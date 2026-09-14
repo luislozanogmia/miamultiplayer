@@ -208,6 +208,64 @@
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
     });
   }
+  function appConfirm(message){
+    return new Promise(function(resolve){
+      var previousFocus = document.activeElement;
+      var overlay = document.createElement('div');
+      overlay.className = 'app-confirm-overlay open';
+      overlay.setAttribute('role', 'presentation');
+
+      var card = document.createElement('div');
+      card.className = 'app-confirm-card';
+      card.setAttribute('role', 'alertdialog');
+      card.setAttribute('aria-modal', 'true');
+      card.setAttribute('aria-labelledby', 'appConfirmMessage');
+
+      var copy = document.createElement('div');
+      copy.className = 'app-confirm-msg';
+      copy.id = 'appConfirmMessage';
+      copy.textContent = String(message || 'Are you sure?');
+
+      var actions = document.createElement('div');
+      actions.className = 'app-confirm-actions';
+      var cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'btn';
+      cancel.textContent = 'Cancel';
+      var confirm = document.createElement('button');
+      confirm.type = 'button';
+      confirm.className = 'btn app-confirm-danger';
+      confirm.textContent = 'Delete';
+
+      actions.appendChild(cancel);
+      actions.appendChild(confirm);
+      card.appendChild(copy);
+      card.appendChild(actions);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      var settled = false;
+      function finish(value){
+        if(settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKeydown);
+        overlay.remove();
+        if(previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+        resolve(value);
+      }
+      function onKeydown(event){
+        if(event.key === 'Escape'){
+          event.preventDefault();
+          finish(false);
+        }
+      }
+      cancel.addEventListener('click', function(){ finish(false); });
+      confirm.addEventListener('click', function(){ finish(true); });
+      overlay.addEventListener('click', function(event){ if(event.target === overlay) finish(false); });
+      document.addEventListener('keydown', onKeydown);
+      confirm.focus();
+    });
+  }
   function firstNameFromEmail(email){
     var local = (email || '').split('@')[0] || '';
     var token = local.split(/[._]/)[0] || local;
@@ -3124,6 +3182,52 @@
     wrap.innerHTML = agentColorSwatchesHtml(editState.avatarColor, 'benchEditColorInput');
   }
 
+  function removeDeletedBotChatState(botId){
+    if(typeof chatWs === 'undefined' || !chatWs) return false;
+    var targetId = String(botId || '');
+    var deletedRoomIds = [];
+    (chatWs.nativeConversations || []).forEach(function(conversation){
+      var metadata = conversation && conversation.metadata && typeof conversation.metadata === 'object'
+        ? conversation.metadata : {};
+      if(conversation && conversation.type === 'bot' && String(metadata.botId || '') === targetId){
+        deletedRoomIds.push(String(conversation.id));
+      }
+    });
+    (chatWs.allAgents || []).forEach(function(agent){
+      if(String(agent && agent.id || '') !== targetId) return;
+      var roomId = agent.roomId || agent.nativeConversationId || agent.conversationId;
+      if(roomId && deletedRoomIds.indexOf(String(roomId)) === -1) deletedRoomIds.push(String(roomId));
+    });
+    var wasActive = deletedRoomIds.indexOf(String(chatWs.activeRoomId || '')) !== -1;
+    deletedRoomIds.forEach(function(roomId){
+      var state = chatWs.byRoom && chatWs.byRoom[roomId];
+      if(state && state.thinkingTimer) clearTimeout(state.thinkingTimer);
+      if(chatWs.byRoom) delete chatWs.byRoom[roomId];
+      delete chatAttentionRooms[roomId];
+    });
+    chatWs.nativeConversations = (chatWs.nativeConversations || []).filter(function(conversation){
+      return deletedRoomIds.indexOf(String(conversation && conversation.id || '')) === -1;
+    });
+    chatWs.hiddenChats = (chatWs.hiddenChats || []).filter(function(key){ return key !== 'agent:' + targetId; });
+    delete chatPinnedKeys['agent:' + targetId];
+    saveChatAttention();
+    saveChatPinned();
+    applyNativeConversationList(chatWs.nativeConversations);
+    if(chatNavigation.back && deletedRoomIds.indexOf(String(chatNavigation.back.roomId || '')) !== -1) clearChatBack();
+    if(wasActive){
+      closeNativeChatSocket();
+      closeChatThread();
+      clearChatBack();
+      chatWs.activeRoomId = null;
+      chatWs.activeKind = null;
+      chatWs.activeLabel = '';
+      saveActiveChatLocation(null);
+      refreshChatMain();
+    }
+    renderChatSidebar();
+    return wasActive;
+  }
+
   function deleteBenchAgent(a, onDeleted){
     if(!a){ showBenchToast('Bot details are still loading'); return; }
     // Legacy builtin records are ordinary persisted bots and remain deletable.
@@ -3132,7 +3236,11 @@
     appConfirm('Delete ' + a.name + '?').then(function(ok){
       if(!ok) return;
       api('/api/bots/' + targetId, {method:'DELETE'}).then(function(res){
-        if(res.status === 200){ if(onDeleted) onDeleted(); loadBenchAgents().then(refreshAgentsView); }
+        if(res.status === 200){
+          removeDeletedBotChatState(targetId);
+          if(onDeleted) onDeleted();
+          loadBenchAgents().then(refreshAgentsView);
+        }
         else showBenchToast('Delete failed (' + res.status + ')');
       }).catch(function(){ showBenchToast('Delete failed — network error'); });
     });
@@ -6335,7 +6443,11 @@
     agentSetup.error = '';
     renderChatThread();
     renderDeptAgentSelector();
-    api('/api/bots/interpret', {method:'POST', body:{intent:agentSetup.intent}}).then(function(res){
+    var modelSelection = chatModelSelectionMetadata();
+    api('/api/bots/interpret', {method:'POST', body:{
+      intent: agentSetup.intent,
+      ...(modelSelection ? {modelSelection:modelSelection} : {})
+    }}).then(function(res){
       if(chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID || agentSetup.phase !== 'interpreting') return;
       if(res.status !== 200 || !res.data || !res.data.draft) throw new Error('proposal unavailable');
       agentSetup.draft = res.data.draft;

@@ -8,6 +8,53 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { HermesGatewayClient } = require('./hermes-gateway-client.js');
 
+test('a fresh session waits for constructor normalization before pinning and submitting its selected model', async () => {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
+  const calls = [];
+  let model = null;
+  let releaseBuild;
+  const built = new Promise(resolve => { releaseBuild = resolve; });
+  client.request = async (method, params) => {
+    calls.push(method + (params.key ? ':' + params.key : ''));
+    if (method === 'session.create') {
+      setImmediate(() => {
+        model = 'deepseek-v4-flash';
+        const info = { model, provider: 'deepseek' };
+        client.sessionInfo.set('live', info);
+        client.sessionReadyWaiters.get('live')?.resolve(info);
+        releaseBuild();
+      });
+      return { session_id: 'live', stored_session_id: 'stored', info: { model: 'deepseek-flash', provider: 'deepseek', lazy: true } };
+    }
+    if (method === 'config.set') {
+      assert.notEqual(model, null, 'selection must not run before the agent is built');
+      model = params.value.split(' --provider ')[0];
+      client.sessionInfo.set('live', { model, provider: 'deepseek' });
+      return { value: model, confirm_required: false };
+    }
+    if (method === 'prompt.submit') {
+      assert.equal(model, 'deepseek-flash');
+      client.handleTurnEvent(client.turns.get('live'), 'message.complete', { text: 'proposal', status: 'complete' });
+      return { status: 'streaming' };
+    }
+  };
+  const result = await client.run({ message: 'Create a greeting bot', options: { model: 'deepseek-flash', provider: 'deepseek' } });
+  await built;
+  assert.equal(result.text, 'proposal');
+  assert.deepEqual(calls, ['session.create', 'config.set:model', 'prompt.submit']);
+  client.close();
+});
+
+test('an acknowledged selection that leaves the wrong live model never submits a prompt', async () => {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
+  client.sessionInfo.set('live', { model: 'wrong-model', provider: 'deepseek' });
+  const calls = [];
+  client.request = async (method) => { calls.push(method); return { value: 'deepseek-flash', confirm_required: false }; };
+  await assert.rejects(client.applySessionSelection('live', { model: 'deepseek-flash', provider: 'deepseek' }, { lazy: true }), /did not apply/);
+  assert.deepEqual(calls, ['config.set']);
+  client.close();
+});
+
 test('Hermes gateway credentials are confined to loopback and cannot be embedded in configuration URLs', () => {
   assert.throws(() => new HermesGatewayClient({
     url: 'wss://gateway.example.com/api/ws', token: 'secret', WebSocketImpl: class {}, env: {},
@@ -49,6 +96,7 @@ test('Hermes gateway client creates, streams, and resumes a persistent session',
           stored_session_id: `stored-${nextSession}`,
         } });
       } else if (request.method === 'session.resume') {
+        respond({ method: 'event', params: { type: 'session.info', session_id: 'live-resumed', payload: { model: 'profile-default', provider: 'default' } } });
         respond({ jsonrpc: '2.0', id: request.id, result: {
           session_id: 'live-resumed',
           session_key: request.params.session_id,
@@ -58,6 +106,7 @@ test('Hermes gateway client creates, streams, and resumes a persistent session',
           info: { model: 'deepseek-chat', provider: 'deepseek', lazy: true },
         } });
       } else if (request.method === 'config.set') {
+        if (request.params.key === 'model') respond({ method: 'event', params: { type: 'session.info', session_id: request.params.session_id, payload: { model: request.params.value.split(' --provider ')[0], provider: request.params.value.split(' --provider ')[1] } } });
         respond({ jsonrpc: '2.0', id: request.id, result: { key: request.params.key, value: request.params.value } });
       } else if (request.method === 'session.cwd.set') {
         respond({ jsonrpc: '2.0', id: request.id, result: { cwd: request.params.cwd } });
@@ -128,15 +177,18 @@ test('Hermes gateway client creates, streams, and resumes a persistent session',
     },
   });
   assert.deepEqual(second, { text: 'native reply', storedSessionId: 'stored-1' });
-  // session.resume ignores the selection params, so the client must re-pin the
-  // picker's provider/model/fast/reasoning on the resumed session before the turn.
+  // Both fresh profile-backed sessions and resumed sessions are explicitly
+  // pinned before their prompt so a profile default cannot replace the picker.
   assert.deepEqual(calls.filter((call) => call.method === 'config.set').map((call) => call.params), [
+    { session_id: 'live-1', key: 'model', value: 'gpt-5.6-luna --provider openai-codex' },
+    { session_id: 'live-1', key: 'fast', value: 'fast' },
     { session_id: 'live-resumed', key: 'model', value: 'deepseek-chat --provider deepseek' },
     { session_id: 'live-resumed', key: 'fast', value: 'normal' },
     { session_id: 'live-resumed', key: 'reasoning', value: 'high' },
   ]);
   const resumeIndex = calls.findIndex((call) => call.method === 'session.resume');
-  const modelSetIndex = calls.findIndex((call) => call.method === 'config.set');
+  const modelSetIndex = calls.findIndex((call) => call.method === 'config.set'
+    && call.params.session_id === 'live-resumed' && call.params.key === 'model');
   const secondSubmitIndex = calls.map((call) => call.method).lastIndexOf('prompt.submit');
   assert.ok(resumeIndex < modelSetIndex && modelSetIndex < secondSubmitIndex);
   assert.equal(calls.filter((call) => call.method === 'session.create').length, 1);
@@ -196,13 +248,16 @@ test('an unchanged picker selection resumes without re-pinning, and a lazy-resum
           session_id: `live-${nextSession}`, stored_session_id: `stored-${nextSession}`,
         } });
       } else if (request.method === 'session.resume') {
+        respond({ method: 'event', params: { type: 'session.info', session_id: 'live-resumed', payload: { model: 'profile-default', provider: 'default' } } });
         respond({ jsonrpc: '2.0', id: request.id, result: {
           session_id: 'live-resumed',
           session_key: request.params.session_id,
           info: { model: 'anthropic/claude-opus-4.6', lazy: true },
         } });
       } else if (request.method === 'config.set') {
-        if (request.params.key === 'fast' && request.params.value === 'fast') {
+        if (request.params.key === 'model') respond({ method: 'event', params: { type: 'session.info', session_id: request.params.session_id, payload: { model: request.params.value.split(' --provider ')[0], provider: request.params.value.split(' --provider ')[1] } } });
+        if (request.params.session_id === 'live-resumed'
+          && request.params.key === 'fast' && request.params.value === 'fast') {
           // The pinned gateway validates fast mode against the profile default
           // model on a lazy resume, not the session's pinned one.
           respond({ jsonrpc: '2.0', id: request.id, error: { code: 4002, message: 'fast mode is not available for this model' } });
@@ -235,7 +290,7 @@ test('an unchanged picker selection resumes without re-pinning, and a lazy-resum
   // resume must not re-enter config.set (whose fast path is the broken one).
   const second = await client.run({ storedSessionId: 'stored-1', message: 'again', options: selection });
   assert.equal(second.storedSessionId, 'stored-1');
-  assert.equal(calls.filter((call) => call.method === 'config.set').length, 0);
+  assert.equal(calls.filter((call) => call.method === 'config.set').length, 2);
   assert.equal(calls.filter((call) => call.method === 'session.resume').length, 1);
 
   // A cold client (restart) has no cache: the re-pin runs, the gateway rejects

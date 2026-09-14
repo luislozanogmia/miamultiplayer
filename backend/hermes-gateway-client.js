@@ -169,6 +169,8 @@ class HermesGatewayClient {
     this.pending = new Map();
     this.turns = new Map();
     this.sessions = new Set();
+    this.sessionInfo = new Map();
+    this.sessionReadyWaiters = new Map();
     // storedSessionId -> serialized picker selection last applied to that
     // session. Pins persist in the stored Hermes row, so a matching cache
     // entry means the per-turn config.set re-pin can be skipped — which also
@@ -271,6 +273,9 @@ class HermesGatewayClient {
     this.readyPromise = null;
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
+    for (const waiter of this.sessionReadyWaiters.values()) waiter.reject(error);
+    this.sessionReadyWaiters.clear();
+    this.sessionInfo.clear();
     if (socket) {
       try { socket.close(); } catch (_) { /* already closed */ }
     }
@@ -318,6 +323,13 @@ class HermesGatewayClient {
           try { this.onEvent(params.type, params.payload || {}); } catch (_) { /* diagnostics must not break chat */ }
         }
         const sessionId = String(params.session_id || '');
+        if (sessionId && params.type === 'session.info' && params.payload?.model && !params.payload.lazy) {
+          this.sessionInfo.set(sessionId, params.payload);
+          this.sessionReadyWaiters.get(sessionId)?.resolve(params.payload);
+        }
+        if (sessionId && params.type === 'error') {
+          this.sessionReadyWaiters.get(sessionId)?.reject(new Error(params.payload?.message || 'Hermes agent initialization failed'));
+        }
         const turn = sessionId ? this.turns.get(sessionId) : null;
         if (turn && turn.onEvent) {
           try { turn.onEvent(params.type, params.payload || {}); } catch (_) { /* chat diagnostics must not break the turn */ }
@@ -443,7 +455,27 @@ class HermesGatewayClient {
     })));
   }
 
+  async waitForSessionReady(sessionId) {
+    if (this.sessionInfo.has(sessionId)) return this.sessionInfo.get(sessionId);
+    return new Promise((resolve, reject) => {
+      const finish = (error, info) => {
+        clearTimeout(timer);
+        this.sessionReadyWaiters.delete(sessionId);
+        if (error) reject(error); else resolve(info);
+      };
+      const timer = setTimeout(() => finish(new Error('Hermes agent initialization timed out')), CONNECT_TIMEOUT_MS);
+      this.sessionReadyWaiters.set(sessionId, {
+        resolve: (info) => finish(null, info),
+        reject: (error) => finish(error),
+      });
+    });
+  }
+
   async applySessionSelection(sessionId, base, info) {
+    // session.create acknowledges the requested model before the agent exists.
+    // Its constructor can normalize that model. Wait for the live agent before
+    // switching so a deferred build cannot overwrite a successful selection.
+    if (info?.lazy && base.model) info = await this.waitForSessionReady(sessionId);
     // A lazily resumed session reports the profile's global default model in
     // its info, not the override persisted on the stored row, so that info
     // cannot prove the session already matches the picker. Only skip the
@@ -454,11 +486,12 @@ class HermesGatewayClient {
       || String(current.provider || '').toLowerCase() === String(base.provider).toLowerCase());
     if (base.model && !(sameModel && sameProvider)) {
       // config.set model without --global/--session pins the pick to this session only.
-      await this.request('config.set', {
+      const selected = await this.request('config.set', {
         session_id: sessionId,
         key: 'model',
         value: base.provider ? `${base.model} --provider ${base.provider}` : base.model,
       });
+      if (selected.confirm_required) throw new Error(selected.confirm_message || selected.warning || 'Model selection requires confirmation');
     }
     if (base.fast !== undefined) {
       try {
@@ -485,6 +518,11 @@ class HermesGatewayClient {
         key: 'reasoning',
         value: base.reasoning_effort,
       });
+    }
+    const live = this.sessionInfo.get(sessionId);
+    if (base.model && live && (live.model !== base.model
+      || (base.provider && String(live.provider || '').toLowerCase() !== String(base.provider).toLowerCase()))) {
+      throw new Error('Hermes did not apply the selected model');
     }
   }
 
@@ -566,9 +604,15 @@ class HermesGatewayClient {
     if (!created || !created.session_id || !created.stored_session_id) {
       throw new Error('Hermes gateway did not return a persistent session id');
     }
-    this.sessions.add(String(created.session_id));
+    const createdSessionId = String(created.session_id);
+    this.sessions.add(createdSessionId);
+    // Some profile-backed Hermes sessions initialize their live agent from
+    // the profile default even when session.create carries an explicit model.
+    // Re-pin the requested selection before the first prompt, exactly as we
+    // do after resume, so one-shot helpers cannot silently use that default.
+    await this.applySessionSelection(createdSessionId, base, created.info);
     this.appliedSelections.set(String(created.stored_session_id), selectionKey);
-    return { sessionId: String(created.session_id), storedSessionId: String(created.stored_session_id) };
+    return { sessionId: createdSessionId, storedSessionId: String(created.stored_session_id) };
   }
 
   async modelOptions({ refresh = false } = {}) {
@@ -635,6 +679,7 @@ class HermesGatewayClient {
         closed += 1;
       } catch (_) { /* already gone */ }
       this.sessions.delete(sessionId);
+      this.sessionInfo.delete(sessionId);
     }
     return closed;
   }

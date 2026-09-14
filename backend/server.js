@@ -76,6 +76,7 @@ const {
   inventoryResponse,
   visibleChatModelInventory,
   normalizeChatModelSelection,
+  chatModelSelectionInferenceOptions,
   userFacingModelDispatchError,
 } = require('./chat-model-selection');
 const { sanitizeChatReply } = require('./chat-security');
@@ -2737,6 +2738,21 @@ function rememberNativeChatModelInventory(payload) {
   return providers;
 }
 
+async function chatModelSelectionForUser(rawSelection, email) {
+  if (!rawSelection || typeof rawSelection !== 'object') return null;
+  let providers = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
+  // Match normal chat's startup behavior: a cached browser selection can
+  // arrive before this backend has hydrated its authenticated inventory.
+  if (!Object.keys(providers).length) {
+    const payload = await getHermesGatewayModelOptions({ refresh: true });
+    providers = visibleChatModelProvidersForUser(
+      rememberNativeChatModelInventory(payload),
+      email
+    );
+  }
+  return normalizeChatModelSelection(rawSelection, providers);
+}
+
 function forgetNativeChatModelProvider(provider) {
   const normalized = String(provider || '').trim().toLowerCase();
   const aliases = normalized === 'openai-api'
@@ -3500,12 +3516,27 @@ app.get('/api/bots/examples', requireAuth, async (req, res) => {
 app.post('/api/bots/interpret', requireAuth, async (req, res) => {
   const intent = String((req.body || {}).intent || '').trim().slice(0, 2000);
   if (!intent) return res.status(400).json({ error: 'intent required' });
+  let modelSelection;
+  try {
+    modelSelection = await chatModelSelectionForUser(
+      req.body && req.body.modelSelection,
+      req.userEmail
+    );
+  } catch (error) {
+    return res.status(409).json({
+      error: 'model_selection_unavailable',
+      message: userFacingModelDispatchError(error),
+    });
+  }
   let draft = fallbackAgentDraft(intent);
   try {
     const reply = await scheduleInference(
       buildAgentSetupPrompt(intent),
       'suggestion',
-      inferenceOptionsForUser(req.userEmail)
+      chatModelSelectionInferenceOptions(
+        inferenceOptionsForUser(req.userEmail),
+        modelSelection
+      )
     );
     draft = normalizeAgentDraft(reply, intent);
   } catch (err) {
@@ -4738,21 +4769,6 @@ async function runNativeConversationAgentReply(dispatch, signal) {
     ? dispatch.metadata.automationTask
     : triggerMessage;
   const rawChatModelSelection = trigger.metadata && trigger.metadata.chatModelSelection;
-  let availableChatModelProviders = visibleChatModelProvidersForUser(
-    nativeChatModelProviders,
-    trigger.senderId
-  );
-  // A message can be sent from the cached composer choice before the first
-  // post-launch inventory request finishes. Warm the server-side inventory on
-  // demand so a valid saved choice is not rejected solely because of startup
-  // ordering.
-  if (rawChatModelSelection && !Object.keys(availableChatModelProviders).length) {
-    const payload = await getHermesGatewayModelOptions({ refresh: true });
-    availableChatModelProviders = visibleChatModelProvidersForUser(
-      rememberNativeChatModelInventory(payload),
-      trigger.senderId
-    );
-  }
   // After Disconnect the resumed gateway session would still answer with the
   // agent it built from the removed key. Refuse before touching the gateway
   // when the user's provider was disconnected here, so "no model" in the
@@ -4763,9 +4779,9 @@ async function runNativeConversationAgentReply(dispatch, signal) {
   if (dispatchProvider && hermesDisconnectedProviders.has(dispatchProvider)) {
     throw new Error(`no usable credentials: ${dispatchProvider} was disconnected for this user`);
   }
-  const chatModelSelection = normalizeChatModelSelection(
+  const chatModelSelection = await chatModelSelectionForUser(
     rawChatModelSelection,
-    availableChatModelProviders
+    trigger.senderId
   );
   if (!message) return;
   const parentEventId = nativeReplyParentEventId(trigger);

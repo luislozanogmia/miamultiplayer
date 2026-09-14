@@ -127,6 +127,18 @@ function normalizeChatModelSelection(raw, providers) {
   };
 }
 
+function chatModelSelectionInferenceOptions(baseOptions, selection) {
+  const options = { ...(baseOptions || {}) };
+  if (!selection) return Object.keys(options).length ? options : undefined;
+  return {
+    ...options,
+    provider: selection.provider,
+    model: selection.model,
+    reasoningEffort: selection.reasoningEffort,
+    fast: selection.fast === true,
+  };
+}
+
 function userFacingModelDispatchError(error) {
   const message = String(error && error.message || error || '');
   if (/invalid[_ -]?api[_ -]?key|incorrect api key|\b401\b|unauthori[sz]ed|authentication failed/i.test(message)) {
@@ -156,5 +168,6 @@ module.exports = {
   inventoryResponse,
   visibleChatModelInventory,
   normalizeChatModelSelection,
+  chatModelSelectionInferenceOptions,
   userFacingModelDispatchError,
 };

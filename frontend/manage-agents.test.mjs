@@ -415,6 +415,12 @@ test('styled chat bot avatars open the selected bot in the right profile panel',
   assert.match(source, /id="styledAgentEditColorOptions"/);
   assert.match(source, /id="styledAgentEditSave"/);
   assert.match(source, /id="styledAgentEditDelete"/);
+  assert.match(source, /if\(remove\) remove\.addEventListener\('click', deleteEditCinemaAgent\)/);
+  assert.match(source, /function appConfirm\(message\)[\s\S]*app-confirm-overlay open[\s\S]*confirm\.addEventListener\('click',[\s\S]*finish\(true\)/);
+  assert.match(source, /function deleteBenchAgent\(a, onDeleted\)[\s\S]*appConfirm\('Delete ' \+ a\.name \+ '\?'\)[\s\S]*method:'DELETE'/);
+  assert.match(source, /function removeDeletedBotChatState\(botId\)[\s\S]*metadata\.botId[\s\S]*var wasActive = deletedRoomIds\.indexOf\(String\(chatWs\.activeRoomId \|\| ''\)\) !== -1/);
+  assert.match(source, /function removeDeletedBotChatState\(botId\)[\s\S]*if\(wasActive\)\{[\s\S]*chatWs\.activeRoomId = null[\s\S]*saveActiveChatLocation\(null\)[\s\S]*refreshChatMain\(\)/);
+  assert.match(source, /if\(res\.status === 200\)\{[\s\S]*removeDeletedBotChatState\(targetId\)[\s\S]*loadBenchAgents\(\)\.then\(refreshAgentsView\)/);
   const styledMarkupStart = source.indexOf('function styledAgentEditMarkup(a){');
   const styledMarkupEnd = source.indexOf('\n  function renderStyledAgentEditColorControls', styledMarkupStart);
   assert.ok(styledMarkupStart >= 0 && styledMarkupEnd > styledMarkupStart, 'styled editor markup function exists');
@@ -483,6 +489,7 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.match(source, /chatWs\.activeKind === 'agent-setup'\)\{\s*setComposerBoundState\(true\)/);
   assert.match(source, /Let’s set me up\. Tell me in a few words what you want me to do\?/);
   assert.match(source, /api\('\/api\/bots\/interpret'/);
+  assert.match(source, /var modelSelection = chatModelSelectionMetadata\(\);[\s\S]*?intent: agentSetup\.intent,[\s\S]*?modelSelection:modelSelection/);
   assert.match(source, /Nothing is created or scheduled until you confirm\./);
   assert.match(source, /Yes, activate bot/);
   assert.match(source, /option\('interval', 'Repeating timer'\)/);

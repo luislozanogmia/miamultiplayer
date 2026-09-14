@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
+const serverSource = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
 const {
   normalizeChatModelInventory,
   normalizeChatModelSelection,
+  chatModelSelectionInferenceOptions,
   userFacingModelDispatchError,
   visibleChatModelInventory,
 } = require('./chat-model-selection.js');
@@ -52,6 +55,23 @@ test('rejects unavailable models and unsupported fast mode', () => {
     () => normalizeChatModelSelection({ provider: 'openai-codex', model: 'gpt-5.3-codex-spark', speed: 'fast' }, inventory),
     /fast response speed/
   );
+});
+
+test('selected chat model overrides a stale harness default for helper inference', () => {
+  assert.deepEqual(chatModelSelectionInferenceOptions({
+    provider: 'deepseek',
+  }, {
+    provider: 'deepseek',
+    model: 'deepseek-flash',
+    reasoningEffort: 'none',
+    speed: 'normal',
+    fast: false,
+  }), {
+    provider: 'deepseek',
+    model: 'deepseek-flash',
+    reasoningEffort: 'none',
+    fast: false,
+  });
 });
 
 test('limits the product picker to explicitly selected providers and hides technical variants', () => {
@@ -102,4 +122,10 @@ test('userFacingModelDispatchError maps provider rate limits to a usage-limit me
 test('userFacingModelDispatchError explains an unresolvable provider credential', () => {
   const message = userFacingModelDispatchError(new Error("config.set: Could not resolve credentials for provider 'ChatGPT or Codex Subscription': No Codex credentials stored. Run `hermes auth` to authenticate."));
   assert.match(message, /disconnected or out of usage/);
+});
+
+test('bot setup uses the same validated per-turn model selection as normal chat', () => {
+  assert.match(serverSource, /async function chatModelSelectionForUser\(rawSelection, email\)/);
+  assert.match(serverSource, /app\.post\('\/api\/bots\/interpret'[\s\S]*?chatModelSelectionForUser\([\s\S]*?req\.body && req\.body\.modelSelection[\s\S]*?chatModelSelectionInferenceOptions\([\s\S]*?modelSelection/);
+  assert.match(serverSource, /function runNativeConversationAgentReply[\s\S]*?chatModelSelectionForUser\(/);
 });
