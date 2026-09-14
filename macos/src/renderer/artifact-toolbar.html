@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Artifact controls</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f7f7f5;
+        color: #202124;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        height: 52px;
+        margin: 0;
+        overflow: hidden;
+        border-bottom: 1px solid #d8d9d5;
+        border-left: 1px solid #d8d9d5;
+      }
+
+      form {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 100%;
+        padding: 8px 10px;
+      }
+
+      button {
+        display: grid;
+        flex: 0 0 34px;
+        height: 34px;
+        padding: 0;
+        place-items: center;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: #3c4043;
+        cursor: pointer;
+        font: 600 17px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      button:hover:not(:disabled) { background: #e9e9e6; }
+      button:focus-visible, input:focus-visible {
+        outline: 2px solid #a77a26;
+        outline-offset: 1px;
+      }
+      button:disabled { cursor: default; opacity: 0.32; }
+
+      .location-wrap {
+        position: relative;
+        flex: 1 1 auto;
+        min-width: 120px;
+      }
+
+      input {
+        width: 100%;
+        height: 34px;
+        padding: 0 36px 0 11px;
+        border: 1px solid #d0d2ce;
+        border-radius: 9px;
+        background: #ffffff;
+        color: #202124;
+        font: 13px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      input[aria-invalid="true"] { border-color: #b3261e; }
+
+      .status {
+        position: absolute;
+        top: 50%;
+        right: 10px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: transparent;
+        transform: translateY(-50%);
+      }
+      .status.loading {
+        border: 2px solid #d9c59d;
+        border-top-color: #8a641d;
+        animation: spin 0.8s linear infinite;
+      }
+      .status.error { background: #b3261e; }
+
+      @keyframes spin { to { transform: translateY(-50%) rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div id="controls">
+      <button id="back" type="button" title="Back" aria-label="Back">‹</button>
+      <button id="forward" type="button" title="Forward" aria-label="Forward">›</button>
+      <button id="reload" type="button" title="Reload" aria-label="Reload">↻</button>
+      <div class="location-wrap">
+        <input
+          id="location"
+          type="text"
+          readonly
+          placeholder="Mia attachment preview"
+          aria-label="Mia attachment preview URL"
+        />
+        <span id="status" class="status" aria-hidden="true"></span>
+      </div>
+      <button id="close" type="button" title="Close artifact browser" aria-label="Close artifact browser">×</button>
+    </div>
+    <script src="artifact-toolbar.js"></script>
+  </body>
+</html>

@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo "Mia browser policy: the macOS open command is disabled. Use the Mia Ghost CLI and the embedded Mia browser instead." >&2
+exit 126

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Mia Test Lab</title>
+    <link rel="stylesheet" href="test-lab.css">
+    <script src="test-lab.js?v=3" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand" aria-label="Mia Test Lab">
+        <span class="brand-mark" aria-hidden="true">✣</span>
+        <div>
+          <p class="eyebrow">Mia</p>
+          <h1>Test Lab</h1>
+        </div>
+      </div>
+      <div class="summary" aria-live="polite">
+        <span><strong id="onlineCount">0</strong>/4 online</span>
+        <span class="summary-divider" aria-hidden="true"></span>
+        <span id="runSummary">4 queued</span>
+      </div>
+      <button class="button secondary" id="configureButton" type="button" aria-expanded="false" aria-controls="configurationPanel">
+        Configure lanes
+      </button>
+    </header>
+
+    <section class="configuration" id="configurationPanel" hidden aria-label="Lane configuration">
+      <div>
+        <h2>Lane URLs</h2>
+        <p>Enter each noVNC address. Settings stay in this browser.</p>
+      </div>
+      <form id="configurationForm">
+        <div class="url-fields" id="urlFields"></div>
+        <div class="configuration-actions">
+          <button class="button secondary" id="restoreDefaults" type="button">Restore defaults</button>
+          <button class="button primary" type="submit">Apply</button>
+        </div>
+      </form>
+    </section>
+
+    <main class="lane-grid" id="laneGrid" aria-label="Concurrent Mia test lanes"></main>
+
+    <template id="laneTemplate">
+      <article class="lane-card">
+        <header class="lane-header">
+          <div class="lane-identity">
+            <span class="lane-number" aria-hidden="true"></span>
+            <div>
+              <h2 class="lane-title"></h2>
+              <p class="lane-scenario"></p>
+            </div>
+          </div>
+          <div class="lane-signals">
+            <span class="connection-badge" role="status">
+              <span class="connection-dot" aria-hidden="true"></span>
+              <span class="connection-label">Checking</span>
+            </span>
+            <label class="state-control">
+              <span class="visually-hidden">Test state</span>
+              <select class="state-select">
+                <option value="queued">Queued</option>
+                <option value="running">Running</option>
+                <option value="passed">Passed</option>
+                <option value="failed">Failed</option>
+              </select>
+            </label>
+          </div>
+        </header>
+        <div class="screen-shell">
+          <iframe class="lane-screen" title="" loading="eager"></iframe>
+          <div class="screen-placeholder" aria-hidden="true">
+            <span class="placeholder-mark">✣</span>
+            <span>Connecting to desktop…</span>
+          </div>
+        </div>
+        <footer class="lane-footer">
+          <span class="lane-url"></span>
+          <div class="lane-actions">
+            <button class="icon-button reload-button" type="button" title="Reload this screen" aria-label="Reload this screen">↻</button>
+            <button class="button focus-button" type="button">Focus</button>
+          </div>
+        </footer>
+      </article>
+    </template>
+  </body>
+</html>

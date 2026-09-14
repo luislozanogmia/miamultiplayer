@@ -1,0 +1,25 @@
+node_modules/
+.env
+*.db
+*.sqlite
+.cookies.jar
+.DS_Store
+__pycache__/
+*.pyc
+
+# macOS/Electron build output and private signing material
+macos/dist/
+macos/out/
+macos/.electron-gyp/
+*.app/
+*.dmg
+*.pkg
+*.p12
+*.provisionprofile
+
+# node_modules as a symlink too (the trailing-slash form only matches directories)
+node_modules
+
+# Backend runtime state from local preview runs (bot outputs, gateway token/profiles)
+backend/bot-artifacts/
+backend/hermes/

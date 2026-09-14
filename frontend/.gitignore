@@ -1,0 +1,4 @@
+_head.txt
+_body.txt
+.playwright-cli/
+node_modules/

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Accept invite — Mia</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+<link rel="stylesheet" href="admin.css?v=1" />
+</head>
+<body>
+
+<div class="invite-wrap">
+  <div class="invite-card card" id="inviteCard">
+
+    <div id="inviteLoading">
+      <h1>Checking invite&hellip;</h1>
+      <p class="sub">Hang tight.</p>
+    </div>
+
+    <div id="inviteInvalid" hidden>
+      <h1>Invite not valid</h1>
+      <p class="sub" id="inviteInvalidReason">This invite link is invalid or has expired.</p>
+      <a class="btn primary" href="/">Back to Mia</a>
+    </div>
+
+    <div id="inviteFormBlock" hidden>
+      <h1>You're invited</h1>
+      <p class="sub" id="inviteEmailLine"></p>
+      <div class="admin-form-error" id="inviteAcceptError" hidden></div>
+      <form id="acceptForm">
+        <div class="field"><label>Display name</label><input class="input" type="text" name="displayName"></div>
+        <div class="field"><label>Password</label><input class="input" type="password" name="password" minlength="10" required></div>
+        <div class="field"><label>Confirm password</label><input class="input" type="password" name="confirm" minlength="10" required></div>
+        <button type="submit" class="btn primary">Set password &amp; join</button>
+      </form>
+    </div>
+
+    <div id="inviteDone" hidden>
+      <h1>You're all set</h1>
+      <p class="sub">Redirecting you to Mia&hellip;</p>
+    </div>
+
+  </div>
+</div>
+
+<div id="adminToast" class="admin-toast"></div>
+
+<script src="invite.js?v=1"></script>
+</body>
+</html>

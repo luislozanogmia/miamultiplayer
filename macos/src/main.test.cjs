@@ -1,0 +1,437 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const Module = require("node:module");
+const path = require("node:path");
+
+test("desktop shell uses the Mia application name and Linux icon", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.match(source, /app\.setName\("Mia"\)/);
+  assert.doesNotMatch(source, /app\.setName\("MiaOS"\)/);
+  assert.match(source, /process\.platform === "linux"[\s\S]{0,120}MIA_LINUX_ICON_PATH/);
+  assert.match(source, /icon: fs\.existsSync\(windowIconPath\) \? windowIconPath : undefined/);
+});
+
+test("main-window trust uses exact parsed origins", () => {
+  const main = loadMain();
+  assert.equal(main.hasExactOrigin("http://127.0.0.1:4871/chat", "http://127.0.0.1:4871"), true);
+  assert.equal(main.hasExactOrigin("http://127.0.0.1:48710/chat", "http://127.0.0.1:4871"), false);
+  assert.equal(main.hasExactOrigin("http://127.0.0.1:4871.evil.test/chat", "http://127.0.0.1:4871"), false);
+  assert.equal(main.hasExactOrigin("not a url", "http://127.0.0.1:4871"), false);
+  assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:4871/chat", "http://127.0.0.1:4871"), true);
+  assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:48710/chat", "http://127.0.0.1:4871"), false);
+});
+
+test("packaged macOS runtime is self-contained and ignores ambient Hermes", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.match(source, /app\.isPackaged\s*\?\s*PACKAGED_HERMES_BIN/);
+  assert.match(source, /syncPackagedDirectory\(path\.join\(PACKAGED_RUNTIME_ROOT, "hermes"\)/);
+  assert.match(source, /syncPackagedDirectory\(path\.join\(PACKAGED_RUNTIME_ROOT, "ghost-cli"\)/);
+  assert.match(source, /verbatimSymlinks:\s*true/);
+  assert.match(source, /process\.env\.GHOST_IN_APP_BROWSER_SOCKET/);
+  assert.match(source, /process\.env\.PYTHONDONTWRITEBYTECODE\s*=\s*"1"/);
+  assert.match(source, /process\.env\.HERMES_PYTHON/);
+});
+
+test("all privileged main-window IPC checks include renderer URL validation", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.doesNotMatch(source, /url\.startsWith\(backendUrl\)/);
+  for (const channel of [
+    "miaos-retry-connection",
+    "miaos-renderer-ready",
+    "miaos-renderer-hydrated",
+    "miaos-state-get",
+    "miaos-state-set",
+    "miaos-artifact-open",
+    "miaos-reset-relaunch",
+  ]) {
+    const start = source.indexOf(`\"${channel}\"`);
+    assert.ok(start >= 0, channel);
+    assert.match(source.slice(start, start + 350), /isMainWindowSender\(event\)/, channel);
+  }
+});
+
+function loadMain() {
+  const electron = {
+    app: {
+      setName() {},
+      requestSingleInstanceLock() { return true; },
+      quit() {},
+      getPath() { return "/tmp/miaos-main-test"; },
+      whenReady() { return { then() {} }; },
+      on() {},
+      dock: null,
+    },
+    BrowserWindow: class {},
+    ipcMain: { handle() {}, on() {}, removeHandler() {} },
+    Menu: { setApplicationMenu() {}, buildFromTemplate(template) { return template; } },
+    session: { fromPartition() { return {}; } },
+    shell: { openExternal() {} },
+    WebContentsView: class {},
+  };
+  const load = Module._load;
+  Module._load = function(request, parent, isMain) {
+    if (request === "electron") return electron;
+    return load.call(this, request, parent, isMain);
+  };
+  try {
+    delete require.cache[require.resolve("./main.cjs")];
+    return require("./main.cjs");
+  } finally {
+    Module._load = load;
+  }
+}
+
+test("Development menu controls the single Mia-owned runtime", async () => {
+  const main = loadMain();
+  const calls = [];
+  const menu = main.createDevelopmentMenu({
+    startServer: () => calls.push("startServer"),
+    stopServer: () => calls.push("stopServer"),
+    restartServer: () => calls.push("restartServer"),
+    openServerLog: () => calls.push("openServerLog"),
+    refreshUi: () => calls.push("refreshUi"),
+  });
+
+  assert.equal(menu.label, "Development");
+  assert.deepEqual(menu.submenu.filter(item => item.label).map(item => item.label), [
+    "Start server",
+    "Stop server",
+    "Restart server",
+    "Open CMD with server log",
+    "UI refresh",
+  ]);
+
+  for (const item of menu.submenu) item.click?.();
+  assert.deepEqual(calls, [
+    "startServer",
+    "stopServer",
+    "restartServer",
+    "openServerLog",
+    "refreshUi",
+  ]);
+  await Promise.resolve();
+});
+
+test("Development menu is part of the native application menu", () => {
+  const main = loadMain();
+  const template = main.createApplicationMenuTemplate();
+  assert.equal(template.find(item => item.label === "Development")?.label, "Development");
+});
+
+test("packaged desktop disables developer menus and backend output capture", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.match(source, /if \(!app\.isPackaged\) viewItems\.unshift\(\{ role: "toggleDevTools" \}\)/);
+  assert.match(source, /if \(!app\.isPackaged\) template\.splice\(5, 0, createDevelopmentMenu\(\)\)/);
+  assert.match(source, /stdio: app\.isPackaged \? "ignore"/);
+});
+
+test("Development server actions share one in-flight operation", async () => {
+  const main = loadMain();
+  let releaseStart;
+  let startCalls = 0;
+  let restartCalls = 0;
+  const startPromise = new Promise(resolve => { releaseStart = resolve; });
+  const menu = main.createDevelopmentMenu({
+    startServer: () => {
+      startCalls += 1;
+      return startPromise;
+    },
+    restartServer: () => {
+      restartCalls += 1;
+      return Promise.resolve();
+    },
+  });
+  const start = menu.submenu.find(item => item.label === "Start server");
+  const restart = menu.submenu.find(item => item.label === "Restart server");
+
+  const first = start.click();
+  const duplicate = restart.click();
+  assert.equal(duplicate, first);
+  assert.equal(startCalls, 1);
+  assert.equal(restartCalls, 0);
+
+  releaseStart("http://127.0.0.1:4871");
+  await first;
+  await Promise.resolve();
+  await restart.click();
+  assert.equal(restartCalls, 1);
+});
+
+test("restart uses the renderer's exact managed port and waits for healthy replacement", async () => {
+  const main = loadMain();
+  const managedProcess = {};
+  const order = [];
+  let reportHealthy;
+  const healthy = new Promise(resolve => { reportHealthy = resolve; });
+  let completed = false;
+
+  const restarting = main.restartManagedBackend({
+    managedProcess,
+    managedUrl: "http://127.0.0.1:4871",
+    rendererUrl: "http://localhost:4871",
+    stop: async processToStop => {
+      assert.equal(processToStop, managedProcess);
+      order.push("stop:managed");
+      return true;
+    },
+    start: async port => {
+      order.push(`start:${port}`);
+      return healthy;
+    },
+    reload: async url => order.push(`reload:${url}`),
+  }).then(url => {
+    completed = true;
+    return url;
+  });
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, ["stop:managed", "start:4871"]);
+  assert.equal(completed, false);
+  reportHealthy("http://127.0.0.1:4871");
+
+  assert.equal(await restarting, "http://127.0.0.1:4871");
+  assert.deepEqual(order, [
+    "stop:managed",
+    "start:4871",
+    "reload:http://127.0.0.1:4871",
+  ]);
+});
+
+test("restart refuses a stale or wrong managed process", async () => {
+  const main = loadMain();
+  let stopCalls = 0;
+  let startCalls = 0;
+
+  await assert.rejects(main.restartManagedBackend({
+    managedProcess: {},
+    managedUrl: "http://127.0.0.1:4872",
+    rendererUrl: "http://127.0.0.1:4871",
+    stop: async () => { stopCalls += 1; return true; },
+    start: async () => { startCalls += 1; return "http://127.0.0.1:4871"; },
+  }), /does not match this Mia window/);
+  assert.equal(stopCalls, 0);
+  assert.equal(startCalls, 0);
+});
+
+test("UI refresh raises the renderer loading gate before reloading", async () => {
+  const main = loadMain();
+  const order = [];
+  const window = {
+    isDestroyed: () => false,
+    webContents: {
+      executeJavaScript: async (script) => {
+        assert.match(script, /appLoadingOverlay/);
+        order.push("loading-gate");
+      },
+      reloadIgnoringCache: () => { order.push("reload"); },
+    },
+  };
+
+  assert.equal(await main.developmentRefreshUi(window), true);
+  assert.deepEqual(order, ["loading-gate", "reload"]);
+});
+
+test("service controls stay detached and UI refresh bypasses the renderer cache", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const frontend = fs.readFileSync(path.join(__dirname, "../../frontend/index.html"), "utf8");
+  assert.match(source, /spawn\(configuredHermesBinary\(\), \["gateway", action\]/);
+  assert.match(source, /detached: true/);
+  assert.match(source, /window\.webContents\.reloadIgnoringCache\(\)/);
+  assert.match(frontend, /id="appLoadingOverlay"[\s\S]*<span>Loading<\/span>/);
+  assert.match(source, /tail -n 100 -f/);
+});
+
+test("localhost frontend stays inside the native desktop host", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.match(source, /preload: path\.join\(__dirname, "preload\.cjs"\)/);
+  assert.match(source, /mainWindow\.loadURL\(`\$\{resolvedBackend\}\/\#\/chat`\)/);
+  assert.match(source, /createBrowser\(\s*window/);
+});
+
+test("cold startup stays hidden until the renderer can display its loading gate", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const preloadSource = fs.readFileSync(path.join(__dirname, "preload.cjs"), "utf8");
+  const fallbackSource = fs.readFileSync(path.join(__dirname, "renderer", "index.html"), "utf8");
+
+  assert.match(mainSource, /new BrowserWindow\(\{[\s\S]*?show:\s*false,/);
+  assert.match(mainSource, /ipcMain\.on\("miaos-renderer-ready"/);
+  assert.match(mainSource, /ipcMain\.on\("miaos-renderer-hydrated"/);
+  assert.match(mainSource, /developmentRefreshUi[\s\S]*executeJavaScript[\s\S]*appLoadingOverlay[\s\S]*reloadIgnoringCache/);
+  assert.match(preloadSource, /ready:\s*\(\)\s*=>\s*ipcRenderer\.send\("miaos-renderer-ready"\)/);
+  assert.match(preloadSource, /hydrated:\s*\(\)\s*=>\s*ipcRenderer\.send\("miaos-renderer-hydrated"\)/);
+  assert.match(fallbackSource, /window\.miaDesktop\.ready\(\)/);
+  assert.match(mainSource, /ipcMain\.on\("miaos-state-get"/);
+  assert.match(mainSource, /ipcMain\.on\("miaos-state-set"/);
+  assert.match(preloadSource, /sendSync\("miaos-state-get", key\)/);
+  assert.match(preloadSource, /send\("miaos-state-set", key, value\)/);
+});
+
+test("native chat artifact previews use the sandboxed Mia artifact pane", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const preloadSource = fs.readFileSync(path.join(__dirname, "preload.cjs"), "utf8");
+
+  assert.match(preloadSource, /artifact:\s*\{[\s\S]*ipcRenderer\.invoke\("miaos-artifact-open", url\)/);
+  assert.match(mainSource, /ipcMain\.handle\("miaos-artifact-open"/);
+  assert.match(mainSource, /isNativeArtifactTarget\(target\)/);
+  assert.match(mainSource, /Only Mia conversation artifact previews can open here/);
+  assert.match(mainSource, /syncArtifactSessionCookies\(target\)/);
+  assert.match(mainSource, /ARTIFACT_PARTITION = "miaos-artifacts"/);
+  assert.doesNotMatch(mainSource, /persist:miaos-artifacts/);
+  assert.match(mainSource, /partition: ARTIFACT_PARTITION,[\s\S]*contextIsolation: true,[\s\S]*nodeIntegration: false,[\s\S]*sandbox: true/);
+});
+
+test("general browser uses an ephemeral profile with a user-facing data reset", () => {
+  const browserSource = fs.readFileSync(path.join(__dirname, "browser.cjs"), "utf8");
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.match(browserSource, /session\.fromPartition\("miaos-browser"/);
+  assert.doesNotMatch(browserSource, /persist:miaos-browser/);
+  assert.match(browserSource, /async function clearData\(\)/);
+  assert.match(mainSource, /label: "Clear Browser Data"/);
+});
+
+test("artifact preview parsing is exact, origin-bound, and never accepts file or arbitrary URLs", () => {
+  const main = loadMain();
+  const backend = "http://127.0.0.1:4870";
+  const native = `${backend}/api/conversations/conversation-1/attachments/attachment-1?preview=true&workspace=solo`;
+
+  assert.equal(main.isNativeArtifactTarget(native, backend), true);
+  assert.equal(main.normalizeArtifactTarget(native, backend), native);
+  for (const blocked of [
+    "file:///tmp/report.pdf",
+    "https://attacker.example/report.pdf",
+    `${backend}/api/conversations/conversation-1/attachments/attachment-1`,
+    `${backend}/api/conversations/conversation-1/attachments/attachment-1?preview=1&workspace=solo`,
+    `${backend}/api/conversations/conversation-1/attachments/attachment-1?preview=true&next=https%3A%2F%2Fattacker.example`,
+    `${backend}/api/conversations/conversation-1/attachments/attachment-1?preview=true#external`,
+  ]) {
+    assert.equal(main.isNativeArtifactTarget(blocked, backend), false, blocked);
+    assert.throws(() => main.normalizeArtifactTarget(blocked, backend), /Only exact Mia conversation attachment preview URLs/);
+  }
+});
+
+test("artifact preview controls cannot turn the pane into a general browser", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const toolbar = fs.readFileSync(path.join(__dirname, "renderer", "artifact-toolbar.html"), "utf8");
+  const preload = fs.readFileSync(path.join(__dirname, "artifact-preload.cjs"), "utf8");
+
+  assert.match(mainSource, /will-redirect/);
+  assert.match(mainSource, /External links open in your normal browser/);
+  assert.match(mainSource, /shell\.openExternal/);
+  assert.doesNotMatch(mainSource, /miaos-artifact-navigate/);
+  assert.match(toolbar, /readonly/);
+  assert.match(toolbar, /Mia attachment preview URL/);
+  assert.doesNotMatch(preload, /navigate/);
+});
+
+test("UI refresh never adds a temporary native compositor layer", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const start = mainSource.indexOf("async function developmentRefreshUi");
+  const end = mainSource.indexOf("\nasync function resolveBackend", start);
+  const refresh = mainSource.slice(start, end);
+  assert.doesNotMatch(refresh, /new LoadingView|new WebContentsView|addChildView|removeChildView/);
+});
+
+test("service retry preserves an already-loaded renderer while restarting its backend", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+
+  assert.match(
+    mainSource,
+    /ipcMain\.handle\("miaos-retry-connection"[\s\S]*?rendererBackendUrl\(mainWindow\)[\s\S]*?resolveBackend\(\)[\s\S]*?return loadMiaOS\(\)/,
+  );
+});
+
+test("development and packaged launches share Electron's single-instance lock", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+
+  assert.match(mainSource, /app\.requestSingleInstanceLock\(\)/);
+  assert.match(mainSource, /if \(!hasSingleInstanceLock\) app\.quit\(\)/);
+  assert.match(mainSource, /app\.on\("second-instance"/);
+  assert.match(mainSource, /function activateMainWindow\(\)[\s\S]*createWindow\(\)[\s\S]*loadMiaOS\(\)[\s\S]*mainWindow\.focus\(\)/);
+  assert.match(mainSource, /app\.on\("second-instance", activateMainWindow\)/);
+  assert.match(mainSource, /BrowserWindow\.getAllWindows\(\)\.length === 0\) activateMainWindow\(\)/);
+  assert.match(mainSource, /mainWindow\.restore\(\)/);
+  assert.match(mainSource, /mainWindow\.focus\(\)/);
+  assert.match(mainSource, /if \(hasSingleInstanceLock\) app\.whenReady\(\)/);
+});
+
+test("browser menu never falls through to closing or reloading the Mia window", () => {
+  const mainSource = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
+  const preloadSource = fs.readFileSync(require.resolve("./preload.cjs"), "utf8");
+
+  assert.match(mainSource, /\["l", "t"\]\.includes\(key\)[\s\S]*?webContents\.send\("miaos-browser-open", key\)/);
+  assert.doesNotMatch(mainSource, /if \(key === "w"\) mainWindow\.close\(\)/);
+  assert.doesNotMatch(mainSource, /if \(key === "r"\) mainWindow\.webContents\.reload\(\)/);
+  assert.match(preloadSource, /onOpen:[\s\S]*?ipcRenderer\.on\("miaos-browser-open"/);
+});
+
+test("closing a window explicitly releases both artifact renderer views", () => {
+  const main = loadMain();
+  const removed = [];
+  const window = {
+    isDestroyed: () => false,
+    contentView: { removeChildView: view => removed.push(view) },
+  };
+  const view = () => ({
+    webContents: {
+      closed: false,
+      isDestroyed() { return this.closed; },
+      close() { this.closed = true; },
+    },
+  });
+  const toolbar = view();
+  const content = view();
+
+  main.disposeArtifactPanel(window, toolbar, content);
+  main.disposeArtifactPanel(window, toolbar, content);
+
+  assert.deepEqual(removed, [toolbar, content, toolbar, content]);
+  assert.equal(toolbar.webContents.closed, true);
+  assert.equal(content.webContents.closed, true);
+});
+
+test("desktop state permits only scoped chat selection and browser-open state", () => {
+  const source = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
+  assert.match(source, /normalized === "miaBrowserOpen"/);
+  assert.match(source, /\^miaChatActive:/);
+  assert.match(source, /windowNativeBrowser\.prepareToClose\(\)/);
+  assert.match(source, /new Promise\(resolve => setTimeout\(resolve, 1000\)\)/);
+});
+
+test("prepared window close resumes a macOS application quit", () => {
+  const source = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
+  assert.match(source, /closePrepared = true;[\s\S]*window\.close\(\);[\s\S]*if \(isQuitting\) setImmediate\(\(\) => app\.quit\(\)\)/);
+});
+
+test("closing the final desktop window quits the owned runtime on macOS", () => {
+  const source = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
+  assert.match(source, /app\.on\("window-all-closed", \(\) => \{\s*(?:\/\/[^^\n]*\n\s*)*app\.quit\(\);\s*\}\)/);
+  assert.doesNotMatch(source, /window-all-closed[\s\S]{0,120}process\.platform !== "darwin"/);
+});
+
+test("startup reclaims only a profile-owned orphaned backend before spawning", () => {
+  const source = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
+  assert.match(source, /BACKEND_LEASE_FILENAME = "miaos-backend-owner\.json"/);
+  assert.match(source, /lease\.databasePath !== backendDatabasePath\(\)/);
+  assert.match(source, /process\.kill\(-lease\.pid, "SIGTERM"\)/);
+  assert.match(source, /const reclaimed = await reclaimOrphanedBackend\(\)/);
+  assert.match(source, /backend launch blocked because the profile-owned orphan could not be reclaimed/);
+  assert.match(source, /writeBackendLease\(child\.pid, url, databasePath\)/);
+  assert.match(source, /clearBackendLease\(child\.pid\)/);
+});
+
+test("packaged app discovers bundled runtime and uses Electron's Node", () => {
+  const source = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
+  assert.match(source, /if \(process\.resourcesPath\) candidates\.push\(process\.resourcesPath\)/);
+  assert.match(source, /const nodeExecutable = String\(process\.env\.MIAOS_NODE_PATH/);
+  assert.doesNotMatch(source, /\/opt\/homebrew\/bin\/node|\/usr\/local\/bin\/node|\/usr\/bin\/node/);
+  assert.match(source, /if \(nodeExecutable === process\.execPath\) childEnvironment\.ELECTRON_RUN_AS_NODE = "1"/);
+  assert.match(source, /MIAOS_LOCAL_PROFILE: process\.env\.MIAOS_LOCAL_PROFILE \|\| "1"/);
+  assert.match(source, /app\.isPackaged \? path\.join\(dataDirectory, "\.env\.local"\)/);
+  assert.match(source, /app\.isPackaged \? path\.join\(dataDirectory, "workspace-artifacts"\)/);
+  assert.match(source, /app\.isPackaged \? path\.join\(dataDirectory, "conversation-attachments"\)/);
+  assert.match(source, /app\.isPackaged[\s\S]*path\.join\(process\.resourcesPath, "electron\.icns"\)/);
+  assert.match(source, /process\.platform === "darwin" && !app\.isPackaged && app\.dock/);
+});

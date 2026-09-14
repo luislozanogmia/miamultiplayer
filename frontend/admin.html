@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Mia · Admin</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+<link rel="stylesheet" href="admin.css?v=1" />
+</head>
+<body>
+
+<div id="adminBlocked" class="admin-blocked card" hidden>
+  <h1 id="adminBlockedTitle">Not authorized</h1>
+  <p id="adminBlockedMessage">You don't have admin access on this instance.</p>
+  <a class="btn primary" href="/">Back to Mia</a>
+</div>
+
+<div id="adminWrap" class="admin-wrap" hidden>
+  <a class="admin-close" href="/" aria-label="Close Admin Center" title="Back to Mia">&times;</a>
+  <nav class="admin-nav">
+    <div class="admin-brand">
+      <div class="admin-brand-mark"><img src="assets/icons/mia-192.png" alt="" /></div>
+      <div>
+        <div class="admin-brand-name" id="adminBrandName">Mia Admin</div>
+        <div class="admin-brand-sub">Admin</div>
+      </div>
+    </div>
+    <div class="admin-nav-list" id="adminNavList">
+      <button type="button" class="admin-nav-item" data-view="overview">Overview</button>
+      <button type="button" class="admin-nav-item" data-view="users">Users</button>
+      <button type="button" class="admin-nav-item" data-view="agents">Bot Roster</button>
+      <button type="button" class="admin-nav-item" data-view="invites">Invites</button>
+      <button type="button" class="admin-nav-item" data-view="activity">Activity</button>
+      <button type="button" class="admin-nav-item" data-view="backup">Backup</button>
+    </div>
+    <div class="admin-nav-foot">
+      <a href="/">&larr; Back to Mia</a>
+    </div>
+  </nav>
+
+  <main class="admin-main">
+
+    <!-- Overview -->
+    <section class="admin-view" data-view="overview">
+      <div class="admin-head">
+        <h1>Overview</h1>
+        <div class="admin-updated" id="overviewUpdated"></div>
+      </div>
+      <div class="admin-tiles" id="overviewTiles"></div>
+    </section>
+
+    <!-- Users -->
+    <section class="admin-view" data-view="users">
+      <div class="admin-head">
+        <h1>Users</h1>
+        <div class="admin-head-actions">
+          <button type="button" class="btn" id="usersInviteBtn">Invite</button>
+          <button type="button" class="btn primary" id="usersAddBtn">Add user</button>
+        </div>
+      </div>
+      <div class="admin-users-tools">
+        <label class="admin-search">
+          <span class="admin-visually-hidden">Search users</span>
+          <input class="input" id="usersSearch" type="search" placeholder="Search by name or email" autocomplete="off" aria-label="Search users">
+        </label>
+        <div class="admin-users-summary" id="usersResultSummary" aria-live="polite"></div>
+      </div>
+      <div class="admin-users-toolbar" id="usersBulkToolbar" aria-label="Bulk user actions">
+        <div class="admin-users-toolbar-meta">
+          <div class="admin-users-selected-count" id="usersSelectionCount">No users selected</div>
+          <div class="admin-users-selection-hint" id="usersSelectionHint">Select users to enable bulk actions.</div>
+        </div>
+        <div class="admin-users-bulk-actions">
+          <button type="button" class="btn small" data-bulk-action="promote" disabled>Make admin</button>
+          <button type="button" class="btn small" data-bulk-action="toggle-disabled" disabled>Disable / Enable</button>
+          <button type="button" class="btn small" data-bulk-action="reset-password" disabled>Reset password</button>
+          <button type="button" class="btn small danger" data-bulk-action="sign-out" disabled>Sign out everywhere</button>
+        </div>
+      </div>
+      <div class="card admin-table-wrap">
+        <table class="admin-table admin-users-table">
+          <thead><tr><th class="admin-select-col"><input type="checkbox" id="usersSelectAll" aria-label="Select all visible eligible users"></th><th>User</th><th>Role</th><th>Status</th><th>Bots</th><th>Last login</th><th>Actions</th></tr></thead>
+          <tbody id="usersBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Bot Roster -->
+    <section class="admin-view" data-view="agents">
+      <div class="admin-head">
+        <div>
+          <h1>Bot Roster</h1>
+          <div class="admin-head-sub">All executable bots across the workspace, including their human owner.</div>
+        </div>
+      </div>
+      <div class="admin-users-tools admin-agents-tools">
+        <label class="admin-search">
+          <span class="admin-visually-hidden">Search bots</span>
+          <input class="input" id="agentsSearch" type="search" placeholder="Search bots, owners, or departments" autocomplete="off" aria-label="Search bots">
+        </label>
+        <div class="admin-users-summary" id="agentsResultSummary" aria-live="polite"></div>
+      </div>
+      <div class="card admin-table-wrap">
+        <table class="admin-table admin-agents-table">
+          <thead><tr><th>Owner</th><th>Bot / Agent</th><th>Type</th><th>Status</th><th>Model</th><th>Departments</th><th>Created</th><th>Updated</th></tr></thead>
+          <tbody id="agentsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Invites -->
+    <section class="admin-view" data-view="invites">
+      <div class="admin-head">
+        <h1>Invites</h1>
+        <div class="admin-head-actions">
+          <button type="button" class="btn primary" id="invitesCreateBtn">New invite</button>
+        </div>
+      </div>
+      <div class="card admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Email</th><th>Role</th><th>Invited by</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="invitesBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Activity -->
+    <section class="admin-view" data-view="activity">
+      <div class="admin-head"><h1>Activity</h1></div>
+      <div class="card admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+          <tbody id="activityBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Backup -->
+    <section class="admin-view" data-view="backup">
+      <div class="admin-head"><h1>Backup</h1></div>
+      <div class="card" style="padding:20px;max-width:480px;">
+        <p style="margin:0 0 16px;color:var(--muted);font-size:13.5px;">Download a full JSON export of this instance's data.</p>
+        <a class="btn primary" id="backupDownloadBtn" href="/api/admin/backup">Download backup</a>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Add user dialog -->
+<div class="admin-overlay" id="addUserOverlay" hidden>
+  <div class="admin-dialog card">
+    <h2>Add user</h2>
+    <div class="admin-form-error" id="addUserError" hidden></div>
+    <form id="addUserForm">
+      <div class="field"><label>Email</label><input class="input" type="email" name="email" required></div>
+      <div class="field"><label>Display name</label><input class="input" type="text" name="displayName"></div>
+      <div class="field"><label>Password</label><input class="input" type="password" name="password" minlength="10" placeholder="Leave blank to send a reset link"></div>
+      <div class="field"><label>Role</label>
+        <select class="input" name="role"><option value="member">Member</option><option value="admin">Admin</option></select>
+      </div>
+      <div class="admin-dialog-actions">
+        <button type="button" class="btn" data-close-overlay="addUserOverlay">Cancel</button>
+        <button type="submit" class="btn primary">Add user</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Invite dialog -->
+<div class="admin-overlay" id="inviteOverlay" hidden>
+  <div class="admin-dialog card">
+    <h2>Invite someone</h2>
+    <div class="admin-form-error" id="inviteError" hidden></div>
+    <div id="inviteFormWrap">
+      <form id="inviteForm">
+        <div class="field"><label>Email</label><input class="input" type="email" name="email" required></div>
+        <div class="field"><label>Role</label>
+          <select class="input" name="role"><option value="member">Member</option><option value="admin">Admin</option></select>
+        </div>
+        <div class="field"><label>Expires in (hours)</label><input class="input" type="number" name="expiresInHours" value="72" min="1"></div>
+        <div class="admin-dialog-actions">
+          <button type="button" class="btn" data-close-overlay="inviteOverlay">Cancel</button>
+          <button type="submit" class="btn primary">Create invite</button>
+        </div>
+      </form>
+    </div>
+    <div id="inviteResultWrap" hidden>
+      <div class="field-hint" style="margin-bottom:6px;">Share this link with the invitee:</div>
+      <div class="admin-link-box"><code id="inviteResultLink"></code><button type="button" class="btn small" id="inviteResultCopy">Copy</button></div>
+      <div class="admin-dialog-actions">
+        <button type="button" class="btn primary" data-close-overlay="inviteOverlay">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Reset password dialog -->
+<div class="admin-overlay" id="resetPwOverlay" hidden>
+  <div class="admin-dialog card">
+    <h2 id="resetPwTitle">Reset password link</h2>
+    <div class="field-hint" id="resetPwHint" style="margin-bottom:6px;">Share this link with the user:</div>
+    <div class="admin-link-box" id="resetPwSingleLink"><code id="resetPwLink"></code><button type="button" class="btn small" id="resetPwCopy">Copy</button></div>
+    <div class="admin-reset-links" id="resetPwBulkLinks" hidden></div>
+    <div class="admin-dialog-actions">
+      <button type="button" class="btn primary" data-close-overlay="resetPwOverlay">Done</button>
+    </div>
+  </div>
+</div>
+
+<div id="adminToast" class="admin-toast"></div>
+
+<script src="assets/mia-mark.js"></script>
+<script src="admin.js?v=20260904-roster-1"></script>
+</body>
+</html>

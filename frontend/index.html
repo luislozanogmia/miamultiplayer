@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; script-src-elem 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self'; manifest-src 'self'" />
+<title>Mia - Solo</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg?v=20260822-1" />
+<link rel="alternate icon" type="image/png" href="assets/favicon.png?v=20260822-1" />
+<link rel="manifest" href="manifest.webmanifest?v=20260822-1" />
+<link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
+<script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
+<link rel="stylesheet" href="styles.css?v=20260908-developer-mode-1" />
+</head>
+<!-- Apply the active preview skin before the first paint so the legacy shell
+     never flashes while app.js is loading. app.js still reapplies the class
+     for runtime navigation and future skin toggles. -->
+<body class="styled-skin">
+
+<div class="app-loading-overlay" id="appLoadingOverlay" role="status" aria-live="polite" aria-label="Loading Mia">
+  <img class="app-loading-avatar" src="assets/favicon.svg?v=20260822-1" alt="" aria-hidden="true" />
+  <span>Loading</span>
+</div>
+
+<div class="developer-mode-transition" id="developerModeTransition" aria-hidden="true" hidden>
+  <video id="developerModeTransitionVideo" muted playsinline preload="auto" tabindex="-1">
+    <source src="assets/developer-mode-transition.mp4" type="video/mp4" />
+  </video>
+</div>
+
+<div class="mia-service-banner" id="miaServiceBanner" role="alert" hidden>
+  <span><strong>Mia service is unavailable.</strong> Your messages are safe.</span>
+  <button type="button" id="miaServiceRetry">Restart and reconnect</button>
+</div>
+
+<div class="login-wall" id="loginWall">
+  <div class="login-split">
+    <div class="login-main">
+      <div class="login-mark-row">
+        <span class="topbar-mark"><span class="topbar-mark-inner"></span></span>
+        <span class="wordmark" id="miaLegacyLoginName">Mia - Solo</span>
+        <span class="mia-lockup" id="miaLockupLogin"><span class="mia-lockup-mark" data-mia-mark="28" data-mia-mark-mode="static"></span><span class="mia-lockup-word" id="miaLoginName">Mia - Solo</span></span>
+      </div>
+      <div class="login-center">
+        <div class="login-box">
+          <div class="login-heading">
+            <h1>Sign in</h1>
+            <p class="subtitle">Sign in to access the platform</p>
+          </div>
+          <div class="login-error" id="loginError"></div>
+          <form id="loginForm" autocomplete="on">
+            <div class="login-field">
+              <label for="loginEmail">Work email</label>
+              <input type="email" id="loginEmail" placeholder="name@company.com" required autocomplete="username" />
+            </div>
+            <div class="login-field">
+              <label for="loginPassword">Password</label>
+              <input type="password" id="loginPassword" placeholder="Session password" required autocomplete="current-password" />
+            </div>
+            <button type="submit" class="login-btn">Sign in</button>
+          </form>
+        </div>
+      </div>
+      <div class="login-footer"><span>Mia</span><span class="login-footer-sp"></span><span id="miaLoginFooterName">Mia - Solo</span></div>
+    </div>
+    <aside class="login-side">
+      <div class="login-side-card">
+        <img class="login-side-logo" src="assets/app-logo.png" alt="Mia" />
+        <div class="login-side-note">Your local workspace for conversations, connected apps, and autonomous bots.</div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="app-shell" id="appShell">
+  <div class="topbar-wrap">
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="topbar-mark"><span class="topbar-mark-inner"></span></span>
+        <span class="wordmark" id="miaLegacyAppName">Mia - Solo</span>
+        <span class="wordmark-dot">&middot;</span>
+        <span class="layer-dropdown">
+          <button type="button" class="wordmark-layer" id="layerDropdownBtn" aria-haspopup="true" aria-expanded="false"><span id="wordmarkLayer">Chat</span></button>
+          <div class="layer-menu" id="layerMenu" role="menu">
+            <button type="button" class="layer-menu-item" data-layer="platform" role="menuitem">Chat</button>
+            <button type="button" class="layer-menu-item" data-layer="agents" role="menuitem">Bots</button>
+            <button type="button" class="layer-menu-item" data-layer="data" role="menuitem">Data</button>
+          </div>
+        </span>
+        <nav class="panel-tabs" id="panelTabs"></nav>
+      </div>
+      <div class="topbar-right">
+        <button type="button" class="panel-toggle-btn hidden" id="configPanelToggle" title="Bot configuration" aria-label="Toggle bot configuration panel">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" stroke-width="1.3"/><line x1="10" y1="2.5" x2="10" y2="13.5" stroke="currentColor" stroke-width="1.3"/></svg>
+        </button>
+        <div class="avatar-dropdown">
+          <button type="button" class="avatar-btn" id="avatarBtn" aria-haspopup="true" aria-expanded="false"></button>
+          <div class="avatar-menu" id="avatarMenu" role="menu">
+            <div class="avatar-menu-email" id="avatarMenuEmail"></div>
+            <div id="companySwitcher"></div>
+            <div class="avatar-menu-sep"></div>
+            <button type="button" class="avatar-menu-item" id="openSettingsBtn" role="menuitem">Settings</button>
+            <button type="button" class="avatar-menu-item" id="logoutBtn" role="menuitem">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+  </div>
+  <div class="shell">
+    <main class="content" id="mainContent">
+
+      <!-- CONNECTORS -->
+      <section class="panel" id="panel-integrations">
+        <div class="styled-integrations-page">
+          <div class="styled-integrations-shell">
+            <div class="styled-integrations-toolbar">
+              <div class="hermes-catalog-intro">
+                <h2>Connect your tools</h2>
+                <p>Working on getting more apps.</p>
+              </div>
+              <div class="hermes-catalog-filters">
+                <input type="search" id="hermesConnectorSearch" placeholder="Search connected apps" aria-label="Search connected apps" autocomplete="off" />
+                <select id="hermesConnectorCategory" aria-label="Connected app category"><option value="">All categories</option></select>
+              </div>
+              <p class="hermes-catalog-count" id="hermesConnectorCount" role="status" aria-live="polite"></p>
+            </div>
+            <div class="styled-integrations-view" id="styledConnectorsView">
+              <div class="styled-connector-grid" id="hermesConnectorGrid"></div>
+              <p id="hermesConnectorEmpty" class="hermes-catalog-empty" hidden>No connected apps match your search.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- BOT ADMIN (Bot Bench) -->
+      <section class="panel" id="panel-agent-admin">
+        <div class="styled-agent-admin-head">
+          <button type="button" class="styled-agent-admin-back" id="styledAgentAdminBack" aria-label="Back to conversations" title="Back to conversations">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+          </button>
+          <span class="styled-agent-admin-title">Manage Bots</span>
+        </div>
+        <div class="bench-hero-row">
+          <div class="bench-hero">
+            <h1 class="bench-hero-title">What should your next bot do?</h1>
+            <p class="bench-hero-sub">Describe the job in plain language. Mia handles the data, permissions and schedule.</p>
+            <button type="button" class="bench-compose-trigger" id="benchComposeTrigger">
+              <span class="bench-compose-placeholder">Describe the bot you want to create&hellip;</span>
+              <span class="bench-compose-cta">Create bot</span>
+            </button>
+            <div class="bench-examples" id="benchHeroExamples"></div>
+          </div>
+        </div>
+
+        <div class="bench-section">
+          <div class="bench-section-head">
+            <h2>Bot Bench</h2>
+            <span class="bench-section-tag">Organized by state</span>
+          </div>
+          <div class="bench-columns" id="benchColumns"></div>
+        </div>
+      </section>
+
+      <!-- DEPARTMENT WORKSPACE (agents layer — one shared panel, department tabs live in the topbar) -->
+      <section class="panel" id="panel-department">
+        <div class="bench-section">
+          <div class="bench-section-head">
+            <h2 id="deptPanelTitle">Department</h2>
+            <span class="bench-section-tag" id="deptPanelTag"></span>
+            <button type="button" class="bench-new-btn" id="deptNewAgentBtn"><span>+</span>New bot</button>
+          </div>
+          <div class="bench-cards" id="deptPanelCards"></div>
+        </div>
+      </section>
+
+      <aside class="agent-config-panel" id="agentConfigPanel">
+        <div class="acp-head">
+          <div class="acp-head-row">
+            <span class="acp-icon">&#9881;</span>
+            <h3>Bot configuration</h3>
+            <button type="button" class="acp-close" id="acpCloseBtn">&times;</button>
+          </div>
+          <div class="acp-sub">Which data can each bot access?</div>
+        </div>
+        <div class="acp-body" id="acpBody">
+          <div class="acp-access" id="iamTableWrap"></div>
+          <div class="acp-departments">
+            <div class="acp-dept-section-head">
+              <span class="tr-label">Departments</span>
+              <span class="acp-dept-sub">Org chart used to tag and group bots</span>
+            </div>
+            <div class="acp-dept-list" id="acpDeptList"></div>
+            <div class="acp-dept-add-row">
+              <input type="text" class="acp-dept-new-input" id="acpDeptNewInput" placeholder="Add department&hellip;" maxlength="40" />
+              <button type="button" class="btn small" id="acpDeptAddBtn">Add</button>
+            </div>
+          </div>
+          <div class="acp-mesh-row">
+            <span class="acp-icon acp-icon-round">&#8644;</span>
+            <div class="acp-mesh-copy">
+              <div class="acp-mesh-head">
+                <span class="tr-label">Inter-bot messaging</span>
+                <label class="switch"><input type="checkbox" id="interAgentMsgToggle" /><span class="track"></span></label>
+              </div>
+              <div class="acp-mesh-note" id="acpMeshNote"></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <aside class="bench-detail" id="benchDetail">
+        <div class="bench-detail-head">
+          <span class="bench-detail-mark" id="benchDetailMark"></span>
+          <div style="flex:1;min-width:0;">
+            <h2 class="bench-detail-name" id="benchDetailName" title="Click to rename"></h2>
+            <input type="text" class="bench-detail-name-input" id="benchDetailNameInput" maxlength="40" />
+            <div class="bench-detail-status">
+              <span class="bench-status-dot" id="benchDetailDot"></span>
+              <span class="line" id="benchDetailStatusLine"></span>
+            </div>
+          </div>
+          <div class="bench-dept-dropdown" id="benchDetailDeptDropdown">
+            <button type="button" class="bench-dept-dropdown-btn" id="benchDetailDeptBtn"><span id="benchDetailDeptBtnLabel"></span><span>&#9662;</span></button>
+            <div class="bench-dept-dropdown-panel" id="benchDetailDeptPanel"></div>
+          </div>
+          <button type="button" class="bench-detail-close" id="benchDetailClose">&times;</button>
+        </div>
+        <p class="bench-detail-brief" id="benchDetailBrief"></p>
+        <div class="bench-stats" id="benchDetailStats"></div>
+        <div>
+          <div class="bench-log-label">WHAT IT HAS BEEN DOING</div>
+          <div class="bench-log" id="benchDetailLog"></div>
+        </div>
+        <div class="bench-detail-actions" id="benchDetailActions"></div>
+      </aside>
+
+      <div class="bench-cinema" id="benchCinema">
+        <div class="bench-cinema-scrim" id="benchCinemaScrim"></div>
+        <div class="bench-cinema-inner" id="benchCinemaInner">
+
+          <div class="bench-cinema-step" id="benchComposeStep">
+            <div class="bench-compose-head">
+              <h2>Tell Mia what this bot should do</h2>
+              <p>Write it the way you would ask a colleague</p>
+            </div>
+            <div class="bench-compose-card">
+              <textarea class="bench-compose-textarea" id="benchComposeTextarea" rows="4" placeholder="I need a bot that reviews a folder every week and tells me what changed&hellip;"></textarea>
+              <div class="bench-scopes-row" id="benchScopesRow"></div>
+              <div class="bench-compose-foot">
+                <input type="text" class="bench-name-input" id="benchNameInput" placeholder="Name your bot" />
+                <span class="bench-compose-sep"></span>
+                <div class="bench-dept-dropdown" id="benchDeptDropdown">
+                  <button type="button" class="bench-model-btn bench-dept-dropdown-btn" id="benchDeptBtn"><span id="benchDeptBtnLabel"></span><span>&#9662;</span></button>
+                  <div class="bench-dept-dropdown-panel" id="benchDeptPanel"></div>
+                </div>
+                <button type="button" class="bench-model-btn" id="benchModelBtn"><span class="bench-model-dot"></span><span id="benchModelLabel">No connected model</span><span>&#9662;</span></button>
+                <span class="bench-hint">&#8629; to create &middot; esc to close</span>
+                <button type="button" class="bench-create-btn" id="benchCreateBtn">Create bot</button>
+              </div>
+            </div>
+            <div class="bench-cinema-examples" id="benchCinemaExamples"></div>
+          </div>
+
+          <div class="bench-build-card" id="benchBuildStep" style="display:none;">
+            <div class="bench-build-progress-track"><div class="bench-build-progress-bar" id="benchBuildProgressBar"></div></div>
+            <div class="bench-build-body">
+              <div class="bench-build-head">
+                <span class="bench-build-mia">MIA</span>
+                <div style="flex:1;min-width:0;">
+                  <div class="bench-build-title" id="benchBuildTitle">Building your bot</div>
+                  <div class="bench-build-sub" id="benchBuildSub"></div>
+                </div>
+                <span class="bench-build-counter" id="benchBuildCounter"></span>
+              </div>
+              <div class="bench-steps" id="benchSteps"></div>
+            </div>
+          </div>
+
+          <div class="bench-ready-card" id="benchReadyStep" style="display:none;">
+            <div class="bench-ready-head">
+              <span class="bench-ready-check">&#10003;</span>
+              <div style="flex:1;min-width:0;">
+                <div class="bench-ready-title" id="benchReadyTitle"></div>
+                <div class="bench-ready-note">It is active and ready in your workspace</div>
+              </div>
+            </div>
+            <div class="bench-ready-rows" id="benchReadyRows"></div>
+            <div class="bench-ready-finding">
+              <div class="bench-ready-finding-label">FIRST TEST RUN</div>
+              <div class="bench-ready-finding-text" id="benchReadyFinding"></div>
+            </div>
+            <div class="bench-ready-actions">
+              <button type="button" class="btn primary" id="benchStartBtn">Done</button>
+              <button type="button" class="btn" id="benchAdjustBtn">Adjust wording</button>
+            </div>
+          </div>
+
+          <div class="bench-cinema-step" id="benchEditStep" style="display:none;">
+            <div class="bench-compose-head">
+              <h2 id="benchEditTitle">Tune this bot</h2>
+              <p id="benchEditSub">Change the brief, test it safely, and save when it behaves</p>
+            </div>
+            <div class="bench-edit-snap-row">
+              <div class="bench-edit-snap-pill" id="benchEditSnapshot"></div>
+              <div class="bench-dept-dropdown" id="benchEditDeptDropdown">
+                <button type="button" class="bench-dept-dropdown-btn" id="benchEditDeptBtn"><span id="benchEditDeptBtnLabel"></span><span>&#9662;</span></button>
+                <div class="bench-dept-dropdown-panel" id="benchEditDeptPanel"></div>
+              </div>
+              <div class="bench-agent-color-control">
+                <span class="bench-agent-color-label">BOT COLOR</span>
+                <div class="bench-agent-color-options" id="benchEditColorOptions" role="group" aria-label="Bot avatar color"></div>
+              </div>
+            </div>
+            <div class="bench-edit-grid">
+              <div class="bench-edit-col">
+                <div class="bench-compose-card bench-edit-prompt-card">
+                  <textarea class="bench-compose-textarea bench-edit-textarea" id="benchEditTextarea"></textarea>
+                  <div class="bench-compose-foot">
+                    <button type="button" class="bench-edit-delete-btn" id="benchEditDeleteBtn" style="display:none;">Delete bot</button>
+                    <span class="bench-hint">esc to cancel</span>
+                    <button type="button" class="bench-model-btn" id="benchEditModelBtn"><span class="bench-model-dot"></span><span id="benchEditModelLabel"></span><span id="benchEditModelRecTag"></span><span>&#9662;</span></button>
+                    <button type="button" class="bench-create-btn bench-edit-save-btn" id="benchEditSaveBtn">Save changes</button>
+                  </div>
+                </div>
+              </div>
+              <div class="bench-edit-col">
+                <div class="bench-test-card">
+                  <div class="bench-test-head">
+                    <span class="bench-test-label">TEST BENCH</span>
+                    <span class="bench-test-note">preview &middot; simulated</span>
+                    <button type="button" class="bench-test-select-btn" id="benchTestSelectBtn">Select data<span>&#9662;</span></button>
+                  </div>
+                  <div class="bench-test-messages" id="benchTestMessages"></div>
+                  <div class="bench-test-input-row">
+                    <input type="text" class="bench-test-input" id="benchTestInput" placeholder="Try another sample task&hellip;" />
+                    <button type="button" class="bench-test-send-btn" id="benchTestSendBtn">Run</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="bench-suggest" id="benchEditSuggest"></div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- CHAT -->
+      <section class="panel" id="panel-chat">
+        <div class="chat-layout" data-shell>
+          <aside class="chat-sidebar" data-rail>
+            <div class="chat-new-btn-wrap">
+              <div class="mia-company-lockup workspace-switcher-wrap" id="miaLockup">
+                <button type="button" class="workspace-switcher" id="workspaceSwitcherToggle" aria-haspopup="menu" aria-expanded="false">
+                  <span class="workspace-switcher-copy"><span class="mia-company-name" id="miaCompanyName">Multiplayer Test</span></span>
+                  <svg class="workspace-switcher-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"></path></svg>
+                </button>
+                <div class="workspace-switcher-menu" id="workspaceSwitcherMenu" role="menu" aria-label="Switch workspace">
+                  <div class="workspace-switcher-label">Your spaces</div>
+                  <button type="button" class="workspace-switcher-option" data-workspace-key="solo" role="menuitem">
+                    <span class="workspace-switcher-option-mark">◌</span><span class="workspace-switcher-option-copy"><strong>Solo</strong><small>Private workspace</small></span><span class="workspace-switcher-check">✓</span>
+                  </button>
+                  <div class="workspace-switcher-label workspace-switcher-shared-label">Shared spaces</div>
+                  <button type="button" class="workspace-switcher-option" data-workspace-key="multiplayer_test" role="menuitem">
+                    <span class="workspace-switcher-option-mark">MT</span><span class="workspace-switcher-option-copy"><strong>Multiplayer Test</strong><small>Company workspace</small></span><span class="workspace-switcher-check">✓</span>
+                  </button>
+                </div>
+              </div>
+              <button type="button" class="chat-sidebar-tool-btn chat-sidebar-developer-btn" id="chatSidebarDeveloperBtn" aria-label="Open developer menu" title="Developer tools" aria-haspopup="menu" aria-expanded="false" hidden>&lt;/&gt;</button>
+              <button type="button" class="chat-sidebar-tool-btn chat-sidebar-agents-btn" id="chatSidebarManageAgentsBtn" aria-label="Manage people, agents, and bots" title="Manage people, agents, and bots"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"></circle><circle cx="17" cy="10" r="2"></circle><path d="M3.5 19a5.5 5.5 0 0 1 11 0M14 16.5a4 4 0 0 1 6.5 2.5"></path></svg></button>
+              <button type="button" class="chat-sidebar-tool-btn chat-sidebar-tools-btn" id="chatSidebarToolsBtn" aria-label="Open tools menu" title="Tools" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4.5 4.5 0 0 0-6.1 6.1L3.9 17.1a2.1 2.1 0 0 0 3 3l5.3-5.3a4.5 4.5 0 0 0 6.1-6.1l-3.2 3.2-2.1-2.1 3.2-3.2Z"></path></svg></button>
+              <button type="button" class="chat-back-btn" id="chatBackBtn" aria-label="Go back" title="Go back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg><span data-rail-hide>Back</span></button>
+              <div class="chat-new-menu chat-tools-menu" id="chatToolsMenu" role="menu" aria-label="Tools">
+                <button type="button" class="chat-new-menu-item" data-tools-action="new-chat" role="menuitem"><span class="chat-new-menu-icon"><img src="assets/icons/new-chat.png" alt="" aria-hidden="true" /></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">New chat</span><span class="chat-new-menu-sub">Start a direct conversation</span></span></button>
+                <button type="button" class="chat-new-menu-item primary" data-tools-action="new-bot" role="menuitem">
+                  <span class="chat-new-menu-icon"><img src="assets/icons/chat-new-agent.png" alt="" aria-hidden="true" /></span>
+                  <span class="chat-new-menu-text"><span class="chat-new-menu-label">New Bot</span><span class="chat-new-menu-sub">Create a bot for your team</span></span>
+                </button>
+                <button type="button" class="chat-new-menu-item upcoming" data-tools-action="new-agent" role="menuitem" aria-disabled="true"><span class="chat-new-menu-icon chat-tools-menu-mia" aria-hidden="true"><span data-mia-mark="24" data-mia-mark-mode="static"></span></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">New Agent (upcoming)</span><span class="chat-new-menu-sub">Configure the agent harness</span></span></button>
+                <button type="button" class="chat-new-menu-item" data-tools-action="new-channel" role="menuitem">
+                  <span class="chat-new-menu-icon"><img src="assets/icons/chat-new-channel.png" alt="" aria-hidden="true" /></span>
+                  <span class="chat-new-menu-text"><span class="chat-new-menu-label">New Channel</span><span class="chat-new-menu-sub">Create a shared team channel</span></span>
+                </button>
+                <div class="chat-tools-menu-separator" role="separator"></div>
+                <button type="button" class="chat-new-menu-item upcoming" data-tools-action="connected-apps" role="menuitem" aria-disabled="true"><span class="chat-new-menu-icon"><img src="assets/icons/connected-apps.png" alt="" aria-hidden="true" /></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Connected apps (upcoming)</span></span></button>
+                <button type="button" class="chat-new-menu-item" data-tools-action="web-browser" role="menuitem"><span class="chat-new-menu-icon"><img src="assets/icons/web-browser.png" alt="" aria-hidden="true" /></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Web browser</span><span class="chat-new-menu-sub">Browse beside Mia</span></span></button>
+              </div>
+              <div class="chat-new-menu chat-developer-menu" id="chatDeveloperMenu" role="menu" aria-label="Developer tools">
+                <button type="button" class="chat-new-menu-item" data-developer-action="diagnostics" role="menuitem"><span class="chat-new-menu-icon chat-tools-menu-glyph" aria-hidden="true">&lt;/&gt;</span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Diagnostics</span><span class="chat-new-menu-sub">Show detailed local activity</span></span></button>
+              </div>
+            </div>
+            <div class="chat-search-wrap" data-rail-hide><div class="chat-search-pill"><span class="chat-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="10.8" cy="10.8" r="6.2"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg></span><input type="text" class="chat-search" id="chatSearch" placeholder="Search chats" autocomplete="off" aria-controls="chatSearchResults" aria-expanded="false" /></div><div class="chat-search-results" id="chatSearchResults" role="listbox" aria-label="People, agents, and bots"></div></div>
+            <div class="chat-sidebar-scroll">
+              <div class="chat-recents-group">
+                <div class="chat-recents-head" data-rail-hide><button type="button" class="chat-section-toggle" data-chat-section-toggle="pinned" aria-controls="chatPinned" aria-expanded="true" aria-label="Collapse Pinned" title="Collapse Pinned"><span class="chat-section-chevron" aria-hidden="true"></span></button><span class="chat-recents-title">Pinned</span><span class="chat-recents-count" id="chatPinnedCount"></span></div>
+                <div class="chat-recents" id="chatPinned"></div>
+              </div>
+              <div class="chat-recents-group">
+                <div class="chat-recents-head" data-rail-hide>
+                  <button type="button" class="chat-section-toggle" data-chat-section-toggle="all" aria-controls="chatAllConversations" aria-expanded="true" aria-label="Collapse All conversations" title="Collapse All conversations"><span class="chat-section-chevron" aria-hidden="true"></span></button>
+                  <span class="chat-recents-title">All conversations</span>
+                  <span class="chat-recents-count" id="chatAllCount"></span>
+                  <button type="button" class="chat-dm-add-btn" id="chatDmAddBtn" title="New direct message" aria-label="New direct message">+</button>
+                </div>
+                <div class="chat-dm-add-popover" id="chatDmAddPopover">
+                  <input type="text" class="chat-dm-add-input" id="chatDmAddInput" placeholder="Search people…" autocomplete="off" />
+                  <div class="chat-dm-add-list" id="chatDmAddList"></div>
+                </div>
+                <div class="chat-recents" id="chatAllConversations"></div>
+              </div>
+            </div>
+            <div class="chat-sidebar-footer" data-rail-hide>
+              <button type="button" class="chat-acct-row" id="chatAcctBtn" aria-haspopup="true" aria-expanded="false">
+                <span class="chat-acct-avatar" id="chatAcctAvatar">?</span><span class="chat-acct-name" id="chatAcctName">User</span>
+              </button>
+              <div class="chat-acct-menu" id="chatAcctMenu" role="menu">
+                <button type="button" class="chat-acct-menu-item" id="chatAcctAdmin" hidden role="menuitem">
+                  <span class="cami" aria-hidden="true"><img src="assets/icons/menu-admin-center.png?v=20260903-menu-icons-1" alt="" /></span><span>Admin Center</span>
+                </button>
+                <button type="button" class="chat-acct-menu-item" id="chatAcctSetup" role="menuitem">
+                  <span class="cami" aria-hidden="true"><img src="assets/icons/menu-initial-setup.png?v=20260903-menu-icons-1" alt="" /></span><span>Initial setup</span>
+                </button>
+                <button type="button" class="chat-acct-menu-item" id="chatAcctSettings" role="menuitem">
+                  <span class="cami" aria-hidden="true"><img src="assets/icons/menu-settings.png?v=20260903-menu-icons-1" alt="" /></span><span>Settings</span>
+                </button>
+                <button type="button" class="chat-acct-menu-item" id="chatAcctNotifications" role="menuitem">
+                  <span class="cami" aria-hidden="true"><img src="assets/icons/menu-desktop-notifications.png?v=20260903-menu-icons-2" alt="" /></span><span>Desktop notifications</span><span class="chat-acct-menu-item-trail"><span id="chatAcctNotificationsStatus">Off</span></span>
+                </button>
+                <button type="button" class="chat-acct-menu-item" id="chatAcctAbout" role="menuitem" aria-haspopup="dialog" aria-controls="aboutDialog">
+                  <span class="cami" aria-hidden="true"><img src="assets/icons/menu-about.png?v=20260903-menu-icons-1" alt="" /></span><span>About</span>
+                </button>
+                <button type="button" class="chat-acct-menu-item" id="chatAcctFeedback" data-chat-acct-toast="Feedback is upcoming" role="menuitem">
+                  <span class="cami" aria-hidden="true"><img src="assets/icons/menu-feedback.png?v=20260903-menu-icons-2" alt="" /></span><span>Send Feedback</span>
+                </button>
+                <div class="chat-acct-menu-sep"></div>
+                <button type="button" class="chat-acct-menu-item danger" id="chatAcctLogout" role="menuitem"><span class="cami" aria-hidden="true"><img src="assets/icons/menu-logout.png?v=20260903-menu-icons-1" alt="" /></span><span>Log out</span></button>
+              </div>
+              <span class="csf-dot" id="chatSyncDot"></span><span id="chatSyncFooter">Connecting&hellip;</span>
+            </div>
+            <div class="chat-sidebar-resize" data-chat-sidebar-resize title="Drag to resize sidebar" aria-hidden="true"></div>
+          </aside>
+          <main class="chat-app">
+            <div class="chat-main-col">
+              <header class="channel-header" id="channelHeader" style="display:none;"></header>
+              <div class="chat-thread" id="chatThread"></div>
+              <div class="chat-presets" id="chatChips"></div>
+              <div class="cc-recording-pill" id="ccRecordingPill"><span class="cc-recording-dot"></span>Recording&hellip;</div>
+              <div class="chat-dept-agents" id="chatDeptAgents" style="display:none;"></div>
+              <div class="chat-mention-popover" id="chatMentionPopover"></div>
+              <div class="chat-composer-wrap">
+                <div class="cc-attach-strip" id="ccAttachStrip" style="display:none;"></div>
+                <div class="chat-composer">
+                  <div class="cc-input-row">
+                    <div class="cc-inline-suggestion" id="ccInlineSuggestion" hidden aria-hidden="true"><em class="cc-inline-suggestion-tab">Tab</em><span>Can we create a newsletter bot?</span></div>
+                    <textarea class="cc-input" id="ccInput" rows="1" placeholder="" autocomplete="off" data-form-type="other" data-lpignore="true" data-1p-ignore="true"></textarea>
+                  </div>
+                  <div class="cc-bottom-row">
+                    <button type="button" class="cc-plus-btn" id="ccPlusBtn" title="Attach" aria-label="Attach">+</button>
+                    <input type="file" id="ccFileInput" class="cc-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" />
+                    <!-- Reserved for the composer keyboard hint. -->
+                    <span class="cc-hint" id="ccHint"></span>
+                    <div class="cc-model-select" id="ccModelSelect">
+                      <button type="button" class="cc-model-btn" id="ccModelBtn" aria-haspopup="dialog" aria-expanded="false" aria-label="Choose model">
+                        <svg class="cc-model-bolt" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9 1.5 3 9h4.2L7 14.5 13 7H8.8L9 1.5z"></path></svg><span class="cc-model-tags" id="ccModelTags"><span class="cc-model-placeholder">Model</span></span><span class="caret" aria-hidden="true">&#8250;</span>
+                      </button>
+                      <div class="cc-model-menu" id="ccModelMenu" role="dialog" aria-label="Choose model">
+                        <div class="cc-model-menu-head">
+                          <button type="button" class="cc-model-back" id="ccModelBack" aria-label="Back" title="Back">&#8249;</button>
+                          <div class="cc-model-menu-title" id="ccModelMenuTitle">Choose a model</div>
+                        </div>
+                        <div class="cc-model-options" id="ccModelOptions" role="listbox"></div>
+                        <div class="cc-model-selection" id="ccModelSelection"></div>
+                      </div>
+                    </div>
+                    <div class="cc-right-cluster">
+                      <button type="button" class="cc-icon-btn" id="ccMicBtn" title="Dictate" aria-label="Dictate">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line><line x1="8" y1="22" x2="16" y2="22"></line></svg>
+                      </button>
+                      <button type="button" class="cc-send" id="ccSend" title="Send" aria-label="Send">
+                        <svg class="cc-send-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <aside class="chat-info-pane" id="chatInfoPane" aria-label="Automations"></aside>
+            <aside class="chat-thread-panel" id="chatThreadPanel" hidden>
+              <div class="ctp-resize" data-ctp-resize title="Drag to resize"></div>
+              <div class="ctp-header cip-pane-head">
+                <span class="ctp-header-title cip-pane-title">Thread</span>
+                <span class="ctp-header-room" id="ctpRoomName"></span>
+                <span class="cip-pane-spacer" aria-hidden="true"></span>
+                <div class="cip-pane-actions"><button type="button" class="ctp-close cip-pane-btn" id="ctpCloseBtn" title="Close thread" aria-label="Close thread"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div>
+              </div>
+              <div class="ctp-body" id="ctpBody">
+                <div class="ctp-root" id="ctpRoot"></div>
+                <div class="ctp-divider" id="ctpDivider"></div>
+                <div class="ctp-replies" id="ctpReplies"></div>
+              </div>
+              <div class="ctp-composer-row">
+                <input type="search" class="ctp-composer-input" id="ctpComposerInput" name="chat_thread_message" data-thread-reply-input placeholder="Reply in thread&hellip;" autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
+              </div>
+            </aside>
+            <aside class="chat-thread-panel" id="chatTasksPanel" hidden>
+              <div class="ctp-resize" data-ctp-resize title="Drag to resize"></div>
+              <div class="ctp-header cip-pane-head">
+                <span class="ctp-header-title cip-pane-title">Tasks</span>
+                <span class="ctp-header-room" id="ctskAgentName"></span>
+                <span class="cip-pane-spacer" aria-hidden="true"></span>
+                <div class="cip-pane-actions"><button type="button" class="ctp-close cip-pane-btn" id="ctskCloseBtn" title="Close tasks" aria-label="Close tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div>
+              </div>
+              <div class="ctp-body" id="ctskBody">
+                <div class="ctsk-list" id="ctskList"></div>
+              </div>
+            </aside>
+            <div class="chat-ctx-menu" id="chatCtxMenu" hidden>
+              <button type="button" class="chat-ctx-menu-item" id="chatCtxEdit">&#9998; Edit prompt</button>
+              <button type="button" class="chat-ctx-menu-item" id="chatCtxThread">&#8618; Reply in thread</button>
+              <button type="button" class="chat-ctx-menu-item chat-ctx-menu-item-delete" id="chatCtxDelete">&#10005; Delete</button>
+            </div>
+            <div class="chat-ctx-menu chat-sidebar-ctx-menu" id="chatSidebarCtxMenu" hidden>
+              <button type="button" class="chat-ctx-menu-item chat-sidebar-ctx-item" id="chatSidebarCtxPin" data-sidebar-action="pin">
+                <img class="chat-sidebar-ctx-icon" src="assets/icons/pin-network.png" alt="" aria-hidden="true" />
+                <span id="chatSidebarCtxPinLabel">Pin</span>
+              </button>
+              <button type="button" class="chat-ctx-menu-item chat-sidebar-ctx-item" id="chatSidebarCtxAttention" data-sidebar-action="attention">
+                <svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 16.5h11l-1.5-2v-4a4 4 0 0 0-8 0v4z"></path><path d="M9.5 19a2.5 2.5 0 0 0 5 0M17.8 4.7l1.5 1.5"></path></svg>
+                <span id="chatSidebarCtxAttentionLabel">Mark as Unread</span>
+              </button>
+              <div class="chat-sidebar-ctx-sep" data-sidebar-separator="agent" role="separator"></div>
+              <button type="button" class="chat-ctx-menu-item chat-sidebar-ctx-item" id="chatSidebarCtxEdit" data-sidebar-action="edit" hidden>
+                <svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16.8-.8 4 4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3z"></path><path d="m14.5 6.5 3 3"></path></svg>
+                <span>Edit bot</span>
+              </button>
+              <button type="button" class="chat-ctx-menu-item chat-sidebar-ctx-item" id="chatSidebarCtxDuplicate" data-sidebar-action="duplicate" hidden>
+                <svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="12" height="12" rx="1.5"></rect><path d="M5 16V5a1 1 0 0 1 1-1h11"></path></svg>
+                <span>Duplicate</span>
+              </button>
+              <button type="button" class="chat-ctx-menu-item chat-sidebar-ctx-item" id="chatSidebarCtxShare" data-sidebar-action="share" hidden>
+                <svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3.5M8 7.5l4-4 4 4"></path><path d="M5 12v7.5h14V12"></path></svg>
+                <span>Share as template</span>
+              </button>
+              <div class="chat-sidebar-ctx-sep" data-sidebar-separator="copy" role="separator"></div>
+              <button type="button" class="chat-ctx-menu-item chat-sidebar-ctx-item" id="chatSidebarCtxCopy" data-sidebar-action="copy">
+                <svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="1.5"></rect><path d="M5 16V5a1 1 0 0 1 1-1h10"></path></svg>
+                <span>Copy conversation ID</span>
+              </button>
+              <div class="chat-sidebar-ctx-sep" data-sidebar-separator="hide" role="separator"></div>
+              <button type="button" class="chat-ctx-menu-item chat-sidebar-ctx-item" id="chatSidebarCtxHide" data-sidebar-action="hide" hidden>
+                <svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 3.5 20.5 20.5"></path><path d="M10.2 5.2A9.8 9.8 0 0 1 12 5c5.3 0 8.9 4.2 9.8 7-.3 1.1-1.1 2.4-2.3 3.6M6.2 6.2C4.8 7.3 3.8 8.8 2.8 12c.8 2.8 4.2 7 9.2 7 1.1 0 2.1-.2 3-.6"></path><path d="M9.5 9.5a3.5 3.5 0 0 0 5 5"></path></svg>
+                <span>Hide from sidebar</span>
+              </button>
+              <button type="button" class="chat-ctx-menu-item chat-sidebar-ctx-item chat-sidebar-ctx-item-danger" id="chatSidebarCtxDelete" data-sidebar-action="delete" hidden>
+                <svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4.5h6V7M7 7l.7 13h8.6L17 7M10 10.5v6M14 10.5v6"></path></svg>
+                <span id="chatSidebarCtxDeleteLabel">Delete</span>
+              </button>
+            </div>
+          </main>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- Local browser surface. -->
+<div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
+  <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
+    <header class="local-browser-head">
+      <div class="local-browser-title">
+        <span class="local-browser-dot" aria-hidden="true"></span>
+        <span>Web browser</span>
+        <span class="local-browser-status" id="localBrowserStatus">Local</span>
+      </div>
+      <div class="local-browser-actions">
+        <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Open sidebar" aria-label="Open sidebar" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.4"></rect><path d="M9.5 4.5v15"></path></svg>
+        </button>
+        <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled>&lsaquo;</button>
+        <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled>&rsaquo;</button>
+        <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled>&#8635;</button>
+        <button type="button" class="local-browser-btn" id="localBrowserCloseBtn" title="Close web browser" aria-label="Close web browser">&times;</button>
+      </div>
+    </header>
+    <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off">
+      <input type="text" id="localBrowserUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Enter a web address" aria-label="Web address" />
+      <button type="submit" class="local-browser-go-btn">Go</button>
+      <button type="button" class="local-browser-share-btn" id="localBrowserShareBtn" title="Share — coming soon" aria-label="Share — coming soon" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
+      </button>
+    </form>
+    <div class="local-browser-screen" id="localBrowserScreen">
+      <div class="local-browser-empty" id="localBrowserEmpty">
+        <span class="local-browser-empty-title">Open a web page</span>
+        <span>Enter a web address above to browse beside Mia.</span>
+      </div>
+      <div class="local-browser-blocked" id="localBrowserBlocked" hidden>
+        <span class="local-browser-empty-title" id="localBrowserBlockedTitle">This page could not be loaded</span>
+        <span id="localBrowserBlockedMessage">The browser reported an error loading this page.</span>
+        <a id="localBrowserBlockedLink" href="#" target="_blank" rel="noopener" hidden>Open in a browser tab</a>
+      </div>
+    </div>
+    <footer class="local-browser-foot">Local browser · Mia is available on the right</footer>
+  </section>
+</div>
+
+<aside class="app-development-panel" id="appDevelopmentPanel" role="dialog" aria-label="Local diagnostics" hidden>
+  <div class="app-development-head">
+    <div>
+      <strong>Diagnostics</strong>
+      <span>Local preview only</span>
+    </div>
+    <button type="button" class="app-development-close" id="appDevelopmentClose" aria-label="Close local diagnostics">&times;</button>
+  </div>
+  <label class="app-development-toggle">
+    <input type="checkbox" id="appDevHermesVerbose" />
+    <span>
+      <strong>Show detailed agent activity</strong>
+      <small>Shows additional local execution status. Sensitive values remain redacted.</small>
+    </span>
+  </label>
+  <div class="app-development-status" id="appDevStatus">Loading diagnostics…</div>
+</aside>
+
+<!-- About Mia -->
+<div class="styled-scrim styled-about-overlay" id="aboutOverlay"></div>
+<section class="styled-about-sheet" id="aboutDialog" role="dialog" aria-modal="true" aria-labelledby="aboutTitle" aria-describedby="aboutSummary">
+  <button type="button" class="styled-sheet-close" id="aboutClose" aria-label="Close About">&times;</button>
+  <div class="styled-about-scroll">
+    <header class="styled-about-hero">
+      <div class="styled-about-mark" aria-hidden="true"><span data-mia-mark="42" data-mia-mark-mode="static"></span></div>
+      <div>
+        <div class="styled-about-badges"><span>Open source</span><span>MIT licensed</span></div>
+        <h1 id="aboutTitle">Mia</h1>
+        <p id="aboutSummary">A friendly, local interface for Hermes Agent, with private agents and bots. Multiplayer rooms and shared bots are upcoming.</p>
+      </div>
+    </header>
+
+    <div class="styled-about-body">
+      <section class="styled-about-section">
+        <h2>How it works</h2>
+        <p>Hermes Agent is the runtime that connects to AI providers, manages provider sessions, tokens and refresh, and performs inference. Mia supplies the interface, room coordination, and bot orchestration.</p>
+        <ul>
+          <li>Provider connections use ChatGPT, Grok, or API access configured through Hermes Agent.</li>
+          <li>Mia does not implement “Sign in with ChatGPT” or provider OAuth with a Mia client ID.</li>
+          <li>Mia does not persist ChatGPT or Grok credentials. Private agents and Solo bots use their owner’s provider subscription or API credential—consumer subscriptions are never pooled.</li>
+        </ul>
+      </section>
+
+      <section class="styled-about-section">
+        <h2>Privacy and upcoming multiplayer</h2>
+        <div class="styled-about-grid">
+          <article><h3>Solo work stays private</h3><p>Only the owner can request work from a private agent or Solo bot. It may use that owner’s Hermes session.</p></article>
+          <article><h3>Shared bots will be API-only</h3><p>When multiplayer ships, shared bots must use paid API credentials and never a member’s consumer ChatGPT or Grok subscription.</p></article>
+          <article><h3>Rooms will coordinate people</h3><p>Upcoming multiplayer services will coordinate rooms, presence, and shared-bot calls without exposing or invoking another person’s private agent.</p></article>
+          <article><h3>Your local work stays local</h3><p>Provider authentication and local agent files remain under Hermes Agent’s control on the user’s computer.</p></article>
+        </div>
+      </section>
+
+      <section class="styled-about-section">
+        <h2>Open-source licenses</h2>
+        <div class="styled-about-license-list">
+          <div class="styled-about-license-row">
+            <div><strong>Mia</strong><small>Copyright © 2026 Mia contributors · MIT License</small></div>
+            <a href="https://github.com/luislozanogmia/mia_multiplayer/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">View license</a>
+          </div>
+          <div class="styled-about-license-row">
+            <div><strong>Hermes Agent</strong><small>Copyright © 2025 Nous Research · MIT License</small></div>
+            <a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">View license</a>
+          </div>
+        </div>
+        <div class="styled-about-links"><a href="https://github.com/luislozanogmia/mia_multiplayer" target="_blank" rel="noopener noreferrer">Mia source code</a><a href="https://github.com/NousResearch/hermes-agent" target="_blank" rel="noopener noreferrer">Hermes Agent source code</a></div>
+      </section>
+
+      <p class="styled-about-disclaimer">Mia is independent software and is not affiliated with or endorsed by OpenAI or xAI. ChatGPT, OpenAI, Grok, xAI, and Hermes Agent are names or trademarks of their respective owners.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Settings drawer -->
+<div class="drawer-overlay styled-scrim" id="settingsOverlay"></div>
+<div class="drawer styled-sheet styled-settings-sheet" id="settingsDrawer" role="dialog" aria-modal="true" aria-label="Settings">
+  <button class="styled-sheet-close" id="settingsClose" aria-label="Close settings">&times;</button>
+  <nav class="styled-settings-nav" id="settingsNav">
+    <button class="styled-settings-nav-item active" data-pane="general"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg>General</button>
+    <button class="styled-settings-nav-item" data-pane="model"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h6M12 8v2.5M14.5 8v1.8"/></svg>Access</button>
+    <button class="styled-settings-nav-item" data-pane="security"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l5 2v4.2c0 3-2.2 5.3-5 6.2-2.8-.9-5-3.2-5-6.2V3.8l5-2z"/><path d="M5.8 8l1.5 1.5L10.3 6.5"/></svg>Security</button>
+    <button class="styled-settings-nav-item" data-pane="backups"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v8.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8M2.8 8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2"/></svg>Backups</button>
+  </nav>
+  <div class="styled-settings-content" id="settingsContent">
+
+    <section class="styled-settings-pane active" data-pane="general">
+      <h1 class="styled-settings-h1">General</h1>
+
+      <div class="styled-settings-group-label">Account</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-account-row">
+          <span class="styled-settings-avatar human-avatar" id="settingsAcctAvatar"></span>
+          <div class="styled-settings-account-text">
+            <div class="styled-settings-row-label" id="settingsAcctName"></div>
+            <div class="styled-settings-account-email" id="settingsAcctEmail"></div>
+          </div>
+          <button class="styled-settings-pill-btn" id="settingsSignOut">Sign out</button>
+        </div>
+      </div>
+
+      <div class="styled-settings-group-label">Profile</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Display name</div><div class="styled-settings-row-desc">How you appear to agents and teammates</div></div>
+          <input type="text" class="styled-settings-field" id="settingsDisplayName" placeholder="Your name" autocomplete="off" maxlength="80" />
+        </div>
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Initials</div><div class="styled-settings-row-desc">Shown on your avatar when there is no photo</div></div>
+          <input type="text" class="styled-settings-field styled-settings-field-short" id="settingsInitials" placeholder="AB" autocomplete="off" maxlength="3" />
+        </div>
+        <div class="styled-settings-row styled-settings-row-actions">
+          <span class="styled-settings-form-note" id="settingsProfileSaved">Saved</span>
+          <button class="styled-settings-pill-btn" id="settingsProfileSave">Save changes</button>
+        </div>
+      </div>
+
+      <div class="styled-settings-group-label">Assistant</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Prompt suggestions</div><div class="styled-settings-row-desc">Show one inline suggestion in the chat composer</div></div>
+          <label class="styled-toggle"><input type="checkbox" id="settingsAgentSuggestions" /><span class="gt-track"></span></label>
+        </div>
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Guided tour</div><div class="styled-settings-row-desc">Show the first-run walkthrough again</div></div>
+          <button class="styled-settings-pill-btn" id="settingsReplayTour">Replay</button>
+        </div>
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Output</div><div class="styled-settings-row-desc" id="settingsOutputNote">Concise is selected — replies show only the final answer.</div></div>
+          <select class="styled-settings-field styled-settings-select" id="settingsOutputMode" aria-label="Chat output detail">
+            <option value="concise">Concise</option>
+            <option value="verbose">Verbose</option>
+          </select>
+        </div>
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Theme</div><div class="styled-settings-row-desc">Light or dark appearance</div></div>
+          <select class="styled-settings-field styled-settings-select" id="settingsThemeMode" aria-label="Theme">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="styled-settings-group-label">All data</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Clean slate</div><div class="styled-settings-row-desc">Start from zero: permanently delete every bot, automation, conversation, message, and attachment, disconnect all model providers, and wipe agent sessions and memories</div></div>
+          <button class="styled-settings-pill-btn danger" id="settingsCleanSlate">Erase all data</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="styled-settings-pane" data-pane="model">
+      <h1 class="styled-settings-h1">Access</h1>
+
+      <div class="styled-settings-group-label">Current Configuration</div>
+      <div class="styled-settings-card styled-harness-summary-card" id="settingsHarnessCard">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Provider</div></div>
+          <span class="status-pill offline" id="settingsHarnessProvider"><span class="dot"></span>Not selected yet</span>
+        </div>
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Workspace mode</div></div>
+          <span class="status-pill offline" id="settingsHarnessMode"><span class="dot"></span>Not set up yet</span>
+        </div>
+      </div>
+
+      <div class="styled-settings-group-label">Model access</div>
+      <div class="styled-settings-card styled-harness-connections" id="settingsHarnessConnections">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Checking provider access</div><div class="styled-settings-row-desc">Connection status is loading.</div></div>
+        </div>
+      </div>
+
+      <div class="styled-settings-group-label">Execution runtime</div>
+      <div class="styled-settings-card styled-harness-runtimes" id="settingsHarnessRuntimes">
+        <div class="styled-settings-row styled-harness-connection-row">
+          <div><div class="styled-settings-row-label">Hermes Agent</div></div>
+          <span class="status-pill offline"><span class="dot"></span>Checking…</span>
+        </div>
+        <div class="styled-settings-row styled-harness-connection-row">
+          <div><div class="styled-settings-row-label">Grok Build</div></div>
+          <span class="status-pill coming-soon">Upcoming</span>
+        </div>
+        <div class="styled-settings-row styled-harness-connection-row">
+          <div><div class="styled-settings-row-label">ChatGPT Codex</div></div>
+          <span class="status-pill coming-soon">Upcoming</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="styled-settings-pane" data-pane="security">
+      <h1 class="styled-settings-h1">Security</h1>
+
+      <div class="styled-settings-group-label">Guardrails</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Allow external model providers</div><div class="styled-settings-row-desc">Permit non-Anthropic providers for fallback calls</div></div>
+          <label class="styled-toggle"><input type="checkbox" class="gr-toggle" id="grAllowedProviders" /><span class="gt-track"></span></label>
+        </div>
+      </div>
+    </section>
+
+    <section class="styled-settings-pane" data-pane="backups">
+      <h1 class="styled-settings-h1">Backups</h1>
+
+      <div class="styled-settings-group-label">Snapshots</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Last backup</div><div class="styled-settings-row-desc">Automatic snapshots run on the instance schedule</div></div>
+          <span class="styled-settings-value" id="settingsLastBackup">&mdash;</span>
+        </div>
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Download snapshot</div><div class="styled-settings-row-desc">Full JSON export of this workspace</div></div>
+          <a class="styled-settings-pill-btn" id="settingsDownloadBtn" href="/api/backup">Download</a>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<!-- First-run provider onboarding -->
+<div class="drawer-overlay styled-scrim" id="harnessOnboardingOverlay"></div>
+<section class="styled-sheet styled-onboarding-sheet" id="harnessOnboarding" role="dialog" aria-modal="true" aria-labelledby="harnessOnboardingTitle">
+  <button class="styled-sheet-close" id="harnessOnboardingClose" aria-label="Close onboarding">&times;</button>
+  <div class="styled-onboarding-kicker">Mia onboarding</div>
+  <h1 class="styled-onboarding-title" id="harnessOnboardingTitle">Mia - Multiplayer</h1>
+  <p class="styled-onboarding-intro">Set up your workspace. You can change this later from Access.</p>
+
+  <div class="styled-onboarding-label">How will you work?</div>
+  <div class="styled-onboarding-mode-grid styled-onboarding-mode-grid-large" id="harnessModeChoices">
+    <button type="button" class="styled-onboarding-mode" data-harness-mode="solo" aria-pressed="false">
+      <span class="styled-onboarding-mode-mark" aria-hidden="true"><img src="assets/icons/mode-solo.png?v=20260904-mode-icons-1" alt="" /></span>
+          <span><strong>Solo</strong><small>Just you, your private agents, and your bots</small></span>
+    </button>
+    <button type="button" class="styled-onboarding-mode is-upcoming" data-harness-mode="multiplayer" aria-pressed="false" disabled aria-disabled="true">
+      <span class="styled-onboarding-mode-mark" aria-hidden="true"><img src="assets/icons/mode-multiplayer.png?v=20260904-mode-icons-1" alt="" /></span>
+          <span><strong>Multiplayer <span class="styled-onboarding-mode-badge">Upcoming</span></strong><small>You and teammates, with shared bots and private agents</small></span>
+    </button>
+  </div>
+
+  <div class="styled-onboarding-label">Choose your provider to power your Agent</div>
+  <div class="styled-onboarding-provider-grid" id="harnessProviderChoices">
+    <div class="styled-onboarding-provider-row">
+      <button type="button" class="styled-onboarding-choice" data-harness-provider="openai-codex" aria-pressed="false">
+        <span class="styled-onboarding-choice-icon choice-openai"><img src="assets/icons/chatgpt-monoblossom.svg?v=20260903-provider-icons-1" alt="" /></span>
+        <span><strong>ChatGPT subscription</strong><small>Use your ChatGPT plan through your configured harness</small></span>
+        <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="openai-codex" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
+    </div>
+    <div class="styled-onboarding-provider-row">
+      <button type="button" class="styled-onboarding-choice" data-harness-provider="xai-oauth" aria-pressed="false">
+        <span class="styled-onboarding-choice-icon choice-grok"><img src="assets/icons/x-logo.svg?v=20260903-provider-icons-1" alt="" /></span>
+        <span><strong>Grok subscription</strong><small>Use your Grok plan through your configured harness</small></span>
+        <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="xai-oauth" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
+    </div>
+    <div class="styled-onboarding-provider-row styled-onboarding-api-card" id="harnessApiCard">
+      <button type="button" class="styled-onboarding-choice" data-harness-provider="openai-api" aria-pressed="false">
+        <span class="styled-onboarding-choice-icon choice-api">↗</span>
+        <span><strong>API connection</strong><small>Use an API credential already managed by your harness</small></span>
+        <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
+      </button>
+      <div class="styled-onboarding-api-section" id="harnessApiConnectionSection" hidden>
+        <label class="styled-onboarding-api-field" for="harnessApiProvider">
+          <span class="styled-onboarding-api-label">Provider</span>
+          <select class="styled-onboarding-api-select" id="harnessApiProvider">
+            <option value="openai-api">OpenAI</option>
+            <option value="xai">xAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Google AI Studio</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="alibaba">Qwen Cloud</option>
+            <option value="alibaba-coding-plan">Alibaba Cloud (Coding Plan)</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="fireworks">Fireworks AI</option>
+            <option value="novita">NovitaAI</option>
+            <option value="lmstudio">LM Studio</option>
+            <option value="nvidia">NVIDIA NIM</option>
+            <option value="copilot">GitHub Copilot</option>
+            <option value="huggingface">Hugging Face</option>
+            <option value="xiaomi">Xiaomi MiMo</option>
+            <option value="tencent-tokenhub">Tencent TokenHub</option>
+            <option value="zai">Z.AI / GLM</option>
+            <option value="kimi-coding">Kimi / Kimi Coding Plan</option>
+            <option value="kimi-coding-cn">Kimi / Moonshot (China)</option>
+            <option value="stepfun">StepFun Step Plan</option>
+            <option value="minimax">MiniMax</option>
+            <option value="minimax-cn">MiniMax (China)</option>
+            <option value="ollama-cloud">Ollama Cloud</option>
+            <option value="arcee">Arcee AI</option>
+            <option value="gmi">GMI Cloud</option>
+            <option value="kilocode">Kilo Code</option>
+            <option value="opencode-zen">OpenCode Zen</option>
+            <option value="opencode-go">OpenCode Go</option>
+            <option value="azure-foundry">Azure Foundry</option>
+            <option value="ai-gateway">Vercel AI Gateway</option>
+            <option value="deepinfra">DeepInfra</option>
+            <option value="upstage">Upstage Solar</option>
+          </select>
+        </label>
+        <label class="styled-onboarding-api-field" for="harnessApiKey">
+          <span class="styled-onboarding-api-label">API key</span>
+          <input class="styled-onboarding-api-key" id="harnessApiKey" type="password" name="harness-api-key" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Paste your API key" />
+        </label>
+      </div>
+      <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="api" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
+    </div>
+  </div>
+
+  <div class="styled-onboarding-shared-bots-section" id="harnessSharedBotsSection" data-harness-multiplayer-only hidden>
+    <div class="styled-onboarding-label-row">
+      <div class="styled-onboarding-label">Shared bots</div>
+      <span class="styled-onboarding-info-wrap">
+        <button type="button" class="styled-onboarding-info" id="harnessSharedBotsInfo" aria-label="Shared bot information" aria-expanded="false" aria-controls="harnessSharedBotsTooltip" title="Shared bot information">i</button>
+        <span class="styled-onboarding-info-popover" id="harnessSharedBotsTooltip" role="tooltip">Provider sign-in and API keys for shared bots are managed outside Mia. Mia never asks for or stores them.</span>
+      </span>
+    </div>
+    <div class="styled-onboarding-shared-bots">
+      <span class="styled-onboarding-shared-bots-icon" aria-hidden="true">↗</span>
+      <span class="styled-onboarding-shared-bots-copy"><strong>Add your API keys to power your shared bots</strong><small>Configure shared-bot access outside Mia. Mia never stores provider credentials.</small></span>
+    </div>
+  </div>
+  <div class="styled-harness-auth" id="harnessAuthPanel" hidden aria-live="polite">
+    <div class="styled-harness-auth-copy">
+      <strong id="harnessAuthTitle">Connect your provider through the harness</strong>
+      <small id="harnessAuthStatus">The harness is preparing a secure sign-in.</small>
+    </div>
+    <a class="styled-harness-auth-link" id="harnessAuthLink" href="#" target="_blank" rel="noopener noreferrer" hidden>Open provider sign-in</a>
+    <div class="styled-harness-auth-code" id="harnessAuthCodeWrap" hidden>
+      <span>Code</span><code id="harnessAuthCode"></code>
+    </div>
+  </div>
+  <div class="styled-onboarding-error" id="harnessOnboardingError" role="status"></div>
+  <div class="styled-onboarding-actions">
+    <small class="styled-onboarding-credentials-note" id="harnessApiCredentialNote" hidden>Your credentials are secured on this computer.</small>
+    <button type="button" class="styled-onboarding-disconnect-action" id="harnessOnboardingDisconnect"><span class="styled-onboarding-connection-icon" aria-hidden="true">×</span><span class="styled-onboarding-connection-label">Disconnect</span></button>
+    <button type="button" class="styled-onboarding-continue" id="harnessOnboardingContinue" disabled><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
+  </div>
+</section>
+
+<!-- Official channel name dialog -->
+<div class="drawer-overlay styled-scrim" id="channelNameOverlay"></div>
+<section class="drawer styled-channel-drawer" id="channelNameDrawer" role="dialog" aria-modal="true" aria-labelledby="channelNameTitle">
+  <div class="drawer-head styled-channel-head">
+    <div>
+      <div class="styled-channel-kicker">Shared space</div>
+      <h2 id="channelNameTitle">New channel</h2>
+      <p>Start an official conversation for everyone in this space.</p>
+    </div>
+    <button class="drawer-close styled-channel-close" id="channelNameClose" aria-label="Close">&times;</button>
+  </div>
+  <div class="drawer-body styled-channel-body">
+    <div class="styled-channel-mark" aria-hidden="true">#</div>
+    <div class="form-field styled-channel-field">
+      <label for="channelNameInput">Channel name</label>
+      <input type="text" id="channelNameInput" placeholder="e.g. product, launch, or friends" autocomplete="off" maxlength="80" />
+      <small>Official channels are shared team conversations. Shared bots can be added here.</small>
+    </div>
+  </div>
+  <div class="drawer-actions styled-channel-actions">
+    <button class="btn styled-channel-cancel" id="channelNameCancel">Cancel</button>
+    <button class="btn primary styled-channel-create" id="channelNameCreate">Create channel</button>
+  </div>
+</section>
+
+<!-- Direct message compose drawer -->
+<div class="drawer-overlay" id="dmComposeOverlay"></div>
+<div class="drawer" id="dmComposeDrawer">
+  <div class="drawer-head">
+    <h2>Direct message</h2>
+    <button class="drawer-close" id="dmComposeClose">&times;</button>
+  </div>
+  <div class="drawer-body">
+    <div class="form-field">
+      <label>Group name (optional)</label>
+      <input type="text" id="dmComposeName" placeholder="Leave blank to use member names" autocomplete="off" />
+    </div>
+    <div class="form-field">
+      <label>Members</label>
+      <input type="text" id="dmComposeSearch" placeholder="Search people, agents, and bots" autocomplete="off" />
+    </div>
+    <div class="dm-compose-list" id="dmComposeList"></div>
+  </div>
+  <div class="drawer-actions">
+    <button class="btn primary" id="dmComposeCreate" disabled>Create</button>
+    <button class="btn" id="dmComposeCancel">Cancel</button>
+  </div>
+</div>
+
+<script src="assets/mia-mark.js"></script>
+<script src="chat-security.js"></script>
+<script src="hermes-connectors.js?v=20260904-google-g"></script>
+    <script src="native-browser.js?v=20260908-native-theme-1"></script>
+    <script src="app.js?v=20260910-oss-release-1"></script>
+</body>
+</html>

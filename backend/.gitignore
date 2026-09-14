@@ -1,0 +1,10 @@
+node_modules/
+.env*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+mia-os-test.*
+seed-users.cjs
+conversation-attachments/
