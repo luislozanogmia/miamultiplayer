@@ -319,13 +319,14 @@ test("native chat artifact previews use the sandboxed Mia artifact pane", () => 
   assert.match(mainSource, /partition: ARTIFACT_PARTITION,[\s\S]*contextIsolation: true,[\s\S]*nodeIntegration: false,[\s\S]*sandbox: true/);
 });
 
-test("general browser uses an ephemeral profile with a user-facing data reset", () => {
+test("general browser uses a persistent isolated profile with user-facing and clean-slate resets", () => {
   const browserSource = fs.readFileSync(path.join(__dirname, "browser.cjs"), "utf8");
   const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  assert.match(browserSource, /session\.fromPartition\("miaos-browser"/);
-  assert.doesNotMatch(browserSource, /persist:miaos-browser/);
+  assert.match(browserSource, /BROWSER_PARTITION = "persist:mia-browser"/);
+  assert.match(browserSource, /session\.fromPartition\(BROWSER_PARTITION/);
   assert.match(browserSource, /async function clearData\(\)/);
   assert.match(mainSource, /label: "Clear Browser Data"/);
+  assert.match(mainSource, /session\.fromPartition\(BROWSER_PARTITION\)/);
 });
 
 test("artifact preview parsing is exact, origin-bound, and never accepts file or arbitrary URLs", () => {

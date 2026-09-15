@@ -78,7 +78,7 @@ function harness(options = {}) {
       setVisible(visible) { this.visible = visible; }
       setBackgroundColor(color) { this.backgroundColor = color; }
     },
-    session: { fromPartition: () => profile },
+    session: { fromPartition: partition => { profile.partition = partition; return profile; } },
     ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
     Menu: { buildFromTemplate: () => ({ popup() {} }) },
     nativeTheme: { themeSource: "light" },
@@ -117,9 +117,10 @@ test("commands require the trusted shell's main frame and exact origin", () => {
   assert.equal(h.views.length, 0);
 });
 
-test("browser profile is ephemeral and can be cleared", async () => {
+test("browser profile is persistent, isolated, and can be cleared", async () => {
   const h = harness();
   h.command("new");
+  assert.equal(h.profile.partition, "persist:mia-browser");
   await h.controller.clearData();
   assert.equal(h.profile.storageCleared, true);
   assert.equal(h.profile.cacheCleared, true);

@@ -9,6 +9,7 @@ const MAX_PROTOCOL_PAGE_TEXT = 100000;
 const MAX_PROTOCOL_SELECTOR = 2000;
 const MAX_PROTOCOL_ELEMENTS = 500;
 const PROTOCOL_SCRIPT_TIMEOUT_MS = 10000;
+const BROWSER_PARTITION = "persist:mia-browser";
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const number = Number(value);
@@ -108,9 +109,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   let restoring = false;
   let download = "";
   let darkTheme = false;
-  // No `persist:` prefix: browser cookies, local storage, and cache live only
-  // for this app process and are never written into the Mia profile.
-  const profile = session.fromPartition("miaos-browser", { cache: true });
+  // Keep website sessions in Mia's own isolated browser profile so a user can
+  // sign in once and remain signed in across app restarts. This does not share
+  // or import Chrome/Safari cookies; Clear Browser Data and clean slate erase it.
+  const profile = session.fromPartition(BROWSER_PARTITION, { cache: true });
   profile.setPermissionCheckHandler(() => false);
   profile.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   profile.setDevicePermissionHandler(() => false);
@@ -1033,4 +1035,4 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   return { shortcut: runShortcut, protocol: protocolCommand, persist: persistTabs, prepareToClose: captureMediaState, clearData };
 }
 
-module.exports = { createBrowser, normalizeTarget, normalizeLocalFileTarget };
+module.exports = { BROWSER_PARTITION, createBrowser, normalizeTarget, normalizeLocalFileTarget };

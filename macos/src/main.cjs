@@ -17,7 +17,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
-const { createBrowser } = require("./browser.cjs");
+const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 
 const PACKAGED_RUNTIME_ROOT = app.isPackaged ? path.join(process.resourcesPath, "runtime") : "";
@@ -1598,6 +1598,7 @@ ipcMain.handle("miaos-reset-relaunch", async (event) => {
   }
   const storages = [mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.session : null];
   try { storages.push(session.fromPartition(ARTIFACT_PARTITION)); } catch (_) { /* no artifact partition yet */ }
+  try { storages.push(session.fromPartition(BROWSER_PARTITION)); } catch (_) { /* no browser partition yet */ }
   for (const storage of storages) {
     if (!storage || typeof storage.clearStorageData !== "function") continue;
     try {
