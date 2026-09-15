@@ -641,9 +641,9 @@
       if(chatModelPicker && typeof chatModelPicker.ensureLoaded === 'function'){
         chatModelPicker.ensureLoaded();
       }
-      // The tour belongs after first-run setup. Starting it while the provider
-      // sheet is opening leaves two modal layers competing for focus.
-      if(harnessSettingsCache.onboardingComplete && currentRealProfileName()) tourMaybeAutoStart();
+      if(harnessSettingsCache.onboardingComplete){
+        Promise.resolve(initialRender).then(startMiaOnboardingChat);
+      }
     });
     Promise.resolve(initialRender).then(function(){
       startLiveRefreshPolling();
@@ -1043,7 +1043,7 @@
     }
   };
   var harnessSettingsCache = {provider: null, model: null, fast: false, mode: 'solo', onboardingComplete: false};
-  var harnessOnboardingState = {provider: null, model: null, fast: false, apiProvider: 'openai-api', mode: 'solo', displayName: ''};
+  var harnessOnboardingState = {provider: null, model: null, fast: false, apiProvider: 'openai-api', mode: 'solo'};
   var harnessAuthPollTimer = null;
   var harnessAuthAwaitingSave = false;
   var harnessAuthSaveInProgress = false;
@@ -1317,24 +1317,12 @@
 
   function realProfileName(value){
     var name = String(value || '').trim();
-    return name && name.toLowerCase() !== 'local user' ? name : '';
+    return name && !name.includes('@') && name.toLowerCase() !== 'local user' ? name : '';
   }
 
   function currentRealProfileName(){
     var profile = userProfiles[String(currentUser || '').toLowerCase()];
     return realProfileName(profile && profile.displayName);
-  }
-
-  function loadHarnessOnboardingProfile(){
-    return api('/api/me').then(function(res){
-      if(res.status !== 200 || !res.data) return '';
-      currentUserLocalProfile = res.data.localProfile === true;
-      mergeUserProfile(res.data.email || currentUser, res.data);
-      var name = realProfileName(res.data.displayName);
-      if(name && !harnessOnboardingState.displayName) harnessOnboardingState.displayName = name;
-      renderHarnessOnboarding();
-      return name;
-    }).catch(function(){ return ''; });
   }
 
   function renderHarnessConnectionInventory(connections, runtimes){
@@ -1385,7 +1373,7 @@
         appCollaborationMode = (WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS['multiplayer_test']).mode;
         refreshAppName();
       }
-      if(showFirstRun && (!harness || !harness.onboardingComplete || !currentRealProfileName())){
+      if(showFirstRun && (!harness || !harness.onboardingComplete)){
         setTimeout(function(){ openHarnessOnboarding(harness); }, 450);
       }
       return harnessSettingsCache;
@@ -1692,20 +1680,17 @@
   function renderHarnessOnboarding(){
     var continueBtn = el('#harnessOnboardingContinue');
     var apiKey = el('#harnessApiKey');
-    var displayNameInput = el('#harnessDisplayName');
     var selectedApiProvider = harnessOnboardingState.apiProvider || 'openai-api';
     var selectedProvider = harnessOnboardingState.provider === 'openai-api'
       ? selectedApiProvider
       : harnessOnboardingState.provider;
     var selectedProviderConnected = harnessConnectionState[selectedProvider] === true;
     var apiReady = harnessOnboardingState.provider !== 'openai-api' || !!(apiKey && apiKey.value.trim()) || harnessConnectionState[selectedApiProvider] === true;
-    var profileReady = !!realProfileName(harnessOnboardingState.displayName);
     var busy = harnessConnectionValidationPending || !!harnessConnectionPending || harnessAuthSaveInProgress || harnessAuthAwaitingSave;
     if(continueBtn){
-      continueBtn.disabled = busy || !profileReady || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
-      setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (selectedProviderConnected ? 'Use' : 'Connect'));
+      continueBtn.disabled = busy || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
+      setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (selectedProviderConnected ? 'Start with Mia' : 'Connect'));
     }
-    if(displayNameInput) displayNameInput.value = harnessOnboardingState.displayName || '';
     els('[data-harness-provider]').forEach(function(choice){
       var choiceProvider = choice.getAttribute('data-harness-provider');
       var selected = choiceProvider === harnessOnboardingState.provider ||
@@ -1738,7 +1723,7 @@
       apiKey.classList.toggle('has-stored-key', apiKeyStored);
     }
     var title = el('#harnessOnboardingTitle');
-    if(title) title.textContent = 'Mia - ' + (harnessOnboardingState.mode === 'multiplayer' ? 'Multiplayer' : 'Solo');
+    if(title) title.textContent = 'Connect your AI';
     renderHarnessConnectionActions();
     renderHarnessFooterActions();
   }
@@ -1756,7 +1741,6 @@
     harnessOnboardingState.fast = modelSelection.fast;
     harnessOnboardingState.apiProvider = existing.apiProvider || 'openai-api';
     harnessOnboardingState.mode = hasSavedMode ? existing.mode : (appCollaborationMode || 'solo');
-    harnessOnboardingState.displayName = currentRealProfileName();
     // Multiplayer is upcoming: the card is disabled, so never restore it as the selection.
     if(harnessOnboardingState.mode === 'multiplayer') harnessOnboardingState.mode = 'solo';
     harnessAuthAwaitingSave = false;
@@ -1775,13 +1759,12 @@
     loadHarnessAuthState();
     loadHarnessConnectionStatus();
     loadHarnessModelCatalog();
-    loadHarnessOnboardingProfile();
   }
 
   function closeHarnessOnboarding(){
-    if(!harnessSettingsCache.onboardingComplete || !realProfileName(harnessOnboardingState.displayName)){
+    if(!harnessSettingsCache.onboardingComplete){
       var setupError = el('#harnessOnboardingError');
-      if(setupError) setupError.textContent = 'Finish setup to continue: choose a workspace and connect a provider.';
+      if(setupError) setupError.textContent = 'Connect your AI to continue.';
       var providerChoices = el('#harnessProviderChoices');
       if(providerChoices && typeof providerChoices.scrollIntoView === 'function') providerChoices.scrollIntoView({block:'nearest'});
       return false;
@@ -1815,11 +1798,6 @@
   });
   var harnessApiKey = el('#harnessApiKey');
   if(harnessApiKey) harnessApiKey.addEventListener('input', renderHarnessOnboarding);
-  var harnessDisplayName = el('#harnessDisplayName');
-  if(harnessDisplayName) harnessDisplayName.addEventListener('input', function(){
-    harnessOnboardingState.displayName = harnessDisplayName.value.trim();
-    renderHarnessOnboarding();
-  });
   els('[data-harness-disconnect]').forEach(function(button){
     button.addEventListener('click', function(event){
       event.preventDefault();
@@ -1879,31 +1857,17 @@
     if(harnessAuthSaveInProgress) return;
     var button = el('#harnessOnboardingContinue');
     var error = el('#harnessOnboardingError');
-    var displayName = realProfileName(harnessOnboardingState.displayName);
-    if(!displayName){
-      if(error) error.textContent = 'Enter your name before continuing.';
-      renderHarnessOnboarding();
-      return;
-    }
     harnessAuthSaveInProgress = true;
     button.disabled = true;
     setHarnessActionLabel(button, 'Loading…');
     if(error) error.textContent = '';
-    api('/api/me', {method:'PUT', body:{displayName:displayName}}).then(function(profileRes){
-      if(profileRes.status !== 200 || !profileRes.data) throw new Error((profileRes.data && profileRes.data.error) || 'Could not save your name');
-      harnessOnboardingState.displayName = realProfileName(profileRes.data.displayName) || displayName;
-      currentUserLocalProfile = profileRes.data.localProfile === true;
-      mergeUserProfile(profileRes.data.email || currentUser, profileRes.data);
-      renderSettingsAccount();
-      if(el('#chatAcctName')) el('#chatAcctName').textContent = displayNameForEmail(currentUser);
-      return api('/api/settings/harness', {method:'POST', body:{
+    api('/api/settings/harness', {method:'POST', body:{
       provider:harnessOnboardingState.provider,
       model:harnessOnboardingState.model,
       fast:harnessOnboardingState.fast,
       apiProvider:harnessOnboardingState.apiProvider,
       mode:harnessOnboardingState.mode
-      }});
-    }).then(function(res){
+      }}).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.harness) throw new Error((res.data && res.data.error) || 'Could not save setup');
       renderHarnessSettings(res.data.harness);
       // The onboarding mode is the authoritative initial workspace. Reload
@@ -2340,8 +2304,8 @@
       '<div class="chat-empty-hero-text">' + message + '</div></div>';
   }
   function miaEmptyGreeting(displayName){
-    var firstName = String(displayName || '').trim().split(/\s+/)[0] || 'there';
-    return 'Hi ' + firstName + ' — what would you like to work on?';
+    var name = realProfileName(displayName);
+    return (name ? 'Hi ' + name : 'Hi') + ' — what would you like to work on?';
   }
   function apiAgentToBench(a){
     var stateMap = {draft:'draft', running:'running', watch:'watch', active:'running', inactive:'watch'};
@@ -2884,16 +2848,16 @@
   // pre-created bots: clicking one opens the normal setup conversation with
   // the prompt ready to edit and send.
   var CHAT_STARTER_BOTS = [
-    {name:'Weekly project update', prompt:'Create a bot that prepares a concise project update every Friday from the files I approve.', icon:'↗'},
-    {name:'Inbox triage', prompt:'Create a bot that reviews new messages and flags the ones that need a reply.', icon:'✦'},
-    {name:'Research brief', prompt:'Create a bot that researches a topic, cites its sources, and sends me a short brief.', icon:'⌕'}
+    {name:'Weekly project update', prompt:'Create a bot that prepares a concise project update every Friday from the files I approve.', avatarColor:'#e83e9a'},
+    {name:'Inbox triage', prompt:'Create a bot that reviews new messages and flags the ones that need a reply.', avatarColor:'#3478d4'},
+    {name:'Research brief', prompt:'Create a bot that researches a topic, cites its sources, and sends me a short brief.', avatarColor:'#63a64f'}
   ];
   function renderChatStarterBots(){
     var wrap = el('#chatStarterBots');
     if(!wrap) return;
     wrap.innerHTML = CHAT_STARTER_BOTS.map(function(template){
       return '<button type="button" class="chat-starter-bot" data-starter-bot="' + esc(template.name) + '">' +
-        '<span class="chat-starter-bot-icon" aria-hidden="true">' + esc(template.icon) + '</span>' +
+        '<span class="chat-starter-bot-icon" aria-hidden="true">' + agentAvatarHtml(template.name, null, 28, null, template.avatarColor) + '</span>' +
         '<span class="chat-starter-bot-copy"><strong>' + esc(template.name) + '</strong><small>Start from this example</small></span></button>';
     }).join('');
     els('[data-starter-bot]', wrap).forEach(function(button){
@@ -7142,7 +7106,7 @@
     updateChatSuggestions(roomId);
     if(!state.messages.length && !state.thinking){
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
-        ? esc(miaEmptyGreeting(currentUser ? displayNameForEmail(currentUser) : ''))
+        ? esc(miaEmptyGreeting(currentRealProfileName()))
         : 'No messages yet &mdash; say hello.';
       thread.innerHTML = chatHeroHtml(emptyMessage, chatWs.activeKind === 'agent' ? chatWs.activeLabel : '');
       return;
@@ -7171,6 +7135,7 @@
       var grouped = key !== null && key === prevHumanKey;
       prevHumanKey = key;
       var footerHtml = m.system ? '' : chatThreadFooterHtml(state, m.id);
+      footerHtml = miaOnboardingChoicesHtml(m, state) + footerHtml;
       return chatMsgHtml(m, grouped, {footerHtml: footerHtml});
     }).join('');
     if(state.thinking){
@@ -7193,6 +7158,13 @@
       ? '<button type="button" class="chat-history-more" id="chatHistoryMore">' + (state.historyLoading ? 'Loading…' : 'Load earlier messages') + '</button>'
       : '';
     thread.innerHTML = historyControl + dateDivider + html;
+    els('[data-mia-onboarding-choice]', thread).forEach(function(button){
+      button.addEventListener('click', function(){
+        var label = button.getAttribute('data-mia-onboarding-choice');
+        if(miaOnboardingChat.phase === 'name') sendMiaOnboardingAnswer(label);
+        else sendActiveRoomMessage(label);
+      });
+    });
     wireChatExpandableMessages(thread);
     wireChatArtifactPreviews(thread);
     var more = el('#chatHistoryMore', thread);
@@ -8578,6 +8550,9 @@
   function chatInlineSuggestionText(){
     if(localBrowserState.open) return LOCAL_BROWSER_PROMPTS[localBrowserPromptIndex] || LOCAL_BROWSER_PROMPTS[0];
     var roomId = chatWs.activeRoomId;
+    if(miaOnboardingChat && miaOnboardingChat.phase === 'name' && miaOnboardingChat.conversationId === roomId){
+      return miaOnboardingChat.suggestedName ? 'Confirm your name, or tell Mia what to call you' : 'Call me…';
+    }
     if(!roomId) return 'What should Mia help with first?';
     var state = chatRoomState(roomId);
     var hasMessages = state.messages.some(function(m){ return !m.system && !m.pending; });
@@ -8593,12 +8568,69 @@
     renderChatSuggestions();
   }
 
+  var miaOnboardingChat = null;
+  var miaOnboardingSending = false;
+  function startMiaOnboardingChat(){
+    return api('/api/onboarding/chat', {method:'POST', body:{}}).then(function(res){
+      if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not start onboarding.');
+      miaOnboardingChat = res.data;
+      if(res.data.phase === 'name'){
+        loadChatRoom(res.data.conversationId, 'agent', 'Mia');
+      } else if(chatWs.activeRoomId === res.data.conversationId){
+        renderChatThread();
+      }
+    }).catch(function(error){ showToast(error.message); });
+  }
+
+  function sendMiaOnboardingAnswer(text){
+    if(miaOnboardingSending) return Promise.resolve({status:409});
+    miaOnboardingSending = true;
+    var roomId = miaOnboardingChat.conversationId;
+    return api('/api/onboarding/chat', {method:'POST', body:{text:text}}).then(function(res){
+      if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not save your answer.');
+      miaOnboardingChat = res.data;
+      if(!res.data.handled) return sendNativeConversationEvent(text, null, null, roomId);
+      return api('/api/me').then(function(profile){
+        if(profile.status === 200){
+          mergeUserProfile(profile.data.email || currentUser, profile.data);
+          renderSettingsAccount();
+          if(el('#chatAcctName')) el('#chatAcctName').textContent = displayNameForEmail(currentUser);
+        }
+        if(chatWs.activeRoomId === roomId) loadChatRoom(roomId, 'agent', 'Mia');
+        return res;
+      });
+    }).catch(function(error){
+      showToast(error.message);
+      var input = el('#ccInput');
+      if(input && !input.value) input.value = text;
+      return {status:0};
+    }).finally(function(){ miaOnboardingSending = false; renderChatThread(); });
+  }
+
+  function miaOnboardingChoicesHtml(message, state){
+    if(!miaOnboardingChat || chatWs.activeRoomId !== miaOnboardingChat.conversationId) return '';
+    var prompts = state.messages.filter(function(item){
+      var event = item.nativeEvent;
+      return event && event.senderType === 'agent' && event.metadata && event.metadata.onboarding && !item.deleted;
+    });
+    var latest = prompts[prompts.length - 1];
+    if(!latest || latest.id !== message.id) return '';
+    var hasLaterTask = state.messages.slice(state.messages.indexOf(latest) + 1).some(function(item){
+      return !item.system && !(item.nativeEvent && item.nativeEvent.metadata && item.nativeEvent.metadata.onboarding);
+    });
+    if(hasLaterTask) return '';
+    var choices = miaOnboardingChat.phase === 'name'
+      ? (miaOnboardingChat.suggestedName ? ['Yes', 'Use another name', 'Skip for now'] : ['Skip for now'])
+      : ['Work on an idea', 'Help with a task', 'Show me around'];
+    return '<div class="agent-setup-actions mia-onboarding-actions">' + choices.map(function(label){
+      return '<button type="button" class="agent-setup-later" data-mia-onboarding-choice="' + esc(label) + '"' +
+        (miaOnboardingSending ? ' disabled' : '') + '>' + esc(label) + '</button>';
+    }).join('') + '</div>';
+  }
+
   function renderChatSuggestions(){
     var wrap = el('#chatChips');
-    if(!wrap) return;
-    // Keep the old chip row empty for layout compatibility. The suggestion
-    // now lives inside the prompt itself.
-    wrap.innerHTML = '';
+    if(wrap) wrap.innerHTML = '';
     syncInlineChatSuggestion();
   }
 
@@ -8946,6 +8978,11 @@
       return;
     }
     if(chatWs.configured === false) return;
+    var explicitNameReply = /^(?:please )?(?:call me|my name is|i['’]d like(?: you to call me)?|i prefer)\s+/i.test(text);
+    if(!threadRootId && !preparedAttachment && miaOnboardingChat && (miaOnboardingChat.phase === 'name' || explicitNameReply)
+      && (boundRoomId || chatWs.activeRoomId) === miaOnboardingChat.conversationId){
+      return sendMiaOnboardingAnswer(text);
+    }
     // Bot setup is a native Mia workflow, not an open-ended Hermes task.
     // Route ordinary creation language into the existing review/confirmation
     // chat before persisting a message or starting a model dispatch. This keeps

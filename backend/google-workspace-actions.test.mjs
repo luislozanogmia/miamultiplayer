@@ -9,7 +9,10 @@ const actions = require('./google-workspace-actions');
 
 const sheetId = 'sheet_id_1234567890';
 const otherSheetId = 'other_sheet_1234567890';
+const docId = 'document_id_1234567890';
+const otherDocId = 'other_document_1234567890';
 const refs = [{ kind: 'sheets', id: sheetId }];
+const docRefs = [{ kind: 'docs', id: docId }];
 
 test('extracts one private Sheets action and preserves only the user-facing report', () => {
   const raw = [
@@ -85,6 +88,82 @@ test('sheet writes require an explicit current-turn request and a linked sheet',
   assert.equal(actions.explicitSheetWriteRequested('Please read this sheet and summarize it.', refs), false);
   assert.equal(actions.explicitSheetWriteRequested("Don't update this sheet yet.", refs), false);
   assert.equal(actions.explicitSheetWriteRequested('Please update it with the new rows.', []), false);
+});
+
+test('Docs writes require an explicit current-turn request and a linked document', () => {
+  assert.equal(actions.explicitDocsWriteRequested('Please edit this document with the new paragraph.', docRefs), true);
+  assert.equal(actions.explicitDocsWriteRequested('Please read this document and summarize it.', docRefs), false);
+  assert.equal(actions.explicitDocsWriteRequested('Please delete this document.', docRefs), false);
+  assert.equal(actions.explicitDocsWriteRequested('Please edit it.', docRefs), true);
+  assert.equal(actions.explicitDocsWriteRequested('Please edit it.', [{ kind: 'docs', id: docId }, { kind: 'sheets', id: sheetId }]), false);
+  assert.equal(actions.explicitDocsWriteRequested('Please edit this document.', []), false);
+  assert.deepEqual(actions.googleWorkspaceWriteKinds('Please edit this document.', [
+    { kind: 'docs', id: docId },
+    { kind: 'sheets', id: sheetId },
+  ]), ['docs']);
+  assert.deepEqual(actions.googleWorkspaceWriteKinds('Please read this document.', docRefs), []);
+});
+
+test('Docs action instructions expose only the linked document and bounded non-destructive schema', () => {
+  const instruction = actions.googleWorkspaceActionInstruction(docRefs, ['docs']);
+  assert.match(instruction, /CONNECTED GOOGLE DOCS WRITE ACTION/);
+  assert.match(instruction, new RegExp(`Allowed document IDs: ${docId}`));
+  assert.match(instruction, /replaceAllText/);
+  assert.match(instruction, /insertText/);
+  assert.match(instruction, /Do not use deleteContentRange/);
+  assert.doesNotMatch(instruction, /CONNECTED GOOGLE SHEETS WRITE ACTION/);
+  assert.doesNotMatch(instruction, new RegExp(otherDocId));
+});
+
+test('Docs validation accepts bounded replacement and append requests only for the linked document', () => {
+  const action = {
+    type: actions.DOCS_ACTION_TYPE,
+    documentId: docId,
+    requests: [
+      { replaceAllText: { containsText: { text: 'old title', matchCase: true }, replaceText: 'new title' } },
+      { insertText: { endOfSegmentLocation: { segmentId: '' }, text: '\nClosing note.' } },
+    ],
+  };
+  assert.deepEqual(actions.validateGoogleWorkspaceAction(action, docRefs), {
+    type: actions.DOCS_ACTION_TYPE,
+    documentId: docId,
+    requests: [
+      { replaceAllText: { containsText: { text: 'old title', matchCase: true }, replaceText: 'new title' } },
+      { insertText: { endOfSegmentLocation: {}, text: '\nClosing note.' } },
+    ],
+  });
+  assert.equal(actions.validateGoogleWorkspaceAction({ ...action, documentId: otherDocId }, docRefs), null);
+  assert.equal(actions.validateGoogleWorkspaceAction({ ...action, documentId: sheetId }, [{ kind: 'sheets', id: sheetId }]), null);
+  assert.equal(actions.validateGoogleWorkspaceAction({
+    ...action,
+    requests: [{ replaceAllText: { containsText: { text: 'old', matchCase: true }, replaceText: '' } }],
+  }, docRefs), null);
+  assert.equal(actions.validateGoogleWorkspaceAction({
+    ...action,
+    requests: [{ deleteContentRange: { range: { startIndex: 1, endIndex: 2 } } }],
+  }, docRefs), null);
+  assert.equal(actions.validateGoogleWorkspaceAction({
+    ...action,
+    requests: [{ insertText: { location: { index: 1 }, text: 'not append-only' } }],
+  }, docRefs), null);
+  assert.equal(actions.validateGoogleWorkspaceAction({
+    ...action,
+    requests: Array.from({ length: actions.MAX_DOC_BATCH_REQUESTS + 1 }, () => ({
+      insertText: { endOfSegmentLocation: {}, text: 'x' },
+    })),
+  }, docRefs), null);
+  assert.equal(actions.validateGoogleWorkspaceAction({
+    ...action,
+    requests: [{
+      insertText: { endOfSegmentLocation: {}, text: 'x'.repeat(actions.MAX_DOC_TEXT_CHARS + 1) },
+    }],
+  }, docRefs), null);
+  assert.equal(actions.validateGoogleWorkspaceAction({
+    ...action,
+    requests: Array.from({ length: actions.MAX_DOC_BATCH_REQUESTS }, () => ({
+      insertText: { endOfSegmentLocation: {}, text: 'x'.repeat(Math.floor(actions.MAX_DOC_TOTAL_CHARS / actions.MAX_DOC_BATCH_REQUESTS) + 1) },
+    })),
+  }, docRefs), null);
 });
 
 test('applies a validated action through server-owned OAuth without returning credentials', async () => {
@@ -175,6 +254,88 @@ test('applies a validated action through the Hermes-owned connector without Mia 
   assert.equal(calls.length, 1);
 });
 
+test('applies a validated Docs edit through the Hermes-owned connector with structured batchUpdate args', async () => {
+  const calls = [];
+  const connector = {
+    status: async () => ({ state: 'connected', connected: true }),
+    runOperation: async (operation, args) => {
+      calls.push({ operation, args });
+      assert.equal(operation, actions.DOCS_ACTION_TYPE);
+      assert.deepEqual(args.slice(0, 1), ['--params']);
+      assert.deepEqual(JSON.parse(args[1]), { documentId: docId });
+      assert.deepEqual(JSON.parse(args[3]), {
+        requests: [{
+          replaceAllText: {
+            containsText: { text: 'draft', matchCase: false },
+            replaceText: 'final',
+          },
+        }],
+      });
+      return { replies: [{}] };
+    },
+  };
+  const result = await actions.applyGoogleWorkspaceAction({
+    action: {
+      type: actions.DOCS_ACTION_TYPE,
+      documentId: docId,
+      requests: [{
+        replaceAllText: {
+          containsText: { text: 'draft', matchCase: false },
+          replaceText: 'final',
+        },
+      }],
+    },
+    refs: docRefs,
+    connector,
+    config: null,
+    connection: null,
+  });
+  assert.deepEqual(result, { documentId: docId, appliedRequests: 1 });
+  assert.equal(calls.length, 1);
+});
+
+test('rejects an unlinked Docs ID before any connector status or provider operation', async () => {
+  const calls = [];
+  const connector = {
+    status: async () => { calls.push('status'); return { state: 'connected', connected: true }; },
+    runOperation: async () => { calls.push('runOperation'); return {}; },
+  };
+  await assert.rejects(
+    actions.applyGoogleWorkspaceAction({
+      action: {
+        type: actions.DOCS_ACTION_TYPE,
+        documentId: otherDocId,
+        requests: [{ insertText: { endOfSegmentLocation: {}, text: 'nope' } }],
+      },
+      refs: docRefs,
+      connector,
+    }),
+    { code: 'invalid_google_workspace_action' }
+  );
+  assert.deepEqual(calls, []);
+});
+
+test('does not call gws when the connected-account check fails for a valid Docs edit', async () => {
+  let providerCalls = 0;
+  const connector = {
+    status: async () => ({ state: 'not_connected', connected: false }),
+    runOperation: async () => { providerCalls += 1; return {}; },
+  };
+  await assert.rejects(
+    actions.applyGoogleWorkspaceAction({
+      action: {
+        type: actions.DOCS_ACTION_TYPE,
+        documentId: docId,
+        requests: [{ insertText: { endOfSegmentLocation: {}, text: 'nope' } }],
+      },
+      refs: docRefs,
+      connector,
+    }),
+    { code: 'google_workspace_reconnect_required' }
+  );
+  assert.equal(providerCalls, 0);
+});
+
 test('server binds actions to the authenticated owner and applies them before native conversation posting', () => {
   const source = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
   assert.match(source, /googleWorkspaceContext\.googleResourceContextInput\(transcript, message\)/);
@@ -183,9 +344,12 @@ test('server binds actions to the authenticated owner and applies them before na
   assert.match(source, /ownerEmail: senderLabel/);
   assert.match(source, /const ownerConnector = googleAccountOwnerBinding\.connectorFor\(ownerEmail\)/);
   assert.match(source, /googleWorkspaceActions\.explicitSheetWriteRequested\(message, googleResourceRefs\)/);
-  assert.match(source, /googleWorkspaceWriteAuthorized = googleWorkspaceWriteRequested && googleWorkspaceConnected/);
+  assert.match(source, /googleWorkspaceActions\.explicitDocsWriteRequested\(message, googleResourceRefs\)/);
+  assert.match(source, /const googleWorkspaceWriteKinds = googleWorkspaceActions\.googleWorkspaceWriteKinds\(message, googleResourceRefs\)/);
+  assert.match(source, /googleWorkspaceWriteAuthorized = googleWorkspaceWriteRequested[\s\S]*googleWorkspaceWriteKinds\.length > 0[\s\S]*googleWorkspaceConnected/);
   assert.match(source, /googleWorkspaceActions\.extractGoogleWorkspaceAction\(rawResult\)/);
   assert.match(source, /googleWorkspaceActions\.applyGoogleWorkspaceAction\(/);
+  assert.match(source, /googleWorkspaceWriteKinds,/);
   assert.match(source, /deletionGuardedGoogleConnector\(ownerConnector, dispatch, trigger, signal\)/);
   assert.match(source, /connector: guardedConnector/);
   assert.match(source, /throwIfNativeGoogleActionStopped\(dispatch, trigger, signal\)/);

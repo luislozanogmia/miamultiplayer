@@ -40,6 +40,7 @@ test('status invokes gws auth status and never infers connected from exit zero a
     env: {
       PATH: '/safe/bin',
       HOME: '/safe/home',
+      GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: 'file',
       GOOGLE_WORKSPACE_CLI_TOKEN: 'must-not-inherit',
       GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: '/must/not/inherit.json',
     },
@@ -54,6 +55,7 @@ test('status invokes gws auth status and never infers connected from exit zero a
   assert.equal((await connector.status()).state, 'connected');
   assert.deepEqual(calls.map((call) => call.args), [['auth', 'status'], ['auth', 'status']]);
   assert.equal(calls[0].file, '/safe/bin/gws');
+  assert.equal(calls[0].env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND, 'file');
   assert.equal(calls[0].env.GOOGLE_WORKSPACE_CLI_TOKEN, undefined);
   assert.equal(calls[0].env.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE, undefined);
 });
@@ -125,11 +127,36 @@ test('operation policy invokes exact gws methods and rejects destructive methods
   assert.deepEqual(calls[0].args.slice(0, 4), ['sheets', 'spreadsheets', 'values', 'update']);
   assert.equal(calls[0].file, '/safe/bin/gws');
 
+  const docsArgs = [
+    '--params', JSON.stringify({ documentId: 'document_id_1234567890' }),
+    '--json', JSON.stringify({
+      requests: [{
+        replaceAllText: {
+          containsText: { text: 'draft', matchCase: true },
+          replaceText: 'final',
+        },
+      }],
+    }),
+  ];
+  assert.deepEqual(await connector.runOperation('docs.documents.batchUpdate', docsArgs), { ok: true });
+  assert.deepEqual(calls[1].args.slice(0, 3), ['docs', 'documents', 'batchUpdate']);
+
+  assert.throws(
+    () => googleAccount.assertAllowedGwsOperation('docs.documents.batchUpdate'),
+    { code: 'invalid_google_operation_arguments' }
+  );
+  assert.throws(
+    () => googleAccount.assertAllowedGwsOperation('docs.documents.batchUpdate', [
+      '--params', JSON.stringify({ documentId: 'document_id_1234567890' }),
+      '--json', JSON.stringify({ requests: [{ deleteContentRange: { range: { startIndex: 1, endIndex: 2 } } }] }),
+    ]),
+    { code: 'invalid_google_operation_arguments' }
+  );
+
   for (const operation of [
     'drive.files.delete',
     'calendar.events.delete',
     'sheets.values.clear',
-    'docs.documents.batchUpdate',
     'gmail.messages.trash',
   ]) {
     assert.throws(

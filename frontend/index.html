@@ -843,23 +843,11 @@
 <div class="drawer-overlay styled-scrim" id="harnessOnboardingOverlay"></div>
 <section class="styled-sheet styled-onboarding-sheet" id="harnessOnboarding" role="dialog" aria-modal="true" aria-labelledby="harnessOnboardingTitle">
   <button class="styled-sheet-close" id="harnessOnboardingClose" aria-label="Close onboarding">&times;</button>
-  <div class="styled-onboarding-kicker">Mia onboarding</div>
-  <h1 class="styled-onboarding-title" id="harnessOnboardingTitle">Mia - Multiplayer</h1>
-  <p class="styled-onboarding-intro">Welcome to Mia. We’ll get you ready in three short steps: choose your workspace, connect the provider that powers your Agent, then start a chat or create a bot.</p>
-  <ol class="styled-onboarding-steps" aria-label="Setup steps">
-    <li><span class="styled-onboarding-step-number">1</span><span><strong>Choose a workspace</strong><small>Keep work private in Solo.</small></span></li>
-    <li><span class="styled-onboarding-step-number">2</span><span><strong>Connect a provider</strong><small>This is required before Mia can answer.</small></span></li>
-    <li><span class="styled-onboarding-step-number">3</span><span><strong>Start with Chat</strong><small>Use Tools to create a bot when you’re ready.</small></span></li>
-  </ol>
+  <div class="styled-onboarding-kicker">Get started</div>
+  <h1 class="styled-onboarding-title" id="harnessOnboardingTitle">Connect your AI</h1>
+  <p class="styled-onboarding-intro">Choose the model Mia will work with. You can change this later. Once connected, Mia will meet you in chat.</p>
 
-  <label class="styled-onboarding-profile" for="harnessDisplayName">
-    <span class="styled-onboarding-label">What should Mia call you?</span>
-    <input class="styled-onboarding-display-name" id="harnessDisplayName" type="text" name="display-name" autocomplete="name" maxlength="80" placeholder="Your name" />
-    <small>Use your name instead of the default Local user label.</small>
-  </label>
-
-  <div class="styled-onboarding-label">How will you work?</div>
-  <div class="styled-onboarding-mode-grid styled-onboarding-mode-grid-large" id="harnessModeChoices">
+  <div class="styled-onboarding-mode-grid styled-onboarding-mode-grid-large" id="harnessModeChoices" hidden>
     <button type="button" class="styled-onboarding-mode" data-harness-mode="solo" aria-pressed="false">
       <span class="styled-onboarding-mode-mark" aria-hidden="true"><img src="assets/icons/mode-solo.png?v=20260904-mode-icons-1" alt="" /></span>
           <span><strong>Solo</strong><small>Just you, your private agents, and your bots</small></span>
@@ -870,7 +858,7 @@
     </button>
   </div>
 
-  <div class="styled-onboarding-label">Choose your provider to power your Agent</div>
+  <div class="styled-onboarding-label">Choose a connection</div>
   <div class="styled-onboarding-provider-grid" id="harnessProviderChoices">
     <div class="styled-onboarding-provider-row">
       <button type="button" class="styled-onboarding-choice" data-harness-provider="openai-codex" aria-pressed="false">

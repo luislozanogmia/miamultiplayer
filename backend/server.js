@@ -41,6 +41,7 @@ const cookieParser = require('cookie-parser');
 const { verifyToken: verifyClerkToken } = require('@clerk/backend');
 
 const db = require('./db');
+const { preferredName, openingMessage, nameAnswer } = require('./onboarding-chat');
 const {
   buildContext,
   runInference,
@@ -1938,7 +1939,7 @@ app.get('/api/me', (req, res) => {
   return res.status(200).json({
     email: session.email,
     ...(clerkProfile ? { accountEmail: clerkProfile.email } : {}),
-    displayName: (clerkProfile && clerkProfile.displayName) || (user && user.displayName) || null,
+    displayName: preferredName(user && user.displayName) || (clerkProfile && clerkProfile.displayName) || null,
     initials: (user && user.initials) || null,
     role,
     isAdmin: role === 'admin',
@@ -2005,6 +2006,88 @@ app.put('/api/me', requireAuth, (req, res) => {
     initials: (user && user.initials) || null,
     ...(MIAOS_LOCAL_PROFILE ? { localProfile: true } : {}),
   });
+});
+
+function onboardingKey(owner) { return `mia.onboarding.chat:${owner}`; }
+function onboardingState(owner) {
+  try { return JSON.parse(db.getMeta(conn, onboardingKey(owner)) || 'null'); }
+  catch (_) { return null; }
+}
+
+// Only the authenticated owner's private Mia conversation can receive this
+// exchange. State and events use the existing local database and transaction.
+app.post('/api/onboarding/chat', requireAuth, (req, res) => {
+  const principal = nativeConversationPrincipal(req.userEmail, 'solo');
+  const owner = principal.principalId;
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  if (!harnessPreferenceForUser(settings, owner).onboardingComplete) {
+    return res.status(409).json({ error: 'Connect your AI before starting with Mia.' });
+  }
+  const published = [];
+  const body = req.body || {};
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  const result = conn.transaction(() => {
+    let state = onboardingState(owner);
+    const explicitNameReply = /^(?:please )?(?:call me|my name is|i['’]d like(?: you to call me)?|i prefer)\s+/i.test(text);
+    if (state && state.phase === 'done' && !explicitNameReply) return { ...state, handled: false };
+    let conversation = state && nativeConversationRepository.getConversation({
+      companyId: principal.companyId, id: state.conversationId, includeDeleted: true,
+    });
+    if (conversation && conversation.deletedAt) {
+      state = { ...state, phase: 'done' };
+      db.setMeta(conn, onboardingKey(owner), JSON.stringify(state));
+      return { ...state, handled: false };
+    }
+    if (!conversation) conversation = nativeConversationRepository.listGatewayConversations({
+      companyId: principal.companyId, createdBy: owner,
+    })[0] || nativeConversationService.createConversation({
+      companyId: principal.companyId, principal, type: 'agent', name: 'Mia',
+      metadata: { agentId: 'gateway', source: 'onboarding', workspaceId: 'solo' },
+    });
+    function append(text, human = false) {
+      const created = nativeConversationRepository.createEvent({
+        companyId: principal.companyId, conversationId: conversation.id,
+        senderId: human ? owner : 'gateway', senderType: human ? 'user' : 'agent',
+        type: human ? 'message' : 'agent_message', content: { text },
+        metadata: { onboarding: true },
+      });
+      published.push(created.event);
+    }
+    if (!state) {
+      const user = db.getUserByEmail(conn, owner);
+      const account = owner === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null;
+      const name = preferredName(user && user.displayName) || preferredName(account && account.displayName);
+      state = { conversationId: conversation.id, phase: 'name', suggestedName: name };
+      append(openingMessage(name));
+    }
+    let handled = false;
+    if (text) {
+      const answer = nameAnswer(text, state.suggestedName);
+      handled = !answer.passthrough;
+      if (handled) append(text, true);
+      if (answer.askName) {
+        state.suggestedName = '';
+        append('What should I call you? You can say “Call me…” or skip for now.');
+      } else {
+        if (answer.name) {
+          const initials = answer.name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => Array.from(part)[0]).join('').toUpperCase();
+          if (!db.updateUserProfile(conn, owner, { displayName: answer.name, initials })) {
+            throw new Error('Could not save your preferred name.');
+          }
+          state.preferredName = answer.name;
+        }
+        if (handled) state.phase = 'done';
+        if (handled) append(answer.name
+          ? `Nice to meet you, ${answer.name}. What would you like a hand with today?`
+          : 'What would you like a hand with today?');
+      }
+    }
+    db.setMeta(conn, onboardingKey(owner), JSON.stringify(state));
+    return { ...state, handled };
+  })();
+  published.forEach((event) => nativeConversationRealtime.publish(event));
+  if (published.length) bumpVersion();
+  return res.json(result);
 });
 
 // Polled by the frontend every few seconds to detect changes made by this
@@ -4508,7 +4591,10 @@ function buildHermesTaskPrompt(agentForPrompt, transcript, message, senderLabel,
   );
   const actionInstruction = allowGoogleWorkspaceWrite
     && /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''))
-    ? googleWorkspaceActions.googleWorkspaceActionInstruction(googleResourceRefs)
+    ? googleWorkspaceActions.googleWorkspaceActionInstruction(
+      googleResourceRefs,
+      googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs)
+    )
     : '';
   return [basePrompt, appOwnedToolPolicy({ botWorker: true }), actionInstruction].filter(Boolean).join('\n\n');
 }
@@ -4525,7 +4611,8 @@ function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel) {
     '',
     senderLabel ? senderDisplayName(senderLabel) : ''
   );
-  return [basePrompt, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext()].filter(Boolean).join('\n\n');
+  const onboardingGuide = 'For a new user, help them get one useful thing done. Ask one relevant question at a time. If they ask to be shown around, briefly explain chat, connected apps, bots, and automations, then offer a small first task. Do not require a biography or invent a name from an email address. Respect the preferred name confirmed in the conversation.';
+  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext()].filter(Boolean).join('\n\n');
 }
 
 function miaosAgentWorkspacePromptContext() {
@@ -4537,7 +4624,10 @@ function miaosAgentWorkspacePromptContext() {
 function buildHermesGatewayTurnMessage(message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite) {
   const actionInstruction = allowGoogleWorkspaceWrite
     && /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''))
-    ? googleWorkspaceActions.googleWorkspaceActionInstruction(googleResourceRefs)
+    ? googleWorkspaceActions.googleWorkspaceActionInstruction(
+      googleResourceRefs,
+      googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs)
+    )
     : '';
   const currentContext = workspaceContext
     ? `Current Mia platform state for this turn:\n${workspaceContext}`
@@ -4701,11 +4791,17 @@ async function applyNativeGoogleWorkspaceAction({
   rawResult,
   googleResourceRefs,
   googleWorkspaceWriteAuthorized,
+  googleWorkspaceWriteKinds,
   dispatch,
   trigger,
   signal,
 }) {
   throwIfNativeGoogleActionStopped(dispatch, trigger, signal);
+  const writeSubject = Array.isArray(googleWorkspaceWriteKinds)
+    && googleWorkspaceWriteKinds.length === 1
+    && googleWorkspaceWriteKinds[0] === 'docs'
+    ? 'document'
+    : 'spreadsheet';
   // `ownerEmail` is intentionally supplied by the authenticated native event
   // and never accepted from model output. The Hermes connector owns the
   // account credential; this binding keeps the action tied to this dispatch's
@@ -4713,14 +4809,14 @@ async function applyNativeGoogleWorkspaceAction({
   if (!String(ownerEmail || '').trim()) {
     throw googleNativeActionError(
       'unauthorized_google_workspace_action',
-      "I didn't change the spreadsheet because the authenticated owner was missing."
+      `I didn't change the ${writeSubject} because the authenticated owner was missing.`
     );
   }
   const ownerConnector = googleAccountOwnerBinding.connectorFor(ownerEmail);
   if (!ownerConnector) {
     throw googleNativeActionError(
       'unauthorized_google_workspace_action',
-      "I didn't change the spreadsheet because this Google account belongs to another Mia user."
+      `I didn't change the ${writeSubject} because this Google account belongs to another Mia user.`
     );
   }
   const extracted = googleWorkspaceActions.extractGoogleWorkspaceAction(rawResult);
@@ -4728,14 +4824,16 @@ async function applyNativeGoogleWorkspaceAction({
   if (extracted.error) {
     throw googleNativeActionError(
       'invalid_google_workspace_action',
-      "I couldn't safely apply the spreadsheet update. Please try again."
+      `I couldn't safely apply the ${writeSubject} update. Please try again.`
     );
   }
   if (!extracted.action) return extracted.text;
-  if (googleWorkspaceWriteAuthorized !== true) {
+  const actionKind = googleWorkspaceActions.googleWorkspaceActionKind(extracted.action);
+  if (googleWorkspaceWriteAuthorized !== true
+    || (actionKind && (!Array.isArray(googleWorkspaceWriteKinds) || !googleWorkspaceWriteKinds.includes(actionKind)))) {
     throw googleNativeActionError(
       'unauthorized_google_workspace_action',
-      "I didn't change the spreadsheet because this request did not explicitly authorize a write."
+      `I didn't change the ${actionKind === 'docs' ? 'document' : writeSubject} because this request did not explicitly authorize a write.`
     );
   }
 
@@ -4747,7 +4845,9 @@ async function applyNativeGoogleWorkspaceAction({
       connector: guardedConnector,
     });
     throwIfNativeGoogleActionStopped(dispatch, trigger, signal);
-    return extracted.text || `Updated ${applied.updatedCells} cells in the shared spreadsheet.`;
+    return extracted.text || (actionKind === 'docs'
+      ? 'Edited the shared Google Doc.'
+      : `Updated ${applied.updatedCells} cells in the shared spreadsheet.`);
   } catch (err) {
     // Preserve cancellation semantics so executeNativeConversationDispatch
     // does not turn a revoked user's stale Google turn into a failure reply.
@@ -4759,24 +4859,26 @@ async function applyNativeGoogleWorkspaceAction({
     if (err && err.code === 'google_workspace_reconnect_required') {
       throw googleNativeActionError(
         err.code,
-        "I couldn't update the spreadsheet because Google needs to be reconnected in Plugins."
+        `I couldn't update the ${actionKind === 'docs' ? 'document' : 'spreadsheet'} because Google needs to be reconnected in Plugins.`
       );
     }
     if (err && err.code === 'invalid_google_workspace_action') {
       throw googleNativeActionError(
         err.code,
-        "I couldn't safely apply the spreadsheet layout. Please try again."
+        `I couldn't safely apply the ${actionKind === 'docs' ? 'document' : 'spreadsheet'} update. Please try again.`
       );
     }
     if (err && err.code === 'google_request_timeout') {
       throw googleNativeActionError(
         err.code,
-        "Google didn't respond in time, so I didn't change the spreadsheet. Please try again."
+        `Google didn't respond in time, so I didn't change the ${actionKind === 'docs' ? 'document' : 'spreadsheet'}. Please try again.`
       );
     }
     throw googleNativeActionError(
       'google_workspace_action_failed',
-      "I couldn't apply the spreadsheet update. Please confirm the sheet still allows access and try again."
+      actionKind === 'docs'
+        ? "I couldn't apply the document update. Please confirm the Doc still allows access and try again."
+        : "I couldn't apply the spreadsheet update. Please confirm the sheet still allows access and try again."
     );
   }
 }
@@ -5146,13 +5248,18 @@ async function runNativeConversationAgentReply(dispatch, signal) {
   const senderLabel = String(trigger.senderId || conversation.createdBy || '').trim().toLowerCase();
   const googleContextInput = googleWorkspaceContext.googleResourceContextInput(transcript, message);
   const googleResourceRefs = googleWorkspaceContext.extractGoogleResourceRefs(googleContextInput);
-  const googleWorkspaceWriteRequested = googleWorkspaceActions.explicitSheetWriteRequested(message, googleResourceRefs);
+  const googleWorkspaceSheetWriteRequested = googleWorkspaceActions.explicitSheetWriteRequested(message, googleResourceRefs);
+  const googleWorkspaceDocsWriteRequested = googleWorkspaceActions.explicitDocsWriteRequested(message, googleResourceRefs);
+  const googleWorkspaceWriteKinds = googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs);
+  const googleWorkspaceWriteRequested = googleWorkspaceSheetWriteRequested || googleWorkspaceDocsWriteRequested;
   const workspaceContext = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
   const googleWorkspaceConnected = /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''));
   const safeGoogleRefs = googleWorkspaceConnected
     ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs)
     : [];
-  const googleWorkspaceWriteAuthorized = googleWorkspaceWriteRequested && googleWorkspaceConnected;
+  const googleWorkspaceWriteAuthorized = googleWorkspaceWriteRequested
+    && googleWorkspaceWriteKinds.length > 0
+    && googleWorkspaceConnected;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
   const inferenceOptions = {
@@ -5277,6 +5384,7 @@ async function runNativeConversationAgentReply(dispatch, signal) {
     rawResult: rawReply,
     googleResourceRefs: safeGoogleRefs,
     googleWorkspaceWriteAuthorized,
+    googleWorkspaceWriteKinds,
     dispatch,
     trigger,
     signal,

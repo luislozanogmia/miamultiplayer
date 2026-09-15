@@ -1150,7 +1150,8 @@
   .chat-starter-bots{display:flex;flex-direction:column;gap:2px;}
   .chat-starter-bot{appearance:none;display:flex;align-items:center;gap:8px;width:100%;padding:7px 8px;border:0;border-radius:8px;background:transparent;color:var(--sand-text-primary);text-align:left;font-family:var(--styled-sans);cursor:pointer;}
   .chat-starter-bot:hover{background:var(--sand-fill-ghost-hover);}
-  .chat-starter-bot-icon{display:flex;align-items:center;justify-content:center;width:24px;height:24px;flex:none;border-radius:7px;background:var(--sand-fill-accent-subtle);color:var(--sand-text-accent);font-size:13px;font-weight:700;}
+  .chat-starter-bot-icon{display:flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;}
+  .chat-starter-bot-icon .mote-avatar-img{width:100%;height:100%;object-fit:contain;}
   .chat-starter-bot-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px;}
   .chat-starter-bot-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:500;}
   .chat-starter-bot-copy small{font-size:10px;line-height:1.25;color:var(--sand-text-tertiary);}
@@ -1675,6 +1676,8 @@
   /* Provider onboarding */
   .styled-onboarding-sheet{inset:50% auto auto 50%;width:min(650px,calc(100vw - 32px));max-height:calc(100vh - 32px);transform:translate(-50%,-50%);border-radius:18px;padding:30px 34px 24px;overflow:auto;box-sizing:border-box;display:none;}
   .styled-onboarding-sheet.open{display:block;}
+  #harnessModeChoices[hidden]{display:none;}
+  .mia-onboarding-actions{margin-top:12px;}
   #harnessOnboardingOverlay{z-index:220;}
   #harnessOnboarding{z-index:221;}
   .styled-onboarding-kicker{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--sand-text-secondary);margin:0 0 7px;}

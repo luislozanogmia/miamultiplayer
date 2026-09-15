@@ -85,6 +85,7 @@ test('recent human links remain available while agent-authored links cannot gran
   const input = context.googleResourceContextInput([
     `Dana: use https://docs.google.com/spreadsheets/d/${sheetId}/edit`,
     `[Content] I also found https://docs.google.com/spreadsheets/d/${folderId}/edit`,
+    `[Content] I also found https://docs.google.com/document/d/${docId}/edit`,
     'Dana: fill that calendar from the image',
   ], 'Please do it now');
   assert.deepEqual(context.extractGoogleResourceRefs(input), [{ kind: 'sheets', id: sheetId }]);
@@ -105,6 +106,7 @@ test('reports the authenticated connection truthfully without refreshing when no
   assert.equal(fetchCount, 0);
   assert.match(result.text, /CONNECTED as owner@example\.com/);
   assert.match(result.text, /ask the user to share one/i);
+  assert.match(result.text, /bounded Google Docs edit/i);
   for (const secret of [refreshSecret, accessSecret, config.clientSecret, config.stateSigningSecret]) {
     assert.equal(result.text.includes(secret), false);
   }
@@ -276,7 +278,7 @@ test('server wires authenticated-owner context into native fast and durable agen
   assert.match(source, /function buildHermesTaskPrompt\(agentForPrompt, transcript, message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite\)/);
   assert.match(source, /buildContext\(\s*agentForPrompt,\s*transcript,\s*message,\s*workspaceContext/);
   assert.match(source, /const prompt = buildHermesTaskPrompt\(/);
-  assert.match(source, /googleWorkspaceActions\.googleWorkspaceActionInstruction\(googleResourceRefs\)/);
+  assert.match(source, /googleWorkspaceActions\.googleWorkspaceActionInstruction\(\s*googleResourceRefs,/);
 });
 
 test('Hermes subprocesses cannot inherit Mia Google OAuth secrets or the env-file pointer', () => {

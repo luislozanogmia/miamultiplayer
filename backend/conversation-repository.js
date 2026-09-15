@@ -234,6 +234,9 @@ function pageSize(value) {
 }
 
 function runImmediate(db, operation) {
+  // Profile onboarding commits its events and preference together. Use a
+  // savepoint when a caller already owns the outer transaction.
+  if (db.inTransaction) return db.transaction(operation)();
   db.exec('BEGIN IMMEDIATE');
   try {
     const result = operation();

@@ -32,7 +32,9 @@ const GWS_OAUTH_SCOPES = Object.freeze([
 
 // Exact Discovery-method prefixes. No raw gws command is accepted from the
 // UI or an agent. In particular, delete, trash, clear, batchClear, remove and
-// broad batchUpdate methods are absent by construction.
+// broad batchUpdate methods are absent by construction. The one Docs
+// batchUpdate exception is handled below as a structured, non-destructive
+// payload with its own schema and bounds.
 const ALLOWED_GWS_COMMANDS = Object.freeze({
   'gmail.messages.list': Object.freeze(['gmail', 'users', 'messages', 'list']),
   'gmail.messages.get': Object.freeze(['gmail', 'users', 'messages', 'get']),
@@ -52,6 +54,7 @@ const ALLOWED_GWS_COMMANDS = Object.freeze({
   'sheets.values.append': Object.freeze(['sheets', 'spreadsheets', 'values', 'append']),
   'docs.documents.get': Object.freeze(['docs', 'documents', 'get']),
   'docs.documents.create': Object.freeze(['docs', 'documents', 'create']),
+  'docs.documents.batchupdate': Object.freeze(['docs', 'documents', 'batchUpdate']),
 });
 
 const FORBIDDEN_COMMAND_PART_RE = /(?:^|[-_.])(delete|trash|clear|remove|purge|destroy|batchclear|batchupdate)(?:$|[-_.])/i;
@@ -59,6 +62,11 @@ const SAFE_OPERATION_FLAGS = new Set(['--params', '--json', '--upload', '--outpu
 const PROCESS_TIMEOUT_MS = 30 * 1000;
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 const PROCESS_MAX_BUFFER = 1024 * 1024;
+const GOOGLE_ID_RE = /^[A-Za-z0-9_-]{10,256}$/;
+const MAX_DOC_BATCH_REQUESTS = 10;
+const MAX_DOC_TEXT_CHARS = 4000;
+const MAX_DOC_TOTAL_CHARS = 8000;
+const MAX_DOC_BATCH_JSON_CHARS = 12000;
 
 function fileExists(filename, fsImpl = fs) {
   try {
@@ -90,8 +98,13 @@ function processEnvironment(env = process.env) {
   for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR']) {
     if (env[key]) childEnv[key] = env[key];
   }
+  if (env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND === 'file'
+    || env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND === 'keyring') {
+    childEnv.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND = env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND;
+  }
   // Do not inherit GOOGLE_WORKSPACE_CLI_TOKEN or a credentials-file override.
-  // gws must own its encrypted profile and keyring-backed login state.
+  // gws must own its encrypted profile. The validated backend selector is
+  // retained so every short-lived process reads the same encryption key.
   return childEnv;
 }
 
@@ -157,10 +170,84 @@ function publicStatus(state) {
   };
 }
 
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function hasExactKeys(value, keys) {
+  if (!isPlainObject(value)) return false;
+  const expected = [...keys].sort();
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function normalizeDocumentText(value, allowEmpty = false) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\r\n?/g, '\n');
+  if ((!allowEmpty && normalized.length === 0) || normalized.length > MAX_DOC_TEXT_CHARS) return null;
+  // Docs text may contain ordinary whitespace, but control characters and NUL
+  // are not useful document data and make the provider payload harder to audit.
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(normalized)) return null;
+  return normalized;
+}
+
+function normalizeDocsBatchUpdatePayload(params, body) {
+  if (!hasExactKeys(params, ['documentId']) || !hasExactKeys(body, ['requests'])) return null;
+  const documentId = params.documentId;
+  if (typeof documentId !== 'string' || !GOOGLE_ID_RE.test(documentId) || !Array.isArray(body.requests)
+    || body.requests.length === 0 || body.requests.length > MAX_DOC_BATCH_REQUESTS) return null;
+
+  const requests = [];
+  let totalChars = 0;
+  for (const request of body.requests) {
+    if (!isPlainObject(request) || Object.keys(request).length !== 1) return null;
+    if (Object.prototype.hasOwnProperty.call(request, 'replaceAllText')) {
+      const replaceAllText = request.replaceAllText;
+      if (!hasExactKeys(replaceAllText, ['containsText', 'replaceText'])) return null;
+      const containsText = replaceAllText.containsText;
+      if (!hasExactKeys(containsText, ['text', 'matchCase']) || typeof containsText.matchCase !== 'boolean') return null;
+      const findText = normalizeDocumentText(containsText.text);
+      // Empty replacement text is deliberately rejected: it would turn the
+      // safe replacement primitive into an unbounded delete operation.
+      const replaceText = normalizeDocumentText(replaceAllText.replaceText);
+      if (!findText || !replaceText) return null;
+      totalChars += findText.length + replaceText.length;
+      requests.push({
+        replaceAllText: {
+          containsText: { text: findText, matchCase: containsText.matchCase },
+          replaceText,
+        },
+      });
+    } else if (Object.prototype.hasOwnProperty.call(request, 'insertText')) {
+      const insertText = request.insertText;
+      if (!hasExactKeys(insertText, ['endOfSegmentLocation', 'text'])) return null;
+      const location = insertText.endOfSegmentLocation;
+      if (!isPlainObject(location)) return null;
+      const locationKeys = Object.keys(location);
+      if (locationKeys.length > 1 || (locationKeys.length === 1
+        && (locationKeys[0] !== 'segmentId' || location.segmentId !== ''))) return null;
+      const text = normalizeDocumentText(insertText.text);
+      if (!text) return null;
+      totalChars += text.length;
+      requests.push({ insertText: { endOfSegmentLocation: {}, text } });
+    } else {
+      return null;
+    }
+    if (totalChars > MAX_DOC_TOTAL_CHARS) return null;
+  }
+
+  const normalized = { documentId, requests };
+  if (JSON.stringify({ requests }).length > MAX_DOC_BATCH_JSON_CHARS) return null;
+  return normalized;
+}
+
 function assertAllowedGwsOperation(operation, args = []) {
   const key = String(operation || '').trim().toLowerCase();
   const prefix = ALLOWED_GWS_COMMANDS[key];
-  if (!prefix || FORBIDDEN_COMMAND_PART_RE.test(key)) {
+  const isDocsBatchUpdate = key === 'docs.documents.batchupdate';
+  if (!prefix || (!isDocsBatchUpdate && FORBIDDEN_COMMAND_PART_RE.test(key))) {
     const error = new Error('google_operation_forbidden');
     error.code = 'google_operation_forbidden';
     throw error;
@@ -169,6 +256,28 @@ function assertAllowedGwsOperation(operation, args = []) {
     const error = new Error('invalid_google_operation_arguments');
     error.code = 'invalid_google_operation_arguments';
     throw error;
+  }
+  if (isDocsBatchUpdate) {
+    if (args.length !== 4 || args[0] !== '--params' || args[2] !== '--json') {
+      const error = new Error('invalid_google_operation_arguments');
+      error.code = 'invalid_google_operation_arguments';
+      throw error;
+    }
+    let params;
+    let body;
+    try {
+      params = JSON.parse(args[1]);
+      body = JSON.parse(args[3]);
+    } catch (_) {
+      params = null;
+      body = null;
+    }
+    if (!normalizeDocsBatchUpdatePayload(params, body)) {
+      const error = new Error('invalid_google_operation_arguments');
+      error.code = 'invalid_google_operation_arguments';
+      throw error;
+    }
+    return [...prefix, ...args];
   }
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index];
@@ -390,6 +499,10 @@ module.exports = {
   GOOGLE_ACCESS_POLICY,
   GWS_OAUTH_SCOPES,
   ALLOWED_GWS_COMMANDS,
+  MAX_DOC_BATCH_REQUESTS,
+  MAX_DOC_TEXT_CHARS,
+  MAX_DOC_TOTAL_CHARS,
+  normalizeDocsBatchUpdatePayload,
   assertAllowedGwsOperation,
   authPayloadConnected,
   publicStatus,

@@ -320,7 +320,7 @@ async function hydrateGoogleResourceWithConnector(connector, ref) {
 
 function connectedSummary(connection) {
   const email = cleanText(connection && connection.googleEmail, 200);
-  return `Google Workspace connector (authoritative server state): CONNECTED${email ? ` as ${email}` : ''}. Gmail is read-only. Google Drive, Google Sheets, and Google Docs are connected with read/write authorization. The production agent bridge can open and read explicitly shared Google Drive, Sheets, and Docs links, and can apply a validated Google Sheets update when the user explicitly requests one. If no link was supplied, ask the user to share one. Never say the connector is disconnected, and never claim a file was edited unless an applied-operation result explicitly says so.`;
+  return `Google Workspace connector (authoritative server state): CONNECTED${email ? ` as ${email}` : ''}. Gmail is read-only. Google Drive, Google Sheets, and Google Docs are connected with read/write authorization. The production agent bridge can open and read explicitly shared Google Drive, Sheets, and Docs links, and can apply a validated Google Sheets update or bounded Google Docs edit when the user explicitly requests one. If no link was supplied, ask the user to share one. Never say the connector is disconnected, and never claim a file was edited unless an applied-operation result explicitly says so.`;
 }
 
 function disconnectedSummary(state) {
