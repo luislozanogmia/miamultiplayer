@@ -530,6 +530,10 @@
     el('#loginWall').classList.remove('hidden');
     el('#appShell').classList.remove('visible');
     signalDesktopReady();
+    // Mia owns the hash router after sign-in. Leaving #/chat in place here
+    // makes Clerk's embedded router silently render an empty sign-in root.
+    // showApp() restores the default chat route after authentication.
+    if(location.hash) history.replaceState(null, '', location.pathname + location.search);
     ensureClerkLoaded().then(function(clerk){
       if(clerk.user && clerk.session) return finishClerkLogin();
       clerk.mountSignIn(mount, {
