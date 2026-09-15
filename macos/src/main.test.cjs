@@ -24,6 +24,23 @@ test("main-window trust uses exact parsed origins", () => {
   assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:48710/chat", "http://127.0.0.1:4871"), false);
 });
 
+test("only Clerk's exact Google OAuth callback stays in the Electron session", () => {
+  const main = loadMain();
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const valid = new URL("https://accounts.google.com/v3/signin/accountchooser");
+  valid.searchParams.set("redirect_uri", "https://clerk.shared.lcl.dev/v1/oauth_callback");
+  valid.searchParams.set("response_type", "code");
+
+  assert.equal(main.isClerkGoogleOAuthUrl(valid.href), true);
+  for (const blocked of [
+    "https://accounts.google.com/",
+    "https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=https%3A%2F%2Fattacker.example%2Fv1%2Foauth_callback&response_type=code",
+    "https://attacker.example/?redirect_uri=https%3A%2F%2Fclerk.shared.lcl.dev%2Fv1%2Foauth_callback&response_type=code",
+    "https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=http%3A%2F%2Fclerk.shared.lcl.dev%2Fv1%2Foauth_callback&response_type=code",
+  ]) assert.equal(main.isClerkGoogleOAuthUrl(blocked), false, blocked);
+  assert.match(source, /will-navigate[\s\S]*?hasExactOrigin\(url, backendUrl\)[\s\S]*?isClerkGoogleOAuthUrl\(url\)[\s\S]*?shell\.openExternal\(url\)/);
+});
+
 test("packaged macOS runtime is self-contained and ignores ambient Hermes", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /app\.isPackaged\s*\?\s*PACKAGED_HERMES_BIN/);

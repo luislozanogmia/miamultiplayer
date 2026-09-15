@@ -912,6 +912,20 @@ function isAllowedExternalUrl(value) {
   }
 }
 
+function isClerkGoogleOAuthUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "accounts.google.com") return false;
+    const redirect = new URL(url.searchParams.get("redirect_uri") || "");
+    return redirect.protocol === "https:"
+      && redirect.hostname === "clerk.shared.lcl.dev"
+      && redirect.pathname === "/v1/oauth_callback"
+      && url.searchParams.get("response_type") === "code";
+  } catch (_) {
+    return false;
+  }
+}
+
 function hasExactOrigin(value, expected) {
   try {
     return new URL(value).origin === new URL(expected).origin;
@@ -1236,6 +1250,25 @@ function disposeArtifactPanel(window, toolbarView, contentView) {
 function configureNavigation(window) {
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (backendUrl && hasExactOrigin(url, backendUrl)) return { action: "allow" };
+    // Clerk's Google flow must stay in Electron's session so its callback can
+    // return the authenticated cookie to Mia. Opening this URL in the user's
+    // regular browser strands the session there and leaves Mia signed out.
+    if (isClerkGoogleOAuthUrl(url)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          parent: window,
+          modal: true,
+          show: true,
+          autoHideMenuBar: true,
+          webPreferences: {
+            contextIsolation: true,
+            sandbox: true,
+            nodeIntegration: false,
+          },
+        },
+      };
+    }
     if (isAllowedExternalUrl(url)) {
       shell.openExternal(url);
     }
@@ -1244,6 +1277,9 @@ function configureNavigation(window) {
   window.webContents.on("will-navigate", (event) => {
     const { url } = event;
     if (backendUrl && hasExactOrigin(url, backendUrl)) return;
+    // Clerk currently starts Google OAuth as a top-level navigation. Keep
+    // that exact flow in this webContents so its session returns to Mia.
+    if (isClerkGoogleOAuthUrl(url)) return;
     if (isAllowedExternalUrl(url)) {
       event.preventDefault();
       shell.openExternal(url);
@@ -1727,6 +1763,7 @@ module.exports = {
   normalizeArtifactTarget,
   isNativeArtifactTarget,
   hasExactOrigin,
+  isClerkGoogleOAuthUrl,
   isTrustedMainWindowUrl,
   miaosWorkspacePath,
   preparePackagedRuntime,
