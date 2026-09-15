@@ -467,6 +467,11 @@ function signMacApp(appPath, config) {
 
 function notarizeMacDmg(dmgPath, config) {
   if (!config.release) return false;
+  // Gatekeeper evaluates the distributed container before it can inspect the
+  // signed app inside it. Sign the final DMG bytes before notarization so both
+  // layers have a usable Developer ID signature.
+  run("codesign", ["--force", "--timestamp", "--sign", config.identity, dmgPath]);
+  run("codesign", ["--verify", "--strict", "--verbose=2", dmgPath]);
   run("xcrun", ["notarytool", "submit", dmgPath, "--keychain-profile", config.notaryProfile, "--wait"]);
   run("xcrun", ["stapler", "staple", dmgPath]);
   run("xcrun", ["stapler", "validate", dmgPath]);

@@ -134,6 +134,8 @@ test("Mac DMG bundles pinned Hermes, Ghost, Python, modules, and release integri
   assert.match(source, /install_name_tool/);
   assert.match(source, /__MIAOS_PACKAGED_PYTHON_ROOT__/);
   assert.match(source, /providerCredentials: "none"/);
+  assert.match(source, /\["--force", "--timestamp", "--sign", config\.identity, dmgPath\]/);
+  assert.match(source, /\["--verify", "--strict", "--verbose=2", dmgPath\]/);
   assert.match(source, /\.sha256/);
   assert.match(source, /\.runtime\.json/);
 });
