@@ -64,7 +64,14 @@ function loadMain() {
       on() {},
       dock: null,
     },
+    autoUpdater: {
+      on() {},
+      setFeedURL() {},
+      checkForUpdates() { return Promise.resolve(); },
+      quitAndInstall() {},
+    },
     BrowserWindow: class {},
+    dialog: { showMessageBox() { return Promise.resolve({ response: 1 }); } },
     ipcMain: { handle() {}, on() {}, removeHandler() {} },
     Menu: { setApplicationMenu() {}, buildFromTemplate(template) { return template; } },
     session: { fromPartition() { return {}; } },
@@ -119,6 +126,16 @@ test("Development menu is part of the native application menu", () => {
   const main = loadMain();
   const template = main.createApplicationMenuTemplate();
   assert.equal(template.find(item => item.label === "Development")?.label, "Development");
+});
+
+test("OTA updates require a configured HTTPS feed and use signed-app update controls", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.match(source, /MIAOS_UPDATE_FEED_URL/);
+  assert.match(source, /url\.protocol !== "https:"/);
+  assert.match(source, /autoUpdater\.setFeedURL\(\{ url: feedUrl \}\)/);
+  assert.match(source, /autoUpdater\.checkForUpdates\(\)/);
+  assert.match(source, /autoUpdater\.quitAndInstall\(\)/);
+  assert.match(source, /label: "Check for Updates…"/);
 });
 
 test("packaged desktop disables developer menus and backend output capture", () => {

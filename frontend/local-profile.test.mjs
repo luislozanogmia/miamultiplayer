@@ -6,8 +6,8 @@ test('local OSS profiles hide their internal principal and sign-out controls', a
   const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
 
   assert.match(source, /currentUserLocalProfile = res\.data\.localProfile === true/);
-  assert.match(source, /currentUserLocalProfile \? 'Local profile' : email/);
-  assert.match(source, /'Local profile · no email required' : currentUser/);
+  assert.match(source, /currentUserLocalProfile \? 'Local profile' : currentAccountEmail/);
+  assert.match(source, /'Local profile · no email required' : \(currentAccountEmail \|\| currentUser\)/);
   assert.match(source, /\[el\('#logoutBtn'\), el\('#chatAcctLogout'\), el\('#settingsSignOut'\)\]/);
   assert.match(source, /control\.style\.display = currentUserLocalProfile \? 'none' : ''/);
   assert.match(source, /if\(chatAcctName\) chatAcctName\.textContent = displayNameForEmail\(currentUser\)/);

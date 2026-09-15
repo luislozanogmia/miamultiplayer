@@ -304,17 +304,22 @@ test('active automation API is sourced from Hermes cron sessions and workspace s
   assert.match(server, /reconcileNativeBotConversations\(\)[\s\S]*\.then\(\(\) => cronSync\.reconcileBotCrons\(conn\)\)/);
 });
 
-test('draft bot lifecycle is removed without deleting legacy records', async () => {
+test('draft bots remain visible and inactive without scheduling work', async () => {
   const [html, source, server] = await Promise.all([
     readFile(htmlUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
     readFile(serverUrl, 'utf8'),
   ]);
-  assert.doesNotMatch(html, /Keep as draft|saved to the bench as a draft/);
-  assert.doesNotMatch(source, /status: 'draft'|Bench · Drafts/);
+  assert.match(source, /var BENCH_COLUMNS = \[[\s\S]*key:'draft'/);
+  assert.match(source, /stateMap = \{draft:'draft'/);
+  assert.match(source, /return status !== 'paused'/);
+  assert.match(source, /Draft — finish setup to activate/);
+  assert.match(server, /\['draft', 'running', 'watch'\]\.indexOf\(body\.status\)/);
+  assert.match(server, /if \(record\.status === 'paused'\)\s*\{/);
+  assert.doesNotMatch(server, /record\.status === 'draft' \|\| record\.status === 'paused'/);
+  assert.match(server, /if \(record\.status !== 'draft'\) \{[\s\S]*syncBotAutomation/);
+  assert.match(server, /record\.status === 'draft'[\s\S]*removeBotCron/);
   assert.match(server, /defaults: \{ status: 'running', replyAlways: false \}/);
-  assert.match(server, /\['running', 'watch'\]\.indexOf\(body\.status\)/);
-  assert.match(server, /record\.status === 'draft' \|\| record\.status === 'paused'[\s\S]*record\.status = 'watch'/);
 });
 
 test('native workspace home remains loaded but is omitted from conversation rows', async () => {
@@ -348,6 +353,8 @@ test('account menu removes trial and help placeholders while preserving supporte
     'chatAcctLogout', 'Log out',
   ]) assert.match(menu, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(source, /showBenchToast\(item\.getAttribute\('data-chat-acct-toast'\)\)/);
+  assert.match(source, /function prepareBetaFeedback\(\)[\s\S]*copySidebarText\(feedback, 'Feedback copied/);
+  assert.match(source, /feedback\.addEventListener\('click'[\s\S]*prepareBetaFeedback\(\)/);
 });
 
 test('Admin Center is available only to Multiplayer Test admins from the account menu', async () => {
@@ -366,7 +373,10 @@ test('Admin Center is available only to Multiplayer Test admins from the account
 test('styled routing keeps the full Agent Bench as a direct fallback', async () => {
   const source = await readFile(appUrl, 'utf8');
 
-  assert.match(source, /var STYLED_ROUTES = \['chat', 'agent-admin'\]/);
+  assert.match(source, /var STYLED_ROUTES = \['chat', 'agent-admin', 'integrations'\]/);
+  assert.match(source, /var ROUTES = \['chat','agent-admin','integrations'\]/);
+  assert.match(source, /id:'gemini', label:'Google AI Studio'/);
+  assert.match(source, /action === 'web-browser'\) openWebBrowserTool\(\)/);
   assert.match(source, /location\.hash = '#\/agent-admin'/);
   assert.match(source, /classList\.toggle\('styled-agent-admin-view', routeHash === 'agent-admin'\)/);
   assert.match(source, /location\.hash = '#\/chat'/);
@@ -691,7 +701,7 @@ test('a final worker reply reconciles stale activity against durable dispatch st
   assert.match(applyEvent, /var fromWorker = event\.senderType === 'agent' \|\| event\.senderType === 'bot'/);
   assert.match(applyEvent, /var isProgress = eventMetadata\.progress === true && eventMetadata\.status !== 'failed'/);
   assert.match(applyEvent, /if\(fromWorker && state\.thinking\) stopChatThinking\(event\.conversationId\)/);
-  assert.match(applyEvent, /if\(fromWorker && !isProgress\) loadActiveNativeDispatches\(event\.conversationId\)/);
+  assert.match(applyEvent, /if\(fromWorker && !isProgress\)\{[\s\S]*?loadActiveNativeDispatches\(event\.conversationId\);/);
 });
 
 test('the first live-state snapshot hydrates durable tasks immediately', async () => {
@@ -720,4 +730,36 @@ test('standalone Agent Bench replaces chat and remains scrollable', async () => 
   assert.match(styles, /styled-agent-admin-view #panel-chat\{display:none!important;\}/);
   assert.match(styles, /styled-agent-admin-view #panel-agent-admin\{[^}]*display:flex!important;[^}]*overflow-y:auto;/);
   assert.match(styles, /styled-agent-admin-view \.bench-hero-row,[\s\S]*styled-agent-admin-view \.bench-section\{flex:0 0 auto;\}/);
+});
+
+test('bot creation has a bounded request with cancel, timeout, and retry recovery states', async () => {
+  const [html, source, styles] = await Promise.all([
+    readFile(htmlUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
+  ]);
+  assert.match(html, /id="benchBuildCancelBtn"/);
+  assert.match(html, /id="benchBuildRetryBtn"/);
+  assert.match(html, /id="benchBuildBackBtn"/);
+  assert.match(source, /var BENCH_BUILD_TIMEOUT_MS = 30000/);
+  assert.match(source, /function cancelBenchBuild\(closeAfter\)/);
+  assert.match(source, /function finishBenchBuildFailure\(attempt, timedOut, message\)/);
+  assert.match(source, /controller\.abort()/);
+  assert.match(source, /cinema\.mode = 'build-error'/);
+  assert.match(source, /api\('\/api\/bots', \{[\s\S]*signal:controller\.signal/);
+  assert.match(source, /el\('#benchBuildRetryBtn'\)\.addEventListener\('click', startBenchBuild\)/);
+  assert.match(styles, /\.bench-build-actions\{display:flex/);
+});
+
+test('chat-native bot setup can cancel or retry bounded interpretation and activation', async () => {
+  const [source, styles] = await Promise.all([readFile(appUrl, 'utf8'), readFile(stylesUrl, 'utf8')]);
+  assert.match(source, /var AGENT_SETUP_TIMEOUT_MS = 30000/);
+  assert.match(source, /function clearAgentSetupRequest\(abort\)/);
+  assert.match(source, /function finishAgentSetupFailure\(attempt, operation, timedOut, message\)/);
+  assert.match(source, /function cancelAgentSetupFlow\(\)/);
+  assert.match(source, /id = 'agentSetupCancelInterpretation'/);
+  assert.match(source, /id="agentSetupRetry"/);
+  assert.match(source, /createNativeAgentConversation\(created, controller \? \{signal:controller\.signal\} : \{\}\)/);
+  assert.match(source, /api\('\/api\/bots\/interpret', \{[\s\S]*signal:controller\.signal/);
+  assert.match(styles, /agent-setup-actions button:disabled/);
 });

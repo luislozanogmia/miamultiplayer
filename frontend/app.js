@@ -3,7 +3,7 @@
 
   /* The public OSS shell consists of Chat and Manage Bots. */
   var STYLED_SKIN = true;
-  var STYLED_ROUTES = ['chat', 'agent-admin'];
+  var STYLED_ROUTES = ['chat', 'agent-admin', 'integrations'];
   // The local desktop shell opens directly without an authentication gate.
   var STYLED_SKIP_AUTH = false;
   if(STYLED_SKIN) document.body.classList.add('styled-skin');
@@ -49,6 +49,7 @@
     domains: ['example.com'],
     companies: []
   };
+  var AUTH_CONFIG = null;
   var WORKSPACE_OPTIONS = {
     solo: {mode:'solo', label:'Solo'},
     'multiplayer_test': {mode:'multiplayer', label:'Multiplayer Test', switcherLabel:'Multiplayer Test'}
@@ -176,6 +177,7 @@
       if(data && typeof data.name === 'string' && data.name) INSTANCE.name = data.name;
       if(data && Array.isArray(data.domains) && data.domains.length) INSTANCE.domains = data.domains;
       if(data && data.localPreview === true) STYLED_SKIP_AUTH = true;
+      AUTH_CONFIG = data && data.auth && data.auth.provider === 'clerk' ? data.auth : null;
       refreshAppName();
     }).catch(function(){ /* keep defaults above */ });
   }
@@ -191,6 +193,7 @@
 
   /* ============ STATE ============ */
   var currentUser = null;
+  var currentAccountEmail = null;
   var currentUserLocalProfile = false;
   // From GET /api/me — gates the channel-settings "Reset channel" action.
   // Never trusted client-side alone (the server 403s a non-admin's actual
@@ -198,7 +201,7 @@
   var isAdmin = false;
   var agentTimer = null;
 
-  var ROUTES = ['chat','agent-admin'];
+  var ROUTES = ['chat','agent-admin','integrations'];
 
   /* ============ HELPERS ============ */
   function el(sel, root){ return (root||document).querySelector(sel); }
@@ -264,6 +267,71 @@
       overlay.addEventListener('click', function(event){ if(event.target === overlay) finish(false); });
       document.addEventListener('keydown', onKeydown);
       confirm.focus();
+    });
+  }
+  function appPrompt(initialText, options){
+    options = options || {};
+    return new Promise(function(resolve){
+      var previousFocus = document.activeElement;
+      var overlay = document.createElement('div');
+      overlay.className = 'app-prompt-overlay open';
+      overlay.setAttribute('role', 'presentation');
+
+      var card = document.createElement('div');
+      card.className = 'app-prompt-card';
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-modal', 'true');
+
+      var title = document.createElement('h2');
+      title.className = 'app-prompt-title';
+      title.textContent = String(options.title || 'Edit message');
+      var message = document.createElement('p');
+      message.className = 'app-prompt-msg';
+      message.textContent = String(options.message || 'Update the text, then continue.');
+      var input = document.createElement('textarea');
+      input.className = 'app-prompt-input';
+      input.value = String(initialText || '');
+      input.setAttribute('aria-label', String(options.inputLabel || 'Text'));
+      var note = document.createElement('p');
+      note.className = 'app-prompt-note';
+      note.textContent = String(options.note || '');
+      note.hidden = !note.textContent;
+      var actions = document.createElement('div');
+      actions.className = 'app-prompt-actions';
+      var cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'btn';
+      cancel.textContent = 'Cancel';
+      var submit = document.createElement('button');
+      submit.type = 'button';
+      submit.className = 'btn app-prompt-submit';
+      submit.textContent = String(options.submitLabel || 'Save');
+      actions.append(cancel, submit);
+      card.append(title, message, input, note, actions);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      var settled = false;
+      function finish(result){
+        if(settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKeydown);
+        overlay.remove();
+        if(previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+        resolve(result);
+      }
+      function onKeydown(event){
+        if(event.key === 'Escape'){
+          event.preventDefault();
+          finish({ok:false, text:''});
+        }
+      }
+      cancel.addEventListener('click', function(){ finish({ok:false, text:''}); });
+      submit.addEventListener('click', function(){ finish({ok:true, text:input.value}); });
+      overlay.addEventListener('click', function(event){ if(event.target === overlay) finish({ok:false, text:''}); });
+      document.addEventListener('keydown', onKeydown);
+      input.focus();
+      input.select();
     });
   }
   function firstNameFromEmail(email){
@@ -377,6 +445,127 @@
 
   /* ============ AUTH ============ */
   var desktopReadySignaled = false;
+  var clerkLoadPromise = null;
+  var clerkExchangeBusy = false;
+  var clerkSigningOut = false;
+
+  function loadClerkAsset(src, attributes){
+    return new Promise(function(resolve, reject){
+      var existing = document.querySelector('script[src="' + src + '"]');
+      if(existing){
+        if(existing.getAttribute('data-loaded') === 'true') return resolve();
+        existing.addEventListener('load', resolve, {once:true});
+        existing.addEventListener('error', reject, {once:true});
+        return;
+      }
+      var script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      Object.keys(attributes || {}).forEach(function(name){ script.setAttribute(name, attributes[name]); });
+      script.addEventListener('load', function(){ script.setAttribute('data-loaded', 'true'); resolve(); }, {once:true});
+      script.addEventListener('error', reject, {once:true});
+      document.head.appendChild(script);
+    });
+  }
+
+  function ensureClerkLoaded(){
+    if(!AUTH_CONFIG || !AUTH_CONFIG.publishableKey) return Promise.reject(new Error('Clerk is not configured'));
+    if(clerkLoadPromise) return clerkLoadPromise;
+    clerkLoadPromise = loadClerkAsset('/vendor/clerk-ui/ui.browser.js').then(function(){
+      return loadClerkAsset('/vendor/clerk-js/clerk.browser.js', {
+        'crossorigin':'anonymous',
+        'data-clerk-publishable-key':AUTH_CONFIG.publishableKey
+      });
+    }).then(function(){
+      if(!window.Clerk || typeof window.Clerk.load !== 'function') throw new Error('Clerk did not initialize');
+      return window.Clerk.load({ui:{ClerkUI:window.__internal_ClerkUICtor}}).then(function(){ return window.Clerk; });
+    });
+    return clerkLoadPromise;
+  }
+
+  function finishClerkLogin(){
+    if(clerkExchangeBusy || clerkSigningOut || !window.Clerk || !window.Clerk.session) return Promise.resolve(false);
+    clerkExchangeBusy = true;
+    var errEl = el('#loginError');
+    if(errEl) errEl.textContent = '';
+    return window.Clerk.session.getToken().then(function(token){
+      if(!token) throw new Error('Clerk did not return a session token');
+      return fetch('/api/clerk/session', {
+        method:'POST',
+        credentials:'include',
+        headers:{'Accept':'application/json', 'Authorization':'Bearer ' + token}
+      });
+    }).then(function(response){
+      return response.json().catch(function(){ return {}; }).then(function(data){ return {status:response.status, data:data}; });
+    }).then(function(result){
+      if(result.status !== 200){
+        if(result.status === 409) throw new Error('This Mia installation is already linked to another account.');
+        if(result.status === 422) throw new Error('Mia needs the verified email claim enabled in Clerk.');
+        throw new Error('Mia could not verify this Clerk session.');
+      }
+      return api('/api/me').then(function(meRes){
+        if(meRes.status !== 200 || !meRes.data || !meRes.data.email) throw new Error('Mia could not open the local session.');
+        currentUserLocalProfile = false;
+        mergeUserProfile(meRes.data.email, meRes.data);
+        isAdmin = !!meRes.data.isAdmin;
+        showApp(meRes.data.email, meRes.data.accountEmail);
+        return true;
+      });
+    }).catch(function(error){
+      if(errEl) errEl.textContent = error && error.message ? error.message : 'Could not sign in. Try again.';
+      return false;
+    }).then(function(result){ clerkExchangeBusy = false; return result; }, function(error){ clerkExchangeBusy = false; throw error; });
+  }
+
+  function showClerkSignIn(){
+    if(!AUTH_CONFIG) return hideApp();
+    var form = el('#loginForm');
+    var mount = el('#clerkSignIn');
+    var wall = el('#loginWall');
+    if(form) form.hidden = true;
+    if(mount) mount.hidden = false;
+    if(wall) wall.classList.add('clerk-active');
+    setLoginEnabled(true);
+    setAppLoading(false);
+    el('#loginWall').classList.remove('hidden');
+    el('#appShell').classList.remove('visible');
+    signalDesktopReady();
+    ensureClerkLoaded().then(function(clerk){
+      if(clerk.user && clerk.session) return finishClerkLogin();
+      clerk.mountSignIn(mount, {
+        routing:'virtual',
+        appearance:{
+          variables:{
+            colorPrimary:'#171717',
+            colorText:'#171717',
+            colorTextSecondary:'#737373',
+            colorBackground:'#ffffff',
+            colorInputBackground:'#ffffff',
+            colorInputText:'#171717',
+            borderRadius:'12px',
+            fontFamily:'Instrument Sans, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif'
+          },
+          elements:{
+            rootBox:'mia-clerk-root',
+            cardBox:'mia-clerk-card-box',
+            card:'mia-clerk-card',
+            header:'mia-clerk-header',
+            socialButtonsBlockButton:'mia-clerk-social-button',
+            formButtonPrimary:'mia-clerk-primary-button',
+            formFieldInput:'mia-clerk-input',
+            footer:'mia-clerk-footer'
+          }
+        }
+      });
+      clerk.addListener(function(state){
+        if(state && state.user && state.session) finishClerkLogin();
+      });
+      return false;
+    }).catch(function(error){
+      var errEl = el('#loginError');
+      if(errEl) errEl.textContent = error && error.message ? error.message : 'Could not load sign in. Check your connection.';
+    });
+  }
   function setAppLoading(loading){
     var overlay = el('#appLoadingOverlay');
     if(!overlay) return;
@@ -397,9 +586,10 @@
     if(adminItem) adminItem.hidden = !isAdmin || activeWorkspaceKey === 'solo';
   }
 
-  function showApp(email){
+  function showApp(email, accountEmail){
     setAppLoading(true);
     currentUser = email;
+    currentAccountEmail = accountEmail || email;
     refreshAppName();
     loadChatPinned();
     loadChatAttention();
@@ -408,7 +598,7 @@
     el('#loginWall').classList.add('hidden');
     el('#appShell').classList.add('visible');
     el('#avatarBtn').innerHTML = humanAvatarInitialsHtml(email);
-    el('#avatarMenuEmail').textContent = currentUserLocalProfile ? 'Local profile' : email;
+    el('#avatarMenuEmail').textContent = currentUserLocalProfile ? 'Local profile' : currentAccountEmail;
     var chatAcctAvatar = el('#chatAcctAvatar');
     var chatAcctName = el('#chatAcctName');
     if(chatAcctAvatar) chatAcctAvatar.innerHTML = humanAvatarInitialsHtml(email);
@@ -447,6 +637,9 @@
       if(chatModelPicker && typeof chatModelPicker.ensureLoaded === 'function'){
         chatModelPicker.ensureLoaded();
       }
+      // The tour belongs after first-run setup. Starting it while the provider
+      // sheet is opening leaves two modal layers competing for focus.
+      if(harnessSettingsCache.onboardingComplete && currentRealProfileName()) tourMaybeAutoStart();
     });
     Promise.resolve(initialRender).then(function(){
       startLiveRefreshPolling();
@@ -459,7 +652,6 @@
       signalDesktopHydrated();
       restoreLocalBrowserAfterBoot();
     });
-    tourMaybeAutoStart();
   }
 
   function setLoginEnabled(enabled){
@@ -477,8 +669,39 @@
     els('input, button', form).forEach(function(field){ field.disabled = !enabled; });
   }
 
+  function appShortcutTargetIsEditable(target){
+    if(!target) return false;
+    var tag = String(target.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable === true;
+  }
+
+  // Keep the app shortcuts small and predictable. Text editors own their
+  // keystrokes; these commands only run from the shell chrome.
+  document.addEventListener('keydown', function(event){
+    if(!currentUser || event.defaultPrevented || event.isComposing || appShortcutTargetIsEditable(event.target)) return;
+    if(!(event.metaKey || event.ctrlKey) || event.altKey) return;
+    if(el('#harnessOnboarding.open') || el('#settingsDrawer.open') || (typeof tour !== 'undefined' && tour.active)) return;
+    var key = String(event.key || '').toLowerCase();
+    if(key === 'k' && !event.shiftKey){
+      event.preventDefault();
+      if(location.hash !== '#/chat'){
+        location.hash = '#/chat';
+        route();
+      }
+      var search = el('#chatSearch');
+      if(search) search.focus();
+    } else if(key === 'n' && !event.shiftKey){
+      event.preventDefault();
+      openDmCompose();
+    } else if(key === 'b' && event.shiftKey){
+      event.preventDefault();
+      startAgentSetupChat();
+    }
+  });
+
   function hideApp(){
     currentUser = null;
+    currentAccountEmail = null;
     currentUserLocalProfile = false;
     isAdmin = false;
     syncAdminMenuItem();
@@ -514,7 +737,7 @@
           currentUserLocalProfile = res.data.localProfile === true;
           mergeUserProfile(res.data.email, res.data);
           isAdmin = !!res.data.isAdmin;
-          showApp(res.data.email);
+          showApp(res.data.email, res.data.accountEmail);
         } else {
           hideApp();
         }
@@ -526,10 +749,10 @@
           currentUserLocalProfile = res.data.localProfile === true;
           mergeUserProfile(res.data.email, res.data);
           isAdmin = !!res.data.isAdmin;
-          showApp(res.data.email);
+          showApp(res.data.email, res.data.accountEmail);
         }
         else { hideApp(); }
-      }).catch(function(error){ console.error('Mia startup failed', error); hideApp(); });
+      }).catch(function(error){ console.error('Mia startup failed', error); showClerkSignIn(); });
     }
   });
 
@@ -558,7 +781,8 @@
             mergeUserProfile(loginEmail, meRes.data);
             isAdmin = !!meRes.data.isAdmin;
           }
-          showApp(loginEmail);
+          showApp(meRes.status === 200 && meRes.data && meRes.data.email ? meRes.data.email : loginEmail,
+            meRes.status === 200 && meRes.data ? meRes.data.accountEmail : null);
         }).catch(function(){ showApp(loginEmail); });
       } else if(res.status === 400){
         errEl.textContent = domainErrorMessage();
@@ -571,7 +795,13 @@
   });
 
   el('#logoutBtn').addEventListener('click', function(){
-    fetch('/api/logout', {method:'POST', credentials:'include'}).catch(function(){}).then(function(){ hideApp(); });
+    clerkSigningOut = true;
+    var clerkSignOut = AUTH_CONFIG ? ensureClerkLoaded().then(function(clerk){
+      return clerk && typeof clerk.signOut === 'function' ? clerk.signOut() : null;
+    }).catch(function(){}) : Promise.resolve();
+    clerkSignOut.then(function(){
+      return fetch('/api/logout', {method:'POST', credentials:'include'}).catch(function(){});
+    }).then(function(){ window.location.reload(); });
   });
 
   /* ============ ROUTER ============ */
@@ -620,13 +850,6 @@
     var rawRoute = location.hash.replace(/^#\//, '');
     var routeParts = rawRoute.split('?');
     var routeHash = routeParts[0] || '';
-    if(STYLED_SKIN && routeHash === 'integrations'){
-      // Connected apps is shelved (shown as Upcoming); the deep link just
-      // lands on chat until the connector program returns.
-      document.body.classList.remove('styled-integrations-view');
-      if(location.hash !== '#/chat') location.hash = '#/chat';
-      return;
-    }
     if(STYLED_SKIN && STYLED_ROUTES.indexOf(routeHash) === -1){ location.hash = '#/chat'; return; }
     if(STYLED_SKIN) document.body.classList.toggle('styled-integrations-view', routeHash === 'integrations');
     if(STYLED_SKIN) document.body.classList.toggle('styled-agent-admin-view', routeHash === 'agent-admin');
@@ -816,7 +1039,7 @@
     }
   };
   var harnessSettingsCache = {provider: null, model: null, fast: false, mode: 'solo', onboardingComplete: false};
-  var harnessOnboardingState = {provider: null, model: null, fast: false, apiProvider: 'openai-api', mode: 'solo'};
+  var harnessOnboardingState = {provider: null, model: null, fast: false, apiProvider: 'openai-api', mode: 'solo', displayName: ''};
   var harnessAuthPollTimer = null;
   var harnessAuthAwaitingSave = false;
   var harnessAuthSaveInProgress = false;
@@ -1088,6 +1311,28 @@
     }
   }
 
+  function realProfileName(value){
+    var name = String(value || '').trim();
+    return name && name.toLowerCase() !== 'local user' ? name : '';
+  }
+
+  function currentRealProfileName(){
+    var profile = userProfiles[String(currentUser || '').toLowerCase()];
+    return realProfileName(profile && profile.displayName);
+  }
+
+  function loadHarnessOnboardingProfile(){
+    return api('/api/me').then(function(res){
+      if(res.status !== 200 || !res.data) return '';
+      currentUserLocalProfile = res.data.localProfile === true;
+      mergeUserProfile(res.data.email || currentUser, res.data);
+      var name = realProfileName(res.data.displayName);
+      if(name && !harnessOnboardingState.displayName) harnessOnboardingState.displayName = name;
+      renderHarnessOnboarding();
+      return name;
+    }).catch(function(){ return ''; });
+  }
+
   function renderHarnessConnectionInventory(connections, runtimes){
     var wrap = el('#settingsHarnessConnections');
     var connected = [];
@@ -1136,7 +1381,7 @@
         appCollaborationMode = (WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS['multiplayer_test']).mode;
         refreshAppName();
       }
-      if(showFirstRun && (!harness || !harness.onboardingComplete)){
+      if(showFirstRun && (!harness || !harness.onboardingComplete || !currentRealProfileName())){
         setTimeout(function(){ openHarnessOnboarding(harness); }, 450);
       }
       return harnessSettingsCache;
@@ -1243,7 +1488,7 @@
     if(!avatar || !currentUser) return;
     avatar.innerHTML = humanAvatarContent(currentUser);
     name.textContent = displayNameForEmail(currentUser);
-    email.textContent = currentUserLocalProfile ? 'Local profile · no email required' : currentUser;
+    email.textContent = currentUserLocalProfile ? 'Local profile · no email required' : (currentAccountEmail || currentUser);
   }
   function openSettingsDrawer(pane){
     el('#settingsOverlay').classList.add('open');
@@ -1443,17 +1688,20 @@
   function renderHarnessOnboarding(){
     var continueBtn = el('#harnessOnboardingContinue');
     var apiKey = el('#harnessApiKey');
+    var displayNameInput = el('#harnessDisplayName');
     var selectedApiProvider = harnessOnboardingState.apiProvider || 'openai-api';
     var selectedProvider = harnessOnboardingState.provider === 'openai-api'
       ? selectedApiProvider
       : harnessOnboardingState.provider;
     var selectedProviderConnected = harnessConnectionState[selectedProvider] === true;
     var apiReady = harnessOnboardingState.provider !== 'openai-api' || !!(apiKey && apiKey.value.trim()) || harnessConnectionState[selectedApiProvider] === true;
+    var profileReady = !!realProfileName(harnessOnboardingState.displayName);
     var busy = harnessConnectionValidationPending || !!harnessConnectionPending || harnessAuthSaveInProgress || harnessAuthAwaitingSave;
     if(continueBtn){
-      continueBtn.disabled = busy || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
+      continueBtn.disabled = busy || !profileReady || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
       setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (selectedProviderConnected ? 'Use' : 'Connect'));
     }
+    if(displayNameInput) displayNameInput.value = harnessOnboardingState.displayName || '';
     els('[data-harness-provider]').forEach(function(choice){
       var choiceProvider = choice.getAttribute('data-harness-provider');
       var selected = choiceProvider === harnessOnboardingState.provider ||
@@ -1504,6 +1752,7 @@
     harnessOnboardingState.fast = modelSelection.fast;
     harnessOnboardingState.apiProvider = existing.apiProvider || 'openai-api';
     harnessOnboardingState.mode = hasSavedMode ? existing.mode : (appCollaborationMode || 'solo');
+    harnessOnboardingState.displayName = currentRealProfileName();
     // Multiplayer is upcoming: the card is disabled, so never restore it as the selection.
     if(harnessOnboardingState.mode === 'multiplayer') harnessOnboardingState.mode = 'solo';
     harnessAuthAwaitingSave = false;
@@ -1522,15 +1771,24 @@
     loadHarnessAuthState();
     loadHarnessConnectionStatus();
     loadHarnessModelCatalog();
+    loadHarnessOnboardingProfile();
   }
 
   function closeHarnessOnboarding(){
+    if(!harnessSettingsCache.onboardingComplete || !realProfileName(harnessOnboardingState.displayName)){
+      var setupError = el('#harnessOnboardingError');
+      if(setupError) setupError.textContent = 'Finish setup to continue: choose a workspace and connect a provider.';
+      var providerChoices = el('#harnessProviderChoices');
+      if(providerChoices && typeof providerChoices.scrollIntoView === 'function') providerChoices.scrollIntoView({block:'nearest'});
+      return false;
+    }
     harnessAuthAwaitingSave = false;
     stopHarnessAuthPolling();
     var apiKey = el('#harnessApiKey');
     if(apiKey) apiKey.value = '';
     el('#harnessOnboardingOverlay').classList.remove('open');
     el('#harnessOnboarding').classList.remove('open');
+    return true;
   }
 
   els('[data-harness-provider]').forEach(function(choice){
@@ -1553,6 +1811,11 @@
   });
   var harnessApiKey = el('#harnessApiKey');
   if(harnessApiKey) harnessApiKey.addEventListener('input', renderHarnessOnboarding);
+  var harnessDisplayName = el('#harnessDisplayName');
+  if(harnessDisplayName) harnessDisplayName.addEventListener('input', function(){
+    harnessOnboardingState.displayName = harnessDisplayName.value.trim();
+    renderHarnessOnboarding();
+  });
   els('[data-harness-disconnect]').forEach(function(button){
     button.addEventListener('click', function(event){
       event.preventDefault();
@@ -1612,17 +1875,31 @@
     if(harnessAuthSaveInProgress) return;
     var button = el('#harnessOnboardingContinue');
     var error = el('#harnessOnboardingError');
+    var displayName = realProfileName(harnessOnboardingState.displayName);
+    if(!displayName){
+      if(error) error.textContent = 'Enter your name before continuing.';
+      renderHarnessOnboarding();
+      return;
+    }
     harnessAuthSaveInProgress = true;
     button.disabled = true;
     setHarnessActionLabel(button, 'Loading…');
     if(error) error.textContent = '';
-    api('/api/settings/harness', {method:'POST', body:{
+    api('/api/me', {method:'PUT', body:{displayName:displayName}}).then(function(profileRes){
+      if(profileRes.status !== 200 || !profileRes.data) throw new Error((profileRes.data && profileRes.data.error) || 'Could not save your name');
+      harnessOnboardingState.displayName = realProfileName(profileRes.data.displayName) || displayName;
+      currentUserLocalProfile = profileRes.data.localProfile === true;
+      mergeUserProfile(profileRes.data.email || currentUser, profileRes.data);
+      renderSettingsAccount();
+      if(el('#chatAcctName')) el('#chatAcctName').textContent = displayNameForEmail(currentUser);
+      return api('/api/settings/harness', {method:'POST', body:{
       provider:harnessOnboardingState.provider,
       model:harnessOnboardingState.model,
       fast:harnessOnboardingState.fast,
       apiProvider:harnessOnboardingState.apiProvider,
       mode:harnessOnboardingState.mode
-    }}).then(function(res){
+      }});
+    }).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.harness) throw new Error((res.data && res.data.error) || 'Could not save setup');
       renderHarnessSettings(res.data.harness);
       // The onboarding mode is the authoritative initial workspace. Reload
@@ -1874,7 +2151,8 @@
 
   var BENCH_COLUMNS = [
     {key:'running', name:'Running now', glyph:'&#9658;', sub:'Actively working', empty:'nothing running', foot:'View all running bots'},
-    {key:'watch', name:'On watch', glyph:'&#9673;', sub:'Monitoring data / waiting for triggers', empty:'nothing on watch', foot:'View all bots on watch'}
+    {key:'watch', name:'On watch', glyph:'&#9673;', sub:'Monitoring data / waiting for triggers', empty:'nothing on watch', foot:'View all bots on watch'},
+    {key:'draft', name:'Drafts', glyph:'&#9998;', sub:'Saved setup, not active yet', empty:'no saved drafts', foot:'View saved drafts'}
   ];
 
   function excerpt(text, max){
@@ -2062,7 +2340,7 @@
     return 'Hi ' + firstName + ' — what would you like to work on?';
   }
   function apiAgentToBench(a){
-    var stateMap = {running:'running', watch:'watch', active:'running', inactive:'watch'};
+    var stateMap = {draft:'draft', running:'running', watch:'watch', active:'running', inactive:'watch'};
     var departments = (Array.isArray(a.departments) && a.departments.length) ? a.departments.slice()
       : (a.department ? [a.department] : guessDepartmentsFor(a.instructions));
     return {
@@ -2094,7 +2372,7 @@
     return api('/api/bots').then(function(res){
       var agents = ((res.data && res.data.bots) || []).filter(function(agent){
         var status = String(agent.status || '').toLowerCase();
-        return status !== 'draft' && status !== 'paused';
+        return status !== 'paused';
       });
       // Native conversation hydration projects bots down to room identity
       // fields in chatWs.allAgents. Keep the complete API records separately
@@ -2280,7 +2558,7 @@
   function renderBenchColumns(){
     var wrap = el('#benchColumns');
     if(!wrap) return;
-    var pillLabel = {running:'RUNNING', watch:'ON WATCH'};
+    var pillLabel = {running:'RUNNING', watch:'ON WATCH', draft:'DRAFT'};
     wrap.innerHTML = BENCH_COLUMNS.map(function(col){
       var list = benchAgents.filter(function(a){ return a.state === col.key; });
       var cards = list.length
@@ -2339,7 +2617,7 @@
     benchOpenId = id;
     refreshAgentsView();
     cancelBenchDetailNameEdit(); // a reopen (e.g. after a prior rename commits) always starts read-only
-    var statusLabel = {running:'running', watch:'on watch'}[a.state] || a.state;
+    var statusLabel = {running:'running', watch:'on watch', draft:'draft'}[a.state] || a.state;
     el('#benchDetailMark').innerHTML = agentAvatarHtml(a.name, a.isBuiltin ? a.agentId : a.id, 34);
     el('#benchDetailName').textContent = a.name;
     el('#benchDetailDot').className = 'bench-status-dot ' + a.state;
@@ -2367,8 +2645,8 @@
     actions.innerHTML = '';
     actions.appendChild(mkBtn('Edit bot', 'btn primary', function(){ closeBenchDetail(); openEditCinema(a.id); }));
     if(!a.isBuiltin){
-      var cycleLabel = {running:'Send to watch', watch:'Start it'}[a.state] || 'Change status';
-      var nextState = {running:'watch', watch:'running'}[a.state] || 'watch';
+      var cycleLabel = {running:'Send to watch', watch:'Start it', draft:'Resume setup'}[a.state] || 'Change status';
+      var nextState = {running:'watch', watch:'running', draft:'watch'}[a.state] || 'watch';
       actions.appendChild(mkBtn(cycleLabel, 'btn', function(){
         api('/api/bots/' + a.id, {method:'PUT', body:{status: nextState}}).then(function(res){
           if(res.status === 200){ loadBenchAgents().then(function(){ openBenchDetail(a.id); }); }
@@ -2597,6 +2875,37 @@
   function currentBenchExamples(){
     return (benchExamplesLoaded && benchExamplesLoaded.length) ? benchExamplesLoaded : BENCH_EXAMPLES;
   }
+
+  // Keep the first bot action concrete for new users. These are prompts, not
+  // pre-created bots: clicking one opens the normal setup conversation with
+  // the prompt ready to edit and send.
+  var CHAT_STARTER_BOTS = [
+    {name:'Weekly project update', prompt:'Create a bot that prepares a concise project update every Friday from the files I approve.', icon:'↗'},
+    {name:'Inbox triage', prompt:'Create a bot that reviews new messages and flags the ones that need a reply.', icon:'✦'},
+    {name:'Research brief', prompt:'Create a bot that researches a topic, cites its sources, and sends me a short brief.', icon:'⌕'}
+  ];
+  function renderChatStarterBots(){
+    var wrap = el('#chatStarterBots');
+    if(!wrap) return;
+    wrap.innerHTML = CHAT_STARTER_BOTS.map(function(template){
+      return '<button type="button" class="chat-starter-bot" data-starter-bot="' + esc(template.name) + '">' +
+        '<span class="chat-starter-bot-icon" aria-hidden="true">' + esc(template.icon) + '</span>' +
+        '<span class="chat-starter-bot-copy"><strong>' + esc(template.name) + '</strong><small>Start from this example</small></span></button>';
+    }).join('');
+    els('[data-starter-bot]', wrap).forEach(function(button){
+      button.addEventListener('click', function(){
+        var template = CHAT_STARTER_BOTS.filter(function(item){ return item.name === button.getAttribute('data-starter-bot'); })[0];
+        if(!template) return;
+        startAgentSetupChat();
+        var input = el('#ccInput');
+        if(input){
+          input.value = template.prompt;
+          input.dispatchEvent(new Event('input', {bubbles:true}));
+          input.focus();
+        }
+      });
+    });
+  }
   // Fires once per page load (roster/department changes invalidate the
   // server-side cache, not this client-side latch) — cheap enough to call
   // from every agents-view render; the guard just avoids a redundant fetch.
@@ -2618,8 +2927,10 @@
   // examples). finishBenchCreate() below branches on it: a chat-origin
   // create should land the user back in Messages inside a live conversation
   // with the new agent, not on the bench.
+  var BENCH_BUILD_TIMEOUT_MS = 30000;
   var cinema = {mode:'idle', prompt:'', name:'', modelIx:0, departments:[], departmentsTouched:false, timers:[], created:null,
-    origin: 'bench', nameSuggestTimer: null, nameSuggestKey: null};
+    origin: 'bench', nameSuggestTimer: null, nameSuggestKey: null, buildAttempt: 0,
+    buildController: null, buildTimeoutTimer: null, buildTimedOut: false, buildStatus: 'idle', buildError: ''};
   var editState = {agentId:null, isBuiltin:false, instructions:'', model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
     testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
   var styledAgentModelPicker = {stage:'family', familyKey:''};
@@ -2776,6 +3087,19 @@
   }
 
   function clearCinemaTimers(){ cinema.timers.forEach(clearTimeout); cinema.timers = []; }
+
+  function clearCinemaBuildDeadline(){
+    if(cinema.buildTimeoutTimer) clearTimeout(cinema.buildTimeoutTimer);
+    cinema.buildTimeoutTimer = null;
+  }
+
+  function cancelCinemaBuildRequest(){
+    clearCinemaBuildDeadline();
+    if(cinema.buildController){
+      try { cinema.buildController.abort(); } catch(error) {}
+      cinema.buildController = null;
+    }
+  }
 
   function styledAgentEditPaneAvailable(){
     return STYLED_SKIN && location.hash.replace('#/', '') === 'chat';
@@ -3039,7 +3363,11 @@
     el('#benchComposeTextarea').focus();
   }
   function closeCinema(){
-    if(cinema.mode === 'building') return;
+    if(cinema.mode === 'building'){
+      cancelBenchBuild(true);
+      return;
+    }
+    cancelCinemaBuildRequest();
     var styledEditOpen = STYLED_SKIN && chatInfo.mode === 'agent-edit';
     if(styledEditOpen){
       chatInfo.mode = 'automations';
@@ -3054,6 +3382,7 @@
     cinema.nameSuggestTimer = null; cinema.nameSuggestKey = null;
     cinema.mode = 'idle'; cinema.prompt = ''; cinema.name = ''; cinema.created = null;
     cinema.origin = 'bench';
+    cinema.buildAttempt += 1; cinema.buildStatus = 'idle'; cinema.buildError = ''; cinema.buildTimedOut = false;
     cinema.departments = []; cinema.departmentsTouched = false;
     editState = {agentId:null, isBuiltin:false, instructions:'', model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
       testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
@@ -3416,12 +3745,13 @@
   }
 
   function renderCinema(){
-    var isCompose = cinema.mode === 'compose', isBuilding = cinema.mode === 'building', isReady = cinema.mode === 'ready', isEdit = cinema.mode === 'edit';
+    var isCompose = cinema.mode === 'compose', isBuilding = cinema.mode === 'building', isBuildError = cinema.mode === 'build-error', isReady = cinema.mode === 'ready', isEdit = cinema.mode === 'edit';
     el('#benchComposeStep').style.display = isCompose ? '' : 'none';
-    el('#benchBuildStep').style.display = isBuilding ? '' : 'none';
+    el('#benchBuildStep').style.display = (isBuilding || isBuildError) ? '' : 'none';
     el('#benchReadyStep').style.display = isReady ? '' : 'none';
     el('#benchEditStep').style.display = isEdit ? '' : 'none';
     if(isEdit) renderEditCinema();
+    if(isBuildError) renderBuildRecovery();
 
     if(isCompose){
       var k = benchKind();
@@ -3484,6 +3814,53 @@
         '</div>' + progressHtml +
       '</div>';
     }).join('');
+    var cancel = el('#benchBuildCancelBtn');
+    var retry = el('#benchBuildRetryBtn');
+    var back = el('#benchBuildBackBtn');
+    if(cancel){ cancel.hidden = false; cancel.disabled = false; cancel.textContent = 'Cancel'; }
+    if(retry) retry.hidden = true;
+    if(back) back.hidden = true;
+  }
+
+  function renderBuildRecovery(){
+    var timedOut = cinema.buildStatus === 'timed-out';
+    el('#benchBuildTitle').textContent = timedOut ? 'This is taking too long' : 'Couldn’t create your bot';
+    el('#benchBuildSub').textContent = timedOut
+      ? 'Nothing was created. You can try again or return to setup.'
+      : (cinema.buildError || 'Nothing was created. Check the setup and try again.');
+    el('#benchBuildCounter').textContent = 'Recovery';
+    el('#benchBuildProgressBar').style.width = '100%';
+    var cancel = el('#benchBuildCancelBtn');
+    var retry = el('#benchBuildRetryBtn');
+    var back = el('#benchBuildBackBtn');
+    if(cancel) cancel.hidden = true;
+    if(retry) retry.hidden = false;
+    if(back) back.hidden = false;
+  }
+
+  function finishBenchBuildFailure(attempt, timedOut, message){
+    if(attempt !== cinema.buildAttempt || cinema.mode !== 'building') return;
+    cinema.buildAttempt += 1;
+    clearCinemaTimers();
+    cancelCinemaBuildRequest();
+    cinema.buildTimedOut = timedOut;
+    cinema.buildStatus = timedOut ? 'timed-out' : 'failed';
+    cinema.buildError = timedOut ? '' : String(message || 'The request could not be completed.');
+    cinema.mode = 'build-error';
+    renderCinema();
+  }
+
+  function cancelBenchBuild(closeAfter){
+    if(cinema.mode !== 'building' && cinema.mode !== 'build-error') return;
+    cinema.buildAttempt += 1;
+    clearCinemaTimers();
+    cancelCinemaBuildRequest();
+    cinema.mode = 'compose';
+    cinema.buildStatus = 'idle';
+    cinema.buildTimedOut = false;
+    cinema.buildError = '';
+    renderCinema();
+    if(closeAfter) closeCinema();
   }
 
   function startBenchBuild(){
@@ -3491,6 +3868,13 @@
     var selectedModel = selectedConnectedBotModel();
     if(!selectedModel){ showBenchToast('Connect and choose a model before creating a bot'); return; }
     var defs = benchStepDefs();
+    cinema.buildAttempt += 1;
+    var attempt = cinema.buildAttempt;
+    clearCinemaTimers();
+    cancelCinemaBuildRequest();
+    cinema.buildTimedOut = false;
+    cinema.buildStatus = 'building';
+    cinema.buildError = '';
     cinema.mode = 'building';
     renderCinema();
     var step = 0;
@@ -3500,24 +3884,40 @@
       t += s.ms;
       cinema.timers.push(setTimeout(function(){ step = i + 1; renderBuildStep(step, defs); }, t));
     });
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    cinema.buildController = controller;
+    cinema.buildTimeoutTimer = setTimeout(function(){
+      if(attempt !== cinema.buildAttempt || cinema.mode !== 'building') return;
+      if(controller) controller.abort();
+      finishBenchBuildFailure(attempt, true);
+    }, BENCH_BUILD_TIMEOUT_MS);
+    if(cinema.buildTimeoutTimer && typeof cinema.buildTimeoutTimer.unref === 'function') cinema.buildTimeoutTimer.unref();
     cinema.timers.push(setTimeout(function(){
+      if(attempt !== cinema.buildAttempt || cinema.mode !== 'building') return;
       var k = benchKind();
       var name = cinema.name.trim() || k.name;
       var instructions = cinema.prompt.trim();
       var model = selectedModel;
       var departments = cinema.departmentsTouched ? cinema.departments : guessDepartmentsFor(instructions);
-      api('/api/bots', {method:'POST', body:{name:name, instructions:instructions, model:model, status:'running', departments:departments}}).then(function(res){
+      api('/api/bots', {
+        method:'POST',
+        ...(controller ? {signal:controller.signal} : {}),
+        body:{name:name, instructions:instructions, model:model, status:'running', departments:departments}
+      }).then(function(res){
+        if(attempt !== cinema.buildAttempt || cinema.mode !== 'building') return;
         var createdAgent = res.data && res.data.bot;
         if(res.status !== 201 || !createdAgent) throw new Error(res.data && res.data.error || 'Bot creation failed');
+        clearCinemaBuildDeadline();
+        cinema.buildController = null;
+        cinema.buildStatus = 'ready';
         cinema.created = Object.assign({}, k, {
           name: name, apiId: createdAgent && createdAgent.id, model: model
         });
         cinema.mode = 'ready';
         renderCinema();
       }).catch(function(error){
-        cinema.mode = 'compose';
-        renderCinema();
-        showBenchToast(error && error.message ? error.message : 'Bot creation failed');
+        if(attempt !== cinema.buildAttempt || cinema.mode !== 'building') return;
+        finishBenchBuildFailure(attempt, cinema.buildTimedOut || !!(error && error.name === 'AbortError'), error && error.message);
       });
     }, t + 450));
   }
@@ -3605,7 +4005,7 @@
   el('#benchComposeTrigger').addEventListener('click', openCinema);
   var benchNewAgentBtn = el('#benchNewAgentBtn');
   if(benchNewAgentBtn) benchNewAgentBtn.addEventListener('click', openCinema);
-  el('#benchCinemaScrim').addEventListener('click', closeCinema);
+  el('#benchCinemaScrim').addEventListener('click', function(){ closeCinema(); });
   el('#benchComposeTextarea').addEventListener('input', function(e){ cinema.prompt = e.target.value; renderCinema(); scheduleNameSuggestion(); });
   el('#benchComposeTextarea').addEventListener('keydown', function(e){
     if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); startBenchBuild(); }
@@ -3613,6 +4013,9 @@
   el('#benchNameInput').addEventListener('input', function(e){ cinema.name = e.target.value; renderCinema(); });
   el('#benchModelBtn').addEventListener('click', function(){ if(BENCH_MODELS.length) cinema.modelIx = (cinema.modelIx + 1) % BENCH_MODELS.length; renderCinema(); });
   el('#benchCreateBtn').addEventListener('click', startBenchBuild);
+  el('#benchBuildCancelBtn').addEventListener('click', function(){ cancelBenchBuild(false); });
+  el('#benchBuildRetryBtn').addEventListener('click', startBenchBuild);
+  el('#benchBuildBackBtn').addEventListener('click', function(){ cancelBenchBuild(false); });
   el('#benchStartBtn').addEventListener('click', startBenchAgent);
   el('#benchAdjustBtn').addEventListener('click', function(){ cinema.mode = 'compose'; cinema.created = null; renderCinema(); });
   el('#benchEditTextarea').addEventListener('input', function(e){ editState.instructions = e.target.value; });
@@ -3922,15 +4325,15 @@
   }
 
   var nativeMiaEnsurePromise = null;
-  function ensureNativeMiaConversation(conversations){
+  function ensureNativeMiaConversation(conversations, requestOptions){
     var existing = (conversations || []).filter(isNativeMiaConversation)[0];
     if(existing) return Promise.resolve(conversations);
     if(nativeMiaEnsurePromise) return nativeMiaEnsurePromise;
-    nativeMiaEnsurePromise = api('/api/conversations', {method:'POST', body:{
+    nativeMiaEnsurePromise = api('/api/conversations', Object.assign({}, requestOptions || {}, {method:'POST', body:{
       type: 'agent',
       name: 'Mia',
       metadata: {agentId: 'gateway', departments: [], source: 'native-ui'}
-    }}).then(function(res){
+    }})).then(function(res){
       if((res.status !== 201 && res.status !== 200) || !res.data || !res.data.conversation){
         throw new Error(res.data && (res.data.message || res.data.error) || 'Could not connect Mia.');
       }
@@ -4108,7 +4511,13 @@
     // become stale (for example, if the final event omitted its dispatchId).
     // Reconcile with the durable active list so an idle chat never keeps a
     // pulsing activity dot after its work has completed.
-    if(fromWorker && !isProgress) loadActiveNativeDispatches(event.conversationId);
+    if(fromWorker && !isProgress){
+      loadActiveNativeDispatches(event.conversationId);
+      // A completed worker event in another room is the actionable transition
+      // the user asked to be told about. Progress events remain quiet so a
+      // long-running background task produces one notification, not a stream.
+      if(isIncomingAttentionMessage(message)) notifyDesktopChatMessage(event.conversationId, message);
+    }
     if(chatWs.activeRoomId === event.conversationId) renderChatThread();
     renderChatSidebar();
     renderComposerTaskControl();
@@ -4211,24 +4620,29 @@
     });
   }
 
-  function loadNativeConversations(){
-    return api('/api/conversations?limit=200').then(function(res){
+  function loadNativeConversations(requestOptions){
+    return api('/api/conversations?limit=200', requestOptions || {}).then(function(res){
       if(res.status !== 200) throw new Error(res.data && res.data.error || 'Native conversations unavailable.');
       var conversations = (res.data && res.data.conversations) || [];
       // A workspace is a scope, not a conversation. Keep the real agent chat
       // available when this scope has no rooms yet, but never synthesize a
       // workspace/home room just to give the center column something to show.
-      return ensureNativeMiaConversation(conversations);
+      return ensureNativeMiaConversation(conversations, requestOptions);
     });
   }
   var AGENT_SETUP_ROOM_ID = '__bot_setup__';
+  var AGENT_SETUP_TIMEOUT_MS = 30000;
   var agentSetup = {
     phase: 'idle', // idle | intent | interpreting | review | activating | active
     intent: '',
     draft: null,
     error: '',
     created: null,
-    liveRoomId: null
+    liveRoomId: null,
+    requestId: 0,
+    requestController: null,
+    requestTimeoutTimer: null,
+    requestTimedOut: false
   };
   var chatPinnedKeys = {};
   var chatPinnedMigrationInFlight = false;
@@ -4647,6 +5061,63 @@
     });
   }
 
+  function buildAppDevSupportSummary(){
+    return Promise.all([
+      api('/healthz').catch(function(){ return {status:0, data:{}}; }),
+      api('/api/dev/diagnostics').catch(function(){ return {status:0, data:{}}; })
+    ]).then(function(results){
+      var health = results[0].data || {};
+      var diagnostics = results[1].data && results[1].data.diagnostics || {};
+      var inference = health.inference || {};
+      var capacity = inference.capacity || {};
+      var chatStatus = chatWs.configured === true ? 'online' : chatWs.configured === false ? 'offline' : 'connecting';
+      var capacitySummary = Number.isInteger(capacity.maxConcurrent) && Number.isInteger(capacity.maxQueueDepth)
+        ? inference.running + '/' + capacity.maxConcurrent + ' active, ' + inference.waiting + '/' + capacity.maxQueueDepth + ' queued'
+        : 'unavailable';
+      var summary = [
+        'Mia safe support summary',
+        'Generated: ' + new Date().toISOString(),
+        'Workspace: ' + workspaceLabel(),
+        'Chat: ' + chatStatus,
+        'Health: ' + (health.ok === true ? 'ok' : 'unavailable'),
+        'Database: ' + (health.db === true ? 'ok' : 'unavailable'),
+        'Inference capacity: ' + capacitySummary,
+        'Diagnostics: ' + (diagnostics.localOnly === true ? 'local only' : 'unavailable'),
+        'Detailed activity: ' + (diagnostics.verboseHermes === true ? 'on' : 'off'),
+        'Trace events captured: ' + (Array.isArray(diagnostics.events) ? diagnostics.events.length : 0)
+      ].join('\n');
+      return summary;
+    });
+  }
+
+  function copyAppDevSupportSummary(){
+    return buildAppDevSupportSummary().then(function(summary){
+      return copySidebarText(summary, 'Safe support summary copied');
+    }).catch(function(){
+      showBenchToast('Could not create support summary');
+      return false;
+    });
+  }
+
+  function prepareBetaFeedback(){
+    return appPrompt('', {
+      title: 'Tell us what happened',
+      message: 'Describe the confusing step, unexpected result, or missing feature. Please leave out passwords and private conversation content.',
+      inputLabel: 'Beta feedback',
+      note: 'Mia will copy your note with a safe support summary so you can paste it into your beta feedback channel.',
+      submitLabel: 'Copy feedback'
+    }).then(function(result){
+      if(!result || !result.ok || !String(result.text || '').trim()) return false;
+      return buildAppDevSupportSummary().then(function(summary){
+        var feedback = ['Mia beta feedback', '', String(result.text).trim(), '', summary].join('\n');
+        return copySidebarText(feedback, 'Feedback copied — paste it into your beta channel');
+      });
+    }).catch(function(){
+      showBenchToast('Could not prepare feedback');
+      return false;
+    });
+  }
+
   function closeAppDevPanel(){
     stopAppDevPolling();
     var panel = el('#appDevelopmentPanel');
@@ -4789,9 +5260,14 @@
     var panel = el('#appDevelopmentPanel');
     var close = el('#appDevelopmentClose');
     var verbose = el('#appDevHermesVerbose');
+    var copy = el('#appDevCopySummary');
     if(!panel) return;
     if(close) close.addEventListener('click', function(){ closeAppDevPanel(); });
     if(verbose) verbose.addEventListener('change', updateAppDevDiagnostics);
+    if(copy) copy.addEventListener('click', function(){
+      copy.disabled = true;
+      Promise.resolve(copyAppDevSupportSummary()).then(function(){ copy.disabled = false; });
+    });
     document.addEventListener('keydown', function(event){
       if(event.key === 'Escape' && !panel.hidden) closeAppDevPanel();
     });
@@ -5698,6 +6174,7 @@
       /^I couldn't safely apply the spreadsheet (?:update|layout)\./i,
       /^Google didn't respond in time, so I didn't change the spreadsheet\./i,
       /^I couldn't apply the spreadsheet update\./i,
+      /^I ran out of time before finishing\./i,
       /^Sorry\s*[—-]\s*I ran into a problem working on that and couldn't finish\./i
     ].some(function(pattern){ return pattern.test(normalized); });
   }
@@ -6339,7 +6816,7 @@
         (agentSetup.error ? '<div class="agent-setup-error" role="alert">' + esc(agentSetup.error) + '</div>' : '') +
         '<div class="agent-setup-actions"><button type="button" class="agent-setup-activate" id="agentSetupActivate"' + (agentSetup.phase === 'activating' ? ' disabled' : '') + '>' +
           (agentSetup.phase === 'activating' ? 'Activating…' : 'Yes, activate bot') + '</button>' +
-          '<button type="button" class="agent-setup-later" id="agentSetupLater"' + (agentSetup.phase === 'activating' ? ' disabled' : '') + '>Not yet</button></div>' +
+          '<button type="button" class="agent-setup-later" id="agentSetupLater">' + (agentSetup.phase === 'activating' ? 'Cancel' : 'Not yet') + '</button></div>' +
       '</div></div></div>';
   }
 
@@ -6384,16 +6861,50 @@
     var activate = el('#agentSetupActivate', thread);
     if(activate) activate.addEventListener('click', activateAgentSetup);
     var later = el('#agentSetupLater', thread);
-    if(later) later.addEventListener('click', function(){
+    if(later) later.addEventListener('click', cancelAgentSetupFlow);
+  }
+
+  function clearAgentSetupRequest(abort){
+    if(agentSetup.requestTimeoutTimer) clearTimeout(agentSetup.requestTimeoutTimer);
+    agentSetup.requestTimeoutTimer = null;
+    if(abort && agentSetup.requestController){
+      try { agentSetup.requestController.abort(); } catch(error) {}
+    }
+    agentSetup.requestController = null;
+  }
+
+  function finishAgentSetupFailure(attempt, operation, timedOut, message){
+    if(agentSetup.requestId !== attempt || agentSetup.phase !== operation) return;
+    agentSetup.requestId += 1;
+    clearAgentSetupRequest(true);
+    agentSetup.requestTimedOut = timedOut;
+    agentSetup.phase = operation === 'interpreting' ? 'intent' : 'review';
+    agentSetup.error = timedOut
+      ? 'This is taking too long. Nothing was confirmed. Try again.'
+      : String(message || (operation === 'interpreting' ? 'I couldn’t prepare the setup. Try again.' : 'The bot could not be activated. Try again.'));
+    renderChatThread();
+    renderDeptAgentSelector();
+  }
+
+  function cancelAgentSetupFlow(){
+    var wasActivating = agentSetup.phase === 'activating';
+    var wasInterpreting = agentSetup.phase === 'interpreting';
+    if(agentSetup.phase !== 'interpreting' && agentSetup.phase !== 'activating' && agentSetup.phase !== 'review' && agentSetup.phase !== 'intent') return;
+    agentSetup.requestId += 1;
+    clearAgentSetupRequest(true);
+    if(wasActivating){
+      agentSetup.phase = 'review';
+      agentSetup.error = 'Activation cancelled. Nothing was confirmed.';
+    } else {
       agentSetup.phase = 'intent';
-      agentSetup.intent = '';
       agentSetup.draft = null;
-      agentSetup.error = '';
-      renderChatThread();
-      renderDeptAgentSelector();
-      var input = el('#ccInput');
-      if(input) input.focus();
-    });
+      agentSetup.intent = wasInterpreting ? agentSetup.intent : '';
+      agentSetup.error = wasInterpreting ? 'Setup cancelled. Try again when ready.' : '';
+    }
+    renderChatThread();
+    renderDeptAgentSelector();
+    var input = el('#ccInput');
+    if(input) input.focus();
   }
 
   function renderAgentSetupThread(thread){
@@ -6414,19 +6925,38 @@
       html += '<div class="agent-setup-inline-error" role="alert">' + esc(agentSetup.error) + '</div>';
     }
     thread.innerHTML = html;
+    if(agentSetup.phase === 'interpreting'){
+      var interpretCancel = document.createElement('button');
+      interpretCancel.type = 'button';
+      interpretCancel.className = 'agent-setup-cancel-inline';
+      interpretCancel.id = 'agentSetupCancelInterpretation';
+      interpretCancel.textContent = 'Cancel';
+      interpretCancel.addEventListener('click', cancelAgentSetupFlow);
+      thread.appendChild(interpretCancel);
+    } else if(agentSetup.error && agentSetup.phase === 'intent'){
+      var recovery = document.createElement('div');
+      recovery.className = 'agent-setup-recovery-actions';
+      recovery.innerHTML = '<button type="button" class="agent-setup-retry" id="agentSetupRetry">Try again</button><button type="button" class="agent-setup-later" id="agentSetupCancel">Clear</button>';
+      thread.appendChild(recovery);
+      var retry = el('#agentSetupRetry', thread);
+      if(retry) retry.addEventListener('click', function(){ submitAgentSetupIntent(agentSetup.intent); });
+      var clear = el('#agentSetupCancel', thread);
+      if(clear) clear.addEventListener('click', cancelAgentSetupFlow);
+    }
     if(agentSetup.phase === 'review' || agentSetup.phase === 'activating') wireAgentSetupReview(thread);
     thread.scrollTop = thread.scrollHeight;
     syncChatThreadPanel();
   }
 
   function startAgentSetupChat(){
+    clearAgentSetupRequest(true);
     rememberChatBack('agent-setup', AGENT_SETUP_ROOM_ID);
     closeManageAgentsPane();
     closeMentionPopover();
     chatRoster.open = null;
     chatInfo.mode = 'automations';
     chatInfo.open = false;
-    agentSetup = {phase:'intent', intent:'', draft:null, error:'', created:null, liveRoomId:null};
+    agentSetup = {phase:'intent', intent:'', draft:null, error:'', created:null, liveRoomId:null, requestId:0, requestController:null, requestTimeoutTimer:null, requestTimedOut:false};
     chatWs.activeRoomId = AGENT_SETUP_ROOM_ID;
     chatWs.activeKind = 'agent-setup';
     chatWs.activeLabel = 'New Bot';
@@ -6444,37 +6974,48 @@
     renderChatThread();
     renderDeptAgentSelector();
     var modelSelection = chatModelSelectionMetadata();
-    api('/api/bots/interpret', {method:'POST', body:{
+    var attempt = ++agentSetup.requestId;
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    agentSetup.requestController = controller;
+    agentSetup.requestTimedOut = false;
+    agentSetup.requestTimeoutTimer = setTimeout(function(){
+      if(agentSetup.requestId !== attempt || agentSetup.phase !== 'interpreting') return;
+      if(controller) controller.abort();
+      finishAgentSetupFailure(attempt, 'interpreting', true);
+    }, AGENT_SETUP_TIMEOUT_MS);
+    api('/api/bots/interpret', {
+      method:'POST',
+      ...(controller ? {signal:controller.signal} : {}),
+      body:{
       intent: agentSetup.intent,
       ...(modelSelection ? {modelSelection:modelSelection} : {})
-    }}).then(function(res){
+      }
+    }).then(function(res){
       if(chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID || agentSetup.phase !== 'interpreting') return;
       if(res.status !== 200 || !res.data || !res.data.draft) throw new Error('proposal unavailable');
+      clearAgentSetupRequest(false);
       agentSetup.draft = res.data.draft;
       agentSetup.phase = 'review';
       renderChatHeaderBar();
       renderChatThread();
       renderDeptAgentSelector();
-    }).catch(function(){
-      if(chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID) return;
-      agentSetup.phase = 'intent';
-      agentSetup.error = 'I couldn’t prepare the setup. Try describing the bot again.';
-      renderChatThread();
-      renderDeptAgentSelector();
+    }).catch(function(error){
+      if(chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID || agentSetup.phase !== 'interpreting') return;
+      finishAgentSetupFailure(attempt, 'interpreting', agentSetup.requestTimedOut || !!(error && error.name === 'AbortError'), 'I couldn’t prepare the setup. Try describing the bot again.');
     });
   }
 
-  function createNativeAgentConversation(agent){
+  function createNativeAgentConversation(agent, requestOptions){
     // POST /api/bots provisions this native conversation on the server.
     // Refresh before creating anything so the client never races that hook
     // and creates a duplicate room for the same bot.
-    return loadNativeConversations().then(function(conversations){
+    return loadNativeConversations(requestOptions).then(function(conversations){
       var existing = (conversations || []).filter(function(conversation){
         var metadata = conversation.metadata || {};
         return conversation.type === 'bot' && metadata.botId === agent.id;
       })[0];
       if(existing) return existing;
-      return api('/api/conversations', {method:'POST', body:{
+      return api('/api/conversations', Object.assign({}, requestOptions || {}, {method:'POST', body:{
         type: 'bot',
         name: agent.name,
         metadata: {
@@ -6482,7 +7023,7 @@
           departments: Array.isArray(agent.departments) ? agent.departments : [],
           source: 'bot-setup'
         }
-      }}).then(function(res){
+      }})).then(function(res){
         if((res.status !== 201 && res.status !== 200) || !res.data || !res.data.conversation){
           throw new Error(res.data && (res.data.message || res.data.error) || 'native bot conversation could not be created');
         }
@@ -6535,12 +7076,28 @@
       renderChatThread();
       return;
     }
-    api('/api/bots', {method:'POST', body:payload}).then(function(res){
+    var attempt = ++agentSetup.requestId;
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    agentSetup.requestController = controller;
+    agentSetup.requestTimedOut = false;
+    agentSetup.requestTimeoutTimer = setTimeout(function(){
+      if(agentSetup.requestId !== attempt || agentSetup.phase !== 'activating') return;
+      if(controller) controller.abort();
+      finishAgentSetupFailure(attempt, 'activating', true);
+    }, AGENT_SETUP_TIMEOUT_MS);
+    api('/api/bots', {
+      method:'POST',
+      ...(controller ? {signal:controller.signal} : {}),
+      body:payload
+    }).then(function(res){
+      if(agentSetup.requestId !== attempt || agentSetup.phase !== 'activating') return;
       if(res.status !== 201 || !res.data || !res.data.bot){
         throw new Error(res.data && (res.data.message || res.data.error) || 'activation failed');
       }
       var created = res.data.bot;
-      return createNativeAgentConversation(created).then(function(conversation){
+      return createNativeAgentConversation(created, controller ? {signal:controller.signal} : {}).then(function(conversation){
+        if(agentSetup.requestId !== attempt || agentSetup.phase !== 'activating') return;
+        clearAgentSetupRequest(false);
         agentSetup.created = created;
         agentSetup.liveRoomId = conversation.id;
         agentSetup.phase = 'idle';
@@ -6556,10 +7113,8 @@
         loadChatRoom(conversation.id, 'agent', created.name);
       });
     }).catch(function(err){
-      agentSetup.phase = 'review';
-      agentSetup.error = 'The bot could not be activated: ' + (err && err.message ? err.message : 'please try again.');
-      renderChatThread();
-      renderDeptAgentSelector();
+      if(agentSetup.requestId !== attempt || agentSetup.phase !== 'activating') return;
+      finishAgentSetupFailure(attempt, 'activating', agentSetup.requestTimedOut || !!(err && err.name === 'AbortError'), 'The bot could not be activated: ' + (err && err.message ? err.message : 'please try again.'));
     });
   }
 
@@ -7131,6 +7686,7 @@
 
   function manageAgentDescription(agent){
     if(agent.id === 'gateway') return 'Chief of staff';
+    if(String(agent.status || '').toLowerCase() === 'draft') return 'Draft — finish setup to activate';
     var tasks = tasksForAgent(agent.id);
     if(tasks.length) return tasks[0].title || 'Working on a background task';
     var departments = agentDepartments(agent);
@@ -7141,7 +7697,7 @@
     var list = [chatWs.gatewayAgent || {id:'gateway', name:'Mia', manager:true, department:'Mia'}];
     (chatWs.allAgents || []).forEach(function(agent){
       var status = String(agent.status || agent.state || '').toLowerCase();
-      if(agent.id !== 'gateway' && status !== 'draft' && status !== 'paused') list.push(agent);
+      if(agent.id !== 'gateway' && status !== 'paused') list.push(agent);
     });
     return list;
   }
@@ -9115,6 +9671,7 @@
       }
     }
     allWrap.innerHTML = dmRowsHtml + hiddenHtml;
+    renderChatStarterBots();
     [pinnedWrap, allWrap].forEach(function(wrap){
       var homeRow = el('.chat-recent-row[data-chat-kind="home"]', wrap);
       if(homeRow) homeRow.addEventListener('click', function(){ clearChatBack(); clearChatActive(); homeRow.classList.add('active'); selectHomeRoom(); });
@@ -9794,6 +10351,12 @@
         });
       });
     }
+    var feedback = el('#chatAcctFeedback');
+    if(feedback) feedback.addEventListener('click', function(){
+      if(menu) menu.classList.remove('open');
+      if(account) account.setAttribute('aria-expanded', 'false');
+      prepareBetaFeedback();
+    });
     var aboutBtn = el('#chatAcctAbout');
     var aboutOverlay = el('#aboutOverlay');
     var aboutDialog = el('#aboutDialog');
@@ -9823,8 +10386,8 @@
       var original = el('#logoutBtn');
       if(original) original.click();
     });
-    // Connected apps is shelved: its menu row is aria-disabled and the
-    // legacy #chatPluginsBtn entry point stays unwired until it returns.
+    // Connected apps is available from the same compact account surface as
+    // the browser and bot tools. The connector itself owns provider auth.
     var backToChat = el('#styledIntegrationsBack');
     if(backToChat) backToChat.addEventListener('click', closePluginPane);
     var settingsBtn = el('#chatAcctSettings');
@@ -11141,26 +11704,28 @@
   var TOUR_LS_KEY = 'miaosTourDone';
   var TOUR_STEPS = [
     {
-      target: '#layerDropdownBtn',
-      title: 'Three layers',
-      body: 'Everything in ' + (INSTANCE.name || 'Mia') + ' lives under one of three layers: Chat, Agents, and Data. Switch here anytime.'
+      target: '#workspaceSwitcherToggle',
+      route: 'chat',
+      title: 'Your private space',
+      body: 'Solo is your private workspace. Conversations, bots, and provider access stay scoped to you.'
     },
     {
       target: '#chatSidebarToolsBtn',
       route: 'chat',
-      title: 'Start here',
-      body: 'Open Tools to start a chat, create a bot or channel, configure an agent, or open a workspace tool.'
+      title: 'Create from Tools',
+      body: 'Open Tools to start a chat, create a bot, create a channel, or open the browser beside Mia.'
+    },
+    {
+      target: '#chatStarterBots',
+      route: 'chat',
+      title: 'Start with a bot template',
+      body: 'Choose a starter bot in the left panel to open setup with an editable prompt. Nothing is created until you confirm it.'
     },
     {
       target: '#chatThread',
       route: 'chat',
-      title: 'Your agent lives here',
-      body: 'Your agent lives here as a conversation — ask it for specific tasks once it exists.'
-    },
-    {
-      target: null,
-      title: 'That’s it',
-      body: 'Create an agent from Messages, then ask it for what you need right there. Replay this walkthrough anytime from Settings → Guided tour.'
+      title: 'Work in the conversation',
+      body: 'Select Mia or a bot from the left panel, then ask for the task. Replay this walkthrough anytime from Settings → Guided tour.'
     }
   ];
 
@@ -11322,7 +11887,6 @@
   // Only ever auto-fires once the app shell is actually visible (called
   // from showApp(), never from the login wall) — see hideApp/showApp above.
   function tourMaybeAutoStart(){
-    if(STYLED_SKIN) return; // no onboarding popover on the styled-skin chat-only shell
     if(localStorage.getItem(TOUR_LS_KEY)) return;
     setTimeout(tourStart, 500);
   }

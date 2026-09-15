@@ -18,7 +18,8 @@ test('styled Connected apps row uses the local reference network icon', async ()
   assert.ok(start >= 0 && end > start, 'Connected apps button is present');
   const row = html.slice(start, end);
   assert.match(row, /src="assets\/icons\/connected-apps\.png"/);
-  assert.match(row, /<span class="chat-new-menu-label">Connected apps \(upcoming\)<\/span>/);
+  assert.match(row, /<span class="chat-new-menu-label">Connected apps<\/span>/);
+  assert.match(row, /Connect Google services/);
   assert.doesNotMatch(row, /<svg/);
   assert.match(css, /\.chat-new-menu-icon img\{display:block;width:36px;height:36px;object-fit:contain;\}/);
   assert.ok(asset.size > 0, 'local connected-apps icon asset is non-empty');

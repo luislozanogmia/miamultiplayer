@@ -38,6 +38,7 @@ const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const { verifyToken: verifyClerkToken } = require('@clerk/backend');
 
 const db = require('./db');
 const {
@@ -118,6 +119,11 @@ const { attachConversationWebSocketServer } = require('./conversation-websocket'
 const { createWorkspaceArtifactService } = require('./workspace-artifacts');
 const { createWorkspaceArtifactRouter } = require('./workspace-artifact-router');
 const { requiredConfiguredExecutable } = require('./runtime-paths');
+const {
+  nativeDispatchTimeoutMs,
+  NATIVE_DISPATCH_TIMEOUT_CODE,
+  createNativeDispatchWatchdog,
+} = require('./native-dispatch-runtime');
 const { miaosWorkspacePromptContext, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
 const {
   DEFAULT_WORKSPACE_ID,
@@ -131,6 +137,7 @@ const {
 const PORT = process.env.PORT || 4870;
 const MAX_BOTS = 100;
 const HERMES_BIN = String(process.env.HERMES_BIN || '').trim();
+const NATIVE_DISPATCH_TIMEOUT_MS = nativeDispatchTimeoutMs(process.env.MIAOS_NATIVE_DISPATCH_TIMEOUT_MS);
 const MIAOS_HERMES_GUARD_BIN = path.join(__dirname, 'miaos-hermes-bin');
 const adminModule = require('./admin');
 const DATA_DIR = process.env.DATA_DIR || '';
@@ -151,11 +158,27 @@ function isAdmin(email) {
 // started with MIAOS_NO_AUTH=1; production and normal development retain the
 // session/API-key auth path below.
 const MIAOS_NO_AUTH = /^(1|true)$/i.test(process.env.MIAOS_NO_AUTH || '');
+const MIAOS_CLERK_AUTH = /^(1|true)$/i.test(process.env.MIAOS_CLERK_AUTH || '');
+const CLERK_PUBLISHABLE_KEY = String(process.env.CLERK_PUBLISHABLE_KEY
+  || 'pk_test_ZmFpdGhmdWwtZHJ1bS0zMzMuY2xlcmsuYWNjb3VudHMuZGV2JA').trim();
+const CLERK_JWT_KEY = String(process.env.CLERK_JWT_KEY || `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8H9FQVnnST3XYwwqcun5
+Bv0iqvXYCQDbxiDgOcGJz3N67WmnRNiv9+rY0Iv5nmCEM5+Mr0nvGimjT++WbN0L
+XlHc1o0MIK1gtR9+umHXIBM9WYvQL3gtkulVfURk0S/UqWruuRbHTk3N/nujN5oG
+eMW/8MdKjxJgRoDiWyQzOHRQL/8H+43uL7/xikDPaf2GeZ4GgHeAEhaSFh8ekTt/
+PViJMSdflAzRM5kn9txqNnCnfl8r7QfzlyiIchCTueiI8uUL7k0g0lgmq6uE48yr
+uR4op4c0GR3ZM1lwPJl/YMLdF82neuuKP+o8pBQEjkzoaVNHdKxGxZm1/5z3ewlB
+UQIDAQAB
+-----END PUBLIC KEY-----`).trim();
+const CLERK_ISSUER = 'https://faithful-drum-333.clerk.accounts.dev';
+const CLERK_SUBJECT_META_KEY = 'clerk.installation.subject';
+const CLERK_EMAIL_META_KEY = 'clerk.installation.email';
+const CLERK_NAME_META_KEY = 'clerk.installation.name';
 // A local OSS installation has one durable profile without requiring the
 // person running it to invent an email address. The internal principal keeps
 // existing ownership/storage contracts intact, but is never shown as an
 // account address in the UI.
-const MIAOS_LOCAL_PROFILE = MIAOS_NO_AUTH
+const MIAOS_LOCAL_PROFILE = (MIAOS_NO_AUTH || MIAOS_CLERK_AUTH)
   && /^(1|true)$/i.test(process.env.MIAOS_LOCAL_PROFILE || '');
 const LOCAL_PROFILE_PRINCIPAL = 'local-user@localhost';
 const MIAOS_TEAM_SEARCH = EFFECTIVE_RELEASE_PROFILE.teamSearch;
@@ -791,8 +814,17 @@ setInterval(sweepExpiredSessions, 24 * 60 * 60 * 1000).unref();
 // call sites already treat a rejected/failed inference as a soft failure
 // (see their own comments), so this degrades gracefully rather than crashing
 // anything.
-const MAX_CONCURRENT_INFERENCE = 2;
-const MAX_QUEUE_DEPTH = 12;
+function boundedCapacityValue(raw, fallback, minimum, maximum) {
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
+}
+
+// Keep the local defaults stable, but make capacity explicit so a hosted
+// deployment can define a tier without changing scheduling code. This is a
+// capacity contract, not a billing meter: provider charges still belong to
+// the connected provider account.
+const MAX_CONCURRENT_INFERENCE = boundedCapacityValue(process.env.MIAOS_MAX_CONCURRENT_INFERENCE, 2, 1, 32);
+const MAX_QUEUE_DEPTH = boundedCapacityValue(process.env.MIAOS_MAX_QUEUE_DEPTH, 12, 0, 1000);
 let runningInferenceCount = 0;
 const inferenceQueues = { reply: [], suggestion: [] };
 
@@ -807,7 +839,12 @@ function inferenceQueueDepth() {
 // function but hoisting makes that fine, they're both plain function
 // declarations in the same module scope.
 function inferenceStats() {
-  return { running: runningInferenceCount, waiting: inferenceQueueDepth(), tasks: { running: 0, waiting: 0 } };
+  return {
+    running: runningInferenceCount,
+    waiting: inferenceQueueDepth(),
+    capacity: { maxConcurrent: MAX_CONCURRENT_INFERENCE, maxQueueDepth: MAX_QUEUE_DEPTH },
+    tasks: { running: 0, waiting: 0 },
+  };
 }
 
 // Starts as many queued jobs as there's room for, reply tier first. Called
@@ -1079,6 +1116,7 @@ function allowsUnauthenticatedNoOrigin(request) {
   // reject a supplied foreign Origin.
   return method === 'POST' && (
     pathname === '/api/login'
+    || pathname === '/api/clerk/session'
     || /^\/api\/invite\/[^/]+\/accept$/.test(pathname)
     || pathname === '/api/desktop/auth'
   );
@@ -1252,6 +1290,80 @@ function startSession(req, res, email) {
   return res.status(200).json({ ok: true, email });
 }
 
+function clerkAccountProfile() {
+  if (!MIAOS_CLERK_AUTH) return null;
+  const subject = String(db.getMeta(conn, CLERK_SUBJECT_META_KEY) || '').trim();
+  if (!subject) return null;
+  return {
+    subject,
+    email: String(db.getMeta(conn, CLERK_EMAIL_META_KEY) || '').trim().toLowerCase(),
+    displayName: String(db.getMeta(conn, CLERK_NAME_META_KEY) || '').trim() || null,
+  };
+}
+
+function clerkAuthorizedParties(req) {
+  const origin = String(req.get('origin') || '').trim();
+  return origin ? [origin] : Array.from(MIAOS_TRUSTED_ORIGINS);
+}
+
+app.post('/api/clerk/session', async (req, res) => {
+  if (!MIAOS_CLERK_AUTH || !CLERK_PUBLISHABLE_KEY || !CLERK_JWT_KEY) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  const match = /^Bearer\s+([^\s]+)$/.exec(String(req.get('authorization') || ''));
+  if (!match) return res.status(401).json({ error: 'clerk_token_missing' });
+
+  let claims;
+  try {
+    claims = await verifyClerkToken(match[1], {
+      jwtKey: CLERK_JWT_KEY,
+      authorizedParties: clerkAuthorizedParties(req),
+    });
+  } catch (_error) {
+    return res.status(401).json({ error: 'clerk_token_invalid' });
+  }
+  if (!claims || claims.iss !== CLERK_ISSUER || typeof claims.sub !== 'string' || !claims.sub) {
+    return res.status(401).json({ error: 'clerk_token_invalid' });
+  }
+
+  const primaryEmail = String(claims.primaryEmail || '').trim().toLowerCase();
+  const displayName = String(claims.fullName || '').trim();
+  if (!primaryEmail || !primaryEmail.includes('@')) {
+    return res.status(422).json({ error: 'clerk_primary_email_missing' });
+  }
+
+  const linked = clerkAccountProfile();
+  if (linked && linked.subject !== claims.sub) {
+    return res.status(409).json({ error: 'clerk_installation_already_linked' });
+  }
+  if (!linked) db.setMeta(conn, CLERK_SUBJECT_META_KEY, claims.sub);
+  db.setMeta(conn, CLERK_EMAIL_META_KEY, primaryEmail);
+  if (displayName) db.setMeta(conn, CLERK_NAME_META_KEY, displayName);
+
+  const localUser = db.getUserByEmail(conn, LOCAL_PROFILE_PRINCIPAL);
+  if (localUser && displayName && (!localUser.displayName || localUser.displayName === 'Local user')) {
+    db.updateUserProfile(conn, LOCAL_PROFILE_PRINCIPAL, {
+      displayName,
+      initials: displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'LU',
+    });
+  }
+  db.appendAuditLog(conn, {
+    actor: LOCAL_PROFILE_PRINCIPAL,
+    action: linked ? 'clerk.login' : 'clerk.installation.link',
+    target: LOCAL_PROFILE_PRINCIPAL,
+  });
+  const token = db.createSession(conn, LOCAL_PROFILE_PRINCIPAL);
+  db.touchLastLogin(conn, LOCAL_PROFILE_PRINCIPAL, new Date().toISOString());
+  res.cookie(SESSION_COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: req.secure,
+    maxAge: SESSION_TTL_MS,
+    path: '/',
+  });
+  return res.status(200).json({ ok: true, email: primaryEmail });
+});
+
 // ---------- auth routes ----------
 // Per-user auth when a users table is populated (migrated from users.json);
 // otherwise legacy shared-password mode, exactly as the old server behaved.
@@ -1379,7 +1491,15 @@ app.use('/api/invite', adminModule.createInviteRouter({ conn, startSession }));
 // configured login domains behind authenticated administration APIs.
 
 app.get('/api/instance', (req, res) => {
-  res.status(200).json({ name: INSTANCE_NAME, localPreview: MIAOS_NO_AUTH });
+  res.status(200).json({
+    name: INSTANCE_NAME,
+    localPreview: MIAOS_NO_AUTH,
+    auth: MIAOS_CLERK_AUTH ? {
+      provider: 'clerk',
+      publishableKey: CLERK_PUBLISHABLE_KEY,
+      frontendApi: CLERK_ISSUER,
+    } : null,
+  });
 });
 
 function isLoopbackRequest(req) {
@@ -1813,13 +1933,16 @@ app.get('/api/me', (req, res) => {
   const session = sessionFromCookie(req);
   if (!session) return res.status(401).json({ error: 'unauthorized' });
   const user = db.listUsers(conn).find((u) => u.email.toLowerCase() === session.email.toLowerCase());
+  const clerkProfile = session.email === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null;
   const role = effectiveRole(session.email, user);
   return res.status(200).json({
     email: session.email,
-    displayName: (user && user.displayName) || null,
+    ...(clerkProfile ? { accountEmail: clerkProfile.email } : {}),
+    displayName: (clerkProfile && clerkProfile.displayName) || (user && user.displayName) || null,
     initials: (user && user.initials) || null,
     role,
     isAdmin: role === 'admin',
+    ...(clerkProfile ? { clerk: true } : {}),
   });
 });
 
@@ -3629,9 +3752,11 @@ registerResource({
     await ensureNativeBotConversation(record);
     // Schedule the agent's automation as a Hermes cron job (best-effort —
     // a CLI failure leaves no job and the boot reconcile retries it).
-    await cronSync.syncBotAutomation(record).catch((err) =>
-      console.error('cron-sync: failed to schedule automation for', record.id, err.message)
-    );
+    if (record.status !== 'draft') {
+      await cronSync.syncBotAutomation(record).catch((err) =>
+        console.error('cron-sync: failed to schedule automation for', record.id, err.message)
+      );
+    }
     return record;
   },
   afterUpdate: async (record, existing) => {
@@ -3640,7 +3765,10 @@ registerResource({
     // (create/update on enable or schedule change, pause on disable). The
     // record already carries hermesCronJobId from `existing`, so edits and
     // pauses address the right job.
-    await cronSync.syncBotAutomation(record).catch((err) =>
+    const cronOperation = record.status === 'draft'
+      ? cronSync.removeBotCron(record)
+      : cronSync.syncBotAutomation(record);
+    await cronOperation.catch((err) =>
       console.error('cron-sync: failed to sync automation for', record.id, err.message)
     );
     return record;
@@ -3665,8 +3793,8 @@ registerResource({
       return 'name and instructions required';
     }
     if (!String(body.model || '').trim()) return 'connected model required';
-    if (body.status && ['running', 'watch'].indexOf(body.status) === -1) {
-      return 'status must be running or watch';
+    if (body.status && ['draft', 'running', 'watch'].indexOf(body.status) === -1) {
+      return 'status must be draft, running, or watch';
     }
     if (body.departments !== undefined && (!Array.isArray(body.departments) || body.departments.some((d) => typeof d !== 'string' || !d.trim()))) {
       return 'departments must be an array of non-empty strings';
@@ -5236,6 +5364,8 @@ async function runNativeConversationAgentReply(dispatch, signal) {
 async function executeNativeConversationDispatch(dispatch) {
   const claimToken = `native-${crypto.randomUUID()}`;
   let claimed = null;
+  let timeoutError = null;
+  let watchdog = null;
   const abortController = new AbortController();
   try {
     claimed = nativeConversationRepository.claimDispatch({
@@ -5251,7 +5381,18 @@ async function executeNativeConversationDispatch(dispatch) {
     });
     if (claimedTrigger && cancelNativeDispatchForInactiveUser(claimed.dispatch, claimedTrigger)) return;
     nativeDispatchAbortControllers.set(dispatch.id, abortController);
+    watchdog = createNativeDispatchWatchdog({
+      timeoutMs: NATIVE_DISPATCH_TIMEOUT_MS,
+      onTimeout: (error) => {
+        timeoutError = error;
+        abortController.abort();
+      },
+    });
     await runNativeConversationAgentReply(claimed.dispatch, abortController.signal);
+    // Abort is cooperative. A runtime that ignores the signal can still
+    // resolve after the watchdog fires; the timeout must win over completion
+    // so the durable dispatch cannot be marked successful after its deadline.
+    if (timeoutError) throw timeoutError;
     if (nativeDispatchWasStopped(dispatch)) {
       removeNativeDispatchProgressEvent(dispatch);
       return;
@@ -5262,13 +5403,31 @@ async function executeNativeConversationDispatch(dispatch) {
       claimToken,
     });
   } catch (error) {
-    const stopped = (error && (error.name === 'AbortError' || error.code === 'ABORT_ERR'))
-      || nativeDispatchWasStopped(dispatch);
-    if (stopped) {
+    const timedOut = timeoutError || (error && error.code === NATIVE_DISPATCH_TIMEOUT_CODE ? error : null);
+    let stopped = nativeDispatchWasStopped(dispatch);
+    if (timedOut && !stopped && claimed && claimed.dispatch) {
+      try {
+        nativeConversationRepository.failDispatch({
+          companyId: dispatch.companyId,
+          id: dispatch.id,
+          claimToken,
+          error: timedOut.message,
+        });
+      } catch (failureError) {
+        // An explicit Stop can win immediately after the watchdog fires. The
+        // durable row decides which terminal state the user should see.
+        if (!nativeDispatchWasStopped(dispatch)) {
+          console.error('native dispatch timeout state update failed', dispatch.id, failureError.message);
+        }
+      }
+      stopped = nativeDispatchWasStopped(dispatch);
+    }
+    const cancelled = !timedOut && (error && (error.name === 'AbortError' || error.code === 'ABORT_ERR'));
+    if (stopped || cancelled) {
       removeNativeDispatchProgressEvent(dispatch);
       return;
     }
-    if (claimed && claimed.dispatch) {
+    if (!timedOut && claimed && claimed.dispatch) {
       try {
         nativeConversationRepository.failDispatch({
           companyId: dispatch.companyId,
@@ -5280,7 +5439,10 @@ async function executeNativeConversationDispatch(dispatch) {
         console.error('native dispatch failure state update failed', dispatch.id, failureError.message);
       }
     }
-    console.error('native conversation dispatch failed', dispatch.id, error.message);
+    // Every terminal failure must retire the transient working row. Leaving
+    // it behind makes a failed or timed-out turn look active after reload.
+    removeNativeDispatchProgressEvent(dispatch);
+    console.error('native conversation dispatch failed', dispatch.id, error && error.message ? error.message : error);
     try {
       const failureTrigger = nativeConversationRepository.getEvent({
         companyId: dispatch.companyId,
@@ -5306,7 +5468,7 @@ async function executeNativeConversationDispatch(dispatch) {
         // error so a local developer never has to dig it out of the DB
         // (the generic copy alone hid a gateway ENOENT for hours).
         content: {
-          text: userFacingModelDispatchError(error)
+          text: userFacingModelDispatchError(timedOut || error)
             + (getHermesDiagnostics().verboseHermes && error && error.message
               ? `\n\nDebug · dispatch error\n${redactHermesChatDetail(String(error.message).slice(0, 2000))}`
               : ''),
@@ -5319,6 +5481,7 @@ async function executeNativeConversationDispatch(dispatch) {
       console.error('native dispatch failure event failed', dispatch.id, failureEventError.message);
     }
   } finally {
+    if (watchdog) watchdog.cancel();
     if (nativeDispatchAbortControllers.get(dispatch.id) === abortController) {
       nativeDispatchAbortControllers.delete(dispatch.id);
     }
@@ -5479,6 +5642,8 @@ app.get('/showcase', (req, res) => {
 // ---------- static frontend (optional) ----------
 
 if (STATIC_DIR) {
+  app.use('/vendor/clerk-js', express.static(path.dirname(require.resolve('@clerk/clerk-js'))));
+  app.use('/vendor/clerk-ui', express.static(path.join(path.dirname(require.resolve('@clerk/ui/package.json')), 'dist')));
   app.use(express.static(STATIC_DIR));
   app.get('/', (req, res) => res.sendFile(path.join(STATIC_DIR, 'index.html')));
 }
@@ -5527,9 +5692,9 @@ function migrateWorkspaceOwnership() {
       record.builtinSlug = String(record.id).slice('builtin-'.length);
       touched = true;
     }
-    // Draft/paused bot lifecycle states were removed. Preserve each record
-    // and its native conversation while moving it to the real inactive state.
-    if (record.status === 'draft' || record.status === 'paused') {
+    // Paused is the old inactive state; drafts are intentionally preserved so
+    // an unfinished bot remains visible and does not block other channels.
+    if (record.status === 'paused') {
       record.status = 'watch';
       touched = true;
     }

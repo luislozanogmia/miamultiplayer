@@ -162,7 +162,7 @@ test('Solo never requests or reuses the company human directory', async () => {
 
 test('Solo falls back to its authoritative Mia conversation without creating a home room', async () => {
   const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  const loaderStart = source.indexOf('function loadNativeConversations()');
+  const loaderStart = source.indexOf('function loadNativeConversations(');
   const loaderEnd = source.indexOf('\n  var AGENT_SETUP_ROOM_ID', loaderStart);
   const initStart = source.indexOf('function initChatWorkspace()');
   const initEnd = source.indexOf('\n  /* Revisiting the Chat layer', initStart);
@@ -170,7 +170,7 @@ test('Solo falls back to its authoritative Mia conversation without creating a h
   assert.ok(initStart >= 0 && initEnd > initStart);
 
   assert.doesNotMatch(source.slice(loaderStart, loaderEnd), /type:\s*['"]home['"]/);
-  assert.match(source.slice(loaderStart, loaderEnd), /return ensureNativeMiaConversation\(conversations\);/);
+  assert.match(source.slice(loaderStart, loaderEnd), /return ensureNativeMiaConversation\(conversations, requestOptions\);/);
   assert.match(source, /preferredStartupConversation\(chatWs\.nativeConversations, roomId, activeWorkspaceKey\)/);
   assert.doesNotMatch(source.slice(initStart, initEnd), /selectChatDefaultRoom\(|selectHomeRoom\(/);
   assert.doesNotMatch(source, /isMockupPreviewUser|MOCKUP_/);
@@ -201,7 +201,7 @@ test('startup and workspace switching keep credentials behind a dedicated loadin
   assert.match(styles, /\.app-loading-overlay\{[^}]*z-index:10000;[^}]*display:flex;/);
   assert.match(source, /function setAppLoading\(loading\)/);
 
-  const showStart = source.indexOf('function showApp(email)');
+  const showStart = source.indexOf('function showApp(email');
   const hideStart = source.indexOf('function hideApp()', showStart);
   assert.match(source.slice(showStart, hideStart), /setAppLoading\(true\)[\s\S]*Promise\.resolve\(initialRender\)[\s\S]*setAppLoading\(false\)/);
   assert.match(source.slice(hideStart, source.indexOf("loadInstanceConfig().then", hideStart)), /setAppLoading\(false\)/);

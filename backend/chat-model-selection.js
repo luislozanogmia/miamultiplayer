@@ -141,6 +141,9 @@ function chatModelSelectionInferenceOptions(baseOptions, selection) {
 
 function userFacingModelDispatchError(error) {
   const message = String(error && error.message || error || '');
+  if ((error && error.code === 'NATIVE_DISPATCH_TIMEOUT') || /native dispatch timed out/i.test(message)) {
+    return 'I ran out of time before finishing. Nothing was changed. Please try again.';
+  }
   if (/invalid[_ -]?api[_ -]?key|incorrect api key|\b401\b|unauthori[sz]ed|authentication failed/i.test(message)) {
     return 'Your connected model credential was rejected. Reconnect it in Settings → Access, then try again.';
   }

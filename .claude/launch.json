@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "miaos-preview",
+      "runtimeExecutable": "/private/tmp/claude-502/-Users-luislozanog-Documents-MiaOS/5a10a20d-55b4-4ecc-a4c6-95dcddfee2b1/scratchpad/preview/run.sh",
+      "runtimeArgs": [],
+      "port": 4899
+    }
+  ]
+}

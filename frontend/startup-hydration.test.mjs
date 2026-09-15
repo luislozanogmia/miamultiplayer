@@ -6,7 +6,7 @@ test('desktop reveals a loading gate while the first authoritative chat hydratio
   const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   const initStart = source.indexOf('function initChatWorkspace()');
   const initEnd = source.indexOf('\n  /* Revisiting the Chat layer', initStart);
-  const showStart = source.indexOf('function showApp(email)');
+  const showStart = source.indexOf('function showApp(email');
   const showEnd = source.indexOf('\n  function setLoginEnabled', showStart);
 
   assert.ok(initStart >= 0 && initEnd > initStart);

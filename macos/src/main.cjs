@@ -2,7 +2,9 @@
 
 const {
   app,
+  autoUpdater,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   session,
@@ -113,6 +115,112 @@ let artifactLastError = "";
 let artifactSessionConfigured = false;
 let developmentRefreshPending = false;
 let packagedRuntimePrepared = null;
+let autoUpdateConfigured = false;
+let autoUpdateCheckInFlight = null;
+let autoUpdateCheckInteractive = false;
+
+function configuredUpdateFeedUrl() {
+  const value = String(process.env.MIAOS_UPDATE_FEED_URL || "").trim();
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") throw new Error("the update feed must use HTTPS");
+    return url.toString();
+  } catch (error) {
+    desktopLog(`update feed rejected: ${error.message}`);
+    return "";
+  }
+}
+
+function updateMessage(options) {
+  if (!dialog || typeof dialog.showMessageBox !== "function") return Promise.resolve({ response: 1 });
+  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  return dialog.showMessageBox(window, options);
+}
+
+function configureAutoUpdates() {
+  if (autoUpdateConfigured || !app.isPackaged || process.platform !== "darwin") return false;
+  const feedUrl = configuredUpdateFeedUrl();
+  if (!feedUrl || !autoUpdater || typeof autoUpdater.setFeedURL !== "function") return false;
+  autoUpdater.setFeedURL({ url: feedUrl });
+  autoUpdater.on("update-available", (info) => {
+    const version = info && info.version ? ` ${info.version}` : "";
+    updateMessage({
+      type: "info",
+      title: "Mia update available",
+      message: `Mia${version} is downloading in the background.`,
+      detail: "Mia will ask before restarting to install the signed update.",
+      buttons: ["OK"],
+    });
+  });
+  autoUpdater.on("update-not-available", () => {
+    if (!autoUpdateCheckInteractive) return;
+    updateMessage({
+      type: "info",
+      title: "Mia is up to date",
+      message: `Mia ${app.getVersion()} is the latest available version.`,
+      buttons: ["OK"],
+    });
+  });
+  autoUpdater.on("error", (error) => {
+    desktopLog(`auto update failed: ${error && error.message || "unknown error"}`);
+    if (!autoUpdateCheckInteractive) return;
+    updateMessage({
+      type: "error",
+      title: "Mia could not check for updates",
+      message: "The update service could not be reached.",
+      detail: "You can try again from Help → Check for Updates.",
+      buttons: ["OK"],
+    });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    const version = info && info.version ? ` ${info.version}` : "";
+    updateMessage({
+      type: "info",
+      title: "Mia update ready",
+      message: `Mia${version} is ready to install.`,
+      detail: "Restart Mia now to finish the update, or keep working and install it later.",
+      buttons: ["Restart and install", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    }).then((result) => {
+      if (result && result.response === 0 && typeof autoUpdater.quitAndInstall === "function") {
+        autoUpdater.quitAndInstall();
+      }
+    }).catch(error => desktopLog(`update install prompt failed: ${error.message}`));
+  });
+  autoUpdateConfigured = true;
+  return true;
+}
+
+function checkForMiaUpdate({ interactive = false } = {}) {
+  if (!configureAutoUpdates()) {
+    if (interactive) {
+      return updateMessage({
+        type: "info",
+        title: "Mia updates",
+        message: "Automatic updates are not configured for this build.",
+        detail: "A signed HTTPS update feed must be supplied with MIAOS_UPDATE_FEED_URL.",
+        buttons: ["OK"],
+      });
+    }
+    return Promise.resolve({ status: "unconfigured" });
+  }
+  if (autoUpdateCheckInFlight) return autoUpdateCheckInFlight;
+  autoUpdateCheckInteractive = interactive;
+  autoUpdateCheckInFlight = Promise.resolve()
+    .then(() => autoUpdater.checkForUpdates())
+    .catch(error => {
+      desktopLog(`auto update check failed: ${error.message}`);
+      if (interactive) throw error;
+      return null;
+    })
+    .finally(() => {
+      autoUpdateCheckInFlight = null;
+      autoUpdateCheckInteractive = false;
+    });
+  return autoUpdateCheckInFlight;
+}
 
 function redactLogValue(value) {
   return String(value ?? "")
@@ -509,9 +617,10 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "executions.db"),
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
       || path.join(dataDirectory, "bot-artifacts"),
-    // This is a loopback-only local preview default. Set
-    // MIAOS_DESKTOP_NO_AUTH=0 when testing the authenticated flow.
-    MIAOS_NO_AUTH: process.env.MIAOS_DESKTOP_NO_AUTH || "1",
+    // Clerk authenticates the human online once; Mia's rolling local session
+    // keeps an already-linked installation usable when it later goes offline.
+    MIAOS_NO_AUTH: process.env.MIAOS_DESKTOP_NO_AUTH || "0",
+    MIAOS_CLERK_AUTH: process.env.MIAOS_CLERK_AUTH || "1",
     MIAOS_LOCAL_PROFILE: process.env.MIAOS_LOCAL_PROFILE || "1",
     GHOST_CLI_HOME: process.env.GHOST_CLI_HOME || "",
     GHOST_MIA_SOCKET: process.env.GHOST_MIA_SOCKET || "",
@@ -1202,7 +1311,14 @@ function createApplicationMenuTemplate() {
     { label: "View", submenu: viewItems },
     { label: "Browser", submenu: [] },
     { role: "windowMenu" },
-    { role: "help", submenu: [] },
+    {
+      role: "help",
+      submenu: [{
+        label: "Check for Updates…",
+        enabled: process.platform === "darwin",
+        click: () => checkForMiaUpdate({ interactive: true }),
+      }],
+    },
   ];
   if (!app.isPackaged) template.splice(5, 0, createDevelopmentMenu());
   return template;
@@ -1569,9 +1685,11 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   applyAppBranding();
   preparePackagedRuntime();
   createWindow();
+  configureAutoUpdates();
   installBrowserMenu();
   await loadMiaOS();
   await startGhostBridge();
+  if (autoUpdateConfigured) checkForMiaUpdate().catch(() => {});
   if (process.env.MIAOS_ARTIFACT_URL) await navigateArtifact(process.env.MIAOS_ARTIFACT_URL);
 
   app.on("activate", () => {
@@ -1610,4 +1728,7 @@ module.exports = {
   miaosWorkspacePath,
   preparePackagedRuntime,
   syncPackagedDirectory,
+  configuredUpdateFeedUrl,
+  configureAutoUpdates,
+  checkForMiaUpdate,
 };

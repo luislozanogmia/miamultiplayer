@@ -26,6 +26,7 @@ test('retryable agent failures are distinguished from reconnect failures', () =>
   assert.equal(retryable("I couldn't safely apply the spreadsheet layout. Please try again."), true);
   assert.equal(retryable("Google didn't respond in time, so I didn't change the spreadsheet. Please try again."), true);
   assert.equal(retryable("I couldn't apply the spreadsheet update. Please confirm access and try again."), true);
+  assert.equal(retryable('I ran out of time before finishing. Nothing was changed. Please try again.'), true);
   assert.equal(retryable("Sorry — I ran into a problem working on that and couldn't finish. Feel free to try again."), true);
   assert.equal(retryable("I couldn't update the spreadsheet because Google needs to be reconnected in Plugins."), false);
   assert.equal(retryable('The spreadsheet update is complete.'), false);

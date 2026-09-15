@@ -39,7 +39,7 @@ test('Google Account UI uses direct OAuth language and the existing status endpo
   assert.match(panel, /data-google-account-action="start"/);
   assert.match(catalog, /assets\/connectors\/google-g\.svg/);
   assert.ok(googleIcon.size > 0, 'downloaded Google G icon asset is non-empty');
-  assert.match(html, /<h2>Connect your tools<\/h2>\s*<p>Working on getting more apps\.<\/p>/);
+  assert.match(html, /<h2>Connect your tools<\/h2>\s*<p>Connect Google services and use them alongside Mia\.<\/p>/);
   assert.doesNotMatch(html, /hermes-catalog-disclaimer/);
   assert.doesNotMatch(panel, /View setup|Start setup|Copy setup request|administrator|technical setup/);
   assert.doesNotMatch(panel, /data-google-account-action="delete"/);
@@ -59,5 +59,6 @@ test('the adjacent Multiplayer Test switcher label remains short without changin
   assert.match(source, /companyName\.textContent = workspace\.switcherLabel \|\| workspace\.label/);
   assert.match(html, /id="miaCompanyName">Multiplayer Test<\/span>/);
   assert.match(html, /data-workspace-key="multiplayer_test"[\s\S]*?<strong>Multiplayer Test<\/strong>/);
-  assert.match(html, /data-tools-action="connected-apps"[\s\S]*?<span class="chat-new-menu-label">Connected apps \(upcoming\)<\/span>/);
+  assert.match(html, /data-tools-action="connected-apps"[\s\S]*?<span class="chat-new-menu-label">Connected apps<\/span>/);
+  assert.doesNotMatch(html, /data-tools-action="connected-apps"[^>]*aria-disabled="true"/);
 });

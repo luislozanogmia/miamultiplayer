@@ -13,8 +13,16 @@ export const CSP_DIRECTIVES = Object.freeze([
   Object.freeze(['object-src', Object.freeze(["'none'"])]),
   Object.freeze(['frame-ancestors', Object.freeze(["'none'"])]),
   Object.freeze(['form-action', Object.freeze(["'self'"])]),
-  Object.freeze(['script-src', Object.freeze(["'self'"])]),
-  Object.freeze(['script-src-elem', Object.freeze(["'self'"])]),
+  Object.freeze(['script-src', Object.freeze([
+    "'self'",
+    'https://challenges.cloudflare.com',
+    'https://*.protect.clerk.com',
+  ])]),
+  Object.freeze(['script-src-elem', Object.freeze([
+    "'self'",
+    'https://challenges.cloudflare.com',
+    'https://*.protect.clerk.com',
+  ])]),
   Object.freeze(['script-src-attr', Object.freeze(["'none'"])]),
   // The page has existing DOM style attributes and MiaMark generates a small
   // keyframes <style> element. Keep those two exceptions explicit while
@@ -28,17 +36,30 @@ export const CSP_DIRECTIVES = Object.freeze([
     "'self'",
     'data:',
     'blob:',
+    'https://img.clerk.com',
   ])]),
   Object.freeze(['font-src', Object.freeze(["'self'"])]),
   Object.freeze(['media-src', Object.freeze(["'self'", 'blob:'])]),
-  // API calls and the native conversation socket are same-origin. Remote
-  // provider requests happen behind the local backend/Hermes boundary.
-  Object.freeze(['connect-src', Object.freeze(["'self'"])]),
+  // API calls and the native conversation socket are same-origin. The named
+  // remote origins are the Clerk development instance and its challenge and
+  // telemetry endpoints; model-provider traffic remains behind the backend.
+  Object.freeze(['connect-src', Object.freeze([
+    "'self'",
+    'https://faithful-drum-333.clerk.accounts.dev',
+    'https://clerk-telemetry.com',
+    'https://*.clerk-telemetry.com',
+    'https://img.clerk.com',
+    'https://*.protect.clerk.com:*',
+  ])]),
   // Local workers and blob worker wrappers stay same-origin.
   Object.freeze(['worker-src', Object.freeze(["'self'", 'blob:'])]),
   Object.freeze(['child-src', Object.freeze(["'self'", 'blob:'])]),
-  // Renderer frames are limited to the application origin.
-  Object.freeze(['frame-src', Object.freeze(["'self'"])]),
+  // Renderer frames are limited to the app and Clerk's verification challenge.
+  Object.freeze(['frame-src', Object.freeze([
+    "'self'",
+    'https://challenges.cloudflare.com',
+    'https://*.protect.clerk.com',
+  ])]),
   Object.freeze(['manifest-src', Object.freeze(["'self'"])]),
 ]);
 

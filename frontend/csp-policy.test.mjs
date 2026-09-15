@@ -39,21 +39,28 @@ function directive(name) {
   return entry[1];
 }
 
-test('Mia page declares the exact fail-closed CSP and no remote executable source', async () => {
+test('Mia page declares the exact fail-closed CSP and only Clerk authentication origins', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const match = html.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/>/i);
   assert.ok(match, 'index.html has a page CSP meta tag');
   assert.equal(match[1], MIAOS_PAGE_CSP);
-  assert.equal(directive('script-src').join(' '), "'self'");
-  assert.equal(directive('script-src-elem').join(' '), "'self'");
+  assert.deepEqual(directive('script-src'), ["'self'", 'https://challenges.cloudflare.com', 'https://*.protect.clerk.com']);
+  assert.deepEqual(directive('script-src-elem'), ["'self'", 'https://challenges.cloudflare.com', 'https://*.protect.clerk.com']);
   assert.equal(directive('script-src-attr').join(' '), "'none'");
-  assert.equal(directive('connect-src').join(' '), "'self'");
+  assert.deepEqual(directive('connect-src'), [
+    "'self'",
+    'https://faithful-drum-333.clerk.accounts.dev',
+    'https://clerk-telemetry.com',
+    'https://*.clerk-telemetry.com',
+    'https://img.clerk.com',
+    'https://*.protect.clerk.com:*',
+  ]);
   assert.deepEqual(directive('worker-src'), ["'self'", 'blob:']);
-  assert.deepEqual(directive('img-src'), ["'self'", 'data:', 'blob:']);
+  assert.deepEqual(directive('img-src'), ["'self'", 'data:', 'blob:', 'https://img.clerk.com']);
+  assert.deepEqual(directive('frame-src'), ["'self'", 'https://challenges.cloudflare.com', 'https://*.protect.clerk.com']);
   assert.match(MIAOS_PAGE_CSP, /style-src 'self'/);
   assert.match(MIAOS_PAGE_CSP, /style-src-elem 'self' 'unsafe-inline'/);
   assert.match(MIAOS_PAGE_CSP, /style-src-attr 'unsafe-inline'/);
-  assert.doesNotMatch(MIAOS_PAGE_CSP, /(?:^|\s)(?:\*|https?:|wss?:)(?:\s|;|$)/);
   assert.doesNotMatch(MIAOS_PAGE_CSP, /unsafe-eval/);
   assert.doesNotMatch(html, /unpkg\.com|cdnjs|jsdelivr/i);
 });

@@ -11,11 +11,18 @@ test('incomplete server onboarding always opens after a clean reinstall', () => 
     source.indexOf('function loadHarnessProviderCatalog()', source.indexOf('function loadHarnessSettings(showFirstRun)'))
   );
 
-  assert.match(loader, /showFirstRun\s*&&\s*\(!harness\s*\|\|\s*!harness\.onboardingComplete\)/);
+  assert.match(loader, /showFirstRun\s*&&\s*\(!harness\s*\|\|\s*!harness\.onboardingComplete\s*\|\|\s*!currentRealProfileName\(\)\)/);
   assert.doesNotMatch(loader, /localStorage/);
   assert.doesNotMatch(source, /(?:getItem|setItem)\('miaosHarnessOnboardingDismissed'/);
   assert.match(source, /harnessOnboardingState\.provider = existing\.provider \|\| null/);
   assert.doesNotMatch(source, /harnessOnboardingState\.provider = existing\.provider \|\| 'openai-codex'/);
+});
+
+test('first-run onboarding explains the path and cannot be dismissed before setup', () => {
+  assert.match(html, /Welcome to Mia\.[\s\S]*three short steps/);
+  assert.match(html, /class="styled-onboarding-steps"[\s\S]*Choose a workspace[\s\S]*Connect a provider[\s\S]*Start with Chat/);
+  assert.match(source, /function closeHarnessOnboarding\(\)\{[\s\S]*if\(!harnessSettingsCache\.onboardingComplete \|\| !realProfileName\(harnessOnboardingState\.displayName\)\)\{[\s\S]*Finish setup to continue/);
+  assert.match(source, /if\(!harnessSettingsCache\.onboardingComplete \|\| !realProfileName\(harnessOnboardingState\.displayName\)\)[\s\S]*return false;/);
 });
 
 test('onboarding choices expose their selected state to assistive technology', () => {

@@ -19,7 +19,8 @@ test('Mia and bot avatars use one bounded animation path', async () => {
   assert.match(source, /headerMiaIsWorking[\s\S]*roomHasModelResponseActivity\(chatWs\.activeRoomId\)/);
   assert.match(source, /headerMiaIsWorking \? 'activity' : null/);
   assert.match(source, /if\(chatWs\.activeRoomId === roomId\)\{ renderChatHeaderBar\(\); renderChatThread\(\); \}/);
-  assert.match(html, /id="miaLockupLogin"[\s\S]*data-mia-mark-mode="static"/);
+  assert.match(html, /class="login-side-agent"[\s\S]*data-mia-mark-mode="activity"/);
+  assert.doesNotMatch(html, /id="miaLockupLogin"/);
 
   assert.match(source, /function staggerVisibleMoteAnimations\(\)/);
   assert.match(source, /setInterval\(pulse, 30000\)/);

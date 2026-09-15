@@ -95,6 +95,10 @@ test('limits the product picker to explicitly selected providers and hides techn
 
 test('turns model credential and stale-selection failures into actionable safe replies', () => {
   assert.equal(
+    userFacingModelDispatchError(Object.assign(new Error('native dispatch timed out after 600000ms'), { code: 'NATIVE_DISPATCH_TIMEOUT' })),
+    'I ran out of time before finishing. Nothing was changed. Please try again.'
+  );
+  assert.equal(
     userFacingModelDispatchError(new Error("Error code: 401 - {'code': 'invalid_api_key'}")),
     'Your connected model credential was rejected. Reconnect it in Settings → Access, then try again.'
   );

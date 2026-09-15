@@ -23,3 +23,9 @@ node_modules
 # Backend runtime state from local preview runs (bot outputs, gateway token/profiles)
 backend/bot-artifacts/
 backend/hermes/
+
+# Local browser verification captures
+.playwright-cli/
+
+# Generated Linux distribution artifacts
+linux/distro/

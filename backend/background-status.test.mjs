@@ -41,9 +41,8 @@ test('native background work posts one progress event for every target and exclu
   assert.notEqual(executionStart, -1);
   assert.match(execution, /const parentEventId = nativeReplyParentEventId\(trigger\);/);
   assert.match(execution, /const agent = nativeDispatchActor\(dispatch, conversation, trigger\);/);
-  assert.match(execution, /if \(rawChatModelSelection && !Object\.keys\(availableChatModelProviders\)\.length\)/);
-  assert.match(execution, /await getHermesGatewayModelOptions\(\{ refresh: true \}\)/);
-  assert.match(execution, /rememberNativeChatModelInventory\(payload\)/);
+  assert.match(execution, /const chatModelSelection = await chatModelSelectionForUser\([\s\S]*rawChatModelSelection/);
+  assert.match(source, /async function chatModelSelectionForUser\(rawSelection, email\) \{[\s\S]*if \(!Object\.keys\(providers\)\.length\) \{[\s\S]*await getHermesGatewayModelOptions\(\{ refresh: true \}\)[\s\S]*rememberNativeChatModelInventory\(payload\)/);
   assert.match(execution, /content: \{ text: humanTaskStatus\('running', 0\) \}/);
   assert.match(source, /function nativeReplyParentEventId\(trigger\) \{[\s\S]*return trigger && trigger\.parentEventId \? trigger\.parentEventId : null;/);
   assert.match(execution, /clientIdempotencyKey: `native-dispatch-progress-\$\{dispatch\.id\}`/);

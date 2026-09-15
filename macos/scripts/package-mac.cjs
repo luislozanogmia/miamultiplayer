@@ -565,6 +565,12 @@ async function buildInstaller() {
 
     const stagedBackend = path.join(temporaryRoot, "backend");
     run("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: stagedBackend });
+    const dependencyBinDirs = [];
+    walkTree(path.join(stagedBackend, "node_modules"), (entry, target) => {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".map")) fs.rmSync(target);
+      if (entry.isDirectory() && entry.name === ".bin") dependencyBinDirs.push(target);
+    });
+    for (const target of dependencyBinDirs) fs.rmSync(target, { recursive: true, force: true });
     await rebuild({
       buildPath: stagedBackend,
       electronVersion: ELECTRON_VERSION,

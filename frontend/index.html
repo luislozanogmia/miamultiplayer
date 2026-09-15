@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; script-src-elem 'self'; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self'; manifest-src 'self'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; script-src-elem 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https://img.clerk.com; font-src 'self'; media-src 'self' blob:; connect-src 'self' https://faithful-drum-333.clerk.accounts.dev https://clerk-telemetry.com https://*.clerk-telemetry.com https://img.clerk.com https://*.protect.clerk.com:*; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; manifest-src 'self'" />
 <title>Mia - Solo</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg?v=20260822-1" />
 <link rel="alternate icon" type="image/png" href="assets/favicon.png?v=20260822-1" />
@@ -36,18 +36,15 @@
 <div class="login-wall" id="loginWall">
   <div class="login-split">
     <div class="login-main">
-      <div class="login-mark-row">
-        <span class="topbar-mark"><span class="topbar-mark-inner"></span></span>
-        <span class="wordmark" id="miaLegacyLoginName">Mia - Solo</span>
-        <span class="mia-lockup" id="miaLockupLogin"><span class="mia-lockup-mark" data-mia-mark="28" data-mia-mark-mode="static"></span><span class="mia-lockup-word" id="miaLoginName">Mia - Solo</span></span>
-      </div>
       <div class="login-center">
         <div class="login-box">
           <div class="login-heading">
-            <h1>Sign in</h1>
-            <p class="subtitle">Sign in to access the platform</p>
+            <span class="login-kicker">Your workspace</span>
+            <h1>Welcome to Mia</h1>
+            <p class="subtitle">Sign in or create your account to continue.</p>
           </div>
           <div class="login-error" id="loginError"></div>
+          <div id="clerkSignIn" class="clerk-sign-in" hidden></div>
           <form id="loginForm" autocomplete="on">
             <div class="login-field">
               <label for="loginEmail">Work email</label>
@@ -61,12 +58,15 @@
           </form>
         </div>
       </div>
-      <div class="login-footer"><span>Mia</span><span class="login-footer-sp"></span><span id="miaLoginFooterName">Mia - Solo</span></div>
     </div>
     <aside class="login-side">
       <div class="login-side-card">
-        <img class="login-side-logo" src="assets/app-logo.png" alt="Mia" />
-        <div class="login-side-note">Your local workspace for conversations, connected apps, and autonomous bots.</div>
+        <div class="login-side-agent" aria-hidden="true"><span data-mia-mark="430" data-mia-mark-mode="activity"></span></div>
+        <div class="login-side-copy">
+          <div class="login-side-logo-space" aria-hidden="true"></div>
+          <h2>Easy, powerful AI for everyone.</h2>
+          <p class="login-side-note">Use your ideas, knowledge, taste and creativity to contribute to the world.</p>
+        </div>
       </div>
     </aside>
   </div>
@@ -116,7 +116,7 @@
             <div class="styled-integrations-toolbar">
               <div class="hermes-catalog-intro">
                 <h2>Connect your tools</h2>
-                <p>Working on getting more apps.</p>
+                <p>Connect Google services and use them alongside Mia.</p>
               </div>
               <div class="hermes-catalog-filters">
                 <input type="search" id="hermesConnectorSearch" placeholder="Search connected apps" aria-label="Search connected apps" autocomplete="off" />
@@ -273,6 +273,11 @@
                 <span class="bench-build-counter" id="benchBuildCounter"></span>
               </div>
               <div class="bench-steps" id="benchSteps"></div>
+              <div class="bench-build-actions">
+                <button type="button" class="bench-build-cancel" id="benchBuildCancelBtn">Cancel</button>
+                <button type="button" class="bench-build-retry" id="benchBuildRetryBtn" hidden>Try again</button>
+                <button type="button" class="bench-build-back" id="benchBuildBackBtn" hidden>Back to setup</button>
+              </div>
             </div>
           </div>
 
@@ -381,14 +386,14 @@
                   <span class="chat-new-menu-text"><span class="chat-new-menu-label">New Channel</span><span class="chat-new-menu-sub">Create a shared team channel</span></span>
                 </button>
                 <div class="chat-tools-menu-separator" role="separator"></div>
-                <button type="button" class="chat-new-menu-item upcoming" data-tools-action="connected-apps" role="menuitem" aria-disabled="true"><span class="chat-new-menu-icon"><img src="assets/icons/connected-apps.png" alt="" aria-hidden="true" /></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Connected apps (upcoming)</span></span></button>
+                <button type="button" class="chat-new-menu-item" data-tools-action="connected-apps" role="menuitem"><span class="chat-new-menu-icon"><img src="assets/icons/connected-apps.png" alt="" aria-hidden="true" /></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Connected apps</span><span class="chat-new-menu-sub">Connect Google services</span></span></button>
                 <button type="button" class="chat-new-menu-item" data-tools-action="web-browser" role="menuitem"><span class="chat-new-menu-icon"><img src="assets/icons/web-browser.png" alt="" aria-hidden="true" /></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Web browser</span><span class="chat-new-menu-sub">Browse beside Mia</span></span></button>
               </div>
               <div class="chat-new-menu chat-developer-menu" id="chatDeveloperMenu" role="menu" aria-label="Developer tools">
                 <button type="button" class="chat-new-menu-item" data-developer-action="diagnostics" role="menuitem"><span class="chat-new-menu-icon chat-tools-menu-glyph" aria-hidden="true">&lt;/&gt;</span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Diagnostics</span><span class="chat-new-menu-sub">Show detailed local activity</span></span></button>
               </div>
             </div>
-            <div class="chat-search-wrap" data-rail-hide><div class="chat-search-pill"><span class="chat-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="10.8" cy="10.8" r="6.2"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg></span><input type="text" class="chat-search" id="chatSearch" placeholder="Search chats" autocomplete="off" aria-controls="chatSearchResults" aria-expanded="false" /></div><div class="chat-search-results" id="chatSearchResults" role="listbox" aria-label="People, agents, and bots"></div></div>
+            <div class="chat-search-wrap" data-rail-hide><div class="chat-search-pill"><span class="chat-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="10.8" cy="10.8" r="6.2"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg></span><input type="text" class="chat-search" id="chatSearch" placeholder="Search chats" autocomplete="off" aria-label="Search chats (Command or Control K)" aria-controls="chatSearchResults" aria-expanded="false" /></div><div class="chat-search-results" id="chatSearchResults" role="listbox" aria-label="People, agents, and bots"></div></div>
             <div class="chat-sidebar-scroll">
               <div class="chat-recents-group">
                 <div class="chat-recents-head" data-rail-hide><button type="button" class="chat-section-toggle" data-chat-section-toggle="pinned" aria-controls="chatPinned" aria-expanded="true" aria-label="Collapse Pinned" title="Collapse Pinned"><span class="chat-section-chevron" aria-hidden="true"></span></button><span class="chat-recents-title">Pinned</span><span class="chat-recents-count" id="chatPinnedCount"></span></div>
@@ -406,6 +411,10 @@
                   <div class="chat-dm-add-list" id="chatDmAddList"></div>
                 </div>
                 <div class="chat-recents" id="chatAllConversations"></div>
+              </div>
+              <div class="chat-recents-group chat-starter-group" id="chatStarterBotsGroup">
+                <div class="chat-recents-head" data-rail-hide><span class="chat-recents-title">Starter bots</span></div>
+                <div class="chat-starter-bots" id="chatStarterBots" aria-label="Starter bot templates"></div>
               </div>
             </div>
             <div class="chat-sidebar-footer" data-rail-hide>
@@ -428,7 +437,7 @@
                 <button type="button" class="chat-acct-menu-item" id="chatAcctAbout" role="menuitem" aria-haspopup="dialog" aria-controls="aboutDialog">
                   <span class="cami" aria-hidden="true"><img src="assets/icons/menu-about.png?v=20260903-menu-icons-1" alt="" /></span><span>About</span>
                 </button>
-                <button type="button" class="chat-acct-menu-item" id="chatAcctFeedback" data-chat-acct-toast="Feedback is upcoming" role="menuitem">
+                <button type="button" class="chat-acct-menu-item" id="chatAcctFeedback" role="menuitem">
                   <span class="cami" aria-hidden="true"><img src="assets/icons/menu-feedback.png?v=20260903-menu-icons-2" alt="" /></span><span>Send Feedback</span>
                 </button>
                 <div class="chat-acct-menu-sep"></div>
@@ -622,6 +631,8 @@
     </span>
   </label>
   <div class="app-development-status" id="appDevStatus">Loading diagnostics…</div>
+  <button type="button" class="app-development-copy" id="appDevCopySummary">Copy safe support summary</button>
+  <small class="app-development-note">Health and capacity state only; no credentials or conversation text.</small>
 </aside>
 
 <!-- About Mia -->
@@ -656,6 +667,7 @@
           <article><h3>Shared bots will be API-only</h3><p>When multiplayer ships, shared bots must use paid API credentials and never a member’s consumer ChatGPT or Grok subscription.</p></article>
           <article><h3>Rooms will coordinate people</h3><p>Upcoming multiplayer services will coordinate rooms, presence, and shared-bot calls without exposing or invoking another person’s private agent.</p></article>
           <article><h3>Your local work stays local</h3><p>Provider authentication and local agent files remain under Hermes Agent’s control on the user’s computer.</p></article>
+          <article><h3>Compute is transparent</h3><p>This build has no in-app platform billing. Provider charges remain with the connected provider account, and local diagnostics show the installation’s active and queued capacity.</p></article>
         </div>
       </section>
 
@@ -833,7 +845,18 @@
   <button class="styled-sheet-close" id="harnessOnboardingClose" aria-label="Close onboarding">&times;</button>
   <div class="styled-onboarding-kicker">Mia onboarding</div>
   <h1 class="styled-onboarding-title" id="harnessOnboardingTitle">Mia - Multiplayer</h1>
-  <p class="styled-onboarding-intro">Set up your workspace. You can change this later from Access.</p>
+  <p class="styled-onboarding-intro">Welcome to Mia. We’ll get you ready in three short steps: choose your workspace, connect the provider that powers your Agent, then start a chat or create a bot.</p>
+  <ol class="styled-onboarding-steps" aria-label="Setup steps">
+    <li><span class="styled-onboarding-step-number">1</span><span><strong>Choose a workspace</strong><small>Keep work private in Solo.</small></span></li>
+    <li><span class="styled-onboarding-step-number">2</span><span><strong>Connect a provider</strong><small>This is required before Mia can answer.</small></span></li>
+    <li><span class="styled-onboarding-step-number">3</span><span><strong>Start with Chat</strong><small>Use Tools to create a bot when you’re ready.</small></span></li>
+  </ol>
+
+  <label class="styled-onboarding-profile" for="harnessDisplayName">
+    <span class="styled-onboarding-label">What should Mia call you?</span>
+    <input class="styled-onboarding-display-name" id="harnessDisplayName" type="text" name="display-name" autocomplete="name" maxlength="80" placeholder="Your name" />
+    <small>Use your name instead of the default Local user label.</small>
+  </label>
 
   <div class="styled-onboarding-label">How will you work?</div>
   <div class="styled-onboarding-mode-grid styled-onboarding-mode-grid-large" id="harnessModeChoices">
@@ -851,7 +874,7 @@
   <div class="styled-onboarding-provider-grid" id="harnessProviderChoices">
     <div class="styled-onboarding-provider-row">
       <button type="button" class="styled-onboarding-choice" data-harness-provider="openai-codex" aria-pressed="false">
-        <span class="styled-onboarding-choice-icon choice-openai"><img src="assets/icons/chatgpt-monoblossom.svg?v=20260903-provider-icons-1" alt="" /></span>
+        <span class="styled-onboarding-choice-icon choice-openai"><img src="assets/icons/chatgpt-monoblossom.svg?v=20260914-provider-icons-2" alt="" /></span>
         <span><strong>ChatGPT subscription</strong><small>Use your ChatGPT plan through your configured harness</small></span>
         <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
       </button>
