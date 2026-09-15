@@ -6,6 +6,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 // Node.js access and no raw IPC object; it can only ask the main process to
 // retry the local connection when the backend was unavailable at startup.
 contextBridge.exposeInMainWorld("miaDesktop", {
+  version: () => ipcRenderer.sendSync("mia-version"),
   ready: () => ipcRenderer.send("miaos-renderer-ready"),
   hydrated: () => ipcRenderer.send("miaos-renderer-hydrated"),
   retryConnection: () => ipcRenderer.invoke("miaos-retry-connection"),

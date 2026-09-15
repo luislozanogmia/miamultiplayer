@@ -5182,6 +5182,7 @@
   function restoreLocalBrowserAfterBoot(){
     if(localBrowserBootRestoreHandled) return;
     localBrowserBootRestoreHandled = true;
+    if(startUpdatedDesktopIntro()) return;
     if(shouldRestoreLocalBrowser()) openWebBrowserTool({restoring:true});
   }
 
@@ -5465,7 +5466,7 @@
       }
       return prefix + 'Every ' + intervalMinutes + ' minutes';
     }
-    if(automation.frequency === 'daily') return prefix + 'Every day' + (automation.time ? ' at ' + automation.time : '');
+    if(automation.frequency === 'daily') return prefix + (automation.weekdaysOnly ? 'Weekdays' : 'Every day') + (automation.time ? ' at ' + automation.time : '') + (Number.isInteger(automation.utcOffsetMinutes) ? ' · ' + newsTimeZoneLabel(automation.utcOffsetMinutes) : '');
     if(automation.frequency === 'weekly') return prefix + 'Every ' + (automation.day || 'week') + (automation.time ? ' at ' + automation.time : '');
     if(automation.frequency === 'monthly') return prefix + 'Every month' + (automation.day ? ' on day ' + automation.day : '') + (automation.time ? ' at ' + automation.time : '');
     return prefix + 'Scheduled';
@@ -5557,6 +5558,8 @@
     if(!name) throw new Error('Name is required.');
     var enabled = values.enabled === true;
     var frequency = String(values.frequency || 'interval');
+    var weekdaysOnly = frequency === 'weekdays';
+    if(weekdaysOnly) frequency = 'daily';
     if(['interval', 'daily', 'weekly', 'monthly'].indexOf(frequency) === -1){
       throw new Error('Choose a valid schedule.');
     }
@@ -5571,6 +5574,8 @@
     delete automation.time;
     automation.enabled = enabled;
     automation.frequency = frequency;
+    if(weekdaysOnly) automation.weekdaysOnly = true;
+    else delete automation.weekdaysOnly;
     automation.name = name;
     var prompt = String(values.prompt || '').trim();
     if(prompt) automation.prompt = prompt;
@@ -7161,10 +7166,15 @@
     els('[data-mia-onboarding-choice]', thread).forEach(function(button){
       button.addEventListener('click', function(){
         var label = button.getAttribute('data-mia-onboarding-choice');
-        if(miaOnboardingChat.phase === 'name') sendMiaOnboardingAnswer(label);
+        if(label === 'Show my briefing') startNewsAutomationGuide();
+        else if(label === 'Skip news briefing') sendMiaOnboardingAction({action:'skip-news'});
+        else if(label === 'Change topics') sendMiaOnboardingAction({action:'edit-topics'});
+        else if(label === 'Set up my news briefing') sendMiaOnboardingAction({action:'start-news'});
+        else if(miaOnboardingChat.phase === 'name') sendMiaOnboardingAnswer(label);
         else sendActiveRoomMessage(label);
       });
     });
+    wireNewsOnboarding(thread);
     wireChatExpandableMessages(thread);
     wireChatArtifactPreviews(thread);
     var more = el('#chatHistoryMore', thread);
@@ -7863,7 +7873,7 @@
   function renderAutomationDetailPane(pane, bot, automation, isNew){
     automation = automation || {name:'New automation', enabled:false, frequency:'none'};
     var promptMissing = automation.enabled === true && !String(automation.prompt || '').trim();
-    var frequency = ['interval', 'daily', 'weekly', 'monthly'].indexOf(automation.frequency) !== -1 ? automation.frequency : 'interval';
+    var frequency = automation.frequency === 'daily' && automation.weekdaysOnly ? 'weekdays' : ['interval', 'daily', 'weekly', 'monthly'].indexOf(automation.frequency) !== -1 ? automation.frequency : 'interval';
     var intervalParts = automationIntervalParts(automation.intervalMinutes || 5);
     var fields = automationDetailFields(bot, automation).filter(function(field){
       return ['Automation ID', 'Bot ID', 'Task', 'Latest run', 'Latest status', 'Latest delivery', 'Latest session'].indexOf(field.label) !== -1;
@@ -7876,7 +7886,7 @@
     var title = String(automation.name || 'New automation');
     var weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     var frequencyOptions = [
-      ['interval', 'Repeating timer'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']
+      ['interval', 'Repeating timer'], ['daily', 'Daily'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly'], ['monthly', 'Monthly']
     ].map(function(option){
       return '<option value="' + option[0] + '"' + (frequency === option[0] ? ' selected' : '') + '>' + option[1] + '</option>';
     }).join('');
@@ -7898,7 +7908,7 @@
         '<label class="cip-field" data-frequency-control="interval"><span class="cip-field-label">Timer</span><span class="cip-automation-timer"><span>Every</span><input type="number" id="automationEditInterval" min="1" max="' + (intervalParts.unit === 'hours' ? '24' : '60') + '" value="' + esc(intervalParts.value) + '"><select id="automationEditIntervalUnit" aria-label="Timer unit"><option value="minutes"' + (intervalParts.unit === 'minutes' ? ' selected' : '') + '>minutes</option><option value="hours"' + (intervalParts.unit === 'hours' ? ' selected' : '') + '>hours</option></select></span></label>' +
         '<label class="cip-field" data-frequency-control="weekly"><span class="cip-field-label">Weekday</span><select id="automationEditWeekday">' + weekdayOptions + '</select></label>' +
         '<label class="cip-field" data-frequency-control="monthly"><span class="cip-field-label">Day of month</span><input type="number" id="automationEditMonthDay" min="1" max="31" value="' + esc(automation.day || 1) + '"></label>' +
-        '<label class="cip-field" data-frequency-control="time"><span class="cip-field-label">Time</span><input type="time" id="automationEditTime" value="' + esc(automation.time || '09:00') + '"></label>' +
+        '<label class="cip-field" data-frequency-control="time"><span class="cip-field-label">Time' + (Number.isInteger(automation.utcOffsetMinutes) ? ' · ' + newsTimeZoneLabel(automation.utcOffsetMinutes) : '') + '</span><input type="time" id="automationEditTime" value="' + esc(automation.time || '09:00') + '"></label>' +
         '<label class="cip-field"><span class="cip-field-label">Prompt</span><textarea id="automationEditPrompt" rows="6">' + esc(automation.prompt || '') + '</textarea></label>' +
         '<div class="cip-automation-form-error" id="automationDetailError" role="alert"></div>' +
         '<div class="cip-editor-actions">' + (!isNew ? '<button type="button" class="styled-btn-secondary danger" id="automationDetailDelete">Delete</button>' : '') + '<button type="button" class="styled-btn-secondary" id="automationDetailCancel">Cancel</button><button type="submit" class="styled-btn-primary" id="automationDetailSave">' + (isNew ? 'Add automation' : 'Save') + '</button></div>' +
@@ -8093,6 +8103,22 @@
         if(!agent) return showBenchToast('Open a bot conversation to add an automation.');
         if(!openAutomationDetail(agent.id, null, true)) showBenchToast('This bot already has 10 automations.');
       });
+    });
+  }
+
+  function openAutomationsFromTools(){
+    closeLocalBrowser();
+    var selection;
+    if(!isInfoPaneAvailable() || chatWs.activeKind !== 'agent'){
+      if(!chatWs.gatewayAgent){ showBenchToast('Mia is still loading. Try again in a moment.'); return; }
+      selection = selectAgentRoom(chatWs.gatewayAgent);
+    }
+    Promise.resolve(selection).then(function(){
+      if(!isInfoPaneAvailable()){ showBenchToast('Open a Mia or bot conversation to see its automations.'); return; }
+      localStorage.setItem('styledInfoPaneOpen', '1');
+      renderChatHeaderBar();
+      prepareChatUtilityPane('automations');
+      renderChatInfoPane();
     });
   }
 
@@ -8570,11 +8596,53 @@
 
   var miaOnboardingChat = null;
   var miaOnboardingSending = false;
+  var newsOnboardingDraft = {topics:[], custom:'', schedule:'daily', time:'09:00', day:'Monday', utcOffsetMinutes:new Date().getTimezoneOffset()};
+
+  function newsTimeZoneLabel(offset){
+    var minutes = Math.abs(offset);
+    return 'UTC' + (offset <= 0 ? '+' : '−') + String(Math.floor(minutes / 60)).padStart(2,'0') + ':' + String(minutes % 60).padStart(2,'0');
+  }
+
+  function sendMiaOnboardingAction(body, endpoint){
+    if(miaOnboardingSending) return Promise.resolve();
+    miaOnboardingSending = true;
+    return api(endpoint || '/api/onboarding/chat', {method:'POST', body:body}).then(function(res){
+      if(res.status !== 200 || !res.data || res.data.error) throw new Error(res.data && res.data.error || 'Could not save your briefing.');
+      miaOnboardingChat = res.data;
+      return loadChatRoom(res.data.conversationId, 'agent', 'Mia');
+    }).catch(function(error){ showToast(error.message); }).finally(function(){ miaOnboardingSending = false; renderChatThread(); });
+  }
+
+  function newsOnboardingFormHtml(){
+    var disabled = miaOnboardingSending ? ' disabled' : '';
+    if(miaOnboardingChat.phase === 'topics'){
+      return '<form class="mia-news-form" id="miaNewsTopics"><div class="mia-news-topics">' + ['Technology & AI','Business & finance','Science & health','Arts & culture'].map(function(topic){
+        return '<label><input type="checkbox" name="topic" value="' + esc(topic) + '"' + (newsOnboardingDraft.topics.indexOf(topic) !== -1 ? ' checked' : '') + '><span>' + esc(topic) + '</span></label>';
+      }).join('') + '</div><label class="cip-field"><span class="cip-field-label">Or add your own topic</span><input name="custom" maxlength="120" placeholder="For example, architecture in Mexico" value="' + esc(newsOnboardingDraft.custom) + '"></label><button class="styled-btn-primary" type="submit"' + disabled + '>Continue</button></form>';
+    }
+    var options = '';
+    for(var offset = 720; offset >= -840; offset -= 15) options += '<option value="' + offset + '"' + (offset === newsOnboardingDraft.utcOffsetMinutes ? ' selected' : '') + '>' + newsTimeZoneLabel(offset) + '</option>';
+    return '<form class="mia-news-form" id="miaNewsSchedule"><label class="cip-field"><span class="cip-field-label">Schedule</span><select name="schedule">' + [['daily','Every morning'],['weekdays','Weekdays'],['weekly','Weekly — choose a day']].map(function(item){ return '<option value="' + item[0] + '"' + (item[0] === newsOnboardingDraft.schedule ? ' selected' : '') + '>' + item[1] + '</option>'; }).join('') + '</select></label>' +
+      '<label class="cip-field" data-news-weekday' + (newsOnboardingDraft.schedule !== 'weekly' ? ' hidden' : '') + '><span class="cip-field-label">Day</span><select name="day">' + ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(function(day){return '<option' + (day === newsOnboardingDraft.day ? ' selected' : '') + '>' + day + '</option>';}).join('') + '</select></label>' +
+      '<div class="mia-news-schedule-row"><label class="cip-field"><span class="cip-field-label">Time</span><input name="time" type="time" required value="' + esc(newsOnboardingDraft.time) + '"></label><label class="cip-field"><span class="cip-field-label">Time zone</span><select name="utcOffsetMinutes">' + options + '</select></label></div><p class="mia-news-hint">Uses this fixed UTC offset. Mia needs to be running and online to deliver your briefing.</p><button class="styled-btn-primary" type="submit"' + disabled + '>' + (miaOnboardingSending ? 'Creating…' : 'Create my news briefing') + '</button></form>';
+  }
+
+  function wireNewsOnboarding(root){
+    var topics = el('#miaNewsTopics', root), schedule = el('#miaNewsSchedule', root);
+    if(topics){
+      topics.addEventListener('input', function(){ newsOnboardingDraft.topics = Array.from(topics.querySelectorAll('input[name="topic"]:checked')).map(function(input){return input.value;}); newsOnboardingDraft.custom = topics.elements.custom.value; });
+      topics.addEventListener('submit', function(event){ event.preventDefault(); sendMiaOnboardingAction({action:'topics', topics:newsOnboardingDraft.topics.concat(newsOnboardingDraft.custom.trim() ? [newsOnboardingDraft.custom.trim()] : [])}); });
+    }
+    if(schedule){
+      schedule.addEventListener('input', function(){ ['schedule','time','day'].forEach(function(key){newsOnboardingDraft[key] = schedule.elements[key].value;}); newsOnboardingDraft.utcOffsetMinutes = Number(schedule.elements.utcOffsetMinutes.value); schedule.querySelector('[data-news-weekday]').hidden = newsOnboardingDraft.schedule !== 'weekly'; });
+      schedule.addEventListener('submit', function(event){ event.preventDefault(); var request = sendMiaOnboardingAction(Object.assign({}, newsOnboardingDraft, {modelSelection:chatModelSelectionMetadata()}), '/api/onboarding/news'); renderChatThread(); return request; });
+    }
+  }
   function startMiaOnboardingChat(){
     return api('/api/onboarding/chat', {method:'POST', body:{}}).then(function(res){
       if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not start onboarding.');
       miaOnboardingChat = res.data;
-      if(res.data.phase === 'name'){
+      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1){
         loadChatRoom(res.data.conversationId, 'agent', 'Mia');
       } else if(chatWs.activeRoomId === res.data.conversationId){
         renderChatThread();
@@ -8619,9 +8687,10 @@
       return !item.system && !(item.nativeEvent && item.nativeEvent.metadata && item.nativeEvent.metadata.onboarding);
     });
     if(hasLaterTask) return '';
+    if(['topics','schedule'].indexOf(miaOnboardingChat.phase) !== -1) return newsOnboardingFormHtml() + '<div class="mia-news-actions">' + (miaOnboardingChat.phase === 'schedule' ? '<button class="mia-news-skip" data-mia-onboarding-choice="Change topics">Change topics</button>' : '') + '<button class="mia-news-skip" data-mia-onboarding-choice="Skip news briefing">Skip for now</button></div>';
     var choices = miaOnboardingChat.phase === 'name'
       ? (miaOnboardingChat.suggestedName ? ['Yes', 'Use another name', 'Skip for now'] : ['Skip for now'])
-      : ['Work on an idea', 'Help with a task', 'Show me around'];
+      : miaOnboardingChat.phase === 'news-created' ? ['Show my briefing'] : ['Work on an idea', 'Help with a task', 'Show me around'].concat(miaOnboardingChat.newsBotId ? [] : ['Set up my news briefing']);
     return '<div class="agent-setup-actions mia-onboarding-actions">' + choices.map(function(label){
       return '<button type="button" class="agent-setup-later" data-mia-onboarding-choice="' + esc(label) + '"' +
         (miaOnboardingSending ? ' disabled' : '') + '>' + esc(label) + '</button>';
@@ -8837,12 +8906,11 @@
 
   function selectAgentRoom(agent){
     if(agent.roomId || agent.nativeConversationId){
-      loadChatRoom(agent.roomId || agent.nativeConversationId, 'agent', agent.name);
-      return;
+      return loadChatRoom(agent.roomId || agent.nativeConversationId, 'agent', agent.name);
     }
     if(chatWs.configured === false) return;
     var isMia = agent.id === 'gateway';
-    api('/api/conversations', {method:'POST', body:{
+    return api('/api/conversations', {method:'POST', body:{
       type: isMia ? 'agent' : 'bot',
       name: agent.name,
       metadata: isMia
@@ -10249,6 +10317,7 @@
       else if(action === 'new-agent') openHarnessAgentSetup();
       else if(action === 'new-channel') openNewChannelFlow();
       else if(action === 'connected-apps') openPluginPane();
+      else if(action === 'automations') openAutomationsFromTools();
       else if(action === 'web-browser') openWebBrowserTool();
     });
     document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && menu.classList.contains('open')) closeMenu(); });
@@ -11772,6 +11841,28 @@
 
   var tour = {active: false, step: 0, startHash: null, pollTimer: null};
 
+  function startNewsAutomationGuide(){
+    return api('/api/bots').then(function(res){
+      if(res.status !== 200) throw new Error('Could not load your automations.');
+      syncChatBotRecords(res.data.bots || []);
+      var botId = miaOnboardingChat.newsBotId, automationId = miaOnboardingChat.newsAutomationId;
+      if(!automationRecordById(botId, automationId)) throw new Error('This briefing was removed. You can manage your other automations from Tools.');
+      if(tour.active) tourTeardown();
+      var row = '[data-bot-id="' + botId + '"][data-automation-id="' + automationId + '"]';
+      tour.steps = [
+        {target:'#chatSidebarToolsBtn', title:'Your tools live here', body:'Open Tools to find your automations.', advanceOnClick:true},
+        {target:'[data-tools-action="automations"]', title:'Open Automations', body:'This opens your scheduled tasks in the right panel.', advanceOnClick:true, prepare:function(){el('#chatToolsMenu').classList.add('open'); syncSidebarToolButtons();}},
+        {target:row, title:'Your news briefing', body:'Here is the briefing you just created. Open it to see its schedule and controls.', advanceOnClick:true, prepare:function(){el('#chatToolsMenu').classList.remove('open'); localStorage.setItem('styledInfoPaneOpen','1'); prepareChatUtilityPane('automations'); renderChatInfoPane();}},
+        {target:'.cip-editor-row-top', title:'Change or pause it anytime', body:'Change the schedule here. Turn Active off and save to pause your briefing.', prepare:function(){openAutomationDetail(botId, automationId);}},
+        {target:'#automationDetailDelete', title:'You’re in control', body:'Delete removes this automation after confirmation. You don’t need to delete it now—your briefing is ready.'}
+      ];
+      tour.onFinish = function(){sendMiaOnboardingAction({action:'finish-news'});};
+      tourStart();
+    }).catch(function(error){showToast(error.message);});
+  }
+
+  function currentTourSteps(){ return tour.steps || TOUR_STEPS; }
+
   function tourEl(tag, cls){
     var e = document.createElement(tag);
     e.className = cls;
@@ -11854,7 +11945,7 @@
 
     // Prefer below the target; flip above if there isn't room, and clamp
     // horizontally so the card never runs off either edge.
-    var popW = 300, popH = popover.offsetHeight || 150, gap = 14;
+    var popW = popover.offsetWidth || 320, popH = popover.offsetHeight || 150, gap = 14;
     var top = r.bottom + gap;
     if(top + popH > window.innerHeight - 12) top = Math.max(12, r.top - popH - gap);
     var left = Math.min(Math.max(12, r.left), window.innerWidth - popW - 12);
@@ -11863,34 +11954,45 @@
   }
 
   function tourRender(){
-    var step = TOUR_STEPS[tour.step];
+    var steps = currentTourSteps();
+    var step = steps[tour.step];
     el('#miaosTourTitle').textContent = step.title;
     el('#miaosTourBody').textContent = step.body;
-    el('#miaosTourCount').textContent = (tour.step + 1) + ' / ' + TOUR_STEPS.length;
+    el('#miaosTourCount').textContent = (tour.step + 1) + ' / ' + steps.length;
     el('#miaosTourBack').style.visibility = tour.step === 0 ? 'hidden' : 'visible';
-    el('#miaosTourNext').textContent = tour.step === TOUR_STEPS.length - 1 ? 'Done' : 'Next';
+    el('#miaosTourNext').textContent = tour.step === steps.length - 1 ? 'Done' : 'Next';
     el('#miaosTourPopover').classList.remove('on');
     tourWaitFor(step.target, function(target){
       tourPosition(target, step);
+      if(target && step.advanceOnClick){
+        var advance = function(){setTimeout(function(){if(tour.active) tourNext();}, 0);};
+        target.addEventListener('click', advance, {once:true});
+        tour.clearStepClick = function(){target.removeEventListener('click', advance);};
+      }
       requestAnimationFrame(function(){ el('#miaosTourPopover').classList.add('on'); });
     });
   }
 
   function tourShowStep(index){
-    tour.step = Math.max(0, Math.min(index, TOUR_STEPS.length - 1));
-    var step = TOUR_STEPS[tour.step];
+    if(tour.clearStepClick){tour.clearStepClick(); tour.clearStepClick = null;}
+    var steps = currentTourSteps();
+    tour.step = Math.max(0, Math.min(index, steps.length - 1));
+    var step = steps[tour.step];
     if(step.route) tourGoto(step.route);
+    if(step.prepare) step.prepare();
     tourRender();
   }
 
   function tourNext(){
-    if(tour.step >= TOUR_STEPS.length - 1){ tourFinish(); return; }
+    if(tour.step >= currentTourSteps().length - 1){ tourFinish(); return; }
     tourShowStep(tour.step + 1);
   }
   function tourBack(){ if(tour.step > 0) tourShowStep(tour.step - 1); }
 
   function tourTeardown(){
     tour.active = false;
+    if(tour.clearStepClick){tour.clearStepClick(); tour.clearStepClick = null;}
+    tour.steps = null;
     if(tour.pollTimer) clearTimeout(tour.pollTimer);
     var backdrop = el('#miaosTourBackdrop'), spotlight = el('#miaosTourSpotlight'), popover = el('#miaosTourPopover');
     if(backdrop) backdrop.classList.remove('on');
@@ -11908,7 +12010,12 @@
 
   function tourFinish(){
     localStorage.setItem(TOUR_LS_KEY, '1');
+    if(tour.releaseVersion && window.miaDesktop && window.miaDesktop.state){
+      window.miaDesktop.state.set('miaIntroVersion', tour.releaseVersion);
+      tour.releaseVersion = null;
+    }
     tourTeardown();
+    if(tour.onFinish){var finish = tour.onFinish; tour.onFinish = null; finish();}
   }
 
   function tourKeydown(e){
@@ -11917,12 +12024,37 @@
 
   function tourStart(){
     if(tour.active) return;
+    // Electron's native browser is above HTML overlays. Close its panel before
+    // showing coach marks; the saved tabs and authenticated session remain.
+    closeLocalBrowser();
+    closeChatThread();
+    closeChatTasksPanel();
     tour.active = true;
     tour.startHash = location.hash;
     tourBuildDom();
+    el('#miaosTourBackdrop').style.pointerEvents = tour.steps ? 'none' : '';
     el('#miaosTourBackdrop').classList.add('on');
     document.addEventListener('keydown', tourKeydown);
     tourShowStep(0);
+  }
+
+  function startUpdatedDesktopIntro(){
+    var desktop = window.miaDesktop;
+    if(!desktop || !desktop.version || !desktop.state) return false;
+    var version = desktop.version();
+    if(!version) return false;
+    var previous = desktop.state.get('miaIntroVersion');
+    // An installation predating version tracking may already have a completed
+    // tour or a restored browser. Treat it as an upgrade, not a new account.
+    var existingInstall = !!previous || !!localStorage.getItem(TOUR_LS_KEY) || shouldRestoreLocalBrowser();
+    if(previous !== version && existingInstall){
+      if(!previous) desktop.state.set('miaIntroVersion', 'legacy');
+      tour.releaseVersion = version;
+      tourStart();
+      return true;
+    }
+    if(!previous) desktop.state.set('miaIntroVersion', version);
+    return false;
   }
 
   // Only ever auto-fires once the app shell is actually visible (called

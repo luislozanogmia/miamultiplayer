@@ -156,7 +156,7 @@ function restrictHermesJob(jobId, bot) {
 
 // automation -> cron expression in the scheduler's (UTC) clock, or null when
 // the automation is off or malformed enough that it must not be scheduled.
-function automationToCronExpr(automation) {
+function automationToCronExpr(automation, schedulerUtcOffsetMinutes = 0) {
   if (!automation || automation.enabled !== true || automation.frequency === 'none') return null;
   if (automation.frequency === 'interval') {
     const intervalMinutes = Number(automation.intervalMinutes);
@@ -173,17 +173,20 @@ function automationToCronExpr(automation) {
   if (!isValidAutomationTime(time)) return null;
   const [hh, mm] = time.split(':').map((n) => Number(n));
   const localMinutes = hh * 60 + mm;
-  const utcMinutes = (((localMinutes + UTC_OFFSET_MIN) % 1440) + 1440) % 1440;
+  const offset = Number.isInteger(automation.utcOffsetMinutes) ? automation.utcOffsetMinutes - schedulerUtcOffsetMinutes : UTC_OFFSET_MIN;
+  const dayShift = Math.floor((localMinutes + offset) / 1440);
+  const utcMinutes = (((localMinutes + offset) % 1440) + 1440) % 1440;
   const hour = Math.floor(utcMinutes / 60);
   const minute = utcMinutes % 60;
   const day = String(automation.day || '').trim();
   switch (automation.frequency) {
     case 'daily':
+      if (automation.weekdaysOnly) return `${minute} ${hour} * * ${[1,2,3,4,5].map(day => (day + dayShift + 7) % 7).join(',')}`;
       return `${minute} ${hour} * * *`;
     case 'weekly': {
       const cronDay = WEEKDAY_TO_CRON[day.toLowerCase()];
       if (cronDay === undefined) return null;
-      return `${minute} ${hour} * * ${cronDay}`;
+      return `${minute} ${hour} * * ${automation.utcOffsetMinutes === undefined ? cronDay : (cronDay + dayShift + 7) % 7}`;
     }
     case 'monthly': {
       const dom = parseInt(day, 10);
@@ -394,9 +397,23 @@ function resolveOwnedAutomationJob(bot, automation, registry, existingJob, allow
   return job;
 }
 
+function schedulerUtcOffsetMinutes() {
+  return new Promise((resolve, reject) => {
+    const source = 'import sys; sys.path.insert(0, sys.argv[1]); from hermes_time import now; print(int(-now().utcoffset().total_seconds() / 60))';
+    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, HERMES_AGENT_ROOT],
+      {timeout:10000, env:hermesProcessEnv()}, (error, stdout) => {
+        const text = String(stdout || '').trim();
+        const offset = Number(text);
+        if(error || !text || !Number.isInteger(offset) || offset < -840 || offset > 720) return reject(new Error('Could not determine the scheduler time zone.'));
+        resolve(offset);
+      });
+  });
+}
+
 async function syncOneBotAutomation(bot, automation, registry, allowLegacy, existingJob) {
   const prompt = jobPromptFor(bot, automation);
-  const expr = prompt ? automationToCronExpr(automation) : null;
+  const schedulerOffset = prompt && automation.enabled && Number.isInteger(automation.utcOffsetMinutes) ? await schedulerUtcOffsetMinutes() : 0;
+  const expr = prompt ? automationToCronExpr(automation, schedulerOffset) : null;
   const name = jobNameFor(bot, automation);
   // Mia owns the conversation event store; external delivery targets are
   // intentionally not selected here. The native event sink will consume

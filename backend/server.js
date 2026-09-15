@@ -41,7 +41,7 @@ const cookieParser = require('cookie-parser');
 const { verifyToken: verifyClerkToken } = require('@clerk/backend');
 
 const db = require('./db');
-const { preferredName, openingMessage, nameAnswer } = require('./onboarding-chat');
+const { preferredName, openingMessage, nameAnswer, NEWS_INTRO, newsBriefing } = require('./onboarding-chat');
 const {
   buildContext,
   runInference,
@@ -2025,11 +2025,12 @@ app.post('/api/onboarding/chat', requireAuth, (req, res) => {
   }
   const published = [];
   const body = req.body || {};
+  if (body.action && onboardingNewsInFlight.has(owner)) return res.status(409).json({error:'Your briefing is still being created.'});
   const text = typeof body.text === 'string' ? body.text.trim() : '';
   const result = conn.transaction(() => {
     let state = onboardingState(owner);
     const explicitNameReply = /^(?:please )?(?:call me|my name is|i['’]d like(?: you to call me)?|i prefer)\s+/i.test(text);
-    if (state && state.phase === 'done' && !explicitNameReply) return { ...state, handled: false };
+    if (state && state.phase === 'done' && !explicitNameReply && body.action !== 'start-news') return { ...state, handled: false };
     let conversation = state && nativeConversationRepository.getConversation({
       companyId: principal.companyId, id: state.conversationId, includeDeleted: true,
     });
@@ -2061,7 +2062,31 @@ app.post('/api/onboarding/chat', requireAuth, (req, res) => {
       append(openingMessage(name));
     }
     let handled = false;
-    if (text) {
+    if (body.action === 'start-news' && state.phase === 'done' && !state.newsBotId) {
+      state.phase = 'topics';
+      append(NEWS_INTRO);
+      handled = true;
+    } else if (body.action === 'skip-news' && ['topics', 'schedule'].includes(state.phase)) {
+      state.phase = 'done';
+      append('No problem. What would you like a hand with today?');
+      handled = true;
+    } else if (body.action === 'edit-topics' && state.phase === 'schedule' && !state.newsBotId) {
+      state.phase = 'topics';
+      append(NEWS_INTRO);
+      handled = true;
+    } else if (body.action === 'topics' && ['topics', 'schedule'].includes(state.phase)) {
+      const topics = Array.isArray(body.topics) ? [...new Set(body.topics.map(value => String(value).trim()).filter(Boolean))] : [];
+      if (!topics.length || topics.length > 8 || topics.some(value => value.length > 120)) return { ...state, error: 'Choose up to eight topics, each under 120 characters.' };
+      state.topics = topics;
+      state.phase = 'schedule';
+      append(topics.join(', '), true);
+      append('When would you like your briefing? Choose a schedule, time, and time zone.');
+      handled = true;
+    } else if (body.action === 'finish-news' && state.phase === 'news-created') {
+      state.phase = 'done';
+      append('You’re all set. Find your briefing anytime under Tools → Automations. What would you like to work on now?');
+      handled = true;
+    } else if (text && (state.phase === 'name' || explicitNameReply)) {
       const answer = nameAnswer(text, state.suggestedName);
       handled = !answer.passthrough;
       if (handled) append(text, true);
@@ -2076,10 +2101,8 @@ app.post('/api/onboarding/chat', requireAuth, (req, res) => {
           }
           state.preferredName = answer.name;
         }
-        if (handled) state.phase = 'done';
-        if (handled) append(answer.name
-          ? `Nice to meet you, ${answer.name}. What would you like a hand with today?`
-          : 'What would you like a hand with today?');
+        if (handled) state.phase = 'topics';
+        if (handled) append((answer.name ? `Nice to meet you, ${answer.name}. ` : '') + NEWS_INTRO);
       }
     }
     db.setMeta(conn, onboardingKey(owner), JSON.stringify(state));
@@ -2088,6 +2111,59 @@ app.post('/api/onboarding/chat', requireAuth, (req, res) => {
   published.forEach((event) => nativeConversationRealtime.publish(event));
   if (published.length) bumpVersion();
   return res.json(result);
+});
+
+const onboardingNewsInFlight = new Set();
+app.post('/api/onboarding/news', requireAuth, async (req, res) => {
+  const principal = nativeConversationPrincipal(req.userEmail, 'solo');
+  const owner = principal.principalId;
+  if (onboardingNewsInFlight.has(owner)) return res.status(409).json({error: 'Your briefing is still being created.'});
+  onboardingNewsInFlight.add(owner);
+  let pendingRecord;
+  try {
+    let state = onboardingState(owner);
+    if (state && state.newsBotId && ['news-created', 'done'].includes(state.phase)) return res.json(state);
+    if (!state || state.phase !== 'schedule') return res.status(409).json({error: 'Choose your news topics first.'});
+    const automation = newsBriefing({...req.body, topics: state.topics});
+    const selection = await chatModelSelectionForUser(req.body.modelSelection, req.userEmail);
+    if (!selection || !selection.model) return res.status(409).json({error: 'Choose a connected model before creating your briefing.'});
+    if (!state.newsBotId && db.loadAll(conn, 'bots').length >= MAX_BOTS) return res.status(409).json({error: 'Bot limit reached.'});
+    state.newsBotId = state.newsBotId || `bot-${crypto.randomUUID()}`;
+    db.setMeta(conn, onboardingKey(owner), JSON.stringify(state));
+    const existing = db.loadAll(conn, 'bots').find(bot => bot.id === state.newsBotId);
+    const record = {...existing, id: state.newsBotId, name: 'News briefing', owner, workspaceId: 'solo',
+      instructions: 'Research reliable current news and produce concise briefings with source links.',
+      model: selection.model, modelProvider: selection.provider, avatarColor: '#60a5fa',
+      status: 'draft', replyAlways: false, createdAt: existing && existing.createdAt || new Date().toISOString(),
+      automations: [{...automation, deliveryConversationId: state.conversationId, deliveryCompanyId: principal.companyId}],
+    };
+    db.saveOne(conn, 'bots', record.id, record);
+    pendingRecord = record;
+    await ensureNativeBotConversation(record);
+    await cronSync.syncBotAutomation(record);
+    if (!record.hermesCronJobIds || !record.hermesCronJobIds[automation.id]) throw new Error('The scheduler did not confirm your briefing. Please retry.');
+    record.status = 'running';
+    const event = conn.transaction(() => {
+      db.saveOne(conn, 'bots', record.id, record);
+      state = {...state, phase: 'news-created', newsAutomationId: automation.id};
+      db.setMeta(conn, onboardingKey(owner), JSON.stringify(state));
+      return nativeConversationRepository.createEvent({companyId: principal.companyId, conversationId: state.conversationId,
+        senderId: 'gateway', senderType: 'agent', type: 'agent_message',
+        content: {text: 'Your news briefing is ready. Let me show you where to find it and how to change or stop it.'}, metadata: {onboarding: true}}).event;
+    })();
+    nativeConversationRealtime.publish(event);
+    bumpVersion();
+    return res.json(state);
+  } catch (error) {
+    if (pendingRecord) {
+      pendingRecord.status = 'draft';
+      pendingRecord.automations.forEach(automation => { automation.enabled = false; });
+      db.saveOne(conn, 'bots', pendingRecord.id, pendingRecord);
+      try { await cronSync.removeBotCron(pendingRecord); }
+      catch (_) { return res.status(503).json({error:'The scheduler could not finish or cancel setup. Open Automations to check the briefing before retrying.'}); }
+    }
+    return res.status(400).json({error: error.message || 'Could not create your briefing. Please retry.'});
+  } finally { onboardingNewsInFlight.delete(owner); }
 });
 
 // Polled by the frontend every few seconds to detect changes made by this
@@ -3907,6 +3983,8 @@ registerResource({
       if (typeof automation.enabled !== 'boolean') return 'automation.enabled must be a boolean';
       if (['none', 'interval', 'daily', 'weekly', 'monthly'].indexOf(automation.frequency) === -1) return 'automation.frequency is invalid';
       if (automation.enabled && automation.frequency === 'none') return 'enabled automation requires a frequency';
+      if (automation.utcOffsetMinutes !== undefined && (!Number.isInteger(automation.utcOffsetMinutes) || automation.utcOffsetMinutes < -840 || automation.utcOffsetMinutes > 720)) return 'automation time zone is invalid';
+      if (automation.weekdaysOnly !== undefined && typeof automation.weekdaysOnly !== 'boolean') return 'automation weekdaysOnly must be a boolean';
       if (automation.frequency === 'interval'
         && (!Number.isInteger(automation.intervalMinutes) || automation.intervalMinutes < 1 || automation.intervalMinutes > 1440
           || (automation.intervalMinutes > 60 && automation.intervalMinutes % 60 !== 0))) {

@@ -127,7 +127,16 @@ test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 test('every cron subprocess receives the strict Hermes environment allowlist', () => {
   const source = fs.readFileSync(new URL('./cron-sync.js', import.meta.url), 'utf8');
-  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 2);
+  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 3);
+});
+
+test('briefing schedules preserve selected UTC offset and weekday across midnight', () => {
+  const base = {enabled:true, frequency:'daily', weekdaysOnly:true, utcOffsetMinutes:360};
+  assert.equal(cronSync.automationToCronExpr({...base,time:'09:00'}), '0 15 * * 1,2,3,4,5');
+  assert.equal(cronSync.automationToCronExpr({...base,time:'23:30'}), '30 5 * * 2,3,4,5,6');
+  assert.equal(cronSync.automationToCronExpr({...base,time:'01:00',utcOffsetMinutes:-540}), '0 16 * * 0,1,2,3,4');
+  assert.equal(cronSync.automationToCronExpr({...base,frequency:'weekly',day:'Sunday',time:'23:30'}), '30 5 * * 1');
+  assert.equal(cronSync.automationToCronExpr({...base,time:'09:00'},360), '0 9 * * 1,2,3,4,5');
 });
 
 test('automationToCronExpr preserves daily, weekly, and monthly schedules in UTC', () => {

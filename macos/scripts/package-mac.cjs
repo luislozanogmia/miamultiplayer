@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
+const { createDmg, copyAppBundleForDmg } = require("./create-dmg.cjs");
 
 const MACOS_ROOT = path.resolve(__dirname, "..");
 const REPOSITORY_ROOT = path.resolve(MACOS_ROOT, "..");
@@ -64,14 +65,6 @@ function copyTrackedArea(area, stagingRoot) {
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(source, destination);
   }
-}
-
-function copyAppBundleForDmg(source, destination) {
-  // Electron frameworks rely on relative symlinks. Node's recursive copy can
-  // rewrite them as absolute source-tree paths, producing a non-portable DMG
-  // whose installed app fails code-sign verification. ditto preserves the
-  // bundle topology exactly as macOS expects.
-  run("ditto", [source, destination], { cwd: MACOS_ROOT });
 }
 
 function pathIsInside(root, candidate) {
@@ -623,12 +616,8 @@ async function buildInstaller() {
     assertNoPrivateContent(appPath);
     signMacApp(appPath, distribution);
 
-    const dmgRoot = path.join(temporaryRoot, "dmg");
-    fs.mkdirSync(dmgRoot);
-    copyAppBundleForDmg(appPath, path.join(dmgRoot, "Mia.app"));
-    fs.symlinkSync("/Applications", path.join(dmgRoot, "Applications"));
     const dmgPath = path.join(DIST_ROOT, `Mia-${VERSION}-arm64.dmg`);
-    run("hdiutil", ["create", "-volname", "Mia", "-srcfolder", dmgRoot, "-ov", "-format", "UDZO", dmgPath]);
+    createDmg(appPath, dmgPath);
     notarizeMacDmg(dmgPath, distribution);
     writeReleaseMetadata(dmgPath, manifest);
     process.stdout.write(`${dmgPath}\n`);

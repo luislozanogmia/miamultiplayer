@@ -34,4 +34,23 @@ function nameAnswer(text, suggestedName) {
   return { passthrough: true };
 }
 
-module.exports = { preferredName, openingMessage, nameAnswer };
+const NEWS_INTRO = 'Let’s start with what interests you. I can put together a regular news briefing on the topics you care about. What would you like to follow?';
+
+function newsBriefing(input) {
+  const topics = Array.isArray(input.topics) ? [...new Set(input.topics.map(value => String(value).trim()).filter(Boolean))] : [];
+  if (!topics.length || topics.length > 8 || topics.some(value => value.length > 120)) throw new Error('Choose up to eight topics, each under 120 characters.');
+  if (!['daily', 'weekdays', 'weekly'].includes(input.schedule)) throw new Error('Choose a schedule.');
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.time || '')) throw new Error('Choose a valid time.');
+  if (!Number.isInteger(input.utcOffsetMinutes) || input.utcOffsetMinutes < -840 || input.utcOffsetMinutes > 720) throw new Error('Choose a valid time zone.');
+  if (input.schedule === 'weekly' && !['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].includes(input.day)) throw new Error('Choose a weekday.');
+  return {
+    id: 'news-briefing', name: 'My news briefing', enabled: true,
+    frequency: input.schedule === 'weekly' ? 'weekly' : 'daily',
+    ...(input.schedule === 'weekdays' ? {weekdaysOnly: true} : {}),
+    ...(input.schedule === 'weekly' ? {day: input.day} : {}),
+    time: input.time, utcOffsetMinutes: input.utcOffsetMinutes,
+    prompt: 'Create today’s concise news briefing about: ' + topics.join('; ') + '. Search the web for current reporting. Include source links and publication dates, distinguish facts from opinion, and explain why each story matters. If reliable current sources are unavailable, say so; do not invent news. Return the briefing here. Do not create or change schedules.',
+  };
+}
+
+module.exports = { preferredName, openingMessage, nameAnswer, NEWS_INTRO, newsBriefing };

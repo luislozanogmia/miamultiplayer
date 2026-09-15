@@ -250,7 +250,7 @@ function runtimeLogPath(name) {
 
 function isAllowedRendererStateKey(key) {
   const normalized = String(key || "");
-  return normalized === "miaBrowserOpen" || /^miaChatActive:[^\r\n]{1,500}$/.test(normalized);
+  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || /^miaChatActive:[^\r\n]{1,500}$/.test(normalized);
 }
 
 function readRendererState() {
@@ -1624,6 +1624,10 @@ ipcMain.on("miaos-renderer-hydrated", (event) => {
   if (!isMainWindowSender(event)) return;
   desktopLog("renderer hydration received");
   repaintDevelopmentUi(mainWindow);
+});
+
+ipcMain.on("mia-version", (event) => {
+  event.returnValue = isMainWindowSender(event) ? app.getVersion() : null;
 });
 
 ipcMain.on("miaos-state-get", (event, key) => {
