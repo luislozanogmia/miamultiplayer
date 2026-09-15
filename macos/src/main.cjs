@@ -637,7 +637,10 @@ async function startLocalBackend(exactPort = null) {
   // the installer rebuilds native backend dependencies for Electron's ABI.
   const nodeExecutable = String(process.env.MIAOS_NODE_PATH || "").trim() || process.execPath;
   if (nodeExecutable === process.execPath) childEnvironment.ELECTRON_RUN_AS_NODE = "1";
-  const url = `http://127.0.0.1:${port}`;
+  // Clerk development sessions bootstrap their dev-browser token only on the
+  // localhost origin. Keep the backend loopback-bound, but expose the renderer
+  // through localhost so a genuinely fresh desktop profile can sign in.
+  const url = `http://localhost:${port}`;
   desktopLog(`starting backend ${nodeExecutable} on ${port} db=${databasePath}`);
   const child = spawn(nodeExecutable, [BACKEND_ENTRYPOINT], {
     cwd: BACKEND_ROOT,
@@ -886,7 +889,7 @@ async function resolveBackend() {
   }
 
   const configuredUrl = normalizeBaseUrl(
-    process.env.MIAOS_URL || `http://127.0.0.1:${PREFERRED_PORT}`,
+    process.env.MIAOS_URL || `http://localhost:${PREFERRED_PORT}`,
   );
   const configuredReady = await isMiaBackendReady(configuredUrl);
   desktopLog(`probe ${configuredUrl} ready=${configuredReady}`);

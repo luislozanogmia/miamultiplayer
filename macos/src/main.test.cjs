@@ -264,6 +264,8 @@ test("service controls stay detached and UI refresh bypasses the renderer cache"
 test("localhost frontend stays inside the native desktop host", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /preload: path\.join\(__dirname, "preload\.cjs"\)/);
+  assert.match(source, /const url = `http:\/\/localhost:\$\{port\}`/);
+  assert.match(source, /process\.env\.MIAOS_URL \|\| `http:\/\/localhost:\$\{PREFERRED_PORT\}`/);
   assert.match(source, /mainWindow\.loadURL\(`\$\{resolvedBackend\}\/\#\/chat`\)/);
   assert.match(source, /createBrowser\(\s*window/);
 });
