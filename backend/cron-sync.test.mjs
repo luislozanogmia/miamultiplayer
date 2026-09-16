@@ -202,7 +202,11 @@ test('jobPromptFor requires an explicit scheduled task instead of guessing from 
     intervalMinutes: 10,
     prompt: 'Run the reminder now.',
   };
-  assert.match(cronSync.jobPromptFor(enabledAgent(), explicit), /web_extract[\s\S]*Run the reminder now\.$/);
+  const prompt = cronSync.jobPromptFor(enabledAgent(), explicit);
+  assert.match(prompt, /specialized task bot inside Mia/);
+  assert.match(prompt, /authorized owner of this bot/);
+  assert.match(prompt, /Keep responses, reasoning, and tool use concise and tight/);
+  assert.match(prompt, /web_extract[\s\S]*Task:\nRun the reminder now\.$/);
 });
 
 test('a stale Hermes job id is replaced by a newly created job', async () => {

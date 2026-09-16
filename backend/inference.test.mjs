@@ -290,13 +290,64 @@ test('Mia tasks load the guarded app-owned bot creation skill', () => {
   assert.match(policy, /# Mia browser/);
 });
 
-test('full-mode bot workers get the local browser without hosted web credentials or bot creation', () => {
+test('full-mode bot workers get a compact local-browser boundary without the full Mia harness', () => {
   const policy = inference.appOwnedToolPolicy({ botWorker: true });
   assert.doesNotMatch(policy, /web_search|web_extract/);
-  // Bots drive the local browser under the same native-only boundary.
-  assert.match(policy, /ghost_instance_create/);
-  assert.match(policy, /# Mia browser/);
+  assert.match(policy, /browser\s+embedded in Mia/);
+  assert.match(policy, /ghost-cli/);
+  assert.match(policy, /Do not inspect Mia's source code, databases, logs/);
   assert.doesNotMatch(policy, /miaos-bot create/);
+  assert.doesNotMatch(policy, /# Mia browser/);
+});
+
+test('bot context is compact and makes its own automations authoritative', () => {
+  const prompt = inference.buildBotContext({
+    name: 'News briefing',
+    instructions: 'Research reliable current news and produce concise briefings with source links.',
+    automations: [
+      {name:'My news briefing', enabled:true, frequency:'daily', time:'09:00', prompt:'Create today’s concise news briefing about architecture in Mexico.'},
+      {name:'Weekly digest', enabled:false, frequency:'weekly', day:'Friday', time:'16:00', prompt:'Summarize the week.'},
+    ],
+  }, Array.from({length:20}, (_, index) => `turn ${index + 1}`), 'run it now', 'Google connection: available.', 'Luis');
+
+  assert.match(prompt, /You are News briefing, a specialized task bot inside Mia\./);
+  assert.match(prompt, /What you are:\nYou are a focused worker/);
+  assert.match(prompt, /Who Mia is:\nMia is the user’s primary private AI assistant/);
+  assert.match(prompt, /Who the user is:\nYou are working for Luis, the authorized user interacting with this bot/);
+  assert.match(prompt, /never infer a name from an email address/);
+  assert.match(prompt, /Capabilities: answer in chat/);
+  assert.match(prompt, /Keep responses, reasoning, and tool use concise and tight/);
+  assert.match(prompt, /“run it now”/);
+  assert.match(prompt, /My news briefing \(daily at 09:00\)/);
+  assert.match(prompt, /Task: Create today’s concise news briefing about architecture in Mexico\./);
+  assert.match(prompt, /Weekly digest \(paused\)/);
+  assert.match(prompt, /Current Mia context \(authoritative\):\nGoogle connection: available\./);
+  assert.doesNotMatch(prompt, /turn [1-8]\n/);
+  assert.match(prompt, /turn 9\n/);
+  assert.match(prompt, /Luis: run it now/);
+  assert.ok(prompt.length < 3800, `expected compact bot context, received ${prompt.length} characters`);
+});
+
+test('scheduled bot prompt states bot, Mia, owner, scope, and exact automation task', () => {
+  const prompt = inference.buildScheduledBotPrompt({
+    name: 'News briefing',
+    instructions: 'Research reliable current news and produce concise briefings with source links.',
+  }, {
+    name: 'My news briefing',
+    enabled: true,
+    frequency: 'daily',
+    time: '09:00',
+    prompt: 'Create today’s concise news briefing about architecture in Mexico.',
+  });
+
+  assert.match(prompt, /^You are News briefing, a specialized task bot inside Mia\./);
+  assert.match(prompt, /You are not Mia, a general assistant, or an administrator/);
+  assert.match(prompt, /Mia is the user’s primary private AI assistant and the coordinator/);
+  assert.match(prompt, /working for the authorized owner of this bot/);
+  assert.match(prompt, /never infer a name from an email address/);
+  assert.match(prompt, /Keep responses, reasoning, and tool use concise and tight/);
+  assert.match(prompt, /Automation:\nName: My news briefing\nSchedule: daily at 09:00/);
+  assert.match(prompt, /Task:\nCreate today’s concise news briefing about architecture in Mexico\.$/);
 });
 
 test('bot replies use a restricted session in the existing Hermes runtime', async () => {

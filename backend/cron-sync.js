@@ -30,7 +30,7 @@ const fs = require('fs');
 const path = require('path');
 const db = require('./db');
 const { requiredConfiguredExecutable, requiredConfiguredPath } = require('./runtime-paths');
-const { MIAOS_BOT_WEB_POLICY, hermesProcessEnv } = require('./inference');
+const { buildScheduledBotPrompt, hermesProcessEnv } = require('./inference');
 const {
   SAFE_DERIVATIVE_PREVIEW_MIME_TYPES,
   validatedArtifactFile,
@@ -287,8 +287,7 @@ function jobOwnedByAutomation(job, bot, automation, allowLegacy = false) {
 // and scheduled tasks are separate product concepts; a missing explicit task
 // therefore makes the automation unrunnable until its prompt is supplied.
 function jobPromptFor(bot, automation) {
-  const automationPrompt = String(automation && automation.prompt || '').trim();
-  return automationPrompt ? `${MIAOS_BOT_WEB_POLICY}\n\n${automationPrompt}` : null;
+  return buildScheduledBotPrompt(bot, automation);
 }
 
 function jobModelFor(bot) {

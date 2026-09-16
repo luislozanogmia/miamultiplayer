@@ -44,6 +44,7 @@ const db = require('./db');
 const { preferredName, openingMessage, nameAnswer, NEWS_INTRO, newsBriefing } = require('./onboarding-chat');
 const {
   buildContext,
+  buildBotContext,
   runInference,
   runInferenceViaHermesGateway,
   steerHermesGatewaySession,
@@ -4338,6 +4339,14 @@ function senderDisplayName(sender) {
   return local.length <= 3 ? local.toUpperCase() : local.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function confirmedSenderDisplayName(sender) {
+  const raw = String(sender || '');
+  if (!raw.includes('@')) return raw;
+  const email = raw.toLowerCase();
+  const user = db.listUsers(conn).find((candidate) => candidate.email.toLowerCase() === email);
+  return user && user.displayName ? String(user.displayName).trim() : '';
+}
+
 
 function buildPlatformContext(includeAgentCreationGuidance, ownerEmail, companyId = NATIVE_COMPANY_ID) {
   const today = new Date().toISOString().slice(0, 10);
@@ -4660,12 +4669,12 @@ async function createNativeBotFromMiaRequest(companyId, ownerEmail, message, mod
 // Keep the prompt builder explicit so the same authenticated-owner Google
 // context and write capability are carried into that durable Hermes call.
 function buildHermesTaskPrompt(agentForPrompt, transcript, message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite) {
-  const basePrompt = buildContext(
+  const basePrompt = buildBotContext(
     agentForPrompt,
     transcript,
     message,
     workspaceContext,
-    senderLabel ? senderDisplayName(senderLabel) : ''
+    senderLabel ? confirmedSenderDisplayName(senderLabel) : ''
   );
   const actionInstruction = allowGoogleWorkspaceWrite
     && /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''))
@@ -5439,7 +5448,7 @@ async function runNativeConversationAgentReply(dispatch, signal) {
     const prompt = buildHermesTaskPrompt(
       agent,
       transcript,
-      `Mia assigned this request to you. Complete the work and return the concrete result in the thread. Original request: ${message}`,
+      message,
       senderLabel,
       platformContext,
       safeGoogleRefs,
