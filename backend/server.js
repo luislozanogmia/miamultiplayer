@@ -72,7 +72,9 @@ const {
 } = require('./inference');
 const {
   listHermesCredentialProviders,
+  readProviderRootCredentials,
   removeProviderProfileCredentials,
+  removeProviderRootCredentials,
   resetHermesHome,
 } = require('./hermes-home-reset');
 const {
@@ -2763,32 +2765,77 @@ async function provisionManagedRouterKey(email, clerkToken) {
   }
 }
 
+// Ask OpenRouter whether a stored key is still live (GET /key is metadata
+// only — no spend). Transient failures count as live: rotating a working key
+// over a network blip would be worse than retrying on the next sign-in.
+async function openRouterKeyIsLive(key) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/key', {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: controller.signal,
+    });
+    if (response.status === 401 || response.status === 403) return false;
+    if (response.ok) {
+      const body = await response.json().catch(() => null);
+      if (body?.data?.disabled === true) return false;
+    }
+    return true;
+  } catch (_) {
+    return true;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Make `key` the ONLY managed-router credential everywhere. The gateway must
+// be down while auth stores change: a running gateway flushes its in-memory
+// pool on shutdown, resurrecting exactly the dead keys being removed.
+async function installManagedRouterKey(key) {
+  try { await stopHermesGatewayRuntime(); } catch (_) { /* not running */ }
+  removeProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
+  removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
+  await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
+  try { await startHermesGatewayRuntime(); } catch (_) { /* best effort */ }
+}
+
 async function autoProvisionManagedRouter(email, clerkToken, { force = false } = {}) {
   if (managedRouterProvisionedEmails.has(email)) return;
-  // A mint rotates the user's key (the endpoint cannot re-read an existing
-  // key's secret), so never mint when Hermes already holds working
-  // credentials — otherwise every sign-in would churn the key. The explicit
-  // admin re-provision passes force to rotate on purpose.
-  if (!force) {
-    try {
-      const connections = await hermesConnectionStatuses();
-      if (connections && connections[MANAGED_ROUTER_HERMES_PROVIDER] === true) {
+  try {
+    // A mint rotates the user's key server-side (the endpoint cannot re-read
+    // an existing key's secret), so never mint while a stored key still
+    // works. The check is against the auth-store FILE, validated against
+    // OpenRouter — never a gateway probe, which fails during boot and must
+    // not be mistaken for "no key". Admin re-provision forces a rotation.
+    if (!force) {
+      const stored = readProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
+      let live = null;
+      for (const candidate of stored.slice().reverse()) {
+        if (await openRouterKeyIsLive(candidate)) { live = candidate; break; }
+      }
+      if (live) {
+        // Prune to exactly the live key when dead siblings are in any pool —
+        // auxiliary clients pick pool entries blindly and 401 on dead ones.
+        if (stored.length > 1) {
+          await installManagedRouterKey(live);
+          console.log('[managed-router] pruned dead credentials for', email);
+        }
         managedRouterProvisionedEmails.add(email);
+        hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
+        hermesDisconnectedProviders.delete('managed-router');
         return;
       }
-    } catch (_) { /* status probe failed; fall through and provision */ }
-  }
-  const token = clerkToken || freshManagedRouterToken(email);
-  if (!token) {
-    console.log('[managed-router] no fresh Clerk token for', email, '- will provision on next sign-in');
-    return;
-  }
-  try {
+      if (stored.length) console.log('[managed-router] stored key is dead for', email, '- re-provisioning');
+    }
+    const token = clerkToken || freshManagedRouterToken(email);
+    if (!token) {
+      console.log('[managed-router] no fresh Clerk token for', email, '- will provision on next sign-in');
+      return;
+    }
     const key = await provisionManagedRouterKey(email, token);
     if (!key) return;
-    await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
-    removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
-    try { await restartHermesGatewayRuntime(); } catch (_) { /* best effort */ }
+    await installManagedRouterKey(key);
     managedRouterProvisionedEmails.add(email);
     managedRouterClerkTokens.delete(email);
     hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
@@ -3264,6 +3311,15 @@ function inferenceOptionsForUser(email, baseOptions) {
   if (provider && preference.model) {
     options.model = preference.model;
     if (preference.fast) options.fast = true;
+  } else if (provider && !options.model) {
+    // A provider without a model is never applied downstream (the gateway
+    // client only pins provider alongside an explicit model), which would
+    // silently hand the turn to whatever the Hermes profile defaults to.
+    // Resolve the user's first visible model instead — for a managed router
+    // that is the allowlisted model.
+    const visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
+    const entry = visible[provider] || Object.values(visible)[0];
+    if (entry && entry.models.length) options.model = entry.models[0];
   }
   return Object.keys(options).length ? options : undefined;
 }
@@ -5554,8 +5610,18 @@ async function runNativeConversationAgentReply(dispatch, signal) {
     && googleWorkspaceConnected;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
+  // Without an explicit model the gateway session would fall back to profile
+  // defaults, so hydrate the inventory when the composer sent no selection
+  // and the cache cannot resolve one (e.g. right after a gateway restart).
+  let userOptions = inferenceOptionsForUser(trigger.senderId);
+  if (!chatModelSelection && userOptions && userOptions.provider && !userOptions.model) {
+    try {
+      rememberNativeChatModelInventory(await getHermesGatewayModelOptions({ refresh: true }));
+      userOptions = inferenceOptionsForUser(trigger.senderId);
+    } catch (_) { /* inventory unavailable; dispatch surfaces the real error */ }
+  }
   const inferenceOptions = {
-    ...inferenceOptionsForUser(trigger.senderId),
+    ...userOptions,
     ...(chatModelSelection ? {
       provider: chatModelSelection.provider,
       model: chatModelSelection.model,
@@ -6270,9 +6336,15 @@ function onBackendListening() {
   // diagnostics from it so verbose mode survives restarts and reinstalls.
   applyChatOutputSetting(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput);
   migrateWorkspaceOwnership();
-  // No managed-router provisioning at boot: minting is authorized only by a
-  // fresh Clerk session token, which exists at sign-in, not at startup. A
-  // user whose key is missing gets it on their next Clerk sign-in.
+  // Reconcile managed-router credentials at boot: validates the stored key
+  // and prunes dead siblings from the auth stores. This path never mints —
+  // minting is authorized only by a fresh Clerk session token, which exists
+  // at sign-in, not at startup; a user whose key is missing or dead gets a
+  // new one on their next Clerk sign-in.
+  if (MANAGED_ROUTER_URL) {
+    const linked = clerkAccountProfile();
+    if (linked && linked.email) void autoProvisionManagedRouter(linked.email);
+  }
   reconcileNativeMiaConversations();
   recoverNativeConversationDispatches();
   reconcileNativeBotConversations()

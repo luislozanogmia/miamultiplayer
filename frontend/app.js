@@ -11772,7 +11772,9 @@
 
     function load(options){
       options = options || {};
-      if(picker.loading || (picker.loaded && !picker.error && options.refresh !== true)) return Promise.resolve();
+      // An empty inventory is never a cacheable success: it usually means the
+      // fetch raced the gateway boot, so reopening the picker must retry.
+      if(picker.loading || (picker.loaded && !picker.error && picker.providers.length && options.refresh !== true)) return Promise.resolve();
       picker.loading = true;
       picker.error = '';
       render();
