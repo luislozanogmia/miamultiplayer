@@ -1,0 +1,44 @@
+{
+  "name": "mia-multiplayer-macos",
+  "version": "0.2.8",
+  "private": true,
+  "productName": "Mia",
+  "author": "Mia Multiplayer Contributors",
+  "description": "Mia desktop app for Mia Multiplayer.",
+  "homepage": "https://miamultiplayer.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luislozanogmia/mia_multiplayer.git"
+  },
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build:linux-icon": "node scripts/build-linux-icon.cjs",
+    "package:linux": "node scripts/package-linux.cjs",
+    "package:mac": "node scripts/package-mac.cjs",
+    "package:win": "node scripts/package-win.cjs"
+  },
+  "build": {
+    "appId": "com.miamultiplayer.mia",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/mia.icns"
+    },
+    "files": [
+      "src/**/*",
+      "assets/mia-512.png",
+      "assets/mia-512-linux.png",
+      "assets/mia.icns",
+      "package.json"
+    ]
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@electron/rebuild": "^4.2.0",
+    "electron": "44.2.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

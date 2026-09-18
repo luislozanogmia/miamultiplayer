@@ -1,0 +1,40 @@
+node_modules/
+.env
+*.db
+*.sqlite
+.cookies.jar
+.DS_Store
+.claude/
+__pycache__/
+*.pyc
+
+# macOS/Electron build output and signing material
+macos/dist/
+macos/out/
+macos/.electron-gyp/
+*.app/
+*.dmg
+*.pkg
+*.p12
+*.provisionprofile
+
+# node_modules symlinks
+node_modules
+
+# Backend runtime state
+backend/bot-artifacts/
+backend/hermes/
+
+# Browser verification captures
+.playwright-cli/
+
+# Linux distribution artifacts
+linux/distro/
+
+# Internal docs (live in private repo)
+docs/
+AGENTS.md
+engineering.md
+user_syntehtic_testing.md
+modules/*/SKILL.md
+ops/

@@ -1,0 +1,13 @@
+diff --git a/scripts/install.sh b/scripts/install.sh
+index c333a25..ead0c0e 100755
+--- a/scripts/install.sh
++++ b/scripts/install.sh
+@@ -1868,7 +1868,7 @@ install_deps() {
+                 else
+                     log_info "sudo is needed ONLY to install build tools (build-essential, python3-dev, libffi-dev) via apt."
+                     log_info "Hermes Agent itself does not require or retain root access."
+-                    if prompt_yes_no "Install build tools?" "yes"; then
++                    if prompt_yes_no "Install build tools?" "no"; then
+                         sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y -qq build-essential python3-dev libffi-dev >/dev/null 2>&1 || true
+                         log_success "Build tools installed"
+                     fi

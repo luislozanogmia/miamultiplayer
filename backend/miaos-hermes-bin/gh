@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo "Mia provider isolation: ambient GitHub CLI credentials are unavailable to Hermes." >&2
+exit 1

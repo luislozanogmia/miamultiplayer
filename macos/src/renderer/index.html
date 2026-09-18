@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/png" href="../../assets/mia-512.png" />
+  <title>Mia Desktop</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f5f6f8;
+        color: #17202a;
+      }
+
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-items: center;
+      }
+
+      main {
+        width: min(520px, calc(100% - 48px));
+        padding: 36px;
+        border: 1px solid #dfe3e8;
+        border-radius: 16px;
+        background: #ffffff;
+        box-shadow: 0 16px 40px rgb(23 32 42 / 8%);
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 26px;
+        line-height: 1.2;
+      }
+
+      p {
+        margin: 0;
+        color: #5d6875;
+        line-height: 1.55;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: #eef1f4;
+        font-size: 0.92em;
+      }
+
+      button {
+        margin-top: 24px;
+        padding: 10px 14px;
+        border: 0;
+        border-radius: 8px;
+        background: #17191c;
+        color: #ffffff;
+        cursor: pointer;
+        font: inherit;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Mia Desktop</h1>
+      <p>
+        The desktop shell is ready, but the local Mia server is not
+        reachable yet. Start the server and try again.
+      </p>
+      <button id="retry" type="button">Retry connection</button>
+    </main>
+    <script>
+      const retry = document.getElementById("retry");
+      if (window.miaDesktop) window.miaDesktop.ready();
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        retry.textContent = "Connecting…";
+        try {
+          if (window.miaDesktop) await window.miaDesktop.retryConnection();
+        } finally {
+          retry.disabled = false;
+          retry.textContent = "Retry connection";
+        }
+      });
+    </script>
+  </body>
+</html>
