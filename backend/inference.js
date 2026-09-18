@@ -288,12 +288,6 @@ const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
   ]),
 });
 
-// Mia Router is the product-facing provider name for alpha testers. Under the
-// hood it routes through OpenRouter using per-user pilot keys provisioned by
-// the mia-mint-pilot-key Lambda. The Hermes provider id is 'openrouter'; this
-// constant maps the product name to the runtime id.
-const MIA_ROUTER_HERMES_PROVIDER = 'openrouter';
-
 const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
   'openai-codex': Object.freeze([
     'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
@@ -773,7 +767,6 @@ module.exports = {
   MIA_OPENAI_MODEL,
   HERMES_SUBSCRIPTION_MODEL_OPTIONS,
   HERMES_ALLOWED_MODELS_BY_PROVIDER,
-  MIA_ROUTER_HERMES_PROVIDER,
   normalizeHermesModelSelection,
   isAllowedHermesModel,
   hermesProcessEnv,

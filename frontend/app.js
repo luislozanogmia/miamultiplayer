@@ -984,7 +984,6 @@
   // dropdown is populated from the provider catalog exposed by Hermes, with
   // this local catalog as a safe first-paint fallback.
   var harnessApiProviderCatalog = [
-    {id:'mia-router', label:'Mia Router'},
     {id:'openai-api', label:'OpenAI'},
     {id:'xai', label:'xAI'},
     {id:'anthropic', label:'Anthropic'},
@@ -1583,7 +1582,6 @@
   }
 
   function selectedHarnessProvider(){
-    if(harnessOnboardingState.provider === 'mia-router') return 'openrouter';
     return harnessOnboardingState.provider === 'openai-api'
       ? (harnessOnboardingState.apiProvider || 'openai-api')
       : harnessOnboardingState.provider;
@@ -1652,16 +1650,10 @@
     });
   }
 
-  var miaRouterAvailable = false;
   function loadHarnessConnectionStatus(){
     harnessConnectionValidationPending = true;
     renderHarnessOnboarding();
-    Promise.all([
-      api('/api/settings/harness/auth/status'),
-      api('/api/settings/mia-router/status')
-    ]).then(function(results){
-      var res = results[0];
-      var routerRes = results[1];
+    api('/api/settings/harness/auth/status').then(function(res){
       var connections = res.data && res.data.connections;
       var runtimes = res.data && res.data.runtimes;
       if(connections && typeof connections === 'object'){
@@ -1669,10 +1661,6 @@
           harnessConnectionState[provider] = connections[provider] === true;
         });
       }
-      miaRouterAvailable = !!(routerRes.data && routerRes.data.available);
-      if(routerRes.data && routerRes.data.provisioned) harnessConnectionState['openrouter'] = true;
-      var miaRouterCard = el('[data-harness-provider="mia-router"]');
-      if(miaRouterCard) miaRouterCard.closest('.styled-onboarding-provider-row').hidden = !miaRouterAvailable;
       harnessConnectionValidationPending = false;
       renderHarnessConnectionInventory(connections, runtimes);
       renderHarnessConnectionActions();
@@ -1692,13 +1680,12 @@
   function renderHarnessOnboarding(){
     var continueBtn = el('#harnessOnboardingContinue');
     var apiKey = el('#harnessApiKey');
-    var isMiaRouter = harnessOnboardingState.provider === 'mia-router';
     var selectedApiProvider = harnessOnboardingState.apiProvider || 'openai-api';
     var selectedProvider = harnessOnboardingState.provider === 'openai-api'
       ? selectedApiProvider
       : harnessOnboardingState.provider;
-    var selectedProviderConnected = harnessConnectionState[selectedProvider] === true || (isMiaRouter && harnessConnectionState['openrouter'] === true);
-    var apiReady = isMiaRouter || harnessOnboardingState.provider !== 'openai-api' || !!(apiKey && apiKey.value.trim()) || harnessConnectionState[selectedApiProvider] === true;
+    var selectedProviderConnected = harnessConnectionState[selectedProvider] === true;
+    var apiReady = harnessOnboardingState.provider !== 'openai-api' || !!(apiKey && apiKey.value.trim()) || harnessConnectionState[selectedApiProvider] === true;
     var busy = harnessConnectionValidationPending || !!harnessConnectionPending || harnessAuthSaveInProgress || harnessAuthAwaitingSave;
     if(continueBtn){
       continueBtn.disabled = busy || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
@@ -1719,11 +1706,11 @@
     var sharedBots = el('#harnessSharedBotsSection');
     if(sharedBots) sharedBots.hidden = harnessOnboardingState.mode !== 'multiplayer';
     var apiSection = el('#harnessApiConnectionSection');
-    if(apiSection) apiSection.hidden = isMiaRouter || harnessOnboardingState.provider !== 'openai-api';
+    if(apiSection) apiSection.hidden = harnessOnboardingState.provider !== 'openai-api';
     var apiCard = el('#harnessApiCard');
-    if(apiCard) apiCard.classList.toggle('is-expanded', !isMiaRouter && harnessOnboardingState.provider === 'openai-api');
+    if(apiCard) apiCard.classList.toggle('is-expanded', harnessOnboardingState.provider === 'openai-api');
     var apiCredentialNote = el('#harnessApiCredentialNote');
-    if(apiCredentialNote) apiCredentialNote.hidden = isMiaRouter || harnessOnboardingState.provider !== 'openai-api';
+    if(apiCredentialNote) apiCredentialNote.hidden = harnessOnboardingState.provider !== 'openai-api';
     var apiProvider = el('#harnessApiProvider');
     populateHarnessApiProviderOptions();
     if(apiProvider) apiProvider.value = harnessOnboardingState.apiProvider || 'openai-api';
@@ -1748,7 +1735,7 @@
     if(onboardingSheet) onboardingSheet.classList.add('open');
     var hasSavedMode = existing && typeof existing.mode === 'string';
     existing = normalizeHarnessSettings(existing || harnessSettingsCache);
-    harnessOnboardingState.provider = (existing.provider === 'openai-api' && existing.apiProvider === 'openrouter') ? 'mia-router' : (existing.provider || null);
+    harnessOnboardingState.provider = existing.provider || null;
     var modelSelection = normalizeHarnessModel(harnessOnboardingState.provider, existing.model, existing.fast);
     harnessOnboardingState.model = modelSelection.model;
     harnessOnboardingState.fast = modelSelection.fast;
