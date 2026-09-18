@@ -111,10 +111,9 @@ function googleWorkspaceMcpConfig() {
 function runtimeProfileConfig({ toolsets, maxTurns, terminal, googleWorkspace = false }) {
   const lines = [
     MANAGED_MARKER,
-    'model:',
-    '  default: deepseek-v4-flash',
-    '  provider: deepseek',
-    '  base_url: https://api.deepseek.com/v1',
+    // No model block on purpose: every dispatch pins the user's connected
+    // provider and model explicitly. A profile-level default would silently
+    // route model-less dispatches to a provider the user never connected.
     'toolsets:',
     ...toolsets.map((name) => `  - ${name}`),
     'agent:',

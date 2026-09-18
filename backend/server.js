@@ -53,6 +53,7 @@ const {
   closeHermesGatewayRuntime,
   HERMES_SUBSCRIPTION_MODEL_OPTIONS,
   HERMES_ALLOWED_MODELS_BY_PROVIDER,
+  MANAGED_ROUTER_HERMES_PROVIDER,
   normalizeHermesModelSelection,
   isAllowedHermesModel,
   loadMiaGhostSkill,
@@ -71,7 +72,9 @@ const {
 } = require('./inference');
 const {
   listHermesCredentialProviders,
+  readProviderRootCredentials,
   removeProviderProfileCredentials,
+  removeProviderRootCredentials,
   resetHermesHome,
 } = require('./hermes-home-reset');
 const {
@@ -1361,6 +1364,14 @@ app.post('/api/clerk/session', async (req, res) => {
     maxAge: SESSION_TTL_MS,
     path: '/',
   });
+  // Auto-provision a managed-router key in the background on first sign-in,
+  // authorized by the user's own verified Clerk token. This runs after the
+  // response so the user sees the app immediately.
+  if (MANAGED_ROUTER_URL) {
+    rememberManagedRouterToken(primaryEmail, match[1]);
+    void autoProvisionManagedRouter(primaryEmail, match[1]);
+  }
+
   return res.status(200).json({ ok: true, email: primaryEmail });
 });
 
@@ -1499,6 +1510,9 @@ app.get('/api/instance', (req, res) => {
       publishableKey: CLERK_PUBLISHABLE_KEY,
       frontendApi: CLERK_ISSUER,
     } : null,
+    // Present only when this deployment offers a managed router; the label is
+    // deployment branding for the onboarding card.
+    managedRouter: MANAGED_ROUTER_URL ? { label: MANAGED_ROUTER_LABEL } : null,
   });
 });
 
@@ -2579,7 +2593,14 @@ function getApiKey() {
   return runtimeApiKey || process.env.ANTHROPIC_API_KEY || '';
 }
 
-const HERMES_ONBOARDING_PROVIDERS = new Set(['openai-codex', 'xai-oauth', 'openai-api']);
+// A hosted deployment can offer a "managed router": a pre-provisioned
+// OpenRouter-backed provider whose key is minted per user (see the
+// managed-router auto-provision section below). Both vars are deployment
+// branding/config, never secrets.
+const MANAGED_ROUTER_URL = String(process.env.MIAOS_MANAGED_ROUTER_URL || '').trim();
+const MANAGED_ROUTER_LABEL = String(process.env.MIAOS_MANAGED_ROUTER_LABEL || '').trim() || 'Managed Router';
+
+const HERMES_ONBOARDING_PROVIDERS = new Set(['managed-router', 'openai-codex', 'xai-oauth', 'openai-api']);
 const HERMES_ONBOARDING_MODES = new Set(['solo', 'multiplayer']);
 
 // This is the API-key slice of Hermes' provider catalog. Subscription and
@@ -2588,6 +2609,7 @@ const HERMES_ONBOARDING_MODES = new Set(['solo', 'multiplayer']);
 // cannot be represented by a pasted API key. Keep these ids canonical for
 // `hermes auth add`, `hermes auth status`, and Hermes session providers.
 const HERMES_API_PROVIDER_CATALOG = Object.freeze([
+  { id: 'managed-router', label: MANAGED_ROUTER_LABEL },
   { id: 'openai-api', label: 'OpenAI' },
   { id: 'xai', label: 'xAI' },
   { id: 'anthropic', label: 'Anthropic' },
@@ -2595,7 +2617,7 @@ const HERMES_API_PROVIDER_CATALOG = Object.freeze([
   { id: 'deepseek', label: 'DeepSeek' },
   { id: 'alibaba', label: 'Qwen Cloud' },
   { id: 'alibaba-coding-plan', label: 'Alibaba Cloud (Coding Plan)' },
-  { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'openrouter', label: MANAGED_ROUTER_URL ? MANAGED_ROUTER_LABEL : 'OpenRouter' },
   { id: 'fireworks', label: 'Fireworks AI' },
   { id: 'novita', label: 'NovitaAI' },
   { id: 'lmstudio', label: 'LM Studio' },
@@ -2630,6 +2652,9 @@ function normalizeHermesApiProvider(value) {
   const input = String(value || '').trim().toLowerCase();
   // Older Mia settings used `openai`; accept it on read and migrate it to
   // Hermes' canonical `openai-api` id when the preference is next saved.
+  // managed-router is the product-facing name that maps to openrouter at
+  // runtime (mia-router is its pre-rename spelling, accepted on read).
+  if (input === 'managed-router' || input === 'mia-router') return 'openrouter';
   const provider = input === 'openai' ? 'openai-api' : input;
   return HERMES_API_KEY_PROVIDERS.has(provider) ? provider : null;
 }
@@ -2673,6 +2698,153 @@ const HERMES_CLI_PROVIDER_BY_ONBOARDING_PROVIDER = Object.freeze({
   'openai-api': 'openai-api',
   xai: 'xai',
 });
+
+// ---------- Managed-router auto-provision ----------
+// A hosted deployment can point MIAOS_MANAGED_ROUTER_URL at an endpoint that
+// mints a per-user router key. The only authorization the backend presents is
+// the user's own verified Clerk session token — the endpoint verifies it
+// again server-side and having an account IS the authorization; there is no
+// static provisioning secret and no manual fallback. The minted key is
+// injected into Hermes automatically; the user never sees or handles it.
+const MANAGED_ROUTER_TIMEOUT_MS = 15000;
+
+// In-memory set of emails that have already been provisioned in this backend
+// lifetime. Avoids redundant mint calls on every Clerk token refresh.
+const managedRouterProvisionedEmails = new Set();
+
+// Clerk session tokens are short-lived (~60s). Cache the newest one per email
+// at sign-in so provisioning triggered shortly afterwards (onboarding choice,
+// admin re-provision) can still authenticate; anything later waits for the
+// next sign-in.
+const managedRouterClerkTokens = new Map();
+
+function rememberManagedRouterToken(email, clerkToken) {
+  if (!MANAGED_ROUTER_URL || !email || !clerkToken) return;
+  managedRouterClerkTokens.set(email, { token: clerkToken, storedAt: Date.now() });
+}
+
+function freshManagedRouterToken(email) {
+  const entry = managedRouterClerkTokens.get(email);
+  if (!entry) return null;
+  // Conservative: treat anything older than 45s as expired.
+  if (Date.now() - entry.storedAt > 45000) {
+    managedRouterClerkTokens.delete(email);
+    return null;
+  }
+  return entry.token;
+}
+
+async function provisionManagedRouterKey(email, clerkToken) {
+  if (!MANAGED_ROUTER_URL || !clerkToken) return null;
+  if (managedRouterProvisionedEmails.has(email)) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MANAGED_ROUTER_TIMEOUT_MS);
+  try {
+    const response = await fetch(MANAGED_ROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${clerkToken}`,
+      },
+      body: JSON.stringify({ action: 'provision' }),
+      signal: controller.signal,
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result?.key) {
+      console.warn('[managed-router] provision failed for', email, result?.error || response.status);
+      return null;
+    }
+    console.log('[managed-router] provisioned key for', email);
+    return result.key;
+  } catch (error) {
+    console.warn('[managed-router] provision error for', email, error.message);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Ask OpenRouter whether a stored key is still live (GET /key is metadata
+// only — no spend). Transient failures count as live: rotating a working key
+// over a network blip would be worse than retrying on the next sign-in.
+async function openRouterKeyIsLive(key) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/key', {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: controller.signal,
+    });
+    if (response.status === 401 || response.status === 403) return false;
+    if (response.ok) {
+      const body = await response.json().catch(() => null);
+      if (body?.data?.disabled === true) return false;
+    }
+    return true;
+  } catch (_) {
+    return true;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Make `key` the ONLY managed-router credential everywhere. The gateway must
+// be down while auth stores change: a running gateway flushes its in-memory
+// pool on shutdown, resurrecting exactly the dead keys being removed.
+async function installManagedRouterKey(key) {
+  try { await stopHermesGatewayRuntime(); } catch (_) { /* not running */ }
+  removeProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
+  removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
+  await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
+  try { await startHermesGatewayRuntime(); } catch (_) { /* best effort */ }
+}
+
+async function autoProvisionManagedRouter(email, clerkToken, { force = false } = {}) {
+  if (managedRouterProvisionedEmails.has(email)) return;
+  try {
+    // A mint rotates the user's key server-side (the endpoint cannot re-read
+    // an existing key's secret), so never mint while a stored key still
+    // works. The check is against the auth-store FILE, validated against
+    // OpenRouter — never a gateway probe, which fails during boot and must
+    // not be mistaken for "no key". Admin re-provision forces a rotation.
+    if (!force) {
+      const stored = readProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
+      let live = null;
+      for (const candidate of stored.slice().reverse()) {
+        if (await openRouterKeyIsLive(candidate)) { live = candidate; break; }
+      }
+      if (live) {
+        // Prune to exactly the live key when dead siblings are in any pool —
+        // auxiliary clients pick pool entries blindly and 401 on dead ones.
+        if (stored.length > 1) {
+          await installManagedRouterKey(live);
+          console.log('[managed-router] pruned dead credentials for', email);
+        }
+        managedRouterProvisionedEmails.add(email);
+        hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
+        hermesDisconnectedProviders.delete('managed-router');
+        return;
+      }
+      if (stored.length) console.log('[managed-router] stored key is dead for', email, '- re-provisioning');
+    }
+    const token = clerkToken || freshManagedRouterToken(email);
+    if (!token) {
+      console.log('[managed-router] no fresh Clerk token for', email, '- will provision on next sign-in');
+      return;
+    }
+    const key = await provisionManagedRouterKey(email, token);
+    if (!key) return;
+    await installManagedRouterKey(key);
+    managedRouterProvisionedEmails.add(email);
+    managedRouterClerkTokens.delete(email);
+    hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
+    hermesDisconnectedProviders.delete('managed-router');
+    console.log('[managed-router] auto-provisioned and connected for', email);
+  } catch (error) {
+    console.warn('[managed-router] auto-connect failed for', email, error.message);
+  }
+}
 
 // Subscription sign-in belongs to Hermes. Mia starts Hermes' device flow
 // for the selected provider and exposes only the URL, one-time code, and
@@ -3096,6 +3268,10 @@ function chatModelProviderIdsForPreference(preference) {
   return provider ? [provider] : [];
 }
 
+const MANAGED_ROUTER_MODEL_ALLOWLIST = process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST
+  ? new Set(process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
+  : null;
+
 function visibleChatModelProvidersForUser(providers, email) {
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, email);
@@ -3103,6 +3279,22 @@ function visibleChatModelProvidersForUser(providers, email) {
   const labelProvider = preference.provider === 'openai-api'
     ? preference.apiProvider || 'openai-api'
     : preference.provider;
+  if (MANAGED_ROUTER_MODEL_ALLOWLIST && labelProvider === 'openrouter') {
+    const filtered = {};
+    for (const [id, provider] of Object.entries(visible)) {
+      const models = provider.models.filter(m => MANAGED_ROUTER_MODEL_ALLOWLIST.has(String(m).toLowerCase()));
+      if (models.length) {
+        filtered[id] = {
+          ...provider,
+          models,
+          capabilities: Object.fromEntries(models.map(m => [
+            m, provider.capabilities[m] || { fast: false, reasoning: true },
+          ])),
+        };
+      }
+    }
+    visible = filtered;
+  }
   const label = HERMES_AUTH_PROVIDER_LABELS[labelProvider];
   if (label) {
     for (const provider of Object.values(visible)) provider.label = label;
@@ -3119,6 +3311,15 @@ function inferenceOptionsForUser(email, baseOptions) {
   if (provider && preference.model) {
     options.model = preference.model;
     if (preference.fast) options.fast = true;
+  } else if (provider && !options.model) {
+    // A provider without a model is never applied downstream (the gateway
+    // client only pins provider alongside an explicit model), which would
+    // silently hand the turn to whatever the Hermes profile defaults to.
+    // Resolve the user's first visible model instead — for a managed router
+    // that is the allowlisted model.
+    const visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
+    const entry = visible[provider] || Object.values(visible)[0];
+    if (entry && entry.models.length) options.model = entry.models[0];
   }
   return Object.keys(options).length ? options : undefined;
 }
@@ -3180,12 +3381,13 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
   if (!HERMES_ONBOARDING_PROVIDERS.has(provider)) {
     return res.status(400).json({ error: 'unsupported provider' });
   }
-  const effectiveProvider = provider;
-  const effectiveApiProvider = requestedApiProvider || 'openai-api';
+  const isManagedRouter = provider === 'managed-router';
+  const effectiveProvider = isManagedRouter ? 'openai-api' : provider;
+  const effectiveApiProvider = isManagedRouter ? 'openrouter' : (requestedApiProvider || 'openai-api');
   if (!HERMES_ONBOARDING_MODES.has(mode)) {
     return res.status(400).json({ error: 'unsupported collaboration mode' });
   }
-  if (effectiveProvider === 'openai-api' && body.apiProvider && !requestedApiProvider) {
+  if (effectiveProvider === 'openai-api' && !isManagedRouter && body.apiProvider && !requestedApiProvider) {
     return res.status(400).json({ error: 'unsupported API provider' });
   }
   if (effectiveProvider !== 'openai-api' && body.model !== undefined
@@ -3211,6 +3413,9 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
   settings.harnessByUser[owner] = preference;
   db.saveSingleton(conn, 'settings', settings);
   bumpVersion();
+  if (isManagedRouter && MANAGED_ROUTER_URL) {
+    void autoProvisionManagedRouter(owner);
+  }
   return res.status(200).json({ harness: preference });
 });
 
@@ -3235,6 +3440,38 @@ app.get('/api/settings/harness/auth/status', requireAuth, async (req, res) => {
 // stay out of this list because they have separate setup flows.
 app.get('/api/settings/harness/providers', requireAuth, (req, res) => {
   return res.status(200).json({ providers: HERMES_API_PROVIDER_CATALOG });
+});
+
+// Managed router: check provision status or trigger re-provision.
+app.get('/api/settings/managed-router/status', requireAuth, (req, res) => {
+  const email = String(req.userEmail || '').trim().toLowerCase();
+  return res.status(200).json({
+    provisioned: managedRouterProvisionedEmails.has(email),
+    available: Boolean(MANAGED_ROUTER_URL),
+    label: MANAGED_ROUTER_LABEL,
+  });
+});
+
+app.post('/api/settings/managed-router/provision', requireGlobalSettingsAdmin, async (req, res) => {
+  const email = String(req.userEmail || '').trim().toLowerCase();
+  if (!MANAGED_ROUTER_URL) {
+    return res.status(503).json({ error: `${MANAGED_ROUTER_LABEL} is not configured on this installation` });
+  }
+  if (!freshManagedRouterToken(email)) {
+    // Provisioning authenticates with the user's own Clerk token; without a
+    // fresh one the mint endpoint would reject us anyway.
+    return res.status(409).json({ error: 'Sign in again to re-provision (the Clerk session token has expired)' });
+  }
+  try {
+    managedRouterProvisionedEmails.delete(email);
+    await autoProvisionManagedRouter(email, null, { force: true });
+    return res.status(200).json({
+      ok: true,
+      provisioned: managedRouterProvisionedEmails.has(email),
+    });
+  } catch (error) {
+    return res.status(502).json({ error: error.message || 'Provision failed' });
+  }
 });
 
 app.get('/api/settings/harness/models', requireAuth, (req, res) => {
@@ -3308,8 +3545,10 @@ app.post('/api/settings/harness/auth/logout', requireGlobalSettingsAdmin, async 
 
 app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req, res) => {
   const body = req.body || {};
-  const provider = String(body.provider || '').trim();
+  let provider = String(body.provider || '').trim();
   const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+  // managed-router is the product-facing name; Hermes knows it as openrouter.
+  if (provider === 'managed-router' || provider === 'mia-router') provider = MANAGED_ROUTER_HERMES_PROVIDER;
   if (!HERMES_API_KEY_PROVIDERS.has(provider)) {
     return res.status(400).json({ error: 'unsupported API provider' });
   }
@@ -5371,8 +5610,18 @@ async function runNativeConversationAgentReply(dispatch, signal) {
     && googleWorkspaceConnected;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
+  // Without an explicit model the gateway session would fall back to profile
+  // defaults, so hydrate the inventory when the composer sent no selection
+  // and the cache cannot resolve one (e.g. right after a gateway restart).
+  let userOptions = inferenceOptionsForUser(trigger.senderId);
+  if (!chatModelSelection && userOptions && userOptions.provider && !userOptions.model) {
+    try {
+      rememberNativeChatModelInventory(await getHermesGatewayModelOptions({ refresh: true }));
+      userOptions = inferenceOptionsForUser(trigger.senderId);
+    } catch (_) { /* inventory unavailable; dispatch surfaces the real error */ }
+  }
   const inferenceOptions = {
-    ...inferenceOptionsForUser(trigger.senderId),
+    ...userOptions,
     ...(chatModelSelection ? {
       provider: chatModelSelection.provider,
       model: chatModelSelection.model,
@@ -6087,6 +6336,15 @@ function onBackendListening() {
   // diagnostics from it so verbose mode survives restarts and reinstalls.
   applyChatOutputSetting(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput);
   migrateWorkspaceOwnership();
+  // Reconcile managed-router credentials at boot: validates the stored key
+  // and prunes dead siblings from the auth stores. This path never mints —
+  // minting is authorized only by a fresh Clerk session token, which exists
+  // at sign-in, not at startup; a user whose key is missing or dead gets a
+  // new one on their next Clerk sign-in.
+  if (MANAGED_ROUTER_URL) {
+    const linked = clerkAccountProfile();
+    if (linked && linked.email) void autoProvisionManagedRouter(linked.email);
+  }
   reconcileNativeMiaConversations();
   recoverNativeConversationDispatches();
   reconcileNativeBotConversations()

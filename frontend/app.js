@@ -984,6 +984,7 @@
   // dropdown is populated from the provider catalog exposed by Hermes, with
   // this local catalog as a safe first-paint fallback.
   var harnessApiProviderCatalog = [
+    {id:'managed-router', label:'Managed Router'},
     {id:'openai-api', label:'OpenAI'},
     {id:'xai', label:'xAI'},
     {id:'anthropic', label:'Anthropic'},
@@ -1582,6 +1583,7 @@
   }
 
   function selectedHarnessProvider(){
+    if(harnessOnboardingState.provider === 'managed-router') return 'openrouter';
     return harnessOnboardingState.provider === 'openai-api'
       ? (harnessOnboardingState.apiProvider || 'openai-api')
       : harnessOnboardingState.provider;
@@ -1650,15 +1652,34 @@
     });
   }
 
+  var managedRouterAvailable = false;
   function loadHarnessConnectionStatus(){
     harnessConnectionValidationPending = true;
     renderHarnessOnboarding();
-    api('/api/settings/harness/auth/status').then(function(res){
+    Promise.all([
+      api('/api/settings/harness/auth/status'),
+      api('/api/settings/managed-router/status')
+    ]).then(function(results){
+      var res = results[0];
+      var routerRes = results[1];
       var connections = res.data && res.data.connections;
       var runtimes = res.data && res.data.runtimes;
       if(connections && typeof connections === 'object'){
         Object.keys(harnessConnectionState).forEach(function(provider){
           harnessConnectionState[provider] = connections[provider] === true;
+        });
+      }
+      managedRouterAvailable = !!(routerRes.data && routerRes.data.available);
+      if(routerRes.data && routerRes.data.provisioned) harnessConnectionState['openrouter'] = true;
+      var managedRouterCard = el('[data-harness-provider="managed-router"]');
+      if(managedRouterCard) managedRouterCard.closest('.styled-onboarding-provider-row').hidden = !managedRouterAvailable;
+      // The card's display name is deployment branding served by the backend.
+      var routerLabel = routerRes.data && routerRes.data.label;
+      if(routerLabel){
+        var labelEl = el('[data-managed-router-label]');
+        if(labelEl) labelEl.textContent = routerLabel;
+        harnessApiProviderCatalog.forEach(function(entry){
+          if(entry.id === 'managed-router') entry.label = routerLabel;
         });
       }
       harnessConnectionValidationPending = false;
@@ -1680,12 +1701,13 @@
   function renderHarnessOnboarding(){
     var continueBtn = el('#harnessOnboardingContinue');
     var apiKey = el('#harnessApiKey');
+    var isManagedRouter = harnessOnboardingState.provider === 'managed-router';
     var selectedApiProvider = harnessOnboardingState.apiProvider || 'openai-api';
     var selectedProvider = harnessOnboardingState.provider === 'openai-api'
       ? selectedApiProvider
       : harnessOnboardingState.provider;
-    var selectedProviderConnected = harnessConnectionState[selectedProvider] === true;
-    var apiReady = harnessOnboardingState.provider !== 'openai-api' || !!(apiKey && apiKey.value.trim()) || harnessConnectionState[selectedApiProvider] === true;
+    var selectedProviderConnected = harnessConnectionState[selectedProvider] === true || (isManagedRouter && harnessConnectionState['openrouter'] === true);
+    var apiReady = isManagedRouter || harnessOnboardingState.provider !== 'openai-api' || !!(apiKey && apiKey.value.trim()) || harnessConnectionState[selectedApiProvider] === true;
     var busy = harnessConnectionValidationPending || !!harnessConnectionPending || harnessAuthSaveInProgress || harnessAuthAwaitingSave;
     if(continueBtn){
       continueBtn.disabled = busy || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
@@ -1706,11 +1728,11 @@
     var sharedBots = el('#harnessSharedBotsSection');
     if(sharedBots) sharedBots.hidden = harnessOnboardingState.mode !== 'multiplayer';
     var apiSection = el('#harnessApiConnectionSection');
-    if(apiSection) apiSection.hidden = harnessOnboardingState.provider !== 'openai-api';
+    if(apiSection) apiSection.hidden = isManagedRouter || harnessOnboardingState.provider !== 'openai-api';
     var apiCard = el('#harnessApiCard');
-    if(apiCard) apiCard.classList.toggle('is-expanded', harnessOnboardingState.provider === 'openai-api');
+    if(apiCard) apiCard.classList.toggle('is-expanded', !isManagedRouter && harnessOnboardingState.provider === 'openai-api');
     var apiCredentialNote = el('#harnessApiCredentialNote');
-    if(apiCredentialNote) apiCredentialNote.hidden = harnessOnboardingState.provider !== 'openai-api';
+    if(apiCredentialNote) apiCredentialNote.hidden = isManagedRouter || harnessOnboardingState.provider !== 'openai-api';
     var apiProvider = el('#harnessApiProvider');
     populateHarnessApiProviderOptions();
     if(apiProvider) apiProvider.value = harnessOnboardingState.apiProvider || 'openai-api';
@@ -1735,7 +1757,7 @@
     if(onboardingSheet) onboardingSheet.classList.add('open');
     var hasSavedMode = existing && typeof existing.mode === 'string';
     existing = normalizeHarnessSettings(existing || harnessSettingsCache);
-    harnessOnboardingState.provider = existing.provider || null;
+    harnessOnboardingState.provider = (existing.provider === 'openai-api' && existing.apiProvider === 'openrouter') ? 'managed-router' : (existing.provider || null);
     var modelSelection = normalizeHarnessModel(harnessOnboardingState.provider, existing.model, existing.fast);
     harnessOnboardingState.model = modelSelection.model;
     harnessOnboardingState.fast = modelSelection.fast;
@@ -11750,7 +11772,9 @@
 
     function load(options){
       options = options || {};
-      if(picker.loading || (picker.loaded && !picker.error && options.refresh !== true)) return Promise.resolve();
+      // An empty inventory is never a cacheable success: it usually means the
+      // fetch raced the gateway boot, so reopening the picker must retry.
+      if(picker.loading || (picker.loaded && !picker.error && picker.providers.length && options.refresh !== true)) return Promise.resolve();
       picker.loading = true;
       picker.error = '';
       render();
