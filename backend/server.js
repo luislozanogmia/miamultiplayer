@@ -2763,8 +2763,21 @@ async function provisionManagedRouterKey(email, clerkToken) {
   }
 }
 
-async function autoProvisionManagedRouter(email, clerkToken) {
+async function autoProvisionManagedRouter(email, clerkToken, { force = false } = {}) {
   if (managedRouterProvisionedEmails.has(email)) return;
+  // A mint rotates the user's key (the endpoint cannot re-read an existing
+  // key's secret), so never mint when Hermes already holds working
+  // credentials — otherwise every sign-in would churn the key. The explicit
+  // admin re-provision passes force to rotate on purpose.
+  if (!force) {
+    try {
+      const connections = await hermesConnectionStatuses();
+      if (connections && connections[MANAGED_ROUTER_HERMES_PROVIDER] === true) {
+        managedRouterProvisionedEmails.add(email);
+        return;
+      }
+    } catch (_) { /* status probe failed; fall through and provision */ }
+  }
   const token = clerkToken || freshManagedRouterToken(email);
   if (!token) {
     console.log('[managed-router] no fresh Clerk token for', email, '- will provision on next sign-in');
@@ -3395,7 +3408,7 @@ app.post('/api/settings/managed-router/provision', requireGlobalSettingsAdmin, a
   }
   try {
     managedRouterProvisionedEmails.delete(email);
-    await autoProvisionManagedRouter(email);
+    await autoProvisionManagedRouter(email, null, { force: true });
     return res.status(200).json({
       ok: true,
       provisioned: managedRouterProvisionedEmails.has(email),
