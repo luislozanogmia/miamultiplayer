@@ -53,7 +53,6 @@ const {
   closeHermesGatewayRuntime,
   HERMES_SUBSCRIPTION_MODEL_OPTIONS,
   HERMES_ALLOWED_MODELS_BY_PROVIDER,
-  MIA_ROUTER_HERMES_PROVIDER,
   normalizeHermesModelSelection,
   isAllowedHermesModel,
   loadMiaGhostSkill,
@@ -1386,12 +1385,6 @@ app.post('/api/clerk/session', async (req, res) => {
     maxAge: SESSION_TTL_MS,
     path: '/',
   });
-  // Auto-provision a Mia Router key in the background on first sign-in.
-  // This runs after the response so the user sees the app immediately.
-  if (MIA_ROUTER_PROVISION_TOKEN) {
-    void autoProvisionMiaRouter(primaryEmail);
-  }
-
   return res.status(200).json({ ok: true, email: primaryEmail });
 });
 
@@ -2610,7 +2603,7 @@ function getApiKey() {
   return runtimeApiKey || process.env.ANTHROPIC_API_KEY || '';
 }
 
-const HERMES_ONBOARDING_PROVIDERS = new Set(['mia-router', 'openai-codex', 'xai-oauth', 'openai-api']);
+const HERMES_ONBOARDING_PROVIDERS = new Set(['openai-codex', 'xai-oauth', 'openai-api']);
 const HERMES_ONBOARDING_MODES = new Set(['solo', 'multiplayer']);
 
 // This is the API-key slice of Hermes' provider catalog. Subscription and
@@ -2619,7 +2612,6 @@ const HERMES_ONBOARDING_MODES = new Set(['solo', 'multiplayer']);
 // cannot be represented by a pasted API key. Keep these ids canonical for
 // `hermes auth add`, `hermes auth status`, and Hermes session providers.
 const HERMES_API_PROVIDER_CATALOG = Object.freeze([
-  { id: 'mia-router', label: 'Mia Router' },
   { id: 'openai-api', label: 'OpenAI' },
   { id: 'xai', label: 'xAI' },
   { id: 'anthropic', label: 'Anthropic' },
@@ -2627,7 +2619,7 @@ const HERMES_API_PROVIDER_CATALOG = Object.freeze([
   { id: 'deepseek', label: 'DeepSeek' },
   { id: 'alibaba', label: 'Qwen Cloud' },
   { id: 'alibaba-coding-plan', label: 'Alibaba Cloud (Coding Plan)' },
-  { id: 'openrouter', label: 'Mia Router' },
+  { id: 'openrouter', label: 'OpenRouter' },
   { id: 'fireworks', label: 'Fireworks AI' },
   { id: 'novita', label: 'NovitaAI' },
   { id: 'lmstudio', label: 'LM Studio' },
@@ -2662,8 +2654,6 @@ function normalizeHermesApiProvider(value) {
   const input = String(value || '').trim().toLowerCase();
   // Older Mia settings used `openai`; accept it on read and migrate it to
   // Hermes' canonical `openai-api` id when the preference is next saved.
-  // mia-router is the product-facing name that maps to openrouter at runtime.
-  if (input === 'mia-router') return 'openrouter';
   const provider = input === 'openai' ? 'openai-api' : input;
   return HERMES_API_KEY_PROVIDERS.has(provider) ? provider : null;
 }
@@ -2707,68 +2697,6 @@ const HERMES_CLI_PROVIDER_BY_ONBOARDING_PROVIDER = Object.freeze({
   'openai-api': 'openai-api',
   xai: 'xai',
 });
-
-// ---------- Mia Router auto-provision ----------
-// On Clerk sign-in the backend calls the mint Lambda to provision a per-user
-// OpenRouter key and injects it into Hermes automatically. The user never
-// sees or handles an API key.
-const MIA_ROUTER_PROVISION_URL = String(
-  process.env.MIA_ROUTER_PROVISION_URL || ''
-).trim();
-const MIA_ROUTER_PROVISION_TOKEN = String(process.env.MIA_ROUTER_PROVISION_TOKEN || '').trim();
-const MIA_ROUTER_PROVISION_TIMEOUT_MS = 15000;
-
-// In-memory set of emails that have already been provisioned in this backend
-// lifetime. Avoids redundant Lambda calls on every Clerk token refresh.
-const miaRouterProvisionedEmails = new Set();
-
-async function provisionMiaRouterKey(email) {
-  if (!MIA_ROUTER_PROVISION_TOKEN || !MIA_ROUTER_PROVISION_URL) return null;
-  if (miaRouterProvisionedEmails.has(email)) return null;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MIA_ROUTER_PROVISION_TIMEOUT_MS);
-  try {
-    const response = await fetch(MIA_ROUTER_PROVISION_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Mint-Token': MIA_ROUTER_PROVISION_TOKEN,
-      },
-      body: JSON.stringify({ email, action: 'provision' }),
-      signal: controller.signal,
-    });
-    const result = await response.json().catch(() => null);
-    if (!response.ok || !result?.key) {
-      console.warn('[mia-router] provision failed for', email, result?.error || response.status);
-      return null;
-    }
-    console.log('[mia-router] provisioned key for', email);
-    return result.key;
-  } catch (error) {
-    console.warn('[mia-router] provision error for', email, error.message);
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function autoProvisionMiaRouter(email) {
-  if (miaRouterProvisionedEmails.has(email)) return;
-  try {
-    const key = await provisionMiaRouterKey(email);
-    if (!key) return;
-    await runHermesApiKeyAdd(MIA_ROUTER_HERMES_PROVIDER, key);
-    removeProviderProfileCredentials(process.env.HERMES_HOME, MIA_ROUTER_HERMES_PROVIDER);
-    try { await restartHermesGatewayRuntime(); } catch (_) { /* best effort */ }
-    miaRouterProvisionedEmails.add(email);
-    hermesDisconnectedProviders.delete(MIA_ROUTER_HERMES_PROVIDER);
-    hermesDisconnectedProviders.delete('mia-router');
-    console.log('[mia-router] auto-provisioned and connected for', email);
-  } catch (error) {
-    console.warn('[mia-router] auto-connect failed for', email, error.message);
-  }
-}
 
 // Subscription sign-in belongs to Hermes. Mia starts Hermes' device flow
 // for the selected provider and exposes only the URL, one-time code, and
@@ -3192,10 +3120,6 @@ function chatModelProviderIdsForPreference(preference) {
   return provider ? [provider] : [];
 }
 
-const MIA_ROUTER_MODEL_ALLOWLIST = process.env.MIA_ROUTER_MODEL_ALLOWLIST
-  ? new Set(process.env.MIA_ROUTER_MODEL_ALLOWLIST.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
-  : null;
-
 function visibleChatModelProvidersForUser(providers, email) {
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, email);
@@ -3203,22 +3127,6 @@ function visibleChatModelProvidersForUser(providers, email) {
   const labelProvider = preference.provider === 'openai-api'
     ? preference.apiProvider || 'openai-api'
     : preference.provider;
-  if (MIA_ROUTER_MODEL_ALLOWLIST && labelProvider === 'openrouter') {
-    const filtered = {};
-    for (const [id, provider] of Object.entries(visible)) {
-      const models = provider.models.filter(m => MIA_ROUTER_MODEL_ALLOWLIST.has(String(m).toLowerCase()));
-      if (models.length) {
-        filtered[id] = {
-          ...provider,
-          models,
-          capabilities: Object.fromEntries(models.map(m => [
-            m, provider.capabilities[m] || { fast: false, reasoning: true },
-          ])),
-        };
-      }
-    }
-    visible = filtered;
-  }
   const label = HERMES_AUTH_PROVIDER_LABELS[labelProvider];
   if (label) {
     for (const provider of Object.values(visible)) provider.label = label;
@@ -3296,13 +3204,12 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
   if (!HERMES_ONBOARDING_PROVIDERS.has(provider)) {
     return res.status(400).json({ error: 'unsupported provider' });
   }
-  const isMiaRouter = provider === 'mia-router';
-  const effectiveProvider = isMiaRouter ? 'openai-api' : provider;
-  const effectiveApiProvider = isMiaRouter ? 'openrouter' : (requestedApiProvider || 'openai-api');
+  const effectiveProvider = provider;
+  const effectiveApiProvider = requestedApiProvider || 'openai-api';
   if (!HERMES_ONBOARDING_MODES.has(mode)) {
     return res.status(400).json({ error: 'unsupported collaboration mode' });
   }
-  if (effectiveProvider === 'openai-api' && !isMiaRouter && body.apiProvider && !requestedApiProvider) {
+  if (effectiveProvider === 'openai-api' && body.apiProvider && !requestedApiProvider) {
     return res.status(400).json({ error: 'unsupported API provider' });
   }
   if (effectiveProvider !== 'openai-api' && body.model !== undefined
@@ -3328,9 +3235,6 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
   settings.harnessByUser[owner] = preference;
   db.saveSingleton(conn, 'settings', settings);
   bumpVersion();
-  if (isMiaRouter && MIA_ROUTER_PROVISION_TOKEN) {
-    void autoProvisionMiaRouter(owner);
-  }
   return res.status(200).json({ harness: preference });
 });
 
@@ -3355,32 +3259,6 @@ app.get('/api/settings/harness/auth/status', requireAuth, async (req, res) => {
 // stay out of this list because they have separate setup flows.
 app.get('/api/settings/harness/providers', requireAuth, (req, res) => {
   return res.status(200).json({ providers: HERMES_API_PROVIDER_CATALOG });
-});
-
-// Mia Router: check provision status or trigger re-provision.
-app.get('/api/settings/mia-router/status', requireAuth, (req, res) => {
-  const email = String(req.userEmail || '').trim().toLowerCase();
-  return res.status(200).json({
-    provisioned: miaRouterProvisionedEmails.has(email),
-    available: Boolean(MIA_ROUTER_PROVISION_TOKEN),
-  });
-});
-
-app.post('/api/settings/mia-router/provision', requireGlobalSettingsAdmin, async (req, res) => {
-  const email = String(req.userEmail || '').trim().toLowerCase();
-  if (!MIA_ROUTER_PROVISION_TOKEN) {
-    return res.status(503).json({ error: 'Mia Router is not configured on this installation' });
-  }
-  try {
-    miaRouterProvisionedEmails.delete(email);
-    await autoProvisionMiaRouter(email);
-    return res.status(200).json({
-      ok: true,
-      provisioned: miaRouterProvisionedEmails.has(email),
-    });
-  } catch (error) {
-    return res.status(502).json({ error: error.message || 'Provision failed' });
-  }
 });
 
 app.get('/api/settings/harness/models', requireAuth, (req, res) => {
@@ -3454,10 +3332,8 @@ app.post('/api/settings/harness/auth/logout', requireGlobalSettingsAdmin, async 
 
 app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req, res) => {
   const body = req.body || {};
-  let provider = String(body.provider || '').trim();
+  const provider = String(body.provider || '').trim();
   const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
-  // mia-router is the product-facing name; Hermes knows it as openrouter.
-  if (provider === 'mia-router') provider = MIA_ROUTER_HERMES_PROVIDER;
   if (!HERMES_API_KEY_PROVIDERS.has(provider)) {
     return res.status(400).json({ error: 'unsupported API provider' });
   }
@@ -6235,17 +6111,6 @@ function onBackendListening() {
   // diagnostics from it so verbose mode survives restarts and reinstalls.
   applyChatOutputSetting(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput);
   migrateWorkspaceOwnership();
-  // If Mia Router is the saved provider but no OpenRouter key exists yet,
-  // provision it now so models are available on first load.
-  if (MIA_ROUTER_PROVISION_TOKEN) {
-    const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
-    const byUser = settings.harnessByUser || {};
-    for (const [email, pref] of Object.entries(byUser)) {
-      if (pref && pref.provider === 'openai-api' && pref.apiProvider === 'openrouter') {
-        void autoProvisionMiaRouter(email);
-      }
-    }
-  }
   reconcileNativeMiaConversations();
   recoverNativeConversationDispatches();
   reconcileNativeBotConversations()
