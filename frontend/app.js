@@ -992,7 +992,7 @@
     {id:'deepseek', label:'DeepSeek'},
     {id:'alibaba', label:'Qwen Cloud'},
     {id:'alibaba-coding-plan', label:'Alibaba Cloud (Coding Plan)'},
-    {id:'openrouter', label:'Mia Router'},
+    {id:'openrouter', label:'OpenRouter'},
     {id:'fireworks', label:'Fireworks AI'},
     {id:'novita', label:'NovitaAI'},
     {id:'lmstudio', label:'LM Studio'},
@@ -1302,7 +1302,7 @@
     var provider = el('#settingsHarnessProvider');
     var mode = el('#settingsHarnessMode');
     var providerLabel = harnessSettingsCache.provider === 'openai-api'
-      ? (harnessSettingsCache.apiProvider === 'openrouter' ? 'Mia Router' : harnessProviderDisplayName(harnessSettingsCache.apiProvider))
+      ? (harnessProviderDisplayName(harnessSettingsCache.apiProvider))
       : HERMES_PROVIDER_LABELS[harnessSettingsCache.provider];
     var configured = !!(harnessSettingsCache.provider && harnessSettingsCache.onboardingComplete);
     var modeLabel = harnessSettingsCache.mode === 'multiplayer' ? 'Multiplayer' : 'Solo';

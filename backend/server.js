@@ -2627,7 +2627,7 @@ const HERMES_API_PROVIDER_CATALOG = Object.freeze([
   { id: 'deepseek', label: 'DeepSeek' },
   { id: 'alibaba', label: 'Qwen Cloud' },
   { id: 'alibaba-coding-plan', label: 'Alibaba Cloud (Coding Plan)' },
-  { id: 'openrouter', label: 'Mia Router' },
+  { id: 'openrouter', label: 'OpenRouter' },
   { id: 'fireworks', label: 'Fireworks AI' },
   { id: 'novita', label: 'NovitaAI' },
   { id: 'lmstudio', label: 'LM Studio' },
