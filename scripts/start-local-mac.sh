@@ -39,6 +39,14 @@ done
   exit 1
 }
 
+backend_root="$engineering_root/backend"
+if [[ ! -d "$backend_root/node_modules" ]]; then
+  echo "Installing backend dependencies…"
+  (cd "$backend_root" && npm install --no-audit --no-fund)
+  echo "Rebuilding native modules for Electron…"
+  (cd "$macos_root" && npx electron-rebuild -m "$backend_root" --only better-sqlite3)
+fi
+
 gws_bin="${MIA_DEV_GWS_BIN:-}"
 if [[ -z "$gws_bin" ]] && command -v gws >/dev/null 2>&1; then
   gws_bin="$(command -v gws)"
