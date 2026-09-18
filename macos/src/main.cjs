@@ -732,14 +732,18 @@ async function startLocalBackend(exactPort = null) {
       || (app.isPackaged ? "production" : ""),
     CLERK_PROD_PUBLISHABLE_KEY: process.env.CLERK_PROD_PUBLISHABLE_KEY || "",
     CLERK_PROD_JWT_KEY: process.env.CLERK_PROD_JWT_KEY || "",
-    // Mia Router auto-provision on Clerk sign-in.
-    MIA_ROUTER_PROVISION_URL: process.env.MIA_ROUTER_PROVISION_URL || "",
-    MIA_ROUTER_PROVISION_TOKEN: process.env.MIA_ROUTER_PROVISION_TOKEN || "fbafa44a760c6b49752f9179b2e77b80672836f6a6f41ad3575bdab81b373d03",
-    GHOST_CLI_HOME: process.env.GHOST_CLI_HOME || "",
-    GHOST_MIA_SOCKET: process.env.GHOST_MIA_SOCKET || "",
-    GHOST_MIA_TOKEN_FILE: process.env.GHOST_MIA_TOKEN_FILE || "",
-    GHOST_IN_APP_BROWSER_SOCKET: process.env.GHOST_IN_APP_BROWSER_SOCKET || "",
-    GHOST_IN_APP_BROWSER_TOKEN_FILE: process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE || "",
+    // Mia Router auto-provision on Clerk sign-in. Only forward when set so
+    // dotenv in server.js can fill them from .env.local in dev builds.
+    // Mia Router and Ghost vars: only forward when set in the parent process
+    // so dotenv in server.js can fill them from .env.local in dev builds.
+    // Empty-string defaults would shadow dotenv and break auto-provision.
+    ...(process.env.MIA_ROUTER_PROVISION_URL ? { MIA_ROUTER_PROVISION_URL: process.env.MIA_ROUTER_PROVISION_URL } : {}),
+    ...(process.env.MIA_ROUTER_PROVISION_TOKEN ? { MIA_ROUTER_PROVISION_TOKEN: process.env.MIA_ROUTER_PROVISION_TOKEN } : {}),
+    ...(process.env.GHOST_CLI_HOME ? { GHOST_CLI_HOME: process.env.GHOST_CLI_HOME } : {}),
+    ...(process.env.GHOST_MIA_SOCKET ? { GHOST_MIA_SOCKET: process.env.GHOST_MIA_SOCKET } : {}),
+    ...(process.env.GHOST_MIA_TOKEN_FILE ? { GHOST_MIA_TOKEN_FILE: process.env.GHOST_MIA_TOKEN_FILE } : {}),
+    ...(process.env.GHOST_IN_APP_BROWSER_SOCKET ? { GHOST_IN_APP_BROWSER_SOCKET: process.env.GHOST_IN_APP_BROWSER_SOCKET } : {}),
+    ...(process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE ? { GHOST_IN_APP_BROWSER_TOKEN_FILE: process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE } : {}),
     PATH: packagedRuntime
       ? `${packagedRuntime.runtimeBin}${path.delimiter}${String(process.env.PATH || "")}`
       : process.env.PATH,
