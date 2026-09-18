@@ -1,0 +1,121 @@
+# Windows desktop build for the Mia app.
+#
+# Heavy build: runs only on manual dispatch or on release tags matching
+# v*-win (e.g. v0.2.8-win). It does NOT run on ordinary pushes.
+#
+# ── Provisioning contract (GITHUB_ENV) ──────────────────────────────────────
+# The two provisioning scripts below MUST append their output locations to
+# the file named by the $env:GITHUB_ENV environment variable (one KEY=value
+# per line), so later steps see them as environment variables:
+#
+#   scripts/provision-python-win.ps1   → HERMES_PYTHON_RUNTIME_DIR=<abs path>
+#   scripts/install-runtimes-win.ps1   → HERMES_BUNDLE_DIR=<abs path>
+#                                        GHOST_BUNDLE_DIR=<abs path>
+#                                        GWS_BUNDLE_DIR=<abs path>
+#
+# Example (PowerShell):
+#   Add-Content -Path $env:GITHUB_ENV -Value "HERMES_BUNDLE_DIR=$hermesDir"
+#
+# macos/scripts/package-win.cjs consumes exactly these four variables (the
+# same contract scripts/install-local-mac.sh exports for package-mac.cjs).
+# ────────────────────────────────────────────────────────────────────────────
+
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*-win"
+
+# Cancel superseded runs of the same ref (a re-dispatch or force-pushed tag).
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      # Full clean checkout. package-win.cjs (like package-mac.cjs) enforces
+      # assertCleanReleaseCheckout, so no step before packaging may modify or
+      # add tracked/untracked files inside the repository working tree —
+      # provisioning scripts must install runtimes OUTSIDE the checkout
+      # (e.g. under $env:USERPROFILE or $env:RUNNER_TEMP).
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Node 22 LTS: repo has no .nvmrc/engines pin; 22 matches the
+      # Electron 44 toolchain used for the macOS builds.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: macos/package-lock.json
+
+      # Dependency: scripts/provision-python-win.ps1 (sibling deliverable —
+      # python-win-runtime agent). Must append HERMES_PYTHON_RUNTIME_DIR to
+      # $env:GITHUB_ENV per the contract at the top of this file.
+      - name: Provision Python runtime
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/provision-python-win.ps1
+
+      # Dependency: scripts/install-runtimes-win.ps1 (sibling deliverable —
+      # runtimes-win-installer agent). Provisions the pinned Hermes clone,
+      # Ghost CLI clone, and Google Workspace CLI download, then appends
+      # HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, and GWS_BUNDLE_DIR to
+      # $env:GITHUB_ENV per the contract at the top of this file.
+      - name: Provision Hermes, Ghost, and Google Workspace runtimes
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-runtimes-win.ps1
+
+      # Fail fast with a clear message if a provisioning script did not
+      # honor the GITHUB_ENV contract, instead of a packager error later.
+      - name: Verify provisioning env contract
+        run: |
+          $required = @(
+            "HERMES_BUNDLE_DIR",
+            "GHOST_BUNDLE_DIR",
+            "GWS_BUNDLE_DIR",
+            "HERMES_PYTHON_RUNTIME_DIR"
+          )
+          $missing = $required | Where-Object {
+            $value = [Environment]::GetEnvironmentVariable($_)
+            [string]::IsNullOrWhiteSpace($value) -or -not (Test-Path $value)
+          }
+          if ($missing) {
+            Write-Error "Provisioning scripts did not export valid paths for: $($missing -join ', '). They must append KEY=value lines to `$env:GITHUB_ENV (see the contract note at the top of windows-build.yml)."
+            exit 1
+          }
+          foreach ($name in $required) {
+            Write-Host "$name = $([Environment]::GetEnvironmentVariable($name))"
+          }
+
+      - name: Install Electron shell dependencies
+        working-directory: macos
+        run: npm ci --no-audit --no-fund
+
+      # Dependency: macos/scripts/package-win.cjs exposed as the
+      # "package:win" npm script (sibling deliverable — win-packager /
+      # main-cjs-win agents). Reads the four env vars exported above and
+      # requires a clean git checkout (assertCleanReleaseCheckout).
+      - name: Package Windows app
+        working-directory: macos
+        run: npm run package:win
+
+      # The packager writes the distributable archive and its checksum
+      # under macos/dist/ (mirroring package-mac.cjs output layout).
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mia-windows-${{ github.ref_name }}-${{ github.run_number }}
+          path: |
+            macos/dist/*.zip
+            macos/dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
