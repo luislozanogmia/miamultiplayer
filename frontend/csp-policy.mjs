@@ -41,11 +41,14 @@ export const CSP_DIRECTIVES = Object.freeze([
   Object.freeze(['font-src', Object.freeze(["'self'"])]),
   Object.freeze(['media-src', Object.freeze(["'self'", 'blob:'])]),
   // API calls and the native conversation socket are same-origin. The named
-  // remote origins are the Clerk development instance and its challenge and
-  // telemetry endpoints; model-provider traffic remains behind the backend.
+  // remote origins are Clerk's development-instance domain and its challenge
+  // and telemetry endpoints (used only when a deployment configures Clerk
+  // auth via the environment); model-provider traffic remains behind the
+  // backend. A production Clerk instance on a custom domain must patch this
+  // policy at build time.
   Object.freeze(['connect-src', Object.freeze([
     "'self'",
-    'https://faithful-drum-333.clerk.accounts.dev',
+    'https://*.clerk.accounts.dev',
     'https://clerk-telemetry.com',
     'https://*.clerk-telemetry.com',
     'https://img.clerk.com',

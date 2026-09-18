@@ -122,6 +122,15 @@ const AUTH_HOSTS = new Set([
   "docs.google.com",
   "sheets.google.com",
 ]);
+// Origin of the deployment's Clerk instance, when one is configured via the
+// environment. Empty when Clerk auth is not in use.
+const CLERK_ISSUER_ORIGIN = (() => {
+  try {
+    return new URL(String(process.env.CLERK_ISSUER || "").trim()).origin;
+  } catch (_) {
+    return "";
+  }
+})();
 
 // Set this before Electron creates its native application menu so development
 // runs are branded as Mia too; packaged builds also use package.json's
@@ -721,17 +730,18 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "executions.db"),
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
       || path.join(dataDirectory, "bot-artifacts"),
-    // Clerk authenticates the human online once; Mia's rolling local session
-    // keeps an already-linked installation usable when it later goes offline.
-    MIAOS_NO_AUTH: process.env.MIAOS_DESKTOP_NO_AUTH || "0",
-    MIAOS_CLERK_AUTH: process.env.MIAOS_CLERK_AUTH || "1",
+    // A deployment may configure Clerk auth entirely through the environment
+    // (MIAOS_CLERK_AUTH plus CLERK_PUBLISHABLE_KEY / CLERK_JWT_KEY /
+    // CLERK_ISSUER). Without it, the desktop app runs the local no-auth
+    // profile. Clerk vars are forwarded only when set so empty-string
+    // defaults don't shadow dotenv values from backend/.env.local.
+    MIAOS_NO_AUTH: process.env.MIAOS_DESKTOP_NO_AUTH
+      || (/^(1|true)$/i.test(process.env.MIAOS_CLERK_AUTH || "") ? "0" : "1"),
     MIAOS_LOCAL_PROFILE: process.env.MIAOS_LOCAL_PROFILE || "1",
-    // Clerk environment: 'production' for shipped builds, unset for dev.
-    // npm start → dev Clerk; packaged .dmg → production Clerk.
-    MIAOS_CLERK_ENV: process.env.MIAOS_CLERK_ENV
-      || (app.isPackaged ? "production" : ""),
-    CLERK_PROD_PUBLISHABLE_KEY: process.env.CLERK_PROD_PUBLISHABLE_KEY || "",
-    CLERK_PROD_JWT_KEY: process.env.CLERK_PROD_JWT_KEY || "",
+    ...(process.env.MIAOS_CLERK_AUTH ? { MIAOS_CLERK_AUTH: process.env.MIAOS_CLERK_AUTH } : {}),
+    ...(process.env.CLERK_PUBLISHABLE_KEY ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY } : {}),
+    ...(process.env.CLERK_JWT_KEY ? { CLERK_JWT_KEY: process.env.CLERK_JWT_KEY } : {}),
+    ...(process.env.CLERK_ISSUER ? { CLERK_ISSUER: process.env.CLERK_ISSUER } : {}),
     // Ghost vars: only forward when set in the parent process so dotenv in
     // server.js can fill them from .env.local in dev builds. Empty-string
     // defaults would shadow dotenv.
@@ -1372,7 +1382,7 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       const url = new URL(value);
       return url.protocol === "https:" && !url.username && !url.password && (
         url.origin === "https://accounts.google.com"
-        || url.origin === "https://faithful-drum-333.clerk.accounts.dev"
+        || (CLERK_ISSUER_ORIGIN && url.origin === CLERK_ISSUER_ORIGIN)
         || (url.origin === "https://clerk.shared.lcl.dev" && url.pathname === "/v1/oauth_callback")
       );
     } catch (_) { return false; }

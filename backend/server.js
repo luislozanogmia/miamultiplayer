@@ -162,39 +162,15 @@ function isAdmin(email) {
 // started with MIAOS_NO_AUTH=1; production and normal development retain the
 // session/API-key auth path below.
 const MIAOS_NO_AUTH = /^(1|true)$/i.test(process.env.MIAOS_NO_AUTH || '');
-const MIAOS_CLERK_AUTH = /^(1|true)$/i.test(process.env.MIAOS_CLERK_AUTH || '');
-
-// Clerk environment: 'production' uses the miamultiplayer.com instance,
-// anything else (including unset) uses the dev instance. Set
-// MIAOS_CLERK_ENV=production for shipped builds.
-const MIAOS_CLERK_ENV = String(process.env.MIAOS_CLERK_ENV || '').trim().toLowerCase();
-
-const CLERK_DEV_PUBLISHABLE_KEY = 'pk_test_ZmFpdGhmdWwtZHJ1bS0zMzMuY2xlcmsuYWNjb3VudHMuZGV2JA';
-const CLERK_DEV_ISSUER = 'https://faithful-drum-333.clerk.accounts.dev';
-const CLERK_DEV_JWT_KEY = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8H9FQVnnST3XYwwqcun5
-Bv0iqvXYCQDbxiDgOcGJz3N67WmnRNiv9+rY0Iv5nmCEM5+Mr0nvGimjT++WbN0L
-XlHc1o0MIK1gtR9+umHXIBM9WYvQL3gtkulVfURk0S/UqWruuRbHTk3N/nujN5oG
-eMW/8MdKjxJgRoDiWyQzOHRQL/8H+43uL7/xikDPaf2GeZ4GgHeAEhaSFh8ekTt/
-PViJMSdflAzRM5kn9txqNnCnfl8r7QfzlyiIchCTueiI8uUL7k0g0lgmq6uE48yr
-uR4op4c0GR3ZM1lwPJl/YMLdF82neuuKP+o8pBQEjkzoaVNHdKxGxZm1/5z3ewlB
-UQIDAQAB
------END PUBLIC KEY-----`;
-
-// Production Clerk keys are loaded from environment variables.
-// CLERK_PUBLISHABLE_KEY and CLERK_JWT_KEY override the defaults when set.
-const CLERK_PROD_PUBLISHABLE_KEY = String(process.env.CLERK_PROD_PUBLISHABLE_KEY || '').trim();
-const CLERK_PROD_JWT_KEY = String(process.env.CLERK_PROD_JWT_KEY || '').trim();
-const CLERK_PROD_ISSUER = 'https://clerk.miamultiplayer.com';
-
-const IS_CLERK_PRODUCTION = MIAOS_CLERK_ENV === 'production'
-  || Boolean(CLERK_PROD_PUBLISHABLE_KEY);
-
-const CLERK_PUBLISHABLE_KEY = String(process.env.CLERK_PUBLISHABLE_KEY
-  || (IS_CLERK_PRODUCTION ? CLERK_PROD_PUBLISHABLE_KEY : CLERK_DEV_PUBLISHABLE_KEY)).trim();
-const CLERK_JWT_KEY = String(process.env.CLERK_JWT_KEY
-  || (IS_CLERK_PRODUCTION ? CLERK_PROD_JWT_KEY : CLERK_DEV_JWT_KEY)).trim();
-const CLERK_ISSUER = IS_CLERK_PRODUCTION ? CLERK_PROD_ISSUER : CLERK_DEV_ISSUER;
+// Clerk instance configuration is deployment-specific and comes entirely
+// from the environment (for example backend/.env.local, which is gitignored).
+// Clerk auth stays disabled unless the flag is set and all three values are
+// present; there are no built-in Clerk instances in this repository.
+const CLERK_PUBLISHABLE_KEY = String(process.env.CLERK_PUBLISHABLE_KEY || '').trim();
+const CLERK_JWT_KEY = String(process.env.CLERK_JWT_KEY || '').trim();
+const CLERK_ISSUER = String(process.env.CLERK_ISSUER || '').trim();
+const MIAOS_CLERK_AUTH = /^(1|true)$/i.test(process.env.MIAOS_CLERK_AUTH || '')
+  && Boolean(CLERK_PUBLISHABLE_KEY && CLERK_JWT_KEY && CLERK_ISSUER);
 const CLERK_SUBJECT_META_KEY = 'clerk.installation.subject';
 const CLERK_EMAIL_META_KEY = 'clerk.installation.email';
 const CLERK_NAME_META_KEY = 'clerk.installation.name';

@@ -49,7 +49,7 @@ test('Mia page declares the exact fail-closed CSP and only Clerk authentication 
   assert.equal(directive('script-src-attr').join(' '), "'none'");
   assert.deepEqual(directive('connect-src'), [
     "'self'",
-    'https://faithful-drum-333.clerk.accounts.dev',
+    'https://*.clerk.accounts.dev',
     'https://clerk-telemetry.com',
     'https://*.clerk-telemetry.com',
     'https://img.clerk.com',
