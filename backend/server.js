@@ -2627,7 +2627,7 @@ const HERMES_API_PROVIDER_CATALOG = Object.freeze([
   { id: 'deepseek', label: 'DeepSeek' },
   { id: 'alibaba', label: 'Qwen Cloud' },
   { id: 'alibaba-coding-plan', label: 'Alibaba Cloud (Coding Plan)' },
-  { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'openrouter', label: 'Mia Router' },
   { id: 'fireworks', label: 'Fireworks AI' },
   { id: 'novita', label: 'NovitaAI' },
   { id: 'lmstudio', label: 'LM Studio' },
@@ -3192,13 +3192,33 @@ function chatModelProviderIdsForPreference(preference) {
   return provider ? [provider] : [];
 }
 
+const MIA_ROUTER_MODEL_ALLOWLIST = process.env.MIA_ROUTER_MODEL_ALLOWLIST
+  ? new Set(process.env.MIA_ROUTER_MODEL_ALLOWLIST.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
+  : null;
+
 function visibleChatModelProvidersForUser(providers, email) {
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, email);
-  const visible = visibleChatModelInventory(providers, chatModelProviderIdsForPreference(preference));
+  let visible = visibleChatModelInventory(providers, chatModelProviderIdsForPreference(preference));
   const labelProvider = preference.provider === 'openai-api'
     ? preference.apiProvider || 'openai-api'
     : preference.provider;
+  if (MIA_ROUTER_MODEL_ALLOWLIST && labelProvider === 'openrouter') {
+    const filtered = {};
+    for (const [id, provider] of Object.entries(visible)) {
+      const models = provider.models.filter(m => MIA_ROUTER_MODEL_ALLOWLIST.has(String(m).toLowerCase()));
+      if (models.length) {
+        filtered[id] = {
+          ...provider,
+          models,
+          capabilities: Object.fromEntries(models.map(m => [
+            m, provider.capabilities[m] || { fast: false, reasoning: true },
+          ])),
+        };
+      }
+    }
+    visible = filtered;
+  }
   const label = HERMES_AUTH_PROVIDER_LABELS[labelProvider];
   if (label) {
     for (const provider of Object.values(visible)) provider.label = label;
