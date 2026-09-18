@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known false positives"
+paths = [
+  # Placeholder values only (replace-with-...)
+  '''backend/\.env\.example''',
+  # Deliberately fake credential fixtures testing the leak scanner
+  '''macos/scripts/package-mac\.test\.cjs''',
+]

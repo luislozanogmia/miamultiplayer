@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Public-repo guard: blocks secrets, private-product markers, and
+# force-added overlay files from ever being committed.
+# Installed via: git config core.hooksPath .githooks
+
+STAGED_FILES=$(git diff --staged --name-only --diff-filter=ACMR)
+[[ -z "$STAGED_FILES" ]] && exit 0
+
+fail() { echo "COMMIT BLOCKED: $1" >&2; exit 1; }
+
+# 1. Overlay paths must never be committed, even force-added.
+while IFS= read -r f; do
+  case "$f" in
+    .env|*/.env|.env.local|backend/.env.local|AGENTS.md|docs/*|ops/*|engineering.md|user_syntehtic_testing.md)
+      fail "'$f' is a private overlay path and must not be committed to the public repo." ;;
+    modules/*/SKILL.md)
+      fail "'$f' is a private overlay path (SKILL.md) and must not be committed." ;;
+  esac
+done <<< "$STAGED_FILES"
+
+# 2. Private-product markers must not appear in staged content
+# (the hook itself is excluded — it contains the patterns it scans for).
+DIFF=$(git diff --staged --unified=0 -- . ':(exclude).githooks/pre-commit')
+for pattern in 'miamultiplayer_PRIVATE' 'Mia Router' 'MIA_ROUTER'; do
+  if grep -qE "^\+.*${pattern}" <<< "$DIFF"; then
+    fail "staged changes mention private marker '${pattern}'. Private-product code/config belongs in the private repo."
+  fi
+done
+
+# 3. Common credential shapes in added lines (skip the leak-scanner test file,
+# whose fixtures are deliberately fake).
+DIFF_NO_FIXTURES=$(git diff --staged --unified=0 -- . ':(exclude)macos/scripts/package-mac.test.cjs' ':(exclude).githooks/pre-commit')
+if grep -qE '^\+.*(sk-[A-Za-z0-9]{20,}|sk_live_|pk_live_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY)' <<< "$DIFF_NO_FIXTURES"; then
+  fail "staged changes contain what looks like a credential/private key."
+fi
+
+# 4. gitleaks, if installed (deeper scan).
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact || fail "gitleaks found a potential secret in staged changes."
+fi
+
+exit 0
