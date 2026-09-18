@@ -11,7 +11,14 @@ Mia Solo is the starting point. Mia Multiplayer is where I want to go: humans wo
 - Forcing people to become tech-savvy before technology becomes useful creates an unnecessary barrier. It increases time-to-action, takes time away from creativity and expertise, and excludes people who simply don't want to make the technical deep dive. I'll share more in the upcoming UX research on the website.
 
 ## How it works
-Mia is open source, model and harness agnostic; you can bring your own subscription, or API key. Work with your personal Agent, create Bots, and automate work from one desktop app.
+**This is the app. Edit it at will — and you can still be part of our ecosystem by signing in. Your choice.**
+
+Mia is open source, model and harness agnostic. Two equally supported ways to run it:
+
+- **Sign in with Mia** (the default): creating an account is the authorization — the app calls the Mia Router and a budget-capped model key is minted for you automatically. No setup, just chat. How that call works is right here in the repo ([backend/server.js](backend/server.js), managed-router section); the service itself runs on our infrastructure and answers only to signed-in users.
+- **Bring your own** subscription or API key (OpenRouter, Anthropic, OpenAI, xAI, …): fully standalone, no account, nothing of yours ever touches our servers.
+
+Nothing personal is baked into this repo — every credential is created on your machine at install time. Our working practices live in [`operations/`](operations/) if you want to see how we build and test Mia.
 
 Product information is available at [miamultiplayer.com](https://miamultiplayer.com).
 The canonical source repository is

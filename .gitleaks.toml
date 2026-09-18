@@ -9,3 +9,8 @@ paths = [
   # Deliberately fake credential fixtures testing the leak scanner
   '''macos/scripts/package-mac\.test\.cjs''',
 ]
+regexes = [
+  # Clerk *publishable* keys are public identifiers, designed to ship in
+  # client code (the secret key is sk_..., which stays blocked).
+  '''pk_test_[A-Za-z0-9]+''',
+]

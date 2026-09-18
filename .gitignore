@@ -33,10 +33,3 @@ backend/hermes/
 # Linux distribution artifacts
 linux/distro/
 
-# Internal docs (live in private repo)
-docs/
-AGENTS.md
-engineering.md
-user_syntehtic_testing.md
-modules/*/SKILL.md
-ops/

@@ -165,14 +165,35 @@ function isAdmin(email) {
 // started with MIAOS_NO_AUTH=1; production and normal development retain the
 // session/API-key auth path below.
 const MIAOS_NO_AUTH = /^(1|true)$/i.test(process.env.MIAOS_NO_AUTH || '');
-// Clerk instance configuration is deployment-specific and comes entirely
-// from the environment (for example backend/.env.local, which is gitignored).
-// Clerk auth stays disabled unless the flag is set and all three values are
-// present; there are no built-in Clerk instances in this repository.
-const CLERK_PUBLISHABLE_KEY = String(process.env.CLERK_PUBLISHABLE_KEY || '').trim();
-const CLERK_JWT_KEY = String(process.env.CLERK_JWT_KEY || '').trim();
-const CLERK_ISSUER = String(process.env.CLERK_ISSUER || '').trim();
-const MIAOS_CLERK_AUTH = /^(1|true)$/i.test(process.env.MIAOS_CLERK_AUTH || '')
+// Mia's own Clerk instance ships as the built-in default so any checkout can
+// join the hosted ecosystem by signing in. These are Clerk *public* values —
+// publishable key, issuer, JWKS public key — the client half of an API call
+// that does nothing without a real sign-in. All admin/server configuration
+// lives outside this repo. A fork overrides them with its own instance via
+// env, or opts out entirely with MIAOS_CLERK_AUTH=0 / MIAOS_NO_AUTH=1.
+const MIA_CLERK_DEFAULTS = Object.freeze({
+  publishableKey: 'pk_test_ZmFpdGhmdWwtZHJ1bS0zMzMuY2xlcmsuYWNjb3VudHMuZGV2JA',
+  issuer: 'https://faithful-drum-333.clerk.accounts.dev',
+  jwtKey: [
+    '-----BEGIN PUBLIC KEY-----',
+    'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8H9FQVnnST3XYwwqcun5',
+    'Bv0iqvXYCQDbxiDgOcGJz3N67WmnRNiv9+rY0Iv5nmCEM5+Mr0nvGimjT++WbN0L',
+    'XlHc1o0MIK1gtR9+umHXIBM9WYvQL3gtkulVfURk0S/UqWruuRbHTk3N/nujN5oG',
+    'eMW/8MdKjxJgRoDiWyQzOHRQL/8H+43uL7/xikDPaf2GeZ4GgHeAEhaSFh8ekTt/',
+    'PViJMSdflAzRM5kn9txqNnCnfl8r7QfzlyiIchCTueiI8uUL7k0g0lgmq6uE48yr',
+    'uR4op4c0GR3ZM1lwPJl/YMLdF82neuuKP+o8pBQEjkzoaVNHdKxGxZm1/5z3ewlB',
+    'UQIDAQAB',
+    '-----END PUBLIC KEY-----',
+  ].join('\n'),
+});
+const CLERK_PUBLISHABLE_KEY = String(process.env.CLERK_PUBLISHABLE_KEY || '').trim()
+  || MIA_CLERK_DEFAULTS.publishableKey;
+const CLERK_JWT_KEY = String(process.env.CLERK_JWT_KEY || '').trim()
+  || MIA_CLERK_DEFAULTS.jwtKey;
+const CLERK_ISSUER = String(process.env.CLERK_ISSUER || '').trim()
+  || MIA_CLERK_DEFAULTS.issuer;
+const MIAOS_CLERK_AUTH = /^(1|true|)$/i.test(String(process.env.MIAOS_CLERK_AUTH || '').trim())
+  && !MIAOS_NO_AUTH
   && Boolean(CLERK_PUBLISHABLE_KEY && CLERK_JWT_KEY && CLERK_ISSUER);
 const CLERK_SUBJECT_META_KEY = 'clerk.installation.subject';
 const CLERK_EMAIL_META_KEY = 'clerk.installation.email';
@@ -2593,12 +2614,18 @@ function getApiKey() {
   return runtimeApiKey || process.env.ANTHROPIC_API_KEY || '';
 }
 
-// A hosted deployment can offer a "managed router": a pre-provisioned
-// OpenRouter-backed provider whose key is minted per user (see the
-// managed-router auto-provision section below). Both vars are deployment
-// branding/config, never secrets.
-const MANAGED_ROUTER_URL = String(process.env.MIAOS_MANAGED_ROUTER_URL || '').trim();
-const MANAGED_ROUTER_LABEL = String(process.env.MIAOS_MANAGED_ROUTER_LABEL || '').trim() || 'Managed Router';
+// The Mia Router is the hosted ecosystem's managed provider: signing in
+// mints a budget-capped router key for the user (see the managed-router
+// auto-provision section below). The endpoint URL ships as the built-in
+// default — it is only an API address; the caller's Clerk session token is
+// the sole authorization and without one the endpoint does nothing. The
+// service itself (minting, budgets, secrets) lives entirely in AWS, not in
+// this repo. Forks may point these at their own service or leave the URL
+// empty to hide the provider.
+const MANAGED_ROUTER_URL = 'MIAOS_MANAGED_ROUTER_URL' in process.env
+  ? String(process.env.MIAOS_MANAGED_ROUTER_URL || '').trim()
+  : 'https://oiptiwgulndjf3nzjfvrhx7blq0eekdr.lambda-url.us-east-1.on.aws/';
+const MANAGED_ROUTER_LABEL = String(process.env.MIAOS_MANAGED_ROUTER_LABEL || '').trim() || 'Mia Router';
 
 const HERMES_ONBOARDING_PROVIDERS = new Set(['managed-router', 'openai-codex', 'xai-oauth', 'openai-api']);
 const HERMES_ONBOARDING_MODES = new Set(['solo', 'multiplayer']);
@@ -3268,8 +3295,14 @@ function chatModelProviderIdsForPreference(preference) {
   return provider ? [provider] : [];
 }
 
-const MANAGED_ROUTER_MODEL_ALLOWLIST = process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST
-  ? new Set(process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
+// Models the Mia Router exposes. The default matches what the hosted
+// service actually serves; env overrides it, and an explicitly empty value
+// disables the filter (all provider models visible).
+const MANAGED_ROUTER_MODEL_ALLOWLIST_RAW = 'MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST' in process.env
+  ? String(process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST || '')
+  : 'deepseek/deepseek-v4.1-flash';
+const MANAGED_ROUTER_MODEL_ALLOWLIST = MANAGED_ROUTER_MODEL_ALLOWLIST_RAW.trim()
+  ? new Set(MANAGED_ROUTER_MODEL_ALLOWLIST_RAW.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
   : null;
 
 function visibleChatModelProvidersForUser(providers, email) {
