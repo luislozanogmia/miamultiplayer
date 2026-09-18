@@ -288,6 +288,13 @@ const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
   ]),
 });
 
+// "Managed router" is the product-facing provider a hosted deployment can
+// offer (see MIAOS_MANAGED_ROUTER_URL in server.js). Under the hood it routes
+// through OpenRouter using per-user keys minted by the deployment. The Hermes
+// provider id is 'openrouter'; this constant maps the product name to the
+// runtime id.
+const MANAGED_ROUTER_HERMES_PROVIDER = 'openrouter';
+
 const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
   'openai-codex': Object.freeze([
     'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
@@ -767,6 +774,7 @@ module.exports = {
   MIA_OPENAI_MODEL,
   HERMES_SUBSCRIPTION_MODEL_OPTIONS,
   HERMES_ALLOWED_MODELS_BY_PROVIDER,
+  MANAGED_ROUTER_HERMES_PROVIDER,
   normalizeHermesModelSelection,
   isAllowedHermesModel,
   hermesProcessEnv,

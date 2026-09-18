@@ -742,9 +742,14 @@ async function startLocalBackend(exactPort = null) {
     ...(process.env.CLERK_PUBLISHABLE_KEY ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY } : {}),
     ...(process.env.CLERK_JWT_KEY ? { CLERK_JWT_KEY: process.env.CLERK_JWT_KEY } : {}),
     ...(process.env.CLERK_ISSUER ? { CLERK_ISSUER: process.env.CLERK_ISSUER } : {}),
-    // Ghost vars: only forward when set in the parent process so dotenv in
-    // server.js can fill them from .env.local in dev builds. Empty-string
-    // defaults would shadow dotenv.
+    // Managed-router auto-provision on Clerk sign-in (authorized by the
+    // user's Clerk session token; there is no separate provisioning secret).
+    // Managed-router and Ghost vars: only forward when set in the parent
+    // process so dotenv in server.js can fill them from .env.local in dev
+    // builds. Empty-string defaults would shadow dotenv.
+    ...(process.env.MIAOS_MANAGED_ROUTER_URL ? { MIAOS_MANAGED_ROUTER_URL: process.env.MIAOS_MANAGED_ROUTER_URL } : {}),
+    ...(process.env.MIAOS_MANAGED_ROUTER_LABEL ? { MIAOS_MANAGED_ROUTER_LABEL: process.env.MIAOS_MANAGED_ROUTER_LABEL } : {}),
+    ...(process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST ? { MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST: process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST } : {}),
     ...(process.env.GHOST_CLI_HOME ? { GHOST_CLI_HOME: process.env.GHOST_CLI_HOME } : {}),
     ...(process.env.GHOST_MIA_SOCKET ? { GHOST_MIA_SOCKET: process.env.GHOST_MIA_SOCKET } : {}),
     ...(process.env.GHOST_MIA_TOKEN_FILE ? { GHOST_MIA_TOKEN_FILE: process.env.GHOST_MIA_TOKEN_FILE } : {}),
