@@ -122,11 +122,14 @@ const AUTH_HOSTS = new Set([
   "docs.google.com",
   "sheets.google.com",
 ]);
-// Origin of the deployment's Clerk instance, when one is configured via the
-// environment. Empty when Clerk auth is not in use.
+// Origin of the deployment's Clerk instance. Mia's own instance is the
+// built-in default (same public identifier the backend ships in
+// backend/server.js); the environment overrides it for forks. Empty only
+// when the override is unparseable.
+const MIA_DEFAULT_CLERK_ISSUER = "https://faithful-drum-333.clerk.accounts.dev";
 const CLERK_ISSUER_ORIGIN = (() => {
   try {
-    return new URL(String(process.env.CLERK_ISSUER || "").trim()).origin;
+    return new URL(String(process.env.CLERK_ISSUER || "").trim() || MIA_DEFAULT_CLERK_ISSUER).origin;
   } catch (_) {
     return "";
   }
@@ -730,13 +733,13 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "executions.db"),
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
       || path.join(dataDirectory, "bot-artifacts"),
-    // A deployment may configure Clerk auth entirely through the environment
-    // (MIAOS_CLERK_AUTH plus CLERK_PUBLISHABLE_KEY / CLERK_JWT_KEY /
-    // CLERK_ISSUER). Without it, the desktop app runs the local no-auth
-    // profile. Clerk vars are forwarded only when set so empty-string
-    // defaults don't shadow dotenv values from backend/.env.local.
+    // Clerk sign-in is on by default: the backend carries Mia's instance as
+    // its built-in configuration, so the desktop app boots into the hosted
+    // ecosystem unless the person opts out (MIAOS_DESKTOP_NO_AUTH=1 or
+    // MIAOS_CLERK_AUTH=0). Clerk vars are forwarded only when set so
+    // empty-string defaults don't shadow dotenv values.
     MIAOS_NO_AUTH: process.env.MIAOS_DESKTOP_NO_AUTH
-      || (/^(1|true)$/i.test(process.env.MIAOS_CLERK_AUTH || "") ? "0" : "1"),
+      || (/^(0|false)$/i.test(process.env.MIAOS_CLERK_AUTH || "") ? "1" : "0"),
     MIAOS_LOCAL_PROFILE: process.env.MIAOS_LOCAL_PROFILE || "1",
     ...(process.env.MIAOS_CLERK_AUTH ? { MIAOS_CLERK_AUTH: process.env.MIAOS_CLERK_AUTH } : {}),
     ...(process.env.CLERK_PUBLISHABLE_KEY ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY } : {}),
