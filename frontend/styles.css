@@ -1096,6 +1096,14 @@
   .chat-new-menu.open{display:block;}
   .chat-new-menu-item{appearance:none;width:100%;border:none;background:none;cursor:pointer;display:flex;align-items:center;gap:10px;text-align:left;padding:8px 10px;border-radius:8px;}
   .chat-new-menu-item:hover{background:var(--sand-fill-ghost-hover);}
+  .chat-sidebar-pins{display:flex;align-items:center;gap:2px;min-width:0;overflow:hidden;}
+  .chat-sidebar-pin-btn img,.chat-sidebar-pin-btn svg,body.styled-skin .chat-sidebar-pin-btn svg{width:18px;height:18px;object-fit:contain;}
+  .chat-tools-menu .chat-new-menu-text{flex:1;min-width:0;}
+  .chat-tools-pin{flex:none;margin-left:auto;width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--sand-text-secondary);opacity:0;cursor:pointer;}
+  .chat-new-menu-item:hover .chat-tools-pin,.chat-tools-pin:focus-visible,.chat-tools-pin.pinned{opacity:1;}
+  .chat-tools-pin:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
+  .chat-tools-pin svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;}
+  .chat-tools-pin.pinned svg{fill:currentColor;}
   .chat-new-menu-item.upcoming{cursor:default;}
   .chat-new-menu-item.upcoming:hover{background:transparent;}
   .chat-new-menu-item.upcoming .chat-new-menu-icon{filter:grayscale(1);opacity:.42;}
