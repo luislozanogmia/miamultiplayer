@@ -6158,6 +6158,14 @@
       var card = preview.closest('.chat-expandable-message, .chat-pre-reasoning');
       var toggle = card && card.querySelector('[data-chat-expand-toggle]');
       if(!toggle) return;
+      // A hidden or not-yet-laid-out panel measures 0×0, which looks like
+      // "fits" and would hide the toggle on a message that is actually cut.
+      // Leave the toggle visible until a real measurement says otherwise.
+      if(!preview.clientHeight){
+        toggle.hidden = false;
+        toggle.setAttribute('aria-hidden', 'false');
+        return;
+      }
       var fits = preview.scrollHeight <= preview.clientHeight + 1;
       preview.classList.toggle('chat-compact-preview-overflow', !fits);
       toggle.hidden = fits;
@@ -6182,6 +6190,15 @@
     });
     syncChatCompactPreviewVisibility(thread);
     if(window.requestAnimationFrame) window.requestAnimationFrame(function(){ syncChatCompactPreviewVisibility(thread); });
+    // The compact browser panel can be hidden or mid-layout when messages
+    // render; re-measure whenever the thread's size actually changes so the
+    // toggle reflects real overflow instead of a 0-height measurement.
+    if(window.ResizeObserver && !thread._compactPreviewObserver){
+      thread._compactPreviewObserver = new ResizeObserver(function(){
+        syncChatCompactPreviewVisibility(thread);
+      });
+      thread._compactPreviewObserver.observe(thread);
+    }
   }
 
   // Only failures that can be resolved by replaying the same agent turn get a

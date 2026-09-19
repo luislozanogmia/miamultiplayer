@@ -484,6 +484,24 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     window.webContents.focus();
     window.webContents.send("miaos-browser-focus");
   }
+  // ERR_ABORTED (-3) means a load was cancelled, almost always because a
+  // newer navigation superseded it. Electron does not attach a stable `code`
+  // to every rejection shape, so match errno and the message as well.
+  function isAbortedLoadError(error) {
+    if (!error) return false;
+    if (error.code === "ERR_ABORTED" || error.errno === -3) return true;
+    return /ERR_ABORTED|\(-3\) loading/.test(String(error.message || ""));
+  }
+
+  function reportLoadError(tab, target, error) {
+    // Only surface the failure if this tab is still on the URL that failed;
+    // a rejection that arrives after the tab moved on must not stamp a stale
+    // error over the page the user is actually looking at.
+    if (isAbortedLoadError(error)) return;
+    if (!tabs.has(tab.id) || tab.url !== target) return;
+    tab.error = error.message; layout(); publish();
+  }
+
   function navigate(tab, value) {
     const target = normalizeTarget(value);
     tab.url = target;
@@ -492,11 +510,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     layout();
     persistTabs();
     // Do not hold the toolbar IPC open until every page resource has loaded.
-    tab.view.webContents.loadURL(target).catch(error => {
-      if (error.code !== "ERR_ABORTED" && tabs.has(tab.id)) {
-        tab.error = error.message; layout(); publish();
-      }
-    });
+    tab.view.webContents.loadURL(target).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -507,11 +521,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     tab.error = "";
     layout();
     persistTabs();
-    tab.view.webContents.loadURL(target).catch(error => {
-      if (error.code !== "ERR_ABORTED" && tabs.has(tab.id)) {
-        tab.error = error.message; layout(); publish();
-      }
-    });
+    tab.view.webContents.loadURL(target).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
