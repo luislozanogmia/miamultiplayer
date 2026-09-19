@@ -18,6 +18,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
+const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 
 // The packaged runtime layout is platform-specific: Windows venvs place
@@ -1410,7 +1411,9 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
           autoHideMenuBar: true,
           webPreferences: {
             session: window.webContents.session,
-            preload: "",
+            // Completes window.chrome the way real Chrome pages see it;
+            // Google's sign-in checks for it (see google-oauth-preload.cjs).
+            preload: path.join(__dirname, "google-oauth-preload.cjs"),
             contextIsolation: true,
             sandbox: true,
             nodeIntegration: false,
@@ -1887,15 +1890,12 @@ app.on("second-instance", activateMainWindow);
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   applyAppBranding();
-  // Google (and other identity providers) refuse OAuth from user agents that
-  // reveal an embedded framework — "Couldn't sign you in / this browser or
-  // app may not be secure". Strip the app and Electron tokens everywhere so
-  // every session presents the Chrome build it actually runs.
-  app.userAgentFallback = app.userAgentFallback
-    .replace(new RegExp("\\s" + app.getName().replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/[\\d.]+", "i"), "")
-    .replace(/\smia-multiplayer-macos\/[\d.]+/i, "")
-    .replace(/\sMia\/[\d.]+/i, "")
-    .replace(/\sElectron\/[\d.]+/, "");
+  // Google (and other identity providers) refuse OAuth from sessions that
+  // look like an embedded framework — "Couldn't sign you in / this browser
+  // or app may not be secure". Present the reduced Chrome user agent and
+  // client-hint headers real Chrome sends (see browser-identity.cjs).
+  app.userAgentFallback = sanitizeUserAgent(app.userAgentFallback, app.getName());
+  installClientHints(session.defaultSession);
   preparePackagedRuntime();
   createWindow();
   configureAutoUpdates();

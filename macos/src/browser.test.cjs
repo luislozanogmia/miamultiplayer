@@ -102,6 +102,7 @@ function harness(options = {}) {
   const context = {
     require: request => request === "electron" ? electron : require(request),
     module: { exports: {} }, URL, Buffer, setImmediate, setTimeout, clearTimeout, process,
+    __dirname,
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
   const { createBrowser, normalizeTarget, normalizeLocalFileTarget } = context.module.exports;
@@ -294,7 +295,9 @@ test("native views have no Node or preload access; permissions stay denied", () 
   assert.equal(prefs.contextIsolation, true);
   assert.equal(prefs.nodeIntegration, false);
   assert.equal(prefs.webSecurity, true);
-  assert.equal(prefs.preload, undefined);
+  // The only preload tabs carry is the Chrome-identity shim Google's
+  // sign-in checks for; it exposes no privileged surface to the page.
+  assert.match(String(prefs.preload), /google-oauth-preload\.cjs$/);
   assert.equal(h.profile.check(), false);
   assert.equal(h.profile.device(), false);
   h.profile.request(null, "camera", allowed => assert.equal(allowed, false));
@@ -355,7 +358,9 @@ test("Google authentication preserves the native popup and browser session", () 
   assert.equal(prefs.nodeIntegration, false);
   assert.equal(prefs.sandbox, true);
   assert.equal(prefs.webSecurity, true);
-  assert.equal(prefs.preload, "");
+  // The only preload the popup carries is the window.chrome shim Google's
+  // sign-in checks for; it exposes no privileged surface to the page.
+  assert.match(String(prefs.preload), /google-oauth-preload\.cjs$/);
   assert.equal(wc.popup({ url: "https://accounts.google.com.attacker.test/" }).action, "deny");
   assert.equal(h.command("state").tabs.length, 2);
   const child = new EventEmitter();
