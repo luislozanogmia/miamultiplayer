@@ -363,6 +363,10 @@ test("Google authentication preserves the native popup and browser session", () 
   assert.match(String(prefs.preload), /google-oauth-preload\.cjs$/);
   assert.equal(wc.popup({ url: "https://accounts.google.com.attacker.test/" }).action, "deny");
   assert.equal(h.command("state").tabs.length, 2);
+  // A plain Google sign-in link (Gmail's "Sign in") is not an OAuth popup:
+  // it opens as an in-app tab so the signed-in session stays in the browser.
+  assert.equal(wc.popup({ url: "https://accounts.google.com/ServiceLogin?service=mail" }).action, "deny");
+  assert.equal(h.command("state").tabs.length, 3);
   const child = new EventEmitter();
   child.webContents = new wc.constructor();
   child.isDestroyed = () => !!child.closed;

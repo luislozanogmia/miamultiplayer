@@ -995,9 +995,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.setWindowOpenHandler(({ url }) => {
       // GIS popup mode returns credentials to window.opener. Turning this into
       // a new tab destroys that relationship and strands the Google chooser.
+      // Only the OAuth/GIS endpoints need the real popup: a plain Google
+      // sign-in link (e.g. Gmail's "Sign in") must stay an in-app tab, or the
+      // whole signed-in session ends up living in a detached window.
       try {
         const target = new URL(normalizeTarget(url));
-        if (target.origin === "https://accounts.google.com") {
+        if (target.origin === "https://accounts.google.com"
+            && /^\/(gsi\/|o\/oauth2\/|signin\/oauth)/.test(target.pathname)) {
           return {
             action: "allow",
             overrideBrowserWindowOptions: {
