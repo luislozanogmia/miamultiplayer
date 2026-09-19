@@ -5270,11 +5270,30 @@
       if(window.miaNativeBrowser) window.miaNativeBrowser.action('reload');
     });
     if(close) close.addEventListener('click', closeLocalBrowser);
-    if(sidebar) sidebar.addEventListener('click', function(){
-      var open = document.body.classList.toggle('browser-sidebar-open');
+    var sidebarClose = el('#chatSidebarDrawerClose');
+    function setBrowserSidebarOpen(open){
+      document.body.classList.toggle('browser-sidebar-open', open);
+      if(!sidebar) return;
       sidebar.setAttribute('aria-expanded', open ? 'true' : 'false');
-      sidebar.setAttribute('aria-label', open ? 'Close sidebar' : 'Open sidebar');
-      sidebar.setAttribute('title', open ? 'Close sidebar' : 'Open sidebar');
+      sidebar.setAttribute('aria-label', open ? 'Close your bots' : 'Open your bots');
+      sidebar.setAttribute('title', 'Your bots');
+    }
+    if(sidebar) sidebar.addEventListener('click', function(){
+      setBrowserSidebarOpen(!document.body.classList.contains('browser-sidebar-open'));
+    });
+    if(sidebarClose) sidebarClose.addEventListener('click', function(){
+      setBrowserSidebarOpen(false);
+    });
+    // Picking a bot or conversation from the drawer is a destination choice:
+    // collapse the drawer so the chosen chat is immediately visible. Row
+    // tools (hide, dismiss, context-menu actions) keep the drawer open.
+    var drawer = el('.chat-sidebar');
+    if(drawer) drawer.addEventListener('click', function(e){
+      if(!document.body.classList.contains('browser-sidebar-open')) return;
+      var pick = e.target.closest('.chat-recent-row, .chat-starter-bot');
+      if(!pick || pick.classList.contains('chat-row-hidden')) return;
+      if(e.target.closest('.chat-row-hide, .chat-starter-bot-dismiss, [data-sidebar-action]')) return;
+      setBrowserSidebarOpen(false);
     });
     renderLocalBrowser();
   })();

@@ -2462,7 +2462,8 @@
   .local-browser-btn:hover:not(:disabled){background:#0000000a;color:#30302e;}
   .local-browser-btn:disabled{cursor:default;opacity:.35;}
   .local-browser-btn svg{display:block;width:18px;height:18px;margin:auto;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
-  .local-browser-sidebar-btn{display:none;}
+  .local-browser-sidebar-btn{display:none;width:34px;}
+  .local-browser-sidebar-btn .local-browser-mote{display:block;width:26px;height:24px;margin:auto;object-fit:contain;}
   .local-browser-toolbar{height:44px;min-height:44px;display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid var(--sand-border-subtle);background:#f7f7f5;}
   .local-browser-toolbar input{appearance:none;min-width:0;flex:1;height:32px;padding:0 11px;border:1px solid #d0d2ce;border-radius:9px;background:#fff;color:#202124;caret-color:#202124;font:13px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;outline:none;margin:0 4px;}
   .local-browser-toolbar input:focus{border-color:var(--sand-fill-accent);box-shadow:0 0 0 2px var(--sand-fill-accent-subtle);}
@@ -2557,6 +2558,13 @@
   body.browser-collab-mode .chat-sidebar{position:fixed!important;z-index:130;inset:0 auto 0 0;width:var(--sand-sidebar-width)!important;display:flex!important;transform:translateX(-102%);transition:transform .16s ease;box-shadow:12px 0 30px #0000002b;}
   body.browser-collab-mode.browser-sidebar-open .chat-sidebar{transform:translateX(0);}
   body.browser-collab-mode .local-browser-sidebar-btn{display:inline-flex;align-items:center;justify-content:center;}
+  /* The drawer floats over the browser with no scrim, so it carries its own
+     close affordance; outside collab mode the sidebar is a fixed column and
+     the button stays hidden. */
+  .chat-sidebar-drawer-close{display:none;}
+  body.browser-collab-mode .chat-sidebar .chat-sidebar-drawer-close{display:grid;place-items:center;position:absolute;top:10px;right:8px;z-index:5;width:26px;height:26px;padding:0;border:0;border-radius:7px;background:transparent;color:var(--sand-text-secondary);font:17px/1 var(--styled-sans);cursor:pointer;}
+  body.browser-collab-mode .chat-sidebar .chat-sidebar-drawer-close:hover{background:#0000000a;color:var(--sand-text-primary);}
+  body.browser-collab-mode .chat-sidebar .chat-new-btn-wrap{padding-right:34px;}
   body.styled-skin .cip-routines{padding:0 16px 18px;border-top:1px solid var(--sand-border-subtle);}
   body.styled-skin .chat-info-pane.computer-hidden .cip-routines{padding-top:18px;}
   body.styled-skin .chat-info-pane.computer-hidden .cip-routines-empty{flex:0 0 auto;justify-content:flex-start;padding-top:0;}

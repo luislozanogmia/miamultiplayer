@@ -353,6 +353,7 @@
       <section class="panel" id="panel-chat">
         <div class="chat-layout" data-shell>
           <aside class="chat-sidebar" data-rail>
+            <button type="button" class="chat-sidebar-drawer-close" id="chatSidebarDrawerClose" aria-label="Close panel" title="Close">&times;</button>
             <div class="chat-new-btn-wrap">
               <div class="mia-company-lockup workspace-switcher-wrap" id="miaLockup">
                 <button type="button" class="workspace-switcher" id="workspaceSwitcherToggle" aria-haspopup="menu" aria-expanded="false">
@@ -582,8 +583,8 @@
     <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off">
       <span class="local-browser-dot" id="localBrowserDot" aria-hidden="true" title="Connected"></span>
       <span class="local-browser-status" id="localBrowserStatus" hidden></span>
-      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Open sidebar" aria-label="Open sidebar" aria-expanded="false">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.4"></rect><path d="M9.5 4.5v15"></path></svg>
+      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <img class="local-browser-mote" src="assets/mote/mote.svg" alt="" draggable="false" />
       </button>
       <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled>&lsaquo;</button>
       <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled>&rsaquo;</button>
