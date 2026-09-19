@@ -1484,6 +1484,9 @@
     email.textContent = currentUserLocalProfile ? 'Local profile · no email required' : (currentAccountEmail || currentUser);
   }
   function openSettingsDrawer(pane){
+    // Same constraint as openHarnessOnboarding: the native browser view
+    // covers HTML overlays, so close its panel before showing the sheet.
+    closeLocalBrowser();
     el('#settingsOverlay').classList.add('open');
     el('#settingsDrawer').classList.add('open');
     showSettingsPane(pane || 'general');
@@ -1751,6 +1754,9 @@
   }
 
   function openHarnessOnboarding(existing){
+    // Electron's native browser view is above HTML overlays; the sheet would
+    // otherwise be hidden behind it. Saved tabs and sessions remain.
+    closeLocalBrowser();
     var onboardingOverlay = el('#harnessOnboardingOverlay');
     var onboardingSheet = el('#harnessOnboarding');
     if(onboardingOverlay) onboardingOverlay.classList.add('open');
