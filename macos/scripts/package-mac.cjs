@@ -442,12 +442,32 @@ function macEntitlementsForTarget(target, config) {
   return config.release && target.endsWith(".app") ? MAC_ENTITLEMENTS : "";
 }
 
+// Touch ID passkeys (app.configureWebAuthn) store WebAuthn credentials in a
+// keychain access group, which macOS only grants to a signed app whose
+// entitlements name the group under the signing team's prefix. Derive the
+// team from the Developer ID identity ("Developer ID Application: … (TEAM)");
+// ad-hoc builds have no team, no group, and no local passkey store.
+function macWebAuthnAccessGroup(config) {
+  if (!config.release) return "";
+  const team = /\(([A-Z0-9]+)\)\s*$/.exec(config.identity);
+  return team ? `${team[1]}.com.miamultiplayer.mia.webauthn` : "";
+}
+
 function signMacApp(appPath, config) {
+  const group = macWebAuthnAccessGroup(config);
+  let groupedEntitlements = "";
+  if (group) {
+    groupedEntitlements = path.join(os.tmpdir(), `mia-entitlements-${process.pid}.plist`);
+    fs.writeFileSync(groupedEntitlements, fs.readFileSync(MAC_ENTITLEMENTS, "utf8").replace(
+      "</dict>",
+      `  <key>keychain-access-groups</key>\n  <array>\n    <string>${group}</string>\n  </array>\n</dict>`,
+    ));
+  }
   const sign = (target) => {
     const args = ["--force"];
     if (config.release) args.push("--options", "runtime", "--timestamp");
     const entitlements = macEntitlementsForTarget(target, config);
-    if (entitlements) args.push("--entitlements", entitlements);
+    if (entitlements) args.push("--entitlements", groupedEntitlements || entitlements);
     args.push("--sign", config.identity, target);
     run("codesign", args);
   };
@@ -681,6 +701,15 @@ async function buildInstaller() {
     // Repair the final app topology before sealing the bundle signature.
     normalizeCopiedSymlinks(runtimeRoot, path.join(appPath, "Contents", "Resources", "runtime"));
     writeAppUpdateConfig(path.join(appPath, "Contents", "Resources"));
+    // The runtime reads this to enable the Touch ID passkey authenticator;
+    // the same group is sealed into the entitlements by signMacApp below.
+    const webauthnGroup = macWebAuthnAccessGroup(distribution);
+    if (webauthnGroup) {
+      fs.writeFileSync(
+        path.join(appPath, "Contents", "Resources", "webauthn.json"),
+        JSON.stringify({ keychainAccessGroup: webauthnGroup }) + "\n",
+      );
+    }
     assertNoRuntimeState(appPath);
     assertNoPrivateBuildPaths(appPath, [os.homedir(), REPOSITORY_ROOT, temporaryRoot, ...sourceRoots]);
     assertNoPrivateContent(appPath);

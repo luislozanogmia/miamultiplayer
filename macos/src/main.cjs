@@ -1888,8 +1888,49 @@ function activateMainWindow() {
 
 app.on("second-instance", activateMainWindow);
 
+// Passkeys stored on this Mac: enable Electron's Touch ID / Secure Enclave
+// platform authenticator so WebAuthn prompts surface natively instead of
+// failing silently. Credentials live in the app's keychain access group,
+// which only exists in signed builds — packaging writes the group into
+// Resources/webauthn.json and seals it into the entitlements (see
+// scripts/package-mac.cjs). Dev and unsigned builds have no group; passkeys
+// there fall back to the phone (hybrid) flow and security keys.
+function configurePasskeys() {
+  if (process.platform !== "darwin" || typeof app.configureWebAuthn !== "function") return;
+  let group = "";
+  try {
+    group = String(JSON.parse(fs.readFileSync(
+      path.join(process.resourcesPath, "webauthn.json"), "utf8",
+    )).keychainAccessGroup || "");
+  } catch (_) { /* No passkey store in this build. */ }
+  if (!group) return;
+  try {
+    app.configureWebAuthn({ touchID: { keychainAccessGroup: group } });
+  } catch (error) {
+    desktopLog(`Touch ID passkey setup failed: ${error.message}`);
+    return;
+  }
+  app.on("select-webauthn-account", (_event, details, callback) => {
+    const accounts = Array.isArray(details.accounts) ? details.accounts : [];
+    if (accounts.length === 1) return callback(accounts[0].credentialId);
+    const labels = accounts.slice(0, 3).map((account, index) =>
+      account.name || account.displayName || `Passkey ${index + 1}`);
+    dialog.showMessageBox(mainWindow, {
+      type: "question",
+      title: "Choose a passkey",
+      message: `Choose a passkey for ${details.relyingPartyId}`,
+      buttons: [...labels, "Cancel"],
+      cancelId: labels.length,
+    }).then(result => {
+      const choice = result && result.response;
+      callback(choice >= 0 && choice < labels.length ? accounts[choice].credentialId : null);
+    }).catch(() => callback(null));
+  });
+}
+
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   applyAppBranding();
+  configurePasskeys();
   // Google (and other identity providers) refuse OAuth from sessions that
   // look like an embedded framework — "Couldn't sign you in / this browser
   // or app may not be secure". Present the reduced Chrome user agent and
