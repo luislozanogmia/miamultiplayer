@@ -51,6 +51,14 @@ function nativeRuntimeBinaryPath(binDir, name) {
   return path.join(binDir, process.platform === "win32" ? `${name}.exe` : name);
 }
 
+// A source checkout launched with MIA_DEV_DATA_ROOT keeps every desktop
+// artifact — renderer state, cookies, logs, and the browser bridge — under
+// its own data root instead of Electron's default userData. A dev run and
+// the installed bundle can then coexist without sharing sign-in profiles or
+// fighting over one bridge socket. Packaged builds keep the default.
+const DEV_DATA_ROOT = app.isPackaged ? "" : String(process.env.MIA_DEV_DATA_ROOT || "").trim();
+if (DEV_DATA_ROOT) app.setPath("userData", path.join(path.resolve(DEV_DATA_ROOT), "desktop"));
+
 const PACKAGED_RUNTIME_ROOT = app.isPackaged ? path.join(process.resourcesPath, "runtime") : "";
 const PACKAGED_HERMES_BIN = PACKAGED_RUNTIME_ROOT
   ? runtimeLauncherPath(path.join(PACKAGED_RUNTIME_ROOT, "bin"), "hermes")
@@ -447,6 +455,19 @@ exec ${JSON.stringify(pythonExecutable)} "$@"
   fs.chmodSync(filePath, 0o755);
 }
 
+// The browser bridge's socket and token live under this instance's own
+// userData, in every mode. The bridge server, the backend, and the ghost-cli
+// adapter Hermes runs all read these same two paths, so agents always find
+// the bridge that this instance actually serves. Environment overrides
+// remain for tests and custom layouts.
+function ghostBridgePaths() {
+  const bridgeRoot = path.join(app.getPath("userData"), "ghost-bridge");
+  return {
+    socketPath: process.env.GHOST_MIA_SOCKET || path.join(bridgeRoot, "bridge.sock"),
+    tokenPath: process.env.GHOST_MIA_TOKEN_FILE || path.join(bridgeRoot, "bridge.token"),
+  };
+}
+
 function preparePackagedRuntime() {
   if (!app.isPackaged) return null;
   if (packagedRuntimePrepared) return packagedRuntimePrepared;
@@ -486,7 +507,7 @@ function preparePackagedRuntime() {
     }
   }
 
-  const bridgeRoot = path.join(userData, "ghost-bridge");
+  const bridge = ghostBridgePaths();
   process.env.HERMES_HOME = hermesHome;
   process.env.HERMES_BIN = hermesLauncher;
   process.env.MIAOS_HERMES_BIN = hermesLauncher;
@@ -508,10 +529,10 @@ function preparePackagedRuntime() {
   process.env.PYTHONDONTWRITEBYTECODE = "1";
   process.env.PYTHONPYCACHEPREFIX = path.join(userData, "python-cache");
   process.env.GHOST_CLI_HOME = ghostInstall;
-  process.env.GHOST_MIA_SOCKET = path.join(bridgeRoot, "bridge.sock");
-  process.env.GHOST_MIA_TOKEN_FILE = path.join(bridgeRoot, "bridge.token");
-  process.env.GHOST_IN_APP_BROWSER_SOCKET = process.env.GHOST_MIA_SOCKET;
-  process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE = process.env.GHOST_MIA_TOKEN_FILE;
+  process.env.GHOST_MIA_SOCKET = bridge.socketPath;
+  process.env.GHOST_MIA_TOKEN_FILE = bridge.tokenPath;
+  process.env.GHOST_IN_APP_BROWSER_SOCKET = process.env.GHOST_IN_APP_BROWSER_SOCKET || bridge.socketPath;
+  process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE = process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE || bridge.tokenPath;
   process.env.PATH = `${runtimeBin}${path.delimiter}${String(process.env.PATH || "")}`;
   packagedRuntimePrepared = { hermesHome, hermesInstall, ghostInstall, pythonExecutable, runtimeBin };
   return packagedRuntimePrepared;
@@ -705,6 +726,7 @@ async function startLocalBackend(exactPort = null) {
   const databasePath = backendDatabasePath();
   const hermesHome = path.resolve(process.env.HERMES_HOME || path.join(dataDirectory, "hermes"));
   const workspaceDir = miaosWorkspacePath();
+  const bridgePaths = ghostBridgePaths();
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
     STATIC_DIR: "../frontend",
@@ -755,10 +777,13 @@ async function startLocalBackend(exactPort = null) {
     ...(process.env.MIAOS_MANAGED_ROUTER_LABEL ? { MIAOS_MANAGED_ROUTER_LABEL: process.env.MIAOS_MANAGED_ROUTER_LABEL } : {}),
     ...(process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST ? { MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST: process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST } : {}),
     ...(process.env.GHOST_CLI_HOME ? { GHOST_CLI_HOME: process.env.GHOST_CLI_HOME } : {}),
-    ...(process.env.GHOST_MIA_SOCKET ? { GHOST_MIA_SOCKET: process.env.GHOST_MIA_SOCKET } : {}),
-    ...(process.env.GHOST_MIA_TOKEN_FILE ? { GHOST_MIA_TOKEN_FILE: process.env.GHOST_MIA_TOKEN_FILE } : {}),
-    ...(process.env.GHOST_IN_APP_BROWSER_SOCKET ? { GHOST_IN_APP_BROWSER_SOCKET: process.env.GHOST_IN_APP_BROWSER_SOCKET } : {}),
-    ...(process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE ? { GHOST_IN_APP_BROWSER_TOKEN_FILE: process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE } : {}),
+    // Bridge coordinates are authoritative in every mode: agents must find
+    // the bridge this same instance serves, never an installer default from
+    // another install. ghostBridgePaths() still honors explicit env overrides.
+    GHOST_MIA_SOCKET: bridgePaths.socketPath,
+    GHOST_MIA_TOKEN_FILE: bridgePaths.tokenPath,
+    GHOST_IN_APP_BROWSER_SOCKET: process.env.GHOST_IN_APP_BROWSER_SOCKET || bridgePaths.socketPath,
+    GHOST_IN_APP_BROWSER_TOKEN_FILE: process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE || bridgePaths.tokenPath,
     PATH: packagedRuntime
       ? `${packagedRuntime.runtimeBin}${path.delimiter}${String(process.env.PATH || "")}`
       : process.env.PATH,
@@ -1379,8 +1404,44 @@ function disposeArtifactPanel(window, toolbarView, contentView) {
   }
 }
 
+function clerkOAuthPopupOptions(parent) {
+  return {
+    parent,
+    modal: true,
+    show: true,
+    autoHideMenuBar: true,
+    webPreferences: {
+      session: parent.webContents.session,
+      // Completes window.chrome the way real Chrome pages see it;
+      // Google's sign-in checks for it (see google-oauth-preload.cjs).
+      preload: path.join(__dirname, "google-oauth-preload.cjs"),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  };
+}
+
+function openClerkOAuthPopup(parent, url, expectedBackendUrl) {
+  const popup = new BrowserWindow(clerkOAuthPopupOptions(parent));
+  configureNavigation(popup, expectedBackendUrl, true);
+  popup.webContents.on("did-navigate", (_event, navigatedUrl) => {
+    const local = expectedBackendUrl || backendUrl;
+    if (!local || !hasExactOrigin(navigatedUrl, local)) return;
+    // The OAuth round trip is done and the session cookie is set. Hand the
+    // signed-in page back to the window the redirect originally targeted.
+    try { parent.loadURL(navigatedUrl); } catch (_) { /* parent may be closing */ }
+    try { popup.close(); } catch (_) { /* already closed */ }
+  });
+  popup.loadURL(url);
+  return popup;
+}
+
 function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false) {
   const isLocal = url => (expectedBackendUrl || backendUrl) && hasExactOrigin(url, expectedBackendUrl || backendUrl);
+  // Windows created for the OAuth flow carry the Chrome-identity preload;
+  // ordinary windows do not, so a flow starting in them must move to a popup.
+  const isOAuthPopup = clerkFlowActive;
   const isClerkFlowNavigation = value => {
     if (isClerkGoogleOAuthUrl(value)) {
       clerkFlowActive = true;
@@ -1435,6 +1496,14 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   window.webContents.on("will-navigate", (event) => {
     const { url } = event;
     if (isLocal(url)) return;
+    // A Clerk Google sign-in that starts as an in-place redirect must move
+    // into the shimmed popup: this window's preload lacks the Chrome-identity
+    // shims, so Google refuses it as an insecure browser.
+    if (!isOAuthPopup && isClerkGoogleOAuthUrl(url)) {
+      event.preventDefault();
+      openClerkOAuthPopup(window, url, expectedBackendUrl);
+      return;
+    }
     // Google drops redirect_uri on subsequent account/password/consent pages.
     // Keep those steps in the same session only after a Clerk flow starts.
     if (isClerkFlowNavigation(url)) return;
@@ -1716,10 +1785,10 @@ async function loadMiaOS() {
 
 async function startGhostBridge() {
   if (ghostBridge || !nativeBrowser) return;
-  const bridgeRuntimeDir = path.join(app.getPath("userData"), "ghost-bridge");
+  const bridge = ghostBridgePaths();
   ghostBridge = createGhostBridge({
-    socketPath: process.env.GHOST_MIA_SOCKET || path.join(bridgeRuntimeDir, "bridge.sock"),
-    tokenPath: process.env.GHOST_MIA_TOKEN_FILE || path.join(bridgeRuntimeDir, "bridge.token"),
+    socketPath: bridge.socketPath,
+    tokenPath: bridge.tokenPath,
     handler: (method, params) => nativeBrowser
       ? nativeBrowser.protocol(method, params)
       : Promise.reject(Object.assign(new Error("Mia browser is unavailable."), { code: "BROWSER_ERROR" })),
