@@ -1887,6 +1887,15 @@ app.on("second-instance", activateMainWindow);
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   applyAppBranding();
+  // Google (and other identity providers) refuse OAuth from user agents that
+  // reveal an embedded framework — "Couldn't sign you in / this browser or
+  // app may not be secure". Strip the app and Electron tokens everywhere so
+  // every session presents the Chrome build it actually runs.
+  app.userAgentFallback = app.userAgentFallback
+    .replace(new RegExp("\\s" + app.getName().replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/[\\d.]+", "i"), "")
+    .replace(/\smia-multiplayer-macos\/[\d.]+/i, "")
+    .replace(/\sMia\/[\d.]+/i, "")
+    .replace(/\sElectron\/[\d.]+/, "");
   preparePackagedRuntime();
   createWindow();
   configureAutoUpdates();

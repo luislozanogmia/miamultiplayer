@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, session, ipcMain, Menu, nativeTheme, dialog, systemPreferences } = require("electron");
+const { WebContentsView, app, session, ipcMain, Menu, nativeTheme, dialog, systemPreferences } = require("electron");
 
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
 const MAX_PROTOCOL_SELECTOR = 2000;
@@ -117,7 +117,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // user agent that reveals an embedded framework — "Sign in with Google"
   // fails with 400/403 disallowed_useragent. Present the Chrome build the
   // browser actually runs by stripping the app and Electron tokens.
+  // The token is the running app's name — "Mia" when packaged, the package
+  // name (mia-multiplayer-macos) in dev — so build the pattern from it.
+  const appName = app && typeof app.getName === "function" ? app.getName() : "Mia";
+  const appNameToken = new RegExp("\\s" + appName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/[\\d.]+", "i");
   profile.setUserAgent(profile.getUserAgent()
+    .replace(appNameToken, "")
+    .replace(/\smia-multiplayer-macos\/[\d.]+/i, "")
     .replace(/\sMia\/[\d.]+/i, "")
     .replace(/\sElectron\/[\d.]+/, ""));
   // Favicons republished to the toolbar as data: URIs (see
