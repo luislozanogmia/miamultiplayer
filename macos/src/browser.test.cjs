@@ -102,6 +102,7 @@ function harness(options = {}) {
   const context = {
     require: request => request === "electron" ? electron : require(request),
     module: { exports: {} }, URL, Buffer, setImmediate, setTimeout, clearTimeout, process,
+    __dirname,
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
   const { createBrowser, normalizeTarget, normalizeLocalFileTarget } = context.module.exports;
@@ -294,7 +295,9 @@ test("native views have no Node or preload access; permissions stay denied", () 
   assert.equal(prefs.contextIsolation, true);
   assert.equal(prefs.nodeIntegration, false);
   assert.equal(prefs.webSecurity, true);
-  assert.equal(prefs.preload, undefined);
+  // The only preload tabs carry is the Chrome-identity shim Google's
+  // sign-in checks for; it exposes no privileged surface to the page.
+  assert.match(String(prefs.preload), /google-oauth-preload\.cjs$/);
   assert.equal(h.profile.check(), false);
   assert.equal(h.profile.device(), false);
   h.profile.request(null, "camera", allowed => assert.equal(allowed, false));
@@ -355,9 +358,15 @@ test("Google authentication preserves the native popup and browser session", () 
   assert.equal(prefs.nodeIntegration, false);
   assert.equal(prefs.sandbox, true);
   assert.equal(prefs.webSecurity, true);
-  assert.equal(prefs.preload, "");
+  // The only preload the popup carries is the window.chrome shim Google's
+  // sign-in checks for; it exposes no privileged surface to the page.
+  assert.match(String(prefs.preload), /google-oauth-preload\.cjs$/);
   assert.equal(wc.popup({ url: "https://accounts.google.com.attacker.test/" }).action, "deny");
   assert.equal(h.command("state").tabs.length, 2);
+  // A plain Google sign-in link (Gmail's "Sign in") is not an OAuth popup:
+  // it opens as an in-app tab so the signed-in session stays in the browser.
+  assert.equal(wc.popup({ url: "https://accounts.google.com/ServiceLogin?service=mail" }).action, "deny");
+  assert.equal(h.command("state").tabs.length, 3);
   const child = new EventEmitter();
   child.webContents = new wc.constructor();
   child.isDestroyed = () => !!child.closed;
@@ -491,4 +500,46 @@ test("Ghost can open only workspace files in the embedded browser", async () => 
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
+});
+
+test("aborted and stale load failures never stamp a tab error", async () => {
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+
+  // ERR_ABORTED shapes: with a code, with only errno, with only the message.
+  for (const error of [
+    Object.assign(new Error("ERR_ABORTED (-3) loading 'https://example.com/a'"), { code: "ERR_ABORTED" }),
+    Object.assign(new Error("(-3) loading 'https://example.com/a'"), { errno: -3 }),
+    new Error("ERR_ABORTED (-3) loading 'https://example.com/a'"),
+  ]) {
+    const h = harness();
+    h.command("new");
+    h.views[0].webContents.loadURL = () => Promise.reject(error);
+    h.command("navigate", { value: "https://example.com/a" });
+    await flush();
+    assert.equal(h.command("state").tabs[0].error, "");
+    h.window.emit("closed");
+  }
+
+  // A genuine failure for the URL the tab is still on is surfaced.
+  const failing = harness();
+  failing.command("new");
+  failing.views[0].webContents.loadURL = () =>
+    Promise.reject(Object.assign(new Error("ERR_NAME_NOT_RESOLVED (-105) loading 'https://bad.example/'"), { code: "ERR_NAME_NOT_RESOLVED" }));
+  failing.command("navigate", { value: "https://bad.example" });
+  await flush();
+  assert.match(failing.command("state").tabs[0].error, /ERR_NAME_NOT_RESOLVED/);
+  failing.window.emit("closed");
+
+  // A failure that resolves after the tab already moved on stays silent.
+  const stale = harness();
+  stale.command("new");
+  let rejectFirst;
+  const gate = new Promise((_resolve, reject) => { rejectFirst = reject; });
+  stale.views[0].webContents.loadURL = url => (url.includes("slow.example") ? gate : Promise.resolve());
+  stale.command("navigate", { value: "https://slow.example" });
+  stale.command("navigate", { value: "https://fast.example" });
+  rejectFirst(Object.assign(new Error("ERR_CONNECTION_RESET (-101) loading 'https://slow.example/'"), { code: "ERR_CONNECTION_RESET" }));
+  await flush();
+  assert.equal(stale.command("state").tabs[0].error, "");
+  stale.window.emit("closed");
 });

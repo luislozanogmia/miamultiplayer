@@ -81,6 +81,7 @@
     clearSoloHumanDirectoryState();
     try { localStorage.setItem(WORKSPACE_STORAGE_KEY, key); } catch(_workspaceStorageError) {}
     refreshAppName();
+    renderSidebarPins();
     return true;
   }
   function appNameLabel(){
@@ -1484,6 +1485,9 @@
     email.textContent = currentUserLocalProfile ? 'Local profile · no email required' : (currentAccountEmail || currentUser);
   }
   function openSettingsDrawer(pane){
+    // Same constraint as openHarnessOnboarding: the native browser view
+    // covers HTML overlays, so close its panel before showing the sheet.
+    closeLocalBrowser();
     el('#settingsOverlay').classList.add('open');
     el('#settingsDrawer').classList.add('open');
     showSettingsPane(pane || 'general');
@@ -1751,6 +1755,9 @@
   }
 
   function openHarnessOnboarding(existing){
+    // Electron's native browser view is above HTML overlays; the sheet would
+    // otherwise be hidden behind it. Saved tabs and sessions remain.
+    closeLocalBrowser();
     var onboardingOverlay = el('#harnessOnboardingOverlay');
     var onboardingSheet = el('#harnessOnboarding');
     if(onboardingOverlay) onboardingOverlay.classList.add('open');
@@ -5263,11 +5270,30 @@
       if(window.miaNativeBrowser) window.miaNativeBrowser.action('reload');
     });
     if(close) close.addEventListener('click', closeLocalBrowser);
-    if(sidebar) sidebar.addEventListener('click', function(){
-      var open = document.body.classList.toggle('browser-sidebar-open');
+    var sidebarClose = el('#chatSidebarDrawerClose');
+    function setBrowserSidebarOpen(open){
+      document.body.classList.toggle('browser-sidebar-open', open);
+      if(!sidebar) return;
       sidebar.setAttribute('aria-expanded', open ? 'true' : 'false');
-      sidebar.setAttribute('aria-label', open ? 'Close sidebar' : 'Open sidebar');
-      sidebar.setAttribute('title', open ? 'Close sidebar' : 'Open sidebar');
+      sidebar.setAttribute('aria-label', open ? 'Close your bots' : 'Open your bots');
+      sidebar.setAttribute('title', 'Your bots');
+    }
+    if(sidebar) sidebar.addEventListener('click', function(){
+      setBrowserSidebarOpen(!document.body.classList.contains('browser-sidebar-open'));
+    });
+    if(sidebarClose) sidebarClose.addEventListener('click', function(){
+      setBrowserSidebarOpen(false);
+    });
+    // Picking a bot or conversation from the drawer is a destination choice:
+    // collapse the drawer so the chosen chat is immediately visible. Row
+    // tools (hide, dismiss, context-menu actions) keep the drawer open.
+    var drawer = el('.chat-sidebar');
+    if(drawer) drawer.addEventListener('click', function(e){
+      if(!document.body.classList.contains('browser-sidebar-open')) return;
+      var pick = e.target.closest('.chat-recent-row, .chat-starter-bot');
+      if(!pick || pick.classList.contains('chat-row-hidden')) return;
+      if(e.target.closest('.chat-row-hide, .chat-starter-bot-dismiss, [data-sidebar-action]')) return;
+      setBrowserSidebarOpen(false);
     });
     renderLocalBrowser();
   })();
@@ -6133,13 +6159,15 @@
   function chatExpandableMessageHtml(text, isPreReasoning, compactBrowserMessage){
     var raw = String(text || '').trim();
     var wordCount = chatMessageWordCount(raw);
-    var hasMore = !!compactBrowserMessage || wordCount > CHAT_MESSAGE_PREVIEW_WORDS;
+    var truncated = wordCount > CHAT_MESSAGE_PREVIEW_WORDS;
+    var hasMore = !!compactBrowserMessage || truncated;
     var preview = hasMore ? chatMessagePreview(raw, CHAT_MESSAGE_PREVIEW_WORDS) : raw;
     var previewClass = isPreReasoning ? ' chat-pre-reasoning-preview' : '';
     var fullClass = isPreReasoning ? ' chat-pre-reasoning-full' : '';
     var toggleClass = isPreReasoning ? ' chat-pre-reasoning-toggle' : '';
     var previewAttr = isPreReasoning ? ' data-pre-reasoning-preview' : '';
     var compactPreviewAttr = compactBrowserMessage ? ' data-chat-compact-preview' : '';
+    var truncatedAttr = truncated ? ' data-chat-truncated' : '';
     var fullAttr = isPreReasoning ? ' data-pre-reasoning-full' : '';
     var toggleAttr = isPreReasoning ? ' data-pre-reasoning-toggle' : '';
     var labelAttr = isPreReasoning ? ' data-pre-reasoning-label' : '';
@@ -6150,7 +6178,7 @@
       : '';
     var previewHtml = isPreReasoning ? esc(preview) : mdLite(preview);
     var full = hasMore ? '<div class="chat-expandable-full' + fullClass + '" data-chat-expand-full' + fullAttr + ' hidden>' + mdLite(raw) + '</div>' : '';
-    return '<div class="chat-expandable-preview' + previewClass + '" data-chat-expand-preview' + previewAttr + compactPreviewAttr + '>' + previewHtml + '</div>' + toggle + full;
+    return '<div class="chat-expandable-preview' + previewClass + '" data-chat-expand-preview' + previewAttr + compactPreviewAttr + truncatedAttr + '>' + previewHtml + '</div>' + toggle + full;
   }
   function syncChatCompactPreviewVisibility(thread){
     if(!thread) return;
@@ -6158,6 +6186,22 @@
       var card = preview.closest('.chat-expandable-message, .chat-pre-reasoning');
       var toggle = card && card.querySelector('[data-chat-expand-toggle]');
       if(!toggle) return;
+      // A word-truncated preview ends in "…" no matter how it is laid out:
+      // fitting its box does not mean the message is whole, so the toggle
+      // must stay visible regardless of measured overflow.
+      if(preview.hasAttribute('data-chat-truncated')){
+        toggle.hidden = false;
+        toggle.setAttribute('aria-hidden', 'false');
+        return;
+      }
+      // A hidden or not-yet-laid-out panel measures 0×0, which looks like
+      // "fits" and would hide the toggle on a message that is actually cut.
+      // Leave the toggle visible until a real measurement says otherwise.
+      if(!preview.clientHeight){
+        toggle.hidden = false;
+        toggle.setAttribute('aria-hidden', 'false');
+        return;
+      }
       var fits = preview.scrollHeight <= preview.clientHeight + 1;
       preview.classList.toggle('chat-compact-preview-overflow', !fits);
       toggle.hidden = fits;
@@ -6182,6 +6226,15 @@
     });
     syncChatCompactPreviewVisibility(thread);
     if(window.requestAnimationFrame) window.requestAnimationFrame(function(){ syncChatCompactPreviewVisibility(thread); });
+    // The compact browser panel can be hidden or mid-layout when messages
+    // render; re-measure whenever the thread's size actually changes so the
+    // toggle reflects real overflow instead of a 0-height measurement.
+    if(window.ResizeObserver && !thread._compactPreviewObserver){
+      thread._compactPreviewObserver = new ResizeObserver(function(){
+        syncChatCompactPreviewVisibility(thread);
+      });
+      thread._compactPreviewObserver.observe(thread);
+    }
   }
 
   // Only failures that can be resolved by replaying the same agent turn get a
@@ -10327,6 +10380,100 @@
     loadHarnessSettings(false).then(function(settings){ openHarnessOnboarding(settings); });
   }
 
+  /* Tools can be pinned into the sidebar header as icon-only shortcuts.
+     Pins are a per-workspace convenience, so they live in localStorage. */
+  var SIDEBAR_PIN_LIMIT = 4;
+  var SIDEBAR_PIN_DEFAULTS = ['web-browser'];
+  /* Header pins use quiet monochrome line glyphs, matching the people and
+     wrench buttons beside them, instead of the menu's full-color icons. */
+  var SIDEBAR_PIN_ICONS = {
+    'new-chat': '<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-4 4z"></path><path d="M12 8v4M10 10h4"></path>',
+    'new-bot': '<rect x="5" y="8" width="14" height="10" rx="2.5"></rect><path d="M12 8V5M9.5 12.5h.01M14.5 12.5h.01M9 15.5h6"></path>',
+    'new-channel': '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h7A2.5 2.5 0 0 1 16 5.5v3A2.5 2.5 0 0 1 13.5 11H8l-4 3.5z"></path><path d="M18 9.5h.5A2.5 2.5 0 0 1 21 12v3a2.5 2.5 0 0 1-2.5 2.5H18V21l-4-3.5h-3"></path>',
+    'automations': '<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7v5l3 2"></path>',
+    'connected-apps': '<circle cx="12" cy="6" r="2.2"></circle><circle cx="6" cy="17" r="2.2"></circle><circle cx="18" cy="17" r="2.2"></circle><path d="M10.8 7.8 7.2 15M13.2 7.8l3.6 7.2M8.2 17h7.6"></path>',
+    'web-browser': '<circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5s1.3-6.2 3.8-8.5z"></path>'
+  };
+  function sidebarPinStorageKey(){ return 'miaSidebarToolPins:' + activeWorkspaceKey; }
+  function sidebarPinMenuItem(action){
+    var menu = el('#chatToolsMenu');
+    return menu ? menu.querySelector('[data-tools-action="' + action + '"]') : null;
+  }
+  function sidebarPinnable(item){
+    return !!item && item.getAttribute('aria-disabled') !== 'true';
+  }
+  function loadSidebarPins(){
+    try {
+      var raw = localStorage.getItem(sidebarPinStorageKey());
+      if(raw){
+        var list = JSON.parse(raw);
+        if(Array.isArray(list)) return list.filter(function(action){ return sidebarPinnable(sidebarPinMenuItem(action)); });
+      }
+    } catch(_pinStorageError) {}
+    return SIDEBAR_PIN_DEFAULTS.slice();
+  }
+  function saveSidebarPins(pins){
+    try { localStorage.setItem(sidebarPinStorageKey(), JSON.stringify(pins)); } catch(_pinStorageError) {}
+  }
+  function toggleSidebarPin(action){
+    var pins = loadSidebarPins();
+    var index = pins.indexOf(action);
+    if(index >= 0) pins.splice(index, 1);
+    else {
+      if(pins.length >= SIDEBAR_PIN_LIMIT) pins.shift();
+      pins.push(action);
+    }
+    saveSidebarPins(pins);
+    renderSidebarPins();
+  }
+  function renderSidebarPins(){
+    var host = el('#chatSidebarPins');
+    if(!host) return;
+    var pins = loadSidebarPins();
+    host.innerHTML = '';
+    pins.slice(0, SIDEBAR_PIN_LIMIT).forEach(function(action){
+      var item = sidebarPinMenuItem(action);
+      if(!sidebarPinnable(item)) return;
+      var icon = item.querySelector('.chat-new-menu-icon');
+      var label = item.querySelector('.chat-new-menu-label');
+      var name = label ? label.textContent.trim() : action;
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chat-sidebar-tool-btn chat-sidebar-pin-btn';
+      btn.title = name;
+      btn.setAttribute('aria-label', name);
+      var glyph = SIDEBAR_PIN_ICONS[action];
+      if(glyph) btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" stroke-width="1.7">' + glyph + '</svg>';
+      else if(icon) btn.innerHTML = icon.innerHTML;
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        var menu = el('#chatToolsMenu');
+        if(menu) menu.classList.remove('open');
+        syncSidebarToolButtons();
+        runToolsAction(action);
+      });
+      host.appendChild(btn);
+    });
+    els('[data-tools-pin]').forEach(function(pin){
+      var owner = pin.closest('[data-tools-action]');
+      var pinned = !!owner && pins.indexOf(owner.getAttribute('data-tools-action')) >= 0;
+      pin.classList.toggle('pinned', pinned);
+      pin.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+      pin.setAttribute('aria-label', pinned ? 'Unpin from sidebar' : 'Pin to sidebar');
+      pin.title = pinned ? 'Unpin from sidebar' : 'Pin to sidebar';
+    });
+  }
+  function runToolsAction(action){
+    if(localBrowserState.open && action !== 'web-browser') closeLocalBrowser();
+    if(action === 'new-chat') openDmCompose();
+    else if(action === 'new-bot') startAgentSetupChat();
+    else if(action === 'new-agent') openHarnessAgentSetup();
+    else if(action === 'new-channel') openNewChannelFlow();
+    else if(action === 'connected-apps') openPluginPane();
+    else if(action === 'automations') openAutomationsFromTools();
+    else if(action === 'web-browser') openWebBrowserTool();
+  }
+
   /* The header has one action menu; every item delegates to its existing
      owning flow so creation and connector handlers remain single-sourced. */
   (function(){
@@ -10334,6 +10481,27 @@
     var menu = el('#chatToolsMenu');
     if(!toolsBtn || !menu) return;
     function closeMenu(){ menu.classList.remove('open'); syncSidebarToolButtons(); }
+    els('[data-tools-action]', menu).forEach(function(item){
+      if(!sidebarPinnable(item)) return;
+      var pin = document.createElement('span');
+      pin.className = 'chat-tools-pin';
+      pin.setAttribute('data-tools-pin', '');
+      pin.setAttribute('role', 'button');
+      pin.setAttribute('tabindex', '0');
+      pin.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"></path><path d="M12 14v6"></path></svg>';
+      pin.addEventListener('click', function(e){
+        e.stopPropagation();
+        toggleSidebarPin(item.getAttribute('data-tools-action'));
+      });
+      pin.addEventListener('keydown', function(e){
+        if(e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        e.stopPropagation();
+        toggleSidebarPin(item.getAttribute('data-tools-action'));
+      });
+      item.appendChild(pin);
+    });
+    renderSidebarPins();
     toolsBtn.addEventListener('click', function(e){
       e.stopPropagation();
       var developerMenu = el('#chatDeveloperMenu');
@@ -10350,14 +10518,7 @@
       var action = item.getAttribute('data-tools-action');
       closeMenu();
       if(item.getAttribute('aria-disabled') === 'true') return;
-      if(localBrowserState.open && action !== 'web-browser') closeLocalBrowser();
-      if(action === 'new-chat') openDmCompose();
-      else if(action === 'new-bot') startAgentSetupChat();
-      else if(action === 'new-agent') openHarnessAgentSetup();
-      else if(action === 'new-channel') openNewChannelFlow();
-      else if(action === 'connected-apps') openPluginPane();
-      else if(action === 'automations') openAutomationsFromTools();
-      else if(action === 'web-browser') openWebBrowserTool();
+      runToolsAction(action);
     });
     document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && menu.classList.contains('open')) closeMenu(); });
   })();

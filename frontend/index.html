@@ -353,6 +353,7 @@
       <section class="panel" id="panel-chat">
         <div class="chat-layout" data-shell>
           <aside class="chat-sidebar" data-rail>
+            <button type="button" class="chat-sidebar-drawer-close" id="chatSidebarDrawerClose" aria-label="Close panel" title="Close">&times;</button>
             <div class="chat-new-btn-wrap">
               <div class="mia-company-lockup workspace-switcher-wrap" id="miaLockup">
                 <button type="button" class="workspace-switcher" id="workspaceSwitcherToggle" aria-haspopup="menu" aria-expanded="false">
@@ -370,6 +371,7 @@
                   </button>
                 </div>
               </div>
+              <div class="chat-sidebar-pins" id="chatSidebarPins" role="group" aria-label="Pinned tools"></div>
               <button type="button" class="chat-sidebar-tool-btn chat-sidebar-developer-btn" id="chatSidebarDeveloperBtn" aria-label="Open developer menu" title="Developer tools" aria-haspopup="menu" aria-expanded="false" hidden>&lt;/&gt;</button>
               <button type="button" class="chat-sidebar-tool-btn chat-sidebar-agents-btn" id="chatSidebarManageAgentsBtn" aria-label="Manage people, agents, and bots" title="Manage people, agents, and bots"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"></circle><circle cx="17" cy="10" r="2"></circle><path d="M3.5 19a5.5 5.5 0 0 1 11 0M14 16.5a4 4 0 0 1 6.5 2.5"></path></svg></button>
               <button type="button" class="chat-sidebar-tool-btn chat-sidebar-tools-btn" id="chatSidebarToolsBtn" aria-label="Open tools menu" title="Tools" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4.5 4.5 0 0 0-6.1 6.1L3.9 17.1a2.1 2.1 0 0 0 3 3l5.3-5.3a4.5 4.5 0 0 0 6.1-6.1l-3.2 3.2-2.1-2.1 3.2-3.2Z"></path></svg></button>
@@ -581,8 +583,8 @@
     <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off">
       <span class="local-browser-dot" id="localBrowserDot" aria-hidden="true" title="Connected"></span>
       <span class="local-browser-status" id="localBrowserStatus" hidden></span>
-      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Open sidebar" aria-label="Open sidebar" aria-expanded="false">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.4"></rect><path d="M9.5 4.5v15"></path></svg>
+      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <img class="local-browser-mote" src="assets/mote/mote.svg" alt="" draggable="false" />
       </button>
       <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled>&lsaquo;</button>
       <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled>&rsaquo;</button>

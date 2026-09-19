@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Ghost CLI adapter for Hermes processes. This directory is first on the
+# Hermes PATH in every mode, so agents always reach the bridge through the
+# coordinates the running app exported (GHOST_CLI_HOME and the
+# GHOST_IN_APP_BROWSER_* variables) instead of an installer-written wrapper
+# whose hardcoded paths may belong to a different install.
+set -euo pipefail
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec "${HERMES_PYTHON:-python3}" "$script_dir/../miaos-ghost-cli.py" "$@"

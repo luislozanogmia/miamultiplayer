@@ -18,6 +18,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
+const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 
 // The packaged runtime layout is platform-specific: Windows venvs place
@@ -49,6 +50,14 @@ function runtimeLauncherPath(binDir, name) {
 function nativeRuntimeBinaryPath(binDir, name) {
   return path.join(binDir, process.platform === "win32" ? `${name}.exe` : name);
 }
+
+// A source checkout launched with MIA_DEV_DATA_ROOT keeps every desktop
+// artifact — renderer state, cookies, logs, and the browser bridge — under
+// its own data root instead of Electron's default userData. A dev run and
+// the installed bundle can then coexist without sharing sign-in profiles or
+// fighting over one bridge socket. Packaged builds keep the default.
+const DEV_DATA_ROOT = app.isPackaged ? "" : String(process.env.MIA_DEV_DATA_ROOT || "").trim();
+if (DEV_DATA_ROOT) app.setPath("userData", path.join(path.resolve(DEV_DATA_ROOT), "desktop"));
 
 const PACKAGED_RUNTIME_ROOT = app.isPackaged ? path.join(process.resourcesPath, "runtime") : "";
 const PACKAGED_HERMES_BIN = PACKAGED_RUNTIME_ROOT
@@ -122,11 +131,14 @@ const AUTH_HOSTS = new Set([
   "docs.google.com",
   "sheets.google.com",
 ]);
-// Origin of the deployment's Clerk instance, when one is configured via the
-// environment. Empty when Clerk auth is not in use.
+// Origin of the deployment's Clerk instance. Mia's own instance is the
+// built-in default (same public identifier the backend ships in
+// backend/server.js); the environment overrides it for forks. Empty only
+// when the override is unparseable.
+const MIA_DEFAULT_CLERK_ISSUER = "https://faithful-drum-333.clerk.accounts.dev";
 const CLERK_ISSUER_ORIGIN = (() => {
   try {
-    return new URL(String(process.env.CLERK_ISSUER || "").trim()).origin;
+    return new URL(String(process.env.CLERK_ISSUER || "").trim() || MIA_DEFAULT_CLERK_ISSUER).origin;
   } catch (_) {
     return "";
   }
@@ -443,6 +455,19 @@ exec ${JSON.stringify(pythonExecutable)} "$@"
   fs.chmodSync(filePath, 0o755);
 }
 
+// The browser bridge's socket and token live under this instance's own
+// userData, in every mode. The bridge server, the backend, and the ghost-cli
+// adapter Hermes runs all read these same two paths, so agents always find
+// the bridge that this instance actually serves. Environment overrides
+// remain for tests and custom layouts.
+function ghostBridgePaths() {
+  const bridgeRoot = path.join(app.getPath("userData"), "ghost-bridge");
+  return {
+    socketPath: process.env.GHOST_MIA_SOCKET || path.join(bridgeRoot, "bridge.sock"),
+    tokenPath: process.env.GHOST_MIA_TOKEN_FILE || path.join(bridgeRoot, "bridge.token"),
+  };
+}
+
 function preparePackagedRuntime() {
   if (!app.isPackaged) return null;
   if (packagedRuntimePrepared) return packagedRuntimePrepared;
@@ -482,7 +507,7 @@ function preparePackagedRuntime() {
     }
   }
 
-  const bridgeRoot = path.join(userData, "ghost-bridge");
+  const bridge = ghostBridgePaths();
   process.env.HERMES_HOME = hermesHome;
   process.env.HERMES_BIN = hermesLauncher;
   process.env.MIAOS_HERMES_BIN = hermesLauncher;
@@ -504,10 +529,10 @@ function preparePackagedRuntime() {
   process.env.PYTHONDONTWRITEBYTECODE = "1";
   process.env.PYTHONPYCACHEPREFIX = path.join(userData, "python-cache");
   process.env.GHOST_CLI_HOME = ghostInstall;
-  process.env.GHOST_MIA_SOCKET = path.join(bridgeRoot, "bridge.sock");
-  process.env.GHOST_MIA_TOKEN_FILE = path.join(bridgeRoot, "bridge.token");
-  process.env.GHOST_IN_APP_BROWSER_SOCKET = process.env.GHOST_MIA_SOCKET;
-  process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE = process.env.GHOST_MIA_TOKEN_FILE;
+  process.env.GHOST_MIA_SOCKET = bridge.socketPath;
+  process.env.GHOST_MIA_TOKEN_FILE = bridge.tokenPath;
+  process.env.GHOST_IN_APP_BROWSER_SOCKET = process.env.GHOST_IN_APP_BROWSER_SOCKET || bridge.socketPath;
+  process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE = process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE || bridge.tokenPath;
   process.env.PATH = `${runtimeBin}${path.delimiter}${String(process.env.PATH || "")}`;
   packagedRuntimePrepared = { hermesHome, hermesInstall, ghostInstall, pythonExecutable, runtimeBin };
   return packagedRuntimePrepared;
@@ -701,6 +726,7 @@ async function startLocalBackend(exactPort = null) {
   const databasePath = backendDatabasePath();
   const hermesHome = path.resolve(process.env.HERMES_HOME || path.join(dataDirectory, "hermes"));
   const workspaceDir = miaosWorkspacePath();
+  const bridgePaths = ghostBridgePaths();
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
     STATIC_DIR: "../frontend",
@@ -730,13 +756,13 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "executions.db"),
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
       || path.join(dataDirectory, "bot-artifacts"),
-    // A deployment may configure Clerk auth entirely through the environment
-    // (MIAOS_CLERK_AUTH plus CLERK_PUBLISHABLE_KEY / CLERK_JWT_KEY /
-    // CLERK_ISSUER). Without it, the desktop app runs the local no-auth
-    // profile. Clerk vars are forwarded only when set so empty-string
-    // defaults don't shadow dotenv values from backend/.env.local.
+    // Clerk sign-in is on by default: the backend carries Mia's instance as
+    // its built-in configuration, so the desktop app boots into the hosted
+    // ecosystem unless the person opts out (MIAOS_DESKTOP_NO_AUTH=1 or
+    // MIAOS_CLERK_AUTH=0). Clerk vars are forwarded only when set so
+    // empty-string defaults don't shadow dotenv values.
     MIAOS_NO_AUTH: process.env.MIAOS_DESKTOP_NO_AUTH
-      || (/^(1|true)$/i.test(process.env.MIAOS_CLERK_AUTH || "") ? "0" : "1"),
+      || (/^(0|false)$/i.test(process.env.MIAOS_CLERK_AUTH || "") ? "1" : "0"),
     MIAOS_LOCAL_PROFILE: process.env.MIAOS_LOCAL_PROFILE || "1",
     ...(process.env.MIAOS_CLERK_AUTH ? { MIAOS_CLERK_AUTH: process.env.MIAOS_CLERK_AUTH } : {}),
     ...(process.env.CLERK_PUBLISHABLE_KEY ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY } : {}),
@@ -751,10 +777,13 @@ async function startLocalBackend(exactPort = null) {
     ...(process.env.MIAOS_MANAGED_ROUTER_LABEL ? { MIAOS_MANAGED_ROUTER_LABEL: process.env.MIAOS_MANAGED_ROUTER_LABEL } : {}),
     ...(process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST ? { MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST: process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST } : {}),
     ...(process.env.GHOST_CLI_HOME ? { GHOST_CLI_HOME: process.env.GHOST_CLI_HOME } : {}),
-    ...(process.env.GHOST_MIA_SOCKET ? { GHOST_MIA_SOCKET: process.env.GHOST_MIA_SOCKET } : {}),
-    ...(process.env.GHOST_MIA_TOKEN_FILE ? { GHOST_MIA_TOKEN_FILE: process.env.GHOST_MIA_TOKEN_FILE } : {}),
-    ...(process.env.GHOST_IN_APP_BROWSER_SOCKET ? { GHOST_IN_APP_BROWSER_SOCKET: process.env.GHOST_IN_APP_BROWSER_SOCKET } : {}),
-    ...(process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE ? { GHOST_IN_APP_BROWSER_TOKEN_FILE: process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE } : {}),
+    // Bridge coordinates are authoritative in every mode: agents must find
+    // the bridge this same instance serves, never an installer default from
+    // another install. ghostBridgePaths() still honors explicit env overrides.
+    GHOST_MIA_SOCKET: bridgePaths.socketPath,
+    GHOST_MIA_TOKEN_FILE: bridgePaths.tokenPath,
+    GHOST_IN_APP_BROWSER_SOCKET: process.env.GHOST_IN_APP_BROWSER_SOCKET || bridgePaths.socketPath,
+    GHOST_IN_APP_BROWSER_TOKEN_FILE: process.env.GHOST_IN_APP_BROWSER_TOKEN_FILE || bridgePaths.tokenPath,
     PATH: packagedRuntime
       ? `${packagedRuntime.runtimeBin}${path.delimiter}${String(process.env.PATH || "")}`
       : process.env.PATH,
@@ -1375,8 +1404,44 @@ function disposeArtifactPanel(window, toolbarView, contentView) {
   }
 }
 
+function clerkOAuthPopupOptions(parent) {
+  return {
+    parent,
+    modal: true,
+    show: true,
+    autoHideMenuBar: true,
+    webPreferences: {
+      session: parent.webContents.session,
+      // Completes window.chrome the way real Chrome pages see it;
+      // Google's sign-in checks for it (see google-oauth-preload.cjs).
+      preload: path.join(__dirname, "google-oauth-preload.cjs"),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  };
+}
+
+function openClerkOAuthPopup(parent, url, expectedBackendUrl) {
+  const popup = new BrowserWindow(clerkOAuthPopupOptions(parent));
+  configureNavigation(popup, expectedBackendUrl, true);
+  popup.webContents.on("did-navigate", (_event, navigatedUrl) => {
+    const local = expectedBackendUrl || backendUrl;
+    if (!local || !hasExactOrigin(navigatedUrl, local)) return;
+    // The OAuth round trip is done and the session cookie is set. Hand the
+    // signed-in page back to the window the redirect originally targeted.
+    try { parent.loadURL(navigatedUrl); } catch (_) { /* parent may be closing */ }
+    try { popup.close(); } catch (_) { /* already closed */ }
+  });
+  popup.loadURL(url);
+  return popup;
+}
+
 function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false) {
   const isLocal = url => (expectedBackendUrl || backendUrl) && hasExactOrigin(url, expectedBackendUrl || backendUrl);
+  // Windows created for the OAuth flow carry the Chrome-identity preload;
+  // ordinary windows do not, so a flow starting in them must move to a popup.
+  const isOAuthPopup = clerkFlowActive;
   const isClerkFlowNavigation = value => {
     if (isClerkGoogleOAuthUrl(value)) {
       clerkFlowActive = true;
@@ -1407,7 +1472,9 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
           autoHideMenuBar: true,
           webPreferences: {
             session: window.webContents.session,
-            preload: "",
+            // Completes window.chrome the way real Chrome pages see it;
+            // Google's sign-in checks for it (see google-oauth-preload.cjs).
+            preload: path.join(__dirname, "google-oauth-preload.cjs"),
             contextIsolation: true,
             sandbox: true,
             nodeIntegration: false,
@@ -1429,6 +1496,14 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   window.webContents.on("will-navigate", (event) => {
     const { url } = event;
     if (isLocal(url)) return;
+    // A Clerk Google sign-in that starts as an in-place redirect must move
+    // into the shimmed popup: this window's preload lacks the Chrome-identity
+    // shims, so Google refuses it as an insecure browser.
+    if (!isOAuthPopup && isClerkGoogleOAuthUrl(url)) {
+      event.preventDefault();
+      openClerkOAuthPopup(window, url, expectedBackendUrl);
+      return;
+    }
     // Google drops redirect_uri on subsequent account/password/consent pages.
     // Keep those steps in the same session only after a Clerk flow starts.
     if (isClerkFlowNavigation(url)) return;
@@ -1710,10 +1785,10 @@ async function loadMiaOS() {
 
 async function startGhostBridge() {
   if (ghostBridge || !nativeBrowser) return;
-  const bridgeRuntimeDir = path.join(app.getPath("userData"), "ghost-bridge");
+  const bridge = ghostBridgePaths();
   ghostBridge = createGhostBridge({
-    socketPath: process.env.GHOST_MIA_SOCKET || path.join(bridgeRuntimeDir, "bridge.sock"),
-    tokenPath: process.env.GHOST_MIA_TOKEN_FILE || path.join(bridgeRuntimeDir, "bridge.token"),
+    socketPath: bridge.socketPath,
+    tokenPath: bridge.tokenPath,
     handler: (method, params) => nativeBrowser
       ? nativeBrowser.protocol(method, params)
       : Promise.reject(Object.assign(new Error("Mia browser is unavailable."), { code: "BROWSER_ERROR" })),
@@ -1882,8 +1957,55 @@ function activateMainWindow() {
 
 app.on("second-instance", activateMainWindow);
 
+// Passkeys stored on this Mac: enable Electron's Touch ID / Secure Enclave
+// platform authenticator so WebAuthn prompts surface natively instead of
+// failing silently. Credentials live in the app's keychain access group,
+// which only exists in signed builds — packaging writes the group into
+// Resources/webauthn.json and seals it into the entitlements (see
+// scripts/package-mac.cjs). Dev and unsigned builds have no group; passkeys
+// there fall back to the phone (hybrid) flow and security keys.
+function configurePasskeys() {
+  if (process.platform !== "darwin" || typeof app.configureWebAuthn !== "function") return;
+  let group = "";
+  try {
+    group = String(JSON.parse(fs.readFileSync(
+      path.join(process.resourcesPath, "webauthn.json"), "utf8",
+    )).keychainAccessGroup || "");
+  } catch (_) { /* No passkey store in this build. */ }
+  if (!group) return;
+  try {
+    app.configureWebAuthn({ touchID: { keychainAccessGroup: group } });
+  } catch (error) {
+    desktopLog(`Touch ID passkey setup failed: ${error.message}`);
+    return;
+  }
+  app.on("select-webauthn-account", (_event, details, callback) => {
+    const accounts = Array.isArray(details.accounts) ? details.accounts : [];
+    if (accounts.length === 1) return callback(accounts[0].credentialId);
+    const labels = accounts.slice(0, 3).map((account, index) =>
+      account.name || account.displayName || `Passkey ${index + 1}`);
+    dialog.showMessageBox(mainWindow, {
+      type: "question",
+      title: "Choose a passkey",
+      message: `Choose a passkey for ${details.relyingPartyId}`,
+      buttons: [...labels, "Cancel"],
+      cancelId: labels.length,
+    }).then(result => {
+      const choice = result && result.response;
+      callback(choice >= 0 && choice < labels.length ? accounts[choice].credentialId : null);
+    }).catch(() => callback(null));
+  });
+}
+
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   applyAppBranding();
+  configurePasskeys();
+  // Google (and other identity providers) refuse OAuth from sessions that
+  // look like an embedded framework — "Couldn't sign you in / this browser
+  // or app may not be secure". Present the reduced Chrome user agent and
+  // client-hint headers real Chrome sends (see browser-identity.cjs).
+  app.userAgentFallback = sanitizeUserAgent(app.userAgentFallback, app.getName());
+  installClientHints(session.defaultSession);
   preparePackagedRuntime();
   createWindow();
   configureAutoUpdates();

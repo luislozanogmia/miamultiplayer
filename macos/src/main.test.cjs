@@ -40,27 +40,44 @@ test("only Clerk's exact Google OAuth callback stays in the Electron session", (
   ]) assert.equal(main.isClerkGoogleOAuthUrl(blocked), false, blocked);
 });
 
-test("Clerk Google navigation retains later sign-in steps and ends on local return", () => {
+test("Clerk Google navigation moves into the shimmed popup and hands back the session", () => {
   const { EventEmitter } = require("node:events");
   const main = loadMain();
   const contents = new EventEmitter();
   contents.setWindowOpenHandler = handler => { contents.popup = handler; };
-  main.configureNavigation({ webContents: contents }, "http://localhost:4871");
-  const navigate = url => {
+  const parent = {
+    webContents: contents,
+    loadedUrls: [],
+    loadURL(url) { this.loadedUrls.push(url); },
+  };
+  main.configureNavigation(parent, "http://localhost:4871");
+  const navigate = (target, url) => {
     let blocked = false;
-    contents.emit("will-navigate", { url, preventDefault() { blocked = true; } });
+    target.emit("will-navigate", { url, preventDefault() { blocked = true; } });
     return !blocked;
   };
   const challenge = "https://accounts.google.com/v3/signin/challenge/pwd";
-  assert.equal(navigate(challenge), false);
-  assert.equal(navigate("https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fclerk.shared.lcl.dev%2Fv1%2Foauth_callback&response_type=code"), true);
-  assert.equal(navigate(challenge), true);
-  assert.equal(navigate("https://clerk.shared.lcl.dev/v1/oauth_callback?code=fixture"), true);
-  assert.equal(navigate("https://accounts.google.com.attacker.test/"), false);
-  assert.equal(navigate("file:///tmp/private"), false);
-  assert.equal(navigate("http://localhost:4871/"), true);
-  contents.emit("did-navigate", {}, "http://localhost:4871/");
-  assert.equal(navigate(challenge), false);
+  assert.equal(navigate(contents, challenge), false);
+
+  // An in-place OAuth redirect is intercepted and rerouted into a popup that
+  // carries the Chrome-identity preload; the main window never navigates.
+  const oauth = "https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fclerk.shared.lcl.dev%2Fv1%2Foauth_callback&response_type=code";
+  assert.equal(navigate(contents, oauth), false);
+  const popup = main.__electron.BrowserWindow.instances[0];
+  assert.ok(popup, "OAuth redirect opens a shimmed popup");
+  assert.match(popup.options.webPreferences.preload, /google-oauth-preload\.cjs$/);
+  assert.equal(popup.options.parent, parent);
+  assert.deepEqual(popup.loadedUrls, [oauth]);
+  assert.equal(navigate(contents, challenge), false, "the flow never activates in the main window");
+
+  // The popup keeps later sign-in steps in-window and ends on local return.
+  assert.equal(navigate(popup.webContents, challenge), true);
+  assert.equal(navigate(popup.webContents, "https://clerk.shared.lcl.dev/v1/oauth_callback?code=fixture"), true);
+  assert.equal(navigate(popup.webContents, "https://accounts.google.com.attacker.test/"), false);
+  assert.equal(navigate(popup.webContents, "file:///tmp/private"), false);
+  popup.webContents.emit("did-navigate", {}, "http://localhost:4871/");
+  assert.deepEqual(parent.loadedUrls, ["http://localhost:4871/"]);
+  assert.equal(popup.closed, true);
 });
 
 test("packaged macOS runtime is self-contained and ignores ambient Hermes", () => {
@@ -159,7 +176,20 @@ function loadMain() {
       checkForUpdates() { return Promise.resolve(); },
       quitAndInstall() {},
     },
-    BrowserWindow: class {},
+    BrowserWindow: class FakeBrowserWindow {
+      static instances = [];
+      constructor(options) {
+        const { EventEmitter } = require("node:events");
+        this.options = options;
+        this.webContents = new EventEmitter();
+        this.webContents.setWindowOpenHandler = handler => { this.webContents.popup = handler; };
+        this.loadedUrls = [];
+        this.closed = false;
+        FakeBrowserWindow.instances.push(this);
+      }
+      loadURL(url) { this.loadedUrls.push(url); }
+      close() { this.closed = true; }
+    },
     dialog: { showMessageBox() { return Promise.resolve({ response: 1 }); } },
     ipcMain: { handle() {}, on() {}, removeHandler() {} },
     Menu: { setApplicationMenu() {}, buildFromTemplate(template) { return template; } },
@@ -174,7 +204,7 @@ function loadMain() {
   };
   try {
     delete require.cache[require.resolve("./main.cjs")];
-    return require("./main.cjs");
+    return { ...require("./main.cjs"), __electron: electron };
   } finally {
     Module._load = load;
   }

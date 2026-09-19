@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Public-repo guard: blocks secrets, private-product markers, and
-# force-added overlay files from ever being committed.
+# Public-repo guard: blocks secrets and server-side code from ever being
+# committed. Everything in this repo is public; real secrets live only in
+# 1Password and the deployment environment (AWS), and server-side service
+# code (minting, budgets) lives only in AWS — never here.
 # Installed via: git config core.hooksPath .githooks
 
 STAGED_FILES=$(git diff --staged --name-only --diff-filter=ACMR)
@@ -10,24 +12,16 @@ STAGED_FILES=$(git diff --staged --name-only --diff-filter=ACMR)
 
 fail() { echo "COMMIT BLOCKED: $1" >&2; exit 1; }
 
-# 1. Overlay paths must never be committed, even force-added.
+# 1. Env files and server-side service code must never be committed, even
+# force-added. The repo contains only client calls to hosted services.
 while IFS= read -r f; do
   case "$f" in
-    .env|*/.env|.env.local|backend/.env.local|AGENTS.md|docs/*|ops/*|engineering.md|user_syntehtic_testing.md)
-      fail "'$f' is a private overlay path and must not be committed to the public repo." ;;
-    modules/*/SKILL.md)
-      fail "'$f' is a private overlay path (SKILL.md) and must not be committed." ;;
+    .env|*/.env|.env.local|backend/.env.local)
+      fail "'$f' is a local env file and must not be committed." ;;
+    ops/*)
+      fail "'$f' looks like server-side service code; that lives only in AWS, never in this repo." ;;
   esac
 done <<< "$STAGED_FILES"
-
-# 2. Private-product markers must not appear in staged content
-# (the hook itself is excluded — it contains the patterns it scans for).
-DIFF=$(git diff --staged --unified=0 -- . ':(exclude).githooks/pre-commit')
-for pattern in 'miamultiplayer_PRIVATE' 'Mia Router' 'MIA_ROUTER'; do
-  if grep -qE "^\+.*${pattern}" <<< "$DIFF"; then
-    fail "staged changes mention private marker '${pattern}'. Private-product code/config belongs in the private repo."
-  fi
-done
 
 # 3. Common credential shapes in added lines (skip the leak-scanner test file,
 # whose fixtures are deliberately fake).

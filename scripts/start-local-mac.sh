@@ -9,11 +9,19 @@ engineering_root="$(cd -- "$script_dir/.." && pwd)"
 macos_root="$engineering_root/macos"
 user_home="${HOME:?HOME is required}"
 mia_data_root="${MIA_DEV_DATA_ROOT:-$user_home/Library/Application Support/Mia}"
+# The Electron main process keys dev-mode isolation off this variable: with it
+# set, the dev app keeps its userData (renderer state, cookies, the browser
+# bridge) under <data root>/desktop instead of sharing the installed bundle's
+# profile. Export it even when the caller relied on the default.
+export MIA_DEV_DATA_ROOT="$mia_data_root"
 hermes_home="$mia_data_root/hermes"
 hermes_install="$hermes_home/hermes-agent"
 hermes_bin="$hermes_install/hermes"
 hermes_python="$hermes_install/venv/bin/python"
-ghost_home="$mia_data_root/runtime/ghost-cli"
+# install-local-mac.sh provisions Ghost at <data root>/ghost-cli; older dev
+# setups used <data root>/runtime/ghost-cli. Accept either.
+ghost_home="$mia_data_root/ghost-cli"
+[[ -d "$ghost_home" ]] || ghost_home="$mia_data_root/runtime/ghost-cli"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This launcher is for macOS local testing." >&2

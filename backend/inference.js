@@ -397,7 +397,9 @@ const HERMES_ENV_ALLOWLIST = Object.freeze([
   // Profile/storage coordinates are paths, not credentials. The one Hermes
   // process Mia owns must read the same state and cron registries as the
   // backend; otherwise its in-process scheduler silently watches a different runtime.
-  'HERMES_HOME', 'HERMES_STATE_DB', 'HERMES_CRON_JOBS_FILE',
+  // HERMES_PYTHON is the interpreter path the guard-bin ghost-cli adapter
+  // execs; without it the adapter falls back to whichever python3 PATH finds.
+  'HERMES_HOME', 'HERMES_PYTHON', 'HERMES_STATE_DB', 'HERMES_CRON_JOBS_FILE',
   'HERMES_CRON_EXECUTIONS_DB', 'MIAOS_AUTOMATION_ARTIFACT_DIR',
   // Ghost CLI receives only filesystem coordinates for the app-owned local
   // bridge. It reads the owner-only token itself and never receives it here.

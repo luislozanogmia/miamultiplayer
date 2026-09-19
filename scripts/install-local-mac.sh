@@ -171,14 +171,20 @@ ditto "$packaged_app" "$installed_app"
 # PATH and callers fall back to the checkout's own script, which wants a
 # .venv this bundle never provisions. The adapter only exposes the in-app
 # browser bridge commands.
+# Inherited environment wins: a Mia instance (installed bundle or a dev
+# checkout) exports the coordinates of the bridge it actually serves, and
+# this wrapper must not redirect its children to another install's bridge.
+# The defaults cover standalone shell calls and point at the installed
+# app's own bridge under its Electron userData directory.
+installed_bridge_root="$user_home/Library/Application Support/Mia/ghost-bridge"
 cat > "$local_bin/ghost-cli" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export GHOST_CLI_HOME="$miaos_home/ghost-cli"
-export GHOST_MIA_SOCKET="$miaos_home/ghost-bridge.sock"
-export GHOST_MIA_TOKEN_FILE="$miaos_home/ghost-bridge.token"
-export GHOST_IN_APP_BROWSER_SOCKET="$miaos_home/ghost-bridge.sock"
-export GHOST_IN_APP_BROWSER_TOKEN_FILE="$miaos_home/ghost-bridge.token"
+export GHOST_CLI_HOME="\${GHOST_CLI_HOME:-$miaos_home/ghost-cli}"
+export GHOST_MIA_SOCKET="\${GHOST_MIA_SOCKET:-$installed_bridge_root/bridge.sock}"
+export GHOST_MIA_TOKEN_FILE="\${GHOST_MIA_TOKEN_FILE:-$installed_bridge_root/bridge.token}"
+export GHOST_IN_APP_BROWSER_SOCKET="\${GHOST_IN_APP_BROWSER_SOCKET:-\$GHOST_MIA_SOCKET}"
+export GHOST_IN_APP_BROWSER_TOKEN_FILE="\${GHOST_IN_APP_BROWSER_TOKEN_FILE:-\$GHOST_MIA_TOKEN_FILE}"
 exec python3 "$installed_app/Contents/Resources/backend/miaos-ghost-cli.py" "\$@"
 EOF
 chmod 755 "$local_bin/ghost-cli"

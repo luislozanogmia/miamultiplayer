@@ -3,7 +3,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, session, ipcMain, Menu, nativeTheme, dialog, systemPreferences } = require("electron");
+const { WebContentsView, app, session, ipcMain, Menu, nativeTheme, dialog, systemPreferences } = require("electron");
+const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
 const MAX_PROTOCOL_SELECTOR = 2000;
@@ -113,13 +114,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // sign in once and remain signed in across app restarts. This does not share
   // or import Chrome/Safari cookies; Clear Browser Data and clean slate erase it.
   const profile = session.fromPartition(BROWSER_PARTITION, { cache: true });
-  // Google's OAuth endpoints (and some other identity providers) reject any
-  // user agent that reveals an embedded framework — "Sign in with Google"
-  // fails with 400/403 disallowed_useragent. Present the Chrome build the
-  // browser actually runs by stripping the app and Electron tokens.
-  profile.setUserAgent(profile.getUserAgent()
-    .replace(/\sMia\/[\d.]+/i, "")
-    .replace(/\sElectron\/[\d.]+/, ""));
+  // Google's OAuth endpoints (and some other identity providers) reject
+  // sessions that reveal an embedded framework — "Sign in with Google"
+  // fails with "this browser or app may not be secure". Present the reduced
+  // Chrome user agent and client-hint headers real Chrome sends. The app
+  // token is the running app's name — "Mia" when packaged, the package name
+  // (mia-multiplayer-macos) in dev (see browser-identity.cjs).
+  const appName = app && typeof app.getName === "function" ? app.getName() : "Mia";
+  profile.setUserAgent(sanitizeUserAgent(profile.getUserAgent(), appName));
+  installClientHints(profile);
   // Favicons republished to the toolbar as data: URIs (see
   // page-favicon-updated) stay small enough for the per-tab state that
   // travels over IPC on every publish.
@@ -484,6 +487,24 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     window.webContents.focus();
     window.webContents.send("miaos-browser-focus");
   }
+  // ERR_ABORTED (-3) means a load was cancelled, almost always because a
+  // newer navigation superseded it. Electron does not attach a stable `code`
+  // to every rejection shape, so match errno and the message as well.
+  function isAbortedLoadError(error) {
+    if (!error) return false;
+    if (error.code === "ERR_ABORTED" || error.errno === -3) return true;
+    return /ERR_ABORTED|\(-3\) loading/.test(String(error.message || ""));
+  }
+
+  function reportLoadError(tab, target, error) {
+    // Only surface the failure if this tab is still on the URL that failed;
+    // a rejection that arrives after the tab moved on must not stamp a stale
+    // error over the page the user is actually looking at.
+    if (isAbortedLoadError(error)) return;
+    if (!tabs.has(tab.id) || tab.url !== target) return;
+    tab.error = error.message; layout(); publish();
+  }
+
   function navigate(tab, value) {
     const target = normalizeTarget(value);
     tab.url = target;
@@ -492,11 +513,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     layout();
     persistTabs();
     // Do not hold the toolbar IPC open until every page resource has loaded.
-    tab.view.webContents.loadURL(target).catch(error => {
-      if (error.code !== "ERR_ABORTED" && tabs.has(tab.id)) {
-        tab.error = error.message; layout(); publish();
-      }
-    });
+    tab.view.webContents.loadURL(target).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -507,11 +524,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     tab.error = "";
     layout();
     persistTabs();
-    tab.view.webContents.loadURL(target).catch(error => {
-      if (error.code !== "ERR_ABORTED" && tabs.has(tab.id)) {
-        tab.error = error.message; layout(); publish();
-      }
-    });
+    tab.view.webContents.loadURL(target).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -949,6 +962,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const view = new WebContentsView({ webPreferences: {
       session: profile, sandbox: true, contextIsolation: true, nodeIntegration: false,
       webSecurity: true, allowRunningInsecureContent: false,
+      // Completes window.chrome and navigator.userAgentData the way real
+      // Chrome pages see them; Google's sign-in checks for both.
+      preload: path.join(__dirname, "google-oauth-preload.cjs"),
     } });
     const requestedId = Number(options.id);
     const id = Number.isInteger(requestedId) && requestedId > 0 && !tabs.has(requestedId)
@@ -979,9 +995,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.setWindowOpenHandler(({ url }) => {
       // GIS popup mode returns credentials to window.opener. Turning this into
       // a new tab destroys that relationship and strands the Google chooser.
+      // Only the OAuth/GIS endpoints need the real popup: a plain Google
+      // sign-in link (e.g. Gmail's "Sign in") must stay an in-app tab, or the
+      // whole signed-in session ends up living in a detached window.
       try {
         const target = new URL(normalizeTarget(url));
-        if (target.origin === "https://accounts.google.com") {
+        if (target.origin === "https://accounts.google.com"
+            && /^\/(gsi\/|o\/oauth2\/|signin\/oauth)/.test(target.pathname)) {
           return {
             action: "allow",
             overrideBrowserWindowOptions: {
@@ -990,7 +1010,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
               webPreferences: {
                 session: profile, sandbox: true, contextIsolation: true,
                 nodeIntegration: false, webSecurity: true,
-                allowRunningInsecureContent: false, preload: "",
+                allowRunningInsecureContent: false,
+                // Completes window.chrome the way real Chrome pages see it;
+                // Google's sign-in checks for it.
+                preload: path.join(__dirname, "google-oauth-preload.cjs"),
               },
             },
           };

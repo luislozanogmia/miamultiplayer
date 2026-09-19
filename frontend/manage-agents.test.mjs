@@ -77,17 +77,17 @@ test('Web browser has one native Mia path with no iframe or localhost bridge fal
   assert.match(styles, /body\.browser-collab-mode\.browser-sidebar-open \.chat-sidebar\{transform:translateX\(0\);\}/);
 });
 
-test('embedded browser header keeps its generic title and only shows transient status', async () => {
+test('embedded browser toolbar keeps status transient in the connection dot', async () => {
   const [html, nativeBrowser] = await Promise.all([
     readFile(htmlUrl, 'utf8'),
     readFile(nativeBrowserUrl, 'utf8'),
   ]);
-  const headerStart = html.indexOf('<header class="local-browser-head">');
-  const headerEnd = html.indexOf('</header>', headerStart);
-  const header = html.slice(headerStart, headerEnd);
+  const toolbarStart = html.indexOf('<form class="local-browser-toolbar"');
+  const toolbarEnd = html.indexOf('</form>', toolbarStart);
+  const toolbar = html.slice(toolbarStart, toolbarEnd);
 
-  assert.match(header, /<span>Web browser<\/span>/);
-  assert.ok(nativeBrowser.includes("status.textContent = tab && tab.loading ? 'Loading\\u2026' : tab && tab.error ? 'Load failed' : '';"));
+  assert.match(toolbar, /class="local-browser-dot"/);
+  assert.ok(nativeBrowser.includes("dot.title = tab && tab.loading ? 'Loading\\u2026' : tab && tab.error ? 'Load failed' : 'Connected';"));
   assert.doesNotMatch(nativeBrowser, /Chromium/);
 });
 
@@ -757,7 +757,7 @@ test('chat-native bot setup can cancel or retry bounded interpretation and activ
   assert.match(source, /function clearAgentSetupRequest\(abort\)/);
   assert.match(source, /function finishAgentSetupFailure\(attempt, operation, timedOut, message\)/);
   assert.match(source, /function cancelAgentSetupFlow\(\)/);
-  assert.match(source, /id = 'agentSetupCancelInterpretation'/);
+  assert.match(source, /id="agentSetupCancel"/);
   assert.match(source, /id="agentSetupRetry"/);
   assert.match(source, /createNativeAgentConversation\(created, controller \? \{signal:controller\.signal\} : \{\}\)/);
   assert.match(source, /api\('\/api\/bots\/interpret', \{[\s\S]*signal:controller\.signal/);
