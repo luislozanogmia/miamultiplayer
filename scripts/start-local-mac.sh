@@ -13,7 +13,10 @@ hermes_home="$mia_data_root/hermes"
 hermes_install="$hermes_home/hermes-agent"
 hermes_bin="$hermes_install/hermes"
 hermes_python="$hermes_install/venv/bin/python"
-ghost_home="$mia_data_root/runtime/ghost-cli"
+# install-local-mac.sh provisions Ghost at <data root>/ghost-cli; older dev
+# setups used <data root>/runtime/ghost-cli. Accept either.
+ghost_home="$mia_data_root/ghost-cli"
+[[ -d "$ghost_home" ]] || ghost_home="$mia_data_root/runtime/ghost-cli"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This launcher is for macOS local testing." >&2
