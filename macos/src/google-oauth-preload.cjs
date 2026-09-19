@@ -48,6 +48,32 @@ const script = `(() => {
     if (!window.chrome) window.chrome = chrome;
   } catch (_) {}
   try {
+    // Real Chrome always reports a user-verifying platform authenticator, and
+    // sign-in pages disable their passkey button when none is reported —
+    // which also blocks USB security keys and the phone (hybrid) flow that
+    // work regardless. Report availability like Chrome; a request the build
+    // truly cannot serve fails into the site's normal fallback instead of a
+    // permanently dead button.
+    if (window.PublicKeyCredential
+        && PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) {
+      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable =
+        function () { return Promise.resolve(true); };
+    }
+    if (window.PublicKeyCredential && PublicKeyCredential.getClientCapabilities) {
+      const realCapabilities =
+        PublicKeyCredential.getClientCapabilities.bind(PublicKeyCredential);
+      PublicKeyCredential.getClientCapabilities = function () {
+        return realCapabilities()
+          .then(function (caps) {
+            return Object.assign({}, caps, { userVerifyingPlatformAuthenticator: true });
+          })
+          .catch(function () {
+            return { userVerifyingPlatformAuthenticator: true };
+          });
+      };
+    }
+  } catch (_) {}
+  try {
     if (!navigator.userAgentData) {
       const major = (navigator.userAgent.match(/Chrome\\/(\\d+)/) || [])[1] || "132";
       const brands = [
