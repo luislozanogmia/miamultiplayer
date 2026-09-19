@@ -657,6 +657,11 @@ async function buildInstaller() {
       extendInfo: {
         NSMicrophoneUsageDescription: "Mia's browser uses the microphone for sites like Google Meet when you allow it.",
         NSCameraUsageDescription: "Mia's browser uses the camera for video calls when you allow it.",
+        // Passkey sign-ins that verify through a nearby phone (WebAuthn's
+        // hybrid flow) use Bluetooth for the proximity check; without this
+        // key Chromium's FIDO layer refuses Bluetooth outright.
+        NSBluetoothAlwaysUsageDescription: "Mia's browser uses Bluetooth to sign in with a passkey stored on your phone when you allow it.",
+        NSBluetoothPeripheralUsageDescription: "Mia's browser uses Bluetooth to sign in with a passkey stored on your phone when you allow it.",
       },
       extraResource: [
         path.join(temporaryRoot, "backend"),
