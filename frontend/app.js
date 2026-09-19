@@ -6139,13 +6139,15 @@
   function chatExpandableMessageHtml(text, isPreReasoning, compactBrowserMessage){
     var raw = String(text || '').trim();
     var wordCount = chatMessageWordCount(raw);
-    var hasMore = !!compactBrowserMessage || wordCount > CHAT_MESSAGE_PREVIEW_WORDS;
+    var truncated = wordCount > CHAT_MESSAGE_PREVIEW_WORDS;
+    var hasMore = !!compactBrowserMessage || truncated;
     var preview = hasMore ? chatMessagePreview(raw, CHAT_MESSAGE_PREVIEW_WORDS) : raw;
     var previewClass = isPreReasoning ? ' chat-pre-reasoning-preview' : '';
     var fullClass = isPreReasoning ? ' chat-pre-reasoning-full' : '';
     var toggleClass = isPreReasoning ? ' chat-pre-reasoning-toggle' : '';
     var previewAttr = isPreReasoning ? ' data-pre-reasoning-preview' : '';
     var compactPreviewAttr = compactBrowserMessage ? ' data-chat-compact-preview' : '';
+    var truncatedAttr = truncated ? ' data-chat-truncated' : '';
     var fullAttr = isPreReasoning ? ' data-pre-reasoning-full' : '';
     var toggleAttr = isPreReasoning ? ' data-pre-reasoning-toggle' : '';
     var labelAttr = isPreReasoning ? ' data-pre-reasoning-label' : '';
@@ -6156,7 +6158,7 @@
       : '';
     var previewHtml = isPreReasoning ? esc(preview) : mdLite(preview);
     var full = hasMore ? '<div class="chat-expandable-full' + fullClass + '" data-chat-expand-full' + fullAttr + ' hidden>' + mdLite(raw) + '</div>' : '';
-    return '<div class="chat-expandable-preview' + previewClass + '" data-chat-expand-preview' + previewAttr + compactPreviewAttr + '>' + previewHtml + '</div>' + toggle + full;
+    return '<div class="chat-expandable-preview' + previewClass + '" data-chat-expand-preview' + previewAttr + compactPreviewAttr + truncatedAttr + '>' + previewHtml + '</div>' + toggle + full;
   }
   function syncChatCompactPreviewVisibility(thread){
     if(!thread) return;
@@ -6164,6 +6166,14 @@
       var card = preview.closest('.chat-expandable-message, .chat-pre-reasoning');
       var toggle = card && card.querySelector('[data-chat-expand-toggle]');
       if(!toggle) return;
+      // A word-truncated preview ends in "…" no matter how it is laid out:
+      // fitting its box does not mean the message is whole, so the toggle
+      // must stay visible regardless of measured overflow.
+      if(preview.hasAttribute('data-chat-truncated')){
+        toggle.hidden = false;
+        toggle.setAttribute('aria-hidden', 'false');
+        return;
+      }
       // A hidden or not-yet-laid-out panel measures 0×0, which looks like
       // "fits" and would hide the toggle on a message that is actually cut.
       // Leave the toggle visible until a real measurement says otherwise.
