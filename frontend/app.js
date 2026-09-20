@@ -4989,7 +4989,7 @@
   var chatInfo = {open: true, mode: 'automations', automationBotId: null, automationId: null};
   var pluginShell = null;
   var pluginPaneRoomId = null;
-  var localBrowserState = {open: false};
+  var localBrowserState = {open: false, roomId: null};
   var LOCAL_BROWSER_OPEN_STATE_KEY = 'miaBrowserOpen';
   var appDevState = {available: false, verboseHermes: false, traceCommands: false, events: []};
   var appDevPollTimer = null;
@@ -5196,6 +5196,9 @@
     if(!localBrowserState.open) return;
     stopLocalBrowserPromptRotation();
     localBrowserState.open = false;
+    localBrowserState.roomId = null;
+    localBrowserHistoryCache = null;
+    closeLocalBrowserSuggest();
     try {
       if(window.miaDesktop && window.miaDesktop.state) window.miaDesktop.state.set(LOCAL_BROWSER_OPEN_STATE_KEY, null);
     } catch(_browserDesktopStateError) {}
@@ -5217,7 +5220,16 @@
     closeChatTasksPanel();
     chatInfo.mode = 'automations';
     chatInfo.open = false;
-    if(chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
+    // Opening the browser used to always yank the chat pane back to the
+    // gateway room. If an agent/bot room is already active, keep the chat
+    // pane pinned to it instead — only fall back to the gateway room when
+    // nothing is active yet.
+    if(chatWs.activeRoomId){
+      localBrowserState.roomId = chatWs.activeRoomId;
+    } else if(chatWs.gatewayAgent){
+      navigateToAgentChat(chatWs.gatewayAgent, true);
+      localBrowserState.roomId = chatWs.activeRoomId || chatWs.gatewayAgent.roomId || chatWs.gatewayAgent.nativeConversationId || null;
+    }
     renderChatInfoPane();
     renderChatHeaderBar();
     renderLocalBrowser();
@@ -5240,6 +5252,74 @@
     if(shouldRestoreLocalBrowser()) openWebBrowserTool({restoring:true});
   }
 
+  // URL-bar autocomplete: a lightweight custom dropdown backed by the
+  // Electron shell's visit history (window.miaDesktop.browser.history).
+  // Older shells / the web build don't expose it — every call below is
+  // guarded so the feature quietly does nothing there.
+  var localBrowserHistoryCache = null;
+  var localBrowserSuggestItems = [];
+  var localBrowserSuggestIndex = -1;
+  function localBrowserHistorySupported(){
+    return !!(window.miaDesktop && window.miaDesktop.browser && typeof window.miaDesktop.browser.history === 'function');
+  }
+  function loadLocalBrowserHistory(){
+    if(!localBrowserHistorySupported()) return Promise.resolve([]);
+    if(localBrowserHistoryCache) return Promise.resolve(localBrowserHistoryCache);
+    return Promise.resolve(window.miaDesktop.browser.history(20)).then(function(res){
+      localBrowserHistoryCache = (res && Array.isArray(res.history)) ? res.history : [];
+      return localBrowserHistoryCache;
+    }).catch(function(){ return []; });
+  }
+  function filterLocalBrowserHistory(history, query){
+    var q = String(query || '').trim().toLowerCase();
+    if(!q) return [];
+    return (history || []).filter(function(item){
+      return (item.url && String(item.url).toLowerCase().indexOf(q) !== -1) ||
+        (item.title && String(item.title).toLowerCase().indexOf(q) !== -1);
+    }).slice(0, 5);
+  }
+  function closeLocalBrowserSuggest(){
+    var box = el('#localBrowserUrlSuggest');
+    if(box){ box.hidden = true; box.innerHTML = ''; }
+    var input = el('#localBrowserUrl');
+    if(input) input.setAttribute('aria-expanded', 'false');
+    localBrowserSuggestItems = [];
+    localBrowserSuggestIndex = -1;
+  }
+  function updateLocalBrowserSuggestHighlight(){
+    var box = el('#localBrowserUrlSuggest');
+    if(!box) return;
+    els('.local-browser-suggest-item', box).forEach(function(btn, i){
+      btn.classList.toggle('active', i === localBrowserSuggestIndex);
+    });
+  }
+  function renderLocalBrowserSuggest(items){
+    var box = el('#localBrowserUrlSuggest');
+    if(!box) return;
+    localBrowserSuggestItems = items || [];
+    localBrowserSuggestIndex = -1;
+    var input = el('#localBrowserUrl');
+    if(!localBrowserSuggestItems.length){
+      box.hidden = true;
+      box.innerHTML = '';
+      if(input) input.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    box.innerHTML = localBrowserSuggestItems.map(function(item, i){
+      return '<button type="button" class="local-browser-suggest-item" role="option" data-suggest-index="' + i + '">' +
+        '<span class="local-browser-suggest-title">' + esc(item.title || item.url) + '</span>' +
+        '<span class="local-browser-suggest-url">' + esc(item.url) + '</span></button>';
+    }).join('');
+    box.hidden = false;
+    if(input) input.setAttribute('aria-expanded', 'true');
+  }
+  function chooseLocalBrowserSuggest(item, input){
+    if(!item) return;
+    if(input) input.value = item.url;
+    closeLocalBrowserSuggest();
+    localBrowserNavigate(item.url);
+  }
+
   (function wireLocalBrowser(){
     var form = el('#localBrowserForm');
     var input = el('#localBrowserUrl');
@@ -5260,6 +5340,46 @@
       event.preventDefault();
       localBrowserNavigate(input ? input.value : '');
     });
+    var suggestBox = el('#localBrowserUrlSuggest');
+    if(input && localBrowserHistorySupported()){
+      var refreshSuggest = function(){
+        loadLocalBrowserHistory().then(function(history){
+          if(document.activeElement !== input) return;
+          renderLocalBrowserSuggest(filterLocalBrowserHistory(history, input.value));
+        });
+      };
+      input.addEventListener('focus', refreshSuggest);
+      input.addEventListener('input', refreshSuggest);
+      input.addEventListener('keydown', function(event){
+        if(!localBrowserSuggestItems.length) return;
+        if(event.key === 'ArrowDown'){
+          event.preventDefault();
+          localBrowserSuggestIndex = Math.min(localBrowserSuggestItems.length - 1, localBrowserSuggestIndex + 1);
+          updateLocalBrowserSuggestHighlight();
+        } else if(event.key === 'ArrowUp'){
+          event.preventDefault();
+          localBrowserSuggestIndex = Math.max(0, localBrowserSuggestIndex - 1);
+          updateLocalBrowserSuggestHighlight();
+        } else if(event.key === 'Enter'){
+          if(localBrowserSuggestIndex < 0) return; // no selection: keep the normal submit behavior
+          event.preventDefault();
+          chooseLocalBrowserSuggest(localBrowserSuggestItems[localBrowserSuggestIndex], input);
+        } else if(event.key === 'Escape'){
+          closeLocalBrowserSuggest();
+        }
+      });
+      input.addEventListener('blur', function(){
+        // Deferred so a suggestion's mousedown/click can still register.
+        setTimeout(closeLocalBrowserSuggest, 150);
+      });
+      if(suggestBox) suggestBox.addEventListener('mousedown', function(event){
+        var btn = event.target.closest('.local-browser-suggest-item');
+        if(!btn) return;
+        event.preventDefault();
+        var idx = Number(btn.getAttribute('data-suggest-index'));
+        chooseLocalBrowserSuggest(localBrowserSuggestItems[idx], input);
+      });
+    }
     if(back) back.addEventListener('click', function(){
       if(window.miaNativeBrowser) window.miaNativeBrowser.action('back');
     });
@@ -6826,6 +6946,54 @@
     return normalized;
   }
 
+  // Builds the greeting a freshly-activated bot "says" the moment its room
+  // opens. Room state's `localWelcome` field is consumed once by
+  // loadChatRoom() (see its use of state.localWelcome) and rendered like any
+  // other message, then cleared as soon as real history exists for the room.
+  function agentSetupWelcomeExcerpt(text, maxWords){
+    var words = String(text || '').trim().split(/\s+/).filter(Boolean);
+    if(!words.length) return '';
+    if(words.length <= maxWords) return words.join(' ');
+    return words.slice(0, maxWords).join(' ') + '…';
+  }
+
+  function agentSetupWelcomeBody(created, draft){
+    var name = (created && created.name) || (draft && draft.name) || 'your new bot';
+    var roleSummary = agentSetupWelcomeExcerpt(draft && draft.role, 24).replace(/[.\s]+$/, '');
+    var automation = draft && draft.automation;
+    var sentences = ['I’m ' + name + '.'];
+    if(roleSummary) sentences.push('I handle ' + roleSummary + '.');
+    if(automation && automation.enabled && String(automation.prompt || '').trim()){
+      var task = agentSetupWelcomeExcerpt(automation.prompt, 16).replace(/[.\s]+$/, '');
+      sentences.push('Want me to run ' + task + ' now, or is there something related you’d like first?');
+    } else {
+      sentences.push('What should I work on first?');
+    }
+    return sentences.join(' ');
+  }
+
+  function buildAgentSetupWelcomeMessage(roomId, created, draft){
+    return {
+      id: 'local-welcome-' + roomId,
+      sender: (created && created.id) || 'bot',
+      nativeAgentName: (created && created.name) || (draft && draft.name) || null,
+      body: agentSetupWelcomeBody(created, draft),
+      media: null,
+      attachments: [],
+      ts: Date.now(),
+      threadRoot: null,
+      editTs: 0,
+      system: false,
+      pending: false,
+      deleted: false,
+      clientIdempotencyKey: null,
+      nativeDispatchId: null,
+      nativeProgress: false,
+      nativeDiagnostic: false,
+      nativeEvent: null
+    };
+  }
+
   function agentSetupMessageHtml(text, human, name){
     var displayName = human ? 'You' : (name || 'New Bot');
     var mark = human ? humanAvatarInitialsHtml(currentUser) : agentAvatarHtml('New Bot', AGENT_SETUP_ROOM_ID, 28);
@@ -7175,6 +7343,7 @@
         applyNativeConversationList(chatWs.nativeConversations);
         renderChatSidebar();
         renderChatHeaderBar();
+        chatRoomState(conversation.id).localWelcome = buildAgentSetupWelcomeMessage(conversation.id, created, draft);
         loadChatRoom(conversation.id, 'agent', created.name);
       });
     }).catch(function(err){
@@ -10464,7 +10633,11 @@
     });
   }
   function runToolsAction(action){
-    if(localBrowserState.open && action !== 'web-browser') closeLocalBrowser();
+    // Bot creation renders into the same side chat pane browser-collab-mode
+    // already uses for agent/bot conversations, so it doesn't need the full
+    // layout back — closing the browser here would kill browser mode for no
+    // reason. Every other tools-menu action still needs the full layout.
+    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot') closeLocalBrowser();
     if(action === 'new-chat') openDmCompose();
     else if(action === 'new-bot') startAgentSetupChat();
     else if(action === 'new-agent') openHarnessAgentSetup();
