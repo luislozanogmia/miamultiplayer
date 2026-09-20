@@ -1374,6 +1374,7 @@
       var harness = res.data && res.data.harness;
       renderHarnessSettings(harness);
       renderOutputSetting(res.data && res.data.chatOutput === 'verbose' ? 'verbose' : 'concise');
+      syncHiddenStarterBotsFromServer(res.data && res.data.hiddenStarterBots);
       if(harness && harness.onboardingComplete){
         appCollaborationMode = (WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS['multiplayer_test']).mode;
         refreshAppName();
@@ -2949,6 +2950,27 @@
     var hidden = hiddenChatStarterBots();
     if(hidden.indexOf(name) === -1) hidden.push(name);
     try { localStorage.setItem(CHAT_STARTER_BOTS_HIDDEN_KEY, JSON.stringify(hidden)); } catch(error) {}
+    // Dismissal is durable: the server copy survives desktop profile
+    // switches and reinstalls; localStorage is only the fast local cache.
+    api('/api/settings/starter-bots', {method:'POST', body:{hidden:hidden}}).catch(function(){});
+    renderChatStarterBots();
+  }
+  // Merge the server-side dismissal list into the local cache at startup so
+  // a dismissal made under another desktop profile still hides the row.
+  function syncHiddenStarterBotsFromServer(serverHidden){
+    if(!Array.isArray(serverHidden)) return;
+    var hidden = hiddenChatStarterBots();
+    var merged = hidden.slice();
+    serverHidden.forEach(function(name){
+      if(typeof name === 'string' && merged.indexOf(name) === -1) merged.push(name);
+    });
+    if(merged.length !== hidden.length){
+      try { localStorage.setItem(CHAT_STARTER_BOTS_HIDDEN_KEY, JSON.stringify(merged)); } catch(error) {}
+    }
+    // Local-only dismissals (made while the server was unreachable) flow up.
+    if(merged.length !== serverHidden.length){
+      api('/api/settings/starter-bots', {method:'POST', body:{hidden:merged}}).catch(function(){});
+    }
     renderChatStarterBots();
   }
   function renderChatStarterBots(){

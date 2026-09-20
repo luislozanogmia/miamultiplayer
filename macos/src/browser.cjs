@@ -934,9 +934,39 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (method === "eval") {
       if (typeof params.script !== "string" || !params.script.trim()) throw protocolError("INVALID_PARAMS", "script is required.");
       if (params.script.length > MAX_PROTOCOL_PAGE_TEXT) throw protocolError("INVALID_PARAMS", "script is too long.");
-      let result;
-      try { result = await executeProtocolScript(tab.view.webContents, `(${params.script})()`); }
-      catch (error) { throw protocolError("BROWSER_ERROR", error.message); }
+      // The documented contract is an arrow-function string, but agents also
+      // send bare expressions ("1+1") and pre-invoked IIFEs. Accept every
+      // expression form: functions are called, plain values returned as-is.
+      // Statements (const/if/return at top level) are not expressions —
+      // reject them here with the parser's own message instead of the
+      // generic renderer failure Electron reports.
+      try { new Function(`return (${params.script}\n);`); }
+      catch (error) {
+        throw protocolError("INVALID_PARAMS",
+          `script is not a JavaScript expression (${error.message}). Pass an arrow function like '() => document.title'.`);
+      }
+      // Evaluate inside an in-page try/catch so a thrown error (or rejected
+      // promise) comes back with its real message rather than Electron's
+      // "Script failed to execute. Check the renderer console."
+      const wrapped = `(async () => {
+        try {
+          const candidate = (${params.script}\n);
+          const value = typeof candidate === "function" ? await candidate() : await candidate;
+          return { __miaEvalOk: true, value };
+        } catch (error) {
+          return { __miaEvalOk: false, message: String((error && (error.stack || error.message)) || error) };
+        }
+      })()`;
+      let outcome;
+      try { outcome = await executeProtocolScript(tab.view.webContents, wrapped); }
+      catch (error) {
+        throw protocolError("BROWSER_ERROR",
+          `${error.message} (The script ran but its result could not be returned — return JSON-serializable data.)`);
+      }
+      if (!outcome || outcome.__miaEvalOk !== true) {
+        throw protocolError("BROWSER_ERROR", `Page script threw: ${(outcome && outcome.message) || "unknown error"}`);
+      }
+      const result = outcome.value;
       if (typeof result === "string") return { result: protocolText(result) };
       return { result };
     }
