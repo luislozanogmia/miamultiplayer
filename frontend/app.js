@@ -1484,6 +1484,29 @@
     name.textContent = displayNameForEmail(currentUser);
     email.textContent = currentUserLocalProfile ? 'Local profile · no email required' : (currentAccountEmail || currentUser);
   }
+  // Only the Electron shell can register a protocol handler — degrade
+  // honestly on the web build (and any older shell without the bridge) by
+  // keeping the row hidden instead of offering a control that can't work.
+  function renderSettingsDefaultBrowserState(state){
+    var row = el('#settingsDefaultBrowserRow');
+    var note = el('#settingsDefaultBrowserNote');
+    var btn = el('#settingsDefaultBrowserBtn');
+    if(!row) return;
+    if(!window.miaDesktop || !window.miaDesktop.defaultBrowser){ row.hidden = true; return; }
+    row.hidden = false;
+    var isDefault = !!(state && state.http && state.https);
+    if(note) note.textContent = isDefault
+      ? 'Mia is your default browser for http and https links.'
+      : 'Open http and https links in Mia.';
+    if(btn) btn.textContent = isDefault ? 'Mia is your default browser' : 'Make Mia your default browser';
+    if(btn) btn.disabled = isDefault;
+  }
+  function loadSettingsDefaultBrowserState(){
+    var row = el('#settingsDefaultBrowserRow');
+    if(!row) return;
+    if(!window.miaDesktop || !window.miaDesktop.defaultBrowser){ row.hidden = true; return; }
+    Promise.resolve(window.miaDesktop.defaultBrowser.get()).then(renderSettingsDefaultBrowserState).catch(function(){ row.hidden = true; });
+  }
   function openSettingsDrawer(pane){
     // Same constraint as openHarnessOnboarding: the native browser view
     // covers HTML overlays, so close its panel before showing the sheet.
@@ -1494,6 +1517,7 @@
     renderSettingsAccount();
     loadSettings();
     loadHarnessConnectionStatus();
+    loadSettingsDefaultBrowserState();
   }
   function closeSettingsDrawer(){
     el('#settingsOverlay').classList.remove('open');
@@ -2028,6 +2052,18 @@
   });
   var settingsCleanSlate = el('#settingsCleanSlate');
   if(settingsCleanSlate) settingsCleanSlate.addEventListener('click', cleanSlateSoloWorkspace);
+  var settingsDefaultBrowserBtn = el('#settingsDefaultBrowserBtn');
+  if(settingsDefaultBrowserBtn) settingsDefaultBrowserBtn.addEventListener('click', function(){
+    settingsDefaultBrowserBtn.disabled = true;
+    Promise.resolve(window.miaDesktop.defaultBrowser.set()).then(function(state){
+      renderSettingsDefaultBrowserState(state);
+    }).catch(function(){
+      var note = el('#settingsDefaultBrowserNote');
+      if(note) note.textContent = 'Could not set Mia as your default browser.';
+    }).then(function(){
+      settingsDefaultBrowserBtn.disabled = false;
+    });
+  });
   // Feedback goes out through the user's own mail client — no backend, no
   // credentials. The Electron shell only opens this exact mailto address.
   var FEEDBACK_EMAIL = 'luislozanog86@gmail.com';

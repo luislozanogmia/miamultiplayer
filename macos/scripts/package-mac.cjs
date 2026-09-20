@@ -682,6 +682,16 @@ async function buildInstaller() {
         // key Chromium's FIDO layer refuses Bluetooth outright.
         NSBluetoothAlwaysUsageDescription: "Mia's browser uses Bluetooth to sign in with a passkey stored on your phone when you allow it.",
         NSBluetoothPeripheralUsageDescription: "Mia's browser uses Bluetooth to sign in with a passkey stored on your phone when you allow it.",
+        // Registers Mia as an http/https handler candidate so Settings ->
+        // General -> "Make Mia your default browser" (app.setAsDefaultProtocolClient
+        // in main.cjs) has something to register against; macOS still owns
+        // the actual confirmation UI and the user's final choice.
+        CFBundleURLTypes: [
+          {
+            CFBundleURLName: "com.miamultiplayer.mia.web",
+            CFBundleURLSchemes: ["http", "https"],
+          },
+        ],
       },
       extraResource: [
         path.join(temporaryRoot, "backend"),
