@@ -209,6 +209,31 @@ test('jobPromptFor requires an explicit scheduled task instead of guessing from 
   assert.match(prompt, /web_extract[\s\S]*Task:\nRun the reminder now\.$/);
 });
 
+test('a slash-namespaced OpenRouter model id schedules a job', async () => {
+  resetCommands();
+  setJobs([]);
+  const agent = enabledAgent({ model: 'deepseek/deepseek-v4.1-flash', modelProvider: 'openrouter' });
+
+  await cronSync.syncBotAutomation(agent, null);
+
+  const commands = readCommands();
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0][2], 'create');
+  assert.deepEqual(commands[0].slice(-4), ['--model', 'deepseek/deepseek-v4.1-flash', '--provider', 'openrouter']);
+});
+
+test('a model id with multiple slashes or a bare slash is still rejected', async () => {
+  for (const model of ['a/b/c', '/model', 'model/', '']) {
+    resetCommands();
+    setJobs([]);
+    await assert.rejects(
+      () => cronSync.syncBotAutomation(enabledAgent({ id: `agent-bad-${model.length}`, model, modelProvider: 'openrouter' }), null),
+      /valid connected model/
+    );
+    assert.equal(readCommands().length, 0);
+  }
+});
+
 test('a stale Hermes job id is replaced by a newly created job', async () => {
   resetCommands();
   setJobs([]);
