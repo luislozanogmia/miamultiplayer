@@ -695,7 +695,7 @@ function listUndeliveredBotCronResults(conn) {
     : null;
   try {
     const latest = hasSqliteTable(state, 'sessions') && hasSqliteTable(state, 'messages') && state.prepare(
-      `SELECT s.id AS sessionId, s.started_at AS startedAt,
+      `SELECT s.id AS sessionId, s.started_at AS startedAt, s.ended_at AS endedAt,
               (SELECT m.content FROM messages m
                 WHERE m.session_id = s.id AND m.role = 'assistant'
                   AND m.active = 1 AND trim(coalesce(m.content, '')) <> ''
@@ -705,10 +705,13 @@ function listUndeliveredBotCronResults(conn) {
           AND s.ended_at IS NOT NULL AND s.end_reason = 'cron_complete'
         ORDER BY s.started_at DESC LIMIT 1`
     );
+    // A lost fire claim means another execution owned that fire; it is
+    // scheduler-internal overlap, not a run the user should see fail.
     const latestFailure = hasSqliteTable(executions, 'executions') && executions.prepare(
       `SELECT id AS executionId, coalesce(started_at, claimed_at) AS startedAt, error
          FROM executions
         WHERE job_id = ? AND status = 'failed'
+          AND coalesce(error, '') NOT LIKE 'Fire claim lost%'
         ORDER BY claimed_at DESC, id DESC LIMIT 1`
     );
     const results = [];
@@ -720,7 +723,10 @@ function listUndeliveredBotCronResults(conn) {
         const delivery = bot.hermesCronDeliveries[automation.id] || {};
         const row = latest ? latest.get(`cron_${jobId}_%`) : null;
         const failed = latestFailure ? latestFailure.get(jobId) : null;
-        if (failed && (!row || hermesTimestampMs(failed.startedAt) > hermesTimestampMs(row.startedAt))) {
+        // A success outranks any failure that began before it ended: a failed
+        // claim taken while a successful run was still executing must not
+        // mask that run's deliverable.
+        if (failed && (!row || hermesTimestampMs(failed.startedAt) > hermesTimestampMs(row.endedAt))) {
           const sessionId = `cron-failure-${failed.executionId}`;
           if (sessionId !== delivery.sessionId) {
             results.push({
