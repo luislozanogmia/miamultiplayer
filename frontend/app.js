@@ -3590,7 +3590,9 @@
       loadBenchAgents().then(function(){
         renderChatSidebar();
         refreshChatMain();
-        if(styledEditOpen) openEditCinema(a.id);
+        // Saving is a completed action: close the drawer and confirm with
+        // the standard bottom toast instead of reopening the editor.
+        if(styledEditOpen) showBenchToast('Changes to Bot "' + name + '" saved');
         else openBenchDetail(a.id);
       });
     };
