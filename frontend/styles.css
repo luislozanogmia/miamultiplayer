@@ -2537,6 +2537,10 @@
   .local-browser-blocked[hidden]{display:none;}
   .local-browser-blocked a{color:var(--sand-text-accent);text-decoration:underline;}
   .local-browser-empty-title{font-size:17px;color:var(--sand-text-primary);}
+  .native-browser-quick-apps{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:6px;max-width:420px;}
+  .native-browser-quick-apps[hidden]{display:none;}
+  .native-browser-quick-app{appearance:none;border:1px solid var(--sand-border-default);border-radius:999px;background:var(--sand-bg-base);color:var(--sand-text-primary);padding:6px 14px;font:12px var(--styled-sans);cursor:pointer;}
+  .native-browser-quick-app:hover{border-color:var(--sand-fill-accent);}
   .local-browser-foot{height:32px;min-height:32px;display:flex;align-items:center;padding:0 14px;border-top:1px solid var(--sand-border-subtle);background:#f7f7f5;color:var(--sand-text-secondary);font-size:10px;}
 
   /* Web browser collaboration keeps the native Mia conversation fixed at

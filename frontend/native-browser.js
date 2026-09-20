@@ -15,6 +15,29 @@
   strip.setAttribute('role', 'tablist');
   strip.setAttribute('aria-label', 'Browser tabs');
   overlay.querySelector('.local-browser-toolbar').before(strip);
+  // Tier 2 "browser apps": quick-launch chips for web equivalents of
+  // desktop apps this machine actually has installed (macos/src/detected-
+  // web-apps.cjs). Only ever populated when the desktop bridge exposes
+  // detectedApps (native Electron shell); a web build has no `bridge` at
+  // all (see the guard at the top of this file) so the row never renders.
+  var emptyState = document.getElementById('localBrowserEmpty');
+  var quickApps = document.createElement('div');
+  quickApps.className = 'native-browser-quick-apps'; quickApps.hidden = true;
+  if (emptyState) emptyState.append(quickApps);
+  function renderQuickApps(apps) {
+    if (!emptyState || !apps || !apps.length) return;
+    quickApps.replaceChildren();
+    apps.forEach(function (app) {
+      var chip = document.createElement('button');
+      chip.type = 'button'; chip.className = 'native-browser-quick-app'; chip.textContent = app.name;
+      chip.onclick = function () { window.miaNativeBrowser.openTab(app.url); };
+      quickApps.append(chip);
+    });
+    quickApps.hidden = false;
+  }
+  if (bridge.detectedApps) {
+    bridge.detectedApps().then(function (result) { renderQuickApps(result && result.apps); }).catch(function () {});
+  }
   var findBar = document.createElement('div');
   findBar.className = 'native-browser-find'; findBar.hidden = true;
   var findInput = document.createElement('input');
