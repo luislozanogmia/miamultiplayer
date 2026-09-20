@@ -2028,6 +2028,24 @@
   });
   var settingsCleanSlate = el('#settingsCleanSlate');
   if(settingsCleanSlate) settingsCleanSlate.addEventListener('click', cleanSlateSoloWorkspace);
+  // Feedback goes out through the user's own mail client — no backend, no
+  // credentials. The Electron shell only opens this exact mailto address.
+  var FEEDBACK_EMAIL = 'luislozanog86@gmail.com';
+  var settingsFeedbackSend = el('#settingsFeedbackSend');
+  if(settingsFeedbackSend) settingsFeedbackSend.addEventListener('click', function(){
+    var box = el('#settingsFeedbackText');
+    var text = box && box.value ? box.value.trim() : '';
+    if(!text){ if(box) box.focus(); return; }
+    var url = 'mailto:' + FEEDBACK_EMAIL +
+      '?subject=' + encodeURIComponent('Mia feedback') +
+      '&body=' + encodeURIComponent(text);
+    window.open(url);
+    var note = el('#settingsFeedbackSent');
+    if(note){
+      note.classList.add('visible');
+      setTimeout(function(){ note.classList.remove('visible'); }, 4000);
+    }
+  });
 
   function saveGuardrails(){
     var providers = ['anthropic'];

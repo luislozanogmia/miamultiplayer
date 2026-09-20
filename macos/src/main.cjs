@@ -1060,9 +1060,14 @@ async function resolveBackend() {
   return backendUrl;
 }
 
+// Settings → Send feedback composes a mail to this address in the user's own
+// mail client; it is the only non-https URL the shell will hand to the OS.
+const FEEDBACK_EMAIL = "luislozanog86@gmail.com";
+
 function isAllowedExternalUrl(value) {
   try {
     const url = new URL(value);
+    if (url.protocol === "mailto:") return url.pathname === FEEDBACK_EMAIL;
     return url.protocol === "https:" && AUTH_HOSTS.has(url.hostname);
   } catch (_) {
     return false;
