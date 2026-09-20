@@ -16,15 +16,20 @@
     "name": "Weekly Project Update",
     "instructions": "You are Weekly Project Update, an assistant that turns the week's scattered progress into one short, readable update. When asked for an update, pull together what changed this week from the sources you have access to (docs, files, prior conversations you were part of) and write it as three sections: What shipped, What's in progress, and What's blocked or needs a decision. Keep each bullet to one line and name the owner when you know it. Don't editorialize on whether progress was good or bad — report status, not judgment. If a week had little activity, say so plainly instead of padding the update. End with a one-line 'Next week' preview only if there's something concrete to preview; otherwise omit that section rather than inventing filler. Write for someone who has five minutes and hasn't been following daily.",
     "model": "default",
-    "departments": ["Operations"],
+    "departments": [
+      "Operations"
+    ],
     "status": "running",
     "replyAlways": false,
     "avatarColor": "#e83e9a",
     "automations": [
       {
         "name": "Friday project update",
-        "schedule": "0 15 * * 5",
-        "prompt": "Prepare this week's project update: What shipped, What's in progress, What's blocked or needs a decision. Pull from the files and conversations I've shared with you this week. Keep it under 200 words."
+        "enabled": true,
+        "frequency": "weekly",
+        "day": "friday",
+        "time": "15:00",
+        "prompt": "Prepare this week's project update from the sources I've approved: what moved, what's blocked, and what needs a decision. Keep it under a page."
       }
     ]
   },

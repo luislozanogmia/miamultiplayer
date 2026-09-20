@@ -40,7 +40,10 @@ test('the seed catalog on disk has a valid index and matching manifests', () => 
     assert.ok(Array.isArray(manifest.bot.automations));
     for (const automation of manifest.bot.automations) {
       assert.equal(typeof automation.name, 'string');
-      assert.equal(typeof automation.schedule, 'string');
+      // The server's automation schema, not cron strings — POST /api/bots
+      // rejects anything else, and the HTTP test below installs for real.
+      assert.equal(typeof automation.enabled, 'boolean');
+      assert.ok(['none', 'interval', 'daily', 'weekly', 'monthly'].includes(automation.frequency));
       assert.equal(typeof automation.prompt, 'string');
     }
     assert.equal(typeof manifest.welcome, 'string');
@@ -124,5 +127,20 @@ test('local HTTP catalog endpoints serve the index and manifests, 404 on invalid
   for (const badId of ['../catalog', 'inbox_triage', 'Inbox-Triage', 'inbox%2Ftriage', 'inbox.triage']) {
     const res = await fetch(`${origin}/api/bots/catalog/${encodeURIComponent(badId)}`);
     assert.equal(res.status, 404, `rejects ${badId}`);
+  }
+
+  // Every catalog manifest's bot object must be installable through the real
+  // create endpoint — the store has no schema of its own, POST /api/bots is
+  // the contract (this is what catches an automation shape the server rejects).
+  for (const entry of index.bots) {
+    const entryManifest = await (await fetch(`${origin}/api/bots/catalog/${entry.id}`)).json();
+    const createRes = await fetch(`${origin}/api/bots`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify(entryManifest.bot),
+    });
+    const created = await createRes.json();
+    assert.equal(createRes.status, 201, `installs ${entry.id}: ${JSON.stringify(created)}`);
+    assert.equal(created.bot.name, entryManifest.bot.name);
   }
 });
