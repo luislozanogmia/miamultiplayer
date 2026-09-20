@@ -39,8 +39,9 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
   unconnected rows get a Connect pill into the real setup flow. Caveat:
   Claude and Gemini have no CLI-subscription harness today (only
   openai-codex and xai-oauth exist), so their Connect goes through the
-  generic API-key card, captioned honestly. Open product decision: add
-  real Claude Code / Gemini CLI harnesses.
+  generic API-key card, captioned honestly. Decision (2026-09-19): this
+  stays API-key-only — neither Anthropic nor Google permits third-party
+  apps like Mia to ride their consumer CLI subscriptions.
 
 ## Roadmap — P3 (future, not scheduled)
 
