@@ -52,7 +52,10 @@ test('Web browser has one native Mia path with no iframe or localhost bridge fal
   assert.match(html, /Show detailed agent activity/);
   assert.doesNotMatch(html, /id="localBrowserDevBtn"/);
   assert.doesNotMatch(html, /id="localBrowserDevPanel"/);
-  assert.match(source, /function openWebBrowserTool\(options\)[\s\S]*localBrowserState\.open = true[\s\S]*if\(chatWs\.gatewayAgent\) navigateToAgentChat\(chatWs\.gatewayAgent[\s\S]*renderLocalBrowser\(\)/);
+  assert.match(source, /function openWebBrowserTool\(options\)[\s\S]*localBrowserState\.open = true[\s\S]*if\(chatWs\.activeRoomId\)\{[\s\S]*\}\s*else if\(chatWs\.gatewayAgent\)\{[\s\S]*navigateToAgentChat\(chatWs\.gatewayAgent[\s\S]*renderLocalBrowser\(\)/);
+  // Opening the browser must not yank the user out of a bot room they're
+  // already in — the forced gateway navigation is now a fallback only.
+  assert.match(source, /if\(chatWs\.activeRoomId\)\{\s*localBrowserState\.roomId = chatWs\.activeRoomId;/);
   assert.match(source, /LOCAL_BROWSER_OPEN_STATE_KEY = 'miaBrowserOpen'/);
   assert.match(source, /function restoreLocalBrowserAfterBoot\(\)[\s\S]*if\(shouldRestoreLocalBrowser\(\)\) openWebBrowserTool\(\{restoring:true\}\)/);
   assert.match(source, /Promise\.resolve\(initialRender\)[\s\S]*setAppLoading\(false\);[\s\S]*restoreLocalBrowserAfterBoot\(\)/);
@@ -762,4 +765,44 @@ test('chat-native bot setup can cancel or retry bounded interpretation and activ
   assert.match(source, /createNativeAgentConversation\(created, controller \? \{signal:controller\.signal\} : \{\}\)/);
   assert.match(source, /api\('\/api\/bots\/interpret', \{[\s\S]*signal:controller\.signal/);
   assert.match(styles, /agent-setup-actions button:disabled/);
+});
+
+test('opening the browser keeps the chat pane pinned to whatever room is already active', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /var localBrowserState = \{open: false, roomId: null\}/);
+  assert.match(source, /function openWebBrowserTool\(options\)[\s\S]*if\(chatWs\.activeRoomId\)\{\s*localBrowserState\.roomId = chatWs\.activeRoomId;\s*\}\s*else if\(chatWs\.gatewayAgent\)\{\s*navigateToAgentChat\(chatWs\.gatewayAgent, true\);/);
+  assert.match(source, /function closeLocalBrowser\(\)[\s\S]*localBrowserState\.roomId = null;/);
+});
+
+test('creating a bot from the tools menu does not close browser mode, but every other tools action still does', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /function runToolsAction\(action\)\{\s*(?:\/\/[^\n]*\n\s*)*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot'\) closeLocalBrowser\(\);/);
+});
+
+test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /function buildAgentSetupWelcomeMessage\(roomId, created, draft\)\{[\s\S]*body: agentSetupWelcomeBody\(created, draft\)/);
+  assert.match(source, /function agentSetupWelcomeBody\(created, draft\)[\s\S]*Want me to run ' \+ task \+ ' now, or is there something related you.d like first\?/);
+  // Wired in after the bot's native room is created, before loadChatRoom
+  // consumes state.localWelcome for that room's first render.
+  assert.match(source, /chatRoomState\(conversation\.id\)\.localWelcome = buildAgentSetupWelcomeMessage\(conversation\.id, created, draft\);\s*loadChatRoom\(conversation\.id, 'agent', created\.name\);/);
+});
+
+test('URL bar autocomplete degrades to nothing when the desktop shell has no history bridge', async () => {
+  const [html, source, styles] = await Promise.all([
+    readFile(htmlUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
+  ]);
+  assert.match(html, /id="localBrowserUrlSuggest"[^>]+role="listbox"[^>]+hidden/);
+  assert.match(source, /function localBrowserHistorySupported\(\)\{\s*return !!\(window\.miaDesktop && window\.miaDesktop\.browser && typeof window\.miaDesktop\.browser\.history === 'function'\);/);
+  assert.match(source, /function loadLocalBrowserHistory\(\)\{\s*if\(!localBrowserHistorySupported\(\)\) return Promise\.resolve\(\[\]\);/);
+  assert.match(source, /window\.miaDesktop\.browser\.history\(20\)/);
+  assert.match(source, /if\(input && localBrowserHistorySupported\(\)\)\{/);
+  assert.match(source, /event\.key === 'ArrowDown'/);
+  assert.match(source, /event\.key === 'ArrowUp'/);
+  assert.match(source, /event\.key === 'Enter'\)\{\s*if\(localBrowserSuggestIndex < 0\) return; \/\/ no selection: keep the normal submit behavior/);
+  assert.match(source, /event\.key === 'Escape'\)\{\s*closeLocalBrowserSuggest\(\);/);
+  assert.match(source, /\.slice\(0, 5\);/);
+  assert.match(styles, /\.local-browser-suggest\{/);
 });
