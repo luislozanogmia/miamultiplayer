@@ -1065,7 +1065,7 @@
     loading: false,
     error: '',
     providers: [],
-    selection: {provider: null, model: null, family: '', familyKey: '', variant: '', reasoningEffort: '', speed: ''},
+    selection: {provider: null, model: null, family: '', familyKey: '', familyProviderId: '', variant: '', reasoningEffort: '', speed: ''},
     stage: 'family'
   };
   var CHAT_MODEL_SELECTION_CACHE_VERSION = 1;
@@ -12102,6 +12102,67 @@
     var picker = chatModelPicker;
     var effortLabels = {none:'None', low:'Low', medium:'Medium', high:'High', xhigh:'Extra high', max:'Max', ultra:'Ultra'};
 
+    // The "Choose a model family" back screen lists every provider offered by
+    // initial setup (harnessProviderChoices in index.html), not just whatever
+    // happens to be connected. Connection state and the connect flow itself
+    // are the same ones setup uses (harnessConnectionState, openHarnessOnboarding,
+    // the [data-harness-provider] choices and #harnessApiProvider select) — no
+    // new state is invented here.
+    var COMPOSER_FAMILY_PROVIDERS = [
+      {id:'managed-router', label:'Mia Router', caption:'Managed Router', harnessProvider:'managed-router', aliases:['managed-router', 'openrouter']},
+      {id:'anthropic', label:'Claude', caption:'Anthropic API key', harnessProvider:'openai-api', apiProvider:'anthropic', aliases:['anthropic', 'claude']},
+      {id:'openai-codex', label:'ChatGPT', caption:'Codex CLI', harnessProvider:'openai-codex', aliases:['openai-codex', 'codex']},
+      {id:'xai-oauth', label:'Grok', caption:'Grok CLI', harnessProvider:'xai-oauth', aliases:['xai-oauth', 'xai', 'grok']},
+      {id:'gemini', label:'Gemini', caption:'Google AI Studio API key', harnessProvider:'openai-api', apiProvider:'gemini', aliases:['gemini', 'google', 'google-ai-studio']}
+    ];
+
+    function familyProviderAliasMatch(providerId, aliases){
+      var actual = String(providerId || '').toLowerCase();
+      return aliases.indexOf(actual) !== -1;
+    }
+
+    function familyProviderConnected(row){
+      if(harnessConnectionState[row.id] === true) return true;
+      // Mia Router is stored under the Hermes provider id 'openrouter'.
+      if(row.id === 'managed-router' && harnessConnectionState['openrouter'] === true) return true;
+      return false;
+    }
+
+    function familyProviderEntries(row){
+      return entries().filter(function(item){ return familyProviderAliasMatch(item.provider, row.aliases); });
+    }
+
+    // The active row mirrors what the composer pill is actually showing right
+    // now (the per-turn cached choice, falling back to the saved harness
+    // default) rather than picker.selection, which goBack() clears on its way
+    // back up to this screen.
+    function activeFamilyProviderId(){
+      var cached = readCachedChatModelSelection();
+      if(cached && cached.provider) return cached.provider;
+      var current = currentEntry(entries());
+      return current && current.provider;
+    }
+
+    // Opens the exact same connect flow initial setup uses: the onboarding
+    // sheet, its [data-harness-provider] choice, and (for API-key providers)
+    // its #harnessApiProvider select — triggered the same way a user's own
+    // click would.
+    function openConnectFlowForProvider(row){
+      closeMenu();
+      openHarnessOnboarding(harnessSettingsCache);
+      var choice = el('[data-harness-provider="' + row.harnessProvider + '"]');
+      if(choice) choice.click();
+      if(row.apiProvider){
+        var apiProviderSelect = el('#harnessApiProvider');
+        if(apiProviderSelect){
+          apiProviderSelect.value = row.apiProvider;
+          var changeEvent;
+          try { changeEvent = new Event('change', {bubbles:true}); } catch(_){ changeEvent = document.createEvent('Event'); changeEvent.initEvent('change', true, true); }
+          apiProviderSelect.dispatchEvent(changeEvent);
+        }
+      }
+    }
+
     function titleCase(value){ return chatModelTitleCase(value); }
 
     function modelParts(model){ return chatModelParts(model); }
@@ -12238,7 +12299,10 @@
         return;
       }
       var all = entries();
-      if(!all.length){
+      // Every other stage needs an actual selected family's entries to list;
+      // the family screen itself must keep working even with zero connected
+      // providers, since its whole job is to offer a way to connect one.
+      if(!all.length && currentStage !== 'family'){
         title.textContent = 'Connect a model';
         optionsWrap.innerHTML = '<div class="cc-model-selection">Connect a provider in Settings → Access.</div>';
         return;
@@ -12246,20 +12310,31 @@
       var html = '';
       if(currentStage === 'family'){
         title.textContent = 'Choose a model family';
-        var families = {};
-        all.forEach(function(item){
-          if(!families[item.familyKey]) families[item.familyKey] = {family:item.family, providers:[], key:item.familyKey, entries:[]};
-          families[item.familyKey].entries.push(item);
-          if(families[item.familyKey].providers.indexOf(item.providerLabel) === -1) families[item.familyKey].providers.push(item.providerLabel);
-        });
-        Object.keys(families).map(function(key){ return families[key]; }).forEach(function(item){
-          html += button(item.family, item.providers.join(', '), 'data-choice="family" data-family-key="' + esc(item.key) + '" data-family="' + esc(item.family) + '"');
+        var activeProviderId = activeFamilyProviderId();
+        COMPOSER_FAMILY_PROVIDERS.forEach(function(row){
+          var connected = familyProviderConnected(row);
+          var active = connected && familyProviderAliasMatch(activeProviderId, row.aliases);
+          html += '<div class="cc-model-family-row' + (connected ? '' : ' is-unconnected') + '">';
+          if(connected){
+            html += '<button type="button" class="cc-model-option cc-model-family-option' + (active ? ' is-active' : '') + '" data-choice="family-provider" data-family-provider-id="' + esc(row.id) + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
+              '<span class="cc-model-family-copy"><span class="cc-model-option-label">' + esc(row.label) + '</span><span class="cc-model-family-caption">' + esc(row.caption) + '</span></span>' +
+              '<span class="cc-model-family-check" aria-hidden="true">' + (active ? '&#10003;' : '') + '</span>' +
+              '</button>';
+          } else {
+            html += '<div class="cc-model-family-option cc-model-family-static">' +
+              '<span class="cc-model-family-copy"><span class="cc-model-option-label">' + esc(row.label) + '</span><span class="cc-model-family-caption">' + esc(row.caption) + '</span></span>' +
+              '</div>' +
+              '<button type="button" class="styled-onboarding-connection-action cc-model-connect-pill" data-connect-provider-id="' + esc(row.id) + '" aria-label="Connect ' + esc(row.label) + '"><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>';
+          }
+          html += '</div>';
         });
       } else if(currentStage === 'variant'){
         title.textContent = 'Choose a ' + (picker.selection.family || 'model') + ' model';
-        all.filter(function(item){
+        var activeRow = COMPOSER_FAMILY_PROVIDERS.filter(function(row){ return row.id === picker.selection.familyProviderId; })[0];
+        var variantEntries = activeRow ? familyProviderEntries(activeRow) : all.filter(function(item){
           return item.familyKey === picker.selection.familyKey;
-        }).forEach(function(item){
+        });
+        variantEntries.forEach(function(item){
           html += button(item.variant, item.providerLabel, 'data-choice="variant" data-provider="' + esc(item.provider) + '" data-model="' + esc(item.model) + '"');
         });
       } else if(currentStage === 'effort'){
@@ -12278,9 +12353,17 @@
       els('.cc-model-option', optionsWrap).forEach(function(choice){
         choice.addEventListener('click', function(){
           var kind = choice.getAttribute('data-choice');
-          if(kind === 'family'){
-            picker.selection.familyKey = choice.getAttribute('data-family-key');
-            picker.selection.family = choice.getAttribute('data-family');
+          if(kind === 'family-provider'){
+            var rowId = choice.getAttribute('data-family-provider-id');
+            var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === rowId; })[0];
+            if(!row) return;
+            // A truthy familyKey is only used as the stage() gate here — the
+            // actual filter for the variant list below keys off
+            // familyProviderId, since this row does not correspond to the old
+            // inventory-derived "provider:family" grouping.
+            picker.selection.familyKey = row.id;
+            picker.selection.familyProviderId = row.id;
+            picker.selection.family = row.label;
             picker.selection.variant = '';
             picker.selection.model = null;
             picker.selection.provider = '';
@@ -12321,6 +12404,13 @@
           render();
         });
       });
+      els('.cc-model-connect-pill', optionsWrap).forEach(function(pill){
+        pill.addEventListener('click', function(event){
+          event.stopPropagation();
+          var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === pill.getAttribute('data-connect-provider-id'); })[0];
+          if(row) openConnectFlowForProvider(row);
+        });
+      });
     }
 
     function render(){
@@ -12343,6 +12433,7 @@
       } else if(currentStage === 'variant'){
         picker.selection.family = '';
         picker.selection.familyKey = '';
+        picker.selection.familyProviderId = '';
         picker.selection.variant = '';
         picker.selection.model = null;
         picker.selection.provider = '';
@@ -12379,13 +12470,13 @@
         if(picker.providers.length) hydrateSelection();
         else {
           clearCachedChatModelSelection();
-          picker.selection = {provider:null, model:null, family:'', familyKey:'', variant:'', reasoningEffort:'', speed:''};
+          picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
         }
       }).catch(function(error){
         picker.providers = [];
         BENCH_MODELS = [];
         picker.loaded = true;
-        picker.selection = {provider:null, model:null, family:'', familyKey:'', variant:'', reasoningEffort:'', speed:''};
+        picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
         picker.error = error && error.message ? error.message : 'Connected models unavailable.';
       }).then(function(){
         picker.loading = false;
@@ -12400,7 +12491,7 @@
       picker.loading = false;
       picker.error = '';
       picker.providers = [];
-      picker.selection = {provider:null, model:null, family:'', familyKey:'', variant:'', reasoningEffort:'', speed:''};
+      picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
       clearCachedChatModelSelection();
       render();
       return load({refresh:true});
