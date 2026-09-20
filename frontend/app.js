@@ -3353,7 +3353,7 @@
     var a = findBenchAgent(editState.agentId);
     if(!pane || !a) return;
     pane.setAttribute('aria-label', 'Edit bot');
-    pane.classList.remove('plugins-open', 'agents-open');
+    pane.classList.remove('plugins-open', 'agents-open', 'bot-store-open');
     pane.classList.add('open', 'agent-edit-open');
     if(!el('#styledAgentEditSurface', pane)){
       pane.innerHTML = styledAgentEditMarkup(a);
@@ -4991,6 +4991,10 @@
   var pluginPaneRoomId = null;
   var localBrowserState = {open: false, roomId: null};
   var LOCAL_BROWSER_OPEN_STATE_KEY = 'miaBrowserOpen';
+  // Bot Store: catalog entries are fetched once (index + each manifest) and
+  // cached here for the lifetime of the tab; installingId guards against a
+  // double-click firing two POST /api/bots calls for the same manifest.
+  var botStoreState = {loading: false, error: '', entries: null, installingId: null};
   var appDevState = {available: false, verboseHermes: false, traceCommands: false, events: []};
   var appDevPollTimer = null;
   var localBrowserPromptIndex = 0;
@@ -8037,7 +8041,7 @@
     var multiplayer = appCollaborationMode === 'multiplayer';
     var paneTitle = multiplayer ? 'People, Agents & Bots' : 'Agents & Bots';
     pane.setAttribute('aria-label', paneTitle);
-    pane.classList.remove('plugins-open');
+    pane.classList.remove('plugins-open', 'bot-store-open');
     pane.classList.add('open', 'agents-open');
     pane.innerHTML = '<div class="cip-pane-head manage-agents-pane-head"><span class="cip-pane-title">' + esc(paneTitle) + '</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
       '<button type="button" class="cip-pane-btn" id="manageAgentsPaneClose" aria-label="Close ' + esc(paneTitle) + '" title="Close ' + esc(paneTitle) + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
@@ -8155,7 +8159,7 @@
       return '<option value="' + day + '"' + (String(automation.day || 'Monday') === day ? ' selected' : '') + '>' + day + '</option>';
     }).join('');
     pane.setAttribute('aria-label', title + ' automation details');
-    pane.classList.remove('plugins-open', 'agents-open');
+    pane.classList.remove('plugins-open', 'agents-open', 'bot-store-open');
     pane.classList.add('open', 'automation-detail-open');
     pane.innerHTML = '<div class="cip-pane-head cip-automation-detail-head">' +
       '<button type="button" class="cip-automation-back" id="automationDetailBack" aria-label="Back to automations" title="Back to automations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"></path></svg><span>Automations</span></button>' +
@@ -8273,6 +8277,177 @@
     });
   }
 
+  // Bot Store: a read-only marketplace of predefined bots (bots-catalog/ in
+  // the repo, served via GET /api/bots/catalog and GET /api/bots/catalog/:id).
+  // Installing one POSTs manifest.bot through the exact same create path
+  // startAgentSetupChat's review card uses, then greets the new room with
+  // manifest.welcome the same way buildAgentSetupWelcomeMessage does for a
+  // hand-built bot — see createNativeAgentConversation / chatRoomState(...).localWelcome.
+  function closeBotStorePane(){
+    if(chatInfo.mode !== 'bot-store') return;
+    chatInfo.mode = 'automations';
+    chatInfo.open = false;
+    renderChatInfoPane();
+    syncSidebarToolButtons();
+  }
+
+  function openBotStorePane(){
+    if(!STYLED_SKIN) return;
+    prepareChatUtilityPane('bot-store');
+    renderChatInfoPane();
+    loadBotStoreCatalog();
+  }
+
+  function loadBotStoreCatalog(force){
+    if(botStoreState.entries && !force){
+      if(chatInfo.mode === 'bot-store') renderChatInfoPane();
+      return;
+    }
+    botStoreState.loading = true;
+    botStoreState.error = '';
+    if(chatInfo.mode === 'bot-store') renderChatInfoPane();
+    api('/api/bots/catalog').then(function(res){
+      if(res.status !== 200 || !res.data || !Array.isArray(res.data.bots)) throw new Error('catalog unavailable');
+      return Promise.all(res.data.bots.map(function(entry){
+        return api('/api/bots/catalog/' + encodeURIComponent(entry.id));
+      }));
+    }).then(function(results){
+      botStoreState.entries = results
+        .filter(function(res){ return res.status === 200 && res.data && res.data.bot; })
+        .map(function(res){ return res.data; });
+      botStoreState.loading = false;
+    }).catch(function(){
+      botStoreState.loading = false;
+      botStoreState.error = 'The bot store is unavailable right now.';
+    }).then(function(){
+      if(chatInfo.mode === 'bot-store') renderChatInfoPane();
+    });
+  }
+
+  // "Installed" detection is name-based (v1 has no manifest-id linkage on
+  // created bot records), same scope as the rest of the roster the user sees.
+  function botStoreInstalledAgentByName(name){
+    var target = String(name || '').trim().toLowerCase();
+    if(!target) return null;
+    return (chatWs.allAgents || []).filter(function(agent){
+      return String(agent.name || '').trim().toLowerCase() === target;
+    })[0] || null;
+  }
+
+  function botStoreCardHtml(manifest){
+    var bot = manifest.bot || {};
+    var store = manifest.store || {};
+    var requires = store.requires || {};
+    var connectors = Array.isArray(requires.connectors) ? requires.connectors : [];
+    var installed = botStoreInstalledAgentByName(bot.name);
+    var installing = botStoreState.installingId === manifest.id;
+    return '<div class="bot-store-card" data-bot-store-card="' + esc(manifest.id) + '">' +
+      '<span class="bot-store-card-avatar">' + agentAvatarHtml(bot.name || manifest.id, null, 40, null, store.avatarColor || bot.avatarColor || null) + '</span>' +
+      '<div class="bot-store-card-body">' +
+        '<div class="bot-store-card-head"><span class="bot-store-card-name">' + esc(bot.name || manifest.id) + '</span><span class="bot-store-card-version">v' + esc(manifest.version || '') + '</span></div>' +
+        '<div class="bot-store-card-tagline">' + esc(store.tagline || '') + '</div>' +
+        '<div class="bot-store-card-meta"><span>' + esc(store.category || 'general') + '</span><span aria-hidden="true">&middot;</span><span>' + esc(manifest.author || 'Mia Labs') + '</span></div>' +
+        (connectors.length ? '<div class="bot-store-card-requires">Requires: ' + esc(connectors.join(', ')) + '</div>' : '') +
+      '</div>' +
+      (installed
+        ? '<span class="bot-store-card-installed">Installed</span>'
+        : '<button type="button" class="bot-store-card-install" data-bot-store-install="' + esc(manifest.id) + '"' + (installing ? ' disabled' : '') + '>' + (installing ? 'Installing…' : 'Install') + '</button>') +
+      '</div>';
+  }
+
+  function renderBotStorePane(pane){
+    pane.setAttribute('aria-label', 'Bot store');
+    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open', 'bot-store-open');
+    pane.classList.add('open', 'bot-store-open');
+    var body;
+    if(botStoreState.loading && !botStoreState.entries){
+      body = '<div class="bot-store-status">Loading bots…</div>';
+    } else if(botStoreState.error){
+      body = '<div class="bot-store-status bot-store-error">' + esc(botStoreState.error) + '</div>';
+    } else if(!botStoreState.entries || !botStoreState.entries.length){
+      body = '<div class="bot-store-status">No bots available right now.</div>';
+    } else {
+      body = '<div class="bot-store-list">' + botStoreState.entries.map(botStoreCardHtml).join('') + '</div>';
+    }
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Bot store</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="botStorePaneClose" aria-label="Close Bot store" title="Close Bot store"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
+      '<div class="bot-store-body">' + body + '</div>';
+    var close = el('#botStorePaneClose', pane);
+    if(close) close.addEventListener('click', closeBotStorePane);
+    els('[data-bot-store-install]', pane).forEach(function(button){
+      button.addEventListener('click', function(){ installBotStoreBot(button.getAttribute('data-bot-store-install')); });
+    });
+  }
+
+  // Same message shape buildAgentSetupWelcomeMessage produces for a
+  // hand-built bot, but the body comes straight from the manifest's own
+  // `welcome` text instead of being assembled from a setup draft.
+  function buildBotStoreWelcomeMessage(roomId, created, welcomeText){
+    var fallbackName = (created && created.name) || 'your new bot';
+    return {
+      id: 'local-welcome-' + roomId,
+      sender: (created && created.id) || 'bot',
+      nativeAgentName: (created && created.name) || null,
+      body: String(welcomeText || '').trim() || ('I’m ' + fallbackName + '. What should I work on first?'),
+      media: null,
+      attachments: [],
+      ts: Date.now(),
+      threadRoot: null,
+      editTs: 0,
+      system: false,
+      pending: false,
+      deleted: false,
+      clientIdempotencyKey: null,
+      nativeDispatchId: null,
+      nativeProgress: false,
+      nativeDiagnostic: false,
+      nativeEvent: null
+    };
+  }
+
+  function installBotStoreBot(id){
+    if(!id || botStoreState.installingId) return;
+    var manifest = (botStoreState.entries || []).filter(function(entry){ return entry.id === id; })[0];
+    if(!manifest){ showBenchToast('That bot is unavailable right now'); return; }
+    var already = botStoreInstalledAgentByName(manifest.bot && manifest.bot.name);
+    if(already){
+      closeBotStorePane();
+      navigateToAgentChat(already, true);
+      return;
+    }
+    botStoreState.installingId = id;
+    if(chatInfo.mode === 'bot-store') renderChatInfoPane();
+    api('/api/bots/catalog/' + encodeURIComponent(id)).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.bot) throw new Error('manifest unavailable');
+      var freshManifest = res.data;
+      return api('/api/bots', {method:'POST', body: freshManifest.bot}).then(function(createRes){
+        if(createRes.status !== 201 || !createRes.data || !createRes.data.bot){
+          throw new Error(createRes.data && (createRes.data.message || createRes.data.error) || 'install failed');
+        }
+        var created = createRes.data.bot;
+        return createNativeAgentConversation(created, {}).then(function(conversation){
+          var createdBotRecords = (chatWs.botRecords || []).filter(function(record){
+            return String(record.id || '') !== String(created.id || '');
+          });
+          createdBotRecords.push(created);
+          syncChatBotRecords(createdBotRecords);
+          chatWs.nativeConversations.push(conversation);
+          applyNativeConversationList(chatWs.nativeConversations);
+          chatRoomState(conversation.id).localWelcome = buildBotStoreWelcomeMessage(conversation.id, created, freshManifest.welcome);
+          botStoreState.installingId = null;
+          closeBotStorePane();
+          renderChatSidebar();
+          renderChatHeaderBar();
+          loadChatRoom(conversation.id, 'agent', created.name);
+        });
+      });
+    }).catch(function(err){
+      botStoreState.installingId = null;
+      if(chatInfo.mode === 'bot-store') renderChatInfoPane();
+      showBenchToast('Could not install bot: ' + (err && err.message ? err.message : 'please try again.'));
+    });
+  }
+
   function renderChatInfoPane(){
     var pane = el('#chatInfoPane');
     if(!pane) return;
@@ -8280,15 +8455,19 @@
       restorePluginShell();
       chatInfo.mode = 'automations';
     }
-    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail';
-    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit') || (!specialMode && !isInfoPaneAvailable())){
+    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-store';
+    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'bot-store') || (!specialMode && !isInfoPaneAvailable())){
       restorePluginShell();
-      pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open');
+      pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open', 'bot-store-open');
       pane.innerHTML = '';
       return;
     }
     if(chatInfo.mode === 'agent-edit'){
       renderStyledAgentEditPane(pane);
+      return;
+    }
+    if(chatInfo.mode === 'bot-store'){
+      renderBotStorePane(pane);
       return;
     }
     if(chatInfo.mode === 'automation-detail'){
@@ -8311,7 +8490,7 @@
     if(chatInfo.mode === 'plugins'){
       var shell = getPluginShell();
       pane.setAttribute('aria-label', 'Connected apps');
-      pane.classList.remove('agents-open');
+      pane.classList.remove('agents-open', 'bot-store-open');
       pane.classList.add('open', 'plugins-open');
       pane.innerHTML = '<div class="cip-pane-head styled-plugin-pane-head"><span class="cip-pane-title">Connected apps</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
         '<button type="button" class="cip-pane-btn" id="styledPluginPaneClose" aria-label="Close connected apps" title="Close connected apps"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>';
@@ -8320,7 +8499,7 @@
       if(pluginClose) pluginClose.addEventListener('click', closePluginPane);
       return;
     }
-    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open');
+    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open', 'bot-store-open');
     pane.setAttribute('aria-label', 'Automations');
     var agent = chatWs.activeKind === 'agent'
       ? chatWs.allAgents.filter(function(a){ return a.roomId === chatWs.activeRoomId || a.nativeConversationId === chatWs.activeRoomId || a.name === chatWs.activeLabel; })[0]
@@ -10637,11 +10816,12 @@
     // already uses for agent/bot conversations, so it doesn't need the full
     // layout back — closing the browser here would kill browser mode for no
     // reason. Every other tools-menu action still needs the full layout.
-    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot') closeLocalBrowser();
+    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store') closeLocalBrowser();
     if(action === 'new-chat') openDmCompose();
     else if(action === 'new-bot') startAgentSetupChat();
     else if(action === 'new-agent') openHarnessAgentSetup();
     else if(action === 'new-channel') openNewChannelFlow();
+    else if(action === 'bot-store') openBotStorePane();
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsFromTools();
     else if(action === 'web-browser') openWebBrowserTool();
@@ -10819,8 +10999,9 @@
       location.hash = '#/chat';
     });
     document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && (chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit')){
+      if(e.key === 'Escape' && (chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'bot-store')){
         if(chatInfo.mode === 'agent-edit') closeCinema();
+        else if(chatInfo.mode === 'bot-store') closeBotStorePane();
         else
         closeManageAgentsPane();
       }
