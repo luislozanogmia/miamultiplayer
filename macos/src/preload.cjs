@@ -18,6 +18,12 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     // storage and relaunch the whole app. Resolves false when refused.
     relaunch: () => ipcRenderer.invoke("miaos-reset-relaunch"),
   },
+  defaultBrowser: {
+    // Both resolve { http, https } — the shell's actual current
+    // registration state, never an optimistic guess.
+    get: () => ipcRenderer.invoke("miaos-default-browser-get"),
+    set: () => ipcRenderer.invoke("miaos-default-browser-set"),
+  },
   state: {
     get: (key) => ipcRenderer.sendSync("miaos-state-get", key),
     set: (key, value) => ipcRenderer.send("miaos-state-set", key, value),

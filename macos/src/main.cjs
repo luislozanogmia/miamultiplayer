@@ -1852,6 +1852,39 @@ ipcMain.handle("miaos-reset-relaunch", async (event) => {
   return true;
 });
 
+// Settings > General > Default browser. macOS/Windows own the actual
+// confirmation UI for this (a system prompt, or the user picking Mia in
+// System Settings/Default Apps); Electron can only ask and report back
+// what is currently registered. Report the real state honestly rather than
+// assuming the ask succeeded — an unsigned dev build, for instance, can
+// have this silently fail.
+ipcMain.handle("miaos-default-browser-get", (event) => {
+  if (!isMainWindowSender(event)) return { http: false, https: false };
+  try {
+    return { http: app.isDefaultProtocolClient("http"), https: app.isDefaultProtocolClient("https") };
+  } catch (error) {
+    desktopLog(`default browser status check failed: ${error.message}`);
+    return { http: false, https: false };
+  }
+});
+
+ipcMain.handle("miaos-default-browser-set", (event) => {
+  if (!isMainWindowSender(event)) return { http: false, https: false };
+  for (const scheme of ["http", "https"]) {
+    try {
+      app.setAsDefaultProtocolClient(scheme);
+    } catch (error) {
+      desktopLog(`setAsDefaultProtocolClient(${scheme}) failed: ${error.message}`);
+    }
+  }
+  try {
+    return { http: app.isDefaultProtocolClient("http"), https: app.isDefaultProtocolClient("https") };
+  } catch (error) {
+    desktopLog(`default browser status check failed: ${error.message}`);
+    return { http: false, https: false };
+  }
+});
+
 ipcMain.on("miaos-renderer-ready", (event) => {
   if (!isMainWindowSender(event)) return;
   revealMainWindow();
