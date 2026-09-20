@@ -2559,6 +2559,12 @@
      over the fixed collaboration pane instead of being hidden with the rest
      of .chat-info-pane. */
   body.browser-collab-mode .chat-info-pane.bot-store-open{display:flex!important;position:fixed!important;inset:0 0 0 auto!important;width:var(--browser-mia-pane-width)!important;max-width:var(--browser-mia-pane-width);height:100vh;z-index:122;background:var(--sand-bg-base);border-left:1px solid var(--sand-border-default);}
+  /* Same treatment for the bot editor: clicking a bot's avatar in the
+     browser's "Your bots" drawer opens this pane pre-loaded with that bot,
+     so it needs to surface over the fixed collaboration pane too — otherwise
+     it renders behind the full-screen browser overlay and never becomes
+     visible. */
+  body.browser-collab-mode .chat-info-pane.agent-edit-open{display:flex!important;position:fixed!important;inset:0 0 0 auto!important;width:var(--browser-mia-pane-width)!important;max-width:var(--browser-mia-pane-width);height:100vh;z-index:122;background:var(--sand-bg-base);border-left:1px solid var(--sand-border-default);}
   /* The right-hand collaboration pane is intentionally dense. The normal
      direct-chat rhythm reserves 28% for breathing room, which leaves a long
      Mia reply stranded in a narrow bubble at this width. Keep only a 5% edge
