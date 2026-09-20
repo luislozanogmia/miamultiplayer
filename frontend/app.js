@@ -10841,6 +10841,7 @@
     'new-channel': '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h7A2.5 2.5 0 0 1 16 5.5v3A2.5 2.5 0 0 1 13.5 11H8l-4 3.5z"></path><path d="M18 9.5h.5A2.5 2.5 0 0 1 21 12v3a2.5 2.5 0 0 1-2.5 2.5H18V21l-4-3.5h-3"></path>',
     'automations': '<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7v5l3 2"></path>',
     'connected-apps': '<circle cx="12" cy="6" r="2.2"></circle><circle cx="6" cy="17" r="2.2"></circle><circle cx="18" cy="17" r="2.2"></circle><path d="M10.8 7.8 7.2 15M13.2 7.8l3.6 7.2M8.2 17h7.6"></path>',
+    'bot-store': '<path d="M4 9.5 5.2 5h13.6l1.2 4.5"></path><path d="M4 9.5a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"></path><path d="M5 9.8V19h14V9.8"></path><path d="M10 19v-5h4v5"></path>',
     'web-browser': '<circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5s1.3-6.2 3.8-8.5z"></path>'
   };
   function sidebarPinStorageKey(){ return 'miaSidebarToolPins:' + activeWorkspaceKey; }
@@ -10912,7 +10913,20 @@
       pin.title = pinned ? 'Unpin from sidebar' : 'Pin to sidebar';
     });
   }
+  function closeBrowserSidebarDrawer(){
+    if(!document.body.classList.contains('browser-sidebar-open')) return;
+    document.body.classList.remove('browser-sidebar-open');
+    var sidebar = el('#localBrowserSidebarBtn');
+    if(sidebar){
+      sidebar.setAttribute('aria-expanded', 'false');
+      sidebar.setAttribute('aria-label', 'Open your bots');
+    }
+  }
   function runToolsAction(action){
+    // A tool action is a destination choice: collapse the browser-mode
+    // sidebar drawer so the destination (browser page or side pane) is
+    // immediately visible instead of staying covered by the drawer.
+    closeBrowserSidebarDrawer();
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
     // layout back — closing the browser here would kill browser mode for no
