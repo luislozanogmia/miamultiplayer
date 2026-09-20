@@ -2515,7 +2515,9 @@
   .app-development-copy:hover{border-color:var(--sand-fill-accent);}
   .app-development-copy:disabled{cursor:wait;opacity:.62;}
   .app-development-note{display:block;margin-top:6px;color:var(--sand-text-secondary);font-size:9.5px;line-height:1.35;}
-  .native-browser-tabs{display:flex;align-items:center;gap:4px;min-height:36px;padding:4px 8px;background:#ededeb;overflow-x:auto;flex:none;}
+  .native-browser-tabs-row{display:flex;align-items:center;background:#ededeb;flex:none;}
+  .native-browser-tabs{display:flex;align-items:center;gap:4px;min-height:36px;padding:4px 8px;background:#ededeb;overflow-x:auto;flex:1;min-width:0;}
+  .native-browser-tabs-row .local-browser-close-btn{flex:none;margin:0 6px 0 2px;}
   .native-browser-tab{display:flex;flex:0 1 190px;min-width:100px;max-width:220px;border-radius:7px;background:#e1e1df;}
   .native-browser-tab.active{background:#fff;box-shadow:0 1px 3px #0000000d;}
   .native-browser-tab button,.native-browser-new-tab{appearance:none;border:0;background:transparent;color:#30302e;padding:6px 9px;font:12px/18px var(--styled-sans);cursor:pointer;}
