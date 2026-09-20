@@ -167,6 +167,28 @@ test('subscription model selections stay inside the provider allowlist', () => {
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200, botWorker: true }), inference.MIAOS_BOT_MAX_TURNS);
 });
 
+test('the output token budget defaults safely, clamps a request, and converts to a char budget', () => {
+  assert.equal(inference.MIAOS_BOT_MAX_TOKENS, 200000);
+  // No request (or an invalid one) falls back to the deployment ceiling —
+  // every caller gets a budget by default, unlike the turn cap above.
+  assert.equal(inference.hermesTokenBudgetFromOptions(), inference.MIAOS_BOT_MAX_TOKENS);
+  assert.equal(inference.hermesTokenBudgetFromOptions({}), inference.MIAOS_BOT_MAX_TOKENS);
+  assert.equal(inference.hermesTokenBudgetFromOptions({ maxTokens: 0 }), inference.MIAOS_BOT_MAX_TOKENS);
+  assert.equal(inference.hermesTokenBudgetFromOptions({ maxTokens: 5000 }), 5000);
+  assert.equal(
+    inference.hermesTokenBudgetFromOptions({ maxTokens: inference.MIAOS_BOT_MAX_TOKENS + 1 }),
+    inference.MIAOS_BOT_MAX_TOKENS
+  );
+  assert.equal(
+    inference.hermesCharBudgetFromTokens(5000),
+    5000 * inference.NATIVE_DISPATCH_CHARS_PER_TOKEN
+  );
+  assert.equal(
+    inference.hermesCharBudgetFromTokens(),
+    inference.MIAOS_BOT_MAX_TOKENS * inference.NATIVE_DISPATCH_CHARS_PER_TOKEN
+  );
+});
+
 test('localhost diagnostics control Hermes verbosity without exposing secrets', () => {
   const before = inference.getHermesDiagnostics();
   const enabled = inference.setHermesDiagnostics({ verboseHermes: true, traceCommands: true });

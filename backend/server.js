@@ -69,6 +69,8 @@ const {
   stopHermesGatewayRuntime,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+  hermesTokenBudgetFromOptions,
+  hermesCharBudgetFromTokens,
 } = require('./inference');
 const {
   listHermesCredentialProviders,
@@ -130,6 +132,8 @@ const {
   nativeDispatchTimeoutMs,
   NATIVE_DISPATCH_TIMEOUT_CODE,
   createNativeDispatchWatchdog,
+  NATIVE_DISPATCH_TOKEN_BUDGET_CODE,
+  createNativeDispatchTokenBudgetTracker,
 } = require('./native-dispatch-runtime');
 const { miaosWorkspacePromptContext, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
 const {
@@ -5129,6 +5133,48 @@ function splitHermesDebugText(text, maxLength = 7000) {
   return chunks;
 }
 
+// The gateway emits one thinking/reasoning delta per token, so verbose mode
+// cannot post a progress event per event without spamming the transcript.
+// This buffers consecutive same-kind deltas and hands the caller one string
+// to post, on whichever comes first: the char cap, the idle timer, or an
+// explicit flush (a kind switch, or a caller-chosen boundary such as
+// message.complete/status change).
+const HERMES_DELTA_FLUSH_CHARS = 400;
+const HERMES_DELTA_FLUSH_MS = 1500;
+
+function createHermesDeltaCoalescer(onFlush) {
+  let buffer = '';
+  let kind = null;
+  let timer = null;
+  function clearTimer() {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  }
+  function flush() {
+    clearTimer();
+    if (!buffer) return;
+    const text = buffer;
+    const flushedKind = kind;
+    buffer = '';
+    kind = null;
+    onFlush(flushedKind, text);
+  }
+  return {
+    push(eventKind, text) {
+      if (!text) return;
+      if (kind && kind !== eventKind) flush();
+      kind = eventKind;
+      buffer += text;
+      if (buffer.length >= HERMES_DELTA_FLUSH_CHARS) {
+        flush();
+        return;
+      }
+      if (!timer) timer = setTimeout(flush, HERMES_DELTA_FLUSH_MS);
+    },
+    flush,
+  };
+}
+
 function throwIfNativeGoogleActionStopped(dispatch, trigger, signal) {
   // The deletion barrier and the dispatch AbortController are deliberately
   // checked together. A user can be revoked before db.deleteUser() commits,
@@ -5355,7 +5401,18 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   return true;
 }
 
-async function runNativeConversationAgentReply(dispatch, signal) {
+// budgetTracker.record() is fed streamed-character counts from delta events
+// below; native-dispatch-runtime.js's tracker aborts `signal`'s controller
+// once the char-approximated token budget is exceeded (see
+// executeNativeConversationDispatch, the caller of this function).
+function budgetTrackingOnEvent(budgetTracker) {
+  return (type, payload) => {
+    if (type !== 'message.delta' && type !== 'thinking.delta' && type !== 'reasoning.delta') return;
+    budgetTracker.record(payload && payload.text);
+  };
+}
+
+async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) {
   throwIfNativeDispatchStopped(signal);
   const conversation = nativeConversationRepository.getConversation({
     companyId: dispatch.companyId,
@@ -5667,6 +5724,10 @@ async function runNativeConversationAgentReply(dispatch, signal) {
     agentic: isGatewayAgent,
     botWorker: !isGatewayAgent,
     maxTurns: isGatewayAgent ? MIAOS_AGENT_MAX_TURNS : MIAOS_BOT_MAX_TURNS,
+    // Output budget mirrors the turn cap above: a per-run ceiling that
+    // executeNativeConversationDispatch enforces via the same abort path the
+    // wall-clock timeout uses (see the token budget tracker there).
+    maxTokens: hermesTokenBudgetFromOptions(userOptions),
     ...(isGatewayAgent ? { profile: googleGatewayProfile } : {}),
     ...(isGatewayAgent && !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly
       && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()
@@ -5677,30 +5738,60 @@ async function runNativeConversationAgentReply(dispatch, signal) {
   let rawReply;
   let inferenceResult;
   let validatedArtifacts = [];
+  // Shared verbose-diagnostics progress poster. Both dispatch flavors route
+  // gateway events through the same Hermes gateway client (client.run()'s
+  // onEvent), so both need the same coalescing/posting wiring — this used to
+  // live only inside the `dispatch.targetType === 'gateway'` branch, which
+  // meant bot-worker dispatches (the non-gateway else-branch below) silently
+  // dropped thinking.delta/reasoning.delta even with verbose chatOutput on.
+  let hermesProgressSequence = Promise.resolve();
+  let hermesProgressIndex = 0;
+  const postHermesProgressText = (hermesEventType, text) => {
+    const sequence = ++hermesProgressIndex;
+    hermesProgressSequence = hermesProgressSequence.then(() => createNativeDispatchReplyEvent(dispatch, trigger, {
+      type: replyEventType,
+      content: { text },
+      parentEventId,
+      clientIdempotencyKey: `native-dispatch-hermes-progress-${dispatch.id}-${sequence}`,
+      metadata: {
+        runtime: 'hermes',
+        dispatchId: dispatch.id,
+        progress: true,
+        diagnostic: true,
+        hermesEventType,
+        agentName: agent.name,
+      },
+    })).catch(() => {});
+  };
+  // thinking.delta/reasoning.delta arrive one token at a time; coalesce them
+  // into a single progress line per burst instead of one event per token.
+  const hermesDeltaCoalescer = createHermesDeltaCoalescer((kind, text) => {
+    postHermesProgressText(kind === 'Thinking' ? 'thinking.delta' : 'reasoning.delta', `${kind}\n${text}`);
+  });
+  const trackBudget = budgetTracker ? budgetTrackingOnEvent(budgetTracker) : null;
+  const postHermesProgress = (type, payload) => {
+    if (trackBudget) trackBudget(type, payload);
+    const diagnostics = getHermesDiagnostics();
+    if (!diagnostics.verboseHermes && !diagnostics.traceCommands) return;
+    // Verbose mode surfaces the live thinking/reasoning stream instead of
+    // silently dropping it (hermesDebugEventText() still drops it — that
+    // pure per-event function has no buffer to coalesce into). gateway.ready
+    // and session.info stay dropped either way; message.delta is left out
+    // too, since its content is the final reply already posted separately.
+    if (diagnostics.verboseHermes && (type === 'thinking.delta' || type === 'reasoning.delta')) {
+      const text = redactHermesChatDetail(String((payload && payload.text) || ''));
+      if (text) hermesDeltaCoalescer.push(type === 'thinking.delta' ? 'Thinking' : 'Reasoning', text);
+      return;
+    }
+    // Any other event is a natural boundary (a tool call, a status change,
+    // message.complete): flush whatever delta text is buffered first so
+    // ordering in the transcript matches the gateway's own event order.
+    hermesDeltaCoalescer.flush();
+    for (const text of splitHermesDebugText(hermesDebugEventText(type, payload))) {
+      postHermesProgressText(type, text);
+    }
+  };
   if (dispatch.targetType === 'gateway') {
-    let hermesProgressSequence = Promise.resolve();
-    let hermesProgressIndex = 0;
-    const postHermesProgress = (type, payload) => {
-      const diagnostics = getHermesDiagnostics();
-      if (!diagnostics.verboseHermes && !diagnostics.traceCommands) return;
-      for (const text of splitHermesDebugText(hermesDebugEventText(type, payload))) {
-        const sequence = ++hermesProgressIndex;
-        hermesProgressSequence = hermesProgressSequence.then(() => createNativeDispatchReplyEvent(dispatch, trigger, {
-          type: 'agent_message',
-          content: { text },
-          parentEventId,
-          clientIdempotencyKey: `native-dispatch-hermes-progress-${dispatch.id}-${sequence}`,
-          metadata: {
-            runtime: 'hermes',
-            dispatchId: dispatch.id,
-            progress: true,
-            diagnostic: true,
-            hermesEventType: type,
-            agentName: agent.name,
-          },
-        })).catch(() => {});
-      }
-    };
     const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel);
     const gatewayMessage = buildHermesGatewayTurnMessage(
       message,
@@ -5742,6 +5833,7 @@ async function runNativeConversationAgentReply(dispatch, signal) {
         nativeActiveGatewaySessions.delete(gatewayKey);
       }
     }
+    hermesDeltaCoalescer.flush();
     throwIfNativeDispatchStopped(signal);
     throwIfNativeDispatchUserInactive(dispatch, trigger);
     await hermesProgressSequence;
@@ -5767,7 +5859,16 @@ async function runNativeConversationAgentReply(dispatch, signal) {
       safeGoogleRefs,
       googleWorkspaceWriteAuthorized
     );
-    inferenceResult = await scheduleInference(prompt, 'reply', { ...inferenceOptions, signal });
+    inferenceResult = await scheduleInference(prompt, 'reply', {
+      ...inferenceOptions,
+      signal,
+      onEvent: postHermesProgress,
+    });
+    hermesDeltaCoalescer.flush();
+    throwIfNativeDispatchStopped(signal);
+    throwIfNativeDispatchUserInactive(dispatch, trigger);
+    await hermesProgressSequence;
+    throwIfNativeDispatchUserInactive(dispatch, trigger);
     rawReply = typeof inferenceResult === 'string' ? inferenceResult : inferenceResult && inferenceResult.text;
     validatedArtifacts = cronSync.validateBotArtifacts(
       agent,
@@ -5873,8 +5974,19 @@ async function executeNativeConversationDispatch(dispatch) {
   const claimToken = `native-${crypto.randomUUID()}`;
   let claimed = null;
   let timeoutError = null;
+  let budgetError = null;
   let watchdog = null;
   const abortController = new AbortController();
+  // Same abort path the wall-clock watchdog uses below. The tracker only
+  // counts characters (the gateway stream exposes no per-turn token usage;
+  // see hermesCharBudgetFromTokens in inference.js) and fires once.
+  const budgetTracker = createNativeDispatchTokenBudgetTracker({
+    charBudget: hermesCharBudgetFromTokens(hermesTokenBudgetFromOptions()),
+    onExceeded: (error) => {
+      budgetError = error;
+      abortController.abort();
+    },
+  });
   try {
     claimed = nativeConversationRepository.claimDispatch({
       companyId: dispatch.companyId,
@@ -5896,11 +6008,13 @@ async function executeNativeConversationDispatch(dispatch) {
         abortController.abort();
       },
     });
-    await runNativeConversationAgentReply(claimed.dispatch, abortController.signal);
+    await runNativeConversationAgentReply(claimed.dispatch, abortController.signal, budgetTracker);
     // Abort is cooperative. A runtime that ignores the signal can still
-    // resolve after the watchdog fires; the timeout must win over completion
-    // so the durable dispatch cannot be marked successful after its deadline.
+    // resolve after the watchdog fires; the timeout (and the output budget)
+    // must win over completion so the durable dispatch cannot be marked
+    // successful after its deadline.
     if (timeoutError) throw timeoutError;
+    if (budgetError) throw budgetError;
     if (nativeDispatchWasStopped(dispatch)) {
       removeNativeDispatchProgressEvent(dispatch);
       return;
@@ -5912,30 +6026,32 @@ async function executeNativeConversationDispatch(dispatch) {
     });
   } catch (error) {
     const timedOut = timeoutError || (error && error.code === NATIVE_DISPATCH_TIMEOUT_CODE ? error : null);
+    const budgetExceeded = budgetError || (error && error.code === NATIVE_DISPATCH_TOKEN_BUDGET_CODE ? error : null);
     let stopped = nativeDispatchWasStopped(dispatch);
-    if (timedOut && !stopped && claimed && claimed.dispatch) {
+    if ((timedOut || budgetExceeded) && !stopped && claimed && claimed.dispatch) {
       try {
         nativeConversationRepository.failDispatch({
           companyId: dispatch.companyId,
           id: dispatch.id,
           claimToken,
-          error: timedOut.message,
+          error: (timedOut || budgetExceeded).message,
         });
       } catch (failureError) {
-        // An explicit Stop can win immediately after the watchdog fires. The
-        // durable row decides which terminal state the user should see.
+        // An explicit Stop can win immediately after the watchdog (or budget
+        // tracker) fires. The durable row decides which terminal state the
+        // user should see.
         if (!nativeDispatchWasStopped(dispatch)) {
           console.error('native dispatch timeout state update failed', dispatch.id, failureError.message);
         }
       }
       stopped = nativeDispatchWasStopped(dispatch);
     }
-    const cancelled = !timedOut && (error && (error.name === 'AbortError' || error.code === 'ABORT_ERR'));
+    const cancelled = !timedOut && !budgetExceeded && (error && (error.name === 'AbortError' || error.code === 'ABORT_ERR'));
     if (stopped || cancelled) {
       removeNativeDispatchProgressEvent(dispatch);
       return;
     }
-    if (!timedOut && claimed && claimed.dispatch) {
+    if (!timedOut && !budgetExceeded && claimed && claimed.dispatch) {
       try {
         nativeConversationRepository.failDispatch({
           companyId: dispatch.companyId,
@@ -5976,14 +6092,23 @@ async function executeNativeConversationDispatch(dispatch) {
         // error so a local developer never has to dig it out of the DB
         // (the generic copy alone hid a gateway ENOENT for hours).
         content: {
-          text: userFacingModelDispatchError(timedOut || error)
-            + (getHermesDiagnostics().verboseHermes && error && error.message
-              ? `\n\nDebug · dispatch error\n${redactHermesChatDetail(String(error.message).slice(0, 2000))}`
-              : ''),
+          text: budgetExceeded
+            // A distinct, named notice rather than the generic failure copy:
+            // the run wasn't broken, it just kept going past its output cap.
+            ? '⏹ Stopped: this response reached its output budget before finishing. Nothing else was changed.'
+            : userFacingModelDispatchError(timedOut || error)
+              + (getHermesDiagnostics().verboseHermes && error && error.message
+                ? `\n\nDebug · dispatch error\n${redactHermesChatDetail(String(error.message).slice(0, 2000))}`
+                : ''),
         },
         parentEventId: nativeReplyParentEventId(failureTrigger),
         clientIdempotencyKey: `native-dispatch-failure-${dispatch.id}`,
-        metadata: { runtime: 'hermes', dispatchId: dispatch.id, status: 'failed', agentName: failureAgent },
+        metadata: {
+          runtime: 'hermes',
+          dispatchId: dispatch.id,
+          status: budgetExceeded ? 'budget_exceeded' : 'failed',
+          agentName: failureAgent,
+        },
       });
     } catch (failureEventError) {
       console.error('native dispatch failure event failed', dispatch.id, failureEventError.message);
