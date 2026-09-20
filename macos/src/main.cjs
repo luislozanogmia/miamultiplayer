@@ -468,6 +468,29 @@ function ghostBridgePaths() {
   };
 }
 
+// Where the Ghost CLI adapter (in_app_browser_transport.py and friends) is
+// installed. Packaged builds set process.env.GHOST_CLI_HOME themselves in
+// preparePackagedRuntime; dev runs normally inherit it from
+// start-local-mac.sh — but a bare `npm run dev` has no such export, and
+// without it every ghost_* call from a bot dies with "Pinned Ghost in-app
+// browser connector is missing". So resolve it here from the same install
+// locations the launcher script accepts.
+function resolveGhostCliHome() {
+  const explicit = String(process.env.GHOST_CLI_HOME || "").trim();
+  if (explicit || app.isPackaged) return explicit;
+  const roots = [];
+  if (DEV_DATA_ROOT) roots.push(path.resolve(DEV_DATA_ROOT));
+  roots.push(app.getPath("userData"));
+  for (const root of roots) {
+    for (const candidate of [path.join(root, "ghost-cli"), path.join(root, "runtime", "ghost-cli")]) {
+      if (fs.statSync(path.join(candidate, "in_app_browser_transport.py"), { throwIfNoEntry: false })?.isFile()) {
+        return candidate;
+      }
+    }
+  }
+  return "";
+}
+
 function preparePackagedRuntime() {
   if (!app.isPackaged) return null;
   if (packagedRuntimePrepared) return packagedRuntimePrepared;
@@ -727,6 +750,7 @@ async function startLocalBackend(exactPort = null) {
   const hermesHome = path.resolve(process.env.HERMES_HOME || path.join(dataDirectory, "hermes"));
   const workspaceDir = miaosWorkspacePath();
   const bridgePaths = ghostBridgePaths();
+  const ghostCliHome = resolveGhostCliHome();
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
     STATIC_DIR: "../frontend",
@@ -776,7 +800,7 @@ async function startLocalBackend(exactPort = null) {
     ...(process.env.MIAOS_MANAGED_ROUTER_URL ? { MIAOS_MANAGED_ROUTER_URL: process.env.MIAOS_MANAGED_ROUTER_URL } : {}),
     ...(process.env.MIAOS_MANAGED_ROUTER_LABEL ? { MIAOS_MANAGED_ROUTER_LABEL: process.env.MIAOS_MANAGED_ROUTER_LABEL } : {}),
     ...(process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST ? { MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST: process.env.MIAOS_MANAGED_ROUTER_MODEL_ALLOWLIST } : {}),
-    ...(process.env.GHOST_CLI_HOME ? { GHOST_CLI_HOME: process.env.GHOST_CLI_HOME } : {}),
+    ...(ghostCliHome ? { GHOST_CLI_HOME: ghostCliHome } : {}),
     // Bridge coordinates are authoritative in every mode: agents must find
     // the bridge this same instance serves, never an installer default from
     // another install. ghostBridgePaths() still honors explicit env overrides.

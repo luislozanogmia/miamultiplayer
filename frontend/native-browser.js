@@ -17,7 +17,9 @@
   // Tabs row also hosts the close-browser button (moved here from the
   // url-bar row so the window closes like a tab strip, not a toolbar).
   var tabsRow = document.getElementById('localBrowserTabsRow');
-  if (tabsRow) tabsRow.insertBefore(strip, tabsRow.firstChild);
+  // The mote (bots menu) button leads the row, then the tabs, then the
+  // close button at the far right — like a browser profile button.
+  if (tabsRow) tabsRow.insertBefore(strip, document.getElementById('localBrowserCloseBtn'));
   else overlay.querySelector('.local-browser-toolbar').before(strip);
   var findBar = document.createElement('div');
   findBar.className = 'native-browser-find'; findBar.hidden = true;

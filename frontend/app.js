@@ -1065,8 +1065,11 @@
     loading: false,
     error: '',
     providers: [],
-    selection: {provider: null, model: null, family: '', familyKey: '', variant: '', reasoningEffort: '', speed: ''},
-    stage: 'family'
+    selection: {provider: null, model: null, family: '', familyKey: '', familyProviderId: '', variant: '', reasoningEffort: '', speed: ''},
+    stage: 'family',
+    // Transient UI-only flag for the "switch provider" screen — see goBack()
+    // and renderOptions() in the composer model picker below.
+    showProviderSwitcher: false
   };
   var CHAT_MODEL_SELECTION_CACHE_VERSION = 1;
 
@@ -1371,6 +1374,7 @@
       var harness = res.data && res.data.harness;
       renderHarnessSettings(harness);
       renderOutputSetting(res.data && res.data.chatOutput === 'verbose' ? 'verbose' : 'concise');
+      syncHiddenStarterBotsFromServer(res.data && res.data.hiddenStarterBots);
       if(harness && harness.onboardingComplete){
         appCollaborationMode = (WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS['multiplayer_test']).mode;
         refreshAppName();
@@ -2946,6 +2950,27 @@
     var hidden = hiddenChatStarterBots();
     if(hidden.indexOf(name) === -1) hidden.push(name);
     try { localStorage.setItem(CHAT_STARTER_BOTS_HIDDEN_KEY, JSON.stringify(hidden)); } catch(error) {}
+    // Dismissal is durable: the server copy survives desktop profile
+    // switches and reinstalls; localStorage is only the fast local cache.
+    api('/api/settings/starter-bots', {method:'POST', body:{hidden:hidden}}).catch(function(){});
+    renderChatStarterBots();
+  }
+  // Merge the server-side dismissal list into the local cache at startup so
+  // a dismissal made under another desktop profile still hides the row.
+  function syncHiddenStarterBotsFromServer(serverHidden){
+    if(!Array.isArray(serverHidden)) return;
+    var hidden = hiddenChatStarterBots();
+    var merged = hidden.slice();
+    serverHidden.forEach(function(name){
+      if(typeof name === 'string' && merged.indexOf(name) === -1) merged.push(name);
+    });
+    if(merged.length !== hidden.length){
+      try { localStorage.setItem(CHAT_STARTER_BOTS_HIDDEN_KEY, JSON.stringify(merged)); } catch(error) {}
+    }
+    // Local-only dismissals (made while the server was unreachable) flow up.
+    if(merged.length !== serverHidden.length){
+      api('/api/settings/starter-bots', {method:'POST', body:{hidden:merged}}).catch(function(){});
+    }
     renderChatStarterBots();
   }
   function renderChatStarterBots(){
@@ -8804,8 +8829,15 @@
       chatRoster.selectedAgentId = null;
       if(chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents') chatInfo.open = false;
     }
-    if(document.body.classList.contains('browser-collab-mode')) chatInfo.open = false;
-    else if(STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && chatInfoOpenPreference();
+    // Browser mode replaces the ordinary docked info pane with the fixed
+    // collaboration pane — but the overlay modes (bot editor, Bot Store,
+    // automation detail) render as fixed right-hand drawers ABOVE the
+    // browser, so closing them here tore the editor down the moment
+    // openProfile re-rendered this header after opening it.
+    var collabMode = document.body.classList.contains('browser-collab-mode');
+    var collabOverlayMode = chatInfo.mode === 'agent-edit' || chatInfo.mode === 'bot-store' || chatInfo.mode === 'automation-detail';
+    if(collabMode && !collabOverlayMode) chatInfo.open = false;
+    else if(!collabMode && STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && chatInfoOpenPreference();
     if(STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && !isInfoPaneAvailable()) chatInfo.open = false;
     syncSidebarToolButtons();
     // Official channels use a square initials mark. The owner's personal avatar
@@ -12102,6 +12134,75 @@
     var picker = chatModelPicker;
     var effortLabels = {none:'None', low:'Low', medium:'Medium', high:'High', xhigh:'Extra high', max:'Max', ultra:'Ultra'};
 
+    // The "Choose a model family" back screen lists every provider offered by
+    // initial setup (harnessProviderChoices in index.html), not just whatever
+    // happens to be connected. Connection state and the connect flow itself
+    // are the same ones setup uses (harnessConnectionState, openHarnessOnboarding,
+    // the [data-harness-provider] choices and #harnessApiProvider select) — no
+    // new state is invented here.
+    // Claude and Gemini get no rows of their own: neither vendor allows
+    // third-party apps on their consumer CLI subscriptions, so they connect
+    // through the one generic API row (see operations/product.md).
+    var COMPOSER_FAMILY_PROVIDERS = [
+      {id:'managed-router', label:'Mia Router', harnessProvider:'managed-router', aliases:['managed-router', 'openrouter']},
+      {id:'openai-codex', label:'ChatGPT', harnessProvider:'openai-codex', aliases:['openai-codex', 'codex']},
+      {id:'xai-oauth', label:'Grok', harnessProvider:'xai-oauth', aliases:['xai-oauth', 'xai', 'grok']},
+      {id:'api', label:'API', harnessProvider:'openai-api', aliases:['openai-api', 'anthropic', 'gemini', 'openai', 'deepseek']}
+    ];
+
+    function familyProviderAliasMatch(providerId, aliases){
+      var actual = String(providerId || '').toLowerCase();
+      return aliases.indexOf(actual) !== -1;
+    }
+
+    function familyProviderConnected(row){
+      // The picker's own inventory (already fetched for this menu) is the
+      // most reliable signal — it only ever lists providers Hermes reports as
+      // configured. harnessConnectionState is a secondary fallback: it is
+      // only populated once Settings → Access or onboarding has loaded, so it
+      // can lag or start out all-false on a fresh app session.
+      if(familyProviderEntries(row).length) return true;
+      if(harnessConnectionState[row.id] === true) return true;
+      // Mia Router is stored under the Hermes provider id 'openrouter'.
+      if(row.id === 'managed-router' && harnessConnectionState['openrouter'] === true) return true;
+      return false;
+    }
+
+    function familyProviderEntries(row){
+      return entries().filter(function(item){ return familyProviderAliasMatch(item.provider, row.aliases); });
+    }
+
+    // The active row mirrors what the composer pill is actually showing right
+    // now (the per-turn cached choice, falling back to the saved harness
+    // default) rather than picker.selection, which goBack() clears on its way
+    // back up to this screen.
+    function activeFamilyProviderId(){
+      var cached = readCachedChatModelSelection();
+      if(cached && cached.provider) return cached.provider;
+      var current = currentEntry(entries());
+      return current && current.provider;
+    }
+
+    // Opens the exact same connect flow initial setup uses: the onboarding
+    // sheet, its [data-harness-provider] choice, and (for API-key providers)
+    // its #harnessApiProvider select — triggered the same way a user's own
+    // click would.
+    function openConnectFlowForProvider(row){
+      closeMenu();
+      openHarnessOnboarding(harnessSettingsCache);
+      var choice = el('[data-harness-provider="' + row.harnessProvider + '"]');
+      if(choice) choice.click();
+      if(row.apiProvider){
+        var apiProviderSelect = el('#harnessApiProvider');
+        if(apiProviderSelect){
+          apiProviderSelect.value = row.apiProvider;
+          var changeEvent;
+          try { changeEvent = new Event('change', {bubbles:true}); } catch(_){ changeEvent = document.createEvent('Event'); changeEvent.initEvent('change', true, true); }
+          apiProviderSelect.dispatchEvent(changeEvent);
+        }
+      }
+    }
+
     function titleCase(value){ return chatModelTitleCase(value); }
 
     function modelParts(model){ return chatModelParts(model); }
@@ -12225,7 +12326,11 @@
     }
 
     function renderOptions(){
-      var currentStage = stage();
+      // The provider switcher is a transient UI-only screen, not something
+      // derived from picker.selection — it only opens via an explicit back-
+      // button press at the (unchanged) default family stage, and stays out
+      // of the normal family -> variant -> effort -> speed derivation.
+      var currentStage = picker.showProviderSwitcher ? 'providers' : stage();
       picker.stage = currentStage;
       if(!picker.loaded){
         title.textContent = picker.loading ? 'Loading connected models…' : 'Choose a model';
@@ -12238,7 +12343,10 @@
         return;
       }
       var all = entries();
-      if(!all.length){
+      // Every other stage needs an actual selected family's entries to list;
+      // the provider switcher must keep working even with zero connected
+      // providers, since its whole job is to offer a way to connect one.
+      if(!all.length && currentStage !== 'providers'){
         title.textContent = 'Connect a model';
         optionsWrap.innerHTML = '<div class="cc-model-selection">Connect a provider in Settings → Access.</div>';
         return;
@@ -12255,11 +12363,36 @@
         Object.keys(families).map(function(key){ return families[key]; }).forEach(function(item){
           html += button(item.family, item.providers.join(', '), 'data-choice="family" data-family-key="' + esc(item.key) + '" data-family="' + esc(item.family) + '"');
         });
+      } else if(currentStage === 'providers'){
+        // Reached only by pressing back at the family stage above. Lists
+        // every provider offered by initial setup, not just what's connected:
+        // connected rows are ordinary, selectable model options; unconnected
+        // ones are a muted row with a plain-text "Connect" affordance, kept
+        // visually quiet rather than a bordered call-to-action pill.
+        title.textContent = 'Switch provider';
+        var activeProviderId = activeFamilyProviderId();
+        COMPOSER_FAMILY_PROVIDERS.forEach(function(row){
+          var connected = familyProviderConnected(row);
+          var active = connected && familyProviderAliasMatch(activeProviderId, row.aliases);
+          if(connected){
+            html += '<button type="button" class="cc-model-option cc-model-family-option' + (active ? ' is-active' : '') + '" data-choice="family-provider" data-family-provider-id="' + esc(row.id) + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
+              '<span class="cc-model-option-label">' + esc(row.label) + '</span>' +
+              '<span class="cc-model-family-check" aria-hidden="true">' + (active ? '&#10003;' : '') + '</span>' +
+              '</button>';
+          } else {
+            html += '<div class="cc-model-option cc-model-family-option cc-model-family-static">' +
+              '<span class="cc-model-option-label">' + esc(row.label) + '</span>' +
+              '<button type="button" class="cc-model-connect-link" data-connect-provider-id="' + esc(row.id) + '" aria-label="Connect ' + esc(row.label) + '">Connect</button>' +
+              '</div>';
+          }
+        });
       } else if(currentStage === 'variant'){
         title.textContent = 'Choose a ' + (picker.selection.family || 'model') + ' model';
-        all.filter(function(item){
+        var activeRow = COMPOSER_FAMILY_PROVIDERS.filter(function(row){ return row.id === picker.selection.familyProviderId; })[0];
+        var variantEntries = activeRow ? familyProviderEntries(activeRow) : all.filter(function(item){
           return item.familyKey === picker.selection.familyKey;
-        }).forEach(function(item){
+        });
+        variantEntries.forEach(function(item){
           html += button(item.variant, item.providerLabel, 'data-choice="variant" data-provider="' + esc(item.provider) + '" data-model="' + esc(item.model) + '"');
         });
       } else if(currentStage === 'effort'){
@@ -12281,6 +12414,26 @@
           if(kind === 'family'){
             picker.selection.familyKey = choice.getAttribute('data-family-key');
             picker.selection.family = choice.getAttribute('data-family');
+            picker.selection.familyProviderId = '';
+            picker.selection.variant = '';
+            picker.selection.model = null;
+            picker.selection.provider = '';
+            picker.selection.reasoningEffort = '';
+            picker.selection.speed = '';
+          } else if(kind === 'family-provider'){
+            var rowId = choice.getAttribute('data-family-provider-id');
+            var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === rowId; })[0];
+            if(!row) return;
+            // Picking a provider here always drills into its own variant
+            // list next, so leave the switcher screen.
+            picker.showProviderSwitcher = false;
+            // A truthy familyKey is only used as the stage() gate here — the
+            // actual filter for the variant list below keys off
+            // familyProviderId, since this row does not correspond to the old
+            // inventory-derived "provider:family" grouping.
+            picker.selection.familyKey = row.id;
+            picker.selection.familyProviderId = row.id;
+            picker.selection.family = row.label;
             picker.selection.variant = '';
             picker.selection.model = null;
             picker.selection.provider = '';
@@ -12321,6 +12474,13 @@
           render();
         });
       });
+      els('.cc-model-connect-link', optionsWrap).forEach(function(pill){
+        pill.addEventListener('click', function(event){
+          event.stopPropagation();
+          var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === pill.getAttribute('data-connect-provider-id'); })[0];
+          if(row) openConnectFlowForProvider(row);
+        });
+      });
     }
 
     function render(){
@@ -12336,13 +12496,28 @@
     }
 
     function goBack(){
+      if(picker.showProviderSwitcher){
+        // Deepest screen: one step back returns to the ordinary family stage.
+        picker.showProviderSwitcher = false;
+        render();
+        return;
+      }
       var currentStage = stage();
       if(currentStage === 'family'){
-        closeMenu();
-        btn.focus();
+        // The default (unchanged) resting screen has nowhere shallower to go
+        // — pressing back here reveals the full setup-provider switcher
+        // instead of closing the menu.
+        picker.showProviderSwitcher = true;
+        render();
+        return;
       } else if(currentStage === 'variant'){
+        // Return to whichever screen this variant list was opened from: the
+        // provider switcher when a family-provider row picked it, otherwise
+        // the ordinary family stage.
+        picker.showProviderSwitcher = !!picker.selection.familyProviderId;
         picker.selection.family = '';
         picker.selection.familyKey = '';
+        picker.selection.familyProviderId = '';
         picker.selection.variant = '';
         picker.selection.model = null;
         picker.selection.provider = '';
@@ -12379,13 +12554,13 @@
         if(picker.providers.length) hydrateSelection();
         else {
           clearCachedChatModelSelection();
-          picker.selection = {provider:null, model:null, family:'', familyKey:'', variant:'', reasoningEffort:'', speed:''};
+          picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
         }
       }).catch(function(error){
         picker.providers = [];
         BENCH_MODELS = [];
         picker.loaded = true;
-        picker.selection = {provider:null, model:null, family:'', familyKey:'', variant:'', reasoningEffort:'', speed:''};
+        picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
         picker.error = error && error.message ? error.message : 'Connected models unavailable.';
       }).then(function(){
         picker.loading = false;
@@ -12400,7 +12575,7 @@
       picker.loading = false;
       picker.error = '';
       picker.providers = [];
-      picker.selection = {provider:null, model:null, family:'', familyKey:'', variant:'', reasoningEffort:'', speed:''};
+      picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
       clearCachedChatModelSelection();
       render();
       return load({refresh:true});
@@ -12409,6 +12584,8 @@
     function closeMenu(){
       menu.classList.remove('open');
       btn.setAttribute('aria-expanded', 'false');
+      // Always reopen on the default family stage, never mid-switcher.
+      picker.showProviderSwitcher = false;
     }
 
     btn.addEventListener('click', function(event){

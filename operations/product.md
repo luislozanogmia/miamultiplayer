@@ -34,13 +34,24 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
 
 ## Todo — approved, not started
 
-- **Model family picker: provider list on back.** In the composer's model
-  popover, tapping back from "Choose a model family" shows every provider
-  from initial setup (Mia Router, Claude, ChatGPT/Codex, Grok, Gemini) as
-  rows: connected ones selectable (active row tinted with a check),
-  unconnected ones showing a "Connect" pill that jumps into the same connect
-  flow setup uses, then returns to the picker. Low-fi approved 2026-09-19;
-  needs more design work before building.
+- **Model family picker: provider list on back.** DONE 2026-09-19. The
+  back screen lists all five setup providers; connected rows selectable,
+  unconnected rows get a Connect pill into the real setup flow. Caveat:
+  Claude and Gemini have no CLI-subscription harness today (only
+  openai-codex and xai-oauth exist), so their Connect goes through the
+  generic API-key card, captioned honestly. Decision (2026-09-19): this
+  stays API-key-only — neither Anthropic nor Google permits third-party
+  apps like Mia to ride their consumer CLI subscriptions.
+
+## Roadmap — P1 (approved, not started)
+
+- **Hold-to-talk dictation (whisper.cpp, MIT).** Muse-style "hold a key and
+  talk" voice input. Engine: whisper.cpp via `nodejs-whisper` (both MIT, as
+  are OpenAI's Whisper weights — clean license chain, attribution via a
+  NOTICE file only). UX built in-house in Electron (`globalShortcut` +
+  hold/release), cross-platform; OpenSuperWhisper (MIT, Swift/macOS-only)
+  is UX inspiration, not a dependency. Known cost: bundled models add
+  ~100MB+ and need per-platform native builds.
 
 ## Roadmap — P3 (future, not scheduled)
 
