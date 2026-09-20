@@ -1066,7 +1066,10 @@
     error: '',
     providers: [],
     selection: {provider: null, model: null, family: '', familyKey: '', familyProviderId: '', variant: '', reasoningEffort: '', speed: ''},
-    stage: 'family'
+    stage: 'family',
+    // Transient UI-only flag for the "switch provider" screen — see goBack()
+    // and renderOptions() in the composer model picker below.
+    showProviderSwitcher: false
   };
   var CHAT_MODEL_SELECTION_CACHE_VERSION = 1;
 
@@ -12122,6 +12125,12 @@
     }
 
     function familyProviderConnected(row){
+      // The picker's own inventory (already fetched for this menu) is the
+      // most reliable signal — it only ever lists providers Hermes reports as
+      // configured. harnessConnectionState is a secondary fallback: it is
+      // only populated once Settings → Access or onboarding has loaded, so it
+      // can lag or start out all-false on a fresh app session.
+      if(familyProviderEntries(row).length) return true;
       if(harnessConnectionState[row.id] === true) return true;
       // Mia Router is stored under the Hermes provider id 'openrouter'.
       if(row.id === 'managed-router' && harnessConnectionState['openrouter'] === true) return true;
@@ -12286,7 +12295,11 @@
     }
 
     function renderOptions(){
-      var currentStage = stage();
+      // The provider switcher is a transient UI-only screen, not something
+      // derived from picker.selection — it only opens via an explicit back-
+      // button press at the (unchanged) default family stage, and stays out
+      // of the normal family -> variant -> effort -> speed derivation.
+      var currentStage = picker.showProviderSwitcher ? 'providers' : stage();
       picker.stage = currentStage;
       if(!picker.loaded){
         title.textContent = picker.loading ? 'Loading connected models…' : 'Choose a model';
@@ -12300,9 +12313,9 @@
       }
       var all = entries();
       // Every other stage needs an actual selected family's entries to list;
-      // the family screen itself must keep working even with zero connected
+      // the provider switcher must keep working even with zero connected
       // providers, since its whole job is to offer a way to connect one.
-      if(!all.length && currentStage !== 'family'){
+      if(!all.length && currentStage !== 'providers'){
         title.textContent = 'Connect a model';
         optionsWrap.innerHTML = '<div class="cc-model-selection">Connect a provider in Settings → Access.</div>';
         return;
@@ -12310,23 +12323,37 @@
       var html = '';
       if(currentStage === 'family'){
         title.textContent = 'Choose a model family';
+        var families = {};
+        all.forEach(function(item){
+          if(!families[item.familyKey]) families[item.familyKey] = {family:item.family, providers:[], key:item.familyKey, entries:[]};
+          families[item.familyKey].entries.push(item);
+          if(families[item.familyKey].providers.indexOf(item.providerLabel) === -1) families[item.familyKey].providers.push(item.providerLabel);
+        });
+        Object.keys(families).map(function(key){ return families[key]; }).forEach(function(item){
+          html += button(item.family, item.providers.join(', '), 'data-choice="family" data-family-key="' + esc(item.key) + '" data-family="' + esc(item.family) + '"');
+        });
+      } else if(currentStage === 'providers'){
+        // Reached only by pressing back at the family stage above. Lists
+        // every provider offered by initial setup, not just what's connected:
+        // connected rows are ordinary, selectable model options; unconnected
+        // ones are a muted row with a plain-text "Connect" affordance, kept
+        // visually quiet rather than a bordered call-to-action pill.
+        title.textContent = 'Switch provider';
         var activeProviderId = activeFamilyProviderId();
         COMPOSER_FAMILY_PROVIDERS.forEach(function(row){
           var connected = familyProviderConnected(row);
           var active = connected && familyProviderAliasMatch(activeProviderId, row.aliases);
-          html += '<div class="cc-model-family-row' + (connected ? '' : ' is-unconnected') + '">';
           if(connected){
             html += '<button type="button" class="cc-model-option cc-model-family-option' + (active ? ' is-active' : '') + '" data-choice="family-provider" data-family-provider-id="' + esc(row.id) + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
               '<span class="cc-model-family-copy"><span class="cc-model-option-label">' + esc(row.label) + '</span><span class="cc-model-family-caption">' + esc(row.caption) + '</span></span>' +
               '<span class="cc-model-family-check" aria-hidden="true">' + (active ? '&#10003;' : '') + '</span>' +
               '</button>';
           } else {
-            html += '<div class="cc-model-family-option cc-model-family-static">' +
+            html += '<div class="cc-model-option cc-model-family-option cc-model-family-static">' +
               '<span class="cc-model-family-copy"><span class="cc-model-option-label">' + esc(row.label) + '</span><span class="cc-model-family-caption">' + esc(row.caption) + '</span></span>' +
-              '</div>' +
-              '<button type="button" class="styled-onboarding-connection-action cc-model-connect-pill" data-connect-provider-id="' + esc(row.id) + '" aria-label="Connect ' + esc(row.label) + '"><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>';
+              '<button type="button" class="cc-model-connect-link" data-connect-provider-id="' + esc(row.id) + '" aria-label="Connect ' + esc(row.label) + '">Connect</button>' +
+              '</div>';
           }
-          html += '</div>';
         });
       } else if(currentStage === 'variant'){
         title.textContent = 'Choose a ' + (picker.selection.family || 'model') + ' model';
@@ -12353,10 +12380,22 @@
       els('.cc-model-option', optionsWrap).forEach(function(choice){
         choice.addEventListener('click', function(){
           var kind = choice.getAttribute('data-choice');
-          if(kind === 'family-provider'){
+          if(kind === 'family'){
+            picker.selection.familyKey = choice.getAttribute('data-family-key');
+            picker.selection.family = choice.getAttribute('data-family');
+            picker.selection.familyProviderId = '';
+            picker.selection.variant = '';
+            picker.selection.model = null;
+            picker.selection.provider = '';
+            picker.selection.reasoningEffort = '';
+            picker.selection.speed = '';
+          } else if(kind === 'family-provider'){
             var rowId = choice.getAttribute('data-family-provider-id');
             var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === rowId; })[0];
             if(!row) return;
+            // Picking a provider here always drills into its own variant
+            // list next, so leave the switcher screen.
+            picker.showProviderSwitcher = false;
             // A truthy familyKey is only used as the stage() gate here — the
             // actual filter for the variant list below keys off
             // familyProviderId, since this row does not correspond to the old
@@ -12404,7 +12443,7 @@
           render();
         });
       });
-      els('.cc-model-connect-pill', optionsWrap).forEach(function(pill){
+      els('.cc-model-connect-link', optionsWrap).forEach(function(pill){
         pill.addEventListener('click', function(event){
           event.stopPropagation();
           var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === pill.getAttribute('data-connect-provider-id'); })[0];
@@ -12426,11 +12465,25 @@
     }
 
     function goBack(){
+      if(picker.showProviderSwitcher){
+        // Deepest screen: one step back returns to the ordinary family stage.
+        picker.showProviderSwitcher = false;
+        render();
+        return;
+      }
       var currentStage = stage();
       if(currentStage === 'family'){
-        closeMenu();
-        btn.focus();
+        // The default (unchanged) resting screen has nowhere shallower to go
+        // — pressing back here reveals the full setup-provider switcher
+        // instead of closing the menu.
+        picker.showProviderSwitcher = true;
+        render();
+        return;
       } else if(currentStage === 'variant'){
+        // Return to whichever screen this variant list was opened from: the
+        // provider switcher when a family-provider row picked it, otherwise
+        // the ordinary family stage.
+        picker.showProviderSwitcher = !!picker.selection.familyProviderId;
         picker.selection.family = '';
         picker.selection.familyKey = '';
         picker.selection.familyProviderId = '';
@@ -12500,6 +12553,8 @@
     function closeMenu(){
       menu.classList.remove('open');
       btn.setAttribute('aria-expanded', 'false');
+      // Always reopen on the default family stage, never mid-switcher.
+      picker.showProviderSwitcher = false;
     }
 
     btn.addEventListener('click', function(event){

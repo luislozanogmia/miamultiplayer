@@ -41,6 +41,7 @@ test('chat picker is a real connected inventory control with staged menus', asyn
   assert.match(appSource, /var pendingEffort = cachedSelection && cachedSelection\.reasoningEffort \|\| 'high'/);
   assert.match(appSource, /picker\.loaded && !picker\.error && picker\.providers\.length && options\.refresh !== true/);
   assert.doesNotMatch(appSource, /ccModelSearch/);
+  assert.match(appSource, /data-choice="family"/);
   assert.match(appSource, /data-choice="family-provider"/);
   assert.match(appSource, /data-choice="variant"/);
   assert.match(appSource, /family:'GPT', variant:'GPT '/);
@@ -66,7 +67,7 @@ test('chat picker is a real connected inventory control with staged menus', asyn
   assert.doesNotMatch(appSource, /BUILTIN_AGENTS_BASE|mergeBuiltinAgents/);
 });
 
-test('the "Choose a model family" back screen lists every setup provider, not just the connected one', async () => {
+test('a "switch provider" screen, reached only via the family stage\'s back button, lists every setup provider', async () => {
   const [appSource, cssSource] = await Promise.all([
     readFile(new URL('./app.js', import.meta.url), 'utf8'),
     readFile(new URL('./styles.css', import.meta.url), 'utf8'),
@@ -81,28 +82,49 @@ test('the "Choose a model family" back screen lists every setup provider, not ju
   assert.match(appSource, /id:'xai-oauth', label:'Grok', caption:'Grok CLI'/);
   assert.match(appSource, /id:'gemini', label:'Gemini'/);
 
-  // Connection state and the connect flow reuse setup's own mechanisms —
-  // no parallel state or flow is invented for the picker.
-  assert.match(appSource, /function familyProviderConnected\(row\)\{\s*if\(harnessConnectionState\[row\.id\] === true\) return true;/);
+  // The default popover is unchanged: the ordinary family stage (grouped by
+  // connected model family) still renders first, exactly as before this
+  // feature. The switcher is a separate, transient screen that only opens
+  // when the user presses back while already at that default stage — never
+  // shown on first open.
+  assert.match(appSource, /showProviderSwitcher: false/);
+  assert.match(appSource, /var currentStage = picker\.showProviderSwitcher \? 'providers' : stage\(\);/);
+  assert.match(appSource, /if\(currentStage === 'family'\)\{\s*title\.textContent = 'Choose a model family';\s*var families = \{\};/);
+  assert.match(appSource, /if\(currentStage === 'family'\)\{\s*\/\/ The default \(unchanged\) resting screen has nowhere shallower to go\s*\/\/ — pressing back here reveals the full setup-provider switcher\s*\/\/ instead of closing the menu\.\s*picker\.showProviderSwitcher = true;/);
+
+  // Connection detection is self-sufficient: it checks the picker's own
+  // already-fetched inventory first (so a connected, active provider like
+  // Mia Router is recognized even if Settings/onboarding was never opened
+  // this session), falling back to harnessConnectionState.
+  assert.match(appSource, /function familyProviderConnected\(row\)\{[\s\S]*if\(familyProviderEntries\(row\)\.length\) return true;[\s\S]*if\(harnessConnectionState\[row\.id\] === true\) return true;/);
+
+  // The connect flow reuses setup's own mechanisms — no parallel state or
+  // flow is invented for the picker.
   assert.match(appSource, /function openConnectFlowForProvider\(row\)\{\s*closeMenu\(\);\s*openHarnessOnboarding\(harnessSettingsCache\);/);
   assert.match(appSource, /var choice = el\('\[data-harness-provider="' \+ row\.harnessProvider \+ '"\]'\);/);
   assert.match(appSource, /var apiProviderSelect = el\('#harnessApiProvider'\);/);
 
-  // Unconnected rows keep a normal (non-selectable) row plus a Connect pill
-  // styled with the same pill class setup's own connect/disconnect actions use.
-  assert.match(appSource, /cc-model-connect-pill/);
-  assert.match(appSource, /styled-onboarding-connection-action cc-model-connect-pill/);
-  assert.match(cssSource, /\.cc-model-connect-pill\{/);
+  // Unconnected rows are a muted, non-interactive row (same shape/typography
+  // as any other model option) plus a small plain-text "Connect" affordance —
+  // no bordered call-to-action pill.
+  assert.match(appSource, /cc-model-connect-link/);
+  assert.doesNotMatch(appSource, /cc-model-connect-pill/);
+  assert.doesNotMatch(appSource, /styled-onboarding-connection-action cc-model-connect-link/);
+  assert.match(cssSource, /\.cc-model-connect-link\{[^}]*border:none;[^}]*background:none;/);
+  assert.match(cssSource, /\.cc-model-family-static\{cursor:default;color:var\(--sand-text-secondary\);\}/);
 
-  // Connected rows are selectable and tap-switch immediately; the active one
-  // is tinted with a check.
+  // Connected rows are ordinary selectable model options and tap-switch
+  // straight into that provider's own variant list; the active one is
+  // tinted with a check.
   assert.match(appSource, /kind === 'family-provider'/);
   assert.match(appSource, /cc-model-family-check/);
   assert.match(cssSource, /\.cc-model-family-option\.is-active \.cc-model-family-check\{/);
-
-  // Not just the old family stage — the variant list under a tapped provider
-  // row is filtered by that provider, and the picker no longer dead-ends on
-  // an empty inventory before reaching the family screen.
   assert.match(appSource, /familyProviderEntries\(activeRow\)/);
-  assert.match(appSource, /if\(!all\.length && currentStage !== 'family'\)/);
+
+  // The switcher (not the ordinary family stage) is the one exempted from
+  // the "nothing connected" dead-end, since its job is to offer a way in.
+  assert.match(appSource, /if\(!all\.length && currentStage !== 'providers'\)/);
+
+  // Back-navigation returns to wherever the variant list was opened from.
+  assert.match(appSource, /picker\.showProviderSwitcher = !!picker\.selection\.familyProviderId;/);
 });
