@@ -39,7 +39,7 @@ test('chat picker is a real connected inventory control with staged menus', asyn
   assert.match(appSource, /var cachedSelection = readCachedChatModelSelection\(\)/);
   assert.match(appSource, /var pendingModel = cachedSelection && cachedSelection\.model \|\| harnessSettingsCache\.model/);
   assert.match(appSource, /var pendingEffort = cachedSelection && cachedSelection\.reasoningEffort \|\| 'high'/);
-  assert.match(appSource, /picker\.loaded && !picker\.error && options\.refresh !== true/);
+  assert.match(appSource, /picker\.loaded && !picker\.error && picker\.providers\.length && options\.refresh !== true/);
   assert.doesNotMatch(appSource, /ccModelSearch/);
   assert.match(appSource, /data-choice="family-provider"/);
   assert.match(appSource, /data-choice="variant"/);
