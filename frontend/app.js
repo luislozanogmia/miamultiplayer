@@ -2974,6 +2974,16 @@
   var editState = {agentId:null, isBuiltin:false, instructions:'', model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
     testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
   var styledAgentModelPicker = {stage:'family', familyKey:''};
+  // Whichever element opened the bot editor (an avatar/mote click, most
+  // often) — restored on close so Escape/close never strands keyboard
+  // focus at document.body, especially over the browser overlay where
+  // there's no other obvious tab stop to land on.
+  var agentEditFocusReturn = null;
+  function returnAgentEditFocus(){
+    var target = agentEditFocusReturn;
+    agentEditFocusReturn = null;
+    if(target && document.contains(target) && typeof target.focus === 'function') target.focus();
+  }
   // Bench-detail header department selector: unlike cinema/editState, this one has no
   // separate "save" step — each toggle PUTs immediately (see the bindDeptDropdown call
   // near the bottom of this file). agentId here is the *card* id (openBenchDetail's id
@@ -3416,6 +3426,7 @@
       var infoPane = el('#chatInfoPane');
       if(infoPane){ infoPane.classList.remove('open', 'agent-edit-open'); infoPane.innerHTML = ''; }
       syncSidebarToolButtons();
+      returnAgentEditFocus();
     }
     clearCinemaTimers();
     clearTimeout(cinema.nameSuggestTimer);
@@ -8141,6 +8152,7 @@
     chatInfo.open = false;
     renderChatInfoPane();
     syncSidebarToolButtons();
+    returnAgentEditFocus();
   }
 
   function openManageAgentsPane(){
@@ -11756,6 +11768,16 @@
       var profileRef = target.getAttribute('data-agent-profile-id');
       var profileName = target.getAttribute('data-agent-profile-name');
       var agent = resolveAgent(profileRef, profileName);
+      agentEditFocusReturn = target;
+      // Opening the editor from the browser's "Your bots" drawer is a
+      // destination choice like picking a chat, so tuck the drawer away —
+      // otherwise it sits on top of the browser next to the editor it just
+      // opened, covering the page for no reason.
+      if(document.body.classList.contains('browser-sidebar-open')){
+        document.body.classList.remove('browser-sidebar-open');
+        var sidebarBtn = el('#localBrowserSidebarBtn');
+        if(sidebarBtn){ sidebarBtn.setAttribute('aria-expanded', 'false'); sidebarBtn.setAttribute('aria-label', 'Open your bots'); }
+      }
       if(agent){
         closeChatThread();
         closeChatTasksPanel();
