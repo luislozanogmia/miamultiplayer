@@ -19,6 +19,29 @@
   var tabsRow = document.getElementById('localBrowserTabsRow');
   if (tabsRow) tabsRow.insertBefore(strip, tabsRow.firstChild);
   else overlay.querySelector('.local-browser-toolbar').before(strip);
+  // Tier 2 "browser apps": quick-launch chips for web equivalents of
+  // desktop apps this machine actually has installed (macos/src/detected-
+  // web-apps.cjs). Only ever populated when the desktop bridge exposes
+  // detectedApps (native Electron shell); a web build has no `bridge` at
+  // all (see the guard at the top of this file) so the row never renders.
+  var emptyState = document.getElementById('localBrowserEmpty');
+  var quickApps = document.createElement('div');
+  quickApps.className = 'native-browser-quick-apps'; quickApps.hidden = true;
+  if (emptyState) emptyState.append(quickApps);
+  function renderQuickApps(apps) {
+    if (!emptyState || !apps || !apps.length) return;
+    quickApps.replaceChildren();
+    apps.forEach(function (app) {
+      var chip = document.createElement('button');
+      chip.type = 'button'; chip.className = 'native-browser-quick-app'; chip.textContent = app.name;
+      chip.onclick = function () { window.miaNativeBrowser.openTab(app.url); };
+      quickApps.append(chip);
+    });
+    quickApps.hidden = false;
+  }
+  if (bridge.detectedApps) {
+    bridge.detectedApps().then(function (result) { renderQuickApps(result && result.apps); }).catch(function () {});
+  }
   var findBar = document.createElement('div');
   findBar.className = 'native-browser-find'; findBar.hidden = true;
   var findInput = document.createElement('input');
@@ -37,6 +60,17 @@
   });
   screen.before(findBar);
   var state = { tabs: [], activeId: null };
+  // The Files app (frontend/files.html) is served by the same backend as
+  // the rest of Mia, so it opens same-origin, same-session, no external URL.
+  var FILES_APP_URL = window.location.origin + '/files.html';
+  function filesTabOpen() {
+    return state.tabs.find(function (t) { return t.url && t.url.indexOf(FILES_APP_URL) === 0; });
+  }
+  function openFilesTab() {
+    var existing = filesTabOpen();
+    if (existing) return command('select', { id: existing.id });
+    return command('new').then(function () { return command('navigate', { value: FILES_APP_URL }); });
+  }
   var open = false;
   var scheduled = false;
   var lastLayout = '';
@@ -104,11 +138,28 @@
     }
     foot.textContent = parts.join(' \u00b7 ') || 'Native browser \u00b7 Mia is available on the right';
     if (state.download) foot.textContent += ' \u00b7 ' + state.download;
-    var signature = JSON.stringify([state.activeId, state.tabs.map(function (t) { return [t.id, t.title, t.favicon]; })]);
+    var signature = JSON.stringify([state.activeId, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.url]; })]);
     if (signature !== lastTabs) {
       lastTabs = signature;
       strip.replaceChildren();
+      var filesTab = filesTabOpen();
+      var filesGroup = document.createElement('div');
+      filesGroup.className = 'native-browser-tab native-browser-tab-pinned' + (filesTab && filesTab.id === state.activeId ? ' active' : '');
+      var filesButton = document.createElement('button');
+      filesButton.type = 'button'; filesButton.title = 'Files';
+      filesButton.setAttribute('role', 'tab');
+      filesButton.setAttribute('aria-selected', String(!!(filesTab && filesTab.id === state.activeId)));
+      var filesGlyph = document.createElement('span');
+      filesGlyph.className = 'native-browser-tab-glyph'; filesGlyph.textContent = '📁'; filesGlyph.setAttribute('aria-hidden', 'true');
+      var filesLabel = document.createElement('span');
+      filesLabel.className = 'native-browser-tab-label'; filesLabel.textContent = 'Files';
+      filesButton.append(filesGlyph, filesLabel);
+      filesButton.onclick = openFilesTab;
+      filesGroup.append(filesButton);
+      strip.append(filesGroup);
       state.tabs.forEach(function (t) {
+        // The pinned Files button above already represents this tab.
+        if (t.url && t.url.indexOf(FILES_APP_URL) === 0) return;
         var group = document.createElement('div');
         group.className = 'native-browser-tab' + (t.id === state.activeId ? ' active' : '');
         var button = document.createElement('button');

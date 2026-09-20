@@ -66,5 +66,10 @@ contextBridge.exposeInMainWorld("miaDesktop", {
       ipcRenderer.on("miaos-browser-find-result", listener);
       return () => ipcRenderer.removeListener("miaos-browser-find-result", listener);
     },
+    // Tier 2 "browser apps": web equivalents of desktop apps this Mac has
+    // installed (see macos/src/detected-web-apps.cjs). Resolves
+    // { apps: [{ id, name, url }, ...] }; empty on Windows/Linux or when
+    // nothing in the catalog is installed.
+    detectedApps: () => ipcRenderer.invoke("miaos-detect-web-apps"),
   },
 });

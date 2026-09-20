@@ -152,6 +152,7 @@ test("all privileged main-window IPC checks include renderer URL validation", ()
     "miaos-state-set",
     "miaos-artifact-open",
     "miaos-reset-relaunch",
+    "miaos-detect-web-apps",
   ]) {
     const start = source.indexOf(`\"${channel}\"`);
     assert.ok(start >= 0, channel);

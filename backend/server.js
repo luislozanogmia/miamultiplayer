@@ -136,6 +136,7 @@ const {
   createNativeDispatchTokenBudgetTracker,
 } = require('./native-dispatch-runtime');
 const { miaosWorkspacePromptContext, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
+const filesApp = require('./files-app');
 const {
   DEFAULT_WORKSPACE_ID,
   departmentsMetaKey,
@@ -4191,6 +4192,136 @@ app.get('/api/bots/catalog/:id', requireAuth, (req, res) => {
   const manifest = readCatalogJsonFile(manifestPath);
   if (!manifest) return res.status(404).json({ error: 'not_found' });
   res.status(200).json(manifest);
+});
+
+// Files app (Tier 1): a read-only view across Mia's own local storage —
+// the shared workspace directory, per-bot automation output, and
+// conversation attachments — surfaced as a pinned "Files" tab in the
+// in-app browser (frontend/files.html + frontend/files.js). Every listing
+// and download route is scoped strictly inside its own root directory
+// (backend/files-app.js#resolveWithinRoot / resolveDownload); there is no
+// write or delete route here on purpose. Registered as its own fixed
+// '/api/files/*' namespace so it can never be shadowed by, or shadow,
+// another resource's :id route (same reasoning as the bots catalog above).
+const FILES_APP_ROOT_LABELS = Object.freeze({ workspace: 'Workspace', automations: 'Bot outputs' });
+
+function filesAppRootDir(root) {
+  if (root === 'workspace') return miaosWorkspaceDir();
+  if (root === 'automations') return String(process.env.MIAOS_AUTOMATION_ARTIFACT_DIR || '').trim();
+  return '';
+}
+
+// Automation artifacts land under '<root>/bot-<hash>/...' (see
+// backend/cron-sync.js#artifactWorkspaceForBot). Map each such directory
+// back to the bot that produced it so the Files list can show "Automation
+// output · <bot name>" instead of an opaque hash.
+function automationBotNameByDirName(req) {
+  const workspaceId = workspaceIdFromRequest(req);
+  const owner = String(req.userEmail || '').toLowerCase();
+  const byDirName = new Map();
+  for (const bot of db.loadAll(conn, 'bots')) {
+    if (workspaceIdForRecord(bot) !== workspaceId) continue;
+    if (workspaceId === DEFAULT_WORKSPACE_ID || sameOwner(bot, owner)) {
+      byDirName.set(filesApp.automationWorkspaceDirName(bot.id), bot.name || bot.id);
+    }
+  }
+  return byDirName;
+}
+
+app.get('/api/files/workspace', requireAuth, (req, res) => {
+  const rootDir = filesAppRootDir('workspace');
+  const { entries, truncated } = filesApp.listFiles(rootDir);
+  res.status(200).json({
+    root: 'workspace',
+    label: FILES_APP_ROOT_LABELS.workspace,
+    files: entries.map((entry) => ({ ...entry, root: 'workspace', caption: null })),
+    truncated,
+  });
+});
+
+app.get('/api/files/automations', requireAuth, (req, res) => {
+  const rootDir = filesAppRootDir('automations');
+  const botNameByDirName = automationBotNameByDirName(req);
+  const { entries, truncated } = filesApp.listFiles(rootDir);
+  const files = entries.map((entry) => {
+    const topDir = entry.path.split('/')[0] || '';
+    const botName = botNameByDirName.get(topDir) || null;
+    return { ...entry, root: 'automations', caption: botName };
+  });
+  res.status(200).json({ root: 'automations', label: FILES_APP_ROOT_LABELS.automations, files, truncated });
+});
+
+app.get('/api/files/attachments', requireAuth, (req, res) => {
+  const workspaceId = workspaceIdFromRequest(req);
+  const principal = nativeConversationPrincipal(req.userEmail, workspaceId);
+  let attachments;
+  try {
+    attachments = nativeConversationRepository.listAttachments({ companyId: principal.companyId });
+  } catch (error) {
+    return res.status(200).json({ root: 'attachments', label: 'Shared in conversations', files: [], truncated: false });
+  }
+  const titleByConversationId = new Map();
+  const files = attachments.map((attachment) => {
+    let title = titleByConversationId.get(attachment.conversationId);
+    if (title === undefined) {
+      const conversation = nativeConversationRepository.getConversation({
+        companyId: principal.companyId,
+        id: attachment.conversationId,
+        includeDeleted: true,
+      });
+      title = (conversation && conversation.name) || null;
+      titleByConversationId.set(attachment.conversationId, title);
+    }
+    return {
+      path: attachment.id,
+      name: attachment.filename,
+      sizeBytes: attachment.sizeBytes ?? null,
+      modifiedAt: attachment.createdAt,
+      root: 'attachments',
+      caption: title,
+      conversationId: attachment.conversationId,
+      attachmentId: attachment.id,
+      mimeType: attachment.mimeType || null,
+    };
+  });
+  files.sort((a, b) => new Date(b.modifiedAt) - new Date(a.modifiedAt));
+  res.status(200).json({ root: 'attachments', label: 'Shared in conversations', files, truncated: false });
+});
+
+app.get('/api/files/download', requireAuth, (req, res) => {
+  const root = String(req.query.root || '');
+  const relativePath = String(req.query.path || '');
+  const rootDir = filesAppRootDir(root);
+  if (!rootDir) return res.status(404).json({ error: 'not_found' });
+  const resolved = filesApp.resolveDownload(rootDir, relativePath);
+  if (!resolved) return res.status(404).json({ error: 'not_found' });
+  res.set('Cache-Control', 'private, no-store');
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.download(resolved.absolutePath, resolved.name);
+});
+
+app.get('/api/files/search', requireAuth, (req, res) => {
+  const query = String(req.query.q || '').trim();
+  const requestedRoot = String(req.query.root || '').trim();
+  const roots = requestedRoot ? [requestedRoot] : ['workspace', 'automations'];
+  if (!query) return res.status(200).json({ query, results: [], truncated: false });
+  const botNameByDirName = requestedRoot === 'automations' || !requestedRoot ? automationBotNameByDirName(req) : null;
+  let truncated = false;
+  const results = [];
+  for (const root of roots) {
+    const rootDir = filesAppRootDir(root);
+    if (!rootDir) continue;
+    const found = filesApp.searchFiles(rootDir, query);
+    truncated = truncated || found.truncated;
+    for (const match of found.results) {
+      const topDir = match.path.split('/')[0] || '';
+      const caption = root === 'automations' && botNameByDirName ? botNameByDirName.get(topDir) || null : null;
+      results.push({ ...match, root, caption });
+      if (results.length >= filesApp.MAX_SEARCH_RESULTS) { truncated = true; break; }
+    }
+    if (results.length >= filesApp.MAX_SEARCH_RESULTS) break;
+  }
+  res.status(200).json({ query, results, truncated });
 });
 
 // Registered after fixed multi-segment /api/bots routes so :id cannot shadow them.

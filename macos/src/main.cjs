@@ -20,6 +20,7 @@ const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
+const { detectWebApps } = require("./detected-web-apps.cjs");
 
 // The packaged runtime layout is platform-specific: Windows venvs place
 // executables in Scripts\ instead of bin/, python-build-standalone ships
@@ -1978,6 +1979,18 @@ ipcMain.handle("miaos-artifact-action", (event, action) => {
 ipcMain.handle("miaos-artifact-state", (event) => {
   if (!isArtifactToolbarSender(event)) return null;
   return getArtifactState();
+});
+
+// Tier 2 "browser apps": quick-launch chips for web equivalents of
+// well-known desktop apps (Slack, Notion, ...), shown only for apps this
+// Mac actually has installed. See macos/src/detected-web-apps.cjs.
+ipcMain.handle("miaos-detect-web-apps", (event) => {
+  if (!isMainWindowSender(event)) return { apps: [] };
+  try {
+    return { apps: detectWebApps() };
+  } catch (_error) {
+    return { apps: [] };
+  }
 });
 
 function activateMainWindow() {

@@ -1,0 +1,10 @@
+[
+  { "id": "slack", "name": "Slack", "appPath": "Slack.app", "url": "https://app.slack.com/client" },
+  { "id": "notion", "name": "Notion", "appPath": "Notion.app", "url": "https://www.notion.so" },
+  { "id": "spotify", "name": "Spotify", "appPath": "Spotify.app", "url": "https://open.spotify.com" },
+  { "id": "discord", "name": "Discord", "appPath": "Discord.app", "url": "https://discord.com/app" },
+  { "id": "figma", "name": "Figma", "appPath": "Figma.app", "url": "https://www.figma.com/files" },
+  { "id": "linear", "name": "Linear", "appPath": "Linear.app", "url": "https://linear.app" },
+  { "id": "whatsapp", "name": "WhatsApp", "appPath": "WhatsApp.app", "url": "https://web.whatsapp.com" },
+  { "id": "zoom", "name": "Zoom", "appPath": "zoom.us.app", "url": "https://zoom.us/wc" }
+]
