@@ -300,14 +300,28 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     callback({});
   }, { useSystemPicker: true });
 
+  // The app itself must never load as a tab inside its own browser: a second
+  // signed-out Mia in a tab runs its own Clerk gate and OAuth flow in the
+  // wrong surface (the sign-in gate belongs in front of the app, not in a
+  // browser tab).
+  function assertNotShellOrigin(normalized) {
+    let url = null;
+    try { url = new URL(normalized); } catch (_) { return normalized; }
+    if (url.origin !== trustedOrigin()) return normalized;
+    // Same-origin app pages built FOR the browser (the Files app) are fine;
+    // only the shell itself is barred.
+    if (url.pathname === "/files.html") return normalized;
+    throw new Error("Mia is already open — it can't be loaded as a browser tab.");
+  }
+
   function normalizeStoredTarget(value) {
     if (isLocalFileTarget(value)) return normalizeLocalFileTarget(value, workspaceRoot);
-    return normalizeTarget(value);
+    return assertNotShellOrigin(normalizeTarget(value));
   }
 
   function normalizeNavigableTarget(value) {
     if (isLocalFileTarget(value)) return normalizeLocalFileTarget(value, workspaceRoot);
-    return normalizeTarget(value);
+    return assertNotShellOrigin(normalizeTarget(value));
   }
 
   function applyNativeTheme(enabled) {
@@ -1082,7 +1096,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       try {
         const target = new URL(normalizeTarget(url));
         if (target.origin === "https://accounts.google.com"
-            && /^\/(gsi\/|o\/oauth2\/|signin\/oauth)/.test(target.pathname)) {
+            && (/^\/(gsi\/|o\/oauth2\/|signin\/oauth)/.test(target.pathname)
+              // The v3 account chooser is the OAuth entry point when Google
+              // already knows the accounts; it carries the flow's client_id.
+              || (/^\/v3\/signin\//.test(target.pathname) && target.searchParams.has("client_id")))) {
           return {
             action: "allow",
             overrideBrowserWindowOptions: {
