@@ -2326,6 +2326,8 @@
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-model-menu{left:0;right:auto;width:min(280px,calc(var(--sand-info-pane-width) - 32px));max-width:calc(var(--sand-info-pane-width) - 32px);z-index:80;}
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-model:hover,
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-select:hover{background:var(--sand-fill-secondary);}
+  body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-workspace,
+  body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-workspace:hover{cursor:default;background:var(--sand-bg-base);}
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-footer{display:flex;align-items:center;gap:8px;min-height:60px;padding:10px 16px;border-top:1px solid var(--sand-border-subtle);flex:0 0 auto;}
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-footer-spacer{flex:1;}
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-delete,
