@@ -1421,6 +1421,16 @@
   .cc-model-option-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .cc-model-option-meta{font-size:10px;color:var(--sand-text-secondary);white-space:nowrap;}
   .cc-model-selection{border-top:1px solid var(--sand-border-subtle);padding:7px 8px 3px;font:10px var(--styled-sans);color:var(--sand-text-secondary);min-height:13px;}
+  .cc-model-family-row{display:flex;align-items:center;gap:6px;}
+  .cc-model-family-option{flex:1;min-width:0;}
+  .cc-model-family-option.cc-model-option{padding:8px;}
+  .cc-model-family-static{font-family:var(--styled-sans);padding:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--sand-text-primary);}
+  .cc-model-family-copy{display:flex;flex-direction:column;gap:1px;min-width:0;}
+  .cc-model-family-caption{font-size:10px;color:var(--sand-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cc-model-family-check{width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none;font-size:10px;color:transparent;}
+  .cc-model-family-option.is-active{background:var(--sand-fill-accent-subtle);}
+  .cc-model-family-option.is-active .cc-model-family-check{background:var(--sand-fill-accent);color:var(--sand-text-on-primary);}
+  .cc-model-connect-pill{height:26px;min-width:0;padding:0 9px;flex:none;}
 
   /* ============ STYLED BOT SKIN: automations info pane ============
      20% of the shell when open, left border, toggled by the header's info icon.
