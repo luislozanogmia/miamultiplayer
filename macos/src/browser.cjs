@@ -158,6 +158,78 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       log(`browser permission save failed: ${error.message}`);
     }
   }
+  // Visited-URL history for the URL-bar autocomplete dropdown. Local state
+  // only, next to the tab-persistence and permissions files under the app's
+  // userData directory — never written into the repo.
+  const HISTORY_MAX_ENTRIES = 200;
+  const historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
+  let historyEntries = [];
+  if (historyPath) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(historyPath, "utf8"));
+      if (saved && Array.isArray(saved.entries)) {
+        historyEntries = saved.entries
+          .filter(item => item && typeof item.url === "string" && /^https?:\/\//i.test(item.url))
+          .slice(0, HISTORY_MAX_ENTRIES)
+          .map(item => ({
+            url: item.url,
+            title: typeof item.title === "string" ? item.title.slice(0, 500) : "",
+            count: Number.isInteger(Number(item.count)) && Number(item.count) > 0 ? Number(item.count) : 1,
+            lastVisit: Number.isFinite(Number(item.lastVisit)) ? Number(item.lastVisit) : Date.now(),
+          }));
+      }
+    } catch (_) { /* First run or unreadable history: start empty. */ }
+  }
+  function persistHistory() {
+    if (!historyPath) return;
+    const temporaryPath = `${historyPath}.${process.pid}.tmp`;
+    try {
+      fs.mkdirSync(path.dirname(historyPath), { recursive: true });
+      fs.writeFileSync(temporaryPath, JSON.stringify({ version: 1, entries: historyEntries }), { mode: 0o600 });
+      fs.renameSync(temporaryPath, historyPath);
+    } catch (error) {
+      try { fs.rmSync(temporaryPath, { force: true }); } catch (_) { /* best effort cleanup */ }
+      log(`browser history save failed: ${error.message}`);
+    }
+  }
+  function recordVisit(url, title) {
+    if (!historyPath || !/^https?:\/\//i.test(String(url || ""))) return;
+    const now = Date.now();
+    const existing = historyEntries.find(entry => entry.url === url);
+    if (existing) {
+      existing.count += 1;
+      existing.lastVisit = now;
+      if (title) existing.title = String(title).slice(0, 500);
+    } else {
+      historyEntries.unshift({ url, title: title ? String(title).slice(0, 500) : "", count: 1, lastVisit: now });
+    }
+    historyEntries.sort((a, b) => b.lastVisit - a.lastVisit);
+    if (historyEntries.length > HISTORY_MAX_ENTRIES) historyEntries.length = HISTORY_MAX_ENTRIES;
+    persistHistory();
+  }
+  function updateVisitTitle(url, title) {
+    if (!historyPath || !title) return;
+    const existing = historyEntries.find(entry => entry.url === url);
+    if (existing && existing.title !== title) {
+      existing.title = String(title).slice(0, 500);
+      persistHistory();
+    }
+  }
+  // Top entries for the URL-bar dropdown, ranked by a recency-weighted
+  // frequency score so a page visited many times stays competitive for a
+  // while after the visit, but yields to genuinely recent browsing.
+  function topHistory(limit = 20) {
+    const now = Date.now();
+    return historyEntries
+      .map(entry => {
+        const ageDays = Math.max(0, (now - entry.lastVisit) / 86400000);
+        const score = entry.count / (1 + ageDays / 14);
+        return { entry, score };
+      })
+      .sort((a, b) => b.score - a.score || b.entry.lastVisit - a.entry.lastVisit)
+      .slice(0, limit)
+      .map(({ entry }) => ({ url: entry.url, title: entry.title, count: entry.count, lastVisit: entry.lastVisit }));
+  }
   async function ensureSystemMediaAccess() {
     if (process.platform !== "darwin" || !systemPreferences || typeof systemPreferences.askForMediaAccess !== "function") return;
     try {
@@ -487,6 +559,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     window.webContents.focus();
     window.webContents.send("miaos-browser-focus");
   }
+  // Chrome moves keyboard focus into the page when a tab becomes active, so
+  // arrow keys/scroll/typing reach the page instead of being swallowed by
+  // the app shell. Guard for a webContents that closed mid-switch.
+  function focusTabWebContents(tab) {
+    if (!tab) return;
+    const wc = tab.view.webContents;
+    if (!wc.isDestroyed()) wc.focus();
+  }
   // ERR_ABORTED (-3) means a load was cancelled, almost always because a
   // newer navigation superseded it. Electron does not attach a stable `code`
   // to every rejection shape, so match errno and the message as well.
@@ -802,6 +882,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       activeId = tab.id;
       layout();
       persistTabs();
+      focusTabWebContents(tab);
       publish();
       return protocolTabResult(tab);
     }
@@ -1066,7 +1147,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       collectTiming(tab, true);
       restoreMediaState(tab);
     }));
-    wc.on("page-title-updated", (_event, title) => { tab.title = title; persistTabs(); publish(); });
+    wc.on("page-title-updated", (_event, title) => { tab.title = title; persistTabs(); updateVisitTitle(tab.url, title); publish(); });
     wc.on("page-favicon-updated", (_event, favicons) => {
       // The tab strip renders the favicon inside Mia's main window, whose CSP
       // deliberately blocks remote images (tracking pixels in conversation
@@ -1102,7 +1183,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
       tab.error = ""; persistTabs(); layout(); publish();
     };
-    wc.on("did-navigate", (_event, url) => navigated(_event, url));
+    wc.on("did-navigate", (_event, url) => { navigated(_event, url); recordVisit(url, tab.title); });
     wc.on("did-navigate-in-page", (event, url, mainFrame) => {
       if (mainFrame) {
         tab.sequence++;
@@ -1133,6 +1214,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       else navigate(tab, value);
     }
     layout(); persistTabs(); publish();
+    if (tab.id === activeId) focusTabWebContents(tab);
     return tab;
   }
   function closeTab(id) {
@@ -1154,7 +1236,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     }
     activeId = null;
+    historyEntries = [];
     try { if (statePath) fs.rmSync(statePath, { force: true }); } catch (error) { log(`browser state cleanup failed: ${error.message}`); }
+    try { if (historyPath) fs.rmSync(historyPath, { force: true }); } catch (error) { log(`browser history cleanup failed: ${error.message}`); }
     newTab();
     return state();
   }
@@ -1189,11 +1273,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return state();
       }
       if (command.action === "state") return state();
+      if (command.action === "history") return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       if (command.action === "new") { newTab(); return state(); }
       if (!tabs.size) newTab();
       const tab = active();
       if (command.action === "navigate") navigate(tab, command.value);
-      if (command.action === "select" && tabs.has(command.id)) { activeId = command.id; layout(); persistTabs(); }
+      if (command.action === "select" && tabs.has(command.id)) {
+        activeId = command.id; layout(); persistTabs();
+        focusTabWebContents(tabs.get(command.id));
+      }
       if (command.action === "close") closeTab(command.id);
       if (command.action === "back" && tab.view.webContents.navigationHistory.canGoBack()) tab.view.webContents.navigationHistory.goBack();
       if (command.action === "forward" && tab.view.webContents.navigationHistory.canGoForward()) tab.view.webContents.navigationHistory.goForward();
