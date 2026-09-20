@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Mia · Files</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+<link rel="stylesheet" href="files.css?v=1" />
+</head>
+<body>
+
+<div class="files-wrap">
+  <nav class="files-sidebar" id="filesSidebar" aria-label="Files sections"></nav>
+
+  <main class="files-main">
+    <div class="files-head">
+      <h1>Files</h1>
+      <input type="search" id="filesSearch" class="files-search" placeholder="Search file names and contents" aria-label="Search file names and contents" />
+    </div>
+
+    <div class="files-list-head">
+      <span id="filesCount" class="files-count"></span>
+      <div class="files-toolbar" id="filesToolbar">
+        <button type="button" data-toolbar="open" disabled>Open</button>
+        <button type="button" data-toolbar="copy" disabled>Copy path</button>
+        <button type="button" data-toolbar="download" disabled>Download</button>
+      </div>
+    </div>
+
+    <ul class="files-list" id="filesList" role="listbox" aria-label="Files"></ul>
+  </main>
+</div>
+
+<div class="files-room-picker" id="filesRoomPicker" hidden>
+  <div class="files-room-picker-card" role="dialog" aria-modal="true" aria-labelledby="filesRoomPickerTitle">
+    <div class="files-room-picker-head">
+      <h2 id="filesRoomPickerTitle">Send to&hellip;</h2>
+      <button type="button" id="filesRoomPickerClose" aria-label="Close">&times;</button>
+    </div>
+    <ul id="filesRoomPickerList" class="files-room-picker-list"></ul>
+  </div>
+</div>
+
+<div class="files-toast" id="filesToast" hidden></div>
+
+<script src="files.js?v=1"></script>
+</body>
+</html>
