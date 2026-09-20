@@ -49,7 +49,7 @@ function harness(options = {}) {
     }
     reload() { this.reloaded = true; }
     stop() { this.stopped = true; }
-    focus() {}
+    focus() { this.focusCalls = (this.focusCalls || 0) + 1; }
     insertText(text) { this.insertedText = text; }
     sendInputEvent(event) { this.inputEvents = [...(this.inputEvents || []), event]; }
     executeJavaScript(script) {
@@ -542,4 +542,108 @@ test("aborted and stale load failures never stamp a tab error", async () => {
   await flush();
   assert.equal(stale.command("state").tabs[0].error, "");
   stale.window.emit("closed");
+});
+
+test("switching tabs and creating a new active tab moves keyboard focus into the page", () => {
+  const h = harness();
+  const first = h.command("new");
+  assert.equal(h.views[0].webContents.focusCalls, 1, "the first (and now active) tab is focused on creation");
+  const second = h.command("new");
+  assert.equal(h.views[1].webContents.focusCalls, 1, "a newly created active tab is focused");
+  assert.equal(h.views[0].webContents.focusCalls, 1, "creating a second tab does not refocus the first");
+
+  h.command("select", { id: first.activeId });
+  assert.equal(h.views[0].webContents.focusCalls, 2, "switching back to a tab focuses its webContents");
+  assert.equal(h.views[1].webContents.focusCalls, 1, "the tab losing focus is left untouched");
+  assert.equal(second.activeId, 2);
+});
+
+test("selecting a tab whose webContents is already destroyed never throws", () => {
+  const h = harness();
+  const first = h.command("new");
+  h.command("new");
+  h.views[0].webContents.closed = true;
+  assert.doesNotThrow(() => h.command("select", { id: first.activeId }));
+});
+
+test("visited URLs are recorded with title/count and exposed by the history command", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-history-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    const h = harness({ statePath });
+    h.command("new");
+    h.command("navigate", { value: "https://example.com" });
+    h.views[0].webContents.emit("did-navigate", null, "https://example.com/");
+    h.views[0].webContents.emit("page-title-updated", null, "Example Domain");
+
+    let result = h.command("history");
+    assert.equal(result.history.length, 1);
+    assert.equal(result.history[0].url, "https://example.com/");
+    assert.equal(result.history[0].title, "Example Domain");
+    assert.equal(result.history[0].count, 1);
+    assert.equal(typeof result.history[0].lastVisit, "number");
+
+    // Revisiting the same URL increments the visit count instead of adding
+    // a duplicate entry.
+    h.views[0].webContents.emit("did-navigate", null, "https://example.com/");
+    result = h.command("history");
+    assert.equal(result.history.length, 1);
+    assert.equal(result.history[0].count, 2);
+
+    // Persisted next to (not inside) the tab-state file, under the app's
+    // own userData directory — never part of the repo.
+    const historyPath = path.join(directory, "browser-history.json");
+    const saved = JSON.parse(fs.readFileSync(historyPath, "utf8"));
+    assert.equal(saved.entries[0].url, "https://example.com/");
+    assert.equal(saved.entries[0].count, 2);
+
+    // Local file targets are app-internal previews, not browsing history.
+    h.views[0].webContents.emit("did-navigate", null, "file:///etc/passwd");
+    assert.equal(h.command("history").history.length, 1);
+
+    h.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("history survives a new browser owner and honors a caller-supplied limit", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-history-restore-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    const first = harness({ statePath });
+    first.command("new");
+    first.command("navigate", { value: "https://example.com" });
+    first.views[0].webContents.emit("did-navigate", null, "https://example.com/");
+    first.command("navigate", { value: "https://www.youtube.com" });
+    first.views[0].webContents.emit("did-navigate", null, "https://www.youtube.com/");
+    first.window.emit("closed");
+
+    const restored = harness({ statePath });
+    const full = restored.command("history");
+    assert.equal(full.history.length, 2);
+    const limited = restored.command("history", { limit: 1 });
+    assert.equal(limited.history.length, 1);
+    restored.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("clean slate clears visited-URL history alongside tabs and cookies", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-history-clear-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    const h = harness({ statePath });
+    h.command("new");
+    h.views[0].webContents.emit("did-navigate", null, "https://example.com/");
+    assert.equal(h.command("history").history.length, 1);
+
+    await h.controller.clearData();
+    assert.equal(h.command("history").history.length, 0);
+    assert.equal(fs.existsSync(path.join(directory, "browser-history.json")), false);
+    h.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

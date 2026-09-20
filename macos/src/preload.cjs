@@ -24,6 +24,12 @@ contextBridge.exposeInMainWorld("miaDesktop", {
   },
   browser: {
     command: (command) => ipcRenderer.invoke("miaos-browser-command", command),
+    // Top visited-URL entries for the URL-bar autocomplete dropdown, ranked
+    // by recency-weighted visit frequency. Resolves
+    // { history: [{ url, title, count, lastVisit }, ...] } (most relevant
+    // first, capped at `limit`, default/max 20/200). Local-only state; never
+    // sent anywhere but this renderer.
+    history: (limit) => ipcRenderer.invoke("miaos-browser-command", { action: "history", limit }),
     onState: (callback) => {
       const listener = (_event, state) => callback(state);
       ipcRenderer.on("miaos-browser-state", listener);

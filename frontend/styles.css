@@ -2465,8 +2465,16 @@
   .local-browser-sidebar-btn{display:none;width:34px;}
   .local-browser-sidebar-btn .local-browser-mote{display:block;width:26px;height:24px;margin:auto;object-fit:contain;}
   .local-browser-toolbar{height:44px;min-height:44px;display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid var(--sand-border-subtle);background:#f7f7f5;}
+  .local-browser-url-wrap{position:relative;flex:1;min-width:0;display:flex;}
   .local-browser-toolbar input{appearance:none;min-width:0;flex:1;height:32px;padding:0 11px;border:1px solid #d0d2ce;border-radius:9px;background:#fff;color:#202124;caret-color:#202124;font:13px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;outline:none;margin:0 4px;}
   .local-browser-toolbar input:focus{border-color:var(--sand-fill-accent);box-shadow:0 0 0 2px var(--sand-fill-accent-subtle);}
+  .local-browser-suggest{position:absolute;left:4px;right:4px;top:calc(100% + 4px);z-index:5;display:flex;flex-direction:column;overflow:hidden;background:#fff;border:1px solid #d0d2ce;border-radius:9px;box-shadow:0 8px 20px #0002;padding:4px;gap:1px;}
+  .local-browser-suggest[hidden]{display:none;}
+  .local-browser-suggest-item{appearance:none;display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;padding:6px 9px;border:0;border-radius:6px;background:transparent;color:#202124;text-align:left;cursor:pointer;font:12px/1.3 var(--styled-sans);}
+  .local-browser-suggest-item:hover,
+  .local-browser-suggest-item.active{background:#0000000a;}
+  .local-browser-suggest-title{font-size:12.5px;color:#202124;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .local-browser-suggest-url{font-size:11px;color:#8c8f89;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
   .local-browser-go-btn{appearance:none;height:32px;padding:0 12px;border:1px solid #202124;border-radius:8px;background:#202124;color:#fff;font:12px var(--styled-sans);cursor:pointer;}
   .local-browser-go-btn:hover{background:#36383b;}
   .local-browser-share-btn{appearance:none;display:grid;place-items:center;flex:none;width:34px;height:34px;padding:0;border:1px solid #d0d2ce;border-radius:8px;background:#ededeb;color:#8c8f89;}
