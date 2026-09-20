@@ -31,3 +31,38 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
 
 - Beta: DeepSeek V4.1 Flash only (cheapest reasoning model, ~$0.15/M in, $0.60/M out).
 - Future: add model tiers (free tier = Flash, paid tier = unlocks Claude/GPT).
+
+## Todo — approved, not started
+
+- **Model family picker: provider list on back.** In the composer's model
+  popover, tapping back from "Choose a model family" shows every provider
+  from initial setup (Mia Router, Claude, ChatGPT/Codex, Grok, Gemini) as
+  rows: connected ones selectable (active row tinted with a check),
+  unconnected ones showing a "Connect" pill that jumps into the same connect
+  flow setup uses, then returns to the picker. Low-fi approved 2026-09-19;
+  needs more design work before building.
+
+## Roadmap — P3 (future, not scheduled)
+
+Sourced from a Sept 2026 competitive scan of Meta's Muse agent and Alexandr
+Wang's public product commentary.
+
+- **Approval gating for autonomous bots.** Extend the existing
+  `agent_permissions` model with an "ask first" tier between denied and
+  auto-approved: approvals scoped one-time, per-session, per-task, or
+  time-bounded, evaluated at action time for connector and browser-mode
+  actions (Muse's "Sentinel" pattern). Hermes auto-approve already covers the
+  static grant half; this adds the runtime half.
+- **Self-healing harness.** Instead of plain in-app bug reporting: when Mia
+  detects a bug (error, failed automation, crash), it asks the user "want me
+  to fix this?" On yes, a dedicated fixer account — running a stronger model
+  on high reasoning — takes the bug report and fixes it with its own harness,
+  then verifies. Turns every user into a contributor without leaving the app.
+- **Fine-grained, time-boxed automations.** Beyond the current
+  interval/daily/weekly/monthly cadences: narrow ad-hoc watches like "monitor
+  X tomorrow between 2-4pm and act when it changes."
+- **Credential isolation broker.** Connector secrets stored via Electron
+  `safeStorage` (Keychain / DPAPI / libsecret — native on all three
+  platforms, not implemented today). Bots reference credentials by name only;
+  the backend injects values in-process at call time. Product-izes the repo's
+  existing no-secrets contract.

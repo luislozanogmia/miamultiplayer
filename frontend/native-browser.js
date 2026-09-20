@@ -14,7 +14,11 @@
   strip.className = 'native-browser-tabs';
   strip.setAttribute('role', 'tablist');
   strip.setAttribute('aria-label', 'Browser tabs');
-  overlay.querySelector('.local-browser-toolbar').before(strip);
+  // Tabs row also hosts the close-browser button (moved here from the
+  // url-bar row so the window closes like a tab strip, not a toolbar).
+  var tabsRow = document.getElementById('localBrowserTabsRow');
+  if (tabsRow) tabsRow.insertBefore(strip, tabsRow.firstChild);
+  else overlay.querySelector('.local-browser-toolbar').before(strip);
   var findBar = document.createElement('div');
   findBar.className = 'native-browser-find'; findBar.hidden = true;
   var findInput = document.createElement('input');

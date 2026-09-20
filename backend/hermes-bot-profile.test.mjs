@@ -48,6 +48,52 @@ test('Mia provisions full-agent and restricted-bot sessions in the shared Hermes
   assert.equal(unchanged.changed, false);
 });
 
+test('background_review defaults to enabled for gateway/agent profiles and disabled for the bot-worker profile', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-bg-review-'));
+  const profilesRoot = path.join(root, 'profiles');
+  const previous = process.env.MIAOS_BACKGROUND_REVIEW;
+  try {
+    delete process.env.MIAOS_BACKGROUND_REVIEW;
+    provisionHermesRuntimeProfiles({ profilesRoot });
+    const agent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    const googleAgent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    const bot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    assert.match(agent, /auxiliary:\n  background_review:\n    enabled: true/);
+    assert.match(googleAgent, /auxiliary:\n  background_review:\n    enabled: true/);
+    assert.match(bot, /auxiliary:\n  background_review:\n    enabled: false/);
+  } finally {
+    if (previous === undefined) delete process.env.MIAOS_BACKGROUND_REVIEW;
+    else process.env.MIAOS_BACKGROUND_REVIEW = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('MIAOS_BACKGROUND_REVIEW=all enables background_review everywhere, =off disables it everywhere', () => {
+  const previous = process.env.MIAOS_BACKGROUND_REVIEW;
+  try {
+    const allRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-bg-review-all-'));
+    const allProfilesRoot = path.join(allRoot, 'profiles');
+    process.env.MIAOS_BACKGROUND_REVIEW = 'all';
+    provisionHermesRuntimeProfiles({ profilesRoot: allProfilesRoot });
+    const allBot = fs.readFileSync(path.join(allProfilesRoot, MIAOS_BOT_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    assert.match(allBot, /auxiliary:\n  background_review:\n    enabled: true/);
+    fs.rmSync(allRoot, { recursive: true, force: true });
+
+    const offRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-bg-review-off-'));
+    const offProfilesRoot = path.join(offRoot, 'profiles');
+    process.env.MIAOS_BACKGROUND_REVIEW = 'off';
+    provisionHermesRuntimeProfiles({ profilesRoot: offProfilesRoot });
+    const offAgent = fs.readFileSync(path.join(offProfilesRoot, MIAOS_AGENT_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    const offBot = fs.readFileSync(path.join(offProfilesRoot, MIAOS_BOT_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    assert.match(offAgent, /auxiliary:\n  background_review:\n    enabled: false/);
+    assert.match(offBot, /auxiliary:\n  background_review:\n    enabled: false/);
+    fs.rmSync(offRoot, { recursive: true, force: true });
+  } finally {
+    if (previous === undefined) delete process.env.MIAOS_BACKGROUND_REVIEW;
+    else process.env.MIAOS_BACKGROUND_REVIEW = previous;
+  }
+});
+
 test('Mia registers its bounded bundled Google Workspace tools for Mia and all Bots', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-google-'));
   const profilesRoot = path.join(root, 'profiles');

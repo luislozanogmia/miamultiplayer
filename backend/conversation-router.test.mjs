@@ -384,6 +384,29 @@ test('native HTTP stop exposes active work, cancels it durably, and prevents a q
     assert.equal(result.payload.dispatch.status, 'failed');
     assert.equal(result.payload.dispatch.lastError, 'cancelled by user');
 
+    // A stop used to leave the transcript silent. It must now record what
+    // happened, in the same shape the dispatch's own reply would have used,
+    // so it renders with no frontend changes.
+    result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=5`);
+    assert.equal(result.response.status, 200);
+    const stopNotice = result.payload.events.find((event) => event.metadata && event.metadata.status === 'stopped');
+    assert.ok(stopNotice, 'expected a stop notice event in the transcript');
+    assert.equal(stopNotice.senderId, 'gateway');
+    assert.equal(stopNotice.senderType, 'agent');
+    assert.equal(stopNotice.type, 'agent_message');
+    assert.match(stopNotice.content.text, /^⏹ Stopped by you — the agent was mid-response\./);
+    assert.equal(stopNotice.metadata.dispatchId, dispatchId);
+
+    // Idempotent: stopping an already-terminal dispatch again must not post
+    // a second notice.
+    result = await app.request(`/conversations/${conversationId}/dispatches/${dispatchId}/stop`, {
+      method: 'POST', body: {},
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.payload.idempotent, true);
+    result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=5`);
+    assert.equal(result.payload.events.filter((event) => event.metadata && event.metadata.status === 'stopped').length, 1);
+
     result = await app.request(`/conversations/${conversationId}/dispatches/active`);
     assert.deepEqual(result.payload.dispatches, []);
     const claim = app.repository.claimDispatch({

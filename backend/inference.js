@@ -44,6 +44,15 @@ function hermesGatewayLaunch() {
   return configuredHermesLaunch(HERMES_BIN);
 }
 const MIAOS_BOT_MAX_TURNS = Math.min(100, Math.max(1, Number(process.env.MIAOS_BOT_MAX_TURNS) || 100));
+// A turn cap (MIAOS_BOT_MAX_TURNS) and the native dispatch wall-clock timeout
+// (native-dispatch-runtime.js) both bound a run, but neither bounds how much
+// a single turn streams back before hitting either limit. The Hermes gateway
+// event stream carries no per-turn usage/token counters — only text deltas —
+// so this budget is approximated from streamed characters using a
+// conservative chars-per-token ratio; it exists to cut off runaway output,
+// not to meter billing.
+const NATIVE_DISPATCH_CHARS_PER_TOKEN = 4;
+const MIAOS_BOT_MAX_TOKENS = Math.min(2000000, Math.max(1000, Number(process.env.MIAOS_BOT_MAX_TOKENS) || 200000));
 const MIAOS_HERMES_GUARD_BIN = path.join(__dirname, 'miaos-hermes-bin');
 const HERMES_DIAGNOSTIC_EVENT_LIMIT = 200;
 
@@ -216,6 +225,22 @@ function hermesTurnsFromOptions(options) {
   if (!Number.isInteger(requested) || requested < 1) return undefined;
   const ceiling = options && options.botWorker === true ? MIAOS_BOT_MAX_TURNS : MIAOS_AGENT_MAX_TURNS;
   return Math.min(requested, ceiling);
+}
+
+// Mirrors hermesTurnsFromOptions: an explicit per-call request narrows the
+// deployment ceiling but can never widen it. Unlike maxTurns, every caller
+// gets a budget by default (undefined would mean "unbounded"), so a missing
+// or invalid request falls back to the ceiling itself.
+function hermesTokenBudgetFromOptions(options) {
+  const requested = Number(options && options.maxTokens);
+  const ceiling = MIAOS_BOT_MAX_TOKENS;
+  if (!Number.isInteger(requested) || requested < 1) return ceiling;
+  return Math.min(requested, ceiling);
+}
+
+function hermesCharBudgetFromTokens(tokenBudget) {
+  const tokens = Number.isInteger(tokenBudget) && tokenBudget > 0 ? tokenBudget : MIAOS_BOT_MAX_TOKENS;
+  return tokens * NATIVE_DISPATCH_CHARS_PER_TOKEN;
 }
 
 function stripHermesOperationalLines(value) {
@@ -802,4 +827,8 @@ module.exports = {
   MIAOS_AGENT_MAX_TURNS,
   MIAOS_BOT_MAX_TURNS,
   hermesTurnsFromOptions,
+  MIAOS_BOT_MAX_TOKENS,
+  NATIVE_DISPATCH_CHARS_PER_TOKEN,
+  hermesTokenBudgetFromOptions,
+  hermesCharBudgetFromTokens,
 };

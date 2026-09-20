@@ -581,6 +581,9 @@
 <!-- Local browser surface. -->
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
+    <div class="native-browser-tabs-row" id="localBrowserTabsRow">
+      <button type="button" class="local-browser-btn local-browser-close-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser">&times;</button>
+    </div>
     <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off">
       <span class="local-browser-dot" id="localBrowserDot" aria-hidden="true" title="Connected"></span>
       <span class="local-browser-status" id="localBrowserStatus" hidden></span>
@@ -598,7 +601,6 @@
       <button type="button" class="local-browser-share-btn" id="localBrowserShareBtn" title="Share — coming soon" aria-label="Share — coming soon" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
       </button>
-      <button type="button" class="local-browser-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser">&times;</button>
     </form>
     <div class="local-browser-screen" id="localBrowserScreen">
       <div class="local-browser-empty" id="localBrowserEmpty">
@@ -757,6 +759,22 @@
             <option value="light">Light</option>
             <option value="dark">Dark</option>
           </select>
+        </div>
+        <div class="styled-settings-row" id="settingsDefaultBrowserRow" hidden>
+          <div><div class="styled-settings-row-label">Default browser</div><div class="styled-settings-row-desc" id="settingsDefaultBrowserNote">Open http and https links in Mia</div></div>
+          <button class="styled-settings-pill-btn" id="settingsDefaultBrowserBtn">Make Mia your default browser</button>
+        </div>
+      </div>
+
+      <div class="styled-settings-group-label">Feedback</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Send feedback</div><div class="styled-settings-row-desc">Found a bug or want a feature? This opens an email to the Mia team in your mail app</div></div>
+        </div>
+        <textarea class="styled-settings-field styled-settings-feedback-text" id="settingsFeedbackText" placeholder="What happened, or what would you like Mia to do?" maxlength="1500"></textarea>
+        <div class="styled-settings-row styled-settings-row-actions">
+          <span class="styled-settings-form-note" id="settingsFeedbackSent">Opened in your mail app</span>
+          <button class="styled-settings-pill-btn" id="settingsFeedbackSend">Send feedback</button>
         </div>
       </div>
 

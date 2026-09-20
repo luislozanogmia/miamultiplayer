@@ -424,6 +424,65 @@ function createConversationService({ repository, authorization, realtime = null,
       .map(publicDispatch);
   }
 
+  const STOP_STEP_MAX_LENGTH = 240;
+
+  function stopNoticeText({ targetType }) {
+    const noun = targetType === 'gateway' ? 'the agent' : 'the bot';
+    return `⏹ Stopped by you — ${noun} was mid-response.`;
+  }
+
+  // Best-effort "where it left off" hint. server.js's verbose Hermes progress
+  // stream (postHermesProgress) persists diagnostic events tagged with this
+  // dispatch while it runs; the static "I'm working through this now."
+  // placeholder carries no real step, so only a diagnostic one counts.
+  function lastDispatchProgressStep({ companyId, conversationId, dispatchId }) {
+    try {
+      const page = repository.listEvents({
+        companyId, conversationId, latest: true, limit: 25, includeDeleted: false,
+      });
+      const rows = (page && page.events) || [];
+      const step = rows.find((event) => event
+        && event.metadata
+        && event.metadata.dispatchId === dispatchId
+        && event.metadata.progress === true
+        && event.metadata.diagnostic === true);
+      const text = step && step.content && typeof step.content.text === 'string' ? step.content.text.trim() : '';
+      if (!text) return '';
+      return text.length > STOP_STEP_MAX_LENGTH ? `${text.slice(0, STOP_STEP_MAX_LENGTH)}…` : text;
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  // A stopped dispatch used to leave the transcript silent — the run just
+  // vanished. Record it as a normal reply-shaped event, the same senderId/type
+  // the dispatch's own reply would have used, so it persists and renders with
+  // no frontend changes (mirrors the failure-notice event server.js posts on
+  // a timeout). Best-effort: bookkeeping here must never turn a successful
+  // stop into an error response.
+  function postStopNotice({ companyId, conversationId, stoppedDispatch }) {
+    if (!stoppedDispatch) return;
+    try {
+      const lastStep = lastDispatchProgressStep({ companyId, conversationId, dispatchId: stoppedDispatch.id });
+      const noticeText = stopNoticeText({ targetType: stoppedDispatch.targetType });
+      const text = lastStep ? `${noticeText}\nWhere it left off: ${lastStep}` : noticeText;
+      const result = repository.createEvent({
+        companyId,
+        conversationId,
+        senderId: stoppedDispatch.targetType === 'gateway' ? 'gateway' : stoppedDispatch.targetId,
+        senderType: stoppedDispatch.targetType === 'gateway' ? 'agent' : 'bot',
+        type: stoppedDispatch.targetType === 'gateway' ? 'agent_message' : 'bot_message',
+        content: { text },
+        clientIdempotencyKey: `native-dispatch-stop-${stoppedDispatch.id}`,
+        metadata: { runtime: 'hermes', dispatchId: stoppedDispatch.id, status: 'stopped' },
+      });
+      if (!result.idempotent) delivery(result.event);
+    } catch (_error) {
+      // Persistence has already committed the cancellation; a notice failure
+      // must not surface as a failed stop.
+    }
+  }
+
   async function stopDispatch({ companyId, conversationId, principal, dispatchId }) {
     authorization.authorize(callerPrincipal(principal, companyId, conversationId, 'send'));
     const result = repository.cancelDispatch({
@@ -431,8 +490,9 @@ function createConversationService({ repository, authorization, realtime = null,
       conversationId,
       id: required(dispatchId, 'dispatchId'),
     });
-    if (!result.idempotent && dispatch && typeof dispatch.cancelRunning === 'function') {
-      await dispatch.cancelRunning(result.dispatch);
+    if (!result.idempotent) {
+      if (dispatch && typeof dispatch.cancelRunning === 'function') await dispatch.cancelRunning(result.dispatch);
+      postStopNotice({ companyId, conversationId, stoppedDispatch: result.dispatch });
     }
     return { ...result, dispatch: publicDispatch(result.dispatch) };
   }
