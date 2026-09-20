@@ -2612,6 +2612,10 @@ const DEFAULT_SETTINGS = {
   // The harness owns OAuth/API credentials. Mia keeps only each user's
   // product preference and workspace mode in the existing settings document.
   harnessByUser: {},
+  // Starter-bot template names the user dismissed from the sidebar. Stored
+  // server-side so a dismissal survives desktop profile switches and
+  // reinstalls (localStorage is per-Electron-profile and does not).
+  hiddenStarterBots: [],
 };
 let runtimeApiKey = '';
 function getApiKey() {
@@ -3389,7 +3393,23 @@ app.get('/api/settings', requireAuth, (req, res) => {
     lastBackup: settings.lastBackup || null,
     chatOutput: settings.chatOutput === 'verbose' ? 'verbose' : 'concise',
     harness: harnessPreferenceForUser(settings, req.userEmail),
+    hiddenStarterBots: Array.isArray(settings.hiddenStarterBots)
+      ? settings.hiddenStarterBots.filter((name) => typeof name === 'string')
+      : [],
   });
+});
+
+// Dismissing a starter-bot template is a durable choice: the full hidden
+// list replaces the stored one (the client owns merge semantics).
+app.post('/api/settings/starter-bots', requireAuth, (req, res) => {
+  const hidden = (req.body || {}).hidden;
+  if (!Array.isArray(hidden) || hidden.some((name) => typeof name !== 'string')) {
+    return res.status(400).json({ error: 'hidden must be an array of template names' });
+  }
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  settings.hiddenStarterBots = [...new Set(hidden.map((name) => name.slice(0, 200)))].slice(0, 50);
+  db.saveSingleton(conn, 'settings', settings);
+  return res.status(200).json({ hiddenStarterBots: settings.hiddenStarterBots });
 });
 
 // Chat output detail is a first-class user setting (Settings → General), not
@@ -5178,11 +5198,29 @@ function splitHermesDebugText(text, maxLength = 7000) {
 // The gateway emits one thinking/reasoning delta per token, so verbose mode
 // cannot post a progress event per event without spamming the transcript.
 // This buffers consecutive same-kind deltas and hands the caller one string
-// to post, on whichever comes first: the char cap, the idle timer, or an
-// explicit flush (a kind switch, or a caller-chosen boundary such as
+// to post, on whichever comes first: the char cap (cut at a sentence or
+// line boundary, never mid-word), the idle timer (which resets on every
+// delta, so an actively streaming burst is never chopped mid-thought), or
+// an explicit flush (a kind switch, or a caller-chosen boundary such as
 // message.complete/status change).
-const HERMES_DELTA_FLUSH_CHARS = 400;
+const HERMES_DELTA_FLUSH_CHARS = 1200;
 const HERMES_DELTA_FLUSH_MS = 1500;
+
+// Where to cut an over-cap buffer: the last newline or sentence end inside
+// the cap, provided it keeps at least half a chunk; otherwise the last
+// whitespace; only a truly unbroken run gets a hard cut at the cap.
+function hermesDeltaCutIndex(buffer) {
+  const window = buffer.slice(0, HERMES_DELTA_FLUSH_CHARS);
+  const minimum = Math.floor(HERMES_DELTA_FLUSH_CHARS / 2);
+  const newline = window.lastIndexOf('\n');
+  if (newline >= minimum) return newline + 1;
+  const sentence = Math.max(
+    window.lastIndexOf('. '), window.lastIndexOf('! '), window.lastIndexOf('? '));
+  if (sentence >= minimum) return sentence + 2;
+  const space = window.lastIndexOf(' ');
+  if (space >= minimum) return space + 1;
+  return HERMES_DELTA_FLUSH_CHARS;
+}
 
 function createHermesDeltaCoalescer(onFlush) {
   let buffer = '';
@@ -5192,6 +5230,9 @@ function createHermesDeltaCoalescer(onFlush) {
     if (timer) clearTimeout(timer);
     timer = null;
   }
+  function emit(text, flushedKind) {
+    if (text) onFlush(flushedKind, text);
+  }
   function flush() {
     clearTimer();
     if (!buffer) return;
@@ -5199,7 +5240,7 @@ function createHermesDeltaCoalescer(onFlush) {
     const flushedKind = kind;
     buffer = '';
     kind = null;
-    onFlush(flushedKind, text);
+    emit(text, flushedKind);
   }
   return {
     push(eventKind, text) {
@@ -5207,11 +5248,15 @@ function createHermesDeltaCoalescer(onFlush) {
       if (kind && kind !== eventKind) flush();
       kind = eventKind;
       buffer += text;
-      if (buffer.length >= HERMES_DELTA_FLUSH_CHARS) {
-        flush();
-        return;
+      while (buffer.length >= HERMES_DELTA_FLUSH_CHARS) {
+        const cut = hermesDeltaCutIndex(buffer);
+        emit(buffer.slice(0, cut), kind);
+        buffer = buffer.slice(cut);
       }
-      if (!timer) timer = setTimeout(flush, HERMES_DELTA_FLUSH_MS);
+      // Idle timer, not a deadline: reset on every delta so a continuous
+      // stream coalesces until it pauses (or hits the char cap above).
+      clearTimer();
+      if (buffer) timer = setTimeout(flush, HERMES_DELTA_FLUSH_MS);
     },
     flush,
   };
