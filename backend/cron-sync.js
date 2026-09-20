@@ -294,7 +294,8 @@ function jobPromptFor(bot, automation) {
 function jobModelFor(bot) {
   const model = String(bot && bot.model || '').trim();
   const provider = String(bot && bot.modelProvider || '').trim();
-  if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(model)) {
+  // OpenRouter model ids are namespaced with a slash (deepseek/deepseek-v4.1-flash).
+  if (!/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?$/i.test(model) || model.length > 128) {
     throw new Error('scheduled bot requires a valid connected model');
   }
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(provider)) {
