@@ -12111,12 +12111,14 @@
     // are the same ones setup uses (harnessConnectionState, openHarnessOnboarding,
     // the [data-harness-provider] choices and #harnessApiProvider select) — no
     // new state is invented here.
+    // Claude and Gemini get no rows of their own: neither vendor allows
+    // third-party apps on their consumer CLI subscriptions, so they connect
+    // through the one generic API row (see operations/product.md).
     var COMPOSER_FAMILY_PROVIDERS = [
-      {id:'managed-router', label:'Mia Router', caption:'Managed Router', harnessProvider:'managed-router', aliases:['managed-router', 'openrouter']},
-      {id:'anthropic', label:'Claude', caption:'Anthropic API key', harnessProvider:'openai-api', apiProvider:'anthropic', aliases:['anthropic', 'claude']},
-      {id:'openai-codex', label:'ChatGPT', caption:'Codex CLI', harnessProvider:'openai-codex', aliases:['openai-codex', 'codex']},
-      {id:'xai-oauth', label:'Grok', caption:'Grok CLI', harnessProvider:'xai-oauth', aliases:['xai-oauth', 'xai', 'grok']},
-      {id:'gemini', label:'Gemini', caption:'Google AI Studio API key', harnessProvider:'openai-api', apiProvider:'gemini', aliases:['gemini', 'google', 'google-ai-studio']}
+      {id:'managed-router', label:'Mia Router', harnessProvider:'managed-router', aliases:['managed-router', 'openrouter']},
+      {id:'openai-codex', label:'ChatGPT', harnessProvider:'openai-codex', aliases:['openai-codex', 'codex']},
+      {id:'xai-oauth', label:'Grok', harnessProvider:'xai-oauth', aliases:['xai-oauth', 'xai', 'grok']},
+      {id:'api', label:'API', harnessProvider:'openai-api', aliases:['openai-api', 'anthropic', 'gemini', 'openai', 'deepseek']}
     ];
 
     function familyProviderAliasMatch(providerId, aliases){
@@ -12345,12 +12347,12 @@
           var active = connected && familyProviderAliasMatch(activeProviderId, row.aliases);
           if(connected){
             html += '<button type="button" class="cc-model-option cc-model-family-option' + (active ? ' is-active' : '') + '" data-choice="family-provider" data-family-provider-id="' + esc(row.id) + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
-              '<span class="cc-model-family-copy"><span class="cc-model-option-label">' + esc(row.label) + '</span><span class="cc-model-family-caption">' + esc(row.caption) + '</span></span>' +
+              '<span class="cc-model-option-label">' + esc(row.label) + '</span>' +
               '<span class="cc-model-family-check" aria-hidden="true">' + (active ? '&#10003;' : '') + '</span>' +
               '</button>';
           } else {
             html += '<div class="cc-model-option cc-model-family-option cc-model-family-static">' +
-              '<span class="cc-model-family-copy"><span class="cc-model-option-label">' + esc(row.label) + '</span><span class="cc-model-family-caption">' + esc(row.caption) + '</span></span>' +
+              '<span class="cc-model-option-label">' + esc(row.label) + '</span>' +
               '<button type="button" class="cc-model-connect-link" data-connect-provider-id="' + esc(row.id) + '" aria-label="Connect ' + esc(row.label) + '">Connect</button>' +
               '</div>';
           }

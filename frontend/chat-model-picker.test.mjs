@@ -77,10 +77,13 @@ test('a "switch provider" screen, reached only via the family stage\'s back butt
   // harnessProviderChoices), independent of what is currently connected.
   assert.match(appSource, /var COMPOSER_FAMILY_PROVIDERS = \[/);
   assert.match(appSource, /id:'managed-router', label:'Mia Router'/);
-  assert.match(appSource, /id:'anthropic', label:'Claude'/);
-  assert.match(appSource, /id:'openai-codex', label:'ChatGPT', caption:'Codex CLI'/);
-  assert.match(appSource, /id:'xai-oauth', label:'Grok', caption:'Grok CLI'/);
-  assert.match(appSource, /id:'gemini', label:'Gemini'/);
+  assert.match(appSource, /id:'openai-codex', label:'ChatGPT'/);
+  assert.match(appSource, /id:'xai-oauth', label:'Grok'/);
+  assert.match(appSource, /id:'api', label:'API'/);
+  // Claude and Gemini must NOT have rows: consumer CLI subscriptions bar
+  // third-party apps, so both connect through the generic API row.
+  assert.doesNotMatch(appSource, /label:'Claude'|label:'Gemini'/);
+  assert.doesNotMatch(appSource, /cc-model-family-caption/);
 
   // The default popover is unchanged: the ordinary family stage (grouped by
   // connected model family) still renders first, exactly as before this
