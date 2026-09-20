@@ -32,6 +32,16 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
 - Beta: DeepSeek V4.1 Flash only (cheapest reasoning model, ~$0.15/M in, $0.60/M out).
 - Future: add model tiers (free tier = Flash, paid tier = unlocks Claude/GPT).
 
+## Todo — approved, not started
+
+- **Model family picker: provider list on back.** In the composer's model
+  popover, tapping back from "Choose a model family" shows every provider
+  from initial setup (Mia Router, Claude, ChatGPT/Codex, Grok, Gemini) as
+  rows: connected ones selectable (active row tinted with a check),
+  unconnected ones showing a "Connect" pill that jumps into the same connect
+  flow setup uses, then returns to the picker. Low-fi approved 2026-09-19;
+  needs more design work before building.
+
 ## Roadmap — P3 (future, not scheduled)
 
 Sourced from a Sept 2026 competitive scan of Meta's Muse agent and Alexandr
