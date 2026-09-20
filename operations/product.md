@@ -53,6 +53,13 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
   is UX inspiration, not a dependency. Known cost: bundled models add
   ~100MB+ and need per-platform native builds.
 
+## Roadmap — P2 (approved, after P1)
+
+- **Sidebar tool pins: icons and logic pass.** Revisit the pinned-tool
+  glyphs (e.g. a "your bots" reading for the bot pin instead of the
+  create-a-bot robot) and the open/close logic of the tools they trigger,
+  so every pin reads clearly and toggles predictably.
+
 ## Roadmap — P3 (future, not scheduled)
 
 Sourced from a Sept 2026 competitive scan of Meta's Muse agent and Alexandr
