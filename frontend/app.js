@@ -8829,8 +8829,15 @@
       chatRoster.selectedAgentId = null;
       if(chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents') chatInfo.open = false;
     }
-    if(document.body.classList.contains('browser-collab-mode')) chatInfo.open = false;
-    else if(STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && chatInfoOpenPreference();
+    // Browser mode replaces the ordinary docked info pane with the fixed
+    // collaboration pane — but the overlay modes (bot editor, Bot Store,
+    // automation detail) render as fixed right-hand drawers ABOVE the
+    // browser, so closing them here tore the editor down the moment
+    // openProfile re-rendered this header after opening it.
+    var collabMode = document.body.classList.contains('browser-collab-mode');
+    var collabOverlayMode = chatInfo.mode === 'agent-edit' || chatInfo.mode === 'bot-store' || chatInfo.mode === 'automation-detail';
+    if(collabMode && !collabOverlayMode) chatInfo.open = false;
+    else if(!collabMode && STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && chatInfoOpenPreference();
     if(STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && !isInfoPaneAvailable()) chatInfo.open = false;
     syncSidebarToolButtons();
     // Official channels use a square initials mark. The owner's personal avatar
