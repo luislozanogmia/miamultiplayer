@@ -36,6 +36,14 @@ restart, and live verification remain explicit delivery steps.
 Old deploys are kept as zips next to the app folder on the VM, not as live
 directories — one running version, one rollback archive.
 
+## PRs that change UI need screenshots
+
+A PR description is not enough on its own when the change is visible. If a
+PR touches UI, its description must include screenshots (or short clips) of
+the tested UI states, captured from the actually-running app — not mockups,
+not the design file. Before/after where relevant, so a reviewer can see the
+change without pulling the branch and clicking through it themselves.
+
 ## Logs
 
 `product.md` (this folder) is the single running product log — what shipped
