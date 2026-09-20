@@ -9,8 +9,10 @@ const {
   MIN_NATIVE_DISPATCH_TIMEOUT_MS,
   MAX_NATIVE_DISPATCH_TIMEOUT_MS,
   NATIVE_DISPATCH_TIMEOUT_CODE,
+  NATIVE_DISPATCH_TOKEN_BUDGET_CODE,
   nativeDispatchTimeoutMs,
   createNativeDispatchWatchdog,
+  createNativeDispatchTokenBudgetTracker,
 } = require('./native-dispatch-runtime.js');
 
 test('native dispatch timeout configuration is bounded and defaults safely', () => {
@@ -41,6 +43,44 @@ test('native dispatch watchdog reports a timeout once and can be cancelled', asy
   assert.equal(cancelledWatchdog.timedOut, false);
   assert.equal(cancelled, false);
   watchdog.cancel();
+});
+
+test('native dispatch token budget tracker fires once, at the char threshold, and stays fail-open below it', () => {
+  let exceeded = null;
+  const tracker = createNativeDispatchTokenBudgetTracker({
+    charBudget: 10,
+    onExceeded: (error) => { exceeded = error; },
+  });
+  tracker.record('12345');
+  assert.equal(tracker.exceeded, false);
+  assert.equal(exceeded, null);
+  tracker.record('67890');
+  assert.equal(tracker.total, 10);
+  assert.equal(tracker.exceeded, true);
+  assert.equal(exceeded.code, NATIVE_DISPATCH_TOKEN_BUDGET_CODE);
+  assert.match(exceeded.message, /exceeded its output budget \(10 characters\)/);
+
+  // Firing is one-shot: further records neither re-invoke onExceeded nor
+  // throw, matching the watchdog's cancel-once posture above.
+  exceeded = null;
+  tracker.record('more text');
+  assert.equal(exceeded, null);
+
+  assert.throws(() => createNativeDispatchTokenBudgetTracker({ charBudget: 0, onExceeded: () => {} }), TypeError);
+  assert.throws(() => createNativeDispatchTokenBudgetTracker({ charBudget: 10 }), TypeError);
+});
+
+test('native dispatch execution wires the token budget into the same abort path as the timeout', () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function executeNativeConversationDispatch(');
+  const end = source.indexOf('\nfunction recoverNativeConversationDispatches(', start);
+  const execution = source.slice(start, end);
+  assert.match(execution, /createNativeDispatchTokenBudgetTracker\(/);
+  assert.match(execution, /budgetError = error/);
+  assert.match(execution, /abortController\.abort\(\)/);
+  assert.match(execution, /if \(budgetError\) throw budgetError/);
+  assert.match(execution, /NATIVE_DISPATCH_TOKEN_BUDGET_CODE/);
+  assert.match(execution, /runNativeConversationAgentReply\(claimed\.dispatch, abortController\.signal, budgetTracker\)/);
 });
 
 test('native dispatch execution wires timeout into durable recovery', () => {

@@ -108,7 +108,35 @@ function googleWorkspaceMcpConfig() {
   ];
 }
 
-function runtimeProfileConfig({ toolsets, maxTurns, terminal, googleWorkspace = false }) {
+// Hermes' background_review auxiliary (agent/background_review.py) forks a
+// second LLM call after every turn to self-improve memory/skills. It reads
+// auxiliary.background_review.enabled from whichever config.yaml is active
+// for the live session — and Hermes scopes HERMES_HOME to the session's
+// profile directory for the turn's whole lifetime (tui_gateway sets a
+// context-local override per profile, and the background-review thread
+// explicitly carries that context via propagate_context_to_thread), so a
+// per-profile config.yaml value is a real per-target switch, not a hack.
+// Mia never configured this key before, so every profile silently ran
+// Hermes' fail-open default (enabled). MIAOS_BACKGROUND_REVIEW selects the
+// policy: 'gateway' (default) keeps it on for Mia's own gateway/agent
+// profiles and off for the bounded bot-worker profile; 'all' keeps it on
+// everywhere; 'off' disables it everywhere.
+function backgroundReviewMode() {
+  const raw = String(process.env.MIAOS_BACKGROUND_REVIEW || '').trim().toLowerCase();
+  return raw === 'all' || raw === 'off' ? raw : 'gateway';
+}
+
+function backgroundReviewEnabledForGateway() {
+  return backgroundReviewMode() !== 'off';
+}
+
+function backgroundReviewEnabledForBot() {
+  return backgroundReviewMode() === 'all';
+}
+
+function runtimeProfileConfig({
+  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview,
+}) {
   const lines = [
     MANAGED_MARKER,
     // No model block on purpose: every dispatch pins the user's connected
@@ -129,6 +157,9 @@ function runtimeProfileConfig({ toolsets, maxTurns, terminal, googleWorkspace = 
     '  sources: []',
     '  onepassword:',
     '    enabled: false',
+    'auxiliary:',
+    '  background_review:',
+    `    enabled: ${backgroundReview === true ? 'true' : 'false'}`,
   ];
   if (terminal && terminal.cwd) {
     lines.push(
@@ -157,11 +188,15 @@ function writeAtomic(file, value, mode = 0o600) {
   }
 }
 
-function provisionRuntimeProfile({ profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false }) {
+function provisionRuntimeProfile({
+  profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview,
+}) {
   const profileDir = path.join(profilesRoot, profile);
   const configPath = path.join(profileDir, 'config.yaml');
   const envPath = path.join(profileDir, '.env');
-  const next = runtimeProfileConfig({ toolsets, maxTurns, terminal, googleWorkspace });
+  const next = runtimeProfileConfig({
+    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview,
+  });
   let existing = '';
   try { existing = fs.readFileSync(configPath, 'utf8'); } catch (error) {
     if (error.code !== 'ENOENT') throw error;
@@ -228,6 +263,7 @@ function provisionHermesBotProfile({
     // Google Workspace tools. The owner connection mediates credentials;
     // raw tokens and delete/clear/trash operations are never exposed.
     googleWorkspace: true,
+    backgroundReview: backgroundReviewEnabledForBot(),
   });
 }
 
@@ -251,6 +287,7 @@ function provisionHermesAgentProfile({
     toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : FULL_AGENT_TOOLSETS,
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal,
+    backgroundReview: backgroundReviewEnabledForGateway(),
   });
 }
 
@@ -271,6 +308,7 @@ function provisionHermesGoogleAgentProfile({
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal,
     googleWorkspace: true,
+    backgroundReview: backgroundReviewEnabledForGateway(),
   });
 }
 
@@ -293,6 +331,9 @@ module.exports = {
   SEARCH_ONLY_TOOLSETS,
   GOOGLE_WORKSPACE_MCP_TOOLS,
   SHELL_GUARD,
+  backgroundReviewMode,
+  backgroundReviewEnabledForGateway,
+  backgroundReviewEnabledForBot,
   runtimeProfileConfig,
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,
