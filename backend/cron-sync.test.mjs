@@ -539,6 +539,53 @@ test('a failed scheduled run produces one safe user-facing model connection erro
   appDb.close();
 });
 
+test('a failure claimed while a successful run was executing does not mask its deliverable', () => {
+  const Database = require('better-sqlite3');
+  const state = new Database(stateDbFile);
+  state.exec('DELETE FROM messages; DELETE FROM sessions;');
+  // Success ran 14:59:30 → 15:04:12; a scheduled fire failed at 15:00:47
+  // (mid-run). The success ended later, so it must win.
+  state.prepare('INSERT INTO sessions (id, source, started_at, ended_at, end_reason) VALUES (?, ?, ?, ?, ?)')
+    .run('cron_job-overlap_success', 'cron', '2026-09-20T14:59:30-06:00', '2026-09-20T15:04:12-06:00', 'cron_complete');
+  state.prepare('INSERT INTO messages (session_id, role, content, active) VALUES (?, ?, ?, 1)')
+    .run('cron_job-overlap_success', 'assistant', 'Overlap-surviving result');
+  state.close();
+  setExecutions([{
+    id: 'execution-mid-run', job_id: 'job-overlap', status: 'failed',
+    claimed_at: '2026-09-20T15:00:47-06:00', started_at: '2026-09-20T15:00:47-06:00',
+    finished_at: '2026-09-20T15:00:48-06:00', error: 'Restart-safe cron worker dispatch failed: boom',
+  }]);
+
+  const appDb = require('./db').openDb(':memory:');
+  const bot = { id: 'bot-overlap', name: 'Overlap', kind: 'bot', hermesCronJobId: 'job-overlap', automation: { prompt: 'Run it.' } };
+  require('./db').saveOne(appDb, 'bots', bot.id, bot);
+
+  const scan = cronSync.listUndeliveredBotCronResults(appDb);
+  assert.equal(scan.length, 1);
+  assert.equal(scan[0].sessionId, 'cron_job-overlap_success');
+  assert.equal(scan[0].content, 'Overlap-surviving result');
+  appDb.close();
+});
+
+test('a lost fire claim is scheduler-internal and never surfaces as a failed run', () => {
+  const Database = require('better-sqlite3');
+  const state = new Database(stateDbFile);
+  state.exec('DELETE FROM messages; DELETE FROM sessions;');
+  state.close();
+  setExecutions([{
+    id: 'execution-claim-lost', job_id: 'job-claim', status: 'failed',
+    claimed_at: '2026-09-20T15:00:47-06:00', started_at: null,
+    finished_at: '2026-09-20T15:00:47-06:00', error: 'Fire claim lost; execution was not started.',
+  }]);
+
+  const appDb = require('./db').openDb(':memory:');
+  const bot = { id: 'bot-claim', name: 'Claimant', kind: 'bot', hermesCronJobId: 'job-claim', automation: { prompt: 'Run it.' } };
+  require('./db').saveOne(appDb, 'bots', bot.id, bot);
+
+  assert.deepEqual(cronSync.listUndeliveredBotCronResults(appDb), []);
+  appDb.close();
+});
+
 test('active automation runs use Hermes execution liveness and retain their delivery conversation', () => {
   setJobs([{
     id: 'job-live',
