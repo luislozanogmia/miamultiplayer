@@ -5877,6 +5877,9 @@
       var time = String(values.time || '').trim();
       if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('Choose a valid time.');
       automation.time = time;
+      // Without a stored offset the backend assumes the legacy UTC-6 server
+      // deployment, which misfires on a local scheduler running on wall time.
+      if(!Number.isInteger(automation.utcOffsetMinutes)) automation.utcOffsetMinutes = new Date().getTimezoneOffset();
     }
     if(frequency === 'weekly'){
       var weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
