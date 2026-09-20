@@ -1484,6 +1484,29 @@
     name.textContent = displayNameForEmail(currentUser);
     email.textContent = currentUserLocalProfile ? 'Local profile · no email required' : (currentAccountEmail || currentUser);
   }
+  // Only the Electron shell can register a protocol handler — degrade
+  // honestly on the web build (and any older shell without the bridge) by
+  // keeping the row hidden instead of offering a control that can't work.
+  function renderSettingsDefaultBrowserState(state){
+    var row = el('#settingsDefaultBrowserRow');
+    var note = el('#settingsDefaultBrowserNote');
+    var btn = el('#settingsDefaultBrowserBtn');
+    if(!row) return;
+    if(!window.miaDesktop || !window.miaDesktop.defaultBrowser){ row.hidden = true; return; }
+    row.hidden = false;
+    var isDefault = !!(state && state.http && state.https);
+    if(note) note.textContent = isDefault
+      ? 'Mia is your default browser for http and https links.'
+      : 'Open http and https links in Mia.';
+    if(btn) btn.textContent = isDefault ? 'Mia is your default browser' : 'Make Mia your default browser';
+    if(btn) btn.disabled = isDefault;
+  }
+  function loadSettingsDefaultBrowserState(){
+    var row = el('#settingsDefaultBrowserRow');
+    if(!row) return;
+    if(!window.miaDesktop || !window.miaDesktop.defaultBrowser){ row.hidden = true; return; }
+    Promise.resolve(window.miaDesktop.defaultBrowser.get()).then(renderSettingsDefaultBrowserState).catch(function(){ row.hidden = true; });
+  }
   function openSettingsDrawer(pane){
     // Same constraint as openHarnessOnboarding: the native browser view
     // covers HTML overlays, so close its panel before showing the sheet.
@@ -1494,6 +1517,7 @@
     renderSettingsAccount();
     loadSettings();
     loadHarnessConnectionStatus();
+    loadSettingsDefaultBrowserState();
   }
   function closeSettingsDrawer(){
     el('#settingsOverlay').classList.remove('open');
@@ -2028,6 +2052,36 @@
   });
   var settingsCleanSlate = el('#settingsCleanSlate');
   if(settingsCleanSlate) settingsCleanSlate.addEventListener('click', cleanSlateSoloWorkspace);
+  var settingsDefaultBrowserBtn = el('#settingsDefaultBrowserBtn');
+  if(settingsDefaultBrowserBtn) settingsDefaultBrowserBtn.addEventListener('click', function(){
+    settingsDefaultBrowserBtn.disabled = true;
+    Promise.resolve(window.miaDesktop.defaultBrowser.set()).then(function(state){
+      renderSettingsDefaultBrowserState(state);
+    }).catch(function(){
+      var note = el('#settingsDefaultBrowserNote');
+      if(note) note.textContent = 'Could not set Mia as your default browser.';
+    }).then(function(){
+      settingsDefaultBrowserBtn.disabled = false;
+    });
+  });
+  // Feedback goes out through the user's own mail client — no backend, no
+  // credentials. The Electron shell only opens this exact mailto address.
+  var FEEDBACK_EMAIL = 'luislozanog86@gmail.com';
+  var settingsFeedbackSend = el('#settingsFeedbackSend');
+  if(settingsFeedbackSend) settingsFeedbackSend.addEventListener('click', function(){
+    var box = el('#settingsFeedbackText');
+    var text = box && box.value ? box.value.trim() : '';
+    if(!text){ if(box) box.focus(); return; }
+    var url = 'mailto:' + FEEDBACK_EMAIL +
+      '?subject=' + encodeURIComponent('Mia feedback') +
+      '&body=' + encodeURIComponent(text);
+    window.open(url);
+    var note = el('#settingsFeedbackSent');
+    if(note){
+      note.classList.add('visible');
+      setTimeout(function(){ note.classList.remove('visible'); }, 4000);
+    }
+  });
 
   function saveGuardrails(){
     var providers = ['anthropic'];
@@ -2956,6 +3010,16 @@
   var editState = {agentId:null, isBuiltin:false, instructions:'', model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
     testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
   var styledAgentModelPicker = {stage:'family', familyKey:''};
+  // Whichever element opened the bot editor (an avatar/mote click, most
+  // often) — restored on close so Escape/close never strands keyboard
+  // focus at document.body, especially over the browser overlay where
+  // there's no other obvious tab stop to land on.
+  var agentEditFocusReturn = null;
+  function returnAgentEditFocus(){
+    var target = agentEditFocusReturn;
+    agentEditFocusReturn = null;
+    if(target && document.contains(target) && typeof target.focus === 'function') target.focus();
+  }
   // Bench-detail header department selector: unlike cinema/editState, this one has no
   // separate "save" step — each toggle PUTs immediately (see the bindDeptDropdown call
   // near the bottom of this file). agentId here is the *card* id (openBenchDetail's id
@@ -3398,6 +3462,7 @@
       var infoPane = el('#chatInfoPane');
       if(infoPane){ infoPane.classList.remove('open', 'agent-edit-open'); infoPane.innerHTML = ''; }
       syncSidebarToolButtons();
+      returnAgentEditFocus();
     }
     clearCinemaTimers();
     clearTimeout(cinema.nameSuggestTimer);
@@ -8123,6 +8188,7 @@
     chatInfo.open = false;
     renderChatInfoPane();
     syncSidebarToolButtons();
+    returnAgentEditFocus();
   }
 
   function openManageAgentsPane(){
@@ -11738,6 +11804,16 @@
       var profileRef = target.getAttribute('data-agent-profile-id');
       var profileName = target.getAttribute('data-agent-profile-name');
       var agent = resolveAgent(profileRef, profileName);
+      agentEditFocusReturn = target;
+      // Opening the editor from the browser's "Your bots" drawer is a
+      // destination choice like picking a chat, so tuck the drawer away —
+      // otherwise it sits on top of the browser next to the editor it just
+      // opened, covering the page for no reason.
+      if(document.body.classList.contains('browser-sidebar-open')){
+        document.body.classList.remove('browser-sidebar-open');
+        var sidebarBtn = el('#localBrowserSidebarBtn');
+        if(sidebarBtn){ sidebarBtn.setAttribute('aria-expanded', 'false'); sidebarBtn.setAttribute('aria-label', 'Open your bots'); }
+      }
       if(agent){
         closeChatThread();
         closeChatTasksPanel();

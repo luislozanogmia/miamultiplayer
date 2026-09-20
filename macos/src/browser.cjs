@@ -1300,6 +1300,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   window.webContents.on("did-start-loading", () => { visible = false; panelOpen = false; layout(); });
   window.webContents.on("zoom-changed", requestLayout);
   window.on("resize", requestLayout);
+  // Cmd-tabbing away and back leaves OS keyboard focus on the window chrome,
+  // not the embedded page, so arrows/scroll do nothing until the user clicks
+  // the page. Refocus the active tab on window focus, but only when the
+  // browser pane is actually visible (`visible` is what layout() uses to
+  // decide whether a tab's view is shown) — otherwise this would steal focus
+  // from the chat composer into a hidden webview, a regression. There is no
+  // tracked "URL bar is focused" state in this process (focusLocation() just
+  // posts an IPC message to the renderer for it to focus the input), so we
+  // cannot guard against stealing focus from an in-progress URL edit here.
+  window.on("focus", () => {
+    if (disposed || !visible) return;
+    focusTabWebContents(active());
+  });
   window.once("closed", () => {
     persistTabs();
     disposed = true;

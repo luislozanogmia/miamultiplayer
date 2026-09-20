@@ -558,6 +558,26 @@ test("switching tabs and creating a new active tab moves keyboard focus into the
   assert.equal(second.activeId, 2);
 });
 
+test("regaining window focus refocuses the active tab only while the browser pane is visible", () => {
+  const h = harness();
+  h.command("new");
+  assert.equal(h.views[0].webContents.focusCalls, 1, "creating the tab focuses it once");
+
+  // Pane hidden (e.g. chat is showing): cmd-tabbing back must not steal focus
+  // from the composer into a hidden webview.
+  h.command("layout", { visible: false, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  h.window.emit("focus");
+  assert.equal(h.views[0].webContents.focusCalls, 1, "window focus with the pane hidden leaves the tab untouched");
+
+  // Pane visible: cmd-tabbing back should return keyboard focus to the page.
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  h.window.emit("focus");
+  assert.equal(h.views[0].webContents.focusCalls, 2, "window focus with the pane visible refocuses the active tab");
+
+  h.window.emit("focus");
+  assert.equal(h.views[0].webContents.focusCalls, 3, "repeated window focus keeps refocusing the visible active tab");
+});
+
 test("selecting a tab whose webContents is already destroyed never throws", () => {
   const h = harness();
   const first = h.command("new");
