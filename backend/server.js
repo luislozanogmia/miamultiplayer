@@ -4147,6 +4147,48 @@ app.get('/api/automations/active', requireAuth, (req, res) => {
   res.status(200).json({ runs: visible });
 });
 
+// Bot Store: read-only catalog of predefined bots the user can install with
+// one click. Served straight from the repo's bots-catalog/ folder — no DB
+// table, nothing writable through these routes. Installing a bot goes through
+// the existing POST /api/bots create path (see frontend), not through here.
+// Registered before the generic bot resource below (fixed multi-segment
+// /api/bots routes precede it, same as /api/bots/examples above) so
+// registerResource's GET /api/bots/:id cannot shadow 'catalog' as an id.
+const BOTS_CATALOG_DIR = path.join(__dirname, '..', 'bots-catalog');
+const BOTS_CATALOG_INDEX_PATH = path.join(BOTS_CATALOG_DIR, 'catalog.json');
+const BOTS_CATALOG_MANIFEST_DIR = path.join(BOTS_CATALOG_DIR, 'bots');
+const BOT_CATALOG_ID_RE = /^[a-z0-9-]+$/;
+
+function readCatalogJsonFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    console.error('bot catalog read failed', filePath, error.message);
+    return null;
+  }
+}
+
+app.get('/api/bots/catalog', requireAuth, (req, res) => {
+  const index = readCatalogJsonFile(BOTS_CATALOG_INDEX_PATH);
+  if (!index) return res.status(404).json({ error: 'catalog_unavailable' });
+  res.status(200).json(index);
+});
+
+app.get('/api/bots/catalog/:id', requireAuth, (req, res) => {
+  const id = String(req.params.id || '');
+  if (!BOT_CATALOG_ID_RE.test(id)) return res.status(404).json({ error: 'not_found' });
+  const manifestPath = path.join(BOTS_CATALOG_MANIFEST_DIR, `${id}.json`);
+  // Defense in depth against path traversal even though the id regex above
+  // already excludes '/', '.', and any other path-breaking characters.
+  if (path.dirname(manifestPath) !== BOTS_CATALOG_MANIFEST_DIR) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  const manifest = readCatalogJsonFile(manifestPath);
+  if (!manifest) return res.status(404).json({ error: 'not_found' });
+  res.status(200).json(manifest);
+});
+
 // Registered after fixed multi-segment /api/bots routes so :id cannot shadow them.
 registerResource({
   path: 'bots',

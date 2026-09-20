@@ -2401,6 +2401,24 @@
   body.styled-skin .chat-info-pane.plugins-open .styled-connector-actions .styled-connector-add,
   body.styled-skin .chat-info-pane.plugins-open .styled-connector-actions .styled-connector-action{margin-left:0;}
 
+  body.styled-skin .chat-info-pane.bot-store-open .bot-store-body{display:flex;flex:1;min-height:0;flex-direction:column;padding:14px 16px 24px;overflow-y:auto;overflow-x:visible;}
+  body.styled-skin .bot-store-status{padding:24px 4px;font:400 12.5px/17px var(--styled-sans);color:var(--sand-text-secondary);text-align:center;}
+  body.styled-skin .bot-store-status.bot-store-error{color:var(--sand-text-danger);}
+  body.styled-skin .bot-store-list{display:flex;flex-direction:column;gap:10px;min-width:0;}
+  body.styled-skin .bot-store-card{display:flex;align-items:flex-start;gap:11px;min-width:0;padding:12px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-bg-base);}
+  body.styled-skin .bot-store-card-avatar{flex:0 0 40px;width:40px;height:40px;display:flex;align-items:center;justify-content:center;}
+  body.styled-skin .bot-store-card-body{display:flex;min-width:0;flex:1;flex-direction:column;gap:3px;}
+  body.styled-skin .bot-store-card-head{display:flex;align-items:baseline;gap:6px;min-width:0;}
+  body.styled-skin .bot-store-card-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 13.5px/18px var(--styled-sans);color:var(--sand-text-primary);}
+  body.styled-skin .bot-store-card-version{flex:0 0 auto;font:400 10.5px/14px var(--styled-sans);color:var(--sand-text-tertiary);}
+  body.styled-skin .bot-store-card-tagline{font:400 12px/17px var(--styled-sans);color:var(--sand-text-secondary);}
+  body.styled-skin .bot-store-card-meta{display:flex;align-items:center;gap:6px;font:500 10.5px/14px var(--styled-sans);color:var(--sand-text-tertiary);text-transform:capitalize;}
+  body.styled-skin .bot-store-card-requires{margin-top:2px;font:400 10.5px/14px var(--styled-sans);color:var(--sand-text-tertiary);}
+  body.styled-skin .bot-store-card-install{align-self:flex-start;flex:0 0 auto;appearance:none;height:28px;padding:0 12px;border:0;border-radius:8px;background:var(--sand-fill-primary);color:var(--sand-text-on-primary);font:500 12px/16px var(--styled-sans);cursor:pointer;}
+  body.styled-skin .bot-store-card-install:hover{background:var(--sand-fill-primary-hover);}
+  body.styled-skin .bot-store-card-install:disabled{opacity:.6;cursor:default;}
+  body.styled-skin .bot-store-card-installed{align-self:flex-start;flex:0 0 auto;padding:4px 10px;border-radius:8px;background:var(--sand-fill-secondary);color:var(--sand-text-secondary);font:500 11.5px/16px var(--styled-sans);}
+
   /* Shared connector catalog, in the sidebar pane and the standalone route. */
   .styled-integrations-shell .hermes-catalog-intro h2{margin:0;font-size:16px;line-height:22px;font-weight:600;}
   .styled-integrations-shell .hermes-catalog-intro p{margin:6px 0 0;font-size:12px;line-height:18px;color:#666;}
@@ -2533,6 +2551,11 @@
      conversation still has an explicit thread, let its thread panel open over
      that same pane instead of leaving the click with a hidden target. */
   body.browser-collab-mode .chat-thread-panel:not([hidden]){display:flex!important;position:fixed!important;inset:0 0 0 auto!important;width:var(--browser-mia-pane-width)!important;max-width:var(--browser-mia-pane-width);height:100vh;z-index:122;background:var(--sand-bg-base);border-left:1px solid var(--sand-border-default);}
+  /* Bot Store stays reachable from the tools menu in browser-collab-mode,
+     the same way the new-bot chat flow stays reachable there — surfaced
+     over the fixed collaboration pane instead of being hidden with the rest
+     of .chat-info-pane. */
+  body.browser-collab-mode .chat-info-pane.bot-store-open{display:flex!important;position:fixed!important;inset:0 0 0 auto!important;width:var(--browser-mia-pane-width)!important;max-width:var(--browser-mia-pane-width);height:100vh;z-index:122;background:var(--sand-bg-base);border-left:1px solid var(--sand-border-default);}
   /* The right-hand collaboration pane is intentionally dense. The normal
      direct-chat rhythm reserves 28% for breathing room, which leaves a long
      Mia reply stranded in a narrow bubble at this width. Keep only a 5% edge

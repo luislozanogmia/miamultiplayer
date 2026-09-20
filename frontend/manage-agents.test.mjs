@@ -776,7 +776,9 @@ test('opening the browser keeps the chat pane pinned to whatever room is already
 
 test('creating a bot from the tools menu does not close browser mode, but every other tools action still does', async () => {
   const source = await readFile(appUrl, 'utf8');
-  assert.match(source, /function runToolsAction\(action\)\{\s*(?:\/\/[^\n]*\n\s*)*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot'\) closeLocalBrowser\(\);/);
+  // Bot store joins new-bot in this exception: it renders into the same
+  // side chat pane too, so opening it shouldn't kill browser mode either.
+  assert.match(source, /function runToolsAction\(action\)\{\s*(?:\/\/[^\n]*\n\s*)*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
 });
 
 test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {
