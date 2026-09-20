@@ -43,6 +43,16 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
   stays API-key-only — neither Anthropic nor Google permits third-party
   apps like Mia to ride their consumer CLI subscriptions.
 
+## Roadmap — P1 (approved, not started)
+
+- **Hold-to-talk dictation (whisper.cpp, MIT).** Muse-style "hold a key and
+  talk" voice input. Engine: whisper.cpp via `nodejs-whisper` (both MIT, as
+  are OpenAI's Whisper weights — clean license chain, attribution via a
+  NOTICE file only). UX built in-house in Electron (`globalShortcut` +
+  hold/release), cross-platform; OpenSuperWhisper (MIT, Swift/macOS-only)
+  is UX inspiration, not a dependency. Known cost: bundled models add
+  ~100MB+ and need per-platform native builds.
+
 ## Roadmap — P3 (future, not scheduled)
 
 Sourced from a Sept 2026 competitive scan of Meta's Muse agent and Alexandr
