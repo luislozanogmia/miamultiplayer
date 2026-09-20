@@ -34,13 +34,13 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
 
 ## Todo — approved, not started
 
-- **Model family picker: provider list on back.** In the composer's model
-  popover, tapping back from "Choose a model family" shows every provider
-  from initial setup (Mia Router, Claude, ChatGPT/Codex, Grok, Gemini) as
-  rows: connected ones selectable (active row tinted with a check),
-  unconnected ones showing a "Connect" pill that jumps into the same connect
-  flow setup uses, then returns to the picker. Low-fi approved 2026-09-19;
-  needs more design work before building.
+- **Model family picker: provider list on back.** DONE 2026-09-19. The
+  back screen lists all five setup providers; connected rows selectable,
+  unconnected rows get a Connect pill into the real setup flow. Caveat:
+  Claude and Gemini have no CLI-subscription harness today (only
+  openai-codex and xai-oauth exist), so their Connect goes through the
+  generic API-key card, captioned honestly. Open product decision: add
+  real Claude Code / Gemini CLI harnesses.
 
 ## Roadmap — P3 (future, not scheduled)
 
