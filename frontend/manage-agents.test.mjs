@@ -29,11 +29,24 @@ test('header keeps developer, people, and tools controls in the requested order'
 
 test('tools menu owns the existing creation and utility actions once', async () => {
   const [html, source] = await Promise.all([readFile(htmlUrl, 'utf8'), readFile(appUrl, 'utf8')]);
-  for (const action of ['new-chat', 'new-bot', 'new-agent', 'new-channel', 'connected-apps', 'web-browser']) {
+  for (const action of ['new-chat', 'new-bot', 'new-agent', 'new-channel', 'bot-store', 'automations', 'connected-apps', 'web-browser']) {
     assert.equal((html.match(new RegExp(`data-tools-action="${action}"`, 'g')) || []).length, 1, `${action} appears once`);
   }
   assert.match(source, /menu\.addEventListener\('click'[\s\S]*action === 'new-chat'\) openDmCompose\(\)[\s\S]*action === 'new-bot'\) startAgentSetupChat\(\)[\s\S]*action === 'new-agent'\) openHarnessAgentSetup\(\)[\s\S]*action === 'new-channel'\) openNewChannelFlow\(\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
   assert.match(source, /function openHarnessAgentSetup\(\)[\s\S]*loadHarnessSettings\(false\)[\s\S]*openHarnessOnboarding\(settings\)/);
+});
+
+test('tools menu uses one canonical Lucide icon system', async () => {
+  const [html, styles] = await Promise.all([readFile(htmlUrl, 'utf8'), readFile(stylesUrl, 'utf8')]);
+  const start = html.indexOf('id="chatToolsMenu"');
+  const end = html.indexOf('id="chatDeveloperMenu"', start);
+  assert.ok(start >= 0 && end > start, 'tools menu markup is present');
+  const menu = html.slice(start, end);
+
+  assert.equal((menu.match(/data-tools-action=/g) || []).length, 8, 'all eight tool actions remain');
+  assert.equal((menu.match(/data-icon-set="lucide"/g) || []).length, 8, 'every tool action uses Lucide');
+  assert.doesNotMatch(menu, /<img|data-mia-mark|chat-tools-menu-mia|stroke-width=/, 'legacy and one-off icon treatments are removed');
+  assert.match(styles, /\.chat-tools-menu \.chat-new-menu-icon svg\{[^}]*width:22px;[^}]*height:22px;[^}]*stroke-width:2;/);
 });
 
 test('Web browser has one native Mia path with no iframe or localhost bridge fallback', async () => {
