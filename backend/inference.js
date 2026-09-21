@@ -619,7 +619,7 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
   const record = bot && typeof bot === 'object' ? bot : {};
   const name = String(record.name || 'Task bot').trim();
   const purpose = String(record.instructions || record.role || record.output || 'Complete the work assigned by the user.')
-    .trim().replace(/\s+/g, ' ');
+    .trim();
   const confirmedName = String(userDisplayName || '').trim();
   const userReference = confirmedName
     ? `${confirmedName}, the ${userRelationship}`

@@ -2445,6 +2445,7 @@
       agentId: a.builtin === true ? a.id : null,
       updatedAt: a.updatedAt, createdAt: a.createdAt,
       runs: '—', last: 'never run', instructions: a.instructions,
+      instructionsRevision: a.instructionsRevision,
       departments: departments, avatarColor: normalizeAgentAvatarColor(a.avatarColor)
     };
   }
@@ -2794,17 +2795,15 @@
     var id = benchOpenId;
     var a = findBenchAgent(id);
     var name = input.value.trim();
-    var instructions = a ? String(a.instructions || '').trim() : '';
     var targetId = a && (a.isBuiltin ? a.agentId : a.id);
     // Empty or unchanged values revert silently.
-    if(!a || !name || name === a.name || !instructions || !targetId){
+    if(!a || !name || name === a.name || !targetId){
       cancelBenchDetailNameEdit();
       return;
     }
-    // Same body shape saveEditCinema PUTs (name + instructions + model +
-    // departments) — the resource's PUT doesn't currently enforce it, but
-    // matching the edit cinema's contract keeps every rename path uniform.
-    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, model: a.model, departments: agentDepartments(a)}}).then(function(res){
+    // Renaming does not write instructions: AGENTS.md remains authoritative
+    // even if it was edited directly since this card was loaded.
+    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, model: a.model, departments: agentDepartments(a)}}).then(function(res){
       if(res.status === 200 && benchOpenId === id){
         loadBenchAgents().then(function(){ openBenchDetail(id); });
       } else {
@@ -3073,7 +3072,7 @@
   var cinema = {mode:'idle', prompt:'', name:'', modelIx:0, departments:[], departmentsTouched:false, timers:[], created:null,
     origin: 'bench', nameSuggestTimer: null, nameSuggestKey: null, buildAttempt: 0,
     buildController: null, buildTimeoutTimer: null, buildTimedOut: false, buildStatus: 'idle', buildError: ''};
-  var editState = {agentId:null, isBuiltin:false, instructions:'', model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
+  var editState = {agentId:null, isBuiltin:false, instructions:'', instructionsRevision:null, model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
     testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
   var styledAgentModelPicker = {stage:'family', familyKey:''};
   // Whichever element opened the bot editor (an avatar/mote click, most
@@ -3491,7 +3490,7 @@
     cinema.origin = 'bench';
     cinema.buildAttempt += 1; cinema.buildStatus = 'idle'; cinema.buildError = ''; cinema.buildTimedOut = false;
     cinema.departments = []; cinema.departmentsTouched = false;
-    editState = {agentId:null, isBuiltin:false, instructions:'', model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
+    editState = {agentId:null, isBuiltin:false, instructions:'', instructionsRevision:null, model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
       testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
     el('#benchCinemaInner').classList.remove('wide');
     if(typeof document !== 'undefined' && document.body) document.body.classList.remove('cinema-open');
@@ -3545,7 +3544,7 @@
     styledAgentModelPicker = {stage:'family', familyKey:''};
     editState = {
       agentId: id, isBuiltin: a.isBuiltin, name: a.name,
-      instructions: text, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
+      instructions: text, instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
       departments: currentDepts.length ? currentDepts.slice() : guessDepartmentsFor(text),
       avatarColor: normalizeAgentAvatarColor(a.avatarColor),
       suggestion: suggestedInstructionsFor(text), suggestDismissed: false,
@@ -3594,8 +3593,9 @@
     if(!targetId) return;
     // The styled editor no longer edits departments (a MiaOS leftover); the
     // stored value stays untouched by omitting the key from the update.
-    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, model: model, avatarColor: editState.avatarColor || null}}).then(function(res){
+    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, expectedInstructionsRevision: editState.instructionsRevision, model: model, avatarColor: editState.avatarColor || null}}).then(function(res){
       if(res.status === 200) reopenAndClose();
+      else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
     }).catch(function(){});
   }
 

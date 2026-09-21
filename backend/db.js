@@ -13,6 +13,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
+const { createBotPackageStore } = require('./bot-packages');
+
+const BOT_PACKAGE_STORES = new WeakMap();
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -188,13 +191,31 @@ CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log (at);
 const DOCUMENT_TABLES = ['trash', 'bots', 'agents', 'department_rooms', 'dm_rooms'];
 const SINGLETON_TABLES = ['settings'];
 
-function openDb(dbPath, dataDir) {
+function openDb(dbPath, dataDir, options = {}) {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.exec(SCHEMA);
   migrateSchema(db);
   migrateFromDataDir(db, dataDir);
   migrateLegacyAgentsToBots(db);
+  if (options.botPackageDir) {
+    const store = createBotPackageStore(options.botPackageDir);
+    const marker = db.prepare("SELECT value FROM meta WHERE key = 'bot_packages_v1'").get();
+    if (!marker) {
+      const records = db.prepare('SELECT json FROM bots').all().map((row) => JSON.parse(row.json));
+      for (const record of records) {
+        if (store.findDirectory(record.id)) {
+          store.hydrate(record);
+        } else {
+          const change = store.prepare(record, { writeInstructions: true });
+          change.apply();
+          change.finish();
+        }
+      }
+      db.prepare("INSERT INTO meta (key, value) VALUES ('bot_packages_v1', ?)").run(new Date().toISOString());
+    }
+    BOT_PACKAGE_STORES.set(db, store);
+  }
   // The database contains password hashes, live sessions, connector state,
   // and user records. Keep it private even when the caller's umask would
   // otherwise create regular files as world-readable (commonly 0644).
@@ -321,30 +342,60 @@ function assertDocumentTable(table) {
 
 function loadAll(db, table) {
   assertDocumentTable(table);
-  return db
+  const records = db
     .prepare(`SELECT json FROM ${table}`)
     .all()
     .map((row) => JSON.parse(row.json));
+  const store = table === 'bots' ? BOT_PACKAGE_STORES.get(db) : null;
+  if (!store) return records;
+  return records.map((record) => store.hydrate(record));
 }
 
 function loadOne(db, table, id) {
   assertDocumentTable(table);
   const row = db.prepare(`SELECT json FROM ${table} WHERE id = ?`).get(id);
-  return row ? JSON.parse(row.json) : null;
+  const record = row ? JSON.parse(row.json) : null;
+  const store = table === 'bots' ? BOT_PACKAGE_STORES.get(db) : null;
+  return record && store ? store.hydrate(record) : record;
 }
 
-function saveOne(db, table, id, record) {
+function cleanDocumentRecord(record) {
+  const clean = { ...record };
+  delete clean.instructionsRevision;
+  delete clean.expectedInstructionsRevision;
+  return clean;
+}
+
+function saveOne(db, table, id, record, options = {}) {
   assertDocumentTable(table);
-  db.prepare(
-    `INSERT INTO ${table} (id, json) VALUES (@id, @json)
-     ON CONFLICT(id) DO UPDATE SET json = excluded.json`
-  ).run({ id, json: JSON.stringify(record) });
+  const store = table === 'bots' ? BOT_PACKAGE_STORES.get(db) : null;
+  const change = options.botPackageChange || (store ? store.prepare(record) : null);
+  if (change) change.apply();
+  try {
+    db.prepare(
+      `INSERT INTO ${table} (id, json) VALUES (@id, @json)
+       ON CONFLICT(id) DO UPDATE SET json = excluded.json`
+    ).run({ id, json: JSON.stringify(cleanDocumentRecord(record)) });
+  } catch (error) {
+    if (change) change.rollback();
+    throw error;
+  }
+  if (change) change.finish();
 }
 
 function insertOne(db, table, id, record) {
   assertDocumentTable(table);
-  db.prepare('INSERT INTO ' + table + ' (id, json) VALUES (@id, @json)')
-    .run({ id, json: JSON.stringify(record) });
+  const store = table === 'bots' ? BOT_PACKAGE_STORES.get(db) : null;
+  const change = store ? store.prepare(record, { writeInstructions: true }) : null;
+  if (change) change.apply();
+  try {
+    db.prepare('INSERT INTO ' + table + ' (id, json) VALUES (@id, @json)')
+      .run({ id, json: JSON.stringify(cleanDocumentRecord(record)) });
+  } catch (error) {
+    if (change) change.rollback();
+    throw error;
+  }
+  if (change) change.finish();
 }
 
 // Upserts a full set of records in one transaction. Used by the CRUD factory
@@ -356,15 +407,41 @@ function saveAll(db, table, records) {
     `INSERT INTO ${table} (id, json) VALUES (@id, @json)
      ON CONFLICT(id) DO UPDATE SET json = excluded.json`
   );
-  db.transaction((rows) => {
-    for (const record of rows) upsert.run({ id: record.id, json: JSON.stringify(record) });
-  })(records);
+  const store = table === 'bots' ? BOT_PACKAGE_STORES.get(db) : null;
+  const changes = store ? records.map((record) => store.prepare(record)) : [];
+  try {
+    changes.forEach((change) => change.apply());
+    db.transaction((rows) => {
+      for (const record of rows) upsert.run({ id: record.id, json: JSON.stringify(cleanDocumentRecord(record)) });
+    })(records);
+  } catch (error) {
+    changes.slice().reverse().forEach((change) => change.rollback());
+    throw error;
+  }
+  changes.forEach((change) => change.finish());
 }
 
 function deleteOne(db, table, id) {
   assertDocumentTable(table);
-  const result = db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
-  return result.changes > 0;
+  const store = table === 'bots' ? BOT_PACKAGE_STORES.get(db) : null;
+  // A package move cannot participate in a caller-owned SQLite transaction.
+  // Keep it inactive and recoverable when deleteOne is nested; moving it here
+  // would leave a rolled-back DB row pointing at a package already in trash.
+  const change = store && !db.inTransaction ? store.prepareDelete(id) : null;
+  if (change) change.apply();
+  try {
+    const result = db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
+    if (change) change.finish();
+    return result.changes > 0;
+  } catch (error) {
+    if (change) change.rollback();
+    throw error;
+  }
+}
+
+function prepareBotPackageUpdate(db, record, options) {
+  const store = BOT_PACKAGE_STORES.get(db);
+  return store ? store.prepare(record, options) : null;
 }
 
 function moveToTrash(db, kind, record) {
@@ -1137,6 +1214,7 @@ module.exports = {
   saveOne,
   insertOne,
   saveAll,
+  prepareBotPackageUpdate,
   deleteOne,
   moveToTrash,
   loadSingleton,

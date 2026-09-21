@@ -73,6 +73,7 @@ test('the compact Mote profile editor renders and persists the agent color picke
   // carrying the deprecated Agent Bench departments field into this surface.
   assert.match(
     source,
-    /api\('\/api\/bots\/' \+ targetId, \{method:'PUT', body:\{name: name, instructions: instructions, model: model, avatarColor: editState\.avatarColor \|\| null\}\}\)/
+    /api\('\/api\/bots\/' \+ targetId, \{method:'PUT', body:\{name: name, instructions: instructions, expectedInstructionsRevision: editState\.instructionsRevision, model: model, avatarColor: editState\.avatarColor \|\| null\}\}\)/
   );
+  assert.match(source, /body:\{name: name, model: a\.model, departments: agentDepartments\(a\)\}/);
 });
