@@ -32,6 +32,7 @@
     if(!view || !state) return state;
     if(options && options.invalidatePending) nextGeneration(view);
     state.followLatest = nearBottom(view);
+    if(state.followLatest) state.newVisibleMessages = false;
     state.chatScrollTop = Number(view.scrollTop || 0);
     state.chatScrollAnchor = state.followLatest ? null : visibleAnchor(view);
     return state;
@@ -93,6 +94,7 @@
     if(!view || !state) return;
     state.followLatest = true;
     state.chatScrollAnchor = null;
+    state.newVisibleMessages = false;
     view.scrollTop = Number(view.scrollHeight || 0);
     state.chatScrollTop = view.scrollTop;
   }
@@ -104,6 +106,16 @@
     button.setAttribute('aria-hidden', hidden ? 'true' : 'false');
   }
 
+  function noteIncoming(state, options){
+    if(!state) return false;
+    options = options || {};
+    if(options.isNew && options.isVisible && !options.isStreamingDelta && state.followLatest === false){
+      state.newVisibleMessages = true;
+    }
+    return !!state.newVisibleMessages;
+  }
+
   return {BOTTOM_THRESHOLD:BOTTOM_THRESHOLD, nearBottom:nearBottom, visibleAnchor:visibleAnchor,
-    capture:capture, restore:restore, replace:replace, jumpToLatest:jumpToLatest, syncButton:syncButton};
+    capture:capture, restore:restore, replace:replace, jumpToLatest:jumpToLatest, syncButton:syncButton,
+    noteIncoming:noteIncoming};
 });

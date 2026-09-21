@@ -4589,6 +4589,9 @@
     var state = chatRoomState(event.conversationId);
     syncNativeDispatchFromEvent(event);
     var message = nativeEventToChatMessage(event);
+    var wasKnown = state.messages.some(function(existing){
+      return existing.id === message.id || (existing.pending && existing.clientIdempotencyKey && existing.clientIdempotencyKey === message.clientIdempotencyKey);
+    });
     var replaced = false;
     state.messages = state.messages.map(function(existing){
       if(existing.pending && existing.clientIdempotencyKey && existing.clientIdempotencyKey === message.clientIdempotencyKey){
@@ -4599,6 +4602,11 @@
     });
     if(!replaced && !state.messages.some(function(existing){ return existing.id === message.id; })) state.messages.push(message);
     state.messages = normalizeChatMessages(state.messages);
+    if(window.MiaChatScroll) window.MiaChatScroll.noteIncoming(state, {
+      isNew: !wasKnown,
+      isVisible: !message.threadRoot && (message.system || isHumanSender(message.sender) || !!displayBotBody(message.body) || chatMessageHasAttachments(message)),
+      isStreamingDelta: wasKnown
+    });
     // Native handoffs use the triggering human event as the thread root.
     // Opening it when the first agent event arrives replaces the old
     // thread-trigger behavior and lets the user see progress immediately.
@@ -5422,6 +5430,14 @@
     localBrowserNavigate(item.url);
   }
 
+  function browserSidebarOwnsClick(target, drawer, toggle, portaledMenu){
+    return !!target && !!(
+      (drawer && drawer.contains(target)) ||
+      (toggle && toggle.contains(target)) ||
+      (portaledMenu && portaledMenu.contains(target))
+    );
+  }
+
   (function wireLocalBrowser(){
     var form = el('#localBrowserForm');
     var input = el('#localBrowserUrl');
@@ -5527,6 +5543,18 @@
     if(sidebarClose) sidebarClose.addEventListener('click', function(){
       setBrowserSidebarOpen(false);
     });
+    document.addEventListener('click', function(event){
+      if(!document.body.classList.contains('browser-sidebar-open')) return;
+      var drawer = el('.chat-sidebar');
+      var portaledMenu = el('#chatSidebarCtxMenu');
+      if(browserSidebarOwnsClick(event.target, drawer, sidebar, portaledMenu)) return;
+      // Capture and consume the click before any underlying chat, toolbar, or
+      // restored native browser surface can act on it.
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setBrowserSidebarOpen(false);
+    }, true);
     // Picking a bot or conversation from the drawer is a destination choice:
     // collapse the drawer so the chosen chat is immediately visible. Row
     // tools (hide, dismiss, context-menu actions) keep the drawer open.
@@ -6196,7 +6224,7 @@
   }
 
   function chatRoomState(roomId){
-    if(!chatWs.byRoom[roomId]) chatWs.byRoom[roomId] = {messages: [], lastTs: 0, lastSequence: 0, polling: false, thinking: false, thinkingTimer: null, thinkingAgentName: null, selectedAgentId: null, mentionRoster: null, chatSuggestions: null, openThreadRoot: null, localWelcome: null, sidebarPreviewLoading: false, sidebarPreviewLoaded: false, sidebarAttentionPolling: false, historyCursor: null, historyLoading: false, historyComplete: false, historyInitialized: false, historyRequestId: 0, historyEdits: {}, followLatest: true, chatScrollTop: 0, chatScrollAnchor: null, chatScrollRevision: 0};
+    if(!chatWs.byRoom[roomId]) chatWs.byRoom[roomId] = {messages: [], lastTs: 0, lastSequence: 0, polling: false, thinking: false, thinkingTimer: null, thinkingAgentName: null, selectedAgentId: null, mentionRoster: null, chatSuggestions: null, openThreadRoot: null, localWelcome: null, sidebarPreviewLoading: false, sidebarPreviewLoaded: false, sidebarAttentionPolling: false, historyCursor: null, historyLoading: false, historyComplete: false, historyInitialized: false, historyRequestId: 0, historyEdits: {}, followLatest: true, newVisibleMessages: false, chatScrollTop: 0, chatScrollAnchor: null, chatScrollRevision: 0};
     return chatWs.byRoom[roomId];
   }
 
@@ -6204,6 +6232,14 @@
     var button = el('#chatJumpLatest');
     if(window.MiaChatScroll) window.MiaChatScroll.syncButton(button, thread, state);
     else if(button) button.hidden = true;
+    if(button){
+      var hasNew = !!(state && state.newVisibleMessages);
+      var label = el('.chat-jump-latest-label', button);
+      button.classList.toggle('has-new-messages', hasNew);
+      button.setAttribute('aria-label', hasNew ? 'New messages. Jump to latest message' : 'Jump to latest message');
+      button.title = hasNew ? 'New messages — jump to latest' : 'Jump to latest message';
+      if(label) label.textContent = hasNew ? 'New messages' : '';
+    }
   }
 
   function captureRenderedChatScroll(thread){
@@ -11277,12 +11313,14 @@
     function closeAbout(){
       if(aboutOverlay) aboutOverlay.classList.remove('open');
       if(aboutDialog) aboutDialog.classList.remove('open');
+      document.body.classList.remove('native-browser-occluded-about');
     }
     function openAbout(){
       if(menu) menu.classList.remove('open');
       if(account) account.setAttribute('aria-expanded', 'false');
       if(aboutOverlay) aboutOverlay.classList.add('open');
       if(aboutDialog) aboutDialog.classList.add('open');
+      document.body.classList.add('native-browser-occluded-about');
       if(aboutClose) aboutClose.focus();
     }
     if(aboutBtn) aboutBtn.addEventListener('click', openAbout);
@@ -11677,6 +11715,26 @@
     return agentId === 'all' || conversationHistoryAgentIds(conversation).indexOf(String(agentId || '')) !== -1;
   }
 
+  function conversationHistoryRowAgent(conversation, selectedAgentId){
+    var ids = conversationHistoryAgentIds(conversation);
+    if(!ids.length) return null;
+    var id = selectedAgentId !== 'all' && ids.indexOf(String(selectedAgentId || '')) !== -1 ? String(selectedAgentId) : null;
+    var state = conversation && chatWs.byRoom[conversation.id];
+    var messages = state && state.messages || [];
+    if(!id){
+      for(var index = messages.length - 1; index >= 0; index--){
+        var event = messages[index] && messages[index].nativeEvent;
+        if(event && (event.senderType === 'agent' || event.senderType === 'bot') && ids.indexOf(String(event.senderId || '')) !== -1){
+          id = String(event.senderId);
+          break;
+        }
+      }
+    }
+    id = id || ids[0];
+    var option = conversationHistoryAgentOptions().filter(function(candidate){ return candidate.id === id; })[0];
+    return {id:id, name:option && option.name || conversation.name || id};
+  }
+
   function renderConversationHistoryAgentFilter(){
     syncConversationHistoryScope();
     var button = el('#conversationHistoryAgentButton');
@@ -11743,6 +11801,7 @@
     if(actions) actions.hidden = !composing;
     if(overlay) overlay.classList.add('open');
     if(drawer) drawer.classList.add('open');
+    document.body.classList.add('native-browser-occluded-conversation');
     if(!composing) renderConversationHistory();
   }
 
@@ -11823,9 +11882,11 @@
         currentGroup = group;
         var active = conversation.id === chatWs.activeRoomId;
         var bookmarked = isChatPinned('room:' + conversation.id);
+        var rowAgent = conversationHistoryRowAgent(conversation, agentId);
         return heading + '<button type="button" class="conversation-history-row' + (active ? ' active' : '') + '" data-history-room-id="' + esc(conversation.id) + '">' +
           '<span class="conversation-history-name">' + esc(conversationHistoryLabel(conversation)) + '</span>' +
           (bookmarked ? '<svg class="conversation-history-bookmark" viewBox="0 0 24 24" aria-label="Bookmarked"><path d="M6.5 4.5h11v15l-5.5-3.5-5.5 3.5z"></path></svg>' : '') +
+          (rowAgent ? '<span class="conversation-history-row-agent" title="' + esc(rowAgent.name) + '">' + agentAvatarHtml(rowAgent.name, rowAgent.id, 26, null, null, false) + '</span>' : '') +
         '</button>';
       }).join('') : '<div class="conversation-history-empty">' + conversationHistoryEmpty(tab) + '</div>';
     }
@@ -11865,6 +11926,7 @@
     var overlay = el('#dmComposeOverlay'), drawer = el('#dmComposeDrawer');
     if(overlay) overlay.classList.remove('open');
     if(drawer) drawer.classList.remove('open');
+    document.body.classList.remove('native-browser-occluded-conversation');
   }
   function dmComposeSelectedCount(){
     return Object.keys(dmCompose.selected).length;
@@ -11945,7 +12007,11 @@
     var tabs = els('[data-conversation-tab]');
     var agentButton = el('#conversationHistoryAgentButton');
     var agentMenu = el('#conversationHistoryAgentMenu');
-    if(overlay) overlay.addEventListener('click', closeDmCompose);
+    if(overlay) overlay.addEventListener('click', function(event){
+      event.preventDefault();
+      event.stopPropagation();
+      closeDmCompose();
+    });
     if(closeBtn) closeBtn.addEventListener('click', closeDmCompose);
     if(cancelBtn) cancelBtn.addEventListener('click', closeDmCompose);
     if(createBtn) createBtn.addEventListener('click', dmComposeCreate);

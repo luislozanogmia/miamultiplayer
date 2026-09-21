@@ -97,6 +97,28 @@ test('followers stay at the latest message and the jump control resumes followin
   assert.equal(attrs['aria-hidden'], 'true');
 });
 
+test('new-message notice only tracks newly appended visible rows while scrolled up', () => {
+  const view = new FakeTimeline(layout([100, 100, 100]));
+  const state = { followLatest: true, newVisibleMessages: false };
+  view.scrollTop = 100;
+  scroll.capture(view, state);
+
+  assert.equal(scroll.noteIncoming(state, { isNew: false, isVisible: true, isStreamingDelta: true }), false, 'same-ID stream delta stays quiet');
+  assert.equal(scroll.noteIncoming(state, { isNew: true, isVisible: false, isStreamingDelta: false }), false, 'hidden/tool row stays quiet');
+  assert.equal(scroll.noteIncoming(state, { isNew: true, isVisible: true, isStreamingDelta: false }), true, 'new visible verbose row is announced');
+
+  scroll.jumpToLatest(view, state);
+  assert.equal(state.newVisibleMessages, false);
+  assert.equal(scroll.noteIncoming(state, { isNew: false, isVisible: true, isStreamingDelta: true }), false, 'later delta cannot relight after clearing');
+
+  view.scrollTop = 100;
+  scroll.capture(view, state);
+  scroll.noteIncoming(state, { isNew: true, isVisible: true, isStreamingDelta: false });
+  view.scrollTop = view.scrollHeight;
+  scroll.capture(view, state);
+  assert.equal(state.newVisibleMessages, false, 'reaching bottom clears the notice');
+});
+
 test('room switches restore independent anchors instead of sharing one scroll position', () => {
   const view = new FakeTimeline(layout([80, 80, 80, 80]));
   const roomA = { followLatest: true };
@@ -144,9 +166,12 @@ test('a user scroll invalidates the queued post-layout restore', () => {
 
 test('production chat render path delegates replacement and has no unconditional delayed bottom jump', () => {
   assert.match(html, /id="chatJumpLatest"[^>]+aria-label="Jump to latest message"/);
+  assert.match(html, /class="chat-jump-latest-label"/);
   assert.match(html, /chat-scroll\.js[^>]*>[\s\S]*native-browser\.js[\s\S]*app\.js/);
   assert.match(appSource, /function replaceChatTimeline\([\s\S]*MiaChatScroll\.replace\(thread, html, state/);
   assert.match(appSource, /MiaChatScroll\.capture\(thread, state, \{invalidatePending:movedSinceRestore\}\)/);
+  assert.match(appSource, /MiaChatScroll\.noteIncoming\(state, \{[\s\S]*isNew: !wasKnown/);
+  assert.match(appSource, /classList\.toggle\('has-new-messages', hasNew\)/);
   assert.match(appSource, /replaceChatTimeline\(thread, roomId, state, historyControl \+ dateDivider \+ html, options\)/);
   assert.doesNotMatch(appSource, /setTimeout\(function\(\)\{ var t = el\('#chatThread'\); if\(t\) t\.scrollTop = t\.scrollHeight/);
   assert.doesNotMatch(appSource.slice(appSource.indexOf('function renderChatThread(options)'), appSource.indexOf('function chatThreadFooterHtml')), /thread\.scrollTop = thread\.scrollHeight/);
