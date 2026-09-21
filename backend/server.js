@@ -3056,6 +3056,12 @@ function parseHermesAuthOutput(provider, value) {
     const code = text.match(/enter code:\s*([A-Z0-9][A-Z0-9-]{2,})/i);
     verificationUrl = url ? url[0].replace(/[),.;]+$/, '') : null;
     userCode = code ? code[1] : null;
+  } else if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
+    // Claude Code owns this PKCE flow. Mia only forwards the exact official
+    // authorization URL printed by `claude auth login --claudeai`; query
+    // parameters must remain intact for the CLI to validate the completion.
+    const url = text.match(/https:\/\/(?:claude\.com\/cai|claude\.ai)\/oauth\/authorize\?[^\s"'<>]+/i);
+    verificationUrl = url ? url[0].replace(/[),.;]+$/, '') : null;
   }
   return {
     verificationUrl,
@@ -3223,6 +3229,106 @@ function startHermesAuth(email, provider) {
     child.stderr.on('data', read);
     child.once('error', () => finish('error'));
     child.once('close', (code) => finish(code === 0 ? 'connected' : 'error'));
+    entry.timeout = setTimeout(() => {
+      if (entry.settled) return;
+      try { child.kill('SIGTERM'); } catch (_) { /* process may already be gone */ }
+      finish('error');
+    }, HERMES_AUTH_TIMEOUT_MS);
+    entry.timeout.unref();
+  } catch (_) {
+    finish('error');
+  }
+
+  return entry;
+}
+
+function startClaudeSubscriptionAuth(email) {
+  const provider = CLAUDE_SUBSCRIPTION_PROVIDER;
+  const owner = String(email || '').trim().toLowerCase();
+  const existing = harnessAuthByUser.get(owner);
+  if (existing && existing.provider === provider && ['starting', 'waiting', 'completing'].includes(existing.state)) {
+    return existing;
+  }
+  if (existing && existing.child && !existing.settled) disconnectHermesAuth(owner, existing.provider);
+
+  const entry = {
+    provider,
+    state: 'starting',
+    verificationUrl: null,
+    userCode: null,
+    startedAt: new Date().toISOString(),
+    child: null,
+    settled: false,
+    completionSubmitted: false,
+    output: '',
+    timeout: null,
+  };
+  harnessAuthByUser.set(owner, entry);
+
+  const finish = (state) => {
+    if (entry.settled) return;
+    entry.settled = true;
+    if (entry.timeout) clearTimeout(entry.timeout);
+    entry.timeout = null;
+    entry.child = null;
+    entry.output = '';
+    entry.state = state;
+    if (state === 'connected') hermesDisconnectedProviders.delete(provider);
+    const cleanup = setTimeout(() => {
+      if (harnessAuthByUser.get(owner) === entry) harnessAuthByUser.delete(owner);
+    }, 10 * 60 * 1000);
+    cleanup.unref();
+  };
+  const verifyCompletion = async (code) => {
+    if (entry.settled) return;
+    if (code !== 0) {
+      finish('error');
+      return;
+    }
+    entry.state = 'completing';
+    const status = await runClaudeSubscriptionStatus();
+    if (entry.settled) return;
+    finish(status.loggedIn ? 'connected' : 'error');
+  };
+  const read = (chunk) => {
+    // The raw CLI stream can contain one-time authorization material. Keep a
+    // bounded private buffer and expose only the allowlisted official URL.
+    entry.output = (entry.output + String(chunk || '')).slice(-HERMES_AUTH_OUTPUT_LIMIT);
+    const parsed = parseHermesAuthOutput(provider, entry.output);
+    if (parsed.verificationUrl) {
+      entry.verificationUrl = parsed.verificationUrl;
+      if (!entry.settled && !entry.completionSubmitted) entry.state = 'waiting';
+      entry.output = '';
+    }
+  };
+
+  try {
+    const command = requiredConfiguredExecutable(
+      'CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND',
+      process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND || 'claude'
+    );
+    const env = hermesCredentialProcessEnv({
+      NO_COLOR: '1',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      DISABLE_TELEMETRY: '1',
+      DISABLE_ERROR_REPORTING: '1',
+      // Prevent Claude Code from launching a system browser. Mia opens the
+      // URL it prints in its own native browser instead.
+      BROWSER: path.join(MIAOS_HERMES_GUARD_BIN, 'open'),
+    });
+    const configDir = String(process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR || '').trim();
+    if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+    const child = spawn(command, ['auth', 'login', '--claudeai'], {
+      cwd: process.cwd(),
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    entry.child = child;
+    child.stdout.on('data', read);
+    child.stderr.on('data', read);
+    child.stdin.on('error', () => finish('error'));
+    child.once('error', () => finish('error'));
+    child.once('close', (code) => { void verifyCompletion(code); });
     entry.timeout = setTimeout(() => {
       if (entry.settled) return;
       try { child.kill('SIGTERM'); } catch (_) { /* process may already be gone */ }
@@ -3760,12 +3866,54 @@ app.post('/api/settings/harness/auth/start', requireGlobalSettingsAdmin, async (
         state: 'connected', provider, plan: status.plan || null,
       } });
     }
-    return res.status(409).json({ error: status.detail, auth: {
-      state: 'error', provider, error: status.detail,
-    } });
+    if (!status.available) {
+      return res.status(409).json({ error: status.detail, auth: {
+        state: 'error', provider, error: status.detail,
+      } });
+    }
+    const auth = await waitForHermesAuthPrompt(
+      startClaudeSubscriptionAuth(req.userEmail),
+      HERMES_AUTH_PROMPT_WAIT_MS
+    );
+    return res.status(200).json({ auth: publicHermesAuthState(auth) });
   }
   const auth = await waitForHermesAuthPrompt(startHermesAuth(req.userEmail, provider), HERMES_AUTH_PROMPT_WAIT_MS);
   return res.status(200).json({ auth: publicHermesAuthState(auth) });
+});
+
+app.post('/api/settings/harness/auth/complete', requireGlobalSettingsAdmin, (req, res) => {
+  const provider = String((req.body || {}).provider || '').trim();
+  const code = typeof (req.body || {}).code === 'string' ? req.body.code.trim() : '';
+  if (provider !== CLAUDE_SUBSCRIPTION_PROVIDER) {
+    return res.status(400).json({ error: 'unsupported harness sign-in completion' });
+  }
+  if (!code || code.length > 8192 || /[\s\x00-\x1f\x7f]/.test(code)) {
+    return res.status(400).json({ error: 'Paste the one-time code shown by Claude.' });
+  }
+  const owner = String(req.userEmail || '').trim().toLowerCase();
+  const auth = harnessAuthByUser.get(owner);
+  if (!auth || auth.provider !== provider || auth.state !== 'waiting' || auth.settled
+    || !auth.child || !auth.child.stdin || !auth.child.stdin.writable) {
+    return res.status(409).json({ error: 'No Claude sign-in is waiting for a code.' });
+  }
+  if (auth.completionSubmitted) {
+    return res.status(409).json({ error: 'That Claude sign-in is already completing.' });
+  }
+  auth.completionSubmitted = true;
+  auth.state = 'completing';
+  auth.child.stdin.end(`${code}\n`);
+  return res.status(202).json({ auth: publicHermesAuthState(auth) });
+});
+
+app.post('/api/settings/harness/auth/cancel', requireGlobalSettingsAdmin, (req, res) => {
+  const provider = String((req.body || {}).provider || '').trim();
+  if (provider !== CLAUDE_SUBSCRIPTION_PROVIDER) {
+    return res.status(400).json({ error: 'unsupported harness sign-in' });
+  }
+  const owner = String(req.userEmail || '').trim().toLowerCase();
+  const auth = harnessAuthByUser.get(owner);
+  if (auth && auth.provider === provider) disconnectHermesAuth(owner, provider);
+  return res.status(200).json({ auth: { state: 'idle', provider: null } });
 });
 
 app.post('/api/settings/harness/auth/logout', requireGlobalSettingsAdmin, async (req, res) => {
