@@ -887,7 +887,6 @@
     else if(hash === 'agent-admin'){ renderAgentAdminPanel(); }
     if(hash === 'chat'){
       var chatReady = renderChatWorkspace();
-      setTimeout(function(){ var t = el('#chatThread'); if(t) t.scrollTop = t.scrollHeight; }, 30);
       return chatReady;
     }
     return Promise.resolve();
@@ -6196,8 +6195,27 @@
   }
 
   function chatRoomState(roomId){
-    if(!chatWs.byRoom[roomId]) chatWs.byRoom[roomId] = {messages: [], lastTs: 0, lastSequence: 0, polling: false, thinking: false, thinkingTimer: null, thinkingAgentName: null, selectedAgentId: null, mentionRoster: null, chatSuggestions: null, openThreadRoot: null, localWelcome: null, sidebarPreviewLoading: false, sidebarPreviewLoaded: false, sidebarAttentionPolling: false, historyCursor: null, historyLoading: false, historyComplete: false, historyEdits: {}};
+    if(!chatWs.byRoom[roomId]) chatWs.byRoom[roomId] = {messages: [], lastTs: 0, lastSequence: 0, polling: false, thinking: false, thinkingTimer: null, thinkingAgentName: null, selectedAgentId: null, mentionRoster: null, chatSuggestions: null, openThreadRoot: null, localWelcome: null, sidebarPreviewLoading: false, sidebarPreviewLoaded: false, sidebarAttentionPolling: false, historyCursor: null, historyLoading: false, historyComplete: false, historyEdits: {}, followLatest: true, chatScrollTop: 0, chatScrollAnchor: null, chatScrollRevision: 0};
     return chatWs.byRoom[roomId];
+  }
+
+  function syncChatJumpLatest(thread, state){
+    var button = el('#chatJumpLatest');
+    if(window.MiaChatScroll) window.MiaChatScroll.syncButton(button, thread, state);
+    else if(button) button.hidden = true;
+  }
+
+  function captureRenderedChatScroll(thread){
+    var roomId = thread && thread.getAttribute('data-chat-scroll-room');
+    var state = roomId && chatWs.byRoom[roomId];
+    if(state && window.MiaChatScroll) window.MiaChatScroll.capture(thread, state);
+  }
+
+  function replaceChatTimeline(thread, roomId, state, html, options){
+    thread.setAttribute('data-chat-scroll-room', roomId);
+    if(window.MiaChatScroll) window.MiaChatScroll.replace(thread, html, state, options || {});
+    else thread.innerHTML = html;
+    syncChatJumpLatest(thread, state);
   }
 
   function absorbChatHistoryEdits(state, edits){
@@ -7481,17 +7499,24 @@
   function renderChatThread(options){
     var thread = el('#chatThread');
     if(!thread) return;
+    captureRenderedChatScroll(thread);
     if(chatWs.activeKind === 'agent-setup'){
+      thread.removeAttribute('data-chat-scroll-room');
+      syncChatJumpLatest(null, null);
       renderAgentSetupThread(thread);
       return;
     }
     if(chatWs.configured === false){
+      thread.removeAttribute('data-chat-scroll-room');
       thread.innerHTML = '<div class="no-data">Native chat unavailable</div>';
+      syncChatJumpLatest(null, null);
       return;
     }
     var roomId = chatWs.activeRoomId;
     if(!roomId){
+      thread.removeAttribute('data-chat-scroll-room');
       thread.innerHTML = chatHeroHtml('Pick a channel, department, or agent to start.');
+      syncChatJumpLatest(null, null);
       return;
     }
     var state = chatRoomState(roomId);
@@ -7500,7 +7525,7 @@
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
         ? esc(miaEmptyGreeting(currentRealProfileName()))
         : 'No messages yet &mdash; say hello.';
-      thread.innerHTML = chatHeroHtml(emptyMessage, chatWs.activeKind === 'agent' ? chatWs.activeLabel : '');
+      replaceChatTimeline(thread, roomId, state, chatHeroHtml(emptyMessage, chatWs.activeKind === 'agent' ? chatWs.activeLabel : ''), options);
       return;
     }
     // Consecutive turns from the SAME human collapse to a slim time-only
@@ -7549,7 +7574,7 @@
     var historyControl = state.historyCursor
       ? '<button type="button" class="chat-history-more" id="chatHistoryMore">' + (state.historyLoading ? 'Loading…' : 'Load earlier messages') + '</button>'
       : '';
-    thread.innerHTML = historyControl + dateDivider + html;
+    replaceChatTimeline(thread, roomId, state, historyControl + dateDivider + html, options);
     els('[data-mia-onboarding-choice]', thread).forEach(function(button){
       button.addEventListener('click', function(){
         var label = button.getAttribute('data-mia-onboarding-choice');
@@ -7566,11 +7591,6 @@
     wireChatArtifactPreviews(thread);
     var more = el('#chatHistoryMore', thread);
     if(more) more.addEventListener('click', function(){ loadOlderChatMessages(roomId); });
-    if(options && options.prependAnchor){
-      thread.scrollTop = Math.max(0, thread.scrollHeight - options.prependAnchor.height + options.prependAnchor.top);
-    } else {
-      thread.scrollTop = thread.scrollHeight;
-    }
     syncChatThreadPanel();
   }
 
@@ -9426,8 +9446,20 @@
     var thread = el('#chatThread');
     if(!thread) return;
     thread.addEventListener('scroll', function(){
+      var roomId = thread.getAttribute('data-chat-scroll-room');
+      var state = roomId && chatWs.byRoom[roomId];
+      var movedSinceRestore = state && Math.abs(Number(thread.scrollTop || 0) - Number(state.chatScrollTop || 0)) > 0.5;
+      if(state && window.MiaChatScroll) window.MiaChatScroll.capture(thread, state, {invalidatePending:movedSinceRestore});
+      syncChatJumpLatest(thread, state);
       if(thread.scrollTop <= 64 && chatWs.activeRoomId) loadOlderChatMessages(chatWs.activeRoomId);
     }, {passive:true});
+    var jump = el('#chatJumpLatest');
+    if(jump) jump.addEventListener('click', function(){
+      var roomId = thread.getAttribute('data-chat-scroll-room');
+      var state = roomId && chatWs.byRoom[roomId];
+      if(state && window.MiaChatScroll) window.MiaChatScroll.jumpToLatest(thread, state);
+      syncChatJumpLatest(thread, state);
+    });
   })();
 
   /* Switching rooms loads the durable native event history before opening the

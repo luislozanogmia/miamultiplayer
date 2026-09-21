@@ -14,7 +14,7 @@ test('incomplete server onboarding always opens after a clean reinstall', () => 
   assert.match(loader, /showFirstRun\s*&&\s*\(!harness\s*\|\|\s*!harness\.onboardingComplete\)/);
   assert.doesNotMatch(loader, /localStorage/);
   assert.doesNotMatch(source, /(?:getItem|setItem)\('miaosHarnessOnboardingDismissed'/);
-  assert.match(source, /harnessOnboardingState\.provider = existing\.provider \|\| null/);
+  assert.match(source, /harnessOnboardingState\.provider = \(existing\.provider === 'openai-api' && existing\.apiProvider === 'openrouter'\) \? 'managed-router' : \(existing\.provider \|\| null\)/);
   assert.doesNotMatch(source, /harnessOnboardingState\.provider = existing\.provider \|\| 'openai-codex'/);
 });
 
@@ -31,7 +31,14 @@ test('onboarding choices expose their selected state to assistive technology', (
 
 test('provider cards keep distinct identities and select the card that receives the click', () => {
   const providers = [...html.matchAll(/data-harness-provider="([^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(providers, ['openai-codex', 'xai-oauth', 'openai-api']);
+  assert.deepEqual(providers, [
+    'managed-router',
+    'claude-subscription-directsdk-experimental',
+    'openai-codex',
+    'xai-oauth',
+    'openai-api',
+  ]);
+  assert.equal(providers.filter((provider) => provider === 'claude-subscription-directsdk-experimental').length, 1);
   assert.match(source, /choice\.addEventListener\('click', function\(\)\{[\s\S]*?harnessOnboardingState\.provider = choice\.getAttribute\('data-harness-provider'\);[\s\S]*?renderHarnessOnboarding\(\);/);
 });
 
@@ -42,5 +49,5 @@ test('API credentials use a password input and onboarding clears the field when 
 
 test('API setup transforms the existing provider card instead of opening a second panel', () => {
   assert.match(html, /id="harnessApiCard"[\s\S]*?data-harness-provider="openai-api"[\s\S]*?id="harnessApiConnectionSection"[\s\S]*?<\/div>\s*<button[^>]+data-harness-disconnect="api"/);
-  assert.match(source, /apiCard\.classList\.toggle\('is-expanded', harnessOnboardingState\.provider === 'openai-api'\)/);
+  assert.match(source, /apiCard\.classList\.toggle\('is-expanded', !isManagedRouter && harnessOnboardingState\.provider === 'openai-api'\)/);
 });

@@ -846,6 +846,11 @@
      directly) — only the visual language changed, to the external measured
      metrics and --sand-* colors. */
   .chat-thread{flex:1;min-width:0;max-width:100%;min-height:0;display:flex;flex-direction:column;gap:3px;overflow-x:hidden;overflow-y:auto;padding:16px 24px 8px;box-sizing:border-box;font-family:var(--styled-sans);}
+  .chat-jump-latest{position:absolute;z-index:12;left:50%;bottom:106px;display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid var(--sand-border-default);border-radius:50%;transform:translateX(-50%);background:var(--sand-bg-elevated);color:var(--sand-text-primary);box-shadow:0 5px 16px #0000001f;cursor:pointer;}
+  .chat-jump-latest[hidden]{display:none;}
+  .chat-jump-latest:hover{background:var(--sand-fill-secondary);}
+  .chat-jump-latest:focus-visible{outline:2px solid var(--sand-border-focus);outline-offset:2px;}
+  .chat-jump-latest svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
   .chat-history-more{appearance:none;align-self:center;border:0;background:transparent;color:var(--sand-text-secondary);font:12px var(--styled-sans);padding:6px 10px;cursor:pointer;flex:0 0 auto;}
   .chat-history-more:hover{color:var(--sand-text-primary);}
   .chat-history-more:disabled{cursor:default;opacity:.65;}
@@ -1308,7 +1313,7 @@
 
   /* ============ STYLED BOT SKIN: main column + info pane ============ */
   .chat-app{max-width:none;flex:1;min-width:0;display:flex;flex-direction:row;min-height:0;background:var(--sand-bg-base);}
-  .chat-main-col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;}
+  .chat-main-col{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;}
 
   .chat-thread-panel{position:relative;flex:0 0 380px;width:380px;min-width:0;display:flex;flex-direction:column;min-height:0;background:var(--sand-bg-elevated);border-left:1px solid var(--sand-border-subtle);font-family:var(--styled-sans);}
   .chat-thread-panel[hidden]{display:none;}
