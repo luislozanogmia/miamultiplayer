@@ -652,8 +652,10 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
         ];
       })
     : ['- None configured.'];
-  const recentTranscript = Array.isArray(transcript) ? transcript.filter(Boolean).slice(-12) : [];
-  const conversationLines = recentTranscript.slice();
+  // Hermes owns context management for bot runs. Preserve the complete
+  // transcript supplied by the conversation runtime instead of applying a
+  // second, lossy message window here.
+  const conversationLines = Array.isArray(transcript) ? transcript.filter(Boolean) : [];
   if (message) conversationLines.push(`${senderLabel || 'User'}: ${message}`);
   const sections = [
     ...botIdentitySections(bot, {
@@ -665,6 +667,8 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
       'Operating rules:',
       '- Complete the user’s task and return the concrete result in this thread.',
       '- Keep responses, reasoning, and tool use concise and tight unless the task clearly requires more depth.',
+      '- The latest explicit user instruction overrides older scope. If the user says to stop, says “full stop,” or says not to overengineer, stop further tool use and respond briefly with the current result.',
+      '- Once the requested result is sufficient, stop. Do not keep exploring tools, implementations, or adjacent improvements that the user did not request.',
       '- Your automation list below is authoritative. Do not inspect local files, databases, logs, or configuration to rediscover it.',
       '- Resolve references such as “it,” “that automation,” or “run it now” from this list when one choice is clear; ask one short question only when genuinely ambiguous.',
       '- When asked to run an automation now, perform its saved task now. Do not create or change a schedule unless the user explicitly asks.',
