@@ -277,7 +277,8 @@ test('server wires authenticated-owner context into native fast and durable agen
   assert.match(source, /googleWorkspaceAgentContextForOwner\(senderLabel, googleContextInput\)/);
   assert.match(source, /function buildHermesTaskPrompt\(agentForPrompt, transcript, message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite\)/);
   assert.match(source, /buildBotContext\(\s*agentForPrompt,\s*transcript,\s*message,\s*workspaceContext/);
-  assert.match(source, /const prompt = buildHermesTaskPrompt\(/);
+  assert.match(source, /const systemPrompt = buildHermesTaskPrompt\(/);
+  assert.match(source, /seedMessages: nativeHermesGatewaySeedMessages\(systemPrompt, historyEvents, trigger\.id\)/);
   assert.match(source, /googleWorkspaceActions\.googleWorkspaceActionInstruction\(\s*googleResourceRefs,/);
 });
 

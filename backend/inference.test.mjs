@@ -325,7 +325,7 @@ test('full-mode bot workers get a compact local-browser boundary without the ful
   assert.doesNotMatch(policy, /# Mia browser/);
 });
 
-test('bot context preserves the full supplied conversation and makes its own automations authoritative', () => {
+test('bot context keeps durable instructions while Hermes owns structured conversation context', () => {
   const prompt = inference.buildBotContext({
     name: 'News briefing',
     instructions: 'Research reliable current news and produce concise briefings with source links.',
@@ -347,9 +347,9 @@ test('bot context preserves the full supplied conversation and makes its own aut
   assert.match(prompt, /Task: Create today’s concise news briefing about architecture in Mexico\./);
   assert.match(prompt, /Weekly digest \(paused\)/);
   assert.match(prompt, /Current Mia context \(authoritative\):\nGoogle connection: available\./);
-  assert.match(prompt, /turn 1\n/);
-  assert.match(prompt, /turn 20\n/);
-  assert.match(prompt, /Luis: run it now/);
+  assert.doesNotMatch(prompt, /turn 1\n/);
+  assert.doesNotMatch(prompt, /turn 20\n/);
+  assert.doesNotMatch(prompt, /Luis: run it now/);
   assert.match(prompt, /latest explicit user instruction overrides older scope/);
   assert.match(prompt, /says “full stop,” or says not to overengineer/);
   assert.match(prompt, /Once the requested result is sufficient, stop/);
@@ -395,6 +395,11 @@ test('bot replies use a restricted session in the existing Hermes runtime', asyn
     provider: 'openai-codex',
     model: 'gpt-5.6-luna',
     signal: new AbortController().signal,
+    seedMessages: [
+      { role: 'system', content: 'bounded bot instructions' },
+      { role: 'user', content: 'earlier request' },
+      { role: 'assistant', content: 'earlier result' },
+    ],
     gatewayClient,
   });
 
@@ -406,7 +411,12 @@ test('bot replies use a restricted session in the existing Hermes runtime', asyn
   assert.equal(requests[0].message, 'perform the bounded task');
   assert.equal(requests[0].options.profile, inference.MIAOS_BOT_HERMES_PROFILE);
   assert.equal(requests[0].options.botWorker, true);
-  assert.deepEqual(requests[0].seedMessages, []);
+  assert.deepEqual(requests[0].seedMessages, [
+    { role: 'system', content: 'bounded bot instructions' },
+    { role: 'user', content: 'earlier request' },
+    { role: 'assistant', content: 'earlier result' },
+  ]);
+  assert.equal(requests[0].options.seedMessages, undefined);
 });
 
 test('backend shutdown closes and releases its singleton Hermes gateway client', async () => {
