@@ -180,6 +180,11 @@ test('native HTTP contract lists only visible company conversations and keeps ow
     const firstId = result.payload.conversation.id;
     result = await app.request('/conversations', { method: 'POST', body: { type: 'channel', name: 'Second native conversation' } });
     const secondId = result.payload.conversation.id;
+    // Listing is newest-updated first. HTTP creation can land both rows in the
+    // same millisecond, leaving the random opaque id as the SQL tie-breaker;
+    // pin fixture timestamps so this assertion tests the ordering contract.
+    app.repository.updateConversation({ companyId: 'acme', id: firstId, updatedAt: '2026-09-21T12:00:00.000Z' });
+    app.repository.updateConversation({ companyId: 'acme', id: secondId, updatedAt: '2026-09-21T12:00:01.000Z' });
     result = await app.request(`/conversations/${firstId}/members`, {
       method: 'POST',
       body: { principalId: 'bob', principalType: 'user' },
