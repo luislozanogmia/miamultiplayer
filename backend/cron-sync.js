@@ -295,7 +295,10 @@ function jobModelFor(bot) {
   const model = String(bot && bot.model || '').trim();
   const provider = String(bot && bot.modelProvider || '').trim();
   // Some provider model ids use a single slash-delimited namespace.
-  if (!/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?$/i.test(model) || model.length > 128) {
+  // Hermes' Claude subscription plugin publishes extended-context models
+  // with the literal `[1m]` suffix. Keep the existing bounded namespace
+  // grammar and allow only that documented bracketed suffix.
+  if (!/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?(?:\[1m\])?$/i.test(model) || model.length > 128) {
     throw new Error('scheduled bot requires a valid connected model');
   }
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(provider)) {

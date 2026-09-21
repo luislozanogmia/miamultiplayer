@@ -976,6 +976,7 @@
 
   /* ============ SETTINGS DRAWER ============ */
   var HERMES_PROVIDER_LABELS = {
+    'claude-subscription-directsdk-experimental': 'Claude subscription (Experimental)',
     'openai-codex': 'ChatGPT subscription',
     'xai-oauth': 'Grok subscription',
     'openai-api': 'OpenAI API',
@@ -1020,6 +1021,7 @@
     {id:'upstage', label:'Upstage Solar'}
   ];
   var HERMES_AUTH_NAMES = {
+    'claude-subscription-directsdk-experimental': 'Claude Subscription DirectSDK (Experimental)',
     'openai-codex': 'ChatGPT',
     'xai-oauth': 'Grok'
   };
@@ -1052,6 +1054,7 @@
   var harnessConnectionPending = null;
   var harnessConnectionValidationPending = false;
   var harnessConnectionState = {
+    'claude-subscription-directsdk-experimental': false,
     'openai-codex': false,
     'xai-oauth': false
   };
@@ -1561,7 +1564,7 @@
     }
     var authName = HERMES_AUTH_NAMES[harnessOnboardingState.provider] || 'provider';
     var active = auth.state && auth.state !== 'idle' &&
-      ['openai-codex', 'xai-oauth'].indexOf(harnessOnboardingState.provider) !== -1 &&
+      ['claude-subscription-directsdk-experimental', 'openai-codex', 'xai-oauth'].indexOf(harnessOnboardingState.provider) !== -1 &&
       (!auth.provider || auth.provider === harnessOnboardingState.provider);
     panel.hidden = !active;
     if(!active) return;
@@ -1670,7 +1673,10 @@
   function disconnectHarnessProvider(provider, button){
     if(harnessConnectionState[provider] !== true) return;
     var authName = harnessProviderDisplayName(provider);
-    if(!window.confirm('Disconnect ' + authName + '? This forgets its stored credentials.')) return;
+    var disconnectPrompt = provider === 'claude-subscription-directsdk-experimental'
+      ? 'Disconnect ' + authName + ' from Mia? Your Claude Code login remains unchanged.'
+      : 'Disconnect ' + authName + '? This forgets its stored credentials.';
+    if(!window.confirm(disconnectPrompt)) return;
     var icon = button && button.querySelector('.styled-onboarding-connection-icon');
     var label = button && button.querySelector('.styled-onboarding-connection-label');
     if(button) button.disabled = true;
@@ -2001,7 +2007,7 @@
       });
       return;
     }
-    if(['openai-codex', 'xai-oauth'].indexOf(authProvider) === -1){
+    if(['claude-subscription-directsdk-experimental', 'openai-codex', 'xai-oauth'].indexOf(authProvider) === -1){
       saveHarnessSelection();
       return;
     }
@@ -2015,8 +2021,10 @@
     // Open a same-origin redirect from the user gesture. That route starts
     // the background harness flow and redirects this tab to the real provider
     // URL, avoiding popup blocking in the later polling callback.
-    var redirectUrl = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(authProvider);
-    try { window.open(redirectUrl, '_blank', 'noopener,noreferrer'); } catch(_) { /* visible link remains available */ }
+    if(authProvider !== 'claude-subscription-directsdk-experimental'){
+      var redirectUrl = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(authProvider);
+      try { window.open(redirectUrl, '_blank', 'noopener,noreferrer'); } catch(_) { /* visible link remains available */ }
+    }
     api('/api/settings/harness/auth/start', {method:'POST', body:{provider:authProvider}}).then(function(res){
       var auth = res.data && res.data.auth;
       if(res.status !== 200 || !auth) throw new Error((res.data && res.data.error) || 'Could not start harness sign-in');
@@ -12319,6 +12327,7 @@
     // through the one generic API row (see operations/product.md).
     var COMPOSER_FAMILY_PROVIDERS = [
       {id:'managed-router', label:'Mia Router', harnessProvider:'managed-router', aliases:['managed-router', 'openrouter']},
+      {id:'claude-subscription-directsdk-experimental', label:'Claude', harnessProvider:'claude-subscription-directsdk-experimental', aliases:['claude-subscription-directsdk-experimental']},
       {id:'openai-codex', label:'ChatGPT', harnessProvider:'openai-codex', aliases:['openai-codex', 'codex']},
       {id:'xai-oauth', label:'Grok', harnessProvider:'xai-oauth', aliases:['xai-oauth', 'xai', 'grok']},
       {id:'api', label:'API', harnessProvider:'openai-api', aliases:['openai-api', 'anthropic', 'gemini', 'openai', 'deepseek']}

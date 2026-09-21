@@ -222,8 +222,26 @@ test('a slash-namespaced provider model id schedules a job', async () => {
   assert.deepEqual(commands[0].slice(-4), ['--model', 'vendor/model-family.v1', '--provider', 'router']);
 });
 
-test('a model id with multiple slashes or a bare slash is still rejected', async () => {
-  for (const model of ['a/b/c', '/model', 'model/', '']) {
+test('the Claude subscription extended-context model id schedules a job', async () => {
+  resetCommands();
+  setJobs([]);
+  const agent = enabledAgent({
+    model: 'claude-sonnet-5[1m]',
+    modelProvider: 'claude-subscription-directsdk-experimental',
+  });
+
+  await cronSync.syncBotAutomation(agent, null);
+
+  const commands = readCommands();
+  assert.equal(commands.length, 1);
+  assert.deepEqual(commands[0].slice(-4), [
+    '--model', 'claude-sonnet-5[1m]',
+    '--provider', 'claude-subscription-directsdk-experimental',
+  ]);
+});
+
+test('a model id with multiple slashes, a bare slash, or an unknown bracket suffix is still rejected', async () => {
+  for (const model of ['a/b/c', '/model', 'model/', 'model[2m]', 'model[1m]suffix', '']) {
     resetCommands();
     setJobs([]);
     await assert.rejects(

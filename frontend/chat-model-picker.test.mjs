@@ -77,12 +77,13 @@ test('a "switch provider" screen, reached only via the family stage\'s back butt
   // harnessProviderChoices), independent of what is currently connected.
   assert.match(appSource, /var COMPOSER_FAMILY_PROVIDERS = \[/);
   assert.match(appSource, /id:'managed-router', label:'Mia Router'/);
+  assert.match(appSource, /id:'claude-subscription-directsdk-experimental', label:'Claude'/);
   assert.match(appSource, /id:'openai-codex', label:'ChatGPT'/);
   assert.match(appSource, /id:'xai-oauth', label:'Grok'/);
   assert.match(appSource, /id:'api', label:'API'/);
-  // Claude and Gemini must NOT have rows: consumer CLI subscriptions bar
-  // third-party apps, so both connect through the generic API row.
-  assert.doesNotMatch(appSource, /label:'Claude'|label:'Gemini'/);
+  // Gemini still connects through the generic API row; Claude uses Hermes'
+  // official experimental DirectSDK plugin and the user's Claude Code login.
+  assert.doesNotMatch(appSource, /label:'Gemini'/);
   assert.doesNotMatch(appSource, /cc-model-family-caption/);
 
   // The default popover is unchanged: the ordinary family stage (grouped by
