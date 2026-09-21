@@ -3273,7 +3273,7 @@
       '<div class="styled-agent-edit-body">' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">BRIEF</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="Brief information" title="Brief information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot brief"></textarea></section>' +
         styledAgentAutomationMarkup(a) +
-        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">DEPARTMENTS</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditDepartmentsInfo" aria-label="Departments information" title="Departments information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditDepartmentsInfo" role="tooltip">Used to route this bot into team channels.</span></span></div><div class="styled-agent-edit-dept-row"><div class="bench-dept-dropdown" id="styledAgentEditDeptDropdown"><button type="button" class="styled-agent-edit-select" id="styledAgentEditDeptBtn"><span id="styledAgentEditDeptBtnLabel"></span><span aria-hidden="true">&#9662;</span></button><div class="bench-dept-dropdown-panel" id="styledAgentEditDeptPanel"></div></div></div></section>' +
+        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">WORKPLACES</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditWorkplacesInfo" aria-label="Workplaces information" title="Workplaces information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditWorkplacesInfo" role="tooltip">The workplace this bot belongs to. In multiplayer you can share it with the people in your workplace.</span></span></div><div class="styled-agent-edit-select styled-agent-edit-workspace" id="styledAgentEditWorkspace">' + esc(workspaceLabel()) + '</div></section>' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">AVATAR COLOR</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditAvatarInfo" aria-label="Avatar color information" title="Avatar color information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditAvatarInfo" role="tooltip">Automatic follows the bot identity.</span></span></div><div class="styled-agent-edit-color-control"><div class="styled-agent-color-options" id="styledAgentEditColorOptions" role="group" aria-label="Bot avatar color">' + colorMarkup + '</div></div></section>' +
         '<section class="styled-agent-edit-section styled-agent-edit-model-section"><div class="styled-agent-edit-section-label">MODEL</div>' +
           '<div class="styled-agent-model-picker" id="styledAgentModelPicker"><button type="button" class="styled-agent-edit-model" id="styledAgentEditModel" aria-haspopup="dialog" aria-expanded="false" aria-label="Choose bot model"><span id="styledAgentEditModelLabel">' + esc(styledAgentModelLabel(editState.model || a.model)) + '</span><span aria-hidden="true">&#8250;</span></button>' +
@@ -3287,12 +3287,6 @@
     var options = el('#styledAgentEditColorOptions');
     if(!options) return;
     options.innerHTML = agentColorSwatchesHtml(editState.avatarColor, 'styledAgentEditColorInput', 'styled-agent-color');
-  }
-
-  function renderStyledAgentEditDepartmentControls(){
-    var label = el('#styledAgentEditDeptBtnLabel');
-    if(label) label.textContent = deptDropdownLabel(editState.departments || []);
-    renderDeptDropdown('styledAgentEditDept', loadDepartments(), editState.departments || []);
   }
 
   function wireStyledAgentEditControls(pane){
@@ -3309,9 +3303,6 @@
     var modelOptions = el('#styledAgentModelOptions', pane);
     var automations = els('[data-bot-id][data-automation-id]', pane);
     var addAutomation = el('#styledAgentAddAutomation', pane);
-    var deptWrap = el('#styledAgentEditDeptDropdown', pane);
-    var deptBtn = el('#styledAgentEditDeptBtn', pane);
-    var deptPanel = el('#styledAgentEditDeptPanel', pane);
     els('[data-agent-info-trigger]', pane).forEach(function(trigger){
       trigger.addEventListener('click', function(e){
         e.stopPropagation();
@@ -3383,42 +3374,6 @@
       var botId = addAutomation.getAttribute('data-bot-id');
       if(botId) openAutomationDetail(botId, null, true);
     });
-    if(deptBtn && deptWrap && deptPanel) {
-      deptBtn.addEventListener('click', function(e){
-        e.stopPropagation();
-        var opening = !deptWrap.classList.contains('open');
-        deptWrap.classList.toggle('open');
-        if(opening) positionDeptPanel(deptBtn, deptPanel);
-      });
-      deptPanel.addEventListener('change', function(e){
-        var checkbox = e.target.closest('input[type=checkbox][data-dept]');
-        if(!checkbox) return;
-        var ok = toggleDeptSelection(editState.departments, checkbox.getAttribute('data-dept'));
-        renderStyledAgentEditDepartmentControls();
-        if(!ok) showDeptHint('styledAgentEditDept');
-      });
-      var submitNewDepartment = function(){
-        var input = el('#styledAgentEditDeptAddInput', pane);
-        if(!input) return;
-        var value = input.value.trim();
-        if(!value) return;
-        if(addDepartment(value)){
-          toggleDeptSelection(editState.departments, value);
-          renderStyledAgentEditDepartmentControls();
-          var fresh = el('#styledAgentEditDeptAddInput', pane);
-          if(fresh) fresh.focus();
-        } else showDeptHint('styledAgentEditDept', 'Already exists');
-      };
-      deptPanel.addEventListener('click', function(e){
-        if(e.target.closest('#styledAgentEditDeptAddBtn')) submitNewDepartment();
-      });
-      deptPanel.addEventListener('keydown', function(e){
-        if(e.key === 'Enter' && e.target.closest('#styledAgentEditDeptAddInput')){
-          e.preventDefault();
-          submitNewDepartment();
-        }
-      });
-    }
     if(colors) {
       colors.addEventListener('click', function(e){
         var button = e.target.closest('[data-agent-color]');
@@ -3450,7 +3405,6 @@
       if(instructions) instructions.value = editState.instructions || '';
       var remove = el('#styledAgentEditDelete', pane);
       if(remove) remove.style.display = (a.isBuiltin && !a.agentId) ? 'none' : '';
-      renderStyledAgentEditDepartmentControls();
       wireStyledAgentEditControls(pane);
     }
   }
@@ -3583,20 +3537,23 @@
     var model = editState.model || BENCH_MODELS[editState.modelIx];
     if(!model){ showBenchToast('Connect and choose a model before saving'); return; }
     var name = String(editState.name || '').trim() || a.name;
-    var departments = editState.departments.length ? editState.departments : guessDepartmentsFor(instructions);
     var styledEditOpen = STYLED_SKIN && chatInfo.mode === 'agent-edit';
     var reopenAndClose = function(){
       closeCinema();
       loadBenchAgents().then(function(){
         renderChatSidebar();
         refreshChatMain();
-        if(styledEditOpen) openEditCinema(a.id);
+        // Saving is a completed action: close the drawer and confirm with
+        // the standard bottom toast instead of reopening the editor.
+        if(styledEditOpen) showBenchToast('Changes to Bot "' + name + '" saved');
         else openBenchDetail(a.id);
       });
     };
     var targetId = a.isBuiltin ? a.agentId : a.id;
     if(!targetId) return;
-    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, model: model, departments: departments, avatarColor: editState.avatarColor || null}}).then(function(res){
+    // The styled editor no longer edits departments (a MiaOS leftover); the
+    // stored value stays untouched by omitting the key from the update.
+    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, model: model, avatarColor: editState.avatarColor || null}}).then(function(res){
       if(res.status === 200) reopenAndClose();
     }).catch(function(){});
   }
@@ -5877,6 +5834,9 @@
       var time = String(values.time || '').trim();
       if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('Choose a valid time.');
       automation.time = time;
+      // Without a stored offset the backend assumes the legacy UTC-6 server
+      // deployment, which misfires on a local scheduler running on wall time.
+      if(!Number.isInteger(automation.utcOffsetMinutes)) automation.utcOffsetMinutes = new Date().getTimezoneOffset();
     }
     if(frequency === 'weekly'){
       var weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -10838,6 +10798,7 @@
     'new-channel': '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h7A2.5 2.5 0 0 1 16 5.5v3A2.5 2.5 0 0 1 13.5 11H8l-4 3.5z"></path><path d="M18 9.5h.5A2.5 2.5 0 0 1 21 12v3a2.5 2.5 0 0 1-2.5 2.5H18V21l-4-3.5h-3"></path>',
     'automations': '<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7v5l3 2"></path>',
     'connected-apps': '<circle cx="12" cy="6" r="2.2"></circle><circle cx="6" cy="17" r="2.2"></circle><circle cx="18" cy="17" r="2.2"></circle><path d="M10.8 7.8 7.2 15M13.2 7.8l3.6 7.2M8.2 17h7.6"></path>',
+    'bot-store': '<path d="M4 9.5 5.2 5h13.6l1.2 4.5"></path><path d="M4 9.5a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"></path><path d="M5 9.8V19h14V9.8"></path><path d="M10 19v-5h4v5"></path>',
     'web-browser': '<circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5s1.3-6.2 3.8-8.5z"></path>'
   };
   function sidebarPinStorageKey(){ return 'miaSidebarToolPins:' + activeWorkspaceKey; }
@@ -10909,7 +10870,20 @@
       pin.title = pinned ? 'Unpin from sidebar' : 'Pin to sidebar';
     });
   }
+  function closeBrowserSidebarDrawer(){
+    if(!document.body.classList.contains('browser-sidebar-open')) return;
+    document.body.classList.remove('browser-sidebar-open');
+    var sidebar = el('#localBrowserSidebarBtn');
+    if(sidebar){
+      sidebar.setAttribute('aria-expanded', 'false');
+      sidebar.setAttribute('aria-label', 'Open your bots');
+    }
+  }
   function runToolsAction(action){
+    // A tool action is a destination choice: collapse the browser-mode
+    // sidebar drawer so the destination (browser page or side pane) is
+    // immediately visible instead of staying covered by the drawer.
+    closeBrowserSidebarDrawer();
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
     // layout back — closing the browser here would kill browser mode for no

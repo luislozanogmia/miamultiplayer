@@ -53,10 +53,25 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
   is UX inspiration, not a dependency. Known cost: bundled models add
   ~100MB+ and need per-platform native builds.
 
+## Roadmap — P2 (approved, after P1)
+
+- **Sidebar tool pins: icons and logic pass.** Revisit the pinned-tool
+  glyphs (e.g. a "your bots" reading for the bot pin instead of the
+  create-a-bot robot) and the open/close logic of the tools they trigger,
+  so every pin reads clearly and toggles predictably.
+
 ## Roadmap — P3 (future, not scheduled)
 
-Sourced from a Sept 2026 competitive scan of Meta's Muse agent and Alexandr
-Wang's public product commentary.
+- **MiaOS-era leftovers sweep.** The bot editor's DEPARTMENTS picker was a
+  MiaOS routing concept that meant nothing here; it became a read-only
+  WORKPLACES label on 2026-09-20. The same audit is still owed on the other
+  surfaces — the skills editor first, then the legacy bench editor, which
+  still carries the full departments dropdown and its `guessDepartmentsFor`
+  heuristics. Each one: decide whether the concept earns its place in
+  Multiplayer, and cut or rename it if not.
+
+The remaining P3 items are sourced from a Sept 2026 competitive scan of Meta's
+Muse agent and Alexandr Wang's public product commentary.
 
 - **Approval gating for autonomous bots.** Extend the existing
   `agent_permissions` model with an "ask first" tier between denied and
