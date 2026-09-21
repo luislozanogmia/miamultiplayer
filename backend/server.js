@@ -154,7 +154,8 @@ const MIAOS_HERMES_GUARD_BIN = path.join(__dirname, 'miaos-hermes-bin');
 const adminModule = require('./admin');
 const DATA_DIR = process.env.DATA_DIR || '';
 const STATIC_DIR = process.env.STATIC_DIR ? path.resolve(__dirname, process.env.STATIC_DIR) : '';
-const conn = db.openDb(DB_PATH, DATA_DIR);
+const BOT_PACKAGE_DIR = path.resolve(process.env.MIAOS_BOT_PACKAGE_DIR || path.join(path.dirname(path.resolve(DB_PATH)), 'bots'));
+const conn = db.openDb(DB_PATH, DATA_DIR, { botPackageDir: BOT_PACKAGE_DIR });
 const configuredAdminEmails = String(process.env.ADMIN_EMAILS || '')
   .split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
 const storedAdminEmails = db.listUsers(conn)
@@ -2579,9 +2580,22 @@ function registerResource(cfg) {
       const error = cfg.validate(record);
       if (error) return res.status(400).json({ error });
     }
-    if (cfg.beforeUpdate) cfg.beforeUpdate(record, existing, req);
-    if (cfg.afterUpdate) record = (await cfg.afterUpdate(record, existing)) || record;
-    db.saveOne(conn, cfg.table, record.id, record);
+    let packageChange = null;
+    let packageSaveAttempted = false;
+    try {
+      if (cfg.beforeUpdate) cfg.beforeUpdate(record, existing, req);
+      if (cfg.prepareUpdate) packageChange = cfg.prepareUpdate(record, existing, req);
+      if (cfg.afterUpdate) record = (await cfg.afterUpdate(record, existing)) || record;
+      packageSaveAttempted = true;
+      db.saveOne(conn, cfg.table, record.id, record, { botPackageChange: packageChange });
+    } catch (error) {
+      if (packageChange && !packageSaveAttempted) packageChange.rollback();
+      if (error && error.statusCode) {
+        return res.status(error.statusCode).json({ error: error.code || 'bot_package_error', message: error.message });
+      }
+      throw error;
+    }
+    record = db.loadOne(conn, cfg.table, record.id);
     if (cfg.bumpOnMutate) bumpVersion();
     res.status(200).json({ [cfg.singular]: record });
   });
@@ -4424,6 +4438,21 @@ registerResource({
     if (record.avatarColor !== undefined) record.avatarColor = normalizeAgentAvatarColor(record.avatarColor);
     if (record.model !== existing.model) record.modelProvider = harnessCliProviderForUser(req.userEmail);
     cronSync.migrateBotAutomations(record);
+  },
+  prepareUpdate: (record, existing, req) => {
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'instructions')) return null;
+    if (String(record.instructions) === String(existing.instructions)) return null;
+    if (!req.body || !req.body.expectedInstructionsRevision) {
+      const error = new Error('Reload the bot before saving instructions.');
+      error.code = 'INSTRUCTIONS_REVISION_REQUIRED';
+      error.statusCode = 409;
+      throw error;
+    }
+    return db.prepareBotPackageUpdate(conn, record, {
+      writeInstructions: true,
+      instructions: record.instructions,
+      expectedRevision: req.body && req.body.expectedInstructionsRevision,
+    });
   },
   // Newest-created agent first so a just-created bot lands at the top.
   // createdAt is always set (trackTimeline), the id-suffix compare is just a

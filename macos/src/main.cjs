@@ -803,6 +803,8 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "executions.db"),
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
       || path.join(dataDirectory, "bot-artifacts"),
+    MIAOS_BOT_PACKAGE_DIR: process.env.MIAOS_BOT_PACKAGE_DIR
+      || path.join(dataDirectory, "bots"),
     // Claude Code owns its credential store. Hermes' DirectSDK plugin receives
     // only resolved executable/config paths, never tokens or Anthropic API
     // overrides. This makes desktop launches see common npm installs without
