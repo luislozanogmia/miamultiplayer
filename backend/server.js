@@ -2673,7 +2673,10 @@ const MANAGED_ROUTER_URL = 'MIAOS_MANAGED_ROUTER_URL' in process.env
   : 'https://oiptiwgulndjf3nzjfvrhx7blq0eekdr.lambda-url.us-east-1.on.aws/';
 const MANAGED_ROUTER_LABEL = String(process.env.MIAOS_MANAGED_ROUTER_LABEL || '').trim() || 'Mia Router';
 
-const HERMES_ONBOARDING_PROVIDERS = new Set(['managed-router', 'openai-codex', 'xai-oauth', 'openai-api']);
+const CLAUDE_SUBSCRIPTION_PROVIDER = 'claude-subscription-directsdk-experimental';
+const HERMES_ONBOARDING_PROVIDERS = new Set([
+  'managed-router', CLAUDE_SUBSCRIPTION_PROVIDER, 'openai-codex', 'xai-oauth', 'openai-api',
+]);
 const HERMES_ONBOARDING_MODES = new Set(['solo', 'multiplayer']);
 
 // This is the API-key slice of Hermes' provider catalog. Subscription and
@@ -2762,10 +2765,40 @@ function harnessPreferenceForUser(settings, email) {
   return normalizeHarnessPreference(byUser[String(email || '').trim().toLowerCase()]);
 }
 
+function harnessProviderDisconnectedForUser(settings, email, provider) {
+  const byUser = settings && settings.harnessDisconnectedByUser && typeof settings.harnessDisconnectedByUser === 'object'
+    ? settings.harnessDisconnectedByUser
+    : {};
+  const providers = byUser[String(email || '').trim().toLowerCase()];
+  return Array.isArray(providers) && providers.includes(provider);
+}
+
+function setHarnessProviderDisconnected(email, provider, disconnected) {
+  const owner = String(email || '').trim().toLowerCase();
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  if (!settings.harnessDisconnectedByUser || typeof settings.harnessDisconnectedByUser !== 'object') {
+    settings.harnessDisconnectedByUser = {};
+  }
+  const providers = new Set(Array.isArray(settings.harnessDisconnectedByUser[owner])
+    ? settings.harnessDisconnectedByUser[owner]
+    : []);
+  if (disconnected) providers.add(provider); else providers.delete(provider);
+  settings.harnessDisconnectedByUser[owner] = Array.from(providers);
+  const preference = settings.harnessByUser && settings.harnessByUser[owner];
+  const selected = preference && (preference.provider === 'openai-api'
+    ? preference.apiProvider
+    : preference.provider);
+  if (disconnected && selected === provider) {
+    preference.onboardingComplete = false;
+  }
+  db.saveSingleton(conn, 'settings', settings);
+}
+
 // These are product-facing choices mapped to the provider names understood by
 // the Hermes service. Credentials remain in Hermes; Mia only selects the
 // provider route for the authenticated user's agent work.
 const HERMES_CLI_PROVIDER_BY_ONBOARDING_PROVIDER = Object.freeze({
+  [CLAUDE_SUBSCRIPTION_PROVIDER]: CLAUDE_SUBSCRIPTION_PROVIDER,
   'openai-codex': 'openai-codex',
   'xai-oauth': 'xai-oauth',
   'openai-api': 'openai-api',
@@ -2925,13 +2958,15 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
 const HERMES_AUTH_TIMEOUT_MS = 16 * 60 * 1000;
 const HERMES_AUTH_PROMPT_WAIT_MS = 30 * 1000;
 const HERMES_AUTH_OUTPUT_LIMIT = 32 * 1024;
-const HERMES_AUTH_PROVIDERS = new Set(['openai-codex', 'xai-oauth']);
+const HERMES_AUTH_PROVIDERS = new Set([CLAUDE_SUBSCRIPTION_PROVIDER, 'openai-codex', 'xai-oauth']);
 const HERMES_DISCONNECT_PROVIDERS = new Set([
+  CLAUDE_SUBSCRIPTION_PROVIDER,
   'openai-codex',
   'xai-oauth',
   ...HERMES_API_KEY_PROVIDERS,
 ]);
 const HERMES_STATUS_PROVIDERS = new Set([
+  CLAUDE_SUBSCRIPTION_PROVIDER,
   'openai-codex',
   'xai-oauth',
   ...HERMES_API_KEY_PROVIDERS,
@@ -2965,6 +3000,7 @@ async function boundedMap(items, limit, mapper) {
   return values;
 }
 const HERMES_AUTH_PROVIDER_LABELS = Object.freeze({
+  [CLAUDE_SUBSCRIPTION_PROVIDER]: 'Claude Subscription DirectSDK (Experimental)',
   'openai-codex': 'ChatGPT',
   'xai-oauth': 'Grok',
   ...HERMES_API_PROVIDER_LABELS,
@@ -3025,7 +3061,45 @@ const HERMES_CREDENTIAL_ENV_KEYS = Object.freeze([
   'TEMP', 'TMP', 'USERNAME',
   'PYTHONPATH', 'PYTHONNOUSERSITE',
   'PYTHONDONTWRITEBYTECODE', 'PYTHONPYCACHEPREFIX',
+  'CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND',
+  'CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR',
 ]);
+
+function runClaudeSubscriptionStatus() {
+  return new Promise((resolve) => {
+    const python = String(process.env.HERMES_PYTHON || '').trim();
+    const pluginDir = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PROVIDER);
+    if (!python) {
+      resolve({ available: false, loggedIn: false, detail: 'The bundled Hermes Python runtime is unavailable.' });
+      return;
+    }
+    execFile(
+      python,
+      [
+        '-c',
+        'import json,sys; sys.path.insert(0, sys.argv[1]); from directsdk_setup import setup_status; print(json.dumps(setup_status()))',
+        pluginDir,
+      ],
+      {
+        cwd: process.cwd(),
+        env: hermesCredentialProcessEnv(),
+        timeout: HERMES_STATUS_TIMEOUT_MS,
+        maxBuffer: 16 * 1024,
+      },
+      (error, stdout) => {
+        let status = null;
+        try { status = JSON.parse(String(stdout || '').trim()); } catch (_) { /* plugin probe failed */ }
+        const loggedIn = !error && status && status.logged_in === true;
+        resolve({
+          available: Boolean(status && status.available === true),
+          loggedIn,
+          plan: loggedIn ? String(status.plan || '') : '',
+          detail: loggedIn ? '' : String(status && status.detail || 'Could not inspect the Claude Code login.'),
+        });
+      }
+    );
+  });
+}
 
 function hermesCredentialProcessEnv(extra = {}) {
   const env = {};
@@ -3267,11 +3341,16 @@ function hermesRuntimeAvailable() {
   });
 }
 
-async function hermesConnectionStatuses() {
+async function hermesConnectionStatuses(email) {
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const providers = Array.from(HERMES_STATUS_PROVIDERS);
   const values = await boundedMap(providers, HERMES_STATUS_CONCURRENCY, async (provider) => [
     provider,
-    await runHermesAuthStatus(provider),
+    hermesDisconnectedProviders.has(provider) || harnessProviderDisconnectedForUser(settings, email, provider)
+      ? false
+      : (provider === CLAUDE_SUBSCRIPTION_PROVIDER
+        ? (await runClaudeSubscriptionStatus()).loggedIn
+        : await runHermesAuthStatus(provider)),
   ]);
   return Object.fromEntries(values);
 }
@@ -3326,6 +3405,8 @@ function waitForHermesAuthPrompt(entry, timeoutMs) {
 function harnessCliProviderForUser(email) {
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, email);
+  const selected = preference.provider === 'openai-api' ? preference.apiProvider : preference.provider;
+  if (harnessProviderDisconnectedForUser(settings, email, selected)) return null;
   if (preference.provider === 'openai-api') return preference.apiProvider || 'openai-api';
   return HERMES_CLI_PROVIDER_BY_ONBOARDING_PROVIDER[preference.provider] || null;
 }
@@ -3537,6 +3618,12 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
   };
   settings.harnessByUser[owner] = preference;
   db.saveSingleton(conn, 'settings', settings);
+  if (effectiveProvider === CLAUDE_SUBSCRIPTION_PROVIDER) {
+    // A successful explicit selection reconnects Mia to the existing external
+    // Claude Code login. The probe itself must not re-enable dispatch before
+    // the user finishes saving this preference.
+    setHarnessProviderDisconnected(owner, effectiveProvider, false);
+  }
   bumpVersion();
   if (isManagedRouter && MANAGED_ROUTER_URL) {
     void autoProvisionManagedRouter(owner);
@@ -3554,7 +3641,7 @@ app.get('/api/settings/harness/auth', requireAuth, (req, res) => {
 
 app.get('/api/settings/harness/auth/status', requireAuth, async (req, res) => {
   const [connections, hermesAgent] = await Promise.all([
-    hermesConnectionStatuses(),
+    hermesConnectionStatuses(req.userEmail),
     hermesRuntimeAvailable(),
   ]);
   return res.status(200).json({ connections, runtimes: { hermesAgent } });
@@ -3638,6 +3725,17 @@ app.post('/api/settings/harness/auth/start', requireGlobalSettingsAdmin, async (
   if (!HERMES_AUTH_PROVIDERS.has(provider)) {
     return res.status(400).json({ error: 'unsupported harness sign-in' });
   }
+  if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
+    const status = await runClaudeSubscriptionStatus();
+    if (status.loggedIn) {
+      return res.status(200).json({ auth: {
+        state: 'connected', provider, plan: status.plan || null,
+      } });
+    }
+    return res.status(409).json({ error: status.detail, auth: {
+      state: 'error', provider, error: status.detail,
+    } });
+  }
   const auth = await waitForHermesAuthPrompt(startHermesAuth(req.userEmail, provider), HERMES_AUTH_PROMPT_WAIT_MS);
   return res.status(200).json({ auth: publicHermesAuthState(auth) });
 });
@@ -3648,6 +3746,16 @@ app.post('/api/settings/harness/auth/logout', requireGlobalSettingsAdmin, async 
     return res.status(400).json({ error: 'unsupported harness disconnect provider' });
   }
   disconnectHermesAuth(req.userEmail, provider);
+  if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
+    forgetNativeChatModelProvider(provider);
+    setHarnessProviderDisconnected(req.userEmail, provider, true);
+    let closedSessions = 0;
+    try { closedSessions = await closeHermesGatewaySessions(); } catch (_) { /* next turn still rechecks persisted state */ }
+    bumpVersion();
+    return res.status(200).json({
+      ok: true, provider, state: 'disconnected', closedSessions, externalCredentialsPreserved: true,
+    });
+  }
   try {
     await runHermesLogout(provider);
     forgetNativeChatModelProvider(provider);

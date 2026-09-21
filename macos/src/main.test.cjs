@@ -92,6 +92,32 @@ test("packaged macOS runtime is self-contained and ignores ambient Hermes", () =
   assert.match(source, /process\.env\.HERMES_GWS_BIN = gwsLauncher/);
   assert.match(source, /process\.env\.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND = "file"/);
   assert.match(source, /\[pythonExecutable, hermesLauncher, ghostLauncher, gwsLauncher\]/);
+  assert.match(source, /CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR/);
+  assert.match(source, /discoverClaudeCodeCommand\(\)/);
+  assert.match(source, /\.npm-global[\s\S]*claude/);
+});
+
+test("Claude CLI discovery skips an unreadable PATH entry", () => {
+  const main = loadMain();
+  const originalPath = process.env.PATH;
+  const originalStatSync = fs.statSync;
+  try {
+    process.env.PATH = ["/unreadable", "/working"].join(path.delimiter);
+    fs.statSync = candidate => {
+      if (candidate.startsWith("/unreadable/")) {
+        const error = new Error("permission denied");
+        error.code = "EACCES";
+        throw error;
+      }
+      if (candidate.startsWith("/working/")) return { isFile: () => true };
+      return undefined;
+    };
+    assert.equal(main.discoverClaudeCodeCommand(), path.join("/working", "claude"));
+  } finally {
+    fs.statSync = originalStatSync;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
 });
 
 test("packaged runtime resolves platform layout through shared helpers", () => {

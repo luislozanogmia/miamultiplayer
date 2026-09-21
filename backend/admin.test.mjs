@@ -98,8 +98,11 @@ function seedUsers(dbPath, rows) {
 
 const BOOT_ADMIN = { email: 'boot-admin@example.com', password: 'correct-horse-battery-staple' };
 
-async function startServer({ extraEnv = {}, seedRows = [], includeBootAdmin = true, preloadScript = '', cronRace = false } = {}) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'miaos-admin-test-'));
+async function startServer({
+  extraEnv = {}, seedRows = [], includeBootAdmin = true, preloadScript = '', cronRace = false,
+  existingRoot = '',
+} = {}) {
+  const tempDir = existingRoot || await mkdtemp(path.join(os.tmpdir(), 'miaos-admin-test-'));
   const dbPath = path.join(tempDir, 'mia.db');
   const hermesHome = path.join(tempDir, 'hermes');
   const hermesAgentRoot = path.join(hermesHome, 'hermes-agent');
@@ -109,7 +112,9 @@ async function startServer({ extraEnv = {}, seedRows = [], includeBootAdmin = tr
   const cronScanReadyPath = cronRace ? path.join(tempDir, 'cron-scan-ready') : '';
   const cronReleasePath = cronRace ? path.join(tempDir, 'cron-release') : '';
   if (preloadPath) fs.writeFileSync(preloadPath, preloadScript, { encoding: 'utf8', mode: 0o600 });
-  seedUsers(dbPath, [ ...(includeBootAdmin ? [{ ...BOOT_ADMIN, role: 'member' }] : []), ...seedRows]);
+  if (!existingRoot) {
+    seedUsers(dbPath, [ ...(includeBootAdmin ? [{ ...BOOT_ADMIN, role: 'member' }] : []), ...seedRows]);
+  }
 
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
@@ -152,12 +157,12 @@ async function startServer({ extraEnv = {}, seedRows = [], includeBootAdmin = tr
   return { origin, child, logs, tempDir, dbPath, dispatchReadyPath, cronScanReadyPath, cronReleasePath };
 }
 
-async function stopServer({ child, tempDir }) {
+async function stopServer({ child, tempDir }, { preserve = false } = {}) {
   if (child.exitCode === null) {
     child.kill();
     await new Promise((resolve) => child.once('exit', resolve));
   }
-  await rm(tempDir, { recursive: true, force: true });
+  if (!preserve) await rm(tempDir, { recursive: true, force: true });
 }
 
 async function login(origin, email, password) {
@@ -657,6 +662,75 @@ test('process-global provider mutations require an admin browser session', async
     assert.equal(authRedirect.status, 403);
   } finally {
     await stopServer(server);
+  }
+});
+
+test('Claude subscription disconnect persists across restart without logging out the external CLI', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'miaos-claude-disconnect-'));
+  const claude = path.join(root, 'claude');
+  const invocationLog = path.join(root, 'claude-invocations.log');
+  fs.writeFileSync(claude, `#!/bin/sh
+printf '%s\\n' "$*" >> "${invocationLog}"
+if [ "$1 $2" = "auth status" ]; then
+  printf '%s\\n' '{"loggedIn":true,"subscriptionType":"pro"}'
+  exit 0
+fi
+exit 9
+`, { mode: 0o700 });
+  const extraEnv = {
+    HERMES_PYTHON: 'python3',
+    CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claude,
+    CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: path.join(root, 'claude-config'),
+  };
+  let first;
+  let second;
+  try {
+    seedUsers(path.join(root, 'mia.db'), [{ ...BOOT_ADMIN, role: 'member' }]);
+    first = await startServer({ existingRoot: root, extraEnv });
+    const cookie = await loginAsBootAdmin(first);
+    const headers = { cookie, 'content-type': 'application/json' };
+    const provider = 'claude-subscription-directsdk-experimental';
+
+    const connected = await fetch(`${first.origin}/api/settings/harness/auth/start`, {
+      method: 'POST', headers, body: JSON.stringify({ provider }),
+    });
+    assert.equal(connected.status, 200, await connected.text());
+    const selected = await fetch(`${first.origin}/api/settings/harness`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ provider, model: 'claude-sonnet-5[1m]', mode: 'solo' }),
+    });
+    assert.equal(selected.status, 200, await selected.text());
+
+    const before = await fetch(`${first.origin}/api/settings/harness/auth/status`, { headers: { cookie } });
+    assert.equal(before.status, 200);
+    assert.equal((await before.json()).connections[provider], true);
+
+    const disconnected = await fetch(`${first.origin}/api/settings/harness/auth/logout`, {
+      method: 'POST', headers, body: JSON.stringify({ provider }),
+    });
+    const disconnectedBody = await disconnected.json();
+    assert.equal(disconnected.status, 200, JSON.stringify(disconnectedBody));
+    assert.equal(disconnectedBody.externalCredentialsPreserved, true);
+    const after = await fetch(`${first.origin}/api/settings/harness/auth/status`, { headers: { cookie } });
+    assert.equal((await after.json()).connections[provider], false);
+
+    await stopServer(first, { preserve: true });
+    first = null;
+    second = await startServer({ existingRoot: root, extraEnv });
+    const restartedCookie = await loginAsBootAdmin(second);
+    const restarted = await fetch(`${second.origin}/api/settings/harness/auth/status`, {
+      headers: { cookie: restartedCookie },
+    });
+    assert.equal(restarted.status, 200);
+    assert.equal((await restarted.json()).connections[provider], false);
+    assert.doesNotMatch(fs.readFileSync(invocationLog, 'utf8'), /auth logout/);
+  } catch (error) {
+    throw error;
+  } finally {
+    if (first) await stopServer(first, { preserve: true });
+    if (second) await stopServer(second, { preserve: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 

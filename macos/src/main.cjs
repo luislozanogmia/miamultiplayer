@@ -51,6 +51,28 @@ function nativeRuntimeBinaryPath(binDir, name) {
   return path.join(binDir, process.platform === "win32" ? `${name}.exe` : name);
 }
 
+function discoverClaudeCodeCommand() {
+  const explicit = String(process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND || "").trim();
+  if (explicit) return explicit;
+  const home = app.getPath("home");
+  const executable = process.platform === "win32" ? "claude.cmd" : "claude";
+  const candidates = [
+    ...String(process.env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, executable)),
+    ...(process.platform === "darwin" ? ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] : []),
+    ...(process.platform === "win32" && process.env.APPDATA ? [path.join(process.env.APPDATA, "npm", executable)] : []),
+    path.join(home, ".local", "bin", executable),
+    path.join(home, ".npm-global", "bin", executable),
+  ];
+  return candidates.find((candidate) => {
+    try {
+      return fs.statSync(candidate, { throwIfNoEntry: false })?.isFile();
+    } catch (_) {
+      // A stale or unreadable PATH entry must not prevent Mia from starting.
+      return false;
+    }
+  }) || "";
+}
+
 // A source checkout launched with MIA_DEV_DATA_ROOT keeps every desktop
 // artifact — renderer state, cookies, logs, and the browser bridge — under
 // its own data root instead of Electron's default userData. A dev run and
@@ -751,6 +773,7 @@ async function startLocalBackend(exactPort = null) {
   const workspaceDir = miaosWorkspacePath();
   const bridgePaths = ghostBridgePaths();
   const ghostCliHome = resolveGhostCliHome();
+  const claudeCodeCommand = discoverClaudeCodeCommand();
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
     STATIC_DIR: "../frontend",
@@ -780,6 +803,15 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "executions.db"),
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
       || path.join(dataDirectory, "bot-artifacts"),
+    // Claude Code owns its credential store. Hermes' DirectSDK plugin receives
+    // only resolved executable/config paths, never tokens or Anthropic API
+    // overrides. This makes desktop launches see common npm installs without
+    // broadening PATH for model-directed tools.
+    CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR
+      || path.join(app.getPath("home"), ".claude"),
+    ...(claudeCodeCommand
+      ? { CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claudeCodeCommand }
+      : {}),
     // Clerk sign-in is on by default: the backend carries Mia's instance as
     // its built-in configuration, so the desktop app boots into the hosted
     // ecosystem unless the person opts out (MIAOS_DESKTOP_NO_AUTH=1 or
@@ -2118,6 +2150,7 @@ module.exports = {
   bundledPythonPath,
   runtimeLauncherPath,
   nativeRuntimeBinaryPath,
+  discoverClaudeCodeCommand,
   preparePackagedRuntime,
   syncPackagedDirectory,
   configuredUpdateFeedUrl,

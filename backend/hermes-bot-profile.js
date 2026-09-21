@@ -15,6 +15,8 @@ const {
 const MIAOS_AGENT_HERMES_PROFILE = 'miaos-agent-runtime';
 const MIAOS_AGENT_GOOGLE_HERMES_PROFILE = 'miaos-agent-google-runtime';
 const MIAOS_BOT_HERMES_PROFILE = 'miaos-bot-worker';
+const CLAUDE_SUBSCRIPTION_PLUGIN = 'claude-subscription-directsdk-experimental';
+const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
 const FULL_AGENT_TOOLSETS = Object.freeze(['file', 'terminal', 'memory', 'session_search', 'todo', 'clarify']);
 const SEARCH_ONLY_TOOLSETS = Object.freeze(['web', 'todo', 'clarify']);
 const GOOGLE_WORKSPACE_MCP_TOOLS = Object.freeze([
@@ -188,6 +190,30 @@ function writeAtomic(file, value, mode = 0o600) {
   }
 }
 
+function provisionClaudeSubscriptionPlugin(profileDir) {
+  if (!fs.existsSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, 'plugin.yaml'))) {
+    throw new Error('Mia bundled Claude subscription plugin is missing.');
+  }
+  const pluginsDir = path.join(profileDir, 'plugins');
+  const destination = path.join(pluginsDir, CLAUDE_SUBSCRIPTION_PLUGIN);
+  const markerName = 'MIAOS_PLUGIN_PROVENANCE.json';
+  const sourceMarker = fs.readFileSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, markerName), 'utf8');
+  const destinationMarker = path.join(destination, markerName);
+  fs.mkdirSync(pluginsDir, { recursive: true, mode: 0o700 });
+  if (fs.existsSync(destination)) {
+    let installedMarker = '';
+    try { installedMarker = fs.readFileSync(destinationMarker, 'utf8'); } catch (_) { /* unmanaged */ }
+    if (!installedMarker) {
+      throw new Error(`refusing to overwrite unmanaged Hermes plugin: ${CLAUDE_SUBSCRIPTION_PLUGIN}`);
+    }
+    if (installedMarker === sourceMarker) return destination;
+    fs.rmSync(destination, { recursive: true, force: true });
+  }
+  fs.cpSync(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, destination, { recursive: true, force: true });
+  fs.chmodSync(destination, 0o700);
+  return destination;
+}
+
 function provisionRuntimeProfile({
   profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview,
 }) {
@@ -210,6 +236,7 @@ function provisionRuntimeProfile({
 
   fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(profileDir, 0o700);
+  provisionClaudeSubscriptionPlugin(profileDir);
   for (const name of ['sessions', 'memories', 'skills', 'cron']) {
     fs.mkdirSync(path.join(profileDir, name), { recursive: true, mode: 0o700 });
   }
@@ -330,11 +357,14 @@ module.exports = {
   FULL_AGENT_TOOLSETS,
   SEARCH_ONLY_TOOLSETS,
   GOOGLE_WORKSPACE_MCP_TOOLS,
+  CLAUDE_SUBSCRIPTION_PLUGIN,
+  CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   SHELL_GUARD,
   backgroundReviewMode,
   backgroundReviewEnabledForGateway,
   backgroundReviewEnabledForBot,
   runtimeProfileConfig,
+  provisionClaudeSubscriptionPlugin,
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,
   provisionHermesBotProfile,
