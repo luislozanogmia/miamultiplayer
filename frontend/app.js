@@ -10793,17 +10793,6 @@
      Pins are a per-workspace convenience, so they live in localStorage. */
   var SIDEBAR_PIN_LIMIT = 4;
   var SIDEBAR_PIN_DEFAULTS = ['web-browser'];
-  /* Header pins use quiet monochrome line glyphs, matching the people and
-     wrench buttons beside them, instead of the menu's full-color icons. */
-  var SIDEBAR_PIN_ICONS = {
-    'new-chat': '<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-4 4z"></path><path d="M12 8v4M10 10h4"></path>',
-    'new-bot': '<rect x="5" y="8" width="14" height="10" rx="2.5"></rect><path d="M12 8V5M9.5 12.5h.01M14.5 12.5h.01M9 15.5h6"></path>',
-    'new-channel': '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h7A2.5 2.5 0 0 1 16 5.5v3A2.5 2.5 0 0 1 13.5 11H8l-4 3.5z"></path><path d="M18 9.5h.5A2.5 2.5 0 0 1 21 12v3a2.5 2.5 0 0 1-2.5 2.5H18V21l-4-3.5h-3"></path>',
-    'automations': '<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7v5l3 2"></path>',
-    'connected-apps': '<circle cx="12" cy="6" r="2.2"></circle><circle cx="6" cy="17" r="2.2"></circle><circle cx="18" cy="17" r="2.2"></circle><path d="M10.8 7.8 7.2 15M13.2 7.8l3.6 7.2M8.2 17h7.6"></path>',
-    'bot-store': '<path d="M4 9.5 5.2 5h13.6l1.2 4.5"></path><path d="M4 9.5a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"></path><path d="M5 9.8V19h14V9.8"></path><path d="M10 19v-5h4v5"></path>',
-    'web-browser': '<circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path>'
-  };
   function sidebarPinStorageKey(){ return 'miaSidebarToolPins:' + activeWorkspaceKey; }
   function sidebarPinMenuItem(action){
     var menu = el('#chatToolsMenu');
@@ -10852,9 +10841,9 @@
       btn.className = 'chat-sidebar-tool-btn chat-sidebar-pin-btn';
       btn.title = name;
       btn.setAttribute('aria-label', name);
-      var glyph = SIDEBAR_PIN_ICONS[action];
-      if(glyph) btn.innerHTML = '<svg' + (action === 'web-browser' ? ' data-icon-set="lucide"' : '') + ' viewBox="0 0 24 24" aria-hidden="true">' + glyph + '</svg>';
-      else if(icon) btn.innerHTML = icon.innerHTML;
+      /* Clone the menu's canonical Lucide SVG instead of maintaining a
+         second set of custom paths with different optical bounds. */
+      if(icon) btn.innerHTML = icon.innerHTML;
       btn.addEventListener('click', function(e){
         e.stopPropagation();
         var menu = el('#chatToolsMenu');
