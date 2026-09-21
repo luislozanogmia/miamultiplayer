@@ -45,6 +45,7 @@ const { preferredName, openingMessage, nameAnswer, NEWS_INTRO, newsBriefing } = 
 const {
   buildContext,
   buildBotContext,
+  userInstructionSection,
   runInference,
   runInferenceViaHermesGateway,
   steerHermesGatewaySession,
@@ -1633,10 +1634,16 @@ async function resetHermesForOwner(owner, storedGatewaySessionIds) {
   const result = { disconnectedProviders: [], deletedSessions: 0, gatewayRestarted: false, failures: [] };
 
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  let settingsChanged = false;
   if (settings.harnessByUser && typeof settings.harnessByUser === 'object' && settings.harnessByUser[owner]) {
     delete settings.harnessByUser[owner];
-    db.saveSingleton(conn, 'settings', settings);
+    settingsChanged = true;
   }
+  if (settings.instructionsByUser && typeof settings.instructionsByUser === 'object' && settings.instructionsByUser[owner]) {
+    delete settings.instructionsByUser[owner];
+    settingsChanged = true;
+  }
+  if (settingsChanged) db.saveSingleton(conn, 'settings', settings);
 
   let connectedProviders = [];
   try {
@@ -1688,6 +1695,7 @@ async function resetHermesEverything() {
   };
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   settings.harnessByUser = {};
+  settings.instructionsByUser = {};
   db.saveSingleton(conn, 'settings', settings);
   for (const owner of Array.from(harnessAuthByUser.keys())) {
     const entry = harnessAuthByUser.get(owner);
@@ -1802,7 +1810,7 @@ function wipeMiaDataForEverything({ keepEmail, keepSessionToken }) {
       }
     }
     conn.prepare("DELETE FROM meta WHERE key LIKE 'departments:%'").run();
-    db.saveSingleton(conn, 'settings', { ...DEFAULT_SETTINGS, harnessByUser: {} });
+    db.saveSingleton(conn, 'settings', { ...DEFAULT_SETTINGS, harnessByUser: {}, instructionsByUser: {} });
     if (keepSessionToken) conn.prepare('DELETE FROM sessions WHERE token <> ?').run(keepSessionToken);
     else conn.prepare('DELETE FROM sessions').run();
     if (keepEmail) conn.prepare('DELETE FROM users WHERE LOWER(email) <> ?').run(keepEmail);
@@ -2178,7 +2186,7 @@ app.post('/api/onboarding/news', requireAuth, async (req, res) => {
     db.saveOne(conn, 'bots', record.id, record);
     pendingRecord = record;
     await ensureNativeBotConversation(record);
-    await cronSync.syncBotAutomation(record);
+    await syncBotAutomationWithInstructions(record);
     if (!record.hermesCronJobIds || !record.hermesCronJobIds[automation.id]) throw new Error('The scheduler did not confirm your briefing. Please retry.');
     record.status = 'running';
     const event = conn.transaction(() => {
@@ -2612,11 +2620,41 @@ const DEFAULT_SETTINGS = {
   // The harness owns OAuth/API credentials. Mia keeps only each user's
   // product preference and workspace mode in the existing settings document.
   harnessByUser: {},
+  // User-authored preferences are separate from app-owned safety and tool
+  // policy. Agent instructions guide Mia/general agents; bot instructions
+  // layer onto every bot's own brief.
+  instructionsByUser: {},
   // Starter-bot template names the user dismissed from the sidebar. Stored
   // server-side so a dismissal survives desktop profile switches and
   // reinstalls (localStorage is per-Electron-profile and does not).
   hiddenStarterBots: [],
 };
+const MAX_GLOBAL_INSTRUCTIONS_LENGTH = 8000;
+
+function normalizeInstructionSettings(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  return {
+    agent: String(input.agent || '').trim().slice(0, MAX_GLOBAL_INSTRUCTIONS_LENGTH),
+    bot: String(input.bot || '').trim().slice(0, MAX_GLOBAL_INSTRUCTIONS_LENGTH),
+  };
+}
+
+function instructionSettingsForUser(settings, email) {
+  const byUser = settings && settings.instructionsByUser && typeof settings.instructionsByUser === 'object'
+    ? settings.instructionsByUser
+    : {};
+  return normalizeInstructionSettings(byUser[String(email || '').trim().toLowerCase()]);
+}
+
+function currentInstructionSettings(email) {
+  return instructionSettingsForUser(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS), email);
+}
+
+function syncBotAutomationWithInstructions(bot, existingJob, existingRegistry) {
+  const owner = ownerOf(bot);
+  const globalInstructions = currentInstructionSettings(owner).bot;
+  return cronSync.syncBotAutomation(bot, existingJob, existingRegistry, { globalInstructions });
+}
 let runtimeApiKey = '';
 function getApiKey() {
   return runtimeApiKey || process.env.ANTHROPIC_API_KEY || '';
@@ -3392,6 +3430,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
     guardrails: settings.guardrails,
     lastBackup: settings.lastBackup || null,
     chatOutput: settings.chatOutput === 'verbose' ? 'verbose' : 'concise',
+    instructions: instructionSettingsForUser(settings, req.userEmail),
     harness: harnessPreferenceForUser(settings, req.userEmail),
     hiddenStarterBots: Array.isArray(settings.hiddenStarterBots)
       ? settings.hiddenStarterBots.filter((name) => typeof name === 'string')
@@ -3425,6 +3464,35 @@ app.post('/api/settings/output', requireAuth, (req, res) => {
   db.saveSingleton(conn, 'settings', settings);
   applyChatOutputSetting(output);
   return res.status(200).json({ chatOutput: output });
+});
+
+app.post('/api/settings/instructions', requireAuth, async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  if (typeof body.agent !== 'string' || typeof body.bot !== 'string') {
+    return res.status(400).json({ error: 'agent and bot instructions must be strings' });
+  }
+  if (body.agent.length > MAX_GLOBAL_INSTRUCTIONS_LENGTH || body.bot.length > MAX_GLOBAL_INSTRUCTIONS_LENGTH) {
+    return res.status(400).json({ error: `instructions must be ${MAX_GLOBAL_INSTRUCTIONS_LENGTH} characters or fewer` });
+  }
+  const owner = String(req.userEmail || '').trim().toLowerCase();
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  if (!settings.instructionsByUser || typeof settings.instructionsByUser !== 'object') settings.instructionsByUser = {};
+  const instructions = normalizeInstructionSettings(body);
+  settings.instructionsByUser[owner] = instructions;
+  db.saveSingleton(conn, 'settings', settings);
+
+  // Scheduled prompts are stored in Hermes cron jobs. Refresh the user's
+  // active bots so this preference applies there as well as on the next chat.
+  const bots = db.loadAll(conn, 'bots').filter((bot) => ownerOf(bot) === owner && bot.status !== 'draft');
+  const synced = await Promise.allSettled(bots.map((bot) => syncBotAutomationWithInstructions(bot)));
+  synced.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      db.saveOne(conn, 'bots', bots[index].id, bots[index]);
+    } else {
+      console.error('cron-sync: failed to apply global bot instructions for', bots[index].id, result.reason && result.reason.message);
+    }
+  });
+  return res.status(200).json({ instructions });
 });
 
 // The harness owns provider login and credentials. This endpoint records only
@@ -4269,7 +4337,7 @@ registerResource({
     // Schedule the agent's automation as a Hermes cron job (best-effort —
     // a CLI failure leaves no job and the boot reconcile retries it).
     if (record.status !== 'draft') {
-      await cronSync.syncBotAutomation(record).catch((err) =>
+      await syncBotAutomationWithInstructions(record).catch((err) =>
         console.error('cron-sync: failed to schedule automation for', record.id, err.message)
       );
     }
@@ -4283,7 +4351,7 @@ registerResource({
     // pauses address the right job.
     const cronOperation = record.status === 'draft'
       ? cronSync.removeBotCron(record)
-      : cronSync.syncBotAutomation(record);
+      : syncBotAutomationWithInstructions(record);
     await cronOperation.catch((err) =>
       console.error('cron-sync: failed to sync automation for', record.id, err.message)
     );
@@ -5044,13 +5112,14 @@ async function createNativeBotFromMiaRequest(companyId, ownerEmail, message, mod
 // this function runs and completed only after the final agent event is saved.
 // Keep the prompt builder explicit so the same authenticated-owner Google
 // context and write capability are carried into that durable Hermes call.
-function buildHermesTaskPrompt(agentForPrompt, transcript, message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite) {
+function buildHermesTaskPrompt(agentForPrompt, transcript, message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite, globalInstructions) {
   const basePrompt = buildBotContext(
     agentForPrompt,
     transcript,
     message,
     workspaceContext,
-    senderLabel ? confirmedSenderDisplayName(senderLabel) : ''
+    senderLabel ? confirmedSenderDisplayName(senderLabel) : '',
+    globalInstructions
   );
   const actionInstruction = allowGoogleWorkspaceWrite
     && /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''))
@@ -5062,7 +5131,7 @@ function buildHermesTaskPrompt(agentForPrompt, transcript, message, senderLabel,
   return [basePrompt, appOwnedToolPolicy({ botWorker: true }), actionInstruction].filter(Boolean).join('\n\n');
 }
 
-function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel) {
+function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstructions) {
   // The legacy gateway session carried the persona and browser boundary for the
   // room, then received only the new user message on each turn. Native Mia
   // keeps that same shape: the durable native transcript is seeded once and
@@ -5072,7 +5141,8 @@ function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel) {
     [],
     '',
     '',
-    senderLabel ? senderDisplayName(senderLabel) : ''
+    senderLabel ? senderDisplayName(senderLabel) : '',
+    globalInstructions
   );
   const onboardingGuide = 'For a new user, help them get one useful thing done. Ask one relevant question at a time. If they ask to be shown around, briefly explain chat, connected apps, bots, and automations, then offer a small first task. Do not require a biography or invent a name from an email address. Respect the preferred name confirmed in the conversation.';
   return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext()].filter(Boolean).join('\n\n');
@@ -5084,7 +5154,7 @@ function miaosAgentWorkspacePromptContext() {
   return EFFECTIVE_RELEASE_PROFILE.agentSearchOnly ? '' : miaosWorkspacePromptContext();
 }
 
-function buildHermesGatewayTurnMessage(message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite) {
+function buildHermesGatewayTurnMessage(message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite, globalInstructions) {
   const actionInstruction = allowGoogleWorkspaceWrite
     && /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''))
     ? googleWorkspaceActions.googleWorkspaceActionInstruction(
@@ -5096,11 +5166,12 @@ function buildHermesGatewayTurnMessage(message, senderLabel, workspaceContext, g
     ? `Current Mia platform state for this turn:\n${workspaceContext}`
     : '';
   const userLine = `${senderLabel ? senderDisplayName(senderLabel) : 'user'}: ${String(message || '').trim()}`;
+  const instructionSection = userInstructionSection('Agent', globalInstructions);
   // A Hermes session can outlive a Mia backend or browser bridge restart.
   // Repeat the complete app-owned browser contract on every turn so a resumed
   // session probes current native state instead of trusting stale history or
   // the system prompt from when the session was first created.
-  return [currentContext, miaosAgentWorkspacePromptContext(), actionInstruction, loadMiaGhostSkill(), userLine]
+  return [currentContext, miaosAgentWorkspacePromptContext(), actionInstruction, loadMiaGhostSkill(), instructionSection, userLine]
     .filter(Boolean).join('\n\n');
 }
 
@@ -5558,6 +5629,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   if (!message) return;
   const parentEventId = nativeReplyParentEventId(trigger);
   const agent = nativeDispatchActor(dispatch, conversation, trigger);
+  const globalInstructions = currentInstructionSettings(isGatewayAgent ? trigger.senderId : ownerOf(agent));
   const replyPrincipalType = isGatewayAgent ? 'agent' : 'bot';
   const replyEventType = isGatewayAgent ? 'agent_message' : 'bot_message';
   await createNativeDispatchReplyEvent(dispatch, trigger, {
@@ -5584,7 +5656,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         message,
       }, {
         canSchedule: (record) => sameOwner(record, trigger.senderId) || isAdmin(trigger.senderId),
-        syncBotAutomation: cronSync.syncBotAutomation,
+        syncBotAutomation: syncBotAutomationWithInstructions,
         saveBot: (record) => {
           throwIfNativeDispatchUserInactive(dispatch, trigger);
           return db.saveOne(conn, 'bots', record.id, record);
@@ -5640,7 +5712,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         companyId: conversation.companyId,
       }, {
         canSchedule: (record) => sameOwner(record, trigger.senderId) || isAdmin(trigger.senderId),
-        syncBotAutomation: cronSync.syncBotAutomation,
+        syncBotAutomation: syncBotAutomationWithInstructions,
         saveBot: (record) => {
           throwIfNativeDispatchUserInactive(dispatch, trigger);
           return db.saveOne(conn, 'bots', record.id, record);
@@ -5898,13 +5970,14 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     }
   };
   if (dispatch.targetType === 'gateway') {
-    const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel);
+    const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel, globalInstructions.agent);
     const gatewayMessage = buildHermesGatewayTurnMessage(
       message,
       senderLabel,
       platformContext,
       safeGoogleRefs,
-      googleWorkspaceWriteAuthorized && googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+      googleWorkspaceWriteAuthorized && googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+      globalInstructions.agent
     );
     const gatewayKey = nativeDispatchChainKey(dispatch);
     const ownsPrivateAgentConversation = conversation.type === 'agent'
@@ -5963,7 +6036,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       senderLabel,
       platformContext,
       safeGoogleRefs,
-      googleWorkspaceWriteAuthorized
+      googleWorkspaceWriteAuthorized,
+      globalInstructions.bot
     );
     inferenceResult = await scheduleInference(nativePromptLine(trigger) || message, 'reply', {
       ...inferenceOptions,
@@ -6616,7 +6690,9 @@ function onBackendListening() {
     // Conversation ownership must settle before cron reconciliation reads
     // bot records. Running these in parallel allowed a stale origin-chat
     // pointer to overwrite the repaired bot-conversation destination.
-    .then(() => cronSync.reconcileBotCrons(conn))
+    .then(() => cronSync.reconcileBotCrons(conn, {
+      globalInstructionsForBot: (bot) => currentInstructionSettings(ownerOf(bot)).bot,
+    }))
     .then(deliverBotCronResults)
     .catch((err) => console.error('bot/cron boot reconciliation failed', err.message));
   setInterval(deliverBotCronResults, 15000).unref();

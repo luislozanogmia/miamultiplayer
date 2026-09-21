@@ -138,7 +138,8 @@ test('creation handler confirms scheduler success once and cleans up a failed at
       MAX_BOTS:20, crypto:{randomUUID:() => 'stable-id'},
       db:{loadAll:() => [...bots.values()], setMeta:(_c,_k,value) => {state=JSON.parse(value);}, saveOne:(_c,_table,id,record) => bots.set(id,structuredClone(record))},
       conn:{transaction:fn => fn}, ensureNativeBotConversation:async () => {},
-      cronSync:{syncBotAutomation:async record => {scheduled++; if(fail) throw new Error('scheduler unavailable'); record.hermesCronJobIds={'news-briefing':'job-id'};}, removeBotCron:async () => {removed++;}},
+      syncBotAutomationWithInstructions:async record => {scheduled++; if(fail) throw new Error('scheduler unavailable'); record.hermesCronJobIds={'news-briefing':'job-id'};},
+      cronSync:{removeBotCron:async () => {removed++;}},
       nativeConversationRepository:{createEvent:() => ({event:{id:'event'}})},
       nativeConversationRealtime:{publish:() => {published++;}}, bumpVersion(){},
     };

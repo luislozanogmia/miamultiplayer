@@ -1369,11 +1369,20 @@
       : 'Concise is selected — replies show only the final answer.';
   }
 
+  function renderInstructionSettings(value){
+    var instructions = value && typeof value === 'object' ? value : {};
+    var agent = el('#settingsAgentInstructions');
+    var bot = el('#settingsBotInstructions');
+    if(agent) agent.value = String(instructions.agent || '');
+    if(bot) bot.value = String(instructions.bot || '');
+  }
+
   function loadHarnessSettings(showFirstRun){
     return api('/api/settings').then(function(res){
       var harness = res.data && res.data.harness;
       renderHarnessSettings(harness);
       renderOutputSetting(res.data && res.data.chatOutput === 'verbose' ? 'verbose' : 'concise');
+      renderInstructionSettings(res.data && res.data.instructions);
       syncHiddenStarterBotsFromServer(res.data && res.data.hiddenStarterBots);
       if(harness && harness.onboardingComplete){
         appCollaborationMode = (WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS['multiplayer_test']).mode;
@@ -1415,6 +1424,7 @@
     api('/api/settings').then(function(res){
       var s = res.data || {};
       renderHarnessSettings(s.harness);
+      renderInstructionSettings(s.instructions);
       var g = s.guardrails || {};
       el('#grAllowedProviders').checked = !!(g.allowedProviders && g.allowedProviders.indexOf('openai') !== -1);
       el('#settingsLastBackup').textContent = s.lastBackup ? new Date(s.lastBackup).toLocaleString() : 'never';
@@ -2085,6 +2095,30 @@
       note.classList.add('visible');
       setTimeout(function(){ note.classList.remove('visible'); }, 4000);
     }
+  });
+  var settingsInstructionsSave = el('#settingsInstructionsSave');
+  if(settingsInstructionsSave) settingsInstructionsSave.addEventListener('click', function(){
+    var agent = el('#settingsAgentInstructions');
+    var bot = el('#settingsBotInstructions');
+    var saved = el('#settingsInstructionsSaved');
+    settingsInstructionsSave.disabled = true;
+    if(saved) saved.classList.remove('visible');
+    api('/api/settings/instructions', {method:'POST', body:{
+      agent: agent ? agent.value : '',
+      bot: bot ? bot.value : ''
+    }}).then(function(res){
+      if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not save instructions.');
+      renderInstructionSettings(res.data.instructions);
+      if(saved){
+        saved.textContent = 'Saved';
+        saved.classList.add('visible');
+        setTimeout(function(){ saved.classList.remove('visible'); }, 2500);
+      }
+    }).catch(function(error){
+      showBenchToast(error.message || 'Could not save instructions.');
+    }).finally(function(){
+      settingsInstructionsSave.disabled = false;
+    });
   });
 
   function saveGuardrails(){
@@ -5038,6 +5072,8 @@
   var pluginPaneRoomId = null;
   var localBrowserState = {open: false, roomId: null};
   var LOCAL_BROWSER_OPEN_STATE_KEY = 'miaBrowserOpen';
+  var LOCAL_BROWSER_SEARCH_ENGINE_KEY = 'miaBrowserSearchEngine';
+  var localBrowserSearchEngine = 'google';
   // Bot Store: catalog entries are fetched once (index + each manifest) and
   // cached here for the lifetime of the tab; installingId guards against a
   // double-click firing two POST /api/bots calls for the same manifest.
@@ -5051,9 +5087,16 @@
     'Ask Mia to do things for you',
     'Ask Mia to find something for you'
   ];
-  function localBrowserNormalizeUrl(value){
+  function localBrowserNormalizeUrl(value, searchEngine){
     var input = String(value || '').trim();
-    if(!input) throw new Error('Enter a web address.');
+    if(!input) throw new Error('Enter an address or search.');
+    var explicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input);
+    var localAddress = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(input);
+    var domainAddress = /^[\w.-]+\.\w+(?::\d+)?(?:[/?#]|$)/i.test(input);
+    if(!explicitScheme && !localAddress && !domainAddress){
+      if(searchEngine === 'x') return 'https://x.com/search?q=' + encodeURIComponent(input) + '&src=typed_query';
+      return 'https://www.google.com/search?q=' + encodeURIComponent(input) + '&igu=1';
+    }
     if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) input = /^localhost(?:[:/]|$)/i.test(input) ? 'http://' + input : 'https://' + input;
     var url = new URL(input);
     if(url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Only web addresses are supported.');
@@ -5236,7 +5279,7 @@
 
   function localBrowserNavigate(value){
     var target;
-    try { target = localBrowserNormalizeUrl(value); }
+    try { target = localBrowserNormalizeUrl(value, localBrowserSearchEngine); }
     catch(error){ showBenchToast(error.message || 'Enter a valid web address.'); return false; }
     if(window.miaNativeBrowser) return window.miaNativeBrowser.navigate(target);
     showBenchToast('The browser is available only in Mia.');
@@ -5379,6 +5422,27 @@
     var reload = el('#localBrowserReloadBtn');
     var close = el('#localBrowserCloseBtn');
     var sidebar = el('#localBrowserSidebarBtn');
+    var searchEnginePicker = el('#localBrowserSearchEngine');
+    function renderLocalBrowserSearchEngine(){
+      if(!searchEnginePicker) return;
+      els('[data-search-engine]', searchEnginePicker).forEach(function(button){
+        button.setAttribute('aria-pressed', button.getAttribute('data-search-engine') === localBrowserSearchEngine ? 'true' : 'false');
+      });
+    }
+    if(searchEnginePicker){
+      try { localBrowserSearchEngine = localStorage.getItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY) === 'x' ? 'x' : 'google'; }
+      catch(_browserSearchReadError){ localBrowserSearchEngine = 'google'; }
+      renderLocalBrowserSearchEngine();
+      searchEnginePicker.addEventListener('click', function(event){
+        var button = event.target.closest('[data-search-engine]');
+        if(!button) return;
+        localBrowserSearchEngine = button.getAttribute('data-search-engine') === 'x' ? 'x' : 'google';
+        renderLocalBrowserSearchEngine();
+        try { localStorage.setItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY, localBrowserSearchEngine); }
+        catch(_browserSearchWriteError) {}
+        if(input) input.focus();
+      });
+    }
     if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onOpen){
       window.miaDesktop.browser.onOpen(function(action){
         openWebBrowserTool();

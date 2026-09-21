@@ -319,7 +319,7 @@ test('active automation API is sourced from Hermes cron sessions and workspace s
   assert.match(server, /botVisibleInWorkspace\(run\.bot, req\)/);
   assert.match(server, /const conversation = nativeBotConversation\(run\.bot\)/);
   assert.match(server, /conversationId: conversation \? conversation\.id : null/);
-  assert.match(server, /reconcileNativeBotConversations\(\)[\s\S]*\.then\(\(\) => cronSync\.reconcileBotCrons\(conn\)\)/);
+  assert.match(server, /reconcileNativeBotConversations\(\)[\s\S]*\.then\(\(\) => cronSync\.reconcileBotCrons\(conn, \{[\s\S]*globalInstructionsForBot/);
 });
 
 test('draft bots remain visible and inactive without scheduling work', async () => {
@@ -831,4 +831,17 @@ test('URL bar autocomplete degrades to nothing when the desktop shell has no his
   assert.match(source, /event\.key === 'Escape'\)\{\s*closeLocalBrowserSuggest\(\);/);
   assert.match(source, /\.slice\(0, 5\);/);
   assert.match(styles, /\.local-browser-suggest\{/);
+});
+
+test('browser address bar defaults plain text to Google and offers persistent X search', async () => {
+  const [html, source] = await Promise.all([
+    readFile(htmlUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+  assert.match(html, /id="localBrowserSearchEngine"[\s\S]*data-search-engine="google"[\s\S]*assets\/connectors\/google-g\.svg[\s\S]*data-search-engine="x"[\s\S]*assets\/icons\/x-logo\.svg/);
+  assert.match(source, /LOCAL_BROWSER_SEARCH_ENGINE_KEY = 'miaBrowserSearchEngine'/);
+  assert.match(source, /function localBrowserNormalizeUrl\(value, searchEngine\)/);
+  assert.match(source, /https:\/\/www\.google\.com\/search\?q=/);
+  assert.match(source, /https:\/\/x\.com\/search\?q=/);
+  assert.match(source, /localStorage\.setItem\(LOCAL_BROWSER_SEARCH_ENGINE_KEY/);
 });
