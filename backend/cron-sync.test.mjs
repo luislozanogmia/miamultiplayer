@@ -209,17 +209,17 @@ test('jobPromptFor requires an explicit scheduled task instead of guessing from 
   assert.match(prompt, /web_extract[\s\S]*Task:\nRun the reminder now\.$/);
 });
 
-test('a slash-namespaced OpenRouter model id schedules a job', async () => {
+test('a slash-namespaced provider model id schedules a job', async () => {
   resetCommands();
   setJobs([]);
-  const agent = enabledAgent({ model: 'deepseek/deepseek-v4.1-flash', modelProvider: 'openrouter' });
+  const agent = enabledAgent({ model: 'vendor/model-family.v1', modelProvider: 'router' });
 
   await cronSync.syncBotAutomation(agent, null);
 
   const commands = readCommands();
   assert.equal(commands.length, 1);
   assert.equal(commands[0][2], 'create');
-  assert.deepEqual(commands[0].slice(-4), ['--model', 'deepseek/deepseek-v4.1-flash', '--provider', 'openrouter']);
+  assert.deepEqual(commands[0].slice(-4), ['--model', 'vendor/model-family.v1', '--provider', 'router']);
 });
 
 test('a model id with multiple slashes or a bare slash is still rejected', async () => {
@@ -227,7 +227,7 @@ test('a model id with multiple slashes or a bare slash is still rejected', async
     resetCommands();
     setJobs([]);
     await assert.rejects(
-      () => cronSync.syncBotAutomation(enabledAgent({ id: `agent-bad-${model.length}`, model, modelProvider: 'openrouter' }), null),
+      () => cronSync.syncBotAutomation(enabledAgent({ id: `agent-bad-${model.length}`, model, modelProvider: 'router' }), null),
       /valid connected model/
     );
     assert.equal(readCommands().length, 0);

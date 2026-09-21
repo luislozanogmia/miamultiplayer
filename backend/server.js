@@ -4828,6 +4828,26 @@ function nativePromptLine(event) {
   return `${senderDisplayName(event.senderId)}: ${body}`;
 }
 
+function allNativeConversationEvents({ companyId, conversationId, includeDeleted = false, excludedSenderTypes = [] }) {
+  const events = [];
+  let afterSequence = null;
+  let hasMore = true;
+  while (hasMore) {
+    const page = nativeConversationRepository.listEvents({
+      companyId,
+      conversationId,
+      includeDeleted,
+      limit: 100,
+      excludedSenderTypes,
+      ...(afterSequence === null ? {} : { afterSequence }),
+    });
+    events.push(...page.events);
+    hasMore = page.hasMore;
+    afterSequence = page.nextAfterSequence;
+  }
+  return events;
+}
+
 function nativeDispatchActor(dispatch, conversation, trigger) {
   if (dispatch.targetType === 'gateway') {
     const department = conversation.metadata && conversation.metadata.department;
@@ -5090,7 +5110,7 @@ function nativeHermesGatewaySeedMessages(systemPrompt, events, triggerId) {
     if (!event || event.id === triggerId || isNativeProgressEvent(event)) continue;
     const body = nativeEventText(event);
     if (!body) continue;
-    const role = event.senderType === 'agent'
+    const role = event.senderType === 'agent' || event.senderType === 'bot'
       ? 'assistant'
       : event.senderType === 'system' ? 'system' : 'user';
     messages.push({ role, content: nativePromptLine(event) || body });
@@ -5756,14 +5776,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       return miaResult;
     }
   }
-  const history = nativeConversationRepository.listEvents({
+  const historyEvents = allNativeConversationEvents({
     companyId: dispatch.companyId,
     conversationId: dispatch.conversationId,
     includeDeleted: false,
-    limit: 100,
     excludedSenderTypes: conversation.type === 'agent' ? ['bot'] : [],
   });
-  const transcript = (history.events || [])
+  const transcript = historyEvents
     .filter((event) => event.id !== trigger.id && !isNativeProgressEvent(event))
     .map(nativePromptLine)
     .filter(Boolean);
@@ -5900,7 +5919,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
             : googleGatewayProfile === MIAOS_AGENT_HERMES_PROFILE)
           ? conversation.metadata.hermesGatewaySessionId
           : null,
-        seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, history.events, trigger.id),
+        seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
         title: conversation.name || 'Mia conversation',
         message: gatewayMessage,
         options: inferenceOptions,
@@ -5937,17 +5956,18 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     inferenceResult = gatewayResult;
     rawReply = gatewayResult.text;
   } else {
-    const prompt = buildHermesTaskPrompt(
+    const systemPrompt = buildHermesTaskPrompt(
       agent,
-      transcript,
+      [],
       message,
       senderLabel,
       platformContext,
       safeGoogleRefs,
       googleWorkspaceWriteAuthorized
     );
-    inferenceResult = await scheduleInference(prompt, 'reply', {
+    inferenceResult = await scheduleInference(nativePromptLine(trigger) || message, 'reply', {
       ...inferenceOptions,
+      seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
       signal,
       onEvent: postHermesProgress,
     });
