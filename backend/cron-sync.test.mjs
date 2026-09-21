@@ -15,6 +15,7 @@ const jobsFile = path.join(tempDir, 'jobs.json');
 const stateDbFile = path.join(tempDir, 'state.db');
 const executionsDbFile = path.join(tempDir, 'executions.db');
 const artifactRoot = path.join(tempDir, 'artifacts');
+const botPackageRoot = path.join(tempDir, 'bots');
 const hermesHome = path.join(tempDir, 'hermes');
 const hermesAgentRoot = path.join(hermesHome, 'hermes-agent');
 fs.mkdirSync(hermesAgentRoot, { recursive: true });
@@ -47,11 +48,22 @@ process.env.HERMES_CRON_JOBS_FILE = jobsFile;
 process.env.HERMES_STATE_DB = stateDbFile;
 process.env.HERMES_CRON_EXECUTIONS_DB = executionsDbFile;
 process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = artifactRoot;
+process.env.MIAOS_BOT_PACKAGE_DIR = botPackageRoot;
 process.env.FAKE_HERMES_LOG = commandLog;
 process.env.FAKE_HERMES_PYTHON_LOG = pythonLog;
 process.env.MIA_AUTOMATION_UTC_OFFSET_MIN = '360';
 
 const cronSync = require('./cron-sync.js');
+const { createBotPackageStore } = require('./bot-packages.js');
+const botPackageStore = createBotPackageStore(botPackageRoot);
+
+function ensureBotPackage(bot) {
+  const current = botPackageStore.findDirectory(bot.id);
+  const change = botPackageStore.prepare(bot, current ? {} : { writeInstructions: true });
+  change.apply();
+  change.finish();
+  return botPackageStore.findDirectory(bot.id);
+}
 
 function readCommands() {
   if (!fs.existsSync(commandLog)) return [];
@@ -112,7 +124,7 @@ function setExecutions(rows) {
 }
 
 function enabledAgent(overrides = {}) {
-  return {
+  const bot = {
     id: 'agent-1',
     name: 'Newsletter',
     instructions: 'Publish the weekly newsletter.\nAutomation: Every Monday at 09:00',
@@ -121,6 +133,8 @@ function enabledAgent(overrides = {}) {
     automation: { enabled: true, frequency: 'weekly', time: '09:00', day: 'Monday', prompt: 'Publish the weekly newsletter.' },
     ...overrides,
   };
+  ensureBotPackage(bot);
+  return bot;
 }
 
 test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
@@ -207,6 +221,8 @@ test('jobPromptFor requires an explicit scheduled task instead of guessing from 
   assert.match(prompt, /authorized owner of this bot/);
   assert.match(prompt, /Keep responses, reasoning, and tool use concise and tight/);
   assert.match(prompt, /web_extract[\s\S]*Task:\nRun the reminder now\.$/);
+  assert.doesNotMatch(prompt, /Purpose:/);
+  assert.doesNotMatch(prompt, /Publish the weekly newsletter/);
 });
 
 test('a slash-namespaced provider model id schedules a job', async () => {
@@ -219,6 +235,9 @@ test('a slash-namespaced provider model id schedules a job', async () => {
   const commands = readCommands();
   assert.equal(commands.length, 1);
   assert.equal(commands[0][2], 'create');
+  assert.deepEqual(commands[0].slice(commands[0].indexOf('--workdir'), commands[0].indexOf('--workdir') + 2), [
+    '--workdir', cronSync.botPackageDirectoryFor(agent),
+  ]);
   assert.deepEqual(commands[0].slice(-4), ['--model', 'vendor/model-family.v1', '--provider', 'router']);
 });
 
@@ -269,8 +288,9 @@ test('a stale Hermes job id is replaced by a newly created job', async () => {
   assert.equal(restrictions.length, 1);
   assert.equal(restrictions[0][2], 'replacement-id');
   assert.deepEqual(JSON.parse(restrictions[0][3]), ['web', 'todo', 'clarify', 'artifacts']);
-  assert.equal(restrictions[0][4], cronSync.artifactWorkspaceForBot(agent));
-  assert.equal(fs.statSync(restrictions[0][4]).mode & 0o777, 0o700);
+  assert.equal(restrictions[0][4], cronSync.botPackageDirectoryFor(agent));
+  assert.equal(restrictions[0][5], cronSync.artifactWorkspaceForBot(agent));
+  assert.equal(fs.statSync(restrictions[0][5]).mode & 0o777, 0o700);
 });
 
 test('an edited paused job is also resumed', async () => {
@@ -292,6 +312,9 @@ test('an edited paused job is also resumed', async () => {
   const commands = readCommands();
   assert.equal(commands.length, 2);
   assert.equal(commands[0][2], 'edit');
+  assert.deepEqual(commands[0].slice(commands[0].indexOf('--workdir'), commands[0].indexOf('--workdir') + 2), [
+    '--workdir', cronSync.botPackageDirectoryFor(agent),
+  ]);
   assert.deepEqual(commands[0].slice(-4), ['--model', 'deepseek-v4-pro', '--provider', 'deepseek']);
   assert.equal(commands[1][2], 'resume');
 });
@@ -308,6 +331,65 @@ test('a disabled agent clears a missing job stamp without issuing a command', as
 
   assert.equal(agent.hermesCronJobIds['automation-1'], undefined);
   assert.deepEqual(readCommands(), []);
+});
+
+test('a disabled bot can pause its owned job even when its package is missing', async () => {
+  resetCommands();
+  const agent = enabledAgent({
+    automation: { enabled: false, frequency: 'weekly', time: '09:00', day: 'Monday', prompt: 'Publish.' },
+  });
+  cronSync.migrateBotAutomations(agent);
+  const automation = agent.automations[0];
+  agent.hermesCronJobIds[automation.id] = 'owned-job';
+  setJobs([{ id: 'owned-job', name: cronSync.jobNameFor(agent, automation), enabled: true }]);
+  fs.rmSync(botPackageStore.findDirectory(agent.id), { recursive: true });
+
+  await cronSync.syncBotAutomation(agent);
+
+  assert.deepEqual(readCommands().map((args) => args.slice(2)), [['pause', 'owned-job']]);
+});
+
+test('an enabled bot with a missing package pauses only its owned job and fails closed', async () => {
+  resetCommands();
+  const agent = enabledAgent();
+  cronSync.migrateBotAutomations(agent);
+  const automation = agent.automations[0];
+  agent.hermesCronJobIds[automation.id] = 'owned-job';
+  setJobs([{ id: 'owned-job', name: cronSync.jobNameFor(agent, automation), enabled: true }]);
+  fs.rmSync(botPackageStore.findDirectory(agent.id), { recursive: true });
+
+  await assert.rejects(() => cronSync.syncBotAutomation(agent), /package is missing/);
+
+  assert.deepEqual(readCommands().map((args) => args.slice(2)), [['pause', 'owned-job']]);
+});
+
+test('a package rename edits the owned job to the new workdir without creating a duplicate', async () => {
+  resetCommands();
+  const agent = enabledAgent();
+  cronSync.migrateBotAutomations(agent);
+  const automation = agent.automations[0];
+  const oldDirectory = cronSync.botPackageDirectoryFor(agent);
+  const renamed = { ...agent, name: 'Renamed Newsletter' };
+  const change = botPackageStore.prepare(renamed);
+  change.apply(); change.finish();
+  const newDirectory = cronSync.botPackageDirectoryFor(renamed);
+  assert.notEqual(newDirectory, oldDirectory);
+  renamed.hermesCronJobIds[automation.id] = 'owned-job';
+  setJobs([{
+    id: 'owned-job', name: cronSync.jobNameFor(agent, automation), enabled: true,
+    schedule: { expr: cronSync.automationToCronExpr(automation) },
+    prompt: cronSync.jobPromptFor(agent, automation), deliver: 'local',
+    model: agent.model, provider: agent.modelProvider,
+    enabled_toolsets: cronSync.BOT_TOOLSETS, workdir: oldDirectory,
+    artifact_workspace: cronSync.artifactWorkspaceForBot(agent),
+  }]);
+
+  await cronSync.syncBotAutomation(renamed);
+
+  const commands = readCommands();
+  assert.equal(commands.filter((args) => args[2] === 'edit').length, 1);
+  assert.equal(commands.some((args) => args[2] === 'create'), false);
+  assert.ok(commands[0].includes(newDirectory));
 });
 
 test('a client-supplied foreign job id can never mutate another agent job', async () => {
@@ -434,6 +516,37 @@ test('legacy singleton state migrates once into the first named automation', () 
   });
 });
 
+test('post-save cron merge clears removed job ids without overwriting newer deliveries or edits', () => {
+  const started = enabledAgent({
+    status: 'draft',
+    automations: [{ id: 'automation-1', enabled: true, frequency: 'daily', time: '09:00', prompt: 'Run.' }],
+    hermesCronJobIds: { 'automation-1': 'old-job' },
+    hermesCronDeliveries: { 'automation-1': { sessionId: 'old-session' } },
+  });
+  const synchronized = {
+    ...started,
+    hermesCronJobIds: {},
+    hermesCronDeliveries: {},
+  };
+  const current = {
+    ...started,
+    hermesCronDeliveries: { 'automation-1': { sessionId: 'newer-session' } },
+  };
+  const merged = cronSync.mergeBotCronSyncState(current, synchronized, started);
+  assert.deepEqual(merged.hermesCronJobIds, {});
+  assert.deepEqual(merged.hermesCronDeliveries, { 'automation-1': { sessionId: 'newer-session' } });
+
+  const concurrentlyEdited = {
+    ...current,
+    automations: [{ ...current.automations[0], prompt: 'A newer task.' }],
+    hermesCronJobIds: { 'automation-1': 'newer-job' },
+  };
+  const preserved = cronSync.mergeBotCronSyncState(concurrentlyEdited, synchronized, started);
+  assert.equal(preserved.automations[0].prompt, 'A newer task.');
+  assert.deepEqual(preserved.hermesCronJobIds, { 'automation-1': 'newer-job' });
+  assert.equal(cronSync.mergeBotCronSyncState(null, synchronized, started), null);
+});
+
 test('two automations sync independently and deleting one removes only its job', async () => {
   const jobs = [
     {id:'job-morning', name:'Mia bot-multi/morning · Brief Bot · Morning Brief', enabled:true, schedule:{expr:'0 15 * * *'}, prompt:'old', deliver:'local'},
@@ -450,6 +563,7 @@ test('two automations sync independently and deleting one removes only its job',
     ],
     hermesCronJobIds:{morning:'job-morning', evening:'job-evening'},
   };
+  ensureBotPackage(bot);
   await cronSync.syncBotAutomation(bot);
   const edits = readCommands().filter((args) => args[2] === 'edit');
   assert.deepEqual(edits.map((args) => args[3]).sort(), ['job-evening', 'job-morning']);

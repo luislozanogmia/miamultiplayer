@@ -615,7 +615,7 @@ function botAutomationSchedule(automation) {
   return automation.frequency && automation.frequency !== 'none' ? String(automation.frequency) : 'manual';
 }
 
-function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'authorized user' } = {}) {
+function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'authorized user', includePurpose = true } = {}) {
   const record = bot && typeof bot === 'object' ? bot : {};
   const name = String(record.name || 'Task bot').trim();
   const purpose = String(record.instructions || record.role || record.output || 'Complete the work assigned by the user.')
@@ -624,7 +624,7 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
   const userReference = confirmedName
     ? `${confirmedName}, the ${userRelationship}`
     : `the ${userRelationship}`;
-  return [
+  const sections = [
     `You are ${name}, a specialized task bot inside Mia.`,
     [
       'What you are:',
@@ -638,8 +638,9 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
       'Who the user is:',
       `You are working for ${userReference}. Address them only by a confirmed preferred name—never infer a name from an email address. Their explicit requests control your work within your permitted scope. Protect their private information and never expose credentials or internal runtime details.`,
     ].join('\n'),
-    `Purpose:\n${purpose}`,
   ];
+  if (includePurpose) sections.push(`Purpose:\n${purpose}`);
+  return sections;
 }
 
 function buildScheduledBotPrompt(bot, automation, options = {}) {
@@ -650,6 +651,7 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     ...botIdentitySections(bot, {
       userDisplayName: options.userDisplayName,
       userRelationship: 'authorized owner of this bot',
+      includePurpose: false,
     }),
   ];
   const instructionSection = userInstructionSection('Bot', options.globalInstructions);
