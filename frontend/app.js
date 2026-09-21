@@ -5072,6 +5072,7 @@
   var pluginPaneRoomId = null;
   var localBrowserState = {open: false, roomId: null};
   var LOCAL_BROWSER_OPEN_STATE_KEY = 'miaBrowserOpen';
+  var LOCAL_BROWSER_SEARCH_ENGINE_KEY = 'miaBrowserSearchEngine';
   // Bot Store: catalog entries are fetched once (index + each manifest) and
   // cached here for the lifetime of the tab; installingId guards against a
   // double-click firing two POST /api/bots calls for the same manifest.
@@ -5085,9 +5086,16 @@
     'Ask Mia to do things for you',
     'Ask Mia to find something for you'
   ];
-  function localBrowserNormalizeUrl(value){
+  function localBrowserNormalizeUrl(value, searchEngine){
     var input = String(value || '').trim();
-    if(!input) throw new Error('Enter a web address.');
+    if(!input) throw new Error('Enter an address or search.');
+    var explicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input);
+    var localAddress = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(input);
+    var domainAddress = /^[\w.-]+\.\w+(?::\d+)?(?:[/?#]|$)/i.test(input);
+    if(!explicitScheme && !localAddress && !domainAddress){
+      if(searchEngine === 'x') return 'https://x.com/search?q=' + encodeURIComponent(input) + '&src=typed_query';
+      return 'https://www.google.com/search?q=' + encodeURIComponent(input) + '&igu=1';
+    }
     if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) input = /^localhost(?:[:/]|$)/i.test(input) ? 'http://' + input : 'https://' + input;
     var url = new URL(input);
     if(url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Only web addresses are supported.');
@@ -5270,7 +5278,8 @@
 
   function localBrowserNavigate(value){
     var target;
-    try { target = localBrowserNormalizeUrl(value); }
+    var searchEngine = el('#localBrowserSearchEngine');
+    try { target = localBrowserNormalizeUrl(value, searchEngine && searchEngine.value === 'x' ? 'x' : 'google'); }
     catch(error){ showBenchToast(error.message || 'Enter a valid web address.'); return false; }
     if(window.miaNativeBrowser) return window.miaNativeBrowser.navigate(target);
     showBenchToast('The browser is available only in Mia.');
@@ -5413,6 +5422,16 @@
     var reload = el('#localBrowserReloadBtn');
     var close = el('#localBrowserCloseBtn');
     var sidebar = el('#localBrowserSidebarBtn');
+    var searchEngine = el('#localBrowserSearchEngine');
+    if(searchEngine){
+      try { searchEngine.value = localStorage.getItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY) === 'x' ? 'x' : 'google'; }
+      catch(_browserSearchReadError){ searchEngine.value = 'google'; }
+      searchEngine.addEventListener('change', function(){
+        try { localStorage.setItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY, searchEngine.value === 'x' ? 'x' : 'google'); }
+        catch(_browserSearchWriteError) {}
+        if(input) input.focus();
+      });
+    }
     if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onOpen){
       window.miaDesktop.browser.onOpen(function(action){
         openWebBrowserTool();

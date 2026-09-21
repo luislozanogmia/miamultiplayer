@@ -832,3 +832,16 @@ test('URL bar autocomplete degrades to nothing when the desktop shell has no his
   assert.match(source, /\.slice\(0, 5\);/);
   assert.match(styles, /\.local-browser-suggest\{/);
 });
+
+test('browser address bar defaults plain text to Google and offers persistent X search', async () => {
+  const [html, source] = await Promise.all([
+    readFile(htmlUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+  assert.match(html, /id="localBrowserSearchEngine"[\s\S]*value="google"[\s\S]*value="x"/);
+  assert.match(source, /LOCAL_BROWSER_SEARCH_ENGINE_KEY = 'miaBrowserSearchEngine'/);
+  assert.match(source, /function localBrowserNormalizeUrl\(value, searchEngine\)/);
+  assert.match(source, /https:\/\/www\.google\.com\/search\?q=/);
+  assert.match(source, /https:\/\/x\.com\/search\?q=/);
+  assert.match(source, /localStorage\.setItem\(LOCAL_BROWSER_SEARCH_ENGINE_KEY/);
+});
