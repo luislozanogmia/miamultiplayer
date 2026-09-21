@@ -593,10 +593,10 @@
       <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled>&lsaquo;</button>
       <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled>&rsaquo;</button>
       <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled>&#8635;</button>
-      <select class="local-browser-search-engine" id="localBrowserSearchEngine" aria-label="Search engine" title="Search engine">
-        <option value="google">Google</option>
-        <option value="x">X</option>
-      </select>
+      <div class="local-browser-search-engine" id="localBrowserSearchEngine" role="group" aria-label="Search engine">
+        <button type="button" class="local-browser-search-engine-btn" data-search-engine="google" aria-label="Search with Google" title="Search with Google" aria-pressed="true"><img src="assets/connectors/google-g.svg" alt="" /></button>
+        <button type="button" class="local-browser-search-engine-btn" data-search-engine="x" aria-label="Search with X" title="Search with X" aria-pressed="false"><img src="assets/icons/x-logo.svg" alt="" /></button>
+      </div>
       <div class="local-browser-url-wrap">
         <input type="text" id="localBrowserUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search or enter a web address" aria-label="Web address" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="localBrowserUrlSuggest" />
         <div class="local-browser-suggest" id="localBrowserUrlSuggest" role="listbox" hidden></div>

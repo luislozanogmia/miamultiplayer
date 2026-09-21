@@ -838,7 +838,7 @@ test('browser address bar defaults plain text to Google and offers persistent X 
     readFile(htmlUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
   ]);
-  assert.match(html, /id="localBrowserSearchEngine"[\s\S]*value="google"[\s\S]*value="x"/);
+  assert.match(html, /id="localBrowserSearchEngine"[\s\S]*data-search-engine="google"[\s\S]*assets\/connectors\/google-g\.svg[\s\S]*data-search-engine="x"[\s\S]*assets\/icons\/x-logo\.svg/);
   assert.match(source, /LOCAL_BROWSER_SEARCH_ENGINE_KEY = 'miaBrowserSearchEngine'/);
   assert.match(source, /function localBrowserNormalizeUrl\(value, searchEngine\)/);
   assert.match(source, /https:\/\/www\.google\.com\/search\?q=/);

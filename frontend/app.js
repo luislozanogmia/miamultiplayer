@@ -5073,6 +5073,7 @@
   var localBrowserState = {open: false, roomId: null};
   var LOCAL_BROWSER_OPEN_STATE_KEY = 'miaBrowserOpen';
   var LOCAL_BROWSER_SEARCH_ENGINE_KEY = 'miaBrowserSearchEngine';
+  var localBrowserSearchEngine = 'google';
   // Bot Store: catalog entries are fetched once (index + each manifest) and
   // cached here for the lifetime of the tab; installingId guards against a
   // double-click firing two POST /api/bots calls for the same manifest.
@@ -5278,8 +5279,7 @@
 
   function localBrowserNavigate(value){
     var target;
-    var searchEngine = el('#localBrowserSearchEngine');
-    try { target = localBrowserNormalizeUrl(value, searchEngine && searchEngine.value === 'x' ? 'x' : 'google'); }
+    try { target = localBrowserNormalizeUrl(value, localBrowserSearchEngine); }
     catch(error){ showBenchToast(error.message || 'Enter a valid web address.'); return false; }
     if(window.miaNativeBrowser) return window.miaNativeBrowser.navigate(target);
     showBenchToast('The browser is available only in Mia.');
@@ -5422,12 +5422,23 @@
     var reload = el('#localBrowserReloadBtn');
     var close = el('#localBrowserCloseBtn');
     var sidebar = el('#localBrowserSidebarBtn');
-    var searchEngine = el('#localBrowserSearchEngine');
-    if(searchEngine){
-      try { searchEngine.value = localStorage.getItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY) === 'x' ? 'x' : 'google'; }
-      catch(_browserSearchReadError){ searchEngine.value = 'google'; }
-      searchEngine.addEventListener('change', function(){
-        try { localStorage.setItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY, searchEngine.value === 'x' ? 'x' : 'google'); }
+    var searchEnginePicker = el('#localBrowserSearchEngine');
+    function renderLocalBrowserSearchEngine(){
+      if(!searchEnginePicker) return;
+      els('[data-search-engine]', searchEnginePicker).forEach(function(button){
+        button.setAttribute('aria-pressed', button.getAttribute('data-search-engine') === localBrowserSearchEngine ? 'true' : 'false');
+      });
+    }
+    if(searchEnginePicker){
+      try { localBrowserSearchEngine = localStorage.getItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY) === 'x' ? 'x' : 'google'; }
+      catch(_browserSearchReadError){ localBrowserSearchEngine = 'google'; }
+      renderLocalBrowserSearchEngine();
+      searchEnginePicker.addEventListener('click', function(event){
+        var button = event.target.closest('[data-search-engine]');
+        if(!button) return;
+        localBrowserSearchEngine = button.getAttribute('data-search-engine') === 'x' ? 'x' : 'google';
+        renderLocalBrowserSearchEngine();
+        try { localStorage.setItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY, localBrowserSearchEngine); }
         catch(_browserSearchWriteError) {}
         if(input) input.focus();
       });
