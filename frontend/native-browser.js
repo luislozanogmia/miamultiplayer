@@ -63,7 +63,10 @@
       scheduled = false;
       var rect = screen.getBoundingClientRect();
       // Native views sit above HTML; hide them while the sidebar drawer covers it.
-      var visible = open && !overlay.hidden && !document.body.classList.contains('browser-sidebar-open');
+      var visible = open && !overlay.hidden &&
+        !document.body.classList.contains('browser-sidebar-open') &&
+        !document.body.classList.contains('native-browser-occluded-about') &&
+        !document.body.classList.contains('native-browser-occluded-conversation');
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       var key = JSON.stringify(payload);

@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+const nativeBrowserSource = readFileSync(new URL('./native-browser.js', import.meta.url), 'utf8');
 
 function functionSlice(name, nextMarker) {
   const start = source.indexOf(`  function ${name}(`);
@@ -146,7 +147,7 @@ test('history filter defaults by stable identity, supports All, and resets acros
       nativeConversations: [
         { id: 'room-a', type: 'bot', name: 'Researcher', metadata: { botId: 'bot-a' } },
         { id: 'room-b', type: 'bot', name: 'Writer', metadata: { botId: 'bot-b' } },
-        { id: 'room-c', type: 'group', metadata: { members: [{ kind: 'agent', agentId: 'bot-a' }, { kind: 'human', email: 'a@example.com' }] } },
+        { id: 'room-c', type: 'group', metadata: { members: [{ kind: 'agent', agentId: 'bot-a' }, { kind: 'agent', agentId: 'bot-b' }, { kind: 'human', email: 'a@example.com' }] } },
       ],
       allAgents: [{ id: 'bot-a', name: 'Researcher' }, { id: 'bot-b', name: 'Writer' }],
       gatewayAgent: null,
@@ -160,6 +161,12 @@ test('history filter defaults by stable identity, supports All, and resets acros
   assert.equal(context.conversationDrawer.agentId, 'bot-a');
   assert.deepEqual(context.chatWs.nativeConversations.filter((conversation) => context.conversationMatchesHistoryAgent(conversation, 'bot-a')).map((conversation) => conversation.id), ['room-a', 'room-c']);
   assert.deepEqual(context.chatWs.nativeConversations.filter((conversation) => context.conversationMatchesHistoryAgent(conversation, 'all')).map((conversation) => conversation.id), ['room-a', 'room-b', 'room-c']);
+  context.chatWs.byRoom['room-c'] = { messages: [
+    { nativeEvent: { senderType: 'bot', senderId: 'bot-a' } },
+    { nativeEvent: { senderType: 'bot', senderId: 'bot-b' } },
+  ] };
+  assert.equal(context.conversationHistoryRowAgent(context.chatWs.nativeConversations[2], 'all').id, 'bot-b');
+  assert.equal(context.conversationHistoryRowAgent(context.chatWs.nativeConversations[2], 'bot-a').id, 'bot-a');
 
   context.conversationDrawer.agentId = 'all';
   context.syncConversationHistoryScope();
@@ -188,4 +195,71 @@ test('an initially empty visible transcript still exposes backward history pagin
   assert.match(renderThread, /if\(!state\.messages\.length && !state\.thinking\)[\s\S]*chatHistoryControlHtml\(state\) \+ chatHeroHtml/);
   assert.match(renderThread, /var historyControl = chatHistoryControlHtml\(state\)/);
   assert.match(renderThread, /wireChatHistoryControl\(thread, roomId\);[\s\S]*return;/);
+});
+
+test('native browser visibility owner occludes and restores the live view without closing it', () => {
+  const start = nativeBrowserSource.indexOf('  function layout()');
+  const end = nativeBrowserSource.indexOf('\n  function render(next)', start);
+  const commands = [];
+  const classes = new Set();
+  const context = {
+    scheduled: false, open: true, lastLayout: '',
+    requestAnimationFrame(callback) { callback(); },
+    screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
+    overlay: { hidden: false },
+    document: { body: { classList: { contains(name) { return classes.has(name); } } } },
+    bridge: { command(payload) { commands.push(payload); return Promise.resolve(); } },
+    JSON,
+  };
+  vm.createContext(context);
+  vm.runInContext(nativeBrowserSource.slice(start, end), context);
+  context.layout();
+  assert.equal(commands.at(-1).visible, true);
+  classes.add('native-browser-occluded-conversation');
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, false);
+  assert.equal(commands.at(-1).panelOpen, true, 'the browser panel and tabs stay open while occluded');
+  classes.add('native-browser-occluded-about');
+  classes.delete('native-browser-occluded-conversation');
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, false, 'closing one overlay cannot reveal the view under another');
+  classes.delete('native-browser-occluded-about');
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, true);
+});
+
+test('conversation drawer toggles native occlusion and row avatars retain bookmark markup', () => {
+  assert.match(source, /function openConversationDrawer\(mode\)[\s\S]*classList\.add\('native-browser-occluded-conversation'\)/);
+  assert.match(source, /function closeDmCompose\(\)[\s\S]*classList\.remove\('native-browser-occluded-conversation'\)/);
+  assert.match(nativeBrowserSource, /MutationObserver\(layout\)\.observe\(document\.body, \{ attributes: true, attributeFilter: \['class'\] \}\)/);
+  assert.match(source, /conversation-history-bookmark[\s\S]*conversation-history-row-agent/);
+});
+
+test('temporary drawer backdrops dismiss safely while docked panes remain non-modal', () => {
+  const clickContext = {};
+  vm.createContext(clickContext);
+  vm.runInContext(functionSlice('browserSidebarOwnsClick', '\n\n  (function wireLocalBrowser'), clickContext);
+  const ownsClick = clickContext.browserSidebarOwnsClick;
+  const inside = {};
+  const menuItem = {};
+  const toggleIcon = {};
+  const outsideChat = {};
+  const contains = (wanted) => ({ contains(target) { return target === wanted; } });
+  assert.equal(ownsClick(inside, contains(inside), null, null), true, 'drawer clicks stay inside');
+  assert.equal(ownsClick(menuItem, null, null, contains(menuItem)), true, 'portaled menu clicks stay inside');
+  assert.equal(ownsClick(toggleIcon, null, contains(toggleIcon), null), true, 'toggle controls its own close');
+  assert.equal(ownsClick(outsideChat, contains(inside), contains(toggleIcon), contains(menuItem)), false, 'chat and toolbar clicks dismiss');
+  assert.match(source, /document\.addEventListener\('click', function\(event\)\{[\s\S]*browser-sidebar-open[\s\S]*browserSidebarOwnsClick\(event\.target, drawer, sidebar, portaledMenu\)[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*event\.stopImmediatePropagation\(\);[\s\S]*setBrowserSidebarOpen\(false\);[\s\S]*\}, true\)/);
+  assert.match(source, /if\(overlay\) overlay\.addEventListener\('click', function\(event\)\{[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*closeDmCompose\(\)/);
+  assert.match(source, /el\('#settingsOverlay'\)\.addEventListener\('click', closeSettingsDrawer\)/);
+  assert.match(source, /el\('#harnessOnboardingOverlay'\)\.addEventListener\('click'/);
+  assert.match(source, /channelNameOverlay[\s\S]*overlay\.addEventListener\('click', closeChannelNameFlow\)/);
+  assert.match(source, /benchCinemaScrim'\)\.addEventListener\('click', function\(\)\{ closeCinema\(\); \}\)/);
+  assert.match(source, /if\(aboutOverlay\) aboutOverlay\.addEventListener\('click', closeAbout\)/);
+  assert.match(source, /function openAbout\(\)[\s\S]*classList\.add\('native-browser-occluded-about'\)/);
+  assert.match(source, /function closeAbout\(\)[\s\S]*classList\.remove\('native-browser-occluded-about'\)/);
+  assert.doesNotMatch(source, /chat-info-pane[^\n]*addEventListener\('click', close/);
 });
