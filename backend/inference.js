@@ -652,11 +652,10 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
         ];
       })
     : ['- None configured.'];
-  // Hermes owns context management for bot runs. Preserve the complete
-  // transcript supplied by the conversation runtime instead of applying a
-  // second, lossy message window here.
-  const conversationLines = Array.isArray(transcript) ? transcript.filter(Boolean) : [];
-  if (message) conversationLines.push(`${senderLabel || 'User'}: ${message}`);
+  // Conversation turns are seeded as structured Hermes messages by the
+  // native runtime. Keep this prompt to durable bot instructions and current
+  // platform state so a long transcript never becomes one uncompressible
+  // mega-message.
   const sections = [
     ...botIdentitySections(bot, {
       userDisplayName: senderLabel,
@@ -677,7 +676,6 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
     `Your automations:\n${automationLines.join('\n')}`,
   ];
   if (platformContext) sections.push(`Current Mia context (authoritative):\n${String(platformContext).trim()}`);
-  if (conversationLines.length) sections.push(`Recent conversation:\n${conversationLines.join('\n')}`);
   return sections.join('\n\n');
 }
 
@@ -692,6 +690,7 @@ function standaloneGatewayOptions(options = {}) {
     : MIAOS_AGENT_HERMES_PROFILE;
   const gatewayOptions = { ...options, profile };
   delete gatewayOptions.gatewayClient;
+  delete gatewayOptions.seedMessages;
   if (imagePaths.length && !requestedProvider) {
     gatewayOptions.provider = VISION_PROVIDER;
     gatewayOptions.model = VISION_MODEL;
@@ -707,7 +706,7 @@ async function runStandaloneInferenceViaHermesGateway(
   const imagePaths = imagePathsFromOptions(options);
   const result = await client.run({
     storedSessionId: null,
-    seedMessages: [],
+    seedMessages: Array.isArray(options.seedMessages) ? options.seedMessages : [],
     title: options.botWorker === true ? 'Mia bot task' : 'Mia assistant task',
     message: String(prompt || ''),
     options: standaloneGatewayOptions(options),

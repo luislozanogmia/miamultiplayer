@@ -5110,7 +5110,7 @@ function nativeHermesGatewaySeedMessages(systemPrompt, events, triggerId) {
     if (!event || event.id === triggerId || isNativeProgressEvent(event)) continue;
     const body = nativeEventText(event);
     if (!body) continue;
-    const role = event.senderType === 'agent'
+    const role = event.senderType === 'agent' || event.senderType === 'bot'
       ? 'assistant'
       : event.senderType === 'system' ? 'system' : 'user';
     messages.push({ role, content: nativePromptLine(event) || body });
@@ -5956,17 +5956,18 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     inferenceResult = gatewayResult;
     rawReply = gatewayResult.text;
   } else {
-    const prompt = buildHermesTaskPrompt(
+    const systemPrompt = buildHermesTaskPrompt(
       agent,
-      transcript,
+      [],
       message,
       senderLabel,
       platformContext,
       safeGoogleRefs,
       googleWorkspaceWriteAuthorized
     );
-    inferenceResult = await scheduleInference(prompt, 'reply', {
+    inferenceResult = await scheduleInference(nativePromptLine(trigger) || message, 'reply', {
       ...inferenceOptions,
+      seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
       signal,
       onEvent: postHermesProgress,
     });
