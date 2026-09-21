@@ -13,6 +13,7 @@ const { EventEmitter } = require("node:events");
 function harness(options = {}) {
   const handlers = new Map();
   const views = [];
+  const menuTemplates = [];
   const dialogCalls = [];
   const dialogResponse = { value: 0 };
   const profile = new EventEmitter();
@@ -48,6 +49,7 @@ function harness(options = {}) {
       return super.removeListener(...args);
     }
     reload() { this.reloaded = true; }
+    downloadURL(url) { this.downloads = [...(this.downloads || []), url]; }
     stop() { this.stopped = true; }
     focus() { this.focusCalls = (this.focusCalls || 0) + 1; }
     insertText(text) { this.insertedText = text; }
@@ -94,7 +96,7 @@ function harness(options = {}) {
     },
     session: { fromPartition: partition => { profile.partition = partition; return profile; } },
     ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
-    Menu: { buildFromTemplate: () => ({ popup() {} }) },
+    Menu: { buildFromTemplate: template => { menuTemplates.push(template); return { popup() {} }; } },
     nativeTheme: { themeSource: "light" },
     dialog: { showMessageBox: (...args) => { dialogCalls.push(args); return Promise.resolve({ response: dialogResponse.value }); } },
     systemPreferences: { askForMediaAccess: async () => true },
@@ -109,7 +111,7 @@ function harness(options = {}) {
   const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, options);
   const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   const command = (action, extra = {}, event = sender) => handlers.get("miaos-browser-command")(event, { action, ...extra });
-  return { command, window, views, sender, profile, handlers, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse };
+  return { command, window, views, sender, profile, handlers, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, menuTemplates };
 }
 
 test("search, domain ports, loopback and prohibited schemes", () => {
@@ -189,6 +191,45 @@ test("tab favicon is refetched as a data: URI and clears on navigation", async (
   h.command("navigate", { value: "https://example.com" });
   state = h.command("state");
   assert.equal(state.tabs[0].favicon, null);
+});
+
+test("tab favicon skips unsupported candidates and falls back after load", async () => {
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const h = harness();
+  h.command("new");
+  h.views[0].webContents.emit("page-favicon-updated", null, [
+    "blob:https://claude.ai/generated-icon",
+    "https://claude.ai/favicon.ico",
+  ]);
+  await flush();
+  assert.deepEqual(h.profile.fetched, ["https://claude.ai/favicon.ico"]);
+  assert.equal(h.command("state").tabs[0].favicon, "data:image/png;base64,AQID");
+
+  const fallback = harness();
+  fallback.command("new");
+  fallback.views[0].webContents.emit("did-navigate", null, "https://claude.ai/new");
+  fallback.views[0].webContents.emit("did-finish-load");
+  await flush();
+  await flush();
+  assert.deepEqual(fallback.profile.fetched, ["https://claude.ai/favicon.ico"]);
+  assert.equal(fallback.command("state").tabs[0].favicon, "data:image/png;base64,AQID");
+});
+
+test("image context menu offers Save image as through the native download lifecycle", () => {
+  const h = harness();
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.emit("context-menu", null, {
+    mediaType: "image",
+    srcURL: "https://images.example/photo.png",
+    linkURL: "",
+    isEditable: false,
+    selectionText: "",
+  });
+  const save = h.menuTemplates.at(-1).find(item => item.label === "Save Image As…");
+  assert.ok(save, "image context menus expose a save action");
+  save.click();
+  assert.deepEqual(wc.downloads, ["https://images.example/photo.png"]);
 });
 
 test("theme delegates to Electron native dark mode and native tab backgrounds", () => {

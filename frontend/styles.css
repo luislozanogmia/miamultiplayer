@@ -1675,6 +1675,8 @@
   .styled-settings-field:focus{border-color:var(--sand-border-focus);}
   .styled-settings-field-short{width:72px;text-align:center;text-transform:uppercase;}
   .styled-settings-feedback-text{width:100%;max-width:none;min-height:72px;resize:vertical;text-align:left;margin-top:8px;}
+  .styled-settings-instructions-text{display:block;width:calc(100% - 32px);max-width:none;min-height:132px;margin:0 16px 16px;resize:vertical;text-align:left;line-height:1.45;}
+  .styled-settings-instructions-actions{padding:0;margin-top:-4px;}
   .styled-settings-select{width:150px;text-align:left;cursor:pointer;}
   .styled-settings-pill-btn{text-decoration:none;white-space:nowrap;line-height:1.3;}
   .styled-settings-pill-btn:hover{background:var(--sand-fill-secondary-hover);}
@@ -2520,6 +2522,12 @@
   .local-browser-sidebar-btn{display:none;width:34px;flex:none;margin-left:6px;}
   .local-browser-sidebar-btn .local-browser-mote{display:block;width:26px;height:24px;margin:auto;object-fit:contain;}
   .local-browser-toolbar{height:44px;min-height:44px;display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid var(--sand-border-subtle);background:#f7f7f5;}
+  .local-browser-search-engine{display:flex;align-items:center;gap:2px;flex:none;height:32px;padding:2px;border:1px solid #d0d2ce;border-radius:9px;background:#fff;}
+  .local-browser-search-engine-btn{appearance:none;display:grid;place-items:center;width:27px;height:26px;padding:5px;border:0;border-radius:6px;background:transparent;cursor:pointer;outline:none;}
+  .local-browser-search-engine-btn img{display:block;width:16px;height:16px;object-fit:contain;}
+  .local-browser-search-engine-btn[aria-pressed="true"]{background:#ececea;box-shadow:inset 0 0 0 1px #d8d8d4;}
+  .local-browser-search-engine-btn:hover{background:#f2f2ef;}
+  .local-browser-search-engine-btn:focus-visible{box-shadow:0 0 0 2px var(--sand-fill-accent);}
   .local-browser-url-wrap{position:relative;flex:1;min-width:0;display:flex;}
   .local-browser-toolbar input{appearance:none;min-width:0;flex:1;height:32px;padding:0 11px;border:1px solid #d0d2ce;border-radius:9px;background:#fff;color:#202124;caret-color:#202124;font:13px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;outline:none;margin:0 4px;}
   .local-browser-toolbar input:focus{border-color:var(--sand-fill-accent);box-shadow:0 0 0 2px var(--sand-fill-accent-subtle);}

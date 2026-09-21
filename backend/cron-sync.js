@@ -287,8 +287,8 @@ function jobOwnedByAutomation(job, bot, automation, allowLegacy = false) {
 // A schedule is never allowed to infer work from the bot brief. Bot identity
 // and scheduled tasks are separate product concepts; a missing explicit task
 // therefore makes the automation unrunnable until its prompt is supplied.
-function jobPromptFor(bot, automation) {
-  return buildScheduledBotPrompt(bot, automation);
+function jobPromptFor(bot, automation, options = {}) {
+  return buildScheduledBotPrompt(bot, automation, options);
 }
 
 function jobModelFor(bot) {
@@ -411,8 +411,8 @@ function schedulerUtcOffsetMinutes() {
   });
 }
 
-async function syncOneBotAutomation(bot, automation, registry, allowLegacy, existingJob) {
-  const prompt = jobPromptFor(bot, automation);
+async function syncOneBotAutomation(bot, automation, registry, allowLegacy, existingJob, options = {}) {
+  const prompt = jobPromptFor(bot, automation, options);
   const schedulerOffset = prompt && automation.enabled && Number.isInteger(automation.utcOffsetMinutes) ? await schedulerUtcOffsetMinutes() : 0;
   const expr = prompt ? automationToCronExpr(automation, schedulerOffset) : null;
   const name = jobNameFor(bot, automation);
@@ -475,12 +475,12 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
 // Bring every stored automation in line with its independent scheduler job.
 // The exported singular name is retained for callers while the persisted
 // contract is now a collection.
-async function syncBotAutomation(bot, existingJob, existingRegistry) {
+async function syncBotAutomation(bot, existingJob, existingRegistry, options = {}) {
   migrateBotAutomations(bot);
   const registry = existingRegistry || readHermesJobs();
   const automations = bot.automations;
   for (let index = 0; index < automations.length; index++) {
-    await syncOneBotAutomation(bot, automations[index], registry, index === 0, index === 0 ? existingJob : null);
+    await syncOneBotAutomation(bot, automations[index], registry, index === 0, index === 0 ? existingJob : null, options);
   }
   const liveIds = new Set(automations.map((automation) => automation.id));
   for (const job of registry.byBotId.get(String(bot.id)) || []) {
@@ -528,7 +528,7 @@ async function removeBotCron(bot, _existingJob, existingRegistry) {
 // - namespaced jobs whose agent no longer exists -> paused (never removed:
 //   an out-of-band DB edit shouldn't destroy a job; the API delete path is
 //   the sanctioned remover)
-async function reconcileBotCrons(conn) {
+async function reconcileBotCrons(conn, options = {}) {
   const registry = readHermesJobs();
   const { byName } = registry;
   const agents = db.loadAll(conn, 'bots') || [];
@@ -543,7 +543,10 @@ async function reconcileBotCrons(conn) {
     seenBotIds.add(agent.id);
     try {
       migrateBotAutomations(agent);
-      await syncBotAutomation(agent, null, registry);
+      const globalInstructions = typeof options.globalInstructionsForBot === 'function'
+        ? options.globalInstructionsForBot(agent)
+        : '';
+      await syncBotAutomation(agent, null, registry, { globalInstructions });
       db.saveOne(conn, 'bots', agent.id, agent);
     } catch (err) {
       errors++;
