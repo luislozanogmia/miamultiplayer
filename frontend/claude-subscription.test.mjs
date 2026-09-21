@@ -5,13 +5,15 @@ import test from 'node:test';
 const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 
-test('Claude DirectSDK is visibly experimental and discloses subscription metering', () => {
+test('Claude subscription keeps its Experimental badge without extra onboarding copy', () => {
   assert.match(html, /data-harness-provider="claude-subscription-directsdk-experimental"/);
   assert.match(html, /Claude subscription[\s\S]*Experimental/);
-  assert.match(html, /official Claude Code CLI/);
-  assert.match(html, /Every turn uses your Claude Agent SDK allowance/);
-  assert.match(html, /extra-usage settings may add charges/);
-  assert.match(html, /Mia never receives or stores your Claude credential/);
+  assert.doesNotMatch(html, /Uses the official Claude Code CLI/);
+  assert.doesNotMatch(html, /Requires Claude Pro\/Max and/);
+  assert.doesNotMatch(html, /Claude DirectSDK is experimental/);
+  assert.doesNotMatch(html, /Every turn uses your Claude Agent SDK allowance/);
+  assert.doesNotMatch(html, /extra-usage settings may add charges/);
+  assert.doesNotMatch(html, /Mia never receives or stores your Claude (?:credential|password)/);
   assert.match(html, /assets\/icons\/claude\.svg/);
 });
 
