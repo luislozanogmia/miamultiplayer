@@ -14,6 +14,25 @@ function runPython(source, env = {}) {
   });
 }
 
+test('Mia caps advertised Claude context while preserving real upstream route ids', () => {
+  const result = runPython([
+    'import json,sys',
+    'sys.path.insert(0,sys.argv[1])',
+    'from model_catalog import ALIASES, CONTEXT_WINDOWS, MODEL_METADATA, native_model',
+    'expected={"claude-sonnet-5":250000,"claude-haiku-4-5-20251001":200000,"claude-opus-5":250000,"claude-opus-4-8":250000,"claude-fable-5-1":250000}',
+    'assert CONTEXT_WINDOWS == expected, CONTEXT_WINDOWS',
+    'for name, canonical in {**{key:key for key in expected}, **ALIASES}.items():',
+    ' route=native_model(name)',
+    ' assert "[250k]" not in route',
+    ' assert MODEL_METADATA[route]["canonical_model"] == canonical',
+    ' assert MODEL_METADATA[route]["context_window"] == expected[canonical]',
+    'assert native_model("haiku") == "claude-haiku-4-5-20251001"',
+    'assert all(native_model(model).endswith("[1m]") for model in expected if "haiku" not in model)',
+    'print(json.dumps(MODEL_METADATA,sort_keys=True))',
+  ].join('\n'));
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
 test('upstream setup probe refuses a missing Claude CLI with the official install hint', () => {
   const result = runPython(
     'import json,sys; sys.path.insert(0,sys.argv[1]); from directsdk_setup import setup_status; print(json.dumps(setup_status(env={"PATH":"", "CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND":"/definitely/missing/claude"})))'
