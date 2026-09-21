@@ -1369,11 +1369,20 @@
       : 'Concise is selected — replies show only the final answer.';
   }
 
+  function renderInstructionSettings(value){
+    var instructions = value && typeof value === 'object' ? value : {};
+    var agent = el('#settingsAgentInstructions');
+    var bot = el('#settingsBotInstructions');
+    if(agent) agent.value = String(instructions.agent || '');
+    if(bot) bot.value = String(instructions.bot || '');
+  }
+
   function loadHarnessSettings(showFirstRun){
     return api('/api/settings').then(function(res){
       var harness = res.data && res.data.harness;
       renderHarnessSettings(harness);
       renderOutputSetting(res.data && res.data.chatOutput === 'verbose' ? 'verbose' : 'concise');
+      renderInstructionSettings(res.data && res.data.instructions);
       syncHiddenStarterBotsFromServer(res.data && res.data.hiddenStarterBots);
       if(harness && harness.onboardingComplete){
         appCollaborationMode = (WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS['multiplayer_test']).mode;
@@ -1415,6 +1424,7 @@
     api('/api/settings').then(function(res){
       var s = res.data || {};
       renderHarnessSettings(s.harness);
+      renderInstructionSettings(s.instructions);
       var g = s.guardrails || {};
       el('#grAllowedProviders').checked = !!(g.allowedProviders && g.allowedProviders.indexOf('openai') !== -1);
       el('#settingsLastBackup').textContent = s.lastBackup ? new Date(s.lastBackup).toLocaleString() : 'never';
@@ -2085,6 +2095,30 @@
       note.classList.add('visible');
       setTimeout(function(){ note.classList.remove('visible'); }, 4000);
     }
+  });
+  var settingsInstructionsSave = el('#settingsInstructionsSave');
+  if(settingsInstructionsSave) settingsInstructionsSave.addEventListener('click', function(){
+    var agent = el('#settingsAgentInstructions');
+    var bot = el('#settingsBotInstructions');
+    var saved = el('#settingsInstructionsSaved');
+    settingsInstructionsSave.disabled = true;
+    if(saved) saved.classList.remove('visible');
+    api('/api/settings/instructions', {method:'POST', body:{
+      agent: agent ? agent.value : '',
+      bot: bot ? bot.value : ''
+    }}).then(function(res){
+      if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not save instructions.');
+      renderInstructionSettings(res.data.instructions);
+      if(saved){
+        saved.textContent = 'Saved';
+        saved.classList.add('visible');
+        setTimeout(function(){ saved.classList.remove('visible'); }, 2500);
+      }
+    }).catch(function(error){
+      showBenchToast(error.message || 'Could not save instructions.');
+    }).finally(function(){
+      settingsInstructionsSave.disabled = false;
+    });
   });
 
   function saveGuardrails(){
