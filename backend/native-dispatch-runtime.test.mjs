@@ -98,3 +98,18 @@ test('native dispatch execution wires timeout into durable recovery', () => {
   assert.match(execution, /removeNativeDispatchProgressEvent\(dispatch\)/);
   assert.match(source, /recoverNativeConversationDispatches\(\);/);
 });
+
+test('native bot dispatch loads every conversation page and delegates context management to Hermes', () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const helperStart = source.indexOf('function allNativeConversationEvents(');
+  const helperEnd = source.indexOf('\nfunction nativeDispatchActor(', helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+  assert.match(helper, /while \(hasMore\)/);
+  assert.match(helper, /afterSequence = page\.nextAfterSequence/);
+
+  const replyStart = source.indexOf('async function runNativeConversationAgentReply(');
+  const replyEnd = source.indexOf('\nasync function executeNativeConversationDispatch(', replyStart);
+  const reply = source.slice(replyStart, replyEnd);
+  assert.match(reply, /const historyEvents = allNativeConversationEvents\(/);
+  assert.doesNotMatch(reply, /const history = nativeConversationRepository\.listEvents\(/);
+});

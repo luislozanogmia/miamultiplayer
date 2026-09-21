@@ -325,7 +325,7 @@ test('full-mode bot workers get a compact local-browser boundary without the ful
   assert.doesNotMatch(policy, /# Mia browser/);
 });
 
-test('bot context is compact and makes its own automations authoritative', () => {
+test('bot context preserves the full supplied conversation and makes its own automations authoritative', () => {
   const prompt = inference.buildBotContext({
     name: 'News briefing',
     instructions: 'Research reliable current news and produce concise briefings with source links.',
@@ -347,10 +347,12 @@ test('bot context is compact and makes its own automations authoritative', () =>
   assert.match(prompt, /Task: Create today’s concise news briefing about architecture in Mexico\./);
   assert.match(prompt, /Weekly digest \(paused\)/);
   assert.match(prompt, /Current Mia context \(authoritative\):\nGoogle connection: available\./);
-  assert.doesNotMatch(prompt, /turn [1-8]\n/);
-  assert.match(prompt, /turn 9\n/);
+  assert.match(prompt, /turn 1\n/);
+  assert.match(prompt, /turn 20\n/);
   assert.match(prompt, /Luis: run it now/);
-  assert.ok(prompt.length < 3800, `expected compact bot context, received ${prompt.length} characters`);
+  assert.match(prompt, /latest explicit user instruction overrides older scope/);
+  assert.match(prompt, /says “full stop,” or says not to overengineer/);
+  assert.match(prompt, /Once the requested result is sufficient, stop/);
 });
 
 test('scheduled bot prompt states bot, Mia, owner, scope, and exact automation task', () => {
