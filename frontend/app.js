@@ -11650,6 +11650,7 @@
      primitives; this is only a clearer way to reach them. */
   var conversationDrawer = {mode: 'history', tab: 'chats', agentId: null, scopeKey: null, agentMenuOpen: false};
   var dmCompose = {open: false, humans: [], agents: [], selected: {}, query: '', busy: false};
+  var freshBotConversationRequest = null;
 
   function conversationHistoryAgentIds(conversation){
     var metadata = conversation && conversation.metadata && typeof conversation.metadata === 'object' ? conversation.metadata : {};
@@ -11759,6 +11760,13 @@
 
   function renderConversationHeaderActions(){
     var pinned = isChatPinned('room:' + chatWs.activeRoomId);
+    var activeConversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
+    var activeMetadata = activeConversation && activeConversation.metadata || {};
+    var canCreateFreshBotConversation = !!activeConversation && activeConversation.type === 'bot' && !!activeMetadata.botId;
+    var freshDisabled = !canCreateFreshBotConversation || !!freshBotConversationRequest;
+    var freshTitle = canCreateFreshBotConversation
+      ? (freshBotConversationRequest ? 'Creating a new conversation…' : 'New conversation with this bot')
+      : (isNativeMiaConversation(activeConversation) ? 'Mia uses one continuous conversation' : 'Open a bot chat to start another conversation');
     // Canonical Lucide v0.545.0 geometry. Keep this set together so these
     // adjacent actions share one optical grid instead of drifting as custom
     // paths are edited independently.
@@ -11766,8 +11774,48 @@
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShareConversation" title="Copy conversation ID" aria-label="Copy conversation ID"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v13"></path><path d="m16 6-4-4-4 4"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path></svg></button>' +
       '<button type="button" class="ch-icon-btn conversation-action-btn' + (pinned ? ' active' : '') + '" id="chatBookmarkConversation" title="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-label="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-pressed="' + (pinned ? 'true' : 'false') + '"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg></button>' +
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatHistoryBtn" title="History" aria-label="Open conversation history"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></button>' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="New conversation" aria-label="New conversation"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="' + esc(freshTitle) + '" aria-label="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '') + '><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button>' +
     '</div>';
+  }
+
+  function createFreshConversationForActiveBot(){
+    if(freshBotConversationRequest) return freshBotConversationRequest.promise;
+    var source = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
+    var metadata = source && source.metadata || {};
+    if(!source || source.type !== 'bot' || !metadata.botId) return Promise.resolve(null);
+    var requestedWorkspace = activeWorkspaceKey;
+    var requestedRoomId = source.id;
+    var request = {
+      roomId: requestedRoomId,
+      workspace: requestedWorkspace,
+      promise: null
+    };
+    freshBotConversationRequest = request;
+    request.promise = api(nativeConversationPath(requestedRoomId, '/fresh'), {method:'POST', body:{}}).then(function(res){
+      if((res.status !== 201 && res.status !== 200) || !res.data || !res.data.conversation){
+        throw new Error(res.data && (res.data.message || res.data.error) || 'Could not create a new conversation.');
+      }
+      var conversation = res.data.conversation;
+      if(activeWorkspaceKey !== requestedWorkspace || chatWs.activeRoomId !== requestedRoomId) return conversation;
+      if(!(chatWs.nativeConversations || []).some(function(item){ return item.id === conversation.id; })){
+        chatWs.nativeConversations.push(conversation);
+      }
+      applyNativeConversationList(chatWs.nativeConversations);
+      renderChatSidebar();
+      loadChatRoom(conversation.id, 'agent', conversation.name || source.name || 'Bot');
+      return conversation;
+    }).catch(function(error){
+      if(activeWorkspaceKey === requestedWorkspace && chatWs.activeRoomId === requestedRoomId){
+        showBenchToast(error && error.message ? error.message : 'Could not create a new conversation.');
+      }
+      return null;
+    }).then(function(conversation){
+      if(freshBotConversationRequest === request) freshBotConversationRequest = null;
+      if(activeWorkspaceKey === requestedWorkspace) renderChatHeaderBar();
+      return conversation;
+    });
+    renderChatHeaderBar();
+    return request.promise;
   }
 
   function wireConversationHeaderActions(header){
@@ -11785,7 +11833,7 @@
       if(dmCompose.open && conversationDrawer.mode === 'history') renderConversationHistory();
     });
     if(history) history.addEventListener('click', function(){ openConversationHistory('chats'); });
-    if(create) create.addEventListener('click', openDmCompose);
+    if(create) create.addEventListener('click', createFreshConversationForActiveBot);
   }
 
   function openConversationDrawer(mode){

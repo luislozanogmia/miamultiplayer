@@ -139,6 +139,40 @@ test('chat-migration.conversation-lifecycle.001 — native HTTP contract creates
   }
 });
 
+test('fresh bot route creates a distinct empty direct-routing conversation and protects its source', async () => {
+  const app = await startApp();
+  try {
+    let result = await app.request('/conversations', {
+      method: 'POST', body: { type: 'bot', name: 'Research Bot', metadata: { botId: 'bot-research', workspaceId: 'solo' } },
+    });
+    assert.equal(result.response.status, 201);
+    const sourceId = result.payload.conversation.id;
+
+    result = await app.request(`/conversations/${sourceId}/fresh`, { method: 'POST', body: {} });
+    assert.equal(result.response.status, 201);
+    const fresh = result.payload.conversation;
+    assert.notEqual(fresh.id, sourceId);
+    assert.equal(fresh.type, 'bot');
+    assert.equal(fresh.metadata.botId, 'bot-research');
+    assert.equal(fresh.metadata.conversationMode, 'fresh');
+    assert.equal(app.repository.listEvents({ companyId: 'acme', conversationId: fresh.id }).events.length, 0);
+    assert.equal(app.repository.listEvents({ companyId: 'acme', conversationId: sourceId }).events.length, 0);
+
+    result = await app.request(`/conversations/${fresh.id}/events`, {
+      method: 'POST', body: { content: { text: 'start clean' }, clientIdempotencyKey: 'fresh-direct-1' },
+    });
+    assert.equal(result.response.status, 201);
+    assert.deepEqual(result.payload.dispatch.dispatches.map((dispatch) => dispatch.targetId), ['bot-research']);
+
+    result = await app.request(`/conversations/${sourceId}/fresh`, { principal: 'bob', method: 'POST', body: {} });
+    assert.equal(result.response.status, 403);
+    result = await app.request(`/conversations/${sourceId}/fresh`, { principal: 'other-company', method: 'POST', body: {} });
+    assert.equal(result.response.status, 403);
+  } finally {
+    await app.close();
+  }
+});
+
 test('native HTTP contract lists only visible company conversations and keeps owner selection candidates stable', async () => {
   const app = await startApp();
   try {

@@ -119,7 +119,7 @@ const {
   USER_CANCELLED_DISPATCH_ERROR,
 } = require('./conversation-repository');
 const { createConversationAuthorization } = require('./conversation-authorization');
-const { createConversationService } = require('./conversation-service');
+const { createConversationService, canonicalBotConversationCandidates } = require('./conversation-service');
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
@@ -2284,7 +2284,7 @@ app.delete('/api/keys/:id', requireSessionAuth, (req, res) => {
 // conversation is provisioned lazily here as well as during boot so bots
 // created by the admin/API surface are immediately addressable in chat.
 function nativeBotConversation(bot, includeDeleted = false) {
-  return nativeBotConversations(bot, includeDeleted)[0] || null;
+  return canonicalBotConversationCandidates(nativeBotConversations(bot, includeDeleted))[0] || null;
 }
 
 function nativeBotConversations(bot, includeDeleted = false) {
@@ -2455,7 +2455,7 @@ async function ensureNativeBotConversation(bot) {
 async function reconcileNativeBotConversations() {
   for (const bot of db.loadAll(conn, 'bots')) {
     try {
-      const candidates = nativeBotConversations(bot);
+      const candidates = canonicalBotConversationCandidates(nativeBotConversations(bot));
       if (candidates.length > 1) {
         let canonical = candidates[0];
         for (const duplicate of candidates.slice(1)) {
