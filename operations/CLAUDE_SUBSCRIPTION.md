@@ -9,8 +9,9 @@ credential and does not silently fall back to an Anthropic API key.
 
 - Mia's bundled Hermes release must be 0.21.4
   (`v2026.9.21`, commit `d337b736aa1e8ebecfab043842d13e4a2d2f48a3`).
-- The official Claude Code CLI must be installed and authenticated with
-  `claude auth login`. Upstream qualified Claude Code 2.1.263.
+- The official Claude Code CLI must be installed. Mia reuses an existing
+  Claude Code login or starts the CLI's own `claude auth login --claudeai`
+  flow from Connect. Upstream qualified Claude Code 2.1.263.
 - The vendored plugin is version 0.3.0, reviewed at commit
   `c92c27c9f919178a58974a72333b473c6cb2e71d`. Its runtime files are kept
   unchanged under
@@ -33,8 +34,11 @@ owned by Hermes and may continue until paused from Mia's Automations view.
 
 Automated checks cover missing-CLI behavior, config-directory mapping,
 paid-API/custom-endpoint refusal, profile provisioning for ordinary agents and
-bots, model validation (including `[1m]` routes), and persisted Mia disconnect
-state across a backend restart. A real subscription turn, real account login,
-packaged-app launch, installer/package build, and manual UI flow remain
-unverified. Do not describe this integration as production-qualified until
-those checks pass.
+bots, model validation (including `[1m]` routes), persisted Mia disconnect
+state across a backend restart, and the mocked login URL/code/cancel/retry
+lifecycle. The login subprocess remains the sole credential owner: Mia opens
+its official authorization URL in the embedded browser and forwards an
+optional one-time completion code to its standard input without storing or
+logging it. A real subscription turn, real account login, packaged-app launch,
+installer/package build, and manual UI flow remain unverified. Do not describe
+this integration as production-qualified until those checks pass.

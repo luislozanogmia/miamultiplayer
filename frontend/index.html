@@ -1019,6 +1019,12 @@
     <div class="styled-harness-auth-code" id="harnessAuthCodeWrap" hidden>
       <span>Code</span><code id="harnessAuthCode"></code>
     </div>
+    <form class="styled-harness-auth-completion" id="harnessAuthCompletion" hidden>
+      <label for="harnessAuthCompletionCode">One-time code</label>
+      <input id="harnessAuthCompletionCode" type="password" autocomplete="off" spellcheck="false" placeholder="Paste code from Claude">
+      <button type="submit" id="harnessAuthCompletionSubmit">Continue</button>
+    </form>
+    <button type="button" class="styled-harness-auth-cancel" id="harnessAuthCancel" hidden>Cancel sign-in</button>
   </div>
   <div class="styled-onboarding-error" id="harnessOnboardingError" role="status"></div>
   <div class="styled-onboarding-actions">

@@ -652,6 +652,14 @@ test('process-global provider mutations require an admin browser session', async
       method: 'POST', headers, body: JSON.stringify({ provider: 'openai-codex' }),
     });
     assert.equal(authLogout.status, 403);
+    const authComplete = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
+      method: 'POST', headers, body: JSON.stringify({ provider: 'openai-codex', code: 'one-time-code' }),
+    });
+    assert.equal(authComplete.status, 403);
+    const authCancel = await fetch(`${server.origin}/api/settings/harness/auth/cancel`, {
+      method: 'POST', headers, body: JSON.stringify({ provider: 'openai-codex' }),
+    });
+    assert.equal(authCancel.status, 403);
     const apiKey = await fetch(`${server.origin}/api/settings/harness/api-key`, {
       method: 'POST', headers, body: JSON.stringify({ provider: 'openai-api', apiKey: 'member-must-not-write' }),
     });
@@ -660,6 +668,145 @@ test('process-global provider mutations require an admin browser session', async
       headers: { cookie: memberLogin.cookie }, redirect: 'manual',
     });
     assert.equal(authRedirect.status, 403);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('Claude subscription starts the official CLI login once and completes without a terminal', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'miaos-claude-login-'));
+  const claude = path.join(root, 'claude');
+  const invocationLog = path.join(root, 'claude-invocations.log');
+  const loggedIn = path.join(root, 'claude-logged-in');
+  fs.writeFileSync(claude, `#!/bin/sh
+printf '%s\\n' "$*" >> "${invocationLog}"
+if [ "$1 $2" = "auth status" ]; then
+  if [ -f "${loggedIn}" ]; then
+    printf '%s\\n' '{"loggedIn":true,"subscriptionType":"pro"}'
+  else
+    printf '%s\\n' '{"loggedIn":false}'
+  fi
+  exit 0
+fi
+if [ "$1 $2 $3" = "auth login --claudeai" ]; then
+  printf '%s\\n' 'Opening browser to sign in…'
+  printf '%s\\n' 'If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=test-state'
+  IFS= read -r code
+  if [ "$code" = "fixture-completion-code" ]; then
+    : > "${loggedIn}"
+    exit 0
+  fi
+  exit 9
+fi
+exit 8
+`, { mode: 0o700 });
+  seedUsers(path.join(root, 'mia.db'), [{ ...BOOT_ADMIN, role: 'member' }]);
+  const server = await startServer({
+    existingRoot: root,
+    extraEnv: {
+      HERMES_PYTHON: 'python3',
+      CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claude,
+      CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: path.join(root, 'claude-config'),
+    },
+  });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const headers = { cookie, 'content-type': 'application/json' };
+    const provider = 'claude-subscription-directsdk-experimental';
+    const start = await fetch(`${server.origin}/api/settings/harness/auth/start`, {
+      method: 'POST', headers, body: JSON.stringify({ provider }),
+    });
+    const started = await start.json();
+    assert.equal(start.status, 200, JSON.stringify(started));
+    assert.equal(started.auth.state, 'waiting');
+    assert.match(started.auth.verificationUrl, /^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
+
+    const duplicate = await fetch(`${server.origin}/api/settings/harness/auth/start`, {
+      method: 'POST', headers, body: JSON.stringify({ provider }),
+    });
+    assert.equal(duplicate.status, 200, await duplicate.text());
+    assert.equal((fs.readFileSync(invocationLog, 'utf8').match(/auth login --claudeai/g) || []).length, 1);
+
+    const complete = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
+      method: 'POST', headers, body: JSON.stringify({ provider, code: 'fixture-completion-code' }),
+    });
+    assert.equal(complete.status, 202, await complete.text());
+
+    let auth = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(`${server.origin}/api/settings/harness/auth`, { headers: { cookie } });
+      auth = (await response.json()).auth;
+      if (auth.state === 'connected') break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(auth && auth.state, 'connected');
+    assert.doesNotMatch(server.logs.join(''), /fixture-completion-code|test-state/);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('Claude subscription login can be cancelled and retried without duplicate children', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'miaos-claude-cancel-'));
+  const claude = path.join(root, 'claude');
+  const invocationLog = path.join(root, 'claude-invocations.log');
+  fs.writeFileSync(claude, `#!/bin/sh
+printf '%s\\n' "$*" >> "${invocationLog}"
+if [ "$1 $2" = "auth status" ]; then printf '%s\\n' '{"loggedIn":false}'; exit 0; fi
+if [ "$1 $2 $3" = "auth login --claudeai" ]; then
+  printf '%s\\n' 'https://claude.com/cai/oauth/authorize?state=cancel-fixture'
+  IFS= read -r code
+  exit 9
+fi
+exit 8
+`, { mode: 0o700 });
+  seedUsers(path.join(root, 'mia.db'), [{ ...BOOT_ADMIN, role: 'member' }]);
+  const server = await startServer({
+    existingRoot: root,
+    extraEnv: {
+      HERMES_PYTHON: 'python3',
+      CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claude,
+      CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: path.join(root, 'claude-config'),
+    },
+  });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const headers = { cookie, 'content-type': 'application/json' };
+    const provider = 'claude-subscription-directsdk-experimental';
+    const start = () => fetch(`${server.origin}/api/settings/harness/auth/start`, {
+      method: 'POST', headers, body: JSON.stringify({ provider }),
+    });
+    assert.equal((await start()).status, 200);
+    assert.equal((await start()).status, 200);
+    assert.equal((fs.readFileSync(invocationLog, 'utf8').match(/auth login --claudeai/g) || []).length, 1);
+
+    const cancel = await fetch(`${server.origin}/api/settings/harness/auth/cancel`, {
+      method: 'POST', headers, body: JSON.stringify({ provider }),
+    });
+    assert.equal(cancel.status, 200, await cancel.text());
+    const cancelledState = await fetch(`${server.origin}/api/settings/harness/auth`, { headers: { cookie } });
+    assert.equal((await cancelledState.json()).auth.state, 'idle');
+
+    assert.equal((await start()).status, 200);
+    assert.equal((fs.readFileSync(invocationLog, 'utf8').match(/auth login --claudeai/g) || []).length, 2);
+    const invalid = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
+      method: 'POST', headers, body: JSON.stringify({ provider, code: 'line-one\nline-two' }),
+    });
+    assert.equal(invalid.status, 400);
+    const rejected = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
+      method: 'POST', headers, body: JSON.stringify({ provider, code: 'rejected-fixture-code' }),
+    });
+    assert.equal(rejected.status, 202);
+    let failed = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(`${server.origin}/api/settings/harness/auth`, { headers: { cookie } });
+      failed = (await response.json()).auth;
+      if (failed.state === 'error') break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(failed && failed.state, 'error');
+    assert.equal((await start()).status, 200);
+    assert.equal((fs.readFileSync(invocationLog, 'utf8').match(/auth login --claudeai/g) || []).length, 3);
   } finally {
     await stopServer(server);
   }
