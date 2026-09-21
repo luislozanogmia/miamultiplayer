@@ -1674,7 +1674,7 @@
     if(harnessConnectionState[provider] !== true) return;
     var authName = harnessProviderDisplayName(provider);
     var disconnectPrompt = provider === 'claude-subscription-directsdk-experimental'
-      ? 'Disconnect ' + authName + ' from Mia? Your Claude Code login remains unchanged.'
+      ? 'Disconnect ' + authName + ' from Mia? Your Claude Code login remains unchanged. Existing scheduled jobs may continue until you pause them in Automations.'
       : 'Disconnect ' + authName + '? This forgets its stored credentials.';
     if(!window.confirm(disconnectPrompt)) return;
     var icon = button && button.querySelector('.styled-onboarding-connection-icon');

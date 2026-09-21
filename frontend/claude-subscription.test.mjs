@@ -19,5 +19,6 @@ test('Claude connect checks the external CLI without opening Mia OAuth or accept
   assert.match(source, /authProvider !== 'claude-subscription-directsdk-experimental'/);
   assert.match(source, /\['claude-subscription-directsdk-experimental', 'openai-codex', 'xai-oauth'\]/);
   assert.match(source, /Your Claude Code login remains unchanged/);
+  assert.match(source, /Existing scheduled jobs may continue until you pause them in Automations/);
   assert.doesNotMatch(html, /data-harness-provider="claude-subscription-directsdk-experimental"[\s\S]{0,600}id="harnessApiKey"/);
 });
