@@ -2,5 +2,8 @@
   "managedBy": "Mia",
   "upstream": "NousResearch/hermes-plugin-claude-subscription-directsdk",
   "version": "0.3.0",
-  "commit": "c92c27c9f919178a58974a72333b473c6cb2e71d"
+  "commit": "c92c27c9f919178a58974a72333b473c6cb2e71d",
+  "localModifications": [
+    "model_catalog.py advertises Mia context budgets of 250000 tokens for listed non-Haiku models and 200000 for Haiku while retaining upstream route IDs"
+  ]
 }
