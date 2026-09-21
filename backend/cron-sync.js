@@ -294,7 +294,7 @@ function jobPromptFor(bot, automation) {
 function jobModelFor(bot) {
   const model = String(bot && bot.model || '').trim();
   const provider = String(bot && bot.modelProvider || '').trim();
-  // OpenRouter model ids are namespaced with a slash (deepseek/deepseek-v4.1-flash).
+  // Some provider model ids use a single slash-delimited namespace.
   if (!/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?$/i.test(model) || model.length > 128) {
     throw new Error('scheduled bot requires a valid connected model');
   }

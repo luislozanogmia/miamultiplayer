@@ -53,6 +53,86 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
   is UX inspiration, not a dependency. Known cost: bundled models add
   ~100MB+ and need per-platform native builds.
 
+- **Post-alpha: delegate agent-runtime primitives to Hermes.** This is P1
+  architectural cleanup after the alpha, not an alpha launch blocker. Mia
+  continues to own context engineering, prompt engineering and the multiplayer
+  product layer; it should stop maintaining parallel implementations of
+  primitives that Hermes now provides. When a required primitive is missing or
+  incomplete, prefer fixing or proposing it upstream in Hermes so the wider
+  ecosystem benefits instead of creating a permanent Mia-only harness.
+
+  **Delegate to Hermes:**
+  - One persistent, resumable Hermes session for each bot-and-conversation
+    pairing, including native transcript persistence and recovery across Mia or
+    Hermes restarts.
+  - Context-window accounting, automatic compaction/compression, summaries,
+    compression lineage and context-overflow recovery. Remove Mia's local
+    message windows and full-transcript replay during ordinary turns.
+  - The reasoning and tool-execution loop, including tool-call state,
+    continuation, runtime retries and completion detection. Mia must not grow a
+    second agent loop around Hermes.
+  - Agent memory, session search and Hermes-native background review where the
+    product policy enables them. Do not build a separate Mia memory primitive.
+  - Native progress, reasoning, tool and terminal events; interruption; usage
+    reporting; and terminal success/failure state. Mia should translate these
+    events for its UI rather than infer equivalent state independently.
+  - Model/provider selection and per-session runtime configuration, including
+    correct behavior when a user changes the selected model.
+  - Cron execution, scheduling state and run lifecycle. Mia owns automation
+    setup and delivery UX, but does not implement a competing scheduler.
+  - Artifact generation and Hermes artifact descriptors. Mia retains the
+    security boundary for validating, storing, previewing and authorizing
+    access to those artifacts.
+  - Hermes-native error and recovery contracts. Mia may convert them into safe,
+    useful product messages but should not recreate the underlying recovery
+    machinery.
+  - Replace Mia's estimated token/output controls with native Hermes limits and
+    usage signals when available. Keep only deliberate outer safety boundaries,
+    such as a final wall-clock watchdog and the user's Stop control.
+
+  **Keep in Mia:**
+  - Bot purpose, identity, persona, task framing and other prompt engineering.
+  - Context engineering: deciding which people, bots, room events, permissions,
+    connected resources and current product state are relevant to a turn.
+  - The canonical multiplayer product record: users, bots, rooms, memberships,
+    messages, threads, mentions, routing, presence and shared-browser actors.
+  - A thin session adapter mapping a Mia bot-and-conversation pair to its Hermes
+    session plus the last synchronized Mia event sequence. Because a bot may
+    miss intervening events in a multiplayer room, send only unseen events in
+    order before the current instruction; do not replay the whole room.
+  - Authentication, authorization, connector ownership, credential isolation,
+    tool/profile policy, attachment and artifact validation, and all other
+    product security boundaries.
+  - Automation authoring, permissions, status and result delivery; durable and
+    idempotent dispatch; Stop/restart controls; and presentation of Hermes
+    events and results in the Mia UI.
+
+  **No-loss migration gates:**
+  - Introduce the persistent-session path behind a reversible switch. Seed an
+    existing Mia conversation once, then persist both the Hermes session ID and
+    the last synchronized Mia event sequence.
+  - If Hermes state is missing or cannot resume, create a replacement session
+    from Mia's canonical history and advance the synchronization cursor only
+    after Hermes accepts the seed or delta.
+  - Prove long-conversation compaction retains the latest instruction and bot
+    identity without Mia-managed truncation or ordinary-turn transcript replay.
+  - Prove cold start, backend restart, Hermes restart, compression continuation
+    and model changes resume the same logical conversation without lost or
+    duplicated messages.
+  - Prove multiplayer catch-up sends every unseen human/bot event exactly once,
+    in sequence, while preserving mention and thread routing semantics.
+  - Prove Stop interrupts the matching Hermes session and that stale work cannot
+    write a reply after a conversation restart, deletion or user revocation.
+  - Prove browser and connected-app tools retain their permission boundaries;
+    generated artifacts retain ownership, integrity and preview protections;
+    and no credentials enter prompts or transcripts.
+  - Prove interactive bot work and scheduled automations retain model choice,
+    progress, failure reporting, artifacts and exactly-once result delivery.
+  - Keep the current replay path as a temporary recovery fallback until these
+    gates pass in integrated tests and dogfooding. Remove it—along with obsolete
+    context windows, prompt reconstruction and duplicate runtime controls—only
+    after parity is demonstrated.
+
 ## Roadmap — P2 (approved, after P1)
 
 - **Sidebar tool pins: icons and logic pass.** Revisit the pinned-tool
@@ -62,13 +142,15 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
 
 ## Roadmap — P3 (future, not scheduled)
 
-- **MiaOS-era leftovers sweep.** The bot editor's DEPARTMENTS picker was a
-  MiaOS routing concept that meant nothing here; it became a read-only
-  WORKPLACES label on 2026-09-20. The same audit is still owed on the other
-  surfaces — the skills editor first, then the legacy bench editor, which
-  still carries the full departments dropdown and its `guessDepartmentsFor`
-  heuristics. Each one: decide whether the concept earns its place in
-  Multiplayer, and cut or rename it if not.
+- **Deprecate and remove Agent Bench.** Agent Bench is a legacy MiaOS surface,
+  not part of Mia Multiplayer's product direction. Remove its route, modal,
+  department controls and `guessDepartmentsFor` heuristics after confirming
+  that bot creation, editing, testing and deletion all have supported homes in
+  the chat-native bot flows. Do not invest in preserving Bench-only behavior.
+- **MiaOS-era leftovers sweep.** The compact bot editor's DEPARTMENTS picker
+  became a read-only WORKPLACES label on 2026-09-20. Audit the skills editor
+  and remaining supported surfaces for other MiaOS-only concepts, then remove
+  or rename them where they do not belong in Multiplayer.
 
 The remaining P3 items are sourced from a Sept 2026 competitive scan of Meta's
 Muse agent and Alexandr Wang's public product commentary.

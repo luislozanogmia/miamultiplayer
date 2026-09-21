@@ -29,11 +29,24 @@ test('header keeps developer, people, and tools controls in the requested order'
 
 test('tools menu owns the existing creation and utility actions once', async () => {
   const [html, source] = await Promise.all([readFile(htmlUrl, 'utf8'), readFile(appUrl, 'utf8')]);
-  for (const action of ['new-chat', 'new-bot', 'new-agent', 'new-channel', 'connected-apps', 'web-browser']) {
+  for (const action of ['new-chat', 'new-bot', 'new-agent', 'new-channel', 'bot-store', 'automations', 'connected-apps', 'web-browser']) {
     assert.equal((html.match(new RegExp(`data-tools-action="${action}"`, 'g')) || []).length, 1, `${action} appears once`);
   }
   assert.match(source, /menu\.addEventListener\('click'[\s\S]*action === 'new-chat'\) openDmCompose\(\)[\s\S]*action === 'new-bot'\) startAgentSetupChat\(\)[\s\S]*action === 'new-agent'\) openHarnessAgentSetup\(\)[\s\S]*action === 'new-channel'\) openNewChannelFlow\(\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
   assert.match(source, /function openHarnessAgentSetup\(\)[\s\S]*loadHarnessSettings\(false\)[\s\S]*openHarnessOnboarding\(settings\)/);
+});
+
+test('tools menu uses one canonical Lucide icon system', async () => {
+  const [html, styles] = await Promise.all([readFile(htmlUrl, 'utf8'), readFile(stylesUrl, 'utf8')]);
+  const start = html.indexOf('id="chatToolsMenu"');
+  const end = html.indexOf('id="chatDeveloperMenu"', start);
+  assert.ok(start >= 0 && end > start, 'tools menu markup is present');
+  const menu = html.slice(start, end);
+
+  assert.equal((menu.match(/data-tools-action=/g) || []).length, 8, 'all eight tool actions remain');
+  assert.equal((menu.match(/data-icon-set="lucide"/g) || []).length, 8, 'every tool action uses Lucide');
+  assert.doesNotMatch(menu, /<img|data-mia-mark|chat-tools-menu-mia|stroke-width=/, 'legacy and one-off icon treatments are removed');
+  assert.match(styles, /\.chat-tools-menu \.chat-new-menu-icon svg\{[^}]*width:22px;[^}]*height:22px;[^}]*stroke-width:2;/);
 });
 
 test('Web browser has one native Mia path with no iframe or localhost bridge fallback', async () => {
@@ -260,6 +273,7 @@ test('automation panel renders durable bot schedules separately from running wor
       frequency: 'weekly',
       day: 'Tuesday',
       time: '08:15',
+      utcOffsetMinutes: new Date().getTimezoneOffset(),
       prompt: 'Send the edited brief.',
     }],
   });
@@ -275,6 +289,7 @@ test('automation panel renders durable bot schedules separately from running wor
     enabled: false,
     frequency: 'daily',
     time: '08:30',
+    utcOffsetMinutes: new Date().getTimezoneOffset(),
     prompt: 'Send one short arithmetic practice question with the answer hidden below.',
   });
 });
@@ -336,9 +351,10 @@ test('native workspace home remains loaded but is omitted from conversation rows
 });
 
 test('account menu removes trial and help placeholders while preserving supported items', async () => {
-  const [html, source] = await Promise.all([
+  const [html, source, styles] = await Promise.all([
     readFile(htmlUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
   ]);
   const menuStart = html.indexOf('id="chatAcctMenu"');
   const menuEnd = html.indexOf('</div>\n              <span class="csf-dot"', menuStart);
@@ -355,6 +371,10 @@ test('account menu removes trial and help placeholders while preserving supporte
     'chatAcctFeedback', 'Send Feedback',
     'chatAcctLogout', 'Log out',
   ]) assert.match(menu, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal((menu.match(/data-icon-set="lucide"/g) || []).length, 7, 'every account action uses Lucide');
+  assert.doesNotMatch(menu, /<img|assets\/icons\/menu-/, 'legacy account-menu images are removed');
+  assert.match(styles, /\.chat-acct-menu-item \.cami svg\{[^}]*width:20px;height:20px;[^}]*stroke-width:2;/);
+  assert.doesNotMatch(styles, /\.chat-acct-menu-item \.cami img|#chatAcct(?:Admin|Setup|Settings|About|Logout) \.cami img/);
   assert.match(source, /showBenchToast\(item\.getAttribute\('data-chat-acct-toast'\)\)/);
   assert.match(source, /function prepareBetaFeedback\(\)[\s\S]*copySidebarText\(feedback, 'Feedback copied/);
   assert.match(source, /feedback\.addEventListener\('click'[\s\S]*prepareBetaFeedback\(\)/);
@@ -424,7 +444,9 @@ test('styled chat bot avatars open the selected bot in the right profile panel',
   assert.match(source, /function renderStyledAgentEditPane\(pane\)/);
   assert.match(source, /function styledAgentEditMarkup\(a\)/);
   assert.match(source, /id="styledAgentEditInstructions"/);
-  assert.match(source, /id="styledAgentEditDeptDropdown"/);
+  assert.match(source, /id="styledAgentEditWorkspace"/);
+  assert.match(source, />WORKPLACES</);
+  assert.doesNotMatch(source, /id="styledAgentEditDeptDropdown"/);
   assert.match(source, /id="styledAgentEditColorOptions"/);
   assert.match(source, /id="styledAgentEditSave"/);
   assert.match(source, /id="styledAgentEditDelete"/);
@@ -465,20 +487,21 @@ test('styled agent profile omits empty run metadata separators', async () => {
   assert.doesNotMatch(source, /a\.runs \|\| '—'.* · .*a\.last \|\| 'never run'/);
 });
 
-test('people manager and tools use the two compact header icons', async () => {
+test('left workspace actions use the canonical Lucide icon grid', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const source = await readFile(appUrl, 'utf8');
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(html, /id="chatSidebarManageAgentsBtn"[\s\S]*?<circle cx="9" cy="8" r="3"[\s\S]*?<circle cx="17" cy="10" r="2"/);
+  assert.match(html, /id="chatSidebarManageAgentsBtn"[\s\S]*?data-icon-set="lucide"[\s\S]*?<circle cx="10" cy="8" r="5"/);
   assert.match(html, /id="chatSidebarDeveloperBtn"[\s\S]*?hidden/);
   assert.ok(html.indexOf('id="chatSidebarDeveloperBtn"') < html.indexOf('id="chatSidebarManageAgentsBtn"'));
-  assert.match(html, /id="chatSidebarToolsBtn"[\s\S]*?<path d="M14\.7 6\.3a4\.5 4\.5 0 0 0-6\.1 6\.1/);
+  assert.match(html, /id="chatSidebarToolsBtn"[\s\S]*?data-icon-set="lucide"[\s\S]*?<path d="M14\.7 6\.3a1 1 0 0 0 0 1\.4/);
+  assert.doesNotMatch(source, /SIDEBAR_PIN_ICONS|var glyph =/);
+  assert.match(source, /var icon = item\.querySelector\('\.chat-new-menu-icon'\)[\s\S]*if\(icon\) btn\.innerHTML = icon\.innerHTML/);
   assert.match(source, /chatInfo\.mode = 'automations'/);
   assert.doesNotMatch(html, /agent-manager-option-1\.png|computer-cloud\.png/);
-  assert.match(styles, /\.chat-sidebar-tool-btn svg\{[^}]*width:17px;height:17px;/);
-  assert.match(styles, /\.chat-sidebar-agents-btn svg\{stroke-width:1\.55;\}/);
-  assert.match(styles, /\.chat-sidebar-tools-btn svg\{fill:none;stroke:currentColor;stroke-width:1\.55;\}/);
+  assert.match(styles, /\.chat-sidebar-tool-btn svg\{[^}]*width:20px;height:20px;[^}]*stroke-width:2;/);
+  assert.doesNotMatch(styles, /\.chat-sidebar-pin-btn (?:img|svg)/);
 });
 
 test('theme migration owns the legacy developer mode and diagnostics stay available', async () => {
@@ -778,7 +801,8 @@ test('creating a bot from the tools menu does not close browser mode, but every 
   const source = await readFile(appUrl, 'utf8');
   // Bot store joins new-bot in this exception: it renders into the same
   // side chat pane too, so opening it shouldn't kill browser mode either.
-  assert.match(source, /function runToolsAction\(action\)\{\s*(?:\/\/[^\n]*\n\s*)*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
+  assert.match(source, /function closeBrowserSidebarDrawer\(\)[\s\S]*classList\.remove\('browser-sidebar-open'\)/);
+  assert.match(source, /function runToolsAction\(action\)[\s\S]*closeBrowserSidebarDrawer\(\);[\s\S]*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
 });
 
 test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {

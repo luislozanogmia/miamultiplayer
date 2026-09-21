@@ -69,9 +69,10 @@ test('the compact Mote profile editor renders and persists the agent color picke
   assert.match(source, /function agentColorSwatchesHtml\(currentColor, colorInputId, classPrefix\)/);
   assert.match(source, /id="styledAgentEditColorOptions"/);
   assert.doesNotMatch(html, /id="benchDetailColorOptions"/);
-  // Saves through the compact editor's existing bot update endpoint.
+  // Saves through the compact editor's existing bot update endpoint without
+  // carrying the deprecated Agent Bench departments field into this surface.
   assert.match(
     source,
-    /api\('\/api\/bots\/' \+ targetId, \{method:'PUT', body:\{name: name, instructions: instructions, model: model, departments: departments, avatarColor: editState\.avatarColor \|\| null\}\}\)/
+    /api\('\/api\/bots\/' \+ targetId, \{method:'PUT', body:\{name: name, instructions: instructions, model: model, avatarColor: editState\.avatarColor \|\| null\}\}\)/
   );
 });

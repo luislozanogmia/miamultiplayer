@@ -1,28 +1,20 @@
 import assert from 'node:assert/strict';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const htmlUrl = new URL('./index.html', import.meta.url);
-const cssUrl = new URL('./styles.css', import.meta.url);
 const appUrl = new URL('./app.js', import.meta.url);
-const assetUrl = new URL('./assets/icons/connected-apps.png', import.meta.url);
 
-test('styled Connected apps row uses the local reference network icon', async () => {
-  const [html, css, asset] = await Promise.all([
-    readFile(htmlUrl, 'utf8'),
-    readFile(cssUrl, 'utf8'),
-    stat(assetUrl),
-  ]);
+test('styled Connected apps row uses the canonical Lucide plug icon', async () => {
+  const html = await readFile(htmlUrl, 'utf8');
   const start = html.indexOf('data-tools-action="connected-apps"');
   const end = html.indexOf('</button>', start);
   assert.ok(start >= 0 && end > start, 'Connected apps button is present');
   const row = html.slice(start, end);
-  assert.match(row, /src="assets\/icons\/connected-apps\.png"/);
+  assert.match(row, /<svg data-icon-set="lucide"[^>]*>[\s\S]*M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z/);
   assert.match(row, /<span class="chat-new-menu-label">Connected apps<\/span>/);
   assert.match(row, /Connect Google services/);
-  assert.doesNotMatch(row, /<svg/);
-  assert.match(css, /\.chat-new-menu-icon img\{display:block;width:36px;height:36px;object-fit:contain;\}/);
-  assert.ok(asset.size > 0, 'local connected-apps icon asset is non-empty');
+  assert.doesNotMatch(row, /<img|connected-apps\.png/);
 });
 
 test('Connected apps sidebar click opens the existing pane without a selected room', async () => {
