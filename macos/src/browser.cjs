@@ -136,6 +136,47 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!buffer.length || buffer.length > FAVICON_MAX_BYTES) return null;
     return `data:${type};base64,${buffer.toString("base64")}`;
   }
+  async function refreshTabFavicon(tab, favicons = []) {
+    const candidates = Array.isArray(favicons)
+      ? favicons.filter(value => typeof value === "string" && value)
+      : [];
+    const inline = candidates.find(value => /^data:image\//i.test(value) && value.length <= FAVICON_MAX_BYTES);
+    const request = ++tab.faviconRequest;
+    const sequence = tab.sequence;
+    if (inline) {
+      tab.faviconPending = false;
+      tab.favicon = inline;
+      publish();
+      return;
+    }
+    const remote = candidates.filter(value => /^https?:/i.test(value));
+    if (!remote.length) {
+      try {
+        const page = new URL(tab.url);
+        if (["https:", "http:"].includes(page.protocol)) remote.push(new URL("/favicon.ico", page.origin).toString());
+      } catch (_) { /* A tab without a committed web URL has no safe fallback. */ }
+    }
+    tab.favicon = null;
+    publish();
+    if (!remote.length || typeof profile.fetch !== "function") {
+      tab.faviconPending = false;
+      return;
+    }
+    tab.faviconPending = true;
+    try {
+      for (const candidate of remote) {
+        const uri = await faviconDataUri(candidate).catch(() => null);
+        if (tab.faviconRequest !== request || tab.sequence !== sequence || tabs.get(tab.id) !== tab) return;
+        if (uri) {
+          tab.favicon = uri;
+          publish();
+          return;
+        }
+      }
+    } finally {
+      if (tab.faviconRequest === request) tab.faviconPending = false;
+    }
+  }
   // Microphone/camera requests from HTTPS pages surface a native Allow/Block
   // dialog, remembered per origin next to the browser state file. Every other
   // permission stays denied.
@@ -1084,7 +1125,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     nextId = Math.max(nextId, id + 1);
     const tab = {
       id, view, url: "", title: typeof options.title === "string" && options.title.trim()
-        ? options.title.slice(0, 500) : "New tab", error: "", favicon: null, timing: null, sequence: 0, vacuumElements: [],
+        ? options.title.slice(0, 500) : "New tab", error: "", favicon: null, faviconPending: false,
+      faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [],
       media: options.media || null,
       restoreMediaPending: !!options.media,
       mediaRestoreTarget: null,
@@ -1167,7 +1209,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("will-navigate", guard);
     wc.on("will-redirect", guard);
     wc.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
-      if (mainFrame && !inPlace) { tab.sequence++; tab.timing = null; tab.documentTimingValid = true; tab.error = ""; tab.favicon = null; }
+      if (mainFrame && !inPlace) {
+        tab.sequence++;
+        tab.faviconRequest++;
+        tab.faviconPending = false;
+        tab.timing = null;
+        tab.documentTimingValid = true;
+        tab.error = "";
+        tab.favicon = null;
+      }
       publish();
     });
     wc.on("did-start-loading", publish);
@@ -1176,6 +1226,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("did-finish-load", () => setImmediate(() => {
       collectTiming(tab, true);
       restoreMediaState(tab);
+      // Some applications do not emit a usable page-favicon-updated value
+      // for their first/restored tab. Fall back to the conventional origin
+      // icon only after any event-driven favicon fetch has had priority.
+      if (!tab.favicon && !tab.faviconPending) void refreshTabFavicon(tab);
     }));
     wc.on("page-title-updated", (_event, title) => { tab.title = title; persistTabs(); updateVisitTitle(tab.url, title); publish(); });
     wc.on("page-favicon-updated", (_event, favicons) => {
@@ -1184,22 +1238,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       // content). Fetch the icon in this process and republish it as a data:
       // URI rather than loosening that CSP; only web-served images of bounded
       // size are accepted, and file:/other privileged schemes never load.
-      const candidate = Array.isArray(favicons) && typeof favicons[0] === "string" ? favicons[0] : "";
-      if (/^data:image\//i.test(candidate) && candidate.length <= FAVICON_MAX_BYTES) {
-        tab.favicon = candidate;
-        publish();
-        return;
-      }
-      tab.favicon = null;
-      publish();
-      if (!/^https?:/i.test(candidate) || typeof profile.fetch !== "function") return;
-      const sequence = tab.sequence;
-      faviconDataUri(candidate).then((uri) => {
-        if (process.env.FAVICON_DEBUG) console.error('favicon then:', uri, tab.sequence, sequence, tabs.get(tab.id) === tab);
-        if (!uri || tab.sequence !== sequence || tabs.get(tab.id) !== tab) return;
-        tab.favicon = uri;
-        publish();
-      }).catch((e) => { if (process.env.FAVICON_DEBUG) console.error('favicon debug:', e); });
+      // Sites may put generated blob: URLs before their normal web favicon.
+      // Try every safe candidate, then the origin fallback, instead of letting
+      // one unsupported first entry leave the tab blank.
+      void refreshTabFavicon(tab, favicons);
     });
     const navigated = (_event, url, isMainFrame = true) => {
       if (!isMainFrame) return;
@@ -1232,6 +1274,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("context-menu", (_event, params) => {
       const items = [];
       if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: () => newTab(params.linkURL) });
+      const imageURL = params.mediaType === "image" && typeof params.srcURL === "string"
+        && (/^https?:\/\//i.test(params.srcURL) || /^blob:https?:\/\//i.test(params.srcURL) || /^data:image\//i.test(params.srcURL))
+        ? params.srcURL
+        : "";
+      if (imageURL) items.push({ label: "Save Image As…", click: () => wc.downloadURL(imageURL) });
       if (params.isEditable) items.push({ role: "cut" }, { role: "copy" }, { role: "paste" });
       else if (params.selectionText) items.push({ role: "copy" });
       items.push({ label: "Back", enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
