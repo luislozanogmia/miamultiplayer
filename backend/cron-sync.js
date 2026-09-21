@@ -29,6 +29,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const db = require('./db');
+const { createBotPackageStore } = require('./bot-packages');
 const { configuredHermesLaunch, requiredConfiguredExecutable, requiredConfiguredPath } = require('./runtime-paths');
 const { buildScheduledBotPrompt, hermesProcessEnv } = require('./inference');
 const {
@@ -56,6 +57,11 @@ const HERMES_STATE_DB = process.env.HERMES_STATE_DB || path.join(HERMES_HOME, 's
 const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT
   ? path.resolve(process.env.HERMES_AGENT_ROOT)
   : path.join(HERMES_HOME, 'hermes-agent');
+const BOT_PACKAGE_ROOT = path.resolve(
+  process.env.MIAOS_BOT_PACKAGE_DIR
+    || path.join(path.dirname(path.resolve(process.env.DB_PATH || path.join(__dirname, 'mia-os.db'))), 'bots')
+);
+const BOT_PACKAGE_STORE = createBotPackageStore(BOT_PACKAGE_ROOT);
 
 // The default deployment offset is UTC-6. Override it for other timezones.
 const UTC_OFFSET_MIN = parseInt(process.env.MIA_AUTOMATION_UTC_OFFSET_MIN || '360', 10);
@@ -134,16 +140,23 @@ function artifactWorkspaceForBot(bot) {
   return workspace;
 }
 
-function restrictHermesJob(jobId, bot) {
+function botPackageDirectoryFor(bot) {
+  BOT_PACKAGE_STORE.hydrate(bot);
+  const directory = BOT_PACKAGE_STORE.findDirectory(bot && bot.id);
+  if (!directory) throw new Error(`bot package is missing for ${bot && bot.id}`);
+  return directory;
+}
+
+function restrictHermesJob(jobId, bot, workdir) {
   const artifactWorkspace = artifactWorkspaceForBot(bot);
   const source = [
     'import json,sys',
     'from cron.jobs import update_job',
-    'job=update_job(sys.argv[1], {"enabled_toolsets": json.loads(sys.argv[2]), "workdir": None, "artifact_workspace": sys.argv[3]})',
+    'job=update_job(sys.argv[1], {"enabled_toolsets": json.loads(sys.argv[2]), "workdir": sys.argv[3], "artifact_workspace": sys.argv[4]})',
     'raise SystemExit(0 if job else 2)',
   ].join(';');
   return new Promise((resolve, reject) => {
-    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(BOT_TOOLSETS), artifactWorkspace], {
+    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(BOT_TOOLSETS), workdir, artifactWorkspace], {
       timeout: 30000,
       maxBuffer: 1024 * 1024,
       cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
@@ -246,6 +259,33 @@ function migrateBotAutomations(bot) {
   return bot;
 }
 
+function mergeBotCronSyncState(current, synchronized, started) {
+  if (!current) return null;
+  const automationIds = new Set((current.automations || []).map((automation) => String(automation.id || '')));
+  const filteredMap = (value) => Object.fromEntries(
+    Object.entries(value || {}).filter(([automationId]) => automationIds.has(automationId))
+  );
+  const schedulingSnapshot = (bot) => JSON.stringify({
+    status: bot && bot.status,
+    name: bot && bot.name,
+    model: bot && bot.model,
+    modelProvider: bot && bot.modelProvider,
+    instructionsRevision: bot && bot.instructionsRevision,
+    automations: bot && bot.automations,
+  });
+  const operationStillCurrent = schedulingSnapshot(current) === schedulingSnapshot(started)
+    && JSON.stringify(filteredMap(current.hermesCronJobIds)) === JSON.stringify(filteredMap(started.hermesCronJobIds));
+  return {
+    ...current,
+    hermesCronJobIds: operationStillCurrent
+      ? filteredMap(synchronized.hermesCronJobIds)
+      : filteredMap(current.hermesCronJobIds),
+    // Delivery checkpoints can advance while a scheduler subprocess is in
+    // flight. They are never outputs of synchronization, so preserve current.
+    hermesCronDeliveries: filteredMap(current.hermesCronDeliveries),
+  };
+}
+
 function automationOwnerKey(botId, automationId) {
   return `${String(botId || '')}/${String(automationId || '')}`;
 }
@@ -319,7 +359,7 @@ function hermesTimestampMs(value) {
   return Date.parse(String(value));
 }
 
-function jobNeedsEdit(job, expr, prompt, deliver, name, artifactWorkspace, model, provider) {
+function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider) {
   if (!job) return true;
   const sched = (job.schedule && job.schedule.expr) || job.schedule_display || '';
   return (
@@ -330,6 +370,7 @@ function jobNeedsEdit(job, expr, prompt, deliver, name, artifactWorkspace, model
     String(job.model || '') !== model ||
     String(job.provider || '') !== provider ||
     JSON.stringify(job.enabled_toolsets || []) !== JSON.stringify(BOT_TOOLSETS) ||
+    String(job.workdir || '') !== workdir ||
     String(job.artifact_workspace || '') !== artifactWorkspace
   );
 }
@@ -423,7 +464,6 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
   // intentionally not selected here. The native event sink will consume
   // scheduled output in a later slice, while Hermes keeps local run output.
   const deliver = 'local';
-  const artifactWorkspace = artifactWorkspaceForBot(bot);
   const job = resolveOwnedAutomationJob(bot, automation, registry, existingJob, allowLegacy);
 
   if (!expr) {
@@ -433,10 +473,22 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
     return;
   }
 
+  let workdir;
+  try {
+    workdir = botPackageDirectoryFor(bot);
+  } catch (error) {
+    // Hermes deliberately falls back to a context-free run when a configured
+    // workdir disappears. Mia bots must fail closed instead: pause only the
+    // already ownership-verified job and let reconciliation retry later.
+    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id]);
+    throw error;
+  }
+  const artifactWorkspace = artifactWorkspaceForBot(bot);
+
   const { model, provider } = jobModelFor(bot);
 
   if (job) {
-    if (jobNeedsEdit(job, expr, prompt, deliver, name, artifactWorkspace, model, provider)) {
+    if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider)) {
       await runHermes([
         'edit',
         job.id,
@@ -448,12 +500,14 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
         deliver,
         '--name',
         name,
+        '--workdir',
+        workdir,
         '--model',
         model,
         '--provider',
         provider,
       ]);
-      await restrictHermesJob(job.id, bot);
+      await restrictHermesJob(job.id, bot, workdir);
     }
     // Editing a paused job does not activate it. Resume independently so a
     // changed schedule cannot remain paused after the user re-enables it.
@@ -465,13 +519,14 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
     'create', expr, prompt,
     '--name', name,
     '--deliver', deliver,
+    '--workdir', workdir,
     '--model', model,
     '--provider', provider,
   ]);
   const m = String(out).match(/Created job:\s*([\w-]+)/i);
   if (m) {
     bot.hermesCronJobIds[automation.id] = m[1];
-    await restrictHermesJob(m[1], bot);
+    await restrictHermesJob(m[1], bot, workdir);
   }
 }
 
@@ -815,6 +870,7 @@ module.exports = {
   jobPromptFor,
   botAutomations,
   migrateBotAutomations,
+  mergeBotCronSyncState,
   MAX_BOT_AUTOMATIONS,
   syncBotAutomation,
   pauseBotCron,
@@ -823,6 +879,7 @@ module.exports = {
   listUndeliveredBotCronResults,
   listActiveBotCronRuns,
   artifactWorkspaceForBot,
+  botPackageDirectoryFor,
   listSessionArtifacts,
   validateBotArtifacts,
   BOT_TOOLSETS,

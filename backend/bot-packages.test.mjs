@@ -97,7 +97,9 @@ test('manual and scheduled prompts read the same externally edited AGENTS.md wit
   assert.equal(bot.instructions, edited);
   const manual = inference.buildBotContext(bot, [], '', '', 'Luis', '');
   const scheduled = inference.buildScheduledBotPrompt(bot, bot.automations[0], { userDisplayName: 'Luis' });
-  for (const prompt of [manual, scheduled]) assert.match(prompt, /Purpose:\n# Operating guide\n\n1\. First line\n2\. Second line/);
+  assert.match(manual, /Purpose:\n# Operating guide\n\n1\. First line\n2\. Second line/);
+  assert.doesNotMatch(scheduled, /# Operating guide|Purpose:/);
+  assert.match(scheduled, /Task:\nPrepare the brief\./);
 
   const delayed = { ...bot, hermesCronJobId: 'updated-job-id' };
   fs.writeFileSync(path.join(directory, 'AGENTS.md'), '# Newer external edit\n');

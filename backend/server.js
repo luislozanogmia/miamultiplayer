@@ -2595,6 +2595,20 @@ function registerResource(cfg) {
       }
       throw error;
     }
+    if (cfg.afterPersistUpdate) {
+      try {
+        const started = JSON.parse(JSON.stringify(record));
+        const synchronized = (await cfg.afterPersistUpdate(record, existing)) || record;
+        const current = db.loadOne(conn, cfg.table, record.id);
+        if (!current) return res.status(409).json({ error: 'not_found' });
+        record = cfg.mergeAfterPersistUpdate
+          ? cfg.mergeAfterPersistUpdate(current, synchronized, started)
+          : synchronized;
+        db.saveOne(conn, cfg.table, record.id, record);
+      } catch (error) {
+        console.error(`${cfg.singular}: afterPersistUpdate hook failed for`, record.id, error.message);
+      }
+    }
     record = db.loadOne(conn, cfg.table, record.id);
     if (cfg.bumpOnMutate) bumpVersion();
     res.status(200).json({ [cfg.singular]: record });
@@ -4480,7 +4494,7 @@ registerResource({
     }
     return record;
   },
-  afterUpdate: async (record, existing) => {
+  afterPersistUpdate: async (record, existing) => {
     await ensureNativeBotConversation(record);
     // Keep the Hermes cron job in step with the agent's automation config
     // (create/update on enable or schedule change, pause on disable). The
@@ -4494,6 +4508,7 @@ registerResource({
     );
     return record;
   },
+  mergeAfterPersistUpdate: cronSync.mergeBotCronSyncState,
   afterDelete: async (record) => {
     const deletedAt = new Date().toISOString();
     for (const conversation of nativeBotConversations(record)) {

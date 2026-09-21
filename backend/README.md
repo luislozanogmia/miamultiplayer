@@ -64,9 +64,11 @@ Each bot has a readable, stable folder named `<name>--<bot-id>` under
 `MIAOS_BOT_PACKAGE_DIR`. `AGENTS.md` is the editable source of truth for the
 bot's instructions: direct edits are read for the next interactive chat, and
 the editor uses a revision check so it cannot silently overwrite a newer file
-edit. Existing Hermes scheduled jobs contain prompt snapshots, so a direct
-`AGENTS.md` edit requires a later editor save or schedule resync before those
-already-registered jobs use the new text.
+edit. Scheduled Hermes jobs use the bot package as their work directory, so
+Hermes' native context loader rereads `AGENTS.md` on every run. The scheduled
+prompt stores app/global policy and the explicit automation task, but not a
+second snapshot of the bot purpose. Editing the automation task or other
+schedule settings still uses Mia's normal editor-driven schedule sync.
 
 `bot.yaml` and `automations.yaml` are generated portable snapshots; Mia may
 overwrite manual edits to those two files. Automation entries are exported as
@@ -87,7 +89,12 @@ a larger SQLite transaction retains an inactive package in place because a
 filesystem move cannot join that transaction; this makes an outer rollback
 safe and leaves manual recovery possible after commit. Package roots, managed
 files, and `assets/` reject symlinks; corrupt or missing migrated packages fail
-closed instead of silently dispatching stale instructions.
+closed instead of silently dispatching stale instructions. During Mia sync, an
+enabled job whose package is missing or invalid is paused before the error is
+reported. Hermes itself falls back to a context-free run if a registered
+workdir disappears between Mia syncs; there is no filesystem watcher, so the
+job is not guaranteed to pause after an out-of-band deletion until its package
+is repaired and Mia can validate/resynchronize it.
 
 ## Auth
 
