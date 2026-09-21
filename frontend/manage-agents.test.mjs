@@ -491,11 +491,12 @@ test('left workspace actions use the canonical Lucide icon grid', async () => {
   assert.match(html, /id="chatSidebarDeveloperBtn"[\s\S]*?hidden/);
   assert.ok(html.indexOf('id="chatSidebarDeveloperBtn"') < html.indexOf('id="chatSidebarManageAgentsBtn"'));
   assert.match(html, /id="chatSidebarToolsBtn"[\s\S]*?data-icon-set="lucide"[\s\S]*?<path d="M14\.7 6\.3a1 1 0 0 0 0 1\.4/);
-  assert.match(source, /'web-browser': '<circle cx="12" cy="12" r="10"><\/circle><path d="M12 2a14\.5 14\.5/);
-  assert.match(source, /action === 'web-browser' \? ' data-icon-set="lucide"'/);
+  assert.doesNotMatch(source, /SIDEBAR_PIN_ICONS|var glyph =/);
+  assert.match(source, /var icon = item\.querySelector\('\.chat-new-menu-icon'\)[\s\S]*if\(icon\) btn\.innerHTML = icon\.innerHTML/);
   assert.match(source, /chatInfo\.mode = 'automations'/);
   assert.doesNotMatch(html, /agent-manager-option-1\.png|computer-cloud\.png/);
   assert.match(styles, /\.chat-sidebar-tool-btn svg\{[^}]*width:20px;height:20px;[^}]*stroke-width:2;/);
+  assert.doesNotMatch(styles, /\.chat-sidebar-pin-btn (?:img|svg)/);
 });
 
 test('theme migration owns the legacy developer mode and diagnostics stay available', async () => {
