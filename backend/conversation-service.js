@@ -34,6 +34,12 @@ function publicDispatch(dispatch) {
   return visible;
 }
 
+function canonicalBotConversationCandidates(conversations) {
+  return (conversations || []).filter((conversation) =>
+    conversation && (!conversation.metadata || conversation.metadata.conversationMode !== 'fresh')
+  );
+}
+
 function callerPrincipal(principal, companyId, conversationId, operation) {
   const result = {
     companyId: required(companyId, 'companyId'),
@@ -227,6 +233,59 @@ function createConversationService({ repository, authorization, realtime = null,
     });
     ensureBotMember(conversation);
     ensureGatewayMember(conversation);
+    ensureConversationMembers(conversation);
+    return conversation;
+  }
+
+  function createFreshBotConversation({ companyId, conversationId, principal, createdAt } = {}) {
+    const normalizedCompanyId = required(companyId, 'companyId');
+    authorization.authorize(callerPrincipal(principal, normalizedCompanyId, conversationId, 'manage_members'));
+    const source = repository.getConversation({ companyId: normalizedCompanyId, id: conversationId });
+    const sourceMetadata = source && source.metadata && typeof source.metadata === 'object' ? source.metadata : {};
+    if (!source || source.type !== 'bot' || typeof sourceMetadata.botId !== 'string' || !sourceMetadata.botId.trim()) {
+      invalidInput('a bot conversation is required');
+    }
+    const metadata = {
+      botId: sourceMetadata.botId.trim(),
+      ...(Array.isArray(sourceMetadata.departments) ? { departments: sourceMetadata.departments.slice() } : {}),
+      ...(typeof sourceMetadata.workspaceId === 'string' && sourceMetadata.workspaceId.trim()
+        ? { workspaceId: sourceMetadata.workspaceId.trim() }
+        : {}),
+      conversationMode: 'fresh',
+      source: 'native-ui-new-conversation',
+    };
+    const owner = {
+      principalId: required(principal && principal.principalId, 'principalId'),
+      principalType: required(principal && principal.principalType, 'principalType'),
+      joinedAt: createdAt,
+    };
+    const conversation = repository.createConversation({
+      companyId: normalizedCompanyId,
+      type: 'bot',
+      name: source.name,
+      createdBy: owner.principalId,
+      createdAt,
+      metadata,
+      owner,
+    });
+    ensureBotMember(conversation);
+    for (const member of repository.listMembers({
+      companyId: normalizedCompanyId,
+      conversationId: source.id,
+      includeRemoved: false,
+    })) {
+      if (member.state !== 'active') continue;
+      if (member.principalId === owner.principalId && member.principalType === owner.principalType) continue;
+      repository.addMember({
+        companyId: normalizedCompanyId,
+        conversationId: conversation.id,
+        principalId: member.principalId,
+        principalType: member.principalType,
+        role: member.role,
+        state: 'active',
+        metadata: member.metadata || {},
+      });
+    }
     ensureConversationMembers(conversation);
     return conversation;
   }
@@ -537,6 +596,7 @@ function createConversationService({ repository, authorization, realtime = null,
 
   return {
     createConversation,
+    createFreshBotConversation,
     listConversations,
     getConversation,
     deleteConversation,
@@ -557,4 +617,4 @@ function createConversationService({ repository, authorization, realtime = null,
   };
 }
 
-module.exports = { createConversationService };
+module.exports = { createConversationService, canonicalBotConversationCandidates };

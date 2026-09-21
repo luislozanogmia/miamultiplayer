@@ -873,6 +873,7 @@ function createConversationRepository(db) {
             AND c.type = 'bot'
             AND c.deleted_at IS NULL
             AND json_extract(c.metadata, '$.botId') = ?
+            AND coalesce(json_extract(c.metadata, '$.conversationMode'), '') <> 'fresh'
           ORDER BY c.created_at ASC, c.id ASC
           LIMIT 1`
       ).get(normalizedCompanyId, normalizedCreatedBy, normalizedBotId);

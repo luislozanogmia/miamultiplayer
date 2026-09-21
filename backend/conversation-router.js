@@ -164,6 +164,16 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
     res.status(200).json(result);
   }));
 
+  router.post('/conversations/:conversationId/fresh', handle((req, res) => {
+    const { companyId, principal } = context(req);
+    const conversation = service.createFreshBotConversation({
+      companyId,
+      conversationId: req.params.conversationId,
+      principal,
+    });
+    res.status(201).json({ conversation });
+  }));
+
   router.get('/conversations/:conversationId/members', handle((req, res) => {
     const { companyId, principal } = context(req);
     const members = service.listMembers({ companyId, conversationId: req.params.conversationId, principal });
