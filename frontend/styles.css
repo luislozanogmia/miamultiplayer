@@ -1288,30 +1288,15 @@
 
   /* Popover: user account menu, docked above the sidebar footer row —
      The styled shell's user-menu popover (06_user_menu.png): radius 12, white,
-     shadow-popover, 13px rows with a 16px leading icon, divider before
+     shadow-popover, 13px rows with a 20px leading icon, divider before
      Log out. */
   .chat-acct-menu{display:none;position:absolute;bottom:calc(100% + 6px);left:8px;width:226px;background:var(--sand-bg-elevated);border:1px solid var(--sand-border-default);border-radius:12px;box-shadow:var(--sand-shadow-popover);padding:5px;z-index:60;font-family:var(--styled-sans);}
   .chat-acct-menu.open{display:block;}
   .chat-acct-menu-item{appearance:none;width:100%;border:none;background:none;cursor:pointer;display:flex;align-items:center;gap:10px;text-align:left;padding:8px 10px;border-radius:8px;font-size:13px;color:var(--sand-text-primary);}
   .chat-acct-menu-item[hidden]{display:none;}
   .chat-acct-menu-item:hover{background:var(--sand-fill-ghost-hover);}
-  .chat-acct-menu-item .cami{width:18px;height:18px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;overflow:hidden;color:var(--sand-text-secondary);}
-  .chat-acct-menu-item .cami img{display:block;width:18px;height:18px;flex:0 0 auto;object-fit:contain;mix-blend-mode:multiply;}
-  html[data-theme="developer"] .chat-acct-menu-item .cami img{
-    /* These PNGs have opaque light backgrounds, so the screen blend must keep
-       dropping the (inverted-to-black) background — never flatten them with
-       brightness(0), that fills the whole tile. The brightness boost after the
-       invert is what lifts the gray glyphs to white (same recipe as
-       .styled-onboarding-mode-mark). */
-    filter:invert(1) brightness(1.9);
-    mix-blend-mode:screen;
-    opacity:1;
-  }
-  #chatAcctAdmin .cami img,
-  #chatAcctSetup .cami img,
-  #chatAcctSettings .cami img,
-  #chatAcctAbout .cami img,
-  #chatAcctLogout .cami img{width:36px;height:36px;}
+  .chat-acct-menu-item .cami{width:20px;height:20px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:var(--sand-text-secondary);}
+  .chat-acct-menu-item .cami svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;shape-rendering:geometricPrecision;}
   .chat-acct-menu-item-trail{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--sand-text-secondary);flex:0 0 auto;}
   .chat-acct-menu-chevron{font-size:20px;font-weight:300;line-height:12px;color:var(--sand-text-secondary);}
   .chat-acct-menu-item.is-open{background:var(--sand-fill-secondary);}

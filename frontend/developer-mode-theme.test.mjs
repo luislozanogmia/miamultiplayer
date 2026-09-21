@@ -44,7 +44,8 @@ test('Developer Mode swaps semantic roots instead of restyling individual compon
   assert.match(styles, /html\[data-theme="developer"\]\{[\s\S]*--paper:#0B0A09;[\s\S]*--ink:#FFFFFF;[\s\S]*--accent:#E3A61B;/);
   assert.match(styles, /html\[data-theme="developer"\]\{[\s\S]*--sand-bg-base:#0B0A09;[\s\S]*--sand-text-primary:#FFFFFF;[\s\S]*--sand-fill-primary:#E3A61B;/);
   assert.match(styles, /html\[data-theme="developer"\] \.mia-mark\{[\s\S]*--mia-dot:rgba\(255,255,255,\.78\)/);
-  assert.match(styles, /html\[data-theme="developer"\] \.chat-acct-menu-item \.cami img\{[\s\S]*filter:invert\(1\) brightness\(1\.9\);[\s\S]*mix-blend-mode:screen;[\s\S]*opacity:1;/);
+  assert.match(styles, /\.chat-acct-menu-item \.cami svg\{[^}]*fill:none;stroke:currentColor;stroke-width:2;/);
+  assert.doesNotMatch(styles, /html\[data-theme="developer"\] \.chat-acct-menu-item \.cami img/);
   assert.match(styles, /html\[data-theme="developer"\] body\.styled-skin \.chat-sidebar-developer-btn\{[\s\S]*color:var\(--ui-icon-feature\)/);
   assert.match(styles, /body\.styled-skin \.chat-search-pill\{[^}]*background:var\(--sand-fill-secondary\)/);
   assert.match(styles, /\.chat-search\{[^}]*color:var\(--sand-text-primary\)/);

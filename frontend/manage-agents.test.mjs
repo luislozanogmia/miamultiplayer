@@ -351,9 +351,10 @@ test('native workspace home remains loaded but is omitted from conversation rows
 });
 
 test('account menu removes trial and help placeholders while preserving supported items', async () => {
-  const [html, source] = await Promise.all([
+  const [html, source, styles] = await Promise.all([
     readFile(htmlUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
   ]);
   const menuStart = html.indexOf('id="chatAcctMenu"');
   const menuEnd = html.indexOf('</div>\n              <span class="csf-dot"', menuStart);
@@ -370,6 +371,10 @@ test('account menu removes trial and help placeholders while preserving supporte
     'chatAcctFeedback', 'Send Feedback',
     'chatAcctLogout', 'Log out',
   ]) assert.match(menu, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal((menu.match(/data-icon-set="lucide"/g) || []).length, 7, 'every account action uses Lucide');
+  assert.doesNotMatch(menu, /<img|assets\/icons\/menu-/, 'legacy account-menu images are removed');
+  assert.match(styles, /\.chat-acct-menu-item \.cami svg\{[^}]*width:20px;height:20px;[^}]*stroke-width:2;/);
+  assert.doesNotMatch(styles, /\.chat-acct-menu-item \.cami img|#chatAcct(?:Admin|Setup|Settings|About|Logout) \.cami img/);
   assert.match(source, /showBenchToast\(item\.getAttribute\('data-chat-acct-toast'\)\)/);
   assert.match(source, /function prepareBetaFeedback\(\)[\s\S]*copySidebarText\(feedback, 'Feedback copied/);
   assert.match(source, /feedback\.addEventListener\('click'[\s\S]*prepareBetaFeedback\(\)/);
