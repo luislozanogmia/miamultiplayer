@@ -108,6 +108,21 @@ test('chat-migration.conversation-lifecycle.001 — native HTTP contract creates
     result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=1`, { principal: 'bob' });
     assert.equal(result.response.status, 200);
     assert.deepEqual(result.payload.events.map((event) => event.content.text), ['latest']);
+    assert.equal(result.payload.nextBeforeSequence, result.payload.events[0].sequence);
+
+    result = await app.request(`/conversations/${conversationId}/events?beforeSequence=${result.payload.nextBeforeSequence}&limit=1`, { principal: 'bob' });
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.payload.events.map((event) => event.content.text), ['hello']);
+    assert.equal(result.payload.nextBeforeSequence, null);
+
+    for (const query of ['beforeSequence=0', 'beforeSequence=2&afterSequence=1', 'beforeSequence=2&latest=true']) {
+      result = await app.request(`/conversations/${conversationId}/events?${query}`, { principal: 'bob' });
+      assert.equal(result.response.status, 400, query);
+    }
+    result = await app.request(`/conversations/${conversationId}/events?beforeSequence=2`, { principal: 'other-company' });
+    assert.equal(result.response.status, 403);
+    result = await app.request(`/conversations/${conversationId}/events?beforeSequence=2`, { principal: 'unknown' });
+    assert.equal(result.response.status, 401);
 
     result = await app.request(`/conversations/${conversationId}`, { principal: 'other-company' });
     assert.equal(result.response.status, 403);

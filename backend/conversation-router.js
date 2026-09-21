@@ -205,6 +205,7 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
   router.get('/conversations/:conversationId/events', handle((req, res) => {
     const { companyId, principal } = context(req);
     const afterSequence = optionalInteger(req.query.afterSequence, 'afterSequence', { min: 0, max: Number.MAX_SAFE_INTEGER });
+    const beforeSequence = optionalInteger(req.query.beforeSequence, 'beforeSequence', { min: 1, max: Number.MAX_SAFE_INTEGER });
     const limit = optionalInteger(req.query.limit, 'limit', { min: 1, max: 100 });
     const events = service.listEvents({
       companyId,
@@ -213,6 +214,7 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
       includeDeleted: req.query.includeDeleted !== 'false',
       latest: req.query.latest === 'true',
       ...(afterSequence === undefined ? {} : { afterSequence }),
+      ...(beforeSequence === undefined ? {} : { beforeSequence }),
       ...(limit === undefined ? {} : { limit }),
     });
     res.status(200).json(events);

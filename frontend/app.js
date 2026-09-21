@@ -4510,9 +4510,10 @@
     return normalizeChatMessages((events || []).map(nativeEventToChatMessage));
   }
 
-  function nativeEventsUrl(conversationId, afterSequence, limit, latest){
+  function nativeEventsUrl(conversationId, afterSequence, limit, latest, beforeSequence){
     var query = '?limit=' + encodeURIComponent(limit || 100) + '&includeDeleted=false';
     if(afterSequence) query += '&afterSequence=' + encodeURIComponent(afterSequence);
+    if(beforeSequence) query += '&beforeSequence=' + encodeURIComponent(beforeSequence);
     if(latest) query += '&latest=true';
     return nativeConversationPath(conversationId, '/events' + query);
   }
@@ -6195,7 +6196,7 @@
   }
 
   function chatRoomState(roomId){
-    if(!chatWs.byRoom[roomId]) chatWs.byRoom[roomId] = {messages: [], lastTs: 0, lastSequence: 0, polling: false, thinking: false, thinkingTimer: null, thinkingAgentName: null, selectedAgentId: null, mentionRoster: null, chatSuggestions: null, openThreadRoot: null, localWelcome: null, sidebarPreviewLoading: false, sidebarPreviewLoaded: false, sidebarAttentionPolling: false, historyCursor: null, historyLoading: false, historyComplete: false, historyEdits: {}, followLatest: true, chatScrollTop: 0, chatScrollAnchor: null, chatScrollRevision: 0};
+    if(!chatWs.byRoom[roomId]) chatWs.byRoom[roomId] = {messages: [], lastTs: 0, lastSequence: 0, polling: false, thinking: false, thinkingTimer: null, thinkingAgentName: null, selectedAgentId: null, mentionRoster: null, chatSuggestions: null, openThreadRoot: null, localWelcome: null, sidebarPreviewLoading: false, sidebarPreviewLoaded: false, sidebarAttentionPolling: false, historyCursor: null, historyLoading: false, historyComplete: false, historyInitialized: false, historyRequestId: 0, historyEdits: {}, followLatest: true, chatScrollTop: 0, chatScrollAnchor: null, chatScrollRevision: 0};
     return chatWs.byRoom[roomId];
   }
 
@@ -7325,6 +7326,16 @@
     syncChatThreadPanel();
   }
 
+  function chatHistoryControlHtml(state){
+    if(!state || !state.historyCursor) return '';
+    return '<button type="button" class="chat-history-more" id="chatHistoryMore"' + (state.historyLoading ? ' disabled' : '') + '>' + (state.historyLoading ? 'Loading…' : 'Load earlier messages') + '</button>';
+  }
+
+  function wireChatHistoryControl(thread, roomId){
+    var more = el('#chatHistoryMore', thread);
+    if(more) more.addEventListener('click', function(){ loadOlderChatMessages(roomId); });
+  }
+
   function startAgentSetupChat(){
     clearAgentSetupRequest(true);
     rememberChatBack('agent-setup', AGENT_SETUP_ROOM_ID);
@@ -7525,7 +7536,8 @@
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
         ? esc(miaEmptyGreeting(currentRealProfileName()))
         : 'No messages yet &mdash; say hello.';
-      replaceChatTimeline(thread, roomId, state, chatHeroHtml(emptyMessage, chatWs.activeKind === 'agent' ? chatWs.activeLabel : ''), options);
+      replaceChatTimeline(thread, roomId, state, chatHistoryControlHtml(state) + chatHeroHtml(emptyMessage, chatWs.activeKind === 'agent' ? chatWs.activeLabel : ''), options);
+      wireChatHistoryControl(thread, roomId);
       return;
     }
     // Consecutive turns from the SAME human collapse to a slim time-only
@@ -7571,9 +7583,7 @@
         (thinkingTag ? '<span class="chat-msg-tag">' + esc(thinkingTag) + '</span>' : '') + '</div>' +
         '<div class="chat-msg-text chat-msg-thinking chat-msg-thinking-local" aria-live="polite"><span class="chat-thinking-shimmer">' + esc(chatThinkingText(state)) + '</span></div></div></div>';
     }
-    var historyControl = state.historyCursor
-      ? '<button type="button" class="chat-history-more" id="chatHistoryMore">' + (state.historyLoading ? 'Loading…' : 'Load earlier messages') + '</button>'
-      : '';
+    var historyControl = chatHistoryControlHtml(state);
     replaceChatTimeline(thread, roomId, state, historyControl + dateDivider + html, options);
     els('[data-mia-onboarding-choice]', thread).forEach(function(button){
       button.addEventListener('click', function(){
@@ -7589,8 +7599,7 @@
     wireNewsOnboarding(thread);
     wireChatExpandableMessages(thread);
     wireChatArtifactPreviews(thread);
-    var more = el('#chatHistoryMore', thread);
-    if(more) more.addEventListener('click', function(){ loadOlderChatMessages(roomId); });
+    wireChatHistoryControl(thread, roomId);
     syncChatThreadPanel();
   }
 
@@ -9439,7 +9448,53 @@
   }
 
   function loadOlderChatMessages(roomId){
-    return;
+    var state = roomId && chatWs.byRoom[roomId];
+    if(!state || chatWs.activeRoomId !== roomId || state.historyLoading || state.historyComplete || !state.historyCursor) return Promise.resolve();
+    var requestedWorkspace = activeWorkspaceKey;
+    var requestId = Number(state.historyRequestId || 0) + 1;
+    state.historyRequestId = requestId;
+    state.historyLoading = true;
+    var advancedSuccessfully = false;
+    if(chatWs.activeRoomId === roomId) renderChatThread();
+
+    function fetchOlderPage(){
+      var cursor = state.historyCursor;
+      if(!cursor) return Promise.resolve();
+      return api(nativeEventsUrl(roomId, 0, 100, false, cursor)).then(function(res){
+        if(state.historyRequestId !== requestId || activeWorkspaceKey !== requestedWorkspace || chatWs.activeRoomId !== roomId) return;
+        if(res.status !== 200) throw new Error('older history unavailable');
+        var rawEvents = (res.data && res.data.events) || [];
+        var incoming = nativeEventsToMessages(rawEvents);
+        var known = {};
+        (state.messages || []).forEach(function(message){ if(message && message.id) known[message.id] = true; });
+        var added = incoming.filter(function(message){ return message && message.id && !known[message.id]; });
+        state.messages = normalizeChatMessages(added.concat(state.messages || []));
+        var nextCursor = res.data && res.data.nextBeforeSequence || null;
+        state.historyCursor = nextCursor && Number(nextCursor) < Number(cursor) ? nextCursor : null;
+        state.historyComplete = !state.historyCursor;
+        advancedSuccessfully = true;
+        // Sanitized tool-only pages may add no visible transcript row. Keep
+        // advancing the raw sequence cursor until a visible page or EOF so
+        // those rows never become an artificial history boundary.
+        var addedVisible = added.some(function(message){
+          return message.system || isHumanSender(message.sender) || displayBotBody(message.body) || chatMessageHasAttachments(message);
+        });
+        if(!addedVisible && state.historyCursor) return fetchOlderPage();
+      });
+    }
+
+    return fetchOlderPage().catch(function(){
+      // Retain the cursor so a later upward scroll can retry safely.
+      advancedSuccessfully = false;
+    }).then(function(){
+      if(state.historyRequestId !== requestId || activeWorkspaceKey !== requestedWorkspace || chatWs.activeRoomId !== roomId) return;
+      state.historyLoading = false;
+      if(chatWs.activeRoomId === roomId){
+        renderChatThread();
+        var thread = el('#chatThread');
+        if(advancedSuccessfully && thread && thread.scrollTop <= 64 && state.historyCursor) setTimeout(function(){ loadOlderChatMessages(roomId); }, 0);
+      }
+    });
   }
 
   (function(){
@@ -9481,22 +9536,48 @@
     loadActiveNativeDispatches(roomId);
     var state = chatRoomState(roomId);
     var localWelcome = state.localWelcome;
-    state.historyCursor = null;
-    state.historyComplete = false;
-    state.historyEdits = {};
-    api(nativeEventsUrl(roomId, 0, 100, true)).then(function(res){
+    state.historyRequestId = Number(state.historyRequestId || 0) + 1;
+    var roomRequestId = state.historyRequestId;
+    var requestedWorkspace = activeWorkspaceKey;
+    state.historyLoading = false;
+    var hadInitializedHistory = state.historyInitialized;
+    return api(nativeEventsUrl(roomId, 0, 100, true)).then(function(res){
+      if(state.historyRequestId !== roomRequestId || activeWorkspaceKey !== requestedWorkspace || chatWs.activeRoomId !== roomId) return;
       if(res.status !== 200) return;
       var rawEvents = (res.data && res.data.events) || [];
       var messages = nativeEventsToMessages(rawEvents);
       var stillPending = state.messages.filter(function(message){ return message.pending; });
+      var cachedMessageIds = {};
+      state.messages.forEach(function(message){ if(message && message.id) cachedMessageIds[message.id] = true; });
+      var latestOverlapsCache = messages.some(function(message){ return message && message.id && cachedMessageIds[message.id]; });
       if(messages.length) state.localWelcome = null;
-      state.messages = normalizeChatMessages(messages.concat(stillPending, messages.length || !localWelcome ? [] : [localWelcome]));
-      state.lastSequence = rawEvents.reduce(function(sequence, event){ return Math.max(sequence, Number(event.sequence || 0)); }, 0);
+      var existingDurable = hadInitializedHistory ? state.messages.filter(function(message){ return !message.pending && message !== localWelcome; }) : [];
+      var merged = messages.concat(existingDurable, stillPending, messages.length || !localWelcome ? [] : [localWelcome]);
+      var seenMessages = {};
+      state.messages = normalizeChatMessages(merged.filter(function(message){
+        if(!message || !message.id || seenMessages[message.id]) return false;
+        seenMessages[message.id] = true;
+        return true;
+      }).sort(function(left, right){
+        var leftSequence = Number(left && left.nativeEvent && left.nativeEvent.sequence || Number.MAX_SAFE_INTEGER);
+        var rightSequence = Number(right && right.nativeEvent && right.nativeEvent.sequence || Number.MAX_SAFE_INTEGER);
+        return leftSequence - rightSequence || Number(left.ts || 0) - Number(right.ts || 0);
+      }));
+      state.lastSequence = rawEvents.reduce(function(sequence, event){ return Math.max(sequence, Number(event.sequence || 0)); }, Number(state.lastSequence || 0));
       state.lastTs = rawEvents.reduce(function(timestamp, event){
         return Math.max(timestamp, Date.parse(event.createdAt) || 0);
-      }, 0);
-      state.historyComplete = true;
-      state.historyCursor = null;
+      }, Number(state.lastTs || 0));
+      if(!hadInitializedHistory){
+        state.historyCursor = res.data && res.data.nextBeforeSequence || null;
+        state.historyComplete = !state.historyCursor;
+      } else if(!latestOverlapsCache && res.data && res.data.nextBeforeSequence){
+        // More than one latest-page window may have arrived while this room
+        // was inactive. Restart backward paging at the newest page boundary;
+        // dedupe reconnects it to the retained cache without leaving a gap.
+        state.historyCursor = res.data.nextBeforeSequence;
+        state.historyComplete = false;
+      }
+      state.historyInitialized = true;
       state.sidebarPreviewLoaded = true;
       connectNativeChatSocket(roomId);
       renderChatSidebar();
@@ -11529,8 +11610,94 @@
      History and creation intentionally share one small surface. Conversation
      storage, membership, and pinning remain owned by the existing native
      primitives; this is only a clearer way to reach them. */
-  var conversationDrawer = {mode: 'history', tab: 'chats'};
+  var conversationDrawer = {mode: 'history', tab: 'chats', agentId: null, scopeKey: null, agentMenuOpen: false};
   var dmCompose = {open: false, humans: [], agents: [], selected: {}, query: '', busy: false};
+
+  function conversationHistoryAgentIds(conversation){
+    var metadata = conversation && conversation.metadata && typeof conversation.metadata === 'object' ? conversation.metadata : {};
+    var ids = {};
+    function add(value){
+      var id = String(value || '').trim();
+      if(id) ids[id] = true;
+    }
+    add(metadata.botId || metadata.agentId);
+    (metadata.members || []).forEach(function(member){
+      if(!member || (member.kind !== 'agent' && member.principalType !== 'agent' && member.principalType !== 'bot')) return;
+      add(member.agentId || member.principalId || member.id);
+    });
+    return Object.keys(ids);
+  }
+
+  function activeConversationHistoryAgentId(){
+    var roomId = chatWs.activeRoomId;
+    var state = roomId && chatWs.byRoom[roomId];
+    if(state && state.selectedAgentId) return String(state.selectedAgentId);
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+    var directIds = conversationHistoryAgentIds(conversation);
+    if((conversation && (conversation.type === 'agent' || conversation.type === 'bot')) && directIds.length) return directIds[0];
+    var messages = state && state.messages || [];
+    for(var index = messages.length - 1; index >= 0; index--){
+      var event = messages[index] && messages[index].nativeEvent;
+      if(event && (event.senderType === 'agent' || event.senderType === 'bot') && event.senderId) return String(event.senderId);
+    }
+    return directIds.length === 1 ? directIds[0] : null;
+  }
+
+  function syncConversationHistoryScope(){
+    var activeAgentId = activeConversationHistoryAgentId();
+    var scopeKey = activeWorkspaceKey + ':' + String(chatWs.activeRoomId || '') + ':' + String(activeAgentId || 'all');
+    if(conversationDrawer.scopeKey !== scopeKey){
+      conversationDrawer.scopeKey = scopeKey;
+      conversationDrawer.agentId = activeAgentId || 'all';
+      conversationDrawer.agentMenuOpen = false;
+    }
+  }
+
+  function conversationHistoryAgentOptions(){
+    var options = [];
+    var seen = {};
+    function add(id, name){
+      id = String(id || '').trim();
+      if(!id || seen[id]) return;
+      seen[id] = true;
+      options.push({id:id, name:String(name || id)});
+    }
+    if(chatWs.gatewayAgent) add('gateway', chatWs.gatewayAgent.name || 'Mia');
+    (chatWs.allAgents || []).forEach(function(agent){ add(agent.id, agent.name); });
+    (chatWs.nativeConversations || []).forEach(function(conversation){
+      conversationHistoryAgentIds(conversation).forEach(function(id){
+        var metadata = conversation.metadata || {};
+        add(id, conversation.type === 'agent' || conversation.type === 'bot' ? (conversation.name || metadata.name) : id);
+      });
+    });
+    return options.sort(function(left, right){ return left.name.localeCompare(right.name); });
+  }
+
+  function conversationMatchesHistoryAgent(conversation, agentId){
+    return agentId === 'all' || conversationHistoryAgentIds(conversation).indexOf(String(agentId || '')) !== -1;
+  }
+
+  function renderConversationHistoryAgentFilter(){
+    syncConversationHistoryScope();
+    var button = el('#conversationHistoryAgentButton');
+    var menu = el('#conversationHistoryAgentMenu');
+    if(!button || !menu) return;
+    var options = conversationHistoryAgentOptions();
+    var selected = options.filter(function(option){ return option.id === conversationDrawer.agentId; })[0] || null;
+    var selectedName = selected ? selected.name : 'All bots and agents';
+    button.innerHTML = selected
+      ? agentAvatarHtml(selected.name, selected.id, 24, null, null, false)
+      : '<span class="conversation-history-agent-all" aria-hidden="true">ALL</span>';
+    button.setAttribute('aria-label', 'Filter history: ' + selectedName);
+    button.setAttribute('aria-expanded', conversationDrawer.agentMenuOpen ? 'true' : 'false');
+    menu.hidden = !conversationDrawer.agentMenuOpen;
+    menu.innerHTML = [{id:'all', name:'All bots and agents'}].concat(options).map(function(option){
+      var active = option.id === conversationDrawer.agentId;
+      var avatar = option.id === 'all' ? '<span class="conversation-history-agent-all">ALL</span>' : agentAvatarHtml(option.name, option.id, 24, null, null, false);
+      return '<button type="button" class="conversation-history-agent-option" data-history-agent-id="' + esc(option.id) + '" role="option" aria-selected="' + (active ? 'true' : 'false') + '">' +
+        '<span class="conversation-history-agent-option-avatar">' + avatar + '</span><span>' + esc(option.name) + '</span></button>';
+    }).join('');
+  }
 
   function renderConversationHeaderActions(){
     var pinned = isChatPinned('room:' + chatWs.activeRoomId);
@@ -11619,7 +11786,9 @@
   function renderConversationHistory(){
     var list = el('#conversationHistoryList');
     if(!list) return;
+    renderConversationHistoryAgentFilter();
     var tab = conversationDrawer.tab || 'chats';
+    var agentId = conversationDrawer.agentId || 'all';
     els('[data-conversation-tab]').forEach(function(button){
       var active = button.getAttribute('data-conversation-tab') === tab;
       button.classList.toggle('active', active);
@@ -11628,6 +11797,8 @@
     if(tab === 'images'){
       var images = [];
       Object.keys(chatWs.byRoom || {}).forEach(function(roomId){
+        var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+        if(!conversation || !conversationMatchesHistoryAgent(conversation, agentId)) return;
         var state = chatWs.byRoom[roomId];
         (state.messages || []).forEach(function(message){
           (message.attachments || []).forEach(function(attachment){
@@ -11642,7 +11813,7 @@
       }).join('') + '</div>' : '<div class="conversation-history-empty">' + conversationHistoryEmpty(tab) + '</div>';
     } else {
       var conversations = (chatWs.nativeConversations || []).slice().filter(function(conversation){
-        return tab !== 'bookmarks' || isChatPinned('room:' + conversation.id);
+        return conversationMatchesHistoryAgent(conversation, agentId) && (tab !== 'bookmarks' || isChatPinned('room:' + conversation.id));
       }).sort(function(a, b){ return conversationHistoryTimestamp(b) - conversationHistoryTimestamp(a); });
       var currentGroup = '';
       list.innerHTML = conversations.length ? conversations.map(function(conversation){
@@ -11772,6 +11943,8 @@
     var createBtn = el('#dmComposeCreate');
     var searchInput = el('#dmComposeSearch');
     var tabs = els('[data-conversation-tab]');
+    var agentButton = el('#conversationHistoryAgentButton');
+    var agentMenu = el('#conversationHistoryAgentMenu');
     if(overlay) overlay.addEventListener('click', closeDmCompose);
     if(closeBtn) closeBtn.addEventListener('click', closeDmCompose);
     if(cancelBtn) cancelBtn.addEventListener('click', closeDmCompose);
@@ -11785,6 +11958,17 @@
         conversationDrawer.tab = tab.getAttribute('data-conversation-tab') || 'chats';
         renderConversationHistory();
       });
+    });
+    if(agentButton) agentButton.addEventListener('click', function(){
+      conversationDrawer.agentMenuOpen = !conversationDrawer.agentMenuOpen;
+      renderConversationHistoryAgentFilter();
+    });
+    if(agentMenu) agentMenu.addEventListener('click', function(event){
+      var option = event.target.closest('[data-history-agent-id]');
+      if(!option || !agentMenu.contains(option)) return;
+      conversationDrawer.agentId = option.getAttribute('data-history-agent-id') || 'all';
+      conversationDrawer.agentMenuOpen = false;
+      renderConversationHistory();
     });
   })();
 

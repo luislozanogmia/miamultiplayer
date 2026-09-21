@@ -1061,10 +1061,16 @@
     <h2 id="conversationDrawerTitle">History</h2>
   </div>
   <div class="conversation-history-view" id="conversationHistoryView">
-    <div class="conversation-history-tabs" role="tablist" aria-label="Conversation history">
-      <button type="button" class="conversation-history-tab active" data-conversation-tab="chats" role="tab" aria-selected="true">Chats</button>
-      <button type="button" class="conversation-history-tab" data-conversation-tab="bookmarks" role="tab" aria-selected="false">Bookmarks</button>
-      <button type="button" class="conversation-history-tab" data-conversation-tab="images" role="tab" aria-selected="false">Images</button>
+    <div class="conversation-history-toolbar">
+      <div class="conversation-history-tabs" role="tablist" aria-label="Conversation history">
+        <button type="button" class="conversation-history-tab active" data-conversation-tab="chats" role="tab" aria-selected="true">Chats</button>
+        <button type="button" class="conversation-history-tab" data-conversation-tab="bookmarks" role="tab" aria-selected="false">Bookmarks</button>
+        <button type="button" class="conversation-history-tab" data-conversation-tab="images" role="tab" aria-selected="false">Images</button>
+      </div>
+      <div class="conversation-history-agent-filter">
+        <button type="button" class="conversation-history-agent-button" id="conversationHistoryAgentButton" aria-label="Filter history by bot or agent" aria-haspopup="listbox" aria-expanded="false"></button>
+        <div class="conversation-history-agent-menu" id="conversationHistoryAgentMenu" role="listbox" aria-label="Bot or agent" hidden></div>
+      </div>
     </div>
     <div class="conversation-history-list" id="conversationHistoryList"></div>
   </div>
