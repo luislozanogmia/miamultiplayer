@@ -469,20 +469,20 @@ test('styled agent profile omits empty run metadata separators', async () => {
   assert.doesNotMatch(source, /a\.runs \|\| '—'.* · .*a\.last \|\| 'never run'/);
 });
 
-test('people manager and tools use the two compact header icons', async () => {
+test('left workspace actions use the canonical Lucide icon grid', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const source = await readFile(appUrl, 'utf8');
   const styles = await readFile(stylesUrl, 'utf8');
 
-  assert.match(html, /id="chatSidebarManageAgentsBtn"[\s\S]*?<circle cx="9" cy="8" r="3"[\s\S]*?<circle cx="17" cy="10" r="2"/);
+  assert.match(html, /id="chatSidebarManageAgentsBtn"[\s\S]*?data-icon-set="lucide"[\s\S]*?<circle cx="10" cy="8" r="5"/);
   assert.match(html, /id="chatSidebarDeveloperBtn"[\s\S]*?hidden/);
   assert.ok(html.indexOf('id="chatSidebarDeveloperBtn"') < html.indexOf('id="chatSidebarManageAgentsBtn"'));
-  assert.match(html, /id="chatSidebarToolsBtn"[\s\S]*?<path d="M14\.7 6\.3a4\.5 4\.5 0 0 0-6\.1 6\.1/);
+  assert.match(html, /id="chatSidebarToolsBtn"[\s\S]*?data-icon-set="lucide"[\s\S]*?<path d="M14\.7 6\.3a1 1 0 0 0 0 1\.4/);
+  assert.match(source, /'web-browser': '<circle cx="12" cy="12" r="10"><\/circle><path d="M12 2a14\.5 14\.5/);
+  assert.match(source, /action === 'web-browser' \? ' data-icon-set="lucide"'/);
   assert.match(source, /chatInfo\.mode = 'automations'/);
   assert.doesNotMatch(html, /agent-manager-option-1\.png|computer-cloud\.png/);
-  assert.match(styles, /\.chat-sidebar-tool-btn svg\{[^}]*width:17px;height:17px;/);
-  assert.match(styles, /\.chat-sidebar-agents-btn svg\{stroke-width:1\.55;\}/);
-  assert.match(styles, /\.chat-sidebar-tools-btn svg\{fill:none;stroke:currentColor;stroke-width:1\.55;\}/);
+  assert.match(styles, /\.chat-sidebar-tool-btn svg\{[^}]*width:20px;height:20px;[^}]*stroke-width:2;/);
 });
 
 test('theme migration owns the legacy developer mode and diagnostics stay available', async () => {
