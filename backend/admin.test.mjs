@@ -187,6 +187,30 @@ test('relative STATIC_DIR serves the standalone admin page', async () => {
   }
 });
 
+test('configured production Clerk origin reaches the CSP header and served index meta', async () => {
+  const clerkHost = 'clerk.example.com';
+  const server = await startServer({ extraEnv: {
+    STATIC_DIR: '../frontend',
+    CLERK_PUBLISHABLE_KEY: `${['pk', 'live'].join('_')}_${Buffer.from(`${clerkHost}$`).toString('base64url')}`,
+    CLERK_JWT_KEY: 'public-key-fixture',
+    CLERK_ISSUER: `https://${clerkHost}`,
+  } });
+  try {
+    for (const pathname of ['/', '/index.html']) {
+      const response = await fetch(`${server.origin}${pathname}`);
+      assert.equal(response.status, 200);
+      const header = response.headers.get('content-security-policy') || '';
+      assert.match(header, /connect-src[^;]* https:\/\/clerk\.example\.com(?:;|$)/);
+      const html = await response.text();
+      const meta = html.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/>/i);
+      assert.ok(meta, 'served index keeps an enforcing CSP meta tag');
+      assert.equal(meta[1], header);
+    }
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('authenticated user roster returns only active same-domain peers', async () => {
   const server = await startServer({
     seedRows: [

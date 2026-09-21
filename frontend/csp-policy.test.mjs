@@ -8,6 +8,8 @@ import {
   MIAOS_PAGE_CSP,
   REQUIRED_LOCAL_ASSETS,
   assertRequiredLocalAssets,
+  buildPageCsp,
+  replacePageCsp,
 } from './csp-policy.mjs';
 
 const htmlUrl = new URL('./index.html', import.meta.url);
@@ -75,6 +77,16 @@ test('missing required assets fail loudly instead of using a network fallback', 
     () => assertRequiredLocalAssets((assetPath) => assetPath !== 'styles.css'),
     /Missing Mia CSP assets:[\s\S]*styles\.css/,
   );
+});
+
+test('production Clerk CSP adds only the configured exact FAPI origin to served HTML', async () => {
+  const html = await readFile(htmlUrl, 'utf8');
+  const policy = buildPageCsp('https://clerk.example.com');
+  const rendered = replacePageCsp(html, policy);
+  assert.match(policy, /connect-src[^;]* https:\/\/clerk\.example\.com(?:;|$)/);
+  assert.doesNotMatch(policy, /https:\/\/\*\.example\.com/);
+  assert.match(rendered, /content="[^"]*https:\/\/clerk\.example\.com[^"]*"/);
+  assert.doesNotMatch(rendered, new RegExp(`content="${MIAOS_PAGE_CSP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
 });
 
 test('obsolete map integration has no shipped source references', async () => {
