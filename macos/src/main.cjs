@@ -15,6 +15,7 @@ const net = require("node:net");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
@@ -105,6 +106,9 @@ function findEngineeringRoot() {
 const ENGINEERING_ROOT = findEngineeringRoot();
 const BACKEND_ROOT = path.join(ENGINEERING_ROOT, "backend");
 const BACKEND_ENTRYPOINT = path.join(BACKEND_ROOT, "server.js");
+const { resolveClerkConfig } = require(path.join(BACKEND_ROOT, "clerk-config.js"));
+const requireBackendDependency = createRequire(BACKEND_ENTRYPOINT);
+const dotenv = requireBackendDependency("dotenv");
 const RENDERER_ENTRYPOINT = path.join(__dirname, "renderer", "index.html");
 const ARTIFACT_TOOLBAR_ENTRYPOINT = path.join(__dirname, "renderer", "artifact-toolbar.html");
 const ARTIFACT_START_ENTRYPOINT = path.join(__dirname, "renderer", "artifact-start.html");
@@ -131,23 +135,24 @@ const AUTH_HOSTS = new Set([
   "docs.google.com",
   "sheets.google.com",
 ]);
-// Origin of the deployment's Clerk instance. Mia's own instance is the
-// built-in default (same public identifier the backend ships in
-// backend/server.js); the environment overrides it for forks. Empty only
-// when the override is unparseable.
-const MIA_DEFAULT_CLERK_ISSUER = "https://faithful-drum-333.clerk.accounts.dev";
-const CLERK_ISSUER_ORIGIN = (() => {
-  try {
-    return new URL(String(process.env.CLERK_ISSUER || "").trim() || MIA_DEFAULT_CLERK_ISSUER).origin;
-  } catch (_) {
-    return "";
-  }
-})();
+// The backend reads install-specific settings from .env.local. Read the same
+// public Clerk tuple here so Electron's navigation allowlist cannot drift from
+// the verifier when a packaged install is configured without shell exports.
+function desktopClerkEnvironment() {
+  const envFile = process.env.MIAOS_ENV_FILE
+    || (app.isPackaged ? path.join(app.getPath("userData"), ".env.local") : path.join(BACKEND_ROOT, ".env.local"));
+  let fileEnvironment = {};
+  try { fileEnvironment = dotenv.parse(fs.readFileSync(envFile, "utf8")); } catch (_) { /* optional file */ }
+  return { ...fileEnvironment, ...process.env };
+}
 
 // Set this before Electron creates its native application menu so development
-// runs are branded as Mia too; packaged builds also use package.json's
-// productName.
+// runs are branded as Mia too. This must also precede app.getPath("userData"):
+// that path selects the packaged .env.local read by desktopClerkEnvironment.
 app.setName("Mia");
+const CLERK_CONFIG = resolveClerkConfig(desktopClerkEnvironment());
+const CLERK_ISSUER_ORIGIN = CLERK_CONFIG.issuerOrigin;
+const CLERK_OAUTH_CALLBACK_ORIGIN = CLERK_CONFIG.oauthCallbackOrigin;
 
 // Development and packaged launches deliberately share Mia's user-data
 // directory. Use Electron's process-wide lock so they cannot create competing
@@ -792,6 +797,7 @@ async function startLocalBackend(exactPort = null) {
     ...(process.env.CLERK_PUBLISHABLE_KEY ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY } : {}),
     ...(process.env.CLERK_JWT_KEY ? { CLERK_JWT_KEY: process.env.CLERK_JWT_KEY } : {}),
     ...(process.env.CLERK_ISSUER ? { CLERK_ISSUER: process.env.CLERK_ISSUER } : {}),
+    ...(process.env.CLERK_OAUTH_CALLBACK_ORIGIN ? { CLERK_OAUTH_CALLBACK_ORIGIN: process.env.CLERK_OAUTH_CALLBACK_ORIGIN } : {}),
     // Managed-router auto-provision on Clerk sign-in (authorized by the
     // user's Clerk session token; there is no separate provisioning secret).
     // Managed-router and Ghost vars: only forward when set in the parent
@@ -1103,7 +1109,7 @@ function isClerkGoogleOAuthUrl(value) {
     const url = new URL(value);
     if (url.origin !== "https://accounts.google.com" || url.username || url.password) return false;
     const redirect = new URL(url.searchParams.get("redirect_uri") || "");
-    return redirect.origin === "https://clerk.shared.lcl.dev"
+    return redirect.origin === CLERK_OAUTH_CALLBACK_ORIGIN
       && !redirect.username && !redirect.password
       && redirect.pathname === "/v1/oauth_callback"
       && url.searchParams.get("response_type") === "code";
@@ -1482,7 +1488,7 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       return url.protocol === "https:" && !url.username && !url.password && (
         url.origin === "https://accounts.google.com"
         || (CLERK_ISSUER_ORIGIN && url.origin === CLERK_ISSUER_ORIGIN)
-        || (url.origin === "https://clerk.shared.lcl.dev" && url.pathname === "/v1/oauth_callback")
+        || (url.origin === CLERK_OAUTH_CALLBACK_ORIGIN && url.pathname === "/v1/oauth_callback")
       );
     } catch (_) { return false; }
   };

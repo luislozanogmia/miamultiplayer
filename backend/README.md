@@ -56,8 +56,15 @@ table row, safe to leave `DATA_DIR` set permanently).
 | `MIAOS_GOOGLE_ACCOUNT_OWNER` | first configured admin | Sole Mia identity allowed to use the process-scoped Hermes/gws Google profile |
 | `MIAOS_ARTIFACT_DIR` | `./workspace-artifacts` | Server-owned storage root for immutable workspace artifact bytes |
 | `MIAOS_ATTACHMENT_DIR` | `./conversation-attachments` | Server-owned storage root for native conversation attachment bytes; production should use a path outside the checkout |
+| `CLERK_PUBLISHABLE_KEY` | Mia development instance | Public Clerk key. A custom value is accepted only together with `CLERK_ISSUER` and `CLERK_JWT_KEY` |
+| `CLERK_ISSUER` | Mia development instance | Exact HTTPS Clerk Frontend API origin; must match the host encoded by the publishable key |
+| `CLERK_JWT_KEY` | Mia development instance | Public PEM key used to verify Clerk session JWTs locally |
+| `CLERK_OAUTH_CALLBACK_ORIGIN` | shared Clerk callback for development; issuer for production | Optional exact HTTPS callback-origin override |
 
 ## Auth
+
+Production Clerk setup and the Electron origin limitation are documented in
+[`../operations/CLERK_PRODUCTION.md`](../operations/CLERK_PRODUCTION.md).
 
 Three doors, one `requireAuth` middleware:
 
