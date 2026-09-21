@@ -151,6 +151,11 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
   became a read-only WORKPLACES label on 2026-09-20. Audit the skills editor
   and remaining supported surfaces for other MiaOS-only concepts, then remove
   or rename them where they do not belong in Multiplayer.
+- **Descriptive, editable conversation titles.** Generate a useful title from
+  each conversation's content, let the user rename it, and show that title in
+  History so multiple conversations with the same bot remain distinguishable.
+- **Website and app bookmarks.** Extend bookmarks beyond conversations so
+  users can save and return to websites and apps from Mia.
 
 The remaining P3 items are sourced from a Sept 2026 competitive scan of Meta's
 Muse agent and Alexandr Wang's public product commentary.
