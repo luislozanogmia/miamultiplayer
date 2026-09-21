@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const appUrl = new URL('./app.js', import.meta.url);
 const htmlUrl = new URL('./index.html', import.meta.url);
+const stylesUrl = new URL('./styles.css', import.meta.url);
 
 test('conversation header exposes history, bookmark, share, and creation actions', async () => {
   const source = await readFile(appUrl, 'utf8');
@@ -17,6 +18,20 @@ test('conversation header exposes history, bookmark, share, and creation actions
   assert.match(source, /setChatPinned\(key, !isChatPinned\(key\)\)/);
   assert.match(source, /openConversationHistory\('chats'\)/);
   assert.match(source, /create\.addEventListener\('click', openDmCompose\)/);
+});
+
+test('conversation actions use one canonical Lucide icon grid', async () => {
+  const [source, styles] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(stylesUrl, 'utf8'),
+  ]);
+
+  assert.equal((source.match(/data-icon-set="lucide"/g) || []).length, 4);
+  assert.match(source, /M12 2v13/); // Share
+  assert.match(source, /m19 21-7-4-7 4V5/); // Bookmark
+  assert.match(source, /M3 12a9 9 0 1 0 9-9/); // History
+  assert.match(source, /M18\.375 2\.625a1 1 0 0 1 3 3/); // Square Pen
+  assert.match(styles, /conversation-action-btn svg\{[^}]*width:20px;[^}]*height:20px;[^}]*stroke-width:2;/);
 });
 
 test('history and new conversation reuse one right-side drawer', async () => {
