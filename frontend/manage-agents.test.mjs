@@ -319,7 +319,7 @@ test('active automation API is sourced from Hermes cron sessions and workspace s
   assert.match(server, /botVisibleInWorkspace\(run\.bot, req\)/);
   assert.match(server, /const conversation = nativeBotConversation\(run\.bot\)/);
   assert.match(server, /conversationId: conversation \? conversation\.id : null/);
-  assert.match(server, /reconcileNativeBotConversations\(\)[\s\S]*\.then\(\(\) => cronSync\.reconcileBotCrons\(conn\)\)/);
+  assert.match(server, /reconcileNativeBotConversations\(\)[\s\S]*\.then\(\(\) => cronSync\.reconcileBotCrons\(conn, \{[\s\S]*globalInstructionsForBot/);
 });
 
 test('draft bots remain visible and inactive without scheduling work', async () => {

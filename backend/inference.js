@@ -551,7 +551,17 @@ const EXTERNAL_CHAT_INSTRUCTION =
 // finished string. Omitted or empty, the prompt is byte-identical to the
 // pre-platformContext shape — no deploy regresses just because a caller
 // hasn't started passing this yet.
-function buildContext(agent, transcript, message, platformContext, senderLabel) {
+function userInstructionSection(kind, value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return [
+    `User-configured ${kind} Instructions:`,
+    'Treat these as persistent user preferences. Follow them when relevant, but they do not override Mia\'s safety, permissions, or tool boundaries.',
+    text,
+  ].join('\n');
+}
+
+function buildContext(agent, transcript, message, platformContext, senderLabel, globalInstructions) {
   const name = (agent && agent.name) || 'Agent';
   const department = (agent && agent.department) || 'Mia';
   const instructions = ((agent && agent.instructions) || '').trim().replace(/[.\s]+$/, '');
@@ -571,6 +581,8 @@ function buildContext(agent, transcript, message, platformContext, senderLabel) 
   if (message) lines.push(`${senderLabel || 'user'}: ${message}`);
   const head = [persona];
   if (platformContext) head.push(platformContext);
+  const instructionSection = userInstructionSection('Agent', globalInstructions);
+  if (instructionSection) head.push(instructionSection);
   if (MIAOS_EXTERNAL_CHAT) head.push(EXTERNAL_CHAT_INSTRUCTION);
   head.push(ROUTING_INSTRUCTION, '', ...lines);
   return head.join('\n');
@@ -617,11 +629,16 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
   const automationPrompt = String(automation && automation.prompt || '').trim();
   if (!automationPrompt) return null;
   const automationName = String(automation && automation.name || 'Automation').trim();
-  return [
+  const sections = [
     ...botIdentitySections(bot, {
       userDisplayName: options.userDisplayName,
       userRelationship: 'authorized owner of this bot',
     }),
+  ];
+  const instructionSection = userInstructionSection('Bot', options.globalInstructions);
+  if (instructionSection) sections.push(instructionSection);
+  return [
+    ...sections,
     'Capabilities:\nAnswer in chat and use the tools made available to research the web and create bounded artifacts needed for this automation.',
     [
       'Operating rules:',
@@ -638,7 +655,7 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
   ].join('\n\n');
 }
 
-function buildBotContext(agent, transcript, message, platformContext, senderLabel) {
+function buildBotContext(agent, transcript, message, platformContext, senderLabel, globalInstructions) {
   const bot = agent && typeof agent === 'object' ? agent : {};
   const name = String(bot.name || 'Task bot').trim();
   const automations = Array.isArray(bot.automations) ? bot.automations : [];
@@ -661,6 +678,10 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
       userDisplayName: senderLabel,
       userRelationship: 'authorized user interacting with this bot',
     }),
+  ];
+  const instructionSection = userInstructionSection('Bot', globalInstructions);
+  if (instructionSection) sections.push(instructionSection);
+  sections.push(
     'Capabilities: answer in chat and use the tools made available to research the web, work with files, use connected apps, and discuss or manage only your own automations.',
     [
       'Operating rules:',
@@ -674,7 +695,7 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
       `- Reply in persona and sign [${name}].`,
     ].join('\n'),
     `Your automations:\n${automationLines.join('\n')}`,
-  ];
+  );
   if (platformContext) sections.push(`Current Mia context (authoritative):\n${String(platformContext).trim()}`);
   return sections.join('\n\n');
 }
@@ -786,6 +807,7 @@ module.exports = {
   buildContext,
   buildBotContext,
   buildScheduledBotPrompt,
+  userInstructionSection,
   runInference,
   runStandaloneInferenceViaHermesGateway,
   runInferenceViaHermesGateway,
