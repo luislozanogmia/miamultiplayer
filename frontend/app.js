@@ -11441,11 +11441,14 @@
 
   function renderConversationHeaderActions(){
     var pinned = isChatPinned('room:' + chatWs.activeRoomId);
+    // Canonical Lucide v0.545.0 geometry. Keep this set together so these
+    // adjacent actions share one optical grid instead of drifting as custom
+    // paths are edited independently.
     return '<div class="conversation-header-actions" role="group" aria-label="Conversation actions">' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShareConversation" title="Copy conversation ID" aria-label="Copy conversation ID"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 17 10h-1.5"></path></svg></button>' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn' + (pinned ? ' active' : '') + '" id="chatBookmarkConversation" title="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-label="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-pressed="' + (pinned ? 'true' : 'false') + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4.5h11v15l-5.5-3.5-5.5 3.5z"></path></svg></button>' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatHistoryBtn" title="History" aria-label="Open conversation history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4m0 0h4M4 4a9 9 0 1 1-1 11"></path><path d="M12 7v5l3 2"></path></svg></button>' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="New conversation" aria-label="New conversation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 5.5 18.5 10.5M4 20l4.2-1 11-11a1.8 1.8 0 0 0 0-2.5l-.7-.7a1.8 1.8 0 0 0-2.5 0l-11 11z"></path><path d="M13 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-8"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShareConversation" title="Copy conversation ID" aria-label="Copy conversation ID"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v13"></path><path d="m16 6-4-4-4 4"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn' + (pinned ? ' active' : '') + '" id="chatBookmarkConversation" title="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-label="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-pressed="' + (pinned ? 'true' : 'false') + '"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatHistoryBtn" title="History" aria-label="Open conversation history"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="New conversation" aria-label="New conversation"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button>' +
     '</div>';
   }
 
