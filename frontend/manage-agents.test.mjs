@@ -260,6 +260,7 @@ test('automation panel renders durable bot schedules separately from running wor
       frequency: 'weekly',
       day: 'Tuesday',
       time: '08:15',
+      utcOffsetMinutes: new Date().getTimezoneOffset(),
       prompt: 'Send the edited brief.',
     }],
   });
@@ -275,6 +276,7 @@ test('automation panel renders durable bot schedules separately from running wor
     enabled: false,
     frequency: 'daily',
     time: '08:30',
+    utcOffsetMinutes: new Date().getTimezoneOffset(),
     prompt: 'Send one short arithmetic practice question with the answer hidden below.',
   });
 });
@@ -424,7 +426,9 @@ test('styled chat bot avatars open the selected bot in the right profile panel',
   assert.match(source, /function renderStyledAgentEditPane\(pane\)/);
   assert.match(source, /function styledAgentEditMarkup\(a\)/);
   assert.match(source, /id="styledAgentEditInstructions"/);
-  assert.match(source, /id="styledAgentEditDeptDropdown"/);
+  assert.match(source, /id="styledAgentEditWorkspace"/);
+  assert.match(source, />WORKPLACES</);
+  assert.doesNotMatch(source, /id="styledAgentEditDeptDropdown"/);
   assert.match(source, /id="styledAgentEditColorOptions"/);
   assert.match(source, /id="styledAgentEditSave"/);
   assert.match(source, /id="styledAgentEditDelete"/);
@@ -778,7 +782,8 @@ test('creating a bot from the tools menu does not close browser mode, but every 
   const source = await readFile(appUrl, 'utf8');
   // Bot store joins new-bot in this exception: it renders into the same
   // side chat pane too, so opening it shouldn't kill browser mode either.
-  assert.match(source, /function runToolsAction\(action\)\{\s*(?:\/\/[^\n]*\n\s*)*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
+  assert.match(source, /function closeBrowserSidebarDrawer\(\)[\s\S]*classList\.remove\('browser-sidebar-open'\)/);
+  assert.match(source, /function runToolsAction\(action\)[\s\S]*closeBrowserSidebarDrawer\(\);[\s\S]*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
 });
 
 test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {

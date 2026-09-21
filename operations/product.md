@@ -62,13 +62,15 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
 
 ## Roadmap — P3 (future, not scheduled)
 
-- **MiaOS-era leftovers sweep.** The bot editor's DEPARTMENTS picker was a
-  MiaOS routing concept that meant nothing here; it became a read-only
-  WORKPLACES label on 2026-09-20. The same audit is still owed on the other
-  surfaces — the skills editor first, then the legacy bench editor, which
-  still carries the full departments dropdown and its `guessDepartmentsFor`
-  heuristics. Each one: decide whether the concept earns its place in
-  Multiplayer, and cut or rename it if not.
+- **Deprecate and remove Agent Bench.** Agent Bench is a legacy MiaOS surface,
+  not part of Mia Multiplayer's product direction. Remove its route, modal,
+  department controls and `guessDepartmentsFor` heuristics after confirming
+  that bot creation, editing, testing and deletion all have supported homes in
+  the chat-native bot flows. Do not invest in preserving Bench-only behavior.
+- **MiaOS-era leftovers sweep.** The compact bot editor's DEPARTMENTS picker
+  became a read-only WORKPLACES label on 2026-09-20. Audit the skills editor
+  and remaining supported surfaces for other MiaOS-only concepts, then remove
+  or rename them where they do not belong in Multiplayer.
 
 The remaining P3 items are sourced from a Sept 2026 competitive scan of Meta's
 Muse agent and Alexandr Wang's public product commentary.
