@@ -2144,7 +2144,7 @@
   body.styled-skin .chat-sidebar{min-width:0;background:var(--sand-bg-subtle);border-right:1px solid var(--sand-border-subtle);overflow:visible;}
   body.styled-skin .chat-sidebar-resize{display:block;}
   body.styled-skin .chat-new-btn-wrap{height:48px;padding:10px 12px 8px;display:flex;justify-content:flex-end;}
-  body.styled-skin .chat-sidebar-tool-btn{appearance:none;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--sand-text-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer;}
+  body.styled-skin .chat-sidebar-tool-btn{appearance:none;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--sand-text-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer;}
   body.styled-skin .chat-sidebar-tool-btn[hidden]{display:none!important;}
   body.styled-skin .chat-sidebar-developer-btn{font:500 10px/1 var(--mono);letter-spacing:-.08em;}
   body.styled-skin .chat-sidebar-tool-btn:hover,
@@ -2156,9 +2156,7 @@
   html[data-theme="developer"] body.styled-skin .chat-sidebar-developer-btn.active{
     color:var(--accent-hover);
   }
-  body.styled-skin .chat-sidebar-tool-btn svg{display:block;width:17px;height:17px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;}
-  body.styled-skin .chat-sidebar-agents-btn svg{stroke-width:1.55;}
-  body.styled-skin .chat-sidebar-tools-btn svg{fill:none;stroke:currentColor;stroke-width:1.55;}
+  body.styled-skin .chat-sidebar-tool-btn svg{display:block;width:20px;height:20px;overflow:visible;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;shape-rendering:geometricPrecision;}
   body.styled-skin .chat-back-btn{width:28px;height:28px;padding:0;border:0;border-radius:50%;font-size:0;color:var(--sand-text-secondary);}
   body.styled-skin .chat-back-btn svg{width:17px;height:17px;stroke-width:1.65;}
   body.styled-skin .chat-back-btn.visible{display:flex;}

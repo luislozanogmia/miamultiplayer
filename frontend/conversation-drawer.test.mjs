@@ -25,12 +25,15 @@ test('conversation actions use one canonical Lucide icon grid', async () => {
     readFile(appUrl, 'utf8'),
     readFile(stylesUrl, 'utf8'),
   ]);
+  const actionStart = source.indexOf('  function renderConversationHeaderActions()');
+  const actionEnd = source.indexOf('\n\n  function wireConversationHeaderActions', actionStart);
+  const actions = source.slice(actionStart, actionEnd);
 
-  assert.equal((source.match(/data-icon-set="lucide"/g) || []).length, 4);
-  assert.match(source, /M12 2v13/); // Share
-  assert.match(source, /m19 21-7-4-7 4V5/); // Bookmark
-  assert.match(source, /M3 12a9 9 0 1 0 9-9/); // History
-  assert.match(source, /M18\.375 2\.625a1 1 0 0 1 3 3/); // Square Pen
+  assert.equal((actions.match(/data-icon-set="lucide"/g) || []).length, 4);
+  assert.match(actions, /M12 2v13/); // Share
+  assert.match(actions, /m19 21-7-4-7 4V5/); // Bookmark
+  assert.match(actions, /M3 12a9 9 0 1 0 9-9/); // History
+  assert.match(actions, /M18\.375 2\.625a1 1 0 0 1 3 3/); // Square Pen
   assert.match(styles, /conversation-action-btn svg\{[^}]*width:20px;[^}]*height:20px;[^}]*stroke-width:2;/);
 });
 

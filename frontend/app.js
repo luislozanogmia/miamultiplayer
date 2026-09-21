@@ -10802,7 +10802,7 @@
     'automations': '<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7v5l3 2"></path>',
     'connected-apps': '<circle cx="12" cy="6" r="2.2"></circle><circle cx="6" cy="17" r="2.2"></circle><circle cx="18" cy="17" r="2.2"></circle><path d="M10.8 7.8 7.2 15M13.2 7.8l3.6 7.2M8.2 17h7.6"></path>',
     'bot-store': '<path d="M4 9.5 5.2 5h13.6l1.2 4.5"></path><path d="M4 9.5a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"></path><path d="M5 9.8V19h14V9.8"></path><path d="M10 19v-5h4v5"></path>',
-    'web-browser': '<circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5s1.3-6.2 3.8-8.5z"></path>'
+    'web-browser': '<circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path>'
   };
   function sidebarPinStorageKey(){ return 'miaSidebarToolPins:' + activeWorkspaceKey; }
   function sidebarPinMenuItem(action){
@@ -10853,7 +10853,7 @@
       btn.title = name;
       btn.setAttribute('aria-label', name);
       var glyph = SIDEBAR_PIN_ICONS[action];
-      if(glyph) btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" stroke-width="1.7">' + glyph + '</svg>';
+      if(glyph) btn.innerHTML = '<svg' + (action === 'web-browser' ? ' data-icon-set="lucide"' : '') + ' viewBox="0 0 24 24" aria-hidden="true">' + glyph + '</svg>';
       else if(icon) btn.innerHTML = icon.innerHTML;
       btn.addEventListener('click', function(e){
         e.stopPropagation();
