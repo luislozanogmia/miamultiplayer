@@ -8811,6 +8811,7 @@
     var rosterData = chatRosterData();
     var rosterChips = renderChatRosterChips(rosterData);
     var rosterOverlay = chatRoster.open ? renderChatRosterPanel(rosterData) : '';
+    var conversationActions = renderConversationHeaderActions();
     var titleHtml = '<span class="channel-header-title" role="heading" aria-level="1">' + esc(title) + '</span>';
     var menuHtml = channelMenuKind() ? '<div class="channel-menu' + (channelMenu.open ? ' open' : '') + '" id="channelMenu" role="menu">' + (channelMenu.open ? renderChannelMenuHtml() : '') + '</div>' : '';
     var titleButtonHtml = channelMenuKind()
@@ -8820,20 +8821,22 @@
       var mobileBackBtn = '<button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to chats">' +
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg></button>';
       header.innerHTML = '<div class="ch-left">' + mobileBackBtn + '<div class="ch-title-row">' + titleButtonHtml + menuHtml + '</div></div>' +
-        '<div class="ch-right">' + rosterChips + rosterOverlay + '</div>';
+        '<div class="ch-right">' + rosterChips + conversationActions + rosterOverlay + '</div>';
       var mobileBack = el('#chatMobileBack', header);
       if(mobileBack) mobileBack.addEventListener('click', closeMobileChatRoom);
       wireChannelMenu(header);
       wireChatRosterControls(header, rosterData);
+      wireConversationHeaderActions(header);
       renderChatInfoPane();
       return;
     }
     // Export sits in the header per the mock, but there's nothing to export
     // yet — it's a quiet no-op, never a fake download.
     header.innerHTML = '<div class="ch-left"><div class="ch-title-row">' + titleButtonHtml + menuHtml + '</div></div>' +
-      '<div class="ch-right">' + rosterChips + rosterOverlay + '<button type="button" class="ch-export-btn" id="chatExportBtn">Export</button></div>';
+      '<div class="ch-right">' + rosterChips + conversationActions + rosterOverlay + '<button type="button" class="ch-export-btn" id="chatExportBtn">Export</button></div>';
     wireChannelMenu(header);
     wireChatRosterControls(header, rosterData);
+    wireConversationHeaderActions(header);
   }
 
   /* Department rooms have no single persona of their own (see addendum #3) —
@@ -11429,13 +11432,149 @@
     loadGoogleAccountStatus();
   })();
 
-  /* ============ CHAT: DM compose drawer ("+ New chat" -> Direct message) ============
-     Member picker over every known human and agent, multi-select, optional
-     group name. Create the native conversation and open it immediately. */
+  /* ============ CHAT: conversation history + creation drawer ============
+     History and creation intentionally share one small surface. Conversation
+     storage, membership, and pinning remain owned by the existing native
+     primitives; this is only a clearer way to reach them. */
+  var conversationDrawer = {mode: 'history', tab: 'chats'};
   var dmCompose = {open: false, humans: [], agents: [], selected: {}, query: '', busy: false};
 
-  function openDmCompose(){
+  function renderConversationHeaderActions(){
+    var pinned = isChatPinned('room:' + chatWs.activeRoomId);
+    return '<div class="conversation-header-actions" role="group" aria-label="Conversation actions">' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShareConversation" title="Copy conversation ID" aria-label="Copy conversation ID"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 17 10h-1.5"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn' + (pinned ? ' active' : '') + '" id="chatBookmarkConversation" title="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-label="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-pressed="' + (pinned ? 'true' : 'false') + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4.5h11v15l-5.5-3.5-5.5 3.5z"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatHistoryBtn" title="History" aria-label="Open conversation history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4m0 0h4M4 4a9 9 0 1 1-1 11"></path><path d="M12 7v5l3 2"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="New conversation" aria-label="New conversation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 5.5 18.5 10.5M4 20l4.2-1 11-11a1.8 1.8 0 0 0 0-2.5l-.7-.7a1.8 1.8 0 0 0-2.5 0l-11 11z"></path><path d="M13 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-8"></path></svg></button>' +
+    '</div>';
+  }
+
+  function wireConversationHeaderActions(header){
+    var share = el('#chatShareConversation', header);
+    var bookmark = el('#chatBookmarkConversation', header);
+    var history = el('#chatHistoryBtn', header);
+    var create = el('#chatNewConversationBtn', header);
+    if(share) share.addEventListener('click', function(){
+      copySidebarText(chatWs.activeRoomId, 'Conversation ID copied');
+    });
+    if(bookmark) bookmark.addEventListener('click', function(){
+      var key = 'room:' + chatWs.activeRoomId;
+      setChatPinned(key, !isChatPinned(key));
+      renderChatHeaderBar();
+      if(dmCompose.open && conversationDrawer.mode === 'history') renderConversationHistory();
+    });
+    if(history) history.addEventListener('click', function(){ openConversationHistory('chats'); });
+    if(create) create.addEventListener('click', openDmCompose);
+  }
+
+  function openConversationDrawer(mode){
+    conversationDrawer.mode = mode;
     dmCompose.open = true;
+    var overlay = el('#dmComposeOverlay'), drawer = el('#dmComposeDrawer');
+    var historyView = el('#conversationHistoryView'), composeView = el('#conversationComposeView');
+    var actions = el('#conversationComposeActions'), title = el('#conversationDrawerTitle');
+    var composing = mode === 'compose';
+    if(title) title.textContent = composing ? 'New conversation' : 'History';
+    if(historyView) historyView.hidden = composing;
+    if(composeView) composeView.hidden = !composing;
+    if(actions) actions.hidden = !composing;
+    if(overlay) overlay.classList.add('open');
+    if(drawer) drawer.classList.add('open');
+    if(!composing) renderConversationHistory();
+  }
+
+  function openConversationHistory(tab){
+    conversationDrawer.tab = tab || conversationDrawer.tab || 'chats';
+    openConversationDrawer('history');
+  }
+
+  function conversationHistoryLabel(conversation){
+    var room = nativeConversationToRoom(conversation);
+    return room.kind === 'dm' || room.kind === 'group' ? dmLabel(room) : room.name;
+  }
+
+  function conversationHistoryTimestamp(conversation){
+    var state = conversation && chatWs.byRoom[conversation.id];
+    return Math.max(
+      Number(state && state.lastTs) || 0,
+      Date.parse(conversation && conversation.updatedAt || '') || 0,
+      Date.parse(conversation && conversation.createdAt || '') || 0
+    );
+  }
+
+  function conversationHistoryDay(timestamp){
+    var day = new Date(timestamp || Date.now());
+    var now = new Date();
+    var start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    var itemStart = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
+    var days = Math.round((start - itemStart) / 86400000);
+    if(days === 0) return 'Today';
+    if(days === 1) return 'Yesterday';
+    if(days > 1 && days < 7) return day.toLocaleDateString(undefined, {weekday:'long'});
+    return day.toLocaleDateString(undefined, {month:'short', day:'numeric', year:day.getFullYear() === now.getFullYear() ? undefined : 'numeric'});
+  }
+
+  function conversationHistoryEmpty(tab){
+    if(tab === 'bookmarks') return 'Bookmark a conversation to keep it here.';
+    if(tab === 'images') return 'Images from conversations you open will appear here.';
+    return 'No conversations yet.';
+  }
+
+  function renderConversationHistory(){
+    var list = el('#conversationHistoryList');
+    if(!list) return;
+    var tab = conversationDrawer.tab || 'chats';
+    els('[data-conversation-tab]').forEach(function(button){
+      var active = button.getAttribute('data-conversation-tab') === tab;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    if(tab === 'images'){
+      var images = [];
+      Object.keys(chatWs.byRoom || {}).forEach(function(roomId){
+        var state = chatWs.byRoom[roomId];
+        (state.messages || []).forEach(function(message){
+          (message.attachments || []).forEach(function(attachment){
+            if(String(attachment.mimeType || '').indexOf('image/') !== 0) return;
+            images.push({roomId:roomId, attachment:attachment, ts:message.ts || 0});
+          });
+        });
+      });
+      images.sort(function(a, b){ return b.ts - a.ts; });
+      list.innerHTML = images.length ? '<div class="conversation-image-grid">' + images.map(function(item){
+        return '<button type="button" class="conversation-image-card" data-history-room-id="' + esc(item.roomId) + '" title="Open conversation"><img src="' + esc(item.attachment.previewUrl || item.attachment.url) + '" alt="' + esc(item.attachment.filename || 'Conversation image') + '" loading="lazy" /></button>';
+      }).join('') + '</div>' : '<div class="conversation-history-empty">' + conversationHistoryEmpty(tab) + '</div>';
+    } else {
+      var conversations = (chatWs.nativeConversations || []).slice().filter(function(conversation){
+        return tab !== 'bookmarks' || isChatPinned('room:' + conversation.id);
+      }).sort(function(a, b){ return conversationHistoryTimestamp(b) - conversationHistoryTimestamp(a); });
+      var currentGroup = '';
+      list.innerHTML = conversations.length ? conversations.map(function(conversation){
+        var timestamp = conversationHistoryTimestamp(conversation);
+        var group = conversationHistoryDay(timestamp);
+        var heading = group !== currentGroup ? '<h3 class="conversation-history-day">' + esc(group) + '</h3>' : '';
+        currentGroup = group;
+        var active = conversation.id === chatWs.activeRoomId;
+        var bookmarked = isChatPinned('room:' + conversation.id);
+        return heading + '<button type="button" class="conversation-history-row' + (active ? ' active' : '') + '" data-history-room-id="' + esc(conversation.id) + '">' +
+          '<span class="conversation-history-name">' + esc(conversationHistoryLabel(conversation)) + '</span>' +
+          (bookmarked ? '<svg class="conversation-history-bookmark" viewBox="0 0 24 24" aria-label="Bookmarked"><path d="M6.5 4.5h11v15l-5.5-3.5-5.5 3.5z"></path></svg>' : '') +
+        '</button>';
+      }).join('') : '<div class="conversation-history-empty">' + conversationHistoryEmpty(tab) + '</div>';
+    }
+    els('[data-history-room-id]', list).forEach(function(row){
+      row.addEventListener('click', function(){
+        var id = row.getAttribute('data-history-room-id');
+        var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === id; })[0];
+        if(!conversation) return;
+        var room = nativeConversationToRoom(conversation);
+        closeDmCompose();
+        loadChatRoom(room.roomId, room.kind, conversationHistoryLabel(conversation));
+      });
+    });
+  }
+
+  function openDmCompose(){
     dmCompose.selected = {};
     dmCompose.query = '';
     dmCompose.busy = false;
@@ -11443,9 +11582,7 @@
     if(nameInput) nameInput.value = '';
     var searchInput = el('#dmComposeSearch');
     if(searchInput) searchInput.value = '';
-    var overlay = el('#dmComposeOverlay'), drawer = el('#dmComposeDrawer');
-    if(overlay) overlay.classList.add('open');
-    if(drawer) drawer.classList.add('open');
+    openConversationDrawer('compose');
     renderDmComposeList();
     Promise.all([loadHumanDirectoryResponse(), api('/api/bots')]).then(function(results){
       var usersRes = results[0], agentsRes = results[1];
@@ -11538,6 +11675,7 @@
     var cancelBtn = el('#dmComposeCancel');
     var createBtn = el('#dmComposeCreate');
     var searchInput = el('#dmComposeSearch');
+    var tabs = els('[data-conversation-tab]');
     if(overlay) overlay.addEventListener('click', closeDmCompose);
     if(closeBtn) closeBtn.addEventListener('click', closeDmCompose);
     if(cancelBtn) cancelBtn.addEventListener('click', closeDmCompose);
@@ -11545,6 +11683,12 @@
     if(searchInput) searchInput.addEventListener('input', function(){
       dmCompose.query = searchInput.value.trim();
       renderDmComposeList();
+    });
+    tabs.forEach(function(tab){
+      tab.addEventListener('click', function(){
+        conversationDrawer.tab = tab.getAttribute('data-conversation-tab') || 'chats';
+        renderConversationHistory();
+      });
     });
   })();
 

@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=20260822-1" />
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
-<link rel="stylesheet" href="styles.css?v=20260908-developer-mode-1" />
+<link rel="stylesheet" href="styles.css?v=20260920-conversation-drawer-1" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
      never flashes while app.js is loading. app.js still reapplies the class
@@ -1011,34 +1011,43 @@
   </div>
 </section>
 
-<!-- Direct message compose drawer -->
-<div class="drawer-overlay" id="dmComposeOverlay"></div>
-<div class="drawer" id="dmComposeDrawer">
-  <div class="drawer-head">
-    <h2>Direct message</h2>
-    <button class="drawer-close" id="dmComposeClose">&times;</button>
+<!-- Conversation history and creation share one right-side drawer. -->
+<div class="drawer-overlay conversation-drawer-overlay" id="dmComposeOverlay"></div>
+<section class="drawer conversation-drawer" id="dmComposeDrawer" role="dialog" aria-modal="true" aria-labelledby="conversationDrawerTitle">
+  <div class="drawer-head conversation-drawer-head">
+    <button class="drawer-close conversation-drawer-close" id="dmComposeClose" aria-label="Close">&times;</button>
+    <h2 id="conversationDrawerTitle">History</h2>
   </div>
-  <div class="drawer-body">
+  <div class="conversation-history-view" id="conversationHistoryView">
+    <div class="conversation-history-tabs" role="tablist" aria-label="Conversation history">
+      <button type="button" class="conversation-history-tab active" data-conversation-tab="chats" role="tab" aria-selected="true">Chats</button>
+      <button type="button" class="conversation-history-tab" data-conversation-tab="bookmarks" role="tab" aria-selected="false">Bookmarks</button>
+      <button type="button" class="conversation-history-tab" data-conversation-tab="images" role="tab" aria-selected="false">Images</button>
+    </div>
+    <div class="conversation-history-list" id="conversationHistoryList"></div>
+  </div>
+  <div class="drawer-body conversation-compose-view" id="conversationComposeView" hidden>
+    <p class="conversation-compose-intro">Start a conversation with any mix of people, agents, and bots.</p>
     <div class="form-field">
-      <label>Group name (optional)</label>
+      <label for="dmComposeName">Conversation name (optional)</label>
       <input type="text" id="dmComposeName" placeholder="Leave blank to use member names" autocomplete="off" />
     </div>
     <div class="form-field">
-      <label>Members</label>
+      <label for="dmComposeSearch">Members</label>
       <input type="text" id="dmComposeSearch" placeholder="Search people, agents, and bots" autocomplete="off" />
     </div>
     <div class="dm-compose-list" id="dmComposeList"></div>
   </div>
-  <div class="drawer-actions">
-    <button class="btn primary" id="dmComposeCreate" disabled>Create</button>
+  <div class="drawer-actions conversation-compose-actions" id="conversationComposeActions" hidden>
     <button class="btn" id="dmComposeCancel">Cancel</button>
+    <button class="btn primary" id="dmComposeCreate" disabled>Create</button>
   </div>
-</div>
+</section>
 
 <script src="assets/mia-mark.js"></script>
 <script src="chat-security.js"></script>
 <script src="hermes-connectors.js?v=20260904-google-g"></script>
     <script src="native-browser.js?v=20260908-native-theme-1"></script>
-    <script src="app.js?v=20260910-oss-release-1"></script>
+    <script src="app.js?v=20260920-conversation-drawer-1"></script>
 </body>
 </html>
