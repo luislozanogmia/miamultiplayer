@@ -8,6 +8,7 @@ const {
   Menu,
   session,
   shell,
+  safeStorage,
   WebContentsView,
 } = require("electron");
 const http = require("node:http");
@@ -15,11 +16,14 @@ const net = require("node:net");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
+const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
+const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
 
 // The packaged runtime layout is platform-specific: Windows venvs place
 // executables in Scripts\ instead of bin/, python-build-standalone ships
@@ -135,6 +139,9 @@ function findEngineeringRoot() {
 const ENGINEERING_ROOT = findEngineeringRoot();
 const BACKEND_ROOT = path.join(ENGINEERING_ROOT, "backend");
 const BACKEND_ENTRYPOINT = path.join(BACKEND_ROOT, "server.js");
+const { resolveClerkConfig } = require(path.join(BACKEND_ROOT, "clerk-config.js"));
+const requireBackendDependency = createRequire(BACKEND_ENTRYPOINT);
+const dotenv = requireBackendDependency("dotenv");
 const RENDERER_ENTRYPOINT = path.join(__dirname, "renderer", "index.html");
 const ARTIFACT_TOOLBAR_ENTRYPOINT = path.join(__dirname, "renderer", "artifact-toolbar.html");
 const ARTIFACT_START_ENTRYPOINT = path.join(__dirname, "renderer", "artifact-start.html");
@@ -161,23 +168,24 @@ const AUTH_HOSTS = new Set([
   "docs.google.com",
   "sheets.google.com",
 ]);
-// Origin of the deployment's Clerk instance. Mia's own instance is the
-// built-in default (same public identifier the backend ships in
-// backend/server.js); the environment overrides it for forks. Empty only
-// when the override is unparseable.
-const MIA_DEFAULT_CLERK_ISSUER = "https://faithful-drum-333.clerk.accounts.dev";
-const CLERK_ISSUER_ORIGIN = (() => {
-  try {
-    return new URL(String(process.env.CLERK_ISSUER || "").trim() || MIA_DEFAULT_CLERK_ISSUER).origin;
-  } catch (_) {
-    return "";
-  }
-})();
+// The backend reads install-specific settings from .env.local. Read the same
+// public Clerk tuple here so Electron's navigation allowlist cannot drift from
+// the verifier when a packaged install is configured without shell exports.
+function desktopClerkEnvironment() {
+  const envFile = process.env.MIAOS_ENV_FILE
+    || (app.isPackaged ? path.join(app.getPath("userData"), ".env.local") : path.join(BACKEND_ROOT, ".env.local"));
+  let fileEnvironment = {};
+  try { fileEnvironment = dotenv.parse(fs.readFileSync(envFile, "utf8")); } catch (_) { /* optional file */ }
+  return { ...fileEnvironment, ...process.env };
+}
 
 // Set this before Electron creates its native application menu so development
-// runs are branded as Mia too; packaged builds also use package.json's
-// productName.
+// runs are branded as Mia too. This must also precede app.getPath("userData"):
+// that path selects the packaged .env.local read by desktopClerkEnvironment.
 app.setName("Mia");
+const CLERK_CONFIG = resolveClerkConfig(desktopClerkEnvironment());
+const CLERK_ISSUER_ORIGIN = CLERK_CONFIG.issuerOrigin;
+const CLERK_OAUTH_CALLBACK_ORIGIN = CLERK_CONFIG.oauthCallbackOrigin;
 
 // Development and packaged launches deliberately share Mia's user-data
 // directory. Use Electron's process-wide lock so they cannot create competing
@@ -204,6 +212,31 @@ let autoUpdateConfigured = false;
 let autoUpdateCheckInFlight = null;
 let autoUpdateCheckInteractive = false;
 let miaAutoUpdater = null;
+let nativeAuthProtocolReady = false;
+const desktopAuth = createDesktopAuth({
+  ipcMain,
+  getWindow: () => mainWindow,
+  getBackendUrl: () => backendUrl,
+  getClient: () => {
+    if (!CLERK_CONFIG.enabled) throw new Error("Clerk is not enabled");
+    const { createNativeClerkClient } = require("./clerk-native-auth.cjs");
+    return createNativeClerkClient({
+      issuer: CLERK_ISSUER_ORIGIN,
+      storage: createClerkCredentialStore({ directory: app.getPath("userData"), issuer: CLERK_ISSUER_ORIGIN, safeStorage }),
+    });
+  },
+  openExternal: url => shell.openExternal(url),
+  canOpenGoogle: () => nativeAuthProtocolReady,
+});
+
+function receiveAuthCallback(value) {
+  // An unsolicited/cold-launch URL never creates a sign-in attempt. The
+  // in-memory pending flow owns its nonce and state; URLs are never logged.
+  void desktopAuth.acceptCallback(value).then(accepted => {
+    if (accepted) activateMainWindow();
+  }).catch(() => desktopLog("Native sign-in callback could not be completed"));
+}
+app.on("open-url", (event, value) => { event.preventDefault(); receiveAuthCallback(value); });
 
 const UPDATE_GITHUB_OWNER = "luislozanogmia";
 const UPDATE_GITHUB_REPO = "mia_multiplayer";
@@ -709,11 +742,18 @@ async function isMiaBackendReady(baseUrl) {
   return (await requestStatus(`${baseUrl}/api/instance`)) === 200;
 }
 
-function findFreePort(startPort) {
+function findFreePort(startPort, { allowFallback = true } = {}) {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", (error) => {
-      if (error.code === "EADDRINUSE") return resolve(findFreePort(startPort + 1));
+      if (error.code === "EADDRINUSE" && allowFallback) {
+        return resolve(findFreePort(startPort + 1, { allowFallback }));
+      }
+      if (error.code === "EADDRINUSE") {
+        const collision = new Error(`http://localhost:${startPort} is already in use.`);
+        collision.code = "EADDRINUSE";
+        return reject(collision);
+      }
       reject(error);
     });
     server.listen(startPort, "127.0.0.1", () => {
@@ -721,6 +761,39 @@ function findFreePort(startPort) {
       server.close(() => resolve(port));
     });
   });
+}
+
+async function selectLocalBackendPort(exactPort = null, {
+  production = CLERK_CONFIG.environment === "production",
+  preferredPort = PREFERRED_PORT,
+  findPort = findFreePort,
+} = {}) {
+  const requestedPort = exactPort === null ? Number(preferredPort) + 1 : Number(exactPort);
+  if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
+    throw new Error("Mia requires a valid local backend port between 1 and 65535.");
+  }
+  // A caller-supplied port is the managed-backend restart contract and must
+  // always remain exact. Production Clerk additionally binds the desktop to a
+  // single allowed origin (localhost:4871 by default), so silently advancing
+  // to another free port would make sign-in fail after the backend starts.
+  try {
+    return await findPort(requestedPort, { allowFallback: exactPort === null && !production });
+  } catch (error) {
+    if (error && error.code === "EADDRINUSE") {
+      if (exactPort !== null) {
+        throw Object.assign(new Error(
+          `Mia cannot restart its managed backend because http://localhost:${requestedPort} is already in use.`
+        ), { code: error.code });
+      }
+      if (production) {
+        throw Object.assign(new Error(
+          `The stable Mia desktop origin http://localhost:${requestedPort} is already in use. `
+          + "Quit the other service and retry; production sign-in cannot switch to another port."
+        ), { code: error.code });
+      }
+    }
+    throw error;
+  }
 }
 
 function stopBackend(processToStop = backendProcess) {
@@ -772,8 +845,7 @@ async function startLocalBackend(exactPort = null) {
   }
 
   const packagedRuntime = preparePackagedRuntime();
-  const port = exactPort === null ? await findFreePort(PREFERRED_PORT + 1) : Number(exactPort);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  const port = await selectLocalBackendPort(exactPort);
   const dataDirectory = app.getPath("userData");
   fs.mkdirSync(dataDirectory, { recursive: true });
   const databasePath = backendDatabasePath();
@@ -835,6 +907,7 @@ async function startLocalBackend(exactPort = null) {
     ...(process.env.CLERK_PUBLISHABLE_KEY ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY } : {}),
     ...(process.env.CLERK_JWT_KEY ? { CLERK_JWT_KEY: process.env.CLERK_JWT_KEY } : {}),
     ...(process.env.CLERK_ISSUER ? { CLERK_ISSUER: process.env.CLERK_ISSUER } : {}),
+    ...(process.env.CLERK_OAUTH_CALLBACK_ORIGIN ? { CLERK_OAUTH_CALLBACK_ORIGIN: process.env.CLERK_OAUTH_CALLBACK_ORIGIN } : {}),
     // Managed-router auto-provision on Clerk sign-in (authorized by the
     // user's Clerk session token; there is no separate provisioning secret).
     // Managed-router and Ghost vars: only forward when set in the parent
@@ -1112,14 +1185,21 @@ async function resolveBackend() {
     return null;
   }
 
-  const configuredUrl = normalizeBaseUrl(
-    process.env.MIAOS_URL || `http://localhost:${PREFERRED_PORT}`,
-  );
-  const configuredReady = await isMiaBackendReady(configuredUrl);
-  desktopLog(`probe ${configuredUrl} ready=${configuredReady}`);
-  if (configuredReady) {
-    backendUrl = configuredUrl;
-    return backendUrl;
+  const explicitlyConfiguredUrl = String(process.env.MIAOS_URL || "").trim();
+  // An explicit MIAOS_URL is an operator-authorized external backend. Retain
+  // the development convenience probe on the preferred port, but never let a
+  // production desktop adopt an unknown service there before starting its own
+  // backend on the stable Clerk origin.
+  const configuredUrl = explicitlyConfiguredUrl
+    ? normalizeBaseUrl(explicitlyConfiguredUrl)
+    : (CLERK_CONFIG.environment === "production" ? null : `http://localhost:${PREFERRED_PORT}`);
+  if (configuredUrl) {
+    const configuredReady = await isMiaBackendReady(configuredUrl);
+    desktopLog(`probe ${configuredUrl} ready=${configuredReady}`);
+    if (configuredReady) {
+      backendUrl = configuredUrl;
+      return backendUrl;
+    }
   }
 
   if (process.env.MIAOS_NO_LOCAL_BACKEND === "1") return null;
@@ -1146,7 +1226,7 @@ function isClerkGoogleOAuthUrl(value) {
     const url = new URL(value);
     if (url.origin !== "https://accounts.google.com" || url.username || url.password) return false;
     const redirect = new URL(url.searchParams.get("redirect_uri") || "");
-    return redirect.origin === "https://clerk.shared.lcl.dev"
+    return redirect.origin === CLERK_OAUTH_CALLBACK_ORIGIN
       && !redirect.username && !redirect.password
       && redirect.pathname === "/v1/oauth_callback"
       && url.searchParams.get("response_type") === "code";
@@ -1529,38 +1609,6 @@ function disposeArtifactPanel(window, toolbarView, contentView) {
   }
 }
 
-function clerkOAuthPopupOptions(parent) {
-  return {
-    parent,
-    modal: true,
-    show: true,
-    autoHideMenuBar: true,
-    webPreferences: {
-      session: parent.webContents.session,
-      // Completes window.chrome the way real Chrome pages see it;
-      // Google's sign-in checks for it (see google-oauth-preload.cjs).
-      preload: path.join(__dirname, "google-oauth-preload.cjs"),
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-    },
-  };
-}
-
-function openClerkOAuthPopup(parent, url, expectedBackendUrl) {
-  const popup = new BrowserWindow(clerkOAuthPopupOptions(parent));
-  configureNavigation(popup, expectedBackendUrl, true);
-  popup.webContents.on("did-navigate", (_event, navigatedUrl) => {
-    const local = expectedBackendUrl || backendUrl;
-    if (!local || !hasExactOrigin(navigatedUrl, local)) return;
-    // The OAuth round trip is done and the session cookie is set. Hand the
-    // signed-in page back to the window the redirect originally targeted.
-    try { parent.loadURL(navigatedUrl); } catch (_) { /* parent may be closing */ }
-    try { popup.close(); } catch (_) { /* already closed */ }
-  });
-  popup.loadURL(url);
-  return popup;
-}
 
 function harnessAuthPopupOptions(parent) {
   return {
@@ -1607,11 +1655,8 @@ async function completeClaudeAuthCallback(window, value, contract, localBackend)
   }
 }
 
-function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false, harnessAuthProvider = "", inheritedAuthContract = null, nestedAuthPopup = false) {
+function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = false, harnessAuthProvider = "", inheritedAuthContract = null, nestedAuthPopup = false) {
   const isLocal = url => (expectedBackendUrl || backendUrl) && hasExactOrigin(url, expectedBackendUrl || backendUrl);
-  // Windows created for the OAuth flow carry the Chrome-identity preload;
-  // ordinary windows do not, so a flow starting in them must move to a popup.
-  const isOAuthPopup = clerkFlowActive;
   let harnessAuthContract = inheritedAuthContract;
   let mayLoadAuthBootstrap = !nestedAuthPopup;
   let completionInFlight = false;
@@ -1623,21 +1668,6 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
     if (!isHarnessAuthNavigation(value, harnessAuthProvider, harnessAuthContract)) return false;
     mayLoadAuthBootstrap = false;
     return true;
-  };
-  const isClerkFlowNavigation = value => {
-    if (isClerkGoogleOAuthUrl(value)) {
-      clerkFlowActive = true;
-      return true;
-    }
-    if (!clerkFlowActive) return false;
-    try {
-      const url = new URL(value);
-      return url.protocol === "https:" && !url.username && !url.password && (
-        url.origin === "https://accounts.google.com"
-        || (CLERK_ISSUER_ORIGIN && url.origin === CLERK_ISSUER_ORIGIN)
-        || (url.origin === "https://clerk.shared.lcl.dev" && url.pathname === "/v1/oauth_callback")
-      );
-    } catch (_) { return false; }
   };
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (harnessAuthProvider) {
@@ -1654,29 +1684,9 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       action: "allow",
       overrideBrowserWindowOptions: harnessAuthPopupOptions(window),
     } : { action: "allow" };
-    // Clerk's Google flow must stay in Electron's session so its callback can
-    // return the authenticated cookie to Mia. Opening this URL in the user's
-    // regular browser strands the session there and leaves Mia signed out.
-    if (isClerkGoogleOAuthUrl(url)) {
-      return {
-        action: "allow",
-        overrideBrowserWindowOptions: {
-          parent: window,
-          modal: true,
-          show: true,
-          autoHideMenuBar: true,
-          webPreferences: {
-            session: window.webContents.session,
-            // Completes window.chrome the way real Chrome pages see it;
-            // Google's sign-in checks for it (see google-oauth-preload.cjs).
-            preload: path.join(__dirname, "google-oauth-preload.cjs"),
-            contextIsolation: true,
-            sandbox: true,
-            nodeIntegration: false,
-          },
-        },
-      };
-    }
+    // Desktop login uses the native client and system browser; never revive
+    // the cookie-backed embedded Google flow from an old renderer.
+    if (isClerkGoogleOAuthUrl(url)) return { action: "deny" };
     if (isAllowedExternalUrl(url)) {
       shell.openExternal(url);
     }
@@ -1686,14 +1696,13 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
     configureNavigation(
       child,
       expectedBackendUrl,
-      isClerkGoogleOAuthUrl(details.url),
+      false,
       harnessAuthProvider || harnessAuthRedirectProvider(details.url, expectedBackendUrl),
       harnessAuthContract,
       Boolean(harnessAuthProvider)
     );
   });
   window.webContents.on("did-navigate", (_event, url) => {
-    if (isLocal(url)) clerkFlowActive = false;
     if (harnessAuthProvider === "claude-subscription-directsdk-experimental" && !completionInFlight) {
       completionInFlight = true;
       void completeClaudeAuthCallback(window, url, harnessAuthContract, expectedBackendUrl || backendUrl).then(accepted => {
@@ -1718,17 +1727,7 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       return;
     }
     if (isLocal(url)) return;
-    // A Clerk Google sign-in that starts as an in-place redirect must move
-    // into the shimmed popup: this window's preload lacks the Chrome-identity
-    // shims, so Google refuses it as an insecure browser.
-    if (!isOAuthPopup && isClerkGoogleOAuthUrl(url)) {
-      event.preventDefault();
-      openClerkOAuthPopup(window, url, expectedBackendUrl);
-      return;
-    }
-    // Google drops redirect_uri on subsequent account/password/consent pages.
-    // Keep those steps in the same session only after a Clerk flow starts.
-    if (isClerkFlowNavigation(url)) return;
+    if (isClerkGoogleOAuthUrl(url)) { event.preventDefault(); return; }
     if (isAllowedExternalUrl(url)) {
       event.preventDefault();
       shell.openExternal(url);
@@ -1998,7 +1997,16 @@ async function loadMiaOS() {
       "Timed out loading the desktop fallback",
     );
     return false;
-  } catch (_) {
+  } catch (error) {
+    desktopLog(`Mia backend unavailable: ${error.message}`);
+    if (error && error.code === "EADDRINUSE") {
+      void updateMessage({
+        type: "error",
+        title: "Mia cannot start",
+        message: error.message,
+        buttons: ["OK"],
+      });
+    }
     // A failed or timed-out navigation must not leave the retry IPC call
     // pending forever. Keep the standalone fallback visible and allow the
     // user to try again after starting the server.
@@ -2045,9 +2053,10 @@ ipcMain.handle("miaos-retry-connection", async (event) => {
 // Relaunching the app is the only way to reset the latter, so do both.
 ipcMain.handle("miaos-reset-relaunch", async (event) => {
   if (!isMainWindowSender(event)) return false;
+  await desktopAuth.clear().catch(() => {});
   desktopLog("clean slate: clearing desktop storage and relaunching");
   const userData = app.getPath("userData");
-  for (const file of [RENDERER_STATE_FILENAME, "miaos-browser-state.json"]) {
+  for (const file of [RENDERER_STATE_FILENAME, "miaos-browser-state.json", "clerk-native-session.enc"]) {
     try { fs.rmSync(path.join(userData, file), { force: true }); } catch (error) {
       desktopLog(`clean slate: could not remove ${file}: ${error.message}`);
     }
@@ -2212,7 +2221,10 @@ function activateMainWindow() {
   mainWindow.focus();
 }
 
-app.on("second-instance", activateMainWindow);
+app.on("second-instance", (_event, argv) => {
+  for (const value of argv || []) if (typeof value === "string" && value.startsWith("miamultiplayer:")) receiveAuthCallback(value);
+  activateMainWindow();
+});
 
 // Passkeys stored on this Mac: enable Electron's Touch ID / Secure Enclave
 // platform authenticator so WebAuthn prompts surface natively instead of
@@ -2256,6 +2268,7 @@ function configurePasskeys() {
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
   applyAppBranding();
+  nativeAuthProtocolReady = registerAuthProtocol(app);
   configurePasskeys();
   // Google (and other identity providers) refuse OAuth from sessions that
   // look like an embedded framework — "Couldn't sign you in / this browser
@@ -2300,6 +2313,8 @@ module.exports = {
   createApplicationMenuTemplate,
   developmentRefreshUi,
   restartManagedBackend,
+  findFreePort,
+  selectLocalBackendPort,
   disposeArtifactPanel,
   activateMainWindow,
   normalizeInAppArtifactTarget,

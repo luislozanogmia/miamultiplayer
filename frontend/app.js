@@ -449,6 +449,8 @@
   var clerkLoadPromise = null;
   var clerkExchangeBusy = false;
   var clerkSigningOut = false;
+  var nativeClerkViewDispose = null;
+  function desktopClerkAuth(){ return window.miaDesktop && window.miaDesktop.auth; }
 
   function loadClerkAsset(src, attributes){
     return new Promise(function(resolve, reject){
@@ -485,11 +487,13 @@
   }
 
   function finishClerkLogin(){
-    if(clerkExchangeBusy || clerkSigningOut || !window.Clerk || !window.Clerk.session) return Promise.resolve(false);
+    var nativeAuth = desktopClerkAuth();
+    if(clerkExchangeBusy || clerkSigningOut || (!nativeAuth && (!window.Clerk || !window.Clerk.session))) return Promise.resolve(false);
     clerkExchangeBusy = true;
     var errEl = el('#loginError');
     if(errEl) errEl.textContent = '';
-    return window.Clerk.session.getToken().then(function(token){
+    var getToken = nativeAuth ? nativeAuth.getSessionToken().then(window.MiaClerkDesktop.unwrap) : window.Clerk.session.getToken();
+    return getToken.then(function(token){
       if(!token) throw new Error('Clerk did not return a session token');
       return fetch('/api/clerk/session', {
         method:'POST',
@@ -535,6 +539,11 @@
     // makes Clerk's embedded router silently render an empty sign-in root.
     // showApp() restores the default chat route after authentication.
     if(location.hash) history.replaceState(null, '', location.pathname + location.search);
+    if(desktopClerkAuth()){
+      if(nativeClerkViewDispose) nativeClerkViewDispose();
+      nativeClerkViewDispose = window.MiaClerkDesktop.mount(mount, desktopClerkAuth(), finishClerkLogin);
+      return;
+    }
     ensureClerkLoaded().then(function(clerk){
       if(clerk.user && clerk.session) return finishClerkLogin();
       clerk.mountSignIn(mount, {
@@ -618,6 +627,7 @@
     // hidden login fields and can pair the saved credential with the composer.
     var loginForm = el('#loginForm');
     if(loginForm) loginForm.remove();
+    if(nativeClerkViewDispose){ nativeClerkViewDispose(); nativeClerkViewDispose = null; }
     syncAdminMenuItem();
     if(STYLED_SKIN){
       var styledBootHash = location.hash.replace(/^#\//, '').split('?')[0];
@@ -749,6 +759,9 @@
       }).catch(function(error){ console.error('Mia startup failed', error); hideApp(); });
     }, 0);
     } else {
+      // Refresh the native Clerk session before trusting a persisted local
+      // app cookie. Client JWTs stay in the main process/OS credential store.
+      if(AUTH_CONFIG && desktopClerkAuth()) return showClerkSignIn();
       api('/api/me').then(function(res){
         if(res.status === 200 && res.data && res.data.email){
           currentUserLocalProfile = res.data.localProfile === true;
@@ -801,12 +814,17 @@
 
   el('#logoutBtn').addEventListener('click', function(){
     clerkSigningOut = true;
-    var clerkSignOut = AUTH_CONFIG ? ensureClerkLoaded().then(function(clerk){
+    var clerkSignOut = AUTH_CONFIG && desktopClerkAuth() ? desktopClerkAuth().signOut().then(window.MiaClerkDesktop.unwrap) : AUTH_CONFIG ? ensureClerkLoaded().then(function(clerk){
       return clerk && typeof clerk.signOut === 'function' ? clerk.signOut() : null;
     }).catch(function(){}) : Promise.resolve();
     clerkSignOut.then(function(){
-      return fetch('/api/logout', {method:'POST', credentials:'include'}).catch(function(){});
-    }).then(function(){ window.location.reload(); });
+      return fetch('/api/logout', {method:'POST', credentials:'include'}).then(function(response){
+        if(!response.ok) throw new Error('Could not end the local session. Please try signing out again.');
+      });
+    }).then(function(){ window.location.reload(); }).catch(function(error){
+      clerkSigningOut = false;
+      window.alert(error.message || 'Sign-out did not finish. Please try again.');
+    });
   });
 
   /* ============ ROUTER ============ */

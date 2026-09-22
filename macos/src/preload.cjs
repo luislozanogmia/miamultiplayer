@@ -10,6 +10,20 @@ contextBridge.exposeInMainWorld("miaDesktop", {
   ready: () => ipcRenderer.send("miaos-renderer-ready"),
   hydrated: () => ipcRenderer.send("miaos-renderer-hydrated"),
   retryConnection: () => ipcRenderer.invoke("miaos-retry-connection"),
+  auth: {
+    status: () => ipcRenderer.invoke("miaos-clerk-auth", "status"),
+    startGoogle: () => ipcRenderer.invoke("miaos-clerk-auth", "google"),
+    startEmail: email => ipcRenderer.invoke("miaos-clerk-auth", "email", email),
+    verifyEmail: code => ipcRenderer.invoke("miaos-clerk-auth", "verify", code),
+    getSessionToken: () => ipcRenderer.invoke("miaos-clerk-auth", "token"),
+    signOut: () => ipcRenderer.invoke("miaos-clerk-auth", "signOut"),
+    cancel: () => ipcRenderer.invoke("miaos-clerk-auth", "cancel"),
+    onState: callback => {
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on("miaos-clerk-state", listener);
+      return () => ipcRenderer.removeListener("miaos-clerk-state", listener);
+    },
+  },
   artifact: {
     open: (url) => ipcRenderer.invoke("miaos-artifact-open", url),
   },
