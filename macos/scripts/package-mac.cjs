@@ -16,6 +16,20 @@ const MAC_ENTITLEMENTS = path.join(__dirname, "entitlements.darwin.plist");
 const VERSION = require(path.join(MACOS_ROOT, "package.json")).version;
 const ELECTRON_VERSION = require(path.join(MACOS_ROOT, "node_modules", "electron", "package.json")).version;
 
+function macBundleUrlTypes() {
+  return [
+    {
+      CFBundleURLName: "com.miamultiplayer.mia.web",
+      CFBundleURLSchemes: ["http", "https"],
+    },
+    {
+      CFBundleURLName: "com.miamultiplayer.mia.auth",
+      CFBundleTypeRole: "Viewer",
+      CFBundleURLSchemes: ["miamultiplayer"],
+    },
+  ];
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd || REPOSITORY_ROOT,
@@ -682,16 +696,10 @@ async function buildInstaller() {
         // key Chromium's FIDO layer refuses Bluetooth outright.
         NSBluetoothAlwaysUsageDescription: "Mia's browser uses Bluetooth to sign in with a passkey stored on your phone when you allow it.",
         NSBluetoothPeripheralUsageDescription: "Mia's browser uses Bluetooth to sign in with a passkey stored on your phone when you allow it.",
-        // Registers Mia as an http/https handler candidate so Settings ->
-        // General -> "Make Mia your default browser" (app.setAsDefaultProtocolClient
-        // in main.cjs) has something to register against; macOS still owns
-        // the actual confirmation UI and the user's final choice.
-        CFBundleURLTypes: [
-          {
-            CFBundleURLName: "com.miamultiplayer.mia.web",
-            CFBundleURLSchemes: ["http", "https"],
-          },
-        ],
+        // Keep Mia as an http/https handler candidate for the optional default-
+        // browser feature, and register its dedicated Clerk return scheme.
+        // macOS still owns confirmation of any http/https default change.
+        CFBundleURLTypes: macBundleUrlTypes(),
       },
       extraResource: [
         path.join(temporaryRoot, "backend"),
@@ -754,6 +762,7 @@ module.exports = {
   copyPortableRuntime,
   normalizeCopiedSymlinks,
   macDistributionConfig,
+  macBundleUrlTypes,
   isMachOFile,
   macCodeTargets,
   macEntitlementsForTarget,

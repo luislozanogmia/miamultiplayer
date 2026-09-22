@@ -1,6 +1,6 @@
 # Clerk production configuration
 
-This repository contains production configuration plumbing, not a configured or live-verified Clerk production instance. Do not commit real values. Store the three public identifiers in the install's ignored `.env.local` file:
+This repository contains production configuration plumbing. Full production readiness requires the lifecycle checks below; a rendered sign-in screen is not sufficient. Do not commit real values. Store the three public identifiers in the install's ignored `.env.local` file:
 
 ```dotenv
 CLERK_PUBLISHABLE_KEY=<production-publishable-key-from-Clerk>
@@ -22,13 +22,27 @@ All three overrides are one atomic tuple. Startup rejects partial tuples, non-HT
 
 ## Electron production boundary
 
-Clerk's documentation says Electron's request origin must be present in the instance `allowedOrigins`. It also says production publishable keys are normally restricted to the configured HTTPS production domain and that localhost production-key testing is unsupported. Mia currently serves its Electron renderer from `http://localhost:<free-port>`; it starts after the preferred port and advances when occupied. Therefore a single assumed localhost origin is not a valid production contract, and this groundwork does not claim that a standard production-domain Clerk instance can authenticate from the desktop shell.
+Clerk explicitly supports browser-like Electron origins through the instance `allowedOrigins` setting. This is distinct from using production keys in an ordinary, unconfigured localhost website. Update the setting through the documented instance API, preserving existing entries; never ship the administrative API credential in Mia. The origin must match the actual renderer scheme, host, and port. An unbounded free-port fallback is not a production origin contract.
 
-Before release, validate the real production instance with Clerk support or choose an explicitly approved desktop architecture, such as a stable verified HTTPS origin or a supported native flow. Do not weaken CSP/navigation matching, wildcard callback hosts, pin an unverified port, enable the Native API, or introduce a proxy as an implicit workaround.
+Production desktop startup uses exactly `MIAOS_PORT + 1` (default `http://localhost:4871`) and fails with an actionable error if occupied instead of choosing an unapproved origin. Development retains free-port selection. Changing `MIAOS_PORT` requires updating Clerk's allowed origins to match. Production does not implicitly adopt a service on the preferred port; an explicit `MIAOS_URL` remains an operator-selected external backend. The occupied-port behavior has automated coverage; manual production collision/relaunch verification remains pending.
+
+On 2026-09-22, the disposable local desktop profile was verified at `http://localhost:4871`: adding that exact allowed origin removed Clerk's `origin_invalid` failure and the real Electron shell rendered the production sign-in form. A read-only `/v1/client` request from that origin returned 200; an unrelated HTTPS origin returned 400 `origin_invalid`. `/v1/environment` is cached and is not a reliable negative-origin test. This establishes origin bootstrap only, not successful authentication, session persistence, or router provisioning.
+
+Google OAuth is a separate release gate: the current Electron popup uses an embedded browser and a Chrome-identity shim. Google's OAuth policy prohibits developer-controlled embedded user-agents. Successful popup rendering does not establish a production-supported Google flow. A supported external-browser return flow must be implemented and verified before claiming Google sign-in production ready; do not replace it with origin spoofing or disabled browser security.
+
+Clerk's stable native SDK flow uses a native client JWT, a whitelisted redirect, and `rotating_token_nonce` to reload the initiating client. Calling `reload` with that nonce alone is not a verified shortcut for Mia's cookie-backed browser client: official adapters also change request transport and token persistence. Electron documents that custom-scheme callbacks on macOS/Linux require a packaged app, so a command-line development run cannot establish end-to-end callback acceptance.
+
+On 2026-09-22, the live managed-router function's issuer allowlist was restricted to the production Clerk issuer, preserving its remaining environment settings. AWS reported the update successful, and the deployed endpoint still returned 401 for an unauthenticated provisioning request. A genuine production session's successful provisioning remains unverified. The production dashboard's session template was also inspected and contained the `fullName` and `primaryEmail` custom claims.
+
+Keep the existing website waitlist intact. Do not change the entire shared instance's access mode merely to test an invited alpha user. Remaining live checks include token claims, invited-user sign-in, rejection of uninvited access, local exchange, router acceptance of the production issuer, restart persistence, logout, and independent security review.
 
 Official references:
 
 - [Clerk Backend Instance `allowedOrigins`](https://clerk.com/docs/reference/backend/types/backend-instance)
+- [Clerk instance update API](https://clerk.com/docs/reference/backend/instance/update)
+- [Google OAuth secure-browser policy](https://developers.google.com/identity/protocols/oauth2/policies#use-secure-browsers)
+- [Clerk native OAuth implementation](https://github.com/clerk/javascript/blob/main/packages/expo/src/hooks/useSSO.ts)
+- [Electron deep-link packaging requirements](https://www.electronjs.org/docs/latest/tutorial/launch-app-from-url-in-another-app#packaging)
 - [Using production keys in local development](https://clerk.com/docs/guides/development/troubleshooting/using-production-keys-in-development)
 - [Development and production session architecture](https://clerk.com/docs/guides/development/managing-environments)
 - [Manual JWT verification and authorized parties](https://clerk.com/docs/guides/sessions/manual-jwt-verification)
