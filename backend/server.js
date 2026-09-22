@@ -3016,7 +3016,7 @@ async function boundedMap(items, limit, mapper) {
   return values;
 }
 const HERMES_AUTH_PROVIDER_LABELS = Object.freeze({
-  [CLAUDE_SUBSCRIPTION_PROVIDER]: 'Claude Subscription DirectSDK (Experimental)',
+  [CLAUDE_SUBSCRIPTION_PROVIDER]: 'Claude Subscription',
   'openai-codex': 'ChatGPT',
   'xai-oauth': 'Grok',
   ...HERMES_API_PROVIDER_LABELS,
