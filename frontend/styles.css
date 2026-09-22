@@ -268,6 +268,14 @@
   .login-error:not(:empty):before{content:"ERROR";font-family:var(--mono);font-size:9px;letter-spacing:.08em;color:var(--accent-text);padding-top:2px;flex:none;}
   .clerk-sign-in{width:100%;min-height:320px;display:flex;justify-content:center;}
   .clerk-sign-in[hidden]{display:none;}
+  .native-clerk-form{width:100%;max-width:400px;}
+  .native-clerk-form [hidden]{display:none!important;}
+  .native-clerk-form .native-clerk-google{background:#fff;color:#171717;border:1px solid #d9d7d1;}
+  .native-clerk-divider{text-align:center;color:#737373;font-size:13px;margin:18px 0;}
+  .native-clerk-status{font-size:13px;line-height:1.5;color:#626262;min-height:20px;margin:14px 0 4px;}
+  .native-clerk-cancel{border:0;background:none;font:inherit;font-size:13px;padding:8px 0;text-decoration:underline;cursor:pointer;}
+  .native-clerk-form button:disabled{opacity:.55;cursor:default;}
+  .native-clerk-google{display:flex;align-items:center;justify-content:center;gap:10px;}
   .login-footer{margin-top:20px;display:flex;align-items:center;gap:16px;font-family:var(--mono);font-size:10.5px;color:var(--light);}
   .login-footer-sp{flex:1;}
   .login-side{padding:14px 14px 14px 0;}
@@ -2147,6 +2155,8 @@
   body.styled-skin .login-field input:focus{border-color:var(--sand-text-primary);box-shadow:0 0 0 3px var(--sand-fill-secondary);}
   body.styled-skin .login-btn{font-family:var(--styled-sans);font-size:14px;font-weight:500;background:var(--sand-fill-primary);color:var(--sand-text-on-primary);border-radius:10px;}
   body.styled-skin .login-btn:hover{background:var(--sand-fill-primary-hover);}
+  body.styled-skin .native-clerk-google{background:#fff;color:#171717;border:1px solid #d9d7d1;}
+  body.styled-skin .native-clerk-google:hover{background:#f7f6f3;}
   body.styled-skin .login-footer{font-family:var(--styled-sans);font-size:12px;color:var(--sand-text-secondary);}
   .ui-icon-symbols{position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;}
 
