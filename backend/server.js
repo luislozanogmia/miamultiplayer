@@ -3744,7 +3744,9 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
   if (effectiveProvider === 'openai-api' && !isManagedRouter && body.apiProvider && !requestedApiProvider) {
     return res.status(400).json({ error: 'unsupported API provider' });
   }
-  if (effectiveProvider !== 'openai-api' && body.model !== undefined
+  // A picker without an explicit model sends null. Treat it like an omitted
+  // model and let the harness catalog choose its default below.
+  if (effectiveProvider !== 'openai-api' && body.model != null
     && !isAllowedHermesModel(effectiveProvider, body.model, body.fast === true)) {
     return res.status(400).json({ error: 'unsupported model for provider' });
   }
