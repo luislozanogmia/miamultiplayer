@@ -1571,6 +1571,31 @@ function harnessAuthPopupOptions(parent) {
   };
 }
 
+async function completeClaudeAuthCallback(window, value, contract, localBackend) {
+  if (!contract || !localBackend) return false;
+  try {
+    const url = new URL(value);
+    if (url.origin !== contract.redirectOrigin || url.pathname !== contract.redirectPath
+      || !isHarnessAuthNavigation(value, "claude-subscription-directsdk-experimental", contract)) return false;
+    const code = url.searchParams.get("code") || "";
+    const state = url.searchParams.get("state") || "";
+    if (!code || code.length > 4096 || /[\s\x00-\x1f\x7f#]/.test(code)) return false;
+    // Use Mia's existing authenticated session. The official CLI remains the
+    // credential owner; no token, callback URL, or code is logged or persisted.
+    const response = await window.webContents.session.fetch(new URL("/api/settings/harness/auth/complete", localBackend).href, {
+      method: "POST",
+      credentials: "include",
+      redirect: "error",
+      headers: { "Content-Type": "application/json", Origin: new URL(localBackend).origin },
+      body: JSON.stringify({ provider: "claude-subscription-directsdk-experimental", code: `${code}#${state}`, state }),
+    });
+    return response.status === 202;
+  } catch (_) {
+    // Leave the official code page available for the manual fallback.
+    return false;
+  }
+}
+
 function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false, harnessAuthProvider = "", inheritedAuthContract = null, nestedAuthPopup = false) {
   const isLocal = url => (expectedBackendUrl || backendUrl) && hasExactOrigin(url, expectedBackendUrl || backendUrl);
   // Windows created for the OAuth flow carry the Chrome-identity preload;
@@ -1578,6 +1603,7 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   const isOAuthPopup = clerkFlowActive;
   let harnessAuthContract = inheritedAuthContract;
   let mayLoadAuthBootstrap = !nestedAuthPopup;
+  let completionInFlight = false;
   const isBoundHarnessAuthNavigation = value => {
     if (harnessAuthProvider === "claude-subscription-directsdk-experimental") {
       const start = claudeAuthStartContract(value);
@@ -1657,6 +1683,15 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   });
   window.webContents.on("did-navigate", (_event, url) => {
     if (isLocal(url)) clerkFlowActive = false;
+    if (harnessAuthProvider === "claude-subscription-directsdk-experimental" && !completionInFlight) {
+      completionInFlight = true;
+      void completeClaudeAuthCallback(window, url, harnessAuthContract, expectedBackendUrl || backendUrl).then(accepted => {
+        completionInFlight = false;
+        if (accepted) {
+          try { window.close(); } catch (_) { /* already closed */ }
+        }
+      });
+    }
   });
   const guardNavigation = (event, targetUrl) => {
     const url = targetUrl || event.url;
@@ -2244,6 +2279,7 @@ app.on("window-all-closed", () => {
 });
 
 module.exports = {
+  completeClaudeAuthCallback,
   createDevelopmentMenu,
   createApplicationMenuTemplate,
   developmentRefreshUi,
