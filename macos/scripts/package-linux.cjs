@@ -134,6 +134,25 @@ function writeExecutable(file, content) {
   fs.writeFileSync(file, content, { mode: 0o755 });
 }
 
+function linuxDesktopEntry() {
+  return "[Desktop Entry]\nType=Application\nName=Mia\nExec=mia %u\nIcon=miaos\nTerminal=false\nCategories=Office;Utility;\nStartupWMClass=miaos\nMimeType=x-scheme-handler/miamultiplayer;\n";
+}
+
+function linuxAppExecLine() {
+  return 'exec /opt/miaos/app/Mia --user-data-dir="${state_home}/electron" "$@"';
+}
+
+function linuxPostInstallScript() {
+  return `#!/usr/bin/env sh
+set -eu
+chown root:root /opt/miaos/app/chrome-sandbox
+chmod 4755 /opt/miaos/app/chrome-sandbox
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
+`;
+}
+
 async function buildLinuxPackage() {
   assertCleanReleaseCheckout();
   const hermesRelease = path.join(REPOSITORY_ROOT, "scripts", "hermes-release.env");
@@ -226,7 +245,7 @@ export GHOST_MIA_SOCKET="\${state_home}/ghost-bridge.sock"
 export GHOST_MIA_TOKEN_FILE="\${state_home}/ghost-bridge.token"
 export GHOST_IN_APP_BROWSER_SOCKET="\${GHOST_MIA_SOCKET}"
 export GHOST_IN_APP_BROWSER_TOKEN_FILE="\${GHOST_MIA_TOKEN_FILE}"
-exec /opt/miaos/app/Mia --user-data-dir="\${state_home}/electron"
+${linuxAppExecLine()}
 `);
     writeExecutable(path.join(packageRoot, "usr", "lib", "miaos", "hermes"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -246,17 +265,13 @@ export PYTHONPATH="\${runtime_home}/hermes/hermes-agent/venv/lib/python3.11/site
 exec "\${runtime_home}/hermes/hermes-agent/venv/bin/python" /opt/miaos/app/resources/backend/miaos-ghost-cli.py "\$@"
 `);
     fs.mkdirSync(path.join(packageRoot, "usr", "share", "applications"), { recursive: true });
-    fs.writeFileSync(path.join(packageRoot, "usr", "share", "applications", "miaos.desktop"), "[Desktop Entry]\nType=Application\nName=Mia\nExec=mia\nIcon=miaos\nTerminal=false\nCategories=Office;Utility;\nStartupWMClass=miaos\n");
+    fs.writeFileSync(path.join(packageRoot, "usr", "share", "applications", "miaos.desktop"), linuxDesktopEntry());
     const iconDir = path.join(packageRoot, "usr", "share", "icons", "hicolor", "512x512", "apps");
     fs.mkdirSync(iconDir, { recursive: true });
     fs.copyFileSync(path.join(MACOS_ROOT, "assets", "mia-512-linux.png"), path.join(iconDir, "miaos.png"));
     fs.mkdirSync(path.join(packageRoot, "DEBIAN"), { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "DEBIAN", "control"), `Package: mia\nVersion: ${VERSION}\nArchitecture: amd64\nMaintainer: Mia contributors\nSection: utils\nPriority: optional\nDescription: Local AI workspace powered by Hermes Agent\n`);
-    writeExecutable(path.join(packageRoot, "DEBIAN", "postinst"), `#!/usr/bin/env sh
-set -eu
-chown root:root /opt/miaos/app/chrome-sandbox
-chmod 4755 /opt/miaos/app/chrome-sandbox
-`);
+    writeExecutable(path.join(packageRoot, "DEBIAN", "postinst"), linuxPostInstallScript());
     assertNoRuntimeState(installRoot);
     assertNoPrivateBuildPaths(packageRoot, [
       os.homedir(), REPOSITORY_ROOT, temporaryRoot, hermesBundle, ghostBundle, pythonRuntime,
@@ -283,4 +298,13 @@ chmod 4755 /opt/miaos/app/chrome-sandbox
 }
 
 if (require.main === module) buildLinuxPackage().then(console.log).catch((error) => { console.error(error.message); process.exitCode = 1; });
-module.exports = { buildLinuxPackage, removeLinuxPythonBuildState, requiredDirectory, requiredPinnedDirectory, requiredPythonRuntime };
+module.exports = {
+  buildLinuxPackage,
+  linuxAppExecLine,
+  linuxDesktopEntry,
+  linuxPostInstallScript,
+  removeLinuxPythonBuildState,
+  requiredDirectory,
+  requiredPinnedDirectory,
+  requiredPythonRuntime,
+};

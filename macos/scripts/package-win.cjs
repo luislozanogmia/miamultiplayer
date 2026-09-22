@@ -357,6 +357,11 @@ async function buildWindowsPackage() {
     // are not executable inputs and embed the build machine's absolute path.
     fs.rmSync(path.join(stagedBackend, "node_modules", "better-sqlite3", "build"), { recursive: true, force: true });
 
+    // This target is a portable zip, not an installer, so there is no install
+    // phase in which to write a per-user URL-handler registry key. The packaged
+    // Mia.exe registers `miamultiplayer` at runtime with Electron's
+    // app.setAsDefaultProtocolClient; keep this packager free of build-host or
+    // machine-wide registry mutations.
     const appPaths = await packager({
       dir: appSource,
       name: "Mia",

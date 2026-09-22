@@ -83,44 +83,18 @@ test("desktop Clerk configuration uses dotenv multiline PEM parsing", () => {
   }
 });
 
-test("Clerk Google navigation moves into the shimmed popup and hands back the session", () => {
+test("legacy Clerk Google navigation is denied, never opened in an embedded popup", () => {
   const { EventEmitter } = require("node:events");
   const main = loadMain();
   const contents = new EventEmitter();
   contents.setWindowOpenHandler = handler => { contents.popup = handler; };
-  const parent = {
-    webContents: contents,
-    loadedUrls: [],
-    loadURL(url) { this.loadedUrls.push(url); },
-  };
-  main.configureNavigation(parent, "http://localhost:4871");
-  const navigate = (target, url) => {
-    let blocked = false;
-    target.emit("will-navigate", { url, preventDefault() { blocked = true; } });
-    return !blocked;
-  };
-  const challenge = "https://accounts.google.com/v3/signin/challenge/pwd";
-  assert.equal(navigate(contents, challenge), false);
-
-  // An in-place OAuth redirect is intercepted and rerouted into a popup that
-  // carries the Chrome-identity preload; the main window never navigates.
-  const oauth = "https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fclerk.shared.lcl.dev%2Fv1%2Foauth_callback&response_type=code";
-  assert.equal(navigate(contents, oauth), false);
-  const popup = main.__electron.BrowserWindow.instances[0];
-  assert.ok(popup, "OAuth redirect opens a shimmed popup");
-  assert.match(popup.options.webPreferences.preload, /google-oauth-preload\.cjs$/);
-  assert.equal(popup.options.parent, parent);
-  assert.deepEqual(popup.loadedUrls, [oauth]);
-  assert.equal(navigate(contents, challenge), false, "the flow never activates in the main window");
-
-  // The popup keeps later sign-in steps in-window and ends on local return.
-  assert.equal(navigate(popup.webContents, challenge), true);
-  assert.equal(navigate(popup.webContents, "https://clerk.shared.lcl.dev/v1/oauth_callback?code=fixture"), true);
-  assert.equal(navigate(popup.webContents, "https://accounts.google.com.attacker.test/"), false);
-  assert.equal(navigate(popup.webContents, "file:///tmp/private"), false);
-  popup.webContents.emit("did-navigate", {}, "http://localhost:4871/");
-  assert.deepEqual(parent.loadedUrls, ["http://localhost:4871/"]);
-  assert.equal(popup.closed, true);
+  main.configureNavigation({ webContents: contents }, "http://localhost:4871");
+  const url = "https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fclerk.shared.lcl.dev%2Fv1%2Foauth_callback&response_type=code";
+  assert.deepEqual(contents.popup({url}), {action:"deny"});
+  let blocked = false;
+  contents.emit("will-navigate", {url, preventDefault(){ blocked = true; }});
+  assert.equal(blocked, true);
+  assert.equal(main.__electron.BrowserWindow.instances.length, 0);
 });
 
 test("provider auth redirects preserve nested OAuth windows and their navigation guards", async () => {
@@ -601,6 +575,75 @@ test("restart refuses a stale or wrong managed process", async () => {
   assert.equal(startCalls, 0);
 });
 
+async function listeningLoopbackServer() {
+  const net = require("node:net");
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return server;
+}
+
+test("production Clerk startup fails on its occupied stable port without falling back", async (t) => {
+  const main = loadMain();
+  const occupied = await listeningLoopbackServer();
+  t.after(() => occupied.close());
+  const port = occupied.address().port;
+
+  await assert.rejects(
+    main.selectLocalBackendPort(null, { production: true, preferredPort: port - 1 }),
+    new RegExp(`stable Mia desktop origin http://localhost:${port} is already in use`),
+  );
+});
+
+test("production Clerk startup uses the default or configured stable port exactly", async () => {
+  const main = loadMain();
+  const calls = [];
+  const findPort = async (port, options) => {
+    calls.push({ port, options });
+    return port;
+  };
+
+  assert.equal(await main.selectLocalBackendPort(null, {
+    production: true, preferredPort: 4870, findPort,
+  }), 4871);
+  assert.equal(await main.selectLocalBackendPort(null, {
+    production: true, preferredPort: 5900, findPort,
+  }), 5901);
+  assert.deepEqual(calls, [
+    { port: 4871, options: { allowFallback: false } },
+    { port: 5901, options: { allowFallback: false } },
+  ]);
+});
+
+test("development startup retains free-port fallback", async (t) => {
+  const main = loadMain();
+  const occupied = await listeningLoopbackServer();
+  t.after(() => occupied.close());
+  const port = occupied.address().port;
+
+  const selected = await main.selectLocalBackendPort(null, { production: false, preferredPort: port - 1 });
+  assert.ok(selected > port, `expected a fallback after occupied port ${port}, received ${selected}`);
+});
+
+test("a configured managed-backend port remains exact in every environment", async (t) => {
+  const main = loadMain();
+  const reservation = await listeningLoopbackServer();
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+
+  assert.equal(await main.selectLocalBackendPort(port, { production: false }), port);
+
+  const occupied = await listeningLoopbackServer();
+  t.after(() => occupied.close());
+  const occupiedPort = occupied.address().port;
+  await assert.rejects(
+    main.selectLocalBackendPort(occupiedPort, { production: false }),
+    new RegExp(`cannot restart its managed backend because http://localhost:${occupiedPort} is already in use`),
+  );
+});
+
 test("UI refresh raises the renderer loading gate before reloading", async () => {
   const main = loadMain();
   const order = [];
@@ -633,7 +676,9 @@ test("localhost frontend stays inside the native desktop host", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /preload: path\.join\(__dirname, "preload\.cjs"\)/);
   assert.match(source, /const url = `http:\/\/localhost:\$\{port\}`/);
-  assert.match(source, /process\.env\.MIAOS_URL \|\| `http:\/\/localhost:\$\{PREFERRED_PORT\}`/);
+  assert.match(source, /explicitlyConfiguredUrl[\s\S]*CLERK_CONFIG\.environment === "production" \? null : `http:\/\/localhost:\$\{PREFERRED_PORT\}`/);
+  assert.match(source, /explicitlyConfiguredUrl\s*\? normalizeBaseUrl\(explicitlyConfiguredUrl\)/);
+  assert.doesNotMatch(source, /process\.env\.MIAOS_URL \|\| `http:\/\/localhost:\$\{PREFERRED_PORT\}`/);
   assert.match(source, /mainWindow\.loadURL\(`\$\{resolvedBackend\}\/\#\/chat`\)/);
   assert.match(source, /createBrowser\(\s*window/);
 });
@@ -738,7 +783,7 @@ test("development and packaged launches share Electron's single-instance lock", 
   assert.match(mainSource, /if \(!hasSingleInstanceLock\) app\.quit\(\)/);
   assert.match(mainSource, /app\.on\("second-instance"/);
   assert.match(mainSource, /function activateMainWindow\(\)[\s\S]*createWindow\(\)[\s\S]*loadMiaOS\(\)[\s\S]*mainWindow\.focus\(\)/);
-  assert.match(mainSource, /app\.on\("second-instance", activateMainWindow\)/);
+  assert.match(mainSource, /app\.on\("second-instance",[\s\S]*receiveAuthCallback\(value\)[\s\S]*activateMainWindow\(\)/);
   assert.match(mainSource, /BrowserWindow\.getAllWindows\(\)\.length === 0\) activateMainWindow\(\)/);
   assert.match(mainSource, /mainWindow\.restore\(\)/);
   assert.match(mainSource, /mainWindow\.focus\(\)/);
