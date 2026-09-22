@@ -109,12 +109,15 @@ test("provider auth redirects preserve nested OAuth windows and their navigation
     else childContents.emit(eventName, event);
     return !blocked;
   };
+  assert.equal(navigate("will-navigate", redirect), true, "initial local broker must load before its remote redirect");
+  assert.equal(navigate("will-navigate", "http://localhost:4871/"), false);
   assert.equal(navigate("will-navigate", "https://platform.claude.com/oauth/code/callback?state=fixture&code=early"), false);
   const authorization = new URL("https://claude.com/cai/oauth/authorize");
   authorization.searchParams.set("code", "true");
   authorization.searchParams.set("state", "fixture-state");
   authorization.searchParams.set("redirect_uri", "https://platform.claude.com/oauth/code/callback");
   assert.equal(navigate("will-navigate", authorization.toString()), true);
+  assert.equal(navigate("will-navigate", redirect), false, "remote auth cannot navigate back into the local broker");
   assert.equal(navigate("will-navigate", "https://accounts.google.com/v3/signin/identifier"), true);
   assert.equal(navigate("will-redirect", "https://platform.claude.com/oauth/code/callback?state=wrong&code=fixture"), false);
   assert.equal(navigate("will-redirect", "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture"), true);
