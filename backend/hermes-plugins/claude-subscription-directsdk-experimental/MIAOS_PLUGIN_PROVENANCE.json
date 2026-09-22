@@ -4,6 +4,7 @@
   "version": "0.3.0",
   "commit": "c92c27c9f919178a58974a72333b473c6cb2e71d",
   "localModifications": [
-    "model_catalog.py advertises Mia context budgets of 250000 tokens for listed non-Haiku models and 200000 for Haiku while retaining upstream route IDs"
+    "model_catalog.py advertises Mia context budgets of 250000 tokens for listed non-Haiku models and 200000 for Haiku while retaining upstream route IDs",
+    "model_catalog.py lists claude-opus-5-5 so the account picker's Opus 5.5 route is not filtered out"
   ]
 }
