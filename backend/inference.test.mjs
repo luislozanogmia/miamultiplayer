@@ -435,7 +435,10 @@ test('backend shutdown closes and releases its singleton Hermes gateway client',
   const originalModelOptions = HermesGatewayClient.prototype.modelOptions;
   const originalClose = HermesGatewayClient.prototype.close;
   let closeCalls = 0;
-  HermesGatewayClient.prototype.modelOptions = async () => [];
+  HermesGatewayClient.prototype.modelOptions = async (options) => {
+    assert.equal(options.profile, 'miaos-agent-runtime');
+    return [];
+  };
   HermesGatewayClient.prototype.close = function closeForTest() { closeCalls += 1; };
 
   try {
