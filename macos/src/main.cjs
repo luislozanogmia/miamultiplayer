@@ -1589,9 +1589,11 @@ async function completeClaudeAuthCallback(window, value, contract, localBackend)
       headers: { "Content-Type": "application/json", Origin: new URL(localBackend).origin },
       body: JSON.stringify({ provider: "claude-subscription-directsdk-experimental", code: `${code}#${state}`, state }),
     });
+    if (response.status !== 202) desktopLog(`Claude automatic completion rejected: HTTP ${response.status}`);
     return response.status === 202;
   } catch (_) {
     // Leave the official code page available for the manual fallback.
+    desktopLog("Claude automatic completion unavailable; manual fallback retained");
     return false;
   }
 }
@@ -1699,6 +1701,10 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       && harnessAuthRedirectProvider(url, expectedBackendUrl) === harnessAuthProvider) return;
     if (harnessAuthProvider && isBoundHarnessAuthNavigation(url)) return;
     if (harnessAuthProvider) {
+      try {
+        const blocked = new URL(url);
+        desktopLog(`Provider auth navigation blocked: ${blocked.origin}${blocked.pathname}`);
+      } catch (_) { /* never log unparsed URLs or query credentials */ }
       event.preventDefault();
       return;
     }
