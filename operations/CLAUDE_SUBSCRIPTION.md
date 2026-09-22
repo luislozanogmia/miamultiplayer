@@ -37,8 +37,16 @@ paid-API/custom-endpoint refusal, profile provisioning for ordinary agents and
 bots, model validation (including `[1m]` routes), persisted Mia disconnect
 state across a backend restart, and the mocked login URL/code/cancel/retry
 lifecycle. The login subprocess remains the sole credential owner: Mia opens
-its official authorization URL in a separate sandboxed sign-in popup and
-forwards an optional one-time completion code to its standard input without storing or
-logging it. A real subscription turn, real account login, packaged-app launch,
-installer/package build, and manual UI flow remain unverified. Do not describe
-this integration as production-qualified until those checks pass.
+its official authorization URL in a separate sandboxed sign-in popup, preserving
+Google's child popup and opener. The desktop captures only the exact official
+callback with the matching login state and submits its one-time code through
+Mia's authenticated session to the CLI's standard input. The backend rejects
+callbacks from replaced login attempts. Codes are not logged or persisted;
+manual entry is available in a collapsed fallback. An omitted/null model uses
+the harness catalog's default; explicit unsupported models remain rejected.
+
+The source-checkout desktop Google login, Claude authorization, automatic code
+handoff, and connected-state UI were exercised live on 2026-09-22. A real
+subscription inference turn, packaged-app launch, and installer/package build
+remain unverified. Do not describe this integration as production-qualified
+until those checks pass.

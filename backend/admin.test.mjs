@@ -762,6 +762,16 @@ exit 8
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     assert.equal(auth && auth.state, 'connected');
+    const selected = await fetch(`${server.origin}/api/settings/harness`, {
+      method: 'POST', headers, body: JSON.stringify({ provider, model: null, fast: false, mode: 'solo' }),
+    });
+    const selectedBody = await selected.json();
+    assert.equal(selected.status, 200, JSON.stringify(selectedBody));
+    assert.equal(selectedBody.harness.model, 'claude-sonnet-5[1m]');
+    const invalidModel = await fetch(`${server.origin}/api/settings/harness`, {
+      method: 'POST', headers, body: JSON.stringify({ provider, model: 'not-a-claude-model', mode: 'solo' }),
+    });
+    assert.equal(invalidModel.status, 400, 'explicit unsupported models must remain rejected');
     assert.doesNotMatch(server.logs.join(''), /fixture-completion-code|test-state/);
   } finally {
     await stopServer(server);
