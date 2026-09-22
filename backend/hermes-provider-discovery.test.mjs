@@ -29,6 +29,11 @@ with tempfile.TemporaryDirectory(prefix='mia-provider-regression-') as directory
     os.environ['HERMES_HOME'] = str(launch)
     shutil.copytree(sys.argv[2], secondary / 'plugins' / name)
     import providers
+    from hermes_cli import models
+    from hermes_cli import model_switch_providers as picker
+    from hermes_cli import auth
+    from types import SimpleNamespace
+    from unittest.mock import patch
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
     from hermes_cli.auth import resolve_provider
     def bound(home, fn):
@@ -43,6 +48,21 @@ with tempfile.TemporaryDirectory(prefix='mia-provider-regression-') as directory
     shutil.copytree(sys.argv[2], late / 'plugins' / name)
     assert bound(late, lambda: providers.get_provider_profile(name)) is not None
     assert bound(secondary, lambda: providers.get_provider_profile(name).get_model_context_length('sonnet')) == 250000
+    def picker_rows():
+        found = []
+        build = SimpleNamespace(seen_slugs=set(), excluded=set(), current_provider='', curated={},
+                                non_blocking_catalogs=True,
+                                add_builtin_row=lambda slug, *a, **kw: found.append(slug))
+        picker._lap_canonical_rows(build)
+        return found
+    with patch.object(picker, '_auth_store_has_provider', return_value=False), \\
+         patch.object(picker, '_pool_usable', return_value=False), \\
+         patch.object(picker, '_has_aws_sdk_creds_for_listing', return_value=False), \\
+         patch.object(auth, 'get_external_process_provider_status', side_effect=lambda slug: {'configured': slug == name}), \\
+         patch.object(picker, '_live_or_curated_ids', return_value=['fixture-model']):
+        assert name not in picker_rows()
+        assert name in bound(secondary, picker_rows)
+        assert name not in picker_rows()
     print('PASS')
 `;
   assert.equal(execFileSync(python, ['-c', source, root, plugin], {

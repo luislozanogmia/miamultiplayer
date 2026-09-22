@@ -85,11 +85,19 @@ const PACKAGED_RUNTIME_ROOT = app.isPackaged ? path.join(process.resourcesPath, 
 const PACKAGED_HERMES_BIN = PACKAGED_RUNTIME_ROOT
   ? runtimeLauncherPath(path.join(PACKAGED_RUNTIME_ROOT, "bin"), "hermes")
   : "";
+function developmentHermesBinary(env = process.env, exists = fs.existsSync, platform = process.platform) {
+  const explicit = env.MIAOS_HERMES_BIN || env.HERMES_BIN;
+  if (explicit) return String(explicit).trim();
+  // A bare dev launch must use the installed Mia runtime, not an unrelated
+  // personal Hermes checkout. Its wrapper selects the bundled Python too.
+  const bundled = "/Applications/Mia.app/Contents/Resources/runtime/bin/hermes";
+  if (platform === "darwin" && exists(bundled)) return bundled;
+  const personal = path.join(os.homedir(), ".local", "bin", "hermes");
+  return exists(personal) ? personal : "";
+}
 const HERMES_BIN = String(app.isPackaged
   ? PACKAGED_HERMES_BIN
-  : (process.env.MIAOS_HERMES_BIN || process.env.HERMES_BIN
-    || (() => { const p = path.join(os.homedir(), ".local", "bin", "hermes"); return fs.existsSync(p) ? p : ""; })()
-  )).trim();
+  : developmentHermesBinary()).trim();
 
 function isEngineeringRoot(candidate) {
   return Boolean(candidate)
@@ -2286,6 +2294,7 @@ app.on("window-all-closed", () => {
 });
 
 module.exports = {
+  developmentHermesBinary,
   completeClaudeAuthCallback,
   createDevelopmentMenu,
   createApplicationMenuTemplate,
