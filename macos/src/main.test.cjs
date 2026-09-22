@@ -231,6 +231,15 @@ test("Claude uses its native credential store unless a custom config is explicit
   assert.doesNotMatch(source, /CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR:[\s\S]{0,140}path\.join\(app\.getPath\("home"\), "\.claude"\)/);
 });
 
+test("bare macOS dev launches prefer Mia's bundled Hermes and preserve explicit overrides", () => {
+  const main = loadMain();
+  const bundled = '/Applications/Mia.app/Contents/Resources/runtime/bin/hermes';
+  assert.equal(main.developmentHermesBinary({}, () => true, 'darwin'), bundled);
+  assert.equal(main.developmentHermesBinary({HERMES_BIN:'/custom/hermes'}, () => true, 'darwin'), '/custom/hermes');
+  assert.equal(main.developmentHermesBinary({}, () => false, 'darwin'), '');
+  assert.notEqual(main.developmentHermesBinary({}, () => true, 'linux'), bundled);
+});
+
 test("Claude CLI discovery skips an unreadable PATH entry", () => {
   const main = loadMain();
   const originalPath = process.env.PATH;
