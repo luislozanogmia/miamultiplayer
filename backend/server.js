@@ -3844,6 +3844,29 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
   return res.status(200).json({ harness: preference });
 });
 
+// Adds a provider to the chat picker without changing the saved default.
+// The picker's Connect links use this after setup confirms the credential,
+// so connecting a second provider never reloads the app or switches models.
+app.post('/api/settings/harness/connected', requireAuth, async (req, res) => {
+  const owner = String(req.userEmail || '').trim().toLowerCase();
+  let provider = String((req.body || {}).provider || '').trim().toLowerCase();
+  if (provider === 'managed-router' || provider === 'mia-router') provider = MANAGED_ROUTER_HERMES_PROVIDER;
+  if (!HERMES_STATUS_PROVIDERS.has(provider)) {
+    return res.status(400).json({ error: 'unsupported provider' });
+  }
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  if (hermesDisconnectedProviders.has(provider) || harnessProviderDisconnectedForUser(settings, owner, provider)) {
+    return res.status(409).json({ error: 'That provider is not connected yet.' });
+  }
+  const connected = provider === CLAUDE_SUBSCRIPTION_PROVIDER
+    ? (await runClaudeSubscriptionStatus()).loggedIn
+    : (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterProvisionedEmails.has(owner))
+      || await runHermesAuthStatus(provider);
+  if (!connected) return res.status(409).json({ error: 'That provider is not connected yet.' });
+  setHarnessProviderConnected(owner, provider, true);
+  return res.status(200).json({ ok: true, provider });
+});
+
 // Mia only brokers the Hermes-owned device flow for subscription choices.
 // Hermes performs the OAuth exchange and stores the credential in its own auth
 // store; no token or raw CLI output is returned.
