@@ -39,6 +39,8 @@ const { execFile, spawn } = require('child_process');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const { verifyToken: verifyClerkToken } = require('@clerk/backend');
+const { resolveClerkConfig, clerkClaimsProfile } = require('./clerk-config');
+const { buildPageCsp, replacePageCsp } = require('../frontend/csp-policy.cjs');
 
 const db = require('./db');
 const { preferredName, openingMessage, nameAnswer, NEWS_INTRO, newsBriefing } = require('./onboarding-chat');
@@ -174,9 +176,8 @@ const MIAOS_NO_AUTH = /^(1|true)$/i.test(process.env.MIAOS_NO_AUTH || '');
 // Mia's own Clerk instance ships as the built-in default so any checkout can
 // join the hosted ecosystem by signing in. These are Clerk *public* values —
 // publishable key, issuer, JWKS public key — the client half of an API call
-// that does nothing without a real sign-in. All admin/server configuration
-// lives outside this repo. A fork overrides them with its own instance via
-// env, or opts out entirely with MIAOS_CLERK_AUTH=0 / MIAOS_NO_AUTH=1.
+// that does nothing without a real sign-in. A custom instance is accepted
+// only as one complete tuple so production and development values cannot mix.
 const MIA_CLERK_DEFAULTS = Object.freeze({
   publishableKey: 'pk_test_ZmFpdGhmdWwtZHJ1bS0zMzMuY2xlcmsuYWNjb3VudHMuZGV2JA',
   issuer: 'https://faithful-drum-333.clerk.accounts.dev',
@@ -191,16 +192,14 @@ const MIA_CLERK_DEFAULTS = Object.freeze({
     'UQIDAQAB',
     '-----END PUBLIC KEY-----',
   ].join('\n'),
+  oauthCallbackOrigin: 'https://clerk.shared.lcl.dev',
 });
-const CLERK_PUBLISHABLE_KEY = String(process.env.CLERK_PUBLISHABLE_KEY || '').trim()
-  || MIA_CLERK_DEFAULTS.publishableKey;
-const CLERK_JWT_KEY = String(process.env.CLERK_JWT_KEY || '').trim()
-  || MIA_CLERK_DEFAULTS.jwtKey;
-const CLERK_ISSUER = String(process.env.CLERK_ISSUER || '').trim()
-  || MIA_CLERK_DEFAULTS.issuer;
-const MIAOS_CLERK_AUTH = /^(1|true|)$/i.test(String(process.env.MIAOS_CLERK_AUTH || '').trim())
-  && !MIAOS_NO_AUTH
-  && Boolean(CLERK_PUBLISHABLE_KEY && CLERK_JWT_KEY && CLERK_ISSUER);
+const CLERK_CONFIG = resolveClerkConfig(process.env, MIA_CLERK_DEFAULTS);
+const CLERK_PUBLISHABLE_KEY = CLERK_CONFIG.publishableKey;
+const CLERK_JWT_KEY = CLERK_CONFIG.jwtKey;
+const CLERK_ISSUER = CLERK_CONFIG.issuer;
+const MIAOS_CLERK_AUTH = CLERK_CONFIG.enabled;
+const MIAOS_PAGE_CSP = buildPageCsp(CLERK_CONFIG.issuerOrigin);
 const CLERK_SUBJECT_META_KEY = 'clerk.installation.subject';
 const CLERK_EMAIL_META_KEY = 'clerk.installation.email';
 const CLERK_NAME_META_KEY = 'clerk.installation.name';
@@ -1352,15 +1351,10 @@ app.post('/api/clerk/session', async (req, res) => {
   } catch (_error) {
     return res.status(401).json({ error: 'clerk_token_invalid' });
   }
-  if (!claims || claims.iss !== CLERK_ISSUER || typeof claims.sub !== 'string' || !claims.sub) {
-    return res.status(401).json({ error: 'clerk_token_invalid' });
-  }
-
-  const primaryEmail = String(claims.primaryEmail || '').trim().toLowerCase();
-  const displayName = String(claims.fullName || '').trim();
-  if (!primaryEmail || !primaryEmail.includes('@')) {
-    return res.status(422).json({ error: 'clerk_primary_email_missing' });
-  }
+  const profile = clerkClaimsProfile(claims, CLERK_ISSUER);
+  if (profile.error === 'clerk_token_invalid') return res.status(401).json({ error: profile.error });
+  if (profile.error) return res.status(422).json({ error: profile.error });
+  const { primaryEmail, displayName } = profile;
 
   const linked = clerkAccountProfile();
   if (linked && linked.subject !== claims.sub) {
@@ -6797,8 +6791,13 @@ app.get('/showcase', (req, res) => {
 if (STATIC_DIR) {
   app.use('/vendor/clerk-js', express.static(path.dirname(require.resolve('@clerk/clerk-js'))));
   app.use('/vendor/clerk-ui', express.static(path.join(path.dirname(require.resolve('@clerk/ui/package.json')), 'dist')));
+  const sendIndex = (_req, res) => {
+    const html = fs.readFileSync(path.join(STATIC_DIR, 'index.html'), 'utf8');
+    res.setHeader('Content-Security-Policy', MIAOS_PAGE_CSP);
+    res.type('html').send(replacePageCsp(html, MIAOS_PAGE_CSP));
+  };
+  app.get(['/', '/index.html'], sendIndex);
   app.use(express.static(STATIC_DIR));
-  app.get('/', (req, res) => res.sendFile(path.join(STATIC_DIR, 'index.html')));
 }
 
 // ---------- one-time boot migration: pre-workspace rows -> DEFAULT_OWNER ----------

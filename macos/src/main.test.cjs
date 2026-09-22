@@ -4,12 +4,14 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const Module = require("node:module");
+const os = require("node:os");
 const path = require("node:path");
 
 test("desktop shell uses the Mia application name and Linux icon", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /app\.setName\("Mia"\)/);
   assert.doesNotMatch(source, /app\.setName\("MiaOS"\)/);
+  assert.ok(source.indexOf('app.setName("Mia")') < source.indexOf('resolveClerkConfig(desktopClerkEnvironment())'));
   assert.match(source, /process\.platform === "linux"[\s\S]{0,120}MIA_LINUX_ICON_PATH/);
   assert.match(source, /icon: fs\.existsSync\(windowIconPath\) \? windowIconPath : undefined/);
 });
@@ -38,6 +40,47 @@ test("only Clerk's exact Google OAuth callback stays in the Electron session", (
     "https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=http%3A%2F%2Fclerk.shared.lcl.dev%2Fv1%2Foauth_callback&response_type=code",
     "https://accounts.google.com:444/o/oauth2/auth?redirect_uri=https%3A%2F%2Fclerk.shared.lcl.dev%2Fv1%2Foauth_callback&response_type=code",
   ]) assert.equal(main.isClerkGoogleOAuthUrl(blocked), false, blocked);
+});
+
+test("production Clerk OAuth accepts only the configured exact FAPI callback", () => {
+  const clerkHost = "clerk.example.com";
+  const main = loadMain({
+    CLERK_PUBLISHABLE_KEY: `${["pk", "live"].join("_")}_${Buffer.from(`${clerkHost}$`).toString("base64url")}`,
+    CLERK_JWT_KEY: "public-key-fixture",
+    CLERK_ISSUER: `https://${clerkHost}`,
+  });
+  const googleUrl = callback => {
+    const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    url.searchParams.set("redirect_uri", `${callback}/v1/oauth_callback`);
+    url.searchParams.set("response_type", "code");
+    return url.href;
+  };
+  assert.equal(main.isClerkGoogleOAuthUrl(googleUrl(`https://${clerkHost}`)), true);
+  assert.equal(main.isClerkGoogleOAuthUrl(googleUrl("https://clerk.shared.lcl.dev")), false);
+  assert.equal(main.isClerkGoogleOAuthUrl(googleUrl("https://clerk.example.com.attacker.test")), false);
+});
+
+test("desktop Clerk configuration uses dotenv multiline PEM parsing", () => {
+  const clerkHost = "clerk.example.com";
+  const jwtKey = "-----BEGIN PUBLIC KEY-----\nmultiline-fixture\n-----END PUBLIC KEY-----";
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-clerk-env-test-"));
+  const envFile = path.join(tempDir, ".env.local");
+  fs.writeFileSync(envFile, [
+    `CLERK_PUBLISHABLE_KEY=${["pk", "live"].join("_")}_${Buffer.from(`${clerkHost}$`).toString("base64url")}`,
+    `CLERK_ISSUER=https://${clerkHost}`,
+    `CLERK_JWT_KEY="${jwtKey}"`,
+  ].join("\n"));
+  try {
+    const requireBackend = Module.createRequire(path.join(__dirname, "../../backend/server.js"));
+    assert.equal(requireBackend("dotenv").parse(fs.readFileSync(envFile, "utf8")).CLERK_JWT_KEY, jwtKey);
+    const main = loadMain({ MIAOS_ENV_FILE: envFile });
+    const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    url.searchParams.set("redirect_uri", `https://${clerkHost}/v1/oauth_callback`);
+    url.searchParams.set("response_type", "code");
+    assert.equal(main.isClerkGoogleOAuthUrl(url.href), true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("Clerk Google navigation moves into the shimmed popup and hands back the session", () => {
@@ -328,7 +371,12 @@ test("all privileged main-window IPC checks include renderer URL validation", ()
   }
 });
 
-function loadMain() {
+function loadMain(environment = {}) {
+  const previousEnvironment = new Map();
+  for (const [name, value] of Object.entries(environment)) {
+    previousEnvironment.set(name, process.env[name]);
+    process.env[name] = value;
+  }
   const electron = {
     app: {
       setName() {},
@@ -376,6 +424,10 @@ function loadMain() {
     return { ...require("./main.cjs"), __electron: electron };
   } finally {
     Module._load = load;
+    for (const [name, value] of previousEnvironment) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 }
 
