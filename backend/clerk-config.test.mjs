@@ -6,11 +6,31 @@ function publishableKey(environment, hostname) {
   return `pk_${environment}_${Buffer.from(`${hostname}$`).toString('base64url')}`;
 }
 
-test('Clerk development defaults retain Mia issuer and shared OAuth callback', () => {
-  const resolved = config.resolveClerkConfig({});
-  assert.equal(resolved.environment, 'development');
-  assert.equal(resolved.issuer, config.DEFAULT_CLERK_CONFIG.issuer);
-  assert.equal(resolved.oauthCallbackOrigin, 'https://clerk.shared.lcl.dev');
+test('built-in Clerk instance defaults to production; the test switch selects development', () => {
+  const production = config.resolveClerkConfig({});
+  assert.equal(production.environment, 'production');
+  assert.equal(production.issuer, config.CLERK_INSTANCES.production.issuer);
+  assert.equal(production.oauthCallbackOrigin, production.issuer);
+  assert.match(production.jwtKey, /^-----BEGIN PUBLIC KEY-----\n[\s\S]+\n-----END PUBLIC KEY-----$/);
+
+  const testInstance = config.resolveClerkConfig({ MIAOS_CLERK_INSTANCE: ' Test ' });
+  assert.equal(testInstance.environment, 'development');
+  assert.equal(testInstance.issuer, config.CLERK_INSTANCES.test.issuer);
+  assert.equal(testInstance.oauthCallbackOrigin, 'https://clerk.shared.lcl.dev');
+  assert.equal(testInstance.jwtKey, config.CLERK_INSTANCES.test.jwtKey);
+
+  assert.throws(() => config.resolveClerkConfig({ MIAOS_CLERK_INSTANCE: 'staging' }), /must be "production" or "test"/);
+});
+
+test('a complete CLERK_* tuple overrides the built-in instance switch', () => {
+  const resolved = config.resolveClerkConfig({
+    MIAOS_CLERK_INSTANCE: 'test',
+    CLERK_PUBLISHABLE_KEY: publishableKey('live', 'clerk.example.com'),
+    CLERK_JWT_KEY: 'public-key-fixture',
+    CLERK_ISSUER: 'https://clerk.example.com',
+  });
+  assert.equal(resolved.issuer, 'https://clerk.example.com');
+  assert.equal(resolved.overridden, true);
 });
 
 test('complete production tuple uses one exact FAPI origin for issuer and OAuth callback', () => {

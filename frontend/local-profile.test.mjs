@@ -13,3 +13,14 @@ test('local OSS profiles hide their internal principal and sign-out controls', a
   assert.match(source, /if\(chatAcctName\) chatAcctName\.textContent = displayNameForEmail\(currentUser\)/);
   assert.match(source, /if\(chatAcctName\)[\s\S]*renderChatHeaderBar\(\);\s*renderChatThread\(\);/);
 });
+
+test('sign-out controls call the sign-out flow directly instead of relaying a click', async () => {
+  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+
+  // A relayed click on #logoutBtn is swallowed by the browser drawer's
+  // capture-phase outside-click guard, so Log out would only close the drawer.
+  assert.doesNotMatch(source, /#logoutBtn'\)\.click\(\)|original\.click\(\)/);
+  assert.match(source, /el\('#logoutBtn'\)\.addEventListener\('click', signOutOfMia\)/);
+  assert.match(source, /closeSettingsDrawer\(\);\s*signOutOfMia\(\);/);
+  assert.match(source, /account\.setAttribute\('aria-expanded', 'false'\);\s*signOutOfMia\(\);/);
+});

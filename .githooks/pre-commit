@@ -26,6 +26,11 @@ done <<< "$STAGED_FILES"
 # 3. Common credential shapes in added lines (skip the leak-scanner test file,
 # whose fixtures are deliberately fake).
 DIFF_NO_FIXTURES=$(git diff --staged --unified=0 -- . ':(exclude)macos/scripts/package-mac.test.cjs' ':(exclude).githooks/pre-commit')
+# Mia's own production Clerk *publishable* key is a public identifier that
+# ships in the client (CLAUDE.md, rule 3). Human-approved against the Clerk
+# dashboard; allow exactly this value, every other pk_live_ stays blocked.
+MIA_CLERK_PK_LIVE='pk_live_Y2xlcmsubWlhbXVsdGlwbGF5ZXIuY29tJA=='
+DIFF_NO_FIXTURES=${DIFF_NO_FIXTURES//"$MIA_CLERK_PK_LIVE"/}
 if grep -qE '^\+.*(sk-[A-Za-z0-9]{20,}|sk_live_|pk_live_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY)' <<< "$DIFF_NO_FIXTURES"; then
   fail "staged changes contain what looks like a credential/private key."
 fi
