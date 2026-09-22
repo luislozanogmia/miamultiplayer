@@ -3319,8 +3319,8 @@ function startClaudeSubscriptionAuth(email) {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       DISABLE_TELEMETRY: '1',
       DISABLE_ERROR_REPORTING: '1',
-      // Prevent Claude Code from launching a system browser. Mia opens the
-      // URL it prints in its own native browser instead.
+      // Prevent Claude Code from launching a system browser. Mia forwards the
+      // URL it prints into the desktop's isolated provider-auth popup.
       BROWSER: path.join(MIAOS_HERMES_GUARD_BIN, 'open'),
     });
     const configDir = String(process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR || '').trim();
@@ -4006,7 +4006,19 @@ app.get('/api/settings/harness/auth/redirect', requireGlobalSettingsAdmin, async
   if (!HERMES_AUTH_PROVIDERS.has(provider)) {
     return res.status(400).type('text/plain').send('Unsupported harness sign-in provider. Return to Mia and try again.');
   }
-  const auth = await waitForHermesAuthPrompt(startHermesAuth(req.userEmail, provider), HERMES_AUTH_PROMPT_WAIT_MS);
+  let auth;
+  if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
+    const status = await runClaudeSubscriptionStatus();
+    if (!status.loggedIn && !status.available) {
+      return res.status(409).type('text/plain').send(status.detail || 'Claude Code is unavailable. Return to Mia and try again.');
+    }
+    if (status.loggedIn) {
+      return res.status(200).type('text/plain').send('Claude is already connected. You can close this window.');
+    }
+    auth = await waitForHermesAuthPrompt(startClaudeSubscriptionAuth(req.userEmail), HERMES_AUTH_PROMPT_WAIT_MS);
+  } else {
+    auth = await waitForHermesAuthPrompt(startHermesAuth(req.userEmail, provider), HERMES_AUTH_PROMPT_WAIT_MS);
+  }
   if (auth && auth.verificationUrl) return res.redirect(302, auth.verificationUrl);
   return res.status(503).type('text/plain').send('Unable to start sign-in. Return to Mia and try again.');
 });

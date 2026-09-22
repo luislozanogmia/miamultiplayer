@@ -1020,7 +1020,7 @@
     {id:'upstage', label:'Upstage Solar'}
   ];
   var HERMES_AUTH_NAMES = {
-    'claude-subscription-directsdk-experimental': 'Claude Subscription DirectSDK (Experimental)',
+    'claude-subscription-directsdk-experimental': 'Claude',
     'openai-codex': 'ChatGPT',
     'xai-oauth': 'Grok'
   };
@@ -1051,7 +1051,6 @@
   var harnessAuthGeneration = 0;
   var harnessAuthAwaitingSave = false;
   var harnessAuthSaveInProgress = false;
-  var harnessClaudeOpenedUrl = '';
   var harnessConnectionPending = null;
   var harnessConnectionValidationPending = false;
   var harnessConnectionState = {
@@ -1554,32 +1553,9 @@
     return generation === harnessAuthGeneration && provider === harnessOnboardingState.provider;
   }
 
-  function openClaudeAuthInMiaBrowser(url){
-    if(!url) return false;
-    if(!window.miaNativeBrowser || !window.miaNativeBrowser.openTab){
-      var unavailable = el('#harnessOnboardingError');
-      if(unavailable) unavailable.textContent = 'Open this setup in Mia to use its secure browser.';
-      return false;
-    }
-    if(url === harnessClaudeOpenedUrl){
-      openWebBrowserTool();
-      return true;
-    }
-    harnessClaudeOpenedUrl = url;
-    Promise.resolve(window.miaNativeBrowser.openTab(url)).then(function(){
-      openWebBrowserTool();
-    }).catch(function(){
-      harnessClaudeOpenedUrl = '';
-      var error = el('#harnessOnboardingError');
-      if(error) error.textContent = 'Mia could not open Claude sign-in. Try again.';
-    });
-    return true;
-  }
-
   function cancelHarnessAuthFlow(provider){
     var activeProvider = provider || harnessOnboardingState.provider;
     stopHarnessAuthPolling();
-    harnessClaudeOpenedUrl = '';
     harnessAuthAwaitingSave = false;
     harnessConnectionPending = null;
     if(activeProvider !== 'claude-subscription-directsdk-experimental'){
@@ -1625,24 +1601,24 @@
       if(cancel) cancel.hidden = true;
       return;
     }
-    if(title) title.textContent = 'Connect ' + authName + ' through the harness';
+    if(title) title.textContent = 'Connect ' + authName;
     if(status){
       status.textContent = auth.state === 'starting'
-        ? 'The harness is preparing a secure ' + authName + ' sign-in…'
+        ? 'Preparing sign-in…'
         : (auth.state === 'waiting'
           ? (auth.provider === 'claude-subscription-directsdk-experimental'
-            ? 'Finish in Mia’s browser. If Claude shows a one-time code, copy it, close the browser, and paste it below.'
-            : 'Open ' + authName + ' and enter the code below. The harness is waiting for confirmation.')
+            ? 'Finish in the sign-in window. Enter a one-time code below only if Claude shows one.'
+            : 'Finish in the sign-in window and enter the code shown below.')
           : (auth.state === 'completing'
-            ? 'Claude is verifying the completed sign-in…'
+            ? 'Verifying sign-in…'
             : (auth.state === 'connected'
-              ? authName + ' is connected through the harness.'
-              : (auth.error || 'The harness could not complete sign-in.'))));
+              ? authName + ' is connected.'
+              : (auth.error || 'Sign-in could not be completed.'))));
     }
     if(link){
       link.hidden = !auth.verificationUrl;
       link.textContent = 'Open ' + authName + ' sign-in';
-      if(auth.verificationUrl) link.href = auth.verificationUrl;
+      if(auth.verificationUrl) link.href = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(auth.provider || harnessOnboardingState.provider);
     }
     if(codeWrap){
       codeWrap.hidden = !auth.userCode;
@@ -1667,14 +1643,8 @@
         if(!harnessAuthFlowIsCurrent(generation, provider)) return;
         var auth = res.data && res.data.auth;
         renderHarnessAuth(auth);
-        if(provider === 'claude-subscription-directsdk-experimental' && auth &&
-          ['starting', 'waiting'].indexOf(auth.state) !== -1 && auth.verificationUrl &&
-          auth.verificationUrl !== harnessClaudeOpenedUrl){
-          openClaudeAuthInMiaBrowser(auth.verificationUrl);
-        }
         if(auth && auth.state === 'connected'){
           stopHarnessAuthPolling();
-          if(auth.provider === 'claude-subscription-directsdk-experimental') closeLocalBrowser();
           if(harnessAuthAwaitingSave) saveHarnessSelection();
           return;
         }
@@ -1899,7 +1869,6 @@
     // Multiplayer is upcoming: the card is disabled, so never restore it as the selection.
     if(harnessOnboardingState.mode === 'multiplayer') harnessOnboardingState.mode = 'solo';
     harnessAuthAwaitingSave = false;
-    harnessClaudeOpenedUrl = '';
     harnessConnectionPending = null;
     harnessConnectionValidationPending = true;
     stopHarnessAuthPolling();
@@ -2110,25 +2079,19 @@
     // Open a same-origin redirect from the user gesture. That route starts
     // the background harness flow and redirects this tab to the real provider
     // URL, avoiding popup blocking in the later polling callback.
-    if(authProvider !== 'claude-subscription-directsdk-experimental'){
-      var redirectUrl = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(authProvider);
-      try { window.open(redirectUrl, '_blank', 'noopener,noreferrer'); } catch(_) { /* visible link remains available */ }
-    }
+    var redirectUrl = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(authProvider);
+    try { window.open(redirectUrl, '_blank', 'noopener,noreferrer'); } catch(_) { /* visible link remains available */ }
     var authRequestGeneration = harnessAuthGeneration;
     api('/api/settings/harness/auth/start', {method:'POST', body:{provider:authProvider}}).then(function(res){
       if(!harnessAuthFlowIsCurrent(authRequestGeneration, authProvider)) return;
       var auth = res.data && res.data.auth;
       if(res.status !== 200 || !auth) throw new Error((res.data && res.data.error) || 'Could not start harness sign-in');
       renderHarnessAuth(auth);
-      if(authProvider === 'claude-subscription-directsdk-experimental' && auth.verificationUrl){
-        openClaudeAuthInMiaBrowser(auth.verificationUrl);
-      }
       if(auth.state === 'connected'){
         harnessConnectionState[authProvider] = true;
         harnessConnectionPending = null;
         renderHarnessConnectionActions();
         stopHarnessAuthPolling();
-        if(authProvider === 'claude-subscription-directsdk-experimental') closeLocalBrowser();
         saveHarnessSelection();
         return;
       }
@@ -2143,11 +2106,6 @@
       renderHarnessConnectionActions();
       renderHarnessOnboarding();
     });
-  });
-  el('#harnessAuthLink').addEventListener('click', function(event){
-    if(harnessOnboardingState.provider !== 'claude-subscription-directsdk-experimental') return;
-    event.preventDefault();
-    openClaudeAuthInMiaBrowser(event.currentTarget.href);
   });
   el('#harnessAuthCompletion').addEventListener('submit', function(event){
     event.preventDefault();

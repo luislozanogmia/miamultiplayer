@@ -1146,6 +1146,31 @@ function isClerkGoogleOAuthUrl(value) {
   }
 }
 
+function harnessAuthRedirectProvider(value, expectedBackendUrl = backendUrl) {
+  try {
+    const url = new URL(value);
+    if (!expectedBackendUrl || !hasExactOrigin(url.toString(), expectedBackendUrl)) return "";
+    if (url.pathname !== "/api/settings/harness/auth/redirect") return "";
+    const provider = url.searchParams.get("provider") || "";
+    return ["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"].includes(provider)
+      ? provider : "";
+  } catch (_) { return ""; }
+}
+
+function isHarnessAuthNavigation(value, provider) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
+    if (!["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"].includes(provider)) return false;
+    const hosts = provider === "claude-subscription-directsdk-experimental"
+      ? new Set(["claude.com", "claude.ai", "accounts.google.com"])
+      : (provider === "openai-codex"
+        ? new Set(["auth.openai.com", "chatgpt.com", "accounts.google.com"])
+        : new Set(["accounts.x.ai", "auth.x.ai", "x.ai", "accounts.google.com"]));
+    return hosts.has(url.hostname);
+  } catch (_) { return false; }
+}
+
 function hasExactOrigin(value, expected) {
   try {
     return new URL(value).origin === new URL(expected).origin;
@@ -1500,7 +1525,7 @@ function openClerkOAuthPopup(parent, url, expectedBackendUrl) {
   return popup;
 }
 
-function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false) {
+function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false, harnessAuthProvider = "") {
   const isLocal = url => (expectedBackendUrl || backendUrl) && hasExactOrigin(url, expectedBackendUrl || backendUrl);
   // Windows created for the OAuth flow carry the Chrome-identity preload;
   // ordinary windows do not, so a flow starting in them must move to a popup.
@@ -1521,7 +1546,33 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
     } catch (_) { return false; }
   };
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (isLocal(url)) return { action: "allow" };
+    if (harnessAuthProvider) {
+      if (isHarnessAuthNavigation(url, harnessAuthProvider)) {
+        setImmediate(() => {
+          try { window.loadURL(url); } catch (_) { /* popup may have closed */ }
+        });
+      }
+      return { action: "deny" };
+    }
+    const provider = harnessAuthRedirectProvider(url, expectedBackendUrl);
+    if (isLocal(url)) return provider ? {
+      action: "allow",
+      overrideBrowserWindowOptions: {
+        parent: window,
+        modal: false,
+        show: true,
+        autoHideMenuBar: true,
+        width: 560,
+        height: 720,
+        webPreferences: {
+          session: window.webContents.session,
+          preload: path.join(__dirname, "google-oauth-preload.cjs"),
+          contextIsolation: true,
+          sandbox: true,
+          nodeIntegration: false,
+        },
+      },
+    } : { action: "allow" };
     // Clerk's Google flow must stay in Electron's session so its callback can
     // return the authenticated cookie to Mia. Opening this URL in the user's
     // regular browser strands the session there and leaves Mia signed out.
@@ -1551,14 +1602,24 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
     return { action: "deny" };
   });
   window.webContents.on("did-create-window", (child, details) => {
-    configureNavigation(child, expectedBackendUrl, isClerkGoogleOAuthUrl(details.url));
+    configureNavigation(
+      child,
+      expectedBackendUrl,
+      isClerkGoogleOAuthUrl(details.url),
+      harnessAuthRedirectProvider(details.url, expectedBackendUrl)
+    );
   });
   window.webContents.on("did-navigate", (_event, url) => {
     if (isLocal(url)) clerkFlowActive = false;
   });
-  window.webContents.on("will-navigate", (event) => {
-    const { url } = event;
+  const guardNavigation = (event, targetUrl) => {
+    const url = targetUrl || event.url;
     if (isLocal(url)) return;
+    if (harnessAuthProvider && isHarnessAuthNavigation(url, harnessAuthProvider)) return;
+    if (harnessAuthProvider) {
+      event.preventDefault();
+      return;
+    }
     // A Clerk Google sign-in that starts as an in-place redirect must move
     // into the shimmed popup: this window's preload lacks the Chrome-identity
     // shims, so Google refuses it as an insecure browser.
@@ -1576,7 +1637,9 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       return;
     }
     event.preventDefault();
-  });
+  };
+  window.webContents.on("will-navigate", guardNavigation);
+  if (harnessAuthProvider) window.webContents.on("will-redirect", guardNavigation);
 }
 
 function invokeDevelopmentAction(label, action) {
@@ -2144,6 +2207,8 @@ module.exports = {
   isNativeArtifactTarget,
   hasExactOrigin,
   isClerkGoogleOAuthUrl,
+  harnessAuthRedirectProvider,
+  isHarnessAuthNavigation,
   configureNavigation,
   isTrustedMainWindowUrl,
   miaosWorkspacePath,

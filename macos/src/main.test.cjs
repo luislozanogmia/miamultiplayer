@@ -80,6 +80,57 @@ test("Clerk Google navigation moves into the shimmed popup and hands back the se
   assert.equal(popup.closed, true);
 });
 
+test("provider auth redirects use a sandboxed child popup and never navigate the main window", () => {
+  const { EventEmitter } = require("node:events");
+  const main = loadMain();
+  const contents = new EventEmitter();
+  contents.session = { id: "main-session" };
+  contents.setWindowOpenHandler = handler => { contents.popup = handler; };
+  const parent = { webContents: contents };
+  main.configureNavigation(parent, "http://localhost:4871");
+
+  const redirect = "http://localhost:4871/api/settings/harness/auth/redirect?provider=claude-subscription-directsdk-experimental";
+  const decision = contents.popup({ url: redirect });
+  assert.equal(decision.action, "allow");
+  assert.equal(decision.overrideBrowserWindowOptions.webPreferences.nodeIntegration, false);
+  assert.equal(decision.overrideBrowserWindowOptions.webPreferences.sandbox, true);
+  assert.equal(decision.overrideBrowserWindowOptions.webPreferences.session, contents.session);
+  assert.match(decision.overrideBrowserWindowOptions.webPreferences.preload, /google-oauth-preload\.cjs$/);
+
+  const childContents = new EventEmitter();
+  childContents.session = contents.session;
+  childContents.setWindowOpenHandler = handler => { childContents.popup = handler; };
+  const child = { webContents: childContents, loadedUrls: [], loadURL(url) { this.loadedUrls.push(url); } };
+  contents.emit("did-create-window", child, { url: redirect });
+  const navigate = (eventName, url) => {
+    let blocked = false;
+    const event = { url, preventDefault() { blocked = true; } };
+    if (eventName === "will-redirect") childContents.emit(eventName, event, url);
+    else childContents.emit(eventName, event);
+    return !blocked;
+  };
+  assert.equal(navigate("will-navigate", "https://claude.com/cai/oauth/authorize?state=fixture"), true);
+  assert.equal(navigate("will-navigate", "https://accounts.google.com/v3/signin/identifier"), true);
+  assert.equal(navigate("will-redirect", "https://claude.ai/oauth/authorize?state=fixture"), true);
+  assert.equal(navigate("will-navigate", "https://claude.com:444/cai/oauth/authorize"), false);
+  assert.equal(navigate("will-navigate", "https://claude.com.attacker.test/"), false);
+  assert.equal(navigate("will-redirect", "https://example.com/steal"), false);
+  assert.equal(navigate("will-navigate", "file:///tmp/private"), false);
+  assert.deepEqual(childContents.popup({ url: "https://example.com/escape" }), { action: "deny" });
+  assert.deepEqual(childContents.popup({ url: "https://claude.com/cai/oauth/continue" }), { action: "deny" });
+});
+
+test("provider auth URL allowlists cover existing providers and fail closed", () => {
+  const main = loadMain();
+  assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com/authorize", "openai-codex"), true);
+  assert.equal(main.isHarnessAuthNavigation("https://auth.x.ai/oauth", "xai-oauth"), true);
+  assert.equal(main.isHarnessAuthNavigation("https://accounts.x.ai/login", "xai-oauth"), true);
+  assert.equal(main.isHarnessAuthNavigation("https://claude.com/cai/oauth/authorize", "claude-subscription-directsdk-experimental"), true);
+  assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com:444/", "openai-codex"), false);
+  assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com/", "unknown"), false);
+  assert.equal(main.harnessAuthRedirectProvider("http://localhost:48710/api/settings/harness/auth/redirect?provider=openai-codex", "http://localhost:4871"), "");
+});
+
 test("packaged macOS runtime is self-contained and ignores ambient Hermes", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /app\.isPackaged\s*\?\s*PACKAGED_HERMES_BIN/);
