@@ -26,8 +26,8 @@ test("main-window trust uses exact parsed origins", () => {
   assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:48710/chat", "http://127.0.0.1:4871"), false);
 });
 
-test("only Clerk's exact Google OAuth callback stays in the Electron session", () => {
-  const main = loadMain();
+test("test Clerk instance accepts only Clerk's exact shared Google OAuth callback", () => {
+  const main = loadMain({ MIAOS_CLERK_INSTANCE: "test" });
   const valid = new URL("https://accounts.google.com/v3/signin/accountchooser");
   valid.searchParams.set("redirect_uri", "https://clerk.shared.lcl.dev/v1/oauth_callback");
   valid.searchParams.set("response_type", "code");
