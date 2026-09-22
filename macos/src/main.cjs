@@ -1157,11 +1157,39 @@ function harnessAuthRedirectProvider(value, expectedBackendUrl = backendUrl) {
   } catch (_) { return ""; }
 }
 
-function isHarnessAuthNavigation(value, provider) {
+function claudeAuthStartContract(value) {
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+    if (!["claude.com", "claude.ai"].includes(url.hostname)) return null;
+    if (!["/cai/oauth/authorize", "/oauth/authorize"].includes(url.pathname)) return null;
+    const redirect = new URL(url.searchParams.get("redirect_uri") || "");
+    const state = url.searchParams.get("state") || "";
+    if (redirect.origin !== "https://platform.claude.com"
+      || redirect.pathname !== "/oauth/code/callback"
+      || redirect.search || redirect.hash
+      || url.searchParams.get("code") !== "true"
+      || !state || state.length > 4096) return null;
+    return {
+      state,
+      redirectOrigin: redirect.origin,
+      redirectPath: redirect.pathname,
+    };
+  } catch (_) { return null; }
+}
+
+function isHarnessAuthNavigation(value, provider, contract = null) {
+  try {
+    const url = new URL(value);
     if (!["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"].includes(provider)) return false;
+    if (provider === "claude-subscription-directsdk-experimental" && contract) {
+      const stateMatches = url.searchParams.get("state") === contract.state;
+      if (url.protocol === "https:" && !url.username && !url.password && !url.port
+        && url.origin === contract.redirectOrigin && url.pathname === contract.redirectPath) {
+        return stateMatches;
+      }
+    }
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
     const hosts = provider === "claude-subscription-directsdk-experimental"
       ? new Set(["claude.com", "claude.ai", "accounts.google.com"])
       : (provider === "openai-codex"
@@ -1530,6 +1558,15 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   // Windows created for the OAuth flow carry the Chrome-identity preload;
   // ordinary windows do not, so a flow starting in them must move to a popup.
   const isOAuthPopup = clerkFlowActive;
+  let harnessAuthContract = null;
+  const isBoundHarnessAuthNavigation = value => {
+    if (harnessAuthProvider === "claude-subscription-directsdk-experimental") {
+      const start = claudeAuthStartContract(value);
+      if (start) harnessAuthContract = start;
+    }
+    if (!isHarnessAuthNavigation(value, harnessAuthProvider, harnessAuthContract)) return false;
+    return true;
+  };
   const isClerkFlowNavigation = value => {
     if (isClerkGoogleOAuthUrl(value)) {
       clerkFlowActive = true;
@@ -1547,7 +1584,7 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   };
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (harnessAuthProvider) {
-      if (isHarnessAuthNavigation(url, harnessAuthProvider)) {
+      if (isBoundHarnessAuthNavigation(url)) {
         setImmediate(() => {
           try { window.loadURL(url); } catch (_) { /* popup may have closed */ }
         });
@@ -1615,7 +1652,7 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   const guardNavigation = (event, targetUrl) => {
     const url = targetUrl || event.url;
     if (isLocal(url)) return;
-    if (harnessAuthProvider && isHarnessAuthNavigation(url, harnessAuthProvider)) return;
+    if (harnessAuthProvider && isBoundHarnessAuthNavigation(url)) return;
     if (harnessAuthProvider) {
       event.preventDefault();
       return;
@@ -2208,6 +2245,7 @@ module.exports = {
   hasExactOrigin,
   isClerkGoogleOAuthUrl,
   harnessAuthRedirectProvider,
+  claudeAuthStartContract,
   isHarnessAuthNavigation,
   configureNavigation,
   isTrustedMainWindowUrl,
