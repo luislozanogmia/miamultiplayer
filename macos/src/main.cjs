@@ -1571,18 +1571,20 @@ function harnessAuthPopupOptions(parent) {
   };
 }
 
-function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false, harnessAuthProvider = "", inheritedAuthContract = null) {
+function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false, harnessAuthProvider = "", inheritedAuthContract = null, nestedAuthPopup = false) {
   const isLocal = url => (expectedBackendUrl || backendUrl) && hasExactOrigin(url, expectedBackendUrl || backendUrl);
   // Windows created for the OAuth flow carry the Chrome-identity preload;
   // ordinary windows do not, so a flow starting in them must move to a popup.
   const isOAuthPopup = clerkFlowActive;
   let harnessAuthContract = inheritedAuthContract;
+  let mayLoadAuthBootstrap = !nestedAuthPopup;
   const isBoundHarnessAuthNavigation = value => {
     if (harnessAuthProvider === "claude-subscription-directsdk-experimental") {
       const start = claudeAuthStartContract(value);
       if (start && !harnessAuthContract) harnessAuthContract = start;
     }
     if (!isHarnessAuthNavigation(value, harnessAuthProvider, harnessAuthContract)) return false;
+    mayLoadAuthBootstrap = false;
     return true;
   };
   const isClerkFlowNavigation = value => {
@@ -1649,7 +1651,8 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       expectedBackendUrl,
       isClerkGoogleOAuthUrl(details.url),
       harnessAuthProvider || harnessAuthRedirectProvider(details.url, expectedBackendUrl),
-      harnessAuthContract
+      harnessAuthContract,
+      Boolean(harnessAuthProvider)
     );
   });
   window.webContents.on("did-navigate", (_event, url) => {
@@ -1657,6 +1660,8 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   });
   const guardNavigation = (event, targetUrl) => {
     const url = targetUrl || event.url;
+    if (harnessAuthProvider && mayLoadAuthBootstrap
+      && harnessAuthRedirectProvider(url, expectedBackendUrl) === harnessAuthProvider) return;
     if (harnessAuthProvider && isBoundHarnessAuthNavigation(url)) return;
     if (harnessAuthProvider) {
       event.preventDefault();
