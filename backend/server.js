@@ -2810,6 +2810,33 @@ function setHarnessProviderDisconnected(email, provider, disconnected) {
   db.saveSingleton(conn, 'settings', settings);
 }
 
+// Providers the user connected through Mia (setup, Settings → Access or the
+// picker's Connect links). Hermes can also report credentials that reached
+// it some other way, for example a GitHub CLI login read as Copilot; only
+// this record, the saved preference and the signed-in user's Mia Router
+// make a provider selectable in the chat picker.
+function harnessConnectedProvidersForUser(settings, email) {
+  const byUser = settings && settings.harnessConnectedByUser && typeof settings.harnessConnectedByUser === 'object'
+    ? settings.harnessConnectedByUser
+    : {};
+  const providers = byUser[String(email || '').trim().toLowerCase()];
+  return Array.isArray(providers) ? providers.slice() : [];
+}
+
+function setHarnessProviderConnected(email, provider, connected) {
+  const owner = String(email || '').trim().toLowerCase();
+  const id = String(provider || '').trim().toLowerCase();
+  if (!owner || !id) return;
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  if (!settings.harnessConnectedByUser || typeof settings.harnessConnectedByUser !== 'object') {
+    settings.harnessConnectedByUser = {};
+  }
+  const providers = new Set(harnessConnectedProvidersForUser(settings, owner));
+  if (connected) providers.add(id); else providers.delete(id);
+  settings.harnessConnectedByUser[owner] = Array.from(providers);
+  db.saveSingleton(conn, 'settings', settings);
+}
+
 // These are product-facing choices mapped to the provider names understood by
 // the Hermes service. Credentials remain in Hermes; Mia only selects the
 // provider route for the authenticated user's agent work.
@@ -3187,7 +3214,10 @@ function startHermesAuth(email, provider) {
     entry.child = null;
     entry.output = '';
     entry.state = state;
-    if (state === 'connected') hermesDisconnectedProviders.delete(provider);
+    if (state === 'connected') {
+      hermesDisconnectedProviders.delete(provider);
+      setHarnessProviderConnected(owner, provider, true);
+    }
     const cleanup = setTimeout(() => {
       if (harnessAuthByUser.get(owner) === entry) harnessAuthByUser.delete(owner);
     }, 10 * 60 * 1000);
@@ -3270,7 +3300,10 @@ function startClaudeSubscriptionAuth(email) {
     entry.child = null;
     entry.output = '';
     entry.state = state;
-    if (state === 'connected') hermesDisconnectedProviders.delete(provider);
+    if (state === 'connected') {
+      hermesDisconnectedProviders.delete(provider);
+      setHarnessProviderConnected(owner, provider, true);
+    }
     const cleanup = setTimeout(() => {
       if (harnessAuthByUser.get(owner) === entry) harnessAuthByUser.delete(owner);
     }, 10 * 60 * 1000);
@@ -3579,16 +3612,19 @@ function chatModelStatusProviderId(id) {
   return normalized;
 }
 
-// The saved preference only picks the default model. Every other product
-// provider the gateway reports as authenticated, and the user has not
-// disconnected, stays selectable per turn, so connecting a second provider
-// (for example Mia Router after Claude) never hides the first one.
+// The saved preference only picks the default model. Every other provider
+// the user connected through Mia, and has not disconnected, stays selectable
+// per turn, so connecting a second provider (for example Mia Router after
+// Claude) never hides the first one.
 function chatModelProviderIdsForUser(providers, settings, email, preference) {
   if (!preference || !preference.onboardingComplete) return [];
+  const owner = String(email || '').trim().toLowerCase();
+  const connected = new Set(harnessConnectedProvidersForUser(settings, owner));
+  if (managedRouterProvisionedEmails.has(owner)) connected.add(MANAGED_ROUTER_HERMES_PROVIDER);
   const ids = new Set(chatModelProviderIdsForPreference(preference));
   for (const id of Object.keys(providers || {})) {
     const statusId = chatModelStatusProviderId(id);
-    if (!HERMES_STATUS_PROVIDERS.has(statusId) || statusId === 'managed-router') continue;
+    if (!connected.has(id) && !connected.has(statusId)) continue;
     if (hermesDisconnectedProviders.has(statusId)
       || harnessProviderDisconnectedForUser(settings, email, statusId)) continue;
     ids.add(id);
@@ -3784,8 +3820,17 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
     onboardingComplete: true,
     updatedAt: new Date().toISOString(),
   };
+  const previous = normalizeHarnessPreference(settings.harnessByUser[owner]);
   settings.harnessByUser[owner] = preference;
   db.saveSingleton(conn, 'settings', settings);
+  // Changing the default must not drop the provider it replaces from the
+  // picker, so both stay recorded as connected.
+  const previousProvider = previous && previous.onboardingComplete
+    && (previous.provider === 'openai-api' ? previous.apiProvider : previous.provider);
+  if (previousProvider && !harnessProviderDisconnectedForUser(settings, owner, previousProvider)) {
+    setHarnessProviderConnected(owner, previousProvider, true);
+  }
+  setHarnessProviderConnected(owner, effectiveProvider === 'openai-api' ? effectiveApiProvider : effectiveProvider, true);
   if (effectiveProvider === CLAUDE_SUBSCRIPTION_PROVIDER) {
     // A successful explicit selection reconnects Mia to the existing external
     // Claude Code login. The probe itself must not re-enable dispatch before
@@ -3896,6 +3941,7 @@ app.post('/api/settings/harness/auth/start', requireGlobalSettingsAdmin, async (
   if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
     const status = await runClaudeSubscriptionStatus();
     if (status.loggedIn && (req.body || {}).reauthenticate !== true) {
+      setHarnessProviderConnected(req.userEmail, provider, true);
       return res.status(200).json({ auth: {
         state: 'connected', provider, plan: status.plan || null,
       } });
@@ -3965,6 +4011,7 @@ app.post('/api/settings/harness/auth/logout', requireGlobalSettingsAdmin, async 
     return res.status(400).json({ error: 'unsupported harness disconnect provider' });
   }
   disconnectHermesAuth(req.userEmail, provider);
+  setHarnessProviderConnected(req.userEmail, provider, false);
   if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
     forgetNativeChatModelProvider(provider);
     setHarnessProviderDisconnected(req.userEmail, provider, true);
@@ -4020,6 +4067,7 @@ app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req
     removeProviderProfileCredentials(process.env.HERMES_HOME, provider);
     await restartHermesGatewayRuntime();
     hermesDisconnectedProviders.delete(provider);
+    setHarnessProviderConnected(req.userEmail, provider, true);
     return res.status(200).json({ ok: true, provider, state: 'connected' });
   } catch (error) {
     return res.status(502).json({ error: error.message || 'Could not add API credential' });
