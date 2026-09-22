@@ -58,6 +58,7 @@ echo "[1/9] Downloading pinned Hermes ${HERMES_TAG} (${HERMES_VERSION})"
   extract_root="$miaos_home/downloads/hermes-source"
   pinned_clone "$HERMES_SOURCE_URL" "$HERMES_COMMIT" "$extract_root"
   (cd "$extract_root" && git apply "$script_dir/hermes-noninteractive.patch")
+  (cd "$extract_root" && git apply "$script_dir/hermes-profile-picker.patch")
 
   echo "[2/9] Installing the pinned Hermes runtime (no provider setup, no skills)"
   hermes_install_dir="$hermes_home/hermes-agent"

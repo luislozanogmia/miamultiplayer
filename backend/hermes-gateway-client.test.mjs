@@ -577,10 +577,11 @@ test('reads the live authenticated model inventory through the gateway API', asy
     },
   });
 
-  const result = await client.modelOptions();
+  const result = await client.modelOptions({ profile: 'miaos-agent-runtime' });
   assert.equal(result.providers[0].models[0], 'gpt-5.6-luna');
   assert.match(requests[0].url, /^http:\/\/127\.0\.0\.1:9121\/api\/model\/options\?/);
   assert.match(requests[0].url, /include_unconfigured=false/);
+  assert.equal(new URL(requests[0].url).searchParams.get('profile'), 'miaos-agent-runtime');
   assert.equal(requests[0].options.headers.Authorization, 'Bearer inventory-token');
 });
 

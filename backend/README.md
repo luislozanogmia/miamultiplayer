@@ -56,6 +56,45 @@ table row, safe to leave `DATA_DIR` set permanently).
 | `MIAOS_GOOGLE_ACCOUNT_OWNER` | first configured admin | Sole Mia identity allowed to use the process-scoped Hermes/gws Google profile |
 | `MIAOS_ARTIFACT_DIR` | `./workspace-artifacts` | Server-owned storage root for immutable workspace artifact bytes |
 | `MIAOS_ATTACHMENT_DIR` | `./conversation-attachments` | Server-owned storage root for native conversation attachment bytes; production should use a path outside the checkout |
+| `MIAOS_BOT_PACKAGE_DIR` | `bots/` beside `DB_PATH` | Bot package root. Electron sets this to `<userData>/bots` (normally Application Support/Mia/bots) |
+
+## Bot packages
+
+Each bot has a readable, stable folder named `<name>--<bot-id>` under
+`MIAOS_BOT_PACKAGE_DIR`. `AGENTS.md` is the editable source of truth for the
+bot's instructions: direct edits are read for the next interactive chat, and
+the editor uses a revision check so it cannot silently overwrite a newer file
+edit. Scheduled Hermes jobs use the bot package as their work directory, so
+Hermes' native context loader rereads `AGENTS.md` on every run. The scheduled
+prompt stores app/global policy and the explicit automation task, but not a
+second snapshot of the bot purpose. Editing the automation task or other
+schedule settings still uses Mia's normal editor-driven schedule sync.
+
+`bot.yaml` and `automations.yaml` are generated portable snapshots; Mia may
+overwrite manual edits to those two files. Automation entries are exported as
+disabled templates only. Live enablement, job IDs, deliveries, conversation
+history, credentials, and other runtime state stay in SQLite or their owning
+credential store. `requiredCapabilities` is currently an empty reserved field
+because Mia does not yet have a persisted capability model. Package import or
+marketplace installation is not implemented by this storage layer.
+
+Existing SQLite bots migrate on first package-enabled startup. A partial
+migration is retry-safe: an existing package is validated and retained instead
+of being regenerated from an older SQLite instruction mirror. Managed-file
+writes roll back when the corresponding SQLite write fails; cleanup after a
+committed write is best-effort and never rolls back committed package data.
+Deleting a bot moves its package into the package root's `.trash/` directory
+for recovery rather than deleting it recursively. A deletion performed inside
+a larger SQLite transaction retains an inactive package in place because a
+filesystem move cannot join that transaction; this makes an outer rollback
+safe and leaves manual recovery possible after commit. Package roots, managed
+files, and `assets/` reject symlinks; corrupt or missing migrated packages fail
+closed instead of silently dispatching stale instructions. During Mia sync, an
+enabled job whose package is missing or invalid is paused before the error is
+reported. Hermes itself falls back to a context-free run if a registered
+workdir disappears between Mia syncs; there is no filesystem watcher, so the
+job is not guaranteed to pause after an out-of-band deletion until its package
+is repaired and Mia can validate/resynchronize it.
 
 ## Auth
 

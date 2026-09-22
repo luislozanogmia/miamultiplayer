@@ -80,6 +80,7 @@ export const REQUIRED_LOCAL_ASSETS = Object.freeze([
   'assets/developer-mode-theme.js',
   'assets/mia-mark.js',
   'chat-security.js',
+  'chat-scroll.js',
   'hermes-connectors.js',
   'native-browser.js',
   'app.js',

@@ -298,6 +298,13 @@ const VISION_MODEL = /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(process.env.MIAOS_VISI
 // `fast` is a product alias for Luna; the optional fast preference is carried
 // with the session request.
 const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
+  'claude-subscription-directsdk-experimental': Object.freeze([
+    Object.freeze({ id: 'sonnet', model: 'claude-sonnet-5[1m]', label: 'Sonnet 5', fast: false }),
+    Object.freeze({ id: 'haiku', model: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', fast: false }),
+    Object.freeze({ id: 'opus', model: 'claude-opus-5[1m]', label: 'Opus 5', fast: false }),
+    Object.freeze({ id: 'claude-opus-4-8[1m]', model: 'claude-opus-4-8[1m]', label: 'Opus 4.8', fast: false }),
+    Object.freeze({ id: 'fable', model: 'claude-fable-5-1[1m]', label: 'Fable 5.1', fast: false }),
+  ]),
   'openai-codex': Object.freeze([
     Object.freeze({ id: 'fast', model: 'gpt-5.6-luna', label: 'Fast', fast: true }),
     Object.freeze({ id: 'gpt-6-astra', model: 'gpt-6-astra', label: 'GPT-6 Astra', fast: false }),
@@ -321,6 +328,10 @@ const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
 const MANAGED_ROUTER_HERMES_PROVIDER = 'openrouter';
 
 const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
+  'claude-subscription-directsdk-experimental': Object.freeze([
+    'claude-sonnet-5[1m]', 'claude-haiku-4-5-20251001', 'claude-opus-5[1m]',
+    'claude-opus-4-8[1m]', 'claude-fable-5-1[1m]',
+  ]),
   'openai-codex': Object.freeze([
     'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
   ]),
@@ -334,6 +345,7 @@ const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
 });
 
 const HERMES_DEFAULT_MODEL_BY_PROVIDER = Object.freeze({
+  'claude-subscription-directsdk-experimental': 'claude-sonnet-5[1m]',
   'openai-codex': 'gpt-5.6-luna',
   'xai-oauth': 'grok-4.6',
 });
@@ -413,6 +425,11 @@ const HERMES_ENV_ALLOWLIST = Object.freeze([
   // bundle with __pycache__ files and invalidating its code signature.
   'PYTHONDONTWRITEBYTECODE',
   'PYTHONPYCACHEPREFIX',
+  // Explicit, path-only overrides for the official Claude CLI provider. API
+  // keys and Anthropic endpoint overrides remain excluded: the upstream
+  // plugin refuses those rather than falling back to paid API traffic.
+  'CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND',
+  'CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR',
   // The local bundle points this at an empty Mia-owned directory so Hermes
   // cannot silently adopt an ambient GitHub CLI/Copilot login.
   'GH_CONFIG_DIR',
@@ -598,16 +615,16 @@ function botAutomationSchedule(automation) {
   return automation.frequency && automation.frequency !== 'none' ? String(automation.frequency) : 'manual';
 }
 
-function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'authorized user' } = {}) {
+function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'authorized user', includePurpose = true } = {}) {
   const record = bot && typeof bot === 'object' ? bot : {};
   const name = String(record.name || 'Task bot').trim();
   const purpose = String(record.instructions || record.role || record.output || 'Complete the work assigned by the user.')
-    .trim().replace(/\s+/g, ' ');
+    .trim();
   const confirmedName = String(userDisplayName || '').trim();
   const userReference = confirmedName
     ? `${confirmedName}, the ${userRelationship}`
     : `the ${userRelationship}`;
-  return [
+  const sections = [
     `You are ${name}, a specialized task bot inside Mia.`,
     [
       'What you are:',
@@ -621,8 +638,9 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
       'Who the user is:',
       `You are working for ${userReference}. Address them only by a confirmed preferred name—never infer a name from an email address. Their explicit requests control your work within your permitted scope. Protect their private information and never expose credentials or internal runtime details.`,
     ].join('\n'),
-    `Purpose:\n${purpose}`,
   ];
+  if (includePurpose) sections.push(`Purpose:\n${purpose}`);
+  return sections;
 }
 
 function buildScheduledBotPrompt(bot, automation, options = {}) {
@@ -633,6 +651,7 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     ...botIdentitySections(bot, {
       userDisplayName: options.userDisplayName,
       userRelationship: 'authorized owner of this bot',
+      includePurpose: false,
     }),
   ];
   const instructionSection = userInstructionSection('Bot', options.globalInstructions);
@@ -795,7 +814,7 @@ async function steerHermesGatewaySession(sessionId, text, client = getHermesGate
 }
 
 async function getHermesGatewayModelOptions(options) {
-  return getHermesGatewayClient().modelOptions(options);
+  return getHermesGatewayClient().modelOptions({ ...options, profile: MIAOS_AGENT_HERMES_PROFILE });
 }
 
 async function startHermesGatewayRuntime() {

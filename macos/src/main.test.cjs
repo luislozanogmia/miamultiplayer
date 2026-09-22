@@ -80,6 +80,135 @@ test("Clerk Google navigation moves into the shimmed popup and hands back the se
   assert.equal(popup.closed, true);
 });
 
+test("provider auth redirects preserve nested OAuth windows and their navigation guards", async () => {
+  const { EventEmitter } = require("node:events");
+  const main = loadMain();
+  const contents = new EventEmitter();
+  contents.session = { id: "main-session" };
+  contents.setWindowOpenHandler = handler => { contents.popup = handler; };
+  const parent = { webContents: contents };
+  main.configureNavigation(parent, "http://localhost:4871");
+
+  const redirect = "http://localhost:4871/api/settings/harness/auth/redirect?provider=claude-subscription-directsdk-experimental";
+  const decision = contents.popup({ url: redirect });
+  assert.equal(decision.action, "allow");
+  assert.equal(decision.overrideBrowserWindowOptions.webPreferences.nodeIntegration, false);
+  assert.equal(decision.overrideBrowserWindowOptions.webPreferences.sandbox, true);
+  assert.equal(decision.overrideBrowserWindowOptions.webPreferences.session, contents.session);
+  assert.match(decision.overrideBrowserWindowOptions.webPreferences.preload, /google-oauth-preload\.cjs$/);
+
+  const childContents = new EventEmitter();
+  childContents.session = contents.session;
+  childContents.setWindowOpenHandler = handler => { childContents.popup = handler; };
+  const child = { webContents: childContents, loadedUrls: [], loadURL(url) { this.loadedUrls.push(url); } };
+  contents.emit("did-create-window", child, { url: redirect });
+  const navigate = (eventName, url) => {
+    let blocked = false;
+    const event = { url, preventDefault() { blocked = true; } };
+    if (eventName === "will-redirect") childContents.emit(eventName, event, url);
+    else childContents.emit(eventName, event);
+    return !blocked;
+  };
+  assert.equal(navigate("will-navigate", redirect), true, "initial local broker must load before its remote redirect");
+  assert.equal(navigate("will-navigate", "http://localhost:4871/"), false);
+  assert.equal(navigate("will-navigate", "https://platform.claude.com/oauth/code/callback?state=fixture&code=early"), false);
+  const authorization = new URL("https://claude.com/cai/oauth/authorize");
+  authorization.searchParams.set("code", "true");
+  authorization.searchParams.set("state", "fixture-state");
+  authorization.searchParams.set("redirect_uri", "https://platform.claude.com/oauth/code/callback");
+  assert.equal(navigate("will-navigate", authorization.toString()), true);
+  assert.equal(navigate("will-navigate", redirect), false, "remote auth cannot navigate back into the local broker");
+  assert.equal(navigate("will-navigate", "https://accounts.google.com/v3/signin/identifier"), true);
+  assert.equal(navigate("will-redirect", "https://platform.claude.com/oauth/code/callback?state=wrong&code=fixture"), false);
+  assert.equal(navigate("will-redirect", "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture"), true);
+  assert.equal(navigate("will-redirect", "http://127.0.0.1:54132/callback?state=fixture-state&code=fixture"), false);
+  assert.equal(navigate("will-navigate", "https://claude.com:444/cai/oauth/authorize"), false);
+  assert.equal(navigate("will-navigate", "https://claude.com.attacker.test/"), false);
+  assert.equal(navigate("will-redirect", "https://example.com/steal"), false);
+  assert.equal(navigate("will-navigate", "file:///tmp/private"), false);
+  assert.deepEqual(childContents.popup({ url: "https://example.com/escape" }), { action: "deny" });
+  const google = "https://accounts.google.com/o/oauth2/v2/auth";
+  const nestedDecision = childContents.popup({ url: google });
+  assert.equal(nestedDecision.action, "allow", "Google needs a real Window, not a denied popup followed by parent navigation");
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.parent, child);
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.session, contents.session);
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.sandbox, true);
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.contextIsolation, true);
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.nodeIntegration, false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(child.loadedUrls, [], "Claude's opener page must survive the Google handoff");
+  const googleContents = new EventEmitter();
+  googleContents.session = contents.session;
+  googleContents.setWindowOpenHandler = handler => { googleContents.popup = handler; };
+  const googleWindow = { webContents: googleContents };
+  childContents.emit("did-create-window", googleWindow, { url: google });
+  const nestedNavigate = url => {
+    let blocked = false;
+    googleContents.emit("will-redirect", { preventDefault() { blocked = true; } }, url);
+    return !blocked;
+  };
+  assert.equal(nestedNavigate("https://claude.ai/api/auth/callback/google"), true);
+  assert.equal(nestedNavigate("https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture"), true);
+  for (const url of [
+    "https://platform.claude.com/oauth/code/callback?state=wrong&code=fixture",
+    "https://accounts.google.com.attacker.test/",
+    "https://accounts.google.com:444/",
+    "file:///tmp/private",
+    "http://localhost:4871/",
+  ]) {
+    assert.equal(nestedNavigate(url), false, url);
+    assert.deepEqual(googleContents.popup({ url }), { action: "deny" }, url);
+  }
+  let completed = 0;
+  let closed = false;
+  googleContents.session.fetch = async () => { completed += 1; return { status: 202 }; };
+  googleWindow.close = () => { closed = true; };
+  googleContents.emit("did-navigate", {}, "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(completed, 1, "the live navigation listener submits the code automatically");
+  assert.equal(closed, true, "accepted code closes the auth window");
+});
+
+test("provider auth URL allowlists cover existing providers and fail closed", () => {
+  const main = loadMain();
+  assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com/authorize", "openai-codex"), true);
+  assert.equal(main.isHarnessAuthNavigation("https://auth.x.ai/oauth", "xai-oauth"), true);
+  assert.equal(main.isHarnessAuthNavigation("https://accounts.x.ai/login", "xai-oauth"), true);
+  assert.equal(main.isHarnessAuthNavigation("https://claude.com/cai/oauth/authorize", "claude-subscription-directsdk-experimental"), true);
+  assert.equal(main.isHarnessAuthNavigation("https://platform.claude.com/oauth/code/callback?state=fixture", "claude-subscription-directsdk-experimental"), false);
+  const contract = main.claudeAuthStartContract("https://claude.com/cai/oauth/authorize?code=true&state=fixture&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback");
+  assert.equal(contract.redirectOrigin, "https://platform.claude.com");
+  assert.equal(contract.redirectPath, "/oauth/code/callback");
+  assert.equal(main.claudeAuthStartContract("https://claude.com/cai/oauth/authorize?code=true&state=fixture&redirect_uri=https%3A%2F%2Fplatform.claude.com.attacker.test%2Foauth%2Fcode%2Fcallback"), null);
+  assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com:444/", "openai-codex"), false);
+  assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com/", "unknown"), false);
+  assert.equal(main.harnessAuthRedirectProvider("http://localhost:48710/api/settings/harness/auth/redirect?provider=openai-codex", "http://localhost:4871"), "");
+});
+
+test("Claude callback automatically submits only the bound code using Mia's session", async () => {
+  const main = loadMain();
+  const contract = { state: "fixture-state", redirectOrigin: "https://platform.claude.com", redirectPath: "/oauth/code/callback" };
+  const calls = [];
+  const window = { webContents: { session: { fetch: async (...args) => { calls.push(args); return { status: 202 }; } } } };
+  const callback = "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture-code";
+  for (const url of [callback.replace("fixture-state", "stale"), callback.replace("platform.claude.com", "attacker.test"), callback.replace("fixture-code", "bad%0Acode"), callback.replace("/oauth/code/callback", "/other")]) {
+    assert.equal(await main.completeClaudeAuthCallback(window, url, contract, "http://localhost:4871"), false);
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(await main.completeClaudeAuthCallback(window, callback, contract, "http://localhost:4871"), true);
+  assert.equal(calls[0][0], "http://localhost:4871/api/settings/harness/auth/complete");
+  assert.equal(calls[0][1].credentials, "include");
+  assert.equal(calls[0][1].redirect, "error");
+  assert.equal(calls[0][1].headers.Origin, "http://localhost:4871");
+  assert.deepEqual(JSON.parse(calls[0][1].body), {
+    provider: "claude-subscription-directsdk-experimental", code: "fixture-code#fixture-state", state: "fixture-state",
+  });
+  window.webContents.session.fetch = async () => ({ status: 409 });
+  assert.equal(await main.completeClaudeAuthCallback(window, callback, contract, "http://localhost:4871"), false);
+  window.webContents.session.fetch = async () => { throw new Error("offline"); };
+  assert.equal(await main.completeClaudeAuthCallback(window, callback, contract, "http://localhost:4871"), false);
+});
+
 test("packaged macOS runtime is self-contained and ignores ambient Hermes", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /app\.isPackaged\s*\?\s*PACKAGED_HERMES_BIN/);
@@ -92,6 +221,46 @@ test("packaged macOS runtime is self-contained and ignores ambient Hermes", () =
   assert.match(source, /process\.env\.HERMES_GWS_BIN = gwsLauncher/);
   assert.match(source, /process\.env\.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND = "file"/);
   assert.match(source, /\[pythonExecutable, hermesLauncher, ghostLauncher, gwsLauncher\]/);
+  assert.match(source, /CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR/);
+  assert.match(source, /discoverClaudeCodeCommand\(\)/);
+  assert.match(source, /\.npm-global[\s\S]*claude/);
+});
+
+test("Claude uses its native credential store unless a custom config is explicit", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.doesNotMatch(source, /CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR:[\s\S]{0,140}path\.join\(app\.getPath\("home"\), "\.claude"\)/);
+});
+
+test("bare macOS dev launches prefer Mia's bundled Hermes and preserve explicit overrides", () => {
+  const main = loadMain();
+  const bundled = '/Applications/Mia.app/Contents/Resources/runtime/bin/hermes';
+  assert.equal(main.developmentHermesBinary({}, () => true, 'darwin'), bundled);
+  assert.equal(main.developmentHermesBinary({HERMES_BIN:'/custom/hermes'}, () => true, 'darwin'), '/custom/hermes');
+  assert.equal(main.developmentHermesBinary({}, () => false, 'darwin'), '');
+  assert.notEqual(main.developmentHermesBinary({}, () => true, 'linux'), bundled);
+});
+
+test("Claude CLI discovery skips an unreadable PATH entry", () => {
+  const main = loadMain();
+  const originalPath = process.env.PATH;
+  const originalStatSync = fs.statSync;
+  try {
+    process.env.PATH = ["/unreadable", "/working"].join(path.delimiter);
+    fs.statSync = candidate => {
+      if (candidate.startsWith("/unreadable/")) {
+        const error = new Error("permission denied");
+        error.code = "EACCES";
+        throw error;
+      }
+      if (candidate.startsWith("/working/")) return { isFile: () => true };
+      return undefined;
+    };
+    assert.equal(main.discoverClaudeCodeCommand(), path.join("/working", "claude"));
+  } finally {
+    fs.statSync = originalStatSync;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
 });
 
 test("packaged runtime resolves platform layout through shared helpers", () => {

@@ -887,7 +887,6 @@
     else if(hash === 'agent-admin'){ renderAgentAdminPanel(); }
     if(hash === 'chat'){
       var chatReady = renderChatWorkspace();
-      setTimeout(function(){ var t = el('#chatThread'); if(t) t.scrollTop = t.scrollHeight; }, 30);
       return chatReady;
     }
     return Promise.resolve();
@@ -976,6 +975,7 @@
 
   /* ============ SETTINGS DRAWER ============ */
   var HERMES_PROVIDER_LABELS = {
+    'claude-subscription-directsdk-experimental': 'Claude subscription (Experimental)',
     'openai-codex': 'ChatGPT subscription',
     'xai-oauth': 'Grok subscription',
     'openai-api': 'OpenAI API',
@@ -1020,6 +1020,7 @@
     {id:'upstage', label:'Upstage Solar'}
   ];
   var HERMES_AUTH_NAMES = {
+    'claude-subscription-directsdk-experimental': 'Claude',
     'openai-codex': 'ChatGPT',
     'xai-oauth': 'Grok'
   };
@@ -1047,11 +1048,13 @@
   var harnessSettingsCache = {provider: null, model: null, fast: false, mode: 'solo', onboardingComplete: false};
   var harnessOnboardingState = {provider: null, model: null, fast: false, apiProvider: 'openai-api', mode: 'solo'};
   var harnessAuthPollTimer = null;
+  var harnessAuthGeneration = 0;
   var harnessAuthAwaitingSave = false;
   var harnessAuthSaveInProgress = false;
   var harnessConnectionPending = null;
   var harnessConnectionValidationPending = false;
   var harnessConnectionState = {
+    'claude-subscription-directsdk-experimental': false,
     'openai-codex': false,
     'xai-oauth': false
   };
@@ -1539,10 +1542,34 @@
   }
 
   function stopHarnessAuthPolling(){
+    harnessAuthGeneration += 1;
     if(harnessAuthPollTimer){
       clearTimeout(harnessAuthPollTimer);
       harnessAuthPollTimer = null;
     }
+  }
+
+  function harnessAuthFlowIsCurrent(generation, provider){
+    return generation === harnessAuthGeneration && provider === harnessOnboardingState.provider;
+  }
+
+  function cancelHarnessAuthFlow(provider){
+    var activeProvider = provider || harnessOnboardingState.provider;
+    stopHarnessAuthPolling();
+    harnessAuthAwaitingSave = false;
+    harnessConnectionPending = null;
+    if(activeProvider !== 'claude-subscription-directsdk-experimental'){
+      renderHarnessAuth(null);
+      return Promise.resolve();
+    }
+    return api('/api/settings/harness/auth/cancel', {method:'POST', body:{provider:activeProvider}}).then(function(){
+      renderHarnessAuth(null);
+      renderHarnessConnectionActions();
+      renderHarnessOnboarding();
+    }).catch(function(){
+      var error = el('#harnessOnboardingError');
+      if(error) error.textContent = 'Could not cancel sign-in. Try again.';
+    });
   }
 
   function renderHarnessAuth(value){
@@ -1552,6 +1579,10 @@
     var title = el('#harnessAuthTitle');
     var codeWrap = el('#harnessAuthCodeWrap');
     var code = el('#harnessAuthCode');
+    var completion = el('#harnessAuthCompletion');
+    var completionInput = el('#harnessAuthCompletionCode');
+    var completionSubmit = el('#harnessAuthCompletionSubmit');
+    var cancel = el('#harnessAuthCancel');
     if(!panel) return;
     var auth = value && typeof value === 'object' ? value : {};
     if(auth.state === 'connected' && auth.provider){
@@ -1561,35 +1592,55 @@
     }
     var authName = HERMES_AUTH_NAMES[harnessOnboardingState.provider] || 'provider';
     var active = auth.state && auth.state !== 'idle' &&
-      ['openai-codex', 'xai-oauth'].indexOf(harnessOnboardingState.provider) !== -1 &&
+      ['claude-subscription-directsdk-experimental', 'openai-codex', 'xai-oauth'].indexOf(harnessOnboardingState.provider) !== -1 &&
       (!auth.provider || auth.provider === harnessOnboardingState.provider);
     panel.hidden = !active;
-    if(!active) return;
-    if(title) title.textContent = 'Connect ' + authName + ' through the harness';
+    if(!active){
+      if(completion) completion.hidden = true;
+      if(completionInput){ completionInput.value = ''; completionInput.disabled = false; }
+      if(cancel) cancel.hidden = true;
+      return;
+    }
+    if(title) title.textContent = 'Connect ' + authName;
     if(status){
       status.textContent = auth.state === 'starting'
-        ? 'The harness is preparing a secure ' + authName + ' sign-in…'
+        ? 'Preparing sign-in…'
         : (auth.state === 'waiting'
-          ? 'Open ' + authName + ' and enter the code below. The harness is waiting for confirmation.'
-          : (auth.state === 'connected'
-            ? authName + ' is connected through the harness.'
-            : (auth.error || 'The harness could not complete sign-in.')));
+          ? (auth.provider === 'claude-subscription-directsdk-experimental'
+            ? 'Finish in the sign-in window. Mia will connect automatically.'
+            : 'Finish in the sign-in window and enter the code shown below.')
+          : (auth.state === 'completing'
+            ? 'Verifying sign-in…'
+            : (auth.state === 'connected'
+              ? authName + ' is connected.'
+              : (auth.error || 'Sign-in could not be completed.'))));
     }
     if(link){
       link.hidden = !auth.verificationUrl;
       link.textContent = 'Open ' + authName + ' sign-in';
-      if(auth.verificationUrl) link.href = auth.verificationUrl;
+      if(auth.verificationUrl) link.href = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(auth.provider || harnessOnboardingState.provider);
     }
     if(codeWrap){
       codeWrap.hidden = !auth.userCode;
       if(code) code.textContent = auth.userCode || '';
     }
+    var claudeWaiting = auth.provider === 'claude-subscription-directsdk-experimental' && ['waiting', 'completing'].indexOf(auth.state) !== -1;
+    if(completion) completion.hidden = !claudeWaiting;
+    if(completionInput){
+      completionInput.disabled = auth.state === 'completing';
+      if(!claudeWaiting) completionInput.value = '';
+    }
+    if(completionSubmit) completionSubmit.disabled = auth.state === 'completing';
+    if(cancel) cancel.hidden = auth.provider !== 'claude-subscription-directsdk-experimental' || ['starting', 'waiting', 'completing'].indexOf(auth.state) === -1;
   }
 
   function pollHarnessAuth(){
     stopHarnessAuthPolling();
+    var generation = harnessAuthGeneration;
+    var provider = harnessOnboardingState.provider;
     var poll = function(){
       api('/api/settings/harness/auth').then(function(res){
+        if(!harnessAuthFlowIsCurrent(generation, provider)) return;
         var auth = res.data && res.data.auth;
         renderHarnessAuth(auth);
         if(auth && auth.state === 'connected'){
@@ -1603,6 +1654,7 @@
         }
         harnessAuthPollTimer = setTimeout(poll, 1500);
       }).catch(function(err){
+        if(!harnessAuthFlowIsCurrent(generation, provider)) return;
         var error = el('#harnessOnboardingError');
         if(error && err && err.message) error.textContent = err.message;
         harnessAuthPollTimer = setTimeout(poll, 2500);
@@ -1612,10 +1664,13 @@
   }
 
   function loadHarnessAuthState(){
+    var generation = harnessAuthGeneration;
+    var provider = harnessOnboardingState.provider;
     api('/api/settings/harness/auth').then(function(res){
+      if(!harnessAuthFlowIsCurrent(generation, provider)) return;
       var auth = res.data && res.data.auth;
       renderHarnessAuth(auth);
-      if(auth && ['starting', 'waiting'].indexOf(auth.state) !== -1) pollHarnessAuth();
+      if(auth && ['starting', 'waiting', 'completing'].indexOf(auth.state) !== -1) pollHarnessAuth();
     }).catch(function(){});
   }
 
@@ -1670,7 +1725,10 @@
   function disconnectHarnessProvider(provider, button){
     if(harnessConnectionState[provider] !== true) return;
     var authName = harnessProviderDisplayName(provider);
-    if(!window.confirm('Disconnect ' + authName + '? This forgets its stored credentials.')) return;
+    var disconnectPrompt = provider === 'claude-subscription-directsdk-experimental'
+      ? 'Disconnect ' + authName + ' from Mia? Your Claude Code login remains unchanged. Existing scheduled jobs may continue until you pause them in Automations.'
+      : 'Disconnect ' + authName + '? This forgets its stored credentials.';
+    if(!window.confirm(disconnectPrompt)) return;
     var icon = button && button.querySelector('.styled-onboarding-connection-icon');
     var label = button && button.querySelector('.styled-onboarding-connection-label');
     if(button) button.disabled = true;
@@ -1836,6 +1894,9 @@
       if(providerChoices && typeof providerChoices.scrollIntoView === 'function') providerChoices.scrollIntoView({block:'nearest'});
       return false;
     }
+    if(harnessAuthAwaitingSave && harnessOnboardingState.provider === 'claude-subscription-directsdk-experimental') {
+      void cancelHarnessAuthFlow(harnessOnboardingState.provider);
+    }
     harnessAuthAwaitingSave = false;
     stopHarnessAuthPolling();
     var apiKey = el('#harnessApiKey');
@@ -1847,6 +1908,9 @@
 
   els('[data-harness-provider]').forEach(function(choice){
     choice.addEventListener('click', function(){
+      if(harnessAuthAwaitingSave && harnessOnboardingState.provider === 'claude-subscription-directsdk-experimental') {
+        void cancelHarnessAuthFlow(harnessOnboardingState.provider);
+      }
       stopHarnessAuthPolling();
       harnessAuthAwaitingSave = false;
       harnessConnectionPending = null;
@@ -2001,7 +2065,7 @@
       });
       return;
     }
-    if(['openai-codex', 'xai-oauth'].indexOf(authProvider) === -1){
+    if(['claude-subscription-directsdk-experimental', 'openai-codex', 'xai-oauth'].indexOf(authProvider) === -1){
       saveHarnessSelection();
       return;
     }
@@ -2016,8 +2080,11 @@
     // the background harness flow and redirects this tab to the real provider
     // URL, avoiding popup blocking in the later polling callback.
     var redirectUrl = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(authProvider);
+    if(authProvider === 'claude-subscription-directsdk-experimental') redirectUrl += '&reauthenticate=true';
     try { window.open(redirectUrl, '_blank', 'noopener,noreferrer'); } catch(_) { /* visible link remains available */ }
-    api('/api/settings/harness/auth/start', {method:'POST', body:{provider:authProvider}}).then(function(res){
+    var authRequestGeneration = harnessAuthGeneration;
+    api('/api/settings/harness/auth/start', {method:'POST', body:{provider:authProvider, reauthenticate:authProvider === 'claude-subscription-directsdk-experimental'}}).then(function(res){
+      if(!harnessAuthFlowIsCurrent(authRequestGeneration, authProvider)) return;
       var auth = res.data && res.data.auth;
       if(res.status !== 200 || !auth) throw new Error((res.data && res.data.error) || 'Could not start harness sign-in');
       renderHarnessAuth(auth);
@@ -2033,12 +2100,40 @@
       setHarnessActionLabel(button, 'Loading…');
       pollHarnessAuth();
     }).catch(function(err){
+      if(!harnessAuthFlowIsCurrent(authRequestGeneration, authProvider)) return;
       harnessAuthAwaitingSave = false;
       harnessConnectionPending = null;
       if(error) error.textContent = err.message || 'Could not start harness sign-in';
       renderHarnessConnectionActions();
       renderHarnessOnboarding();
     });
+  });
+  el('#harnessAuthCompletion').addEventListener('submit', function(event){
+    event.preventDefault();
+    var input = el('#harnessAuthCompletionCode');
+    var error = el('#harnessOnboardingError');
+    var code = input ? input.value.trim() : '';
+    if(!code){ if(input) input.focus(); return; }
+    if(input) input.disabled = true;
+    if(error) error.textContent = '';
+    var completionGeneration = harnessAuthGeneration;
+    var completionProvider = harnessOnboardingState.provider;
+    api('/api/settings/harness/auth/complete', {method:'POST', body:{
+      provider:'claude-subscription-directsdk-experimental', code:code
+    }}).then(function(res){
+      if(!harnessAuthFlowIsCurrent(completionGeneration, completionProvider)) return;
+      if(input) input.value = '';
+      if(res.status !== 202) throw new Error((res.data && res.data.error) || 'Could not submit Claude sign-in');
+      renderHarnessAuth(res.data && res.data.auth);
+      pollHarnessAuth();
+    }).catch(function(err){
+      if(!harnessAuthFlowIsCurrent(completionGeneration, completionProvider)) return;
+      if(input) input.disabled = false;
+      if(error) error.textContent = err.message || 'Could not submit Claude sign-in';
+    });
+  });
+  el('#harnessAuthCancel').addEventListener('click', function(){
+    void cancelHarnessAuthFlow(harnessOnboardingState.provider);
   });
   el('#harnessOnboardingClose').addEventListener('click', function(){
     closeHarnessOnboarding();
@@ -2438,6 +2533,7 @@
       agentId: a.builtin === true ? a.id : null,
       updatedAt: a.updatedAt, createdAt: a.createdAt,
       runs: '—', last: 'never run', instructions: a.instructions,
+      instructionsRevision: a.instructionsRevision,
       departments: departments, avatarColor: normalizeAgentAvatarColor(a.avatarColor)
     };
   }
@@ -2787,17 +2883,15 @@
     var id = benchOpenId;
     var a = findBenchAgent(id);
     var name = input.value.trim();
-    var instructions = a ? String(a.instructions || '').trim() : '';
     var targetId = a && (a.isBuiltin ? a.agentId : a.id);
     // Empty or unchanged values revert silently.
-    if(!a || !name || name === a.name || !instructions || !targetId){
+    if(!a || !name || name === a.name || !targetId){
       cancelBenchDetailNameEdit();
       return;
     }
-    // Same body shape saveEditCinema PUTs (name + instructions + model +
-    // departments) — the resource's PUT doesn't currently enforce it, but
-    // matching the edit cinema's contract keeps every rename path uniform.
-    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, model: a.model, departments: agentDepartments(a)}}).then(function(res){
+    // Renaming does not write instructions: AGENTS.md remains authoritative
+    // even if it was edited directly since this card was loaded.
+    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, model: a.model, departments: agentDepartments(a)}}).then(function(res){
       if(res.status === 200 && benchOpenId === id){
         loadBenchAgents().then(function(){ openBenchDetail(id); });
       } else {
@@ -3066,7 +3160,7 @@
   var cinema = {mode:'idle', prompt:'', name:'', modelIx:0, departments:[], departmentsTouched:false, timers:[], created:null,
     origin: 'bench', nameSuggestTimer: null, nameSuggestKey: null, buildAttempt: 0,
     buildController: null, buildTimeoutTimer: null, buildTimedOut: false, buildStatus: 'idle', buildError: ''};
-  var editState = {agentId:null, isBuiltin:false, instructions:'', model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
+  var editState = {agentId:null, isBuiltin:false, instructions:'', instructionsRevision:null, model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
     testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
   var styledAgentModelPicker = {stage:'family', familyKey:''};
   // Whichever element opened the bot editor (an avatar/mote click, most
@@ -3484,7 +3578,7 @@
     cinema.origin = 'bench';
     cinema.buildAttempt += 1; cinema.buildStatus = 'idle'; cinema.buildError = ''; cinema.buildTimedOut = false;
     cinema.departments = []; cinema.departmentsTouched = false;
-    editState = {agentId:null, isBuiltin:false, instructions:'', model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
+    editState = {agentId:null, isBuiltin:false, instructions:'', instructionsRevision:null, model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
       testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
     el('#benchCinemaInner').classList.remove('wide');
     if(typeof document !== 'undefined' && document.body) document.body.classList.remove('cinema-open');
@@ -3538,7 +3632,7 @@
     styledAgentModelPicker = {stage:'family', familyKey:''};
     editState = {
       agentId: id, isBuiltin: a.isBuiltin, name: a.name,
-      instructions: text, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
+      instructions: text, instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
       departments: currentDepts.length ? currentDepts.slice() : guessDepartmentsFor(text),
       avatarColor: normalizeAgentAvatarColor(a.avatarColor),
       suggestion: suggestedInstructionsFor(text), suggestDismissed: false,
@@ -3587,8 +3681,9 @@
     if(!targetId) return;
     // The styled editor no longer edits departments (a MiaOS leftover); the
     // stored value stays untouched by omitting the key from the update.
-    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, model: model, avatarColor: editState.avatarColor || null}}).then(function(res){
+    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, expectedInstructionsRevision: editState.instructionsRevision, model: model, avatarColor: editState.avatarColor || null}}).then(function(res){
       if(res.status === 200) reopenAndClose();
+      else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
     }).catch(function(){});
   }
 
@@ -4503,9 +4598,10 @@
     return normalizeChatMessages((events || []).map(nativeEventToChatMessage));
   }
 
-  function nativeEventsUrl(conversationId, afterSequence, limit, latest){
+  function nativeEventsUrl(conversationId, afterSequence, limit, latest, beforeSequence){
     var query = '?limit=' + encodeURIComponent(limit || 100) + '&includeDeleted=false';
     if(afterSequence) query += '&afterSequence=' + encodeURIComponent(afterSequence);
+    if(beforeSequence) query += '&beforeSequence=' + encodeURIComponent(beforeSequence);
     if(latest) query += '&latest=true';
     return nativeConversationPath(conversationId, '/events' + query);
   }
@@ -4581,6 +4677,9 @@
     var state = chatRoomState(event.conversationId);
     syncNativeDispatchFromEvent(event);
     var message = nativeEventToChatMessage(event);
+    var wasKnown = state.messages.some(function(existing){
+      return existing.id === message.id || (existing.pending && existing.clientIdempotencyKey && existing.clientIdempotencyKey === message.clientIdempotencyKey);
+    });
     var replaced = false;
     state.messages = state.messages.map(function(existing){
       if(existing.pending && existing.clientIdempotencyKey && existing.clientIdempotencyKey === message.clientIdempotencyKey){
@@ -4591,6 +4690,11 @@
     });
     if(!replaced && !state.messages.some(function(existing){ return existing.id === message.id; })) state.messages.push(message);
     state.messages = normalizeChatMessages(state.messages);
+    if(window.MiaChatScroll) window.MiaChatScroll.noteIncoming(state, {
+      isNew: !wasKnown,
+      isVisible: !message.threadRoot && (message.system || isHumanSender(message.sender) || !!displayBotBody(message.body) || chatMessageHasAttachments(message)),
+      isStreamingDelta: wasKnown
+    });
     // Native handoffs use the triggering human event as the thread root.
     // Opening it when the first agent event arrives replaces the old
     // thread-trigger behavior and lets the user see progress immediately.
@@ -5414,6 +5518,14 @@
     localBrowserNavigate(item.url);
   }
 
+  function browserSidebarOwnsClick(target, drawer, toggle, portaledMenu){
+    return !!target && !!(
+      (drawer && drawer.contains(target)) ||
+      (toggle && toggle.contains(target)) ||
+      (portaledMenu && portaledMenu.contains(target))
+    );
+  }
+
   (function wireLocalBrowser(){
     var form = el('#localBrowserForm');
     var input = el('#localBrowserUrl');
@@ -5519,6 +5631,18 @@
     if(sidebarClose) sidebarClose.addEventListener('click', function(){
       setBrowserSidebarOpen(false);
     });
+    document.addEventListener('click', function(event){
+      if(!document.body.classList.contains('browser-sidebar-open')) return;
+      var drawer = el('.chat-sidebar');
+      var portaledMenu = el('#chatSidebarCtxMenu');
+      if(browserSidebarOwnsClick(event.target, drawer, sidebar, portaledMenu)) return;
+      // Capture and consume the click before any underlying chat, toolbar, or
+      // restored native browser surface can act on it.
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setBrowserSidebarOpen(false);
+    }, true);
     // Picking a bot or conversation from the drawer is a destination choice:
     // collapse the drawer so the chosen chat is immediately visible. Row
     // tools (hide, dismiss, context-menu actions) keep the drawer open.
@@ -6188,8 +6312,35 @@
   }
 
   function chatRoomState(roomId){
-    if(!chatWs.byRoom[roomId]) chatWs.byRoom[roomId] = {messages: [], lastTs: 0, lastSequence: 0, polling: false, thinking: false, thinkingTimer: null, thinkingAgentName: null, selectedAgentId: null, mentionRoster: null, chatSuggestions: null, openThreadRoot: null, localWelcome: null, sidebarPreviewLoading: false, sidebarPreviewLoaded: false, sidebarAttentionPolling: false, historyCursor: null, historyLoading: false, historyComplete: false, historyEdits: {}};
+    if(!chatWs.byRoom[roomId]) chatWs.byRoom[roomId] = {messages: [], lastTs: 0, lastSequence: 0, polling: false, thinking: false, thinkingTimer: null, thinkingAgentName: null, selectedAgentId: null, mentionRoster: null, chatSuggestions: null, openThreadRoot: null, localWelcome: null, sidebarPreviewLoading: false, sidebarPreviewLoaded: false, sidebarAttentionPolling: false, historyCursor: null, historyLoading: false, historyComplete: false, historyInitialized: false, historyRequestId: 0, historyEdits: {}, followLatest: true, newVisibleMessages: false, chatScrollTop: 0, chatScrollAnchor: null, chatScrollRevision: 0};
     return chatWs.byRoom[roomId];
+  }
+
+  function syncChatJumpLatest(thread, state){
+    var button = el('#chatJumpLatest');
+    if(window.MiaChatScroll) window.MiaChatScroll.syncButton(button, thread, state);
+    else if(button) button.hidden = true;
+    if(button){
+      var hasNew = !!(state && state.newVisibleMessages);
+      var label = el('.chat-jump-latest-label', button);
+      button.classList.toggle('has-new-messages', hasNew);
+      button.setAttribute('aria-label', hasNew ? 'New messages. Jump to latest message' : 'Jump to latest message');
+      button.title = hasNew ? 'New messages — jump to latest' : 'Jump to latest message';
+      if(label) label.textContent = hasNew ? 'New messages' : '';
+    }
+  }
+
+  function captureRenderedChatScroll(thread){
+    var roomId = thread && thread.getAttribute('data-chat-scroll-room');
+    var state = roomId && chatWs.byRoom[roomId];
+    if(state && window.MiaChatScroll) window.MiaChatScroll.capture(thread, state);
+  }
+
+  function replaceChatTimeline(thread, roomId, state, html, options){
+    thread.setAttribute('data-chat-scroll-room', roomId);
+    if(window.MiaChatScroll) window.MiaChatScroll.replace(thread, html, state, options || {});
+    else thread.innerHTML = html;
+    syncChatJumpLatest(thread, state);
   }
 
   function absorbChatHistoryEdits(state, edits){
@@ -7299,6 +7450,16 @@
     syncChatThreadPanel();
   }
 
+  function chatHistoryControlHtml(state){
+    if(!state || !state.historyCursor) return '';
+    return '<button type="button" class="chat-history-more" id="chatHistoryMore"' + (state.historyLoading ? ' disabled' : '') + '>' + (state.historyLoading ? 'Loading…' : 'Load earlier messages') + '</button>';
+  }
+
+  function wireChatHistoryControl(thread, roomId){
+    var more = el('#chatHistoryMore', thread);
+    if(more) more.addEventListener('click', function(){ loadOlderChatMessages(roomId); });
+  }
+
   function startAgentSetupChat(){
     clearAgentSetupRequest(true);
     rememberChatBack('agent-setup', AGENT_SETUP_ROOM_ID);
@@ -7473,17 +7634,24 @@
   function renderChatThread(options){
     var thread = el('#chatThread');
     if(!thread) return;
+    captureRenderedChatScroll(thread);
     if(chatWs.activeKind === 'agent-setup'){
+      thread.removeAttribute('data-chat-scroll-room');
+      syncChatJumpLatest(null, null);
       renderAgentSetupThread(thread);
       return;
     }
     if(chatWs.configured === false){
+      thread.removeAttribute('data-chat-scroll-room');
       thread.innerHTML = '<div class="no-data">Native chat unavailable</div>';
+      syncChatJumpLatest(null, null);
       return;
     }
     var roomId = chatWs.activeRoomId;
     if(!roomId){
+      thread.removeAttribute('data-chat-scroll-room');
       thread.innerHTML = chatHeroHtml('Pick a channel, department, or agent to start.');
+      syncChatJumpLatest(null, null);
       return;
     }
     var state = chatRoomState(roomId);
@@ -7492,7 +7660,8 @@
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
         ? esc(miaEmptyGreeting(currentRealProfileName()))
         : 'No messages yet &mdash; say hello.';
-      thread.innerHTML = chatHeroHtml(emptyMessage, chatWs.activeKind === 'agent' ? chatWs.activeLabel : '');
+      replaceChatTimeline(thread, roomId, state, chatHistoryControlHtml(state) + chatHeroHtml(emptyMessage, chatWs.activeKind === 'agent' ? chatWs.activeLabel : ''), options);
+      wireChatHistoryControl(thread, roomId);
       return;
     }
     // Consecutive turns from the SAME human collapse to a slim time-only
@@ -7538,10 +7707,8 @@
         (thinkingTag ? '<span class="chat-msg-tag">' + esc(thinkingTag) + '</span>' : '') + '</div>' +
         '<div class="chat-msg-text chat-msg-thinking chat-msg-thinking-local" aria-live="polite"><span class="chat-thinking-shimmer">' + esc(chatThinkingText(state)) + '</span></div></div></div>';
     }
-    var historyControl = state.historyCursor
-      ? '<button type="button" class="chat-history-more" id="chatHistoryMore">' + (state.historyLoading ? 'Loading…' : 'Load earlier messages') + '</button>'
-      : '';
-    thread.innerHTML = historyControl + dateDivider + html;
+    var historyControl = chatHistoryControlHtml(state);
+    replaceChatTimeline(thread, roomId, state, historyControl + dateDivider + html, options);
     els('[data-mia-onboarding-choice]', thread).forEach(function(button){
       button.addEventListener('click', function(){
         var label = button.getAttribute('data-mia-onboarding-choice');
@@ -7556,13 +7723,7 @@
     wireNewsOnboarding(thread);
     wireChatExpandableMessages(thread);
     wireChatArtifactPreviews(thread);
-    var more = el('#chatHistoryMore', thread);
-    if(more) more.addEventListener('click', function(){ loadOlderChatMessages(roomId); });
-    if(options && options.prependAnchor){
-      thread.scrollTop = Math.max(0, thread.scrollHeight - options.prependAnchor.height + options.prependAnchor.top);
-    } else {
-      thread.scrollTop = thread.scrollHeight;
-    }
+    wireChatHistoryControl(thread, roomId);
     syncChatThreadPanel();
   }
 
@@ -9411,15 +9572,73 @@
   }
 
   function loadOlderChatMessages(roomId){
-    return;
+    var state = roomId && chatWs.byRoom[roomId];
+    if(!state || chatWs.activeRoomId !== roomId || state.historyLoading || state.historyComplete || !state.historyCursor) return Promise.resolve();
+    var requestedWorkspace = activeWorkspaceKey;
+    var requestId = Number(state.historyRequestId || 0) + 1;
+    state.historyRequestId = requestId;
+    state.historyLoading = true;
+    var advancedSuccessfully = false;
+    if(chatWs.activeRoomId === roomId) renderChatThread();
+
+    function fetchOlderPage(){
+      var cursor = state.historyCursor;
+      if(!cursor) return Promise.resolve();
+      return api(nativeEventsUrl(roomId, 0, 100, false, cursor)).then(function(res){
+        if(state.historyRequestId !== requestId || activeWorkspaceKey !== requestedWorkspace || chatWs.activeRoomId !== roomId) return;
+        if(res.status !== 200) throw new Error('older history unavailable');
+        var rawEvents = (res.data && res.data.events) || [];
+        var incoming = nativeEventsToMessages(rawEvents);
+        var known = {};
+        (state.messages || []).forEach(function(message){ if(message && message.id) known[message.id] = true; });
+        var added = incoming.filter(function(message){ return message && message.id && !known[message.id]; });
+        state.messages = normalizeChatMessages(added.concat(state.messages || []));
+        var nextCursor = res.data && res.data.nextBeforeSequence || null;
+        state.historyCursor = nextCursor && Number(nextCursor) < Number(cursor) ? nextCursor : null;
+        state.historyComplete = !state.historyCursor;
+        advancedSuccessfully = true;
+        // Sanitized tool-only pages may add no visible transcript row. Keep
+        // advancing the raw sequence cursor until a visible page or EOF so
+        // those rows never become an artificial history boundary.
+        var addedVisible = added.some(function(message){
+          return message.system || isHumanSender(message.sender) || displayBotBody(message.body) || chatMessageHasAttachments(message);
+        });
+        if(!addedVisible && state.historyCursor) return fetchOlderPage();
+      });
+    }
+
+    return fetchOlderPage().catch(function(){
+      // Retain the cursor so a later upward scroll can retry safely.
+      advancedSuccessfully = false;
+    }).then(function(){
+      if(state.historyRequestId !== requestId || activeWorkspaceKey !== requestedWorkspace || chatWs.activeRoomId !== roomId) return;
+      state.historyLoading = false;
+      if(chatWs.activeRoomId === roomId){
+        renderChatThread();
+        var thread = el('#chatThread');
+        if(advancedSuccessfully && thread && thread.scrollTop <= 64 && state.historyCursor) setTimeout(function(){ loadOlderChatMessages(roomId); }, 0);
+      }
+    });
   }
 
   (function(){
     var thread = el('#chatThread');
     if(!thread) return;
     thread.addEventListener('scroll', function(){
+      var roomId = thread.getAttribute('data-chat-scroll-room');
+      var state = roomId && chatWs.byRoom[roomId];
+      var movedSinceRestore = state && Math.abs(Number(thread.scrollTop || 0) - Number(state.chatScrollTop || 0)) > 0.5;
+      if(state && window.MiaChatScroll) window.MiaChatScroll.capture(thread, state, {invalidatePending:movedSinceRestore});
+      syncChatJumpLatest(thread, state);
       if(thread.scrollTop <= 64 && chatWs.activeRoomId) loadOlderChatMessages(chatWs.activeRoomId);
     }, {passive:true});
+    var jump = el('#chatJumpLatest');
+    if(jump) jump.addEventListener('click', function(){
+      var roomId = thread.getAttribute('data-chat-scroll-room');
+      var state = roomId && chatWs.byRoom[roomId];
+      if(state && window.MiaChatScroll) window.MiaChatScroll.jumpToLatest(thread, state);
+      syncChatJumpLatest(thread, state);
+    });
   })();
 
   /* Switching rooms loads the durable native event history before opening the
@@ -9441,22 +9660,48 @@
     loadActiveNativeDispatches(roomId);
     var state = chatRoomState(roomId);
     var localWelcome = state.localWelcome;
-    state.historyCursor = null;
-    state.historyComplete = false;
-    state.historyEdits = {};
-    api(nativeEventsUrl(roomId, 0, 100, true)).then(function(res){
+    state.historyRequestId = Number(state.historyRequestId || 0) + 1;
+    var roomRequestId = state.historyRequestId;
+    var requestedWorkspace = activeWorkspaceKey;
+    state.historyLoading = false;
+    var hadInitializedHistory = state.historyInitialized;
+    return api(nativeEventsUrl(roomId, 0, 100, true)).then(function(res){
+      if(state.historyRequestId !== roomRequestId || activeWorkspaceKey !== requestedWorkspace || chatWs.activeRoomId !== roomId) return;
       if(res.status !== 200) return;
       var rawEvents = (res.data && res.data.events) || [];
       var messages = nativeEventsToMessages(rawEvents);
       var stillPending = state.messages.filter(function(message){ return message.pending; });
+      var cachedMessageIds = {};
+      state.messages.forEach(function(message){ if(message && message.id) cachedMessageIds[message.id] = true; });
+      var latestOverlapsCache = messages.some(function(message){ return message && message.id && cachedMessageIds[message.id]; });
       if(messages.length) state.localWelcome = null;
-      state.messages = normalizeChatMessages(messages.concat(stillPending, messages.length || !localWelcome ? [] : [localWelcome]));
-      state.lastSequence = rawEvents.reduce(function(sequence, event){ return Math.max(sequence, Number(event.sequence || 0)); }, 0);
+      var existingDurable = hadInitializedHistory ? state.messages.filter(function(message){ return !message.pending && message !== localWelcome; }) : [];
+      var merged = messages.concat(existingDurable, stillPending, messages.length || !localWelcome ? [] : [localWelcome]);
+      var seenMessages = {};
+      state.messages = normalizeChatMessages(merged.filter(function(message){
+        if(!message || !message.id || seenMessages[message.id]) return false;
+        seenMessages[message.id] = true;
+        return true;
+      }).sort(function(left, right){
+        var leftSequence = Number(left && left.nativeEvent && left.nativeEvent.sequence || Number.MAX_SAFE_INTEGER);
+        var rightSequence = Number(right && right.nativeEvent && right.nativeEvent.sequence || Number.MAX_SAFE_INTEGER);
+        return leftSequence - rightSequence || Number(left.ts || 0) - Number(right.ts || 0);
+      }));
+      state.lastSequence = rawEvents.reduce(function(sequence, event){ return Math.max(sequence, Number(event.sequence || 0)); }, Number(state.lastSequence || 0));
       state.lastTs = rawEvents.reduce(function(timestamp, event){
         return Math.max(timestamp, Date.parse(event.createdAt) || 0);
-      }, 0);
-      state.historyComplete = true;
-      state.historyCursor = null;
+      }, Number(state.lastTs || 0));
+      if(!hadInitializedHistory){
+        state.historyCursor = res.data && res.data.nextBeforeSequence || null;
+        state.historyComplete = !state.historyCursor;
+      } else if(!latestOverlapsCache && res.data && res.data.nextBeforeSequence){
+        // More than one latest-page window may have arrived while this room
+        // was inactive. Restart backward paging at the newest page boundary;
+        // dedupe reconnects it to the retained cache without leaving a gap.
+        state.historyCursor = res.data.nextBeforeSequence;
+        state.historyComplete = false;
+      }
+      state.historyInitialized = true;
       state.sidebarPreviewLoaded = true;
       connectNativeChatSocket(roomId);
       renderChatSidebar();
@@ -11156,12 +11401,14 @@
     function closeAbout(){
       if(aboutOverlay) aboutOverlay.classList.remove('open');
       if(aboutDialog) aboutDialog.classList.remove('open');
+      document.body.classList.remove('native-browser-occluded-about');
     }
     function openAbout(){
       if(menu) menu.classList.remove('open');
       if(account) account.setAttribute('aria-expanded', 'false');
       if(aboutOverlay) aboutOverlay.classList.add('open');
       if(aboutDialog) aboutDialog.classList.add('open');
+      document.body.classList.add('native-browser-occluded-about');
       if(aboutClose) aboutClose.focus();
     }
     if(aboutBtn) aboutBtn.addEventListener('click', openAbout);
@@ -11489,11 +11736,125 @@
      History and creation intentionally share one small surface. Conversation
      storage, membership, and pinning remain owned by the existing native
      primitives; this is only a clearer way to reach them. */
-  var conversationDrawer = {mode: 'history', tab: 'chats'};
+  var conversationDrawer = {mode: 'history', tab: 'chats', agentId: null, scopeKey: null, agentMenuOpen: false};
   var dmCompose = {open: false, humans: [], agents: [], selected: {}, query: '', busy: false};
+  var freshBotConversationRequest = null;
+
+  function conversationHistoryAgentIds(conversation){
+    var metadata = conversation && conversation.metadata && typeof conversation.metadata === 'object' ? conversation.metadata : {};
+    var ids = {};
+    function add(value){
+      var id = String(value || '').trim();
+      if(id) ids[id] = true;
+    }
+    add(metadata.botId || metadata.agentId);
+    (metadata.members || []).forEach(function(member){
+      if(!member || (member.kind !== 'agent' && member.principalType !== 'agent' && member.principalType !== 'bot')) return;
+      add(member.agentId || member.principalId || member.id);
+    });
+    return Object.keys(ids);
+  }
+
+  function activeConversationHistoryAgentId(){
+    var roomId = chatWs.activeRoomId;
+    var state = roomId && chatWs.byRoom[roomId];
+    if(state && state.selectedAgentId) return String(state.selectedAgentId);
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+    var directIds = conversationHistoryAgentIds(conversation);
+    if((conversation && (conversation.type === 'agent' || conversation.type === 'bot')) && directIds.length) return directIds[0];
+    var messages = state && state.messages || [];
+    for(var index = messages.length - 1; index >= 0; index--){
+      var event = messages[index] && messages[index].nativeEvent;
+      if(event && (event.senderType === 'agent' || event.senderType === 'bot') && event.senderId) return String(event.senderId);
+    }
+    return directIds.length === 1 ? directIds[0] : null;
+  }
+
+  function syncConversationHistoryScope(){
+    var activeAgentId = activeConversationHistoryAgentId();
+    var scopeKey = activeWorkspaceKey + ':' + String(chatWs.activeRoomId || '') + ':' + String(activeAgentId || 'all');
+    if(conversationDrawer.scopeKey !== scopeKey){
+      conversationDrawer.scopeKey = scopeKey;
+      conversationDrawer.agentId = activeAgentId || 'all';
+      conversationDrawer.agentMenuOpen = false;
+    }
+  }
+
+  function conversationHistoryAgentOptions(){
+    var options = [];
+    var seen = {};
+    function add(id, name){
+      id = String(id || '').trim();
+      if(!id || seen[id]) return;
+      seen[id] = true;
+      options.push({id:id, name:String(name || id)});
+    }
+    if(chatWs.gatewayAgent) add('gateway', chatWs.gatewayAgent.name || 'Mia');
+    (chatWs.allAgents || []).forEach(function(agent){ add(agent.id, agent.name); });
+    (chatWs.nativeConversations || []).forEach(function(conversation){
+      conversationHistoryAgentIds(conversation).forEach(function(id){
+        var metadata = conversation.metadata || {};
+        add(id, conversation.type === 'agent' || conversation.type === 'bot' ? (conversation.name || metadata.name) : id);
+      });
+    });
+    return options.sort(function(left, right){ return left.name.localeCompare(right.name); });
+  }
+
+  function conversationMatchesHistoryAgent(conversation, agentId){
+    return agentId === 'all' || conversationHistoryAgentIds(conversation).indexOf(String(agentId || '')) !== -1;
+  }
+
+  function conversationHistoryRowAgent(conversation, selectedAgentId){
+    var ids = conversationHistoryAgentIds(conversation);
+    if(!ids.length) return null;
+    var id = selectedAgentId !== 'all' && ids.indexOf(String(selectedAgentId || '')) !== -1 ? String(selectedAgentId) : null;
+    var state = conversation && chatWs.byRoom[conversation.id];
+    var messages = state && state.messages || [];
+    if(!id){
+      for(var index = messages.length - 1; index >= 0; index--){
+        var event = messages[index] && messages[index].nativeEvent;
+        if(event && (event.senderType === 'agent' || event.senderType === 'bot') && ids.indexOf(String(event.senderId || '')) !== -1){
+          id = String(event.senderId);
+          break;
+        }
+      }
+    }
+    id = id || ids[0];
+    var option = conversationHistoryAgentOptions().filter(function(candidate){ return candidate.id === id; })[0];
+    return {id:id, name:option && option.name || conversation.name || id};
+  }
+
+  function renderConversationHistoryAgentFilter(){
+    syncConversationHistoryScope();
+    var button = el('#conversationHistoryAgentButton');
+    var menu = el('#conversationHistoryAgentMenu');
+    if(!button || !menu) return;
+    var options = conversationHistoryAgentOptions();
+    var selected = options.filter(function(option){ return option.id === conversationDrawer.agentId; })[0] || null;
+    var selectedName = selected ? selected.name : 'All bots and agents';
+    button.innerHTML = selected
+      ? agentAvatarHtml(selected.name, selected.id, 24, null, null, false)
+      : '<span class="conversation-history-agent-all" aria-hidden="true">ALL</span>';
+    button.setAttribute('aria-label', 'Filter history: ' + selectedName);
+    button.setAttribute('aria-expanded', conversationDrawer.agentMenuOpen ? 'true' : 'false');
+    menu.hidden = !conversationDrawer.agentMenuOpen;
+    menu.innerHTML = [{id:'all', name:'All bots and agents'}].concat(options).map(function(option){
+      var active = option.id === conversationDrawer.agentId;
+      var avatar = option.id === 'all' ? '<span class="conversation-history-agent-all">ALL</span>' : agentAvatarHtml(option.name, option.id, 24, null, null, false);
+      return '<button type="button" class="conversation-history-agent-option" data-history-agent-id="' + esc(option.id) + '" role="option" aria-selected="' + (active ? 'true' : 'false') + '">' +
+        '<span class="conversation-history-agent-option-avatar">' + avatar + '</span><span>' + esc(option.name) + '</span></button>';
+    }).join('');
+  }
 
   function renderConversationHeaderActions(){
     var pinned = isChatPinned('room:' + chatWs.activeRoomId);
+    var activeConversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
+    var activeMetadata = activeConversation && activeConversation.metadata || {};
+    var canCreateFreshBotConversation = !!activeConversation && activeConversation.type === 'bot' && !!activeMetadata.botId;
+    var freshDisabled = !canCreateFreshBotConversation || !!freshBotConversationRequest;
+    var freshTitle = canCreateFreshBotConversation
+      ? (freshBotConversationRequest ? 'Creating a new conversation…' : 'New conversation with this bot')
+      : (isNativeMiaConversation(activeConversation) ? 'Mia uses one continuous conversation' : 'Open a bot chat to start another conversation');
     // Canonical Lucide v0.545.0 geometry. Keep this set together so these
     // adjacent actions share one optical grid instead of drifting as custom
     // paths are edited independently.
@@ -11501,8 +11862,48 @@
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShareConversation" title="Copy conversation ID" aria-label="Copy conversation ID"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v13"></path><path d="m16 6-4-4-4 4"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path></svg></button>' +
       '<button type="button" class="ch-icon-btn conversation-action-btn' + (pinned ? ' active' : '') + '" id="chatBookmarkConversation" title="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-label="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-pressed="' + (pinned ? 'true' : 'false') + '"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg></button>' +
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatHistoryBtn" title="History" aria-label="Open conversation history"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></button>' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="New conversation" aria-label="New conversation"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button>' +
+      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="' + esc(freshTitle) + '" aria-label="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '') + '><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button>' +
     '</div>';
+  }
+
+  function createFreshConversationForActiveBot(){
+    if(freshBotConversationRequest) return freshBotConversationRequest.promise;
+    var source = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
+    var metadata = source && source.metadata || {};
+    if(!source || source.type !== 'bot' || !metadata.botId) return Promise.resolve(null);
+    var requestedWorkspace = activeWorkspaceKey;
+    var requestedRoomId = source.id;
+    var request = {
+      roomId: requestedRoomId,
+      workspace: requestedWorkspace,
+      promise: null
+    };
+    freshBotConversationRequest = request;
+    request.promise = api(nativeConversationPath(requestedRoomId, '/fresh'), {method:'POST', body:{}}).then(function(res){
+      if((res.status !== 201 && res.status !== 200) || !res.data || !res.data.conversation){
+        throw new Error(res.data && (res.data.message || res.data.error) || 'Could not create a new conversation.');
+      }
+      var conversation = res.data.conversation;
+      if(activeWorkspaceKey !== requestedWorkspace || chatWs.activeRoomId !== requestedRoomId) return conversation;
+      if(!(chatWs.nativeConversations || []).some(function(item){ return item.id === conversation.id; })){
+        chatWs.nativeConversations.push(conversation);
+      }
+      applyNativeConversationList(chatWs.nativeConversations);
+      renderChatSidebar();
+      loadChatRoom(conversation.id, 'agent', conversation.name || source.name || 'Bot');
+      return conversation;
+    }).catch(function(error){
+      if(activeWorkspaceKey === requestedWorkspace && chatWs.activeRoomId === requestedRoomId){
+        showBenchToast(error && error.message ? error.message : 'Could not create a new conversation.');
+      }
+      return null;
+    }).then(function(conversation){
+      if(freshBotConversationRequest === request) freshBotConversationRequest = null;
+      if(activeWorkspaceKey === requestedWorkspace) renderChatHeaderBar();
+      return conversation;
+    });
+    renderChatHeaderBar();
+    return request.promise;
   }
 
   function wireConversationHeaderActions(header){
@@ -11520,7 +11921,7 @@
       if(dmCompose.open && conversationDrawer.mode === 'history') renderConversationHistory();
     });
     if(history) history.addEventListener('click', function(){ openConversationHistory('chats'); });
-    if(create) create.addEventListener('click', openDmCompose);
+    if(create) create.addEventListener('click', createFreshConversationForActiveBot);
   }
 
   function openConversationDrawer(mode){
@@ -11536,6 +11937,7 @@
     if(actions) actions.hidden = !composing;
     if(overlay) overlay.classList.add('open');
     if(drawer) drawer.classList.add('open');
+    document.body.classList.add('native-browser-occluded-conversation');
     if(!composing) renderConversationHistory();
   }
 
@@ -11579,7 +11981,9 @@
   function renderConversationHistory(){
     var list = el('#conversationHistoryList');
     if(!list) return;
+    renderConversationHistoryAgentFilter();
     var tab = conversationDrawer.tab || 'chats';
+    var agentId = conversationDrawer.agentId || 'all';
     els('[data-conversation-tab]').forEach(function(button){
       var active = button.getAttribute('data-conversation-tab') === tab;
       button.classList.toggle('active', active);
@@ -11588,6 +11992,8 @@
     if(tab === 'images'){
       var images = [];
       Object.keys(chatWs.byRoom || {}).forEach(function(roomId){
+        var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+        if(!conversation || !conversationMatchesHistoryAgent(conversation, agentId)) return;
         var state = chatWs.byRoom[roomId];
         (state.messages || []).forEach(function(message){
           (message.attachments || []).forEach(function(attachment){
@@ -11602,7 +12008,7 @@
       }).join('') + '</div>' : '<div class="conversation-history-empty">' + conversationHistoryEmpty(tab) + '</div>';
     } else {
       var conversations = (chatWs.nativeConversations || []).slice().filter(function(conversation){
-        return tab !== 'bookmarks' || isChatPinned('room:' + conversation.id);
+        return conversationMatchesHistoryAgent(conversation, agentId) && (tab !== 'bookmarks' || isChatPinned('room:' + conversation.id));
       }).sort(function(a, b){ return conversationHistoryTimestamp(b) - conversationHistoryTimestamp(a); });
       var currentGroup = '';
       list.innerHTML = conversations.length ? conversations.map(function(conversation){
@@ -11612,9 +12018,11 @@
         currentGroup = group;
         var active = conversation.id === chatWs.activeRoomId;
         var bookmarked = isChatPinned('room:' + conversation.id);
+        var rowAgent = conversationHistoryRowAgent(conversation, agentId);
         return heading + '<button type="button" class="conversation-history-row' + (active ? ' active' : '') + '" data-history-room-id="' + esc(conversation.id) + '">' +
           '<span class="conversation-history-name">' + esc(conversationHistoryLabel(conversation)) + '</span>' +
           (bookmarked ? '<svg class="conversation-history-bookmark" viewBox="0 0 24 24" aria-label="Bookmarked"><path d="M6.5 4.5h11v15l-5.5-3.5-5.5 3.5z"></path></svg>' : '') +
+          (rowAgent ? '<span class="conversation-history-row-agent" title="' + esc(rowAgent.name) + '">' + agentAvatarHtml(rowAgent.name, rowAgent.id, 26, null, null, false) + '</span>' : '') +
         '</button>';
       }).join('') : '<div class="conversation-history-empty">' + conversationHistoryEmpty(tab) + '</div>';
     }
@@ -11654,6 +12062,7 @@
     var overlay = el('#dmComposeOverlay'), drawer = el('#dmComposeDrawer');
     if(overlay) overlay.classList.remove('open');
     if(drawer) drawer.classList.remove('open');
+    document.body.classList.remove('native-browser-occluded-conversation');
   }
   function dmComposeSelectedCount(){
     return Object.keys(dmCompose.selected).length;
@@ -11732,7 +12141,13 @@
     var createBtn = el('#dmComposeCreate');
     var searchInput = el('#dmComposeSearch');
     var tabs = els('[data-conversation-tab]');
-    if(overlay) overlay.addEventListener('click', closeDmCompose);
+    var agentButton = el('#conversationHistoryAgentButton');
+    var agentMenu = el('#conversationHistoryAgentMenu');
+    if(overlay) overlay.addEventListener('click', function(event){
+      event.preventDefault();
+      event.stopPropagation();
+      closeDmCompose();
+    });
     if(closeBtn) closeBtn.addEventListener('click', closeDmCompose);
     if(cancelBtn) cancelBtn.addEventListener('click', closeDmCompose);
     if(createBtn) createBtn.addEventListener('click', dmComposeCreate);
@@ -11745,6 +12160,17 @@
         conversationDrawer.tab = tab.getAttribute('data-conversation-tab') || 'chats';
         renderConversationHistory();
       });
+    });
+    if(agentButton) agentButton.addEventListener('click', function(){
+      conversationDrawer.agentMenuOpen = !conversationDrawer.agentMenuOpen;
+      renderConversationHistoryAgentFilter();
+    });
+    if(agentMenu) agentMenu.addEventListener('click', function(event){
+      var option = event.target.closest('[data-history-agent-id]');
+      if(!option || !agentMenu.contains(option)) return;
+      conversationDrawer.agentId = option.getAttribute('data-history-agent-id') || 'all';
+      conversationDrawer.agentMenuOpen = false;
+      renderConversationHistory();
     });
   })();
 
@@ -12319,6 +12745,7 @@
     // through the one generic API row (see operations/product.md).
     var COMPOSER_FAMILY_PROVIDERS = [
       {id:'managed-router', label:'Mia Router', harnessProvider:'managed-router', aliases:['managed-router', 'openrouter']},
+      {id:'claude-subscription-directsdk-experimental', label:'Claude', harnessProvider:'claude-subscription-directsdk-experimental', aliases:['claude-subscription-directsdk-experimental']},
       {id:'openai-codex', label:'ChatGPT', harnessProvider:'openai-codex', aliases:['openai-codex', 'codex']},
       {id:'xai-oauth', label:'Grok', harnessProvider:'xai-oauth', aliases:['xai-oauth', 'xai', 'grok']},
       {id:'api', label:'API', harnessProvider:'openai-api', aliases:['openai-api', 'anthropic', 'gemini', 'openai', 'deepseek']}

@@ -455,6 +455,10 @@
             <div class="chat-main-col">
               <header class="channel-header" id="channelHeader" style="display:none;"></header>
               <div class="chat-thread" id="chatThread"></div>
+              <button type="button" class="chat-jump-latest" id="chatJumpLatest" aria-label="Jump to latest message" title="Jump to latest message" aria-hidden="true" hidden>
+                <span class="chat-jump-latest-label" aria-hidden="true"></span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
+              </button>
               <div class="chat-presets" id="chatChips"></div>
               <div class="cc-recording-pill" id="ccRecordingPill"><span class="cc-recording-dot"></span>Recording&hellip;</div>
               <div class="chat-dept-agents" id="chatDeptAgents" style="display:none;"></div>
@@ -911,15 +915,23 @@
     <div class="styled-onboarding-provider-row">
       <button type="button" class="styled-onboarding-choice" data-harness-provider="managed-router" aria-pressed="false">
         <span class="styled-onboarding-choice-icon choice-managed-router"><img src="assets/icons/mia-192.png" alt="" style="width:28px;height:28px;border-radius:6px;" /></span>
-        <span><strong data-managed-router-label>Managed Router</strong><small>Auto-provisioned access to top models — no API key needed</small></span>
+        <span><strong data-managed-router-label>Managed Router</strong></span>
         <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
       </button>
       <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="managed-router" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
     </div>
     <div class="styled-onboarding-provider-row">
+      <button type="button" class="styled-onboarding-choice" data-harness-provider="claude-subscription-directsdk-experimental" aria-pressed="false">
+        <span class="styled-onboarding-choice-icon choice-claude"><img src="assets/icons/claude.svg?v=20260921-claude-directsdk-1" alt="" /></span>
+        <span><strong>Claude subscription <span class="styled-onboarding-mode-badge">Experimental</span></strong></span>
+        <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="claude-subscription-directsdk-experimental" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
+    </div>
+    <div class="styled-onboarding-provider-row">
       <button type="button" class="styled-onboarding-choice" data-harness-provider="openai-codex" aria-pressed="false">
         <span class="styled-onboarding-choice-icon choice-openai"><img src="assets/icons/chatgpt-monoblossom.svg?v=20260914-provider-icons-2" alt="" /></span>
-        <span><strong>ChatGPT subscription</strong><small>Use your ChatGPT plan through your configured harness</small></span>
+        <span><strong>ChatGPT subscription</strong></span>
         <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
       </button>
       <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="openai-codex" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
@@ -927,7 +939,7 @@
     <div class="styled-onboarding-provider-row">
       <button type="button" class="styled-onboarding-choice" data-harness-provider="xai-oauth" aria-pressed="false">
         <span class="styled-onboarding-choice-icon choice-grok"><img src="assets/icons/x-logo.svg?v=20260903-provider-icons-1" alt="" /></span>
-        <span><strong>Grok subscription</strong><small>Use your Grok plan through your configured harness</small></span>
+        <span><strong>Grok subscription</strong></span>
         <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
       </button>
       <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="xai-oauth" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
@@ -935,7 +947,7 @@
     <div class="styled-onboarding-provider-row styled-onboarding-api-card" id="harnessApiCard">
       <button type="button" class="styled-onboarding-choice" data-harness-provider="openai-api" aria-pressed="false">
         <span class="styled-onboarding-choice-icon choice-api">↗</span>
-        <span><strong>API connection</strong><small>Use an API credential already managed by your harness</small></span>
+        <span><strong>API connection</strong></span>
         <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
       </button>
       <div class="styled-onboarding-api-section" id="harnessApiConnectionSection" hidden>
@@ -1007,6 +1019,15 @@
     <div class="styled-harness-auth-code" id="harnessAuthCodeWrap" hidden>
       <span>Code</span><code id="harnessAuthCode"></code>
     </div>
+    <details id="harnessAuthCompletion" hidden style="flex:1 1 100%;min-width:0">
+      <summary>Enter code manually</summary>
+      <form class="styled-harness-auth-completion">
+      <label for="harnessAuthCompletionCode">One-time code</label>
+      <input id="harnessAuthCompletionCode" type="password" autocomplete="off" spellcheck="false" placeholder="Paste code from Claude">
+      <button type="submit" id="harnessAuthCompletionSubmit">Continue</button>
+      </form>
+    </details>
+    <button type="button" class="styled-harness-auth-cancel" id="harnessAuthCancel" hidden>Cancel sign-in</button>
   </div>
   <div class="styled-onboarding-error" id="harnessOnboardingError" role="status"></div>
   <div class="styled-onboarding-actions">
@@ -1049,10 +1070,16 @@
     <h2 id="conversationDrawerTitle">History</h2>
   </div>
   <div class="conversation-history-view" id="conversationHistoryView">
-    <div class="conversation-history-tabs" role="tablist" aria-label="Conversation history">
-      <button type="button" class="conversation-history-tab active" data-conversation-tab="chats" role="tab" aria-selected="true">Chats</button>
-      <button type="button" class="conversation-history-tab" data-conversation-tab="bookmarks" role="tab" aria-selected="false">Bookmarks</button>
-      <button type="button" class="conversation-history-tab" data-conversation-tab="images" role="tab" aria-selected="false">Images</button>
+    <div class="conversation-history-toolbar">
+      <div class="conversation-history-tabs" role="tablist" aria-label="Conversation history">
+        <button type="button" class="conversation-history-tab active" data-conversation-tab="chats" role="tab" aria-selected="true">Chats</button>
+        <button type="button" class="conversation-history-tab" data-conversation-tab="bookmarks" role="tab" aria-selected="false">Bookmarks</button>
+        <button type="button" class="conversation-history-tab" data-conversation-tab="images" role="tab" aria-selected="false">Images</button>
+      </div>
+      <div class="conversation-history-agent-filter">
+        <button type="button" class="conversation-history-agent-button" id="conversationHistoryAgentButton" aria-label="Filter history by bot or agent" aria-haspopup="listbox" aria-expanded="false"></button>
+        <div class="conversation-history-agent-menu" id="conversationHistoryAgentMenu" role="listbox" aria-label="Bot or agent" hidden></div>
+      </div>
     </div>
     <div class="conversation-history-list" id="conversationHistoryList"></div>
   </div>
@@ -1077,6 +1104,7 @@
 <script src="assets/mia-mark.js"></script>
 <script src="chat-security.js"></script>
 <script src="hermes-connectors.js?v=20260904-google-g"></script>
+<script src="chat-scroll.js?v=20260921-scroll-follow-1"></script>
     <script src="native-browser.js?v=20260908-native-theme-1"></script>
     <script src="app.js?v=20260920-conversation-drawer-1"></script>
 </body>

@@ -11,6 +11,8 @@ const SERVER_OWNED_AGENT_FIELDS = Object.freeze([
   'hermesCronJobId',
   'hermesCronJobIds',
   'hermesCronDeliveries',
+  'instructionsRevision',
+  'expectedInstructionsRevision',
 ]);
 
 const AGENT_AVATAR_COLOR_RE = /^#[0-9a-f]{6}$/i;

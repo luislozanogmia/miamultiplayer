@@ -873,6 +873,7 @@ function createConversationRepository(db) {
             AND c.type = 'bot'
             AND c.deleted_at IS NULL
             AND json_extract(c.metadata, '$.botId') = ?
+            AND coalesce(json_extract(c.metadata, '$.conversationMode'), '') <> 'fresh'
           ORDER BY c.created_at ASC, c.id ASC
           LIMIT 1`
       ).get(normalizedCompanyId, normalizedCreatedBy, normalizedBotId);
@@ -1412,15 +1413,24 @@ function createConversationRepository(db) {
     return eventRow(row);
   }
 
-  function listEvents({ companyId, conversationId, afterSequence = null, limit, includeDeleted = true, latest = false, excludedSenderTypes = [] }) {
+  function listEvents({ companyId, conversationId, afterSequence = null, beforeSequence = null, limit, includeDeleted = true, latest = false, excludedSenderTypes = [] }) {
     const normalizedCompanyId = requiredString(companyId, 'companyId');
     const normalizedConversationId = requiredString(conversationId, 'conversationId');
     ensureConversation(normalizedCompanyId, normalizedConversationId, { includeDeleted: true });
     if (afterSequence !== null && afterSequence !== undefined && (!Number.isInteger(afterSequence) || afterSequence < 0)) {
       fail('INVALID_INPUT', 'afterSequence must be a non-negative integer');
     }
+    if (beforeSequence !== null && beforeSequence !== undefined && (!Number.isInteger(beforeSequence) || beforeSequence < 1)) {
+      fail('INVALID_INPUT', 'beforeSequence must be a positive integer');
+    }
+    if (afterSequence !== null && afterSequence !== undefined && beforeSequence !== null && beforeSequence !== undefined) {
+      fail('INVALID_INPUT', 'beforeSequence cannot be combined with afterSequence');
+    }
     if (latest && afterSequence !== null && afterSequence !== undefined) {
       fail('INVALID_INPUT', 'latest cannot be combined with afterSequence');
+    }
+    if (latest && beforeSequence !== null && beforeSequence !== undefined) {
+      fail('INVALID_INPUT', 'latest cannot be combined with beforeSequence');
     }
     if (!Array.isArray(excludedSenderTypes)
       || excludedSenderTypes.some((senderType) => !PRINCIPAL_TYPES.has(senderType))) {
@@ -1435,23 +1445,26 @@ function createConversationRepository(db) {
       `SELECT * FROM events
         WHERE company_id = ? AND conversation_id = ?
           ${afterSequence === null || afterSequence === undefined ? '' : 'AND sequence > ?'}
+          ${beforeSequence === null || beforeSequence === undefined ? '' : 'AND sequence < ?'}
           ${includeDeleted ? '' : 'AND deleted_at IS NULL'}
           ${senderClause}
-        ORDER BY sequence ${latest ? 'DESC' : 'ASC'}
+        ORDER BY sequence ${latest || (beforeSequence !== null && beforeSequence !== undefined) ? 'DESC' : 'ASC'}
         LIMIT ?`
     ).all(...(
-      afterSequence === null || afterSequence === undefined
-        ? [normalizedCompanyId, normalizedConversationId, ...excluded, size + 1]
-        : [normalizedCompanyId, normalizedConversationId, afterSequence, ...excluded, size + 1]
+      [normalizedCompanyId, normalizedConversationId]
+        .concat(afterSequence === null || afterSequence === undefined ? [] : [afterSequence])
+        .concat(beforeSequence === null || beforeSequence === undefined ? [] : [beforeSequence])
+        .concat(excluded, [size + 1])
     ));
     const hasMore = rows.length > size;
     if (hasMore) rows.pop();
-    if (latest) rows.reverse();
+    if (latest || (beforeSequence !== null && beforeSequence !== undefined)) rows.reverse();
     const events = rows.map(eventRow);
     return {
       events,
       hasMore,
-      nextAfterSequence: !latest && hasMore && events.length ? events[events.length - 1].sequence : null,
+      nextAfterSequence: !latest && (beforeSequence === null || beforeSequence === undefined) && hasMore && events.length ? events[events.length - 1].sequence : null,
+      nextBeforeSequence: (latest || (beforeSequence !== null && beforeSequence !== undefined)) && hasMore && events.length ? events[0].sequence : null,
     };
   }
 
