@@ -37,8 +37,8 @@ paid-API/custom-endpoint refusal, profile provisioning for ordinary agents and
 bots, model validation (including `[1m]` routes), persisted Mia disconnect
 state across a backend restart, and the mocked login URL/code/cancel/retry
 lifecycle. The login subprocess remains the sole credential owner: Mia opens
-its official authorization URL in the embedded browser and forwards an
-optional one-time completion code to its standard input without storing or
+its official authorization URL in a separate sandboxed sign-in popup and
+forwards an optional one-time completion code to its standard input without storing or
 logging it. A real subscription turn, real account login, packaged-app launch,
 installer/package build, and manual UI flow remain unverified. Do not describe
 this integration as production-qualified until those checks pass.

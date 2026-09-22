@@ -718,8 +718,8 @@ exit 8
     const cookie = await loginAsBootAdmin(server);
     const headers = { cookie, 'content-type': 'application/json' };
     const provider = 'claude-subscription-directsdk-experimental';
-    const startPromise = fetch(`${server.origin}/api/settings/harness/auth/start`, {
-      method: 'POST', headers, body: JSON.stringify({ provider }),
+    const redirectPromise = fetch(`${server.origin}/api/settings/harness/auth/redirect?provider=${encodeURIComponent(provider)}`, {
+      headers: { cookie }, redirect: 'manual',
     });
     await waitForFile(firstChunkReady, server.child, server.logs);
     const partial = await fetch(`${server.origin}/api/settings/harness/auth`, { headers: { cookie } });
@@ -728,7 +728,12 @@ exit 8
     assert.equal(partialAuth.provider, provider);
     assert.equal(partialAuth.verificationUrl, null);
     fs.writeFileSync(releaseUrl, 'continue');
-    const start = await startPromise;
+    const redirected = await redirectPromise;
+    assert.equal(redirected.status, 302, await redirected.text());
+    assert.match(redirected.headers.get('location') || '', /^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
+    const start = await fetch(`${server.origin}/api/settings/harness/auth/start`, {
+      method: 'POST', headers, body: JSON.stringify({ provider }),
+    });
     const started = await start.json();
     assert.equal(start.status, 200, JSON.stringify(started));
     assert.equal(started.auth.state, 'waiting');
