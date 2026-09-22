@@ -77,7 +77,9 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
       return { ok: true, result };
     } catch (error) {
       // Exception messages and provider bodies can contain credentials. Never
-      // pass those across IPC or put them in logs.
+      // pass those across IPC or put them in logs. Only the fixed error code
+      // and HTTP status are logged, so failures stay diagnosable.
+      console.warn("[clerk-auth]", action, "failed:", error && error.code ? error.code : "UNEXPECTED", error && error.httpStatus ? error.httpStatus : "");
       const local = {
         protocol_unavailable: "Install this Mia build to enable browser sign-in. You can still sign in with an email code.",
         invalid_email: "Enter a valid email address.",
