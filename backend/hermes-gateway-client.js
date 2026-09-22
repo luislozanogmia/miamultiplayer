@@ -625,7 +625,7 @@ class HermesGatewayClient {
     return { sessionId: createdSessionId, storedSessionId: String(created.stored_session_id) };
   }
 
-  async modelOptions({ refresh = false } = {}) {
+  async modelOptions({ refresh = false, profile = '' } = {}) {
     if (typeof this.fetchImpl !== 'function') throw new Error('fetch is not available');
     await this.ensureGateway();
     const endpoint = new URL(this.endpoint());
@@ -634,6 +634,7 @@ class HermesGatewayClient {
     endpoint.pathname = '/api/model/options';
     endpoint.search = '';
     endpoint.searchParams.set('include_unconfigured', 'false');
+    if (profile) endpoint.searchParams.set('profile', profile);
     if (refresh) endpoint.searchParams.set('refresh', 'true');
     let lastError = null;
     // The gateway socket can accept connections a fraction before its HTTP

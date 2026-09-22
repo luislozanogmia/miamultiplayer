@@ -256,6 +256,9 @@ try {
     $null = Invoke-Native "git apply hermes-noninteractive.patch" {
         & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-noninteractive.patch")
     }
+    $null = Invoke-Native "git apply hermes-profile-picker.patch" {
+        & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-profile-picker.patch")
+    }
 } finally {
     Pop-Location
 }

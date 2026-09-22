@@ -51,6 +51,28 @@ function nativeRuntimeBinaryPath(binDir, name) {
   return path.join(binDir, process.platform === "win32" ? `${name}.exe` : name);
 }
 
+function discoverClaudeCodeCommand() {
+  const explicit = String(process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND || "").trim();
+  if (explicit) return explicit;
+  const home = app.getPath("home");
+  const executable = process.platform === "win32" ? "claude.cmd" : "claude";
+  const candidates = [
+    ...String(process.env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, executable)),
+    ...(process.platform === "darwin" ? ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] : []),
+    ...(process.platform === "win32" && process.env.APPDATA ? [path.join(process.env.APPDATA, "npm", executable)] : []),
+    path.join(home, ".local", "bin", executable),
+    path.join(home, ".npm-global", "bin", executable),
+  ];
+  return candidates.find((candidate) => {
+    try {
+      return fs.statSync(candidate, { throwIfNoEntry: false })?.isFile();
+    } catch (_) {
+      // A stale or unreadable PATH entry must not prevent Mia from starting.
+      return false;
+    }
+  }) || "";
+}
+
 // A source checkout launched with MIA_DEV_DATA_ROOT keeps every desktop
 // artifact — renderer state, cookies, logs, and the browser bridge — under
 // its own data root instead of Electron's default userData. A dev run and
@@ -63,11 +85,19 @@ const PACKAGED_RUNTIME_ROOT = app.isPackaged ? path.join(process.resourcesPath, 
 const PACKAGED_HERMES_BIN = PACKAGED_RUNTIME_ROOT
   ? runtimeLauncherPath(path.join(PACKAGED_RUNTIME_ROOT, "bin"), "hermes")
   : "";
+function developmentHermesBinary(env = process.env, exists = fs.existsSync, platform = process.platform) {
+  const explicit = env.MIAOS_HERMES_BIN || env.HERMES_BIN;
+  if (explicit) return String(explicit).trim();
+  // A bare dev launch must use the installed Mia runtime, not an unrelated
+  // personal Hermes checkout. Its wrapper selects the bundled Python too.
+  const bundled = "/Applications/Mia.app/Contents/Resources/runtime/bin/hermes";
+  if (platform === "darwin" && exists(bundled)) return bundled;
+  const personal = path.join(os.homedir(), ".local", "bin", "hermes");
+  return exists(personal) ? personal : "";
+}
 const HERMES_BIN = String(app.isPackaged
   ? PACKAGED_HERMES_BIN
-  : (process.env.MIAOS_HERMES_BIN || process.env.HERMES_BIN
-    || (() => { const p = path.join(os.homedir(), ".local", "bin", "hermes"); return fs.existsSync(p) ? p : ""; })()
-  )).trim();
+  : developmentHermesBinary()).trim();
 
 function isEngineeringRoot(candidate) {
   return Boolean(candidate)
@@ -751,6 +781,7 @@ async function startLocalBackend(exactPort = null) {
   const workspaceDir = miaosWorkspacePath();
   const bridgePaths = ghostBridgePaths();
   const ghostCliHome = resolveGhostCliHome();
+  const claudeCodeCommand = discoverClaudeCodeCommand();
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
     STATIC_DIR: "../frontend",
@@ -780,6 +811,18 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "executions.db"),
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
       || path.join(dataDirectory, "bot-artifacts"),
+    MIAOS_BOT_PACKAGE_DIR: process.env.MIAOS_BOT_PACKAGE_DIR
+      || path.join(dataDirectory, "bots"),
+    // Claude Code owns its credential store. Hermes' DirectSDK plugin receives
+    // only resolved executable/config paths, never tokens or Anthropic API
+    // overrides. This makes desktop launches see common npm installs without
+    // broadening PATH for model-directed tools.
+    // Even explicitly setting the default directory changes Claude's macOS
+    // credential-store identity. Let the official CLI choose its native store.
+    CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR || "",
+    ...(claudeCodeCommand
+      ? { CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claudeCodeCommand }
+      : {}),
     // Clerk sign-in is on by default: the backend carries Mia's instance as
     // its built-in configuration, so the desktop app boots into the hosted
     // ecosystem unless the person opts out (MIAOS_DESKTOP_NO_AUTH=1 or
@@ -1110,6 +1153,59 @@ function isClerkGoogleOAuthUrl(value) {
   } catch (_) {
     return false;
   }
+}
+
+function harnessAuthRedirectProvider(value, expectedBackendUrl = backendUrl) {
+  try {
+    const url = new URL(value);
+    if (!expectedBackendUrl || !hasExactOrigin(url.toString(), expectedBackendUrl)) return "";
+    if (url.pathname !== "/api/settings/harness/auth/redirect") return "";
+    const provider = url.searchParams.get("provider") || "";
+    return ["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"].includes(provider)
+      ? provider : "";
+  } catch (_) { return ""; }
+}
+
+function claudeAuthStartContract(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+    if (!["claude.com", "claude.ai"].includes(url.hostname)) return null;
+    if (!["/cai/oauth/authorize", "/oauth/authorize"].includes(url.pathname)) return null;
+    const redirect = new URL(url.searchParams.get("redirect_uri") || "");
+    const state = url.searchParams.get("state") || "";
+    if (redirect.origin !== "https://platform.claude.com"
+      || redirect.pathname !== "/oauth/code/callback"
+      || redirect.search || redirect.hash
+      || url.searchParams.get("code") !== "true"
+      || !state || state.length > 4096) return null;
+    return {
+      state,
+      redirectOrigin: redirect.origin,
+      redirectPath: redirect.pathname,
+    };
+  } catch (_) { return null; }
+}
+
+function isHarnessAuthNavigation(value, provider, contract = null) {
+  try {
+    const url = new URL(value);
+    if (!["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"].includes(provider)) return false;
+    if (provider === "claude-subscription-directsdk-experimental" && contract) {
+      const stateMatches = url.searchParams.get("state") === contract.state;
+      if (url.protocol === "https:" && !url.username && !url.password && !url.port
+        && url.origin === contract.redirectOrigin && url.pathname === contract.redirectPath) {
+        return stateMatches;
+      }
+    }
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
+    const hosts = provider === "claude-subscription-directsdk-experimental"
+      ? new Set(["claude.com", "claude.ai", "accounts.google.com"])
+      : (provider === "openai-codex"
+        ? new Set(["auth.openai.com", "chatgpt.com", "accounts.google.com"])
+        : new Set(["accounts.x.ai", "auth.x.ai", "x.ai", "accounts.google.com"]));
+    return hosts.has(url.hostname);
+  } catch (_) { return false; }
 }
 
 function hasExactOrigin(value, expected) {
@@ -1466,11 +1562,68 @@ function openClerkOAuthPopup(parent, url, expectedBackendUrl) {
   return popup;
 }
 
-function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false) {
+function harnessAuthPopupOptions(parent) {
+  return {
+    parent,
+    modal: false,
+    show: true,
+    autoHideMenuBar: true,
+    width: 560,
+    height: 720,
+    webPreferences: {
+      session: parent.webContents.session,
+      preload: path.join(__dirname, "google-oauth-preload.cjs"),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  };
+}
+
+async function completeClaudeAuthCallback(window, value, contract, localBackend) {
+  if (!contract || !localBackend) return false;
+  try {
+    const url = new URL(value);
+    if (url.origin !== contract.redirectOrigin || url.pathname !== contract.redirectPath
+      || !isHarnessAuthNavigation(value, "claude-subscription-directsdk-experimental", contract)) return false;
+    const code = url.searchParams.get("code") || "";
+    const state = url.searchParams.get("state") || "";
+    if (!code || code.length > 4096 || /[\s\x00-\x1f\x7f#]/.test(code)) return false;
+    // Use Mia's existing authenticated session. The official CLI remains the
+    // credential owner; no token, callback URL, or code is logged or persisted.
+    const response = await window.webContents.session.fetch(new URL("/api/settings/harness/auth/complete", localBackend).href, {
+      method: "POST",
+      credentials: "include",
+      redirect: "error",
+      headers: { "Content-Type": "application/json", Origin: new URL(localBackend).origin },
+      body: JSON.stringify({ provider: "claude-subscription-directsdk-experimental", code: `${code}#${state}`, state }),
+    });
+    if (response.status !== 202) desktopLog(`Claude automatic completion rejected: HTTP ${response.status}`);
+    return response.status === 202;
+  } catch (_) {
+    // Leave the official code page available for the manual fallback.
+    desktopLog("Claude automatic completion unavailable; manual fallback retained");
+    return false;
+  }
+}
+
+function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false, harnessAuthProvider = "", inheritedAuthContract = null, nestedAuthPopup = false) {
   const isLocal = url => (expectedBackendUrl || backendUrl) && hasExactOrigin(url, expectedBackendUrl || backendUrl);
   // Windows created for the OAuth flow carry the Chrome-identity preload;
   // ordinary windows do not, so a flow starting in them must move to a popup.
   const isOAuthPopup = clerkFlowActive;
+  let harnessAuthContract = inheritedAuthContract;
+  let mayLoadAuthBootstrap = !nestedAuthPopup;
+  let completionInFlight = false;
+  const isBoundHarnessAuthNavigation = value => {
+    if (harnessAuthProvider === "claude-subscription-directsdk-experimental") {
+      const start = claudeAuthStartContract(value);
+      if (start && !harnessAuthContract) harnessAuthContract = start;
+    }
+    if (!isHarnessAuthNavigation(value, harnessAuthProvider, harnessAuthContract)) return false;
+    mayLoadAuthBootstrap = false;
+    return true;
+  };
   const isClerkFlowNavigation = value => {
     if (isClerkGoogleOAuthUrl(value)) {
       clerkFlowActive = true;
@@ -1487,7 +1640,20 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
     } catch (_) { return false; }
   };
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (isLocal(url)) return { action: "allow" };
+    if (harnessAuthProvider) {
+      // OAuth providers use the returned Window and its opener to finish
+      // sign-in. Replacing the parent after denying window.open destroys
+      // that relationship, even though the Google page itself still loads.
+      return isBoundHarnessAuthNavigation(url) ? {
+        action: "allow",
+        overrideBrowserWindowOptions: harnessAuthPopupOptions(window),
+      } : { action: "deny" };
+    }
+    const provider = harnessAuthRedirectProvider(url, expectedBackendUrl);
+    if (isLocal(url)) return provider ? {
+      action: "allow",
+      overrideBrowserWindowOptions: harnessAuthPopupOptions(window),
+    } : { action: "allow" };
     // Clerk's Google flow must stay in Electron's session so its callback can
     // return the authenticated cookie to Mia. Opening this URL in the user's
     // regular browser strands the session there and leaves Mia signed out.
@@ -1517,13 +1683,40 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
     return { action: "deny" };
   });
   window.webContents.on("did-create-window", (child, details) => {
-    configureNavigation(child, expectedBackendUrl, isClerkGoogleOAuthUrl(details.url));
+    configureNavigation(
+      child,
+      expectedBackendUrl,
+      isClerkGoogleOAuthUrl(details.url),
+      harnessAuthProvider || harnessAuthRedirectProvider(details.url, expectedBackendUrl),
+      harnessAuthContract,
+      Boolean(harnessAuthProvider)
+    );
   });
   window.webContents.on("did-navigate", (_event, url) => {
     if (isLocal(url)) clerkFlowActive = false;
+    if (harnessAuthProvider === "claude-subscription-directsdk-experimental" && !completionInFlight) {
+      completionInFlight = true;
+      void completeClaudeAuthCallback(window, url, harnessAuthContract, expectedBackendUrl || backendUrl).then(accepted => {
+        completionInFlight = false;
+        if (accepted) {
+          try { window.close(); } catch (_) { /* already closed */ }
+        }
+      });
+    }
   });
-  window.webContents.on("will-navigate", (event) => {
-    const { url } = event;
+  const guardNavigation = (event, targetUrl) => {
+    const url = targetUrl || event.url;
+    if (harnessAuthProvider && mayLoadAuthBootstrap
+      && harnessAuthRedirectProvider(url, expectedBackendUrl) === harnessAuthProvider) return;
+    if (harnessAuthProvider && isBoundHarnessAuthNavigation(url)) return;
+    if (harnessAuthProvider) {
+      try {
+        const blocked = new URL(url);
+        desktopLog(`Provider auth navigation blocked: ${blocked.origin}${blocked.pathname}`);
+      } catch (_) { /* never log unparsed URLs or query credentials */ }
+      event.preventDefault();
+      return;
+    }
     if (isLocal(url)) return;
     // A Clerk Google sign-in that starts as an in-place redirect must move
     // into the shimmed popup: this window's preload lacks the Chrome-identity
@@ -1542,7 +1735,9 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       return;
     }
     event.preventDefault();
-  });
+  };
+  window.webContents.on("will-navigate", guardNavigation);
+  if (harnessAuthProvider) window.webContents.on("will-redirect", guardNavigation);
 }
 
 function invokeDevelopmentAction(label, action) {
@@ -2099,6 +2294,8 @@ app.on("window-all-closed", () => {
 });
 
 module.exports = {
+  developmentHermesBinary,
+  completeClaudeAuthCallback,
   createDevelopmentMenu,
   createApplicationMenuTemplate,
   developmentRefreshUi,
@@ -2110,6 +2307,9 @@ module.exports = {
   isNativeArtifactTarget,
   hasExactOrigin,
   isClerkGoogleOAuthUrl,
+  harnessAuthRedirectProvider,
+  claudeAuthStartContract,
+  isHarnessAuthNavigation,
   configureNavigation,
   isTrustedMainWindowUrl,
   miaosWorkspacePath,
@@ -2118,6 +2318,7 @@ module.exports = {
   bundledPythonPath,
   runtimeLauncherPath,
   nativeRuntimeBinaryPath,
+  discoverClaudeCodeCommand,
   preparePackagedRuntime,
   syncPackagedDirectory,
   configuredUpdateFeedUrl,

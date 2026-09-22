@@ -20,6 +20,8 @@ test('agent create/update payloads cannot set server-owned identity or cron fiel
     builtinSlug: 'sample',
     modelProvider: 'attacker-provider',
     hermesCronJobId: 'victim-job',
+    instructionsRevision: 'forged-current-revision',
+    expectedInstructionsRevision: 'forged-expected-revision',
   };
 
   stripServerOwnedAgentFields(body);
@@ -32,6 +34,8 @@ test('agent create/update payloads cannot set server-owned identity or cron fiel
     'hermesCronJobId',
     'hermesCronJobIds',
     'hermesCronDeliveries',
+    'instructionsRevision',
+    'expectedInstructionsRevision',
   ]);
   assert.deepEqual(body, {
     name: 'Newsletter',

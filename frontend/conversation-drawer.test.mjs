@@ -17,7 +17,8 @@ test('conversation header exposes history, bookmark, share, and creation actions
   assert.match(source, /copySidebarText\(chatWs\.activeRoomId, 'Conversation ID copied'\)/);
   assert.match(source, /setChatPinned\(key, !isChatPinned\(key\)\)/);
   assert.match(source, /openConversationHistory\('chats'\)/);
-  assert.match(source, /create\.addEventListener\('click', openDmCompose\)/);
+  assert.match(source, /create\.addEventListener\('click', createFreshConversationForActiveBot\)/);
+  assert.match(source, /if\(action === 'new-chat'\) openDmCompose\(\)/);
 });
 
 test('conversation actions use one canonical Lucide icon grid', async () => {

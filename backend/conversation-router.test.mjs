@@ -108,6 +108,21 @@ test('chat-migration.conversation-lifecycle.001 — native HTTP contract creates
     result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=1`, { principal: 'bob' });
     assert.equal(result.response.status, 200);
     assert.deepEqual(result.payload.events.map((event) => event.content.text), ['latest']);
+    assert.equal(result.payload.nextBeforeSequence, result.payload.events[0].sequence);
+
+    result = await app.request(`/conversations/${conversationId}/events?beforeSequence=${result.payload.nextBeforeSequence}&limit=1`, { principal: 'bob' });
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.payload.events.map((event) => event.content.text), ['hello']);
+    assert.equal(result.payload.nextBeforeSequence, null);
+
+    for (const query of ['beforeSequence=0', 'beforeSequence=2&afterSequence=1', 'beforeSequence=2&latest=true']) {
+      result = await app.request(`/conversations/${conversationId}/events?${query}`, { principal: 'bob' });
+      assert.equal(result.response.status, 400, query);
+    }
+    result = await app.request(`/conversations/${conversationId}/events?beforeSequence=2`, { principal: 'other-company' });
+    assert.equal(result.response.status, 403);
+    result = await app.request(`/conversations/${conversationId}/events?beforeSequence=2`, { principal: 'unknown' });
+    assert.equal(result.response.status, 401);
 
     result = await app.request(`/conversations/${conversationId}`, { principal: 'other-company' });
     assert.equal(result.response.status, 403);
@@ -124,6 +139,40 @@ test('chat-migration.conversation-lifecycle.001 — native HTTP contract creates
   }
 });
 
+test('fresh bot route creates a distinct empty direct-routing conversation and protects its source', async () => {
+  const app = await startApp();
+  try {
+    let result = await app.request('/conversations', {
+      method: 'POST', body: { type: 'bot', name: 'Research Bot', metadata: { botId: 'bot-research', workspaceId: 'solo' } },
+    });
+    assert.equal(result.response.status, 201);
+    const sourceId = result.payload.conversation.id;
+
+    result = await app.request(`/conversations/${sourceId}/fresh`, { method: 'POST', body: {} });
+    assert.equal(result.response.status, 201);
+    const fresh = result.payload.conversation;
+    assert.notEqual(fresh.id, sourceId);
+    assert.equal(fresh.type, 'bot');
+    assert.equal(fresh.metadata.botId, 'bot-research');
+    assert.equal(fresh.metadata.conversationMode, 'fresh');
+    assert.equal(app.repository.listEvents({ companyId: 'acme', conversationId: fresh.id }).events.length, 0);
+    assert.equal(app.repository.listEvents({ companyId: 'acme', conversationId: sourceId }).events.length, 0);
+
+    result = await app.request(`/conversations/${fresh.id}/events`, {
+      method: 'POST', body: { content: { text: 'start clean' }, clientIdempotencyKey: 'fresh-direct-1' },
+    });
+    assert.equal(result.response.status, 201);
+    assert.deepEqual(result.payload.dispatch.dispatches.map((dispatch) => dispatch.targetId), ['bot-research']);
+
+    result = await app.request(`/conversations/${sourceId}/fresh`, { principal: 'bob', method: 'POST', body: {} });
+    assert.equal(result.response.status, 403);
+    result = await app.request(`/conversations/${sourceId}/fresh`, { principal: 'other-company', method: 'POST', body: {} });
+    assert.equal(result.response.status, 403);
+  } finally {
+    await app.close();
+  }
+});
+
 test('native HTTP contract lists only visible company conversations and keeps owner selection candidates stable', async () => {
   const app = await startApp();
   try {
@@ -131,6 +180,11 @@ test('native HTTP contract lists only visible company conversations and keeps ow
     const firstId = result.payload.conversation.id;
     result = await app.request('/conversations', { method: 'POST', body: { type: 'channel', name: 'Second native conversation' } });
     const secondId = result.payload.conversation.id;
+    // Listing is newest-updated first. HTTP creation can land both rows in the
+    // same millisecond, leaving the random opaque id as the SQL tie-breaker;
+    // pin fixture timestamps so this assertion tests the ordering contract.
+    app.repository.updateConversation({ companyId: 'acme', id: firstId, updatedAt: '2026-09-21T12:00:00.000Z' });
+    app.repository.updateConversation({ companyId: 'acme', id: secondId, updatedAt: '2026-09-21T12:00:01.000Z' });
     result = await app.request(`/conversations/${firstId}/members`, {
       method: 'POST',
       body: { principalId: 'bob', principalType: 'user' },

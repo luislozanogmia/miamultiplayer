@@ -184,6 +184,45 @@ test('chat-migration.send-idempotency.001 — events have monotonic per-conversa
   assert.deepEqual(repository.getThread({ companyId: 'company-a', eventId: 'evt_first' }).replies.map((event) => event.id), [second.event.id]);
 });
 
+test('backward event pages use stable sequence cursors across equal timestamps and company boundaries', (t) => {
+  const { db, repository } = fixture();
+  t.after(() => db.close());
+  const conversation = createConversation(repository, { id: 'conv_backward' });
+  const other = createConversation(repository, { id: 'conv_other', companyId: 'company-b' });
+  for (let index = 1; index <= 7; index += 1) {
+    repository.createEvent({
+      id: `evt_${index}`,
+      companyId: 'company-a',
+      conversationId: conversation.id,
+      senderId: 'alice@example.com',
+      senderType: 'user',
+      content: { text: `Message ${index}` },
+      createdAt: '2026-09-03T06:02:10.000Z',
+    });
+  }
+  repository.createEvent({
+    id: 'evt_other', companyId: 'company-b', conversationId: other.id,
+    senderId: 'bob@example.com', senderType: 'user', content: { text: 'Other workspace' },
+    createdAt: '2026-09-03T06:02:10.000Z',
+  });
+
+  const latest = repository.listEvents({ companyId: 'company-a', conversationId: conversation.id, latest: true, limit: 3 });
+  assert.deepEqual(latest.events.map((event) => event.sequence), [5, 6, 7]);
+  assert.equal(latest.nextBeforeSequence, 5);
+  const middle = repository.listEvents({ companyId: 'company-a', conversationId: conversation.id, beforeSequence: latest.nextBeforeSequence, limit: 3 });
+  assert.deepEqual(middle.events.map((event) => event.sequence), [2, 3, 4]);
+  assert.equal(middle.nextBeforeSequence, 2);
+  const oldest = repository.listEvents({ companyId: 'company-a', conversationId: conversation.id, beforeSequence: middle.nextBeforeSequence, limit: 3 });
+  assert.deepEqual(oldest.events.map((event) => event.sequence), [1]);
+  assert.equal(oldest.hasMore, false);
+  assert.equal(oldest.nextBeforeSequence, null);
+  assert.equal(oldest.events.some((event) => event.id === 'evt_other'), false);
+
+  assert.throws(() => repository.listEvents({ companyId: 'company-a', conversationId: conversation.id, beforeSequence: 0 }), /beforeSequence/);
+  assert.throws(() => repository.listEvents({ companyId: 'company-a', conversationId: conversation.id, beforeSequence: 5, afterSequence: 1 }), /cannot be combined/);
+  assert.throws(() => repository.listEvents({ companyId: 'company-a', conversationId: conversation.id, beforeSequence: 5, latest: true }), /cannot be combined/);
+});
+
 test('chat-migration.edits.001 — event edits and deletes preserve stable tombstones', (t) => {
   const { db, repository } = fixture();
   t.after(() => db.close());

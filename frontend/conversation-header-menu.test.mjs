@@ -99,3 +99,94 @@ test('failed native restart leaves the visible room state untouched', async () =
   assert.deepEqual(state.messages, [{ id: 'keep-me' }]);
   assert.equal(state.lastTs, 55);
 });
+
+test('header action creates one distinct active-bot conversation without dispatching a turn', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const start = source.indexOf('  function createFreshConversationForActiveBot(');
+  const end = source.indexOf('\n\n  function wireConversationHeaderActions', start);
+  assert.ok(start >= 0 && end > start);
+  let resolveRequest;
+  const calls = [];
+  const loaded = [];
+  const originalMessages = [{ id: 'original-message' }];
+  const context = {
+    freshBotConversationRequest: null,
+    activeWorkspaceKey: 'solo',
+    chatWs: {
+      activeRoomId: 'room-original',
+      nativeConversations: [{ id: 'room-original', type: 'bot', name: 'Research Bot', metadata: { botId: 'bot-1' } }],
+      byRoom: { 'room-original': { messages: originalMessages } },
+    },
+    api(path, options) {
+      calls.push({ path, options });
+      return new Promise((resolve) => { resolveRequest = resolve; });
+    },
+    nativeConversationPath: (id, suffix) => `/api/conversations/${id}${suffix}?workspace=solo`,
+    renderChatHeaderBar() {},
+    applyNativeConversationList(conversations) { context.chatWs.nativeConversations = conversations; },
+    renderChatSidebar() {},
+    loadChatRoom(...args) { loaded.push(args); },
+    showBenchToast() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+
+  const first = context.createFreshConversationForActiveBot();
+  const second = context.createFreshConversationForActiveBot();
+  assert.equal(first, second, 'double click shares the one in-flight request');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, '/api/conversations/room-original/fresh?workspace=solo');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(Object.keys(calls[0].options.body), [], 'creation sends no message or model payload');
+  resolveRequest({ status: 201, data: { conversation: { id: 'room-fresh', type: 'bot', name: 'Research Bot', metadata: { botId: 'bot-1', conversationMode: 'fresh' } } } });
+  const created = await first;
+
+  assert.equal(created.id, 'room-fresh');
+  assert.deepEqual(context.chatWs.nativeConversations.map((item) => item.id), ['room-original', 'room-fresh']);
+  assert.deepEqual(loaded, [['room-fresh', 'agent', 'Research Bot']]);
+  assert.deepEqual(context.chatWs.byRoom['room-original'].messages, originalMessages);
+});
+
+test('failed or stale fresh-bot creation never replaces the visible conversation and can retry', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const start = source.indexOf('  function createFreshConversationForActiveBot(');
+  const end = source.indexOf('\n\n  function wireConversationHeaderActions', start);
+  const responses = [
+    { status: 500, data: { error: 'Creation failed' } },
+    { status: 201, data: { conversation: { id: 'room-stale-fresh', type: 'bot', name: 'Research Bot', metadata: { botId: 'bot-1' } } } },
+  ];
+  const toasts = [];
+  const loaded = [];
+  const context = {
+    freshBotConversationRequest: null,
+    activeWorkspaceKey: 'solo',
+    chatWs: { activeRoomId: 'room-original', nativeConversations: [{ id: 'room-original', type: 'bot', name: 'Research Bot', metadata: { botId: 'bot-1' } }] },
+    api: async () => responses.shift(),
+    nativeConversationPath: (id, suffix) => `/api/conversations/${id}${suffix}`,
+    renderChatHeaderBar() {}, renderChatSidebar() {},
+    applyNativeConversationList() { throw new Error('stale response must not mutate the active list'); },
+    loadChatRoom(...args) { loaded.push(args); },
+    showBenchToast(message) { toasts.push(message); },
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+
+  assert.equal(await context.createFreshConversationForActiveBot(), null);
+  assert.deepEqual(toasts, ['Creation failed']);
+  assert.equal(context.chatWs.activeRoomId, 'room-original');
+
+  const retry = context.createFreshConversationForActiveBot();
+  context.chatWs.activeRoomId = 'another-room';
+  const staleCreated = await retry;
+  assert.equal(staleCreated.id, 'room-stale-fresh');
+  assert.deepEqual(context.chatWs.nativeConversations.map((item) => item.id), ['room-original']);
+  assert.deepEqual(loaded, []);
+});
+
+test('header fresh action is bot-only and leaves generic new chat in Tools', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /canCreateFreshBotConversation = !!activeConversation && activeConversation\.type === 'bot' && !!activeMetadata\.botId/);
+  assert.match(source, /isNativeMiaConversation\(activeConversation\) \? 'Mia uses one continuous conversation'/);
+  assert.match(source, /if\(create\) create\.addEventListener\('click', createFreshConversationForActiveBot\)/);
+  assert.match(source, /if\(action === 'new-chat'\) openDmCompose\(\)/);
+});

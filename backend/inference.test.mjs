@@ -25,6 +25,8 @@ test('Hermes subprocess environment is a strict allowlist', () => {
     MIAOS_AUTOMATION_ARTIFACT_DIR: '/safe/miaos/artifacts',
     PYTHONDONTWRITEBYTECODE: '1',
     PYTHONPYCACHEPREFIX: '/safe/miaos/python-cache',
+    CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: '/safe/bin/claude',
+    CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: '/safe/claude-config',
     MIAOS_FIRECRAWL_GATEWAY_URL: 'https://search.example.com',
     MIAOS_FIRECRAWL_GATEWAY_TOKEN: 'miaos-installation-token-with-entropy',
   };
@@ -39,6 +41,9 @@ test('Hermes subprocess environment is a strict allowlist', () => {
     GOOGLE_TOKEN_ENCRYPTION_KEY: 'google-encryption-secret',
     MIAOS_ENV_FILE: '/private/backend/.env',
     UNRELATED_INHERITED_SECRET: 'must-not-inherit',
+    ANTHROPIC_API_KEY: 'must-not-fall-back-to-paid-api',
+    ANTHROPIC_BASE_URL: 'https://must-not-route.example',
+    CLAUDE_CONFIG_DIR: '/ambient/claude-config',
   };
 
   try {
@@ -63,6 +68,7 @@ test('Hermes subprocess environment is a strict allowlist', () => {
       'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'NO_COLOR', 'CI',
       'PYTHONDONTWRITEBYTECODE',
       'PYTHONPYCACHEPREFIX',
+      'CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND', 'CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR',
       'GH_CONFIG_DIR',
       'MIAOS_WORKSPACE_DIR', 'MIAOS_HERMES_GUARD_BIN',
       'HERMES_HOME', 'HERMES_STATE_DB', 'HERMES_CRON_JOBS_FILE',
@@ -138,6 +144,12 @@ test('provider status checks use bounded subprocess concurrency', () => {
 });
 
 test('subscription model selections stay inside the provider allowlist', () => {
+  assert.deepEqual(inference.normalizeHermesModelSelection('claude-subscription-directsdk-experimental', 'sonnet', false), {
+    model: 'claude-sonnet-5[1m]',
+    fast: false,
+  });
+  assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5[1m]', false), true);
+  assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5', false), false);
   assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', null, false), {
     model: 'gpt-5.6-luna',
     fast: false,
@@ -423,7 +435,10 @@ test('backend shutdown closes and releases its singleton Hermes gateway client',
   const originalModelOptions = HermesGatewayClient.prototype.modelOptions;
   const originalClose = HermesGatewayClient.prototype.close;
   let closeCalls = 0;
-  HermesGatewayClient.prototype.modelOptions = async () => [];
+  HermesGatewayClient.prototype.modelOptions = async (options) => {
+    assert.equal(options.profile, 'miaos-agent-runtime');
+    return [];
+  };
   HermesGatewayClient.prototype.close = function closeForTest() { closeCalls += 1; };
 
   try {

@@ -8,7 +8,7 @@ const { createConversationRepository } = require('./conversation-repository');
 const { createConversationAuthorization } = require('./conversation-authorization');
 const { createConversationDispatchService } = require('./conversation-dispatch');
 const { createConversationRealtime } = require('./conversation-realtime');
-const { createConversationService } = require('./conversation-service');
+const { createConversationService, canonicalBotConversationCandidates } = require('./conversation-service');
 
 function fixture() {
   const db = new Database(':memory:');
@@ -185,6 +185,105 @@ test('service bot creation is idempotent for one owner and bot identity', (t) =>
   assert.equal(repository.listConversations({ companyId: 'company-a' }).filter((conversation) =>
     conversation.type === 'bot' && conversation.metadata.botId === 'bot-28'
   ).length, 1);
+});
+
+test('fresh bot conversations preserve bot scope and membership without copying history', (t) => {
+  const { db, repository, service } = fixture();
+  t.after(() => db.close());
+  const source = service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'bot', name: 'SuperBot',
+    metadata: {
+      botId: 'bot-28', departments: ['Research'], workspaceId: 'solo',
+      hermesGatewaySessionId: 'must-not-copy', dispatchId: 'must-not-copy',
+    },
+  });
+  service.addMember({
+    companyId: 'company-a', conversationId: source.id, principal: owner(),
+    member: { principalId: 'member@example.com', principalType: 'user', role: 'member', state: 'active' },
+  });
+  service.addMember({
+    companyId: 'company-a', conversationId: source.id, principal: owner(),
+    member: { principalId: 'invited@example.com', principalType: 'user', role: 'member', state: 'invited' },
+  });
+  service.createEvent({
+    companyId: 'company-a', conversationId: source.id, principal: owner(),
+    content: { text: 'original history' }, clientIdempotencyKey: 'original-event',
+  });
+
+  const first = service.createFreshBotConversation({ companyId: 'company-a', conversationId: source.id, principal: owner() });
+  const second = service.createFreshBotConversation({ companyId: 'company-a', conversationId: source.id, principal: owner() });
+
+  assert.notEqual(first.id, source.id);
+  assert.notEqual(second.id, source.id);
+  assert.notEqual(second.id, first.id);
+  assert.equal(first.type, 'bot');
+  assert.deepEqual(first.metadata, {
+    botId: 'bot-28', departments: ['Research'], workspaceId: 'solo',
+    conversationMode: 'fresh', source: 'native-ui-new-conversation',
+  });
+  assert.equal(repository.listEvents({ companyId: 'company-a', conversationId: source.id }).events.length, 1);
+  assert.equal(repository.listEvents({ companyId: 'company-a', conversationId: first.id }).events.length, 0);
+  assert.equal(repository.getMember({
+    companyId: 'company-a', conversationId: first.id,
+    principalId: 'member@example.com', principalType: 'user',
+  }).role, 'member');
+  assert.equal(repository.getMember({
+    companyId: 'company-a', conversationId: first.id,
+    principalId: 'bot-28', principalType: 'bot',
+  }).role, 'bot');
+  assert.equal(repository.getMember({
+    companyId: 'company-a', conversationId: first.id,
+    principalId: 'invited@example.com', principalType: 'user',
+  }), null, 'fresh creation must not promote invited members to active');
+});
+
+test('fresh bot creation enforces source authorization and bot-only scope', (t) => {
+  const { db, service } = fixture();
+  t.after(() => db.close());
+  const bot = service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'bot', name: 'SuperBot', metadata: { botId: 'bot-28' },
+  });
+  service.addMember({
+    companyId: 'company-a', conversationId: bot.id, principal: owner(),
+    member: { principalId: 'member@example.com', principalType: 'user', role: 'member' },
+  });
+  assert.throws(() => service.createFreshBotConversation({
+    companyId: 'company-a', conversationId: bot.id,
+    principal: { companyId: 'company-a', principalId: 'member@example.com', principalType: 'user' },
+  }), /member cannot manage_members/);
+  const channel = service.createConversation({ companyId: 'company-a', principal: owner(), type: 'channel', name: 'Shared' });
+  assert.throws(() => service.createFreshBotConversation({
+    companyId: 'company-a', conversationId: channel.id, principal: owner(),
+  }), /bot conversation is required/);
+});
+
+test('canonical bot recreation never adopts or merges fresh conversations', (t) => {
+  const { db, repository, service } = fixture();
+  t.after(() => db.close());
+  const request = {
+    companyId: 'company-a', principal: owner(), type: 'bot', name: 'SuperBot', metadata: { botId: 'bot-28' },
+  };
+  const canonical = service.createConversation(request);
+  const freshOne = service.createFreshBotConversation({ companyId: 'company-a', conversationId: canonical.id, principal: owner() });
+  const freshTwo = service.createFreshBotConversation({ companyId: 'company-a', conversationId: canonical.id, principal: owner() });
+  service.deleteConversation({ companyId: 'company-a', conversationId: canonical.id, principal: owner() });
+  const replacement = service.createConversation(request);
+
+  assert.notEqual(replacement.id, canonical.id);
+  assert.notEqual(replacement.id, freshOne.id);
+  assert.notEqual(replacement.id, freshTwo.id);
+  const active = repository.listConversations({ companyId: 'company-a' }).filter((row) =>
+    row.type === 'bot' && row.metadata.botId === 'bot-28'
+  );
+  const reconciliationCandidates = canonicalBotConversationCandidates(active);
+  for (const duplicate of reconciliationCandidates.slice(1)) {
+    repository.mergeConversations({ companyId: 'company-a', targetId: reconciliationCandidates[0].id, sourceId: duplicate.id });
+  }
+  const afterReconciliation = repository.listConversations({ companyId: 'company-a' }).filter((row) =>
+    row.type === 'bot' && row.metadata.botId === 'bot-28'
+  );
+  assert.deepEqual(afterReconciliation.map((row) => row.id).sort(), [freshOne.id, freshTwo.id, replacement.id].sort());
+  assert.deepEqual(canonicalBotConversationCandidates(afterReconciliation).map((row) => row.id), [replacement.id]);
 });
 
 test('private agent conversations contain exactly their owner and bound agent', (t) => {

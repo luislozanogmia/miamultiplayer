@@ -31,8 +31,9 @@ test('bot instructions layer onto each bot brief for chat and scheduled work', (
     { userDisplayName: 'Luis', globalInstructions }
   );
 
+  assert.match(chat, /Purpose:\nPrepare social media posts\./);
+  assert.doesNotMatch(scheduled, /Purpose:\nPrepare social media posts\./);
   for (const prompt of [chat, scheduled]) {
-    assert.match(prompt, /Purpose:\nPrepare social media posts\./);
     assert.match(prompt, /User-configured Bot Instructions:/);
     assert.match(prompt, /Be concise and spend no more than five minutes on one task\./);
     assert.match(prompt, /do not override Mia's safety, permissions, or tool boundaries/i);

@@ -50,6 +50,7 @@ actual_commit="$(git -C "$extract_root" rev-parse HEAD)"
   exit 1
 }
 git -C "$extract_root" apply "$script_dir/hermes-noninteractive.patch"
+git -C "$extract_root" apply "$script_dir/hermes-profile-picker.patch"
 rm -rf -- "$extract_root/.git"
 
 echo "[2/7] Installing the pinned Hermes runtime with no provider setup or seeded skills"

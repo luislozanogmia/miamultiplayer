@@ -11,8 +11,45 @@ const {
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
+  CLAUDE_SUBSCRIPTION_PLUGIN,
+  CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   provisionHermesRuntimeProfiles,
 } = require('./hermes-bot-profile');
+
+test('Claude DirectSDK is provisioned unchanged for agent, Google-agent, and bot profiles', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-claude-plugin-'));
+  const profilesRoot = path.join(root, 'profiles');
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot });
+    for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE]) {
+      const installed = path.join(profilesRoot, profile, 'plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
+      for (const file of ['plugin.yaml', '__init__.py', 'directsdk.py', 'directsdk_setup.py', 'LICENSE']) {
+        assert.equal(
+          fs.readFileSync(path.join(installed, file), 'utf8'),
+          fs.readFileSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, file), 'utf8'),
+          `${profile}/${file}`
+        );
+      }
+    }
+
+    const agentPlugin = path.join(profilesRoot, MIAOS_AGENT_HERMES_PROFILE, 'plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
+    const before = fs.statSync(path.join(agentPlugin, 'plugin.yaml')).mtimeMs;
+    provisionHermesRuntimeProfiles({ profilesRoot });
+    assert.equal(fs.statSync(path.join(agentPlugin, 'plugin.yaml')).mtimeMs, before);
+
+    const unmanagedRoot = path.join(root, 'unmanaged-profiles');
+    const unmanaged = path.join(unmanagedRoot, MIAOS_AGENT_HERMES_PROFILE, 'plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
+    fs.mkdirSync(unmanaged, { recursive: true });
+    fs.writeFileSync(path.join(unmanaged, 'plugin.yaml'), 'user-owned');
+    assert.throws(
+      () => provisionHermesRuntimeProfiles({ profilesRoot: unmanagedRoot }),
+      /refusing to overwrite unmanaged Hermes plugin/
+    );
+    assert.equal(fs.readFileSync(path.join(unmanaged, 'plugin.yaml'), 'utf8'), 'user-owned');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('Mia provisions full-agent and restricted-bot sessions in the shared Hermes runtime', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-bot-'));
