@@ -116,4 +116,7 @@ if [[ ! -d "$repo_root/macos/node_modules" ]]; then
 fi
 
 export MIA_DEV_DATA_ROOT="$data_root"
+# Dev runs use Mia's test Clerk instance (production is the built-in
+# default). Export MIAOS_CLERK_INSTANCE=production to exercise production.
+export MIAOS_CLERK_INSTANCE="${MIAOS_CLERK_INSTANCE:-test}"
 exec bash "$script_dir/start-local-mac.sh" "$@"

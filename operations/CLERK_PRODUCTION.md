@@ -1,6 +1,10 @@
 # Clerk production configuration
 
-This repository contains production configuration plumbing. Full production readiness requires the lifecycle checks below; a rendered sign-in screen is not sufficient. Do not commit real values. Store the three public identifiers in the install's ignored `.env.local` file:
+Mia ships two built-in Clerk instances in `backend/clerk-config.js`: **production** (the default) and **test** (Mia's development instance). Set `MIAOS_CLERK_INSTANCE=test` in the environment or the install's `.env.local` to use the test instance; `scripts/dev_mode.sh` does this for dev runs. Their values are public identifiers (publishable key, issuer, JWKS public key). Full production readiness still requires the lifecycle checks below; a rendered sign-in screen is not sufficient.
+
+Each install records which instance its Clerk link belongs to. Clerk instances are separate user stores, so after switching instances the first successful sign-in relinks the install (audit action `clerk.installation.relink`) instead of failing with "already linked". Links created before the issuer was recorded are treated as test-instance links.
+
+A fork uses its own instance by storing a complete override tuple in the install's ignored `.env.local` file (it takes precedence over `MIAOS_CLERK_INSTANCE`):
 
 ```dotenv
 CLERK_PUBLISHABLE_KEY=<production-publishable-key-from-Clerk>

@@ -39,7 +39,7 @@ const { execFile, spawn } = require('child_process');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const { verifyToken: verifyClerkToken } = require('@clerk/backend');
-const { resolveClerkConfig, clerkClaimsProfile, clerkVerifyOptions } = require('./clerk-config');
+const { CLERK_INSTANCES, resolveClerkConfig, clerkClaimsProfile, clerkVerifyOptions } = require('./clerk-config');
 const { buildPageCsp, replacePageCsp } = require('../frontend/csp-policy.cjs');
 
 const db = require('./db');
@@ -173,28 +173,8 @@ function isAdmin(email) {
 // started with MIAOS_NO_AUTH=1; production and normal development retain the
 // session/API-key auth path below.
 const MIAOS_NO_AUTH = /^(1|true)$/i.test(process.env.MIAOS_NO_AUTH || '');
-// Mia's own Clerk instance ships as the built-in default so any checkout can
-// join the hosted ecosystem by signing in. These are Clerk *public* values —
-// publishable key, issuer, JWKS public key — the client half of an API call
-// that does nothing without a real sign-in. A custom instance is accepted
-// only as one complete tuple so production and development values cannot mix.
-const MIA_CLERK_DEFAULTS = Object.freeze({
-  publishableKey: 'pk_test_ZmFpdGhmdWwtZHJ1bS0zMzMuY2xlcmsuYWNjb3VudHMuZGV2JA',
-  issuer: 'https://faithful-drum-333.clerk.accounts.dev',
-  jwtKey: [
-    '-----BEGIN PUBLIC KEY-----',
-    'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8H9FQVnnST3XYwwqcun5',
-    'Bv0iqvXYCQDbxiDgOcGJz3N67WmnRNiv9+rY0Iv5nmCEM5+Mr0nvGimjT++WbN0L',
-    'XlHc1o0MIK1gtR9+umHXIBM9WYvQL3gtkulVfURk0S/UqWruuRbHTk3N/nujN5oG',
-    'eMW/8MdKjxJgRoDiWyQzOHRQL/8H+43uL7/xikDPaf2GeZ4GgHeAEhaSFh8ekTt/',
-    'PViJMSdflAzRM5kn9txqNnCnfl8r7QfzlyiIchCTueiI8uUL7k0g0lgmq6uE48yr',
-    'uR4op4c0GR3ZM1lwPJl/YMLdF82neuuKP+o8pBQEjkzoaVNHdKxGxZm1/5z3ewlB',
-    'UQIDAQAB',
-    '-----END PUBLIC KEY-----',
-  ].join('\n'),
-  oauthCallbackOrigin: 'https://clerk.shared.lcl.dev',
-});
-const CLERK_CONFIG = resolveClerkConfig(process.env, MIA_CLERK_DEFAULTS);
+// Built-in production/test Clerk instances and fork overrides: clerk-config.js.
+const CLERK_CONFIG = resolveClerkConfig(process.env);
 const CLERK_PUBLISHABLE_KEY = CLERK_CONFIG.publishableKey;
 const CLERK_JWT_KEY = CLERK_CONFIG.jwtKey;
 const CLERK_ISSUER = CLERK_CONFIG.issuer;
@@ -203,6 +183,10 @@ const MIAOS_PAGE_CSP = buildPageCsp(CLERK_CONFIG.issuerOrigin);
 const CLERK_SUBJECT_META_KEY = 'clerk.installation.subject';
 const CLERK_EMAIL_META_KEY = 'clerk.installation.email';
 const CLERK_NAME_META_KEY = 'clerk.installation.name';
+const CLERK_ISSUER_META_KEY = 'clerk.installation.issuer';
+// Links made before the issuer was recorded came from the only built-in
+// instance at the time, Mia's test instance.
+const CLERK_LEGACY_LINK_ISSUER = CLERK_INSTANCES.test.issuer;
 // A local OSS installation has one durable profile without requiring the
 // person running it to invent an email address. The internal principal keeps
 // existing ownership/storage contracts intact, but is never shown as an
@@ -1323,8 +1307,10 @@ function clerkAccountProfile() {
   if (!MIAOS_CLERK_AUTH) return null;
   const subject = String(db.getMeta(conn, CLERK_SUBJECT_META_KEY) || '').trim();
   if (!subject) return null;
+  const issuer = String(db.getMeta(conn, CLERK_ISSUER_META_KEY) || '').trim() || CLERK_LEGACY_LINK_ISSUER;
   return {
     subject,
+    issuer,
     email: String(db.getMeta(conn, CLERK_EMAIL_META_KEY) || '').trim().toLowerCase(),
     displayName: String(db.getMeta(conn, CLERK_NAME_META_KEY) || '').trim() || null,
   };
@@ -1357,13 +1343,20 @@ app.post('/api/clerk/session', async (req, res) => {
   if (profile.error) return res.status(422).json({ error: profile.error });
   const { primaryEmail, displayName } = profile;
 
-  const linked = clerkAccountProfile();
+  const previous = clerkAccountProfile();
+  // Clerk instances are separate user stores, so a link made on another
+  // instance (e.g. test before production became the default) cannot match
+  // this subject. The operator chose the instance; relink on first sign-in.
+  const relink = Boolean(previous && previous.issuer !== CLERK_ISSUER);
+  const linked = relink ? null : previous;
   if (linked && linked.subject !== claims.sub) {
     return res.status(409).json({ error: 'clerk_installation_already_linked' });
   }
   if (!linked) db.setMeta(conn, CLERK_SUBJECT_META_KEY, claims.sub);
+  db.setMeta(conn, CLERK_ISSUER_META_KEY, CLERK_ISSUER);
   db.setMeta(conn, CLERK_EMAIL_META_KEY, primaryEmail);
   if (displayName) db.setMeta(conn, CLERK_NAME_META_KEY, displayName);
+  else if (relink) db.setMeta(conn, CLERK_NAME_META_KEY, '');
 
   const localUser = db.getUserByEmail(conn, LOCAL_PROFILE_PRINCIPAL);
   if (localUser && displayName && (!localUser.displayName || localUser.displayName === 'Local user')) {
@@ -1374,7 +1367,7 @@ app.post('/api/clerk/session', async (req, res) => {
   }
   db.appendAuditLog(conn, {
     actor: LOCAL_PROFILE_PRINCIPAL,
-    action: linked ? 'clerk.login' : 'clerk.installation.link',
+    action: linked ? 'clerk.login' : (relink ? 'clerk.installation.relink' : 'clerk.installation.link'),
     target: LOCAL_PROFILE_PRINCIPAL,
   });
   const token = db.createSession(conn, LOCAL_PROFILE_PRINCIPAL);

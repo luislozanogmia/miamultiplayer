@@ -1,11 +1,53 @@
 'use strict';
 
-const DEFAULT_CLERK_HOST = 'faithful-drum-333.clerk.accounts.dev';
-const DEFAULT_CLERK_CONFIG = Object.freeze({
-  publishableKey: `pk_test_${Buffer.from(`${DEFAULT_CLERK_HOST}$`).toString('base64url')}`,
-  issuer: `https://${DEFAULT_CLERK_HOST}`,
-  oauthCallbackOrigin: 'https://clerk.shared.lcl.dev',
+// Mia's own Clerk instances ship as built-in defaults so any checkout can join
+// the hosted ecosystem by signing in. These are Clerk *public* values —
+// publishable key, issuer, JWKS public key — the client half of an API call
+// that does nothing without a real sign-in. Production is the default;
+// MIAOS_CLERK_INSTANCE=test selects the development instance (dev_mode.sh
+// does this). A fork overrides both with one complete CLERK_* tuple.
+const TEST_OAUTH_CALLBACK_ORIGIN = 'https://clerk.shared.lcl.dev';
+const CLERK_INSTANCES = Object.freeze({
+  production: Object.freeze({
+    publishableKey: 'pk_live_Y2xlcmsubWlhbXVsdGlwbGF5ZXIuY29tJA==',
+    issuer: 'https://clerk.miamultiplayer.com',
+    jwtKey: [
+      '-----BEGIN PUBLIC KEY-----',
+      'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv6cEb3FXZDmeK2vWPUh3',
+      'Yv0+UX9hD1xHtrJB4zxOPV0ZviEOcBXRN77u7yaFrAPkP/1Af9DkGAEXXkSoq3jW',
+      'Fg2s/82krYx2L1s37tomzZYzhFfxfZpESZbBw+37NVo2pBEEI7OM3yQF0G6Zh9f7',
+      'PPxEwChGZrPBe+JLf42iqY+e8u9tly0VqGJK7NM8aZZf9zrTP161umy6PWF7QmsR',
+      '2wr7zp0EMMM/T0x7JVklt9/hhbEmTt4jPHRgNqj/49DaEycjlzPhN8zFSgi4HZq5',
+      'owZZNIGnAjMq+M7cR0k/I0pN1OFHTtiGmUenhTzdaufOq9c3VBExcNs71oI/cW46',
+      'lQIDAQAB',
+      '-----END PUBLIC KEY-----',
+    ].join('\n'),
+  }),
+  test: Object.freeze({
+    publishableKey: 'pk_test_ZmFpdGhmdWwtZHJ1bS0zMzMuY2xlcmsuYWNjb3VudHMuZGV2JA',
+    issuer: 'https://faithful-drum-333.clerk.accounts.dev',
+    jwtKey: [
+      '-----BEGIN PUBLIC KEY-----',
+      'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8H9FQVnnST3XYwwqcun5',
+      'Bv0iqvXYCQDbxiDgOcGJz3N67WmnRNiv9+rY0Iv5nmCEM5+Mr0nvGimjT++WbN0L',
+      'XlHc1o0MIK1gtR9+umHXIBM9WYvQL3gtkulVfURk0S/UqWruuRbHTk3N/nujN5oG',
+      'eMW/8MdKjxJgRoDiWyQzOHRQL/8H+43uL7/xikDPaf2GeZ4GgHeAEhaSFh8ekTt/',
+      'PViJMSdflAzRM5kn9txqNnCnfl8r7QfzlyiIchCTueiI8uUL7k0g0lgmq6uE48yr',
+      'uR4op4c0GR3ZM1lwPJl/YMLdF82neuuKP+o8pBQEjkzoaVNHdKxGxZm1/5z3ewlB',
+      'UQIDAQAB',
+      '-----END PUBLIC KEY-----',
+    ].join('\n'),
+    oauthCallbackOrigin: TEST_OAUTH_CALLBACK_ORIGIN,
+  }),
 });
+
+function builtInClerkInstance(env = process.env) {
+  const name = String(env.MIAOS_CLERK_INSTANCE || '').trim().toLowerCase() || 'production';
+  if (!Object.prototype.hasOwnProperty.call(CLERK_INSTANCES, name)) {
+    throw new Error('MIAOS_CLERK_INSTANCE must be "production" or "test"');
+  }
+  return CLERK_INSTANCES[name];
+}
 
 function exactHttpsOrigin(value, name) {
   const raw = String(value || '').trim().replace(/\/$/, '');
@@ -20,7 +62,7 @@ function exactHttpsOrigin(value, name) {
   return url.origin;
 }
 
-function resolveClerkConfig(env = process.env, defaults = DEFAULT_CLERK_CONFIG) {
+function resolveClerkConfig(env = process.env, defaults = builtInClerkInstance(env)) {
   const names = ['CLERK_PUBLISHABLE_KEY', 'CLERK_JWT_KEY', 'CLERK_ISSUER'];
   const values = Object.fromEntries(names.map((name) => [name, String(env[name] || '').trim()]));
   const configured = names.filter((name) => values[name]);
@@ -46,7 +88,7 @@ function resolveClerkConfig(env = process.env, defaults = DEFAULT_CLERK_CONFIG) 
   const explicitCallback = String(env.CLERK_OAUTH_CALLBACK_ORIGIN || '').trim();
   const oauthCallbackOrigin = exactHttpsOrigin(
     explicitCallback || (keyEnvironment === 'test'
-      ? (defaults.oauthCallbackOrigin || DEFAULT_CLERK_CONFIG.oauthCallbackOrigin)
+      ? (defaults.oauthCallbackOrigin || TEST_OAUTH_CALLBACK_ORIGIN)
       : issuer),
     'CLERK_OAUTH_CALLBACK_ORIGIN',
   );
@@ -110,7 +152,8 @@ function clerkVerifyOptions(token, { jwtKey, requestOrigin, trustedOrigins }) {
 }
 
 module.exports = {
-  DEFAULT_CLERK_CONFIG,
+  CLERK_INSTANCES,
+  builtInClerkInstance,
   exactHttpsOrigin,
   resolveClerkConfig,
   clerkClaimsProfile,
