@@ -809,8 +809,9 @@ async function startLocalBackend(exactPort = null) {
     // only resolved executable/config paths, never tokens or Anthropic API
     // overrides. This makes desktop launches see common npm installs without
     // broadening PATH for model-directed tools.
-    CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR
-      || path.join(app.getPath("home"), ".claude"),
+    // Even explicitly setting the default directory changes Claude's macOS
+    // credential-store identity. Let the official CLI choose its native store.
+    CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR || "",
     ...(claudeCodeCommand
       ? { CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claudeCodeCommand }
       : {}),

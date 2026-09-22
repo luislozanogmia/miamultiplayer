@@ -226,6 +226,11 @@ test("packaged macOS runtime is self-contained and ignores ambient Hermes", () =
   assert.match(source, /\.npm-global[\s\S]*claude/);
 });
 
+test("Claude uses its native credential store unless a custom config is explicit", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.doesNotMatch(source, /CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR:[\s\S]{0,140}path\.join\(app\.getPath\("home"\), "\.claude"\)/);
+});
+
 test("Claude CLI discovery skips an unreadable PATH entry", () => {
   const main = loadMain();
   const originalPath = process.env.PATH;

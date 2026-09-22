@@ -814,7 +814,7 @@ async function steerHermesGatewaySession(sessionId, text, client = getHermesGate
 }
 
 async function getHermesGatewayModelOptions(options) {
-  return getHermesGatewayClient().modelOptions(options);
+  return getHermesGatewayClient().modelOptions({ ...options, profile: MIAOS_AGENT_HERMES_PROFILE });
 }
 
 async function startHermesGatewayRuntime() {
