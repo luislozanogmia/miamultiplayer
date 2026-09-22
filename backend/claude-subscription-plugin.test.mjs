@@ -19,7 +19,7 @@ test('Mia caps advertised Claude context while preserving real upstream route id
     'import json,sys',
     'sys.path.insert(0,sys.argv[1])',
     'from model_catalog import ALIASES, CONTEXT_WINDOWS, MODEL_METADATA, native_model',
-    'expected={"claude-sonnet-5":250000,"claude-haiku-4-5-20251001":200000,"claude-opus-5":250000,"claude-opus-4-8":250000,"claude-fable-5-1":250000}',
+    'expected={"claude-sonnet-5":250000,"claude-haiku-4-5-20251001":200000,"claude-opus-5-5":250000,"claude-opus-5":250000,"claude-opus-4-8":250000,"claude-fable-5-1":250000}',
     'assert CONTEXT_WINDOWS == expected, CONTEXT_WINDOWS',
     'for name, canonical in {**{key:key for key in expected}, **ALIASES}.items():',
     ' route=native_model(name)',
