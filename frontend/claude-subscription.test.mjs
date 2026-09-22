@@ -41,7 +41,8 @@ test('the single Claude onboarding choice opens the same popup redirect as other
   );
   assert.match(connectFlow, /var redirectUrl = '\/api\/settings\/harness\/auth\/redirect\?provider='/);
   assert.match(connectFlow, /window\.open\(redirectUrl, '_blank', 'noopener,noreferrer'\)/);
-  assert.match(connectFlow, /api\('\/api\/settings\/harness\/auth\/start', \{method:'POST', body:\{provider:authProvider\}\}\)/);
+  assert.match(connectFlow, /api\('\/api\/settings\/harness\/auth\/start', \{method:'POST', body:\{provider:authProvider, reauthenticate:authProvider === 'claude-subscription-directsdk-experimental'\}\}\)/);
+  assert.match(connectFlow, /redirectUrl \+= '&reauthenticate=true'/);
   assert.match(connectFlow, /if\(auth\.state === 'connected'\)[\s\S]*saveHarnessSelection\(\)/);
 });
 

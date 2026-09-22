@@ -3877,7 +3877,7 @@ app.post('/api/settings/harness/auth/start', requireGlobalSettingsAdmin, async (
   }
   if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
     const status = await runClaudeSubscriptionStatus();
-    if (status.loggedIn) {
+    if (status.loggedIn && (req.body || {}).reauthenticate !== true) {
       return res.status(200).json({ auth: {
         state: 'connected', provider, plan: status.plan || null,
       } });
@@ -4023,7 +4023,7 @@ app.get('/api/settings/harness/auth/redirect', requireGlobalSettingsAdmin, async
     if (!status.loggedIn && !status.available) {
       return res.status(409).type('text/plain').send(status.detail || 'Claude Code is unavailable. Return to Mia and try again.');
     }
-    if (status.loggedIn) {
+    if (status.loggedIn && req.query.reauthenticate !== 'true') {
       return res.status(200).type('text/plain').send('Claude is already connected. You can close this window.');
     }
     auth = await waitForHermesAuthPrompt(startClaudeSubscriptionAuth(req.userEmail), HERMES_AUTH_PROMPT_WAIT_MS);
