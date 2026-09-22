@@ -718,7 +718,10 @@ exit 8
     const cookie = await loginAsBootAdmin(server);
     const headers = { cookie, 'content-type': 'application/json' };
     const provider = 'claude-subscription-directsdk-experimental';
-    const redirectPromise = fetch(`${server.origin}/api/settings/harness/auth/redirect?provider=${encodeURIComponent(provider)}`, {
+    // An expired credential can still report loggedIn:true; an explicit
+    // reconnect must launch OAuth, not short-circuit on that cached status.
+    fs.writeFileSync(loggedIn, 'cached status');
+    const redirectPromise = fetch(`${server.origin}/api/settings/harness/auth/redirect?provider=${encodeURIComponent(provider)}&reauthenticate=true`, {
       headers: { cookie }, redirect: 'manual',
     });
     await waitForFile(firstChunkReady, server.child, server.logs);
@@ -732,7 +735,7 @@ exit 8
     assert.equal(redirected.status, 302, await redirected.text());
     assert.match(redirected.headers.get('location') || '', /^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
     const start = await fetch(`${server.origin}/api/settings/harness/auth/start`, {
-      method: 'POST', headers, body: JSON.stringify({ provider }),
+      method: 'POST', headers, body: JSON.stringify({ provider, reauthenticate: true }),
     });
     const started = await start.json();
     assert.equal(start.status, 200, JSON.stringify(started));
@@ -740,7 +743,7 @@ exit 8
     assert.match(started.auth.verificationUrl, /^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
 
     const duplicate = await fetch(`${server.origin}/api/settings/harness/auth/start`, {
-      method: 'POST', headers, body: JSON.stringify({ provider }),
+      method: 'POST', headers, body: JSON.stringify({ provider, reauthenticate: true }),
     });
     assert.equal(duplicate.status, 200, await duplicate.text());
     assert.equal((fs.readFileSync(invocationLog, 'utf8').match(/auth login --claudeai/g) || []).length, 1);

@@ -2080,9 +2080,10 @@
     // the background harness flow and redirects this tab to the real provider
     // URL, avoiding popup blocking in the later polling callback.
     var redirectUrl = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(authProvider);
+    if(authProvider === 'claude-subscription-directsdk-experimental') redirectUrl += '&reauthenticate=true';
     try { window.open(redirectUrl, '_blank', 'noopener,noreferrer'); } catch(_) { /* visible link remains available */ }
     var authRequestGeneration = harnessAuthGeneration;
-    api('/api/settings/harness/auth/start', {method:'POST', body:{provider:authProvider}}).then(function(res){
+    api('/api/settings/harness/auth/start', {method:'POST', body:{provider:authProvider, reauthenticate:authProvider === 'claude-subscription-directsdk-experimental'}}).then(function(res){
       if(!harnessAuthFlowIsCurrent(authRequestGeneration, authProvider)) return;
       var auth = res.data && res.data.auth;
       if(res.status !== 200 || !auth) throw new Error((res.data && res.data.error) || 'Could not start harness sign-in');
