@@ -678,6 +678,8 @@ test('Claude subscription starts the official CLI login once and completes witho
   const claude = path.join(root, 'claude');
   const invocationLog = path.join(root, 'claude-invocations.log');
   const loggedIn = path.join(root, 'claude-logged-in');
+  const firstChunkReady = path.join(root, 'claude-url-first-chunk');
+  const releaseUrl = path.join(root, 'claude-url-release');
   fs.writeFileSync(claude, `#!/bin/sh
 printf '%s\\n' "$*" >> "${invocationLog}"
 if [ "$1 $2" = "auth status" ]; then
@@ -690,7 +692,10 @@ if [ "$1 $2" = "auth status" ]; then
 fi
 if [ "$1 $2 $3" = "auth login --claudeai" ]; then
   printf '%s\\n' 'Opening browser to sign in…'
-  printf '%s\\n' 'If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=test-state'
+  printf '%s' 'If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&sta'
+  : > "${firstChunkReady}"
+  while [ ! -f "${releaseUrl}" ]; do sleep 0.05; done
+  printf '%s\\n' 'te=test-state'
   IFS= read -r code
   if [ "$code" = "fixture-completion-code" ]; then
     : > "${loggedIn}"
@@ -713,9 +718,17 @@ exit 8
     const cookie = await loginAsBootAdmin(server);
     const headers = { cookie, 'content-type': 'application/json' };
     const provider = 'claude-subscription-directsdk-experimental';
-    const start = await fetch(`${server.origin}/api/settings/harness/auth/start`, {
+    const startPromise = fetch(`${server.origin}/api/settings/harness/auth/start`, {
       method: 'POST', headers, body: JSON.stringify({ provider }),
     });
+    await waitForFile(firstChunkReady, server.child, server.logs);
+    const partial = await fetch(`${server.origin}/api/settings/harness/auth`, { headers: { cookie } });
+    const partialAuth = (await partial.json()).auth;
+    assert.equal(partialAuth.state, 'starting');
+    assert.equal(partialAuth.provider, provider);
+    assert.equal(partialAuth.verificationUrl, null);
+    fs.writeFileSync(releaseUrl, 'continue');
+    const start = await startPromise;
     const started = await start.json();
     assert.equal(start.status, 200, JSON.stringify(started));
     assert.equal(started.auth.state, 'waiting');
@@ -809,6 +822,49 @@ exit 8
     assert.equal((fs.readFileSync(invocationLog, 'utf8').match(/auth login --claudeai/g) || []).length, 3);
   } finally {
     await stopServer(server);
+  }
+});
+
+test('backend shutdown terminates an in-progress Claude login child', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'miaos-claude-shutdown-'));
+  const claude = path.join(root, 'claude');
+  const terminated = path.join(root, 'claude-terminated');
+  fs.writeFileSync(claude, `#!/bin/sh
+if [ "$1 $2" = "auth status" ]; then printf '%s\\n' '{"loggedIn":false}'; exit 0; fi
+if [ "$1 $2 $3" = "auth login --claudeai" ]; then
+  trap ': > "${terminated}"; exit 0' TERM INT
+  printf '%s\\n' 'https://claude.com/cai/oauth/authorize?state=shutdown-fixture'
+  while :; do sleep 1; done
+fi
+exit 8
+`, { mode: 0o700 });
+  seedUsers(path.join(root, 'mia.db'), [{ ...BOOT_ADMIN, role: 'member' }]);
+  let server = await startServer({
+    existingRoot: root,
+    extraEnv: {
+      HERMES_PYTHON: 'python3',
+      CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claude,
+      CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: path.join(root, 'claude-config'),
+    },
+  });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const provider = 'claude-subscription-directsdk-experimental';
+    const started = await fetch(`${server.origin}/api/settings/harness/auth/start`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider }),
+    });
+    assert.equal(started.status, 200, await started.text());
+    await stopServer(server, { preserve: true });
+    server = null;
+    for (let attempt = 0; attempt < 100 && !fs.existsSync(terminated); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(fs.existsSync(terminated), true, 'Claude auth child received SIGTERM');
+  } finally {
+    if (server) await stopServer(server, { preserve: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 

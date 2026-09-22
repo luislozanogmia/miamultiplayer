@@ -3060,8 +3060,11 @@ function parseHermesAuthOutput(provider, value) {
     // Claude Code owns this PKCE flow. Mia only forwards the exact official
     // authorization URL printed by `claude auth login --claudeai`; query
     // parameters must remain intact for the CLI to validate the completion.
-    const url = text.match(/https:\/\/(?:claude\.com\/cai|claude\.ai)\/oauth\/authorize\?[^\s"'<>]+/i);
-    verificationUrl = url ? url[0].replace(/[),.;]+$/, '') : null;
+    // Require a delimiter after the query. Stream chunks may end halfway
+    // through `state` or the PKCE challenge; publishing at buffer-end would
+    // open a valid-looking but unusable truncated URL.
+    const url = text.match(/https:\/\/(?:claude\.com\/cai|claude\.ai)\/oauth\/authorize\?[^\s"'<>]+(?=\s|["'<>])/i);
+    verificationUrl = url ? url[0] : null;
   }
   return {
     verificationUrl,
@@ -3265,11 +3268,15 @@ function startClaudeSubscriptionAuth(email) {
   };
   harnessAuthByUser.set(owner, entry);
 
-  const finish = (state) => {
+  const finish = (state, { terminate = false } = {}) => {
     if (entry.settled) return;
     entry.settled = true;
+    const child = entry.child;
     if (entry.timeout) clearTimeout(entry.timeout);
     entry.timeout = null;
+    if (terminate && child && child.exitCode === null) {
+      try { child.kill('SIGTERM'); } catch (_) { /* process may already be gone */ }
+    }
     entry.child = null;
     entry.output = '';
     entry.state = state;
@@ -3326,13 +3333,12 @@ function startClaudeSubscriptionAuth(email) {
     entry.child = child;
     child.stdout.on('data', read);
     child.stderr.on('data', read);
-    child.stdin.on('error', () => finish('error'));
-    child.once('error', () => finish('error'));
+    child.stdin.on('error', () => finish('error', { terminate: true }));
+    child.once('error', () => finish('error', { terminate: true }));
     child.once('close', (code) => { void verifyCompletion(code); });
     entry.timeout = setTimeout(() => {
       if (entry.settled) return;
-      try { child.kill('SIGTERM'); } catch (_) { /* process may already be gone */ }
-      finish('error');
+      finish('error', { terminate: true });
     }, HERMES_AUTH_TIMEOUT_MS);
     entry.timeout.unref();
   } catch (_) {
@@ -3353,6 +3359,14 @@ function disconnectHermesAuth(email, provider) {
     try { existing.child.kill('SIGTERM'); } catch (_) { /* process may already be gone */ }
   }
   if (harnessAuthByUser.get(owner) === existing) harnessAuthByUser.delete(owner);
+}
+
+function disconnectAllHermesAuth() {
+  for (const owner of Array.from(harnessAuthByUser.keys())) {
+    const entry = harnessAuthByUser.get(owner);
+    if (entry && entry.provider) disconnectHermesAuth(owner, entry.provider);
+  }
+  harnessAuthByUser.clear();
 }
 
 function runHermesLogout(provider) {
@@ -6855,6 +6869,7 @@ let backendShutdownStarted = false;
 function shutdownBackend() {
   if (backendShutdownStarted) return;
   backendShutdownStarted = true;
+  disconnectAllHermesAuth();
   closeHermesGatewayRuntime();
   nativeConversationWebSocket.close();
 

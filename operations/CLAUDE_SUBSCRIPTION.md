@@ -13,9 +13,9 @@ credential and does not silently fall back to an Anthropic API key.
   Claude Code login or starts the CLI's own `claude auth login --claudeai`
   flow from Connect. Upstream qualified Claude Code 2.1.263.
 - The vendored plugin is version 0.3.0, reviewed at commit
-  `c92c27c9f919178a58974a72333b473c6cb2e71d`. Its runtime files are kept
-  unchanged under
-  `backend/hermes-plugins/claude-subscription-directsdk-experimental`.
+  `c92c27c9f919178a58974a72333b473c6cb2e71d`. Mia keeps the upstream runtime
+  structure under `backend/hermes-plugins/claude-subscription-directsdk-experimental`
+  with the documented local context-window policy customization.
 
 Desktop builds search the current `PATH` plus common Homebrew and npm install
 locations. Set `CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND` to an explicit Claude
