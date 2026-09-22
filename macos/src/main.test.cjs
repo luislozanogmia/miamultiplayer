@@ -159,6 +159,14 @@ test("provider auth redirects preserve nested OAuth windows and their navigation
     assert.equal(nestedNavigate(url), false, url);
     assert.deepEqual(googleContents.popup({ url }), { action: "deny" }, url);
   }
+  let completed = 0;
+  let closed = false;
+  googleContents.session.fetch = async () => { completed += 1; return { status: 202 }; };
+  googleWindow.close = () => { closed = true; };
+  googleContents.emit("did-navigate", {}, "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(completed, 1, "the live navigation listener submits the code automatically");
+  assert.equal(closed, true, "accepted code closes the auth window");
 });
 
 test("provider auth URL allowlists cover existing providers and fail closed", () => {
@@ -175,6 +183,30 @@ test("provider auth URL allowlists cover existing providers and fail closed", ()
   assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com:444/", "openai-codex"), false);
   assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com/", "unknown"), false);
   assert.equal(main.harnessAuthRedirectProvider("http://localhost:48710/api/settings/harness/auth/redirect?provider=openai-codex", "http://localhost:4871"), "");
+});
+
+test("Claude callback automatically submits only the bound code using Mia's session", async () => {
+  const main = loadMain();
+  const contract = { state: "fixture-state", redirectOrigin: "https://platform.claude.com", redirectPath: "/oauth/code/callback" };
+  const calls = [];
+  const window = { webContents: { session: { fetch: async (...args) => { calls.push(args); return { status: 202 }; } } } };
+  const callback = "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture-code";
+  for (const url of [callback.replace("fixture-state", "stale"), callback.replace("platform.claude.com", "attacker.test"), callback.replace("fixture-code", "bad%0Acode"), callback.replace("/oauth/code/callback", "/other")]) {
+    assert.equal(await main.completeClaudeAuthCallback(window, url, contract, "http://localhost:4871"), false);
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(await main.completeClaudeAuthCallback(window, callback, contract, "http://localhost:4871"), true);
+  assert.equal(calls[0][0], "http://localhost:4871/api/settings/harness/auth/complete");
+  assert.equal(calls[0][1].credentials, "include");
+  assert.equal(calls[0][1].redirect, "error");
+  assert.equal(calls[0][1].headers.Origin, "http://localhost:4871");
+  assert.deepEqual(JSON.parse(calls[0][1].body), {
+    provider: "claude-subscription-directsdk-experimental", code: "fixture-code#fixture-state", state: "fixture-state",
+  });
+  window.webContents.session.fetch = async () => ({ status: 409 });
+  assert.equal(await main.completeClaudeAuthCallback(window, callback, contract, "http://localhost:4871"), false);
+  window.webContents.session.fetch = async () => { throw new Error("offline"); };
+  assert.equal(await main.completeClaudeAuthCallback(window, callback, contract, "http://localhost:4871"), false);
 });
 
 test("packaged macOS runtime is self-contained and ignores ambient Hermes", () => {

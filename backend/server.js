@@ -3913,6 +3913,15 @@ app.post('/api/settings/harness/auth/complete', requireGlobalSettingsAdmin, (req
   if (auth.completionSubmitted) {
     return res.status(409).json({ error: 'That Claude sign-in is already completing.' });
   }
+  // Desktop auto-completion is bound to the currently waiting CLI flow, so
+  // a late callback from an older popup cannot finish a replacement login.
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'state')) {
+    let expectedState = '';
+    try { expectedState = new URL(auth.verificationUrl).searchParams.get('state') || ''; } catch (_) {}
+    if (!expectedState || req.body.state !== expectedState || !code.endsWith(`#${expectedState}`)) {
+      return res.status(409).json({ error: 'This Claude sign-in has expired. Start sign-in again.' });
+    }
+  }
   auth.completionSubmitted = true;
   auth.state = 'completing';
   auth.child.stdin.end(`${code}\n`);

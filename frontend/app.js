@@ -1607,7 +1607,7 @@
         ? 'Preparing sign-in…'
         : (auth.state === 'waiting'
           ? (auth.provider === 'claude-subscription-directsdk-experimental'
-            ? 'Finish in the sign-in window. Enter a one-time code below only if Claude shows one.'
+            ? 'Finish in the sign-in window. Mia will connect automatically.'
             : 'Finish in the sign-in window and enter the code shown below.')
           : (auth.state === 'completing'
             ? 'Verifying sign-in…'
