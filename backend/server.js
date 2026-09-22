@@ -3570,32 +3570,57 @@ const MANAGED_ROUTER_MODEL_ALLOWLIST = MANAGED_ROUTER_MODEL_ALLOWLIST_RAW.trim()
   ? new Set(MANAGED_ROUTER_MODEL_ALLOWLIST_RAW.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
   : null;
 
+// Hermes reports some product providers under a second id. Map those back to
+// the id Mia uses for connection status and disconnect records.
+function chatModelStatusProviderId(id) {
+  const normalized = String(id || '').trim().toLowerCase();
+  if (normalized === 'openai') return 'openai-api';
+  if (normalized === 'xai') return 'xai-oauth';
+  return normalized;
+}
+
+// The saved preference only picks the default model. Every other product
+// provider the gateway reports as authenticated, and the user has not
+// disconnected, stays selectable per turn, so connecting a second provider
+// (for example Mia Router after Claude) never hides the first one.
+function chatModelProviderIdsForUser(providers, settings, email, preference) {
+  if (!preference || !preference.onboardingComplete) return [];
+  const ids = new Set(chatModelProviderIdsForPreference(preference));
+  for (const id of Object.keys(providers || {})) {
+    const statusId = chatModelStatusProviderId(id);
+    if (!HERMES_STATUS_PROVIDERS.has(statusId) || statusId === 'managed-router') continue;
+    if (hermesDisconnectedProviders.has(statusId)
+      || harnessProviderDisconnectedForUser(settings, email, statusId)) continue;
+    ids.add(id);
+  }
+  return Array.from(ids);
+}
+
 function visibleChatModelProvidersForUser(providers, email) {
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, email);
-  let visible = visibleChatModelInventory(providers, chatModelProviderIdsForPreference(preference));
-  const labelProvider = preference.provider === 'openai-api'
-    ? preference.apiProvider || 'openai-api'
-    : preference.provider;
-  if (MANAGED_ROUTER_MODEL_ALLOWLIST && labelProvider === 'openrouter') {
-    const filtered = {};
-    for (const [id, provider] of Object.entries(visible)) {
-      const models = provider.models.filter(m => MANAGED_ROUTER_MODEL_ALLOWLIST.has(String(m).toLowerCase()));
-      if (models.length) {
-        filtered[id] = {
-          ...provider,
-          models,
-          capabilities: Object.fromEntries(models.map(m => [
-            m, provider.capabilities[m] || { fast: false, reasoning: true },
-          ])),
-        };
-      }
+  const visible = visibleChatModelInventory(
+    providers,
+    chatModelProviderIdsForUser(providers, settings, email, preference)
+  );
+  if (MANAGED_ROUTER_MODEL_ALLOWLIST && visible.openrouter) {
+    const provider = visible.openrouter;
+    const models = provider.models.filter(m => MANAGED_ROUTER_MODEL_ALLOWLIST.has(String(m).toLowerCase()));
+    if (models.length) {
+      visible.openrouter = {
+        ...provider,
+        models,
+        capabilities: Object.fromEntries(models.map(m => [
+          m, provider.capabilities[m] || { fast: false, reasoning: true },
+        ])),
+      };
+    } else {
+      delete visible.openrouter;
     }
-    visible = filtered;
   }
-  const label = HERMES_AUTH_PROVIDER_LABELS[labelProvider];
-  if (label) {
-    for (const provider of Object.values(visible)) provider.label = label;
+  for (const [id, provider] of Object.entries(visible)) {
+    const label = HERMES_AUTH_PROVIDER_LABELS[chatModelStatusProviderId(id)] || HERMES_AUTH_PROVIDER_LABELS[id];
+    if (label) provider.label = label;
   }
   return visible;
 }
@@ -3615,8 +3640,11 @@ function inferenceOptionsForUser(email, baseOptions) {
     // silently hand the turn to whatever the Hermes profile defaults to.
     // Resolve the user's first visible model instead — for a managed router
     // that is the allowlisted model.
+    // Several providers can be visible; only the preferred one (under
+    // either of its Hermes ids) may supply the default model.
     const visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
-    const entry = visible[provider] || Object.values(visible)[0];
+    const entry = visible[provider] || chatModelProviderIdsForPreference(preference)
+      .map((id) => visible[id]).find(Boolean);
     if (entry && entry.models.length) options.model = entry.models[0];
   }
   return Object.keys(options).length ? options : undefined;

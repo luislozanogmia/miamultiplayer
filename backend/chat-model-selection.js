@@ -67,7 +67,8 @@ function inventoryResponse(providers) {
 }
 
 // Mia is a product-facing picker, not a gateway diagnostics surface. Only
-// show providers the user explicitly selected during onboarding, and hide
+// show the providers the caller allows (the user's connected product
+// providers), and hide
 // context-window variants whose implementation labels are not meaningful to
 // non-technical users.
 function visibleChatModelInventory(providers, providerIds) {
