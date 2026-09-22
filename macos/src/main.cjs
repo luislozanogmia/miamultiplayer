@@ -1553,16 +1553,34 @@ function openClerkOAuthPopup(parent, url, expectedBackendUrl) {
   return popup;
 }
 
-function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false, harnessAuthProvider = "") {
+function harnessAuthPopupOptions(parent) {
+  return {
+    parent,
+    modal: false,
+    show: true,
+    autoHideMenuBar: true,
+    width: 560,
+    height: 720,
+    webPreferences: {
+      session: parent.webContents.session,
+      preload: path.join(__dirname, "google-oauth-preload.cjs"),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  };
+}
+
+function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false, harnessAuthProvider = "", inheritedAuthContract = null) {
   const isLocal = url => (expectedBackendUrl || backendUrl) && hasExactOrigin(url, expectedBackendUrl || backendUrl);
   // Windows created for the OAuth flow carry the Chrome-identity preload;
   // ordinary windows do not, so a flow starting in them must move to a popup.
   const isOAuthPopup = clerkFlowActive;
-  let harnessAuthContract = null;
+  let harnessAuthContract = inheritedAuthContract;
   const isBoundHarnessAuthNavigation = value => {
     if (harnessAuthProvider === "claude-subscription-directsdk-experimental") {
       const start = claudeAuthStartContract(value);
-      if (start) harnessAuthContract = start;
+      if (start && !harnessAuthContract) harnessAuthContract = start;
     }
     if (!isHarnessAuthNavigation(value, harnessAuthProvider, harnessAuthContract)) return false;
     return true;
@@ -1584,31 +1602,18 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   };
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (harnessAuthProvider) {
-      if (isBoundHarnessAuthNavigation(url)) {
-        setImmediate(() => {
-          try { window.loadURL(url); } catch (_) { /* popup may have closed */ }
-        });
-      }
-      return { action: "deny" };
+      // OAuth providers use the returned Window and its opener to finish
+      // sign-in. Replacing the parent after denying window.open destroys
+      // that relationship, even though the Google page itself still loads.
+      return isBoundHarnessAuthNavigation(url) ? {
+        action: "allow",
+        overrideBrowserWindowOptions: harnessAuthPopupOptions(window),
+      } : { action: "deny" };
     }
     const provider = harnessAuthRedirectProvider(url, expectedBackendUrl);
     if (isLocal(url)) return provider ? {
       action: "allow",
-      overrideBrowserWindowOptions: {
-        parent: window,
-        modal: false,
-        show: true,
-        autoHideMenuBar: true,
-        width: 560,
-        height: 720,
-        webPreferences: {
-          session: window.webContents.session,
-          preload: path.join(__dirname, "google-oauth-preload.cjs"),
-          contextIsolation: true,
-          sandbox: true,
-          nodeIntegration: false,
-        },
-      },
+      overrideBrowserWindowOptions: harnessAuthPopupOptions(window),
     } : { action: "allow" };
     // Clerk's Google flow must stay in Electron's session so its callback can
     // return the authenticated cookie to Mia. Opening this URL in the user's
@@ -1643,7 +1648,8 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
       child,
       expectedBackendUrl,
       isClerkGoogleOAuthUrl(details.url),
-      harnessAuthRedirectProvider(details.url, expectedBackendUrl)
+      harnessAuthProvider || harnessAuthRedirectProvider(details.url, expectedBackendUrl),
+      harnessAuthContract
     );
   });
   window.webContents.on("did-navigate", (_event, url) => {
@@ -1651,12 +1657,12 @@ function configureNavigation(window, expectedBackendUrl, clerkFlowActive = false
   });
   const guardNavigation = (event, targetUrl) => {
     const url = targetUrl || event.url;
-    if (isLocal(url)) return;
     if (harnessAuthProvider && isBoundHarnessAuthNavigation(url)) return;
     if (harnessAuthProvider) {
       event.preventDefault();
       return;
     }
+    if (isLocal(url)) return;
     // A Clerk Google sign-in that starts as an in-place redirect must move
     // into the shimmed popup: this window's preload lacks the Chrome-identity
     // shims, so Google refuses it as an insecure browser.

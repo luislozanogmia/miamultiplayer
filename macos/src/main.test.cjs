@@ -80,7 +80,7 @@ test("Clerk Google navigation moves into the shimmed popup and hands back the se
   assert.equal(popup.closed, true);
 });
 
-test("provider auth redirects use a sandboxed child popup and never navigate the main window", () => {
+test("provider auth redirects preserve nested OAuth windows and their navigation guards", async () => {
   const { EventEmitter } = require("node:events");
   const main = loadMain();
   const contents = new EventEmitter();
@@ -124,7 +124,38 @@ test("provider auth redirects use a sandboxed child popup and never navigate the
   assert.equal(navigate("will-redirect", "https://example.com/steal"), false);
   assert.equal(navigate("will-navigate", "file:///tmp/private"), false);
   assert.deepEqual(childContents.popup({ url: "https://example.com/escape" }), { action: "deny" });
-  assert.deepEqual(childContents.popup({ url: "https://claude.com/cai/oauth/continue" }), { action: "deny" });
+  const google = "https://accounts.google.com/o/oauth2/v2/auth";
+  const nestedDecision = childContents.popup({ url: google });
+  assert.equal(nestedDecision.action, "allow", "Google needs a real Window, not a denied popup followed by parent navigation");
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.parent, child);
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.session, contents.session);
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.sandbox, true);
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.contextIsolation, true);
+  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.nodeIntegration, false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(child.loadedUrls, [], "Claude's opener page must survive the Google handoff");
+  const googleContents = new EventEmitter();
+  googleContents.session = contents.session;
+  googleContents.setWindowOpenHandler = handler => { googleContents.popup = handler; };
+  const googleWindow = { webContents: googleContents };
+  childContents.emit("did-create-window", googleWindow, { url: google });
+  const nestedNavigate = url => {
+    let blocked = false;
+    googleContents.emit("will-redirect", { preventDefault() { blocked = true; } }, url);
+    return !blocked;
+  };
+  assert.equal(nestedNavigate("https://claude.ai/api/auth/callback/google"), true);
+  assert.equal(nestedNavigate("https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture"), true);
+  for (const url of [
+    "https://platform.claude.com/oauth/code/callback?state=wrong&code=fixture",
+    "https://accounts.google.com.attacker.test/",
+    "https://accounts.google.com:444/",
+    "file:///tmp/private",
+    "http://localhost:4871/",
+  ]) {
+    assert.equal(nestedNavigate(url), false, url);
+    assert.deepEqual(googleContents.popup({ url }), { action: "deny" }, url);
+  }
 });
 
 test("provider auth URL allowlists cover existing providers and fail closed", () => {
