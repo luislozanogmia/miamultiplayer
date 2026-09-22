@@ -812,7 +812,10 @@
     }).catch(function(){ errEl.textContent = 'Could not verify. Try again.'; });
   });
 
-  el('#logoutBtn').addEventListener('click', function(){
+  // Every sign-out control calls this directly. Relaying a synthetic click
+  // to #logoutBtn is not safe: that button sits outside the browser drawer,
+  // so the drawer's capture-phase outside-click guard swallows the event.
+  function signOutOfMia(){
     clerkSigningOut = true;
     var clerkSignOut = AUTH_CONFIG && desktopClerkAuth() ? desktopClerkAuth().signOut().then(window.MiaClerkDesktop.unwrap) : AUTH_CONFIG ? ensureClerkLoaded().then(function(clerk){
       return clerk && typeof clerk.signOut === 'function' ? clerk.signOut() : null;
@@ -825,7 +828,8 @@
       clerkSigningOut = false;
       window.alert(error.message || 'Sign-out did not finish. Please try again.');
     });
-  });
+  }
+  el('#logoutBtn').addEventListener('click', signOutOfMia);
 
   /* ============ ROUTER ============ */
   var LAYERS = ['platform','agents'];
@@ -2179,7 +2183,7 @@
   var settingsSignOut = el('#settingsSignOut');
   if(settingsSignOut) settingsSignOut.addEventListener('click', function(){
     closeSettingsDrawer();
-    el('#logoutBtn').click();
+    signOutOfMia();
   });
   var settingsCleanSlate = el('#settingsCleanSlate');
   if(settingsCleanSlate) settingsCleanSlate.addEventListener('click', cleanSlateSoloWorkspace);
@@ -11444,8 +11448,9 @@
     });
     var logout = el('#chatAcctLogout');
     if(logout) logout.addEventListener('click', function(){
-      var original = el('#logoutBtn');
-      if(original) original.click();
+      if(menu) menu.classList.remove('open');
+      if(account) account.setAttribute('aria-expanded', 'false');
+      signOutOfMia();
     });
     // Connected apps is available from the same compact account surface as
     // the browser and bot tools. The connector itself owns provider auth.
