@@ -81,3 +81,29 @@ test('verified Clerk claims require exact issuer, subject, and primaryEmail', ()
     primaryEmail: 'a@b.test',
   }, issuer).displayName, '');
 });
+
+function unsignedJwt(payload) {
+  const part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${part({ alg: 'RS256' })}.${part(payload)}.signature`;
+}
+
+test('browser Clerk tokens with azp must match the requesting origin', () => {
+  const trustedOrigins = new Set(['http://localhost:4871']);
+  const token = unsignedJwt({ azp: 'http://localhost:4871', sub: 'user_123' });
+  assert.deepEqual(config.clerkVerifyOptions(token, { jwtKey: 'key', requestOrigin: 'http://localhost:4871', trustedOrigins }), {
+    options: { jwtKey: 'key', authorizedParties: ['http://localhost:4871'] },
+  });
+  assert.deepEqual(config.clerkVerifyOptions(token, { jwtKey: 'key', requestOrigin: '', trustedOrigins }).options.authorizedParties, ['http://localhost:4871']);
+});
+
+test('native Clerk tokens without azp are accepted only from a trusted Mia origin', () => {
+  const trustedOrigins = new Set(['http://localhost:4871']);
+  const token = unsignedJwt({ sub: 'user_123' });
+  assert.deepEqual(config.clerkVerifyOptions(token, { jwtKey: 'key', requestOrigin: 'http://localhost:4871', trustedOrigins }), {
+    options: { jwtKey: 'key' },
+    native: true,
+  });
+  assert.equal(config.clerkVerifyOptions(token, { jwtKey: 'key', requestOrigin: 'https://attacker.test', trustedOrigins }).error, 'clerk_token_invalid');
+  assert.equal(config.clerkVerifyOptions(token, { jwtKey: 'key', requestOrigin: '', trustedOrigins }).error, 'clerk_token_invalid');
+  assert.equal(config.clerkVerifyOptions('not-a-jwt', { jwtKey: 'key', requestOrigin: 'http://localhost:4871', trustedOrigins }).error, 'clerk_token_invalid');
+});
