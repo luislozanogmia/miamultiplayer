@@ -81,9 +81,38 @@ function clerkClaimsProfile(claims, expectedIssuer) {
   };
 }
 
+function unverifiedJwtPayload(token) {
+  const pieces = String(token || '').split('.');
+  if (pieces.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(pieces[1], 'base64url').toString('utf8'));
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Browser Clerk tokens carry `azp` (the page origin that minted them) and must
+// match the requesting origin. Native Clerk clients (Mia's desktop sign-in)
+// mint tokens without `azp`; those are accepted only from a request whose
+// Origin is one of this Mia's own trusted origins. The unverified read below
+// only selects the mode — verifyToken still checks the signed payload.
+function clerkVerifyOptions(token, { jwtKey, requestOrigin, trustedOrigins }) {
+  const payload = unverifiedJwtPayload(token);
+  if (!payload) return { error: 'clerk_token_invalid' };
+  const origin = String(requestOrigin || '').trim().toLowerCase();
+  const trusted = Array.from(trustedOrigins || []);
+  if (Object.prototype.hasOwnProperty.call(payload, 'azp')) {
+    return { options: { jwtKey, authorizedParties: origin ? [origin] : trusted } };
+  }
+  if (!origin || !trusted.includes(origin)) return { error: 'clerk_token_invalid' };
+  return { options: { jwtKey }, native: true };
+}
+
 module.exports = {
   DEFAULT_CLERK_CONFIG,
   exactHttpsOrigin,
   resolveClerkConfig,
   clerkClaimsProfile,
+  clerkVerifyOptions,
 };

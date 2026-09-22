@@ -39,7 +39,7 @@ const { execFile, spawn } = require('child_process');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const { verifyToken: verifyClerkToken } = require('@clerk/backend');
-const { resolveClerkConfig, clerkClaimsProfile } = require('./clerk-config');
+const { resolveClerkConfig, clerkClaimsProfile, clerkVerifyOptions } = require('./clerk-config');
 const { buildPageCsp, replacePageCsp } = require('../frontend/csp-policy.cjs');
 
 const db = require('./db');
@@ -1330,11 +1330,6 @@ function clerkAccountProfile() {
   };
 }
 
-function clerkAuthorizedParties(req) {
-  const origin = String(req.get('origin') || '').trim();
-  return origin ? [origin] : Array.from(MIAOS_TRUSTED_ORIGINS);
-}
-
 app.post('/api/clerk/session', async (req, res) => {
   if (!MIAOS_CLERK_AUTH || !CLERK_PUBLISHABLE_KEY || !CLERK_JWT_KEY) {
     return res.status(404).json({ error: 'not_found' });
@@ -1342,13 +1337,19 @@ app.post('/api/clerk/session', async (req, res) => {
   const match = /^Bearer\s+([^\s]+)$/.exec(String(req.get('authorization') || ''));
   if (!match) return res.status(401).json({ error: 'clerk_token_missing' });
 
+  const verification = clerkVerifyOptions(match[1], {
+    jwtKey: CLERK_JWT_KEY,
+    requestOrigin: req.get('origin'),
+    trustedOrigins: MIAOS_TRUSTED_ORIGINS,
+  });
+  if (verification.error) return res.status(401).json({ error: verification.error });
   let claims;
   try {
-    claims = await verifyClerkToken(match[1], {
-      jwtKey: CLERK_JWT_KEY,
-      authorizedParties: clerkAuthorizedParties(req),
-    });
+    claims = await verifyClerkToken(match[1], verification.options);
   } catch (_error) {
+    return res.status(401).json({ error: 'clerk_token_invalid' });
+  }
+  if (verification.native && claims && claims.azp !== undefined) {
     return res.status(401).json({ error: 'clerk_token_invalid' });
   }
   const profile = clerkClaimsProfile(claims, CLERK_ISSUER);
