@@ -6373,6 +6373,24 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     postHermesProgressText(kind === 'Thinking' ? 'thinking.delta' : 'reasoning.delta', `${kind}\n${text}`);
   });
   const trackBudget = budgetTracker ? budgetTrackingOnEvent(budgetTracker) : null;
+  // Some providers (the Claude subscription route) report the final answer
+  // again as a completed reasoning block, which showed the reply twice. Hold
+  // the reasoning summary until the next event and drop it when it only
+  // repeats the reply.
+  let pendingReasoningSummary = '';
+  const sameReplyText = (a, b) => String(a || '').replace(/\s+/g, ' ').trim()
+    === String(b || '').replace(/\s+/g, ' ').trim();
+  const flushPendingReasoningSummary = (replyText) => {
+    const text = pendingReasoningSummary;
+    pendingReasoningSummary = '';
+    if (!text) return;
+    if (replyText && sameReplyText(text.replace(/^Reasoning summary\n/, ''), redactHermesChatDetail(replyText))) return;
+    for (const chunk of splitHermesDebugText(text)) postHermesProgressText('reasoning.available', chunk);
+  };
+  const flushHermesProgress = (replyText) => {
+    hermesDeltaCoalescer.flush();
+    flushPendingReasoningSummary(replyText);
+  };
   const postHermesProgress = (type, payload) => {
     if (trackBudget) trackBudget(type, payload);
     const diagnostics = getHermesDiagnostics();
@@ -6391,6 +6409,15 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // message.complete): flush whatever delta text is buffered first so
     // ordering in the transcript matches the gateway's own event order.
     hermesDeltaCoalescer.flush();
+    if (type === 'reasoning.available') {
+      flushPendingReasoningSummary();
+      pendingReasoningSummary = hermesDebugEventText(type, payload);
+      return;
+    }
+    // message.complete without text (streamed replies) keeps the summary
+    // until the run returns the final reply to compare against.
+    const completedText = type === 'message.complete' ? String((payload && payload.text) || '') : '';
+    if (type !== 'message.complete' || completedText) flushPendingReasoningSummary(completedText);
     for (const text of splitHermesDebugText(hermesDebugEventText(type, payload))) {
       postHermesProgressText(type, text);
     }
@@ -6438,7 +6465,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         nativeActiveGatewaySessions.delete(gatewayKey);
       }
     }
-    hermesDeltaCoalescer.flush();
+    flushHermesProgress(gatewayResult && gatewayResult.text);
     throwIfNativeDispatchStopped(signal);
     throwIfNativeDispatchUserInactive(dispatch, trigger);
     await hermesProgressSequence;
@@ -6471,7 +6498,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       signal,
       onEvent: postHermesProgress,
     });
-    hermesDeltaCoalescer.flush();
+    flushHermesProgress(typeof inferenceResult === 'string' ? inferenceResult : inferenceResult && inferenceResult.text);
     throwIfNativeDispatchStopped(signal);
     throwIfNativeDispatchUserInactive(dispatch, trigger);
     await hermesProgressSequence;
