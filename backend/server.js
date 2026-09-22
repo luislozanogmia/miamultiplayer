@@ -3087,7 +3087,9 @@ function publicHermesAuthState(entry) {
 }
 
 const HERMES_CREDENTIAL_ENV_KEYS = Object.freeze([
-  'PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'NO_COLOR',
+  // Claude Code keys macOS credentials by OS username. Preserve the same
+  // identity as hermesProcessEnv so login/status and inference share a store.
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'NO_COLOR',
   'HERMES_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
   'GH_CONFIG_DIR',
   // Windows process basics. The argv launch vector spawns python.exe
