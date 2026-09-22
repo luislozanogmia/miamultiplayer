@@ -1048,6 +1048,7 @@
   var harnessSettingsCache = {provider: null, model: null, fast: false, mode: 'solo', onboardingComplete: false};
   var harnessOnboardingState = {provider: null, model: null, fast: false, apiProvider: 'openai-api', mode: 'solo'};
   var harnessAuthPollTimer = null;
+  var harnessAuthGeneration = 0;
   var harnessAuthAwaitingSave = false;
   var harnessAuthSaveInProgress = false;
   var harnessClaudeOpenedUrl = '';
@@ -1542,10 +1543,15 @@
   }
 
   function stopHarnessAuthPolling(){
+    harnessAuthGeneration += 1;
     if(harnessAuthPollTimer){
       clearTimeout(harnessAuthPollTimer);
       harnessAuthPollTimer = null;
     }
+  }
+
+  function harnessAuthFlowIsCurrent(generation, provider){
+    return generation === harnessAuthGeneration && provider === harnessOnboardingState.provider;
   }
 
   function openClaudeAuthInMiaBrowser(url){
@@ -1654,10 +1660,18 @@
 
   function pollHarnessAuth(){
     stopHarnessAuthPolling();
+    var generation = harnessAuthGeneration;
+    var provider = harnessOnboardingState.provider;
     var poll = function(){
       api('/api/settings/harness/auth').then(function(res){
+        if(!harnessAuthFlowIsCurrent(generation, provider)) return;
         var auth = res.data && res.data.auth;
         renderHarnessAuth(auth);
+        if(provider === 'claude-subscription-directsdk-experimental' && auth &&
+          ['starting', 'waiting'].indexOf(auth.state) !== -1 && auth.verificationUrl &&
+          auth.verificationUrl !== harnessClaudeOpenedUrl){
+          openClaudeAuthInMiaBrowser(auth.verificationUrl);
+        }
         if(auth && auth.state === 'connected'){
           stopHarnessAuthPolling();
           if(auth.provider === 'claude-subscription-directsdk-experimental') closeLocalBrowser();
@@ -1670,6 +1684,7 @@
         }
         harnessAuthPollTimer = setTimeout(poll, 1500);
       }).catch(function(err){
+        if(!harnessAuthFlowIsCurrent(generation, provider)) return;
         var error = el('#harnessOnboardingError');
         if(error && err && err.message) error.textContent = err.message;
         harnessAuthPollTimer = setTimeout(poll, 2500);
@@ -1679,10 +1694,13 @@
   }
 
   function loadHarnessAuthState(){
+    var generation = harnessAuthGeneration;
+    var provider = harnessOnboardingState.provider;
     api('/api/settings/harness/auth').then(function(res){
+      if(!harnessAuthFlowIsCurrent(generation, provider)) return;
       var auth = res.data && res.data.auth;
       renderHarnessAuth(auth);
-      if(auth && ['starting', 'waiting'].indexOf(auth.state) !== -1) pollHarnessAuth();
+      if(auth && ['starting', 'waiting', 'completing'].indexOf(auth.state) !== -1) pollHarnessAuth();
     }).catch(function(){});
   }
 
@@ -2096,7 +2114,9 @@
       var redirectUrl = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(authProvider);
       try { window.open(redirectUrl, '_blank', 'noopener,noreferrer'); } catch(_) { /* visible link remains available */ }
     }
+    var authRequestGeneration = harnessAuthGeneration;
     api('/api/settings/harness/auth/start', {method:'POST', body:{provider:authProvider}}).then(function(res){
+      if(!harnessAuthFlowIsCurrent(authRequestGeneration, authProvider)) return;
       var auth = res.data && res.data.auth;
       if(res.status !== 200 || !auth) throw new Error((res.data && res.data.error) || 'Could not start harness sign-in');
       renderHarnessAuth(auth);
@@ -2116,6 +2136,7 @@
       setHarnessActionLabel(button, 'Loading…');
       pollHarnessAuth();
     }).catch(function(err){
+      if(!harnessAuthFlowIsCurrent(authRequestGeneration, authProvider)) return;
       harnessAuthAwaitingSave = false;
       harnessConnectionPending = null;
       if(error) error.textContent = err.message || 'Could not start harness sign-in';
@@ -2136,14 +2157,18 @@
     if(!code){ if(input) input.focus(); return; }
     if(input) input.disabled = true;
     if(error) error.textContent = '';
+    var completionGeneration = harnessAuthGeneration;
+    var completionProvider = harnessOnboardingState.provider;
     api('/api/settings/harness/auth/complete', {method:'POST', body:{
       provider:'claude-subscription-directsdk-experimental', code:code
     }}).then(function(res){
+      if(!harnessAuthFlowIsCurrent(completionGeneration, completionProvider)) return;
       if(input) input.value = '';
       if(res.status !== 202) throw new Error((res.data && res.data.error) || 'Could not submit Claude sign-in');
       renderHarnessAuth(res.data && res.data.auth);
       pollHarnessAuth();
     }).catch(function(err){
+      if(!harnessAuthFlowIsCurrent(completionGeneration, completionProvider)) return;
       if(input) input.disabled = false;
       if(error) error.textContent = err.message || 'Could not submit Claude sign-in';
     });
