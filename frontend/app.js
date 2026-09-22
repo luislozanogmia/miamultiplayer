@@ -1073,6 +1073,9 @@
   var harnessAuthGeneration = 0;
   var harnessAuthAwaitingSave = false;
   var harnessAuthSaveInProgress = false;
+  // Set when the model picker's Connect link opened setup: finishing only adds
+  // that provider to the picker, keeping the saved default and the page.
+  var harnessConnectOnly = false;
   var harnessConnectionPending = null;
   var harnessConnectionValidationPending = false;
   var harnessConnectionState = {
@@ -1879,6 +1882,28 @@
     renderHarnessFooterActions();
   }
 
+  // Picker Connect: record the newly connected provider, close setup and
+  // refresh the picker. The saved default stays, and the page does not reload.
+  function finishConnectOnly(button, error){
+    var provider = harnessOnboardingState.provider === 'openai-api'
+      ? normalizeHarnessApiProvider(harnessOnboardingState.apiProvider || 'openai-api')
+      : harnessOnboardingState.provider;
+    api('/api/settings/harness/connected', {method:'POST', body:{provider:provider}}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.ok) throw new Error((res.data && res.data.error) || 'Could not connect that provider');
+      harnessAuthAwaitingSave = false;
+      harnessAuthSaveInProgress = false;
+      renderHarnessAuth(null);
+      closeHarnessOnboarding();
+      if(chatModelPicker.ensureLoaded) chatModelPicker.ensureLoaded();
+    }).catch(function(err){
+      harnessAuthSaveInProgress = false;
+      harnessAuthAwaitingSave = false;
+      if(error) error.textContent = err.message || 'Could not connect that provider';
+      if(button) button.disabled = false;
+      renderHarnessOnboarding();
+    });
+  }
+
   function openHarnessOnboarding(existing){
     // Electron's native browser view is above HTML overlays; the sheet would
     // otherwise be hidden behind it. Saved tabs and sessions remain.
@@ -1898,6 +1923,7 @@
     // Multiplayer is upcoming: the card is disabled, so never restore it as the selection.
     if(harnessOnboardingState.mode === 'multiplayer') harnessOnboardingState.mode = 'solo';
     harnessAuthAwaitingSave = false;
+    harnessConnectOnly = false;
     harnessConnectionPending = null;
     harnessConnectionValidationPending = true;
     stopHarnessAuthPolling();
@@ -1927,6 +1953,7 @@
       void cancelHarnessAuthFlow(harnessOnboardingState.provider);
     }
     harnessAuthAwaitingSave = false;
+    harnessConnectOnly = false;
     stopHarnessAuthPolling();
     var apiKey = el('#harnessApiKey');
     if(apiKey) apiKey.value = '';
@@ -2021,6 +2048,10 @@
     button.disabled = true;
     setHarnessActionLabel(button, 'Loading…');
     if(error) error.textContent = '';
+    if(harnessConnectOnly){
+      finishConnectOnly(button, error);
+      return;
+    }
     api('/api/settings/harness', {method:'POST', body:{
       provider:harnessOnboardingState.provider,
       model:harnessOnboardingState.model,
@@ -12818,16 +12849,10 @@
     }
 
     function familyProviderConnected(row){
-      // The picker's own inventory (already fetched for this menu) is the
-      // most reliable signal — it only ever lists providers Hermes reports as
-      // configured. harnessConnectionState is a secondary fallback: it is
-      // only populated once Settings → Access or onboarding has loaded, so it
-      // can lag or start out all-false on a fresh app session.
-      if(familyProviderEntries(row).length) return true;
-      if(harnessConnectionState[row.id] === true) return true;
-      // Mia Router is stored under the Hermes provider id 'openrouter'.
-      if(row.id === 'managed-router' && harnessConnectionState['openrouter'] === true) return true;
-      return false;
+      // The picker's inventory is the only signal: the backend lists exactly
+      // the providers this user connected through Mia. Hermes' raw connection
+      // status can include credentials that reached it some other way.
+      return familyProviderEntries(row).length > 0;
     }
 
     function familyProviderEntries(row){
@@ -12852,6 +12877,7 @@
     function openConnectFlowForProvider(row){
       closeMenu();
       openHarnessOnboarding(harnessSettingsCache);
+      harnessConnectOnly = true;
       var choice = el('[data-harness-provider="' + row.harnessProvider + '"]');
       if(choice) choice.click();
       if(row.apiProvider){
