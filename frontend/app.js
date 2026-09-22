@@ -1155,8 +1155,12 @@
     if(raw.indexOf('gpt-') === 0) return {family:'GPT', variant:chatModelTitleCase(raw.replace(/-latest$/, '').replace(/-/g, ' ')), familyKey:'gpt'};
     match = /^grok-(\d+(?:\.\d+)?)(?:-(.+))?$/.exec(raw);
     if(match) return {family:'Grok', variant:match[1] + (match[2] ? ' ' + chatModelTitleCase(match[2]) : ''), familyKey:'grok'};
+    // Claude route ids carry a version, an optional snapshot date, and the
+    // `[1m]` long-context selector: claude-haiku-4-5-20251001 -> Haiku 4.5.
+    match = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:\[1m\])?$/.exec(raw);
+    if(match) return {family:'Claude', variant:chatModelTitleCase(match[1]) + ' ' + match[2] + (match[3] ? '.' + match[3] : ''), familyKey:'claude'};
     match = /^claude-(.+)$/.exec(raw);
-    if(match) return {family:'Claude', variant:chatModelTitleCase(match[1]), familyKey:'claude'};
+    if(match) return {family:'Claude', variant:chatModelTitleCase(match[1].replace(/\[1m\]$/, '')), familyKey:'claude'};
     match = /^deepseek-(.+)$/.exec(raw);
     if(match) return {family:'DeepSeek', variant:chatModelTitleCase(match[1]), familyKey:'deepseek'};
     var pieces = raw.split('-');
