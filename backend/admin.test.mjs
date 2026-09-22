@@ -680,8 +680,10 @@ test('Claude subscription starts the official CLI login once and completes witho
   const loggedIn = path.join(root, 'claude-logged-in');
   const firstChunkReady = path.join(root, 'claude-url-first-chunk');
   const releaseUrl = path.join(root, 'claude-url-release');
+  const identityLog = path.join(root, 'claude-identity.log');
   fs.writeFileSync(claude, `#!/bin/sh
 printf '%s\\n' "$*" >> "${invocationLog}"
+printf '%s:%s\\n' "$USER" "$LOGNAME" >> "${identityLog}"
 if [ "$1 $2" = "auth status" ]; then
   if [ -f "${loggedIn}" ]; then
     printf '%s\\n' '{"loggedIn":true,"subscriptionType":"pro"}'
@@ -710,6 +712,8 @@ exit 8
     existingRoot: root,
     extraEnv: {
       HERMES_PYTHON: 'python3',
+      USER: 'mia-fixture-user',
+      LOGNAME: 'mia-fixture-user',
       CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claude,
       CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR: path.join(root, 'claude-config'),
     },
@@ -732,6 +736,9 @@ exit 8
     assert.equal(partialAuth.verificationUrl, null);
     fs.writeFileSync(releaseUrl, 'continue');
     const redirected = await redirectPromise;
+    assert.ok(fs.readFileSync(identityLog, 'utf8').trim().split('\n')
+      .every((identity) => identity === 'mia-fixture-user:mia-fixture-user'),
+    'Claude login and status must use the same OS identity as inference');
     assert.equal(redirected.status, 302, await redirected.text());
     assert.match(redirected.headers.get('location') || '', /^https:\/\/claude\.com\/cai\/oauth\/authorize\?/);
     const start = await fetch(`${server.origin}/api/settings/harness/auth/start`, {
