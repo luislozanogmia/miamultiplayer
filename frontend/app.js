@@ -2235,7 +2235,7 @@
   });
   // Feedback goes out through the user's own mail client — no backend, no
   // credentials. The Electron shell only opens this exact mailto address.
-  var FEEDBACK_EMAIL = 'luislozanog86@gmail.com';
+  var FEEDBACK_EMAIL = 'hello@mia-labs.com';
   var settingsFeedbackSend = el('#settingsFeedbackSend');
   if(settingsFeedbackSend) settingsFeedbackSend.addEventListener('click', function(){
     var box = el('#settingsFeedbackText');
@@ -8682,7 +8682,7 @@
       '<div class="bot-store-card-body">' +
         '<div class="bot-store-card-head"><span class="bot-store-card-name">' + esc(bot.name || manifest.id) + '</span><span class="bot-store-card-version">v' + esc(manifest.version || '') + '</span></div>' +
         '<div class="bot-store-card-tagline">' + esc(store.tagline || '') + '</div>' +
-        '<div class="bot-store-card-meta"><span>' + esc(store.category || 'general') + '</span><span aria-hidden="true">&middot;</span><span>' + esc(manifest.author || 'Mia Labs') + '</span></div>' +
+        '<div class="bot-store-card-meta"><span>' + esc(store.category || 'general') + '</span><span aria-hidden="true">&middot;</span><span>' + esc(manifest.author || 'Mia') + '</span></div>' +
         (connectors.length ? '<div class="bot-store-card-requires">Requires: ' + esc(connectors.join(', ')) + '</div>' : '') +
       '</div>' +
       (installed

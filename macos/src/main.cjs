@@ -1209,7 +1209,7 @@ async function resolveBackend() {
 
 // Settings → Send feedback composes a mail to this address in the user's own
 // mail client; it is the only non-https URL the shell will hand to the OS.
-const FEEDBACK_EMAIL = "luislozanog86@gmail.com";
+const FEEDBACK_EMAIL = "hello@mia-labs.com";
 
 function isAllowedExternalUrl(value) {
   try {

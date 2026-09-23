@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "research-brief",
   "version": "1.0.0",
-  "author": "Mia Labs",
+  "author": "Mia",
   "store": {
     "tagline": "Researches a topic, cites its sources, and sends you a short brief.",
     "category": "research",

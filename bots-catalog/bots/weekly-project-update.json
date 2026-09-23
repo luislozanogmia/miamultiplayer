@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "weekly-project-update",
   "version": "1.1.0",
-  "author": "Mia Labs",
+  "author": "Mia",
   "store": {
     "tagline": "Prepares a concise project update every Friday from the files you approve.",
     "category": "productivity",
