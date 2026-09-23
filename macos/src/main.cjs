@@ -2262,7 +2262,9 @@ function configurePasskeys() {
     desktopLog(`Touch ID passkey setup failed: ${error.message}`);
     return;
   }
-  app.on("select-webauthn-account", (_event, details, callback) => {
+  // Electron emits this per session (the app window and each browser
+  // partition), not on app; a session without a listener cancels the request.
+  const attach = (ses) => ses.on("select-webauthn-account", (_event, details, callback) => {
     const accounts = Array.isArray(details.accounts) ? details.accounts : [];
     if (accounts.length === 1) return callback(accounts[0].credentialId);
     const labels = accounts.slice(0, 3).map((account, index) =>
@@ -2278,6 +2280,8 @@ function configurePasskeys() {
       callback(choice >= 0 && choice < labels.length ? accounts[choice].credentialId : null);
     }).catch(() => callback(null));
   });
+  attach(session.defaultSession);
+  app.on("session-created", attach);
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
