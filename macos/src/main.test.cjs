@@ -255,6 +255,14 @@ test("packaged runtime copy is replaced by a new build of the same commit", () =
   }
 });
 
+test("passkey account chooser listens on every session, not on app", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.doesNotMatch(source, /app\.on\("select-webauthn-account"/);
+  assert.match(source, /ses\.on\("select-webauthn-account"/);
+  assert.match(source, /attach\(session\.defaultSession\)/);
+  assert.match(source, /app\.on\("session-created", attach\)/);
+});
+
 test("packaged macOS runtime is self-contained and ignores ambient Hermes", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /app\.isPackaged\s*\?\s*PACKAGED_HERMES_BIN/);
