@@ -15,6 +15,10 @@ const {
   macCodeTargets,
   macEntitlementsForTarget,
   macDistributionConfig,
+  macEntitlementsPathForTarget,
+  macGroupedEntitlements,
+  validateMacProvisioningProfile,
+  embedMacProvisioningProfile,
   normalizeCopiedSymlinks,
   trackedRuntimeFiles,
   stageGoogleWorkspaceRuntime,
@@ -125,10 +129,29 @@ test("runtime audit rejects credentials, databases, logs, maps, and caches", () 
   }
 });
 
+test("runtime audit allows only Mia.app's embedded distribution profile", () => {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-embedded-profile-audit-test-"));
+  try {
+    const app = path.join(temporaryRoot, "Mia.app");
+    const embeddedProfile = path.join(app, "Contents", "embedded.provisionprofile");
+    fs.mkdirSync(path.dirname(embeddedProfile), { recursive: true });
+    fs.writeFileSync(embeddedProfile, "Apple-signed-profile");
+    assert.doesNotThrow(() => assertNoRuntimeState(app));
+
+    const misplacedProfile = path.join(app, "Contents", "Resources", "other.provisionprofile");
+    fs.mkdirSync(path.dirname(misplacedProfile), { recursive: true });
+    fs.writeFileSync(misplacedProfile, "unexpected-profile");
+    assert.throws(() => assertNoRuntimeState(app), /Runtime state remains in package/);
+  } finally {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
 test("Mac DMG bundles pinned Hermes, Ghost, Python, modules, and release integrity metadata", () => {
   const source = fs.readFileSync(require.resolve("./package-mac.cjs"), "utf8");
   assert.match(source, /name: "Mia"/);
-  assert.match(source, /appBundleId: "com\.miamultiplayer\.mia"/);
+  assert.match(source, /const MAC_BUNDLE_ID = "com\.miamultiplayer\.mia"/);
+  assert.match(source, /appBundleId: MAC_BUNDLE_ID/);
   assert.match(source, /path\.join\(appPaths\[0\], "Mia\.app"\)/);
   assert.match(source, /`Mia-\$\{VERSION\}-arm64\.dmg`/);
   assert.match(source, /requiredPinnedDirectory\("HERMES_BUNDLE_DIR"/);
@@ -162,19 +185,88 @@ test("Mac DMG bundles pinned Hermes, Ghost, Python, modules, and release integri
 });
 
 test("release signing requires a paired Developer ID and notary profile", () => {
-  assert.deepEqual(macDistributionConfig({}), { identity: "-", notaryProfile: "", release: false });
+  assert.deepEqual(macDistributionConfig({}), {
+    identity: "-",
+    notaryProfile: "",
+    provisioningProfile: "",
+    release: false,
+  });
   assert.throws(
     () => macDistributionConfig({ MIAOS_MAC_SIGN_IDENTITY: "Developer ID Application: Example" }),
     /must be configured together/
   );
-  assert.deepEqual(macDistributionConfig({
-    MIAOS_MAC_SIGN_IDENTITY: "Developer ID Application: Example",
+  assert.throws(() => macDistributionConfig({
+    MIAOS_MAC_SIGN_IDENTITY: "Developer ID Application: Example (TEAM123)",
     MIAOS_MAC_NOTARY_PROFILE: "miaos-notary",
+  }), /MIAOS_MAC_PROVISIONING_PROFILE/);
+  assert.deepEqual(macDistributionConfig({
+    MIAOS_MAC_SIGN_IDENTITY: "Developer ID Application: Example (TEAM123)",
+    MIAOS_MAC_NOTARY_PROFILE: "miaos-notary",
+    MIAOS_MAC_PROVISIONING_PROFILE: "/profiles/Mia_Developer_ID.provisionprofile",
   }), {
-    identity: "Developer ID Application: Example",
+    identity: "Developer ID Application: Example (TEAM123)",
     notaryProfile: "miaos-notary",
+    provisioningProfile: "/profiles/Mia_Developer_ID.provisionprofile",
     release: true,
   });
+});
+
+test("Developer ID release profile authorizes Mia's bundle and WebAuthn keychain group", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-provisioning-profile-test-"));
+  try {
+    const profilePath = path.join(root, "Mia_Developer_ID.provisionprofile");
+    fs.writeFileSync(profilePath, "signed-profile-fixture");
+    const profile = `<?xml version="1.0"?><plist><dict>
+      <key>Entitlements</key><dict>
+        <key>com.apple.application-identifier</key><string>TEAM123.com.miamultiplayer.mia</string>
+        <key>com.apple.developer.team-identifier</key><string>TEAM123</string>
+        <key>keychain-access-groups</key><array><string>TEAM123.*</string></array>
+      </dict>
+    </dict></plist>`;
+
+    assert.equal(
+      validateMacProvisioningProfile(profilePath, "Developer ID Application: Example (TEAM123)", () => profile),
+      fs.realpathSync(profilePath),
+    );
+    assert.throws(
+      () => validateMacProvisioningProfile(profilePath, "Developer ID Application: Example (TEAM123)", () => (
+        profile.replace("TEAM123.com.miamultiplayer.mia", "TEAM123.com.other.app")
+      )),
+      /must authorize TEAM123\.com\.miamultiplayer\.mia/,
+    );
+    assert.throws(
+      () => validateMacProvisioningProfile(profilePath, "Developer ID Application: Example (TEAM123)", () => (
+        profile.replace("TEAM123.*", "TEAM123.com.other.app")
+      )),
+      /must authorize TEAM123\.com\.miamultiplayer\.mia/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("release app embeds its provisioning profile before the outer code signature", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-profile-embed-test-"));
+  try {
+    const appPath = path.join(root, "Mia.app");
+    const profilePath = path.join(root, "Mia_Developer_ID.provisionprofile");
+    fs.mkdirSync(path.join(appPath, "Contents"), { recursive: true });
+    fs.writeFileSync(profilePath, "validated-profile");
+
+    const embedded = embedMacProvisioningProfile(appPath, profilePath);
+    assert.equal(embedded, path.join(appPath, "Contents", "embedded.provisionprofile"));
+    assert.equal(fs.readFileSync(embedded, "utf8"), "validated-profile");
+    assert.throws(() => embedMacProvisioningProfile(appPath, ""), /required for release signing/);
+
+    const packagerSource = fs.readFileSync(path.resolve(__dirname, "package-mac.cjs"), "utf8");
+    const embedIndex = packagerSource.indexOf("embedMacProvisioningProfile(appPath, distribution.provisioningProfile)");
+    const signIndex = packagerSource.indexOf("signMacApp(appPath, distribution)");
+    assert.notEqual(embedIndex, -1);
+    assert.notEqual(signIndex, -1);
+    assert.ok(embedIndex < signIndex);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("release signing discovers Mach-O files and orders nested containers inside-out", () => {
@@ -208,6 +300,30 @@ test("hardened Electron app containers receive the JIT entitlement", () => {
   assert.equal(macEntitlementsForTarget("/tmp/Mia.app", { release: false }), "");
   const entitlements = fs.readFileSync(path.join(__dirname, "entitlements.darwin.plist"), "utf8");
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/);
+});
+
+test("only the outer Mia app claims the provisioned WebAuthn keychain group", () => {
+  const release = { release: true };
+  const appPath = "/tmp/Mia.app";
+  const groupedEntitlements = "/tmp/mia-grouped-entitlements.plist";
+  assert.equal(
+    macEntitlementsPathForTarget(appPath, appPath, release, groupedEntitlements),
+    groupedEntitlements,
+  );
+  assert.equal(
+    macEntitlementsPathForTarget(`${appPath}/Contents/Frameworks/Mia Helper.app`, appPath, release, groupedEntitlements),
+    path.join(__dirname, "entitlements.darwin.plist"),
+  );
+  assert.equal(macEntitlementsPathForTarget(`${appPath}/Contents/MacOS/Mia`, appPath, release, groupedEntitlements), "");
+});
+
+test("the provisioned app claims its profile's application and team identifiers", () => {
+  const base = fs.readFileSync(path.join(__dirname, "entitlements.darwin.plist"), "utf8");
+  const grouped = macGroupedEntitlements(base, "TEAM123.com.miamultiplayer.mia.webauthn");
+  assert.match(grouped, /<key>com\.apple\.application-identifier<\/key>\s*<string>TEAM123\.com\.miamultiplayer\.mia<\/string>/);
+  assert.match(grouped, /<key>com\.apple\.developer\.team-identifier<\/key>\s*<string>TEAM123<\/string>/);
+  assert.match(grouped, /<string>TEAM123\.com\.miamultiplayer\.mia\.webauthn<\/string>/);
+  assert.match(grouped, /com\.apple\.security\.cs\.allow-jit/);
 });
 
 test("artifact audit rejects exact private build roots, including binary content", () => {
