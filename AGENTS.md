@@ -1,27 +1,32 @@
 # AGENTS.md — working on the Mia repo
 
-For AI agents (Claude, Codex) and humans developing Mia. Read `CLAUDE.md`
-first: the secrets contract there overrides everything here. This repo is
-public, history included.
+For anyone developing Mia, human or AI agent. This repo is public, history
+included.
 
 This file is for developing Mia. It is not the workspace `AGENTS.md` that the
 app writes into the user's Mia workspace (`backend/miaos-workspace.js`).
 
+## Secrets
+
+- No API keys, tokens, signing secrets, customer data, or `.env` contents
+  anywhere in the repo: code, comments, docs, tests, or commit messages.
+- AI agents never see secret values. When a task needs a secret at runtime,
+  use it in-process from its store without printing it, or hand the task to
+  a human.
+- Public identifiers (Clerk publishable key, issuer, JWKS public key, Mia
+  Router endpoint) are committed on purpose; they do nothing without a
+  signed-in user.
+- The pre-commit hook (`.githooks/pre-commit`) scans for leaks. Never bypass
+  it with `--no-verify`.
+
 ## How we work
 
-- **Commits, not a PR per change.** Commit on a `claude/*` or `codex/*`
-  branch. Open one PR with everything only when the maintainer says
-  "do the PR for review".
 - **No AI attribution** in commits, PRs, or comments.
 - **Evidence before claims.** Don't say "fixed" or "works" until you've run
-  it. Say what you tested and what you didn't. A guess is labeled as a guess.
+  it. Say what you tested and what you didn't.
 - **Test in dev mode before building.** `scripts/dev_mode.sh` runs the app
   from the checkout. Building a release to find a bug costs 20+ minutes.
-- **Short answers.** Lead with the result, one line where one line works.
-- **Never delete.** Move files to the Trash; the maintainer empties it.
-- **Other agents share this checkout.** Several Codex and Claude worktrees run
-  at once. Don't assume untracked files are yours, and don't rely on untracked
-  files surviving.
+- Engineering and product practices live in `operations/`.
 
 ## Dev mode vs installed app
 
@@ -34,10 +39,10 @@ app writes into the user's Mia workspace (`backend/miaos-workspace.js`).
 
 - Dev mode and the installed app share the Hermes port. Quit one before
   starting the other.
-- `backend/bots` holds personal bots when running from the checkout. It is in
-  `backend/.gitignore`; never commit it. `bots-catalog/` (repo root) holds the
-  public store templates and is tracked.
-- Mia Router (AWS) accepts only **production** Clerk sessions. A test-instance
+- `backend/bots` holds your personal bots when running from the checkout.
+  Never commit it. `bots-catalog/` (repo root) holds the public store
+  templates and is tracked.
+- Mia Router accepts only **production** Clerk sessions. A test-instance
   sign-in gets "invalid session token".
 - Never run `scripts/clean_slate_mac.sh --apply` on a machine with real data:
   it wipes `~/Library/Application Support/Mia`.
@@ -52,8 +57,8 @@ app writes into the user's Mia workspace (`backend/miaos-workspace.js`).
   by `scripts/hermes-*.patch`. A new patch must apply cleanly to the pinned
   commit and go into all three installers (`install-local-mac.sh`,
   `install-local.sh`, `install-runtimes-win.ps1`). Upstream fixes go to
-  NousResearch/hermes-agent as a PR, tested in a clean venv per their
-  contributing guide; Mia carries the patch until upstream merges.
+  NousResearch/hermes-agent as a PR, tested per their contributing guide;
+  Mia carries the patch until upstream merges.
 - **Check what the pinned Hermes accepts.** A field Mia sends that Hermes
   rejects (e.g. `artifact_workspace` on `session.create`) breaks every bot
   chat. After changing Hermes calls, test a real bot chat, not just Mia's
@@ -62,58 +67,53 @@ app writes into the user's Mia workspace (`backend/miaos-workspace.js`).
   Hermes out of the bundle, and a signed app refuses native modules stamped by
   another team. The copy is refreshed whenever the app build changes; keep it
   that way.
-- **Signed builds can need things ad-hoc builds don't.** Mia's Touch ID
-  passkey keychain group needs the embedded Developer ID provisioning profile
-  plus application and team identifiers in the signature, or macOS kills the
-  app at launch. Ad-hoc builds skip it, so the breakage appears only in the
-  next signed build.
+- **Signed builds can need things ad-hoc builds don't.** The Touch ID passkey
+  keychain group needs an embedded Developer ID provisioning profile plus
+  application and team identifiers in the signature, or macOS kills the app
+  at launch. Ad-hoc builds skip it, so the breakage appears only in the next
+  signed build.
 - **Passkeys:** Touch ID passkeys created in Mia work. iCloud Keychain
-  passkeys need Apple's browser public-key credential entitlement (requested,
-  pending) plus native code; Electron doesn't ship Chrome's passkey UI. USB
-  security keys don't work yet (Electron's Touch ID mode is reported to break
-  them). All three come from one native Apple passkey integration.
+  passkeys need Apple's browser public-key credential entitlement plus native
+  code; Electron doesn't ship Chrome's passkey UI. USB security keys don't
+  work yet. All three come from one native Apple passkey integration.
 
 ## Releases (macOS)
 
-Every build that leaves the checkout is signed with the Developer ID,
-notarized, stapled, verified, and launch-tested. Unsigned is a failed build,
-never a lesser release. Maintainers follow the local `app_release` skill; the
-essentials:
+Official builds are signed with Mia's Developer ID, notarized, stapled,
+verified, and launch-tested by the maintainers. Unsigned is a failed build,
+never a lesser release. The essentials:
 
-1. Merge every branch that belongs in the release into `main`; build from a
-   clean `main`. Read `git log v<last>..HEAD -- macos/scripts macos/src` for
-   signing-relevant changes.
+1. Build from a clean `main` with every intended branch merged. Read
+   `git log v<last>..HEAD -- macos/scripts macos/src` for signing-relevant
+   changes.
 2. Test in dev mode: Mia's agent, a new bot, a model switch in a resumed chat,
    Mia Router.
 3. Bump `macos/package.json` `version` and `CHANGELOG.md`. The updater never
    reinstalls the same version.
-4. Build with `scripts/install-local-mac.sh` and all three
-   `MIAOS_MAC_SIGN_IDENTITY`, `MIAOS_MAC_NOTARY_PROFILE`,
-   `MIAOS_MAC_PROVISIONING_PROFILE`. Use `MIAOS_PACKAGE_ONLY=1` so the
-   installed app stays on the old version and can test the over-the-air
-   update. Needs ~8 GB free and no mounted `Mia` volume; dev-mode provider
-   credentials in `~/.miaos/hermes/auth.json` must be moved aside (step 5/9
-   refuses to package them).
-5. Publish a GitHub Release (maintainer approval required) with
-   `Mia-<ver>-arm64.dmg`, `.dmg.sha256`, `Mia-<ver>-arm64-mac.zip`,
-   `latest-mac.yml`, **and the same DMG as `Mia-arm64.dmg`**. Invite links use
-   `https://github.com/luislozanogmia/miamultiplayer/releases/latest/download/Mia-arm64.dmg`,
-   which breaks if a release lacks that asset.
+4. Build with `scripts/install-local-mac.sh` and `MIAOS_MAC_SIGN_IDENTITY`,
+   `MIAOS_MAC_NOTARY_PROFILE`, `MIAOS_MAC_PROVISIONING_PROFILE`.
+   `MIAOS_PACKAGE_ONLY=1` leaves the installed app alone so it can test the
+   over-the-air update. Needs ~8 GB free and no mounted `Mia` volume; step
+   5/9 refuses to package dev-mode provider credentials
+   (`~/.miaos/hermes/auth.json`).
+5. Publish a GitHub Release with `Mia-<ver>-arm64.dmg`, `.dmg.sha256`,
+   `Mia-<ver>-arm64-mac.zip`, `latest-mac.yml`, **and the same DMG as
+   `Mia-arm64.dmg`**. The public download link
+   `https://github.com/luislozanogmia/miamultiplayer/releases/latest/download/Mia-arm64.dmg`
+   breaks if a release lacks that asset.
 6. Confirm the installed app updates (log: `.../Mia/miaos-desktop.log`, UTC)
    and retest chat, bots, and passkeys in it.
 
-## Open items (as of 0.2.10, 2026-09-23)
+## Open items
+
+Tracked as GitHub issues. Known ones for 0.2.11:
 
 - `package-mac.cjs` should write `Mia-arm64.dmg` itself.
-- Updater: check free disk space before downloading and say so when it's
-  short; show "Restart and install" only after Squirrel finishes unpacking.
-- ChatGPT/Grok subscription sign-in should open the system browser: branch
-  `claude/subscription-signin-system-browser` (uncommitted work in a separate
-  worktree), tested in isolation but not in the app.
+- Updater: check free disk space before downloading; show "Restart and
+  install" only after the update finishes unpacking.
+- ChatGPT/Grok subscription sign-in should open the system browser.
 - Chats whose bot was deleted show a "native bot … not found" debug error
   instead of saying the bot is gone.
 - Mia Router rejections show "That provider is not connected yet" instead of
   the real reason.
-- `operations/browser-cookies.md` (copying a site's sign-in from Chrome) is on
-  `claude/developer-id-profile` but not in `main`.
 - Mia's browser stores cookie values unencrypted on disk.
