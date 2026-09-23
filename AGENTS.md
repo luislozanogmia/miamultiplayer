@@ -103,17 +103,3 @@ never a lesser release. The essentials:
    breaks if a release lacks that asset.
 6. Confirm the installed app updates (log: `.../Mia/miaos-desktop.log`, UTC)
    and retest chat, bots, and passkeys in it.
-
-## Open items
-
-Tracked as GitHub issues. Known ones for 0.2.11:
-
-- `package-mac.cjs` should write `Mia-arm64.dmg` itself.
-- Updater: check free disk space before downloading; show "Restart and
-  install" only after the update finishes unpacking.
-- ChatGPT/Grok subscription sign-in should open the system browser.
-- Chats whose bot was deleted show a "native bot … not found" debug error
-  instead of saying the bot is gone.
-- Mia Router rejections show "That provider is not connected yet" instead of
-  the real reason.
-- Mia's browser stores cookie values unencrypted on disk.
