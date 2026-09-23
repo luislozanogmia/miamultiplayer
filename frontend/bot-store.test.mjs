@@ -28,7 +28,7 @@ test('Bot store cards show avatar color, tagline, category, author, version and 
   const source = await readFile(appUrl, 'utf8');
   assert.match(source, /function botStoreCardHtml\(manifest\)\{[\s\S]*?agentAvatarHtml\(bot\.name \|\| manifest\.id, null, 40, null, store\.avatarColor \|\| bot\.avatarColor \|\| null\)/);
   assert.match(source, /bot-store-card-tagline[\s\S]*?esc\(store\.tagline \|\| ''\)/);
-  assert.match(source, /bot-store-card-meta[\s\S]*?esc\(store\.category \|\| 'general'\)[\s\S]*?esc\(manifest\.author \|\| 'Mia Labs'\)/);
+  assert.match(source, /bot-store-card-meta[\s\S]*?esc\(store\.category \|\| 'general'\)[\s\S]*?esc\(manifest\.author \|\| 'Mia'\)/);
   assert.match(source, /bot-store-card-requires[\s\S]*?Requires: ' \+ esc\(connectors\.join\(', '\)\)/);
   assert.doesNotMatch(source, /connectors\.length[\s\S]{0,80}disabled="disabled"|connectors\.length[\s\S]{0,80}aria-disabled="true"/);
 });
