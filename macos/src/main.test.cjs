@@ -186,6 +186,43 @@ test("provider auth redirects preserve nested OAuth windows and their navigation
   assert.equal(closed, true, "accepted code closes the auth window");
 });
 
+test("ChatGPT and Grok sign-in pages open in the system browser, not the Mia popup", () => {
+  const { EventEmitter } = require("node:events");
+  for (const [provider, signIn] of [
+    ["openai-codex", "https://auth.openai.com/codex/device"],
+    ["xai-oauth", "https://accounts.x.ai/oauth2/device"],
+  ]) {
+    const main = loadMain();
+    const opened = [];
+    main.__electron.shell.openExternal = url => { opened.push(url); return Promise.resolve(); };
+    const contents = new EventEmitter();
+    contents.session = { id: "main-session" };
+    contents.setWindowOpenHandler = handler => { contents.popup = handler; };
+    main.configureNavigation({ webContents: contents }, "http://localhost:4871");
+
+    // The local broker still loads in Mia so it can use the signed-in session.
+    const redirect = `http://localhost:4871/api/settings/harness/auth/redirect?provider=${provider}`;
+    assert.equal(contents.popup({ url: redirect }).action, "allow");
+    const childContents = new EventEmitter();
+    childContents.setWindowOpenHandler = handler => { childContents.popup = handler; };
+    let closed = false;
+    const child = { webContents: childContents, close() { closed = true; } };
+    contents.emit("did-create-window", child, { url: redirect });
+
+    let blocked = false;
+    childContents.emit("will-redirect", { preventDefault() { blocked = true; } }, signIn);
+    assert.equal(blocked, true, `${provider} sign-in must not load inside Mia`);
+    assert.deepEqual(opened, [signIn], `${provider} sign-in opens in the default browser`);
+    assert.equal(closed, true, "the empty Mia popup closes");
+
+    // Anything else still fails closed and is never handed to the system browser.
+    blocked = false;
+    childContents.emit("will-redirect", { preventDefault() { blocked = true; } }, "https://example.com/steal");
+    assert.equal(blocked, true);
+    assert.deepEqual(opened, [signIn]);
+  }
+});
+
 test("provider auth URL allowlists cover existing providers and fail closed", () => {
   const main = loadMain();
   assert.equal(main.isHarnessAuthNavigation("https://auth.openai.com/authorize", "openai-codex"), true);

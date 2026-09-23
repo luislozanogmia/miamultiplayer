@@ -1249,6 +1249,8 @@ function isClerkGoogleOAuthUrl(value) {
   }
 }
 
+const SYSTEM_BROWSER_AUTH_PROVIDERS = new Set(["openai-codex", "xai-oauth"]);
+
 function harnessAuthRedirectProvider(value, expectedBackendUrl = backendUrl) {
   try {
     const url = new URL(value);
@@ -1731,6 +1733,14 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
     const url = targetUrl || event.url;
     if (harnessAuthProvider && mayLoadAuthBootstrap
       && harnessAuthRedirectProvider(url, expectedBackendUrl) === harnessAuthProvider) return;
+    if (SYSTEM_BROWSER_AUTH_PROVIDERS.has(harnessAuthProvider) && isBoundHarnessAuthNavigation(url)) {
+      // Device-code sign-in only needs the code Mia shows, so hand the page to
+      // the user's own browser, where passkeys and saved logins work.
+      event.preventDefault();
+      shell.openExternal(url);
+      try { window.close(); } catch (_) { /* already closed */ }
+      return;
+    }
     if (harnessAuthProvider && isBoundHarnessAuthNavigation(url)) return;
     if (harnessAuthProvider) {
       try {
