@@ -8,3 +8,4 @@ node_modules/
 mia-os-test.*
 seed-users.cjs
 conversation-attachments/
+bots/
