@@ -1073,6 +1073,9 @@
   var harnessAuthGeneration = 0;
   var harnessAuthAwaitingSave = false;
   var harnessAuthSaveInProgress = false;
+  // Set when the model picker's Connect link opened setup: finishing only adds
+  // that provider to the picker, keeping the saved default and the page.
+  var harnessConnectOnly = false;
   var harnessConnectionPending = null;
   var harnessConnectionValidationPending = false;
   var harnessConnectionState = {
@@ -1094,7 +1097,10 @@
     stage: 'family',
     // Transient UI-only flag for the "switch provider" screen — see goBack()
     // and renderOptions() in the composer model picker below.
-    showProviderSwitcher: false
+    showProviderSwitcher: false,
+    // Transient flag for the API-provider list reached from the switcher's
+    // API row.
+    showApiProviders: false
   };
   var CHAT_MODEL_SELECTION_CACHE_VERSION = 1;
 
@@ -1876,6 +1882,28 @@
     renderHarnessFooterActions();
   }
 
+  // Picker Connect: record the newly connected provider, close setup and
+  // refresh the picker. The saved default stays, and the page does not reload.
+  function finishConnectOnly(button, error){
+    var provider = harnessOnboardingState.provider === 'openai-api'
+      ? normalizeHarnessApiProvider(harnessOnboardingState.apiProvider || 'openai-api')
+      : harnessOnboardingState.provider;
+    api('/api/settings/harness/connected', {method:'POST', body:{provider:provider}}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.ok) throw new Error((res.data && res.data.error) || 'Could not connect that provider');
+      harnessAuthAwaitingSave = false;
+      harnessAuthSaveInProgress = false;
+      renderHarnessAuth(null);
+      closeHarnessOnboarding();
+      if(chatModelPicker.ensureLoaded) chatModelPicker.ensureLoaded();
+    }).catch(function(err){
+      harnessAuthSaveInProgress = false;
+      harnessAuthAwaitingSave = false;
+      if(error) error.textContent = err.message || 'Could not connect that provider';
+      if(button) button.disabled = false;
+      renderHarnessOnboarding();
+    });
+  }
+
   function openHarnessOnboarding(existing){
     // Electron's native browser view is above HTML overlays; the sheet would
     // otherwise be hidden behind it. Saved tabs and sessions remain.
@@ -1895,6 +1923,7 @@
     // Multiplayer is upcoming: the card is disabled, so never restore it as the selection.
     if(harnessOnboardingState.mode === 'multiplayer') harnessOnboardingState.mode = 'solo';
     harnessAuthAwaitingSave = false;
+    harnessConnectOnly = false;
     harnessConnectionPending = null;
     harnessConnectionValidationPending = true;
     stopHarnessAuthPolling();
@@ -1924,6 +1953,7 @@
       void cancelHarnessAuthFlow(harnessOnboardingState.provider);
     }
     harnessAuthAwaitingSave = false;
+    harnessConnectOnly = false;
     stopHarnessAuthPolling();
     var apiKey = el('#harnessApiKey');
     if(apiKey) apiKey.value = '';
@@ -2018,6 +2048,10 @@
     button.disabled = true;
     setHarnessActionLabel(button, 'Loading…');
     if(error) error.textContent = '';
+    if(harnessConnectOnly){
+      finishConnectOnly(button, error);
+      return;
+    }
     api('/api/settings/harness', {method:'POST', body:{
       provider:harnessOnboardingState.provider,
       model:harnessOnboardingState.model,
@@ -12778,22 +12812,47 @@
       {id:'api', label:'API', harnessProvider:'openai-api', aliases:['openai-api', 'anthropic', 'gemini', 'openai', 'deepseek']}
     ];
 
+    // The API row lists every provider initial setup can connect with an API
+    // key (harnessApiProviderCatalog), except the Mia Router slot, which has
+    // its own row. Hermes reports the OpenAI key under 'openai'.
+    function apiProviderAliases(id){
+      return id === 'openai-api' ? ['openai-api', 'openai'] : [id];
+    }
+
+    function apiCatalogProviders(){
+      return harnessApiProviderCatalog.filter(function(provider){
+        return provider.id !== 'managed-router' && provider.id !== 'openrouter';
+      });
+    }
+
+    // Resolves a switcher row id, including an 'api:<provider>' row picked on
+    // the API-provider list.
+    function familyProviderRow(id){
+      var value = String(id || '');
+      if(value.indexOf('api:') === 0){
+        var apiId = value.slice(4);
+        var provider = apiCatalogProviders().filter(function(candidate){ return candidate.id === apiId; })[0];
+        return {id:value, label:provider ? provider.label : apiId, harnessProvider:'openai-api', apiProvider:apiId, aliases:apiProviderAliases(apiId)};
+      }
+      var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === value; })[0];
+      if(row && row.id === 'api'){
+        var aliases = [];
+        apiCatalogProviders().forEach(function(provider){ aliases = aliases.concat(apiProviderAliases(provider.id)); });
+        return Object.assign({}, row, {aliases:aliases});
+      }
+      return row || null;
+    }
+
     function familyProviderAliasMatch(providerId, aliases){
       var actual = String(providerId || '').toLowerCase();
       return aliases.indexOf(actual) !== -1;
     }
 
     function familyProviderConnected(row){
-      // The picker's own inventory (already fetched for this menu) is the
-      // most reliable signal — it only ever lists providers Hermes reports as
-      // configured. harnessConnectionState is a secondary fallback: it is
-      // only populated once Settings → Access or onboarding has loaded, so it
-      // can lag or start out all-false on a fresh app session.
-      if(familyProviderEntries(row).length) return true;
-      if(harnessConnectionState[row.id] === true) return true;
-      // Mia Router is stored under the Hermes provider id 'openrouter'.
-      if(row.id === 'managed-router' && harnessConnectionState['openrouter'] === true) return true;
-      return false;
+      // The picker's inventory is the only signal: the backend lists exactly
+      // the providers this user connected through Mia. Hermes' raw connection
+      // status can include credentials that reached it some other way.
+      return familyProviderEntries(row).length > 0;
     }
 
     function familyProviderEntries(row){
@@ -12818,6 +12877,7 @@
     function openConnectFlowForProvider(row){
       closeMenu();
       openHarnessOnboarding(harnessSettingsCache);
+      harnessConnectOnly = true;
       var choice = el('[data-harness-provider="' + row.harnessProvider + '"]');
       if(choice) choice.click();
       if(row.apiProvider){
@@ -12958,7 +13018,7 @@
       // derived from picker.selection — it only opens via an explicit back-
       // button press at the (unchanged) default family stage, and stays out
       // of the normal family -> variant -> effort -> speed derivation.
-      var currentStage = picker.showProviderSwitcher ? 'providers' : stage();
+      var currentStage = picker.showApiProviders ? 'api-providers' : (picker.showProviderSwitcher ? 'providers' : stage());
       picker.stage = currentStage;
       if(!picker.loaded){
         title.textContent = picker.loading ? 'Loading connected models…' : 'Choose a model';
@@ -12974,7 +13034,7 @@
       // Every other stage needs an actual selected family's entries to list;
       // the provider switcher must keep working even with zero connected
       // providers, since its whole job is to offer a way to connect one.
-      if(!all.length && currentStage !== 'providers'){
+      if(!all.length && currentStage !== 'providers' && currentStage !== 'api-providers'){
         title.textContent = 'Connect a model';
         optionsWrap.innerHTML = '<div class="cc-model-selection">Connect a provider in Settings → Access.</div>';
         return;
@@ -12999,8 +13059,11 @@
         // visually quiet rather than a bordered call-to-action pill.
         title.textContent = 'Switch provider';
         var activeProviderId = activeFamilyProviderId();
-        COMPOSER_FAMILY_PROVIDERS.forEach(function(row){
-          var connected = familyProviderConnected(row);
+        COMPOSER_FAMILY_PROVIDERS.forEach(function(listed){
+          var row = familyProviderRow(listed.id);
+          // The API row always opens the API-provider list, where each
+          // provider is connected or offered on its own.
+          var connected = row.id === 'api' || familyProviderConnected(row);
           var active = connected && familyProviderAliasMatch(activeProviderId, row.aliases);
           if(connected){
             html += '<button type="button" class="cc-model-option cc-model-family-option' + (active ? ' is-active' : '') + '" data-choice="family-provider" data-family-provider-id="' + esc(row.id) + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
@@ -13014,9 +13077,28 @@
               '</div>';
           }
         });
+      } else if(currentStage === 'api-providers'){
+        title.textContent = 'Choose an API provider';
+        var activeApiProviderId = activeFamilyProviderId();
+        apiCatalogProviders().forEach(function(provider){
+          var apiRow = familyProviderRow('api:' + provider.id);
+          if(familyProviderEntries(apiRow).length){
+            var apiActive = familyProviderAliasMatch(activeApiProviderId, apiRow.aliases);
+            html += '<button type="button" class="cc-model-option cc-model-family-option' + (apiActive ? ' is-active' : '') + '" data-choice="family-provider" data-family-provider-id="' + esc(apiRow.id) + '" aria-pressed="' + (apiActive ? 'true' : 'false') + '">' +
+              '<span class="cc-model-option-label">' + esc(apiRow.label) + '</span>' +
+              '<span class="cc-model-family-check" aria-hidden="true">' + (apiActive ? '&#10003;' : '') + '</span>' +
+              '</button>';
+          } else {
+            html += '<div class="cc-model-option cc-model-family-option cc-model-family-static">' +
+              '<span class="cc-model-option-label">' + esc(apiRow.label) + '</span>' +
+              '<button type="button" class="cc-model-connect-link" data-connect-provider-id="' + esc(apiRow.id) + '" aria-label="Connect ' + esc(apiRow.label) + '">Connect</button>' +
+              '</div>';
+          }
+        });
       } else if(currentStage === 'variant'){
-        title.textContent = 'Choose a ' + (picker.selection.family || 'model') + ' model';
-        var activeRow = COMPOSER_FAMILY_PROVIDERS.filter(function(row){ return row.id === picker.selection.familyProviderId; })[0];
+        var variantFamily = picker.selection.family || '';
+        title.textContent = variantFamily ? 'Choose ' + (/^[aeiou]/i.test(variantFamily) ? 'an ' : 'a ') + variantFamily + ' model' : 'Choose a model';
+        var activeRow = familyProviderRow(picker.selection.familyProviderId);
         var variantEntries = activeRow ? familyProviderEntries(activeRow) : all.filter(function(item){
           return item.familyKey === picker.selection.familyKey;
         });
@@ -13050,11 +13132,18 @@
             picker.selection.speed = '';
           } else if(kind === 'family-provider'){
             var rowId = choice.getAttribute('data-family-provider-id');
-            var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === rowId; })[0];
+            var row = familyProviderRow(rowId);
             if(!row) return;
+            if(row.id === 'api'){
+              picker.showProviderSwitcher = false;
+              picker.showApiProviders = true;
+              render();
+              return;
+            }
             // Picking a provider here always drills into its own variant
-            // list next, so leave the switcher screen.
+            // list next, so leave the switcher screens.
             picker.showProviderSwitcher = false;
+            picker.showApiProviders = false;
             // A truthy familyKey is only used as the stage() gate here — the
             // actual filter for the variant list below keys off
             // familyProviderId, since this row does not correspond to the old
@@ -13105,7 +13194,7 @@
       els('.cc-model-connect-link', optionsWrap).forEach(function(pill){
         pill.addEventListener('click', function(event){
           event.stopPropagation();
-          var row = COMPOSER_FAMILY_PROVIDERS.filter(function(candidate){ return candidate.id === pill.getAttribute('data-connect-provider-id'); })[0];
+          var row = familyProviderRow(pill.getAttribute('data-connect-provider-id'));
           if(row) openConnectFlowForProvider(row);
         });
       });
@@ -13124,6 +13213,12 @@
     }
 
     function goBack(){
+      if(picker.showApiProviders){
+        picker.showApiProviders = false;
+        picker.showProviderSwitcher = true;
+        render();
+        return;
+      }
       if(picker.showProviderSwitcher){
         // Deepest screen: one step back returns to the ordinary family stage.
         picker.showProviderSwitcher = false;
@@ -13142,7 +13237,9 @@
         // Return to whichever screen this variant list was opened from: the
         // provider switcher when a family-provider row picked it, otherwise
         // the ordinary family stage.
-        picker.showProviderSwitcher = !!picker.selection.familyProviderId;
+        var openedFromApiList = String(picker.selection.familyProviderId || '').indexOf('api:') === 0;
+        picker.showApiProviders = openedFromApiList;
+        picker.showProviderSwitcher = !!picker.selection.familyProviderId && !openedFromApiList;
         picker.selection.family = '';
         picker.selection.familyKey = '';
         picker.selection.familyProviderId = '';
@@ -13214,6 +13311,7 @@
       btn.setAttribute('aria-expanded', 'false');
       // Always reopen on the default family stage, never mid-switcher.
       picker.showProviderSwitcher = false;
+      picker.showApiProviders = false;
     }
 
     btn.addEventListener('click', function(event){

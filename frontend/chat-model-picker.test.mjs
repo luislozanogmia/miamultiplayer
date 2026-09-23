@@ -92,19 +92,22 @@ test('a "switch provider" screen, reached only via the family stage\'s back butt
   // when the user presses back while already at that default stage — never
   // shown on first open.
   assert.match(appSource, /showProviderSwitcher: false/);
-  assert.match(appSource, /var currentStage = picker\.showProviderSwitcher \? 'providers' : stage\(\);/);
+  assert.match(appSource, /var currentStage = picker\.showApiProviders \? 'api-providers' : \(picker\.showProviderSwitcher \? 'providers' : stage\(\)\);/);
   assert.match(appSource, /if\(currentStage === 'family'\)\{\s*title\.textContent = 'Choose a model family';\s*var families = \{\};/);
   assert.match(appSource, /if\(currentStage === 'family'\)\{\s*\/\/ The default \(unchanged\) resting screen has nowhere shallower to go\s*\/\/ — pressing back here reveals the full setup-provider switcher\s*\/\/ instead of closing the menu\.\s*picker\.showProviderSwitcher = true;/);
 
-  // Connection detection is self-sufficient: it checks the picker's own
-  // already-fetched inventory first (so a connected, active provider like
-  // Mia Router is recognized even if Settings/onboarding was never opened
-  // this session), falling back to harnessConnectionState.
-  assert.match(appSource, /function familyProviderConnected\(row\)\{[\s\S]*if\(familyProviderEntries\(row\)\.length\) return true;[\s\S]*if\(harnessConnectionState\[row\.id\] === true\) return true;/);
+  // Connection detection uses only the picker's inventory, which the backend
+  // limits to providers connected through Mia (so a machine credential such
+  // as a GitHub CLI login never shows up as connected).
+  assert.match(appSource, /function familyProviderConnected\(row\)\{[\s\S]*?return familyProviderEntries\(row\)\.length > 0;\s*\}/);
 
   // The connect flow reuses setup's own mechanisms — no parallel state or
   // flow is invented for the picker.
-  assert.match(appSource, /function openConnectFlowForProvider\(row\)\{\s*closeMenu\(\);\s*openHarnessOnboarding\(harnessSettingsCache\);/);
+  assert.match(appSource, /function openConnectFlowForProvider\(row\)\{\s*closeMenu\(\);\s*openHarnessOnboarding\(harnessSettingsCache\);\s*harnessConnectOnly = true;/);
+  // Finishing a picker Connect only records the provider: no default change,
+  // no page reload.
+  assert.match(appSource, /if\(harnessConnectOnly\)\{\s*finishConnectOnly\(button, error\);\s*return;\s*\}/);
+  assert.match(appSource, /function finishConnectOnly\(button, error\)\{[\s\S]*?api\('\/api\/settings\/harness\/connected'[\s\S]*?closeHarnessOnboarding\(\);\s*if\(chatModelPicker\.ensureLoaded\) chatModelPicker\.ensureLoaded\(\);/);
   assert.match(appSource, /var choice = el\('\[data-harness-provider="' \+ row\.harnessProvider \+ '"\]'\);/);
   assert.match(appSource, /var apiProviderSelect = el\('#harnessApiProvider'\);/);
 
@@ -127,8 +130,23 @@ test('a "switch provider" screen, reached only via the family stage\'s back butt
 
   // The switcher (not the ordinary family stage) is the one exempted from
   // the "nothing connected" dead-end, since its job is to offer a way in.
-  assert.match(appSource, /if\(!all\.length && currentStage !== 'providers'\)/);
+  assert.match(appSource, /if\(!all\.length && currentStage !== 'providers' && currentStage !== 'api-providers'\)/);
 
   // Back-navigation returns to wherever the variant list was opened from.
-  assert.match(appSource, /picker\.showProviderSwitcher = !!picker\.selection\.familyProviderId;/);
+  assert.match(appSource, /picker\.showApiProviders = openedFromApiList;/);
+  assert.match(appSource, /picker\.showProviderSwitcher = !!picker\.selection\.familyProviderId && !openedFromApiList;/);
+});
+
+test('the API row opens a list of every setup API provider, not one merged model list', async () => {
+  const appSource = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  // The list comes from setup's own API catalog, minus the Mia Router slot.
+  assert.match(appSource, /function apiCatalogProviders\(\)\{\s*return harnessApiProviderCatalog\.filter\(function\(provider\)\{\s*return provider\.id !== 'managed-router' && provider\.id !== 'openrouter';/);
+  // The API row always opens that list instead of drilling into models.
+  assert.match(appSource, /var connected = row\.id === 'api' \|\| familyProviderConnected\(row\);/);
+  assert.match(appSource, /if\(row\.id === 'api'\)\{\s*picker\.showProviderSwitcher = false;\s*picker\.showApiProviders = true;/);
+  assert.match(appSource, /title\.textContent = 'Choose an API provider';/);
+  // Unconnected API providers reuse setup's connect flow with their own id.
+  assert.match(appSource, /return \{id:value, label:provider \? provider\.label : apiId, harnessProvider:'openai-api', apiProvider:apiId, aliases:apiProviderAliases\(apiId\)\};/);
+  // Back from the API list returns to the provider switcher.
+  assert.match(appSource, /if\(picker\.showApiProviders\)\{\s*picker\.showApiProviders = false;\s*picker\.showProviderSwitcher = true;/);
 });
