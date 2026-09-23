@@ -169,7 +169,7 @@ async function buildLinuxPackage() {
     copyTrackedArea("macos", appSourceRoot);
     const appSource = path.join(appSourceRoot, "macos");
     run("npm", ["ci", "--no-audit", "--no-fund"], { cwd: appSource });
-    for (const area of ["backend", "frontend", "modules"]) copyTrackedArea(area, runtimeRoot);
+    for (const area of ["backend", "frontend", "modules", "bots-catalog"]) copyTrackedArea(area, runtimeRoot);
     run("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: path.join(runtimeRoot, "backend") });
     await rebuild({ buildPath: path.join(runtimeRoot, "backend"), electronVersion: ELECTRON_VERSION, onlyModules: ["better-sqlite3"], force: true });
     fs.rmSync(path.join(runtimeRoot, "backend", "node_modules", ".bin"), { recursive: true, force: true });
@@ -178,7 +178,7 @@ async function buildLinuxPackage() {
     const [electronRoot] = await packager({
       dir: appSource, name: "Mia", platform: "linux", arch: "x64", out: temporaryRoot, overwrite: true, prune: true,
       derefSymlinks: false,
-      extraResource: [path.join(runtimeRoot, "backend"), path.join(runtimeRoot, "frontend"), path.join(runtimeRoot, "modules")],
+      extraResource: [path.join(runtimeRoot, "backend"), path.join(runtimeRoot, "frontend"), path.join(runtimeRoot, "modules"), path.join(runtimeRoot, "bots-catalog")],
       ignore: [/^\/dist(?:\/|$)/, /^\/scripts(?:\/|$)/, /\.test\.cjs$/],
     });
     const installRoot = path.join(packageRoot, "opt", "miaos");

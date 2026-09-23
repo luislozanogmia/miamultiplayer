@@ -226,6 +226,43 @@ test("Claude callback automatically submits only the bound code using Mia's sess
   assert.equal(await main.completeClaudeAuthCallback(window, callback, contract, "http://localhost:4871"), false);
 });
 
+test("packaged runtime copy is replaced by a new build of the same commit", () => {
+  const main = loadMain();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-runtime-sync-test-"));
+  try {
+    const source = path.join(root, "bundle", "hermes");
+    const destination = path.join(root, "userData", "hermes-agent");
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, ".miaos-source-commit"), "abc123\n");
+    fs.writeFileSync(path.join(source, "module.so"), "ad-hoc build");
+    fs.utimesSync(path.join(source, ".miaos-source-commit"), new Date(1000000), new Date(1000000));
+
+    assert.equal(main.syncPackagedDirectory(source, destination), true);
+    assert.equal(main.syncPackagedDirectory(source, destination), false);
+
+    // Same commit, rebuilt and re-signed: the stale copy must be replaced.
+    fs.writeFileSync(path.join(source, "module.so"), "Developer ID build");
+    fs.utimesSync(path.join(source, ".miaos-source-commit"), new Date(2000000), new Date(2000000));
+    assert.equal(main.syncPackagedDirectory(source, destination), true);
+    assert.equal(fs.readFileSync(path.join(destination, "module.so"), "utf8"), "Developer ID build");
+
+    // A copy made before build stamps existed is refreshed once.
+    fs.rmSync(path.join(destination, ".miaos-packaged-build"));
+    assert.equal(main.syncPackagedDirectory(source, destination), true);
+    assert.equal(main.syncPackagedDirectory(source, destination), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("passkey account chooser listens on every session, not on app", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.doesNotMatch(source, /app\.on\("select-webauthn-account"/);
+  assert.match(source, /ses\.on\("select-webauthn-account"/);
+  assert.match(source, /attach\(session\.defaultSession\)/);
+  assert.match(source, /app\.on\("session-created", attach\)/);
+});
+
 test("packaged macOS runtime is self-contained and ignores ambient Hermes", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /app\.isPackaged\s*\?\s*PACKAGED_HERMES_BIN/);
