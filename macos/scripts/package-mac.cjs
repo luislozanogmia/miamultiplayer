@@ -7,7 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
-const { createDmg, copyAppBundleForDmg } = require("./create-dmg.cjs");
+const { createDmg, copyAppBundleForDmg, assertNoMountedMiaVolume } = require("./create-dmg.cjs");
 
 const MACOS_ROOT = path.resolve(__dirname, "..");
 const REPOSITORY_ROOT = path.resolve(MACOS_ROOT, "..");
@@ -704,6 +704,7 @@ function writeUpdateFeed(appPath) {
 
 async function buildInstaller() {
   assertCleanReleaseCheckout();
+  assertNoMountedMiaVolume();
   const distribution = macDistributionConfig();
   if (distribution.release) {
     distribution.provisioningProfile = validateMacProvisioningProfile(

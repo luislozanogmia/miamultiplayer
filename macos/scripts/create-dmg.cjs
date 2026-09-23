@@ -9,6 +9,21 @@ function run(command, args) {
   return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
+// Finder and Spotlight can hold a freshly laid-out volume for a few seconds
+// after the AppleScript returns, so a busy detach is retried before failing.
+function detachWithRetry(mount, { attempts = 10, delayMs = 1000, detach = (target) => run("hdiutil", ["detach", target]) } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      detach(mount);
+      return;
+    } catch (error) {
+      const busy = /Resource busy/i.test(String(error.stderr || error.message || ""));
+      if (!busy || attempt >= attempts) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
+}
+
 function copyAppBundleForDmg(source, destination) {
   // Preserve Electron's relative framework symlinks and sealed signature.
   run("ditto", [source, destination]);
@@ -42,7 +57,16 @@ function finderLayout(mount) {
   end tell`;
 }
 
+// Finder can keep a renamed layout volume busy when another volume already
+// uses the name Mia, such as an earlier installer left open.
+function assertNoMountedMiaVolume(volumesRoot = "/Volumes") {
+  if (fs.existsSync(path.join(volumesRoot, "Mia"))) {
+    throw new Error("Eject the mounted Mia volume before building the installer");
+  }
+}
+
 function createDmg(appPath, outputPath) {
+  assertNoMountedMiaVolume();
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "mia-dmg-layout-"));
   const mount = path.join(temporary, "mounted");
   let attached = false;
@@ -62,17 +86,17 @@ function createDmg(appPath, outputPath) {
     run("osascript", ["-e", finderLayout(mount)]);
     if (!fs.existsSync(path.join(mount, ".DS_Store"))) throw new Error("Finder did not save the installer layout");
     run("diskutil", ["renameVolume", mount, "Mia"]);
-    run("hdiutil", ["detach", mount]);
+    detachWithRetry(mount);
     attached = false;
     run("hdiutil", ["convert", writable, "-format", "UDZO", "-ov", "-o", outputPath]);
   } finally {
-    if (attached) run("hdiutil", ["detach", mount]);
+    if (attached) detachWithRetry(mount);
     fs.rmSync(temporary, { recursive: true, force: true });
   }
   return outputPath;
 }
 
-module.exports = { createDmg, copyAppBundleForDmg };
+module.exports = { createDmg, copyAppBundleForDmg, detachWithRetry, assertNoMountedMiaVolume };
 
 if (require.main === module) {
   const [appPath, outputPath] = process.argv.slice(2);
