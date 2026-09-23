@@ -84,6 +84,21 @@ test('legacy migration is lossless, portable, retry-safe, and keeps live schedul
   db.close();
 });
 
+test('the bots folder is the source of truth: no package folder means no bot', (t) => {
+  const fixture = tempFixture(t);
+  fs.mkdirSync(fixture.dataDir);
+  let db = dbStore.openDb(fixture.dbPath, fixture.dataDir, { botPackageDir: fixture.packages });
+  dbStore.insertOne(db, 'bots', 'bot-alpha', record());
+  db.close();
+
+  fs.rmSync(fixture.packages, { recursive: true, force: true });
+  db = dbStore.openDb(fixture.dbPath, fixture.dataDir, { botPackageDir: fixture.packages });
+  assert.ok(fs.statSync(fixture.packages).isDirectory());
+  assert.deepEqual(dbStore.loadAll(db, 'bots'), []);
+  assert.equal(dbStore.loadOne(db, 'bots', 'bot-alpha'), null);
+  db.close();
+});
+
 test('manual and scheduled prompts read the same externally edited AGENTS.md without collapsing Markdown', (t) => {
   const fixture = tempFixture(t);
   fs.mkdirSync(fixture.dataDir);
