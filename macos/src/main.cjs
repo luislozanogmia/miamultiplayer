@@ -484,12 +484,25 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// A runtime copy belongs to the exact app build that shipped it, not just to
+// its source commit: builds of the same commit can be signed differently (an
+// ad-hoc dev build vs. a Developer ID release), and a hardened-runtime Python
+// refuses native modules signed by another team. The build stamp is the
+// packaged marker's modification time, which every new build rewrites.
+function packagedBuildStamp(source, marker) {
+  const markerPath = path.join(source, marker);
+  const commit = fs.readFileSync(markerPath, "utf8").trim();
+  return `${commit} ${Math.trunc(fs.statSync(markerPath).mtimeMs)}`;
+}
+
 function syncPackagedDirectory(source, destination) {
   const marker = ".miaos-source-commit";
+  const stampFile = ".miaos-packaged-build";
   const expected = fs.readFileSync(path.join(source, marker), "utf8").trim();
+  const stamp = packagedBuildStamp(source, marker);
   let current = "";
-  try { current = fs.readFileSync(path.join(destination, marker), "utf8").trim(); } catch (_) { /* first launch */ }
-  if (current === expected) return false;
+  try { current = fs.readFileSync(path.join(destination, stampFile), "utf8").trim(); } catch (_) { /* first launch or older copy */ }
+  if (current === stamp) return false;
   const next = `${destination}.next`;
   fs.rmSync(next, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -497,6 +510,7 @@ function syncPackagedDirectory(source, destination) {
   if (fs.readFileSync(path.join(next, marker), "utf8").trim() !== expected) {
     throw new Error(`Packaged runtime verification failed: ${destination}`);
   }
+  fs.writeFileSync(path.join(next, stampFile), `${stamp}\n`);
   fs.rmSync(destination, { recursive: true, force: true });
   fs.renameSync(next, destination);
   return true;
