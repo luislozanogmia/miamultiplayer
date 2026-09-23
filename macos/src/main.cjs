@@ -1626,11 +1626,11 @@ function disposeArtifactPanel(window, toolbarView, contentView) {
 }
 
 
-function harnessAuthPopupOptions(parent) {
+function harnessAuthPopupOptions(parent, show = true) {
   return {
     parent,
     modal: false,
-    show: true,
+    show,
     autoHideMenuBar: true,
     width: 560,
     height: 720,
@@ -1698,7 +1698,9 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
     const provider = harnessAuthRedirectProvider(url, expectedBackendUrl);
     if (isLocal(url)) return provider ? {
       action: "allow",
-      overrideBrowserWindowOptions: harnessAuthPopupOptions(window),
+      // System-browser providers hand off before the page draws, so their
+      // pop-up starts hidden instead of flashing on screen.
+      overrideBrowserWindowOptions: harnessAuthPopupOptions(window, !SYSTEM_BROWSER_AUTH_PROVIDERS.has(provider)),
     } : { action: "allow" };
     // Desktop login uses the native client and system browser; never revive
     // the cookie-backed embedded Google flow from an old renderer.
@@ -1761,6 +1763,12 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
   };
   window.webContents.on("will-navigate", guardNavigation);
   if (harnessAuthProvider) window.webContents.on("will-redirect", guardNavigation);
+  if (SYSTEM_BROWSER_AUTH_PROVIDERS.has(harnessAuthProvider)) {
+    // Reached only when no hand-off happened (e.g. an error page): show it.
+    window.webContents.on("did-finish-load", () => {
+      if (!window.isDestroyed() && !window.isVisible()) window.show();
+    });
+  }
 }
 
 function invokeDevelopmentAction(label, action) {
