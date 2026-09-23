@@ -328,15 +328,21 @@ test("the provisioned app claims its profile's application and team identifiers"
 
 test("installer build retries a busy layout detach and refuses a mounted Mia volume", () => {
   const { detachWithRetry, assertNoMountedMiaVolume } = require("./create-dmg.cjs");
-  let calls = 0;
-  detachWithRetry("/mnt/layout", { delayMs: 1, detach: () => {
-    calls += 1;
-    if (calls < 3) throw Object.assign(new Error("detach failed"), { stderr: "hdiutil: couldn't unmount - Resource busy" });
+  const busy = () => Object.assign(new Error("detach failed"), { stderr: "hdiutil: couldn't unmount - Resource busy" });
+  const calls = [];
+  detachWithRetry("/mnt/layout", { delayMs: 1, detach: (_target, force) => {
+    calls.push(force);
+    if (calls.length < 3) throw busy();
   } });
-  assert.equal(calls, 3);
-  assert.throws(() => detachWithRetry("/mnt/layout", { attempts: 2, delayMs: 1, detach: () => {
-    throw Object.assign(new Error("detach failed"), { stderr: "Resource busy" });
-  } }), /detach failed/);
+  assert.deepEqual(calls, [false, false, false]);
+
+  const forced = [];
+  detachWithRetry("/mnt/layout", { attempts: 2, delayMs: 1, detach: (_target, force) => {
+    forced.push(force);
+    if (!force) throw busy();
+  } });
+  assert.deepEqual(forced, [false, false, true]);
+
   let otherFailures = 0;
   assert.throws(() => detachWithRetry("/mnt/layout", { delayMs: 1, detach: () => {
     otherFailures += 1;

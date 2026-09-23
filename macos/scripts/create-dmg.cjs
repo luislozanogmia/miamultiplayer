@@ -9,19 +9,26 @@ function run(command, args) {
   return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
-// Finder and Spotlight can hold a freshly laid-out volume for a few seconds
-// after the AppleScript returns, so a busy detach is retried before failing.
-function detachWithRetry(mount, { attempts = 10, delayMs = 1000, detach = (target) => run("hdiutil", ["detach", target]) } = {}) {
-  for (let attempt = 1; ; attempt += 1) {
+// Finder keeps a freshly laid-out volume busy for a while after the
+// AppleScript returns (observed: well over ten seconds). Flush writes, retry a
+// busy detach for up to a minute, then force it: the layout volume is scratch,
+// and its .DS_Store is verified and synced before any detach is attempted.
+function detachWithRetry(mount, {
+  attempts = 30,
+  delayMs = 2000,
+  detach = (target, force) => run("hdiutil", force ? ["detach", "-force", target] : ["detach", target]),
+} = {}) {
+  run("sync", []);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      detach(mount);
+      detach(mount, false);
       return;
     } catch (error) {
-      const busy = /Resource busy/i.test(String(error.stderr || error.message || ""));
-      if (!busy || attempt >= attempts) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      if (!/Resource busy/i.test(String(error.stderr || error.message || ""))) throw error;
+      if (attempt < attempts) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
     }
   }
+  detach(mount, true);
 }
 
 function copyAppBundleForDmg(source, destination) {
@@ -57,8 +64,8 @@ function finderLayout(mount) {
   end tell`;
 }
 
-// Finder can keep a renamed layout volume busy when another volume already
-// uses the name Mia, such as an earlier installer left open.
+// The layout volume is renamed Mia before conversion; refuse to start while an
+// earlier installer is mounted under that name so the two can't be confused.
 function assertNoMountedMiaVolume(volumesRoot = "/Volumes") {
   if (fs.existsSync(path.join(volumesRoot, "Mia"))) {
     throw new Error("Eject the mounted Mia volume before building the installer");
@@ -90,8 +97,11 @@ function createDmg(appPath, outputPath) {
     attached = false;
     run("hdiutil", ["convert", writable, "-format", "UDZO", "-ov", "-o", outputPath]);
   } finally {
-    if (attached) detachWithRetry(mount);
-    fs.rmSync(temporary, { recursive: true, force: true });
+    try {
+      if (attached) detachWithRetry(mount);
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
   }
   return outputPath;
 }
