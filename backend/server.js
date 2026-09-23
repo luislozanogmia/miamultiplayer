@@ -2810,6 +2810,33 @@ function setHarnessProviderDisconnected(email, provider, disconnected) {
   db.saveSingleton(conn, 'settings', settings);
 }
 
+// Providers the user connected through Mia (setup, Settings → Access or the
+// picker's Connect links). Hermes can also report credentials that reached
+// it some other way, for example a GitHub CLI login read as Copilot; only
+// this record, the saved preference and the signed-in user's Mia Router
+// make a provider selectable in the chat picker.
+function harnessConnectedProvidersForUser(settings, email) {
+  const byUser = settings && settings.harnessConnectedByUser && typeof settings.harnessConnectedByUser === 'object'
+    ? settings.harnessConnectedByUser
+    : {};
+  const providers = byUser[String(email || '').trim().toLowerCase()];
+  return Array.isArray(providers) ? providers.slice() : [];
+}
+
+function setHarnessProviderConnected(email, provider, connected) {
+  const owner = String(email || '').trim().toLowerCase();
+  const id = String(provider || '').trim().toLowerCase();
+  if (!owner || !id) return;
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  if (!settings.harnessConnectedByUser || typeof settings.harnessConnectedByUser !== 'object') {
+    settings.harnessConnectedByUser = {};
+  }
+  const providers = new Set(harnessConnectedProvidersForUser(settings, owner));
+  if (connected) providers.add(id); else providers.delete(id);
+  settings.harnessConnectedByUser[owner] = Array.from(providers);
+  db.saveSingleton(conn, 'settings', settings);
+}
+
 // These are product-facing choices mapped to the provider names understood by
 // the Hermes service. Credentials remain in Hermes; Mia only selects the
 // provider route for the authenticated user's agent work.
@@ -3187,7 +3214,10 @@ function startHermesAuth(email, provider) {
     entry.child = null;
     entry.output = '';
     entry.state = state;
-    if (state === 'connected') hermesDisconnectedProviders.delete(provider);
+    if (state === 'connected') {
+      hermesDisconnectedProviders.delete(provider);
+      setHarnessProviderConnected(owner, provider, true);
+    }
     const cleanup = setTimeout(() => {
       if (harnessAuthByUser.get(owner) === entry) harnessAuthByUser.delete(owner);
     }, 10 * 60 * 1000);
@@ -3270,7 +3300,10 @@ function startClaudeSubscriptionAuth(email) {
     entry.child = null;
     entry.output = '';
     entry.state = state;
-    if (state === 'connected') hermesDisconnectedProviders.delete(provider);
+    if (state === 'connected') {
+      hermesDisconnectedProviders.delete(provider);
+      setHarnessProviderConnected(owner, provider, true);
+    }
     const cleanup = setTimeout(() => {
       if (harnessAuthByUser.get(owner) === entry) harnessAuthByUser.delete(owner);
     }, 10 * 60 * 1000);
@@ -3570,32 +3603,60 @@ const MANAGED_ROUTER_MODEL_ALLOWLIST = MANAGED_ROUTER_MODEL_ALLOWLIST_RAW.trim()
   ? new Set(MANAGED_ROUTER_MODEL_ALLOWLIST_RAW.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
   : null;
 
+// Hermes reports some product providers under a second id. Map those back to
+// the id Mia uses for connection status and disconnect records.
+function chatModelStatusProviderId(id) {
+  const normalized = String(id || '').trim().toLowerCase();
+  if (normalized === 'openai') return 'openai-api';
+  if (normalized === 'xai') return 'xai-oauth';
+  return normalized;
+}
+
+// The saved preference only picks the default model. Every other provider
+// the user connected through Mia, and has not disconnected, stays selectable
+// per turn, so connecting a second provider (for example Mia Router after
+// Claude) never hides the first one.
+function chatModelProviderIdsForUser(providers, settings, email, preference) {
+  if (!preference || !preference.onboardingComplete) return [];
+  const owner = String(email || '').trim().toLowerCase();
+  const connected = new Set(harnessConnectedProvidersForUser(settings, owner));
+  if (managedRouterProvisionedEmails.has(owner)) connected.add(MANAGED_ROUTER_HERMES_PROVIDER);
+  const ids = new Set(chatModelProviderIdsForPreference(preference));
+  for (const id of Object.keys(providers || {})) {
+    const statusId = chatModelStatusProviderId(id);
+    if (!connected.has(id) && !connected.has(statusId)) continue;
+    if (hermesDisconnectedProviders.has(statusId)
+      || harnessProviderDisconnectedForUser(settings, email, statusId)) continue;
+    ids.add(id);
+  }
+  return Array.from(ids);
+}
+
 function visibleChatModelProvidersForUser(providers, email) {
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, email);
-  let visible = visibleChatModelInventory(providers, chatModelProviderIdsForPreference(preference));
-  const labelProvider = preference.provider === 'openai-api'
-    ? preference.apiProvider || 'openai-api'
-    : preference.provider;
-  if (MANAGED_ROUTER_MODEL_ALLOWLIST && labelProvider === 'openrouter') {
-    const filtered = {};
-    for (const [id, provider] of Object.entries(visible)) {
-      const models = provider.models.filter(m => MANAGED_ROUTER_MODEL_ALLOWLIST.has(String(m).toLowerCase()));
-      if (models.length) {
-        filtered[id] = {
-          ...provider,
-          models,
-          capabilities: Object.fromEntries(models.map(m => [
-            m, provider.capabilities[m] || { fast: false, reasoning: true },
-          ])),
-        };
-      }
+  const visible = visibleChatModelInventory(
+    providers,
+    chatModelProviderIdsForUser(providers, settings, email, preference)
+  );
+  if (MANAGED_ROUTER_MODEL_ALLOWLIST && visible.openrouter) {
+    const provider = visible.openrouter;
+    const models = provider.models.filter(m => MANAGED_ROUTER_MODEL_ALLOWLIST.has(String(m).toLowerCase()));
+    if (models.length) {
+      visible.openrouter = {
+        ...provider,
+        models,
+        capabilities: Object.fromEntries(models.map(m => [
+          m, provider.capabilities[m] || { fast: false, reasoning: true },
+        ])),
+      };
+    } else {
+      delete visible.openrouter;
     }
-    visible = filtered;
   }
-  const label = HERMES_AUTH_PROVIDER_LABELS[labelProvider];
-  if (label) {
-    for (const provider of Object.values(visible)) provider.label = label;
+  for (const [id, provider] of Object.entries(visible)) {
+    const label = HERMES_AUTH_PROVIDER_LABELS[chatModelStatusProviderId(id)] || HERMES_AUTH_PROVIDER_LABELS[id];
+    if (label) provider.label = label;
   }
   return visible;
 }
@@ -3615,8 +3676,11 @@ function inferenceOptionsForUser(email, baseOptions) {
     // silently hand the turn to whatever the Hermes profile defaults to.
     // Resolve the user's first visible model instead — for a managed router
     // that is the allowlisted model.
+    // Several providers can be visible; only the preferred one (under
+    // either of its Hermes ids) may supply the default model.
     const visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
-    const entry = visible[provider] || Object.values(visible)[0];
+    const entry = visible[provider] || chatModelProviderIdsForPreference(preference)
+      .map((id) => visible[id]).find(Boolean);
     if (entry && entry.models.length) options.model = entry.models[0];
   }
   return Object.keys(options).length ? options : undefined;
@@ -3756,8 +3820,17 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
     onboardingComplete: true,
     updatedAt: new Date().toISOString(),
   };
+  const previous = normalizeHarnessPreference(settings.harnessByUser[owner]);
   settings.harnessByUser[owner] = preference;
   db.saveSingleton(conn, 'settings', settings);
+  // Changing the default must not drop the provider it replaces from the
+  // picker, so both stay recorded as connected.
+  const previousProvider = previous && previous.onboardingComplete
+    && (previous.provider === 'openai-api' ? previous.apiProvider : previous.provider);
+  if (previousProvider && !harnessProviderDisconnectedForUser(settings, owner, previousProvider)) {
+    setHarnessProviderConnected(owner, previousProvider, true);
+  }
+  setHarnessProviderConnected(owner, effectiveProvider === 'openai-api' ? effectiveApiProvider : effectiveProvider, true);
   if (effectiveProvider === CLAUDE_SUBSCRIPTION_PROVIDER) {
     // A successful explicit selection reconnects Mia to the existing external
     // Claude Code login. The probe itself must not re-enable dispatch before
@@ -3769,6 +3842,29 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
     void autoProvisionManagedRouter(owner);
   }
   return res.status(200).json({ harness: preference });
+});
+
+// Adds a provider to the chat picker without changing the saved default.
+// The picker's Connect links use this after setup confirms the credential,
+// so connecting a second provider never reloads the app or switches models.
+app.post('/api/settings/harness/connected', requireAuth, async (req, res) => {
+  const owner = String(req.userEmail || '').trim().toLowerCase();
+  let provider = String((req.body || {}).provider || '').trim().toLowerCase();
+  if (provider === 'managed-router' || provider === 'mia-router') provider = MANAGED_ROUTER_HERMES_PROVIDER;
+  if (!HERMES_STATUS_PROVIDERS.has(provider)) {
+    return res.status(400).json({ error: 'unsupported provider' });
+  }
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  if (hermesDisconnectedProviders.has(provider) || harnessProviderDisconnectedForUser(settings, owner, provider)) {
+    return res.status(409).json({ error: 'That provider is not connected yet.' });
+  }
+  const connected = provider === CLAUDE_SUBSCRIPTION_PROVIDER
+    ? (await runClaudeSubscriptionStatus()).loggedIn
+    : (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterProvisionedEmails.has(owner))
+      || await runHermesAuthStatus(provider);
+  if (!connected) return res.status(409).json({ error: 'That provider is not connected yet.' });
+  setHarnessProviderConnected(owner, provider, true);
+  return res.status(200).json({ ok: true, provider });
 });
 
 // Mia only brokers the Hermes-owned device flow for subscription choices.
@@ -3868,6 +3964,7 @@ app.post('/api/settings/harness/auth/start', requireGlobalSettingsAdmin, async (
   if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
     const status = await runClaudeSubscriptionStatus();
     if (status.loggedIn && (req.body || {}).reauthenticate !== true) {
+      setHarnessProviderConnected(req.userEmail, provider, true);
       return res.status(200).json({ auth: {
         state: 'connected', provider, plan: status.plan || null,
       } });
@@ -3937,6 +4034,7 @@ app.post('/api/settings/harness/auth/logout', requireGlobalSettingsAdmin, async 
     return res.status(400).json({ error: 'unsupported harness disconnect provider' });
   }
   disconnectHermesAuth(req.userEmail, provider);
+  setHarnessProviderConnected(req.userEmail, provider, false);
   if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
     forgetNativeChatModelProvider(provider);
     setHarnessProviderDisconnected(req.userEmail, provider, true);
@@ -3992,6 +4090,7 @@ app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req
     removeProviderProfileCredentials(process.env.HERMES_HOME, provider);
     await restartHermesGatewayRuntime();
     hermesDisconnectedProviders.delete(provider);
+    setHarnessProviderConnected(req.userEmail, provider, true);
     return res.status(200).json({ ok: true, provider, state: 'connected' });
   } catch (error) {
     return res.status(502).json({ error: error.message || 'Could not add API credential' });
@@ -6274,6 +6373,24 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     postHermesProgressText(kind === 'Thinking' ? 'thinking.delta' : 'reasoning.delta', `${kind}\n${text}`);
   });
   const trackBudget = budgetTracker ? budgetTrackingOnEvent(budgetTracker) : null;
+  // Some providers (the Claude subscription route) report the final answer
+  // again as a completed reasoning block, which showed the reply twice. Hold
+  // the reasoning summary until the next event and drop it when it only
+  // repeats the reply.
+  let pendingReasoningSummary = '';
+  const sameReplyText = (a, b) => String(a || '').replace(/\s+/g, ' ').trim()
+    === String(b || '').replace(/\s+/g, ' ').trim();
+  const flushPendingReasoningSummary = (replyText) => {
+    const text = pendingReasoningSummary;
+    pendingReasoningSummary = '';
+    if (!text) return;
+    if (replyText && sameReplyText(text.replace(/^Reasoning summary\n/, ''), redactHermesChatDetail(replyText))) return;
+    for (const chunk of splitHermesDebugText(text)) postHermesProgressText('reasoning.available', chunk);
+  };
+  const flushHermesProgress = (replyText) => {
+    hermesDeltaCoalescer.flush();
+    flushPendingReasoningSummary(replyText);
+  };
   const postHermesProgress = (type, payload) => {
     if (trackBudget) trackBudget(type, payload);
     const diagnostics = getHermesDiagnostics();
@@ -6292,6 +6409,15 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // message.complete): flush whatever delta text is buffered first so
     // ordering in the transcript matches the gateway's own event order.
     hermesDeltaCoalescer.flush();
+    if (type === 'reasoning.available') {
+      flushPendingReasoningSummary();
+      pendingReasoningSummary = hermesDebugEventText(type, payload);
+      return;
+    }
+    // message.complete without text (streamed replies) keeps the summary
+    // until the run returns the final reply to compare against.
+    const completedText = type === 'message.complete' ? String((payload && payload.text) || '') : '';
+    if (type !== 'message.complete' || completedText) flushPendingReasoningSummary(completedText);
     for (const text of splitHermesDebugText(hermesDebugEventText(type, payload))) {
       postHermesProgressText(type, text);
     }
@@ -6339,7 +6465,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         nativeActiveGatewaySessions.delete(gatewayKey);
       }
     }
-    hermesDeltaCoalescer.flush();
+    flushHermesProgress(gatewayResult && gatewayResult.text);
     throwIfNativeDispatchStopped(signal);
     throwIfNativeDispatchUserInactive(dispatch, trigger);
     await hermesProgressSequence;
@@ -6372,7 +6498,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       signal,
       onEvent: postHermesProgress,
     });
-    hermesDeltaCoalescer.flush();
+    flushHermesProgress(typeof inferenceResult === 'string' ? inferenceResult : inferenceResult && inferenceResult.text);
     throwIfNativeDispatchStopped(signal);
     throwIfNativeDispatchUserInactive(dispatch, trigger);
     await hermesProgressSequence;
