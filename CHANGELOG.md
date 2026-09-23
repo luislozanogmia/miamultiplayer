@@ -35,6 +35,12 @@ automatically through the in-app updater.
   Windows-critical variables (`SYSTEMROOT`, `APPDATA`, `USERPROFILE`,
   `COMSPEC`, `TEMP`, …) plus the venv `PYTHONPATH` the shim used to set.
 
+## [0.2.11] — 2026-09-23
+
+### Changed
+- ChatGPT and Grok sign-in now open in your own browser, where passkeys and
+  saved logins work, instead of a window inside Mia.
+
 ## [0.2.8] — 2026-09-16
 
 ### Added
