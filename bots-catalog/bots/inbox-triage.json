@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "inbox-triage",
   "version": "1.2.0",
-  "author": "Mia Labs",
+  "author": "Mia",
   "store": {
     "tagline": "Reviews new messages and flags the ones that need a reply.",
     "category": "productivity",
