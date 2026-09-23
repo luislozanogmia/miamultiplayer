@@ -7,12 +7,13 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
-const { createDmg, copyAppBundleForDmg } = require("./create-dmg.cjs");
+const { createDmg, copyAppBundleForDmg, assertNoMountedMiaVolume } = require("./create-dmg.cjs");
 
 const MACOS_ROOT = path.resolve(__dirname, "..");
 const REPOSITORY_ROOT = path.resolve(MACOS_ROOT, "..");
 const DIST_ROOT = path.join(MACOS_ROOT, "dist");
 const MAC_ENTITLEMENTS = path.join(__dirname, "entitlements.darwin.plist");
+const MAC_BUNDLE_ID = "com.miamultiplayer.mia";
 const VERSION = require(path.join(MACOS_ROOT, "package.json")).version;
 const ELECTRON_VERSION = require(path.join(MACOS_ROOT, "node_modules", "electron", "package.json")).version;
 
@@ -172,11 +173,14 @@ function assertNoRuntimeState(root) {
       throw new Error(`Runtime symlink escapes package: ${path.relative(root, target)}`);
     }
     const lower = entry.name.toLowerCase();
+    const relative = path.relative(root, target).split(path.sep).join("/");
+    const expectedEmbeddedProfile = path.basename(root) === "Mia.app"
+      && relative === "Contents/embedded.provisionprofile";
     if ((entry.isDirectory() && RUNTIME_STATE_DIRECTORIES.has(lower))
       || (entry.isFile() && (RUNTIME_STATE_BASENAMES.has(lower) || /^\.env(?:\.|$)/.test(lower)
         || /\.(?:db|sqlite|sqlite3)(?:-(?:wal|shm|journal))?$/.test(lower)
-        || /\.(?:log|pyc|map|pdb|key|p12|pfx|provisionprofile)$/.test(lower)))) {
-      throw new Error(`Runtime state remains in package: ${path.relative(root, target)}`);
+        || (/\.(?:log|pyc|map|pdb|key|p12|pfx|provisionprofile)$/.test(lower) && !expectedEmbeddedProfile)))) {
+      throw new Error(`Runtime state remains in package: ${relative}`);
     }
   });
 }
@@ -413,10 +417,50 @@ function assertNoPrivateContent(root) {
 function macDistributionConfig(env = process.env) {
   const identity = String(env.MIAOS_MAC_SIGN_IDENTITY || "").trim();
   const notaryProfile = String(env.MIAOS_MAC_NOTARY_PROFILE || "").trim();
-  if (Boolean(identity) !== Boolean(notaryProfile)) {
-    throw new Error("MIAOS_MAC_SIGN_IDENTITY and MIAOS_MAC_NOTARY_PROFILE must be configured together");
+  const provisioningProfile = String(env.MIAOS_MAC_PROVISIONING_PROFILE || "").trim();
+  const configured = [identity, notaryProfile, provisioningProfile].filter(Boolean).length;
+  if (configured !== 0 && configured !== 3) {
+    throw new Error("MIAOS_MAC_SIGN_IDENTITY, MIAOS_MAC_NOTARY_PROFILE, and MIAOS_MAC_PROVISIONING_PROFILE must be configured together");
   }
-  return { identity: identity || "-", notaryProfile, release: Boolean(identity) };
+  return { identity: identity || "-", notaryProfile, provisioningProfile, release: Boolean(identity) };
+}
+
+function plistString(xml, key) {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`<key>${escapedKey}</key>\\s*<string>([^<]*)</string>`).exec(xml);
+  return match ? match[1] : "";
+}
+
+function validateMacProvisioningProfile(profilePath, identity, decodeProfile = (file) => run(
+  "security", ["cms", "-D", "-i", file], { capture: true },
+)) {
+  if (!path.isAbsolute(profilePath) || !fs.statSync(profilePath, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error("MIAOS_MAC_PROVISIONING_PROFILE must point to an existing absolute .provisionprofile file");
+  }
+
+  const team = /\(([A-Z0-9]+)\)\s*$/.exec(identity)?.[1];
+  if (!team) throw new Error("MIAOS_MAC_SIGN_IDENTITY must include its Apple Team ID in parentheses");
+  const xml = decodeProfile(profilePath);
+  const appId = plistString(xml, "com.apple.application-identifier");
+  const teamId = plistString(xml, "com.apple.developer.team-identifier");
+  const groups = /<key>keychain-access-groups<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)?.[1] || "";
+  const expectedGroup = `${team}.${MAC_BUNDLE_ID}.webauthn`;
+  const allowedGroups = [...groups.matchAll(/<string>([^<]*)<\/string>/g)].map((match) => match[1]);
+  const authorizesGroup = allowedGroups.some((group) => (
+    group === expectedGroup || group === `${team}.*` || group === `${team}.${MAC_BUNDLE_ID}.*`
+  ));
+
+  if (appId !== `${team}.${MAC_BUNDLE_ID}` || teamId !== team || !authorizesGroup) {
+    throw new Error(`Developer ID profile must authorize ${team}.${MAC_BUNDLE_ID} and its WebAuthn keychain group`);
+  }
+  return fs.realpathSync(profilePath);
+}
+
+function embedMacProvisioningProfile(appPath, profilePath) {
+  if (!profilePath) throw new Error("A validated Developer ID provisioning profile is required for release signing");
+  const destination = path.join(appPath, "Contents", "embedded.provisionprofile");
+  fs.copyFileSync(profilePath, destination);
+  return destination;
 }
 
 const MACH_O_MAGICS = new Set([
@@ -457,6 +501,14 @@ function macEntitlementsForTarget(target, config) {
   return config.release && target.endsWith(".app") ? MAC_ENTITLEMENTS : "";
 }
 
+function macEntitlementsPathForTarget(target, appPath, config, groupedEntitlements) {
+  const entitlements = macEntitlementsForTarget(target, config);
+  if (!entitlements) return "";
+  // Only Mia.app itself has the provisioned keychain group. Electron helper
+  // apps have distinct identifiers and no matching Developer ID profile.
+  return target === appPath && groupedEntitlements ? groupedEntitlements : entitlements;
+}
+
 // Touch ID passkeys (app.configureWebAuthn) store WebAuthn credentials in a
 // keychain access group, which macOS only grants to a signed app whose
 // entitlements name the group under the signing team's prefix. Derive the
@@ -465,7 +517,20 @@ function macEntitlementsForTarget(target, config) {
 function macWebAuthnAccessGroup(config) {
   if (!config.release) return "";
   const team = /\(([A-Z0-9]+)\)\s*$/.exec(config.identity);
-  return team ? `${team[1]}.com.miamultiplayer.mia.webauthn` : "";
+  return team ? `${team[1]}.${MAC_BUNDLE_ID}.webauthn` : "";
+}
+
+// A restricted entitlement (the keychain group) is only honored when the app
+// also claims the application and team identifiers its embedded provisioning
+// profile authorizes; without them macOS kills the app at launch.
+function macGroupedEntitlements(baseEntitlements, group) {
+  const team = group.split(".")[0];
+  return baseEntitlements.replace(
+    "</dict>",
+    `  <key>com.apple.application-identifier</key>\n  <string>${team}.${MAC_BUNDLE_ID}</string>\n`
+      + `  <key>com.apple.developer.team-identifier</key>\n  <string>${team}</string>\n`
+      + `  <key>keychain-access-groups</key>\n  <array>\n    <string>${group}</string>\n  </array>\n</dict>`,
+  );
 }
 
 function signMacApp(appPath, config) {
@@ -473,16 +538,13 @@ function signMacApp(appPath, config) {
   let groupedEntitlements = "";
   if (group) {
     groupedEntitlements = path.join(os.tmpdir(), `mia-entitlements-${process.pid}.plist`);
-    fs.writeFileSync(groupedEntitlements, fs.readFileSync(MAC_ENTITLEMENTS, "utf8").replace(
-      "</dict>",
-      `  <key>keychain-access-groups</key>\n  <array>\n    <string>${group}</string>\n  </array>\n</dict>`,
-    ));
+    fs.writeFileSync(groupedEntitlements, macGroupedEntitlements(fs.readFileSync(MAC_ENTITLEMENTS, "utf8"), group));
   }
   const sign = (target) => {
     const args = ["--force"];
     if (config.release) args.push("--options", "runtime", "--timestamp");
-    const entitlements = macEntitlementsForTarget(target, config);
-    if (entitlements) args.push("--entitlements", groupedEntitlements || entitlements);
+    const entitlements = macEntitlementsPathForTarget(target, appPath, config, groupedEntitlements);
+    if (entitlements) args.push("--entitlements", entitlements);
     args.push("--sign", config.identity, target);
     run("codesign", args);
   };
@@ -642,10 +704,17 @@ function writeUpdateFeed(appPath) {
 
 async function buildInstaller() {
   assertCleanReleaseCheckout();
+  assertNoMountedMiaVolume();
+  const distribution = macDistributionConfig();
+  if (distribution.release) {
+    distribution.provisioningProfile = validateMacProvisioningProfile(
+      distribution.provisioningProfile,
+      distribution.identity,
+    );
+  }
   fs.rmSync(DIST_ROOT, { recursive: true, force: true });
   fs.mkdirSync(DIST_ROOT, { recursive: true });
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-package-"));
-  const distribution = macDistributionConfig();
   try {
     const appSourceRoot = path.join(temporaryRoot, "app-source");
     copyTrackedArea("macos", appSourceRoot);
@@ -654,6 +723,7 @@ async function buildInstaller() {
     copyTrackedArea("backend", temporaryRoot);
     copyTrackedArea("frontend", temporaryRoot);
     copyTrackedArea("modules", temporaryRoot);
+    copyTrackedArea("bots-catalog", temporaryRoot);
     const { runtimeRoot, manifest, sourceRoots } = stageBundledRuntime(temporaryRoot);
 
     const stagedBackend = path.join(temporaryRoot, "backend");
@@ -688,7 +758,7 @@ async function buildInstaller() {
       overwrite: true,
       prune: true,
       derefSymlinks: false,
-      appBundleId: "com.miamultiplayer.mia",
+      appBundleId: MAC_BUNDLE_ID,
       extendInfo: {
         NSMicrophoneUsageDescription: "Mia's browser uses the microphone for sites like Google Meet when you allow it.",
         NSCameraUsageDescription: "Mia's browser uses the camera for video calls when you allow it.",
@@ -706,6 +776,7 @@ async function buildInstaller() {
         path.join(temporaryRoot, "backend"),
         path.join(temporaryRoot, "frontend"),
         path.join(temporaryRoot, "modules"),
+        path.join(temporaryRoot, "bots-catalog"),
         runtimeRoot,
       ],
       ignore: [
@@ -729,6 +800,7 @@ async function buildInstaller() {
         JSON.stringify({ keychainAccessGroup: webauthnGroup }) + "\n",
       );
     }
+    if (distribution.release) embedMacProvisioningProfile(appPath, distribution.provisioningProfile);
     assertNoRuntimeState(appPath);
     assertNoPrivateBuildPaths(appPath, [os.homedir(), REPOSITORY_ROOT, temporaryRoot, ...sourceRoots]);
     assertNoPrivateContent(appPath);
@@ -763,6 +835,10 @@ module.exports = {
   copyPortableRuntime,
   normalizeCopiedSymlinks,
   macDistributionConfig,
+  macEntitlementsPathForTarget,
+  macGroupedEntitlements,
+  validateMacProvisioningProfile,
+  embedMacProvisioningProfile,
   macBundleUrlTypes,
   isMachOFile,
   macCodeTargets,

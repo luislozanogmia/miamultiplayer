@@ -213,6 +213,14 @@ function openDb(dbPath, dataDir, options = {}) {
         }
       }
       db.prepare("INSERT INTO meta (key, value) VALUES ('bot_packages_v1', ?)").run(new Date().toISOString());
+    } else {
+      // The bots folder is the source of truth: a bot exists only while its
+      // package does, so an empty folder (for example after a clean slate)
+      // means zero bots.
+      const removeBot = db.prepare('DELETE FROM bots WHERE id = ?');
+      for (const { id } of db.prepare('SELECT id FROM bots').all()) {
+        if (!store.findDirectory(id)) removeBot.run(id);
+      }
     }
     BOT_PACKAGE_STORES.set(db, store);
   }

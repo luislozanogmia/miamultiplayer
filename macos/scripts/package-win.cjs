@@ -336,6 +336,7 @@ async function buildWindowsPackage() {
     copyTrackedArea("backend", temporaryRoot);
     copyTrackedArea("frontend", temporaryRoot);
     copyTrackedArea("modules", temporaryRoot);
+    copyTrackedArea("bots-catalog", temporaryRoot);
     const { runtimeRoot, stagedPython, manifest, sourceRoots } = stageWindowsBundledRuntime(temporaryRoot);
 
     const stagedBackend = path.join(temporaryRoot, "backend");
@@ -382,6 +383,7 @@ async function buildWindowsPackage() {
         path.join(temporaryRoot, "backend"),
         path.join(temporaryRoot, "frontend"),
         path.join(temporaryRoot, "modules"),
+        path.join(temporaryRoot, "bots-catalog"),
         runtimeRoot,
       ],
       ignore: [/^\/dist(?:\/|$)/, /^\/scripts(?:\/|$)/, /\.test\.cjs$/],

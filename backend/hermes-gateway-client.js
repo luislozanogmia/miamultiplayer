@@ -549,9 +549,9 @@ class HermesGatewayClient {
       ...(options && options.model ? { model: options.model } : {}),
       ...(options && options.fast !== undefined ? { fast: options.fast === true } : {}),
       ...(options && options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
-      ...(options && typeof options.artifactWorkspace === 'string' && options.artifactWorkspace
-        ? { artifact_workspace: options.artifactWorkspace }
-        : {}),
+      // options.artifactWorkspace is deliberately not sent: session.create
+      // has no such field, and Hermes rejects unknown params. Bot artifacts
+      // are validated against the derived workspace on Mia's side.
       ...(options && typeof options.workspaceDir === 'string' && options.workspaceDir
         ? { cwd: options.workspaceDir }
         : {}),

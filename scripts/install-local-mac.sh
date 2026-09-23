@@ -159,6 +159,13 @@ for required in \
   [[ -e "$required" ]] || { echo "Packaged app is incomplete: $required" >&2; exit 1; }
 done
 
+# Release builds for over-the-air updates must not replace the installed app:
+# the installed copy is what receives and tests the update.
+if [[ "${MIAOS_PACKAGE_ONLY:-}" == "1" ]]; then
+  echo "Packaged only (MIAOS_PACKAGE_ONLY=1): $packaged_app"
+  exit 0
+fi
+
 echo "[8/9] Installing $installed_app"
 osascript -e 'quit app "Mia"' >/dev/null 2>&1 || true
 pkill -9 -f "Mia.app/Contents/MacOS" >/dev/null 2>&1 || true

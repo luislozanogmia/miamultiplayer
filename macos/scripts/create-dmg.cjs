@@ -9,6 +9,28 @@ function run(command, args) {
   return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
+// Finder keeps a freshly laid-out volume busy for a while after the
+// AppleScript returns (observed: well over ten seconds). Flush writes, retry a
+// busy detach for up to a minute, then force it: the layout volume is scratch,
+// and its .DS_Store is verified and synced before any detach is attempted.
+function detachWithRetry(mount, {
+  attempts = 30,
+  delayMs = 2000,
+  detach = (target, force) => run("hdiutil", force ? ["detach", "-force", target] : ["detach", target]),
+} = {}) {
+  run("sync", []);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      detach(mount, false);
+      return;
+    } catch (error) {
+      if (!/Resource busy/i.test(String(error.stderr || error.message || ""))) throw error;
+      if (attempt < attempts) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
+  detach(mount, true);
+}
+
 function copyAppBundleForDmg(source, destination) {
   // Preserve Electron's relative framework symlinks and sealed signature.
   run("ditto", [source, destination]);
@@ -42,7 +64,16 @@ function finderLayout(mount) {
   end tell`;
 }
 
+// The layout volume is renamed Mia before conversion; refuse to start while an
+// earlier installer is mounted under that name so the two can't be confused.
+function assertNoMountedMiaVolume(volumesRoot = "/Volumes") {
+  if (fs.existsSync(path.join(volumesRoot, "Mia"))) {
+    throw new Error("Eject the mounted Mia volume before building the installer");
+  }
+}
+
 function createDmg(appPath, outputPath) {
+  assertNoMountedMiaVolume();
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "mia-dmg-layout-"));
   const mount = path.join(temporary, "mounted");
   let attached = false;
@@ -62,17 +93,20 @@ function createDmg(appPath, outputPath) {
     run("osascript", ["-e", finderLayout(mount)]);
     if (!fs.existsSync(path.join(mount, ".DS_Store"))) throw new Error("Finder did not save the installer layout");
     run("diskutil", ["renameVolume", mount, "Mia"]);
-    run("hdiutil", ["detach", mount]);
+    detachWithRetry(mount);
     attached = false;
     run("hdiutil", ["convert", writable, "-format", "UDZO", "-ov", "-o", outputPath]);
   } finally {
-    if (attached) run("hdiutil", ["detach", mount]);
-    fs.rmSync(temporary, { recursive: true, force: true });
+    try {
+      if (attached) detachWithRetry(mount);
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
   }
   return outputPath;
 }
 
-module.exports = { createDmg, copyAppBundleForDmg };
+module.exports = { createDmg, copyAppBundleForDmg, detachWithRetry, assertNoMountedMiaVolume };
 
 if (require.main === module) {
   const [appPath, outputPath] = process.argv.slice(2);

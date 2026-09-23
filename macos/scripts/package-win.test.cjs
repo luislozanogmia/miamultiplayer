@@ -170,6 +170,8 @@ test("Windows Hermes staging strips venv launchers and loads dependencies from s
   assert.match(SOURCE, /requiredPinnedDirectory\("GHOST_BUNDLE_DIR"/);
   assert.match(SOURCE, /HERMES_PYTHON_RUNTIME_DIR/);
   assert.match(SOURCE, /copyTrackedArea\("modules"/);
+  assert.match(SOURCE, /copyTrackedArea\("bots-catalog"/);
+  assert.match(SOURCE, /path\.join\(temporaryRoot, "bots-catalog"\)/);
   assert.match(SOURCE, /"better-sqlite3", "build"/);
   assert.match(SOURCE, /assertNoPrivateBuildPaths\(packagedRoot/);
   assert.match(SOURCE, /assertNoPrivateContent\(packagedRoot\)/);
