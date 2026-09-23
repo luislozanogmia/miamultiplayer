@@ -326,6 +326,34 @@ test("the provisioned app claims its profile's application and team identifiers"
   assert.match(grouped, /com\.apple\.security\.cs\.allow-jit/);
 });
 
+test("installer build retries a busy layout detach and refuses a mounted Mia volume", () => {
+  const { detachWithRetry, assertNoMountedMiaVolume } = require("./create-dmg.cjs");
+  let calls = 0;
+  detachWithRetry("/mnt/layout", { delayMs: 1, detach: () => {
+    calls += 1;
+    if (calls < 3) throw Object.assign(new Error("detach failed"), { stderr: "hdiutil: couldn't unmount - Resource busy" });
+  } });
+  assert.equal(calls, 3);
+  assert.throws(() => detachWithRetry("/mnt/layout", { attempts: 2, delayMs: 1, detach: () => {
+    throw Object.assign(new Error("detach failed"), { stderr: "Resource busy" });
+  } }), /detach failed/);
+  let otherFailures = 0;
+  assert.throws(() => detachWithRetry("/mnt/layout", { delayMs: 1, detach: () => {
+    otherFailures += 1;
+    throw new Error("no such volume");
+  } }), /no such volume/);
+  assert.equal(otherFailures, 1);
+
+  const volumes = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-volumes-test-"));
+  try {
+    assert.doesNotThrow(() => assertNoMountedMiaVolume(volumes));
+    fs.mkdirSync(path.join(volumes, "Mia"));
+    assert.throws(() => assertNoMountedMiaVolume(volumes), /Eject the mounted Mia volume/);
+  } finally {
+    fs.rmSync(volumes, { recursive: true, force: true });
+  }
+});
+
 test("artifact audit rejects exact private build roots, including binary content", () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-private-path-test-"));
   try {
