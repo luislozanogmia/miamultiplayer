@@ -723,6 +723,7 @@ async function buildInstaller() {
     copyTrackedArea("backend", temporaryRoot);
     copyTrackedArea("frontend", temporaryRoot);
     copyTrackedArea("modules", temporaryRoot);
+    copyTrackedArea("bots-catalog", temporaryRoot);
     const { runtimeRoot, manifest, sourceRoots } = stageBundledRuntime(temporaryRoot);
 
     const stagedBackend = path.join(temporaryRoot, "backend");
@@ -775,6 +776,7 @@ async function buildInstaller() {
         path.join(temporaryRoot, "backend"),
         path.join(temporaryRoot, "frontend"),
         path.join(temporaryRoot, "modules"),
+        path.join(temporaryRoot, "bots-catalog"),
         runtimeRoot,
       ],
       ignore: [

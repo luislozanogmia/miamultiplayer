@@ -158,6 +158,8 @@ test("Mac DMG bundles pinned Hermes, Ghost, Python, modules, and release integri
   assert.match(source, /requiredPinnedDirectory\("GHOST_BUNDLE_DIR"/);
   assert.match(source, /HERMES_PYTHON_RUNTIME_DIR/);
   assert.match(source, /copyTrackedArea\("modules"/);
+  assert.match(source, /copyTrackedArea\("bots-catalog"/);
+  assert.match(source, /path\.join\(temporaryRoot, "bots-catalog"\)/);
   assert.match(source, /normalizeCopiedSymlinks\(runtimeRoot, path\.join\(appPath, "Contents", "Resources", "runtime"\)\)/);
   assert.match(source, /path\.join\(runtimeRoot, "bin", "hermes"\)/);
   assert.match(source, /hermes-agent\/venv\/bin\/python/);
