@@ -197,7 +197,7 @@ test('Hermes gateway client creates, streams, and resumes a persistent session',
   assert.equal(calls.filter((call) => call.method === 'image.attach').length, 1);
   assert.equal(calls.filter((call) => call.method === 'prompt.submit').length, 2);
   assert.equal(calls.find((call) => call.method === 'session.create').params.profile, 'miaos-bot');
-  assert.equal(calls.find((call) => call.method === 'session.create').params.artifact_workspace, '/tmp/miaos-bot-artifacts');
+  assert.equal('artifact_workspace' in calls.find((call) => call.method === 'session.create').params, false);
   assert.equal(calls.find((call) => call.method === 'session.resume').params.profile, 'miaos-bot');
   assert.deepEqual(calls.find((call) => call.method === 'session.cwd.set').params, {
     session_id: 'live-resumed',
@@ -360,7 +360,7 @@ test('Hermes gateway client preserves artifact descriptors, including artifact-o
   });
   assert.equal(result.text, '');
   assert.deepEqual(result.artifacts, [{ filename: 'report.pdf' }]);
-  assert.equal(calls.find(call => call.method === 'session.create').params.artifact_workspace, '/tmp/miaos-bot-artifacts');
+  assert.equal('artifact_workspace' in calls.find(call => call.method === 'session.create').params, false);
   client.close();
 });
 
