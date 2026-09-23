@@ -93,13 +93,13 @@ never a lesser release. The essentials:
 4. Build with `scripts/install-local-mac.sh` and `MIAOS_MAC_SIGN_IDENTITY`,
    `MIAOS_MAC_NOTARY_PROFILE`, `MIAOS_MAC_PROVISIONING_PROFILE`.
    `MIAOS_PACKAGE_ONLY=1` leaves the installed app alone so it can test the
-   over-the-air update. Needs ~8 GB free and no mounted `Mia` volume; step
-   5/9 refuses to package dev-mode provider credentials
+   over-the-air update. Needs ~8 GB free and no mounted `Mia` volume. The
+   installer refuses to package dev-mode provider credentials
    (`~/.miaos/hermes/auth.json`).
 5. Publish a GitHub Release with `Mia-<ver>-arm64.dmg`, `.dmg.sha256`,
-   `Mia-<ver>-arm64-mac.zip`, `latest-mac.yml`, **and the same DMG as
-   `Mia-arm64.dmg`**. The public download link
+   `Mia-<ver>-arm64-mac.zip`, `latest-mac.yml`, and `Mia-arm64.dmg`. Every
+   release must include `Mia-arm64.dmg`: the public download link
    `https://github.com/luislozanogmia/miamultiplayer/releases/latest/download/Mia-arm64.dmg`
-   breaks if a release lacks that asset.
+   breaks without it.
 6. Confirm the installed app updates (log: `.../Mia/miaos-desktop.log`, UTC)
    and retest chat, bots, and passkeys in it.
