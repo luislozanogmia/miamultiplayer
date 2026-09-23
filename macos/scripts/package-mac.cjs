@@ -398,7 +398,8 @@ function assertNoPrivateContent(root) {
     const content = fs.readFileSync(target);
     if (content.includes(0)) return;
     const body = content.toString("utf8");
-    const searchable = `${relative}\n${body}`.replace(/luislozanogmia/gi, "PUBLIC_GITHUB_OWNER");
+    const searchable = `${relative}\n${body}`.replace(/luislozanogmia/gi, "PUBLIC_GITHUB_OWNER")
+      .replace(/hello@mia-labs\.com/gi, "PUBLIC_CONTACT_EMAIL");
     if (new RegExp(["mia", "agent"].join(""), "i").test(searchable)
       || new RegExp(`\\b${["A", "TX"].join("")}\\b`).test(searchable) || containsPrivateTerm(searchable)) {
       throw new Error(`private identity remains in packaged artifact: ${relative}`);

@@ -27,7 +27,7 @@ test('the seed catalog on disk has a valid index and matching manifests', () => 
     assert.equal(manifest.manifestVersion, 1);
     assert.equal(manifest.id, entry.id);
     assert.equal(manifest.version, entry.version);
-    assert.equal(manifest.author, 'Mia Labs');
+    assert.equal(manifest.author, 'Mia');
     assert.equal(typeof manifest.store.tagline, 'string');
     assert.ok(manifest.store.tagline.length > 0);
     assert.equal(typeof manifest.store.category, 'string');
