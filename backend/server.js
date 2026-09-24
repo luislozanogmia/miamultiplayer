@@ -72,6 +72,7 @@ const {
   stopHermesGatewayRuntime,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   hermesTokenBudgetFromOptions,
   hermesCharBudgetFromTokens,
 } = require('./inference');
@@ -4234,6 +4235,26 @@ app.get([
 ], requireInteractiveAuth, googleAccountLegacyStartHandler);
 app.post('/api/connections/google/account/test', requireInteractiveAuth, googleAccountTestHandler);
 app.post('/api/connections/google/account/disconnect', requireInteractiveAuth, googleAccountDisconnectHandler);
+app.post('/api/connections/google/account/files/start', requireInteractiveAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const connector = googleAccountOwnerBinding.connectorFor(req.userEmail);
+  if (!connector) return res.status(403).json({ state: 'unavailable' });
+  try { return res.json(await connector.startPicker()); }
+  catch (_) { return res.status(503).json({ state: 'failed' }); }
+});
+app.get('/api/connections/google/account/files', requireInteractiveAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const connector = googleAccountOwnerBinding.connectorFor(req.userEmail);
+  if (!connector) return res.status(403).json({ state: 'unavailable' });
+  return res.json(connector.pickerStatus());
+});
+app.get('/api/connections/google/account/files/recent', requireInteractiveAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const connector = googleAccountOwnerBinding.connectorFor(req.userEmail);
+  if (!connector) return res.status(403).json({ state: 'unavailable', files: [] });
+  try { return res.json(await connector.recentFiles()); }
+  catch (_) { return res.status(503).json({ state: 'failed', files: [] }); }
+});
 
 // Legacy direct-Google helpers remain below for data compatibility, but none
 // of their routes are registered. New OAuth tokens and operations are owned by
@@ -6293,12 +6314,19 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const googleWorkspaceWriteRequested = googleWorkspaceSheetWriteRequested || googleWorkspaceDocsWriteRequested;
   const workspaceContext = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
   const googleWorkspaceConnected = /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''));
-  const googleGatewayProfile = googleWorkspaceConnected && googleAccountOwnerBinding.connectorFor(senderLabel)
-    ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
-    : MIAOS_AGENT_HERMES_PROFILE;
   const safeGoogleRefs = googleWorkspaceConnected
     ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs)
     : [];
+  const googleToolRequested = safeGoogleRefs.length > 0
+    || /\b(?:google\s+(?:drive|docs?|sheets?|slides?|calendar)|gmail|inbox|email|calendar event|spreadsheet|presentation)\b/i.test(message);
+  const googleProfileAuthorized = googleWorkspaceConnected && googleToolRequested
+    && googleAccountOwnerBinding.connectorFor(senderLabel);
+  const googleGatewayProfile = googleProfileAuthorized
+    ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+    : MIAOS_AGENT_HERMES_PROFILE;
+  const googleBotProfile = googleProfileAuthorized
+    ? MIAOS_BOT_GOOGLE_HERMES_PROFILE
+    : MIAOS_BOT_HERMES_PROFILE;
   const googleWorkspaceWriteAuthorized = googleWorkspaceWriteRequested
     && googleWorkspaceWriteKinds.length > 0
     && googleWorkspaceConnected;
@@ -6332,7 +6360,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // executeNativeConversationDispatch enforces via the same abort path the
     // wall-clock timeout uses (see the token budget tracker there).
     maxTokens: hermesTokenBudgetFromOptions(userOptions),
-    ...(isGatewayAgent ? { profile: googleGatewayProfile } : {}),
+    profile: isGatewayAgent ? googleGatewayProfile : googleBotProfile,
     ...(isGatewayAgent && !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly
       && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()
       ? { workspaceDir: miaosWorkspaceDir() }

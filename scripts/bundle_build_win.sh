@@ -14,6 +14,9 @@
 # package-mac.cjs (HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, GWS_BUNDLE_DIR,
 # HERMES_PYTHON_RUNTIME_DIR — see scripts/install-local-mac.sh) plus a clean
 # git checkout.
+# Official builds additionally set MIA_REQUIRE_GOOGLE_OAUTH=1 and inject the
+# public MIA_GOOGLE_OAUTH_CLIENT_ID. Fork builds may omit both and ship Google
+# disconnected until they supply their own Desktop OAuth client ID.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

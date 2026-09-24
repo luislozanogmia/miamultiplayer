@@ -4,6 +4,14 @@ const assert = require("node:assert/strict");
 const { CALLBACK_URL, FLOW_TTL_MS, parseCallback, createClerkDesktopFlow } = require("./clerk-desktop-flow.cjs");
 const state = "a".repeat(64);
 const callback = `${CALLBACK_URL}?state=${state}&rotating_token_nonce=${"n".repeat(32)}`;
+test("opaque nonce grammar is bounded and shared with the auth exchange", () => {
+  for (const nonce of ['nonce.fixture~' + 'x'.repeat(600), 'n'.repeat(4096)]) {
+    assert.deepEqual(parseCallback(`${CALLBACK_URL}?state=${state}&rotating_token_nonce=${encodeURIComponent(nonce)}`, state), { nonce });
+  }
+  for (const nonce of ['n'.repeat(4097), 'short', 'has spaces in nonce', 'a'.repeat(20) + '\n']) {
+    assert.equal(parseCallback(`${CALLBACK_URL}?state=${state}&rotating_token_nonce=${encodeURIComponent(nonce)}`, state), null);
+  }
+});
 test("callback requires exact scheme, host, path, state and a single nonce", () => {
   assert.ok(parseCallback(callback, state));
   assert.equal(parseCallback(callback.replace(state, "é".repeat(64)), state), null);

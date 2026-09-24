@@ -6,6 +6,12 @@
     font-family:"JetBrains Mono";font-style:normal;font-weight:400 700;
     font-display:swap;src:url("assets/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations"),url("assets/fonts/JetBrainsMono-Variable.woff2") format("woff2");
   }
+  .chat-drive-files{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chat-drive-file{display:inline-flex;align-items:center;gap:7px;max-width:100%;padding:7px 10px;border:1px solid currentColor;border-radius:9px;color:inherit!important;text-decoration:none!important;font-size:13px;line-height:1.4}
+  .chat-drive-file img{flex:none}
+  .chat-drive-file span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .chat-drive-file:hover{background:rgba(128,128,128,.15)}
+  .chat-drive-file:focus-visible{outline:2px solid #4285f4;outline-offset:3px}
   :root{
     --paper:#FFFFFF;
     --paper-2:#F2F0EC;
@@ -2856,3 +2862,20 @@
     /* iPhone home-indicator: keep the composer above the safe area. */
     body.styled-skin .chat-composer-wrap{padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));}
   }
+/* Drive references stay beside the active chat, never over the native browser. */
+.chat-composer-wrap { position: relative; }
+#ccDriveBtn[hidden], .cc-drive-menu[hidden], .cc-drive-attachments[hidden] { display: none !important; }
+.cc-drive-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px; }
+.cc-drive-attachments .cc-attach-chip { max-width: 100%; }
+.cc-drive-attachments button, .cc-drive-head button { border: 0; background: transparent; cursor: pointer; color: inherit; }
+.cc-drive-menu { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; z-index: 50; background: var(--panel, #fff); color: var(--text, #222); border: 1px solid #ddd; border-radius: 14px; padding: 12px; box-shadow: 0 8px 28px #0002; font-size: 13px; }
+.cc-drive-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.cc-drive-head strong { font-size: 14px; }
+#ccDriveSearch { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ddd; border-radius: 8px; background: transparent; color: inherit; }
+#ccDriveStatus { font-size: 12px; color: #777; margin: 8px 0; }
+.cc-drive-list { max-height: 240px; overflow-y: auto; }
+.cc-drive-list > button { width: 100%; display: flex; align-items: center; gap: 8px; text-align: left; padding: 9px 6px; border: 0; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; }
+.cc-drive-list > button:hover { background: #8881; }
+.cc-drive-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-drive-list small { margin-left: auto; white-space: nowrap; }
+#ccDriveMore { width: 100%; margin-top: 8px; padding: 9px; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; background: transparent; color: inherit; }
