@@ -309,9 +309,11 @@ const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
   'openai-codex': Object.freeze([
     Object.freeze({ id: 'fast', model: 'gpt-5.6-luna', label: 'Fast', fast: true }),
     Object.freeze({ id: 'gpt-6-astra', model: 'gpt-6-astra', label: 'GPT-6 Astra', fast: false }),
-    Object.freeze({ id: 'gpt-5.6-sol', model: 'gpt-5.6-sol', label: 'Sol', fast: false }),
-    Object.freeze({ id: 'gpt-5.6-terra', model: 'gpt-5.6-terra', label: 'Terra', fast: false }),
-    Object.freeze({ id: 'gpt-5.6-luna', model: 'gpt-5.6-luna', label: 'Luna', fast: false }),
+    Object.freeze({ id: 'gpt-6-sol', model: 'gpt-6-sol', label: 'GPT-6 Sol', fast: false }),
+    Object.freeze({ id: 'gpt-6-luna', model: 'gpt-6-luna', label: 'GPT-6 Luna', fast: false }),
+    Object.freeze({ id: 'gpt-5.6-sol', model: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', fast: false }),
+    Object.freeze({ id: 'gpt-5.6-terra', model: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', fast: false }),
+    Object.freeze({ id: 'gpt-5.6-luna', model: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', fast: false }),
   ]),
   'xai-oauth': Object.freeze([
     Object.freeze({ id: 'grok-4.6', model: 'grok-4.6', label: 'Grok 4.6', fast: false }),
@@ -334,7 +336,7 @@ const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
     'claude-opus-5[1m]', 'claude-opus-4-8[1m]', 'claude-fable-5-1[1m]',
   ]),
   'openai-codex': Object.freeze([
-    'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+    'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
   ]),
   'xai-oauth': Object.freeze([
     'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-composer-2.5-fast',

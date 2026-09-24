@@ -38,7 +38,14 @@
     findBar.append(button);
   });
   screen.before(findBar);
-  var state = { tabs: [], activeId: null };
+  var downloadsBtn = document.getElementById('localBrowserDownloadsBtn');
+  var downloadsView = document.getElementById('localBrowserDownloads');
+  var downloadsList = document.getElementById('localBrowserDownloadsList');
+  var downloadsEmpty = document.getElementById('localBrowserDownloadsEmpty');
+  var downloadsClear = document.getElementById('localBrowserDownloadsClear');
+  var downloadsOpen = false;
+  var lastDownloads = '';
+  var state = { tabs: [], activeId: null, downloads: [] };
   var open = false;
   var scheduled = false;
   var lastLayout = '';
@@ -63,7 +70,7 @@
       scheduled = false;
       var rect = screen.getBoundingClientRect();
       // Native views sit above HTML; hide them while the sidebar drawer covers it.
-      var visible = open && !overlay.hidden &&
+      var visible = open && !overlay.hidden && !downloadsOpen &&
         !document.body.classList.contains('browser-sidebar-open') &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation');
@@ -75,6 +82,7 @@
   }
   function render(next) {
     var changedTab = state.activeId !== next.activeId;
+    if (changedTab && downloadsOpen) setDownloadsOpen(false);
     state = next;
     var tab = selected();
     var url = tab && tab.url || '';
@@ -109,6 +117,7 @@
     }
     foot.textContent = parts.join(' \u00b7 ') || 'Native browser \u00b7 Mia is available on the right';
     if (state.download) foot.textContent += ' \u00b7 ' + state.download;
+    renderDownloads();
     var signature = JSON.stringify([state.activeId, state.tabs.map(function (t) { return [t.id, t.title, t.favicon]; })]);
     if (signature !== lastTabs) {
       lastTabs = signature;
@@ -143,6 +152,74 @@
     }
     layout();
   }
+  function formatBytes(bytes) {
+    if (!bytes) return '';
+    var units = ['B', 'KB', 'MB', 'GB'];
+    var index = 0;
+    while (bytes >= 1024 && index < units.length - 1) { bytes /= 1024; index++; }
+    return (index ? bytes.toFixed(1) : String(bytes)) + ' ' + units[index];
+  }
+  function downloadMeta(item) {
+    var parts = [];
+    if (item.state === 'progressing') {
+      parts.push(item.total ? 'Downloading ' + Math.round(item.received / item.total * 100) + '%' : 'Downloading ' + formatBytes(item.received));
+    } else if (item.state === 'completed') {
+      parts.push(item.exists ? 'Saved' : 'Moved or deleted');
+      if (item.total || item.received) parts.push(formatBytes(item.total || item.received));
+    } else {
+      parts.push(item.state === 'cancelled' ? 'Cancelled' : 'Failed');
+    }
+    if (item.startedAt) parts.push(new Date(item.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+    if (item.url) { try { parts.push(new URL(item.url).hostname); } catch (_) {} }
+    return parts.join(' \u00b7 ');
+  }
+  function renderDownloads() {
+    var items = Array.isArray(state.downloads) ? state.downloads : [];
+    downloadsBtn.setAttribute('data-active', String(items.some(function (item) { return item.state === 'progressing'; })));
+    var signature = JSON.stringify(items);
+    if (signature === lastDownloads) return;
+    lastDownloads = signature;
+    downloadsList.replaceChildren();
+    downloadsEmpty.hidden = items.length > 0;
+    downloadsClear.disabled = !items.some(function (item) { return item.state !== 'progressing'; });
+    items.forEach(function (item) {
+      var row = document.createElement('li');
+      row.className = 'local-browser-download';
+      var text = document.createElement('div');
+      text.className = 'local-browser-download-text';
+      var name = document.createElement('span');
+      name.className = 'local-browser-download-name' + (item.state === 'completed' && !item.exists ? ' missing' : '');
+      name.textContent = item.filename; name.title = item.path || item.filename;
+      var meta = document.createElement('span');
+      meta.className = 'local-browser-download-meta';
+      meta.textContent = downloadMeta(item);
+      text.append(name, meta);
+      row.append(text);
+      var action = null;
+      if (item.state === 'completed' && item.exists) action = ['Show in Finder', 'downloadShow'];
+      else if (item.state === 'progressing') action = ['Cancel', 'downloadCancel'];
+      if (action) {
+        var button = document.createElement('button');
+        button.type = 'button'; button.className = 'local-browser-download-action';
+        button.textContent = action[0];
+        button.setAttribute('aria-label', action[0] + ': ' + item.filename);
+        button.onclick = function () { command(action[1], { id: item.id }); };
+        row.append(button);
+      }
+      downloadsList.append(row);
+    });
+  }
+  function setDownloadsOpen(next) {
+    downloadsOpen = next;
+    downloadsView.hidden = !next;
+    downloadsBtn.setAttribute('aria-expanded', String(next));
+    if (next) { lastDownloads = ''; renderDownloads(); }
+    layout();
+  }
+  downloadsBtn.addEventListener('click', function () { setDownloadsOpen(!downloadsOpen); });
+  document.getElementById('localBrowserDownloadsClose').addEventListener('click', function () { setDownloadsOpen(false); });
+  downloadsClear.addEventListener('click', function () { command('downloadsClear'); });
+  downloadsView.addEventListener('keydown', function (event) { if (event.key === 'Escape') setDownloadsOpen(false); });
   new ResizeObserver(layout).observe(screen);
   new MutationObserver(layout).observe(document.body, { attributes: true, attributeFilter: ['class'] });
   function syncNativeTheme() {
@@ -184,7 +261,7 @@
         if (!selected() || !selected().url) focusLocation();
       }
     },
-    navigate: function (value) { input.blur(); command('navigate', { value: value }); return true; },
+    navigate: function (value) { input.blur(); setDownloadsOpen(false); command('navigate', { value: value }); return true; },
     openTab: function (value) {
       input.blur();
       return command('new').then(function () { return command('navigate', { value: value }); });

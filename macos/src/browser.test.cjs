@@ -16,6 +16,7 @@ function harness(options = {}) {
   const menuTemplates = [];
   const dialogCalls = [];
   const dialogResponse = { value: 0 };
+  const shown = [];
   const profile = new EventEmitter();
   profile.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Mia/0.2.7 Chrome/132.0.0.0 Electron/44.2.0 Safari/537.36";
   profile.getUserAgent = () => profile.userAgent;
@@ -41,6 +42,7 @@ function harness(options = {}) {
       this.navigationHistory = { canGoBack: () => false, canGoForward: () => false };
     }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
+    getURL() { return this.shownUrl || ""; }
     isLoading() { return false; }
     isDestroyed() { return this.closed; }
     close() { this.closed = true; }
@@ -100,6 +102,7 @@ function harness(options = {}) {
     nativeTheme: { themeSource: "light" },
     dialog: { showMessageBox: (...args) => { dialogCalls.push(args); return Promise.resolve({ response: dialogResponse.value }); } },
     systemPreferences: { askForMediaAccess: async () => true },
+    shell: { showItemInFolder: target => { shown.push(target); } },
   };
   const context = {
     require: request => request === "electron" ? electron : require(request),
@@ -108,10 +111,10 @@ function harness(options = {}) {
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
   const { createBrowser, normalizeTarget, normalizeLocalFileTarget } = context.module.exports;
-  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, options);
+  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, ...options });
   const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   const command = (action, extra = {}, event = sender) => handlers.get("miaos-browser-command")(event, { action, ...extra });
-  return { command, window, views, sender, profile, handlers, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, menuTemplates };
+  return { command, window, views, sender, profile, handlers, shown, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, menuTemplates };
 }
 
 test("search, domain ports, loopback and prohibited schemes", () => {
@@ -583,6 +586,127 @@ test("aborted and stale load failures never stamp a tab error", async () => {
   await flush();
   assert.equal(stale.command("state").tabs[0].error, "");
   stale.window.emit("closed");
+});
+
+test("a link that becomes a download is not shown as a load error", async () => {
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const fileUrl = "https://files.example/report.xlsx";
+  const downloadItem = url => Object.assign(new EventEmitter(), { getURL: () => url, getFilename: () => "report.xlsx" });
+  const failed = () => Object.assign(new Error(`ERR_FAILED (-2) loading '${fileUrl}'`), { code: "ERR_FAILED" });
+
+  // Download reported first, then the page load fails: no error, tab stays on its page.
+  const h = harness();
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://files.example/list";
+  wc.loadURL = () => new Promise((_resolve, reject) => setImmediate(() => reject(failed())));
+  h.command("navigate", { value: fileUrl });
+  h.profile.emit("will-download", {}, downloadItem(fileUrl), wc);
+  await flush(); await flush();
+  let tab = h.command("state").tabs[0];
+  assert.equal(tab.error, "");
+  assert.equal(tab.url, "https://files.example/list");
+  wc.emit("did-fail-load", {}, -2, "ERR_FAILED", fileUrl, true);
+  assert.equal(h.command("state").tabs[0].error, "");
+  h.window.emit("closed");
+
+  // Page load fails first, then the download is reported: the error never shows.
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const late = harness({ downloadErrorGraceMs: 30 });
+  late.command("new");
+  const lateWc = late.views[0].webContents;
+  lateWc.shownUrl = "https://files.example/list";
+  lateWc.loadURL = () => Promise.reject(failed());
+  late.command("navigate", { value: fileUrl });
+  await flush();
+  lateWc.emit("did-fail-load", {}, -2, "ERR_FAILED", fileUrl, true);
+  assert.equal(late.command("state").tabs[0].error, "");
+  late.profile.emit("will-download", {}, downloadItem(fileUrl), lateWc);
+  await wait(60);
+  tab = late.command("state").tabs[0];
+  assert.equal(tab.error, "");
+  assert.equal(tab.url, "https://files.example/list");
+  late.window.emit("closed");
+
+  // A generic failure with no download still shows, after the short wait;
+  // any other failure shows at once.
+  const real = harness({ downloadErrorGraceMs: 30 });
+  real.command("new");
+  const realWc = real.views[0].webContents;
+  realWc.loadURL = () => Promise.reject(failed());
+  real.command("navigate", { value: fileUrl });
+  await flush();
+  assert.equal(real.command("state").tabs[0].error, "");
+  await wait(60);
+  assert.match(real.command("state").tabs[0].error, /ERR_FAILED/);
+  realWc.loadURL = () => Promise.resolve();
+  real.command("navigate", { value: "https://nowhere.example/" });
+  realWc.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "https://nowhere.example/", true);
+  assert.equal(real.command("state").tabs[0].error, "ERR_NAME_NOT_RESOLVED");
+  real.window.emit("closed");
+
+  // A new tab opened only for the download closes, as in Chrome.
+  const blank = harness();
+  blank.command("new");
+  blank.command("new");
+  blank.command("navigate", { value: fileUrl });
+  blank.profile.emit("will-download", {}, downloadItem(fileUrl), blank.views[1].webContents);
+  assert.equal(blank.command("state").tabs.length, 1);
+  blank.window.emit("closed");
+});
+
+test("downloads are listed, persisted, shown in Finder, cancelled and cleared", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-downloads-"));
+  try {
+    const statePath = path.join(directory, "browser.json");
+    const saved = path.join(directory, "report.xlsx");
+    fs.writeFileSync(saved, "x");
+    const item = (url, filename, savePath) => Object.assign(new EventEmitter(), {
+      getURL: () => url, getFilename: () => filename, getSavePath: () => savePath,
+      getTotalBytes: () => 2048, getReceivedBytes: () => 2048,
+      cancel() { this.cancelled = true; this.emit("done", {}, "cancelled"); },
+    });
+    const h = harness({ statePath });
+    h.command("new");
+    const wc = h.views[0].webContents;
+    const done = item("https://files.example/report.xlsx", "report.xlsx", saved);
+    h.profile.emit("will-download", {}, done, wc);
+    assert.equal(h.command("state").downloads[0].state, "progressing");
+    done.emit("done", {}, "completed");
+    let [entry] = h.command("state").downloads;
+    assert.equal(entry.state, "completed");
+    assert.equal(entry.exists, true);
+    assert.equal(entry.path, saved);
+
+    h.command("downloadShow", { id: entry.id });
+    assert.deepEqual(h.shown, [saved]);
+
+    const running = item("https://files.example/big.zip", "big.zip", path.join(directory, "big.zip"));
+    h.profile.emit("will-download", {}, running, wc);
+    const runningId = h.command("state").downloads[0].id;
+    h.command("downloadCancel", { id: runningId });
+    assert.equal(running.cancelled, true);
+    assert.equal(h.command("state").downloads[0].state, "cancelled");
+    h.window.emit("closed");
+
+    // The list survives a restart; a moved file can't be shown.
+    fs.rmSync(saved);
+    const reopened = harness({ statePath });
+    const downloads = reopened.command("state").downloads;
+    assert.equal(JSON.stringify(downloads.map(d => [d.filename, d.state])), JSON.stringify([["big.zip", "cancelled"], ["report.xlsx", "completed"]]));
+    assert.equal(downloads[1].exists, false);
+    assert.match(reopened.command("downloadShow", { id: downloads[1].id }).error, /moved or deleted/);
+    assert.deepEqual(reopened.shown, []);
+
+    // Clearing the list removes entries but never touches files.
+    fs.writeFileSync(saved, "x");
+    reopened.command("downloadsClear");
+    assert.equal(reopened.command("state").downloads.length, 0);
+    assert.equal(fs.existsSync(saved), true);
+    reopened.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("switching tabs and creating a new active tab moves keyboard focus into the page", () => {

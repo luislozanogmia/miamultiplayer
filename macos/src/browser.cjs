@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, app, session, ipcMain, Menu, nativeTheme, dialog, systemPreferences } = require("electron");
+const { WebContentsView, app, session, ipcMain, Menu, nativeTheme, dialog, shell, systemPreferences } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
@@ -97,6 +97,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const statePath = typeof options.statePath === "string" && options.statePath.trim()
     ? path.resolve(options.statePath)
     : "";
+  // Chromium can fail a page load with the generic ERR_FAILED a moment before
+  // it reports that the link was a download. Hold only that error this long so
+  // a download can claim it without the error page flashing first.
+  const downloadErrorGraceMs = Number.isFinite(options.downloadErrorGraceMs)
+    ? options.downloadErrorGraceMs : 1500;
   const workspaceRoot = typeof options.workspaceRoot === "string" && options.workspaceRoot.trim()
     ? path.resolve(options.workspaceRoot)
     : "";
@@ -232,6 +237,56 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       try { fs.rmSync(temporaryPath, { force: true }); } catch (_) { /* best effort cleanup */ }
       log(`browser history save failed: ${error.message}`);
     }
+  }
+  // Download list for the Downloads view, like Chrome's. Stores names,
+  // save paths and states only (never file contents), next to the history
+  // file. Clearing the list never deletes the downloaded files.
+  const DOWNLOADS_MAX_ENTRIES = 100;
+  const downloadsPath = statePath ? `${statePath.replace(/\.json$/, "")}-downloads.json` : "";
+  const DOWNLOAD_STATES = new Set(["progressing", "completed", "cancelled", "interrupted"]);
+  const downloadItems = new Map();
+  let downloadEntries = [];
+  let nextDownloadId = 1;
+  if (downloadsPath) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(downloadsPath, "utf8"));
+      if (saved && Array.isArray(saved.entries)) {
+        downloadEntries = saved.entries
+          .filter(item => item && typeof item.filename === "string" && typeof item.path === "string")
+          .slice(0, DOWNLOADS_MAX_ENTRIES)
+          .map(item => ({
+            id: 0,
+            filename: item.filename.slice(0, 500),
+            path: item.path,
+            url: typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? item.url.slice(0, 2000) : "",
+            // A download still running when Mia quit did not finish.
+            state: DOWNLOAD_STATES.has(item.state) && item.state !== "progressing" ? item.state : "interrupted",
+            received: Number(item.received) || 0,
+            total: Number(item.total) || 0,
+            startedAt: Number(item.startedAt) || 0,
+          }));
+        for (const entry of downloadEntries) entry.id = nextDownloadId++;
+      }
+    } catch (_) { /* First run or unreadable list: start empty. */ }
+  }
+  function persistDownloads() {
+    if (!downloadsPath) return;
+    const temporaryPath = `${downloadsPath}.${process.pid}.tmp`;
+    try {
+      fs.mkdirSync(path.dirname(downloadsPath), { recursive: true });
+      const entries = downloadEntries.map(({ id: _id, ...entry }) => entry);
+      fs.writeFileSync(temporaryPath, JSON.stringify({ version: 1, entries }), { mode: 0o600 });
+      fs.renameSync(temporaryPath, downloadsPath);
+    } catch (error) {
+      try { fs.rmSync(temporaryPath, { force: true }); } catch (_) { /* best effort cleanup */ }
+      log(`browser downloads save failed: ${error.message}`);
+    }
+  }
+  function downloadList() {
+    return downloadEntries.map(entry => ({
+      ...entry,
+      exists: entry.state === "completed" && Boolean(entry.path) && fs.existsSync(entry.path),
+    }));
   }
   function recordVisit(url, title) {
     if (!historyPath || !/^https?:\/\//i.test(String(url || ""))) return;
@@ -557,7 +612,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   const active = () => tabs.get(activeId);
-  const state = () => ({ activeId, download, tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ activeId, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     active: tab.id === activeId,
     loading: tab.view.webContents.isLoading(), timing: tab.timing,
@@ -623,13 +678,39 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // error over the page the user is actually looking at.
     if (isAbortedLoadError(error)) return;
     if (!tabs.has(tab.id) || tab.url !== target) return;
-    tab.error = error.message; layout(); publish();
+    showLoadError(tab, target, error.message, isGenericLoadError(error));
+  }
+
+  // ERR_FAILED (-2) is what a link that turns out to be a file reports.
+  function isGenericLoadError(error) {
+    if (!error) return false;
+    if (error.code === "ERR_FAILED" || error.errno === -2) return true;
+    return /ERR_FAILED|\(-2\) loading/.test(String(error.message || ""));
+  }
+  function clearPendingLoadError(tab) {
+    clearTimeout(tab.errorTimer);
+    tab.errorTimer = null;
+  }
+  // A link that turns out to be a file ends its page load as a download; that
+  // is not a failure, so a generic error waits briefly for the download.
+  function showLoadError(tab, url, message, generic) {
+    clearPendingLoadError(tab);
+    if (tab.downloadUrl === url) return;
+    const show = () => {
+      tab.errorTimer = null;
+      if (!tabs.has(tab.id) || tab.downloadUrl === url) return;
+      tab.error = message; layout(); publish();
+    };
+    if (!generic || downloadErrorGraceMs <= 0) return show();
+    tab.errorTimer = setTimeout(show, downloadErrorGraceMs);
+    if (typeof tab.errorTimer.unref === "function") tab.errorTimer.unref();
   }
 
   function navigate(tab, value) {
     const target = normalizeTarget(value);
     tab.url = target;
     tab.error = "";
+    clearPendingLoadError(tab);
     tab.favicon = null;
     layout();
     persistTabs();
@@ -643,6 +724,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const target = normalizeLocalFileTarget(value, workspaceRoot);
     tab.url = target;
     tab.error = "";
+    clearPendingLoadError(tab);
     layout();
     persistTabs();
     tab.view.webContents.loadURL(target).catch(error => reportLoadError(tab, target, error));
@@ -1264,9 +1346,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
       navigated(event, url, mainFrame);
     });
-    wc.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
+    wc.on("did-fail-load", (_event, code, description, url, mainFrame) => {
       if (!mainFrame || code === -3) return;
-      tab.error = description; layout(); publish();
+      showLoadError(tab, url, description, code === -2);
     });
     wc.on("render-process-gone", () => {
       tab.error = "This tab stopped responding. Reload to try again."; layout(); publish();
@@ -1298,6 +1380,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
     tabs.delete(id);
+    clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
     tab.view.webContents.close();
     if (activeId === id) activeId = [...tabs.keys()].at(-1) || null;
@@ -1314,18 +1397,64 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     activeId = null;
     historyEntries = [];
+    downloadEntries = downloadEntries.filter(entry => entry.state === "progressing");
+    try { if (downloadsPath) fs.rmSync(downloadsPath, { force: true }); } catch (error) { log(`browser downloads cleanup failed: ${error.message}`); }
     try { if (statePath) fs.rmSync(statePath, { force: true }); } catch (error) { log(`browser state cleanup failed: ${error.message}`); }
     try { if (historyPath) fs.rmSync(historyPath, { force: true }); } catch (error) { log(`browser history cleanup failed: ${error.message}`); }
     newTab();
     return state();
   }
   function downloadStarted(_event, item, contents) {
-    if (![...tabs.values()].some(tab => tab.view.webContents === contents)) return;
+    const tab = [...tabs.values()].find(candidate => candidate.view.webContents === contents);
+    if (!tab) return;
+    downloadEndedNavigation(tab, item.getURL());
     // Electron's native Save dialog chooses the destination; never auto-open files.
-    download = `Downloading ${item.getFilename()}`; publish();
-    item.once("done", (_event, result) => {
-      download = `${result === "completed" ? "Saved" : result}: ${item.getFilename()}`; publish();
+    download = `Downloading ${item.getFilename()}`;
+    const entry = {
+      id: nextDownloadId++,
+      filename: String(item.getFilename() || "download").slice(0, 500),
+      path: "",
+      url: /^https?:\/\//i.test(String(item.getURL() || "")) ? String(item.getURL()).slice(0, 2000) : "",
+      state: "progressing",
+      received: 0,
+      total: Number(item.getTotalBytes && item.getTotalBytes()) || 0,
+      startedAt: Date.now(),
+    };
+    downloadEntries.unshift(entry);
+    downloadEntries = downloadEntries.slice(0, DOWNLOADS_MAX_ENTRIES);
+    downloadItems.set(entry.id, item);
+    persistDownloads(); publish();
+    item.on("updated", (_event, progress) => {
+      entry.received = Number(item.getReceivedBytes && item.getReceivedBytes()) || entry.received;
+      entry.total = Number(item.getTotalBytes && item.getTotalBytes()) || entry.total;
+      entry.state = progress === "interrupted" ? "interrupted" : "progressing";
+      if (!entry.path && item.getSavePath) entry.path = String(item.getSavePath() || "");
+      publish();
     });
+    item.once("done", (_event, result) => {
+      downloadItems.delete(entry.id);
+      entry.state = DOWNLOAD_STATES.has(result) ? result : "interrupted";
+      entry.path = String((item.getSavePath && item.getSavePath()) || entry.path || "");
+      entry.received = Number(item.getReceivedBytes && item.getReceivedBytes()) || entry.received;
+      download = `${result === "completed" ? "Saved" : result}: ${item.getFilename()}`;
+      persistDownloads(); publish();
+    });
+  }
+  // The download may be reported before or after its page load fails, so
+  // clear any error already shown and return the tab to the page it still
+  // displays. A tab opened only for the download closes, as in Chrome.
+  function downloadEndedNavigation(tab, url) {
+    tab.downloadUrl = url;
+    clearPendingLoadError(tab);
+    if (tab.url !== url) return;
+    const wc = tab.view.webContents;
+    const shown = wc.isDestroyed() ? "" : wc.getURL();
+    if ((!shown || shown === "about:blank") && tabs.size > 1) {
+      closeTab(tab.id);
+      return;
+    }
+    if (shown) tab.url = shown;
+    tab.error = ""; persistTabs(); layout(); publish();
   }
   profile.on("will-download", downloadStarted);
   function authorized(event) {
@@ -1352,6 +1481,25 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "state") return state();
       if (command.action === "history") return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       if (command.action === "new") { newTab(); return state(); }
+      if (command.action === "downloadShow") {
+        const entry = downloadEntries.find(item => item.id === command.id);
+        if (!entry || entry.state !== "completed" || !entry.path || !fs.existsSync(entry.path)) {
+          return { error: "This file was moved or deleted." };
+        }
+        shell.showItemInFolder(entry.path);
+        return state();
+      }
+      if (command.action === "downloadCancel") {
+        const item = downloadItems.get(command.id);
+        if (item) item.cancel();
+        return state();
+      }
+      if (command.action === "downloadsClear") {
+        // Removes finished entries from the list; files stay where they are.
+        downloadEntries = downloadEntries.filter(entry => entry.state === "progressing");
+        persistDownloads(); publish();
+        return state();
+      }
       if (!tabs.size) newTab();
       const tab = active();
       if (command.action === "navigate") navigate(tab, command.value);
