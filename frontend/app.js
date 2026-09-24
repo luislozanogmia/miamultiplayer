@@ -1052,9 +1052,11 @@
       options: [
         {id:'fast', model:'gpt-5.6-luna', label:'Fast', fast:true},
         {id:'gpt-6-astra', model:'gpt-6-astra', label:'GPT-6 Astra'},
-        {id:'gpt-5.6-sol', model:'gpt-5.6-sol', label:'Sol'},
-        {id:'gpt-5.6-terra', model:'gpt-5.6-terra', label:'Terra'},
-        {id:'gpt-5.6-luna', model:'gpt-5.6-luna', label:'Luna'}
+        {id:'gpt-6-sol', model:'gpt-6-sol', label:'GPT-6 Sol'},
+        {id:'gpt-6-luna', model:'gpt-6-luna', label:'GPT-6 Luna'},
+        {id:'gpt-5.6-sol', model:'gpt-5.6-sol', label:'GPT-5.6 Sol'},
+        {id:'gpt-5.6-terra', model:'gpt-5.6-terra', label:'GPT-5.6 Terra'},
+        {id:'gpt-5.6-luna', model:'gpt-5.6-luna', label:'GPT-5.6 Luna'}
       ]
     },
     'xai-oauth': {
