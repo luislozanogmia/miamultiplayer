@@ -251,11 +251,11 @@ test('image-only messages render through the native attachment endpoint', async 
   const renderer = source.slice(start, end);
 
   assert.match(renderer, /var hasMedia = attachments\.length > 0/);
-  assert.match(renderer, /if\(!text && !hasMedia\) return ''/);
+  assert.match(renderer, /if\(!text && !hasMedia && !driveDisplay.files.length\) return ''/);
   assert.match(renderer, /attachments\.map\(chatArtifactCardHtml\)/);
   assert.match(source, /function chatArtifactCardHtml\(media\)/);
   assert.match(source, /chat-msg-media/);
-  assert.match(renderer, /\(text \? '<div class="chat-msg-text/);
+  assert.match(renderer, /\(text \|\| driveDisplay\.files\.length \? '<div class="chat-msg-text/);
 });
 
 test('native artifact cards preserve every attachment, keep originals downloadable, and sandbox previews', async () => {

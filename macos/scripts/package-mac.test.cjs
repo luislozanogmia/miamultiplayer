@@ -22,7 +22,20 @@ const {
   normalizeCopiedSymlinks,
   trackedRuntimeFiles,
   stageGoogleWorkspaceRuntime,
+  writeStableInstaller,
 } = require("./package-mac.cjs");
+
+test("stable installer reproduces the final DMG bytes and replaces stale output", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-stable-dmg-"));
+  try {
+    const versioned = path.join(root, "Mia-0.2.12-arm64.dmg");
+    fs.writeFileSync(versioned, Buffer.from([0, 1, 255, 17]));
+    fs.writeFileSync(path.join(root, "Mia-arm64.dmg"), "old release");
+    const stable = writeStableInstaller(versioned);
+    assert.equal(path.basename(stable), "Mia-arm64.dmg");
+    assert.deepEqual(fs.readFileSync(stable), fs.readFileSync(versioned));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("Google Workspace packaging rejects missing and unpinned binaries", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-gws-test-"));

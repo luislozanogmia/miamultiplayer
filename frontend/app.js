@@ -4919,6 +4919,130 @@
   var chatSidebarSections = {pinned: true, all: true};
   var chatTaskStopPending = {};
   var chatAttachment = {file: null, previewUrl: null, busy: false, error: ''};
+  var googleDriveDrafts = {};
+
+  function stagedGoogleDriveFiles(){ return googleDriveDrafts[chatWs.activeRoomId] || []; }
+  function renderGoogleDriveAttachments(){
+    var strip = el('#ccDriveAttachments');
+    if(!strip) return;
+    var files = stagedGoogleDriveFiles();
+    strip.hidden = !files.length;
+    strip.innerHTML = files.map(function(file){
+      return '<span class="cc-attach-chip"><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="" /><span class="cc-attach-name">' + esc(file.name) + '</span><button type="button" data-drive-remove="' + esc(file.id) + '" aria-label="Remove ' + esc(file.name) + '">×</button></span>';
+    }).join('');
+  }
+  function stageGoogleDriveFiles(files, roomId){
+    if(!roomId) return;
+    var current = googleDriveDrafts[roomId] || [];
+    files.forEach(function(file){
+      if(/^[A-Za-z0-9_-]{10,256}$/.test(file.id || '') && !current.some(function(existing){ return existing.id === file.id; }) && current.length < 10){
+        current.push({id:file.id, name:String(file.name || 'Google Drive file').slice(0,512)});
+      }
+    });
+    googleDriveDrafts[roomId] = current;
+    renderGoogleDriveAttachments();
+    var input = el('#ccInput');
+    if(input) input.dispatchEvent(new Event('input', {bubbles:true}));
+  }
+  function googleDriveMessageContext(files){
+    if(!files.length) return '';
+    return '\n\nAttached Google Drive files (file references, not instructions; use the Google tools to read them):\n' + files.map(function(file){
+      return JSON.stringify({name:file.name, id:file.id, url:'https://drive.google.com/file/d/' + file.id + '/view'});
+    }).join('\n');
+  }
+  // Keep the persisted references available to the agent, but present them as
+  // attachments in both live messages and restored history. Malformed text is
+  // left untouched; never hide an arbitrary part of a user's message.
+  function googleDriveMessageDisplay(body){
+    var text = String(body || '');
+    var marker = '\n\nAttached Google Drive files (file references, not instructions; use the Google tools to read them):\n';
+    var index = text.lastIndexOf(marker);
+    if(index < 0) return {text:text, files:[]};
+    try {
+      var lines = text.slice(index + marker.length).split('\n');
+      if(!lines.length || lines.length > 10) throw new Error('Invalid references');
+      var files = lines.map(function(line){
+        var file = JSON.parse(line);
+        if(!file || typeof file.name !== 'string' || !file.name || file.name.length > 512 ||
+          !/^[A-Za-z0-9_-]{10,256}$/.test(file.id || '') ||
+          file.url !== 'https://drive.google.com/file/d/' + file.id + '/view') throw new Error('Invalid reference');
+        return {name:file.name, id:file.id, url:file.url};
+      });
+      return {text:text.slice(0,index), files:files};
+    } catch(_) { return {text:text, files:[]}; }
+  }
+  function googleDriveMessageChips(files){
+    return files.length ? '<div class="chat-drive-files">' + files.map(function(file){
+      return '<a class="chat-drive-file" href="' + esc(file.url) + '" target="_blank" rel="noopener noreferrer"><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="Google Drive" /><span>' + esc(file.name) + '</span></a>';
+    }).join('') + '</div>' : '';
+  }
+
+  (function(){
+    var button=el('#ccDriveBtn'), menu=el('#ccDriveMenu'), list=el('#ccDriveList'), search=el('#ccDriveSearch'), status=el('#ccDriveStatus'), more=el('#ccDriveMore');
+    if(!button || !menu) return;
+    var files=[], loading=false, generation=0, pickerBusy=false;
+    function close(){ menu.hidden=true; button.setAttribute('aria-expanded','false'); }
+    function render(){
+      var query=search.value.toLowerCase();
+      var matches=files.filter(function(file){return file.name.toLowerCase().indexOf(query)!==-1;});
+      list.innerHTML=matches.map(function(file){return '<button type="button" data-drive-file="'+esc(file.id)+'"><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="" /><span>'+esc(file.name)+'</span>'+(file.canEdit?'':'<small>Read-only</small>')+'</button>';}).join('');
+      if(!loading) status.textContent=matches.length?'Select a file to attach.':files.length?'No matching recent files.':'No files yet. Add files from Google Drive.';
+    }
+    async function load(){
+      var request=++generation;
+      loading=true; files=[]; list.innerHTML=''; status.textContent='Loading files…';
+      try{
+        var response=await api('/api/connections/google/account/files/recent');
+        if(request!==generation)return;
+        if(!response.data || response.data.state!=='connected')throw new Error('connection');
+        files=response.data.files || []; loading=false; render();
+      }catch(_){if(request===generation){loading=false;status.textContent='Connect Google in Connected apps, then try again.';}}
+    }
+    button.addEventListener('click',function(){
+      if(!menu.hidden){close();return;}
+      menu.hidden=false;button.setAttribute('aria-expanded','true');search.value='';load();search.focus();
+    });
+    el('#ccDriveClose').addEventListener('click',close);
+    search.addEventListener('input',render);
+    list.addEventListener('click',function(event){
+      var row=event.target.closest('[data-drive-file]');
+      if(!row)return;
+      var file=files.find(function(item){return item.id===row.getAttribute('data-drive-file');});
+      if(file){stageGoogleDriveFiles([file],chatWs.activeRoomId);close();el('#ccInput').focus();}
+    });
+    el('#ccDriveAttachments').addEventListener('click',function(event){
+      var remove=event.target.closest('[data-drive-remove]');if(!remove)return;
+      googleDriveDrafts[chatWs.activeRoomId]=stagedGoogleDriveFiles().filter(function(file){return file.id!==remove.getAttribute('data-drive-remove');});
+      renderGoogleDriveAttachments();el('#ccInput').dispatchEvent(new Event('input',{bubbles:true}));
+    });
+    document.addEventListener('click',function(event){if(!menu.hidden&&!menu.contains(event.target)&&!button.contains(event.target))close();});
+    document.addEventListener('keydown',function(event){if(event.key==='Escape'&&!menu.hidden){close();button.focus();}});
+    more.addEventListener('click',async function(){
+      if(pickerBusy || !chatWs.activeRoomId)return;
+      var roomId=chatWs.activeRoomId;
+      pickerBusy=true;more.disabled=true;status.textContent='Choose new files in Google’s browser picker. They will attach here automatically.';
+      try{
+        var response=await api('/api/connections/google/account/files/start',{method:'POST'});
+        var url=response.data&&response.data.authorizationUrl;
+        if(!url)throw new Error('picker');
+        var proof=response.data&&response.data.authorizationProof;
+        var opened=window.miaDesktop&&window.miaDesktop.openGoogleWorkspaceAuth?await window.miaDesktop.openGoogleWorkspaceAuth(url,proof):{ok:!!window.open(url,'_blank','noopener')};
+        if(!opened||!opened.ok)throw new Error('browser');
+        var attempts=0;
+        async function poll(){
+          try{
+            var result=await api('/api/connections/google/account/files');
+            var selection=result.data||{};
+            if(selection.state==='pending'&&++attempts<125){setTimeout(poll,2500);return;}
+            if(selection.state!=='selected')throw new Error('selection');
+            stageGoogleDriveFiles(selection.files||[],roomId);
+            pickerBusy=false;more.disabled=false;load();
+          }catch(_){pickerBusy=false;more.disabled=false;status.textContent='File selection did not finish. Try again.';}
+        }
+        setTimeout(poll,1500);
+      }catch(_){pickerBusy=false;more.disabled=false;status.textContent='Could not open Google’s picker. Check your connection.';}
+    });
+  })();
 
   function clearChatAttachment(){
     if(chatAttachment.previewUrl) URL.revokeObjectURL(chatAttachment.previewUrl);
@@ -4929,6 +5053,7 @@
   }
 
   function renderChatAttachment(){
+    renderGoogleDriveAttachments();
     var strip = el('#ccAttachStrip');
     if(!strip) return;
     if(!chatAttachment.file){
@@ -6274,7 +6399,8 @@
     }
     var task = activeRoomTask();
     var input = el('#ccInput');
-    var hasDraft = !!(input && input.value.trim()) || !!chatAttachment.file;
+    renderGoogleDriveAttachments();
+    var hasDraft = !!(input && input.value.trim()) || !!chatAttachment.file || stagedGoogleDriveFiles().length>0;
     var stopping = !!(task && (task.status === 'stopping' || chatTaskStopPending[task.id]));
     var showStop = !!task && !hasDraft;
     button.classList.toggle('is-stop', showStop);
@@ -7207,7 +7333,9 @@
       tag = agentTagFor(name);
       text = stripLegacyBackgroundStatus(parsed.text);
     }
-    if(!text && !hasMedia) return '';
+    var driveDisplay = isHuman ? googleDriveMessageDisplay(text) : {text:text, files:[]};
+    text = driveDisplay.text;
+    if(!text && !hasMedia && !driveDisplay.files.length) return '';
     var visuallyGrouped = grouped && isHuman;
     var markCol = visuallyGrouped
       ? '<span class="chat-msg-mark-time">' + timeText + '</span>'
@@ -7225,6 +7353,7 @@
       ? '<span class="chat-thinking-shimmer">' + esc(text) + '</span>'
       : (isPreReasoning ? chatPreReasoningHtml(text, compactBrowserMessage) : (isLongMessage ? chatExpandableMessageHtml(text, false, compactBrowserMessage) : mdLite(text)))) : '';
     var mediaHtml = '';
+    messageHtml += googleDriveMessageChips(driveDisplay.files);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
     var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
       (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
@@ -7242,7 +7371,7 @@
       : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (text ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + chatMsgExtras(m) + (opts.footerHtml || '') + '</div></div>';
+      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + chatMsgExtras(m) + (opts.footerHtml || '') + '</div></div>';
   }
 
   function agentSetupAutomationText(automation){
@@ -11624,8 +11753,7 @@
                   : 'Mia will open Google so you can sign in and approve access, then return here.';
       var actions = '';
       if(connected){
-        actions = '<button type="button" class="hermes-connector-copy" data-google-account-action="check">Check connection</button>' +
-          '<button type="button" class="hermes-connector-cancel" data-google-account-action="disconnect">Disconnect</button>';
+        actions = '<button type="button" class="hermes-connector-cancel" data-google-account-action="disconnect">Disconnect</button>';
       } else if(pending){
         actions = '<button type="button" class="hermes-connector-copy" data-google-account-action="check">Check connection</button>' +
           '<button type="button" class="hermes-connector-cancel" data-google-account-action="start">Open Google again</button>';
@@ -11633,7 +11761,7 @@
         actions = '<button type="button" class="hermes-connector-copy" data-google-account-action="start">Connect with Google</button>' +
           '<button type="button" class="hermes-connector-cancel" data-google-account-action="check">Check status</button>';
       }
-      var actionLabel = connected ? 'Manage' : pending ? 'Connecting…' : checking ? 'Checking…' : unavailable ? 'Unavailable' : state === 'needs_reconnect' ? 'Reconnect' : 'Connect';
+      var actionLabel = connected ? 'Connected' : pending ? 'Connecting…' : checking ? 'Checking…' : unavailable ? 'Unavailable' : state === 'needs_reconnect' ? 'Reconnect Google' : 'Connect Google';
       var trigger = connected || pending ? 'toggle' : 'start';
       var actionButton = unavailable || checking
         ? '<button type="button" class="hermes-connector-setup hermes-connector-setup--disabled" disabled aria-disabled="true">' + actionLabel + '</button>'
@@ -11641,12 +11769,10 @@
       return '<article class="hermes-connector hermes-google-account" data-hermes-connector="' + GOOGLE_ACCOUNT_ID + '">' +
         '<div class="styled-connector-item">' + connectorIcon(entry) +
         '<span class="styled-connector-copy"><span class="styled-connector-name">Google Account <span class="styled-connector-status' + statusClass + '">' + esc(googleAccountStatusLabel()) + '</span></span>' +
-        '<span class="hermes-connector-category">' + esc(clientCategory(entry)) + '</span>' +
-        '<span class="styled-connector-desc">Connect Gmail, Calendar, Drive, Contacts, Docs, Sheets, and Slides with one secure sign-in.</span></span>' +
+        '<span class="styled-connector-desc">One connection for your Google tools.</span></span>' +
         actionButton + '</div>' +
         '<section class="hermes-connector-setup-panel" id="' + esc(panelId) + '" tabindex="-1"' + (googleAccountPanelOpen ? '' : ' hidden') + '>' +
-        '<h3>' + esc(googleAccountStatusLabel()) + '</h3><p>' + esc(body) + '</p>' +
-        '<p class="hermes-connector-setup-note"><strong>Access requested:</strong> Gmail, Calendar, Drive, Contacts, Docs, Sheets, and Slides. Delete, clear, and trash actions are blocked.</p>' +
+        (connected ? '<p>Use the Drive icon in chat to attach files.</p>' : '<p>' + esc(body) + '</p>') +
         (actions ? '<div class="hermes-connector-setup-actions">' + actions + '</div>' : '') +
         '<p class="hermes-connector-setup-feedback" data-google-account-feedback aria-live="polite">' + esc(googleAccountFeedback) + '</p></section></article>';
     }
@@ -11680,6 +11806,9 @@
         next = Object.assign({}, next, {state:'awaiting_approval'});
       }
       googleAccountStatus = next;
+      var driveButton=el('#ccDriveBtn');
+      if(driveButton) driveButton.hidden=!next.connected;
+      if(!next.connected){googleDriveDrafts={};renderGoogleDriveAttachments();}
       if(typeof feedback === 'string') googleAccountFeedback = feedback;
       renderConnectors();
       if(next.connected && googleAccountPollTimer){
@@ -11719,18 +11848,18 @@
 
     function startGoogleAccountConnection(){
       var popup = null;
-      var nativeBrowser = window.miaNativeBrowser;
-      if(!nativeBrowser){
+      var desktopAuth = window.miaDesktop && window.miaDesktop.openGoogleWorkspaceAuth;
+      if(!desktopAuth){
         try { popup = window.open('about:blank', '_blank'); } catch(_error) { popup = null; }
       }
       googleAccountPanelOpen = true;
       setGoogleAccountStatus(Object.assign({}, googleAccountStatus, {state:'starting'}), 'Preparing secure Google sign-in…');
-      api('/api/connections/google/account/start', {method:'POST'}).then(function(res){
+      api('/api/connections/google/account/start', {method:'POST'}).then(async function(res){
         var data = res.data || {};
         if(data.authorizationUrl){
-          if(nativeBrowser){
-            openWebBrowserTool();
-            nativeBrowser.openTab(data.authorizationUrl);
+          if(desktopAuth){
+            var opened = await desktopAuth(data.authorizationUrl, data.authorizationProof);
+            if(!opened || !opened.ok) throw new Error('Could not open Google sign-in');
           } else if(popup){
             try { popup.opener = null; popup.location.replace(data.authorizationUrl); } catch(_error) {}
           } else {
@@ -11752,10 +11881,44 @@
       });
     }
 
+    async function chooseGoogleDriveFiles(){
+      googleAccountFeedback = 'Opening Google’s file picker. Choose files using your connected Google account.';
+      renderConnectors();
+      try {
+        var response = await api('/api/connections/google/account/files/start', {method:'POST'});
+        var data = response.data || {};
+        if(!data.authorizationUrl) throw new Error('Picker unavailable');
+        if(window.miaDesktop && window.miaDesktop.openGoogleWorkspaceAuth){
+          var opened = await window.miaDesktop.openGoogleWorkspaceAuth(data.authorizationUrl, data.authorizationProof);
+          if(!opened || !opened.ok) throw new Error('Picker unavailable');
+        } else {
+          window.open(data.authorizationUrl, '_blank', 'noopener');
+        }
+        var attempts = 0;
+        async function pollFiles(){
+          try {
+            var result = await api('/api/connections/google/account/files');
+            var selection = result.data || {};
+            if(selection.state === 'pending' && ++attempts < 125){ setTimeout(pollFiles, 2500); return; }
+            googleAccountFeedback = selection.state === 'selected'
+              ? 'Access verified: ' + (selection.files || []).map(function(file){ return file.name + (file.canEdit ? '' : ' (read-only)'); }).join(', ') + '. You can now use these files with Mia.'
+              : selection.state === 'failed' ? 'File access could not be verified. Choose files using the same Google account connected to Mia.'
+              : 'File selection ended. You can choose files again.';
+          } catch(_error){ googleAccountFeedback = 'Could not check file access. Try again.'; }
+          renderConnectors();
+        }
+        setTimeout(pollFiles, 1500);
+      } catch(_error){
+        googleAccountFeedback = 'Could not open the Google file picker. Check your connection and try again.';
+        renderConnectors();
+      }
+    }
+
     grid.addEventListener('click', function(event){
       var googleButton = event.target.closest('[data-google-account-action]');
       if(googleButton && grid.contains(googleButton)){
         var action = googleButton.getAttribute('data-google-account-action');
+        if(action === 'files'){ chooseGoogleDriveFiles(); return; }
         if(action === 'toggle'){
           googleAccountPanelOpen = !googleAccountPanelOpen;
           renderConnectors();
@@ -12347,6 +12510,10 @@
     function submit(){
       if(!chatWs.activeRoomId) return;
       var text = input.value.trim();
+      var draftText = text;
+      var driveFiles = stagedGoogleDriveFiles().slice();
+      var driveRoomId = chatWs.activeRoomId;
+      text += googleDriveMessageContext(driveFiles);
       var file = chatAttachment.file;
       if((!text && !file) || chatAttachment.busy) return;
       setLocalChatTypingActivity(false);
@@ -12355,7 +12522,12 @@
         if(!file){
           input.value = '';
           syncDraftState();
-          sendActiveRoomMessage(text);
+          Promise.resolve(sendActiveRoomMessage(text, null, null, driveRoomId)).then(function(result){
+            if(result && (result.status===200 || result.status===201)){
+              googleDriveDrafts[driveRoomId]=(googleDriveDrafts[driveRoomId]||[]).filter(function(item){return !driveFiles.some(function(sent){return sent.id===item.id;});});
+              renderGoogleDriveAttachments();syncDraftState();
+            }
+          }).catch(function(){ /* Keep Drive references staged for a retry. */ });
           return;
         }
         if(chatWs.activeKind === 'agent-setup'){
@@ -12369,14 +12541,15 @@
         renderChatAttachment();
         syncDraftState();
         prepareChatAttachment(file, roomId, null).then(function(prepared){
-          if(input.value.trim() === text) input.value = '';
+          if(input.value.trim() === draftText) input.value = '';
           return sendActiveRoomMessage(text, null, prepared, roomId).then(function(result){
             if(result && (result.status === 200 || result.status === 201)){
+              googleDriveDrafts[driveRoomId]=(googleDriveDrafts[driveRoomId]||[]).filter(function(item){return !driveFiles.some(function(sent){return sent.id===item.id;});});
               clearChatAttachment();
             } else {
               chatAttachment.busy = false;
               chatAttachment.error = result && result.data && result.data.error || 'Message send failed.';
-              if(!input.value) input.value = text;
+              if(!input.value) input.value = draftText;
               renderChatAttachment();
             }
             syncDraftState();
@@ -12398,7 +12571,7 @@
     // a real draft — mirrors the mock's sendStyle/hint being keyed off
     // state.draft.trim(), not a permanent enabled state.
     function syncDraftState(){
-      var hasDraft = !!input.value.trim() || !!chatAttachment.file;
+      var hasDraft = !!input.value.trim() || !!chatAttachment.file || stagedGoogleDriveFiles().length>0;
       var task = activeRoomTask();
       var stopping = !!(task && (task.status === 'stopping' || chatTaskStopPending[task.id]));
       sendBtn.classList.toggle('has-draft', hasDraft);

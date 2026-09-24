@@ -435,6 +435,17 @@ test('bot replies use a restricted session in the existing Hermes runtime', asyn
   assert.equal(requests[0].options.seedMessages, undefined);
 });
 
+test('Google bot turns use the no-terminal Google profile', async () => {
+  const requests = [];
+  const gatewayClient = { async run(request) { requests.push(request); return { text: 'google result' }; } };
+  await inference.runInference('list my inbox', {
+    botWorker: true,
+    profile: inference.MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+    provider: 'openai-codex', model: 'gpt-5.6-luna', gatewayClient,
+  });
+  assert.equal(requests[0].options.profile, inference.MIAOS_BOT_GOOGLE_HERMES_PROFILE);
+});
+
 test('backend shutdown closes and releases its singleton Hermes gateway client', async () => {
   const originalModelOptions = HermesGatewayClient.prototype.modelOptions;
   const originalClose = HermesGatewayClient.prototype.close;

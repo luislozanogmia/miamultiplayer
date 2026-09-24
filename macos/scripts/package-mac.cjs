@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
+const { stageGoogleOAuthClient } = require("./package-google-oauth.cjs");
 const { createDmg, copyAppBundleForDmg, assertNoMountedMiaVolume } = require("./create-dmg.cjs");
 
 const MACOS_ROOT = path.resolve(__dirname, "..");
@@ -666,6 +667,13 @@ function writeReleaseMetadata(dmgPath, manifest) {
   fs.writeFileSync(`${dmgPath}.runtime.json`, `${JSON.stringify({ ...manifest, sha256: digest }, null, 2)}\n`);
 }
 
+function writeStableInstaller(dmgPath) {
+  const stablePath = path.join(path.dirname(dmgPath), "Mia-arm64.dmg");
+  fs.copyFileSync(dmgPath, stablePath, fs.constants.COPYFILE_FICLONE);
+  if (sha256(stablePath) !== sha256(dmgPath)) throw new Error("Stable installer checksum mismatch");
+  return stablePath;
+}
+
 // electron-updater refuses to download updates unless the packaged app carries
 // app-update.yml in its resources directory (electron-builder generates it;
 // our hand-rolled packaging must ship it explicitly). Without it, update
@@ -727,6 +735,10 @@ async function buildInstaller() {
     const { runtimeRoot, manifest, sourceRoots } = stageBundledRuntime(temporaryRoot);
 
     const stagedBackend = path.join(temporaryRoot, "backend");
+    stageGoogleOAuthClient(stagedBackend, {
+      ...process.env,
+      ...(distribution.release ? { MIA_REQUIRE_GOOGLE_OAUTH: "1" } : {}),
+    });
     run("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: stagedBackend });
     const dependencyBinDirs = [];
     walkTree(path.join(stagedBackend, "node_modules"), (entry, target) => {
@@ -810,9 +822,10 @@ async function buildInstaller() {
     createDmg(appPath, dmgPath);
     notarizeMacDmg(dmgPath, distribution);
     writeReleaseMetadata(dmgPath, manifest);
+    const stableDmgPath = writeStableInstaller(dmgPath);
     const zipPath = writeUpdateFeed(appPath);
     process.stdout.write(`${dmgPath}\n${zipPath}\n`);
-    return { appPath, dmgPath, zipPath };
+    return { appPath, dmgPath, stableDmgPath, zipPath };
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }
@@ -856,4 +869,5 @@ module.exports = {
   stageGoogleWorkspaceRuntime,
   writeAppUpdateConfig,
   writeUpdateFeed,
+  writeStableInstaller,
 };

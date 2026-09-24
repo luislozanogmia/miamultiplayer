@@ -75,6 +75,7 @@ export HERMES_BIN="$hermes_bin"
 export MIAOS_HERMES_BIN="$hermes_bin"
 export HERMES_PYTHON="$hermes_python"
 export HERMES_GWS_BIN="$gws_bin"
+export GOOGLE_WORKSPACE_CLI_CONFIG_DIR="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$mia_data_root/google-workspace}"
 # The native keyring backend can hand different keys to short-lived gws
 # processes launched by Electron during development. gws officially supports
 # this persistent encrypted-file backend for headless/embedded runtimes.
