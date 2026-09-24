@@ -1,4 +1,5 @@
 'use strict';
+const { validClerkNonce } = require('./clerk-nonce.cjs');
 
 const DEFAULT_API_VERSION = '2026-05-12';
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -331,7 +332,7 @@ function createNativeClerkClient(options = {}) {
 
   async function completeGoogle({ nonce } = {}) {
     const rotatingNonce = String(nonce || '');
-    if (!/^[A-Za-z0-9_-]{16,512}$/.test(rotatingNonce)) throw safeError('INVALID_CALLBACK');
+    if (!validClerkNonce(rotatingNonce)) throw safeError('INVALID_CALLBACK');
     return exclusive(async context => {
       if (usedNonces.has(rotatingNonce)) throw safeError('CALLBACK_REPLAYED');
       usedNonces.add(rotatingNonce);

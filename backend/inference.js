@@ -26,6 +26,7 @@ const {
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   FULL_AGENT_TOOLSETS,
   SEARCH_ONLY_TOOLSETS,
 } = require('./hermes-bot-profile');
@@ -729,7 +730,9 @@ function standaloneGatewayOptions(options = {}) {
     ? options.provider
     : '';
   const profile = options.botWorker === true
-    ? MIAOS_BOT_HERMES_PROFILE
+    ? (options.profile === MIAOS_BOT_GOOGLE_HERMES_PROFILE
+      ? MIAOS_BOT_GOOGLE_HERMES_PROFILE
+      : MIAOS_BOT_HERMES_PROFILE)
     : MIAOS_AGENT_HERMES_PROFILE;
   const gatewayOptions = { ...options, profile };
   delete gatewayOptions.gatewayClient;
@@ -868,6 +871,7 @@ module.exports = {
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_TOOLSETS,
   MIAOS_BOT_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_WEB_POLICY,
   MIAOS_BOT_COMPACT_TOOL_POLICY,
   appOwnedToolPolicy,

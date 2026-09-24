@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
+const { stageGoogleOAuthClient } = require("./package-google-oauth.cjs");
 const {
   assertNoPrivateBuildPaths,
   assertNoPrivateContent,
@@ -170,6 +171,7 @@ async function buildLinuxPackage() {
     const appSource = path.join(appSourceRoot, "macos");
     run("npm", ["ci", "--no-audit", "--no-fund"], { cwd: appSource });
     for (const area of ["backend", "frontend", "modules", "bots-catalog"]) copyTrackedArea(area, runtimeRoot);
+    stageGoogleOAuthClient(path.join(runtimeRoot, "backend"));
     run("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: path.join(runtimeRoot, "backend") });
     await rebuild({ buildPath: path.join(runtimeRoot, "backend"), electronVersion: ELECTRON_VERSION, onlyModules: ["better-sqlite3"], force: true });
     fs.rmSync(path.join(runtimeRoot, "backend", "node_modules", ".bin"), { recursive: true, force: true });

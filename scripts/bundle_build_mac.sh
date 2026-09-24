@@ -13,9 +13,11 @@
 #   - codesign/ditto/xcrun, which only exist on macOS — this wrapper checks
 #     the host up front so a non-mac run fails fast instead of partway
 #     through packaging;
-#   - MIAOS_MAC_SIGN_IDENTITY and MIAOS_MAC_NOTARY_PROFILE, set together, to
-#     produce a signed and notarized release build. Leave both unset for an
-#     ad-hoc local build.
+#   - MIAOS_MAC_SIGN_IDENTITY, MIAOS_MAC_NOTARY_PROFILE, and
+#     MIAOS_MAC_PROVISIONING_PROFILE, set together, to produce a signed and
+#     notarized release build. Signed releases also require the public
+#     MIA_GOOGLE_OAUTH_CLIENT_ID injected by the controlled release shell.
+#     Leave all release variables unset for an ad-hoc local build.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

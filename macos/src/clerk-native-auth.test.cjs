@@ -128,8 +128,9 @@ test('Google callback reloads the original attempt, transfers sign-up, and expos
     },
   });
   await auth.startGoogle({ redirectUrl: REDIRECT });
-  assert.deepEqual(await auth.completeGoogle({ nonce: 'nonce_fixture_123456' }), { status: 'active', sessionId: 'sess_active' });
-  assert.equal(mock.calls[1].url.searchParams.get('rotating_token_nonce'), 'nonce_fixture_123456');
+  const nonce = 'nonce.fixture~' + 'x'.repeat(600);
+  assert.deepEqual(await auth.completeGoogle({ nonce }), { status: 'active', sessionId: 'sess_active' });
+  assert.equal(mock.calls[1].url.searchParams.get('rotating_token_nonce'), nonce);
   assert.deepEqual(mock.calls[2].body, { transfer: 'true' });
   const token = await auth.getSessionToken();
   assert.equal(token.split('.').length, 3);

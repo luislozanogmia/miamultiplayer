@@ -15,6 +15,7 @@ const {
 const MIAOS_AGENT_HERMES_PROFILE = 'miaos-agent-runtime';
 const MIAOS_AGENT_GOOGLE_HERMES_PROFILE = 'miaos-agent-google-runtime';
 const MIAOS_BOT_HERMES_PROFILE = 'miaos-bot-worker';
+const MIAOS_BOT_GOOGLE_HERMES_PROFILE = 'miaos-bot-google-worker';
 const CLAUDE_SUBSCRIPTION_PLUGIN = 'claude-subscription-directsdk-experimental';
 const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
 const FULL_AGENT_TOOLSETS = Object.freeze(['file', 'terminal', 'memory', 'session_search', 'todo', 'clarify']);
@@ -23,12 +24,19 @@ const GOOGLE_WORKSPACE_MCP_TOOLS = Object.freeze([
   'google_gmail_list',
   'google_gmail_get',
   'google_gmail_send',
+  'google_gmail_modify',
+  'google_gmail_labels',
+  'google_gmail_create_draft',
   'google_calendar_list',
   'google_calendar_get',
   'google_calendar_create',
   'google_drive_list',
   'google_drive_get',
+  'google_drive_get_content',
   'google_drive_create',
+  'google_drive_update_metadata',
+  'google_drive_create_file',
+  'google_drive_update_content',
   'google_sheets_get',
   'google_sheets_create',
   'google_sheets_update',
@@ -86,14 +94,12 @@ function hermesHome() {
 
 function googleWorkspaceMcpConfig() {
   const python = String(process.env.HERMES_PYTHON || '').trim();
-  const gws = String(process.env.HERMES_GWS_BIN || '').trim();
-  const userHome = String(process.env.HOME || '').trim();
-  if (!python || !gws || !userHome) return [];
+  const brokerUrl = String(process.env.MIA_GOOGLE_BROKER_URL || '').trim();
+  const brokerToken = String(process.env.MIA_GOOGLE_BROKER_TOKEN || '').trim();
+  if (!python || !/^http:\/\/127\.0\.0\.1:\d+$/.test(brokerUrl)
+      || !/^[A-Za-z0-9_-]{43}$/.test(brokerToken)) return [];
   const server = path.join(__dirname, 'mia-google-workspace-mcp.py');
-  if (!fs.existsSync(python) || !fs.existsSync(gws) || !fs.existsSync(server)) return [];
-  const keyringBackend = process.env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND === 'keyring'
-    ? 'keyring'
-    : 'file';
+  if (!fs.existsSync(python) || !fs.existsSync(server)) return [];
   return [
     'mcp_servers:',
     '  mia-google-workspace:',
@@ -101,9 +107,8 @@ function googleWorkspaceMcpConfig() {
     '    args:',
     `      - ${JSON.stringify(server)}`,
     '    env:',
-    `      HERMES_GWS_BIN: ${JSON.stringify(gws)}`,
-    `      HOME: ${JSON.stringify(userHome)}`,
-    `      GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: ${JSON.stringify(keyringBackend)}`,
+    `      MIA_GOOGLE_BROKER_URL: ${JSON.stringify(brokerUrl)}`,
+    `      MIA_GOOGLE_BROKER_TOKEN: ${JSON.stringify(brokerToken)}`,
     '    tools:',
     '      include:',
     ...GOOGLE_WORKSPACE_MCP_TOOLS.map((name) => `        - ${name}`),
@@ -277,18 +282,29 @@ function provisionHermesBotProfile({
   searchOnly = MIAOS_AGENT_SEARCH_ONLY,
   workspaceDir,
 } = {}) {
-  // Search-only releases get hosted web tools; full local releases use the
-  // guarded terminal/browser bridge. Both receive the same curated Google
-  // tool surface for the alpha.
+  // Ordinary bot work may use the guarded terminal. Google tools live in a
+  // separate no-terminal profile so the model cannot bypass their curated
+  // MCP surface to inspect or invoke raw credential machinery.
   return provisionRuntimeProfile({
     profilesRoot,
     profile: MIAOS_BOT_HERMES_PROFILE,
     toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
     maxTurns: 100,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
-    // Alpha policy: every Bot receives the same curated, non-destructive
-    // Google Workspace tools. The owner connection mediates credentials;
-    // raw tokens and delete/clear/trash operations are never exposed.
+    backgroundReview: backgroundReviewEnabledForBot(),
+  });
+}
+
+function provisionHermesGoogleBotProfile({
+  profilesRoot = path.join(hermesHome(), 'profiles'),
+  searchOnly = MIAOS_AGENT_SEARCH_ONLY,
+} = {}) {
+  return provisionRuntimeProfile({
+    profilesRoot,
+    profile: MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+    toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['memory', 'todo', 'clarify'],
+    maxTurns: 100,
+    terminal: undefined,
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForBot(),
   });
@@ -327,13 +343,12 @@ function provisionHermesGoogleAgentProfile({
   if (MIAOS_AGENT_SEARCH_ONLY && !searchOnly) {
     throw new Error(`Mia release profile ${MIAOS_RELEASE_PROFILE} cannot disable search-only agent confinement`);
   }
-  const terminal = guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir });
   return provisionRuntimeProfile({
     profilesRoot,
     profile: MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
-    toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : FULL_AGENT_TOOLSETS,
+    toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : ['memory', 'session_search', 'todo', 'clarify'],
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
-    terminal,
+    terminal: undefined,
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForGateway(),
   });
@@ -343,13 +358,16 @@ function provisionHermesRuntimeProfiles(options = {}) {
   const agent = provisionHermesAgentProfile(options);
   const googleAgent = provisionHermesGoogleAgentProfile(options);
   const bot = provisionHermesBotProfile(options);
-  return { agent, googleAgent, bot, changed: agent.changed || googleAgent.changed || bot.changed };
+  const googleBot = provisionHermesGoogleBotProfile(options);
+  return { agent, googleAgent, bot, googleBot,
+    changed: agent.changed || googleAgent.changed || bot.changed || googleBot.changed };
 }
 
 module.exports = {
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   EFFECTIVE_RELEASE_PROFILE,
   MIAOS_RELEASE_PROFILE,
   MIAOS_AGENT_SEARCH_ONLY,
@@ -368,5 +386,6 @@ module.exports = {
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,
   provisionHermesBotProfile,
+  provisionHermesGoogleBotProfile,
   provisionHermesRuntimeProfiles,
 };
