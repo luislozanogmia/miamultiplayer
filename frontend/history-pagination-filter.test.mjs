@@ -203,7 +203,7 @@ test('native browser visibility owner occludes and restores the live view withou
   const commands = [];
   const classes = new Set();
   const context = {
-    scheduled: false, open: true, lastLayout: '',
+    scheduled: false, open: true, lastLayout: '', downloadsOpen: false,
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
     overlay: { hidden: false },
@@ -215,6 +215,12 @@ test('native browser visibility owner occludes and restores the live view withou
   vm.runInContext(nativeBrowserSource.slice(start, end), context);
   context.layout();
   assert.equal(commands.at(-1).visible, true);
+  context.downloadsOpen = true;
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, false, 'the Downloads view covers the page');
+  assert.equal(commands.at(-1).panelOpen, true, 'the browser stays open behind the Downloads view');
+  context.downloadsOpen = false;
   classes.add('native-browser-occluded-conversation');
   context.lastLayout = '';
   context.layout();

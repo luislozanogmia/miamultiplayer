@@ -606,11 +606,24 @@
         <div class="local-browser-suggest" id="localBrowserUrlSuggest" role="listbox" hidden></div>
       </div>
       <button type="submit" class="local-browser-go-btn">Go</button>
+      <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
+      </button>
       <button type="button" class="local-browser-share-btn" id="localBrowserShareBtn" title="Share — coming soon" aria-label="Share — coming soon" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
       </button>
     </form>
     <div class="local-browser-screen" id="localBrowserScreen">
+      <section class="local-browser-downloads" id="localBrowserDownloads" aria-label="Downloads" hidden>
+        <header class="local-browser-downloads-head">
+          <h2>Downloads</h2>
+          <button type="button" class="local-browser-downloads-clear" id="localBrowserDownloadsClear">Clear list</button>
+          <button type="button" class="local-browser-btn" id="localBrowserDownloadsClose" title="Close downloads" aria-label="Close downloads">&times;</button>
+        </header>
+        <p class="local-browser-downloads-note">Clearing the list keeps your files.</p>
+        <ul class="local-browser-downloads-list" id="localBrowserDownloadsList"></ul>
+        <p class="local-browser-downloads-empty" id="localBrowserDownloadsEmpty">Files you download in Mia's browser appear here.</p>
+      </section>
       <div class="local-browser-empty" id="localBrowserEmpty">
         <span class="local-browser-empty-title">Open a web page</span>
         <span>Enter a web address above to browse beside Mia.</span>
