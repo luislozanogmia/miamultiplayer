@@ -97,6 +97,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const statePath = typeof options.statePath === "string" && options.statePath.trim()
     ? path.resolve(options.statePath)
     : "";
+  // Chromium can fail a page load with the generic ERR_FAILED a moment before
+  // it reports that the link was a download. Hold only that error this long so
+  // a download can claim it without the error page flashing first.
+  const downloadErrorGraceMs = Number.isFinite(options.downloadErrorGraceMs)
+    ? options.downloadErrorGraceMs : 1500;
   const workspaceRoot = typeof options.workspaceRoot === "string" && options.workspaceRoot.trim()
     ? path.resolve(options.workspaceRoot)
     : "";
@@ -673,16 +678,39 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // error over the page the user is actually looking at.
     if (isAbortedLoadError(error)) return;
     if (!tabs.has(tab.id) || tab.url !== target) return;
-    // A link that turns out to be a file ends its page load as a download;
-    // that is not a failure (Chromium reports ERR_FAILED for it).
-    if (tab.downloadUrl === target) return;
-    tab.error = error.message; layout(); publish();
+    showLoadError(tab, target, error.message, isGenericLoadError(error));
+  }
+
+  // ERR_FAILED (-2) is what a link that turns out to be a file reports.
+  function isGenericLoadError(error) {
+    if (!error) return false;
+    if (error.code === "ERR_FAILED" || error.errno === -2) return true;
+    return /ERR_FAILED|\(-2\) loading/.test(String(error.message || ""));
+  }
+  function clearPendingLoadError(tab) {
+    clearTimeout(tab.errorTimer);
+    tab.errorTimer = null;
+  }
+  // A link that turns out to be a file ends its page load as a download; that
+  // is not a failure, so a generic error waits briefly for the download.
+  function showLoadError(tab, url, message, generic) {
+    clearPendingLoadError(tab);
+    if (tab.downloadUrl === url) return;
+    const show = () => {
+      tab.errorTimer = null;
+      if (!tabs.has(tab.id) || tab.downloadUrl === url) return;
+      tab.error = message; layout(); publish();
+    };
+    if (!generic || downloadErrorGraceMs <= 0) return show();
+    tab.errorTimer = setTimeout(show, downloadErrorGraceMs);
+    if (typeof tab.errorTimer.unref === "function") tab.errorTimer.unref();
   }
 
   function navigate(tab, value) {
     const target = normalizeTarget(value);
     tab.url = target;
     tab.error = "";
+    clearPendingLoadError(tab);
     tab.favicon = null;
     layout();
     persistTabs();
@@ -696,6 +724,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const target = normalizeLocalFileTarget(value, workspaceRoot);
     tab.url = target;
     tab.error = "";
+    clearPendingLoadError(tab);
     layout();
     persistTabs();
     tab.view.webContents.loadURL(target).catch(error => reportLoadError(tab, target, error));
@@ -1318,8 +1347,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       navigated(event, url, mainFrame);
     });
     wc.on("did-fail-load", (_event, code, description, url, mainFrame) => {
-      if (!mainFrame || code === -3 || url === tab.downloadUrl) return;
-      tab.error = description; layout(); publish();
+      if (!mainFrame || code === -3) return;
+      showLoadError(tab, url, description, code === -2);
     });
     wc.on("render-process-gone", () => {
       tab.error = "This tab stopped responding. Reload to try again."; layout(); publish();
@@ -1351,6 +1380,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
     tabs.delete(id);
+    clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
     tab.view.webContents.close();
     if (activeId === id) activeId = [...tabs.keys()].at(-1) || null;
@@ -1415,6 +1445,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // displays. A tab opened only for the download closes, as in Chrome.
   function downloadEndedNavigation(tab, url) {
     tab.downloadUrl = url;
+    clearPendingLoadError(tab);
     if (tab.url !== url) return;
     const wc = tab.view.webContents;
     const shown = wc.isDestroyed() ? "" : wc.getURL();

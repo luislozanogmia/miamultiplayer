@@ -111,7 +111,7 @@ function harness(options = {}) {
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
   const { createBrowser, normalizeTarget, normalizeLocalFileTarget } = context.module.exports;
-  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, options);
+  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, ...options });
   const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   const command = (action, extra = {}, event = sender) => handlers.get("miaos-browser-command")(event, { action, ...extra });
   return { command, window, views, sender, profile, handlers, shown, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, menuTemplates };
@@ -610,20 +610,40 @@ test("a link that becomes a download is not shown as a load error", async () => 
   assert.equal(h.command("state").tabs[0].error, "");
   h.window.emit("closed");
 
-  // Page load fails first, then the download is reported: the error is cleared.
-  const late = harness();
+  // Page load fails first, then the download is reported: the error never shows.
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const late = harness({ downloadErrorGraceMs: 30 });
   late.command("new");
   const lateWc = late.views[0].webContents;
   lateWc.shownUrl = "https://files.example/list";
   lateWc.loadURL = () => Promise.reject(failed());
   late.command("navigate", { value: fileUrl });
   await flush();
-  assert.match(late.command("state").tabs[0].error, /ERR_FAILED/);
+  lateWc.emit("did-fail-load", {}, -2, "ERR_FAILED", fileUrl, true);
+  assert.equal(late.command("state").tabs[0].error, "");
   late.profile.emit("will-download", {}, downloadItem(fileUrl), lateWc);
+  await wait(60);
   tab = late.command("state").tabs[0];
   assert.equal(tab.error, "");
   assert.equal(tab.url, "https://files.example/list");
   late.window.emit("closed");
+
+  // A generic failure with no download still shows, after the short wait;
+  // any other failure shows at once.
+  const real = harness({ downloadErrorGraceMs: 30 });
+  real.command("new");
+  const realWc = real.views[0].webContents;
+  realWc.loadURL = () => Promise.reject(failed());
+  real.command("navigate", { value: fileUrl });
+  await flush();
+  assert.equal(real.command("state").tabs[0].error, "");
+  await wait(60);
+  assert.match(real.command("state").tabs[0].error, /ERR_FAILED/);
+  realWc.loadURL = () => Promise.resolve();
+  real.command("navigate", { value: "https://nowhere.example/" });
+  realWc.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "https://nowhere.example/", true);
+  assert.equal(real.command("state").tabs[0].error, "ERR_NAME_NOT_RESOLVED");
+  real.window.emit("closed");
 
   // A new tab opened only for the download closes, as in Chrome.
   const blank = harness();
