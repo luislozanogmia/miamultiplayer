@@ -2,6 +2,16 @@
 
 const fs = require("node:fs");
 const GIB = 1024 ** 3;
+const DEFAULT_UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+function scheduleUpdateChecks({ check, intervalMs = DEFAULT_UPDATE_CHECK_INTERVAL_MS, schedule = setInterval }) {
+  if (typeof check !== "function") throw new TypeError("check must be a function");
+  const timer = schedule(() => {
+    Promise.resolve().then(check).catch(() => {});
+  }, intervalMs);
+  if (timer && typeof timer.unref === "function") timer.unref();
+  return timer;
+}
 
 function requiredUpdateBytes(info) {
   const sizes = (info?.files || []).map(file => Number(file.size)).filter(size => Number.isFinite(size) && size > 0);
@@ -108,4 +118,10 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
   return { handledError: error => Boolean(error && typeof error === "object" && reportedErrors.has(error)) };
 }
 
-module.exports = { requiredUpdateBytes, assertUpdateSpace, attachUpdateReadiness };
+module.exports = {
+  DEFAULT_UPDATE_CHECK_INTERVAL_MS,
+  requiredUpdateBytes,
+  assertUpdateSpace,
+  attachUpdateReadiness,
+  scheduleUpdateChecks,
+};

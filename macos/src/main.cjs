@@ -27,7 +27,7 @@ const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
 const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
-const { attachUpdateReadiness } = require("./update-readiness.cjs");
+const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
 
 const googleAuthOpenSecret = crypto.randomBytes(32).toString("base64url");
 
@@ -218,6 +218,7 @@ let packagedRuntimePrepared = null;
 let autoUpdateConfigured = false;
 let autoUpdateCheckInFlight = null;
 let autoUpdateCheckInteractive = false;
+let autoUpdateCheckTimer = null;
 let miaAutoUpdater = null;
 let nativeAuthProtocolReady = false;
 const desktopAuth = createDesktopAuth({
@@ -2348,7 +2349,10 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   installBrowserMenu();
   await loadMiaOS();
   await startGhostBridge();
-  if (autoUpdateConfigured) checkForMiaUpdate().catch(() => {});
+  if (autoUpdateConfigured) {
+    checkForMiaUpdate().catch(() => {});
+    autoUpdateCheckTimer = scheduleUpdateChecks({ check: () => checkForMiaUpdate() });
+  }
   if (process.env.MIAOS_ARTIFACT_URL) await navigateArtifact(process.env.MIAOS_ARTIFACT_URL);
 
   app.on("activate", () => {
@@ -2359,6 +2363,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 app.on("before-quit", () => {
   if (isQuitting) return;
   isQuitting = true;
+  if (autoUpdateCheckTimer) clearInterval(autoUpdateCheckTimer);
   nativeBrowser?.persist?.();
   ghostBridge?.stop().catch(error => desktopLog(`Ghost browser bridge stop failed: ${error.message}`));
   googleWorkspaceBroker?.close().catch(error => desktopLog(`Google credential broker stop failed: ${error.message}`));

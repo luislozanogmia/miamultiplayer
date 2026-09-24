@@ -2,8 +2,36 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
-const { attachUpdateReadiness, assertUpdateSpace } = require("./update-readiness.cjs");
+const {
+  DEFAULT_UPDATE_CHECK_INTERVAL_MS,
+  attachUpdateReadiness,
+  assertUpdateSpace,
+  scheduleUpdateChecks,
+} = require("./update-readiness.cjs");
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("running apps check for updates every four hours", async () => {
+  let scheduledCallback;
+  let scheduledInterval;
+  let unrefCalled = false;
+  let checks = 0;
+  const timer = scheduleUpdateChecks({
+    check: async () => { checks++; },
+    schedule(callback, interval) {
+      scheduledCallback = callback;
+      scheduledInterval = interval;
+      return { unref() { unrefCalled = true; } };
+    },
+  });
+
+  assert.equal(DEFAULT_UPDATE_CHECK_INTERVAL_MS, 4 * 60 * 60 * 1000);
+  assert.equal(scheduledInterval, DEFAULT_UPDATE_CHECK_INTERVAL_MS);
+  assert.equal(unrefCalled, true);
+  assert.ok(timer);
+  scheduledCallback();
+  await tick();
+  assert.equal(checks, 1);
+});
 
 test("low disk space blocks download and explains recovery", async () => {
   const updater = new EventEmitter(), notices = [];

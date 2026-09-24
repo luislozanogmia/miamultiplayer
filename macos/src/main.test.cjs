@@ -545,6 +545,7 @@ test("OTA updates default to the GitHub releases feed and use signed-app update 
   assert.match(source, /provider: "generic", url: feedUrl/);
   assert.match(source, /\.checkForUpdates\(\)/);
   assert.match(source, /attachUpdateReadiness\(/);
+  assert.match(source, /scheduleUpdateChecks\(\{ check: \(\) => checkForMiaUpdate\(\) \}\)/);
   assert.match(source, /label: "Check for Updates…"/);
 });
 
