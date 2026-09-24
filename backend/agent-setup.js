@@ -195,10 +195,76 @@ function buildAgentSetupPrompt(intent) {
   ].join('\n');
 }
 
+// Revising a draft from Mia's chat: the user describes a change in words
+// ("make it weekly", "call it Scout") and the proposal is rewritten from the
+// current draft, which already includes any edits made in the review card.
+function wantsNoAutomation(change) {
+  return /\b(?:no|remove|drop|stop|without|turn\s+off|disable|cancel|don'?t\s+(?:need|want))\b[^.]*\b(?:schedul\w*|automations?|timers?|recurr\w*|repeat\w*)\b/i.test(String(change || ''));
+}
+
+function currentDraftText(draft) {
+  const source = draft && typeof draft === 'object' ? draft : {};
+  return JSON.stringify({
+    name: cleanText(source.name, 40),
+    role: cleanText(source.role, 500),
+    output: cleanText(source.output, 300),
+    automation: source.automation && typeof source.automation === 'object' ? source.automation : { enabled: false },
+  });
+}
+
+function buildAgentRevisionPrompt(intent, currentDraft, change) {
+  return [
+    'Revise an editable AI-agent setup. Apply the requested change to the current setup and keep everything else as it is.',
+    'Return ONLY valid JSON with the same shape as the current setup:',
+    '{"name":"1-3 words","role":"what the agent does and sources it may use","output":"the result it should produce","automation":{"enabled":false,"frequency":"none","intervalMinutes":null,"day":"","time":"","prompt":"exact task to run on schedule"}}',
+    'Rules:',
+    '- Change only what the request asks for; do not add capabilities, sources, or promises the user did not request.',
+    '- automation.enabled may be true ONLY when the user explicitly requested recurrence, a cadence, a day, or a time.',
+    '- frequency must be one of none, interval, daily, weekly, monthly. Use HH:MM 24-hour time.',
+    '- No markdown, prose, explanation, or hidden reasoning.',
+    '',
+    `Original request: ${cleanText(intent, 2000)}`,
+    `Current setup: ${currentDraftText(currentDraft)}`,
+    `Requested change: ${cleanText(change, 2000)}`,
+  ].join('\n');
+}
+
+function normalizeAgentRevision(raw, intent, currentDraft, change) {
+  const current = currentDraft && typeof currentDraft === 'object' ? currentDraft : {};
+  const fallback = fallbackAgentDraft(intent);
+  const parsed = parseJsonObject(raw) || {};
+  // The schedule is the one field with a safety rule: it changes only when the
+  // user asks for it in this change. Otherwise the current schedule stays,
+  // including one the user set by hand in the review card.
+  let automation;
+  if (wantsNoAutomation(change)) {
+    automation = { enabled: false, frequency: 'none', day: '', time: '' };
+  } else if (hasExplicitScheduleIntent(change)) {
+    const proposed = parsed.automation && typeof parsed.automation === 'object' ? parsed.automation : {};
+    automation = normalizeAutomation(proposed, change);
+    if (!cleanText(proposed.prompt, 1000)) {
+      const currentPrompt = current.automation && cleanText(current.automation.prompt, 1000);
+      automation.prompt = currentPrompt || cleanText(intent, 1000) || automation.prompt;
+    }
+  } else if (current.automation && typeof current.automation === 'object' && current.automation.enabled) {
+    automation = { ...current.automation };
+  } else {
+    automation = { enabled: false, frequency: 'none', day: '', time: '' };
+  }
+  return {
+    name: titleCase(parsed.name) || titleCase(current.name) || fallback.name,
+    role: cleanText(parsed.role, 500) || cleanText(current.role, 500) || fallback.role,
+    output: cleanText(parsed.output, 300) || cleanText(current.output, 300) || fallback.output,
+    automation,
+  };
+}
+
 module.exports = {
+  buildAgentRevisionPrompt,
   buildAgentSetupPrompt,
   fallbackAgentDraft,
   hasExplicitScheduleIntent,
   inferSchedule,
   normalizeAgentDraft,
+  normalizeAgentRevision,
 };

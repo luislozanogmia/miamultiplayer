@@ -106,9 +106,11 @@ const googleWorkspaceActions = require('./google-workspace-actions');
 const { createGoogleAccountConnector, createOwnerBoundGoogleAccount } = require('./google-account-connector');
 const { stripTaskOpeningNotice, humanTaskStatus, shouldPostTaskStatus } = require('./background-status');
 const {
+  buildAgentRevisionPrompt,
   buildAgentSetupPrompt,
   fallbackAgentDraft,
   normalizeAgentDraft,
+  normalizeAgentRevision,
 } = require('./agent-setup');
 const { INSTANCE_NAME, INSTANCE_TEAM_DESCRIPTION, INSTANCE_DOMAINS, INSTANCE_PASSWORD } = require('./instance');
 const cronSync = require('./cron-sync');
@@ -4624,17 +4626,28 @@ app.post('/api/bots/interpret', requireAuth, async (req, res) => {
       message: userFacingModelDispatchError(error),
     });
   }
-  let draft = fallbackAgentDraft(intent);
+  // Mia's chat revises a draft in place: `currentDraft` is the proposal the
+  // user is reviewing (with any hand edits) and `change` is what they asked
+  // Mia to change about it.
+  const body = req.body || {};
+  const change = String(body.change || '').trim().slice(0, 2000);
+  const currentDraft = change && body.currentDraft && typeof body.currentDraft === 'object' && !Array.isArray(body.currentDraft)
+    ? body.currentDraft : null;
+  let draft = currentDraft
+    ? normalizeAgentRevision('', intent, currentDraft, change)
+    : fallbackAgentDraft(intent);
   try {
     const reply = await scheduleInference(
-      buildAgentSetupPrompt(intent),
+      currentDraft ? buildAgentRevisionPrompt(intent, currentDraft, change) : buildAgentSetupPrompt(intent),
       'suggestion',
       chatModelSelectionInferenceOptions(
         inferenceOptionsForUser(req.userEmail),
         modelSelection
       )
     );
-    draft = normalizeAgentDraft(reply, intent);
+    draft = currentDraft
+      ? normalizeAgentRevision(reply, intent, currentDraft, change)
+      : normalizeAgentDraft(reply, intent);
   } catch (err) {
     // Naming/setup inference is UX assistance, not an availability boundary.
     // A deterministic proposal still lets the user edit and confirm safely.

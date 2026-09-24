@@ -192,7 +192,7 @@ test('compact agent filter is accessible and applies to chats, bookmarks, images
 
 test('an initially empty visible transcript still exposes backward history paging', () => {
   const renderThread = functionSlice('renderChatThread', '\n  function chatThreadFooterHtml');
-  assert.match(renderThread, /if\(!state\.messages\.length && !state\.thinking\)[\s\S]*chatHistoryControlHtml\(state\) \+ chatHeroHtml/);
+  assert.match(renderThread, /if\(!state\.messages\.length && !state\.thinking && !botDraftFlow\)[\s\S]*chatHistoryControlHtml\(state\) \+ chatHeroHtml/);
   assert.match(renderThread, /var historyControl = chatHistoryControlHtml\(state\)/);
   assert.match(renderThread, /wireChatHistoryControl\(thread, roomId\);[\s\S]*return;/);
 });
