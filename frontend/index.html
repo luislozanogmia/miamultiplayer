@@ -465,6 +465,14 @@
               <div class="chat-mention-popover" id="chatMentionPopover"></div>
               <div class="chat-composer-wrap">
                 <div class="cc-attach-strip" id="ccAttachStrip" style="display:none;"></div>
+                <div id="ccDriveAttachments" class="cc-drive-attachments" hidden></div>
+                <section id="ccDriveMenu" class="cc-drive-menu" role="dialog" aria-label="Files shared with Mia" hidden>
+                  <div class="cc-drive-head"><strong>Files shared with Mia</strong><button type="button" id="ccDriveClose" aria-label="Close Google Drive files">×</button></div>
+                  <input id="ccDriveSearch" type="search" placeholder="Search recent files" aria-label="Search recent Google Drive files" />
+                  <p id="ccDriveStatus" role="status"></p>
+                  <div id="ccDriveList" class="cc-drive-list"></div>
+                  <button type="button" id="ccDriveMore">Add files from Google Drive ↗</button>
+                </section>
                 <div class="chat-composer">
                   <div class="cc-input-row">
                     <div class="cc-inline-suggestion" id="ccInlineSuggestion" hidden aria-hidden="true"><em class="cc-inline-suggestion-tab">Tab</em><span>Can we create a newsletter bot?</span></div>
@@ -472,6 +480,7 @@
                   </div>
                   <div class="cc-bottom-row">
                     <button type="button" class="cc-plus-btn" id="ccPlusBtn" title="Attach" aria-label="Attach">+</button>
+                    <button type="button" class="cc-plus-btn" id="ccDriveBtn" title="Attach from Google Drive" aria-label="Attach from Google Drive" aria-expanded="false" hidden><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="" /></button>
                     <input type="file" id="ccFileInput" class="cc-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" />
                     <!-- Reserved for the composer keyboard hint. -->
                     <span class="cc-hint" id="ccHint"></span>

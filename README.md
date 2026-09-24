@@ -89,6 +89,8 @@ staples the notarization ticket.
 ```bash
 export MIAOS_MAC_SIGN_IDENTITY="Developer ID Application: Luis Lozano (9F277BG847)"
 export MIAOS_MAC_NOTARY_PROFILE="miaos-notary"
+export MIAOS_MAC_PROVISIONING_PROFILE="/absolute/path/to/Mia_Developer_ID.provisionprofile"
+export MIA_GOOGLE_OAUTH_CLIENT_ID="<official Desktop OAuth client ID from the release environment>"
 
 ./scripts/clean_slate_mac.sh --apply
 ./scripts/install-local-mac.sh
@@ -101,7 +103,11 @@ macos/dist/Mia-<version>-arm64.dmg
 ```
 
 For an unsigned local development build, omit the signing and notarization
-environment variables.
+environment variables. Native OAuth clients are public registrations: Mia
+ships only the client ID, never a Desktop client secret. Generic source builds
+omit Google connection unless the builder supplies their own
+`MIA_GOOGLE_OAUTH_CLIENT_ID`; official signed builds fail closed when the
+controlled release value is missing.
 
 ## Ubuntu build and installation
 To create a fresh local Ubuntu installation from the pinned source revisions:

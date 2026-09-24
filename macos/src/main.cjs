@@ -10,12 +10,14 @@ const {
   shell,
   safeStorage,
   WebContentsView,
+  autoUpdater: nativeAutoUpdater,
 } = require("electron");
 const http = require("node:http");
 const net = require("node:net");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
@@ -23,7 +25,11 @@ const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
+const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
 const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
+const { attachUpdateReadiness } = require("./update-readiness.cjs");
+
+const googleAuthOpenSecret = crypto.randomBytes(32).toString("base64url");
 
 // The packaged runtime layout is platform-specific: Windows venvs place
 // executables in Scripts\ instead of bin/, python-build-standalone ships
@@ -200,6 +206,7 @@ let backendProcessUrl = null;
 let backendUrl = null;
 let isQuitting = false;
 let ghostBridge = null;
+let googleWorkspaceBroker = null;
 let artifactToolbarView = null;
 let artifactView = null;
 let artifactPanelVisible = false;
@@ -283,18 +290,13 @@ function configureAutoUpdates() {
   const feedUrl = configuredUpdateFeedUrl();
   if (feedUrl) autoUpdater.setFeedURL({ provider: "generic", url: feedUrl });
   else autoUpdater.setFeedURL({ provider: "github", owner: UPDATE_GITHUB_OWNER, repo: UPDATE_GITHUB_REPO });
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.logger = { info: desktopLog, warn: desktopLog, error: desktopLog, debug: () => {} };
-  autoUpdater.on("update-available", (info) => {
-    const version = info && info.version ? ` ${info.version}` : "";
-    updateMessage({
-      type: "info",
-      title: "Mia update available",
-      message: `Mia${version} is downloading in the background.`,
-      detail: "Mia will ask before restarting to install the signed update.",
-      buttons: ["OK"],
-    });
+  const updateReadiness = attachUpdateReadiness({
+    updater: autoUpdater, nativeUpdater: nativeAutoUpdater, platform: process.platform,
+    directories: [app.getPath("userData"), app.getPath("temp"), path.dirname(app.getPath("exe"))],
+    notify: updateMessage, log: desktopLog,
   });
   autoUpdater.on("update-not-available", () => {
     if (!autoUpdateCheckInteractive) return;
@@ -306,6 +308,7 @@ function configureAutoUpdates() {
     });
   });
   autoUpdater.on("error", (error) => {
+    if (updateReadiness.handledError(error)) return;
     desktopLog(`auto update failed: ${error && error.message || "unknown error"}`);
     if (!autoUpdateCheckInteractive) return;
     updateMessage({
@@ -315,22 +318,6 @@ function configureAutoUpdates() {
       detail: "You can try again from Help → Check for Updates.",
       buttons: ["OK"],
     });
-  });
-  autoUpdater.on("update-downloaded", (info) => {
-    const version = info && info.version ? ` ${info.version}` : "";
-    updateMessage({
-      type: "info",
-      title: "Mia update ready",
-      message: `Mia${version} is ready to install.`,
-      detail: "Restart Mia now to finish the update, or keep working and install it later.",
-      buttons: ["Restart and install", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-    }).then((result) => {
-      if (result && result.response === 0 && typeof autoUpdater.quitAndInstall === "function") {
-        autoUpdater.quitAndInstall();
-      }
-    }).catch(error => desktopLog(`update install prompt failed: ${error.message}`));
   });
   autoUpdateConfigured = true;
   return true;
@@ -613,6 +600,7 @@ function preparePackagedRuntime() {
   process.env.MIAOS_HERMES_BIN = hermesLauncher;
   process.env.HERMES_PYTHON = venvPythonPath(venvRoot);
   process.env.HERMES_GWS_BIN = gwsLauncher;
+  process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(userData, "google-workspace");
   // Windows packaged builds cannot spawn the .cmd Hermes shim from Node
   // (CVE-2024-27980), so the backend receives the launcher as an argv
   // vector (interpreter + script) plus the venv coordinates the .cmd
@@ -862,6 +850,14 @@ async function startLocalBackend(exactPort = null) {
   const port = await selectLocalBackendPort(exactPort);
   const dataDirectory = app.getPath("userData");
   fs.mkdirSync(dataDirectory, { recursive: true });
+  if (!googleWorkspaceBroker) {
+    const gwsBin = String(process.env.HERMES_GWS_BIN || "").trim();
+    if (gwsBin && fs.statSync(gwsBin, { throwIfNoEntry: false })?.isFile()) {
+      googleWorkspaceBroker = await createGoogleWorkspaceBroker({
+        directory: path.join(dataDirectory, "google-workspace"), safeStorage, gwsBin,
+      });
+    }
+  }
   const databasePath = backendDatabasePath();
   const hermesHome = path.resolve(process.env.HERMES_HOME || path.join(dataDirectory, "hermes"));
   const workspaceDir = miaosWorkspacePath();
@@ -880,6 +876,11 @@ async function startLocalBackend(exactPort = null) {
       || (app.isPackaged ? path.join(dataDirectory, "workspace-artifacts") : path.join(BACKEND_ROOT, "workspace-artifacts")),
     MIAOS_ATTACHMENT_DIR: process.env.MIAOS_ATTACHMENT_DIR
       || (app.isPackaged ? path.join(dataDirectory, "conversation-attachments") : path.join(BACKEND_ROOT, "conversation-attachments")),
+    MIA_GOOGLE_AUTH_OPEN_SECRET: googleAuthOpenSecret,
+    ...(googleWorkspaceBroker ? {
+      MIA_GOOGLE_BROKER_URL: googleWorkspaceBroker.url,
+      MIA_GOOGLE_BROKER_TOKEN: googleWorkspaceBroker.token,
+    } : {}),
     HERMES_HOME: hermesHome,
     MIAOS_WORKSPACE_DIR: workspaceDir,
     MIAOS_HERMES_GUARD_BIN: path.join(BACKEND_ROOT, "miaos-hermes-bin"),
@@ -2202,6 +2203,35 @@ function isMainWindowSender(event) {
     && isTrustedMainWindowUrl(ipcSenderUrl(event));
 }
 
+ipcMain.handle("miaos-google-workspace-auth-open", async (event, value) => {
+  if (!isMainWindowSender(event)) return { ok: false };
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+        || Object.keys(value).length !== 2 || typeof value.url !== "string"
+        || typeof value.proof !== "string" || value.url.length > 12000
+        || !/^[A-Za-z0-9_-]{43}$/.test(value.proof)) return { ok: false };
+    const expectedProof = crypto.createHmac("sha256", googleAuthOpenSecret).update(value.url).digest();
+    const suppliedProof = Buffer.from(value.proof, "base64url");
+    if (suppliedProof.length !== expectedProof.length || !crypto.timingSafeEqual(suppliedProof, expectedProof)) {
+      return { ok: false };
+    }
+    const url = new URL(value.url);
+    const callback = new URL(url.searchParams.get('redirect_uri'));
+    if (url.origin !== 'https://accounts.google.com' || url.pathname !== '/o/oauth2/v2/auth'
+        || url.username || url.password || url.hash
+        || callback.protocol !== 'http:' || callback.hostname !== '127.0.0.1'
+        || !callback.port || callback.pathname !== '/callback' || callback.search || callback.hash
+        || callback.username || callback.password
+        || url.searchParams.get('response_type') !== 'code'
+        || url.searchParams.get('code_challenge_method') !== 'S256'
+        || !/^[A-Za-z0-9_-]{43}$/.test(url.searchParams.get('code_challenge') || '')
+        || !/^[A-Za-z0-9_-]{43}$/.test(url.searchParams.get('state') || '')
+        || [...new Set(url.searchParams.keys())].some(key => url.searchParams.getAll(key).length !== 1)) return { ok: false };
+    await shell.openExternal(url.toString());
+    return { ok: true };
+  } catch (_) { return { ok: false }; }
+});
+
 ipcMain.handle("miaos-artifact-open", async (event, value) => {
   if (!isMainWindowSender(event)) return { ok: false, error: "Not authorized." };
   let target;
@@ -2331,6 +2361,7 @@ app.on("before-quit", () => {
   isQuitting = true;
   nativeBrowser?.persist?.();
   ghostBridge?.stop().catch(error => desktopLog(`Ghost browser bridge stop failed: ${error.message}`));
+  googleWorkspaceBroker?.close().catch(error => desktopLog(`Google credential broker stop failed: ${error.message}`));
   stopBackend();
 });
 

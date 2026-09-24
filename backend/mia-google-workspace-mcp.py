@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Mia-owned, bounded Google Workspace MCP tools.
 
-The server delegates to the bundled ``gws`` binary and shares its encrypted
-local Google profile. It exposes explicit non-destructive operations only;
-raw gws commands, delete/clear operations, and arbitrary Slides batch updates
-are deliberately not available to the model.
+The server delegates to Mia's local credential broker. It exposes explicit
+bounded operations only; raw gws commands, deletion, and arbitrary Slides
+batch updates are deliberately not available to the model.
 """
 
 from __future__ import annotations
@@ -13,23 +12,33 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import sys
 import base64
+import binascii
+import tempfile
+import urllib.request
 from email.message import EmailMessage
 from typing import Any
+from urllib.parse import urlsplit, parse_qs
 
 
 TOOL_NAMES = (
     "google_gmail_list",
     "google_gmail_get",
     "google_gmail_send",
+    "google_gmail_modify",
+    "google_gmail_labels",
+    "google_gmail_create_draft",
     "google_calendar_list",
     "google_calendar_get",
     "google_calendar_create",
     "google_drive_list",
     "google_drive_get",
+    "google_drive_get_content",
     "google_drive_create",
+    "google_drive_update_metadata",
+    "google_drive_create_file",
+    "google_drive_update_content",
     "google_sheets_get",
     "google_sheets_create",
     "google_sheets_update",
@@ -59,6 +68,39 @@ def _identifier(value: str, label: str) -> str:
     if not _ID_RE.fullmatch(text):
         raise ValueError(f"invalid {label}")
     return text
+
+
+def _file_identifier(value: str, label: str, kind: str = "") -> str:
+    """Extract IDs from exact Google file URLs; never fetch a model-supplied URL.
+
+    A link identifies a file, not an OAuth grant. Google still enforces account
+    permissions and (for drive.file) selection/creation through this app.
+    """
+    text = str(value or "").strip()
+    if _ID_RE.fullmatch(text):
+        return text
+    try:
+        url = urlsplit(text)
+        if url.scheme != "https" or url.username or url.password or url.port is not None:
+            raise ValueError("invalid Google file URL")
+        host = url.hostname
+        allowed = {"spreadsheets", "document", "presentation"}
+        if host == "docs.google.com":
+            match = re.fullmatch(r"/(spreadsheets|document|presentation)/d/([A-Za-z0-9_-]{10,256})(?:/(?:edit|view|preview|copy))?/?", url.path)
+            if not match or (kind in allowed and match[1] != kind):
+                raise ValueError("invalid Google file URL")
+            return match[2]
+        if host == "drive.google.com" and not kind:
+            match = re.fullmatch(r"/file/d/([A-Za-z0-9_-]{10,256})(?:/(?:view|edit|preview))?/?", url.path)
+            if match:
+                return match[1]
+            if url.path == "/open":
+                ids = parse_qs(url.query).get("id", [])
+                if len(ids) == 1:
+                    return _identifier(ids[0], label)
+    except (ValueError, TypeError):
+        pass
+    raise ValueError(f"invalid {label} or Google file link")
 
 
 def _text(value: str, label: str, *, allow_empty: bool = False) -> str:
@@ -102,40 +144,66 @@ def _values(rows: list[list[Any]]) -> list[list[str | int | float | bool]]:
     return output
 
 
-def _gws(operation: tuple[str, ...], *, params: dict[str, Any] | None = None, body: dict[str, Any] | None = None) -> Any:
-    binary = str(os.environ.get("HERMES_GWS_BIN") or "").strip()
-    if not binary or not os.path.isfile(binary):
+def _gws(operation: tuple[str, ...], *, params: dict[str, Any] | None = None, body: dict[str, Any] | None = None, media: bytes | None = None, media_type: str = "") -> Any:
+    if media is not None:
+        # Only Mia-generated payload bytes reach disk, never a model-selected
+        # host path. Close before gws opens it (required on Windows).
+        with tempfile.TemporaryDirectory(prefix="mia-google-upload-") as directory:
+            upload_path = os.path.join(directory, "payload")
+            with open(upload_path, "xb") as upload:
+                upload.write(media)
+            return _run_gws(operation, params=params, body=body, upload_path=upload_path, media_type=media_type)
+    return _run_gws(operation, params=params, body=body)
+
+
+def _broker_run(args: list[str], cwd: str = "") -> dict[str, Any]:
+    broker_url = str(os.environ.get("MIA_GOOGLE_BROKER_URL") or "").strip()
+    broker_token = str(os.environ.get("MIA_GOOGLE_BROKER_TOKEN") or "").strip()
+    if not re.fullmatch(r"http://127\.0\.0\.1:\d+", broker_url) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", broker_token):
         raise RuntimeError("Google connection runtime is unavailable")
+    payload = json.dumps({"args": args, **({"cwd": cwd} if cwd else {})}, separators=(",", ":")).encode()
+    request = urllib.request.Request(f"{broker_url}/run", data=payload, method="POST", headers={
+        "Authorization": f"Bearer {broker_token}", "Content-Type": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=35) as response:
+            return json.loads(response.read(_MAX_OUTPUT + 16384).decode("utf-8"))
+    except Exception as error:
+        raise RuntimeError("Google connection broker is unavailable") from error
+
+
+def _run_gws(operation: tuple[str, ...], *, params: dict[str, Any] | None = None, body: dict[str, Any] | None = None, upload_path: str = "", media_type: str = "", output_path: str = "") -> Any:
     args = [*operation]
     if params is not None:
         args.extend(("--params", json.dumps(params, separators=(",", ":"))))
     if body is not None:
         args.extend(("--json", json.dumps(body, separators=(",", ":"))))
-    environment = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "NO_COLOR": "1",
-        "GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND": os.environ.get("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND", "file"),
-    }
-    for key in ("LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"):
-        if os.environ.get(key):
-            environment[key] = os.environ[key]
-    completed = subprocess.run(
-        [binary, *args],
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=30,
-        check=False,
-    )
-    stdout = completed.stdout[: _MAX_OUTPUT + 1]
-    stderr = completed.stderr[:8192].decode("utf-8", "replace").strip()
+    if upload_path:
+        args.extend(("--upload", upload_path, "--upload-content-type", media_type))
+    if output_path:
+        args.extend(("--output", output_path))
+    result = _broker_run(args, os.path.dirname(upload_path or output_path) if upload_path or output_path else "")
+    stdout = str(result.get("stdout") or "").encode()
+    stderr = str(result.get("stderr") or "")[:8192].strip()
     if len(stdout) > _MAX_OUTPUT:
         raise RuntimeError("Google response exceeded Mia's safe size limit")
-    if completed.returncode != 0:
-        detail = re.sub(r"(?i)(token|secret|password|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]", stderr)
-        raise RuntimeError(detail[:1000] or "Google operation failed")
+    if int(result.get("code", 1)) != 0:
+        # CLI diagnostics are untrusted and may contain account data or JSON
+        # credentials. Return fixed guidance, never raw provider text.
+        diagnostic = stderr.lower()
+        if any(reason in diagnostic for reason in ("invalid_grant", "unauthenticated", "invalid credentials")):
+            raise RuntimeError("Google authentication failed. Reconnect Google Account in Mia settings.")
+        if any(reason in diagnostic for reason in ("insufficientpermissions", "permission_denied", "insufficient authentication scopes")):
+            raise RuntimeError("Google denied access. Check file access and reconnect if required permissions are missing.")
+        if any(reason in diagnostic for reason in ("ratelimitexceeded", "resource_exhausted", "quota exceeded")):
+            raise RuntimeError("Google's request limit was reached. Try again later.")
+        raise RuntimeError("Google operation failed. Check the connection and requested resource, then try again.")
+    if output_path:
+        with open(output_path, "rb") as downloaded:
+            content = downloaded.read(10 * 1024 * 1024 + 1)
+        if len(content) > 10 * 1024 * 1024:
+            raise RuntimeError("Google file exceeds the 10 MiB content limit")
+        return content
     try:
         return json.loads(stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -159,11 +227,10 @@ def google_gmail_get(message_id: str, format: str = "metadata") -> Any:
     return _gws(("gmail", "users", "messages", "get"), params={"userId": "me", "id": _identifier(message_id, "message ID"), "format": selected})
 
 
-def google_gmail_send(to: str, subject: str, body: str, cc: str = "") -> Any:
-    """Send one bounded plain-text email after the user granted Gmail write access to this bot."""
+def _gmail_raw(to: str, subject: str, body: str, cc: str = "") -> str:
     recipients = [item.strip() for item in str(to or "").split(",") if item.strip()]
     copies = [item.strip() for item in str(cc or "").split(",") if item.strip()]
-    if not recipients or len(recipients) > 20 or any(not _EMAIL_RE.fullmatch(item) for item in recipients + copies):
+    if not recipients or len(recipients) + len(copies) > 20 or any(not _EMAIL_RE.fullmatch(item) for item in recipients + copies):
         raise ValueError("invalid email recipients")
     message = EmailMessage()
     message["To"] = ", ".join(recipients)
@@ -171,8 +238,49 @@ def google_gmail_send(to: str, subject: str, body: str, cc: str = "") -> Any:
         message["Cc"] = ", ".join(copies)
     message["Subject"] = _text(subject, "subject")
     message.set_content(_text(body, "body"))
-    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
+
+
+def google_gmail_send(to: str, subject: str, body: str, cc: str = "") -> Any:
+    """Send one bounded plain-text email after the user granted Gmail write access to this bot."""
+    raw = _gmail_raw(to, subject, body, cc)
     return _gws(("gmail", "users", "messages", "send"), params={"userId": "me"}, body={"raw": raw})
+
+
+def google_gmail_create_draft(to: str, subject: str, body: str, cc: str = "") -> Any:
+    """Save a plain-text email in Gmail Drafts without sending it."""
+    return _gws(("gmail", "users", "drafts", "create"), params={"userId": "me"},
+                body={"message": {"raw": _gmail_raw(to, subject, body, cc)}})
+
+
+def google_gmail_labels() -> Any:
+    """List existing Gmail labels and IDs for triage; does not change labels."""
+    return _gws(("gmail", "users", "labels", "list"), params={"userId": "me"})
+
+
+def google_gmail_modify(message_id: str, add_labels: list[str], remove_labels: list[str]) -> Any:
+    """Change one message's triage labels. Remove UNREAD to mark read, add UNREAD
+    to mark unread, or remove INBOX to archive. Existing Label_* IDs are accepted.
+    Trash, spam, deletion and changes to sent/draft state are unavailable.
+    """
+    def labels(value: list[str]) -> list[str]:
+        if not isinstance(value, list) or len(value) > 20:
+            raise ValueError("provide at most 20 label IDs")
+        for label in value:
+            if not isinstance(label, str) or not (
+                label in {"INBOX", "UNREAD", "STARRED", "IMPORTANT"}
+                or re.fullmatch(r"Label_[A-Za-z0-9_-]{1,128}", label)
+            ):
+                raise ValueError("only inbox, read, star, importance and custom labels may change")
+        return list(dict.fromkeys(value))
+    added, removed = labels(add_labels), labels(remove_labels)
+    if not added and not removed:
+        raise ValueError("provide a label change")
+    if set(added) & set(removed):
+        raise ValueError("a label cannot be both added and removed")
+    return _gws(("gmail", "users", "messages", "modify"),
+                params={"userId": "me", "id": _identifier(message_id, "message ID")},
+                body={"addLabelIds": added, "removeLabelIds": removed})
 
 
 def google_calendar_list(time_min: str = "", time_max: str = "", max_results: int = 50) -> Any:
@@ -205,7 +313,27 @@ def google_drive_list(query: str = "trashed = false", page_size: int = 50) -> An
 
 def google_drive_get(file_id: str) -> Any:
     """Read metadata for one shared Drive file by ID."""
-    return _gws(("drive", "files", "get"), params={"fileId": _identifier(file_id, "file ID"), "fields": "id,name,mimeType,modifiedTime,webViewLink,parents"})
+    return _gws(("drive", "files", "get"), params={"fileId": _file_identifier(file_id, "file ID"), "fields": "id,name,mimeType,modifiedTime,webViewLink,parents"})
+
+
+def google_drive_get_content(file_id: str) -> Any:
+    """Read a shared non-Google-native file as base64 (up to 10 MiB) before editing it. No local path input. Use Docs/Sheets/Slides readers for native files. Google enforces the account's selected-file access."""
+    file_id = _file_identifier(file_id, "file ID")
+    metadata = _gws(("drive", "files", "get"), params={"fileId": file_id, "supportsAllDrives": True, "fields": "id,name,mimeType,size,trashed,capabilities(canDownload)"})
+    if not isinstance(metadata, dict) or metadata.get("id") != file_id or metadata.get("trashed") is not False:
+        raise ValueError("file is not available for reading")
+    capabilities = metadata.get("capabilities")
+    mime_type = metadata.get("mimeType", "")
+    if not isinstance(capabilities, dict) or capabilities.get("canDownload") is not True:
+        raise ValueError("file cannot be downloaded")
+    if not isinstance(mime_type, str) or mime_type.startswith("application/vnd.google-apps."):
+        raise ValueError("use the dedicated Google Docs, Sheets or Slides readers for native files")
+    size = str(metadata.get("size", ""))
+    if not size.isascii() or not size.isdigit() or len(size) > 12 or int(size) > 10 * 1024 * 1024:
+        raise ValueError("file size is unknown or exceeds the 10 MiB content limit")
+    with tempfile.TemporaryDirectory(prefix="mia-google-download-") as directory:
+        content = _run_gws(("drive", "files", "get"), params={"fileId": file_id, "supportsAllDrives": True, "alt": "media"}, output_path=os.path.join(directory, "payload"))
+    return {"id": file_id, "name": metadata.get("name", ""), "mimeType": mime_type, "size": len(content), "content_base64": base64.b64encode(content).decode("ascii")}
 
 
 def google_drive_create(name: str, mime_type: str = "application/vnd.google-apps.folder", parent_id: str = "") -> Any:
@@ -216,9 +344,62 @@ def google_drive_create(name: str, mime_type: str = "application/vnd.google-apps
     return _gws(("drive", "files", "create"), body=body)
 
 
+def google_drive_update_metadata(file_id: str, name: str = "", description: str = "") -> Any:
+    """Rename or describe a file authorized for Mia. Does not edit content, move, trash, delete, or change sharing. Requires drive.file access; a pasted link alone does not grant it."""
+    if not isinstance(name, str) or not isinstance(description, str):
+        raise ValueError("name and description must be text")
+    file_id = _file_identifier(file_id, "file ID")
+    body: dict[str, Any] = {}
+    if name:
+        body["name"] = _text(name, "name")
+    if description:
+        body["description"] = _text(description, "description")
+    if not body:
+        raise ValueError("provide a name or description")
+    return _gws(("drive", "files", "update"), params={"fileId": file_id, "supportsAllDrives": True, "fields": "id,name,description,mimeType,webViewLink"}, body=body)
+
+
+def _drive_media(content_base64: str, mime_type: str) -> tuple[bytes, str]:
+    if not isinstance(mime_type, str) or not re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", mime_type):
+        raise ValueError("invalid MIME type")
+    if mime_type.lower().startswith("application/vnd.google-apps."):
+        raise ValueError("use the dedicated Google Docs, Sheets or Slides tools for native files")
+    if not isinstance(content_base64, str) or not content_base64 or len(content_base64) > 14_000_000:
+        raise ValueError("file content must be non-empty base64, at most 10 MiB decoded")
+    try:
+        content = base64.b64decode(content_base64, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("invalid base64 file content") from error
+    if not content or len(content) > 10 * 1024 * 1024:
+        raise ValueError("file content must be non-empty and at most 10 MiB")
+    return content, mime_type
+
+
+def google_drive_create_file(name: str, content_base64: str, mime_type: str, parent_id: str = "") -> Any:
+    """Create a non-Google-native file from base64 content (up to 10 MiB). No host filesystem paths. Parent must already be authorized for Mia. Use dedicated editors to create Google Docs/Sheets/Slides."""
+    content, mime_type = _drive_media(content_base64, mime_type)
+    body: dict[str, Any] = {"name": _text(name, "name"), "mimeType": mime_type}
+    if parent_id:
+        body["parents"] = [_identifier(parent_id, "parent ID")]
+    return _gws(("drive", "files", "create"), params={"supportsAllDrives": True, "fields": "id,name,mimeType,webViewLink"}, body=body, media=content, media_type=mime_type)
+
+
+def google_drive_update_content(file_id: str, content_base64: str) -> Any:
+    """Replace content of a non-Google-native file authorized for Mia with non-empty base64 (up to 10 MiB). Preserves its MIME type, name, parents and sharing. This replaces existing bytes: only use when the user requests that edit. Use dedicated editors for Google Docs/Sheets/Slides. A pasted link alone does not grant drive.file access."""
+    file_id = _file_identifier(file_id, "file ID")
+    # Validate payload before any account access; the file's actual MIME type
+    # decides whether media replacement is appropriate, not a model claim.
+    content, _ = _drive_media(content_base64, "application/octet-stream")
+    metadata = _gws(("drive", "files", "get"), params={"fileId": file_id, "supportsAllDrives": True, "fields": "id,mimeType,trashed,capabilities(canEdit)"})
+    if not isinstance(metadata, dict) or metadata.get("id") != file_id or metadata.get("trashed") is not False or metadata.get("capabilities", {}).get("canEdit") is not True:
+        raise ValueError("file is not available for editing")
+    _, mime_type = _drive_media(content_base64, metadata.get("mimeType", ""))
+    return _gws(("drive", "files", "update"), params={"fileId": file_id, "supportsAllDrives": True, "fields": "id,name,mimeType,webViewLink"}, body={}, media=content, media_type=mime_type)
+
+
 def google_sheets_get(spreadsheet_id: str, a1_range: str = "") -> Any:
     """Read spreadsheet metadata, or values when an A1 range is supplied. Requires a shared spreadsheet ID/link."""
-    spreadsheet_id = _identifier(spreadsheet_id, "spreadsheet ID")
+    spreadsheet_id = _file_identifier(spreadsheet_id, "spreadsheet ID", "spreadsheets")
     if a1_range:
         return _gws(("sheets", "spreadsheets", "values", "get"), params={"spreadsheetId": spreadsheet_id, "range": _range(a1_range)})
     return _gws(("sheets", "spreadsheets", "get"), params={"spreadsheetId": spreadsheet_id, "fields": "spreadsheetId,properties(title,locale,timeZone),sheets(properties(sheetId,title,gridProperties))"})
@@ -235,19 +416,19 @@ def google_sheets_create(title: str, values: list[list[Any]] | None = None) -> A
 
 def google_sheets_update(spreadsheet_id: str, a1_range: str, values: list[list[Any]]) -> Any:
     """Write literal values to an exact A1 range in a shared spreadsheet. Formulas are not evaluated."""
-    spreadsheet_id, a1_range, values = _identifier(spreadsheet_id, "spreadsheet ID"), _range(a1_range), _values(values)
+    spreadsheet_id, a1_range, values = _file_identifier(spreadsheet_id, "spreadsheet ID", "spreadsheets"), _range(a1_range), _values(values)
     return _gws(("sheets", "spreadsheets", "values", "update"), params={"spreadsheetId": spreadsheet_id, "range": a1_range, "valueInputOption": "RAW"}, body={"range": a1_range, "majorDimension": "ROWS", "values": values})
 
 
 def google_sheets_append(spreadsheet_id: str, a1_range: str, values: list[list[Any]]) -> Any:
     """Append literal rows after the current table in an exact A1 range."""
-    spreadsheet_id, a1_range, values = _identifier(spreadsheet_id, "spreadsheet ID"), _range(a1_range), _values(values)
+    spreadsheet_id, a1_range, values = _file_identifier(spreadsheet_id, "spreadsheet ID", "spreadsheets"), _range(a1_range), _values(values)
     return _gws(("sheets", "spreadsheets", "values", "append"), params={"spreadsheetId": spreadsheet_id, "range": a1_range, "valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"}, body={"majorDimension": "ROWS", "values": values})
 
 
 def google_docs_get(document_id: str) -> Any:
     """Read a shared Google Doc by document ID/link."""
-    return _gws(("docs", "documents", "get"), params={"documentId": _identifier(document_id, "document ID")})
+    return _gws(("docs", "documents", "get"), params={"documentId": _file_identifier(document_id, "document ID", "document")})
 
 
 def google_docs_create(title: str, initial_text: str = "") -> Any:
@@ -260,18 +441,18 @@ def google_docs_create(title: str, initial_text: str = "") -> Any:
 
 def google_docs_append(document_id: str, text: str) -> Any:
     """Append bounded plain text to the end of a shared Google Doc."""
-    return _gws(("docs", "documents", "batchUpdate"), params={"documentId": _identifier(document_id, "document ID")}, body={"requests": [{"insertText": {"endOfSegmentLocation": {}, "text": _text(text, "text")}}]})
+    return _gws(("docs", "documents", "batchUpdate"), params={"documentId": _file_identifier(document_id, "document ID", "document")}, body={"requests": [{"insertText": {"endOfSegmentLocation": {}, "text": _text(text, "text")}}]})
 
 
 def google_docs_replace(document_id: str, find_text: str, replace_text: str, match_case: bool = True) -> Any:
     """Replace every exact occurrence of non-empty text in a shared Google Doc."""
     request = {"replaceAllText": {"containsText": {"text": _text(find_text, "find text"), "matchCase": bool(match_case)}, "replaceText": _text(replace_text, "replacement text")}}
-    return _gws(("docs", "documents", "batchUpdate"), params={"documentId": _identifier(document_id, "document ID")}, body={"requests": [request]})
+    return _gws(("docs", "documents", "batchUpdate"), params={"documentId": _file_identifier(document_id, "document ID", "document")}, body={"requests": [request]})
 
 
 def google_slides_get(presentation_id: str) -> Any:
     """Read a shared Google Slides presentation by presentation ID/link."""
-    return _gws(("slides", "presentations", "get"), params={"presentationId": _identifier(presentation_id, "presentation ID")})
+    return _gws(("slides", "presentations", "get"), params={"presentationId": _file_identifier(presentation_id, "presentation ID", "presentation")})
 
 
 def google_slides_create(title: str) -> Any:
@@ -281,7 +462,7 @@ def google_slides_create(title: str) -> Any:
 
 def google_slides_add_text_slide(presentation_id: str, title: str, body: str) -> Any:
     """Add one clean text slide to a shared presentation without deleting or rearranging existing slides."""
-    presentation_id = _identifier(presentation_id, "presentation ID")
+    presentation_id = _file_identifier(presentation_id, "presentation ID", "presentation")
     suffix = secrets.token_hex(8)
     slide_id, title_id, body_id = f"mia_slide_{suffix}", f"mia_title_{suffix}", f"mia_body_{suffix}"
     requests = [
@@ -297,7 +478,7 @@ def google_slides_add_text_slide(presentation_id: str, title: str, body: str) ->
 def google_slides_replace_text(presentation_id: str, find_text: str, replace_text: str, match_case: bool = True) -> Any:
     """Replace every exact occurrence of non-empty text in a shared Google Slides presentation."""
     request = {"replaceAllText": {"containsText": {"text": _text(find_text, "find text"), "matchCase": bool(match_case)}, "replaceText": _text(replace_text, "replacement text")}}
-    return _gws(("slides", "presentations", "batchUpdate"), params={"presentationId": _identifier(presentation_id, "presentation ID")}, body={"requests": [request]})
+    return _gws(("slides", "presentations", "batchUpdate"), params={"presentationId": _file_identifier(presentation_id, "presentation ID", "presentation")}, body={"requests": [request]})
 
 
 def _describe() -> None:
@@ -309,7 +490,7 @@ def _serve() -> None:
 
     server = MCPServer(
         "mia-google-workspace",
-        instructions="Use only the Google capabilities Mia granted to this bot. Delete, clear, trash, arbitrary API calls, and permission changes are unavailable. Ask Mia for escalation when the task needs a capability absent from this session.",
+        instructions="Use only the Google capabilities Mia granted to this bot. Drive and Gmail deletion, arbitrary API calls, and permission changes are unavailable. Ask Mia for escalation when the task needs a capability absent from this session.",
     )
     for name in TOOL_NAMES:
         server.add_tool(globals()[name], name=name)

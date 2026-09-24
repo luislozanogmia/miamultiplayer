@@ -106,6 +106,9 @@ jobs:
       # requires a clean git checkout (assertCleanReleaseCheckout).
       - name: Package Windows app
         working-directory: macos
+        env:
+          MIA_REQUIRE_GOOGLE_OAUTH: "1"
+          MIA_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.MIA_GOOGLE_OAUTH_CLIENT_ID }}
         run: npm run package:win
 
       # The packager writes the distributable archive and its checksum

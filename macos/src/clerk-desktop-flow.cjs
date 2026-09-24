@@ -1,5 +1,6 @@
 "use strict";
 const crypto = require("node:crypto");
+const { validClerkNonce } = require("./clerk-nonce.cjs");
 
 const CALLBACK_URL = "miamultiplayer://auth/clerk";
 const FLOW_TTL_MS = 10 * 60 * 1000;
@@ -16,7 +17,7 @@ function parseCallback(value, expectedState) {
   const state = states[0];
   if (!/^[a-f0-9]{64}$/.test(state) || !/^[a-f0-9]{64}$/.test(expectedState)
     || !crypto.timingSafeEqual(Buffer.from(state), Buffer.from(expectedState))) return null;
-  if (!/^[A-Za-z0-9._~-]{16,4096}$/.test(nonces[0])) return null;
+  if (!validClerkNonce(nonces[0])) return null;
   return { nonce: nonces[0] };
 }
 

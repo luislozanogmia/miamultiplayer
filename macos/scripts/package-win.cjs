@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
+const { stageGoogleOAuthClient } = require("./package-google-oauth.cjs");
 const {
   assertNoPrivateBuildPaths,
   assertNoPrivateContent,
@@ -340,6 +341,7 @@ async function buildWindowsPackage() {
     const { runtimeRoot, stagedPython, manifest, sourceRoots } = stageWindowsBundledRuntime(temporaryRoot);
 
     const stagedBackend = path.join(temporaryRoot, "backend");
+    stageGoogleOAuthClient(stagedBackend);
     runNpm(["ci", "--omit=dev", "--no-audit", "--no-fund"], stagedBackend);
     function stripDependencyState(directory) {
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {

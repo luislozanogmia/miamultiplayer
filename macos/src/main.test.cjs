@@ -310,6 +310,7 @@ test("packaged macOS runtime is self-contained and ignores ambient Hermes", () =
   assert.match(source, /process\.env\.PYTHONDONTWRITEBYTECODE\s*=\s*"1"/);
   assert.match(source, /process\.env\.HERMES_PYTHON/);
   assert.match(source, /process\.env\.HERMES_GWS_BIN = gwsLauncher/);
+  assert.match(source, /process\.env\.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path\.join\(userData, "google-workspace"\)/);
   assert.match(source, /process\.env\.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND = "file"/);
   assert.match(source, /\[pythonExecutable, hermesLauncher, ghostLauncher, gwsLauncher\]/);
   assert.match(source, /CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR/);
@@ -543,7 +544,7 @@ test("OTA updates default to the GitHub releases feed and use signed-app update 
   assert.match(source, /url\.protocol !== "https:"/);
   assert.match(source, /provider: "generic", url: feedUrl/);
   assert.match(source, /\.checkForUpdates\(\)/);
-  assert.match(source, /autoUpdater\.quitAndInstall\(\)/);
+  assert.match(source, /attachUpdateReadiness\(/);
   assert.match(source, /label: "Check for Updates…"/);
 });
 

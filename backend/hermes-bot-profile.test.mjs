@@ -11,6 +11,7 @@ const {
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   provisionHermesRuntimeProfiles,
@@ -21,7 +22,8 @@ test('Claude DirectSDK is provisioned unchanged for agent, Google-agent, and bot
   const profilesRoot = path.join(root, 'profiles');
   try {
     provisionHermesRuntimeProfiles({ profilesRoot });
-    for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE]) {
+    for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+      MIAOS_BOT_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE]) {
       const installed = path.join(profilesRoot, profile, 'plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
       for (const file of ['plugin.yaml', '__init__.py', 'directsdk.py', 'directsdk_setup.py', 'LICENSE']) {
         assert.equal(
@@ -95,9 +97,11 @@ test('background_review defaults to enabled for gateway/agent profiles and disab
     const agent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_HERMES_PROFILE, 'config.yaml'), 'utf8');
     const googleAgent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
     const bot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    const googleBot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
     assert.match(agent, /auxiliary:\n  background_review:\n    enabled: true/);
     assert.match(googleAgent, /auxiliary:\n  background_review:\n    enabled: true/);
     assert.match(bot, /auxiliary:\n  background_review:\n    enabled: false/);
+    assert.match(googleBot, /auxiliary:\n  background_review:\n    enabled: false/);
   } finally {
     if (previous === undefined) delete process.env.MIAOS_BACKGROUND_REVIEW;
     else process.env.MIAOS_BACKGROUND_REVIEW = previous;
@@ -135,34 +139,57 @@ test('Mia registers its bounded bundled Google Workspace tools for Mia and all B
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-google-'));
   const profilesRoot = path.join(root, 'profiles');
   const python = path.join(root, 'python');
-  const gws = path.join(root, 'gws');
   fs.writeFileSync(python, 'python');
-  fs.writeFileSync(gws, 'gws');
   const previous = {
     HERMES_PYTHON: process.env.HERMES_PYTHON,
-    HERMES_GWS_BIN: process.env.HERMES_GWS_BIN,
+    MIA_GOOGLE_BROKER_URL: process.env.MIA_GOOGLE_BROKER_URL,
+    MIA_GOOGLE_BROKER_TOKEN: process.env.MIA_GOOGLE_BROKER_TOKEN,
     HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    GOOGLE_WORKSPACE_CLI_CONFIG_DIR: process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR,
   };
   try {
     process.env.HERMES_PYTHON = python;
-    process.env.HERMES_GWS_BIN = gws;
+    process.env.MIA_GOOGLE_BROKER_URL = 'http://127.0.0.1:54321';
+    process.env.MIA_GOOGLE_BROKER_TOKEN = 't'.repeat(43);
     process.env.HOME = root;
+    process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(root, 'google-profile');
     provisionHermesRuntimeProfiles({ profilesRoot });
     const agent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_HERMES_PROFILE, 'config.yaml'), 'utf8');
     const googleAgent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
     const bot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    const googleBot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
     assert.doesNotMatch(agent, /mia-google-workspace|google_sheets_get|google_docs_create|google_slides/);
     assert.match(googleAgent, /mcp_servers:\n  mia-google-workspace:/);
     assert.match(googleAgent, /google_sheets_get/);
     assert.match(googleAgent, /google_docs_create/);
     assert.match(googleAgent, /google_slides_add_text_slide/);
-    assert.match(bot, /mcp_servers:\n  mia-google-workspace:/);
-    assert.match(bot, /google_gmail_list/);
-    assert.match(bot, /google_calendar_create/);
-    assert.match(bot, /google_drive_create/);
-    assert.match(bot, /google_sheets_get/);
-    assert.match(bot, /google_docs_create/);
-    assert.match(bot, /google_slides_add_text_slide/);
+    assert.doesNotMatch(bot, /mia-google-workspace|MIA_GOOGLE_BROKER_URL|MIA_GOOGLE_BROKER_TOKEN/);
+    assert.match(googleBot, /mcp_servers:\n  mia-google-workspace:/);
+    assert.match(googleBot, /google_gmail_list/);
+    assert.match(googleBot, /google_calendar_create/);
+    assert.match(googleBot, /google_drive_create/);
+    assert.match(googleBot, /google_drive_update_metadata/);
+    assert.match(googleBot, /google_drive_create_file/);
+    assert.match(googleBot, /google_drive_update_content/);
+    assert.match(googleBot, /google_drive_get_content/);
+    assert.doesNotMatch(googleBot, /google_drive_trash_file/);
+    assert.match(googleAgent, /google_drive_get_content/);
+    for (const profile of [googleAgent, googleBot]) {
+      assert.ok(profile.includes('MIA_GOOGLE_BROKER_URL: "http://127.0.0.1:54321"'));
+      assert.ok(profile.includes(`MIA_GOOGLE_BROKER_TOKEN: ${JSON.stringify('t'.repeat(43))}`));
+      assert.doesNotMatch(profile, /HERMES_GWS_BIN|GOOGLE_WORKSPACE_CLI_CONFIG_DIR/);
+      assert.doesNotMatch(profile, /  - terminal\n|\nterminal:/);
+    }
+    assert.match(googleBot, /google_sheets_get/);
+    assert.match(googleBot, /google_docs_create/);
+    assert.match(googleBot, /google_slides_add_text_slide/);
+    // Registration is broker-based and does not inherit HOME/USERPROFILE.
+    delete process.env.HOME;
+    delete process.env.USERPROFILE;
+    provisionHermesRuntimeProfiles({ profilesRoot });
+    const windowsBot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
+    assert.match(windowsBot, /mia-google-workspace:/);
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;

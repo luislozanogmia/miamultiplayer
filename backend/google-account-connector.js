@@ -2,7 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFile, spawn } = require('child_process');
+const { execFile } = require('child_process');
+const { startNativeGoogleLogin, hasNativeGoogleClient } = require('./google-native-login');
 
 const CONNECTOR_ID = 'skill-google-workspace';
 const CONNECTOR_NAME = 'Google Account';
@@ -21,14 +22,10 @@ const GOOGLE_ACCESS_POLICY = Object.freeze({
 const GWS_OAUTH_SCOPES = Object.freeze([
   'openid',
   'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/contacts.readonly',
-  'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/documents',
-  'https://www.googleapis.com/auth/presentations',
 ]);
 
 // Exact Discovery-method prefixes. No raw gws command is accepted from the
@@ -61,7 +58,6 @@ const ALLOWED_GWS_COMMANDS = Object.freeze({
 const FORBIDDEN_COMMAND_PART_RE = /(?:^|[-_.])(delete|trash|clear|remove|purge|destroy|batchclear|batchupdate)(?:$|[-_.])/i;
 const SAFE_OPERATION_FLAGS = new Set(['--params', '--json', '--upload', '--output', '-o', '--page-all', '--page-limit', '--page-delay', '--dry-run']);
 const PROCESS_TIMEOUT_MS = 30 * 1000;
-const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 const PROCESS_MAX_BUFFER = 1024 * 1024;
 const GOOGLE_ID_RE = /^[A-Za-z0-9_-]{10,256}$/;
 const MAX_DOC_BATCH_REQUESTS = 10;
@@ -103,6 +99,7 @@ function processEnvironment(env = process.env) {
     'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'PATHEXT',
     'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'USERPROFILE',
     'TEMP', 'TMP', 'USERNAME',
+    'GOOGLE_WORKSPACE_CLI_CONFIG_DIR',
   ]) {
     if (env[key]) childEnv[key] = env[key];
   }
@@ -134,6 +131,21 @@ function defaultProcessRunner(file, args, options = {}) {
   });
 }
 
+async function runBroker(env, args, cwd, fetchImpl = fetch) {
+  const base = String(env.MIA_GOOGLE_BROKER_URL || '').trim();
+  const token = String(env.MIA_GOOGLE_BROKER_TOKEN || '');
+  if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base) || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  try {
+    const response = await fetchImpl(`${base}/run`, { method: 'POST', redirect: 'error', headers: {
+      Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+    }, body: JSON.stringify({ args, ...(cwd ? { cwd } : {}) }) });
+    if (!response.ok) return { code: 1, stdout: '', stderr: '' };
+    const result = await response.json();
+    return { code: Number.isInteger(result.code) ? result.code : 1,
+      stdout: String(result.stdout || ''), stderr: String(result.stderr || ''), timedOut: result.timedOut === true };
+  } catch (_) { return { code: 1, stdout: '', stderr: '' }; }
+}
+
 function parseJson(text) {
   const raw = String(text || '').trim();
   try {
@@ -156,6 +168,9 @@ function parseJson(text) {
 
 function authPayloadConnected(payload) {
   if (!payload) return false;
+  // Local encrypted credentials can outlive a revoked or expired grant.
+  // The provider's explicit validation result overrides their mere presence.
+  if (payload.token_valid === false || payload.credentials_valid === false || payload.authenticated === false) return false;
   if (payload.authenticated === true || payload.token_valid === true || payload.credentials_valid === true) return true;
   if (payload.status === 'authenticated' || payload.status === 'success' || payload.status === 'connected') return true;
   return payload.encryption_valid === true && payload.has_refresh_token === true;
@@ -167,8 +182,10 @@ function authPayloadConfigured(payload) {
 }
 
 function authPayloadHasRequiredScopes(payload) {
-  if (!payload || !Array.isArray(payload.scopes)) return true;
+  if (!payload || !Array.isArray(payload.scopes)) return false;
   const granted = new Set(payload.scopes.map((scope) => String(scope || '').trim()).filter(Boolean));
+  // Old broad grants must not be mistaken for the new per-file policy.
+  if ([...granted].some((scope) => /^https:\/\/www\.googleapis\.com\/auth\/(?:drive(?:\.readonly|\.metadata(?:\.readonly)?)?|documents(?:\.readonly)?|spreadsheets(?:\.readonly)?|presentations(?:\.readonly)?)$/.test(scope))) return false;
   return GWS_OAUTH_SCOPES.every((scope) => granted.has(scope));
 }
 
@@ -312,59 +329,18 @@ function assertAllowedGwsOperation(operation, args = []) {
   return [...prefix, ...args];
 }
 
-function defaultLoginStarter(file, args, options = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(file, args, {
-      env: options.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    let settled = false;
-    let output = '';
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch (_) {}
-      finish({ ok: false, timedOut: true, child: null, authorizationUrl: null });
-    }, LOGIN_TIMEOUT_MS);
-    if (typeof timer.unref === 'function') timer.unref();
-    const inspect = (chunk) => {
-      output = (output + String(chunk || '')).slice(-65536);
-      const completeLines = output.split(/\r?\n/).slice(0, -1);
-      for (const line of completeLines) {
-        const match = line.match(/https:\/\/accounts\.google\.com\/[^\s]+/);
-        if (match) {
-          finish({ ok: true, child, authorizationUrl: match[0] });
-          break;
-        }
-      }
-    };
-    child.stdout.on('data', inspect);
-    child.stderr.on('data', inspect);
-    child.once('error', () => {
-      clearTimeout(timer);
-      finish({ ok: false, child: null, authorizationUrl: null });
-    });
-    child.once('exit', () => {
-      clearTimeout(timer);
-      finish({ ok: false, child: null, authorizationUrl: null });
-    });
-    // Current gws releases pause before opening/printing the browser flow when
-    // stdin is not a TTY. A newline accepts that prompt without using a shell.
-    child.stdin.write('\n');
-  });
-}
 
 function createGoogleAccountConnector(options = {}) {
   const env = options.env || process.env;
   const fsImpl = options.fsImpl || fs;
   const runtime = options.runtime || resolveRuntime(env, fsImpl);
   const runProcess = options.runProcess || defaultProcessRunner;
-  const startLogin = options.startLogin || defaultLoginStarter;
+  const fetchImpl = options.fetchImpl || fetch;
+  const startLogin = options.startLogin || (() => startNativeGoogleLogin({ env, scopes: GWS_OAUTH_SCOPES, fetchImpl }));
   let activeLogin = null;
+  let pendingStart = null;
+  let activePicker = null;
+  let pendingPicker = null;
   let loginGeneration = 0;
 
   function terminateLogin(login) {
@@ -381,6 +357,8 @@ function createGoogleAccountConnector(options = {}) {
 
   async function runGws(args, timeout = PROCESS_TIMEOUT_MS) {
     if (!runtime.available) return { code: 127, unavailable: true, stdout: '', stderr: '' };
+    const brokered = await runBroker(env, args, undefined, fetchImpl);
+    if (brokered) return brokered;
     return runProcess(runtime.gwsBin, args, {
       env: processEnvironment(env),
       timeout,
@@ -396,14 +374,32 @@ function createGoogleAccountConnector(options = {}) {
       return publicStatus(authPayloadHasRequiredScopes(payload) ? 'connected' : 'needs_reconnect');
     }
     if (result.timedOut || (result.code !== 0 && result.code !== 2)) return publicStatus('connection_error');
-    return publicStatus(authPayloadConfigured(payload) ? 'not_connected' : 'setup_required');
+    return publicStatus(authPayloadConfigured(payload) || hasNativeGoogleClient(env) ? 'not_connected' : 'setup_required');
   }
 
-  async function start() {
+  function start() {
+    if (pendingStart) return pendingStart;
+    const attempt = startAttempt();
+    pendingStart = attempt;
+    const clear = () => { if (pendingStart === attempt) pendingStart = null; };
+    attempt.then(clear, clear);
+    return attempt;
+  }
+
+  async function startAttempt() {
     if (!runtime.available) return { ...publicStatus('unavailable'), authorizationUrl: null };
     if (activeLogin && activeLogin.authorizationUrl) {
-      return { ...publicStatus('awaiting_approval'), authorizationUrl: activeLogin.authorizationUrl };
+      return { ...publicStatus('awaiting_approval'), authorizationUrl: activeLogin.authorizationUrl,
+        authorizationProof: activeLogin.authorizationProof || null };
     }
+    // Reconnect can replace the account without calling disconnect first.
+    // Invalidate both active and still-starting file selections before the
+    // new login can write credentials; old callbacks must not verify against
+    // the replacement account.
+    loginGeneration += 1;
+    pendingPicker = null;
+    terminateLogin(activePicker);
+    activePicker = null;
     const requestedGeneration = loginGeneration;
     const login = await startLogin(runtime.gwsBin, [
       'auth',
@@ -423,20 +419,75 @@ function createGoogleAccountConnector(options = {}) {
     }
     activeLogin = login.child ? login : null;
     if (login.child && typeof login.child.once === 'function') {
-      login.child.once('exit', () => { activeLogin = null; });
+      login.child.once('exit', () => { if (activeLogin === login) activeLogin = null; });
     }
-    return { ...publicStatus('awaiting_approval'), authorizationUrl: login.authorizationUrl };
+    return { ...publicStatus('awaiting_approval'), authorizationUrl: login.authorizationUrl,
+      authorizationProof: login.authorizationProof || null };
   }
 
   async function testConnection() {
     return status();
   }
 
+  function pickerStatus() {
+    return activePicker && activePicker.child ? activePicker.child.result : { state: 'idle' };
+  }
+
+  function startPicker() {
+    if (pendingPicker) return pendingPicker;
+    const attempt = startPickerAttempt();
+    pendingPicker = attempt;
+    const clear = () => { if (pendingPicker === attempt) pendingPicker = null; };
+    attempt.then(clear, clear);
+    return attempt;
+  }
+
+  async function startPickerAttempt() {
+    if (pendingStart || activeLogin) return { state: 'not_connected' };
+    if (pickerStatus().state === 'pending') return { state: 'pending', authorizationUrl: activePicker.authorizationUrl,
+      authorizationProof: activePicker.authorizationProof || null };
+    const generation = loginGeneration;
+    if (!(await status()).connected || generation !== loginGeneration) return { state: 'not_connected' };
+    const picker = await (options.startPicker || startNativeGoogleLogin)({ env, filePicker: true,
+      onPicked: async ids => {
+        const files = [];
+        for (const id of ids) {
+          if (generation !== loginGeneration) throw new Error('connection changed');
+          const result = await runGws(['drive', 'files', 'get', '--params', JSON.stringify({
+            fileId: id, supportsAllDrives: true, fields: 'id,name,mimeType,trashed,capabilities(canEdit)',
+          })]);
+          const file = parseJson(result.stdout);
+          if (result.code !== 0 || !file || file.id !== id || file.trashed !== false) throw new Error('file access unavailable');
+          files.push({ id, name: String(file.name || '').slice(0, 512), canEdit: file.capabilities?.canEdit === true });
+        }
+        if (generation !== loginGeneration) throw new Error('connection changed');
+        return files;
+      },
+    });
+    if (generation !== loginGeneration) { terminateLogin(picker); return { state: 'cancelled' }; }
+    if (!picker.ok) return { state: 'failed' };
+    activePicker = picker;
+    return { state: 'pending', authorizationUrl: picker.authorizationUrl,
+      authorizationProof: picker.authorizationProof || null };
+  }
+
   async function disconnect() {
     loginGeneration += 1;
+    pendingStart = null;
+    pendingPicker = null;
+    terminateLogin(activePicker);
+    activePicker = null;
     // A pending browser login can otherwise finish after account deletion and
     // repopulate the process-scoped profile with the deleted user's token.
     cancelActiveLogin();
+    if (env.MIA_GOOGLE_BROKER_URL && env.MIA_GOOGLE_BROKER_TOKEN) {
+      try {
+        const response = await fetchImpl(`${env.MIA_GOOGLE_BROKER_URL}/logout`, { method: 'POST', redirect: 'error', headers: {
+          Authorization: `Bearer ${env.MIA_GOOGLE_BROKER_TOKEN}`, 'Content-Type': 'application/json',
+        }, body: '{}' });
+        return response.ok ? publicStatus('not_connected') : publicStatus('connection_error');
+      } catch (_) { return publicStatus('connection_error'); }
+    }
     if (!runtime.available) return publicStatus('unavailable');
     const result = await runGws(['auth', 'logout']);
     if (result.code !== 0) return publicStatus('connection_error');
@@ -465,7 +516,24 @@ function createGoogleAccountConnector(options = {}) {
     return payload;
   }
 
-  return { runtime, status, start, testConnection, disconnect, runOperation };
+  async function recentFiles() {
+    const generation = loginGeneration;
+    if (!(await status()).connected) return { state: 'not_connected', files: [] };
+    const result = await runGws(['drive', 'files', 'list', '--params', JSON.stringify({
+      q: 'trashed = false', pageSize: 100, orderBy: 'modifiedTime desc',
+      fields: 'files(id,name,mimeType,isAppAuthorized,capabilities(canEdit))',
+    })]);
+    if (generation !== loginGeneration) return { state: 'not_connected', files: [] };
+    const payload = parseJson(result.stdout);
+    if (result.code !== 0 || !Array.isArray(payload?.files)) throw new Error('file_list_unavailable');
+    return { state: 'connected', files: payload.files.filter(file =>
+      GOOGLE_ID_RE.test(file.id || '') && file.isAppAuthorized === true
+      && file.mimeType !== 'application/vnd.google-apps.folder'
+    ).map(file => ({ id: file.id, name: String(file.name || '').slice(0, 512),
+      mimeType: String(file.mimeType || ''), canEdit: file.capabilities?.canEdit === true })) };
+  }
+
+  return { runtime, status, start, testConnection, disconnect, runOperation, startPicker, pickerStatus, recentFiles };
 }
 
 // The gws CLI profile is process-scoped, not a multi-profile credential
