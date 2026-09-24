@@ -262,6 +262,9 @@ try {
     $null = Invoke-Native "git apply hermes-model-switch-history.patch" {
         & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-model-switch-history.patch")
     }
+    $null = Invoke-Native "git apply hermes-gpt6-tiers.patch" {
+        & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-gpt6-tiers.patch")
+    }
 } finally {
     Pop-Location
 }

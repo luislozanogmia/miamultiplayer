@@ -172,6 +172,10 @@ test('subscription model selections stay inside the provider allowlist', () => {
   });
   assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-6-astra', false), true);
   assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-6-astra', true), false);
+  for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
+    assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', model, false), { model, fast: false });
+    assert.equal(inference.isAllowedHermesModel('openai-codex', model, false), true);
+  }
   assert.equal(inference.isAllowedHermesModel('xai-oauth', 'deepseek-v4-flash', false), false);
   assert.equal(inference.MIAOS_BOT_MAX_TURNS, 100);
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200 }), 200);
