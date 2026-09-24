@@ -8785,7 +8785,7 @@
       botStoreState.loading = false;
     }).catch(function(){
       botStoreState.loading = false;
-      botStoreState.error = 'The bot store is unavailable right now.';
+      botStoreState.error = 'The Bot Marketplace is unavailable right now.';
     }).then(function(){
       if(chatInfo.mode === 'bot-store') renderChatInfoPane();
     });
@@ -8823,7 +8823,7 @@
   }
 
   function renderBotStorePane(pane){
-    pane.setAttribute('aria-label', 'Bot store');
+    pane.setAttribute('aria-label', 'Bot Marketplace');
     pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open', 'bot-store-open');
     pane.classList.add('open', 'bot-store-open');
     var body;
@@ -8836,8 +8836,8 @@
     } else {
       body = '<div class="bot-store-list">' + botStoreState.entries.map(botStoreCardHtml).join('') + '</div>';
     }
-    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Bot store</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
-      '<button type="button" class="cip-pane-btn" id="botStorePaneClose" aria-label="Close Bot store" title="Close Bot store"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Bot Marketplace</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="botStorePaneClose" aria-label="Close Bot Marketplace" title="Close Bot Marketplace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
       '<div class="bot-store-body">' + body + '</div>';
     var close = el('#botStorePaneClose', pane);
     if(close) close.addEventListener('click', closeBotStorePane);
