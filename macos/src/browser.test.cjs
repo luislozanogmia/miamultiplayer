@@ -41,6 +41,7 @@ function harness(options = {}) {
       this.navigationHistory = { canGoBack: () => false, canGoForward: () => false };
     }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
+    getURL() { return this.shownUrl || ""; }
     isLoading() { return false; }
     isDestroyed() { return this.closed; }
     close() { this.closed = true; }
@@ -583,6 +584,53 @@ test("aborted and stale load failures never stamp a tab error", async () => {
   await flush();
   assert.equal(stale.command("state").tabs[0].error, "");
   stale.window.emit("closed");
+});
+
+test("a link that becomes a download is not shown as a load error", async () => {
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const fileUrl = "https://files.example/report.xlsx";
+  const downloadItem = url => Object.assign(new EventEmitter(), { getURL: () => url, getFilename: () => "report.xlsx" });
+  const failed = () => Object.assign(new Error(`ERR_FAILED (-2) loading '${fileUrl}'`), { code: "ERR_FAILED" });
+
+  // Download reported first, then the page load fails: no error, tab stays on its page.
+  const h = harness();
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://files.example/list";
+  wc.loadURL = () => new Promise((_resolve, reject) => setImmediate(() => reject(failed())));
+  h.command("navigate", { value: fileUrl });
+  h.profile.emit("will-download", {}, downloadItem(fileUrl), wc);
+  await flush(); await flush();
+  let tab = h.command("state").tabs[0];
+  assert.equal(tab.error, "");
+  assert.equal(tab.url, "https://files.example/list");
+  wc.emit("did-fail-load", {}, -2, "ERR_FAILED", fileUrl, true);
+  assert.equal(h.command("state").tabs[0].error, "");
+  h.window.emit("closed");
+
+  // Page load fails first, then the download is reported: the error is cleared.
+  const late = harness();
+  late.command("new");
+  const lateWc = late.views[0].webContents;
+  lateWc.shownUrl = "https://files.example/list";
+  lateWc.loadURL = () => Promise.reject(failed());
+  late.command("navigate", { value: fileUrl });
+  await flush();
+  assert.match(late.command("state").tabs[0].error, /ERR_FAILED/);
+  late.profile.emit("will-download", {}, downloadItem(fileUrl), lateWc);
+  tab = late.command("state").tabs[0];
+  assert.equal(tab.error, "");
+  assert.equal(tab.url, "https://files.example/list");
+  late.window.emit("closed");
+
+  // A new tab opened only for the download closes, as in Chrome.
+  const blank = harness();
+  blank.command("new");
+  blank.command("new");
+  blank.command("navigate", { value: fileUrl });
+  blank.profile.emit("will-download", {}, downloadItem(fileUrl), blank.views[1].webContents);
+  assert.equal(blank.command("state").tabs.length, 1);
+  blank.window.emit("closed");
 });
 
 test("switching tabs and creating a new active tab moves keyboard focus into the page", () => {

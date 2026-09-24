@@ -623,6 +623,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // error over the page the user is actually looking at.
     if (isAbortedLoadError(error)) return;
     if (!tabs.has(tab.id) || tab.url !== target) return;
+    // A link that turns out to be a file ends its page load as a download;
+    // that is not a failure (Chromium reports ERR_FAILED for it).
+    if (tab.downloadUrl === target) return;
     tab.error = error.message; layout(); publish();
   }
 
@@ -1264,8 +1267,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
       navigated(event, url, mainFrame);
     });
-    wc.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
-      if (!mainFrame || code === -3) return;
+    wc.on("did-fail-load", (_event, code, description, url, mainFrame) => {
+      if (!mainFrame || code === -3 || url === tab.downloadUrl) return;
       tab.error = description; layout(); publish();
     });
     wc.on("render-process-gone", () => {
@@ -1320,12 +1323,29 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return state();
   }
   function downloadStarted(_event, item, contents) {
-    if (![...tabs.values()].some(tab => tab.view.webContents === contents)) return;
+    const tab = [...tabs.values()].find(candidate => candidate.view.webContents === contents);
+    if (!tab) return;
+    downloadEndedNavigation(tab, item.getURL());
     // Electron's native Save dialog chooses the destination; never auto-open files.
     download = `Downloading ${item.getFilename()}`; publish();
     item.once("done", (_event, result) => {
       download = `${result === "completed" ? "Saved" : result}: ${item.getFilename()}`; publish();
     });
+  }
+  // The download may be reported before or after its page load fails, so
+  // clear any error already shown and return the tab to the page it still
+  // displays. A tab opened only for the download closes, as in Chrome.
+  function downloadEndedNavigation(tab, url) {
+    tab.downloadUrl = url;
+    if (tab.url !== url) return;
+    const wc = tab.view.webContents;
+    const shown = wc.isDestroyed() ? "" : wc.getURL();
+    if ((!shown || shown === "about:blank") && tabs.size > 1) {
+      closeTab(tab.id);
+      return;
+    }
+    if (shown) tab.url = shown;
+    tab.error = ""; persistTabs(); layout(); publish();
   }
   profile.on("will-download", downloadStarted);
   function authorized(event) {
