@@ -83,3 +83,55 @@ test('setup prompt makes confirmation and schedule boundaries explicit', () => {
   assert.match(prompt, /automation\.enabled may be true ONLY/);
   assert.match(prompt, /Help me monitor the market/);
 });
+
+test('a revision changes only what was asked and keeps a hand-set schedule', () => {
+  const { normalizeAgentRevision } = require('./agent-setup');
+  const current = {
+    name: 'Research',
+    role: 'Research AI papers.',
+    output: 'A sourced brief.',
+    automation: { enabled: true, frequency: 'daily', day: '', time: '08:00', prompt: 'Find new AI papers.' },
+  };
+  const reply = JSON.stringify({
+    name: 'Scout',
+    role: 'Research AI papers.',
+    output: 'A sourced brief.',
+    automation: { enabled: false, frequency: 'none' },
+  });
+  const revised = normalizeAgentRevision(reply, 'Create a research bot', current, 'Call it Scout');
+  assert.equal(revised.name, 'Scout');
+  assert.equal(revised.role, 'Research AI papers.');
+  assert.deepEqual(revised.automation, current.automation);
+});
+
+test('a revision can add or remove a schedule only when the change asks', () => {
+  const { normalizeAgentRevision } = require('./agent-setup');
+  const current = { name: 'Research', role: 'Research AI papers.', output: 'A sourced brief.', automation: { enabled: false } };
+  const weekly = normalizeAgentRevision(
+    JSON.stringify({ automation: { enabled: true, frequency: 'weekly', day: 'Friday', time: '09:00' } }),
+    'Create a research bot', current, 'Run it every Friday at 9am'
+  );
+  assert.equal(weekly.automation.enabled, true);
+  assert.equal(weekly.automation.frequency, 'weekly');
+  assert.equal(weekly.automation.day, 'Friday');
+  assert.equal(weekly.automation.time, '09:00');
+  assert.ok(weekly.automation.prompt);
+  const invented = normalizeAgentRevision(
+    JSON.stringify({ automation: { enabled: true, frequency: 'daily', time: '07:00' } }),
+    'Create a research bot', current, 'Make the output shorter'
+  );
+  assert.equal(invented.automation.enabled, false);
+  const removed = normalizeAgentRevision('', 'Create a research bot', weekly, 'Remove the schedule');
+  assert.equal(removed.automation.enabled, false);
+});
+
+test('a revision falls back to the current draft when inference fails', () => {
+  const { normalizeAgentRevision, buildAgentRevisionPrompt } = require('./agent-setup');
+  const current = { name: 'Scout', role: 'Research AI papers.', output: 'A sourced brief.', automation: { enabled: false } };
+  const revised = normalizeAgentRevision('not json', 'Create a research bot', current, 'Make it friendlier');
+  assert.equal(revised.name, 'Scout');
+  assert.equal(revised.role, 'Research AI papers.');
+  const prompt = buildAgentRevisionPrompt('Create a research bot', current, 'Make it friendlier');
+  assert.match(prompt, /Requested change: Make it friendlier/);
+  assert.match(prompt, /"name":"Scout"/);
+});

@@ -541,16 +541,49 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.doesNotMatch(source, /openCinema\('chat'\)/);
 });
 
-test('Mia routes bot-creation language into native setup before Hermes dispatch', async () => {
+test('Mia keeps bot creation in her own chat before any Hermes dispatch', async () => {
   const source = await readFile(appUrl, 'utf8');
 
   assert.match(source, /function isBotCreationIntent\(value\)/);
-  assert.match(source, /(?:create\|build\|make\|add|build\|make\|add\|set).*bot/);
   assert.match(source, /chatWs\.activeKind === 'agent'[\s\S]*isMiaOrchestrator\(chatWs\.activeLabel, 'gateway'\)[\s\S]*isBotCreationIntent\(text\)/);
-  assert.match(source, /startAgentSetupChat\(\);[\s\S]*submitAgentSetupIntent\(text\);[\s\S]*botSetup: true/);
+  // Mia drafts the bot in her chat and revises it from follow-up messages;
+  // she no longer jumps to the separate New Bot setup chat.
+  assert.match(source, /draftFlow\.phase === 'review'\)\{\s*reviseMiaBotDraft\(sendRoomId, text\);/);
+  assert.match(source, /isBotCreationIntent\(text\)\)\{\s*startMiaBotDraft\(sendRoomId, text\);[\s\S]*botSetup: true/);
   const routeStart = source.indexOf("if(!threadRootId && !preparedAttachment && chatWs.activeKind === 'agent'");
-  const dispatchStart = source.indexOf('return sendNativeConversationEvent(', routeStart);
-  assert.ok(routeStart >= 0 && dispatchStart > routeStart, 'native setup routing precedes Hermes dispatch');
+  const routeEnd = source.indexOf('return sendNativeConversationEvent(', routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart, 'bot drafting precedes Hermes dispatch');
+  assert.doesNotMatch(source.slice(routeStart, routeEnd), /startAgentSetupChat\(\)/);
+});
+
+test('bot creation intent catches requests, not questions or edits', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const fn = /  function isBotCreationIntent\(value\)\{[\s\S]*?\n  \}\n/.exec(source)[0];
+  const isBotCreationIntent = new Function(`${fn}; return isBotCreationIntent;`)();
+  for (const text of ['create a bot', 'Create a bot that tracks AI news', 'make me a daily news bot',
+    'can you create a research bot?', 'I want a newsletter bot', 'Mia, set up a bot to watch my inbox']) {
+    assert.equal(isBotCreationIntent(text), true, text);
+  }
+  for (const text of ['how do I create a bot?', 'add a new skill to my bot', 'add a schedule to the news bot',
+    'edit the linkedin bot', 'create a report about bots']) {
+    assert.equal(isBotCreationIntent(text), false, text);
+  }
+});
+
+test('Mia\'s chat drafts, revises, and creates a bot with the shared review card', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  // Revisions send the current draft (with hand edits) and the change.
+  assert.match(source, /function reviseMiaBotDraft\(roomId, text\)[\s\S]*captureAgentSetupDraft\(flow\)/);
+  assert.match(source, /body\.change = change;\s*body\.currentDraft = flow\.draft;/);
+  assert.match(source, /We’re building this bot\. Review the details, or tell me what to change\./);
+  // The same card and create path as the New Bot setup chat.
+  assert.match(source, /function miaBotDraftHtml\(flow, thread\)[\s\S]*agentSetupReviewHtml\(flow, \{/);
+  assert.match(source, /function activateMiaBotDraft\(roomId\)[\s\S]*agentSetupCreatePayload\(flow, flow\.intent\)[\s\S]*createBotFromSetupPayload\(/);
+  assert.match(source, /function activateAgentSetup\(\)[\s\S]*agentSetupCreatePayload\(agentSetup, agentSetup\.intent\)[\s\S]*createBotFromSetupPayload\(/);
+  // A redraw keeps what was typed into the card.
+  assert.match(source, /flow\.phase === 'review' && thread && el\('\.agent-setup-card #agentSetupName', thread\)[\s\S]*captureAgentSetupDraft\(flow\)/);
+  assert.match(source, /html \+= miaBotDraftHtml\(botDraftFlow, thread\);/);
+  assert.match(source, /wireMiaBotDraft\(thread, roomId, botDraftFlow\);/);
 });
 
 test('bot profile shows its automation collection and opens one item independently', async () => {
@@ -785,7 +818,8 @@ test('chat-native bot setup can cancel or retry bounded interpretation and activ
   assert.match(source, /function cancelAgentSetupFlow\(\)/);
   assert.match(source, /id="agentSetupCancel"/);
   assert.match(source, /id="agentSetupRetry"/);
-  assert.match(source, /createNativeAgentConversation\(created, controller \? \{signal:controller\.signal\} : \{\}\)/);
+  assert.match(source, /createBotFromSetupPayload\(prepared\.payload, controller \? \{signal:controller\.signal\} : \{\}, agentSetup\)/);
+  assert.match(source, /createNativeAgentConversation\(created, requestOptions\)/);
   assert.match(source, /api\('\/api\/bots\/interpret', \{[\s\S]*signal:controller\.signal/);
   assert.match(styles, /agent-setup-actions button:disabled/);
 });
