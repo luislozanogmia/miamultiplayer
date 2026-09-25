@@ -95,3 +95,26 @@ test('cancel cannot discard a submitted creation or claim it was rolled back', (
   assert.equal(flow.phase, 'review');
   assert.equal(flow.creation.submitted, true);
 });
+
+test('creation timeout retains its request identity and offers recovery', async () => {
+  const flow = { phase: 'review', draft: { name: 'Fixture' }, intent: 'fixture', requestId: 0 };
+  let timeout;
+  const ctx = harness({
+    AbortController, AGENT_SETUP_TIMEOUT_MS: 100,
+    setTimeout: callback => { timeout = callback; return 1; }, clearTimeout: () => {},
+    chatRoomState: () => ({ botDraft: flow }),
+    agentSetupCreatePayload: () => ({ payload: { name: 'Fixture' } }),
+    renderMiaBotDraftRoom: () => {},
+    clearMiaBotDraftRequest: () => {},
+    api: () => new Promise(() => {}),
+  });
+  ctx.activateMiaBotDraft('room');
+  await Promise.resolve();
+  const key = flow.creation.key;
+  timeout();
+  assert.equal(flow.phase, 'review');
+  assert.equal(flow.creation.key, key);
+  assert.equal(flow.creation.submitted, true);
+  assert.match(flow.error, /Check creation/);
+  assert.doesNotMatch(flow.error, /Nothing was created|cancelled/i);
+});
