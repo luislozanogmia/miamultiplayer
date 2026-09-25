@@ -17,21 +17,23 @@ function readClient(env, directory) {
   const bundled = path.join(__dirname, 'google-oauth-client.json');
   const bundledExists = fs.existsSync(bundled);
   // Packaged registration is authoritative. Dev/fork builds may supply their
-  // own public Desktop client ID through the environment. Client secrets are
-  // intentionally unsupported because native applications cannot keep them.
+  // own Desktop registration through the environment. Google may require its
+  // client secret even with PKCE; native apps cannot keep this value confidential.
   let value;
   if (bundledExists) {
     const stat = fs.lstatSync(bundled);
     if (!stat.isFile() || stat.size > 4096) throw new Error('Invalid Google desktop configuration');
     value = JSON.parse(fs.readFileSync(bundled, 'utf8')).installed;
   } else {
-    value = { client_id: String(env.MIA_GOOGLE_OAUTH_CLIENT_ID || '').trim() };
+    value = { client_id: String(env.MIA_GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+      client_secret: String(env.MIA_GOOGLE_OAUTH_CLIENT_SECRET || '').trim() };
   }
   if (!value || !/^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(value.client_id)
-      || Object.prototype.hasOwnProperty.call(value, 'client_secret')) {
+      || (value.client_secret !== undefined && (typeof value.client_secret !== 'string'
+        || value.client_secret.length > 4096))) {
     throw new Error('Google desktop client is not configured');
   }
-  return { client_id: value.client_id };
+  return { client_id: value.client_id, ...(value.client_secret ? { client_secret: value.client_secret } : {}) };
 }
 
 function authorizationProof(env, authorizationUrl) {
@@ -90,7 +92,7 @@ function saveCredentials(directory, credentials) {
 
 async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = fetch,
   timeoutMs = 5 * 60 * 1000, client, directory, persist,
-  filePicker = false, onPicked } = {}) {
+  filePicker = false, onPicked, log = message => console.error(message) } = {}) {
   const brokered = Boolean(env.MIA_GOOGLE_BROKER_URL && env.MIA_GOOGLE_BROKER_TOKEN);
   if (!brokered && env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND !== 'file') {
     return { ok: false, child: null, authorizationUrl: null };
@@ -144,13 +146,29 @@ async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = f
     const codes = url.searchParams.getAll('code');
     if (codes.length !== 1 || !codes[0] || codes[0].length > 8192) { reply(400, 'Missing sign-in code.'); return; }
     exchanging = true;
+    let failureStage = 'token_exchange';
+    let failureReason = '';
     try {
       const response = await fetchImpl('https://oauth2.googleapis.com/token', {
         method: 'POST', redirect: 'error', signal: abort.signal,
         body: new URLSearchParams({ ...client, code: codes[0], code_verifier: verifier,
           redirect_uri: redirect, grant_type: 'authorization_code' }),
       });
-      if (!response.ok) throw new Error('exchange failed');
+      if (!response.ok) {
+        const status = Number.isInteger(response.status) ? response.status : 0;
+        try {
+          const payload = await response.json();
+          if (/^[a-z_]{1,64}$/.test(payload?.error || '')) failureReason = payload.error;
+          const description = typeof payload?.error_description === 'string'
+            ? payload.error_description.toLowerCase() : '';
+          const field = ['client_secret', 'code_verifier', 'redirect_uri', 'client_id', 'grant_type']
+            .find(name => description.includes(name));
+          if (field) failureReason += `_${field}`;
+        } catch (_) { /* response details are intentionally ignored */ }
+        failureReason = `http_${status || 'unknown'}${failureReason ? `_${failureReason}` : ''}`;
+        throw new Error('exchange failed');
+      }
+      failureStage = 'token_response';
       const token = await response.json();
       if (stopped) return;
       if (typeof token.access_token !== 'string' || !token.access_token) throw new Error('missing grant');
@@ -166,6 +184,7 @@ async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = f
         child.result = { state: 'selected', files };
       } else {
         if (typeof token.refresh_token !== 'string' || !token.refresh_token || token.refresh_token.length > 16384) throw new Error('missing grant');
+        failureStage = 'credential_save';
         await persist(directory, { type: 'authorized_user', ...client, refresh_token: token.refresh_token });
         child.result = { state: 'connected' };
       }
@@ -173,6 +192,8 @@ async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = f
       reply(200, filePicker ? 'File access verified. You can close this tab and return to Mia.' : 'Google is connected. You can close this tab and return to Mia.');
     } catch (_) {
       if (!stopped) {
+        try { log(`[google-native-login] failed stage=${failureStage}${failureReason ? ` reason=${failureReason}` : ''}`); }
+        catch (_) { /* diagnostics must never change the auth result */ }
         child.result = { state: 'failed' };
         res.on('finish', finish);
         reply(400, filePicker ? 'Mia could not verify these files with your connected Google account. Return to Mia and choose files using that same account.' : 'Mia could not complete Google sign-in. Return to Mia and try again.');

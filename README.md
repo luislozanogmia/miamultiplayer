@@ -91,6 +91,8 @@ export MIAOS_MAC_SIGN_IDENTITY="Developer ID Application: Luis Lozano (9F277BG84
 export MIAOS_MAC_NOTARY_PROFILE="miaos-notary"
 export MIAOS_MAC_PROVISIONING_PROFILE="/absolute/path/to/Mia_Developer_ID.provisionprofile"
 export MIA_GOOGLE_OAUTH_CLIENT_ID="<official Desktop OAuth client ID from the release environment>"
+# Also inject MIA_GOOGLE_OAUTH_CLIENT_SECRET from the maintainer's secret store.
+# Never paste credential values into source files or shell history.
 
 ./scripts/clean_slate_mac.sh --apply
 ./scripts/install-local-mac.sh
@@ -103,11 +105,15 @@ macos/dist/Mia-<version>-arm64.dmg
 ```
 
 For an unsigned local development build, omit the signing and notarization
-environment variables. Native OAuth clients are public registrations: Mia
-ships only the client ID, never a Desktop client secret. Generic source builds
-omit Google connection unless the builder supplies their own
-`MIA_GOOGLE_OAUTH_CLIENT_ID`; official signed builds fail closed when the
-controlled release value is missing.
+environment variables. Official builds receive `MIA_GOOGLE_OAUTH_CLIENT_ID`
+and `MIA_GOOGLE_OAUTH_CLIENT_SECRET` through the maintainer's approved 1Password
+launch/build wrapper. No actual registration values belong in this repository.
+The same inputs work in dev mode. Forks supply their own Google Desktop OAuth
+registration; builds without a client ID omit Google connection. Official builds
+fail closed if either value is missing. Google requires the client secret for
+our token exchange and refresh; it is extractable from a distributed desktop app
+and does not prove an app is an official release. User tokens are separate and
+stored using platform encryption, never included in the build.
 
 ## Ubuntu build and installation
 To create a fresh local Ubuntu installation from the pinned source revisions:
