@@ -6,6 +6,19 @@ A desktop OS layer (Electron) that gives users an AI agent (Mia) with chat,
 automations, browser control, Google Workspace integration, and bot creation.
 Open-source core at github.com/luislozanogmia/miamultiplayer.
 
+## Bot creation in Mia chat — review candidate
+
+Describe a bot in Mia's chat, revise the draft through messages or the review
+card, then choose **Create bot**. Drafting and **Not now** do not create a bot.
+After submission, **Check creation** recovers the same request if the response
+is interrupted; **Open bot chat** retries opening an already-created bot's chat.
+Creation cannot be cancelled once submitted. Drafts are local to the current
+page and are not a durable draft history.
+
+The visible catalog name is **Bot Marketplace**. This change does not relax
+instruction-file approvals or establish per-bot filesystem isolation; that
+permissions work remains separate.
+
 ## Inference routing
 
 ### Current (Beta)
