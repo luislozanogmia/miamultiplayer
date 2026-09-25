@@ -26,7 +26,8 @@ test('Connected apps sidebar click opens the existing pane without a selected ro
 
   assert.doesNotMatch(opener, /!chatWs\.activeRoomId/);
   assert.match(opener, /prepareChatUtilityPane\('plugins'\)/);
-  assert.match(source, /item\.getAttribute\('data-tools-action'\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
+  assert.match(source, /else if\(action === 'connected-apps'\) openPluginPane\(\)/);
+  assert.match(source, /var action = item\.getAttribute\('data-tools-action'\);[\s\S]*runToolsAction\(action\);/);
   assert.match(source, /if\(chatInfo\.mode !== 'agents' && chatInfo\.mode !== 'plugins'\) chatInfo\.open = false/);
   assert.match(source, /!chatWs\.activeRoomId && chatInfo\.mode !== 'agents' && chatInfo\.mode !== 'plugins' && chatInfo\.mode !== 'agent-edit'/);
 });

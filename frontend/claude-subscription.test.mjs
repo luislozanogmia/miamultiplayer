@@ -9,7 +9,7 @@ const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
 
 test('provider cards keep names and icons only, with Claude Experimental', () => {
   assert.match(html, /data-harness-provider="claude-subscription-directsdk-experimental"/);
-  assert.match(html, /Claude subscription[\s\S]*Experimental/);
+  assert.match(html, /Claude Code subscription[\s\S]*Experimental/);
   assert.doesNotMatch(html, /Uses the official Claude Code CLI/);
   assert.doesNotMatch(html, /Requires Claude Pro\/Max and/);
   assert.doesNotMatch(html, /Claude DirectSDK is experimental/);
@@ -44,6 +44,17 @@ test('the single Claude onboarding choice opens the same popup redirect as other
   assert.match(connectFlow, /api\('\/api\/settings\/harness\/auth\/start', \{method:'POST', body:\{provider:authProvider, reauthenticate:authProvider === 'claude-subscription-directsdk-experimental'\}\}\)/);
   assert.match(connectFlow, /redirectUrl \+= '&reauthenticate=true'/);
   assert.match(connectFlow, /if\(auth\.state === 'connected'\)[\s\S]*saveHarnessSelection\(\)/);
+});
+
+test('Claude onboarding uses an existing CLI or asks before native installation', () => {
+  const preload = readFileSync(new URL('../macos/src/preload.cjs', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../macos/src/main.cjs', import.meta.url), 'utf8');
+  assert.match(preload, /claudeCode:\s*\{[\s\S]*?status:[\s\S]*?install:/);
+  assert.match(main, /miaos-claude-code-status/);
+  assert.match(main, /miaos-claude-code-install[\s\S]*?showMessageBox/);
+  assert.match(source, /needsClaudeCode \? 'Install Claude Code' : 'Connect'/);
+  assert.match(source, /if\(!claudeStatus \|\| !claudeStatus\.available\)/);
+  assert.match(source, /claudeCode\.install\(\)/);
 });
 
 test('compact auth status wraps without horizontal overflow', () => {

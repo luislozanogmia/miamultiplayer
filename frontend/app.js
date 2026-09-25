@@ -1843,9 +1843,13 @@
     var selectedProviderConnected = harnessConnectionState[selectedProvider] === true || (isManagedRouter && harnessConnectionState['openrouter'] === true);
     var apiReady = isManagedRouter || harnessOnboardingState.provider !== 'openai-api' || !!(apiKey && apiKey.value.trim()) || harnessConnectionState[selectedApiProvider] === true;
     var busy = harnessConnectionValidationPending || !!harnessConnectionPending || harnessAuthSaveInProgress || harnessAuthAwaitingSave;
+    var needsClaudeCode = false;
+    if(selectedProvider === 'claude-subscription-directsdk-experimental' && window.miaDesktop && window.miaDesktop.claudeCode){
+      try { needsClaudeCode = !window.miaDesktop.claudeCode.status().available; } catch(_) { needsClaudeCode = true; }
+    }
     if(continueBtn){
       continueBtn.disabled = busy || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
-      setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (selectedProviderConnected ? 'Start with Mia' : 'Connect'));
+      setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (selectedProviderConnected ? 'Start with Mia' : (needsClaudeCode ? 'Install Claude Code' : 'Connect')));
     }
     els('[data-harness-provider]').forEach(function(choice){
       var choiceProvider = choice.getAttribute('data-harness-provider');
@@ -2134,6 +2138,27 @@
     if(harnessConnectionState[authProvider] === true && !harnessAuthAwaitingSave){
       saveHarnessSelection();
       return;
+    }
+    if(authProvider === 'claude-subscription-directsdk-experimental' && window.miaDesktop && window.miaDesktop.claudeCode){
+      var claudeCode = window.miaDesktop.claudeCode;
+      var claudeStatus;
+      try { claudeStatus = claudeCode.status(); }
+      catch(_) { claudeStatus = {available:false}; }
+      if(!claudeStatus || !claudeStatus.available){
+        setHarnessActionLabel(button, 'Installing…');
+        claudeCode.install().then(function(result){
+          button.disabled = false;
+          if(error) error.textContent = result && result.ok
+            ? 'Claude Code is ready. Click Connect to sign in with your Claude account.'
+            : (result && result.cancelled ? 'Installation cancelled. Claude Code is needed to connect.' : (result && result.error) || 'Claude Code could not be installed.');
+          renderHarnessOnboarding();
+        }).catch(function(){
+          button.disabled = false;
+          if(error) error.textContent = 'Claude Code could not be installed. Try again or use Anthropic’s installer.';
+          renderHarnessOnboarding();
+        });
+        return;
+      }
     }
     harnessAuthAwaitingSave = true;
     harnessConnectionPending = authProvider;
@@ -7523,7 +7548,7 @@
         (flow.error ? '<div class="agent-setup-error" role="alert">' + esc(flow.error) + '</div>' : '') +
         '<div class="agent-setup-actions"><button type="button" class="agent-setup-activate" id="agentSetupActivate"' + (busy ? ' disabled' : '') + '>' +
           (busy ? (view.busyLabel || 'Activating…') : (flow.creation ? (flow.creation.bot ? 'Open bot chat' : 'Check creation') : (view.confirmLabel || 'Yes, activate bot'))) + '</button>' +
-          '<button type="button" class="agent-setup-later" id="agentSetupLater"' + (busy || flow.creation ? ' disabled' : '') + '>' + (view.laterLabel || 'Not yet') + '</button></div>' +
+          (view.hideLater ? '' : '<button type="button" class="agent-setup-later" id="agentSetupLater"' + (busy || flow.creation ? ' disabled' : '') + '>' + (view.laterLabel || 'Not yet') + '</button>') + '</div>' +
       '</div></div></div>';
   }
 
@@ -10099,8 +10124,8 @@
       return sendMiaOnboardingAnswer(text);
     }
     // Building a bot is a native Mia workflow, not an open-ended Hermes task.
-    // Mia keeps it in her own chat: she drafts the bot, shows the review card,
-    // and revises it from whatever the user asks until they confirm.
+    // Mia asks for a purpose before drafting a generic request. Once the card
+    // appears, its fields are editable; a new message closes the draft.
     var sendRoomId = boundRoomId || chatWs.activeRoomId;
     if(!threadRootId && !preparedAttachment && chatWs.activeKind === 'agent'
       && isMiaOrchestrator(chatWs.activeLabel, 'gateway')){
@@ -10108,9 +10133,12 @@
       if(draftFlow && (miaBotDraftBusy(draftFlow) || draftFlow.creation && draftFlow.phase === 'review')){
         return Promise.resolve({status: 409, data: {botSetup: true, message:'Finish the current bot creation first.'}});
       }
-      if(draftFlow && draftFlow.phase === 'review'){
-        reviseMiaBotDraft(sendRoomId, text);
+      if(draftFlow && draftFlow.phase === 'clarifying'){
+        continueMiaBotDraft(sendRoomId, text);
         return Promise.resolve({status: 200, data: {botSetup: true}});
+      }
+      if(draftFlow && draftFlow.phase === 'review'){
+        cancelMiaBotDraft(sendRoomId);
       }
       if(isBotCreationIntent(text)){
         startMiaBotDraft(sendRoomId, text);
@@ -10135,14 +10163,29 @@
       || new RegExp('\\b(?:i\\s+(?:want|need)|we\\s+(?:want|need))\\s+(?:a|an|new|another)\\s+' + describing + 'bot\\b', 'i').test(text);
   }
 
+  function botCreationIntentNeedsDetails(value){
+    var text = String(value || '').trim().replace(/^(?:(?:hi|hey|hello|mia)[,!\s]+)+/i, '').replace(/[?.!\s]+$/, '');
+    return /^(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:create|build|make|set\s+up|get)\s+(?:(?:me|us)\s+)?(?:(?:a|an|new|another)\s+)?bot(?:\s+for\s+(?:me|us))?$/i.test(text)
+      || /^(?:i|we)\s+(?:want|need|would\s+like)\s+(?:a|an|new|another)\s+bot$/i.test(text);
+  }
+
+  function recentBotPurpose(roomId){
+    var messages = chatRoomState(roomId).messages || [];
+    var recentHuman = messages.filter(function(message){
+      return message && !message.deleted && !message.threadRoot && isHumanSender(message.sender) && String(message.body || '').trim();
+    }).slice(-1)[0];
+    if(!recentHuman || !recentHuman.ts || Date.now() - Number(recentHuman.ts) > 10 * 60 * 1000) return '';
+    var purpose = String(recentHuman.body || '').trim();
+    // Only reuse an explicit description of what "it" (the bot) should do.
+    // A nearby unrelated message must not silently become bot instructions.
+    if(!/^(?:i(?:['’]d| would) like (?:it|the bot|the agent) to|i (?:want|need) (?:it|the bot|the agent) to|(?:it|the bot|the agent) (?:should|needs? to|will)|(?:have|make) (?:it|the bot|the agent)\b)/i.test(purpose)) return '';
+    return purpose.slice(0, 1800);
+  }
+
   /* ============ CHAT: building a bot from Mia's chat ============
-     "Create a bot…" in Mia's chat stays in Mia's chat. Mia drafts the bot
-     with /api/bots/interpret, shows the same review card as the New Bot
-     setup chat, and treats every message while the card is open as a
-     change request ("call it Scout", "make it weekly"). Nothing is created
-     until the user presses Create bot. The draft lives in the room's local
-     state; after it is created or dismissed, the next ordinary message
-     clears it. */
+     Vague requests first ask what the bot should do. Once Mia has a purpose,
+     /api/bots/interpret produces an editable review card in this chat.
+     A new message dismisses an unsubmitted card; only Accept creates a bot. */
   function miaBotDraftBusy(flow){
     return !!flow && (flow.phase === 'interpreting' || flow.phase === 'activating');
   }
@@ -10164,13 +10207,40 @@
   function startMiaBotDraft(roomId, text){
     var state = chatRoomState(roomId);
     clearMiaBotDraftRequest(state.botDraft, true);
+    var needsDetails = botCreationIntentNeedsDetails(text);
+    var priorPurpose = needsDetails ? recentBotPurpose(roomId) : '';
     state.botDraft = {
-      intent: String(text || '').trim().slice(0, 2000),
+      intent: priorPurpose ? ('Create a bot for me. It should: ' + priorPurpose).slice(0, 2000)
+        : needsDetails ? '' : String(text || '').trim().slice(0, 2000),
       turns: [{human: true, text: String(text || '').trim()}],
-      draft: null, phase: 'interpreting', revised: false, error: '',
+      draft: null, phase: needsDetails && !priorPurpose ? 'clarifying' : 'interpreting', revised: false, error: '',
       created: null, conversation: null, requestId: 0, controller: null, timer: null
     };
+    if(needsDetails && !priorPurpose){
+      state.botDraft.turns.push({human: false, text: 'Sure. What should the bot do, and what result should it give you? If it should run automatically, tell me when.'});
+      renderMiaBotDraftRoom(roomId);
+      return;
+    }
+    if(priorPurpose) state.botDraft.turns.push({human: false, text: 'I’ll use the details you just gave me and prepare a draft for you to review.'});
     requestMiaBotDraft(roomId, state.botDraft, '');
+  }
+
+  function continueMiaBotDraft(roomId, text){
+    var flow = chatRoomState(roomId).botDraft;
+    if(!flow || flow.phase !== 'clarifying') return;
+    var details = String(text || '').trim();
+    if(/^(?:never\s*mind|cancel|stop|forget\s*it)$/i.test(details)){
+      cancelMiaBotDraft(roomId);
+      return;
+    }
+    flow.turns.push({human: true, text: details});
+    if(!details || /^(?:yes|yeah|yep|sure|okay|ok)$/i.test(details) || botCreationIntentNeedsDetails(details)){
+      flow.turns.push({human: false, text: 'What specific task should the bot handle, and what should it produce for you?'});
+      renderMiaBotDraftRoom(roomId);
+      return;
+    }
+    flow.intent = details.slice(0, 2000);
+    requestMiaBotDraft(roomId, flow, '');
   }
 
   function reviseMiaBotDraft(roomId, text){
@@ -10273,16 +10343,12 @@
   }
 
   function cancelMiaBotDraft(roomId){
-    var flow = chatRoomState(roomId).botDraft;
+    var state = chatRoomState(roomId);
+    var flow = state.botDraft;
     if(!flow) return;
     if(flow.phase === 'activating' || flow.creation) return;
-    if(flow.phase === 'review'){
-      try { captureAgentSetupDraft(flow); } catch(error) {}
-      flow.phase = 'cancelled';
-      flow.turns.push({human: false, text: 'Okay, I didn’t create it. Ask me any time you want to pick it back up.'});
-    } else {
-      return;
-    }
+    clearMiaBotDraftRequest(flow, true);
+    state.botDraft = null;
     renderMiaBotDraftRoom(roomId);
   }
 
@@ -10313,13 +10379,11 @@
         markClass: 'mia-mark-host',
         name: 'Mia',
         tag: agentTagFor('Mia') || 'Agent',
-        intro: flow.revised
-          ? 'Updated. Review the details, or tell me what else to change.'
-          : 'We’re building this bot. Review the details, or tell me what to change.',
+        intro: 'Review the draft. Edit any field, then accept it.',
         confirmCopy: 'Ready to create it?',
-        confirmLabel: 'Create bot',
+        confirmLabel: 'Accept',
         busyLabel: 'Creating…',
-        laterLabel: 'Not now'
+        hideLater: true
       });
     } else if(flow.phase === 'created' && flow.created){
       html += miaBotDraftMessageHtml('**' + (flow.created.name || 'Your bot') + '** is ready. It has its own chat, and you can ask me to change it any time.', false);
@@ -10332,8 +10396,7 @@
     if(!flow) return;
     if(flow.phase === 'review' || flow.phase === 'activating'){
       wireAgentSetupReview(thread, flow, {
-        activate: function(){ activateMiaBotDraft(roomId); },
-        later: function(){ cancelMiaBotDraft(roomId); }
+        activate: function(){ activateMiaBotDraft(roomId); }
       });
     }
     var open = el('[data-mia-bot-open]', thread);

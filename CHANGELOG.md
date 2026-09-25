@@ -9,7 +9,35 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.12] — 2026-09-25
+
+### Changed
+- Mia asks for a bot's purpose before drafting a vague request in chat. The
+  editable review card creates the bot only when you choose **Accept**.
+- Claude Code subscription setup now finds an existing CLI outside the app's
+  shell PATH; if absent, Mia offers an explicit, opt-in native installation.
+
+### Added
+- Google Workspace connection with reusable, approved Drive-file attachments
+  in chat, while keeping access limited to files the user chooses or creates.
+- A Downloads list in Mia's browser, with persistent history and Show in Finder.
+- Automatic update checks every four hours while Mia is running.
+- Windows backend blockers B1/B2 fixed: the backend now launches the
+  Hermes CLI through an argv launch vector (`MIAOS_HERMES_ARGV_JSON`,
+  interpreter + script) published by the packaged Windows shell, instead
+  of the `.cmd` shim Node refuses to spawn (CVE-2024-27980); and the
+  Hermes/gws child-process environment allowlists pass the
+  Windows-critical variables (`SYSTEMROOT`, `APPDATA`, `USERPROFILE`,
+  `COMSPEC`, `TEMP`, …) plus the venv `PYTHONPATH` the shim used to set.
+
 ### Fixed
+- Mia and bot chats select their intended Hermes profiles, so a missing
+  profile constant cannot fail every response.
+- Claude setup explains when the Claude Code CLI is missing instead of showing
+  a raw terminal error.
+- Google Desktop OAuth credentials are supplied by the controlled build flow,
+  and local Google tokens stay in the installation's credential store.
+- Browser downloads no longer produce a false page-load error.
 - Adding an API-key provider (DeepSeek, OpenAI, Anthropic, …) hung and
   timed out on Windows: Hermes' hidden key prompt falls back to Python
   `getpass`, which on Windows reads the console rather than the stdin
@@ -25,15 +53,6 @@ automatically through the in-app updater.
   browser: Electron requires an explicit `setDisplayMediaRequestHandler`
   on the session. The browser now handles display-media requests by
   offering the first available screen/window source via `desktopCapturer`.
-
-### Added
-- Windows backend blockers B1/B2 fixed: the backend now launches the
-  Hermes CLI through an argv launch vector (`MIAOS_HERMES_ARGV_JSON`,
-  interpreter + script) published by the packaged Windows shell, instead
-  of the `.cmd` shim Node refuses to spawn (CVE-2024-27980); and the
-  Hermes/gws child-process environment allowlists pass the
-  Windows-critical variables (`SYSTEMROOT`, `APPDATA`, `USERPROFILE`,
-  `COMSPEC`, `TEMP`, …) plus the venv `PYTHONPATH` the shim used to set.
 
 ## [0.2.11] — 2026-09-23
 

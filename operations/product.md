@@ -8,8 +8,10 @@ Open-source core at github.com/luislozanogmia/miamultiplayer.
 
 ## Bot creation in Mia chat — review candidate
 
-Describe a bot in Mia's chat, revise the draft through messages or the review
-card, then choose **Create bot**. Drafting and **Not now** do not create a bot.
+Ask Mia to build a bot. If the request is vague, Mia uses a recent, explicit
+description of what it should do or asks for one before drafting. Review or
+edit the card, then choose **Accept**. A new
+message dismisses an unsubmitted draft; only Accept starts creation.
 After submission, **Check creation** recovers the same request if the response
 is interrupted; **Open bot chat** retries opening an already-created bot's chat.
 Creation cannot be cancelled once submitted. Drafts are local to the current

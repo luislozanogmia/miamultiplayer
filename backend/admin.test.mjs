@@ -181,6 +181,106 @@ async function loginAsBootAdmin(server) {
   return cookie;
 }
 
+test('Mia chat dispatch selects a defined Hermes profile and posts the reply', async () => {
+  const preloadScript = `
+const fs = require('node:fs');
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async ({ options }) => {
+  fs.writeFileSync(process.env.MIAOS_TEST_GATE_READY, options.profile);
+  return { text: 'Fixture Mia reply', storedSessionId: null };
+};
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const created = await fetch(`${server.origin}/api/conversations`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' } }),
+    });
+    assert.equal(created.status, 201);
+    const conversation = (await created.json()).conversation;
+    const sent = await fetch(`${server.origin}/api/conversations/${conversation.id}/events`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: { text: 'Can you draft a bot for me?' }, clientIdempotencyKey: 'profile-binding-regression' }),
+    });
+    assert.equal(sent.status, 201);
+    await waitForFile(server.dispatchReadyPath, server.child, server.logs);
+    assert.equal(fs.readFileSync(server.dispatchReadyPath, 'utf8'), 'miaos-agent-runtime');
+    let replyFound = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const events = await fetch(`${server.origin}/api/conversations/${conversation.id}/events`, { headers: { cookie } });
+      assert.equal(events.status, 200);
+      if ((await events.text()).includes('Fixture Mia reply')) {
+        replyFound = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(replyFound, true, `Mia reply was not posted: ${server.logs.join('')}`);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('bot chat dispatch selects its restricted Hermes profile and posts the reply', async () => {
+  const preloadScript = `
+const fs = require('node:fs');
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInference = async (_prompt, options) => {
+  fs.writeFileSync(process.env.MIAOS_TEST_GATE_READY, options.profile);
+  return { text: 'Fixture bot reply' };
+};
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Chat Profile Fixture',
+        instructions: '# Fixture bot\n\nReply to this test.\n',
+        model: 'fixture-model',
+        status: 'draft',
+        automations: [],
+        departments: [],
+      }),
+    });
+    assert.equal(created.status, 201, await created.text());
+    const database = new Database(server.dbPath, { readonly: true });
+    const botConversation = database.prepare("SELECT id FROM conversations WHERE type = 'bot' LIMIT 1").get();
+    database.close();
+    assert.ok(botConversation);
+    const sent = await fetch(`${server.origin}/api/conversations/${botConversation.id}/events`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: { text: 'Please reply.' }, clientIdempotencyKey: 'bot-profile-binding-regression' }),
+    });
+    assert.equal(sent.status, 201, await sent.text());
+    await waitForFile(server.dispatchReadyPath, server.child, server.logs);
+    assert.equal(fs.readFileSync(server.dispatchReadyPath, 'utf8'), 'miaos-bot-worker');
+    let replyFound = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const events = await fetch(`${server.origin}/api/conversations/${botConversation.id}/events`, { headers: { cookie } });
+      assert.equal(events.status, 200);
+      if ((await events.text()).includes('Fixture bot reply')) {
+        replyFound = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(replyFound, true, `Bot reply was not posted: ${server.logs.join('')}`);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('relative STATIC_DIR serves the standalone admin page', async () => {
   const server = await startServer({ extraEnv: { STATIC_DIR: '../frontend' } });
   try {
@@ -692,6 +792,28 @@ test('process-global provider mutations require an admin browser session', async
       headers: { cookie: memberLogin.cookie }, redirect: 'manual',
     });
     assert.equal(authRedirect.status, 403);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('missing Claude Code shows an actionable page rather than a raw terminal error', async () => {
+  const server = await startServer({ extraEnv: {
+    HERMES_PYTHON: 'python3',
+    CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: '/definitely/missing/claude',
+  } });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const response = await fetch(`${server.origin}/api/settings/harness/auth/redirect?provider=claude-subscription-directsdk-experimental`, {
+      headers: { cookie }, redirect: 'manual',
+    });
+    assert.equal(response.status, 409);
+    assert.match(response.headers.get('content-type') || '', /text\/html/);
+    const html = await response.text();
+    assert.match(html, /Claude Desktop alone does not install the Claude Code command/);
+    assert.match(html, /https:\/\/code\.claude\.com\/docs\/en\/setup/);
+    assert.match(html, /restart Mia/i);
+    assert.doesNotMatch(html, /npm install -g|CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND/);
   } finally {
     await stopServer(server);
   }

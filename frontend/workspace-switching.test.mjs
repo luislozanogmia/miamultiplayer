@@ -178,10 +178,11 @@ test('Solo falls back to its authoritative Mia conversation without creating a h
 
 test('an unbound composer cannot send and an empty Mia chat greets the signed-in user locally', async () => {
   const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  const greeting = sourceFunction(source, 'miaEmptyGreeting');
+  const realProfileName = sourceFunction(source, 'realProfileName');
+  const greeting = sourceFunction(source, 'miaEmptyGreeting', { realProfileName });
 
-  assert.equal(greeting('Example User'), 'Hi Example — what would you like to work on?');
-  assert.equal(greeting(''), 'Hi there — what would you like to work on?');
+  assert.equal(greeting('Example User'), 'Hi Example User — what would you like to work on?');
+  assert.equal(greeting(''), 'Hi — what would you like to work on?');
   assert.match(source, /if\(!chatWs\.activeRoomId\)\{\s*setComposerBoundState\(false\)/);
   assert.match(source, /function submit\(\)\{\s*if\(!chatWs\.activeRoomId\) return;/);
   assert.match(source, /chat-composer-unbound/);

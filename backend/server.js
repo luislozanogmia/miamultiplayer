@@ -72,6 +72,7 @@ const {
   stopHermesGatewayRuntime,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+  MIAOS_BOT_HERMES_PROFILE,
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   hermesTokenBudgetFromOptions,
   hermesCharBudgetFromTokens,
@@ -4274,6 +4275,12 @@ app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req
 // directly from the user's click, preserving popup permission. It starts (or
 // reuses) the same Hermes-owned flow and redirects only after the real device
 // URL exists, so no placeholder tab is shown.
+function claudeCodeInstallPage() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect Claude Code to Mia</title>
+<style>body{margin:0;background:#f7f8fa;color:#202124;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{box-sizing:border-box;max-width:560px;margin:clamp(32px,9vh,100px) auto;padding:32px;background:white;border:1px solid #e3e5e8;border-radius:16px;box-shadow:0 12px 40px #17223b0d}h1{font-size:26px;line-height:1.2;margin:0 0 16px}p{margin:0 0 18px}a{display:inline-block;background:#202124;color:white;text-decoration:none;border-radius:9px;padding:10px 15px;font-weight:600}small{display:block;margin-top:20px;color:#666}@media(max-width:600px){main{margin:16px;padding:24px}}</style></head>
+<body><main><h1>Claude Code is needed to connect</h1><p>Claude Desktop alone does not install the Claude Code command that Mia’s Experimental connection uses.</p><p>Install Claude Code for your computer, then <strong>restart Mia</strong> and try connecting again. If Claude Code is already installed, restarting Mia lets it find the command.</p><a href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener noreferrer">How to install Claude Code</a><small>No Claude account or login information was changed.</small></main></body></html>`;
+}
+
 app.get('/api/settings/harness/auth/redirect', requireGlobalSettingsAdmin, async (req, res) => {
   const provider = String(req.query.provider || 'openai-codex').trim();
   if (!HERMES_AUTH_PROVIDERS.has(provider)) {
@@ -4283,7 +4290,7 @@ app.get('/api/settings/harness/auth/redirect', requireGlobalSettingsAdmin, async
   if (provider === CLAUDE_SUBSCRIPTION_PROVIDER) {
     const status = await runClaudeSubscriptionStatus();
     if (!status.loggedIn && !status.available) {
-      return res.status(409).type('text/plain').send(status.detail || 'Claude Code is unavailable. Return to Mia and try again.');
+      return res.status(409).set('Cache-Control', 'no-store').type('html').send(claudeCodeInstallPage());
     }
     if (status.loggedIn && req.query.reauthenticate !== 'true') {
       return res.status(200).type('text/plain').send('Claude is already connected. You can close this window.');

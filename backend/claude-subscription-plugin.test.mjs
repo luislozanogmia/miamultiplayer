@@ -41,7 +41,8 @@ test('upstream setup probe refuses a missing Claude CLI with the official instal
   const status = JSON.parse(result.stdout);
   assert.equal(status.available, false);
   assert.equal(status.logged_in, false);
-  assert.match(status.detail, /npm install -g @anthropic-ai\/claude-code/);
+  assert.match(status.detail, /Claude Desktop alone does not install the Claude Code command/);
+  assert.match(status.detail, /https:\/\/code\.claude\.com\/docs\/en\/setup/);
 });
 
 test('upstream setup probe maps Mia explicit config path to the official CLI environment', () => {
