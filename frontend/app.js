@@ -7519,11 +7519,11 @@
         automationPromptField +
         '<label class="agent-setup-field"><span>Output</span><textarea id="agentSetupOutput" rows="3" maxlength="300">' + esc(draft.output || '') + '</textarea></label>' +
         '<div class="agent-setup-confirm-copy">' + esc(view.confirmCopy || 'Do you want me to activate this bot?') + '</div>' +
-        '<div class="agent-setup-safety">Nothing is created or scheduled until you confirm.</div>' +
+        '<div class="agent-setup-safety">' + (flow.creation || busy ? 'Your creation request is being tracked. Retrying will recover the same bot.' : 'Nothing is created or scheduled until you confirm.') + '</div>' +
         (flow.error ? '<div class="agent-setup-error" role="alert">' + esc(flow.error) + '</div>' : '') +
         '<div class="agent-setup-actions"><button type="button" class="agent-setup-activate" id="agentSetupActivate"' + (busy ? ' disabled' : '') + '>' +
-          (busy ? (view.busyLabel || 'Activating…') : (view.confirmLabel || 'Yes, activate bot')) + '</button>' +
-          '<button type="button" class="agent-setup-later" id="agentSetupLater">' + (busy ? 'Cancel' : (view.laterLabel || 'Not yet')) + '</button></div>' +
+          (busy ? (view.busyLabel || 'Activating…') : (flow.creation ? (flow.creation.bot ? 'Open bot chat' : 'Check creation') : (view.confirmLabel || 'Yes, activate bot'))) + '</button>' +
+          '<button type="button" class="agent-setup-later" id="agentSetupLater"' + (busy || flow.creation ? ' disabled' : '') + '>' + (view.laterLabel || 'Not yet') + '</button></div>' +
       '</div></div></div>';
   }
 
@@ -7556,6 +7556,9 @@
   function wireAgentSetupReview(thread, flow, actions){
     flow = flow || agentSetup;
     actions = actions || {activate: activateAgentSetup, later: cancelAgentSetupFlow};
+    if(flow.creation || flow.phase === 'activating'){
+      thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea, .agent-setup-card select').forEach(function(field){ field.disabled = true; });
+    }
     var frequency = el('#agentSetupFrequency', thread);
     if(frequency) frequency.addEventListener('change', function(){
       captureAgentSetupDraft(flow);
@@ -7589,28 +7592,24 @@
     clearAgentSetupRequest(true);
     agentSetup.requestTimedOut = timedOut;
     agentSetup.phase = operation === 'interpreting' ? 'intent' : 'review';
-    agentSetup.error = timedOut
-      ? 'This is taking too long. Nothing was confirmed. Try again.'
+    agentSetup.error = operation === 'activating'
+      ? botCreationRecoveryMessage(agentSetup)
+      : timedOut ? 'This is taking too long. Nothing was created. Try again.'
       : String(message || (operation === 'interpreting' ? 'I couldn’t prepare the setup. Try again.' : 'The bot could not be activated. Try again.'));
     renderChatThread();
     renderDeptAgentSelector();
   }
 
   function cancelAgentSetupFlow(){
-    var wasActivating = agentSetup.phase === 'activating';
+    if(agentSetup.phase === 'activating' || agentSetup.creation) return;
     var wasInterpreting = agentSetup.phase === 'interpreting';
     if(agentSetup.phase !== 'interpreting' && agentSetup.phase !== 'activating' && agentSetup.phase !== 'review' && agentSetup.phase !== 'intent') return;
     agentSetup.requestId += 1;
     clearAgentSetupRequest(true);
-    if(wasActivating){
-      agentSetup.phase = 'review';
-      agentSetup.error = 'Activation cancelled. Nothing was confirmed.';
-    } else {
-      agentSetup.phase = 'intent';
-      agentSetup.draft = null;
-      agentSetup.intent = wasInterpreting ? agentSetup.intent : '';
-      agentSetup.error = wasInterpreting ? 'Setup cancelled. Try again when ready.' : '';
-    }
+    agentSetup.phase = 'intent';
+    agentSetup.draft = null;
+    agentSetup.intent = wasInterpreting ? agentSetup.intent : '';
+    agentSetup.error = wasInterpreting ? 'Setup cancelled. Try again when ready.' : '';
     renderChatThread();
     renderDeptAgentSelector();
     var input = el('#ccInput');
@@ -7748,6 +7747,7 @@
   // New Bot setup chat and Mia's chat; returns {error} when something the
   // user must fix is missing.
   function agentSetupCreatePayload(flow, intent){
+    if(flow.creation) return {payload: flow.creation.payload};
     try {
       captureAgentSetupDraft(flow);
     } catch(error) {
@@ -7777,12 +7777,38 @@
   }
 
   // Creates the bot and its native chat, then adds both to the sidebar.
-  function createBotFromSetupPayload(payload, requestOptions){
-    return api('/api/bots', Object.assign({}, requestOptions || {}, {method:'POST', body:payload})).then(function(res){
-      if(res.status !== 201 || !res.data || !res.data.bot){
-        throw new Error(res.data && (res.data.message || res.data.error) || 'activation failed');
-      }
-      var created = res.data.bot;
+  function botCreationRecoveryMessage(flow){
+    return flow.creation && flow.creation.bot
+      ? 'Your bot was created, but its chat could not open. Choose Open bot chat to try again.'
+      : 'Creation has not been confirmed yet. Choose Check creation to recover this request safely.';
+  }
+
+  function createBotFromSetupPayload(payload, requestOptions, flow){
+    if(!flow.creation){
+      var bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      bytes[6] = (bytes[6] & 15) | 64;
+      bytes[8] = (bytes[8] & 63) | 128;
+      var hex = Array.from(bytes, function(b){ return b.toString(16).padStart(2, '0'); }).join('');
+      var key = hex.slice(0,8) + '-' + hex.slice(8,12) + '-' + hex.slice(12,16) + '-' + hex.slice(16,20) + '-' + hex.slice(20);
+      flow.creation = {payload: JSON.parse(JSON.stringify(payload)), key:key, bot:null, submitted:false};
+    }
+    var creation = flow.creation;
+    var recover = creation.bot ? Promise.resolve(creation.bot) : creation.submitted
+      ? api('/api/bots/creation-requests/' + encodeURIComponent(creation.key), requestOptions).then(function(res){
+        if(res.status === 200 && res.data && res.data.bot) return res.data.bot;
+        if(res.status === 404) return null;
+        throw new Error('creation status unavailable');
+      }) : Promise.resolve(null);
+    return recover.then(function(bot){
+      if(bot) return bot;
+      creation.submitted = true;
+      return api('/api/bots', Object.assign({}, requestOptions || {}, {method:'POST', body:Object.assign({}, creation.payload, {creationRequestId:creation.key})})).then(function(res){
+        if(res.status !== 201 || !res.data || !res.data.bot) throw new Error('creation not confirmed');
+        return res.data.bot;
+      });
+    }).then(function(created){
+      creation.bot = created;
       return createNativeAgentConversation(created, requestOptions).then(function(conversation){
         return {created: created, conversation: conversation};
       });
@@ -7823,7 +7849,7 @@
       if(controller) controller.abort();
       finishAgentSetupFailure(attempt, 'activating', true);
     }, AGENT_SETUP_TIMEOUT_MS);
-    createBotFromSetupPayload(prepared.payload, controller ? {signal:controller.signal} : {}).then(function(result){
+    createBotFromSetupPayload(prepared.payload, controller ? {signal:controller.signal} : {}, agentSetup).then(function(result){
       if(agentSetup.requestId !== attempt || agentSetup.phase !== 'activating') return;
       var created = result.created, conversation = result.conversation;
       clearAgentSetupRequest(false);
@@ -10079,6 +10105,9 @@
     if(!threadRootId && !preparedAttachment && chatWs.activeKind === 'agent'
       && isMiaOrchestrator(chatWs.activeLabel, 'gateway')){
       var draftFlow = chatRoomState(sendRoomId).botDraft;
+      if(draftFlow && (miaBotDraftBusy(draftFlow) || draftFlow.creation && draftFlow.phase === 'review')){
+        return Promise.resolve({status: 409, data: {botSetup: true, message:'Finish the current bot creation first.'}});
+      }
       if(draftFlow && draftFlow.phase === 'review'){
         reviseMiaBotDraft(sendRoomId, text);
         return Promise.resolve({status: 200, data: {botSetup: true}});
@@ -10146,7 +10175,7 @@
 
   function reviseMiaBotDraft(roomId, text){
     var flow = chatRoomState(roomId).botDraft;
-    if(!flow || flow.phase !== 'review') return;
+    if(!flow || flow.phase !== 'review' || flow.creation) return;
     // Keep anything typed into the card before asking for the change.
     try { captureAgentSetupDraft(flow); } catch(error) {}
     flow.turns.push({human: true, text: String(text || '').trim()});
@@ -10225,10 +10254,10 @@
       renderMiaBotDraftRoom(roomId);
     }
     flow.timer = setTimeout(function(){
-      if(!stale()) fail('Creating the bot took too long. Nothing was confirmed. Try again.');
+      if(!stale()) fail(botCreationRecoveryMessage(flow));
     }, AGENT_SETUP_TIMEOUT_MS);
     renderMiaBotDraftRoom(roomId);
-    createBotFromSetupPayload(prepared.payload, controller ? {signal:controller.signal} : {}).then(function(result){
+    createBotFromSetupPayload(prepared.payload, controller ? {signal:controller.signal} : {}, flow).then(function(result){
       if(stale()) return;
       clearMiaBotDraftRequest(flow, false);
       flow.created = result.created;
@@ -10239,19 +10268,15 @@
       renderMiaBotDraftRoom(roomId);
     }).catch(function(error){
       if(stale()) return;
-      fail('The bot could not be created: ' + (error && error.name !== 'AbortError' && error.message ? error.message : 'please try again.'));
+      fail(botCreationRecoveryMessage(flow));
     });
   }
 
   function cancelMiaBotDraft(roomId){
     var flow = chatRoomState(roomId).botDraft;
     if(!flow) return;
-    if(flow.phase === 'activating'){
-      clearMiaBotDraftRequest(flow, true);
-      flow.requestId += 1;
-      flow.phase = 'review';
-      flow.error = 'Cancelled. Nothing was created.';
-    } else if(flow.phase === 'review'){
+    if(flow.phase === 'activating' || flow.creation) return;
+    if(flow.phase === 'review'){
       try { captureAgentSetupDraft(flow); } catch(error) {}
       flow.phase = 'cancelled';
       flow.turns.push({human: false, text: 'Okay, I didn’t create it. Ask me any time you want to pick it back up.'});
