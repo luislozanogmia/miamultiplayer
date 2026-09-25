@@ -1789,7 +1789,7 @@ function wipeMiaDataForEverything({ keepEmail, keepSessionToken }) {
     attachments.push(...cleared.attachments);
   }
   const wipe = conn.transaction(() => {
-    for (const table of ['bots', 'agents', 'department_rooms', 'dm_rooms', 'trash']) {
+    for (const table of ['bot_creation_requests', 'bots', 'agents', 'department_rooms', 'dm_rooms', 'trash']) {
       conn.prepare(`DELETE FROM ${table}`).run();
     }
     for (const table of [
@@ -1910,7 +1910,10 @@ app.post('/api/dev/clean-slate', requireLocalDevelopment, requireAuth, async (re
   );
   const cleared = nativeConversationRepository.deleteCompanyData({ companyId });
   const deleteSoloDocuments = conn.transaction(() => {
-    targetBots.forEach((bot) => db.deleteOne(conn, 'bots', bot.id));
+    targetBots.forEach((bot) => {
+      db.deleteOne(conn, 'bots', bot.id);
+      db.deleteBotCreationRequestsForBot(conn, bot.id);
+    });
     legacySoloRooms.forEach((record) => db.deleteOne(conn, record.table, record.id));
     db.setMeta(conn, departmentsMetaKey(owner, 'solo'), '[]');
   });
@@ -2470,9 +2473,78 @@ async function reconcileNativeBotConversations() {
 
 // ---------- resource CRUD factory ----------
 
+const BOT_CREATION_REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function canonicalJsonValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalJsonValue(value[key])]));
+}
+
+function botCreationRequestId(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return BOT_CREATION_REQUEST_ID_RE.test(normalized) ? normalized : null;
+}
+
+function botCreationRequestScope(req, requestId) {
+  const ownerEmail = String(req.userEmail || '').trim().toLowerCase();
+  const workspaceId = String(workspaceIdFromRequest(req) || '').trim();
+  if (!ownerEmail || !workspaceId) return null;
+  return {
+    ownerEmail,
+    workspaceId,
+    requestHash: crypto.createHash('sha256').update(requestId).digest('hex'),
+  };
+}
+
+function botCreationRequestIdentityKey(scope) {
+  return JSON.stringify([scope.ownerEmail, scope.workspaceId, scope.requestHash]);
+}
+
 function registerResource(cfg) {
   const base = `/api/${cfg.path}`;
   const project = cfg.listProjection || ((record) => record);
+  const inFlightCreateRequests = new Map();
+
+  // Only resources that opt in expose this status route. It is registered
+  // before the generic `/:id` route so request ids can never be interpreted as
+  // bot ids. Unknown requests are safe to retry with the same identity.
+  if (cfg.createRequest && cfg.createRequest.bodyField) {
+    app.get(`${base}/creation-requests/:requestId`, requireAuth, async (req, res) => {
+      const requestId = botCreationRequestId(req.params.requestId);
+      if (!requestId) return res.status(400).json({ error: 'invalid_creation_request_id' });
+      const scope = botCreationRequestScope(req, requestId);
+      if (!scope) return res.status(401).json({ error: 'unauthorized' });
+      const request = db.getBotCreationRequest(conn, scope);
+      if (!request) return res.status(404).json({ error: 'not_found', status: 'not_found' });
+      const identityKey = botCreationRequestIdentityKey(scope);
+      let record = null;
+      const pending = inFlightCreateRequests.get(identityKey);
+      let pendingFailed = false;
+      if (pending) {
+        try { record = await pending; } catch (_error) {
+          pendingFailed = true;
+          /* recover from the durable row below */
+        }
+      }
+      record = record || db.loadOne(conn, cfg.table, request.botId);
+      if (!record) return res.status(410).json({ error: 'creation_request_deleted', status: 'deleted' });
+      if (cfg.accessCheck && !cfg.accessCheck(record, req)) {
+        return res.status(404).json({ error: 'not_found', status: 'not_found' });
+      }
+      if ((!pending || pendingFailed) && cfg.createRequest.recoverExisting) {
+        try {
+          record = (await cfg.createRequest.recoverExisting(record, req)) || record;
+          db.saveOne(conn, cfg.table, record.id, record);
+        } catch (error) {
+          console.error(`${cfg.singular}: creation request recovery failed for`, record.id, error.message);
+        }
+      }
+      res.set('Cache-Control', 'no-store');
+      return res.status(200).json({ status: 'created', [cfg.singular]: record });
+    });
+  }
 
   app.get(base, requireAuth, (req, res) => {
     let records = db.loadAll(conn, cfg.table);
@@ -2501,46 +2573,144 @@ function registerResource(cfg) {
   // degrade.
   if (cfg.allowCreate !== false) {
     app.post(base, requireAuth, async (req, res) => {
-      const body = req.body || {};
+      const body = Object.assign({}, req.body || {});
+      let createRequest = null;
+      if (cfg.createRequest && cfg.createRequest.bodyField
+        && Object.prototype.hasOwnProperty.call(body, cfg.createRequest.bodyField)) {
+        const rawRequestId = body[cfg.createRequest.bodyField];
+        delete body[cfg.createRequest.bodyField];
+        const requestId = botCreationRequestId(rawRequestId);
+        if (!requestId) return res.status(400).json({ error: 'invalid_creation_request_id' });
+        const scope = botCreationRequestScope(req, requestId);
+        if (!scope) return res.status(401).json({ error: 'unauthorized' });
+        const payload = Object.assign({}, body);
+        for (const field of cfg.protectedFields || []) delete payload[field];
+        createRequest = {
+          scope,
+          identityKey: botCreationRequestIdentityKey(scope),
+          payloadHash: crypto.createHash('sha256')
+            .update(JSON.stringify(canonicalJsonValue(payload))).digest('hex'),
+        };
+      }
       if (cfg.validate) {
         const error = cfg.validate(body);
         if (error) return res.status(400).json({ error });
       }
+
+      const buildRecord = (existing) => {
+        const id = cfg.idGenerator(existing, body);
+        let record;
+        if (cfg.trackTimeline) {
+          const now = new Date().toISOString();
+          record = Object.assign({}, cfg.defaults, body, {
+            id,
+            createdAt: now,
+            updatedAt: now,
+            timeline: [{ ts: now, event: `${cfg.singular} created` }],
+          });
+        } else {
+          record = Object.assign({}, body, { id });
+        }
+        if (cfg.beforeSave) cfg.beforeSave(record, req);
+        return record;
+      };
+
+      const runAfterCreate = async (record) => {
+        if (cfg.afterCreate) {
+          try {
+            record = (await cfg.afterCreate(record, req)) || record;
+          } catch (err) {
+            // External synchronization is best-effort. The primary agent record
+            // must still be created when a scheduler is unavailable; the next
+            // native chat refresh can expose the agent.
+            console.error(`${cfg.singular}: afterCreate hook failed for`, record.id, err.message);
+          }
+        }
+        db.saveOne(conn, cfg.table, record.id, record);
+        return record;
+      };
+
+      if (createRequest) {
+        // The request identity and bot document share one SQLite transaction.
+        // A lost response or process restart can therefore recover either the
+        // existing bot or an uncommitted request, never a second bot.
+        let outcome;
+        try {
+          outcome = db.createBotWithCreationRequest(conn, {
+            ...createRequest.scope,
+            payloadHash: createRequest.payloadHash,
+            maxRecords: cfg.maxRecords,
+            buildRecord: (existing) => buildRecord(existing),
+          });
+        } catch (error) {
+          if (error && error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+            // A concurrent process won the unique owner/workspace/request key.
+            // Read its durable result below and apply the same conflict check.
+            outcome = { kind: 'existing', request: db.getBotCreationRequest(conn, createRequest.scope) };
+          } else {
+            throw error;
+          }
+        }
+        if (outcome.kind === 'limit') {
+          return res.status(409).json({ error: `${cfg.singular}_limit_reached`, limit: cfg.maxRecords });
+        }
+        if (outcome.kind === 'existing') {
+          const savedRequest = outcome.request || db.getBotCreationRequest(conn, createRequest.scope);
+          if (!savedRequest) return res.status(503).json({ error: 'creation_request_unavailable' });
+          if (savedRequest.payloadHash !== createRequest.payloadHash) {
+            return res.status(409).json({ error: 'creation_request_conflict' });
+          }
+          const pending = inFlightCreateRequests.get(createRequest.identityKey);
+          let record = null;
+          let pendingFailed = false;
+          if (pending) {
+            try { record = await pending; } catch (_error) {
+              pendingFailed = true;
+              /* reload the committed bot below */
+            }
+          }
+          record = record || db.loadOne(conn, cfg.table, savedRequest.botId);
+          if (!record) return res.status(410).json({ error: 'creation_request_deleted' });
+          if (cfg.accessCheck && !cfg.accessCheck(record, req)) {
+            return res.status(404).json({ error: 'not_found' });
+          }
+          if ((!pending || pendingFailed) && cfg.createRequest.recoverExisting) {
+            try {
+              record = (await cfg.createRequest.recoverExisting(record, req)) || record;
+              db.saveOne(conn, cfg.table, record.id, record);
+            } catch (error) {
+              console.error(`${cfg.singular}: creation request recovery failed for`, record.id, error.message);
+            }
+          }
+          return res.status(201).json({ [cfg.singular]: record });
+        }
+
+        const createPromise = Promise.resolve().then(() => runAfterCreate(outcome.record));
+        inFlightCreateRequests.set(createRequest.identityKey, createPromise);
+        let record;
+        try {
+          record = await createPromise;
+        } finally {
+          if (inFlightCreateRequests.get(createRequest.identityKey) === createPromise) {
+            inFlightCreateRequests.delete(createRequest.identityKey);
+          }
+        }
+        if (cfg.bumpOnMutate) bumpVersion();
+        return res.status(201).json({ [cfg.singular]: record });
+      }
+
       const existing = db.loadAll(conn, cfg.table);
       if (cfg.maxRecords && existing.length >= cfg.maxRecords) {
         return res.status(409).json({ error: `${cfg.singular}_limit_reached`, limit: cfg.maxRecords });
       }
-      const id = cfg.idGenerator(existing, body);
-      let record;
-      if (cfg.trackTimeline) {
-        const now = new Date().toISOString();
-        record = Object.assign({}, cfg.defaults, body, {
-          id,
-          createdAt: now,
-          updatedAt: now,
-          timeline: [{ ts: now, event: `${cfg.singular} created` }],
-        });
-      } else {
-        record = Object.assign({}, body, { id });
-      }
-      if (cfg.beforeSave) cfg.beforeSave(record, req);
+      const record = buildRecord(existing);
       // Reserve the id before any asynchronous provisioning hook. Creation
       // must fail on a collision instead of silently replacing an existing
       // document through the update-oriented saveOne helper.
-      db.insertOne(conn, cfg.table, id, record);
-      if (cfg.afterCreate) {
-        try {
-          record = (await cfg.afterCreate(record, req)) || record;
-        } catch (err) {
-          // External synchronization is best-effort. The primary agent record
-          // must still be created when a scheduler is
-          // unavailable; the next native chat refresh can expose the agent.
-          console.error(`${cfg.singular}: afterCreate hook failed for`, record.id, err.message);
-        }
-      }
-      db.saveOne(conn, cfg.table, id, record);
+      db.insertOne(conn, cfg.table, record.id, record);
+      const created = await runAfterCreate(record);
       if (cfg.bumpOnMutate) bumpVersion();
-      res.status(201).json({ [cfg.singular]: record });
+      res.status(201).json({ [cfg.singular]: created });
     });
   }
 
@@ -4731,6 +4901,19 @@ registerResource({
   table: 'bots',
   singular: 'bot',
   plural: 'bots',
+  createRequest: {
+    bodyField: 'creationRequestId',
+    // POST replay and the status endpoint repair the one intentional partial
+    // success in bot creation: the bot row can outlive a failed conversation
+    // provision. Do not rerun automation scheduling on a replay.
+    recoverExisting: async (record) => {
+      if (!nativeBotConversation(record)) {
+        const conversation = await ensureNativeBotConversation(record);
+        if (conversation) bumpVersion();
+      }
+      return record;
+    },
+  },
   idGenerator: () => `bot-${crypto.randomUUID()}`,
   maxRecords: MAX_BOTS,
   trackTimeline: true,
@@ -6886,6 +7069,7 @@ app.use(
             });
           }
           db.deleteOne(conn, 'bots', agent.id);
+          db.deleteBotCreationRequestsForBot(conn, agent.id);
           db.moveToTrash(conn, 'bot', agent);
           await cronSync.removeBotCron(agent).catch((err) =>
             console.error('cron-sync: failed to remove deleted user bot', agent.id, err.message)

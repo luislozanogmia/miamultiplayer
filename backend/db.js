@@ -72,6 +72,22 @@ CREATE TABLE IF NOT EXISTS settings         (id TEXT PRIMARY KEY, json TEXT NOT 
 CREATE TABLE IF NOT EXISTS bots             (id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS agents           (id TEXT PRIMARY KEY, json TEXT NOT NULL);
 
+-- A bot setup request is durable across lost HTTP responses and backend
+-- restarts. Owner/workspace scope prevents a replay from resolving to another
+-- user's or workspace's bot; the request id and payload are stored only as
+-- digests. The row is inserted atomically with the bot document.
+CREATE TABLE IF NOT EXISTS bot_creation_requests (
+  owner_email TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  bot_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (owner_email, workspace_id, request_hash)
+);
+CREATE INDEX IF NOT EXISTS bot_creation_requests_bot_id
+  ON bot_creation_requests (bot_id);
+
 -- One row per department conversation. id = the
 -- department name itself (departments have no separate id elsewhere in this
 -- system — they're free-string labels on agents), json = {department, roomId}.
@@ -404,6 +420,73 @@ function insertOne(db, table, id, record) {
     throw error;
   }
   if (change) change.finish();
+}
+
+function getBotCreationRequest(db, { ownerEmail, workspaceId, requestHash }) {
+  const owner = String(ownerEmail || '').trim().toLowerCase();
+  const workspace = String(workspaceId || '').trim();
+  if (!owner || !workspace || !requestHash) return null;
+  return db.prepare(
+    `SELECT owner_email AS ownerEmail, workspace_id AS workspaceId,
+            request_hash AS requestHash, payload_hash AS payloadHash,
+            bot_id AS botId, created_at AS createdAt
+       FROM bot_creation_requests
+      WHERE owner_email = ? AND workspace_id = ? AND request_hash = ?`
+  ).get(owner, workspace, requestHash) || null;
+}
+
+// Insert the bot document, its package files, and its durable creation-request
+// mapping as one recoverable operation. Package changes are rolled back if
+// SQLite rejects either insert; the package cleanup runs only after SQLite has
+// committed. `buildRecord` is invoked under the immediate transaction so the
+// bot limit and generated record are based on the latest committed set.
+function createBotWithCreationRequest(db, {
+  ownerEmail, workspaceId, requestHash, payloadHash, maxRecords, buildRecord,
+}) {
+  if (typeof buildRecord !== 'function') throw new Error('bot record builder is required');
+  const owner = String(ownerEmail || '').trim().toLowerCase();
+  const workspace = String(workspaceId || '').trim();
+  if (!owner || !workspace || !requestHash || !payloadHash) {
+    throw new Error('bot creation request identity is incomplete');
+  }
+
+  let packageChange = null;
+  let outcome;
+  try {
+    outcome = db.transaction(() => {
+      const existingRequest = getBotCreationRequest(db, { ownerEmail: owner, workspaceId: workspace, requestHash });
+      if (existingRequest) return { kind: 'existing', request: existingRequest };
+
+      const existing = loadAll(db, 'bots');
+      if (maxRecords && existing.length >= maxRecords) return { kind: 'limit', count: existing.length };
+      const record = buildRecord(existing);
+      const store = BOT_PACKAGE_STORES.get(db);
+      packageChange = store ? store.prepare(record, { writeInstructions: true }) : null;
+      if (packageChange) packageChange.apply();
+
+      db.prepare('INSERT INTO bots (id, json) VALUES (?, ?)')
+        .run(record.id, JSON.stringify(cleanDocumentRecord(record)));
+      db.prepare(
+        `INSERT INTO bot_creation_requests
+           (owner_email, workspace_id, request_hash, payload_hash, bot_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(owner, workspace, requestHash, payloadHash, record.id, record.createdAt || new Date().toISOString());
+      return { kind: 'created', record };
+    }).immediate();
+  } catch (error) {
+    if (packageChange) packageChange.rollback();
+    throw error;
+  }
+  // The SQLite commit succeeded. Do not roll it back if a future package
+  // cleanup implementation can fail; the durable request mapping now lets a
+  // retry recover the committed bot.
+  if (outcome.kind === 'created' && packageChange) packageChange.finish();
+  else if (packageChange) packageChange.rollback();
+  return outcome;
+}
+
+function deleteBotCreationRequestsForBot(db, botId) {
+  return db.prepare('DELETE FROM bot_creation_requests WHERE bot_id = ?').run(String(botId || '')).changes;
 }
 
 // Upserts a full set of records in one transaction. Used by the CRUD factory
@@ -1221,6 +1304,9 @@ module.exports = {
   loadOne,
   saveOne,
   insertOne,
+  getBotCreationRequest,
+  createBotWithCreationRequest,
+  deleteBotCreationRequestsForBot,
   saveAll,
   prepareBotPackageUpdate,
   deleteOne,
