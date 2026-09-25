@@ -105,22 +105,28 @@ test('Picker rejects unverified file access without saving or reporting a succes
 });
 
 test('provider failure is generic and never writes credentials', async t => {
+  const diagnostics = [];
   const login = await startNativeGoogleLogin({ env, client, scopes: ['openid'],
-    persist: () => assert.fail('must not persist'), fetchImpl: async () => ({ ok: false }) });
+    persist: () => assert.fail('must not persist'), log: message => diagnostics.push(message),
+    fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({ error: 'invalid_client',
+      error_description: 'client_secret is missing; must never be logged verbatim' }) }) });
   t.after(() => login.child.kill());
   const result = await fetch(callback(login));
   assert.equal(result.status, 400);
   assert.match(await result.text(), /could not complete/);
+  assert.deepEqual(diagnostics, ['[google-native-login] failed stage=token_exchange reason=http_401_invalid_client_client_secret']);
+  assert.doesNotMatch(diagnostics.join('\n'), /description|fixture-code|missing|verbatim/);
 });
 
-test('dev login accepts a fork-owned public client ID without a client file or secret', async t => {
+test('dev login sends the injected client secret only in the token exchange and preserves it for refresh', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-client-env-'));
   t.after(() => fs.rmSync(home, {recursive:true, force:true}));
   const login = await startNativeGoogleLogin({
     env: { HOME:home, GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND:'file',
-      MIA_GOOGLE_OAUTH_CLIENT_ID:'fixture.apps.googleusercontent.com' }, scopes:['openid'],
-    persist:()=>{}, fetchImpl:async (_url, options)=>{
-      assert.equal(options.body.has('client_secret'),false);
+      MIA_GOOGLE_OAUTH_CLIENT_ID:'fixture.apps.googleusercontent.com',
+      MIA_GOOGLE_OAUTH_CLIENT_SECRET:'fixture-desktop-secret' }, scopes:['openid'],
+    persist:(_dir, credentials)=>{ assert.equal(credentials.client_secret,'fixture-desktop-secret'); }, fetchImpl:async (_url, options)=>{
+      assert.equal(options.body.get('client_secret'),'fixture-desktop-secret');
       assert.equal(options.body.get('client_id'),'fixture.apps.googleusercontent.com');
       return {ok:true,json:async()=>({access_token:'fixture-access',refresh_token:'fixture-refresh'})};
     },
@@ -128,6 +134,7 @@ test('dev login accepts a fork-owned public client ID without a client file or s
   assert.equal(login.ok,true);
   t.after(()=>login.child.kill());
   assert.equal(new URL(login.authorizationUrl).searchParams.get('client_id'),'fixture.apps.googleusercontent.com');
+  assert.equal(new URL(login.authorizationUrl).searchParams.has('client_secret'),false);
   assert.equal((await fetch(callback(login))).status,200);
   assert.deepEqual(fs.readdirSync(home),[]);
 });

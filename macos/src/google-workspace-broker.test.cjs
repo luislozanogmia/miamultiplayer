@@ -16,7 +16,7 @@ const safeStorage = {
 };
 const credentials = { type: "authorized_user", client_id: "fixture.apps.googleusercontent.com", refresh_token: "fixture-refresh" };
 
-test("Google credential store uses platform encryption and rejects native client secrets", async t => {
+test("Google credential store encrypts and preserves the client secret needed for refresh", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-google-secure-store-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const store = secureStore({ directory: root, safeStorage, platform: "darwin" });
@@ -24,7 +24,11 @@ test("Google credential store uses platform encryption and rejects native client
   const disk = fs.readFileSync(path.join(root, "google-workspace-credentials.enc"));
   assert.doesNotMatch(disk.toString(), /fixture-refresh/);
   assert.deepEqual(await store.load(), credentials);
-  await assert.rejects(() => store.save({ ...credentials, client_secret: "must-not-ship" }), /invalid_credentials/);
+  const withSecret = { ...credentials, client_secret: "fixture-desktop-secret" };
+  await store.save(withSecret);
+  assert.deepEqual(await store.load(), withSecret);
+  assert.doesNotMatch(fs.readFileSync(path.join(root, "google-workspace-credentials.enc")).toString(), /fixture-desktop-secret/);
+  await assert.rejects(() => store.save({ ...credentials, client_secret: {} }), /invalid_credentials/);
 });
 
 test("legacy file credentials migrate to platform storage and remove the adjacent key", async t => {
@@ -39,7 +43,7 @@ test("legacy file credentials migrate to platform storage and remove the adjacen
   fs.writeFileSync(path.join(root, "credentials.enc"), encrypted, { mode: 0o600 });
   const store = secureStore({ directory: root, safeStorage, platform: "darwin" });
   assert.equal(await migrateLegacyFileCredential(root, store), true);
-  assert.deepEqual(await store.load(), credentials);
+  assert.deepEqual(await store.load(), old);
   assert.equal(fs.existsSync(path.join(root, ".encryption_key")), false);
   assert.equal(fs.existsSync(path.join(root, "credentials.enc")), false);
 });
@@ -48,7 +52,15 @@ test("broker accepts only authenticated Workspace service commands", async t => 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-google-broker-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const executable = path.join(root, "fake-gws");
-  fs.writeFileSync(executable, "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ok:true,args:process.argv.slice(2)}));\n", { mode: 0o700 });
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+assert.equal(process.env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND, 'file');
+assert.equal(path.dirname(process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR), process.env.HOME);
+fs.writeFileSync(path.join(process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR, 'token_cache.json'), 'fixture-token');
+process.stdout.write(JSON.stringify({ok:true,args:process.argv.slice(2),temporary:process.env.HOME}));
+`, { mode: 0o700 });
   const broker = await createGoogleWorkspaceBroker({ directory: path.join(root, "data"), safeStorage, gwsBin: executable });
   t.after(() => broker.close());
   const request = (endpoint, body, token = broker.token) => fetch(`${broker.url}${endpoint}`, {
@@ -61,6 +73,7 @@ test("broker accepts only authenticated Workspace service commands", async t => 
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.equal(result.code, 0);
+  assert.equal(fs.existsSync(JSON.parse(result.stdout).temporary), false);
   assert.match(result.stdout, /gmail/);
   assert.equal((await request("/run", { args: ["auth", "export", "--unmasked"] })).status, 400);
   assert.equal(validRun({ args: ["drive", "files", "list"] }), true);
