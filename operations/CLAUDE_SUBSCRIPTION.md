@@ -9,20 +9,22 @@ credential and does not silently fall back to an Anthropic API key.
 
 - Mia's bundled Hermes release must be 0.21.4
   (`v2026.9.21`, commit `d337b736aa1e8ebecfab043842d13e4a2d2f48a3`).
-- The official Claude Code CLI must be installed. Mia reuses an existing
-  Claude Code login or starts the CLI's own `claude auth login --claudeai`
-  flow from Connect. Upstream qualified Claude Code 2.1.263.
+- Mia uses an existing Claude Code CLI when it can find one. If absent, Connect
+  offers an explicit native confirmation before downloading and running
+  Anthropic's installer. Claude Desktop by itself is not the Claude Code CLI.
+  Mia then uses the CLI's own `claude auth login --claudeai` flow. Upstream
+  qualified Claude Code 2.1.263.
 - The vendored plugin is version 0.3.0, reviewed at commit
   `c92c27c9f919178a58974a72333b473c6cb2e71d`. Mia keeps the upstream runtime
   structure under `backend/hermes-plugins/claude-subscription-directsdk-experimental`
   with the documented local context-window policy customization.
 
-Desktop builds search the current `PATH` plus common Homebrew and npm install
-locations. Set `CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND` to an explicit Claude
-CLI path when discovery is insufficient. Mia passes
-`CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR` to the plugin, which maps it to the
-CLI's `CLAUDE_CONFIG_DIR`; desktop builds default this to the user's
-`~/.claude` rather than Mia's isolated Hermes home.
+Desktop builds search the current `PATH` plus common native, Homebrew, and npm
+install locations, including the native Windows `.exe`. Set
+`CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND` to an explicit Claude CLI path when
+discovery is insufficient. Mia passes `CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR`
+to the plugin only when explicitly set; otherwise the CLI chooses its own
+credential store. Mia does not copy Claude Desktop credentials.
 
 ## Operational limits
 

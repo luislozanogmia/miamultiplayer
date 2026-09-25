@@ -20,7 +20,7 @@ test('bot creation uses collision-resistant ids, insert-only persistence, and a 
   assert.match(source, /const MAX_BOTS = 100;/);
   assert.match(source, /idGenerator: \(\) => `bot-\$\{crypto\.randomUUID\(\)\}`/);
   assert.match(source, /maxRecords: MAX_BOTS/);
-  assert.match(source, /db\.insertOne\(conn, cfg\.table, id, record\)/);
+  assert.match(source, /db\.insertOne\(conn, cfg\.table, record\.id, record\)/);
   assert.match(source, /db\.insertOne\(conn, 'bots', bot\.id, bot\)/);
 });
 

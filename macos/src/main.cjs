@@ -28,6 +28,7 @@ const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
 const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
 const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
+const { discoverClaudeCodeCommand, installClaudeCode } = require("./claude-code.cjs");
 
 const googleAuthOpenSecret = crypto.randomBytes(32).toString("base64url");
 
@@ -59,28 +60,6 @@ function runtimeLauncherPath(binDir, name) {
 // Windows it ships as bin\gws.exe rather than a .cmd launcher.
 function nativeRuntimeBinaryPath(binDir, name) {
   return path.join(binDir, process.platform === "win32" ? `${name}.exe` : name);
-}
-
-function discoverClaudeCodeCommand() {
-  const explicit = String(process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND || "").trim();
-  if (explicit) return explicit;
-  const home = app.getPath("home");
-  const executable = process.platform === "win32" ? "claude.cmd" : "claude";
-  const candidates = [
-    ...String(process.env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, executable)),
-    ...(process.platform === "darwin" ? ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] : []),
-    ...(process.platform === "win32" && process.env.APPDATA ? [path.join(process.env.APPDATA, "npm", executable)] : []),
-    path.join(home, ".local", "bin", executable),
-    path.join(home, ".npm-global", "bin", executable),
-  ];
-  return candidates.find((candidate) => {
-    try {
-      return fs.statSync(candidate, { throwIfNoEntry: false })?.isFile();
-    } catch (_) {
-      // A stale or unreadable PATH entry must not prevent Mia from starting.
-      return false;
-    }
-  }) || "";
 }
 
 // A source checkout launched with MIA_DEV_DATA_ROOT keeps every desktop
@@ -864,7 +843,7 @@ async function startLocalBackend(exactPort = null) {
   const workspaceDir = miaosWorkspacePath();
   const bridgePaths = ghostBridgePaths();
   const ghostCliHome = resolveGhostCliHome();
-  const claudeCodeCommand = discoverClaudeCodeCommand();
+  const claudeCodeCommand = discoverClaudeCodeCommand({ home: app.getPath("home") });
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
     STATIC_DIR: "../frontend",
@@ -1075,7 +1054,7 @@ async function restartManagedBackend({ managedProcess, managedUrl, rendererUrl, 
   return replacementUrl;
 }
 
-function developmentRestartServer() {
+function developmentRestartServer({ reload = true } = {}) {
   const managedProcess = backendProcess;
   const managedUrl = backendProcessUrl;
   const currentRendererUrl = rendererBackendUrl();
@@ -1094,7 +1073,7 @@ function developmentRestartServer() {
       return startedUrl;
     },
     reload: async () => {
-      if (mainWindow && !mainWindow.isDestroyed()) await loadMiaOS();
+      if (reload && mainWindow && !mainWindow.isDestroyed()) await loadMiaOS();
     },
   });
 }
@@ -2078,6 +2057,45 @@ ipcMain.handle("miaos-retry-connection", async (event) => {
   // The standalone fallback has no live app to reconnect, so replace it with
   // the backend renderer once the service is available.
   return loadMiaOS();
+});
+
+ipcMain.on("miaos-claude-code-status", (event) => {
+  event.returnValue = isMainWindowSender(event)
+    ? { available: Boolean(discoverClaudeCodeCommand({ home: app.getPath("home") })) }
+    : { available: false };
+});
+
+let claudeCodeInstallPromise = null;
+ipcMain.handle("miaos-claude-code-install", async (event) => {
+  if (!isMainWindowSender(event)) return { ok: false, error: "This request did not come from Mia." };
+  const existing = discoverClaudeCodeCommand({ home: app.getPath("home") });
+  if (existing) return { ok: true, alreadyInstalled: true };
+  if (claudeCodeInstallPromise) return { ok: false, error: "Claude Code installation is already running." };
+  claudeCodeInstallPromise = (async () => {
+    try {
+      const choice = await dialog.showMessageBox(mainWindow, {
+        type: "question",
+        buttons: ["Cancel", "Install Claude Code"],
+        defaultId: 0,
+        cancelId: 0,
+        title: "Install Claude Code",
+        message: "Install Anthropic's Claude Code command?",
+        detail: "Mia will download and run Anthropic's official installer from claude.ai. Claude Desktop is separate. You will sign in to Claude Code afterward; Mia will not copy your Claude Desktop login.",
+        noLink: true,
+      });
+      if (choice.response !== 1) return { ok: false, cancelled: true };
+      const command = await installClaudeCode({ home: app.getPath("home") });
+      process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND = command;
+      await developmentRestartServer({ reload: false });
+      return { ok: true, installed: true };
+    } catch (error) {
+      desktopLog(`Claude Code installation failed: ${error.message}`);
+      return { ok: false, error: error.message || "Claude Code could not be installed." };
+    } finally {
+      claudeCodeInstallPromise = null;
+    }
+  })();
+  return claudeCodeInstallPromise;
 });
 
 // Clean slate, desktop half. The backend has already emptied its database
