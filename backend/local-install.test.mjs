@@ -134,7 +134,7 @@ test('Linux package validates and refreshes pinned runtimes and emits release in
   assert.match(packager, /path\.join\(packageRoot, "usr", "bin", "ghost-cli"\)/);
   assert.match(packager, /path\.join\(packageRoot, "usr", "bin", "mia"\)/);
   assert.match(packager, /Package: mia\\n/);
-  assert.match(packager, /Name=Mia\\nExec=mia\\n/);
+  assert.match(packager, /Name=Mia\\nExec=mia %u\\n/);
   assert.match(packager, /`Mia_\$\{VERSION\}_amd64\.deb`/);
   assert.match(packager, /\/opt\/miaos\/app\/resources\/backend\/miaos-ghost-cli\.py/);
   assert.doesNotMatch(packager, /ghost-cli\/ghost_cli\.py/);

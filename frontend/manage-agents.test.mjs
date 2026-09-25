@@ -546,9 +546,8 @@ test('Mia keeps bot creation in her own chat before any Hermes dispatch', async 
 
   assert.match(source, /function isBotCreationIntent\(value\)/);
   assert.match(source, /chatWs\.activeKind === 'agent'[\s\S]*isMiaOrchestrator\(chatWs\.activeLabel, 'gateway'\)[\s\S]*isBotCreationIntent\(text\)/);
-  // Mia drafts the bot in her chat and revises it from follow-up messages;
-  // she no longer jumps to the separate New Bot setup chat.
-  assert.match(source, /draftFlow\.phase === 'review'\)\{\s*reviseMiaBotDraft\(sendRoomId, text\);/);
+  // Mia drafts the bot in her chat; a new message closes an unsubmitted card.
+  assert.match(source, /draftFlow\.phase === 'review'\)\{\s*cancelMiaBotDraft\(sendRoomId\);/);
   assert.match(source, /isBotCreationIntent\(text\)\)\{\s*startMiaBotDraft\(sendRoomId, text\);[\s\S]*botSetup: true/);
   const routeStart = source.indexOf("if(!threadRootId && !preparedAttachment && chatWs.activeKind === 'agent'");
   const routeEnd = source.indexOf('return sendNativeConversationEvent(', routeStart);
@@ -570,12 +569,12 @@ test('bot creation intent catches requests, not questions or edits', async () =>
   }
 });
 
-test('Mia\'s chat drafts, revises, and creates a bot with the shared review card', async () => {
+test('Mia\'s chat clarifies, drafts, and creates a bot with the shared review card', async () => {
   const source = await readFile(appUrl, 'utf8');
-  // Revisions send the current draft (with hand edits) and the change.
-  assert.match(source, /function reviseMiaBotDraft\(roomId, text\)[\s\S]*captureAgentSetupDraft\(flow\)/);
-  assert.match(source, /body\.change = change;\s*body\.currentDraft = flow\.draft;/);
-  assert.match(source, /We’re building this bot\. Review the details, or tell me what to change\./);
+  assert.match(source, /function startMiaBotDraft\(roomId, text\)[\s\S]*botCreationIntentNeedsDetails\(text\)/);
+  assert.match(source, /function continueMiaBotDraft\(roomId, text\)[\s\S]*requestMiaBotDraft\(roomId, flow, ''\)/);
+  assert.match(source, /Review the draft\. Edit any field, then accept it\./);
+  assert.match(source, /confirmLabel: 'Accept',[\s\S]*hideLater: true/);
   // The same card and create path as the New Bot setup chat.
   assert.match(source, /function miaBotDraftHtml\(flow, thread\)[\s\S]*agentSetupReviewHtml\(flow, \{/);
   assert.match(source, /function activateMiaBotDraft\(roomId\)[\s\S]*agentSetupCreatePayload\(flow, flow\.intent\)[\s\S]*createBotFromSetupPayload\(/);

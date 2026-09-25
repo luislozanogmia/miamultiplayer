@@ -18,8 +18,8 @@ except ImportError:
     from admission import Admission
     from model_catalog import CONTEXT_WINDOWS, native_model
 
-INSTALL_HINT = ("Claude Code is not installed (no `claude` on PATH). Install it with "
-                "`npm install -g @anthropic-ai/claude-code` or set CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND to the binary.")
+INSTALL_HINT = ("Mia couldn't find the Claude Code command. Claude Desktop alone does not install the Claude Code command. "
+                "Install Claude Code from https://code.claude.com/docs/en/setup, then restart Mia and try again.")
 LOGIN_HINT = "Claude Code is installed but not logged in. Run `claude auth login`, then select this provider again."
 
 
