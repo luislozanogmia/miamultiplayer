@@ -818,7 +818,7 @@ test('chat-native bot setup can cancel or retry bounded interpretation and activ
   assert.match(source, /function cancelAgentSetupFlow\(\)/);
   assert.match(source, /id="agentSetupCancel"/);
   assert.match(source, /id="agentSetupRetry"/);
-  assert.match(source, /createBotFromSetupPayload\(prepared\.payload, controller \? \{signal:controller\.signal\} : \{\}\)/);
+  assert.match(source, /createBotFromSetupPayload\(prepared\.payload, controller \? \{signal:controller\.signal\} : \{\}, agentSetup\)/);
   assert.match(source, /createNativeAgentConversation\(created, requestOptions\)/);
   assert.match(source, /api\('\/api\/bots\/interpret', \{[\s\S]*signal:controller\.signal/);
   assert.match(styles, /agent-setup-actions button:disabled/);
