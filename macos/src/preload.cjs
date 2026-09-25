@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld("miaDesktop", {
   ready: () => ipcRenderer.send("miaos-renderer-ready"),
   hydrated: () => ipcRenderer.send("miaos-renderer-hydrated"),
   retryConnection: () => ipcRenderer.invoke("miaos-retry-connection"),
+  claudeCode: {
+    status: () => ipcRenderer.sendSync("miaos-claude-code-status"),
+    install: () => ipcRenderer.invoke("miaos-claude-code-install"),
+  },
   openGoogleWorkspaceAuth: (url, proof) => ipcRenderer.invoke("miaos-google-workspace-auth-open", { url, proof }),
   auth: {
     status: () => ipcRenderer.invoke("miaos-clerk-auth", "status"),

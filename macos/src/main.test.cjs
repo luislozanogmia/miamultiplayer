@@ -314,8 +314,8 @@ test("packaged macOS runtime is self-contained and ignores ambient Hermes", () =
   assert.match(source, /process\.env\.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND = "file"/);
   assert.match(source, /\[pythonExecutable, hermesLauncher, ghostLauncher, gwsLauncher\]/);
   assert.match(source, /CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR/);
-  assert.match(source, /discoverClaudeCodeCommand\(\)/);
-  assert.match(source, /\.npm-global[\s\S]*claude/);
+  assert.match(source, /discoverClaudeCodeCommand\(\{ home: app\.getPath\("home"\) \}\)/);
+  assert.match(fs.readFileSync(path.join(__dirname, "claude-code.cjs"), "utf8"), /\.npm-global[\s\S]*claude/);
 });
 
 test("Claude uses its native credential store unless a custom config is explicit", () => {
