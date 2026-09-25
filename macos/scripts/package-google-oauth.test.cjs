@@ -37,7 +37,7 @@ test("generic builds omit Google registration and official builds fail closed", 
   }), /requires MIA_GOOGLE_OAUTH_CLIENT_ID/);
 });
 
-test("protected release validation rejects wrong IDs and all secret inputs", t => {
+test("protected release validation rejects wrong IDs, incomplete credentials and file inputs", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-client-validation-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.throws(() => stageGoogleOAuthClient(path.join(root, "invalid"), {
@@ -49,8 +49,18 @@ test("protected release validation rejects wrong IDs and all secret inputs", t =
   }), /protected release value/);
   assert.throws(() => stageGoogleOAuthClient(path.join(root, "secret"), {
     MIA_GOOGLE_OAUTH_CLIENT_SECRET: "must-not-ship",
-  }), /not accepted/);
+  }), /requires a client ID/);
   assert.throws(() => stageGoogleOAuthClient(path.join(root, "file"), {
     MIA_GOOGLE_OAUTH_CLIENT_FILE: "/unused/file.json",
   }), /not accepted/);
+});
+
+test("official builds stage the injected registration without user tokens", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-client-official-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const env = { MIA_REQUIRE_GOOGLE_OAUTH: "1", MIA_GOOGLE_OAUTH_CLIENT_ID: CLIENT_ID };
+  assert.throws(() => stageGoogleOAuthClient(root, env), /requires MIA_GOOGLE_OAUTH_CLIENT_SECRET/);
+  const output = stageGoogleOAuthClient(root, { ...env, MIA_GOOGLE_OAUTH_CLIENT_SECRET: "fixture-desktop-secret" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(output)), { installed: { client_id: CLIENT_ID, client_secret: "fixture-desktop-secret" } });
+  assert.doesNotMatch(fs.readFileSync(output, "utf8"), /refresh_token|access_token/);
 });

@@ -16,7 +16,7 @@
 #   - MIAOS_MAC_SIGN_IDENTITY, MIAOS_MAC_NOTARY_PROFILE, and
 #     MIAOS_MAC_PROVISIONING_PROFILE, set together, to produce a signed and
 #     notarized release build. Signed releases also require the public
-#     MIA_GOOGLE_OAUTH_CLIENT_ID injected by the controlled release shell.
+#     MIA_GOOGLE_OAUTH_CLIENT_ID and MIA_GOOGLE_OAUTH_CLIENT_SECRET injected by the controlled release shell.
 #     Leave all release variables unset for an ad-hoc local build.
 set -euo pipefail
 

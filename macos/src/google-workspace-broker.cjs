@@ -64,7 +64,8 @@ function secureStore({ directory, safeStorage, platform = process.platform }) {
       if (!value || value.type !== "authorized_user"
         || !/^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(value.client_id || "")
         || typeof value.refresh_token !== "string" || !value.refresh_token || value.refresh_token.length > 16384
-        || Object.prototype.hasOwnProperty.call(value, "client_secret")) throw new Error("invalid_credentials");
+        || (value.client_secret !== undefined && (typeof value.client_secret !== "string"
+          || value.client_secret.length > 4096))) throw new Error("invalid_credentials");
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
       await fs.chmod(directory, 0o700);
       const temporary = `${file}.${crypto.randomUUID()}.tmp`;
@@ -88,7 +89,6 @@ async function migrateLegacyFileCredential(directory, store) {
     const decipher = crypto.createDecipheriv("aes-256-gcm", key, data.subarray(0, 12));
     decipher.setAuthTag(data.subarray(-16));
     const value = JSON.parse(Buffer.concat([decipher.update(data.subarray(12, -16)), decipher.final()]).toString("utf8"));
-    delete value.client_secret;
     await store.save(value);
     key.fill(0);
     migrated = true;
@@ -163,6 +163,10 @@ function runGws(gwsBin, args, { credentials, cwd }) {
           PATH: process.env.PATH || "", HOME: temporary, USERPROFILE: temporary,
           GOOGLE_WORKSPACE_CLI_CONFIG_DIR: configDir,
           GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: credentialsFile,
+          // gws caches refreshed access tokens. Its isolated HOME has no login
+          // keychain; keep that short-lived cache in this private directory,
+          // removed in finally. Durable credentials stay in safeStorage.
+          GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file",
           NO_COLOR: "1",
         };
         for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"]) {
