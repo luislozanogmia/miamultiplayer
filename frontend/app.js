@@ -655,6 +655,12 @@
       if(harnessSettingsCache.onboardingComplete){
         Promise.resolve(initialRender).then(startMiaOnboardingChat);
       }
+      // Provisioning runs in the background after sign-in and can take up
+      // to its 15-second timeout, so check once now and once after that.
+      if(usesManagedRouterByDefault()){
+        checkManagedRouterStatus();
+        setTimeout(checkManagedRouterStatus, 20000);
+      }
     });
     Promise.resolve(initialRender).then(function(){
       startLiveRefreshPolling();
@@ -1367,9 +1373,10 @@
     return realProfileName(profile && profile.displayName);
   }
 
-  function renderHarnessConnectionInventory(connections, runtimes){
+  function renderHarnessConnectionInventory(connections, runtimes, routerStatus){
     var wrap = el('#settingsHarnessConnections');
     var connected = [];
+    var routerError = routerStatus && !routerStatus.provisioned && routerStatus.error;
     if(connections && connections['openai-codex'] === true) connected.push({label:'ChatGPT subscription'});
     if(connections && connections['xai-oauth'] === true) connected.push({label:'Grok subscription'});
     harnessApiProviderCatalog.forEach(function(provider){
@@ -1378,10 +1385,15 @@
       }
     });
     if(wrap){
-      if(!connected.length){
+      var routerErrorRow = routerError
+        ? '<div class="styled-settings-row styled-harness-connection-row"><div><div class="styled-settings-row-label">' + esc((routerStatus && routerStatus.label) || 'Mia Router') + '</div><div class="styled-settings-row-desc">' + esc(routerError) + '</div></div><span class="status-pill offline"><span class="dot"></span>Not connected</span></div>'
+        : '';
+      if(!connected.length && routerErrorRow){
+        wrap.innerHTML = routerErrorRow;
+      } else if(!connected.length){
         wrap.innerHTML = '<div class="styled-settings-row"><div><div class="styled-settings-row-label">No connected providers</div><div class="styled-settings-row-desc">Connect a subscription or API provider from setup.</div></div></div>';
       } else {
-        wrap.innerHTML = connected.map(function(item){
+        wrap.innerHTML = routerErrorRow + connected.map(function(item){
           return '<div class="styled-settings-row styled-harness-connection-row"><div><div class="styled-settings-row-label">' + esc(item.label) + '</div></div><span class="status-pill live"><span class="dot"></span>Connected</span></div>';
         }).join('');
       }
@@ -1787,6 +1799,41 @@
   }
 
   var managedRouterAvailable = false;
+  // Mia Router connects in the background after sign-in. When that fails,
+  // show the reason on the Mia Router card, in Access, and, when Mia Router
+  // is the saved default, in a banner that stays until dismissed.
+  var managedRouterStatusError = '';
+  var managedRouterBannerDismissed = '';
+  function usesManagedRouterByDefault(){
+    return !!(harnessSettingsCache && harnessSettingsCache.onboardingComplete
+      && harnessSettingsCache.provider === 'openai-api' && harnessSettingsCache.apiProvider === 'openrouter');
+  }
+  function applyManagedRouterStatus(data){
+    var bannerLabel = el('#miaRouterBannerLabel');
+    if(bannerLabel && data && data.label) bannerLabel.textContent = data.label;
+    managedRouterStatusError = data && !data.provisioned && data.error ? String(data.error) : '';
+    var note = el('[data-managed-router-error]');
+    if(note){ note.textContent = managedRouterStatusError; note.hidden = !managedRouterStatusError; }
+    var banner = el('#miaRouterBanner');
+    if(!banner) return;
+    var show = !!managedRouterStatusError && usesManagedRouterByDefault()
+      && managedRouterBannerDismissed !== managedRouterStatusError;
+    var reason = el('#miaRouterBannerReason');
+    if(reason) reason.textContent = managedRouterStatusError;
+    banner.hidden = !show;
+  }
+  function checkManagedRouterStatus(){
+    return api('/api/settings/managed-router/status').then(function(res){
+      applyManagedRouterStatus(res.data);
+      return res.data;
+    }).catch(function(){ return null; });
+  }
+  var miaRouterBannerDismiss = el('#miaRouterBannerDismiss');
+  if(miaRouterBannerDismiss) miaRouterBannerDismiss.addEventListener('click', function(){
+    managedRouterBannerDismissed = managedRouterStatusError;
+    var banner = el('#miaRouterBanner');
+    if(banner) banner.hidden = true;
+  });
   function loadHarnessConnectionStatus(){
     harnessConnectionValidationPending = true;
     renderHarnessOnboarding();
@@ -1804,6 +1851,7 @@
         });
       }
       managedRouterAvailable = !!(routerRes.data && routerRes.data.available);
+      applyManagedRouterStatus(routerRes.data);
       if(routerRes.data && routerRes.data.provisioned) harnessConnectionState['openrouter'] = true;
       var managedRouterCard = el('[data-harness-provider="managed-router"]');
       if(managedRouterCard) managedRouterCard.closest('.styled-onboarding-provider-row').hidden = !managedRouterAvailable;
@@ -1812,12 +1860,14 @@
       if(routerLabel){
         var labelEl = el('[data-managed-router-label]');
         if(labelEl) labelEl.textContent = routerLabel;
+        var bannerLabel = el('#miaRouterBannerLabel');
+        if(bannerLabel) bannerLabel.textContent = routerLabel;
         harnessApiProviderCatalog.forEach(function(entry){
           if(entry.id === 'managed-router') entry.label = routerLabel;
         });
       }
       harnessConnectionValidationPending = false;
-      renderHarnessConnectionInventory(connections, runtimes);
+      renderHarnessConnectionInventory(connections, runtimes, routerRes.data);
       renderHarnessConnectionActions();
       renderHarnessOnboarding();
     }).catch(function(){

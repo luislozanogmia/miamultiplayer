@@ -33,6 +33,11 @@
   <button type="button" id="miaServiceRetry">Restart and reconnect</button>
 </div>
 
+<div class="mia-service-banner mia-router-banner" id="miaRouterBanner" role="alert" hidden>
+  <span><strong id="miaRouterBannerLabel">Mia Router</strong> isn't connected. <span id="miaRouterBannerReason"></span></span>
+  <button type="button" id="miaRouterBannerDismiss">Dismiss</button>
+</div>
+
 <div class="login-wall" id="loginWall">
   <div class="login-split">
     <div class="login-main">
@@ -937,7 +942,7 @@
     <div class="styled-onboarding-provider-row">
       <button type="button" class="styled-onboarding-choice" data-harness-provider="managed-router" aria-pressed="false">
         <span class="styled-onboarding-choice-icon choice-managed-router"><img src="assets/icons/mia-192.png" alt="" style="width:28px;height:28px;border-radius:6px;" /></span>
-        <span><strong data-managed-router-label>Managed Router</strong></span>
+        <span><strong data-managed-router-label>Managed Router</strong><small class="styled-onboarding-choice-error" data-managed-router-error hidden></small></span>
         <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
       </button>
       <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="managed-router" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>
