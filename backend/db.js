@@ -530,6 +530,51 @@ function deleteOne(db, table, id) {
   }
 }
 
+// Archive moves the bot's package under bots/.archive/ (with its full
+// record) and removes the row; restore reverses both. A package move can't
+// join a caller-owned SQLite transaction, so neither runs nested.
+function archiveBot(db, record, archivedAt) {
+  const store = BOT_PACKAGE_STORES.get(db);
+  if (!store) throw new Error('bot packages are not configured');
+  if (db.inTransaction) throw new Error('archiveBot cannot run inside a transaction');
+  const change = store.prepareArchive(record, archivedAt);
+  change.apply();
+  try {
+    db.prepare('DELETE FROM bots WHERE id = ?').run(record.id);
+  } catch (error) {
+    change.rollback();
+    throw error;
+  }
+  change.finish();
+}
+
+function listArchivedBots(db) {
+  const store = BOT_PACKAGE_STORES.get(db);
+  return store ? store.listArchived() : [];
+}
+
+function archivedBot(db, id) {
+  return listArchivedBots(db).find((entry) => entry.record && entry.record.id === id) || null;
+}
+
+function restoreBot(db, id, buildRecord) {
+  const store = BOT_PACKAGE_STORES.get(db);
+  if (!store) throw new Error('bot packages are not configured');
+  if (db.inTransaction) throw new Error('restoreBot cannot run inside a transaction');
+  const change = store.prepareRestore(id);
+  const record = buildRecord(change.record, change.archivedAt);
+  change.apply();
+  try {
+    db.prepare('INSERT INTO bots (id, json) VALUES (@id, @json)')
+      .run({ id: record.id, json: JSON.stringify(cleanDocumentRecord(record)) });
+  } catch (error) {
+    change.rollback();
+    throw error;
+  }
+  change.finish();
+  return loadOne(db, 'bots', record.id);
+}
+
 function prepareBotPackageUpdate(db, record, options) {
   const store = BOT_PACKAGE_STORES.get(db);
   return store ? store.prepare(record, options) : null;
@@ -1311,6 +1356,10 @@ module.exports = {
   prepareBotPackageUpdate,
   deleteOne,
   moveToTrash,
+  archiveBot,
+  listArchivedBots,
+  archivedBot,
+  restoreBot,
   loadSingleton,
   saveSingleton,
   listUsers,

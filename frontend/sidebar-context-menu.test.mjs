@@ -80,7 +80,7 @@ test('right-click exposes conversation delete and keeps bot delete separate', as
     const button = node('[data-sidebar-action="delete"]');
     assert.equal(button.hidden, kind === 'home', kind);
     if (kind === 'home') continue;
-    assert.equal(node('#chatSidebarCtxDeleteLabel').textContent, kind === 'agent' ? 'Delete' : 'Delete conversation');
+    assert.equal(node('#chatSidebarCtxDeleteLabel').textContent, kind === 'agent' ? 'Archive bot' : 'Delete conversation');
     button.getAttribute = () => 'delete';
     listeners['#chatSidebarCtxMenu:click']({ target: { closest: () => button } });
   }

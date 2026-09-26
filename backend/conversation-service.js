@@ -362,6 +362,15 @@ function createConversationService({ repository, authorization, realtime = null,
   function createEvent({ companyId, conversationId, principal, routing = {}, ...input }) {
     authorization.authorize(callerPrincipal(principal, companyId, conversationId, 'send'));
     const conversation = repository.getConversation({ companyId, id: conversationId, includeDeleted: false });
+    // An archived bot's own chat stays readable, but nobody can post to it
+    // until the bot is restored.
+    const conversationMetadata = conversation && conversation.metadata && typeof conversation.metadata === 'object'
+      ? conversation.metadata : {};
+    if (conversation && conversation.type === 'bot' && conversationMetadata.botArchived === true) {
+      const error = new Error('This bot is archived. Restore it to chat again.');
+      error.code = 'READ_ONLY';
+      throw error;
+    }
     ensureBotMember(conversation);
     ensureConversationMembers(conversation);
     const result = repository.createEvent({

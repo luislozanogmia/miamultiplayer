@@ -212,7 +212,7 @@
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
     });
   }
-  function appConfirm(message){
+  function appConfirm(message, confirmLabel){
     return new Promise(function(resolve){
       var previousFocus = document.activeElement;
       var overlay = document.createElement('div');
@@ -239,7 +239,7 @@
       var confirm = document.createElement('button');
       confirm.type = 'button';
       confirm.className = 'btn app-confirm-danger';
-      confirm.textContent = 'Delete';
+      confirm.textContent = confirmLabel || 'Delete';
 
       actions.appendChild(cancel);
       actions.appendChild(confirm);
@@ -2978,7 +2978,7 @@
     if(!(a.isBuiltin && !a.agentId)){
       actions.appendChild(mkIconBtn(
         '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
-        'bench-delete-btn', 'Delete bot',
+        'bench-delete-btn', 'Archive bot',
         function(){ deleteBenchAgent(a, closeBenchDetail); }
       ));
     }
@@ -3544,7 +3544,7 @@
           '<div class="styled-agent-model-picker" id="styledAgentModelPicker"><button type="button" class="styled-agent-edit-model" id="styledAgentEditModel" aria-haspopup="dialog" aria-expanded="false" aria-label="Choose bot model"><span id="styledAgentEditModelLabel">' + esc(styledAgentModelLabel(editState.model || a.model)) + '</span><span aria-hidden="true">&#8250;</span></button>' +
             '<div class="cc-model-menu styled-agent-model-menu" id="styledAgentModelMenu"><div class="cc-model-menu-head"><button type="button" class="cc-model-back" id="styledAgentModelBack" aria-label="Back" title="Back" hidden>&#8249;</button><div class="cc-model-menu-title" id="styledAgentModelTitle">Choose a model family</div></div><div class="cc-model-options" id="styledAgentModelOptions">' + styledAgentModelMenuOptionsHtml() + '</div><div class="cc-model-selection" id="styledAgentModelSummary">' + esc(editState.model || a.model || 'No model selected') + '</div></div></div></section>' +
       '</div>' +
-      '<div class="styled-agent-edit-footer"><button type="button" class="styled-agent-edit-delete" id="styledAgentEditDelete">Delete bot</button><span class="styled-agent-edit-footer-spacer"></span><button type="button" class="styled-agent-edit-cancel" id="styledAgentEditCancel">Cancel</button><button type="button" class="styled-agent-edit-save" id="styledAgentEditSave">Save changes</button></div>' +
+      '<div class="styled-agent-edit-footer"><button type="button" class="styled-agent-edit-delete" id="styledAgentEditDelete">Archive bot</button><span class="styled-agent-edit-footer-spacer"></span><button type="button" class="styled-agent-edit-cancel" id="styledAgentEditCancel">Cancel</button><button type="button" class="styled-agent-edit-save" id="styledAgentEditSave">Save changes</button></div>' +
     '</div>';
   }
 
@@ -3894,19 +3894,22 @@
 
   function deleteBenchAgent(a, onDeleted){
     if(!a){ showBenchToast('Bot details are still loading'); return; }
-    // Legacy builtin records are ordinary persisted bots and remain deletable.
+    // Bots are archived, never deleted: the server parks the bot and its
+    // files, takes it out of its rooms, and keeps its chat read-only until
+    // it is restored from Agents & Bots → Archived bots.
     var targetId = a.isBuiltin ? a.agentId : a.id;
-    if(!targetId){ showBenchToast('This bot has no server record to delete'); return; }
-    appConfirm('Delete ' + a.name + '?').then(function(ok){
+    if(!targetId){ showBenchToast('This bot has no server record to archive'); return; }
+    appConfirm('Archive ' + a.name + '? It stops running and leaves its rooms. You can restore it from Archived bots.', 'Archive').then(function(ok){
       if(!ok) return;
       api('/api/bots/' + targetId, {method:'DELETE'}).then(function(res){
         if(res.status === 200){
           removeDeletedBotChatState(targetId);
           if(onDeleted) onDeleted();
           loadBenchAgents().then(refreshAgentsView);
+          showBenchToast('Archived ' + a.name);
         }
-        else showBenchToast('Delete failed (' + res.status + ')');
-      }).catch(function(){ showBenchToast('Delete failed — network error'); });
+        else showBenchToast('Archive failed (' + res.status + ')');
+      }).catch(function(){ showBenchToast('Archive failed — network error'); });
     });
   }
 
@@ -4900,7 +4903,12 @@
 
   function applyNativeConversationList(conversations){
     setMiaServiceUnavailable(false);
-    var rooms = (conversations || []).map(nativeConversationToRoom);
+    // An archived bot's chat is kept on the server (read-only) but is not a
+    // live conversation; it comes back to the sidebar when the bot is restored.
+    conversations = (conversations || []).filter(function(conversation){
+      return !(conversation && conversation.type === 'bot' && conversation.metadata && conversation.metadata.botArchived === true);
+    });
+    var rooms = conversations.map(nativeConversationToRoom);
     chatWs.native = true;
     chatWs.nativeConversations = conversations || [];
     chatWs.configured = true;
@@ -5352,7 +5360,7 @@
       setVisible('copy', hasCopy);
       setVisible('hide', hasHide);
       setVisible('delete', hasAgentActions || hasConversationDelete);
-      if(deleteLabel) deleteLabel.textContent = hasConversationDelete ? 'Delete conversation' : 'Delete';
+      if(deleteLabel) deleteLabel.textContent = hasConversationDelete ? 'Delete conversation' : 'Archive bot';
       setSeparator('agent', hasAgentActions);
       setSeparator('copy', hasAgentActions && hasCopy);
       setSeparator('hide', hasCopy && hasHide);
@@ -8619,6 +8627,63 @@
       (rows.length ? '<div class="manage-agent-list">' + rows.join('') + '</div>' : '') + '</section>';
   }
 
+  // Archived bots are listed from the server's archive, not the live bot
+  // list. Restore brings a bot back with its files, schedules, and chat; it
+  // does not rejoin the rooms it left. The section starts collapsed so
+  // archived bots are not mistaken for live ones.
+  var archivedBotsExpanded = false;
+  function loadArchivedBots(pane){
+    api('/api/bots/archived').then(function(res){
+      var section = el('#manageArchivedBots', pane);
+      if(!section || res.status !== 200 || !res.data) return;
+      var bots = Array.isArray(res.data.bots) ? res.data.bots : [];
+      section.hidden = !bots.length;
+      if(!bots.length){ section.innerHTML = ''; return; }
+      section.innerHTML = '<button type="button" class="manage-agent-section-head manage-archived-toggle" id="manageArchivedToggle" aria-expanded="' + (archivedBotsExpanded ? 'true' : 'false') + '">' +
+          '<span><span class="manage-archived-chevron" aria-hidden="true">' + (archivedBotsExpanded ? '&#9662;' : '&#9656;') + '</span> Archived bots</span>' +
+          '<span class="manage-agent-section-tools"><span>' + bots.length + '</span></span></button>' +
+        '<div class="manage-agent-list"' + (archivedBotsExpanded ? '' : ' hidden') + '>' + bots.map(function(bot){
+          return '<div class="manage-agent-row manage-archived-bot-row"><span class="manage-agent-name">' + esc(bot.name || 'Bot') + '</span>' +
+            '<button type="button" class="manage-agent-section-link" data-restore-archived-bot="' + esc(bot.id) + '">Restore</button></div>';
+        }).join('') + '</div>';
+      var toggle = el('#manageArchivedToggle', section);
+      if(toggle) toggle.addEventListener('click', function(){
+        archivedBotsExpanded = !archivedBotsExpanded;
+        loadArchivedBots(pane);
+      });
+      els('[data-restore-archived-bot]', section).forEach(function(button){
+        button.addEventListener('click', function(e){
+          e.stopPropagation();
+          restoreArchivedBot(button.getAttribute('data-restore-archived-bot'), button);
+        });
+      });
+    }).catch(function(){});
+  }
+
+  function restoreArchivedBot(botId, button){
+    if(button) button.disabled = true;
+    api('/api/bots/archived/' + encodeURIComponent(botId) + '/restore', {method:'POST'}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.bot){
+        if(button) button.disabled = false;
+        showBenchToast(res.status === 409 ? 'A bot with this id already exists' : 'Restore failed (' + res.status + ')');
+        return;
+      }
+      showBenchToast('Restored ' + (res.data.bot.name || 'bot'));
+      return loadBenchAgents().then(function(){ return loadAgents(); }).then(function(apiAgents){
+        syncChatBotRecords(apiAgents);
+        renderChatSidebar();
+        refreshAgentsView();
+        if(chatInfo.mode === 'agents'){
+          var pane = el('#chatInfoPane');
+          if(pane) renderManageAgentsPane(pane);
+        }
+      });
+    }).catch(function(){
+      if(button) button.disabled = false;
+      showBenchToast('Restore failed — network error');
+    });
+  }
+
   function renderManageAgentsPane(pane){
     var groups = {agent: [], bots: []};
     manageAgentList().forEach(function(agent){
@@ -8634,7 +8699,9 @@
       '<button type="button" class="cip-pane-btn" id="manageAgentsPaneClose" aria-label="Close ' + esc(paneTitle) + '" title="Close ' + esc(paneTitle) + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
       '<div class="manage-agents-body">' +
       (multiplayer ? manageAgentSectionHtml('Users', chatWs.humans || [], {humans:true, manageUsers:isAdmin}) : '') +
-      manageAgentSectionHtml('Agent', groups.agent) + manageAgentSectionHtml('Bots', groups.bots, {newBot:true}) + '</div>';
+      manageAgentSectionHtml('Agent', groups.agent) + manageAgentSectionHtml('Bots', groups.bots, {newBot:true}) +
+      '<section class="manage-agent-section manage-archived-bots" id="manageArchivedBots" hidden></section></div>';
+    loadArchivedBots(pane);
 
     function openManageAgentEditor(agentId){
       loadBenchAgents().then(function(){

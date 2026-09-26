@@ -2369,6 +2369,86 @@ function reconcileNativeMiaConversations() {
   }
 }
 
+// Archiving a bot takes it out of everything that can run it (rooms, queued
+// replies, cron) and parks its package plus full record under
+// bots/.archive/. Its own chat is kept, marked read-only, so history is not
+// lost. Restore brings the bot back; rooms are deliberately not rejoined.
+function setNativeBotConversationsArchived(bot, archived) {
+  const updatedAt = new Date().toISOString();
+  for (const conversation of nativeBotConversations(bot)) {
+    const metadata = { ...(conversation.metadata && typeof conversation.metadata === 'object' ? conversation.metadata : {}) };
+    if (archived) metadata.botArchived = true;
+    else delete metadata.botArchived;
+    nativeConversationRepository.updateConversation({
+      companyId: conversation.companyId,
+      id: conversation.id,
+      metadata,
+      updatedAt,
+    });
+  }
+}
+
+function retireNativeBotWork(bot) {
+  const companyId = nativeCompanyId(workspaceIdForRecord(bot), ownerOf(bot));
+  const removedAt = new Date().toISOString();
+  const rooms = conn.prepare(
+    `SELECT m.conversation_id AS conversationId
+       FROM conversation_members m
+       JOIN conversations c ON c.company_id = m.company_id AND c.id = m.conversation_id
+      WHERE m.company_id = ? AND m.principal_type = 'bot' AND m.principal_id = ?
+        AND m.state != 'removed' AND c.type != 'bot'`
+  ).all(companyId, bot.id);
+  for (const room of rooms) {
+    nativeConversationRepository.removeMember({
+      companyId, conversationId: room.conversationId, principalId: bot.id, principalType: 'bot', removedAt,
+    });
+  }
+  const dispatches = conn.prepare(
+    `SELECT conversation_id AS conversationId, id FROM conversation_dispatches
+      WHERE company_id = ? AND target_type = 'bot' AND target_id = ? AND status IN ('pending', 'claimed')`
+  ).all(companyId, bot.id);
+  for (const dispatch of dispatches) {
+    try {
+      nativeConversationRepository.cancelDispatch({ companyId, conversationId: dispatch.conversationId, id: dispatch.id, cancelledAt: removedAt });
+    } catch (error) {
+      if (!error || !['NOT_FOUND', 'CONFLICT'].includes(error.code)) {
+        console.error('bot archive: dispatch cancellation failed', dispatch.id, error && error.message ? error.message : error);
+      }
+    }
+    const controller = nativeDispatchAbortControllers.get(dispatch.id);
+    if (controller && !controller.signal.aborted) controller.abort();
+  }
+  return { roomsLeft: rooms.length, dispatchesCancelled: dispatches.length };
+}
+
+async function archiveNativeBot(record) {
+  // Best-effort like the old delete: a cron CLI failure never blocks the
+  // archive, and the boot reconcile pauses any job left without a bot.
+  await cronSync.removeBotCron(record).catch((err) =>
+    console.error('cron-sync: failed to remove archived bot', record.id, err.message)
+  );
+  retireNativeBotWork(record);
+  setNativeBotConversationsArchived(record, true);
+  db.archiveBot(conn, record, new Date().toISOString());
+}
+
+function archivedBotsFor(req) {
+  return db.listArchivedBots(conn)
+    .filter((entry) => botMutableInWorkspace(entry.record, req))
+    .map((entry) => {
+      const conversation = nativeBotConversation(entry.record);
+      return {
+        id: entry.record.id,
+        name: entry.record.name,
+        avatarColor: entry.record.avatarColor || null,
+        departments: departmentsOf(entry.record),
+        archivedAt: entry.archivedAt,
+        conversationId: conversation ? conversation.id : null,
+      };
+    })
+    .sort((left, right) => String(right.archivedAt).localeCompare(String(left.archivedAt)));
+}
+
 async function ensureNativeBotConversation(bot) {
   if (!bot || !bot.id) return null;
   const owner = ownerOf(bot);
@@ -2784,6 +2864,18 @@ function registerResource(cfg) {
     if (cfg.beforeDelete) {
       const blocked = cfg.beforeDelete(removed);
       if (blocked) return res.status(blocked.status || 400).json({ error: blocked.message });
+    }
+    if (cfg.archive) {
+      try {
+        await cfg.archive(removed, req);
+      } catch (error) {
+        if (error && error.statusCode) {
+          return res.status(error.statusCode).json({ error: error.code || 'bot_package_error', message: error.message });
+        }
+        throw error;
+      }
+      if (cfg.bumpOnMutate) bumpVersion();
+      return res.status(200).json({ ok: true, archived: true });
     }
     if (cfg.afterDelete) {
       // Best-effort: a hook failure (e.g. the cron CLI being down) never
@@ -4852,6 +4944,47 @@ app.get('/api/bots/examples', requireAuth, async (req, res) => {
   }
 });
 
+// Archived bots. Registered before registerResource so GET /api/bots/:id
+// cannot shadow 'archived' as an id.
+app.get('/api/bots/archived', requireAuth, (req, res) => {
+  res.status(200).json({ bots: archivedBotsFor(req) });
+});
+
+app.post('/api/bots/archived/:id/restore', requireAuth, async (req, res) => {
+  const entry = db.archivedBot(conn, req.params.id);
+  if (!entry || !botMutableInWorkspace(entry.record, req)) return res.status(404).json({ error: 'not_found' });
+  let record;
+  try {
+    // Cron job ids died with the archive; the sync below schedules fresh ones.
+    record = db.restoreBot(conn, entry.record.id, (archived) => {
+      const restored = { ...archived, hermesCronJobIds: {}, hermesCronDeliveries: {} };
+      delete restored.hermesCronJobId;
+      return restored;
+    });
+  } catch (error) {
+    if (error && error.statusCode) {
+      return res.status(error.statusCode).json({ error: error.code || 'bot_package_error', message: error.message });
+    }
+    throw error;
+  }
+  setNativeBotConversationsArchived(record, false);
+  await ensureNativeBotConversation(record).catch((err) =>
+    console.error('bot restore: conversation provisioning failed for', record.id, err.message)
+  );
+  if (record.status !== 'draft') {
+    try {
+      const started = JSON.parse(JSON.stringify(record));
+      const synced = (await syncBotAutomationWithInstructions(record)) || record;
+      const current = db.loadOne(conn, 'bots', record.id);
+      if (current) db.saveOne(conn, 'bots', record.id, cronSync.mergeBotCronSyncState(current, synced, started));
+    } catch (err) {
+      console.error('cron-sync: failed to sync restored bot', record.id, err.message);
+    }
+  }
+  bumpVersion();
+  res.status(200).json({ bot: db.loadOne(conn, 'bots', record.id) });
+});
+
 // Chat-native agent setup: turn the user's plain-language intent into an
 // editable proposal. No agent, room, or automation is created here; creation
 // remains behind the separate explicit confirmation POST /api/bots.
@@ -5074,20 +5207,8 @@ registerResource({
     return record;
   },
   mergeAfterPersistUpdate: cronSync.mergeBotCronSyncState,
-  afterDelete: async (record) => {
-    const deletedAt = new Date().toISOString();
-    for (const conversation of nativeBotConversations(record)) {
-      nativeConversationRepository.updateConversation({
-        companyId: conversation.companyId,
-        id: conversation.id,
-        deletedAt,
-        updatedAt: deletedAt,
-      });
-    }
-    // Deleting the agent removes its cron job — no schedule should outlive
-    // the agent that owned it.
-    await cronSync.removeBotCron(record);
-  },
+  // Bots are archived, never deleted from the UI: see archiveNativeBot.
+  archive: (record) => archiveNativeBot(record),
   // Every persisted bot is deletable, including legacy records marked builtin.
   validate: (body) => {
     if (!String(body.name || '').trim() || !String(body.instructions || '').trim()) {
