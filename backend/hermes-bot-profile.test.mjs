@@ -80,6 +80,18 @@ test('Mia provisions full-agent and restricted-bot sessions in the shared Hermes
   assert.match(config, /approvals:\n  mode: "off"/);
   assert.match(config, /onepassword:\n    enabled: false/);
   assert.doesNotMatch(config, /file|memory|skills|op:\/\//);
+  // Only Mia's own agent may write bot instructions (AGENTS.md); bot workers
+  // keep Hermes' protected-instruction gate.
+  assert.match(agentConfig, /security:\n  protected_instruction_files: false/);
+  assert.match(
+    fs.readFileSync(path.join(profileRoot, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8'),
+    /security:\n  protected_instruction_files: false/
+  );
+  assert.doesNotMatch(config, /security:|protected_instruction/);
+  assert.doesNotMatch(
+    fs.readFileSync(path.join(profileRoot, MIAOS_BOT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8'),
+    /security:|protected_instruction/
+  );
   assert.equal(fs.statSync(profileDir).mode & 0o777, 0o700);
   assert.equal(fs.statSync(path.join(profileDir, 'config.yaml')).mode & 0o777, 0o600);
 
