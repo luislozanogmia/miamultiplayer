@@ -7,6 +7,7 @@ const YAML = require('yaml');
 
 const BOT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const MANAGED_FILES = ['bot.yaml', 'AGENTS.md', 'automations.yaml'];
+const ARCHIVE_RECORD_FILE = 'archived-bot.json';
 
 class BotPackageError extends Error {
   constructor(code, message, statusCode = 500) {
@@ -277,7 +278,96 @@ function createBotPackageStore(rootDirectory) {
     };
   }
 
-  return { root, hydrate, prepare, prepareDelete, findDirectory };
+  // Archived bots keep their whole package under `.archive/`, plus the full
+  // bot record, so Restore can bring them back exactly. The dot-directory is
+  // invisible to findDirectory and the boot reconcile, so an archived bot is
+  // not a bot until it is restored.
+  const archiveRoot = path.join(root, '.archive');
+
+  function readArchivedRecord(directory, id) {
+    const recordPath = path.join(directory, ARCHIVE_RECORD_FILE);
+    assertRegularFile(recordPath, ARCHIVE_RECORD_FILE);
+    const archived = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    if (!archived || !archived.record || archived.record.id !== id) {
+      throw new BotPackageError('PACKAGE_ID_MISMATCH', `archived bot package identity does not match ${id}`);
+    }
+    return archived;
+  }
+
+  function findArchivedDirectory(id) {
+    if (!fs.existsSync(archiveRoot)) return null;
+    const suffix = `--${safeBotId(id)}`;
+    const matching = fs.readdirSync(archiveRoot, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith('.') && entry.name.endsWith(suffix));
+    if (matching.some((entry) => entry.isSymbolicLink() || !entry.isDirectory())) {
+      throw new BotPackageError('UNSAFE_PACKAGE_ENTRY', `archived bot package for ${id} must be a real directory`);
+    }
+    if (matching.length > 1) throw new BotPackageError('PACKAGE_COLLISION', `multiple archived bot packages exist for ${id}`);
+    return matching.length ? path.join(archiveRoot, matching[0].name) : null;
+  }
+
+  function prepareArchive(record, archivedAt) {
+    const id = safeBotId(record && record.id);
+    const directory = findDirectory(id);
+    if (!directory) throw new BotPackageError('PACKAGE_MISSING', `bot package is missing for ${id}`);
+    if (findArchivedDirectory(id)) throw new BotPackageError('PACKAGE_COLLISION', `an archived bot package already exists for ${id}`);
+    const target = path.join(archiveRoot, path.basename(directory));
+    const archived = { schemaVersion: 1, archivedAt, record };
+    let moved = false;
+    return {
+      apply() {
+        fs.mkdirSync(archiveRoot, { recursive: true, mode: 0o700 });
+        fs.renameSync(directory, target);
+        moved = true;
+        fs.writeFileSync(path.join(target, ARCHIVE_RECORD_FILE), JSON.stringify(archived, null, 2), { encoding: 'utf8', mode: 0o600 });
+      },
+      finish() {},
+      rollback() {
+        if (!moved) return;
+        fs.rmSync(path.join(target, ARCHIVE_RECORD_FILE), { force: true });
+        if (fs.existsSync(target) && !fs.existsSync(directory)) fs.renameSync(target, directory);
+        moved = false;
+      },
+    };
+  }
+
+  function listArchived() {
+    if (!fs.existsSync(archiveRoot)) return [];
+    const archived = [];
+    for (const entry of fs.readdirSync(archiveRoot, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const id = entry.name.slice(entry.name.lastIndexOf('--') + 2);
+      try {
+        archived.push(readArchivedRecord(path.join(archiveRoot, entry.name), safeBotId(id)));
+      } catch (error) {
+        console.error('archived bot package unreadable:', entry.name, error.message);
+      }
+    }
+    return archived;
+  }
+
+  function prepareRestore(id) {
+    const safeId = safeBotId(id);
+    const directory = findArchivedDirectory(safeId);
+    if (!directory) throw new BotPackageError('ARCHIVE_MISSING', `no archived bot ${safeId}`, 404);
+    const archived = readArchivedRecord(directory, safeId);
+    if (findDirectory(safeId)) throw new BotPackageError('PACKAGE_COLLISION', `bot ${safeId} already exists`, 409);
+    const target = path.join(root, path.basename(directory));
+    if (fs.existsSync(target)) throw new BotPackageError('PACKAGE_COLLISION', `bot package path already exists for ${safeId}`, 409);
+    let moved = false;
+    return {
+      record: archived.record,
+      archivedAt: archived.archivedAt,
+      apply() { fs.renameSync(directory, target); moved = true; },
+      finish() { fs.rmSync(path.join(target, ARCHIVE_RECORD_FILE), { force: true }); },
+      rollback() {
+        if (moved && fs.existsSync(target) && !fs.existsSync(directory)) fs.renameSync(target, directory);
+        moved = false;
+      },
+    };
+  }
+
+  return { root, hydrate, prepare, prepareDelete, prepareArchive, prepareRestore, listArchived, findDirectory };
 }
 
 module.exports = {
