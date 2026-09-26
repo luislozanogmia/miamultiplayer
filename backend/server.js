@@ -3035,6 +3035,49 @@ const MANAGED_ROUTER_TIMEOUT_MS = 15000;
 // lifetime. Avoids redundant mint calls on every Clerk token refresh.
 const managedRouterProvisionedEmails = new Set();
 
+// The latest provisioning failure per account, kept as a reason the UI can
+// show. Mia Router's own response text never leaves this process.
+const managedRouterProvisionErrors = new Map();
+const MANAGED_ROUTER_ERROR_MESSAGES = {
+  session_rejected: `${MANAGED_ROUTER_LABEL} didn't accept your Mia sign-in. Sign out of Mia and sign in again.`,
+  not_authorized: `This account isn't allowed to use ${MANAGED_ROUTER_LABEL}.`,
+  limit_reached: `This account has reached its ${MANAGED_ROUTER_LABEL} usage limit.`,
+  unavailable: `${MANAGED_ROUTER_LABEL} couldn't be reached. Check your connection and try again.`,
+  sign_in_required: `Sign in to Mia again to connect ${MANAGED_ROUTER_LABEL}.`,
+  install_failed: `Mia got a ${MANAGED_ROUTER_LABEL} key but couldn't save it. Try again.`,
+};
+
+function managedRouterErrorCodeForStatus(status) {
+  if (status === 401) return 'session_rejected';
+  if (status === 403) return 'not_authorized';
+  if (status === 402 || status === 429) return 'limit_reached';
+  return 'unavailable';
+}
+
+function setManagedRouterError(email, code) {
+  managedRouterProvisionErrors.set(email, { code, message: MANAGED_ROUTER_ERROR_MESSAGES[code] });
+  console.warn('[managed-router] provisioning failed for', email, code);
+}
+
+function clearManagedRouterError(email) {
+  managedRouterProvisionErrors.delete(email);
+}
+
+function managedRouterError(email) {
+  return managedRouterProvisionErrors.get(email) || null;
+}
+
+// Mia Router is provisioned for the signed-in Clerk account, but the desktop
+// app's session belongs to the local profile. Resolve the local profile to
+// the linked Clerk email so status and connect checks use the same account
+// that provisioning used.
+function managedRouterAccountEmail(email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (normalized !== LOCAL_PROFILE_PRINCIPAL) return normalized;
+  const linked = clerkAccountProfile();
+  return (linked && linked.email) || normalized;
+}
+
 // Clerk session tokens are short-lived (~60s). Cache the newest one per email
 // at sign-in so provisioning triggered shortly afterwards (onboarding choice,
 // admin re-provision) can still authenticate; anything later waits for the
@@ -3075,13 +3118,13 @@ async function provisionManagedRouterKey(email, clerkToken) {
     });
     const result = await response.json().catch(() => null);
     if (!response.ok || !result?.key) {
-      console.warn('[managed-router] provision failed for', email, result?.error || response.status);
+      setManagedRouterError(email, response.ok ? 'unavailable' : managedRouterErrorCodeForStatus(response.status));
       return null;
     }
     console.log('[managed-router] provisioned key for', email);
     return result.key;
-  } catch (error) {
-    console.warn('[managed-router] provision error for', email, error.message);
+  } catch (_error) {
+    setManagedRouterError(email, 'unavailable');
     return null;
   } finally {
     clearTimeout(timer);
@@ -3145,6 +3188,7 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
           console.log('[managed-router] pruned dead credentials for', email);
         }
         managedRouterProvisionedEmails.add(email);
+        clearManagedRouterError(email);
         hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
         hermesDisconnectedProviders.delete('managed-router');
         return;
@@ -3153,19 +3197,25 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
     }
     const token = clerkToken || freshManagedRouterToken(email);
     if (!token) {
-      console.log('[managed-router] no fresh Clerk token for', email, '- will provision on next sign-in');
+      setManagedRouterError(email, 'sign_in_required');
       return;
     }
     const key = await provisionManagedRouterKey(email, token);
     if (!key) return;
-    await installManagedRouterKey(key);
+    try {
+      await installManagedRouterKey(key);
+    } catch (_error) {
+      setManagedRouterError(email, 'install_failed');
+      return;
+    }
     managedRouterProvisionedEmails.add(email);
+    clearManagedRouterError(email);
     managedRouterClerkTokens.delete(email);
     hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
     hermesDisconnectedProviders.delete('managed-router');
     console.log('[managed-router] auto-provisioned and connected for', email);
-  } catch (error) {
-    console.warn('[managed-router] auto-connect failed for', email, error.message);
+  } catch (_error) {
+    setManagedRouterError(email, 'unavailable');
   }
 }
 
@@ -3794,7 +3844,7 @@ function chatModelProviderIdsForUser(providers, settings, email, preference) {
   if (!preference || !preference.onboardingComplete) return [];
   const owner = String(email || '').trim().toLowerCase();
   const connected = new Set(harnessConnectedProvidersForUser(settings, owner));
-  if (managedRouterProvisionedEmails.has(owner)) connected.add(MANAGED_ROUTER_HERMES_PROVIDER);
+  if (managedRouterProvisionedEmails.has(managedRouterAccountEmail(owner))) connected.add(MANAGED_ROUTER_HERMES_PROVIDER);
   const ids = new Set(chatModelProviderIdsForPreference(preference));
   for (const id of Object.keys(providers || {})) {
     const statusId = chatModelStatusProviderId(id);
@@ -4013,7 +4063,7 @@ app.post('/api/settings/harness', requireAuth, (req, res) => {
   }
   bumpVersion();
   if (isManagedRouter && MANAGED_ROUTER_URL) {
-    void autoProvisionManagedRouter(owner);
+    void autoProvisionManagedRouter(managedRouterAccountEmail(owner));
   }
   return res.status(200).json({ harness: preference });
 });
@@ -4029,14 +4079,23 @@ app.post('/api/settings/harness/connected', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'unsupported provider' });
   }
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  const routerEmail = managedRouterAccountEmail(owner);
+  // A Mia Router failure reports its real reason instead of the generic
+  // "not connected" message, so the user knows what to do next.
+  const notConnected = () => {
+    const routerError = provider === MANAGED_ROUTER_HERMES_PROVIDER ? managedRouterError(routerEmail) : null;
+    return res.status(409).json(routerError
+      ? { error: routerError.message, code: routerError.code }
+      : { error: 'That provider is not connected yet.' });
+  };
   if (hermesDisconnectedProviders.has(provider) || harnessProviderDisconnectedForUser(settings, owner, provider)) {
-    return res.status(409).json({ error: 'That provider is not connected yet.' });
+    return notConnected();
   }
   const connected = provider === CLAUDE_SUBSCRIPTION_PROVIDER
     ? (await runClaudeSubscriptionStatus()).loggedIn
-    : (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterProvisionedEmails.has(owner))
+    : (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterProvisionedEmails.has(routerEmail))
       || await runHermesAuthStatus(provider);
-  if (!connected) return res.status(409).json({ error: 'That provider is not connected yet.' });
+  if (!connected) return notConnected();
   setHarnessProviderConnected(owner, provider, true);
   return res.status(200).json({ ok: true, provider });
 });
@@ -4066,16 +4125,20 @@ app.get('/api/settings/harness/providers', requireAuth, (req, res) => {
 
 // Managed router: check provision status or trigger re-provision.
 app.get('/api/settings/managed-router/status', requireAuth, (req, res) => {
-  const email = String(req.userEmail || '').trim().toLowerCase();
+  const email = managedRouterAccountEmail(req.userEmail);
+  const provisioned = managedRouterProvisionedEmails.has(email);
+  const error = provisioned ? null : managedRouterError(email);
   return res.status(200).json({
-    provisioned: managedRouterProvisionedEmails.has(email),
+    provisioned,
     available: Boolean(MANAGED_ROUTER_URL),
     label: MANAGED_ROUTER_LABEL,
+    error: error && error.message,
+    errorCode: error && error.code,
   });
 });
 
 app.post('/api/settings/managed-router/provision', requireGlobalSettingsAdmin, async (req, res) => {
-  const email = String(req.userEmail || '').trim().toLowerCase();
+  const email = managedRouterAccountEmail(req.userEmail);
   if (!MANAGED_ROUTER_URL) {
     return res.status(503).json({ error: `${MANAGED_ROUTER_LABEL} is not configured on this installation` });
   }
@@ -4087,10 +4150,14 @@ app.post('/api/settings/managed-router/provision', requireGlobalSettingsAdmin, a
   try {
     managedRouterProvisionedEmails.delete(email);
     await autoProvisionManagedRouter(email, null, { force: true });
-    return res.status(200).json({
-      ok: true,
-      provisioned: managedRouterProvisionedEmails.has(email),
-    });
+    if (!managedRouterProvisionedEmails.has(email)) {
+      const error = managedRouterError(email);
+      return res.status(502).json({
+        error: (error && error.message) || MANAGED_ROUTER_ERROR_MESSAGES.unavailable,
+        code: (error && error.code) || 'unavailable',
+      });
+    }
+    return res.status(200).json({ ok: true, provisioned: true });
   } catch (error) {
     return res.status(502).json({ error: error.message || 'Provision failed' });
   }
