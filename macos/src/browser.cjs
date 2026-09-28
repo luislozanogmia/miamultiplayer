@@ -370,13 +370,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return "";
     }
   }
+  // Copy buttons (navigator.clipboard.writeText) need clipboard write, which
+  // Chrome grants by default. Reading the clipboard stays denied so pages
+  // never see what the user copied elsewhere.
+  const CLIPBOARD_WRITE = "clipboard-sanitized-write";
   profile.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (permission === CLIPBOARD_WRITE) return callback(true);
     if (permission !== "media") return callback(false);
     const origin = mediaRequestOrigin(details, contents);
     if (!origin) return callback(false);
     decideMediaPermission(origin).then(callback).catch(() => callback(false));
   });
   profile.setPermissionCheckHandler((_contents, permission, requestingOrigin) => {
+    if (permission === CLIPBOARD_WRITE) return true;
     if (permission !== "media") return false;
     try {
       const origin = new URL(String(requestingOrigin)).origin;

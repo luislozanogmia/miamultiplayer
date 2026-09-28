@@ -345,6 +345,11 @@ test("native views have no Node or preload access; permissions stay denied", () 
   assert.equal(h.profile.check(), false);
   assert.equal(h.profile.device(), false);
   h.profile.request(null, "camera", allowed => assert.equal(allowed, false));
+  // Site copy buttons work; reading the user's clipboard does not.
+  assert.equal(h.profile.check(null, "clipboard-sanitized-write", "https://chatgpt.com"), true);
+  h.profile.request(null, "clipboard-sanitized-write", allowed => assert.equal(allowed, true));
+  assert.equal(h.profile.check(null, "clipboard-read", "https://chatgpt.com"), false);
+  h.profile.request(null, "clipboard-read", allowed => assert.equal(allowed, false));
   // The browser presents the Chrome build it runs, never the embedding framework.
   assert.doesNotMatch(h.profile.userAgent, /Electron\/|Mia\//);
   assert.match(h.profile.userAgent, /Chrome\//);
