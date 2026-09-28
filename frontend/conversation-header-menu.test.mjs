@@ -111,6 +111,7 @@ test('header action creates one distinct active-bot conversation without dispatc
   const originalMessages = [{ id: 'original-message' }];
   const context = {
     freshBotConversationRequest: null,
+    isNativeMiaConversation: (conversation) => !!conversation && conversation.type === 'agent' && (conversation.metadata || {}).agentId === 'gateway',
     activeWorkspaceKey: 'solo',
     chatWs: {
       activeRoomId: 'room-original',
@@ -147,6 +148,37 @@ test('header action creates one distinct active-bot conversation without dispatc
   assert.deepEqual(context.chatWs.byRoom['room-original'].messages, originalMessages);
 });
 
+test('Mia header action opens a separate fresh Mia conversation', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const start = source.indexOf('  function createFreshConversationForActiveBot(');
+  const end = source.indexOf('\n\n  function wireConversationHeaderActions', start);
+  const calls = [];
+  const loaded = [];
+  const context = {
+    freshBotConversationRequest: null,
+    isNativeMiaConversation: (conversation) => !!conversation && conversation.type === 'agent' && (conversation.metadata || {}).agentId === 'gateway',
+    activeWorkspaceKey: 'solo',
+    chatWs: { activeRoomId: 'room-mia', nativeConversations: [{ id: 'room-mia', type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' } }] },
+    api: async (path, options) => {
+      calls.push({ path, options });
+      return { status: 201, data: { conversation: { id: 'room-mia-fresh', type: 'agent', name: 'Mia', metadata: { agentId: 'gateway', conversationMode: 'fresh' } } } };
+    },
+    nativeConversationPath: (id, suffix) => `/api/conversations/${id}${suffix}`,
+    renderChatHeaderBar() {}, renderChatSidebar() {},
+    applyNativeConversationList(conversations) { context.chatWs.nativeConversations = conversations; },
+    loadChatRoom(...args) { loaded.push(args); },
+    showBenchToast() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+
+  const created = await context.createFreshConversationForActiveBot();
+  assert.equal(created.id, 'room-mia-fresh');
+  assert.equal(calls[0].path, '/api/conversations/room-mia/fresh');
+  assert.deepEqual(context.chatWs.nativeConversations.map((item) => item.id), ['room-mia', 'room-mia-fresh']);
+  assert.deepEqual(loaded, [['room-mia-fresh', 'agent', 'Mia']]);
+});
+
 test('failed or stale fresh-bot creation never replaces the visible conversation and can retry', async () => {
   const source = await readFile(appUrl, 'utf8');
   const start = source.indexOf('  function createFreshConversationForActiveBot(');
@@ -159,6 +191,7 @@ test('failed or stale fresh-bot creation never replaces the visible conversation
   const loaded = [];
   const context = {
     freshBotConversationRequest: null,
+    isNativeMiaConversation: (conversation) => !!conversation && conversation.type === 'agent' && (conversation.metadata || {}).agentId === 'gateway',
     activeWorkspaceKey: 'solo',
     chatWs: { activeRoomId: 'room-original', nativeConversations: [{ id: 'room-original', type: 'bot', name: 'Research Bot', metadata: { botId: 'bot-1' } }] },
     api: async () => responses.shift(),
@@ -185,8 +218,11 @@ test('failed or stale fresh-bot creation never replaces the visible conversation
 
 test('header fresh action is bot-only and leaves generic new chat in Tools', async () => {
   const source = await readFile(appUrl, 'utf8');
-  assert.match(source, /canCreateFreshBotConversation = !!activeConversation && activeConversation\.type === 'bot' && !!activeMetadata\.botId/);
-  assert.match(source, /isNativeMiaConversation\(activeConversation\) \? 'Mia uses one continuous conversation'/);
+  assert.match(source, /canCreateFreshBotConversation = !!activeConversation && \(\(activeConversation\.type === 'bot' && !!activeMetadata\.botId\) \|\| activeIsMia\)/);
+  assert.match(source, /activeIsMia \? 'New conversation with Mia' : 'New conversation with this bot'/);
+  assert.doesNotMatch(source, /Mia uses one continuous conversation/);
+  assert.match(source, /function createFreshConversationForActiveBot\(\)[\s\S]*var sourceIsMia = isNativeMiaConversation\(source\)/);
+  assert.match(source, /var mia = miaRooms\.filter\([\s\S]*metadata\.conversationMode !== 'fresh'/);
   assert.match(source, /if\(create\) create\.addEventListener\('click', createFreshConversationForActiveBot\)/);
   assert.match(source, /if\(action === 'new-chat'\) openDmCompose\(\)/);
 });
