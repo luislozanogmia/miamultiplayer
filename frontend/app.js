@@ -4937,7 +4937,13 @@
       };
     });
     if(Array.isArray(chatWs.botRecords) && chatWs.botRecords.length) syncChatBotRecords(chatWs.botRecords);
-    var mia = agentRooms.filter(function(room){ return isNativeMiaConversation(room.nativeConversation); })[0];
+    // Mia's sidebar row is her original chat; chats started with "New
+    // conversation" (conversationMode 'fresh') live in History, like bots'.
+    var miaRooms = agentRooms.filter(function(room){ return isNativeMiaConversation(room.nativeConversation); });
+    var mia = miaRooms.filter(function(room){
+      var metadata = room.nativeConversation && room.nativeConversation.metadata || {};
+      return metadata.conversationMode !== 'fresh';
+    })[0] || miaRooms[0];
     chatWs.gatewayAgent = mia ? {id:'gateway', name:mia.name || 'Mia', roomId:mia.roomId, conversationId:mia.id, manager:true, department:'Mia'} : null;
     chatWs.allDepartments = chatWs.rooms.departments.map(function(room){ return room.department; });
     chatWs.humans = [];
@@ -11151,6 +11157,17 @@
       .map(function(a){
         return {kind: 'agent', name: a.name, roomId: a.roomId || a.nativeConversationId || null, agent: a, mockupOrder: a.mockupOrder};
       });
+    // An extra chat with Mia or a bot ("New conversation") lives in History;
+    // once bookmarked it also gets its own row under Pinned.
+    var agentRowRoomIds = {};
+    agentEntries.forEach(function(e){ if(e.roomId) agentRowRoomIds[e.roomId] = true; });
+    (chatWs.nativeConversations || []).forEach(function(conversation){
+      var room = nativeConversationToRoom(conversation);
+      if(room.kind !== 'agent' || agentRowRoomIds[room.roomId] || !isChatPinned('room:' + room.roomId)) return;
+      var agentId = isNativeMiaConversation(conversation) ? 'gateway' : String(room.agentId || room.id);
+      agentEntries.push({kind: 'agent', name: room.name, roomId: room.roomId, agent: {id: agentId, name: room.name},
+        extraChat: true, createdTs: Date.parse(conversation.createdAt || '') || 0});
+    });
     var dmEntries = chatWs.rooms.dms.filter(function(d){ return !directHumanRoomIds[d.roomId]; }).map(function(d){
       return {kind: d.kind === 'group' ? 'group' : 'dm', name: dmLabel(d), roomId: d.roomId, dm: d};
     });
@@ -11159,6 +11176,8 @@
       // Hide/unhide keys on ids, not room ids — an agent row can exist
       // before its native conversation does.
       e.hideKey = e.kind === 'agent' ? 'agent:' + e.agent.id : e.kind === 'dm' ? 'dm:' + e.dm.id : e.kind === 'human' ? 'human:' + String(e.email || '').toLowerCase() : null;
+      // Hiding an extra chat's row would hide the agent's main row too.
+      if(e.extraChat) e.hideKey = null;
       return e;
     });
     conversationEntries = conversationEntries.concat(allDmEntries);
@@ -11201,6 +11220,7 @@
       if(e.hideKey) attr += ' data-chat-menu-hide-key="' + esc(e.hideKey) + '"';
       if(e.kind === 'human') attr += ' data-chat-menu-human-email="' + esc(e.email) + '"';
       if(e.kind === 'agent') attr += ' data-chat-menu-agent-id="' + esc(e.agent.id) + '"';
+      if(e.extraChat) attr += ' data-agent-room-id="' + esc(e.roomId) + '"';
       var hasActivity = sidebarEntryHasActivity(e);
       var titleAttr = hasActivity ? ' title="Active now"' : '';
       var mark = e.kind === 'home' || e.kind === 'department'
@@ -11245,6 +11265,12 @@
       });
       els('.chat-recent-row[data-agent-id]', wrap).forEach(function(row){
         row.addEventListener('click', function(){
+          var extraRoomId = row.getAttribute('data-agent-room-id');
+          if(extraRoomId){
+            clearChatBack(); clearChatActive(); row.classList.add('active');
+            loadChatRoom(extraRoomId, 'agent', row.getAttribute('data-chat-menu-name') || '');
+            return;
+          }
           var id = row.getAttribute('data-agent-id');
           var agent = id === 'gateway' ? chatWs.gatewayAgent : chatWs.allAgents.filter(function(a){ return a.id === id; })[0];
           if(agent) navigateToAgentChat(agent, true);
@@ -12525,11 +12551,12 @@
     var pinned = isChatPinned('room:' + chatWs.activeRoomId);
     var activeConversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
     var activeMetadata = activeConversation && activeConversation.metadata || {};
-    var canCreateFreshBotConversation = !!activeConversation && activeConversation.type === 'bot' && !!activeMetadata.botId;
+    var activeIsMia = isNativeMiaConversation(activeConversation);
+    var canCreateFreshBotConversation = !!activeConversation && ((activeConversation.type === 'bot' && !!activeMetadata.botId) || activeIsMia);
     var freshDisabled = !canCreateFreshBotConversation || !!freshBotConversationRequest;
     var freshTitle = canCreateFreshBotConversation
-      ? (freshBotConversationRequest ? 'Creating a new conversation…' : 'New conversation with this bot')
-      : (isNativeMiaConversation(activeConversation) ? 'Mia uses one continuous conversation' : 'Open a bot chat to start another conversation');
+      ? (freshBotConversationRequest ? 'Creating a new conversation…' : (activeIsMia ? 'New conversation with Mia' : 'New conversation with this bot'))
+      : 'Open a bot or Mia chat to start another conversation';
     // Canonical Lucide v0.545.0 geometry. Keep this set together so these
     // adjacent actions share one optical grid instead of drifting as custom
     // paths are edited independently.
@@ -12545,7 +12572,8 @@
     if(freshBotConversationRequest) return freshBotConversationRequest.promise;
     var source = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
     var metadata = source && source.metadata || {};
-    if(!source || source.type !== 'bot' || !metadata.botId) return Promise.resolve(null);
+    var sourceIsMia = isNativeMiaConversation(source);
+    if(!source || (!sourceIsMia && (source.type !== 'bot' || !metadata.botId))) return Promise.resolve(null);
     var requestedWorkspace = activeWorkspaceKey;
     var requestedRoomId = source.id;
     var request = {
@@ -12565,7 +12593,7 @@
       }
       applyNativeConversationList(chatWs.nativeConversations);
       renderChatSidebar();
-      loadChatRoom(conversation.id, 'agent', conversation.name || source.name || 'Bot');
+      loadChatRoom(conversation.id, 'agent', conversation.name || source.name || (sourceIsMia ? 'Mia' : 'Bot'));
       return conversation;
     }).catch(function(error){
       if(activeWorkspaceKey === requestedWorkspace && chatWs.activeRoomId === requestedRoomId){
