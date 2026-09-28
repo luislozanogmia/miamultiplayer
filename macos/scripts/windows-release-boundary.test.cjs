@@ -19,6 +19,8 @@ test("Windows provisioning verifies uv before extraction and refuses unlocked fa
   assert.doesNotMatch(install, /astral\.sh\/uv\/install|releases\/latest\/download\/uv|pip install -e/);
   assert.match(install, /throw "Locked Hermes dependency installation failed/);
   assert.match(install, /throw "Pinned Hermes source has no uv.lock/);
+  assert.match(install, /& \$uvCmd sync --extra all --extra bedrock --extra edge-tts --locked/);
+  assert.doesNotMatch(install, /& \$uvCmd pip install/);
   assert.match(provision, /Get-FileHash.*-Algorithm SHA256/);
   assert.ok(provision.indexOf("checksum mismatch") < provision.indexOf("Expand-Archive"));
   assert.match(provision, /\$expected = '[a-f0-9]{64}'/);

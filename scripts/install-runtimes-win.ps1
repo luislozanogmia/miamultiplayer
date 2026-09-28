@@ -318,7 +318,8 @@ try {
     $env:VIRTUAL_ENV = Join-Path $hermesInstallDir "venv"
 
     # --- stage python-deps (install.sh::install_deps) -----------------------
-    # Tier 0: hash-verified `uv sync --extra all --locked` against uv.lock
+    # Hash-verified sync, including the optional Bedrock and Edge TTS packages,
+    # against uv.lock. No post-sync package resolution is allowed.
     # (NOT --all-extras: [matrix] needs python-olm which has no Windows wheel).
     # UV_PROJECT_ENVIRONMENT pins the sync target to venv\ (modern uv ignores
     # VIRTUAL_ENV for sync). Like install.sh::run_locked_uv_sync, ambient uv
@@ -340,8 +341,8 @@ try {
             $env:XDG_CONFIG_HOME = $isolatedUvConfig
             $env:XDG_CONFIG_DIRS = $isolatedUvConfig
             $env:UV_PROJECT_ENVIRONMENT = Join-Path $hermesInstallDir "venv"
-            $syncExit = Invoke-Native "uv sync --extra all --locked" -IgnoreFailure {
-                & $uvCmd sync --extra all --locked
+            $syncExit = Invoke-Native "uv sync --extra all --extra bedrock --extra edge-tts --locked" -IgnoreFailure {
+                & $uvCmd sync --extra all --extra bedrock --extra edge-tts --locked
             }
             if ($syncExit -eq 0) {
                 Write-Host "Main package installed (hash-verified via uv.lock)"
@@ -449,12 +450,7 @@ try {
         "}`n"
     Write-Utf8NoBom -Path (Join-Path $hermesInstallDir ".hermes-bootstrap-complete") -Content $markerJson
 
-    # --- post-stage pins (install-local-mac.sh lines 79-82) -----------------
-    # Hermes otherwise downloads these optional dependencies while building the
-    # first Mia agent; keep the tested versions inside the shipped venv.
-    $null = Invoke-Native "uv pip install boto3/edge-tts" {
-        & $uvCmd pip install --quiet --python $venvPython "boto3==1.42.89" "edge-tts==7.2.7"
-    }
+    # Bedrock and Edge TTS were installed through the hash-verified lock above.
     Write-Utf8NoBom -Path (Join-Path $hermesInstallDir ".install_method") -Content "miaos-bundle`n"
 } finally {
     Pop-Location
