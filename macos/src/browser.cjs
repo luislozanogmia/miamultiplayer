@@ -106,6 +106,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     ? path.resolve(options.workspaceRoot)
     : "";
   let activeId = null;
+  let fullscreenId = null;
+  let windowWasFullscreen = false;
   let nextId = 1;
   let visible = false;
   let panelOpen = false;
@@ -375,14 +377,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // never see what the user copied elsewhere.
   const CLIPBOARD_WRITE = "clipboard-sanitized-write";
   profile.setPermissionRequestHandler((contents, permission, callback, details) => {
-    if (permission === CLIPBOARD_WRITE) return callback(true);
+    if (permission === CLIPBOARD_WRITE || permission === "fullscreen") return callback(true);
     if (permission !== "media") return callback(false);
     const origin = mediaRequestOrigin(details, contents);
     if (!origin) return callback(false);
     decideMediaPermission(origin).then(callback).catch(() => callback(false));
   });
   profile.setPermissionCheckHandler((_contents, permission, requestingOrigin) => {
-    if (permission === CLIPBOARD_WRITE) return true;
+    if (permission === CLIPBOARD_WRITE || permission === "fullscreen") return true;
     if (permission !== "media") return false;
     try {
       const origin = new URL(String(requestingOrigin)).origin;
@@ -637,9 +639,41 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const factor = Number(window.webContents.getZoomFactor && window.webContents.getZoomFactor());
     return Number.isFinite(factor) && factor > 0 ? factor : 1;
   }
+  // Page fullscreen: the tab fills the window and the window itself goes
+  // fullscreen, like Chrome. Leaving restores the window as it was.
+  function enterPageFullscreen(tab) {
+    if (disposed || window.isDestroyed()) return;
+    if (fullscreenId === null) windowWasFullscreen = window.isFullScreen();
+    fullscreenId = tab.id;
+    if (!windowWasFullscreen) window.setFullScreen(true);
+    layout();
+  }
+  function leavePageFullscreen(tab) {
+    if (fullscreenId === null || (tab && tab.id !== fullscreenId)) return;
+    fullscreenId = null;
+    if (disposed || window.isDestroyed()) return;
+    if (!windowWasFullscreen && window.isFullScreen()) window.setFullScreen(false);
+    requestLayout();
+  }
+  function exitPageFullscreen() {
+    const tab = tabs.get(fullscreenId);
+    if (tab && !tab.view.webContents.isDestroyed()) {
+      tab.view.webContents.executeJavaScript("document.fullscreenElement && document.exitFullscreen()").catch(() => {});
+    }
+    leavePageFullscreen();
+  }
   function layout() {
     if (disposed || window.isDestroyed()) return;
     const [width, height] = window.getContentSize();
+    const fullscreenTab = tabs.get(fullscreenId);
+    if (fullscreenTab) {
+      // A page in fullscreen (a video's ⤢ button) covers the whole window.
+      for (const tab of tabs.values()) {
+        if (tab === fullscreenTab) tab.view.setBounds({ x: 0, y: 0, width, height });
+        tab.view.setVisible(tab === fullscreenTab);
+      }
+      return;
+    }
     const scale = shellScale();
     const x = Math.min(width, Math.max(0, Math.round(bounds.x * scale)));
     const y = Math.min(height, Math.max(0, Math.round(bounds.y * scale)));
@@ -652,6 +686,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   function requestLayout() {
     if (disposed || window.isDestroyed()) return;
+    if (tabs.has(fullscreenId)) return layout();
     // A stale native view sits above the renderer and can cover chat after a
     // resize. Fail closed until the renderer reports the current DOM bounds.
     for (const tab of tabs.values()) tab.view.setVisible(false);
@@ -1356,6 +1391,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (!mainFrame || code === -3) return;
       showLoadError(tab, url, description, code === -2);
     });
+    wc.on("enter-html-full-screen", () => enterPageFullscreen(tab));
+    wc.on("leave-html-full-screen", () => leavePageFullscreen(tab));
     wc.on("render-process-gone", () => {
       tab.error = "This tab stopped responding. Reload to try again."; layout(); publish();
     });
@@ -1385,6 +1422,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function closeTab(id) {
     const tab = tabs.get(id);
     if (!tab) return;
+    if (fullscreenId === id) exitPageFullscreen();
     tabs.delete(id);
     clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
@@ -1477,7 +1515,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         const wasVisible = visible;
         bounds = b; visible = command.visible === true;
         panelOpen = command.panelOpen === undefined ? visible : command.panelOpen === true;
-        if (wasVisible && !visible) holdAllMediaPausedWhileHidden();
+        if (wasVisible && !visible) { exitPageFullscreen(); holdAllMediaPausedWhileHidden(); }
         layout(); return;
       }
       if (command.action === "theme") {
@@ -1510,6 +1548,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       const tab = active();
       if (command.action === "navigate") navigate(tab, command.value);
       if (command.action === "select" && tabs.has(command.id)) {
+        if (fullscreenId !== null && fullscreenId !== command.id) exitPageFullscreen();
         activeId = command.id; layout(); persistTabs();
         focusTabWebContents(tabs.get(command.id));
       }
@@ -1531,6 +1570,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   window.webContents.on("did-start-loading", () => { visible = false; panelOpen = false; layout(); });
   window.webContents.on("zoom-changed", requestLayout);
   window.on("resize", requestLayout);
+  // Leaving macOS fullscreen (green button, Ctrl-Cmd-F) also ends page fullscreen.
+  const leaveWindowFullscreen = () => { if (fullscreenId !== null) exitPageFullscreen(); };
+  window.on("leave-full-screen", leaveWindowFullscreen);
   // Cmd-tabbing away and back leaves OS keyboard focus on the window chrome,
   // not the embedded page, so arrows/scroll do nothing until the user clicks
   // the page. Refocus the active tab on window focus, but only when the
@@ -1549,6 +1591,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     disposed = true;
     if (!shellContents.isDestroyed()) shellContents.removeListener("zoom-changed", requestLayout);
     window.removeListener("resize", requestLayout);
+    window.removeListener("leave-full-screen", leaveWindowFullscreen);
     ipcMain.removeHandler(channel);
     profile.removeListener("will-download", downloadStarted);
     for (const tab of tabs.values()) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
