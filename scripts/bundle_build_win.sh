@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Windows Mia zip bundle via macos/scripts/package-win.cjs
+# Builds the Windows Mia installer, OTA feed and portable ZIP via package-win.cjs
 # (npm run package:win). Ensures macos/ has its dependencies installed, runs
 # the packager, and prints where the output landed.
 #
@@ -44,5 +44,7 @@ version="$(node -p "require('$macos_root/package.json').version")"
 dist_root="$macos_root/dist"
 echo
 echo "Windows bundle output:"
+echo "  Installer: $dist_root/Mia-Setup-${version}-x64.exe"
+echo "  OTA feed: $dist_root/latest.yml"
 echo "  ZIP: $dist_root/Mia-${version}-win-x64.zip"
 echo "  (plus .sha256 and .runtime.json alongside it)"

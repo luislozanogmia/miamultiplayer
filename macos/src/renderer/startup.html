@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mia</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #25241f; background: #f5f6f8; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+    main { text-align: center; max-width: 360px; padding: 32px; }
+    img { width: 64px; height: 64px; }
+    h1 { font-size: 22px; font-weight: 600; margin: 20px 0 10px; }
+    p { font-size: 14px; line-height: 1.6; color: #66645c; }
+    .progress { height: 3px; overflow: hidden; background: #e5e3da; border-radius: 3px; margin-top: 24px; }
+    .progress::after { content: ''; display: block; width: 35%; height: 100%; background: #ba942f; animation: slide 1.6s ease-in-out infinite alternate; }
+    @keyframes slide { to { transform: translateX(186%); } }
+    @media (prefers-reduced-motion: reduce) { .progress::after { animation: none; width: 100%; } }
+  </style>
+</head>
+<body><main role="status" aria-live="polite">
+  <img src="../../assets/mia-512.png" alt="">
+  <h1>Preparing Mia</h1>
+  <p>Getting your workspace ready. The first launch after installation may take a few minutes.</p>
+  <div class="progress" aria-hidden="true"></div>
+</main></body>
+</html>
