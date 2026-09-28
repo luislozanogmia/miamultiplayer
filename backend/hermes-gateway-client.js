@@ -140,6 +140,7 @@ class HermesGatewayClient {
     tokenFile = process.env.MIAOS_HERMES_GATEWAY_TOKEN_FILE || '',
     now = () => Date.now(),
     onEvent = null,
+    onSessionEvent = null,
     stopExternalGatewayImpl = stopExternalHermesGateway,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
@@ -167,6 +168,7 @@ class HermesGatewayClient {
     this.tokenFile = tokenFile ? String(tokenFile) : '';
     this.now = now;
     this.onEvent = typeof onEvent === 'function' ? onEvent : null;
+    this.onSessionEvent = typeof onSessionEvent === 'function' ? onSessionEvent : null;
     this.stopExternalGatewayImpl = stopExternalGatewayImpl;
     this.toolProgressMode = String(this.env.HERMES_TUI_TOOL_PROGRESS || '').trim().toLowerCase() === 'verbose'
       ? 'verbose'
@@ -178,6 +180,10 @@ class HermesGatewayClient {
     this.nextRequestId = 1;
     this.pending = new Map();
     this.turns = new Map();
+    // sessionId -> reply text of a turn Hermes started on its own (a /goal
+    // continuation). No run() is waiting for it, so it is reported through
+    // onSessionEvent instead of being dropped.
+    this.unsolicitedTurns = new Map();
     this.sessions = new Set();
     this.sessionInfo = new Map();
     this.sessionReadyWaiters = new Map();
@@ -286,6 +292,7 @@ class HermesGatewayClient {
     for (const waiter of this.sessionReadyWaiters.values()) waiter.reject(error);
     this.sessionReadyWaiters.clear();
     this.sessionInfo.clear();
+    this.unsolicitedTurns.clear();
     if (socket) {
       try { socket.close(); } catch (_) { /* already closed */ }
     }
@@ -345,6 +352,7 @@ class HermesGatewayClient {
           try { turn.onEvent(params.type, params.payload || {}); } catch (_) { /* chat diagnostics must not break the turn */ }
         }
         if (turn) this.handleTurnEvent(turn, params.type, params.payload || {});
+        else if (sessionId) this.handleUnsolicitedEvent(sessionId, params.type, params.payload || {});
       }
     };
     socket.onerror = (event) => {
@@ -444,6 +452,48 @@ class HermesGatewayClient {
         });
       }
       this.turns.delete(turn.sessionId);
+    }
+  }
+
+  setSessionEventHandler(handler) {
+    this.onSessionEvent = typeof handler === 'function' ? handler : null;
+  }
+
+  // Events for a session with no run() waiting: Hermes chains /goal
+  // continuation turns after a turn completes, and reports goal verdicts and
+  // control-state changes, all without a client request.
+  handleUnsolicitedEvent(sessionId, type, payload) {
+    const emit = (kind, data) => {
+      if (!this.onSessionEvent) return;
+      try { this.onSessionEvent(sessionId, kind, data); } catch (_) { /* a listener must not break the socket */ }
+    };
+    if (type === 'message.start') {
+      this.unsolicitedTurns.set(sessionId, { text: '' });
+      emit('turn.start', {});
+      return;
+    }
+    if (type === 'message.delta') {
+      const pending = this.unsolicitedTurns.get(sessionId) || { text: '' };
+      pending.text += String(payload.text || '');
+      this.unsolicitedTurns.set(sessionId, pending);
+      return;
+    }
+    if (type === 'message.complete') {
+      const pending = this.unsolicitedTurns.get(sessionId);
+      this.unsolicitedTurns.delete(sessionId);
+      emit('turn.complete', {
+        text: String(payload.text || (pending && pending.text) || '').trim(),
+        status: payload.status || 'complete',
+        ...(Array.isArray(payload.artifacts) ? { artifacts: payload.artifacts } : {}),
+      });
+      return;
+    }
+    if (type === 'status.update' && payload.kind === 'goal' && payload.text) {
+      emit('goal.status', { text: String(payload.text) });
+      return;
+    }
+    if (type === 'session.control.update' && payload.control) {
+      emit('control', { control: payload.control });
     }
   }
 
@@ -574,11 +624,17 @@ class HermesGatewayClient {
           // Existing Hermes rows retain their old cwd. Rebind Mia's resumed
           // session to the app-owned workspace before the next turn so its
           // AGENTS.md chain and shell guard apply immediately after upgrade.
-          if (base.cwd) {
-            await this.request('session.cwd.set', {
-              session_id: String(resumed.session_id),
-              cwd: base.cwd,
-            });
+          // Hermes refuses cwd.set while a turn runs (a /goal continuation,
+          // say). The rebind only matters for a session reopened idle, so a
+          // busy one skips it and the message goes on to prompt.submit, where
+          // Hermes redirects or queues it.
+          const liveId = String(resumed.session_id);
+          if (base.cwd && !this.turns.has(liveId) && !this.unsolicitedTurns.has(liveId)) {
+            try {
+              await this.request('session.cwd.set', { session_id: liveId, cwd: base.cwd });
+            } catch (error) {
+              if (!(error && error.gatewayError && error.code === 4009)) throw error;
+            }
           }
           // session.resume ignores provider/model/fast/reasoning params: the
           // resumed row keeps whatever override it was created with, so a
@@ -750,8 +806,21 @@ class HermesGatewayClient {
         path: String(imagePath || ''),
       });
     }
+    const completed = await this.submitTurn(session, message, { onEvent, signal });
+    return {
+      text: completed.text,
+      storedSessionId: session.storedSessionId,
+      ...(Array.isArray(completed.artifacts) ? { artifacts: completed.artifacts } : {}),
+    };
+  }
+
+  // One prompt.submit on an open session, resolved by its message.complete.
+  async submitTurn(session, message, { onEvent = null, signal = null } = {}) {
     const existing = this.turns.get(session.sessionId);
     if (existing) throw new Error('Hermes gateway session already has a running turn');
+    // A reply already streaming for a Hermes-started turn now belongs to
+    // this turn; Hermes queues this prompt and runs it after that one.
+    this.unsolicitedTurns.delete(session.sessionId);
     const result = new Promise((resolve, reject) => {
       this.turns.set(session.sessionId, {
         sessionId: session.sessionId,
@@ -771,18 +840,72 @@ class HermesGatewayClient {
     try {
       const submitted = this.request('prompt.submit', { session_id: session.sessionId, text: String(message || '') });
       await (signal ? Promise.race([submitted, aborted]) : submitted);
-      const completed = await (signal ? Promise.race([result, aborted]) : result);
-      return {
-        text: completed.text,
-        storedSessionId: session.storedSessionId,
-        ...(Array.isArray(completed.artifacts) ? { artifacts: completed.artifacts } : {}),
-      };
+      return await (signal ? Promise.race([result, aborted]) : result);
     } catch (error) {
       this.turns.delete(session.sessionId);
       throw error;
     } finally {
       if (signal) signal.removeEventListener('abort', onAbort);
     }
+  }
+
+  // Run a Hermes slash command (/goal, /subgoal, /compress) on the
+  // conversation's session. Commands go through command.dispatch; sent as
+  // prompt text they would only reach the model. A command that starts work
+  // (setting a goal) answers with a notice plus the first turn's prompt.
+  async runCommand({
+    storedSessionId,
+    seedMessages,
+    title,
+    options,
+    name,
+    arg = '',
+    onEvent = null,
+    onSession = null,
+    onNotice = null,
+    signal = null,
+  }) {
+    const session = await this.createOrResumeSession({ storedSessionId, seedMessages, title, options });
+    if (typeof onSession === 'function') onSession(session);
+    if (signal && signal.aborted) throw turnAbortError();
+    let dispatched;
+    try {
+      dispatched = await this.request('command.dispatch', {
+        session_id: session.sessionId,
+        name: String(name || ''),
+        arg: String(arg || ''),
+      });
+    } catch (error) {
+      // Hermes' own refusal ("session busy", "no active goal", bad
+      // arguments) is the answer to show; transport failures still throw.
+      if (error && error.gatewayError) {
+        const detail = String(error.gatewayError.message || error.message || '').trim();
+        return { text: detail || `/${name} failed`, storedSessionId: session.storedSessionId, sessionId: session.sessionId, commandError: true };
+      }
+      throw error;
+    }
+    const result = dispatched && typeof dispatched === 'object' ? dispatched : {};
+    if (result.type === 'send' && result.message) {
+      if (result.notice && typeof onNotice === 'function') await onNotice(String(result.notice));
+      const completed = await this.submitTurn(session, result.message, { onEvent, signal });
+      return {
+        text: completed.text,
+        storedSessionId: session.storedSessionId,
+        sessionId: session.sessionId,
+        ...(Array.isArray(completed.artifacts) ? { artifacts: completed.artifacts } : {}),
+      };
+    }
+    return {
+      text: String(result.output || result.notice || '').trim() || `/${name} done.`,
+      storedSessionId: session.storedSessionId,
+      sessionId: session.sessionId,
+    };
+  }
+
+  // Frontend-safe goal/loop state of a live session (null goal = none).
+  async readSessionControl(sessionId) {
+    const result = await this.request('session.control.read', { session_id: String(sessionId || '') });
+    return result && result.control ? result.control : null;
   }
 
   // Stop the gateway this client started and wait for it to exit, so a fresh
