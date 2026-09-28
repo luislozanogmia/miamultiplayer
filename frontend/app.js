@@ -6398,6 +6398,16 @@
     if(weekdaysOnly) automation.weekdaysOnly = true;
     else delete automation.weekdaysOnly;
     automation.name = name;
+    // "provider|model" picks a model for this automation; empty uses the bot's.
+    var modelChoice = String(values.model || '');
+    var split = modelChoice.indexOf('|');
+    if(split > 0 && split < modelChoice.length - 1){
+      automation.modelProvider = modelChoice.slice(0, split);
+      automation.model = modelChoice.slice(split + 1);
+    } else {
+      delete automation.model;
+      delete automation.modelProvider;
+    }
     var prompt = String(values.prompt || '').trim();
     if(prompt) automation.prompt = prompt;
     else if(enabled) throw new Error('Add the task prompt this automation should run.');
@@ -9066,6 +9076,15 @@
     var weekdayOptions = weekdays.map(function(day){
       return '<option value="' + day + '"' + (String(automation.day || 'Monday') === day ? ' selected' : '') + '>' + day + '</option>';
     }).join('');
+    var currentModel = automation.model && automation.modelProvider ? automation.modelProvider + '|' + automation.model : '';
+    var modelEntries = chatConnectedModelEntries();
+    var modelOptions = '<option value="">Bot\'s model' + (bot && bot.model ? ' (' + esc(bot.model) + ')' : '') + '</option>' +
+      modelEntries.map(function(entry){
+        var value = entry.provider + '|' + entry.model;
+        return '<option value="' + esc(value) + '"' + (value === currentModel ? ' selected' : '') + '>' + esc(entry.family + ' ' + entry.variant + ' · ' + entry.providerLabel) + '</option>';
+      }).join('') +
+      (currentModel && !modelEntries.some(function(entry){ return entry.provider + '|' + entry.model === currentModel; })
+        ? '<option value="' + esc(currentModel) + '" selected>' + esc(automation.model) + ' (not connected)</option>' : '');
     pane.setAttribute('aria-label', title + ' automation details');
     pane.classList.remove('plugins-open', 'agents-open', 'bot-store-open');
     pane.classList.add('open', 'automation-detail-open');
@@ -9082,6 +9101,7 @@
         '<label class="cip-field" data-frequency-control="weekly"><span class="cip-field-label">Weekday</span><select id="automationEditWeekday">' + weekdayOptions + '</select></label>' +
         '<label class="cip-field" data-frequency-control="monthly"><span class="cip-field-label">Day of month</span><input type="number" id="automationEditMonthDay" min="1" max="31" value="' + esc(automation.day || 1) + '"></label>' +
         '<label class="cip-field" data-frequency-control="time"><span class="cip-field-label">Time' + (Number.isInteger(automation.utcOffsetMinutes) ? ' · ' + newsTimeZoneLabel(automation.utcOffsetMinutes) : '') + '</span><input type="time" id="automationEditTime" value="' + esc(automation.time || '09:00') + '"></label>' +
+        '<label class="cip-field"><span class="cip-field-label">Model</span><select id="automationEditModel">' + modelOptions + '</select></label>' +
         '<label class="cip-field"><span class="cip-field-label">Prompt</span><textarea id="automationEditPrompt" rows="6">' + esc(automation.prompt || '') + '</textarea></label>' +
         '<div class="cip-automation-form-error" id="automationDetailError" role="alert"></div>' +
         '<div class="cip-editor-actions">' + (!isNew ? '<button type="button" class="styled-btn-secondary danger" id="automationDetailDelete">Delete</button>' : '') + '<button type="button" class="styled-btn-secondary" id="automationDetailCancel">Cancel</button><button type="submit" class="styled-btn-primary" id="automationDetailSave">' + (isNew ? 'Add automation' : 'Save') + '</button></div>' +
@@ -9120,6 +9140,7 @@
           intervalUnit: el('#automationEditIntervalUnit', pane).value,
           day: frequencyInput.value === 'weekly' ? el('#automationEditWeekday', pane).value : el('#automationEditMonthDay', pane).value,
           time: el('#automationEditTime', pane).value,
+          model: el('#automationEditModel', pane).value,
           prompt: el('#automationEditPrompt', pane).value
         });
       } catch(error) {
