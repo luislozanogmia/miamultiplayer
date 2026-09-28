@@ -682,7 +682,7 @@ function writeAppUpdateConfig(resourcesPath) {
   fs.writeFileSync(path.join(resourcesPath, "app-update.yml"), [
     "provider: github",
     "owner: luislozanogmia",
-    "repo: mia_multiplayer",
+    "repo: miamultiplayer",
     "updaterCacheDirName: mia-multiplayer-macos-updater",
     "",
   ].join("\n"));

@@ -22,6 +22,9 @@
 
 name: Windows build
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   push:
@@ -50,6 +53,8 @@ jobs:
       # (e.g. under $env:USERPROFILE or $env:RUNNER_TEMP).
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Node 22 LTS: repo has no .nvmrc/engines pin; 22 matches the
       # Electron 44 toolchain used for the macOS builds.

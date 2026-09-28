@@ -226,7 +226,7 @@ function receiveAuthCallback(value) {
 app.on("open-url", (event, value) => { event.preventDefault(); receiveAuthCallback(value); });
 
 const UPDATE_GITHUB_OWNER = "luislozanogmia";
-const UPDATE_GITHUB_REPO = "mia_multiplayer";
+const UPDATE_GITHUB_REPO = "miamultiplayer";
 
 function configuredUpdateFeedUrl() {
   const value = String(process.env.MIAOS_UPDATE_FEED_URL || "").trim();
