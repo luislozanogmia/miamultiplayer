@@ -72,6 +72,11 @@ app writes into the user's Mia workspace (`backend/miaos-workspace.js`).
   application and team identifiers in the signature, or macOS kills the app
   at launch. Ad-hoc builds skip it, so the breakage appears only in the next
   signed build.
+- **Mia can do whatever a bot can.** Bots get a narrow tool list, and we
+  add one safe capability at a time when a bot hits a real limit. Any such
+  capability (e.g. adding a Google Sheets tab) must also be added to Mia's own
+  agent in the same change. Only the bot boundaries themselves (no
+  instruction-file edits, the ghost-cli-first browser guard) stay bot-only.
 - **Passkeys:** Touch ID passkeys created in Mia work. iCloud Keychain
   passkeys need Apple's browser public-key credential entitlement plus native
   code; Electron doesn't ship Chrome's passkey UI. USB security keys don't
