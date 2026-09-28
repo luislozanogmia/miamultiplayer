@@ -8184,6 +8184,7 @@
   function renderChatThread(options){
     var thread = el('#chatThread');
     if(!thread) return;
+    renderGoalChip();
     captureRenderedChatScroll(thread);
     if(chatWs.activeKind === 'agent-setup'){
       thread.removeAttribute('data-chat-scroll-room');
@@ -10404,7 +10405,7 @@
   // send, except that an untagged thread reply implicitly addresses the
   // thread root's author instead of going silent — see the resolution
   // block below.
-  function sendNativeConversationEvent(text, threadRootId, preparedAttachment, roomId){
+  function sendNativeConversationEvent(text, threadRootId, preparedAttachment, roomId, extraMetadata){
     var state = chatRoomState(roomId);
     var activeDispatchAtSend = activeRoomTask();
     var thinkingAgentName = nativeThinkingAgentName(roomId, text, threadRootId);
@@ -10431,12 +10432,13 @@
     renderChatSidebar();
     if(chatWs.activeRoomId === roomId) renderChatThread();
     var chatModelMetadata = chatModelSelectionMetadata();
+    var metadata = Object.assign({}, chatModelMetadata ? {chatModelSelection: chatModelMetadata} : {}, extraMetadata || {});
     return api(nativeConversationPath(roomId, '/events'), {method:'POST', body:{
       type: preparedAttachment ? 'image' : 'message',
       content: content,
       parentEventId: threadRootId || null,
       clientIdempotencyKey: clientIdempotencyKey,
-      ...(chatModelMetadata ? {metadata: {chatModelSelection: chatModelMetadata}} : {})
+      ...(Object.keys(metadata).length ? {metadata: metadata} : {})
     }}).then(function(res){
       if(res.status !== 201 && res.status !== 200){
         stopChatThinking(roomId);
@@ -10470,6 +10472,18 @@
       return;
     }
     if(chatWs.configured === false) return;
+    if(!threadRootId && !preparedAttachment && /^\/clear$/i.test(String(text || '').trim())){
+      if(!composerSlashCommands().length){
+        showBenchToast('/clear starts a new conversation in Mia and bot chats.');
+        return Promise.resolve({status: 400});
+      }
+      return createFreshConversationForActiveBot().then(function(conversation){
+        return {status: conversation ? 200 : 500};
+      });
+    }
+    if(!threadRootId && !preparedAttachment && composerHermesCommand(text)){
+      return sendNativeConversationEvent(text, null, null, boundRoomId || chatWs.activeRoomId, {slashCommand: true});
+    }
     var explicitNameReply = /^(?:please )?(?:call me|my name is|i['’]d like(?: you to call me)?|i prefer)\s+/i.test(text);
     if(!threadRootId && !preparedAttachment && miaOnboardingChat && (miaOnboardingChat.phase === 'name' || explicitNameReply)
       && (boundRoomId || chatWs.activeRoomId) === miaOnboardingChat.conversationId){
@@ -10774,7 +10788,7 @@
      .bench-dept-dropdown-panel: fixed off the input's own rect so it
      escapes the composer card's rounded-corner clipping instead of being
      laid out in flow. */
-  var chatMention = {open: false, atPos: -1, query: '', matches: [], highlight: 0, confirmEntry: null, confirmBusy: false, groupSend: null};
+  var chatMention = {open: false, atPos: -1, query: '', matches: [], highlight: 0, confirmEntry: null, confirmBusy: false, groupSend: null, slash: false};
 
   function humanDirectoryMatches(user, query){
     var q = String(query || '').trim().toLowerCase();
@@ -10912,6 +10926,7 @@
   function renderMentionPopover(){
     var pop = el('#chatMentionPopover');
     if(!pop || !chatMention.open) return;
+    if(chatMention.slash) return renderSlashCommandPopover();
     if(chatMention.confirmEntry) return renderMentionConfirm();
     var lists = mentionEntryList();
     chatMention.matches = lists.privateAgents.concat(lists.inChat, lists.notInChat);
@@ -11035,9 +11050,141 @@
     chatMention.confirmEntry = null;
     chatMention.confirmBusy = false;
     chatMention.groupSend = null;
+    chatMention.slash = false;
     var pop = el('#chatMentionPopover');
     if(pop){ pop.classList.remove('open'); pop.innerHTML = ''; }
     renderChatSuggestions(); // was deferred while the popover was open
+  }
+
+  // Slash commands the composer offers. Hermes runs goal/subgoal/compact on
+  // the Mia chat's own session; /clear is a composer action that starts a
+  // new conversation and never reaches the backend.
+  var COMPOSER_SLASH_COMMANDS = [
+    {name: 'goal', args: '<what to achieve>', desc: 'Keep Mia working until it is done', mia: true},
+    {name: 'subgoal', args: '<extra check>', desc: 'Add a requirement to the current goal', mia: true},
+    {name: 'compact', args: '', desc: 'Summarize earlier messages to free up context', mia: true},
+    {name: 'clear', args: '', desc: 'Start a new conversation'}
+  ];
+  var HERMES_SLASH_COMMAND_NAMES = ['goal', 'subgoal', 'compact', 'compress'];
+
+  // The newest goal snapshot Hermes attached to one of Mia's messages in
+  // this room: an object, null once cleared, or undefined when no goal was
+  // ever set. Anyone can put metadata on their own message, so only agent
+  // events count.
+  function roomGoalState(roomId){
+    var messages = roomId ? chatRoomState(roomId).messages : [];
+    for(var i = messages.length - 1; i >= 0; i--){
+      var event = messages[i].nativeEvent;
+      var metadata = event && event.senderType === 'agent' && event.metadata;
+      if(metadata && Object.prototype.hasOwnProperty.call(metadata, 'goal')) return metadata.goal;
+    }
+    return undefined;
+  }
+
+  // Shows a running or paused goal above the composer. The goal keeps
+  // working after the user leaves the chat, so its controls stay in reach.
+  function renderGoalChip(){
+    var chip = el('#ccGoalChip');
+    if(!chip) return;
+    var goal = chatWs.activeKind === 'agent' && composerSlashCommands().length ? roomGoalState(chatWs.activeRoomId) : null;
+    var live = !!(goal && goal.title && (goal.status === 'active' || goal.status === 'paused'));
+    chip.hidden = !live;
+    if(!live){ chip.innerHTML = ''; return; }
+    var paused = goal.status === 'paused';
+    var turns = Number(goal.max_turns) > 0 ? 'turn ' + (Number(goal.turns_used) || 0) + '/' + Number(goal.max_turns) : '';
+    chip.innerHTML = '<span class="cc-goal-dot' + (paused ? ' paused' : '') + '" aria-hidden="true"></span>' +
+      '<span class="cc-goal-label">' + (paused ? 'Goal paused' : 'Goal') + '</span>' +
+      '<span class="cc-goal-title" title="' + esc(goal.title) + '">' + esc(goal.title) + '</span>' +
+      (turns ? '<span class="cc-goal-turns">' + esc(turns) + '</span>' : '') +
+      '<button type="button" class="cc-goal-btn" data-goal-action="' + (paused ? 'resume' : 'pause') + '">' + (paused ? 'Resume' : 'Pause') + '</button>' +
+      '<button type="button" class="cc-goal-btn" data-goal-action="clear">Clear</button>';
+    var roomId = chatWs.activeRoomId;
+    els('[data-goal-action]', chip).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        btn.disabled = true;
+        sendActiveRoomMessage('/goal ' + btn.getAttribute('data-goal-action'), null, null, roomId);
+      });
+    });
+  }
+
+  function activeConversationRecord(){
+    return (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
+  }
+
+  // Mia's chat gets every command; a bot chat only /clear (bot turns start a
+  // fresh session, so a goal there would be forgotten). Other rooms: none.
+  function composerSlashCommands(){
+    var conversation = activeConversationRecord();
+    if(!conversation || chatWs.activeKind !== 'agent') return [];
+    if(isNativeMiaConversation(conversation)) return COMPOSER_SLASH_COMMANDS;
+    var metadata = conversation.metadata || {};
+    if(conversation.type === 'bot' && metadata.botId) return COMPOSER_SLASH_COMMANDS.filter(function(command){ return !command.mia; });
+    return [];
+  }
+
+  // "/" at the start of the draft, followed only by the command name so far.
+  function slashTriggerAt(input){
+    var caret = input.selectionStart == null ? input.value.length : input.selectionStart;
+    var match = /^\/([a-z]*)$/i.exec(input.value.slice(0, caret));
+    if(!match || input.value.slice(caret).trim()) return null;
+    return {query: match[1].toLowerCase()};
+  }
+
+  // A draft that is one of Hermes' commands, so the backend runs it as a
+  // command instead of handing "/goal …" to the model as text.
+  function composerHermesCommand(text){
+    var match = /^\/([a-z]+)(?:\s|$)/i.exec(String(text || '').trim());
+    return match && HERMES_SLASH_COMMAND_NAMES.indexOf(match[1].toLowerCase()) !== -1 ? match[1].toLowerCase() : null;
+  }
+
+  function openSlashCommandPopover(trigger){
+    var commands = composerSlashCommands().filter(function(command){ return command.name.indexOf(trigger.query) === 0; });
+    if(!commands.length){ if(chatMention.slash) closeMentionPopover(); return; }
+    chatMention.open = true;
+    chatMention.slash = true;
+    chatMention.confirmEntry = null;
+    chatMention.groupSend = null;
+    chatMention.matches = commands;
+    if(chatMention.query !== trigger.query) chatMention.highlight = 0;
+    chatMention.query = trigger.query;
+    var pop = el('#chatMentionPopover');
+    if(pop) pop.classList.add('open');
+    positionMentionPopover();
+    renderMentionPopover();
+  }
+
+  function renderSlashCommandPopover(){
+    var pop = el('#chatMentionPopover');
+    if(chatMention.highlight >= chatMention.matches.length) chatMention.highlight = 0;
+    pop.innerHTML = '<div class="cmp-section-label">COMMANDS</div>' + chatMention.matches.map(function(command, i){
+      return '<button type="button" class="cmp-option cmp-slash-option' + (i === chatMention.highlight ? ' highlighted' : '') + '" data-slash-ix="' + i + '">' +
+        '<span class="cmp-slash-name">/' + esc(command.name) + (command.args ? ' <span class="cmp-slash-args">' + esc(command.args) + '</span>' : '') + '</span>' +
+        '<span class="cmp-slash-desc">' + esc(command.desc) + '</span></button>';
+    }).join('');
+    els('.cmp-slash-option', pop).forEach(function(btn){
+      btn.addEventListener('mousedown', function(e){
+        e.preventDefault();
+        if(selectSlashCommand(chatMention.matches[parseInt(btn.getAttribute('data-slash-ix'), 10)])) submitComposerDraft();
+      });
+    });
+  }
+
+  // Fills the composer with the chosen command. Returns true when the
+  // command takes no argument and should be sent right away.
+  function selectSlashCommand(command){
+    var input = el('#ccInput');
+    if(!command || !input) return false;
+    input.value = '/' + command.name + (command.args ? ' ' : '');
+    closeMentionPopover();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    return !command.args;
+  }
+
+  function submitComposerDraft(){
+    var send = el('#ccSend');
+    if(send && !send.getAttribute('data-stop-task-id')) send.click();
   }
 
   // How many people a draft's group tags (@all/@all_users/@all_bots) would
@@ -11157,6 +11304,15 @@
       renderMentionPopover();
       return true;
     }
+    if(chatMention.slash && (e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey){
+      var command = chatMention.matches[chatMention.highlight];
+      if(!command) return false;
+      // A command with no argument sends on Enter; the caller's Enter
+      // handler does that once the draft holds the full command.
+      if(selectSlashCommand(command) && e.key === 'Enter') return false;
+      e.preventDefault();
+      return true;
+    }
     if(e.key === 'Enter'){
       var entry = chatMention.matches[chatMention.highlight];
       if(entry){ e.preventDefault(); selectMentionEntry(entry); return true; }
@@ -11183,6 +11339,8 @@
     var input = el('#ccInput');
     if(!input) return;
     input.addEventListener('input', function(){
+      var slash = slashTriggerAt(input);
+      if(slash && composerSlashCommands().length){ openSlashCommandPopover(slash); return; }
       var trigger = mentionTriggerAt(input);
       if(trigger) openMentionPopover(trigger);
       else closeMentionPopover();
