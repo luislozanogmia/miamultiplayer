@@ -385,6 +385,32 @@ test("microphone/camera prompt once per HTTPS origin; insecure origins stay deni
   assert.equal(h.profile.check(null, "media", "https://blocked.example"), false);
 });
 
+test("Cmd+click opens a background tab next to its page; tabs can be moved", () => {
+  const h = harness();
+  const ids = s => [...s.tabs.map(t => t.id)];
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  h.command("select", { id: first });
+  const wc = h.views[0].webContents;
+  wc.popup({ url: "https://example.com/a", disposition: "background-tab" });
+  let state = h.command("state");
+  assert.equal(state.activeId, first, "Cmd+click keeps the current page");
+  assert.deepEqual(ids(state).slice(0, 2), [first, state.tabs[1].id]);
+  assert.notEqual(state.tabs[1].id, second, "the new tab sits right after its opener");
+  assert.equal(state.tabs[2].id, second);
+  wc.popup({ url: "https://example.com/b", disposition: "foreground-tab" });
+  state = h.command("state");
+  assert.notEqual(state.activeId, first, "Cmd+Shift+click switches to the new tab");
+
+  const order = ids(state);
+  h.command("move", { id: order[0], index: order.length - 1 });
+  assert.deepEqual(ids(h.command("state")), [...order.slice(1), order[0]]);
+  h.command("move", { id: order[0], index: 0 });
+  assert.deepEqual(ids(h.command("state")), order);
+  h.command("move", { id: 9999, index: 0 });
+  assert.deepEqual(ids(h.command("state")), order, "unknown tabs are ignored");
+});
+
 test("web popups become tabs, blocked schemes never navigate", () => {
   const h = harness(); h.command("new");
   const wc = h.views[0].webContents;
