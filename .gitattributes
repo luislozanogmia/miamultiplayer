@@ -1,0 +1,3 @@
+# Patches apply to byte-preserved upstream sources, including on Windows hosts
+# whose Git installation defaults to core.autocrlf=true.
+*.patch text eol=lf
