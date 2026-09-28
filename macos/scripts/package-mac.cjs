@@ -353,13 +353,19 @@ function sha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-function assertNoPrivateBuildPaths(root, forbiddenPaths = []) {
+function assertNoPrivateBuildPaths(root, forbiddenPaths = [], upstreamExceptions = []) {
   const needles = Array.from(new Set(forbiddenPaths
     .map((value) => String(value || "").trim())
     .filter((value) => path.isAbsolute(value) && value !== path.parse(value).root)))
     .map((value) => Buffer.from(value));
   walkTree(root, (entry, target) => {
-    if (entry.isFile() && needles.some((needle) => fs.readFileSync(target).includes(needle))) {
+    if (!entry.isFile()) return;
+    const content = fs.readFileSync(target);
+    const relative = path.relative(root, target).split(path.sep).join("/");
+    const exception = upstreamExceptions.find((item) => item.path === relative &&
+      item.sha256 === crypto.createHash("sha256").update(content).digest("hex"));
+    if (needles.some((needle) => content.includes(needle) &&
+      !(exception && exception.paths.includes(needle.toString())))) {
       throw new Error(`Private build path remains in packaged artifact: ${path.relative(root, target)}`);
     }
   });

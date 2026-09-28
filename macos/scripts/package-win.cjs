@@ -33,6 +33,19 @@ const ELECTRON_VERSION = require(path.join(MACOS_ROOT, "node_modules", "electron
 // npm resolves to npm.cmd on Windows, and cmd shims only launch through a shell.
 const NPM_COMMAND = process.platform === "win32" ? "npm.cmd" : "npm";
 
+// fb-dotslash 0.5.8's npm archive (integrity pinned in backend/package-lock.json)
+// embeds its upstream Rust builder's generic GitHub runner home. These are not
+// Mia build paths. Exempt only these exact bytes, files and prefix; still scan
+// every other prefix, and reject any modified binary.
+const UPSTREAM_BUILD_PATH_EXCEPTIONS = [
+  ["windows", "1bc24c92262d801f2b1f9cd193cd45f191b325bc9038e1f713579a2bb0c4977f"],
+  ["windows-arm64", "803726ad37a62cc42c3bbd6056fbe8889d473a2135b515967335ad5b5e629644"],
+].map(([arch, sha256]) => ({
+  path: `resources/backend/node_modules/fb-dotslash/bin/${arch}/dotslash.exe`,
+  sha256,
+  paths: ["C:\\Users\\runneradmin"],
+}));
+
 function windowsArtifactName(version = VERSION) {
   return `Mia-${version}-win-x64.zip`;
 }
@@ -400,7 +413,7 @@ async function buildWindowsPackage() {
     assertNoPrivateContent(packagedRoot);
     fs.cpSync(stagedPython, path.join(packagedRoot, "resources", "runtime", "python"), { recursive: true, dereference: false });
     assertNoRuntimeState(path.join(packagedRoot, "resources", "runtime"));
-    assertNoPrivateBuildPaths(packagedRoot, [os.homedir(), REPOSITORY_ROOT, temporaryRoot, ...sourceRoots]);
+    assertNoPrivateBuildPaths(packagedRoot, [os.homedir(), REPOSITORY_ROOT, temporaryRoot, ...sourceRoots], UPSTREAM_BUILD_PATH_EXCEPTIONS);
     signWindowsApp(packagedRoot);
 
     fs.mkdirSync(DIST_ROOT, { recursive: true });
