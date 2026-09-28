@@ -132,5 +132,5 @@ test('the goal chip follows the newest goal snapshot in the chat', () => {
 test('the chip sits above the composer and the send path forwards command metadata', () => {
   assert.match(html, /id="ccGoalChip"[^>]*hidden[\s\S]*id="chatMentionPopover"/);
   const send = source.slice(source.indexOf('  function sendNativeConversationEvent('), source.indexOf('  function sendActiveRoomMessage('));
-  assert.match(send, /Object\.assign\(\{\}, chatModelMetadata \? \{chatModelSelection: chatModelMetadata\} : \{\}, extraMetadata \|\| \{\}\)/);
+  assert.match(send, /Object\.assign\(\{\}, chatModelMetadata \? \{chatModelSelection: chatModelMetadata\} : \{\}, browserPage \? \{browserContext: browserPage\} : \{\}, extraMetadata \|\| \{\}\)/);
 });

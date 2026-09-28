@@ -10452,7 +10452,8 @@
     renderChatSidebar();
     if(chatWs.activeRoomId === roomId) renderChatThread();
     var chatModelMetadata = chatModelSelectionMetadata();
-    var metadata = Object.assign({}, chatModelMetadata ? {chatModelSelection: chatModelMetadata} : {}, extraMetadata || {});
+    var browserPage = window.miaNativeBrowser && window.miaNativeBrowser.currentPage ? window.miaNativeBrowser.currentPage() : null;
+    var metadata = Object.assign({}, chatModelMetadata ? {chatModelSelection: chatModelMetadata} : {}, browserPage ? {browserContext: browserPage} : {}, extraMetadata || {});
     return api(nativeConversationPath(roomId, '/events'), {method:'POST', body:{
       type: preparedAttachment ? 'image' : 'message',
       content: content,

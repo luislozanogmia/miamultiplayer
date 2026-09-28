@@ -269,6 +269,13 @@
     action: function (action) {
       command(action === 'reload' && selected() && selected().loading ? 'stop' : action);
     },
+    // The page the user is looking at, for the chat to attach as context.
+    // Only while the browser panel is open and showing a web page.
+    currentPage: function () {
+      var tab = open && selected();
+      if (!tab || !/^https?:\/\//i.test(tab.url || '')) return null;
+      return { url: tab.url, title: tab.title || '' };
+    },
     menuAction: function (key) {
       if (key === 't') command('new').then(focusLocation);
       else if (key === 'l') focusLocation();
