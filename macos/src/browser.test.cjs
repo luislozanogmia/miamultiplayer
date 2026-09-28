@@ -87,6 +87,9 @@ function harness(options = {}) {
   window.webContents = new Contents();
   window.webContents.mainFrame = { url: "http://127.0.0.1:4870/#/chat" };
   window.getContentSize = () => [1000, 800];
+  window.fullScreen = false;
+  window.isFullScreen = () => window.fullScreen;
+  window.setFullScreen = value => { window.fullScreen = value; if (!value) window.emit("leave-full-screen"); };
   window.isDestroyed = () => false;
   window.contentView = { addChildView() {}, removeChildView() {} };
   const electron = {
@@ -836,4 +839,38 @@ test("clean slate clears visited-URL history alongside tabs and cookies", async 
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a page's fullscreen request fills the window and leaving restores the pane", () => {
+  const h = harness();
+  assert.equal(h.profile.check(null, "fullscreen", "https://www.youtube.com"), true);
+  h.profile.request(null, "fullscreen", allowed => assert.equal(allowed, true));
+
+  h.command("navigate", { value: "https://www.youtube.com/watch?v=x" });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  const wc = h.views[0].webContents;
+  wc.emit("enter-html-full-screen");
+  assert.equal(h.window.fullScreen, true);
+  assert.equal(JSON.stringify(h.views[0].bounds), JSON.stringify({ x: 0, y: 0, width: 1000, height: 800 }));
+  h.window.emit("resize");
+  assert.equal(h.views[0].visible, true, "a resize while fullscreen keeps the video showing");
+
+  wc.emit("leave-html-full-screen");
+  assert.equal(h.window.fullScreen, false);
+  assert.equal(h.window.webContents.sent.at(-1).channel, "miaos-browser-layout-request");
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  assert.equal(JSON.stringify(h.views[0].bounds), JSON.stringify({ x: 0, y: 100, width: 700, height: 600 }));
+});
+
+test("page fullscreen keeps a window that was already fullscreen, and ends when the pane hides", () => {
+  const h = harness();
+  h.window.fullScreen = true;
+  h.command("navigate", { value: "https://www.youtube.com/watch?v=x" });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  const wc = h.views[0].webContents;
+  wc.emit("enter-html-full-screen");
+  h.command("layout", { visible: false, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  assert.ok(wc.scripts.some(script => script.includes("document.exitFullscreen()")));
+  assert.equal(h.window.fullScreen, true, "the window stays fullscreen as the user had it");
+  assert.equal(h.views[0].visible, false);
 });
