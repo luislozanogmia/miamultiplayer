@@ -8,6 +8,8 @@ const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
 const { stageGoogleOAuthClient } = require("./package-google-oauth.cjs");
+const { buildWindowsInstaller } = require("./windows-installer.cjs");
+const { buildWindowsIcon } = require("./build-windows-icon.cjs");
 const {
   assertNoPrivateBuildPaths,
   assertNoPrivateContent,
@@ -360,18 +362,17 @@ async function buildWindowsPackage() {
     // are not executable inputs and embed the build machine's absolute path.
     fs.rmSync(path.join(stagedBackend, "node_modules", "better-sqlite3", "build"), { recursive: true, force: true });
 
-    // This target is a portable zip, not an installer, so there is no install
-    // phase in which to write a per-user URL-handler registry key. The packaged
+    // Both the portable ZIP and NSIS installer use this payload. The packaged
     // Mia.exe registers `miamultiplayer` at runtime with Electron's
     // app.setAsDefaultProtocolClient; keep this packager free of build-host or
     // machine-wide registry mutations.
+    const windowsIconPath = buildWindowsIcon(path.join(appSource, "assets", "mia.icns"), path.join(appSource, "assets", "mia.ico"));
     const appPaths = await packager({
       dir: appSource,
       name: "Mia",
       platform: "win32",
       arch: "x64",
-      // TODO(windows-icon): assets/ only ships mia.icns and PNGs today. Add a
-      // multi-size assets/mia.ico and pass it as `icon` so Mia.exe carries it.
+      icon: windowsIconPath,
       out: temporaryRoot,
       overwrite: true,
       prune: true,
@@ -403,6 +404,7 @@ async function buildWindowsPackage() {
     signWindowsApp(packagedRoot);
 
     fs.mkdirSync(DIST_ROOT, { recursive: true });
+    const installer = await buildWindowsInstaller(packagedRoot, DIST_ROOT, MACOS_ROOT, ELECTRON_VERSION, windowsIconPath);
     for (const name of fs.readdirSync(DIST_ROOT)) {
       if (/^Mia-.*-win-x64\.zip(?:\.sha256|\.runtime\.json)?$/.test(name)) {
         fs.rmSync(path.join(DIST_ROOT, name), { force: true });
@@ -414,6 +416,7 @@ async function buildWindowsPackage() {
     run("tar", ["-a", "-c", "-f", artifact, "-C", path.dirname(packagedRoot), path.basename(packagedRoot)]);
     writeReleaseMetadata(artifact, manifest);
     process.stdout.write(`${artifact}\n`);
+    process.stdout.write(`${installer}\n${path.join(DIST_ROOT, "latest.yml")}\n`);
     return artifact;
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });

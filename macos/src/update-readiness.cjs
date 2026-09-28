@@ -79,7 +79,8 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
       });
       if (result?.response === 0 && !installRequested) {
         installRequested = true;
-        updater.quitAndInstall();
+        if (platform === "win32") updater.quitAndInstall(true, true);
+        else updater.quitAndInstall();
       }
     } catch (error) { report(error); }
     finally { promptOpen = false; }
