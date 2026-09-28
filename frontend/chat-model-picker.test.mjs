@@ -61,7 +61,7 @@ test('chat picker is a real connected inventory control with staged menus', asyn
   assert.doesNotMatch(cssSource, /\.chat-composer-wrap\.chat-composer-unbound\{[^}]*pointer-events:none/);
   assert.match(appSource, /function goBack\(\)/);
   assert.match(appSource, /event\.key === 'Escape'/);
-  assert.match(appSource, /metadata: \{chatModelSelection: chatModelMetadata\}/);
+  assert.match(appSource, /chatModelMetadata \? \{chatModelSelection: chatModelMetadata\} : \{\}/);
   assert.match(cssSource, /\.cc-model-options\{[^}]*max-height:220px/);
   assert.doesNotMatch(appSource, /interactive-mock, doesn't change the real backend model/);
   assert.doesNotMatch(appSource, /BUILTIN_AGENTS_BASE|mergeBuiltinAgents/);
