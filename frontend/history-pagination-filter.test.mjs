@@ -89,7 +89,7 @@ function loadRoomContext({ state, api }) {
     chatRoster: {},
     chatWs: { native: false, nativeSocketConversationId: null, activeRoomId: null, configured: true, byRoom: { 'room-a': state } },
     setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {},
-    saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
+    chatModelPicker: null, saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     chatRoomState(roomId) { return context.chatWs.byRoom[roomId]; }, api,
     nativeEventsUrl() { return '/events'; },
     nativeEventsToMessages(events) {

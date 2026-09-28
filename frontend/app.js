@@ -1112,10 +1112,18 @@
   };
   var CHAT_MODEL_SELECTION_CACHE_VERSION = 1;
 
-  function chatModelSelectionCacheKey(workspaceKey){
+  // Each bot keeps its own model choice; Mia and every other room share one.
+  function chatModelSelectionScope(){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0];
+    var botId = conversation && conversation.type === 'bot' && conversation.metadata && conversation.metadata.botId;
+    return botId ? 'bot:' + String(botId) : '';
+  }
+
+  function chatModelSelectionCacheKey(workspaceKey, scope){
     var owner = encodeURIComponent(String(currentUser || '').trim().toLowerCase());
     var workspace = WORKSPACE_OPTIONS[workspaceKey] ? workspaceKey : activeWorkspaceKey;
-    return 'mia.chat-model-selection.v1:' + owner + ':' + workspace;
+    var chatScope = scope === undefined ? chatModelSelectionScope() : scope;
+    return 'mia.chat-model-selection.v1:' + owner + ':' + workspace + (chatScope ? ':' + encodeURIComponent(chatScope) : '');
   }
 
   function readCachedChatModelSelection(){
@@ -1145,8 +1153,17 @@
     } catch(error){}
   }
 
-  function clearCachedChatModelSelection(){
-    try { localStorage.removeItem(chatModelSelectionCacheKey()); } catch(error){}
+  // Every chat's choice in the workspace: Mia's key and each bot's.
+  function clearCachedChatModelSelection(workspaceKey){
+    var base = chatModelSelectionCacheKey(workspaceKey, '');
+    try {
+      var keys = [];
+      for(var i = 0; i < localStorage.length; i += 1){
+        var key = localStorage.key(i);
+        if(key === base || (key && key.indexOf(base + ':') === 0)) keys.push(key);
+      }
+      keys.forEach(function(key){ localStorage.removeItem(key); });
+    } catch(error){}
   }
 
   function normalizeChatModelProviders(providers){
@@ -5041,6 +5058,7 @@
     chatWs.allDepartments = chatWs.rooms.departments.map(function(room){ return room.department; });
     chatWs.humans = [];
     syncNativeWatchSubscriptions();
+    if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
   }
 
   function loadNativeConversationStates(rooms){
@@ -6165,8 +6183,9 @@
       'miaChatAttention:' + owner + ':solo',
       'miaChatPinned:' + owner + ':solo',
       'miaChatPinnedServerMigration:' + owner + ':solo',
-      chatModelSelectionCacheKey('solo')
+      chatModelSelectionCacheKey('solo', '')
     ];
+    clearCachedChatModelSelection('solo');
     keys.forEach(function(key){
       try { localStorage.removeItem(key); } catch(_cleanSlateStorageError) {}
       try {
@@ -10267,6 +10286,7 @@
     chatWs.activeRoomId = roomId;
     chatWs.activeKind = kind;
     chatWs.activeLabel = label;
+    if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
     if(roomId !== AGENT_SETUP_ROOM_ID) saveActiveChatLocation(roomId);
     renderChatSidebar();
     refreshChatMain();
@@ -14346,6 +14366,17 @@
     }
 
     picker.ensureLoaded = function(){ return load({refresh:true}); };
+    // Switching chats shows that chat's own choice (a bot's, or Mia's).
+    var shownScope = null;
+    picker.showChatSelection = function(){
+      var scope = chatModelSelectionScope();
+      if(scope === shownScope) return;
+      shownScope = scope;
+      picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
+      closeMenu();
+      if(picker.loaded && picker.providers.length) hydrateSelection();
+      render();
+    };
     picker.resetAndReload = function(){
       picker.loaded = false;
       picker.loading = false;

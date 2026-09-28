@@ -24,7 +24,7 @@ test('chat picker is a real connected inventory control with staged menus', asyn
   assert.doesNotMatch(appSource, /chat-model-inventory|readCachedChatModelProviders|cacheChatModelProviders/);
   assert.match(appSource, /mia\.chat-model-selection\.v1:/);
   assert.match(appSource, /function readCachedChatModelSelection\(\)/);
-  assert.match(appSource, /function clearCachedChatModelSelection\(\)/);
+  assert.match(appSource, /function clearCachedChatModelSelection\(workspaceKey\)/);
   assert.match(appSource, /candidate\.provider === cached\.provider && candidate\.model === cached\.model/);
   assert.match(appSource, /cacheChatModelSelection\(picker\.selection\)/);
   assert.match(appSource, /cacheChatModelSelection\(Object\.assign\(\{\}, picker\.selection, \{speed:'normal'\}\)\)/);
@@ -149,4 +149,70 @@ test('the API row opens a list of every setup API provider, not one merged model
   assert.match(appSource, /return \{id:value, label:provider \? provider\.label : apiId, harnessProvider:'openai-api', apiProvider:apiId, aliases:apiProviderAliases\(apiId\)\};/);
   // Back from the API list returns to the provider switcher.
   assert.match(appSource, /if\(picker\.showApiProviders\)\{\s*picker\.showApiProviders = false;\s*picker\.showProviderSwitcher = true;/);
+});
+
+test('each bot keeps its own model choice; Mia and other rooms share one', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const vm = await import('node:vm');
+  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const store = new Map();
+  const localStorage = {
+    get length() { return store.size; },
+    key: (index) => [...store.keys()][index] ?? null,
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+    removeItem: (key) => store.delete(key),
+  };
+  const context = vm.createContext({
+    JSON, String, encodeURIComponent, localStorage,
+    currentUser: 'me@example.com',
+    activeWorkspaceKey: 'solo',
+    WORKSPACE_OPTIONS: { solo: {}, multiplayer_test: {} },
+    CHAT_MODEL_SELECTION_CACHE_VERSION: 1,
+    chatWs: {
+      activeRoomId: 'mia',
+      nativeConversations: [
+        { id: 'mia', type: 'agent', metadata: { agentId: 'gateway' } },
+        { id: 'writer', type: 'bot', metadata: { botId: 'bot-writer' } },
+        { id: 'writer-2', type: 'bot', metadata: { botId: 'bot-writer' } },
+        { id: 'researcher', type: 'bot', metadata: { botId: 'bot-researcher' } },
+        { id: 'dept', type: 'department', metadata: {} },
+      ],
+    },
+  });
+  for (const name of ['chatModelSelectionScope', 'chatModelSelectionCacheKey', 'readCachedChatModelSelection', 'cacheChatModelSelection', 'clearCachedChatModelSelection']) {
+    const start = source.indexOf(`  function ${name}(`);
+    assert.ok(start >= 0, `${name} exists`);
+    vm.runInContext(source.slice(start, source.indexOf('\n  }\n', start) + 4), context);
+  }
+  const open = (roomId) => { context.chatWs.activeRoomId = roomId; };
+  const pick = (model) => context.cacheChatModelSelection({ provider: 'openrouter', model, reasoningEffort: 'high', speed: 'normal' });
+  const shown = () => context.readCachedChatModelSelection()?.model ?? null;
+
+  open('mia'); pick('gpt-5.5');
+  open('writer'); pick('claude-sonnet-5');
+  open('researcher');
+  assert.equal(shown(), null, 'a bot with no choice of its own uses the default, not another chat\'s pick');
+  pick('deepseek-v4');
+
+  open('mia'); assert.equal(shown(), 'gpt-5.5');
+  open('writer'); assert.equal(shown(), 'claude-sonnet-5');
+  open('writer-2'); assert.equal(shown(), 'claude-sonnet-5', 'a bot\'s newer conversation keeps its choice');
+  open('researcher'); assert.equal(shown(), 'deepseek-v4');
+  open('dept'); assert.equal(shown(), 'gpt-5.5', 'other rooms follow Mia\'s choice');
+  assert.equal(context.chatModelSelectionCacheKey(undefined, ''), 'mia.chat-model-selection.v1:me%40example.com:solo', 'Mia keeps the existing key');
+
+  store.set('mia.chat-model-selection.v1:me%40example.com:multiplayer_test', 'keep');
+  context.clearCachedChatModelSelection();
+  assert.deepEqual([...store.keys()], ['mia.chat-model-selection.v1:me%40example.com:multiplayer_test'], 'clearing removes every chat\'s choice in this workspace only');
+});
+
+test('switching chats refreshes the picker to that chat\'s choice', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const load = source.slice(source.indexOf('  function loadChatRoom('), source.indexOf('  function loadChatRoom(') + 800);
+  assert.match(load, /chatModelPicker\.showChatSelection\(\)/);
+  const list = source.slice(source.indexOf('  function applyNativeConversationList('), source.indexOf('\n  function ', source.indexOf('  function applyNativeConversationList(') + 1));
+  assert.match(list, /chatModelPicker\.showChatSelection\(\)/);
+  assert.match(source, /picker\.showChatSelection = function\(\)\{[\s\S]*?if\(scope === shownScope\) return;[\s\S]*?hydrateSelection\(\);/);
 });

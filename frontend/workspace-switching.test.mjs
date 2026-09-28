@@ -67,7 +67,8 @@ test('settings clean slate targets Solo from every workspace and clears only Sol
   assert.match(source, /'miaChatActive:' \+ owner \+ ':solo'/);
   assert.match(source, /'miaChatAttention:' \+ owner \+ ':solo'/);
   assert.match(source, /'miaChatPinned:' \+ owner \+ ':solo'/);
-  assert.match(source, /chatModelSelectionCacheKey\('solo'\)/);
+  assert.match(source, /chatModelSelectionCacheKey\('solo', ''\)/);
+  assert.match(source, /clearCachedChatModelSelection\('solo'\);/);
 });
 
 test('settings clean slate confirms before issuing Solo-scoped requests and cancel is inert', async () => {
