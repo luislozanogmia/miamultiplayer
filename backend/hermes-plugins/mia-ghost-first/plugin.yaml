@@ -1,0 +1,7 @@
+name: mia-ghost-first
+version: "0.1.0"
+description: "Mia: web work goes through ghost-cli and the browser embedded in Mia. Hermes' own browser tools stay available only as a fallback after ghost-cli has been tried in the session."
+author: "Mia"
+license: MIT
+hooks:
+  - pre_tool_call

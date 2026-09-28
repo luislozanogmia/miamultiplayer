@@ -1,0 +1,57 @@
+"""Mia ghost-first browser policy.
+
+Mia's agents browse through ghost-cli, which drives the browser embedded in
+Mia (the user's signed-in sessions live there). Hermes' own browser tools
+start a separate Chromium with none of those sessions, so they are a fallback
+only: a browser tool is refused until the session has run ghost-cli.
+"""
+
+import threading
+from typing import Any, Dict, Optional
+
+BLOCK_MESSAGE = (
+    "There is no ghost-cli call in this session yet. Use ghost-cli first: it "
+    "drives the browser inside Mia, where the user is signed in (start with "
+    "`ghost-cli call ghost_instance_create --arguments "
+    "'{\"instance_id\":\"miaos\",\"miaos\":true}'`). Hermes' built-in browser "
+    "tools are a fallback only after ghost-cli has been tried."
+)
+
+_lock = threading.Lock()
+_ghost_sessions: set = set()
+
+
+def _is_browser_tool(name: Any) -> bool:
+    return isinstance(name, str) and name.startswith("browser_")
+
+
+def _runs_ghost_cli(tool_name: str, args: Any) -> bool:
+    if tool_name != "terminal" or not isinstance(args, dict):
+        return False
+    return "ghost-cli" in str(args.get("command") or "")
+
+
+def _session_key(session_id: Any, task_id: Any) -> str:
+    return str(session_id or task_id or "")
+
+
+def _on_pre_tool_call(tool_name: str = "", args: Any = None, session_id: str = "",
+                      task_id: str = "", **_: Any) -> Optional[Dict[str, str]]:
+    key = _session_key(session_id, task_id)
+    if _runs_ghost_cli(tool_name, args):
+        with _lock:
+            _ghost_sessions.add(key)
+        return None
+    target = tool_name
+    if tool_name == "tool_call" and isinstance(args, dict):
+        target = args.get("name")
+    if not _is_browser_tool(target):
+        return None
+    with _lock:
+        if key in _ghost_sessions:
+            return None
+    return {"action": "block", "message": BLOCK_MESSAGE}
+
+
+def register(ctx) -> None:
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)

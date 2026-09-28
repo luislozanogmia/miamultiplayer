@@ -14,6 +14,7 @@ const {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
+  GHOST_FIRST_PLUGIN,
   provisionHermesRuntimeProfiles,
 } = require('./hermes-bot-profile');
 
@@ -323,4 +324,58 @@ test('default runtime profiles follow HERMES_HOME for isolated installations', (
     if (previous === undefined) delete process.env.HERMES_HOME;
     else process.env.HERMES_HOME = previous;
   }
+});
+
+test('profiles with a terminal get the ghost-first guard; Google profiles do not', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-ghost-first-'));
+  const profilesRoot = path.join(root, 'profiles');
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir: path.join(root, 'Documents', 'mia') });
+    for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE]) {
+      const config = fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8');
+      assert.match(config, new RegExp(`plugins:\\n  enabled:\\n    - ${GHOST_FIRST_PLUGIN}\\n`), profile);
+      assert.ok(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN, '__init__.py')), profile);
+    }
+    for (const profile of [MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE]) {
+      const config = fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8');
+      assert.doesNotMatch(config, new RegExp(GHOST_FIRST_PLUGIN), `${profile} cannot run ghost-cli`);
+      assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN)), false, profile);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ghost-first guard refuses Hermes browser tools until ghost-cli has run in the session', (t) => {
+  const plugin = path.join(path.dirname(new URL(import.meta.url).pathname), 'hermes-plugins', GHOST_FIRST_PLUGIN);
+  const script = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("ghost_first", sys.argv[1] + "/__init__.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn): hooks[name] = fn
+m.register(Ctx())
+h = hooks["pre_tool_call"]
+out = [
+  h(tool_name="browser_navigate", args={"url": "https://linkedin.com"}, session_id="s1"),
+  h(tool_name="tool_call", args={"name": "browser_exec"}, session_id="s1"),
+  h(tool_name="web_search", args={"query": "x"}, session_id="s1"),
+  h(tool_name="terminal", args={"command": "ghost-cli call ghost_instance_create"}, session_id="s1"),
+  h(tool_name="browser_navigate", args={"url": "https://linkedin.com"}, session_id="s1"),
+  h(tool_name="browser_exec", args={}, session_id="s2"),
+]
+print(json.dumps(out))
+`;
+  const run = spawnSync('python3', ['-c', script, plugin], { encoding: 'utf8' });
+  if (run.error && run.error.code === 'ENOENT') return t.skip('python3 is not installed');
+  assert.equal(run.status, 0, run.stderr);
+  const [first, bridged, other, ghost, afterGhost, otherSession] = JSON.parse(run.stdout);
+  assert.equal(first.action, 'block');
+  assert.match(first.message, /There is no ghost-cli call in this session yet\. Use ghost-cli first/);
+  assert.equal(bridged.action, 'block', 'the tool_call bridge cannot reach a browser tool either');
+  assert.equal(other, null);
+  assert.equal(ghost, null);
+  assert.equal(afterGhost, null, 'after ghost-cli the built-in browser is the fallback');
+  assert.equal(otherSession.action, 'block', 'each session tries ghost-cli first');
 });
