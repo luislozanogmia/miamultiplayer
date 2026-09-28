@@ -2635,6 +2635,8 @@
   .native-browser-tabs-row .local-browser-close-btn{flex:none;margin:0 6px 0 2px;}
   .native-browser-tab{display:flex;flex:0 1 190px;min-width:100px;max-width:220px;border-radius:7px;background:#e1e1df;}
   .native-browser-tab.active{background:#fff;box-shadow:0 1px 3px #0000000d;}
+  .native-browser-tab.dragging{opacity:.45;}
+  .native-browser-tab.drop-target{box-shadow:inset 2px 0 0 #7a7a76;}
   .native-browser-tab button,.native-browser-new-tab{appearance:none;border:0;background:transparent;color:#30302e;padding:6px 9px;font:12px/18px var(--styled-sans);cursor:pointer;}
   .native-browser-tab button[role="tab"]{display:flex;align-items:center;gap:6px;min-width:0;flex:1;text-align:left;}
   .native-browser-tab-icon{width:14px;height:14px;flex:none;border-radius:3px;}

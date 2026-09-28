@@ -1232,6 +1232,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       event.preventDefault(); runShortcut(key);
     } else if (key === "escape") active()?.view.webContents.stop();
   }
+  // Tabs keep the Map's insertion order; reordering rebuilds it.
+  function moveTab(id, index) {
+    const tab = tabs.get(id);
+    if (!tab) return false;
+    const order = [...tabs.values()].filter(item => item !== tab);
+    order.splice(Math.max(0, Math.min(order.length, Math.trunc(Number(index)) || 0)), 0, tab);
+    tabs.clear();
+    for (const item of order) tabs.set(item.id, item);
+    return true;
+  }
   function newTab(value, options = {}) {
     if (value) normalizeStoredTarget(value);
     const view = new WebContentsView({ webPreferences: {
@@ -1258,6 +1268,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       hiddenMediaPlaybackGuard: null,
     };
     tabs.set(tab.id, tab);
+    // A link opened from a page goes right after that page, like Chrome.
+    if (tabs.has(options.after)) moveTab(tab.id, [...tabs.keys()].indexOf(options.after) + 1);
     if (options.activate !== false || activeId === null) activeId = tab.id;
     window.contentView.addChildView(view);
     view.setBackgroundColor(darkTheme ? "#0B0A09" : "#ffffff");
@@ -1268,7 +1280,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         matches: result.matches, activeMatchOrdinal: result.activeMatchOrdinal,
       });
     });
-    wc.setWindowOpenHandler(({ url }) => {
+    wc.setWindowOpenHandler(({ url, disposition }) => {
       // GIS popup mode returns credentials to window.opener. Turning this into
       // a new tab destroys that relationship and strands the Google chooser.
       // Only the OAuth/GIS endpoints need the real popup: a plain Google
@@ -1295,7 +1307,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
           };
         }
       } catch (_) { /* Invalid targets are denied below. */ }
-      try { newTab(url); } catch (_) { /* Block non-web schemes and local-file popups. */ }
+      // Cmd/Ctrl+click arrives as "background-tab": open it without leaving
+      // this page. Cmd+Shift+click and target=_blank links switch to it.
+      try { newTab(url, { activate: disposition !== "background-tab", after: tab.id }); } catch (_) { /* Block non-web schemes and local-file popups. */ }
       return { action: "deny" };
     });
     const guard = (event) => {
@@ -1398,7 +1412,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     });
     wc.on("context-menu", (_event, params) => {
       const items = [];
-      if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: () => newTab(params.linkURL) });
+      if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: () => newTab(params.linkURL, { activate: false, after: tab.id }) });
       const imageURL = params.mediaType === "image" && typeof params.srcURL === "string"
         && (/^https?:\/\//i.test(params.srcURL) || /^blob:https?:\/\//i.test(params.srcURL) || /^data:image\//i.test(params.srcURL))
         ? params.srcURL
@@ -1553,6 +1567,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         focusTabWebContents(tabs.get(command.id));
       }
       if (command.action === "close") closeTab(command.id);
+      if (command.action === "move" && moveTab(command.id, command.index)) persistTabs();
       if (command.action === "back" && tab.view.webContents.navigationHistory.canGoBack()) tab.view.webContents.navigationHistory.goBack();
       if (command.action === "forward" && tab.view.webContents.navigationHistory.canGoForward()) tab.view.webContents.navigationHistory.goForward();
       if (command.action === "reload") { tab.error = ""; layout(); tab.view.webContents.reload(); }
