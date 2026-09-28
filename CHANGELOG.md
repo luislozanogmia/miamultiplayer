@@ -9,6 +9,24 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.13] — 2026-09-28
+
+### Added
+- Windows per-user installer and update-feed packaging for in-app updates.
+- Mia's branded icon in the Windows executable and installer.
+
+### Fixed
+- Show a preparation window while packaged runtimes are copied instead of
+  leaving the app running without a visible window.
+- Keep the desktop backend on loopback and hide its Windows console.
+- Handle long dependency paths during Windows installer replacement, retaining
+  rollback on failure and preserving user data.
+
+### Windows distribution
+- Windows artifacts are unsigned: Windows may show Unknown publisher or
+  SmartScreen warnings. Certificate-based publisher verification is not provided.
+- macOS signing and notarization requirements are unchanged.
+
 ## [0.2.12] — 2026-09-25
 
 ### Changed
