@@ -59,9 +59,9 @@ function harness({ roomId = 'mia', kind = 'agent', messages = [] } = {}) {
 
 const names = (commands) => Array.from(commands, (command) => command.name);
 
-test('Mia\'s chat offers every command, a bot chat only /clear, other rooms none', () => {
+test('Mia\'s chat and a bot\'s own chat offer every command, other rooms none', () => {
   assert.deepEqual(names(harness({ roomId: 'mia' }).context.composerSlashCommands()), ['goal', 'subgoal', 'compact', 'clear']);
-  assert.deepEqual(names(harness({ roomId: 'bot' }).context.composerSlashCommands()), ['clear']);
+  assert.deepEqual(names(harness({ roomId: 'bot' }).context.composerSlashCommands()), ['goal', 'subgoal', 'compact', 'clear']);
   assert.deepEqual(names(harness({ roomId: 'dept', kind: 'department' }).context.composerSlashCommands()), []);
 });
 
@@ -119,6 +119,10 @@ test('the goal chip follows the newest goal snapshot in the chat', () => {
     ended.context.renderGoalChip();
     assert.equal(ended.chip.hidden, true);
   }
+
+  const fromBot = harness({ roomId: 'bot', messages: [withGoal({ title: 'Revise the report', status: 'active', turns_used: 1, max_turns: 20 }, 'bot')] });
+  fromBot.context.renderGoalChip();
+  assert.equal(fromBot.chip.hidden, false, 'a bot\'s goal shows in its chat');
 
   const spoofed = harness({ messages: [withGoal({ title: 'Not from Mia', status: 'active' }, 'user')] });
   spoofed.context.renderGoalChip();

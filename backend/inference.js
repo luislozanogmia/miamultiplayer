@@ -777,6 +777,17 @@ function runInference(prompt, options) {
 // The native Mia gateway path uses one long-lived
 // Hermes gateway process, one persistent Hermes session per native
 // conversation, and one prompt.submit per new user turn.
+// A persistent session runs under Mia's agent profiles, or under the bot
+// profiles for a bot's own chat (botWorker), with the same vision fallback a
+// one-shot bot turn gets.
+function persistentSessionOptions(options) {
+  if (options && options.botWorker === true) return standaloneGatewayOptions(options);
+  const profile = options && options.profile === MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+    ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+    : MIAOS_AGENT_HERMES_PROFILE;
+  return { ...options, profile };
+}
+
 async function runInferenceViaHermesGateway({
   storedSessionId,
   seedMessages,
@@ -787,23 +798,20 @@ async function runInferenceViaHermesGateway({
   onSession,
   signal,
 }, client = getHermesGatewayClient()) {
-  const requestedProfile = options && options.profile === MIAOS_AGENT_GOOGLE_HERMES_PROFILE
-    ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
-    : MIAOS_AGENT_HERMES_PROFILE;
   const result = await client.run({
     storedSessionId,
     seedMessages,
     title,
     message,
-    options: {
-      ...options,
-      profile: requestedProfile,
-    },
+    options: persistentSessionOptions(options),
     imagePaths: imagePathsFromOptions(options),
     onEvent,
     onSession,
     signal,
   });
+  if (options && options.botWorker === true && result) {
+    return { ...result, text: stripHermesOperationalLines(result.text) };
+  }
   return result;
 }
 
@@ -821,14 +829,11 @@ async function runSlashCommandViaHermesGateway({
   onNotice,
   signal,
 }, client = getHermesGatewayClient()) {
-  const requestedProfile = options && options.profile === MIAOS_AGENT_GOOGLE_HERMES_PROFILE
-    ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
-    : MIAOS_AGENT_HERMES_PROFILE;
   return client.runCommand({
     storedSessionId,
     seedMessages,
     title,
-    options: { ...options, profile: requestedProfile },
+    options: persistentSessionOptions(options),
     name,
     arg,
     onEvent,
@@ -879,6 +884,7 @@ module.exports = {
   runInferenceViaHermesGateway,
   runBotInferenceViaHermesGateway,
   runSlashCommandViaHermesGateway,
+  persistentSessionOptions,
   readHermesGatewaySessionControl,
   setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,

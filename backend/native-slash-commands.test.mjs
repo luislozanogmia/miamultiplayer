@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const store = require('./db.js');
+const Database = require('better-sqlite3');
 const { encodeFrame } = require('./conversation-websocket.js');
 const BACKEND_DIR = path.dirname(new URL(import.meta.url).pathname);
 const ALICE = 'alice@example.com';
@@ -318,3 +319,88 @@ test('/compact compresses Mia\'s session and posts what Hermes reports', async (
     { session_id: 'live-mia', name: 'compact', arg: '' });
   assert.equal(hermes.calls.some((call) => call.method === 'prompt.submit'), false);
 });
+
+function botConversation(dbPath, botId) {
+  const database = new Database(dbPath, { readonly: true });
+  try {
+    return database.prepare(
+      "SELECT id, metadata FROM conversations WHERE type = 'bot' AND json_extract(metadata, '$.botId') = ?"
+    ).get(botId);
+  } finally {
+    database.close();
+  }
+}
+
+test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (t) => {
+  const data = fixture(t);
+  let goal = null;
+  const script = (request, push) => {
+    if (request.method === 'session.create') return { session_id: 'live-mia', stored_session_id: 'stored-bot' };
+    if (request.method === 'session.resume') return { session_id: 'live-mia', session_key: 'stored-bot' };
+    if (request.method === 'command.dispatch') {
+      goal = { title: request.params.arg, status: 'active', turns_used: 0, max_turns: 20 };
+      return { type: 'send', notice: `⊙ Goal set (20-turn budget): ${request.params.arg}`, message: request.params.arg };
+    }
+    if (request.method === 'session.control.read') return { control: { goal } };
+    if (request.method === 'prompt.submit') {
+      const text = String(request.params.text || '');
+      setTimeout(() => {
+        if (!goal) {
+          push('message.complete', { text: text.endsWith('first') ? 'First answer.' : 'Second answer.', status: 'complete' });
+          return;
+        }
+        push('message.complete', { text: 'Audited the evidence.', status: 'complete' });
+        setTimeout(() => {
+          goal = { ...goal, turns_used: 1 };
+          push('status.update', { kind: 'goal', text: '↻ Continuing toward goal (1/20): report not revised yet' });
+          push('message.start');
+          push('message.delta', { text: 'Revised the report and made the PDF.' });
+          push('message.complete', { status: 'complete' });
+          goal = { ...goal, status: 'done', turns_used: 2 };
+          push('status.update', { kind: 'goal', text: '✓ Goal achieved: report revised' });
+        }, 150);
+      }, 20);
+      return { status: 'streaming' };
+    }
+    return {};
+  };
+  const server = await startServer(data, t);
+  const hermes = await startFakeHermes(Number(new URL(server.gatewayUrl).port), script);
+  t.after(() => hermes.close());
+  const headers = { 'x-miaos-workspace': 'solo' };
+
+  const created = await request(server, data.aliceSession, '/api/bots', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Research Reports', instructions: '# Research\n\nWrite reports.\n', model: 'fixture-model', status: 'running', automations: [], departments: [] }),
+  });
+  assert.equal(created.status, 201, server.logs.join(''));
+  const bot = (await created.json()).bot;
+  const chat = botConversation(data.dbPath, bot.id);
+  assert.ok(chat, 'bot chat provisioned');
+  const events = async () => (await (await request(server, data.aliceSession,
+    `/api/conversations/${chat.id}/events?limit=100`, { headers })).json()).events || [];
+  const send = (text, metadata) => request(server, data.aliceSession, `/api/conversations/${chat.id}/events`, {
+    method: 'POST', headers, body: JSON.stringify({ type: 'message', content: { text }, ...(metadata ? { metadata } : {}) }),
+  });
+  const botReply = (text) => waitFor(async () => (await events()).find((event) =>
+    event.senderType === 'bot' && event.content && event.content.text === text), text);
+
+  assert.equal((await send('answer this first')).status, 201);
+  await botReply('First answer.');
+  assert.equal((await send('now the second')).status, 201);
+  await botReply('Second answer.');
+  assert.equal(hermes.calls.filter((call) => call.method === 'session.create').length, 1, 'one session for the chat');
+  assert.equal(hermes.calls.find((call) => call.method === 'session.resume').params.session_id, 'stored-bot');
+  const second = hermes.calls.filter((call) => call.method === 'prompt.submit')[1].params.text;
+  assert.match(second, /now the second/);
+
+  assert.equal((await send('/goal revise the report', { slashCommand: true })).status, 201);
+  const done = await botReply('✓ Goal achieved: report revised');
+  const continuation = await botReply('Revised the report and made the PDF.');
+  assert.equal(continuation.senderId, bot.id, 'Hermes\' own turn is posted as the bot');
+  assert.equal(continuation.metadata.goalContinuation, true);
+  assert.equal(done.metadata.goal.status, 'done');
+  assert.equal(hermes.calls.find((call) => call.method === 'command.dispatch').params.session_id, 'live-mia');
+});
+
