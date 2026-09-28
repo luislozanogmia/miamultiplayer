@@ -669,3 +669,169 @@ test('stopOwnedGateway terminates the gateway this client started and waits for 
   assert.equal(client.sessions.size, 0);
   client.close();
 });
+
+// A scriptable gateway for slash-command tests: `handlers[method]` answers a
+// request; `socket.push(type, payload)` sends an unsolicited session event.
+function scriptedGateway(handlers) {
+  const calls = [];
+  const sockets = [];
+  class ScriptedWebSocket {
+    static OPEN = 1;
+
+    constructor() {
+      this.readyState = 0;
+      sockets.push(this);
+      setImmediate(() => {
+        this.readyState = 1;
+        this.onopen?.();
+        this.frame({ jsonrpc: '2.0', method: 'event', params: { type: 'gateway.ready', payload: {} } });
+      });
+    }
+
+    frame(value) { setImmediate(() => this.onmessage?.({ data: `${JSON.stringify(value)}\n` })); }
+
+    push(type, payload = {}, sessionId = 'live-goal') {
+      this.frame({ jsonrpc: '2.0', method: 'event', params: { type, session_id: sessionId, payload } });
+    }
+
+    send(raw) {
+      const request = JSON.parse(raw.trim());
+      calls.push(request);
+      const handler = handlers[request.method];
+      const reply = handler ? handler(request, this) : {};
+      if (reply && reply.error) this.frame({ jsonrpc: '2.0', id: request.id, error: reply.error });
+      else this.frame({ jsonrpc: '2.0', id: request.id, result: reply });
+    }
+
+    close() { this.readyState = 3; }
+  }
+  return { calls, sockets, WebSocketImpl: ScriptedWebSocket };
+}
+
+const createGoalSession = () => ({ session_id: 'live-goal', stored_session_id: 'stored-goal' });
+
+test('a message sent mid-goal skips the busy cwd rebind and still reaches prompt.submit', async () => {
+  let submits = 0;
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'session.resume': () => ({ session_id: 'live-goal', session_key: 'stored-goal' }),
+    // Hermes refuses cwd.set while a turn runs.
+    'session.cwd.set': () => ({ error: { code: 4009, message: 'session busy' } }),
+    'prompt.submit': (request, socket) => {
+      submits += 1;
+      if (submits === 1) {
+        socket.push('message.complete', { text: 'First step done.', status: 'complete' });
+        return { status: 'streaming' };
+      }
+      socket.push('message.delta', { text: '4' });
+      socket.push('message.complete', { status: 'complete' });
+      return { status: 'redirected' };
+    },
+  });
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {} });
+  const options = { workspaceDir: '/tmp/mia-workspace' };
+  const first = await client.run({ message: 'go', options });
+  // Hermes starts a goal turn, so Mia knows the session is busy.
+  gateway.sockets[0].push('message.start');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const second = await client.run({ storedSessionId: first.storedSessionId, message: 'how much is 2+2?', options });
+  assert.equal(second.text, '4');
+  assert.equal(gateway.calls.filter((call) => call.method === 'session.cwd.set').length, 0, 'no rebind while busy');
+
+  // Busy by Hermes' own account but not yet by Mia's: the 4009 is skipped too.
+  gateway.sockets[0].push('message.complete', { status: 'complete' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const third = await client.run({ storedSessionId: first.storedSessionId, message: 'and 3+3?', options });
+  assert.equal(third.text, '4');
+  assert.equal(gateway.calls.filter((call) => call.method === 'session.cwd.set').length, 1);
+  client.close();
+});
+
+test('a slash command goes through command.dispatch, never prompt.submit', async () => {
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'command.dispatch': () => ({ type: 'exec', output: '⊙ Goal (active, 2/20 turns): ship it' }),
+  });
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {} });
+  const result = await client.runCommand({ name: 'goal', arg: 'status', options: {} });
+  assert.equal(result.text, '⊙ Goal (active, 2/20 turns): ship it');
+  assert.equal(result.sessionId, 'live-goal');
+  assert.deepEqual(gateway.calls.find((call) => call.method === 'command.dispatch').params, { session_id: 'live-goal', name: 'goal', arg: 'status' });
+  assert.equal(gateway.calls.some((call) => call.method === 'prompt.submit'), false);
+  client.close();
+});
+
+test('setting a goal shows the notice, then runs the kickoff turn Hermes asks for', async () => {
+  const notices = [];
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'command.dispatch': () => ({ type: 'send', notice: '⊙ Goal set (20-turn budget): fix the tests', message: 'fix the tests' }),
+    'prompt.submit': (request, socket) => {
+      socket.push('message.complete', { text: 'Found the failing test.', status: 'complete' });
+      return { status: 'streaming' };
+    },
+  });
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {} });
+  const result = await client.runCommand({
+    name: 'goal', arg: 'fix the tests', options: {},
+    onNotice: (notice) => { notices.push(notice); },
+  });
+  assert.deepEqual(notices, ['⊙ Goal set (20-turn budget): fix the tests']);
+  assert.equal(result.text, 'Found the failing test.');
+  assert.equal(gateway.calls.find((call) => call.method === 'prompt.submit').params.text, 'fix the tests');
+  client.close();
+});
+
+test('a refused command is the answer, not a crash', async () => {
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'command.dispatch': () => ({ error: { code: 4009, message: 'session busy — try /compress after the turn' } }),
+  });
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {} });
+  const result = await client.runCommand({ name: 'compact', options: {} });
+  assert.equal(result.text, 'session busy — try /compress after the turn');
+  assert.equal(result.commandError, true);
+  client.close();
+});
+
+test('turns and goal verdicts Hermes starts on its own reach the session listener', async () => {
+  const seen = [];
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'prompt.submit': (request, socket) => {
+      socket.push('message.complete', { text: 'First step done.', status: 'complete' });
+      // After the turn, Hermes judges the goal and chains a continuation.
+      socket.push('status.update', { kind: 'goal', text: '↻ Continuing toward goal (1/20): tests still fail' });
+      socket.push('message.start');
+      socket.push('message.delta', { text: 'Second ' });
+      socket.push('message.delta', { text: 'step done.' });
+      socket.push('message.complete', { status: 'complete' });
+      socket.push('status.update', { kind: 'goal', text: '✓ Goal achieved: all tests pass' });
+      socket.push('message.complete', { text: 'other session', status: 'complete' }, 'someone-else');
+      return { status: 'streaming' };
+    },
+  });
+  const client = new HermesGatewayClient({
+    url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {},
+    onSessionEvent: (sessionId, kind, data) => seen.push({ sessionId, kind, data }),
+  });
+  const result = await client.run({ message: 'go', options: {} });
+  assert.equal(result.text, 'First step done.');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const mine = seen.filter((event) => event.sessionId === 'live-goal');
+  assert.deepEqual(mine.map((event) => event.kind), ['goal.status', 'turn.start', 'turn.complete', 'goal.status']);
+  assert.equal(mine[2].data.text, 'Second step done.');
+  assert.equal(mine[3].data.text, '✓ Goal achieved: all tests pass');
+  assert.equal(seen.some((event) => event.sessionId === 'someone-else' && event.data.text === 'other session'), true);
+  client.close();
+});
+
+test('reads the goal snapshot for the chip', async () => {
+  const gateway = scriptedGateway({
+    'session.control.read': () => ({ control: { goal: { title: 'ship it', status: 'active', turns_used: 3, max_turns: 20 } } }),
+  });
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {} });
+  const control = await client.readSessionControl('live-goal');
+  assert.equal(control.goal.turns_used, 3);
+  client.close();
+});

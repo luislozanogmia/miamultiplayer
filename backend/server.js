@@ -50,6 +50,9 @@ const {
   userInstructionSection,
   runInference,
   runInferenceViaHermesGateway,
+  runSlashCommandViaHermesGateway,
+  readHermesGatewaySessionControl,
+  setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
   startHermesGatewayRuntime,
@@ -6027,6 +6030,91 @@ function nativeHermesGatewaySeedMessages(systemPrompt, events, triggerId) {
   return messages;
 }
 
+// Hermes slash commands that work in Mia's own chat. The composer marks them
+// (metadata.slashCommand) so a message that merely starts with "/" stays text.
+// /clear is a composer action (it starts a new conversation) and never
+// reaches the backend.
+const NATIVE_SLASH_COMMANDS = new Set(['goal', 'subgoal', 'compact', 'compress']);
+
+function nativeSlashCommand(trigger) {
+  const metadata = trigger && trigger.metadata && typeof trigger.metadata === 'object' ? trigger.metadata : {};
+  if (metadata.slashCommand !== true) return null;
+  const match = /^\/([a-z]+)(?:\s+([\s\S]*))?$/i.exec(String(nativeEventText(trigger) || '').trim());
+  if (!match || !NATIVE_SLASH_COMMANDS.has(match[1].toLowerCase())) return null;
+  return { name: match[1].toLowerCase(), arg: String(match[2] || '').trim() };
+}
+
+// Live Hermes session id -> the private Mia conversation it answers in. A
+// /goal keeps working after a turn ends; those turns arrive with no dispatch
+// waiting, and this map is how they find their chat.
+const nativeGatewaySessionConversations = new Map();
+// Per-session chain so a verdict that waits on the goal snapshot still posts
+// before the continuation turn that follows it.
+const nativeHermesSessionEventChains = new Map();
+let nativeHermesSessionEventsBound = false;
+
+function bindNativeHermesSessionEvents() {
+  if (nativeHermesSessionEventsBound) return;
+  nativeHermesSessionEventsBound = true;
+  setHermesGatewaySessionEventHandler((sessionId, kind, data) => {
+    const key = String(sessionId || '');
+    const next = (nativeHermesSessionEventChains.get(key) || Promise.resolve())
+      .then(() => handleNativeHermesSessionEvent(key, kind, data))
+      .catch(() => {});
+    nativeHermesSessionEventChains.set(key, next);
+    next.then(() => {
+      if (nativeHermesSessionEventChains.get(key) === next) nativeHermesSessionEventChains.delete(key);
+    });
+  });
+}
+
+// Hermes' goal state for the chip: an object, null (no goal), or undefined
+// when it could not be read (the chip then keeps what it had).
+async function nativeGoalSnapshot(sessionId) {
+  if (!sessionId) return undefined;
+  try {
+    const control = await readHermesGatewaySessionControl(sessionId);
+    return control && Object.prototype.hasOwnProperty.call(control, 'goal') ? (control.goal || null) : undefined;
+  } catch (_) {
+    return undefined;
+  }
+}
+
+async function handleNativeHermesSessionEvent(sessionId, kind, data) {
+  const target = nativeGatewaySessionConversations.get(String(sessionId || ''));
+  if (!target || !data) return;
+  const metadata = { runtime: 'hermes', agentName: 'Mia' };
+  let text = '';
+  if (kind === 'turn.complete') {
+    if (data.status === 'interrupted') return;
+    text = sanitizeChatReply(String(data.text || ''))
+      .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, '')
+      .replace(/\s*\[Mia\]\s*$/i, '')
+      .trim();
+    metadata.goalContinuation = true;
+  } else if (kind === 'goal.status') {
+    text = String(data.text || '').trim();
+    metadata.goalStatus = true;
+    // "↻ Continuing toward goal" is progress; done/paused/failed need the user.
+    metadata.goalFinal = !text.startsWith('↻');
+    const goal = await nativeGoalSnapshot(sessionId);
+    if (goal !== undefined) metadata.goal = goal;
+  } else {
+    return;
+  }
+  if (!text) return;
+  const conversation = nativeConversationRepository.getConversation({ companyId: target.companyId, id: target.conversationId });
+  if (!conversation) return;
+  nativeConversationService.createEvent({
+    companyId: target.companyId,
+    conversationId: target.conversationId,
+    principal: { companyId: target.companyId, principalId: 'gateway', principalType: 'agent' },
+    type: 'agent_message',
+    content: { text },
+    metadata,
+  });
+}
+
 function persistNativeHermesGatewaySession(conversation, eventId, storedSessionId, profile) {
   if (!conversation || !eventId || !storedSessionId) return conversation;
   return nativeConversationRepository.persistGatewaySessionIfEventLive({
@@ -6392,6 +6480,9 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   });
   const message = trigger && trigger.senderType === 'user' ? nativeEventText(trigger) : '';
   if (!message || !activeGateway || !activeGateway.sessionId) return false;
+  // A slash command is a command, not extra text for the running turn; it
+  // runs as its own dispatch once that turn ends.
+  if (nativeSlashCommand(trigger)) return false;
   if (cancelNativeDispatchForInactiveUser(dispatch, trigger)) return true;
   let result;
   try {
@@ -6470,6 +6561,18 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const globalInstructions = currentInstructionSettings(isGatewayAgent ? trigger.senderId : ownerOf(agent));
   const replyPrincipalType = isGatewayAgent ? 'agent' : 'bot';
   const replyEventType = isGatewayAgent ? 'agent_message' : 'bot_message';
+  const slashCommand = nativeSlashCommand(trigger);
+  // Bots start a fresh agent session every turn, so a goal or a compaction
+  // there would be forgotten by the next message.
+  if (slashCommand && !isGatewayAgent) {
+    return createNativeDispatchReplyEvent(dispatch, trigger, {
+      type: replyEventType,
+      content: { text: `/${slashCommand.name} works in Mia's own chat. Ask Mia to take this on as a goal.` },
+      parentEventId,
+      clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
+      metadata: { runtime: 'hermes', dispatchId: dispatch.id, agentName: agent.name, slashCommand: slashCommand.name },
+    });
+  }
   await createNativeDispatchReplyEvent(dispatch, trigger, {
     type: replyEventType,
     content: { text: humanTaskStatus('running', 0) },
@@ -6598,7 +6701,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       });
     }
   }
-  if (dispatch.targetType === 'gateway') {
+  if (dispatch.targetType === 'gateway' && !slashCommand) {
     throwIfNativeDispatchUserInactive(dispatch, trigger);
     const created = await createNativeBotFromMiaRequest(
       dispatch.companyId,
@@ -6854,31 +6957,65 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     const gatewayKey = nativeDispatchChainKey(dispatch);
     const ownsPrivateAgentConversation = conversation.type === 'agent'
       && String(conversation.createdBy || '').toLowerCase() === senderLabel;
+    if (slashCommand && !ownsPrivateAgentConversation) {
+      return createNativeDispatchReplyEvent(dispatch, trigger, {
+        type: replyEventType,
+        content: { text: `/${slashCommand.name} works in your own chat with Mia.` },
+        parentEventId,
+        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
+        metadata: { runtime: 'hermes', dispatchId: dispatch.id, agentName: agent.name, slashCommand: slashCommand.name },
+      });
+    }
+    bindNativeHermesSessionEvents();
     let activeGatewayRecord = null;
     let gatewayResult;
+    const gatewayRunArgs = {
+      storedSessionId: ownsPrivateAgentConversation && conversation.metadata
+        && (conversation.metadata.hermesGatewayProfile
+          ? conversation.metadata.hermesGatewayProfile === googleGatewayProfile
+          : googleGatewayProfile === MIAOS_AGENT_HERMES_PROFILE)
+        ? conversation.metadata.hermesGatewaySessionId
+        : null,
+      seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
+      title: conversation.name || 'Mia conversation',
+      options: inferenceOptions,
+      onEvent: postHermesProgress,
+      onSession: (session) => {
+        throwIfNativeDispatchUserInactive(dispatch, trigger);
+        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId };
+        nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
+        if (ownsPrivateAgentConversation) {
+          nativeGatewaySessionConversations.set(String(session.sessionId), {
+            companyId: conversation.companyId,
+            conversationId: conversation.id,
+          });
+          persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, googleGatewayProfile);
+        }
+      },
+      signal,
+    };
     try {
-      gatewayResult = await runInferenceViaHermesGateway({
-        storedSessionId: ownsPrivateAgentConversation && conversation.metadata
-          && (conversation.metadata.hermesGatewayProfile
-            ? conversation.metadata.hermesGatewayProfile === googleGatewayProfile
-            : googleGatewayProfile === MIAOS_AGENT_HERMES_PROFILE)
-          ? conversation.metadata.hermesGatewaySessionId
-          : null,
-        seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
-        title: conversation.name || 'Mia conversation',
-        message: gatewayMessage,
-        options: inferenceOptions,
-        onEvent: postHermesProgress,
-        onSession: (session) => {
-          throwIfNativeDispatchUserInactive(dispatch, trigger);
-          activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId };
-          nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
-          if (ownsPrivateAgentConversation) {
-            persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, googleGatewayProfile);
-          }
-        },
-        signal,
-      });
+      gatewayResult = slashCommand
+        ? await runSlashCommandViaHermesGateway({
+          ...gatewayRunArgs,
+          name: slashCommand.name,
+          arg: slashCommand.arg,
+          // Setting a goal answers at once ("Goal set …") and then works on
+          // its first turn; show the notice while that turn runs.
+          onNotice: (notice) => createNativeDispatchReplyEvent(dispatch, trigger, {
+            type: replyEventType,
+            content: { text: notice },
+            parentEventId,
+            clientIdempotencyKey: `native-dispatch-${dispatch.id}-command-notice`,
+            metadata: { runtime: 'hermes', agentName: agent.name, slashCommand: slashCommand.name, goalStatus: true },
+          }),
+        })
+        : await runInferenceViaHermesGateway({ ...gatewayRunArgs, message: gatewayMessage });
+      if (slashCommand && gatewayResult && gatewayResult.sessionId
+        && (slashCommand.name === 'goal' || slashCommand.name === 'subgoal')) {
+        const goal = await nativeGoalSnapshot(gatewayResult.sessionId);
+        if (goal !== undefined) gatewayResult.goal = goal;
+      }
     } finally {
       if (activeGatewayRecord && nativeActiveGatewaySessions.get(gatewayKey) === activeGatewayRecord) {
         nativeActiveGatewaySessions.delete(gatewayKey);
@@ -7015,7 +7152,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     content: { text: safeReply },
     parentEventId,
     clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-    metadata: { runtime: 'hermes', dispatchId: dispatch.id, agentName: agent.name },
+    metadata: {
+      runtime: 'hermes',
+      dispatchId: dispatch.id,
+      agentName: agent.name,
+      ...(slashCommand ? { slashCommand: slashCommand.name } : {}),
+      ...(inferenceResult && inferenceResult.goal !== undefined ? { goal: inferenceResult.goal } : {}),
+    },
   });
   if (dispatch.targetType === 'gateway') {
     await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch);

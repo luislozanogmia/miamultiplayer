@@ -807,6 +807,47 @@ async function runInferenceViaHermesGateway({
   return result;
 }
 
+// Slash commands (/goal, /subgoal, /compress) on the same persistent session
+// runInferenceViaHermesGateway uses, so the command acts on that chat.
+async function runSlashCommandViaHermesGateway({
+  storedSessionId,
+  seedMessages,
+  title,
+  options,
+  name,
+  arg,
+  onEvent,
+  onSession,
+  onNotice,
+  signal,
+}, client = getHermesGatewayClient()) {
+  const requestedProfile = options && options.profile === MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+    ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+    : MIAOS_AGENT_HERMES_PROFILE;
+  return client.runCommand({
+    storedSessionId,
+    seedMessages,
+    title,
+    options: { ...options, profile: requestedProfile },
+    name,
+    arg,
+    onEvent,
+    onSession,
+    onNotice,
+    signal,
+  });
+}
+
+async function readHermesGatewaySessionControl(sessionId, client = getHermesGatewayClient()) {
+  return client.readSessionControl(sessionId);
+}
+
+// Turns and goal verdicts Hermes produces on its own (see
+// HermesGatewayClient.handleUnsolicitedEvent).
+function setHermesGatewaySessionEventHandler(handler, client = getHermesGatewayClient()) {
+  client.setSessionEventHandler(handler);
+}
+
 async function runBotInferenceViaHermesGateway(
   prompt,
   options = {},
@@ -837,6 +878,9 @@ module.exports = {
   runStandaloneInferenceViaHermesGateway,
   runInferenceViaHermesGateway,
   runBotInferenceViaHermesGateway,
+  runSlashCommandViaHermesGateway,
+  readHermesGatewaySessionControl,
+  setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
   startHermesGatewayRuntime,
