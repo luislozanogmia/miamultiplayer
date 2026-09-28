@@ -43,6 +43,7 @@ const GOOGLE_WORKSPACE_MCP_TOOLS = Object.freeze([
   'google_sheets_create',
   'google_sheets_update',
   'google_sheets_append',
+  'google_sheets_add_tab',
   'google_docs_get',
   'google_docs_create',
   'google_docs_append',
