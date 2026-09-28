@@ -10,6 +10,19 @@ const {
 } = require("./update-readiness.cjs");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test("Windows restart installs silently and relaunches, while Later does not install", async () => {
+  for (const response of [0, 1]) {
+    const updater = new EventEmitter();
+    const calls = [];
+    updater.quitAndInstall = (...args) => calls.push(args);
+    attachUpdateReadiness({ updater, platform: "win32", directories: [],
+      notify: async () => ({ response }), log: () => {} });
+    updater.emit("update-downloaded", { version: "next" });
+    await tick();
+    assert.deepEqual(calls, response === 0 ? [[true, true]] : []);
+  }
+});
+
 test("running apps check for updates every four hours", async () => {
   let scheduledCallback;
   let scheduledInterval;

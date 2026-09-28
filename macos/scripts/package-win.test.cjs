@@ -38,10 +38,8 @@ test("Windows packaging derives version-stamped artifact names for the win32 x64
   assert.match(SOURCE, /"tar", \["-a", "-c", "-f", artifact/);
   assert.match(SOURCE, /\.sha256/);
   assert.match(SOURCE, /\.runtime\.json/);
-  // No .ico exists yet; the icon stays a marked follow-up instead of a
-  // silently missing packager option.
-  assert.match(SOURCE, /TODO\(windows-icon\)/);
-  assert.equal(/icon: /.test(SOURCE), false);
+  assert.match(SOURCE, /const windowsIconPath = buildWindowsIcon\(/);
+  assert.match(SOURCE, /icon: windowsIconPath/);
   // Signing is a clearly marked stub until the Windows identity exists.
   assert.match(SOURCE, /TODO\(windows-signing\)/);
 });
