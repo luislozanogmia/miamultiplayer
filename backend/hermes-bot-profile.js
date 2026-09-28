@@ -18,6 +18,8 @@ const MIAOS_BOT_HERMES_PROFILE = 'miaos-bot-worker';
 const MIAOS_BOT_GOOGLE_HERMES_PROFILE = 'miaos-bot-google-worker';
 const CLAUDE_SUBSCRIPTION_PLUGIN = 'claude-subscription-directsdk-experimental';
 const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
+// Refuses Hermes' own browser tools until the session has tried ghost-cli.
+const GHOST_FIRST_PLUGIN = 'mia-ghost-first';
 const FULL_AGENT_TOOLSETS = Object.freeze(['file', 'terminal', 'memory', 'session_search', 'todo', 'clarify']);
 const SEARCH_ONLY_TOOLSETS = Object.freeze(['web', 'todo', 'clarify']);
 const GOOGLE_WORKSPACE_MCP_TOOLS = Object.freeze([
@@ -190,6 +192,15 @@ function runtimeProfileConfig({
       `  auto_source_bashrc: ${terminal.autoSourceBashrc === true ? 'true' : 'false'}`,
     );
   }
+  if (terminal && terminal.cwd) {
+    // Only profiles with a terminal can run ghost-cli, so only they get the
+    // ghost-first guard; elsewhere it would lock the browser fallback away.
+    lines.push(
+      'plugins:',
+      '  enabled:',
+      `    - ${GHOST_FIRST_PLUGIN}`,
+    );
+  }
   if (googleWorkspace) lines.push(...googleWorkspaceMcpConfig());
   lines.push('');
   return lines.join('\n');
@@ -206,26 +217,27 @@ function writeAtomic(file, value, mode = 0o600) {
   }
 }
 
-function provisionClaudeSubscriptionPlugin(profileDir) {
-  if (!fs.existsSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, 'plugin.yaml'))) {
-    throw new Error('Mia bundled Claude subscription plugin is missing.');
+function provisionBundledPlugin(profileDir, plugin) {
+  const source = path.join(__dirname, 'hermes-plugins', plugin);
+  if (!fs.existsSync(path.join(source, 'plugin.yaml'))) {
+    throw new Error(`Mia bundled Hermes plugin is missing: ${plugin}`);
   }
   const pluginsDir = path.join(profileDir, 'plugins');
-  const destination = path.join(pluginsDir, CLAUDE_SUBSCRIPTION_PLUGIN);
+  const destination = path.join(pluginsDir, plugin);
   const markerName = 'MIAOS_PLUGIN_PROVENANCE.json';
-  const sourceMarker = fs.readFileSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, markerName), 'utf8');
+  const sourceMarker = fs.readFileSync(path.join(source, markerName), 'utf8');
   const destinationMarker = path.join(destination, markerName);
   fs.mkdirSync(pluginsDir, { recursive: true, mode: 0o700 });
   if (fs.existsSync(destination)) {
     let installedMarker = '';
     try { installedMarker = fs.readFileSync(destinationMarker, 'utf8'); } catch (_) { /* unmanaged */ }
     if (!installedMarker) {
-      throw new Error(`refusing to overwrite unmanaged Hermes plugin: ${CLAUDE_SUBSCRIPTION_PLUGIN}`);
+      throw new Error(`refusing to overwrite unmanaged Hermes plugin: ${plugin}`);
     }
     if (installedMarker === sourceMarker) return destination;
     fs.rmSync(destination, { recursive: true, force: true });
   }
-  fs.cpSync(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, destination, { recursive: true, force: true });
+  fs.cpSync(source, destination, { recursive: true, force: true });
   fs.chmodSync(destination, 0o700);
   return destination;
 }
@@ -252,7 +264,8 @@ function provisionRuntimeProfile({
 
   fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(profileDir, 0o700);
-  provisionClaudeSubscriptionPlugin(profileDir);
+  provisionBundledPlugin(profileDir, CLAUDE_SUBSCRIPTION_PLUGIN);
+  if (terminal && terminal.cwd) provisionBundledPlugin(profileDir, GHOST_FIRST_PLUGIN);
   for (const name of ['sessions', 'memories', 'skills', 'cron']) {
     fs.mkdirSync(path.join(profileDir, name), { recursive: true, mode: 0o700 });
   }
@@ -395,7 +408,8 @@ module.exports = {
   backgroundReviewEnabledForGateway,
   backgroundReviewEnabledForBot,
   runtimeProfileConfig,
-  provisionClaudeSubscriptionPlugin,
+  GHOST_FIRST_PLUGIN,
+  provisionBundledPlugin,
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,
   provisionHermesBotProfile,
