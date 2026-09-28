@@ -4480,7 +4480,11 @@
     nativeConversations: [],
     nativeSocket: null,
     nativeSocketConversationId: null,
-    nativeReconnectTimer: null
+    nativeReconnectTimer: null,
+    watchSocket: null,         // one extra socket subscribed to every conversation, only for attention
+    watchSubscribed: {},       // conversationId -> true, subscribed on watchSocket
+    watchReconnectTimer: null,
+    lastNotifiedAt: {}         // conversationId -> ms, so an automation finish doesn't double-notify its reply
   };
   var localChatTyping = {roomId: null, active: false, timer: null};
   var chatSearchDirectory = {humans: [], agents: [], loaded: false, loading: false, request: null};
@@ -4860,10 +4864,8 @@
     // pulsing activity dot after its work has completed.
     if(fromWorker && !isProgress){
       loadActiveNativeDispatches(event.conversationId);
-      // A completed worker event in another room is the actionable transition
-      // the user asked to be told about. Progress events remain quiet so a
-      // long-running background task produces one notification, not a stream.
-      if(isIncomingAttentionMessage(message)) notifyDesktopChatMessage(event.conversationId, message);
+      // Unread dots and desktop notifications are handled by the watch
+      // socket (applyWatchedNativeEvent), which sees every conversation.
     }
     if(chatWs.activeRoomId === event.conversationId) renderChatThread();
     renderChatSidebar();
@@ -4899,6 +4901,97 @@
         if(chatWs.native && chatWs.activeRoomId === conversationId) connectNativeChatSocket(conversationId);
       }, 1500);
     };
+  }
+
+  // The chat socket above follows only the open conversation. This second
+  // socket subscribes to every conversation (without history replay) so a bot
+  // finishing a task, or asking something, is noticed wherever it happens.
+  function watchedConversationIds(){
+    return (chatWs.nativeConversations || []).filter(function(conversation){
+      return conversation && conversation.id && !(conversation.metadata && conversation.metadata.botArchived === true);
+    }).map(function(conversation){ return String(conversation.id); });
+  }
+  function syncNativeWatchSubscriptions(){
+    if(!chatWs.native || typeof WebSocket !== 'function') return;
+    var socket = chatWs.watchSocket;
+    if(!socket){ connectNativeWatchSocket(); return; }
+    if(socket.readyState !== 1) return; // onopen subscribes everything
+    var wanted = {};
+    watchedConversationIds().forEach(function(id){
+      wanted[id] = true;
+      if(chatWs.watchSubscribed[id]) return;
+      chatWs.watchSubscribed[id] = true;
+      socket.send(JSON.stringify({type:'subscribe', conversationId:id}));
+    });
+    Object.keys(chatWs.watchSubscribed).forEach(function(id){
+      if(wanted[id]) return;
+      delete chatWs.watchSubscribed[id];
+      socket.send(JSON.stringify({type:'unsubscribe', conversationId:id}));
+    });
+  }
+  function connectNativeWatchSocket(){
+    if(chatWs.watchReconnectTimer){
+      clearTimeout(chatWs.watchReconnectTimer);
+      chatWs.watchReconnectTimer = null;
+    }
+    var socket = new WebSocket(nativeSocketUrl());
+    chatWs.watchSocket = socket;
+    chatWs.watchSubscribed = {};
+    socket.onopen = function(){
+      if(chatWs.watchSocket !== socket) return;
+      syncNativeWatchSubscriptions();
+    };
+    socket.onmessage = function(message){
+      if(chatWs.watchSocket !== socket) return;
+      var payload;
+      try { payload = JSON.parse(message.data); } catch(err){ return; }
+      if(payload.type === 'conversation.event') applyWatchedNativeEvent(payload.event);
+    };
+    socket.onclose = function(){
+      if(chatWs.watchSocket !== socket) return;
+      chatWs.watchSocket = null;
+      chatWs.watchSubscribed = {};
+      if(!chatWs.native) return;
+      chatWs.watchReconnectTimer = setTimeout(function(){
+        chatWs.watchReconnectTimer = null;
+        if(chatWs.native && !chatWs.watchSocket) connectNativeWatchSocket();
+      }, 3000);
+    };
+  }
+  function appInForeground(){
+    return !document.hidden && (typeof document.hasFocus !== 'function' || document.hasFocus());
+  }
+  // Chats that aren't open learn about new replies only through the watch
+  // socket, so the sidebar row's preview and time are updated from it too.
+  // Opening the chat later replaces this with its real history.
+  function recordWatchedSidebarMessage(roomId, message){
+    if(roomId === chatWs.activeRoomId || !message || !message.id) return false;
+    var state = chatRoomState(roomId);
+    var replaced = false;
+    state.messages = state.messages.map(function(existing){
+      if(existing.id !== message.id) return existing;
+      replaced = true;
+      return message;
+    });
+    if(!replaced) state.messages.push(message);
+    state.messages = normalizeChatMessages(state.messages);
+    state.lastTs = Math.max(Number(state.lastTs || 0), message.ts || 0);
+    return true;
+  }
+  function applyWatchedNativeEvent(event){
+    if(!event || !event.conversationId) return;
+    if(event.senderType !== 'agent' && event.senderType !== 'bot') return;
+    var metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+    var message = nativeEventToChatMessage(event);
+    var roomId = String(event.conversationId);
+    if(recordWatchedSidebarMessage(roomId, message)) renderChatSidebar();
+    // Progress stays quiet so a long task produces one notification, not a stream.
+    if(metadata.progress === true && metadata.status !== 'failed') return;
+    if(!isIncomingAttentionMessage(message)) return;
+    var isActive = roomId === chatWs.activeRoomId;
+    if(isActive && appInForeground()) return; // the user is watching it arrive
+    if(!isActive && markChatAttention(roomId)) renderChatSidebar();
+    notifyDesktopChatMessage(roomId, message);
   }
 
   function applyNativeConversationList(conversations){
@@ -4947,6 +5040,7 @@
     chatWs.gatewayAgent = mia ? {id:'gateway', name:mia.name || 'Mia', roomId:mia.roomId, conversationId:mia.id, manager:true, department:'Mia'} : null;
     chatWs.allDepartments = chatWs.rooms.departments.map(function(room){ return room.department; });
     chatWs.humans = [];
+    syncNativeWatchSubscriptions();
   }
 
   function loadNativeConversationStates(rooms){
@@ -6369,6 +6463,7 @@
     return api('/api/automations/active').then(function(res){
       var next = res.status === 200 && res.data && Array.isArray(res.data.runs) ? res.data.runs : [];
       var changed = JSON.stringify(chatWs.automationRuns || []) !== JSON.stringify(next);
+      notifyFinishedAutomationRuns(chatWs.automationRuns, next);
       chatWs.automationRuns = next;
       if(changed){
         renderChatSidebar();
@@ -6661,27 +6756,113 @@
     var agent = chatWs.allAgents.filter(function(item){ return item.roomId === roomId || item.nativeConversationId === roomId; })[0];
     return agent ? agent.name : 'New message';
   }
+  // In the desktop app notifications are native (the main process shows
+  // them, and macOS asks "Allow notifications from Mia?" the first time).
+  // In a plain browser they use the web Notification API.
+  function nativeDesktopNotifications(){
+    return window.miaDesktop && window.miaDesktop.notifications && typeof window.miaDesktop.notifications.show === 'function'
+      ? window.miaDesktop.notifications
+      : null;
+  }
+  var DESKTOP_NOTIFICATIONS_OFF_KEY = 'miaDesktopNotificationsOff';
+  var DESKTOP_NOTIFICATIONS_BLOCKED_KEY = 'miaDesktopNotificationsBlocked';
+  var DESKTOP_NOTIFICATIONS_ASKED_KEY = 'miaDesktopNotificationsAsked';
+  function readNotificationFlag(key){
+    try { return window.localStorage.getItem(key) === '1'; } catch(err) { return false; }
+  }
+  function writeNotificationFlag(key, on){
+    try {
+      if(on) window.localStorage.setItem(key, '1');
+      else window.localStorage.removeItem(key);
+    } catch(err) {}
+  }
   function desktopNotificationPermission(){
+    if(nativeDesktopNotifications()) return readNotificationFlag(DESKTOP_NOTIFICATIONS_BLOCKED_KEY) ? 'denied' : 'granted';
     return typeof window.Notification === 'function' ? window.Notification.permission : 'unsupported';
+  }
+  // The system permission can't be taken back from inside the app, so the
+  // on/off switch is Mia's own setting on top of it.
+  function desktopNotificationsSwitchedOff(){
+    return readNotificationFlag(DESKTOP_NOTIFICATIONS_OFF_KEY);
+  }
+  function setDesktopNotificationsSwitchedOff(off){
+    writeNotificationFlag(DESKTOP_NOTIFICATIONS_OFF_KEY, off);
+  }
+  function desktopNotificationsEnabled(){
+    if(desktopNotificationsSwitchedOff()) return false;
+    // A native "blocked" is only what macOS said last time; keep trying so
+    // allowing Mia in System Settings starts working without a restart.
+    return nativeDesktopNotifications() ? true : desktopNotificationPermission() === 'granted';
   }
   function syncDesktopNotificationControl(){
     var status = el('#chatAcctNotificationsStatus');
     if(!status) return;
     var permission = desktopNotificationPermission();
-    status.textContent = permission === 'granted' ? 'On' : permission === 'denied' ? 'Blocked' : permission === 'unsupported' ? 'Unavailable' : 'Off';
+    status.textContent = permission === 'unsupported' ? 'Unavailable'
+      : desktopNotificationsSwitchedOff() ? 'Off'
+      : permission === 'denied' ? 'Blocked'
+      : permission === 'granted' ? 'On' : 'Off';
+  }
+  function recordNativeNotificationResult(result){
+    if(result === 'blocked') writeNotificationFlag(DESKTOP_NOTIFICATIONS_BLOCKED_KEY, true);
+    else if(result === 'shown') writeNotificationFlag(DESKTOP_NOTIFICATIONS_BLOCKED_KEY, false);
+    syncDesktopNotificationControl();
+    return result;
+  }
+  function showNativeNotification(payload){
+    var native = nativeDesktopNotifications();
+    return Promise.resolve(native.show(payload)).then(recordNativeNotificationResult, function(){ return 'failed'; });
+  }
+  function explainBlockedNativeNotifications(){
+    showBenchToast('macOS is blocking notifications from Mia. Turn on Allow notifications for Mia in System Settings.');
+    var native = nativeDesktopNotifications();
+    if(native && typeof native.openSettings === 'function') native.openSettings();
+  }
+  // The first launch shows one notification, which is what makes macOS ask
+  // the user to allow them. It runs once; the menu switch can ask again.
+  function askForDesktopNotificationsOnce(){
+    if(!nativeDesktopNotifications() || desktopNotificationsSwitchedOff() || readNotificationFlag(DESKTOP_NOTIFICATIONS_ASKED_KEY)) return;
+    writeNotificationFlag(DESKTOP_NOTIFICATIONS_ASKED_KEY, true);
+    showNativeNotification({title: 'Mia', body: 'You will get a notification when a bot finishes or needs your input.'});
+  }
+  function requestNativeDesktopNotifications(){
+    if(!desktopNotificationsSwitchedOff() && desktopNotificationPermission() === 'granted'){
+      setDesktopNotificationsSwitchedOff(true);
+      syncDesktopNotificationControl();
+      showBenchToast('Desktop notifications are off.');
+      return Promise.resolve('off');
+    }
+    setDesktopNotificationsSwitchedOff(false);
+    syncDesktopNotificationControl();
+    return showNativeNotification({title: 'Mia', body: 'Desktop notifications are on.'}).then(function(result){
+      if(result === 'blocked') explainBlockedNativeNotifications();
+      else if(result === 'pending') showBenchToast('Choose Allow in the macOS notification prompt.');
+      else if(result === 'shown') showBenchToast('Desktop notifications are on.');
+      else showBenchToast('Desktop notifications could not be shown.');
+      return result;
+    });
   }
   function requestDesktopNotifications(){
+    if(nativeDesktopNotifications()) return requestNativeDesktopNotifications();
     var permission = desktopNotificationPermission();
     if(permission === 'unsupported'){
       showBenchToast('Desktop notifications are not supported in this browser.');
       return;
     }
-    if(permission === 'granted'){
-      showBenchToast('Desktop notifications are already on.');
+    if(permission === 'denied'){
+      showBenchToast('Desktop notifications are blocked. Allow them for Mia in System Settings > Notifications.');
       syncDesktopNotificationControl();
       return;
     }
+    if(permission === 'granted'){
+      var turnOff = !desktopNotificationsSwitchedOff();
+      setDesktopNotificationsSwitchedOff(turnOff);
+      syncDesktopNotificationControl();
+      showBenchToast(turnOff ? 'Desktop notifications are off.' : 'Desktop notifications are on.');
+      return;
+    }
     window.Notification.requestPermission().then(function(next){
+      if(next === 'granted') setDesktopNotificationsSwitchedOff(false);
       syncDesktopNotificationControl();
       showBenchToast(next === 'granted' ? 'Desktop notifications are on.' : 'Desktop notifications were not enabled.');
     }).catch(function(){
@@ -6689,20 +6870,66 @@
       showBenchToast('Desktop notifications could not be enabled.');
     });
   }
-  function notifyDesktopChatMessage(roomId, message){
-    if(roomId === chatWs.activeRoomId || desktopNotificationPermission() !== 'granted') return;
-    var parsed = message && isHumanSender(message.sender)
-      ? parseSignedHumanBody(message.body)
-      : parseSignedBody(message && message.body);
-    var body = parsed && parsed.text ? parsed.text : (message && message.body) || 'New message';
-    body = excerpt(String(body).replace(/\s+/g, ' ').trim(), 120);
+  function conversationNotificationLabel(roomId){
+    var label = chatAttentionLabel(roomId);
+    if(label !== 'New message') return label;
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){
+      return item && String(item.id) === String(roomId);
+    })[0];
+    return conversation && conversation.name || 'Mia';
+  }
+  function openNotifiedConversation(roomId){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){
+      return item && String(item.id) === String(roomId);
+    })[0] || null;
+    if(!conversation) return;
+    closeChatUtilityPane();
+    loadChatRoom(roomId, nativeConversationKind(conversation.type), conversationNotificationLabel(roomId));
+  }
+  function showDesktopNotification(roomId, title, body){
+    if(!desktopNotificationsEnabled()) return;
+    chatWs.lastNotifiedAt[roomId] = Date.now();
+    if(nativeDesktopNotifications()){
+      showNativeNotification({title: title, body: body || 'New message', tag: roomId});
+      return;
+    }
     try {
-      var notification = new window.Notification('Mia · ' + chatAttentionLabel(roomId), {
+      var notification = new window.Notification(title, {
         body: body || 'New message',
         tag: 'mia-chat-' + roomId
       });
-      notification.onclick = function(){ window.focus(); notification.close(); };
+      notification.onclick = function(){
+        window.focus();
+        notification.close();
+        if(roomId !== chatWs.activeRoomId) openNotifiedConversation(roomId);
+      };
     } catch(err) {}
+  }
+  function notifyDesktopChatMessage(roomId, message){
+    if((roomId === chatWs.activeRoomId && appInForeground()) || !desktopNotificationsEnabled()) return;
+    var parsed = message && isHumanSender(message.sender)
+      ? parseSignedHumanBody(message.body)
+      : parseSignedBody(message && message.body);
+    var text = String(parsed && parsed.text ? parsed.text : (message && message.body) || '').trim();
+    var name = conversationNotificationLabel(roomId);
+    // A reply whose last line is a question is the bot waiting on the user.
+    var lines = text.split(/\n+/).map(function(line){ return line.trim(); }).filter(Boolean);
+    var asksUser = lines.length > 0 && /\?\s*$/.test(lines[lines.length - 1]);
+    var title = asksUser ? name + ' needs your input' : name + ' replied';
+    showDesktopNotification(roomId, title, excerpt(text.replace(/\s+/g, ' '), 120) || 'New message');
+  }
+  function notifyFinishedAutomationRuns(previous, next){
+    var stillActive = {};
+    (next || []).forEach(function(run){ if(run && run.id) stillActive[String(run.id)] = true; });
+    (previous || []).forEach(function(run){
+      if(!run || !run.id || stillActive[String(run.id)]) return;
+      var roomId = run.conversationId ? String(run.conversationId) : '';
+      // The run's reply usually notified already; one notification is enough.
+      if(roomId && Date.now() - Number(chatWs.lastNotifiedAt[roomId] || 0) < 60000) return;
+      if(roomId && roomId === chatWs.activeRoomId && appInForeground()) return;
+      if(roomId && roomId !== chatWs.activeRoomId && markChatAttention(roomId)) renderChatSidebar();
+      showDesktopNotification(roomId || ('automation-' + run.id), (run.name || 'Automation') + ' finished', 'Scheduled run completed.');
+    });
   }
   function isIncomingAttentionMessage(message){
     if(!message) return false;
@@ -9949,10 +10176,12 @@
     chatWs.pollTimer = null;
     chatWs.attentionTimer = null;
     syncDesktopNotificationControl();
+    askForDesktopNotificationsOnce();
   }
   function stopChatPolling(){
     if(chatWs.pollTimer){ clearInterval(chatWs.pollTimer); chatWs.pollTimer = null; }
     if(chatWs.attentionTimer){ clearInterval(chatWs.attentionTimer); chatWs.attentionTimer = null; }
+    // The watch socket stays open on other screens: attention is app-wide.
     if(chatWs.native) closeNativeChatSocket();
   }
 
@@ -11038,7 +11267,7 @@
     function roomTimeTag(roomId){
       var state = roomId && chatWs.byRoom[roomId];
       if(!state || !state.lastTs) return '';
-      return '<span class="chat-dm-time">' + esc(chatRelTime(state.lastTs)) + '</span>';
+      return '<span class="chat-dm-time" data-ts="' + Number(state.lastTs) + '">' + esc(chatRelTime(state.lastTs)) + '</span>';
     }
     function lastTsFor(roomId){
       var state = roomId && chatWs.byRoom[roomId];
@@ -12101,6 +12330,18 @@
       if(menu) menu.classList.remove('open');
       if(account) account.setAttribute('aria-expanded', 'false');
       openSettingsDrawer();
+    });
+    // Sidebar times would otherwise stay at "just now" until the next render.
+    setInterval(function(){
+      if(document.hidden) return;
+      els('#panel-chat .chat-dm-time[data-ts]').forEach(function(node){
+        var text = chatRelTime(Number(node.getAttribute('data-ts')) || 0);
+        if(node.textContent !== text) node.textContent = text;
+      });
+    }, 60000);
+    var nativeNotifications = nativeDesktopNotifications();
+    if(nativeNotifications && typeof nativeNotifications.onClick === 'function') nativeNotifications.onClick(function(roomId){
+      if(roomId && roomId !== chatWs.activeRoomId) openNotifiedConversation(String(roomId));
     });
     var notifications = el('#chatAcctNotifications');
     if(notifications) notifications.addEventListener('click', function(){

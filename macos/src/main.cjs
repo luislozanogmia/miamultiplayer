@@ -6,6 +6,7 @@ const {
   dialog,
   ipcMain,
   Menu,
+  Notification,
   session,
   shell,
   safeStorage,
@@ -29,6 +30,7 @@ const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs")
 const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
 const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
 const { discoverClaudeCodeCommand, installClaudeCode } = require("./claude-code.cjs");
+const { createDesktopNotifications } = require("./desktop-notifications.cjs");
 
 const googleAuthOpenSecret = crypto.randomBytes(32).toString("base64url");
 
@@ -2047,6 +2049,19 @@ async function startGhostBridge() {
     ghostBridge = null;
   }
 }
+
+createDesktopNotifications({
+  Notification,
+  isTrustedSender: isMainWindowSender,
+  // A click comes while Mia is in the background, so bring the app forward
+  // and not only its window.
+  activate: () => {
+    if (process.platform === "darwin") app.focus({ steal: true });
+    activateMainWindow();
+  },
+  openExternal: url => shell.openExternal(url),
+  log: message => desktopLog(message),
+}).register(ipcMain);
 
 ipcMain.handle("miaos-retry-connection", async (event) => {
   if (!isMainWindowSender(event)) return false;

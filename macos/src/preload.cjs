@@ -32,6 +32,17 @@ contextBridge.exposeInMainWorld("miaDesktop", {
   artifact: {
     open: (url) => ipcRenderer.invoke("miaos-artifact-open", url),
   },
+  notifications: {
+    // Resolves "shown", "blocked" (macOS said no), "pending" (still asking),
+    // "failed" or "unsupported".
+    show: (payload) => ipcRenderer.invoke("miaos-notification-show", payload),
+    openSettings: () => ipcRenderer.invoke("miaos-notification-settings"),
+    onClick: (callback) => {
+      const listener = (_event, tag) => callback(tag);
+      ipcRenderer.on("miaos-notification-click", listener);
+      return () => ipcRenderer.removeListener("miaos-notification-click", listener);
+    },
+  },
   reset: {
     // After a clean slate the renderer asks the shell to drop Electron
     // storage and relaunch the whole app. Resolves false when refused.
