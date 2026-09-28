@@ -11057,25 +11057,25 @@
   }
 
   // Slash commands the composer offers. Hermes runs goal/subgoal/compact on
-  // the Mia chat's own session; /clear is a composer action that starts a
+  // the chat's own session (Mia's, or a bot's own chat); /clear is a composer action that starts a
   // new conversation and never reaches the backend.
   var COMPOSER_SLASH_COMMANDS = [
-    {name: 'goal', args: '<what to achieve>', desc: 'Keep Mia working until it is done', mia: true},
-    {name: 'subgoal', args: '<extra check>', desc: 'Add a requirement to the current goal', mia: true},
-    {name: 'compact', args: '', desc: 'Summarize earlier messages to free up context', mia: true},
+    {name: 'goal', args: '<what to achieve>', desc: 'Keep working until it is done'},
+    {name: 'subgoal', args: '<extra check>', desc: 'Add a requirement to the current goal'},
+    {name: 'compact', args: '', desc: 'Summarize earlier messages to free up context'},
     {name: 'clear', args: '', desc: 'Start a new conversation'}
   ];
   var HERMES_SLASH_COMMAND_NAMES = ['goal', 'subgoal', 'compact', 'compress'];
 
-  // The newest goal snapshot Hermes attached to one of Mia's messages in
-  // this room: an object, null once cleared, or undefined when no goal was
-  // ever set. Anyone can put metadata on their own message, so only agent
-  // events count.
+  // The newest goal snapshot Hermes attached to one of Mia's or the bot's
+  // messages in this room: an object, null once cleared, or undefined when no
+  // goal was ever set. Anyone can put metadata on their own message, so only
+  // agent and bot events count.
   function roomGoalState(roomId){
     var messages = roomId ? chatRoomState(roomId).messages : [];
     for(var i = messages.length - 1; i >= 0; i--){
       var event = messages[i].nativeEvent;
-      var metadata = event && event.senderType === 'agent' && event.metadata;
+      var metadata = event && (event.senderType === 'agent' || event.senderType === 'bot') && event.metadata;
       if(metadata && Object.prototype.hasOwnProperty.call(metadata, 'goal')) return metadata.goal;
     }
     return undefined;
@@ -11111,14 +11111,14 @@
     return (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
   }
 
-  // Mia's chat gets every command; a bot chat only /clear (bot turns start a
-  // fresh session, so a goal there would be forgotten). Other rooms: none.
+  // Mia's chat and a bot's own chat keep one Hermes session, so every
+  // command works there. Other rooms: none.
   function composerSlashCommands(){
     var conversation = activeConversationRecord();
     if(!conversation || chatWs.activeKind !== 'agent') return [];
     if(isNativeMiaConversation(conversation)) return COMPOSER_SLASH_COMMANDS;
     var metadata = conversation.metadata || {};
-    if(conversation.type === 'bot' && metadata.botId) return COMPOSER_SLASH_COMMANDS.filter(function(command){ return !command.mia; });
+    if(conversation.type === 'bot' && metadata.botId) return COMPOSER_SLASH_COMMANDS;
     return [];
   }
 

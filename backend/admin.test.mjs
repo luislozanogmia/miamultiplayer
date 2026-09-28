@@ -237,6 +237,12 @@ inference.runInference = async (_prompt, options) => {
   fs.writeFileSync(process.env.MIAOS_TEST_GATE_READY, options.profile);
   return { text: 'Fixture bot reply' };
 };
+// A bot's own chat runs on its persistent session; check the profile the
+// real option mapping picks for it.
+inference.runInferenceViaHermesGateway = async ({ options }) => {
+  fs.writeFileSync(process.env.MIAOS_TEST_GATE_READY, inference.persistentSessionOptions(options).profile);
+  return { text: 'Fixture bot reply' };
+};
 `;
   const server = await startServer({ preloadScript });
   try {

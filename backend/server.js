@@ -6044,6 +6044,27 @@ function nativeSlashCommand(trigger) {
   return { name: match[1].toLowerCase(), arg: String(match[2] || '').trim() };
 }
 
+// A bot keeps one Hermes session in its own chat (the one its sender
+// created), like Mia does, so a /goal or a compaction outlives the turn.
+// Shared rooms and scheduled runs still start fresh every turn.
+function ownsPrivateBotConversation(conversation, agent, trigger) {
+  const metadata = conversation && conversation.metadata && typeof conversation.metadata === 'object'
+    ? conversation.metadata
+    : {};
+  return Boolean(conversation && agent && trigger)
+    && conversation.type === 'bot'
+    && metadata.botId === agent.id
+    && String(conversation.createdBy || '').trim().toLowerCase() === String(trigger.senderId || '').trim().toLowerCase();
+}
+
+// The saved session is only reused while it runs on the same profile with the
+// same durable instructions; editing the bot starts a new session seeded with
+// the chat history instead of leaving the old instructions in charge.
+function nativeBotSessionKey(profile, systemPrompt) {
+  const digest = crypto.createHash('sha256').update(String(systemPrompt || '')).digest('hex').slice(0, 16);
+  return `${profile}#${digest}`;
+}
+
 // Live Hermes session id -> the private Mia conversation it answers in. A
 // /goal keeps working after a turn ends; those turns arrive with no dispatch
 // waiting, and this map is how they find their chat.
@@ -6083,13 +6104,14 @@ async function nativeGoalSnapshot(sessionId) {
 async function handleNativeHermesSessionEvent(sessionId, kind, data) {
   const target = nativeGatewaySessionConversations.get(String(sessionId || ''));
   if (!target || !data) return;
-  const metadata = { runtime: 'hermes', agentName: 'Mia' };
+  const metadata = { runtime: 'hermes', agentName: target.agentName || 'Mia' };
   let text = '';
   if (kind === 'turn.complete') {
     if (data.status === 'interrupted') return;
+    const signature = `[${metadata.agentName}]`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     text = sanitizeChatReply(String(data.text || ''))
       .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, '')
-      .replace(/\s*\[Mia\]\s*$/i, '')
+      .replace(new RegExp(`\\s*${signature}\\s*$`, 'i'), '')
       .trim();
     metadata.goalContinuation = true;
   } else if (kind === 'goal.status') {
@@ -6108,8 +6130,10 @@ async function handleNativeHermesSessionEvent(sessionId, kind, data) {
   nativeConversationService.createEvent({
     companyId: target.companyId,
     conversationId: target.conversationId,
-    principal: { companyId: target.companyId, principalId: 'gateway', principalType: 'agent' },
-    type: 'agent_message',
+    principal: target.botId
+      ? { companyId: target.companyId, principalId: target.botId, principalType: 'bot' }
+      : { companyId: target.companyId, principalId: 'gateway', principalType: 'agent' },
+    type: target.botId ? 'bot_message' : 'agent_message',
     content: { text },
     metadata,
   });
@@ -6562,12 +6586,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const replyPrincipalType = isGatewayAgent ? 'agent' : 'bot';
   const replyEventType = isGatewayAgent ? 'agent_message' : 'bot_message';
   const slashCommand = nativeSlashCommand(trigger);
-  // Bots start a fresh agent session every turn, so a goal or a compaction
-  // there would be forgotten by the next message.
-  if (slashCommand && !isGatewayAgent) {
+  // Outside its own chat a bot starts a fresh session every turn, so a goal or
+  // a compaction there would be forgotten by the next message.
+  const privateBotChat = !isGatewayAgent && ownsPrivateBotConversation(conversation, agent, trigger);
+  if (slashCommand && !isGatewayAgent && !privateBotChat) {
     return createNativeDispatchReplyEvent(dispatch, trigger, {
       type: replyEventType,
-      content: { text: `/${slashCommand.name} works in Mia's own chat. Ask Mia to take this on as a goal.` },
+      content: { text: `/${slashCommand.name} works in your own chat with ${agent.name}.` },
       parentEventId,
       clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
       metadata: { runtime: 'hermes', dispatchId: dispatch.id, agentName: agent.name, slashCommand: slashCommand.name },
@@ -6588,7 +6613,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   });
   throwIfNativeDispatchStopped(signal);
   throwIfNativeDispatchUserInactive(dispatch, trigger);
-  if (!isGatewayAgent) {
+  // A slash command goes to Hermes as-is; it is never an automation request.
+  if (!isGatewayAgent && !slashCommand) {
     throwIfNativeDispatchUserInactive(dispatch, trigger);
     let cancelled;
     try {
@@ -7037,6 +7063,74 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     }
     inferenceResult = gatewayResult;
     rawReply = gatewayResult.text;
+  } else if (privateBotChat) {
+    // The bot's own chat keeps one session. Its durable instructions seed the
+    // session once; what changes per turn (platform state, Google write
+    // instructions) travels with each message instead.
+    const systemPrompt = buildHermesTaskPrompt(agent, [], '', senderLabel, '', [], false, globalInstructions.bot);
+    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt);
+    const googleActionInstruction = googleWorkspaceWriteAuthorized
+      && /authoritative server state\): CONNECTED/.test(String(platformContext || ''))
+      ? googleWorkspaceActions.googleWorkspaceActionInstruction(
+        safeGoogleRefs,
+        googleWorkspaceActions.googleWorkspaceWriteKinds(message, safeGoogleRefs)
+      )
+      : '';
+    const turnMessage = [
+      platformContext ? `Current Mia platform state for this turn (authoritative):\n${String(platformContext).trim()}` : '',
+      googleActionInstruction,
+      nativePromptLine(trigger) || message,
+    ].filter(Boolean).join('\n\n');
+    const botRunArgs = {
+      storedSessionId: conversation.metadata && conversation.metadata.hermesGatewayProfile === sessionKey
+        ? conversation.metadata.hermesGatewaySessionId
+        : null,
+      seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
+      title: conversation.name || agent.name || 'Bot conversation',
+      options: inferenceOptions,
+      onEvent: postHermesProgress,
+      onSession: (session) => {
+        throwIfNativeDispatchUserInactive(dispatch, trigger);
+        bindNativeHermesSessionEvents();
+        nativeGatewaySessionConversations.set(String(session.sessionId), {
+          companyId: conversation.companyId,
+          conversationId: conversation.id,
+          botId: agent.id,
+          agentName: agent.name,
+        });
+        persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, sessionKey);
+      },
+      signal,
+    };
+    inferenceResult = slashCommand
+      ? await runSlashCommandViaHermesGateway({
+        ...botRunArgs,
+        name: slashCommand.name,
+        arg: slashCommand.arg,
+        onNotice: (notice) => createNativeDispatchReplyEvent(dispatch, trigger, {
+          type: replyEventType,
+          content: { text: notice },
+          parentEventId,
+          clientIdempotencyKey: `native-dispatch-${dispatch.id}-command-notice`,
+          metadata: { runtime: 'hermes', agentName: agent.name, slashCommand: slashCommand.name, goalStatus: true },
+        }),
+      })
+      : await runInferenceViaHermesGateway({ ...botRunArgs, message: turnMessage });
+    if (slashCommand && inferenceResult && inferenceResult.sessionId
+      && (slashCommand.name === 'goal' || slashCommand.name === 'subgoal')) {
+      const goal = await nativeGoalSnapshot(inferenceResult.sessionId);
+      if (goal !== undefined) inferenceResult.goal = goal;
+    }
+    flushHermesProgress(inferenceResult && inferenceResult.text);
+    throwIfNativeDispatchStopped(signal);
+    throwIfNativeDispatchUserInactive(dispatch, trigger);
+    await hermesProgressSequence;
+    throwIfNativeDispatchUserInactive(dispatch, trigger);
+    rawReply = inferenceResult && inferenceResult.text;
+    validatedArtifacts = cronSync.validateBotArtifacts(
+      agent,
+      inferenceResult && Array.isArray(inferenceResult.artifacts) ? inferenceResult.artifacts : []
+    );
   } else {
     const systemPrompt = buildHermesTaskPrompt(
       agent,
