@@ -3901,6 +3901,19 @@ function harnessCliProviderForUser(email) {
   return HERMES_CLI_PROVIDER_BY_ONBOARDING_PROVIDER[preference.provider] || null;
 }
 
+// True when the turn ran on the user's Mia Router key: the message picked
+// the router's provider, or picked nothing and Mia Router is their default.
+// A user's own OpenRouter key is saved as an API provider, not managed-router.
+function dispatchUsesManagedRouter(trigger) {
+  if (!trigger) return false;
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  const preference = harnessPreferenceForUser(settings, trigger.senderId);
+  if (!preference || preference.provider !== 'managed-router') return false;
+  const selection = trigger.metadata && trigger.metadata.chatModelSelection;
+  const selected = selection && String(selection.provider || '').trim().toLowerCase();
+  return !selected || selected === MANAGED_ROUTER_HERMES_PROVIDER || selected === 'managed-router';
+}
+
 function chatModelProviderIdsForPreference(preference) {
   if (!preference || !preference.onboardingComplete) return [];
   const provider = preference.provider === 'openai-api'
@@ -7386,7 +7399,10 @@ async function executeNativeConversationDispatch(dispatch) {
             // A distinct, named notice rather than the generic failure copy:
             // the run wasn't broken, it just kept going past its output cap.
             ? '⏹ Stopped: this response reached its output budget before finishing. Nothing else was changed.'
-            : userFacingModelDispatchError(timedOut || error)
+            : userFacingModelDispatchError(timedOut || error, {
+              managedRouter: dispatchUsesManagedRouter(failureTrigger),
+              managedRouterLabel: MANAGED_ROUTER_LABEL,
+            })
               + (getHermesDiagnostics().verboseHermes && error && error.message
                 ? `\n\nDebug · dispatch error\n${redactHermesChatDetail(String(error.message).slice(0, 2000))}`
                 : ''),
