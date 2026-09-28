@@ -5264,6 +5264,12 @@ registerResource({
       if (automation.enabled && automation.frequency === 'none') return 'enabled automation requires a frequency';
       if (automation.utcOffsetMinutes !== undefined && (!Number.isInteger(automation.utcOffsetMinutes) || automation.utcOffsetMinutes < -840 || automation.utcOffsetMinutes > 720)) return 'automation time zone is invalid';
       if (automation.weekdaysOnly !== undefined && typeof automation.weekdaysOnly !== 'boolean') return 'automation weekdaysOnly must be a boolean';
+      if (automation.model !== undefined || automation.modelProvider !== undefined) {
+        if (!/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?(?:\[1m\])?$/i.test(String(automation.model || '')) || String(automation.model).length > 128
+          || !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(String(automation.modelProvider || ''))) {
+          return 'automation model must name a connected model and its provider';
+        }
+      }
       if (automation.frequency === 'interval'
         && (!Number.isInteger(automation.intervalMinutes) || automation.intervalMinutes < 1 || automation.intervalMinutes > 1440
           || (automation.intervalMinutes > 60 && automation.intervalMinutes % 60 !== 0))) {

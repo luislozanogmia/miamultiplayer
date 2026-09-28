@@ -49,7 +49,7 @@ function portableAutomation(value, index) {
     enabled: false,
     frequency: String(automation.frequency || 'none'),
   };
-  for (const key of ['prompt', 'intervalMinutes', 'time', 'day', 'weekdaysOnly', 'utcOffsetMinutes']) {
+  for (const key of ['prompt', 'intervalMinutes', 'time', 'day', 'weekdaysOnly', 'utcOffsetMinutes', 'model', 'modelProvider']) {
     if (automation[key] !== undefined) result[key] = automation[key];
   }
   return result;

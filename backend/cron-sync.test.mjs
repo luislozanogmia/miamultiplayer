@@ -241,6 +241,25 @@ test('a slash-namespaced provider model id schedules a job', async () => {
   assert.deepEqual(commands[0].slice(-4), ['--model', 'vendor/model-family.v1', '--provider', 'router']);
 });
 
+test('an automation with its own model runs on it, others on the bot model', async () => {
+  resetCommands();
+  setJobs([]);
+  const agent = enabledAgent({
+    automation: { enabled: true, frequency: 'weekly', time: '09:00', day: 'Monday', prompt: 'Run it.', model: 'gpt-5.5', modelProvider: 'openai-codex' },
+  });
+  await cronSync.syncBotAutomation(agent, null);
+  assert.deepEqual(readCommands()[0].slice(-4), ['--model', 'gpt-5.5', '--provider', 'openai-codex']);
+
+  resetCommands();
+  setJobs([]);
+  const halfSet = enabledAgent({
+    id: 'agent-half',
+    automation: { enabled: true, frequency: 'weekly', time: '09:00', day: 'Monday', prompt: 'Run it.', model: 'gpt-5.5' },
+  });
+  await cronSync.syncBotAutomation(halfSet, null);
+  assert.deepEqual(readCommands()[0].slice(-4), ['--model', 'deepseek-v4-pro', '--provider', 'deepseek']);
+});
+
 test('the Claude subscription extended-context model id schedules a job', async () => {
   resetCommands();
   setJobs([]);

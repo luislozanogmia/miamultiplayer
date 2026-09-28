@@ -277,6 +277,19 @@ test('automation panel renders durable bot schedules separately from running wor
       prompt: 'Send the edited brief.',
     }],
   });
+  const withModel = helpers.normalizedAutomationEditorPayload(persistedBots[1], 'reminder-1', {
+    name: 'Daily Brief', enabled: true, frequency: 'weekly', day: 'Tuesday', time: '08:15',
+    prompt: 'Send the edited brief.', model: 'openai-codex|gpt-5.5',
+  }).automations[0];
+  assert.equal(withModel.model, 'gpt-5.5');
+  assert.equal(withModel.modelProvider, 'openai-codex');
+  const backToBot = helpers.normalizedAutomationEditorPayload({ ...persistedBots[1], automations: [withModel] }, 'reminder-1', {
+    name: 'Daily Brief', enabled: true, frequency: 'weekly', day: 'Tuesday', time: '08:15',
+    prompt: 'Send the edited brief.', model: '',
+  }).automations[0];
+  assert.equal(backToBot.model, undefined, 'choosing the bot model clears the override');
+  assert.equal(backToBot.modelProvider, undefined);
+  assert.match(source, /id="automationEditModel"/);
   assert.deepEqual(helpers.normalizedAutomationEditorPayload(persistedBots[0], 'research-1', {
     name: 'Daily Practice',
     enabled: false,
