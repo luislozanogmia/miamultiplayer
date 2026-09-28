@@ -133,3 +133,30 @@ test('bot setup uses the same validated per-turn model selection as normal chat'
   assert.match(serverSource, /app\.post\('\/api\/bots\/interpret'[\s\S]*?chatModelSelectionForUser\([\s\S]*?req\.body && req\.body\.modelSelection[\s\S]*?chatModelSelectionInferenceOptions\([\s\S]*?modelSelection/);
   assert.match(serverSource, /function runNativeConversationAgentReply[\s\S]*?chatModelSelectionForUser\(/);
 });
+
+test('a rejected or dropped Mia Router key says to sign in again on this computer', () => {
+  const router = { managedRouter: true, managedRouterLabel: 'Mia Router' };
+  for (const failure of [
+    'HTTP 401: User not found.',
+    'OpenRouter rejected your API key, so the model can\'t be reached.',
+    'Agent could not start the assistant for this session. Details: No LLM provider configured. Run `hermes model` to select a provider.',
+  ]) {
+    const message = userFacingModelDispatchError(new Error(failure), router);
+    assert.match(message, /^Your Mia Router key on this computer is no longer valid\./, failure);
+    assert.match(message, /one computer at a time/);
+    assert.match(message, /Sign out and sign in again here/);
+  }
+  assert.match(userFacingModelDispatchError(new Error('HTTP 429 rate limit'), router), /usage limit/);
+  assert.match(
+    userFacingModelDispatchError(new Error('HTTP 401: User not found.')),
+    /credential was rejected/,
+    'other providers keep the generic reconnect copy'
+  );
+});
+
+test('dispatch failures name Mia Router only for turns that ran on it', () => {
+  assert.match(serverSource, /userFacingModelDispatchError\(timedOut \|\| error, \{\s*managedRouter: dispatchUsesManagedRouter\(failureTrigger\),/);
+  const helper = serverSource.slice(serverSource.indexOf('function dispatchUsesManagedRouter('), serverSource.indexOf('function chatModelProviderIdsForPreference('));
+  assert.match(helper, /preference\.provider !== 'managed-router'/, 'a user\'s own OpenRouter key is not Mia Router');
+  assert.match(helper, /!selected \|\| selected === MANAGED_ROUTER_HERMES_PROVIDER/);
+});
