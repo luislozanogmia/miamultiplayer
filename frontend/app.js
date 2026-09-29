@@ -6489,22 +6489,28 @@
   }
 
   function loadActiveAutomationRuns(){
+    // A failed request clears the running pulses (they would otherwise stick)
+    // but says nothing about which runs finished: finish notices compare
+    // only lists the server actually returned.
+    var clearStaleRuns = function(){
+      var changed = (chatWs.automationRuns || []).length > 0;
+      chatWs.automationRuns = [];
+      if(changed) renderChatSidebar();
+      return [];
+    };
     return api('/api/automations/active').then(function(res){
-      // A failed request says nothing about which runs finished; keep the
-      // last known list so an error is never announced as a completion.
-      if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return chatWs.automationRuns || [];
+      if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return clearStaleRuns();
       var next = res.data.runs;
       var changed = JSON.stringify(chatWs.automationRuns || []) !== JSON.stringify(next);
-      notifyFinishedAutomationRuns(chatWs.automationRuns, next);
+      notifyFinishedAutomationRuns(chatWs.knownAutomationRuns || chatWs.automationRuns, next);
+      chatWs.knownAutomationRuns = next;
       chatWs.automationRuns = next;
       if(changed){
         renderChatSidebar();
         if(chatInfo.open && chatInfo.mode === 'automations' && !liveRefreshBlocked()) renderChatInfoPane();
       }
       return next;
-    }).catch(function(){
-      return chatWs.automationRuns || [];
-    });
+    }).catch(clearStaleRuns);
   }
 
   function openRunningAutomationConversation(runId){
