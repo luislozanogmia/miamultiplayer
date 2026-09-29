@@ -2381,6 +2381,7 @@ function setNativeBotConversationsArchived(bot, archived) {
   const updatedAt = new Date().toISOString();
   for (const conversation of nativeBotConversations(bot)) {
     const metadata = { ...(conversation.metadata && typeof conversation.metadata === 'object' ? conversation.metadata : {}) };
+    if ((metadata.botArchived === true) === archived) continue;
     if (archived) metadata.botArchived = true;
     else delete metadata.botArchived;
     nativeConversationRepository.updateConversation({
@@ -2426,14 +2427,46 @@ function retireNativeBotWork(bot) {
 }
 
 async function archiveNativeBot(record) {
-  // Best-effort like the old delete: a cron CLI failure never blocks the
-  // archive, and the boot reconcile pauses any job left without a bot.
+  // Archive the package and row first. If that fails nothing else has been
+  // touched and the bot stays fully usable; once it succeeds the bot shows
+  // under Restore, and the cleanup below is best-effort. The boot reconcile
+  // finishes any cleanup a crash left undone and pauses cron jobs left
+  // without a bot.
+  db.archiveBot(conn, record, new Date().toISOString());
+  finishArchivedBotCleanup(record);
   await cronSync.removeBotCron(record).catch((err) =>
     console.error('cron-sync: failed to remove archived bot', record.id, err.message)
   );
-  retireNativeBotWork(record);
-  setNativeBotConversationsArchived(record, true);
-  db.archiveBot(conn, record, new Date().toISOString());
+}
+
+function finishArchivedBotCleanup(record) {
+  try {
+    setNativeBotConversationsArchived(record, true);
+  } catch (err) {
+    console.error('bot archive: marking chats read-only failed for', record.id, err.message);
+  }
+  try {
+    retireNativeBotWork(record);
+  } catch (err) {
+    console.error('bot archive: leaving rooms failed for', record.id, err.message);
+  }
+}
+
+// A chat is read-only exactly when its bot is archived. Repairs either side
+// of an interrupted archive or restore.
+function reconcileBotConversationArchiveFlags() {
+  for (const bot of db.loadAll(conn, 'bots')) {
+    try {
+      setNativeBotConversationsArchived(bot, false);
+    } catch (err) {
+      console.error('bot archive reconcile failed for', bot.id, err.message);
+    }
+  }
+  for (const entry of db.listArchivedBots(conn)) {
+    const record = entry && entry.record;
+    if (!record || !record.id) continue;
+    finishArchivedBotCleanup(record);
+  }
 }
 
 function archivedBotsFor(req) {
@@ -2533,6 +2566,7 @@ async function ensureNativeBotConversation(bot) {
 }
 
 async function reconcileNativeBotConversations() {
+  reconcileBotConversationArchiveFlags();
   for (const bot of db.loadAll(conn, 'bots')) {
     try {
       const candidates = canonicalBotConversationCandidates(nativeBotConversations(bot));
@@ -2876,7 +2910,9 @@ function registerResource(cfg) {
         if (error && error.statusCode) {
           return res.status(error.statusCode).json({ error: error.code || 'bot_package_error', message: error.message });
         }
-        throw error;
+        // An async route that throws takes the whole backend down.
+        console.error(`${cfg.singular}: archive failed for`, removed.id, error && error.message ? error.message : error);
+        return res.status(500).json({ error: 'archive_failed', message: 'Could not archive. Nothing was changed.' });
       }
       if (cfg.bumpOnMutate) bumpVersion();
       return res.status(200).json({ ok: true, archived: true });
@@ -4994,7 +5030,8 @@ app.post('/api/bots/archived/:id/restore', requireAuth, async (req, res) => {
     if (error && error.statusCode) {
       return res.status(error.statusCode).json({ error: error.code || 'bot_package_error', message: error.message });
     }
-    throw error;
+    console.error('bot restore failed for', entry.record.id, error && error.message ? error.message : error);
+    return res.status(500).json({ error: 'restore_failed', message: 'Could not restore. Nothing was changed.' });
   }
   setNativeBotConversationsArchived(record, false);
   await ensureNativeBotConversation(record).catch((err) =>
