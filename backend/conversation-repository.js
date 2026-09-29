@@ -158,12 +158,15 @@ CREATE INDEX IF NOT EXISTS conversation_dispatches_event
 
 -- The gateway agent is canonical per owner inside a company/workspace.
 -- Legacy records are normalized before they receive this metadata, so this
--- protects the new path without discarding old history.
+-- protects the new path without discarding old history. Extra Mia chats the
+-- user starts with "New conversation" are marked conversationMode 'fresh'
+-- and are not the canonical one.
 CREATE UNIQUE INDEX IF NOT EXISTS conversations_gateway_canonical_owner
   ON conversations (company_id, created_by)
   WHERE type = 'agent'
     AND deleted_at IS NULL
-    AND json_extract(metadata, '$.agentId') = 'gateway';
+    AND json_extract(metadata, '$.agentId') = 'gateway'
+    AND coalesce(json_extract(metadata, '$.conversationMode'), '') != 'fresh';
 `;
 
 class ConversationRepositoryError extends Error {
@@ -618,6 +621,17 @@ function migrateLegacyBotConversationData(db) {
   });
 }
 
+// Databases created before fresh Mia chats have a canonical-Mia index that
+// also covers them. Drop it so SCHEMA recreates it with the fresh exclusion.
+function migrateGatewayCanonicalIndex(db) {
+  const index = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'conversations_gateway_canonical_owner'"
+  ).get();
+  if (index && !String(index.sql || '').includes('conversationMode')) {
+    db.exec('DROP INDEX conversations_gateway_canonical_owner');
+  }
+}
+
 function createConversationRepository(db) {
   if (!db || typeof db.exec !== 'function' || typeof db.prepare !== 'function') {
     fail('INVALID_DATABASE', 'a better-sqlite3 database connection is required');
@@ -627,6 +641,7 @@ function createConversationRepository(db) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   db.pragma('journal_mode = WAL');
+  migrateGatewayCanonicalIndex(db);
   db.exec(SCHEMA);
   migrateLegacyBotConversationData(db);
 
@@ -708,6 +723,7 @@ function createConversationRepository(db) {
           AND lower(c.created_by) = lower(?)
           AND c.type = 'agent'
           AND lower(coalesce(c.name, '')) = 'mia'
+          AND coalesce(json_extract(c.metadata, '$.conversationMode'), '') != 'fresh'
           ${includeDeleted ? '' : 'AND c.deleted_at IS NULL'}
           AND (
             json_extract(c.metadata, '$.agentId') = 'gateway'
@@ -752,6 +768,7 @@ function createConversationRepository(db) {
           WHERE c.company_id = ?
             AND lower(c.created_by) = lower(?)
             AND c.type = 'agent' AND lower(coalesce(c.name, '')) = 'mia' AND c.deleted_at IS NULL
+            AND coalesce(json_extract(c.metadata, '$.conversationMode'), '') != 'fresh'
             AND (
               json_extract(c.metadata, '$.agentId') = 'gateway'
               OR EXISTS (

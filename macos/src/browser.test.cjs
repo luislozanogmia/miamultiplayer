@@ -87,6 +87,9 @@ function harness(options = {}) {
   window.webContents = new Contents();
   window.webContents.mainFrame = { url: "http://127.0.0.1:4870/#/chat" };
   window.getContentSize = () => [1000, 800];
+  window.fullScreen = false;
+  window.isFullScreen = () => window.fullScreen;
+  window.setFullScreen = value => { window.fullScreen = value; if (!value) window.emit("leave-full-screen"); };
   window.isDestroyed = () => false;
   window.contentView = { addChildView() {}, removeChildView() {} };
   const electron = {
@@ -345,6 +348,11 @@ test("native views have no Node or preload access; permissions stay denied", () 
   assert.equal(h.profile.check(), false);
   assert.equal(h.profile.device(), false);
   h.profile.request(null, "camera", allowed => assert.equal(allowed, false));
+  // Site copy buttons work; reading the user's clipboard does not.
+  assert.equal(h.profile.check(null, "clipboard-sanitized-write", "https://chatgpt.com"), true);
+  h.profile.request(null, "clipboard-sanitized-write", allowed => assert.equal(allowed, true));
+  assert.equal(h.profile.check(null, "clipboard-read", "https://chatgpt.com"), false);
+  h.profile.request(null, "clipboard-read", allowed => assert.equal(allowed, false));
   // The browser presents the Chrome build it runs, never the embedding framework.
   assert.doesNotMatch(h.profile.userAgent, /Electron\/|Mia\//);
   assert.match(h.profile.userAgent, /Chrome\//);
@@ -375,6 +383,32 @@ test("microphone/camera prompt once per HTTPS origin; insecure origins stay deni
   assert.deepEqual(results, [true, true, false, false]);
   assert.equal(h.dialogCalls.length, 2);
   assert.equal(h.profile.check(null, "media", "https://blocked.example"), false);
+});
+
+test("Cmd+click opens a background tab next to its page; tabs can be moved", () => {
+  const h = harness();
+  const ids = s => [...s.tabs.map(t => t.id)];
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  h.command("select", { id: first });
+  const wc = h.views[0].webContents;
+  wc.popup({ url: "https://example.com/a", disposition: "background-tab" });
+  let state = h.command("state");
+  assert.equal(state.activeId, first, "Cmd+click keeps the current page");
+  assert.deepEqual(ids(state).slice(0, 2), [first, state.tabs[1].id]);
+  assert.notEqual(state.tabs[1].id, second, "the new tab sits right after its opener");
+  assert.equal(state.tabs[2].id, second);
+  wc.popup({ url: "https://example.com/b", disposition: "foreground-tab" });
+  state = h.command("state");
+  assert.notEqual(state.activeId, first, "Cmd+Shift+click switches to the new tab");
+
+  const order = ids(state);
+  h.command("move", { id: order[0], index: order.length - 1 });
+  assert.deepEqual(ids(h.command("state")), [...order.slice(1), order[0]]);
+  h.command("move", { id: order[0], index: 0 });
+  assert.deepEqual(ids(h.command("state")), order);
+  h.command("move", { id: 9999, index: 0 });
+  assert.deepEqual(ids(h.command("state")), order, "unknown tabs are ignored");
 });
 
 test("web popups become tabs, blocked schemes never navigate", () => {
@@ -831,4 +865,52 @@ test("clean slate clears visited-URL history alongside tabs and cookies", async 
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a page's fullscreen request fills the window and leaving restores the pane", () => {
+  const h = harness();
+  assert.equal(h.profile.check(null, "fullscreen", "https://www.youtube.com"), true);
+  h.profile.request(null, "fullscreen", allowed => assert.equal(allowed, true));
+
+  h.command("navigate", { value: "https://www.youtube.com/watch?v=x" });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  const wc = h.views[0].webContents;
+  wc.emit("enter-html-full-screen");
+  assert.equal(h.window.fullScreen, true);
+  assert.equal(JSON.stringify(h.views[0].bounds), JSON.stringify({ x: 0, y: 0, width: 1000, height: 800 }));
+  h.window.emit("resize");
+  assert.equal(h.views[0].visible, true, "a resize while fullscreen keeps the video showing");
+
+  wc.emit("leave-html-full-screen");
+  assert.equal(h.window.fullScreen, false);
+  assert.equal(h.window.webContents.sent.at(-1).channel, "miaos-browser-layout-request");
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  assert.equal(JSON.stringify(h.views[0].bounds), JSON.stringify({ x: 0, y: 100, width: 700, height: 600 }));
+});
+
+test("opening a new foreground tab ends the old tab's page fullscreen", () => {
+  const h = harness();
+  h.command("navigate", { value: "https://www.youtube.com/watch?v=x" });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  const wc = h.views[0].webContents;
+  wc.emit("enter-html-full-screen");
+  assert.equal(h.window.fullScreen, true);
+  const created = h.command("new");
+  assert.equal(h.window.fullScreen, false, "the window leaves fullscreen");
+  assert.ok(wc.scripts.some(script => script.includes("document.exitFullscreen()")), "the video leaves fullscreen");
+  assert.equal(created.activeId, created.tabs.at(-1).id, "the new tab is in front");
+  assert.equal(h.views[0].visible, false, "the old video no longer covers the window");
+});
+
+test("page fullscreen keeps a window that was already fullscreen, and ends when the pane hides", () => {
+  const h = harness();
+  h.window.fullScreen = true;
+  h.command("navigate", { value: "https://www.youtube.com/watch?v=x" });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  const wc = h.views[0].webContents;
+  wc.emit("enter-html-full-screen");
+  h.command("layout", { visible: false, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  assert.ok(wc.scripts.some(script => script.includes("document.exitFullscreen()")));
+  assert.equal(h.window.fullScreen, true, "the window stays fullscreen as the user had it");
+  assert.equal(h.views[0].visible, false);
 });

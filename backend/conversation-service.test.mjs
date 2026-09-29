@@ -254,7 +254,7 @@ test('fresh bot creation enforces source authorization and bot-only scope', (t) 
   const channel = service.createConversation({ companyId: 'company-a', principal: owner(), type: 'channel', name: 'Shared' });
   assert.throws(() => service.createFreshBotConversation({
     companyId: 'company-a', conversationId: channel.id, principal: owner(),
-  }), /bot conversation is required/);
+  }), /bot or Mia conversation is required/);
 });
 
 test('canonical bot recreation never adopts or merges fresh conversations', (t) => {
@@ -284,6 +284,74 @@ test('canonical bot recreation never adopts or merges fresh conversations', (t) 
   );
   assert.deepEqual(afterReconciliation.map((row) => row.id).sort(), [freshOne.id, freshTwo.id, replacement.id].sort());
   assert.deepEqual(canonicalBotConversationCandidates(afterReconciliation).map((row) => row.id), [replacement.id]);
+});
+
+test('Mia can start separate fresh conversations without losing or merging the canonical chat', (t) => {
+  const { db, repository, service } = fixture();
+  t.after(() => db.close());
+  const mia = service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'agent', name: 'Mia', metadata: { agentId: 'gateway', workspaceId: 'solo' },
+  });
+  service.createEvent({
+    companyId: 'company-a', conversationId: mia.id, principal: owner(),
+    content: { text: 'older Mia history' }, clientIdempotencyKey: 'mia-history',
+  });
+  const first = service.createFreshBotConversation({ companyId: 'company-a', conversationId: mia.id, principal: owner() });
+  const second = service.createFreshBotConversation({ companyId: 'company-a', conversationId: first.id, principal: owner() });
+
+  assert.notEqual(first.id, mia.id);
+  assert.notEqual(second.id, first.id);
+  assert.equal(first.type, 'agent');
+  assert.equal(first.name, 'Mia');
+  assert.deepEqual(first.metadata, {
+    agentId: 'gateway', workspaceId: 'solo', conversationMode: 'fresh', source: 'native-ui-new-conversation',
+  });
+  assert.equal(repository.getMember({
+    companyId: 'company-a', conversationId: first.id, principalId: 'gateway', principalType: 'agent',
+  }).state, 'active');
+  assert.equal(repository.getMember({
+    companyId: 'company-a', conversationId: first.id, principalId: 'owner@example.com', principalType: 'user',
+  }).role, 'owner');
+  assert.equal(repository.listEvents({ companyId: 'company-a', conversationId: mia.id }).events.length, 1);
+  assert.equal(repository.listEvents({ companyId: 'company-a', conversationId: first.id }).events.length, 0);
+
+  // The canonical lookups (boot merge, onboarding, private Mia) only ever see
+  // the original chat, so the new ones are never merged into it.
+  assert.deepEqual(
+    repository.listGatewayConversations({ companyId: 'company-a', createdBy: 'owner@example.com' }).map((row) => row.id),
+    [mia.id]
+  );
+  const again = repository.getOrCreateGatewayConversation({ companyId: 'company-a', createdBy: 'owner@example.com' });
+  assert.equal(again.conversation ? again.conversation.id : again.id, mia.id);
+
+  // A new chat can take a message and route it to Mia.
+  const sent = service.createEvent({
+    companyId: 'company-a', conversationId: first.id, principal: owner(),
+    content: { text: 'fresh start' }, clientIdempotencyKey: 'mia-fresh',
+  });
+  assert.equal(sent.event.conversationId, first.id);
+});
+
+test('the canonical Mia index is migrated so fresh Mia chats are allowed', () => {
+  const db = new Database(':memory:');
+  createConversationRepository(db);
+  db.exec('DROP INDEX conversations_gateway_canonical_owner');
+  db.exec(`CREATE UNIQUE INDEX conversations_gateway_canonical_owner
+    ON conversations (company_id, created_by)
+    WHERE type = 'agent' AND deleted_at IS NULL AND json_extract(metadata, '$.agentId') = 'gateway'`);
+  const repository = createConversationRepository(db);
+  const authorization = createConversationAuthorization(repository);
+  const service = createConversationService({ repository, authorization, realtime: createConversationRealtime(authorization) });
+  const mia = service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' },
+  });
+  const fresh = service.createFreshBotConversation({ companyId: 'company-a', conversationId: mia.id, principal: owner() });
+  assert.notEqual(fresh.id, mia.id);
+  assert.match(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'conversations_gateway_canonical_owner'").get().sql, /conversationMode/);
+  assert.throws(() => repository.createConversation({
+    companyId: 'company-a', type: 'agent', name: 'Mia', createdBy: 'owner@example.com', metadata: { agentId: 'gateway' },
+  }), /UNIQUE/);
+  db.close();
 });
 
 test('private agent conversations contain exactly their owner and bound agent', (t) => {

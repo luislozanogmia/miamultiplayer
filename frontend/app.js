@@ -212,7 +212,7 @@
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
     });
   }
-  function appConfirm(message){
+  function appConfirm(message, confirmLabel){
     return new Promise(function(resolve){
       var previousFocus = document.activeElement;
       var overlay = document.createElement('div');
@@ -239,7 +239,7 @@
       var confirm = document.createElement('button');
       confirm.type = 'button';
       confirm.className = 'btn app-confirm-danger';
-      confirm.textContent = 'Delete';
+      confirm.textContent = confirmLabel || 'Delete';
 
       actions.appendChild(cancel);
       actions.appendChild(confirm);
@@ -654,6 +654,12 @@
       }
       if(harnessSettingsCache.onboardingComplete){
         Promise.resolve(initialRender).then(startMiaOnboardingChat);
+      }
+      // Provisioning runs in the background after sign-in and can take up
+      // to its 15-second timeout, so check once now and once after that.
+      if(usesManagedRouterByDefault()){
+        checkManagedRouterStatus();
+        setTimeout(checkManagedRouterStatus, 20000);
       }
     });
     Promise.resolve(initialRender).then(function(){
@@ -1106,10 +1112,18 @@
   };
   var CHAT_MODEL_SELECTION_CACHE_VERSION = 1;
 
-  function chatModelSelectionCacheKey(workspaceKey){
+  // Each bot keeps its own model choice; Mia and every other room share one.
+  function chatModelSelectionScope(){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0];
+    var botId = conversation && conversation.type === 'bot' && conversation.metadata && conversation.metadata.botId;
+    return botId ? 'bot:' + String(botId) : '';
+  }
+
+  function chatModelSelectionCacheKey(workspaceKey, scope){
     var owner = encodeURIComponent(String(currentUser || '').trim().toLowerCase());
     var workspace = WORKSPACE_OPTIONS[workspaceKey] ? workspaceKey : activeWorkspaceKey;
-    return 'mia.chat-model-selection.v1:' + owner + ':' + workspace;
+    var chatScope = scope === undefined ? chatModelSelectionScope() : scope;
+    return 'mia.chat-model-selection.v1:' + owner + ':' + workspace + (chatScope ? ':' + encodeURIComponent(chatScope) : '');
   }
 
   function readCachedChatModelSelection(){
@@ -1139,8 +1153,17 @@
     } catch(error){}
   }
 
-  function clearCachedChatModelSelection(){
-    try { localStorage.removeItem(chatModelSelectionCacheKey()); } catch(error){}
+  // Every chat's choice in the workspace: Mia's key and each bot's.
+  function clearCachedChatModelSelection(workspaceKey){
+    var base = chatModelSelectionCacheKey(workspaceKey, '');
+    try {
+      var keys = [];
+      for(var i = 0; i < localStorage.length; i += 1){
+        var key = localStorage.key(i);
+        if(key === base || (key && key.indexOf(base + ':') === 0)) keys.push(key);
+      }
+      keys.forEach(function(key){ localStorage.removeItem(key); });
+    } catch(error){}
   }
 
   function normalizeChatModelProviders(providers){
@@ -1367,9 +1390,10 @@
     return realProfileName(profile && profile.displayName);
   }
 
-  function renderHarnessConnectionInventory(connections, runtimes){
+  function renderHarnessConnectionInventory(connections, runtimes, routerStatus){
     var wrap = el('#settingsHarnessConnections');
     var connected = [];
+    var routerError = routerStatus && !routerStatus.provisioned && routerStatus.error;
     if(connections && connections['openai-codex'] === true) connected.push({label:'ChatGPT subscription'});
     if(connections && connections['xai-oauth'] === true) connected.push({label:'Grok subscription'});
     harnessApiProviderCatalog.forEach(function(provider){
@@ -1378,10 +1402,15 @@
       }
     });
     if(wrap){
-      if(!connected.length){
+      var routerErrorRow = routerError
+        ? '<div class="styled-settings-row styled-harness-connection-row"><div><div class="styled-settings-row-label">' + esc((routerStatus && routerStatus.label) || 'Mia Router') + '</div><div class="styled-settings-row-desc">' + esc(routerError) + '</div></div><span class="status-pill offline"><span class="dot"></span>Not connected</span></div>'
+        : '';
+      if(!connected.length && routerErrorRow){
+        wrap.innerHTML = routerErrorRow;
+      } else if(!connected.length){
         wrap.innerHTML = '<div class="styled-settings-row"><div><div class="styled-settings-row-label">No connected providers</div><div class="styled-settings-row-desc">Connect a subscription or API provider from setup.</div></div></div>';
       } else {
-        wrap.innerHTML = connected.map(function(item){
+        wrap.innerHTML = routerErrorRow + connected.map(function(item){
           return '<div class="styled-settings-row styled-harness-connection-row"><div><div class="styled-settings-row-label">' + esc(item.label) + '</div></div><span class="status-pill live"><span class="dot"></span>Connected</span></div>';
         }).join('');
       }
@@ -1787,6 +1816,41 @@
   }
 
   var managedRouterAvailable = false;
+  // Mia Router connects in the background after sign-in. When that fails,
+  // show the reason on the Mia Router card, in Access, and, when Mia Router
+  // is the saved default, in a banner that stays until dismissed.
+  var managedRouterStatusError = '';
+  var managedRouterBannerDismissed = '';
+  function usesManagedRouterByDefault(){
+    return !!(harnessSettingsCache && harnessSettingsCache.onboardingComplete
+      && harnessSettingsCache.provider === 'openai-api' && harnessSettingsCache.apiProvider === 'openrouter');
+  }
+  function applyManagedRouterStatus(data){
+    var bannerLabel = el('#miaRouterBannerLabel');
+    if(bannerLabel && data && data.label) bannerLabel.textContent = data.label;
+    managedRouterStatusError = data && !data.provisioned && data.error ? String(data.error) : '';
+    var note = el('[data-managed-router-error]');
+    if(note){ note.textContent = managedRouterStatusError; note.hidden = !managedRouterStatusError; }
+    var banner = el('#miaRouterBanner');
+    if(!banner) return;
+    var show = !!managedRouterStatusError && usesManagedRouterByDefault()
+      && managedRouterBannerDismissed !== managedRouterStatusError;
+    var reason = el('#miaRouterBannerReason');
+    if(reason) reason.textContent = managedRouterStatusError;
+    banner.hidden = !show;
+  }
+  function checkManagedRouterStatus(){
+    return api('/api/settings/managed-router/status').then(function(res){
+      applyManagedRouterStatus(res.data);
+      return res.data;
+    }).catch(function(){ return null; });
+  }
+  var miaRouterBannerDismiss = el('#miaRouterBannerDismiss');
+  if(miaRouterBannerDismiss) miaRouterBannerDismiss.addEventListener('click', function(){
+    managedRouterBannerDismissed = managedRouterStatusError;
+    var banner = el('#miaRouterBanner');
+    if(banner) banner.hidden = true;
+  });
   function loadHarnessConnectionStatus(){
     harnessConnectionValidationPending = true;
     renderHarnessOnboarding();
@@ -1804,6 +1868,7 @@
         });
       }
       managedRouterAvailable = !!(routerRes.data && routerRes.data.available);
+      applyManagedRouterStatus(routerRes.data);
       if(routerRes.data && routerRes.data.provisioned) harnessConnectionState['openrouter'] = true;
       var managedRouterCard = el('[data-harness-provider="managed-router"]');
       if(managedRouterCard) managedRouterCard.closest('.styled-onboarding-provider-row').hidden = !managedRouterAvailable;
@@ -1812,12 +1877,14 @@
       if(routerLabel){
         var labelEl = el('[data-managed-router-label]');
         if(labelEl) labelEl.textContent = routerLabel;
+        var bannerLabel = el('#miaRouterBannerLabel');
+        if(bannerLabel) bannerLabel.textContent = routerLabel;
         harnessApiProviderCatalog.forEach(function(entry){
           if(entry.id === 'managed-router') entry.label = routerLabel;
         });
       }
       harnessConnectionValidationPending = false;
-      renderHarnessConnectionInventory(connections, runtimes);
+      renderHarnessConnectionInventory(connections, runtimes, routerRes.data);
       renderHarnessConnectionActions();
       renderHarnessOnboarding();
     }).catch(function(){
@@ -2928,7 +2995,7 @@
     if(!(a.isBuiltin && !a.agentId)){
       actions.appendChild(mkIconBtn(
         '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
-        'bench-delete-btn', 'Delete bot',
+        'bench-delete-btn', 'Archive bot',
         function(){ deleteBenchAgent(a, closeBenchDetail); }
       ));
     }
@@ -3494,7 +3561,7 @@
           '<div class="styled-agent-model-picker" id="styledAgentModelPicker"><button type="button" class="styled-agent-edit-model" id="styledAgentEditModel" aria-haspopup="dialog" aria-expanded="false" aria-label="Choose bot model"><span id="styledAgentEditModelLabel">' + esc(styledAgentModelLabel(editState.model || a.model)) + '</span><span aria-hidden="true">&#8250;</span></button>' +
             '<div class="cc-model-menu styled-agent-model-menu" id="styledAgentModelMenu"><div class="cc-model-menu-head"><button type="button" class="cc-model-back" id="styledAgentModelBack" aria-label="Back" title="Back" hidden>&#8249;</button><div class="cc-model-menu-title" id="styledAgentModelTitle">Choose a model family</div></div><div class="cc-model-options" id="styledAgentModelOptions">' + styledAgentModelMenuOptionsHtml() + '</div><div class="cc-model-selection" id="styledAgentModelSummary">' + esc(editState.model || a.model || 'No model selected') + '</div></div></div></section>' +
       '</div>' +
-      '<div class="styled-agent-edit-footer"><button type="button" class="styled-agent-edit-delete" id="styledAgentEditDelete">Delete bot</button><span class="styled-agent-edit-footer-spacer"></span><button type="button" class="styled-agent-edit-cancel" id="styledAgentEditCancel">Cancel</button><button type="button" class="styled-agent-edit-save" id="styledAgentEditSave">Save changes</button></div>' +
+      '<div class="styled-agent-edit-footer"><button type="button" class="styled-agent-edit-delete" id="styledAgentEditDelete">Archive bot</button><span class="styled-agent-edit-footer-spacer"></span><button type="button" class="styled-agent-edit-cancel" id="styledAgentEditCancel">Cancel</button><button type="button" class="styled-agent-edit-save" id="styledAgentEditSave">Save changes</button></div>' +
     '</div>';
   }
 
@@ -3844,19 +3911,22 @@
 
   function deleteBenchAgent(a, onDeleted){
     if(!a){ showBenchToast('Bot details are still loading'); return; }
-    // Legacy builtin records are ordinary persisted bots and remain deletable.
+    // Bots are archived, never deleted: the server parks the bot and its
+    // files, takes it out of its rooms, and keeps its chat read-only until
+    // it is restored from Agents & Bots → Archived bots.
     var targetId = a.isBuiltin ? a.agentId : a.id;
-    if(!targetId){ showBenchToast('This bot has no server record to delete'); return; }
-    appConfirm('Delete ' + a.name + '?').then(function(ok){
+    if(!targetId){ showBenchToast('This bot has no server record to archive'); return; }
+    appConfirm('Archive ' + a.name + '? It stops running and leaves its rooms. You can restore it from Archived bots.', 'Archive').then(function(ok){
       if(!ok) return;
       api('/api/bots/' + targetId, {method:'DELETE'}).then(function(res){
         if(res.status === 200){
           removeDeletedBotChatState(targetId);
           if(onDeleted) onDeleted();
           loadBenchAgents().then(refreshAgentsView);
+          showBenchToast('Archived ' + a.name);
         }
-        else showBenchToast('Delete failed (' + res.status + ')');
-      }).catch(function(){ showBenchToast('Delete failed — network error'); });
+        else showBenchToast('Archive failed (' + res.status + ')');
+      }).catch(function(){ showBenchToast('Archive failed — network error'); });
     });
   }
 
@@ -4427,7 +4497,11 @@
     nativeConversations: [],
     nativeSocket: null,
     nativeSocketConversationId: null,
-    nativeReconnectTimer: null
+    nativeReconnectTimer: null,
+    watchSocket: null,         // one extra socket subscribed to every conversation, only for attention
+    watchSubscribed: {},       // conversationId -> true, subscribed on watchSocket
+    watchReconnectTimer: null,
+    lastNotifiedAt: {}         // conversationId -> ms, so an automation finish doesn't double-notify its reply
   };
   var localChatTyping = {roomId: null, active: false, timer: null};
   var chatSearchDirectory = {humans: [], agents: [], loaded: false, loading: false, request: null};
@@ -4807,10 +4881,8 @@
     // pulsing activity dot after its work has completed.
     if(fromWorker && !isProgress){
       loadActiveNativeDispatches(event.conversationId);
-      // A completed worker event in another room is the actionable transition
-      // the user asked to be told about. Progress events remain quiet so a
-      // long-running background task produces one notification, not a stream.
-      if(isIncomingAttentionMessage(message)) notifyDesktopChatMessage(event.conversationId, message);
+      // Unread dots and desktop notifications are handled by the watch
+      // socket (applyWatchedNativeEvent), which sees every conversation.
     }
     if(chatWs.activeRoomId === event.conversationId) renderChatThread();
     renderChatSidebar();
@@ -4848,9 +4920,105 @@
     };
   }
 
+  // The chat socket above follows only the open conversation. This second
+  // socket subscribes to every conversation (without history replay) so a bot
+  // finishing a task, or asking something, is noticed wherever it happens.
+  function watchedConversationIds(){
+    return (chatWs.nativeConversations || []).filter(function(conversation){
+      return conversation && conversation.id && !(conversation.metadata && conversation.metadata.botArchived === true);
+    }).map(function(conversation){ return String(conversation.id); });
+  }
+  function syncNativeWatchSubscriptions(){
+    if(!chatWs.native || typeof WebSocket !== 'function') return;
+    var socket = chatWs.watchSocket;
+    if(!socket){ connectNativeWatchSocket(); return; }
+    if(socket.readyState !== 1) return; // onopen subscribes everything
+    var wanted = {};
+    watchedConversationIds().forEach(function(id){
+      wanted[id] = true;
+      if(chatWs.watchSubscribed[id]) return;
+      chatWs.watchSubscribed[id] = true;
+      socket.send(JSON.stringify({type:'subscribe', conversationId:id}));
+    });
+    Object.keys(chatWs.watchSubscribed).forEach(function(id){
+      if(wanted[id]) return;
+      delete chatWs.watchSubscribed[id];
+      socket.send(JSON.stringify({type:'unsubscribe', conversationId:id}));
+    });
+  }
+  function connectNativeWatchSocket(){
+    if(chatWs.watchReconnectTimer){
+      clearTimeout(chatWs.watchReconnectTimer);
+      chatWs.watchReconnectTimer = null;
+    }
+    var socket = new WebSocket(nativeSocketUrl());
+    chatWs.watchSocket = socket;
+    chatWs.watchSubscribed = {};
+    socket.onopen = function(){
+      if(chatWs.watchSocket !== socket) return;
+      syncNativeWatchSubscriptions();
+    };
+    socket.onmessage = function(message){
+      if(chatWs.watchSocket !== socket) return;
+      var payload;
+      try { payload = JSON.parse(message.data); } catch(err){ return; }
+      if(payload.type === 'conversation.event') applyWatchedNativeEvent(payload.event);
+    };
+    socket.onclose = function(){
+      if(chatWs.watchSocket !== socket) return;
+      chatWs.watchSocket = null;
+      chatWs.watchSubscribed = {};
+      if(!chatWs.native) return;
+      chatWs.watchReconnectTimer = setTimeout(function(){
+        chatWs.watchReconnectTimer = null;
+        if(chatWs.native && !chatWs.watchSocket) connectNativeWatchSocket();
+      }, 3000);
+    };
+  }
+  function appInForeground(){
+    return !document.hidden && (typeof document.hasFocus !== 'function' || document.hasFocus());
+  }
+  // Chats that aren't open learn about new replies only through the watch
+  // socket, so the sidebar row's preview and time are updated from it too.
+  // Opening the chat later replaces this with its real history.
+  function recordWatchedSidebarMessage(roomId, message){
+    if(roomId === chatWs.activeRoomId || !message || !message.id) return false;
+    var state = chatRoomState(roomId);
+    var replaced = false;
+    state.messages = state.messages.map(function(existing){
+      if(existing.id !== message.id) return existing;
+      replaced = true;
+      return message;
+    });
+    if(!replaced) state.messages.push(message);
+    state.messages = normalizeChatMessages(state.messages);
+    state.lastTs = Math.max(Number(state.lastTs || 0), message.ts || 0);
+    return true;
+  }
+  function applyWatchedNativeEvent(event){
+    if(!event || !event.conversationId) return;
+    if(event.senderType !== 'agent' && event.senderType !== 'bot') return;
+    var metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+    var message = nativeEventToChatMessage(event);
+    var roomId = String(event.conversationId);
+    if(recordWatchedSidebarMessage(roomId, message)) renderChatSidebar();
+    // Progress stays quiet so a long task produces one notification, not a stream.
+    if(metadata.progress === true && metadata.status !== 'failed') return;
+    if(!isIncomingAttentionMessage(message)) return;
+    var isActive = roomId === chatWs.activeRoomId;
+    if(isActive && appInForeground()) return; // the user is watching it arrive
+    if(!isActive && markChatAttention(roomId)) renderChatSidebar();
+    notifyDesktopChatMessage(roomId, message);
+  }
+
   function applyNativeConversationList(conversations){
     setMiaServiceUnavailable(false);
-    var rooms = (conversations || []).map(nativeConversationToRoom);
+    // An archived bot's chat is kept on the server (read-only) but is not a
+    // live conversation; it comes back to the sidebar when the bot is restored.
+    conversations = (conversations || []).filter(function(conversation){
+      return !(conversation && conversation.type === 'bot' && conversation.metadata && conversation.metadata.botArchived === true);
+    });
+    var rooms = conversations.map(nativeConversationToRoom);
     chatWs.native = true;
     chatWs.nativeConversations = conversations || [];
     chatWs.configured = true;
@@ -4879,10 +5047,18 @@
       };
     });
     if(Array.isArray(chatWs.botRecords) && chatWs.botRecords.length) syncChatBotRecords(chatWs.botRecords);
-    var mia = agentRooms.filter(function(room){ return isNativeMiaConversation(room.nativeConversation); })[0];
+    // Mia's sidebar row is her original chat; chats started with "New
+    // conversation" (conversationMode 'fresh') live in History, like bots'.
+    var miaRooms = agentRooms.filter(function(room){ return isNativeMiaConversation(room.nativeConversation); });
+    var mia = miaRooms.filter(function(room){
+      var metadata = room.nativeConversation && room.nativeConversation.metadata || {};
+      return metadata.conversationMode !== 'fresh';
+    })[0] || miaRooms[0];
     chatWs.gatewayAgent = mia ? {id:'gateway', name:mia.name || 'Mia', roomId:mia.roomId, conversationId:mia.id, manager:true, department:'Mia'} : null;
     chatWs.allDepartments = chatWs.rooms.departments.map(function(room){ return room.department; });
     chatWs.humans = [];
+    syncNativeWatchSubscriptions();
+    if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
   }
 
   function loadNativeConversationStates(rooms){
@@ -5302,7 +5478,7 @@
       setVisible('copy', hasCopy);
       setVisible('hide', hasHide);
       setVisible('delete', hasAgentActions || hasConversationDelete);
-      if(deleteLabel) deleteLabel.textContent = hasConversationDelete ? 'Delete conversation' : 'Delete';
+      if(deleteLabel) deleteLabel.textContent = hasConversationDelete ? 'Delete conversation' : 'Archive bot';
       setSeparator('agent', hasAgentActions);
       setSeparator('copy', hasAgentActions && hasCopy);
       setSeparator('hide', hasCopy && hasHide);
@@ -6007,8 +6183,9 @@
       'miaChatAttention:' + owner + ':solo',
       'miaChatPinned:' + owner + ':solo',
       'miaChatPinnedServerMigration:' + owner + ':solo',
-      chatModelSelectionCacheKey('solo')
+      chatModelSelectionCacheKey('solo', '')
     ];
+    clearCachedChatModelSelection('solo');
     keys.forEach(function(key){
       try { localStorage.removeItem(key); } catch(_cleanSlateStorageError) {}
       try {
@@ -6221,6 +6398,16 @@
     if(weekdaysOnly) automation.weekdaysOnly = true;
     else delete automation.weekdaysOnly;
     automation.name = name;
+    // "provider|model" picks a model for this automation; empty uses the bot's.
+    var modelChoice = String(values.model || '');
+    var split = modelChoice.indexOf('|');
+    if(split > 0 && split < modelChoice.length - 1){
+      automation.modelProvider = modelChoice.slice(0, split);
+      automation.model = modelChoice.slice(split + 1);
+    } else {
+      delete automation.model;
+      delete automation.modelProvider;
+    }
     var prompt = String(values.prompt || '').trim();
     if(prompt) automation.prompt = prompt;
     else if(enabled) throw new Error('Add the task prompt this automation should run.');
@@ -6302,21 +6489,28 @@
   }
 
   function loadActiveAutomationRuns(){
+    // A failed request clears the running pulses (they would otherwise stick)
+    // but says nothing about which runs finished: finish notices compare
+    // only lists the server actually returned.
+    var clearStaleRuns = function(){
+      var changed = (chatWs.automationRuns || []).length > 0;
+      chatWs.automationRuns = [];
+      if(changed) renderChatSidebar();
+      return [];
+    };
     return api('/api/automations/active').then(function(res){
-      var next = res.status === 200 && res.data && Array.isArray(res.data.runs) ? res.data.runs : [];
+      if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return clearStaleRuns();
+      var next = res.data.runs;
       var changed = JSON.stringify(chatWs.automationRuns || []) !== JSON.stringify(next);
+      notifyFinishedAutomationRuns(chatWs.knownAutomationRuns || chatWs.automationRuns, next);
+      chatWs.knownAutomationRuns = next;
       chatWs.automationRuns = next;
       if(changed){
         renderChatSidebar();
         if(chatInfo.open && chatInfo.mode === 'automations' && !liveRefreshBlocked()) renderChatInfoPane();
       }
       return next;
-    }).catch(function(){
-      var changed = (chatWs.automationRuns || []).length > 0;
-      chatWs.automationRuns = [];
-      if(changed) renderChatSidebar();
-      return [];
-    });
+    }).catch(clearStaleRuns);
   }
 
   function openRunningAutomationConversation(runId){
@@ -6597,27 +6791,113 @@
     var agent = chatWs.allAgents.filter(function(item){ return item.roomId === roomId || item.nativeConversationId === roomId; })[0];
     return agent ? agent.name : 'New message';
   }
+  // In the desktop app notifications are native (the main process shows
+  // them, and macOS asks "Allow notifications from Mia?" the first time).
+  // In a plain browser they use the web Notification API.
+  function nativeDesktopNotifications(){
+    return window.miaDesktop && window.miaDesktop.notifications && typeof window.miaDesktop.notifications.show === 'function'
+      ? window.miaDesktop.notifications
+      : null;
+  }
+  var DESKTOP_NOTIFICATIONS_OFF_KEY = 'miaDesktopNotificationsOff';
+  var DESKTOP_NOTIFICATIONS_BLOCKED_KEY = 'miaDesktopNotificationsBlocked';
+  var DESKTOP_NOTIFICATIONS_ASKED_KEY = 'miaDesktopNotificationsAsked';
+  function readNotificationFlag(key){
+    try { return window.localStorage.getItem(key) === '1'; } catch(err) { return false; }
+  }
+  function writeNotificationFlag(key, on){
+    try {
+      if(on) window.localStorage.setItem(key, '1');
+      else window.localStorage.removeItem(key);
+    } catch(err) {}
+  }
   function desktopNotificationPermission(){
+    if(nativeDesktopNotifications()) return readNotificationFlag(DESKTOP_NOTIFICATIONS_BLOCKED_KEY) ? 'denied' : 'granted';
     return typeof window.Notification === 'function' ? window.Notification.permission : 'unsupported';
+  }
+  // The system permission can't be taken back from inside the app, so the
+  // on/off switch is Mia's own setting on top of it.
+  function desktopNotificationsSwitchedOff(){
+    return readNotificationFlag(DESKTOP_NOTIFICATIONS_OFF_KEY);
+  }
+  function setDesktopNotificationsSwitchedOff(off){
+    writeNotificationFlag(DESKTOP_NOTIFICATIONS_OFF_KEY, off);
+  }
+  function desktopNotificationsEnabled(){
+    if(desktopNotificationsSwitchedOff()) return false;
+    // A native "blocked" is only what macOS said last time; keep trying so
+    // allowing Mia in System Settings starts working without a restart.
+    return nativeDesktopNotifications() ? true : desktopNotificationPermission() === 'granted';
   }
   function syncDesktopNotificationControl(){
     var status = el('#chatAcctNotificationsStatus');
     if(!status) return;
     var permission = desktopNotificationPermission();
-    status.textContent = permission === 'granted' ? 'On' : permission === 'denied' ? 'Blocked' : permission === 'unsupported' ? 'Unavailable' : 'Off';
+    status.textContent = permission === 'unsupported' ? 'Unavailable'
+      : desktopNotificationsSwitchedOff() ? 'Off'
+      : permission === 'denied' ? 'Blocked'
+      : permission === 'granted' ? 'On' : 'Off';
+  }
+  function recordNativeNotificationResult(result){
+    if(result === 'blocked') writeNotificationFlag(DESKTOP_NOTIFICATIONS_BLOCKED_KEY, true);
+    else if(result === 'shown') writeNotificationFlag(DESKTOP_NOTIFICATIONS_BLOCKED_KEY, false);
+    syncDesktopNotificationControl();
+    return result;
+  }
+  function showNativeNotification(payload){
+    var native = nativeDesktopNotifications();
+    return Promise.resolve(native.show(payload)).then(recordNativeNotificationResult, function(){ return 'failed'; });
+  }
+  function explainBlockedNativeNotifications(){
+    showBenchToast('macOS is blocking notifications from Mia. Turn on Allow notifications for Mia in System Settings.');
+    var native = nativeDesktopNotifications();
+    if(native && typeof native.openSettings === 'function') native.openSettings();
+  }
+  // The first launch shows one notification, which is what makes macOS ask
+  // the user to allow them. It runs once; the menu switch can ask again.
+  function askForDesktopNotificationsOnce(){
+    if(!nativeDesktopNotifications() || desktopNotificationsSwitchedOff() || readNotificationFlag(DESKTOP_NOTIFICATIONS_ASKED_KEY)) return;
+    writeNotificationFlag(DESKTOP_NOTIFICATIONS_ASKED_KEY, true);
+    showNativeNotification({title: 'Mia', body: 'You will get a notification when a bot finishes or needs your input.'});
+  }
+  function requestNativeDesktopNotifications(){
+    if(!desktopNotificationsSwitchedOff() && desktopNotificationPermission() === 'granted'){
+      setDesktopNotificationsSwitchedOff(true);
+      syncDesktopNotificationControl();
+      showBenchToast('Desktop notifications are off.');
+      return Promise.resolve('off');
+    }
+    setDesktopNotificationsSwitchedOff(false);
+    syncDesktopNotificationControl();
+    return showNativeNotification({title: 'Mia', body: 'Desktop notifications are on.'}).then(function(result){
+      if(result === 'blocked') explainBlockedNativeNotifications();
+      else if(result === 'pending') showBenchToast('Choose Allow in the macOS notification prompt.');
+      else if(result === 'shown') showBenchToast('Desktop notifications are on.');
+      else showBenchToast('Desktop notifications could not be shown.');
+      return result;
+    });
   }
   function requestDesktopNotifications(){
+    if(nativeDesktopNotifications()) return requestNativeDesktopNotifications();
     var permission = desktopNotificationPermission();
     if(permission === 'unsupported'){
       showBenchToast('Desktop notifications are not supported in this browser.');
       return;
     }
-    if(permission === 'granted'){
-      showBenchToast('Desktop notifications are already on.');
+    if(permission === 'denied'){
+      showBenchToast('Desktop notifications are blocked. Allow them for Mia in System Settings > Notifications.');
       syncDesktopNotificationControl();
       return;
     }
+    if(permission === 'granted'){
+      var turnOff = !desktopNotificationsSwitchedOff();
+      setDesktopNotificationsSwitchedOff(turnOff);
+      syncDesktopNotificationControl();
+      showBenchToast(turnOff ? 'Desktop notifications are off.' : 'Desktop notifications are on.');
+      return;
+    }
     window.Notification.requestPermission().then(function(next){
+      if(next === 'granted') setDesktopNotificationsSwitchedOff(false);
       syncDesktopNotificationControl();
       showBenchToast(next === 'granted' ? 'Desktop notifications are on.' : 'Desktop notifications were not enabled.');
     }).catch(function(){
@@ -6625,20 +6905,66 @@
       showBenchToast('Desktop notifications could not be enabled.');
     });
   }
-  function notifyDesktopChatMessage(roomId, message){
-    if(roomId === chatWs.activeRoomId || desktopNotificationPermission() !== 'granted') return;
-    var parsed = message && isHumanSender(message.sender)
-      ? parseSignedHumanBody(message.body)
-      : parseSignedBody(message && message.body);
-    var body = parsed && parsed.text ? parsed.text : (message && message.body) || 'New message';
-    body = excerpt(String(body).replace(/\s+/g, ' ').trim(), 120);
+  function conversationNotificationLabel(roomId){
+    var label = chatAttentionLabel(roomId);
+    if(label !== 'New message') return label;
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){
+      return item && String(item.id) === String(roomId);
+    })[0];
+    return conversation && conversation.name || 'Mia';
+  }
+  function openNotifiedConversation(roomId){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){
+      return item && String(item.id) === String(roomId);
+    })[0] || null;
+    if(!conversation) return;
+    closeChatUtilityPane();
+    loadChatRoom(roomId, nativeConversationKind(conversation.type), conversationNotificationLabel(roomId));
+  }
+  function showDesktopNotification(roomId, title, body){
+    if(!desktopNotificationsEnabled()) return;
+    chatWs.lastNotifiedAt[roomId] = Date.now();
+    if(nativeDesktopNotifications()){
+      showNativeNotification({title: title, body: body || 'New message', tag: roomId});
+      return;
+    }
     try {
-      var notification = new window.Notification('Mia · ' + chatAttentionLabel(roomId), {
+      var notification = new window.Notification(title, {
         body: body || 'New message',
         tag: 'mia-chat-' + roomId
       });
-      notification.onclick = function(){ window.focus(); notification.close(); };
+      notification.onclick = function(){
+        window.focus();
+        notification.close();
+        if(roomId !== chatWs.activeRoomId) openNotifiedConversation(roomId);
+      };
     } catch(err) {}
+  }
+  function notifyDesktopChatMessage(roomId, message){
+    if((roomId === chatWs.activeRoomId && appInForeground()) || !desktopNotificationsEnabled()) return;
+    var parsed = message && isHumanSender(message.sender)
+      ? parseSignedHumanBody(message.body)
+      : parseSignedBody(message && message.body);
+    var text = String(parsed && parsed.text ? parsed.text : (message && message.body) || '').trim();
+    var name = conversationNotificationLabel(roomId);
+    // A reply whose last line is a question is the bot waiting on the user.
+    var lines = text.split(/\n+/).map(function(line){ return line.trim(); }).filter(Boolean);
+    var asksUser = lines.length > 0 && /\?\s*$/.test(lines[lines.length - 1]);
+    var title = asksUser ? name + ' needs your input' : name + ' replied';
+    showDesktopNotification(roomId, title, excerpt(text.replace(/\s+/g, ' '), 120) || 'New message');
+  }
+  function notifyFinishedAutomationRuns(previous, next){
+    var stillActive = {};
+    (next || []).forEach(function(run){ if(run && run.id) stillActive[String(run.id)] = true; });
+    (previous || []).forEach(function(run){
+      if(!run || !run.id || stillActive[String(run.id)]) return;
+      var roomId = run.conversationId ? String(run.conversationId) : '';
+      // The run's reply usually notified already; one notification is enough.
+      if(roomId && Date.now() - Number(chatWs.lastNotifiedAt[roomId] || 0) < 60000) return;
+      if(roomId && roomId === chatWs.activeRoomId && appInForeground()) return;
+      if(roomId && roomId !== chatWs.activeRoomId && markChatAttention(roomId)) renderChatSidebar();
+      showDesktopNotification(roomId || ('automation-' + run.id), (run.name || 'Automation') + ' finished', 'Scheduled run completed.');
+    });
   }
   function isIncomingAttentionMessage(message){
     if(!message) return false;
@@ -7893,6 +8219,7 @@
   function renderChatThread(options){
     var thread = el('#chatThread');
     if(!thread) return;
+    renderGoalChip();
     captureRenderedChatScroll(thread);
     if(chatWs.activeKind === 'agent-setup'){
       thread.removeAttribute('data-chat-scroll-room');
@@ -8569,6 +8896,63 @@
       (rows.length ? '<div class="manage-agent-list">' + rows.join('') + '</div>' : '') + '</section>';
   }
 
+  // Archived bots are listed from the server's archive, not the live bot
+  // list. Restore brings a bot back with its files, schedules, and chat; it
+  // does not rejoin the rooms it left. The section starts collapsed so
+  // archived bots are not mistaken for live ones.
+  var archivedBotsExpanded = false;
+  function loadArchivedBots(pane){
+    api('/api/bots/archived').then(function(res){
+      var section = el('#manageArchivedBots', pane);
+      if(!section || res.status !== 200 || !res.data) return;
+      var bots = Array.isArray(res.data.bots) ? res.data.bots : [];
+      section.hidden = !bots.length;
+      if(!bots.length){ section.innerHTML = ''; return; }
+      section.innerHTML = '<button type="button" class="manage-agent-section-head manage-archived-toggle" id="manageArchivedToggle" aria-expanded="' + (archivedBotsExpanded ? 'true' : 'false') + '">' +
+          '<span><span class="manage-archived-chevron" aria-hidden="true">' + (archivedBotsExpanded ? '&#9662;' : '&#9656;') + '</span> Archived bots</span>' +
+          '<span class="manage-agent-section-tools"><span>' + bots.length + '</span></span></button>' +
+        '<div class="manage-agent-list"' + (archivedBotsExpanded ? '' : ' hidden') + '>' + bots.map(function(bot){
+          return '<div class="manage-agent-row manage-archived-bot-row"><span class="manage-agent-name">' + esc(bot.name || 'Bot') + '</span>' +
+            '<button type="button" class="manage-agent-section-link" data-restore-archived-bot="' + esc(bot.id) + '">Restore</button></div>';
+        }).join('') + '</div>';
+      var toggle = el('#manageArchivedToggle', section);
+      if(toggle) toggle.addEventListener('click', function(){
+        archivedBotsExpanded = !archivedBotsExpanded;
+        loadArchivedBots(pane);
+      });
+      els('[data-restore-archived-bot]', section).forEach(function(button){
+        button.addEventListener('click', function(e){
+          e.stopPropagation();
+          restoreArchivedBot(button.getAttribute('data-restore-archived-bot'), button);
+        });
+      });
+    }).catch(function(){});
+  }
+
+  function restoreArchivedBot(botId, button){
+    if(button) button.disabled = true;
+    api('/api/bots/archived/' + encodeURIComponent(botId) + '/restore', {method:'POST'}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.bot){
+        if(button) button.disabled = false;
+        showBenchToast(res.status === 409 ? 'A bot with this id already exists' : 'Restore failed (' + res.status + ')');
+        return;
+      }
+      showBenchToast('Restored ' + (res.data.bot.name || 'bot'));
+      return loadBenchAgents().then(function(){ return loadAgents(); }).then(function(apiAgents){
+        syncChatBotRecords(apiAgents);
+        renderChatSidebar();
+        refreshAgentsView();
+        if(chatInfo.mode === 'agents'){
+          var pane = el('#chatInfoPane');
+          if(pane) renderManageAgentsPane(pane);
+        }
+      });
+    }).catch(function(){
+      if(button) button.disabled = false;
+      showBenchToast('Restore failed — network error');
+    });
+  }
+
   function renderManageAgentsPane(pane){
     var groups = {agent: [], bots: []};
     manageAgentList().forEach(function(agent){
@@ -8584,7 +8968,9 @@
       '<button type="button" class="cip-pane-btn" id="manageAgentsPaneClose" aria-label="Close ' + esc(paneTitle) + '" title="Close ' + esc(paneTitle) + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
       '<div class="manage-agents-body">' +
       (multiplayer ? manageAgentSectionHtml('Users', chatWs.humans || [], {humans:true, manageUsers:isAdmin}) : '') +
-      manageAgentSectionHtml('Agent', groups.agent) + manageAgentSectionHtml('Bots', groups.bots, {newBot:true}) + '</div>';
+      manageAgentSectionHtml('Agent', groups.agent) + manageAgentSectionHtml('Bots', groups.bots, {newBot:true}) +
+      '<section class="manage-agent-section manage-archived-bots" id="manageArchivedBots" hidden></section></div>';
+    loadArchivedBots(pane);
 
     function openManageAgentEditor(agentId){
       loadBenchAgents().then(function(){
@@ -8696,6 +9082,15 @@
     var weekdayOptions = weekdays.map(function(day){
       return '<option value="' + day + '"' + (String(automation.day || 'Monday') === day ? ' selected' : '') + '>' + day + '</option>';
     }).join('');
+    var currentModel = automation.model && automation.modelProvider ? automation.modelProvider + '|' + automation.model : '';
+    var modelEntries = chatConnectedModelEntries();
+    var modelOptions = '<option value="">Bot\'s model' + (bot && bot.model ? ' (' + esc(bot.model) + ')' : '') + '</option>' +
+      modelEntries.map(function(entry){
+        var value = entry.provider + '|' + entry.model;
+        return '<option value="' + esc(value) + '"' + (value === currentModel ? ' selected' : '') + '>' + esc(entry.family + ' ' + entry.variant + ' · ' + entry.providerLabel) + '</option>';
+      }).join('') +
+      (currentModel && !modelEntries.some(function(entry){ return entry.provider + '|' + entry.model === currentModel; })
+        ? '<option value="' + esc(currentModel) + '" selected>' + esc(automation.model) + ' (not connected)</option>' : '');
     pane.setAttribute('aria-label', title + ' automation details');
     pane.classList.remove('plugins-open', 'agents-open', 'bot-store-open');
     pane.classList.add('open', 'automation-detail-open');
@@ -8712,6 +9107,7 @@
         '<label class="cip-field" data-frequency-control="weekly"><span class="cip-field-label">Weekday</span><select id="automationEditWeekday">' + weekdayOptions + '</select></label>' +
         '<label class="cip-field" data-frequency-control="monthly"><span class="cip-field-label">Day of month</span><input type="number" id="automationEditMonthDay" min="1" max="31" value="' + esc(automation.day || 1) + '"></label>' +
         '<label class="cip-field" data-frequency-control="time"><span class="cip-field-label">Time' + (Number.isInteger(automation.utcOffsetMinutes) ? ' · ' + newsTimeZoneLabel(automation.utcOffsetMinutes) : '') + '</span><input type="time" id="automationEditTime" value="' + esc(automation.time || '09:00') + '"></label>' +
+        '<label class="cip-field"><span class="cip-field-label">Model</span><select id="automationEditModel">' + modelOptions + '</select></label>' +
         '<label class="cip-field"><span class="cip-field-label">Prompt</span><textarea id="automationEditPrompt" rows="6">' + esc(automation.prompt || '') + '</textarea></label>' +
         '<div class="cip-automation-form-error" id="automationDetailError" role="alert"></div>' +
         '<div class="cip-editor-actions">' + (!isNew ? '<button type="button" class="styled-btn-secondary danger" id="automationDetailDelete">Delete</button>' : '') + '<button type="button" class="styled-btn-secondary" id="automationDetailCancel">Cancel</button><button type="submit" class="styled-btn-primary" id="automationDetailSave">' + (isNew ? 'Add automation' : 'Save') + '</button></div>' +
@@ -8750,6 +9146,7 @@
           intervalUnit: el('#automationEditIntervalUnit', pane).value,
           day: frequencyInput.value === 'weekly' ? el('#automationEditWeekday', pane).value : el('#automationEditMonthDay', pane).value,
           time: el('#automationEditTime', pane).value,
+          model: el('#automationEditModel', pane).value,
           prompt: el('#automationEditPrompt', pane).value
         });
       } catch(error) {
@@ -9826,10 +10223,12 @@
     chatWs.pollTimer = null;
     chatWs.attentionTimer = null;
     syncDesktopNotificationControl();
+    askForDesktopNotificationsOnce();
   }
   function stopChatPolling(){
     if(chatWs.pollTimer){ clearInterval(chatWs.pollTimer); chatWs.pollTimer = null; }
     if(chatWs.attentionTimer){ clearInterval(chatWs.attentionTimer); chatWs.attentionTimer = null; }
+    // The watch socket stays open on other screens: attention is app-wide.
     if(chatWs.native) closeNativeChatSocket();
   }
 
@@ -9914,6 +10313,7 @@
     chatWs.activeRoomId = roomId;
     chatWs.activeKind = kind;
     chatWs.activeLabel = label;
+    if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
     if(roomId !== AGENT_SETUP_ROOM_ID) saveActiveChatLocation(roomId);
     renderChatSidebar();
     refreshChatMain();
@@ -10052,7 +10452,7 @@
   // send, except that an untagged thread reply implicitly addresses the
   // thread root's author instead of going silent — see the resolution
   // block below.
-  function sendNativeConversationEvent(text, threadRootId, preparedAttachment, roomId){
+  function sendNativeConversationEvent(text, threadRootId, preparedAttachment, roomId, extraMetadata){
     var state = chatRoomState(roomId);
     var activeDispatchAtSend = activeRoomTask();
     var thinkingAgentName = nativeThinkingAgentName(roomId, text, threadRootId);
@@ -10079,12 +10479,14 @@
     renderChatSidebar();
     if(chatWs.activeRoomId === roomId) renderChatThread();
     var chatModelMetadata = chatModelSelectionMetadata();
+    var browserPage = window.miaNativeBrowser && window.miaNativeBrowser.currentPage ? window.miaNativeBrowser.currentPage() : null;
+    var metadata = Object.assign({}, chatModelMetadata ? {chatModelSelection: chatModelMetadata} : {}, browserPage ? {browserContext: browserPage} : {}, extraMetadata || {});
     return api(nativeConversationPath(roomId, '/events'), {method:'POST', body:{
       type: preparedAttachment ? 'image' : 'message',
       content: content,
       parentEventId: threadRootId || null,
       clientIdempotencyKey: clientIdempotencyKey,
-      ...(chatModelMetadata ? {metadata: {chatModelSelection: chatModelMetadata}} : {})
+      ...(Object.keys(metadata).length ? {metadata: metadata} : {})
     }}).then(function(res){
       if(res.status !== 201 && res.status !== 200){
         stopChatThinking(roomId);
@@ -10118,6 +10520,18 @@
       return;
     }
     if(chatWs.configured === false) return;
+    if(!threadRootId && !preparedAttachment && /^\/clear$/i.test(String(text || '').trim())){
+      if(!composerSlashCommands().length){
+        showBenchToast('/clear starts a new conversation in Mia and bot chats.');
+        return Promise.resolve({status: 400});
+      }
+      return createFreshConversationForActiveBot().then(function(conversation){
+        return {status: conversation ? 200 : 500};
+      });
+    }
+    if(!threadRootId && !preparedAttachment && composerHermesCommand(text)){
+      return sendNativeConversationEvent(text, null, null, boundRoomId || chatWs.activeRoomId, {slashCommand: true});
+    }
     var explicitNameReply = /^(?:please )?(?:call me|my name is|i['’]d like(?: you to call me)?|i prefer)\s+/i.test(text);
     if(!threadRootId && !preparedAttachment && miaOnboardingChat && (miaOnboardingChat.phase === 'name' || explicitNameReply)
       && (boundRoomId || chatWs.activeRoomId) === miaOnboardingChat.conversationId){
@@ -10422,7 +10836,7 @@
      .bench-dept-dropdown-panel: fixed off the input's own rect so it
      escapes the composer card's rounded-corner clipping instead of being
      laid out in flow. */
-  var chatMention = {open: false, atPos: -1, query: '', matches: [], highlight: 0, confirmEntry: null, confirmBusy: false, groupSend: null};
+  var chatMention = {open: false, atPos: -1, query: '', matches: [], highlight: 0, confirmEntry: null, confirmBusy: false, groupSend: null, slash: false};
 
   function humanDirectoryMatches(user, query){
     var q = String(query || '').trim().toLowerCase();
@@ -10560,6 +10974,7 @@
   function renderMentionPopover(){
     var pop = el('#chatMentionPopover');
     if(!pop || !chatMention.open) return;
+    if(chatMention.slash) return renderSlashCommandPopover();
     if(chatMention.confirmEntry) return renderMentionConfirm();
     var lists = mentionEntryList();
     chatMention.matches = lists.privateAgents.concat(lists.inChat, lists.notInChat);
@@ -10683,9 +11098,140 @@
     chatMention.confirmEntry = null;
     chatMention.confirmBusy = false;
     chatMention.groupSend = null;
+    chatMention.slash = false;
     var pop = el('#chatMentionPopover');
     if(pop){ pop.classList.remove('open'); pop.innerHTML = ''; }
     renderChatSuggestions(); // was deferred while the popover was open
+  }
+
+  // Slash commands the composer offers. Hermes runs goal/compact on
+  // the chat's own session (Mia's, or a bot's own chat); /clear is a composer action that starts a
+  // new conversation and never reaches the backend.
+  var COMPOSER_SLASH_COMMANDS = [
+    {name: 'goal', args: '<what to achieve>', desc: 'Keep working until it is done'},
+    {name: 'compact', args: '', desc: 'Summarize earlier messages to free up context'},
+    {name: 'clear', args: '', desc: 'Start a new conversation'}
+  ];
+  var HERMES_SLASH_COMMAND_NAMES = ['goal', 'compact', 'compress'];
+
+  // The newest goal snapshot Hermes attached to one of Mia's or the bot's
+  // messages in this room: an object, null once cleared, or undefined when no
+  // goal was ever set. Anyone can put metadata on their own message, so only
+  // agent and bot events count.
+  function roomGoalState(roomId){
+    var messages = roomId ? chatRoomState(roomId).messages : [];
+    for(var i = messages.length - 1; i >= 0; i--){
+      var event = messages[i].nativeEvent;
+      var metadata = event && (event.senderType === 'agent' || event.senderType === 'bot') && event.metadata;
+      if(metadata && Object.prototype.hasOwnProperty.call(metadata, 'goal')) return metadata.goal;
+    }
+    return undefined;
+  }
+
+  // Shows a running or paused goal above the composer. The goal keeps
+  // working after the user leaves the chat, so its controls stay in reach.
+  function renderGoalChip(){
+    var chip = el('#ccGoalChip');
+    if(!chip) return;
+    var goal = chatWs.activeKind === 'agent' && composerSlashCommands().length ? roomGoalState(chatWs.activeRoomId) : null;
+    var live = !!(goal && goal.title && (goal.status === 'active' || goal.status === 'paused'));
+    chip.hidden = !live;
+    if(!live){ chip.innerHTML = ''; return; }
+    var paused = goal.status === 'paused';
+    var turns = Number(goal.max_turns) > 0 ? 'turn ' + (Number(goal.turns_used) || 0) + '/' + Number(goal.max_turns) : '';
+    chip.innerHTML = '<span class="cc-goal-dot' + (paused ? ' paused' : '') + '" aria-hidden="true"></span>' +
+      '<span class="cc-goal-label">' + (paused ? 'Goal paused' : 'Goal') + '</span>' +
+      '<span class="cc-goal-title" title="' + esc(goal.title) + '">' + esc(goal.title) + '</span>' +
+      (turns ? '<span class="cc-goal-turns">' + esc(turns) + '</span>' : '') +
+      '<button type="button" class="cc-goal-btn" data-goal-action="' + (paused ? 'resume' : 'pause') + '">' + (paused ? 'Resume' : 'Pause') + '</button>' +
+      '<button type="button" class="cc-goal-btn" data-goal-action="clear">Clear</button>';
+    var roomId = chatWs.activeRoomId;
+    els('[data-goal-action]', chip).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        btn.disabled = true;
+        sendActiveRoomMessage('/goal ' + btn.getAttribute('data-goal-action'), null, null, roomId);
+      });
+    });
+  }
+
+  function activeConversationRecord(){
+    return (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
+  }
+
+  // Mia's chat and a bot's own chat keep one Hermes session, so every
+  // command works there. Other rooms: none.
+  function composerSlashCommands(){
+    var conversation = activeConversationRecord();
+    if(!conversation || chatWs.activeKind !== 'agent') return [];
+    if(isNativeMiaConversation(conversation)) return COMPOSER_SLASH_COMMANDS;
+    var metadata = conversation.metadata || {};
+    if(conversation.type === 'bot' && metadata.botId) return COMPOSER_SLASH_COMMANDS;
+    return [];
+  }
+
+  // "/" at the start of the draft, followed only by the command name so far.
+  function slashTriggerAt(input){
+    var caret = input.selectionStart == null ? input.value.length : input.selectionStart;
+    var match = /^\/([a-z]*)$/i.exec(input.value.slice(0, caret));
+    if(!match || input.value.slice(caret).trim()) return null;
+    return {query: match[1].toLowerCase()};
+  }
+
+  // A draft that is one of Hermes' commands, so the backend runs it as a
+  // command instead of handing "/goal …" to the model as text.
+  function composerHermesCommand(text){
+    var match = /^\/([a-z]+)(?:\s|$)/i.exec(String(text || '').trim());
+    return match && HERMES_SLASH_COMMAND_NAMES.indexOf(match[1].toLowerCase()) !== -1 ? match[1].toLowerCase() : null;
+  }
+
+  function openSlashCommandPopover(trigger){
+    var commands = composerSlashCommands().filter(function(command){ return command.name.indexOf(trigger.query) === 0; });
+    if(!commands.length){ if(chatMention.slash) closeMentionPopover(); return; }
+    chatMention.open = true;
+    chatMention.slash = true;
+    chatMention.confirmEntry = null;
+    chatMention.groupSend = null;
+    chatMention.matches = commands;
+    if(chatMention.query !== trigger.query) chatMention.highlight = 0;
+    chatMention.query = trigger.query;
+    var pop = el('#chatMentionPopover');
+    if(pop) pop.classList.add('open');
+    positionMentionPopover();
+    renderMentionPopover();
+  }
+
+  function renderSlashCommandPopover(){
+    var pop = el('#chatMentionPopover');
+    if(chatMention.highlight >= chatMention.matches.length) chatMention.highlight = 0;
+    pop.innerHTML = '<div class="cmp-section-label">COMMANDS</div>' + chatMention.matches.map(function(command, i){
+      return '<button type="button" class="cmp-option cmp-slash-option' + (i === chatMention.highlight ? ' highlighted' : '') + '" data-slash-ix="' + i + '">' +
+        '<span class="cmp-slash-name">/' + esc(command.name) + (command.args ? ' <span class="cmp-slash-args">' + esc(command.args) + '</span>' : '') + '</span>' +
+        '<span class="cmp-slash-desc">' + esc(command.desc) + '</span></button>';
+    }).join('');
+    els('.cmp-slash-option', pop).forEach(function(btn){
+      btn.addEventListener('mousedown', function(e){
+        e.preventDefault();
+        if(selectSlashCommand(chatMention.matches[parseInt(btn.getAttribute('data-slash-ix'), 10)])) submitComposerDraft();
+      });
+    });
+  }
+
+  // Fills the composer with the chosen command. Returns true when the
+  // command takes no argument and should be sent right away.
+  function selectSlashCommand(command){
+    var input = el('#ccInput');
+    if(!command || !input) return false;
+    input.value = '/' + command.name + (command.args ? ' ' : '');
+    closeMentionPopover();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    return !command.args;
+  }
+
+  function submitComposerDraft(){
+    var send = el('#ccSend');
+    if(send && !send.getAttribute('data-stop-task-id')) send.click();
   }
 
   // How many people a draft's group tags (@all/@all_users/@all_bots) would
@@ -10805,6 +11351,15 @@
       renderMentionPopover();
       return true;
     }
+    if(chatMention.slash && (e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey){
+      var command = chatMention.matches[chatMention.highlight];
+      if(!command) return false;
+      // A command with no argument sends on Enter; the caller's Enter
+      // handler does that once the draft holds the full command.
+      if(selectSlashCommand(command) && e.key === 'Enter') return false;
+      e.preventDefault();
+      return true;
+    }
     if(e.key === 'Enter'){
       var entry = chatMention.matches[chatMention.highlight];
       if(entry){ e.preventDefault(); selectMentionEntry(entry); return true; }
@@ -10831,6 +11386,8 @@
     var input = el('#ccInput');
     if(!input) return;
     input.addEventListener('input', function(){
+      var slash = slashTriggerAt(input);
+      if(slash && composerSlashCommands().length){ openSlashCommandPopover(slash); return; }
       var trigger = mentionTriggerAt(input);
       if(trigger) openMentionPopover(trigger);
       else closeMentionPopover();
@@ -10915,7 +11472,7 @@
     function roomTimeTag(roomId){
       var state = roomId && chatWs.byRoom[roomId];
       if(!state || !state.lastTs) return '';
-      return '<span class="chat-dm-time">' + esc(chatRelTime(state.lastTs)) + '</span>';
+      return '<span class="chat-dm-time" data-ts="' + Number(state.lastTs) + '">' + esc(chatRelTime(state.lastTs)) + '</span>';
     }
     function lastTsFor(roomId){
       var state = roomId && chatWs.byRoom[roomId];
@@ -11034,6 +11591,17 @@
       .map(function(a){
         return {kind: 'agent', name: a.name, roomId: a.roomId || a.nativeConversationId || null, agent: a, mockupOrder: a.mockupOrder};
       });
+    // An extra chat with Mia or a bot ("New conversation") lives in History;
+    // once bookmarked it also gets its own row under Pinned.
+    var agentRowRoomIds = {};
+    agentEntries.forEach(function(e){ if(e.roomId) agentRowRoomIds[e.roomId] = true; });
+    (chatWs.nativeConversations || []).forEach(function(conversation){
+      var room = nativeConversationToRoom(conversation);
+      if(room.kind !== 'agent' || agentRowRoomIds[room.roomId] || !isChatPinned('room:' + room.roomId)) return;
+      var agentId = isNativeMiaConversation(conversation) ? 'gateway' : String(room.agentId || room.id);
+      agentEntries.push({kind: 'agent', name: room.name, roomId: room.roomId, agent: {id: agentId, name: room.name},
+        extraChat: true, createdTs: Date.parse(conversation.createdAt || '') || 0});
+    });
     var dmEntries = chatWs.rooms.dms.filter(function(d){ return !directHumanRoomIds[d.roomId]; }).map(function(d){
       return {kind: d.kind === 'group' ? 'group' : 'dm', name: dmLabel(d), roomId: d.roomId, dm: d};
     });
@@ -11042,6 +11610,8 @@
       // Hide/unhide keys on ids, not room ids — an agent row can exist
       // before its native conversation does.
       e.hideKey = e.kind === 'agent' ? 'agent:' + e.agent.id : e.kind === 'dm' ? 'dm:' + e.dm.id : e.kind === 'human' ? 'human:' + String(e.email || '').toLowerCase() : null;
+      // Hiding an extra chat's row would hide the agent's main row too.
+      if(e.extraChat) e.hideKey = null;
       return e;
     });
     conversationEntries = conversationEntries.concat(allDmEntries);
@@ -11084,6 +11654,7 @@
       if(e.hideKey) attr += ' data-chat-menu-hide-key="' + esc(e.hideKey) + '"';
       if(e.kind === 'human') attr += ' data-chat-menu-human-email="' + esc(e.email) + '"';
       if(e.kind === 'agent') attr += ' data-chat-menu-agent-id="' + esc(e.agent.id) + '"';
+      if(e.extraChat) attr += ' data-agent-room-id="' + esc(e.roomId) + '"';
       var hasActivity = sidebarEntryHasActivity(e);
       var titleAttr = hasActivity ? ' title="Active now"' : '';
       var mark = e.kind === 'home' || e.kind === 'department'
@@ -11128,6 +11699,12 @@
       });
       els('.chat-recent-row[data-agent-id]', wrap).forEach(function(row){
         row.addEventListener('click', function(){
+          var extraRoomId = row.getAttribute('data-agent-room-id');
+          if(extraRoomId){
+            clearChatBack(); clearChatActive(); row.classList.add('active');
+            loadChatRoom(extraRoomId, 'agent', row.getAttribute('data-chat-menu-name') || '');
+            return;
+          }
           var id = row.getAttribute('data-agent-id');
           var agent = id === 'gateway' ? chatWs.gatewayAgent : chatWs.allAgents.filter(function(a){ return a.id === id; })[0];
           if(agent) navigateToAgentChat(agent, true);
@@ -11959,6 +12536,18 @@
       if(account) account.setAttribute('aria-expanded', 'false');
       openSettingsDrawer();
     });
+    // Sidebar times would otherwise stay at "just now" until the next render.
+    setInterval(function(){
+      if(document.hidden) return;
+      els('#panel-chat .chat-dm-time[data-ts]').forEach(function(node){
+        var text = chatRelTime(Number(node.getAttribute('data-ts')) || 0);
+        if(node.textContent !== text) node.textContent = text;
+      });
+    }, 60000);
+    var nativeNotifications = nativeDesktopNotifications();
+    if(nativeNotifications && typeof nativeNotifications.onClick === 'function') nativeNotifications.onClick(function(roomId){
+      if(roomId && roomId !== chatWs.activeRoomId) openNotifiedConversation(String(roomId));
+    });
     var notifications = el('#chatAcctNotifications');
     if(notifications) notifications.addEventListener('click', function(){
       if(menu) menu.classList.remove('open');
@@ -12408,11 +12997,12 @@
     var pinned = isChatPinned('room:' + chatWs.activeRoomId);
     var activeConversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
     var activeMetadata = activeConversation && activeConversation.metadata || {};
-    var canCreateFreshBotConversation = !!activeConversation && activeConversation.type === 'bot' && !!activeMetadata.botId;
+    var activeIsMia = isNativeMiaConversation(activeConversation);
+    var canCreateFreshBotConversation = !!activeConversation && ((activeConversation.type === 'bot' && !!activeMetadata.botId) || activeIsMia);
     var freshDisabled = !canCreateFreshBotConversation || !!freshBotConversationRequest;
     var freshTitle = canCreateFreshBotConversation
-      ? (freshBotConversationRequest ? 'Creating a new conversation…' : 'New conversation with this bot')
-      : (isNativeMiaConversation(activeConversation) ? 'Mia uses one continuous conversation' : 'Open a bot chat to start another conversation');
+      ? (freshBotConversationRequest ? 'Creating a new conversation…' : (activeIsMia ? 'New conversation with Mia' : 'New conversation with this bot'))
+      : 'Open a bot or Mia chat to start another conversation';
     // Canonical Lucide v0.545.0 geometry. Keep this set together so these
     // adjacent actions share one optical grid instead of drifting as custom
     // paths are edited independently.
@@ -12428,7 +13018,8 @@
     if(freshBotConversationRequest) return freshBotConversationRequest.promise;
     var source = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
     var metadata = source && source.metadata || {};
-    if(!source || source.type !== 'bot' || !metadata.botId) return Promise.resolve(null);
+    var sourceIsMia = isNativeMiaConversation(source);
+    if(!source || (!sourceIsMia && (source.type !== 'bot' || !metadata.botId))) return Promise.resolve(null);
     var requestedWorkspace = activeWorkspaceKey;
     var requestedRoomId = source.id;
     var request = {
@@ -12448,7 +13039,7 @@
       }
       applyNativeConversationList(chatWs.nativeConversations);
       renderChatSidebar();
-      loadChatRoom(conversation.id, 'agent', conversation.name || source.name || 'Bot');
+      loadChatRoom(conversation.id, 'agent', conversation.name || source.name || (sourceIsMia ? 'Mia' : 'Bot'));
       return conversation;
     }).catch(function(error){
       if(activeWorkspaceKey === requestedWorkspace && chatWs.activeRoomId === requestedRoomId){
@@ -13802,6 +14393,17 @@
     }
 
     picker.ensureLoaded = function(){ return load({refresh:true}); };
+    // Switching chats shows that chat's own choice (a bot's, or Mia's).
+    var shownScope = null;
+    picker.showChatSelection = function(){
+      var scope = chatModelSelectionScope();
+      if(scope === shownScope) return;
+      shownScope = scope;
+      picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
+      closeMenu();
+      if(picker.loaded && picker.providers.length) hydrateSelection();
+      render();
+    };
     picker.resetAndReload = function(){
       picker.loaded = false;
       picker.loading = false;

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
@@ -132,4 +133,42 @@ test('bot setup uses the same validated per-turn model selection as normal chat'
   assert.match(serverSource, /async function chatModelSelectionForUser\(rawSelection, email\)/);
   assert.match(serverSource, /app\.post\('\/api\/bots\/interpret'[\s\S]*?chatModelSelectionForUser\([\s\S]*?req\.body && req\.body\.modelSelection[\s\S]*?chatModelSelectionInferenceOptions\([\s\S]*?modelSelection/);
   assert.match(serverSource, /function runNativeConversationAgentReply[\s\S]*?chatModelSelectionForUser\(/);
+});
+
+test('a rejected or dropped Mia Router key says to sign in again on this computer', () => {
+  const router = { managedRouter: true, managedRouterLabel: 'Mia Router' };
+  for (const failure of [
+    'HTTP 401: User not found.',
+    'OpenRouter rejected your API key, so the model can\'t be reached.',
+    'Agent could not start the assistant for this session. Details: No LLM provider configured. Run `hermes model` to select a provider.',
+  ]) {
+    const message = userFacingModelDispatchError(new Error(failure), router);
+    assert.match(message, /^Your Mia Router key on this computer is no longer valid\./, failure);
+    assert.match(message, /one computer at a time/);
+    assert.match(message, /Sign out and sign in again here/);
+  }
+  assert.match(userFacingModelDispatchError(new Error('HTTP 429 rate limit'), router), /usage limit/);
+  assert.match(
+    userFacingModelDispatchError(new Error('HTTP 401: User not found.')),
+    /credential was rejected/,
+    'other providers keep the generic reconnect copy'
+  );
+});
+
+test('dispatch failures name Mia Router only for turns that ran on it', () => {
+  assert.match(serverSource, /userFacingModelDispatchError\(timedOut \|\| error, \{\s*managedRouter: dispatchUsesManagedRouter\(failureTrigger\),/);
+  const start = serverSource.indexOf('function turnUsesManagedRouter(');
+  const context = vm.createContext({ MANAGED_ROUTER_HERMES_PROVIDER: 'openrouter' });
+  vm.runInContext(serverSource.slice(start, serverSource.indexOf('\nfunction dispatchUsesManagedRouter(', start)), context);
+  const uses = (preference, selection, configured = true) => context.turnUsesManagedRouter(preference, selection, configured);
+  // What onboarding actually saves when the user picks Mia Router.
+  const router = { provider: 'openai-api', apiProvider: 'openrouter' };
+  const codex = { provider: 'openai-codex', apiProvider: null };
+  assert.equal(uses(router, null), true, 'Mia Router as the default');
+  assert.equal(uses(router, { provider: 'openrouter' }), true, 'Mia Router picked explicitly');
+  assert.equal(uses(codex, { provider: 'openrouter' }), true, 'Mia Router picked over another default');
+  assert.equal(uses(router, { provider: 'openai-codex' }), false, 'another provider picked over Mia Router');
+  assert.equal(uses(codex, null), false);
+  assert.equal(uses({ provider: 'openai-api', apiProvider: 'deepseek' }, null), false, 'the user\'s own API key');
+  assert.equal(uses(router, null, false), false, 'no Mia Router configured: OpenRouter is the user\'s own key');
 });

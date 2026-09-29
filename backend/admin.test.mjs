@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -234,6 +235,12 @@ inference.startHermesGatewayRuntime = async () => {};
 inference.closeHermesGatewayRuntime = async () => {};
 inference.runInference = async (_prompt, options) => {
   fs.writeFileSync(process.env.MIAOS_TEST_GATE_READY, options.profile);
+  return { text: 'Fixture bot reply' };
+};
+// A bot's own chat runs on its persistent session; check the profile the
+// real option mapping picks for it.
+inference.runInferenceViaHermesGateway = async ({ options }) => {
+  fs.writeFileSync(process.env.MIAOS_TEST_GATE_READY, inference.persistentSessionOptions(options).profile);
   return { text: 'Fixture bot reply' };
 };
 `;
@@ -794,6 +801,183 @@ test('process-global provider mutations require an admin browser session', async
     assert.equal(authRedirect.status, 403);
   } finally {
     await stopServer(server);
+  }
+});
+
+test('Mia Router failures reach the local-profile UI as a safe reason', async () => {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const issuer = 'https://router-fixture.clerk.test';
+  const publishableKey = `pk_test_${Buffer.from('router-fixture.clerk.test$').toString('base64url')}`;
+  const privateRouterDetail = 'router-private-detail-canary';
+  const forbiddenRouterDetail = 'router-forbidden-detail-canary';
+  let invalidProvisionResolve;
+  let successfulProvisionResolve;
+  const invalidProvisionRequest = new Promise((resolve) => { invalidProvisionResolve = resolve; });
+  const successfulProvisionRequest = new Promise((resolve) => { successfulProvisionResolve = resolve; });
+  let provisionCount = 0;
+  const router = http.createServer(async (request, response) => {
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    const record = {
+      authorization: request.headers.authorization,
+      body,
+    };
+    provisionCount += 1;
+    if (provisionCount === 1) {
+      invalidProvisionResolve(record);
+      response.writeHead(401, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'invalid session token', detail: privateRouterDetail }));
+      return;
+    }
+    if (provisionCount === 2) {
+      response.writeHead(403, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'not authorized', detail: forbiddenRouterDetail }));
+      return;
+    }
+    successfulProvisionResolve(record);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ key: 'fixture-router-key-never-return-this' }));
+  });
+  await new Promise((resolve) => router.listen(0, '127.0.0.1', resolve));
+  const routerPort = router.address().port;
+  let server = null;
+  try {
+    const preloadScript = `
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.stopHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewaySessions = async () => 0;
+`;
+    server = await startServer({
+      preloadScript,
+      extraEnv: {
+        MIAOS_MANAGED_ROUTER_URL: `http://127.0.0.1:${routerPort}/provision`,
+        CLERK_PUBLISHABLE_KEY: publishableKey,
+        CLERK_JWT_KEY: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        CLERK_ISSUER: issuer,
+        MIAOS_LOCAL_PROFILE: '1',
+        HERMES_BIN: '/usr/bin/true',
+      },
+    });
+    const localCookie = await loginAsBootAdmin(server);
+    const headers = { cookie: localCookie, 'content-type': 'application/json' };
+    const disconnectedRouter = await fetch(`${server.origin}/api/settings/harness/auth/logout`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ provider: 'openrouter' }),
+    });
+    assert.equal(disconnectedRouter.status, 200);
+    const disconnected = await fetch(`${server.origin}/api/settings/harness/connected`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ provider: 'managed-router' }),
+    });
+    assert.equal(disconnected.status, 409);
+    assert.equal((await disconnected.json()).error, 'That provider is not connected yet.');
+
+    const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const unsigned = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({
+      iss: issuer,
+      sub: 'user_router_fixture',
+      primaryEmail: 'router-fixture@example.com',
+      fullName: 'Router Fixture',
+      azp: server.origin,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 60,
+    })}`;
+    const clerkToken = `${unsigned}.${crypto.sign('RSA-SHA256', Buffer.from(unsigned), privateKey).toString('base64url')}`;
+    const clerkLogin = await fetch(`${server.origin}/api/clerk/session`, {
+      method: 'POST',
+      headers: { origin: server.origin, authorization: `Bearer ${clerkToken}` },
+    });
+    assert.equal(clerkLogin.status, 200, await clerkLogin.text());
+    const clerkCookieHeader = clerkLogin.headers.get('set-cookie');
+    assert.ok(clerkCookieHeader, 'Clerk login creates the local browser session');
+    const clerkCookie = clerkCookieHeader.split(';', 1)[0];
+
+    const routerRequest = await invalidProvisionRequest;
+    assert.equal(routerRequest.authorization, `Bearer ${clerkToken}`);
+    assert.deepEqual(JSON.parse(routerRequest.body), { action: 'provision' });
+
+    let routerStatusBody = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const status = await fetch(`${server.origin}/api/settings/managed-router/status`, {
+        headers: { cookie: clerkCookie },
+      });
+      routerStatusBody = await status.json();
+      if (routerStatusBody.error) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(routerStatusBody.error, "Mia Router didn't accept your Mia sign-in. Sign out of Mia and sign in again.");
+    assert.equal(routerStatusBody.errorCode, 'session_rejected');
+    assert.doesNotMatch(JSON.stringify(routerStatusBody), /private-detail-canary/);
+    assert.equal(JSON.stringify(routerStatusBody).includes(clerkToken), false);
+
+    const connected = await fetch(`${server.origin}/api/settings/harness/connected`, {
+      method: 'POST',
+      headers: { cookie: clerkCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'managed-router' }),
+    });
+    const connectedBody = await connected.json();
+    assert.equal(connected.status, 409);
+    assert.equal(connectedBody.error, "Mia Router didn't accept your Mia sign-in. Sign out of Mia and sign in again.");
+    assert.doesNotMatch(JSON.stringify(connectedBody), /private-detail-canary/);
+    assert.equal(JSON.stringify(connectedBody).includes(clerkToken), false);
+    assert.doesNotMatch(server.logs.join(''), /private-detail-canary/);
+    assert.equal(server.logs.join('').includes(clerkToken), false);
+
+    const forbiddenRetry = await fetch(`${server.origin}/api/settings/managed-router/provision`, {
+      method: 'POST',
+      headers: { cookie: clerkCookie, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const forbiddenRetryBody = await forbiddenRetry.json();
+    assert.equal(forbiddenRetry.status, 502);
+    assert.equal(forbiddenRetryBody.error, "This account isn't allowed to use Mia Router.");
+    assert.equal(forbiddenRetryBody.code, 'not_authorized');
+    const forbiddenStatus = await fetch(`${server.origin}/api/settings/managed-router/status`, {
+      headers: { cookie: clerkCookie },
+    });
+    assert.equal((await forbiddenStatus.json()).error, "This account isn't allowed to use Mia Router.");
+    const forbiddenConnected = await fetch(`${server.origin}/api/settings/harness/connected`, {
+      method: 'POST',
+      headers: { cookie: clerkCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'managed-router' }),
+    });
+    assert.equal(forbiddenConnected.status, 409);
+    assert.equal((await forbiddenConnected.json()).error, "This account isn't allowed to use Mia Router.");
+    assert.doesNotMatch(server.logs.join(''), /forbidden-detail-canary/);
+    assert.equal(server.logs.join('').includes(clerkToken), false);
+
+    const retried = await fetch(`${server.origin}/api/settings/managed-router/provision`, {
+      method: 'POST',
+      headers: { cookie: clerkCookie, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const retryBody = await retried.json();
+    assert.equal(retried.status, 200, JSON.stringify(retryBody));
+    assert.deepEqual(retryBody, { ok: true, provisioned: true });
+    const successfulRequest = await successfulProvisionRequest;
+    assert.equal(successfulRequest.authorization, `Bearer ${clerkToken}`);
+    assert.deepEqual(JSON.parse(successfulRequest.body), { action: 'provision' });
+
+    const provisionedStatus = await fetch(`${server.origin}/api/settings/managed-router/status`, {
+      headers: { cookie: clerkCookie },
+    });
+    const provisionedStatusBody = await provisionedStatus.json();
+    assert.equal(provisionedStatusBody.provisioned, true);
+    assert.equal(provisionedStatusBody.error, null);
+    assert.equal(provisionedStatusBody.errorCode, null);
+    assert.doesNotMatch(JSON.stringify(provisionedStatusBody), /fixture-router-key-never-return-this/);
+    const connectedAfterRetry = await fetch(`${server.origin}/api/settings/harness/connected`, {
+      method: 'POST',
+      headers: { cookie: clerkCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'managed-router' }),
+    });
+    assert.equal(connectedAfterRetry.status, 200, await connectedAfterRetry.text());
+  } catch (error) {
+    throw new Error(`${error.stack || error}\nBackend logs:\n${server ? server.logs.join('') : ''}`);
+  } finally {
+    if (server) await stopServer(server);
+    await new Promise((resolve) => router.close(resolve));
   }
 });
 

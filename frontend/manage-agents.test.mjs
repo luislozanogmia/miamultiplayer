@@ -277,6 +277,19 @@ test('automation panel renders durable bot schedules separately from running wor
       prompt: 'Send the edited brief.',
     }],
   });
+  const withModel = helpers.normalizedAutomationEditorPayload(persistedBots[1], 'reminder-1', {
+    name: 'Daily Brief', enabled: true, frequency: 'weekly', day: 'Tuesday', time: '08:15',
+    prompt: 'Send the edited brief.', model: 'openai-codex|gpt-5.5',
+  }).automations[0];
+  assert.equal(withModel.model, 'gpt-5.5');
+  assert.equal(withModel.modelProvider, 'openai-codex');
+  const backToBot = helpers.normalizedAutomationEditorPayload({ ...persistedBots[1], automations: [withModel] }, 'reminder-1', {
+    name: 'Daily Brief', enabled: true, frequency: 'weekly', day: 'Tuesday', time: '08:15',
+    prompt: 'Send the edited brief.', model: '',
+  }).automations[0];
+  assert.equal(backToBot.model, undefined, 'choosing the bot model clears the override');
+  assert.equal(backToBot.modelProvider, undefined);
+  assert.match(source, /id="automationEditModel"/);
   assert.deepEqual(helpers.normalizedAutomationEditorPayload(persistedBots[0], 'research-1', {
     name: 'Daily Practice',
     enabled: false,
@@ -451,8 +464,8 @@ test('styled chat bot avatars open the selected bot in the right profile panel',
   assert.match(source, /id="styledAgentEditSave"/);
   assert.match(source, /id="styledAgentEditDelete"/);
   assert.match(source, /if\(remove\) remove\.addEventListener\('click', deleteEditCinemaAgent\)/);
-  assert.match(source, /function appConfirm\(message\)[\s\S]*app-confirm-overlay open[\s\S]*confirm\.addEventListener\('click',[\s\S]*finish\(true\)/);
-  assert.match(source, /function deleteBenchAgent\(a, onDeleted\)[\s\S]*appConfirm\('Delete ' \+ a\.name \+ '\?'\)[\s\S]*method:'DELETE'/);
+  assert.match(source, /function appConfirm\(message, confirmLabel\)[\s\S]*app-confirm-overlay open[\s\S]*confirm\.addEventListener\('click',[\s\S]*finish\(true\)/);
+  assert.match(source, /function deleteBenchAgent\(a, onDeleted\)[\s\S]*appConfirm\('Archive ' \+ a\.name \+ '\? [\s\S]*method:'DELETE'/);
   assert.match(source, /function removeDeletedBotChatState\(botId\)[\s\S]*metadata\.botId[\s\S]*var wasActive = deletedRoomIds\.indexOf\(String\(chatWs\.activeRoomId \|\| ''\)\) !== -1/);
   assert.match(source, /function removeDeletedBotChatState\(botId\)[\s\S]*if\(wasActive\)\{[\s\S]*chatWs\.activeRoomId = null[\s\S]*saveActiveChatLocation\(null\)[\s\S]*refreshChatMain\(\)/);
   assert.match(source, /if\(res\.status === 200\)\{[\s\S]*removeDeletedBotChatState\(targetId\)[\s\S]*loadBenchAgents\(\)\.then\(refreshAgentsView\)/);
@@ -746,8 +759,9 @@ test('failed activity refreshes clear stale automation and dispatch pulses', asy
   const automationLoader = source.match(/function loadActiveAutomationRuns\(\)\{[\s\S]*?\n  \}/)?.[0] || '';
   const dispatchLoader = source.match(/function loadActiveNativeDispatches\(roomId\)\{[\s\S]*?\n  \}/)?.[0] || '';
 
-  assert.match(automationLoader, /var next = res\.status === 200[\s\S]*?\? res\.data\.runs : \[\]/);
-  assert.match(automationLoader, /\.catch\(function\(\)\{[\s\S]*?chatWs\.automationRuns = \[\]/);
+  assert.match(automationLoader, /res\.status !== 200[\s\S]*?return clearStaleRuns\(\)/);
+  assert.match(automationLoader, /\.catch\(clearStaleRuns\)/);
+  assert.match(source, /var clearStaleRuns = function\(\)\{[\s\S]*?chatWs\.automationRuns = \[\]/);
   assert.match(dispatchLoader, /res\.status === 200 \? \(res\.data && res\.data\.dispatches \|\| \[\]\) : \[\]/);
   assert.match(dispatchLoader, /\.catch\(function\(\)\{[\s\S]*?setRoomNativeDispatches\(roomId, \[\]\)/);
 });
@@ -877,4 +891,22 @@ test('browser address bar defaults plain text to Google and offers persistent X 
   assert.match(source, /https:\/\/www\.google\.com\/search\?q=/);
   assert.match(source, /https:\/\/x\.com\/search\?q=/);
   assert.match(source, /localStorage\.setItem\(LOCAL_BROWSER_SEARCH_ENGINE_KEY/);
+});
+
+test('bots are archived with Restore, never permanently deleted from the UI', async () => {
+  const [html, source] = await Promise.all([readFile(htmlUrl, 'utf8'), readFile(appUrl, 'utf8')]);
+  assert.doesNotMatch(html + source, />Delete bot</);
+  assert.doesNotMatch(source, /'Delete bot'/);
+  assert.match(html, /id="benchEditDeleteBtn"[^>]*>Archive bot</);
+  assert.match(source, /id="styledAgentEditDelete">Archive bot</);
+  assert.match(source, /hasConversationDelete \? 'Delete conversation' : 'Archive bot'/);
+  assert.match(source, /confirm\.textContent = confirmLabel \|\| 'Delete'/);
+  assert.match(source, /You can restore it from Archived bots\.', 'Archive'\)/);
+  assert.match(source, /function applyNativeConversationList\(conversations\)[\s\S]*conversation\.metadata\.botArchived === true/);
+  assert.match(source, /function loadArchivedBots\(pane\)[\s\S]*api\('\/api\/bots\/archived'\)[\s\S]*data-restore-archived-bot/);
+  assert.match(source, /function restoreArchivedBot\(botId, button\)[\s\S]*'\/api\/bots\/archived\/' \+ encodeURIComponent\(botId\) \+ '\/restore', \{method:'POST'\}/);
+  assert.match(source, /function renderManageAgentsPane\(pane\)[\s\S]*id="manageArchivedBots" hidden[\s\S]*loadArchivedBots\(pane\)/);
+  // Collapsed by default so archived bots are not mistaken for live ones.
+  assert.match(source, /var archivedBotsExpanded = false;/);
+  assert.match(source, /'<div class="manage-agent-list"' \+ \(archivedBotsExpanded \? '' : ' hidden'\) \+ '>'/);
 });

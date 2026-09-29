@@ -52,6 +52,8 @@
   var lastTabs = '';
   input.placeholder = 'Search or enter a web address';
   input.setAttribute('aria-label', 'Search or web address');
+  var draggingTabId = null;
+  function els(selector) { return Array.prototype.slice.call(strip.querySelectorAll(selector)); }
   function selected() { return state.tabs.find(function (tab) { return tab.id === state.activeId; }); }
   function developerModeEnabled() { return document.documentElement.getAttribute('data-theme') === 'developer'; }
   function closeFind() { findBar.hidden = true; command('find', { value: '' }); layout(); }
@@ -119,12 +121,40 @@
     if (state.download) foot.textContent += ' \u00b7 ' + state.download;
     renderDownloads();
     var signature = JSON.stringify([state.activeId, state.tabs.map(function (t) { return [t.id, t.title, t.favicon]; })]);
-    if (signature !== lastTabs) {
+    // Redrawing mid-drag would drop the dragged tab; catch up once it ends.
+    if (signature !== lastTabs && draggingTabId === null) {
       lastTabs = signature;
       strip.replaceChildren();
-      state.tabs.forEach(function (t) {
+      state.tabs.forEach(function (t, index) {
         var group = document.createElement('div');
         group.className = 'native-browser-tab' + (t.id === state.activeId ? ' active' : '');
+        // Drag a tab onto another to put it in that tab's place.
+        group.draggable = true;
+        group.addEventListener('dragstart', function (event) {
+          draggingTabId = t.id;
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', String(t.id));
+          group.classList.add('dragging');
+        });
+        group.addEventListener('dragend', function () {
+          draggingTabId = null;
+          if (state) render(state);
+          group.classList.remove('dragging');
+          els('.native-browser-tab.drop-target').forEach(function (node) { node.classList.remove('drop-target'); });
+        });
+        group.addEventListener('dragover', function (event) {
+          if (draggingTabId === null || draggingTabId === t.id) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+          group.classList.add('drop-target');
+        });
+        group.addEventListener('dragleave', function () { group.classList.remove('drop-target'); });
+        group.addEventListener('drop', function (event) {
+          event.preventDefault();
+          group.classList.remove('drop-target');
+          if (draggingTabId === null || draggingTabId === t.id) return;
+          command('move', { id: draggingTabId, index: index });
+        });
         var button = document.createElement('button');
         button.type = 'button'; button.title = t.title || 'New tab';
         button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(t.id === state.activeId));
@@ -268,6 +298,13 @@
     },
     action: function (action) {
       command(action === 'reload' && selected() && selected().loading ? 'stop' : action);
+    },
+    // The page the user is looking at, for the chat to attach as context.
+    // Only while the browser panel is open and showing a web page.
+    currentPage: function () {
+      var tab = open && selected();
+      if (!tab || !/^https?:\/\//i.test(tab.url || '')) return null;
+      return { url: tab.url, title: tab.title || '' };
     },
     menuAction: function (key) {
       if (key === 't') command('new').then(focusLocation);

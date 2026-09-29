@@ -18,6 +18,8 @@ const MIAOS_BOT_HERMES_PROFILE = 'miaos-bot-worker';
 const MIAOS_BOT_GOOGLE_HERMES_PROFILE = 'miaos-bot-google-worker';
 const CLAUDE_SUBSCRIPTION_PLUGIN = 'claude-subscription-directsdk-experimental';
 const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
+// Refuses Hermes' own browser tools until the session has tried ghost-cli.
+const GHOST_FIRST_PLUGIN = 'mia-ghost-first';
 const FULL_AGENT_TOOLSETS = Object.freeze(['file', 'terminal', 'memory', 'session_search', 'todo', 'clarify']);
 const SEARCH_ONLY_TOOLSETS = Object.freeze(['web', 'todo', 'clarify']);
 const GOOGLE_WORKSPACE_MCP_TOOLS = Object.freeze([
@@ -41,6 +43,7 @@ const GOOGLE_WORKSPACE_MCP_TOOLS = Object.freeze([
   'google_sheets_create',
   'google_sheets_update',
   'google_sheets_append',
+  'google_sheets_add_tab',
   'google_docs_get',
   'google_docs_create',
   'google_docs_append',
@@ -142,7 +145,7 @@ function backgroundReviewEnabledForBot() {
 }
 
 function runtimeProfileConfig({
-  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview,
+  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false,
 }) {
   const lines = [
     MANAGED_MARKER,
@@ -168,6 +171,17 @@ function runtimeProfileConfig({
     '  background_review:',
     `    enabled: ${backgroundReview === true ? 'true' : 'false'}`,
   ];
+  if (editsBots) {
+    // Mia's own agent creates and edits bots, whose instructions live in
+    // each bot's AGENTS.md. Hermes gates every AGENTS.md write behind a
+    // human approval that Mia cannot show yet, so the write always failed.
+    // Only Mia's agent profiles turn the gate off; the bot-worker profile
+    // keeps Hermes' default.
+    lines.push(
+      'security:',
+      '  protected_instruction_files: false',
+    );
+  }
   if (terminal && terminal.cwd) {
     lines.push(
       'terminal:',
@@ -177,6 +191,15 @@ function runtimeProfileConfig({
         ? terminal.shellInitFiles.map((file) => `    - ${JSON.stringify(String(file))}`)
         : []),
       `  auto_source_bashrc: ${terminal.autoSourceBashrc === true ? 'true' : 'false'}`,
+    );
+  }
+  if (terminal && terminal.cwd) {
+    // Only profiles with a terminal can run ghost-cli, so only they get the
+    // ghost-first guard; elsewhere it would lock the browser fallback away.
+    lines.push(
+      'plugins:',
+      '  enabled:',
+      `    - ${GHOST_FIRST_PLUGIN}`,
     );
   }
   if (googleWorkspace) lines.push(...googleWorkspaceMcpConfig());
@@ -195,38 +218,39 @@ function writeAtomic(file, value, mode = 0o600) {
   }
 }
 
-function provisionClaudeSubscriptionPlugin(profileDir) {
-  if (!fs.existsSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, 'plugin.yaml'))) {
-    throw new Error('Mia bundled Claude subscription plugin is missing.');
+function provisionBundledPlugin(profileDir, plugin) {
+  const source = path.join(__dirname, 'hermes-plugins', plugin);
+  if (!fs.existsSync(path.join(source, 'plugin.yaml'))) {
+    throw new Error(`Mia bundled Hermes plugin is missing: ${plugin}`);
   }
   const pluginsDir = path.join(profileDir, 'plugins');
-  const destination = path.join(pluginsDir, CLAUDE_SUBSCRIPTION_PLUGIN);
+  const destination = path.join(pluginsDir, plugin);
   const markerName = 'MIAOS_PLUGIN_PROVENANCE.json';
-  const sourceMarker = fs.readFileSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, markerName), 'utf8');
+  const sourceMarker = fs.readFileSync(path.join(source, markerName), 'utf8');
   const destinationMarker = path.join(destination, markerName);
   fs.mkdirSync(pluginsDir, { recursive: true, mode: 0o700 });
   if (fs.existsSync(destination)) {
     let installedMarker = '';
     try { installedMarker = fs.readFileSync(destinationMarker, 'utf8'); } catch (_) { /* unmanaged */ }
     if (!installedMarker) {
-      throw new Error(`refusing to overwrite unmanaged Hermes plugin: ${CLAUDE_SUBSCRIPTION_PLUGIN}`);
+      throw new Error(`refusing to overwrite unmanaged Hermes plugin: ${plugin}`);
     }
     if (installedMarker === sourceMarker) return destination;
     fs.rmSync(destination, { recursive: true, force: true });
   }
-  fs.cpSync(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, destination, { recursive: true, force: true });
+  fs.cpSync(source, destination, { recursive: true, force: true });
   fs.chmodSync(destination, 0o700);
   return destination;
 }
 
 function provisionRuntimeProfile({
-  profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview,
+  profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false,
 }) {
   const profileDir = path.join(profilesRoot, profile);
   const configPath = path.join(profileDir, 'config.yaml');
   const envPath = path.join(profileDir, '.env');
   const next = runtimeProfileConfig({
-    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview,
+    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots,
   });
   let existing = '';
   try { existing = fs.readFileSync(configPath, 'utf8'); } catch (error) {
@@ -241,7 +265,8 @@ function provisionRuntimeProfile({
 
   fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(profileDir, 0o700);
-  provisionClaudeSubscriptionPlugin(profileDir);
+  provisionBundledPlugin(profileDir, CLAUDE_SUBSCRIPTION_PLUGIN);
+  if (terminal && terminal.cwd) provisionBundledPlugin(profileDir, GHOST_FIRST_PLUGIN);
   for (const name of ['sessions', 'memories', 'skills', 'cron']) {
     fs.mkdirSync(path.join(profileDir, name), { recursive: true, mode: 0o700 });
   }
@@ -331,6 +356,7 @@ function provisionHermesAgentProfile({
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal,
     backgroundReview: backgroundReviewEnabledForGateway(),
+    editsBots: !searchOnly,
   });
 }
 
@@ -351,6 +377,7 @@ function provisionHermesGoogleAgentProfile({
     terminal: undefined,
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForGateway(),
+    editsBots: !searchOnly,
   });
 }
 
@@ -382,7 +409,8 @@ module.exports = {
   backgroundReviewEnabledForGateway,
   backgroundReviewEnabledForBot,
   runtimeProfileConfig,
-  provisionClaudeSubscriptionPlugin,
+  GHOST_FIRST_PLUGIN,
+  provisionBundledPlugin,
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,
   provisionHermesBotProfile,

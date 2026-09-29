@@ -6,6 +6,7 @@
 // identity supplied in request JSON.
 
 const express = require('express');
+const { safeBrowserContext } = require('./browser-context');
 const {
   isSafePreviewMime,
   previewContentSecurityPolicy,
@@ -21,6 +22,7 @@ const STATUS_BY_CODE = Object.freeze({
   FORBIDDEN: 403,
   UNAUTHORIZED: 401,
   CONFLICT: 409,
+  READ_ONLY: 409,
   IDEMPOTENCY_CONFLICT: 409,
   PREVIEW_UNAVAILABLE: 415,
   INVALID_DATABASE: 500,
@@ -49,6 +51,15 @@ function optionalObject(value, field) {
   if (value === undefined) return {};
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_INPUT', `${field} must be an object`);
   return value;
+}
+
+// A message's attached browser page is saved only as a cleaned address.
+function messageMetadata(value) {
+  const metadata = optionalObject(value, 'metadata');
+  if (!Object.prototype.hasOwnProperty.call(metadata, 'browserContext')) return metadata;
+  const { browserContext, ...rest } = metadata;
+  const safe = safeBrowserContext(browserContext);
+  return safe ? { ...rest, browserContext: safe } : rest;
 }
 
 function optionalBoolean(value, field) {
@@ -262,7 +273,7 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
       content: body.content,
       parentEventId: body.parentEventId === undefined ? null : body.parentEventId,
       clientIdempotencyKey: body.clientIdempotencyKey === undefined ? null : body.clientIdempotencyKey,
-      metadata: optionalObject(body.metadata, 'metadata'),
+      metadata: messageMetadata(body.metadata),
     });
     res.status(result.idempotent ? 200 : 201).json(result);
   }));
@@ -276,7 +287,7 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
       principal,
       eventId: req.params.eventId,
       ...(body.content === undefined ? {} : { content: body.content }),
-      ...(body.metadata === undefined ? {} : { metadata: optionalObject(body.metadata, 'metadata') }),
+      ...(body.metadata === undefined ? {} : { metadata: messageMetadata(body.metadata) }),
     });
     res.status(200).json(result);
   }));
