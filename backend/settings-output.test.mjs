@@ -87,12 +87,12 @@ test('bot-worker dispatches route gateway events through the same verbose progre
   assert.ok(fnStart >= 0 && fnEnd > fnStart);
 
   // postHermesProgress must be defined once, above the gateway/bot-worker
-  // branch, and passed as onEvent on BOTH sides: runInferenceViaHermesGateway
-  // (targetType === 'gateway') and scheduleInference (the bot-worker else
-  // branch). Previously only the gateway branch wired it, so a bot dispatch
+  // branch, and passed as onEvent on every flavor: Mia's session
+  // (targetType === 'gateway'), a bot's own-chat session, and scheduleInference
+  // (a bot in a shared room). Previously only the gateway branch wired it, so a bot dispatch
   // never streamed thinking.delta/reasoning.delta even with verbose on.
   const onEventUses = body.match(/onEvent:\s*postHermesProgress/g) || [];
-  assert.equal(onEventUses.length, 2, 'expected postHermesProgress wired as onEvent on both dispatch flavors');
+  assert.equal(onEventUses.length, 3, 'expected postHermesProgress wired as onEvent on every dispatch flavor');
 });
 
 test('the token-budget tracker is fed from the same shared postHermesProgress, ahead of the verbose gate', async () => {

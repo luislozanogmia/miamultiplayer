@@ -14,6 +14,7 @@ const {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
+  GHOST_FIRST_PLUGIN,
   provisionHermesRuntimeProfiles,
 } = require('./hermes-bot-profile');
 
@@ -80,6 +81,18 @@ test('Mia provisions full-agent and restricted-bot sessions in the shared Hermes
   assert.match(config, /approvals:\n  mode: "off"/);
   assert.match(config, /onepassword:\n    enabled: false/);
   assert.doesNotMatch(config, /file|memory|skills|op:\/\//);
+  // Only Mia's own agent may write bot instructions (AGENTS.md); bot workers
+  // keep Hermes' protected-instruction gate.
+  assert.match(agentConfig, /security:\n  protected_instruction_files: false/);
+  assert.match(
+    fs.readFileSync(path.join(profileRoot, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8'),
+    /security:\n  protected_instruction_files: false/
+  );
+  assert.doesNotMatch(config, /security:|protected_instruction/);
+  assert.doesNotMatch(
+    fs.readFileSync(path.join(profileRoot, MIAOS_BOT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8'),
+    /security:|protected_instruction/
+  );
   assert.equal(fs.statSync(profileDir).mode & 0o777, 0o700);
   assert.equal(fs.statSync(path.join(profileDir, 'config.yaml')).mode & 0o777, 0o600);
 
@@ -311,4 +324,90 @@ test('default runtime profiles follow HERMES_HOME for isolated installations', (
     if (previous === undefined) delete process.env.HERMES_HOME;
     else process.env.HERMES_HOME = previous;
   }
+});
+
+test('profiles with a terminal get the ghost-first guard; Google profiles do not', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-ghost-first-'));
+  const profilesRoot = path.join(root, 'profiles');
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir: path.join(root, 'Documents', 'mia') });
+    for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE]) {
+      const config = fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8');
+      assert.match(config, new RegExp(`plugins:\\n  enabled:\\n    - ${GHOST_FIRST_PLUGIN}\\n`), profile);
+      assert.ok(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN, '__init__.py')), profile);
+    }
+    for (const profile of [MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE]) {
+      const config = fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8');
+      assert.doesNotMatch(config, new RegExp(GHOST_FIRST_PLUGIN), `${profile} cannot run ghost-cli`);
+      assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN)), false, profile);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ghost-first guard refuses Hermes browser tools until ghost-cli has run in the session', (t) => {
+  const plugin = path.join(path.dirname(new URL(import.meta.url).pathname), 'hermes-plugins', GHOST_FIRST_PLUGIN);
+  const script = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("ghost_first", sys.argv[1] + "/__init__.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn): hooks[name] = fn
+m.register(Ctx())
+h = hooks["pre_tool_call"]
+post = hooks["post_tool_call"]
+def ran(command, session_id, status="ok"):
+    h(tool_name="terminal", args={"command": command}, session_id=session_id)
+    post(tool_name="terminal", args={"command": command}, session_id=session_id, status=status)
+browse = lambda sid: h(tool_name="browser_navigate", args={"url": "https://linkedin.com"}, session_id=sid)
+out = [
+  browse("s1"),
+  h(tool_name="tool_call", args={"name": "browser_exec"}, session_id="s1"),
+  h(tool_name="web_search", args={"query": "x"}, session_id="s1"),
+  h(tool_name="terminal", args={"command": "ghost-cli call ghost_instance_create"}, session_id="s1"),
+  browse("s1"),
+]
+post(tool_name="terminal", args={"command": "ghost-cli call ghost_instance_create"}, session_id="s1", status="ok")
+out += [browse("s1"), h(tool_name="browser_exec", args={}, session_id="s2")]
+for sid, command in [("m1", "echo ghost-cli"), ("m2", "cat ~/ghost-cli.md"), ("m3", "grep -r 'ghost-cli call' ."),
+                     ("m4", "true || ghost-cli call x"), ("m5", "false && ghost-cli call x"),
+                     ("m6", "if false; then ghost-cli call x; fi"), ("m7", "exit 0; ghost-cli call x"),
+                     ("m8", "ghost-cli() { :; }; ghost-cli"), ("m9", "true # ghost-cli call x")]:
+    ran(command, sid)
+    out.append(browse(sid))
+ran("ghost-cli call ghost_instance_create", "b1", status="blocked")
+out.append(browse("b1"))
+for sid, command in [("r1", "cd /tmp; ghost-cli call x"), ("r2", "GHOST_TIMEOUT=5 /usr/local/bin/ghost-cli call x"), ("r3", "ghost-cli call x | head")]:
+    ran(command, sid)
+    out.append(browse(sid))
+ran("ghost-cli call ghost_instance_create", "f1", status="error")
+out.append(browse("f1"))
+print(json.dumps(out))
+`;
+  const run = spawnSync('python3', ['-c', script, plugin], { encoding: 'utf8' });
+  if (run.error && run.error.code === 'ENOENT') return t.skip('python3 is not installed');
+  assert.equal(run.status, 0, run.stderr);
+  const [first, bridged, other, ghost, beforeItRan, afterGhost, otherSession, ...rest] = JSON.parse(run.stdout);
+  assert.equal(first.action, 'block');
+  assert.match(first.message, /There is no ghost-cli call in this session yet\. Use ghost-cli first/);
+  assert.equal(bridged.action, 'block', 'the tool_call bridge cannot reach a browser tool either');
+  assert.equal(other, null);
+  assert.equal(ghost, null);
+  assert.equal(beforeItRan.action, 'block', 'a ghost-cli command counts only once it has run');
+  assert.equal(afterGhost, null, 'after ghost-cli the built-in browser is the fallback');
+  assert.equal(otherSession.action, 'block', 'each session tries ghost-cli first');
+  const [echo, cat, grep, orElse, andThen, inIf, afterExit, asFunction, inComment, blocked, chained, prefixed, piped, failed] = rest;
+  for (const [label, result] of [['echo', echo], ['cat', cat], ['grep', grep], ['a comment', inComment]]) {
+    assert.equal(result.action, 'block', `${label} only mentions ghost-cli`);
+  }
+  for (const [label, result] of [['after ||', orElse], ['after &&', andThen], ['inside if', inIf], ['after exit', afterExit], ['a function named ghost-cli', asFunction]]) {
+    assert.equal(result.action, 'block', `ghost-cli ${label} may never have run`);
+  }
+  assert.equal(blocked.action, 'block', 'a blocked ghost-cli call never ran');
+  for (const [label, result] of [['after cd ;', chained], ['with env and full path', prefixed], ['piped', piped]]) {
+    assert.equal(result, null, `ghost-cli ${label} is a real attempt`);
+  }
+  assert.equal(failed, null, 'a ghost-cli run that failed still unlocks the fallback');
 });

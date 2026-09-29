@@ -113,6 +113,7 @@ test('native bot dispatch loads every conversation page and delegates context ma
   assert.match(reply, /const historyEvents = allNativeConversationEvents\(/);
   assert.doesNotMatch(reply, /const history = nativeConversationRepository\.listEvents\(/);
   assert.match(reply, /seedMessages: nativeHermesGatewaySeedMessages\(systemPrompt, historyEvents, trigger\.id\)/);
-  assert.match(reply, /scheduleInference\(nativePromptLine\(trigger\) \|\| message/);
+  assert.match(reply, /const replyPrompt = \[\s*nativePromptLine\(trigger\) \|\| message,\s*nativeBrowserContextNote\(trigger/);
+  assert.match(reply, /scheduleInference\(replyPrompt, 'reply'/);
   assert.match(source, /event\.senderType === 'agent' \|\| event\.senderType === 'bot'[\s\S]{0,80}\? 'assistant'/);
 });

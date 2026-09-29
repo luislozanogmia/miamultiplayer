@@ -606,3 +606,33 @@ test('chat-migration.attachments.001 — native HTTP contract encodes and serves
     await app.close();
   }
 });
+
+test('a message saves its attached browser page only as a cleaned address', async () => {
+  const app = await startApp();
+  try {
+    let result = await app.request('/conversations', { method: 'POST', body: { type: 'dm', name: 'Page context' } });
+    const conversationId = result.payload.conversation.id;
+    result = await app.request(`/conversations/${conversationId}/events`, {
+      method: 'POST',
+      body: {
+        content: { text: 'what is this page?' },
+        metadata: { browserContext: { url: 'https://u:pw@example.com/cb?q=1&code=SECRET#access_token=SECRET', title: 'Callback' }, other: true },
+      },
+    });
+    assert.equal(result.response.status, 201);
+    const eventId = result.payload.event.id;
+    result = await app.request(`/conversations/${conversationId}/events`);
+    const saved = result.payload.events.find((event) => event.id === eventId);
+    assert.deepEqual(saved.metadata.browserContext, { url: 'https://example.com/cb?q=1', title: 'Callback' });
+    assert.equal(saved.metadata.other, true);
+    assert.equal(JSON.stringify(result.payload).includes('SECRET'), false);
+
+    result = await app.request(`/conversations/${conversationId}/events`, {
+      method: 'POST',
+      body: { content: { text: 'local file' }, metadata: { browserContext: { url: 'file:///etc/passwd' } } },
+    });
+    assert.equal(result.payload.event.metadata.browserContext, undefined, 'an unusable page is dropped');
+  } finally {
+    await app.close();
+  }
+});

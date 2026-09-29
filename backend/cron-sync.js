@@ -331,9 +331,12 @@ function jobPromptFor(bot, automation, options = {}) {
   return buildScheduledBotPrompt(bot, automation, options);
 }
 
-function jobModelFor(bot) {
-  const model = String(bot && bot.model || '').trim();
-  const provider = String(bot && bot.modelProvider || '').trim();
+// An automation can pick its own model; otherwise it runs on the bot's.
+function jobModelFor(bot, automation) {
+  const own = automation && String(automation.model || '').trim() && String(automation.modelProvider || '').trim();
+  const source = own ? automation : bot;
+  const model = String(source && source.model || '').trim();
+  const provider = String(source && source.modelProvider || '').trim();
   // Some provider model ids use a single slash-delimited namespace.
   // Hermes' Claude subscription plugin publishes extended-context models
   // with the literal `[1m]` suffix. Keep the existing bounded namespace
@@ -485,7 +488,7 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
   }
   const artifactWorkspace = artifactWorkspaceForBot(bot);
 
-  const { model, provider } = jobModelFor(bot);
+  const { model, provider } = jobModelFor(bot, automation);
 
   if (job) {
     if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider)) {

@@ -140,10 +140,25 @@ function chatModelSelectionInferenceOptions(baseOptions, selection) {
   };
 }
 
-function userFacingModelDispatchError(error) {
+// A Mia Router key belongs to one computer: signing in on another computer
+// mints a new key and the old one stops working. Hermes reports that as a
+// 401 on the first turn and, once it drops the dead key, as no provider at all.
+const MANAGED_ROUTER_KEY_FAILURE = /invalid[_ -]?api[_ -]?key|incorrect api key|\b401\b|unauthori[sz]ed|authentication failed|rejected (?:your|the) (?:api )?key|user not found|no llm provider configured|could not resolve credentials|no [a-z ]*credentials stored|no usable credentials|provider credential missing/i;
+
+function managedRouterKeyMessage(label) {
+  const name = String(label || '').trim() || 'Mia Router';
+  return `Your ${name} key on this computer is no longer valid. ${name} works on one computer at a time, `
+    + 'so signing in on another computer replaces this one’s key. Sign out and sign in again here to get '
+    + 'a new key, then try again.';
+}
+
+function userFacingModelDispatchError(error, { managedRouter = false, managedRouterLabel = '' } = {}) {
   const message = String(error && error.message || error || '');
   if ((error && error.code === 'NATIVE_DISPATCH_TIMEOUT') || /native dispatch timed out/i.test(message)) {
     return 'I ran out of time before finishing. Nothing was changed. Please try again.';
+  }
+  if (managedRouter && MANAGED_ROUTER_KEY_FAILURE.test(message)) {
+    return managedRouterKeyMessage(managedRouterLabel);
   }
   if (/invalid[_ -]?api[_ -]?key|incorrect api key|\b401\b|unauthori[sz]ed|authentication failed/i.test(message)) {
     return 'Your connected model credential was rejected. Reconnect it in Settings → Access, then try again.';

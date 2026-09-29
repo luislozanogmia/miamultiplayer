@@ -125,11 +125,35 @@ test('bundled Workspace server exposes only the curated non-destructive tools us
     'google_calendar_list', 'google_calendar_get', 'google_calendar_create',
     'google_drive_list', 'google_drive_get', 'google_drive_create', 'google_drive_update_metadata',
     'google_drive_create_file', 'google_drive_update_content', 'google_drive_get_content',
-    'google_sheets_get', 'google_sheets_create', 'google_sheets_update', 'google_sheets_append',
+    'google_sheets_get', 'google_sheets_create', 'google_sheets_update', 'google_sheets_append', 'google_sheets_add_tab',
     'google_docs_get', 'google_docs_create', 'google_docs_append', 'google_docs_replace',
     'google_slides_get', 'google_slides_create', 'google_slides_add_text_slide', 'google_slides_replace_text',
   ]) assert.ok(description.tools.includes(name), `${name} is missing`);
   assert.deepEqual(description.tools.filter((name) => /delete|trash|clear/i.test(name)), []);
+});
+
+test('adding a Sheets tab sends only one addSheet request', () => {
+  const result = spawnSync('python3', ['-c', `
+import runpy
+m = runpy.run_path(${JSON.stringify(server)})
+calls = []
+m['google_sheets_add_tab'].__globals__['_gws'] = lambda op, **kwargs: calls.append((op, kwargs)) or {"ok": True}
+file_id = 'shared_fixture_123456'
+m['google_sheets_add_tab']('https://docs.google.com/spreadsheets/d/' + file_id + '/edit', 'Leads 2026')
+op, kwargs = calls[-1]
+assert op == ('sheets', 'spreadsheets', 'batchUpdate')
+assert kwargs['params'] == {'spreadsheetId': file_id}
+assert kwargs['body'] == {'requests': [{'addSheet': {'properties': {'title': 'Leads 2026'}}}]}
+for bad in ('', 'a/b', 'x' * 101):
+    try:
+        m['google_sheets_add_tab'](file_id, bad)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('accepted ' + repr(bad))
+assert len(calls) == 1
+`], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('Drive media create/update preserves file identity and rejects native, trashed, read-only and empty payloads', () => {

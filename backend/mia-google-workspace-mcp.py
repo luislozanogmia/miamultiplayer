@@ -43,6 +43,7 @@ TOOL_NAMES = (
     "google_sheets_create",
     "google_sheets_update",
     "google_sheets_append",
+    "google_sheets_add_tab",
     "google_docs_get",
     "google_docs_create",
     "google_docs_append",
@@ -424,6 +425,16 @@ def google_sheets_append(spreadsheet_id: str, a1_range: str, values: list[list[A
     """Append literal rows after the current table in an exact A1 range."""
     spreadsheet_id, a1_range, values = _file_identifier(spreadsheet_id, "spreadsheet ID", "spreadsheets"), _range(a1_range), _values(values)
     return _gws(("sheets", "spreadsheets", "values", "append"), params={"spreadsheetId": spreadsheet_id, "range": a1_range, "valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"}, body={"majorDimension": "ROWS", "values": values})
+
+
+def google_sheets_add_tab(spreadsheet_id: str, title: str) -> Any:
+    """Add one empty tab (sheet) to a spreadsheet without changing existing tabs."""
+    spreadsheet_id = _file_identifier(spreadsheet_id, "spreadsheet ID", "spreadsheets")
+    title = _text(title, "tab title")
+    if len(title) > 100 or any(ch in title for ch in "[]*?/\\:\n"):
+        raise ValueError("tab title must be at most 100 characters without [ ] * ? / \\ :")
+    request = {"addSheet": {"properties": {"title": title}}}
+    return _gws(("sheets", "spreadsheets", "batchUpdate"), params={"spreadsheetId": spreadsheet_id}, body={"requests": [request]})
 
 
 def google_docs_get(document_id: str) -> Any:

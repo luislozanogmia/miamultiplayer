@@ -26,6 +26,7 @@ const ALLOWED_PREFIXES = Object.freeze([
   ["sheets", "spreadsheets", "values", "get"],
   ["sheets", "spreadsheets", "values", "update"],
   ["sheets", "spreadsheets", "values", "append"],
+  ["sheets", "spreadsheets", "batchUpdate"],
   ["docs", "documents", "get"],
   ["docs", "documents", "create"],
   ["docs", "documents", "batchUpdate"],

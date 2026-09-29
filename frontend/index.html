@@ -33,6 +33,11 @@
   <button type="button" id="miaServiceRetry">Restart and reconnect</button>
 </div>
 
+<div class="mia-service-banner mia-router-banner" id="miaRouterBanner" role="alert" hidden>
+  <span><strong id="miaRouterBannerLabel">Mia Router</strong> isn't connected. <span id="miaRouterBannerReason"></span></span>
+  <button type="button" id="miaRouterBannerDismiss">Dismiss</button>
+</div>
+
 <div class="login-wall" id="loginWall">
   <div class="login-split">
     <div class="login-main">
@@ -321,7 +326,7 @@
                 <div class="bench-compose-card bench-edit-prompt-card">
                   <textarea class="bench-compose-textarea bench-edit-textarea" id="benchEditTextarea"></textarea>
                   <div class="bench-compose-foot">
-                    <button type="button" class="bench-edit-delete-btn" id="benchEditDeleteBtn" style="display:none;">Delete bot</button>
+                    <button type="button" class="bench-edit-delete-btn" id="benchEditDeleteBtn" style="display:none;">Archive bot</button>
                     <span class="bench-hint">esc to cancel</span>
                     <button type="button" class="bench-model-btn" id="benchEditModelBtn"><span class="bench-model-dot"></span><span id="benchEditModelLabel"></span><span id="benchEditModelRecTag"></span><span>&#9662;</span></button>
                     <button type="button" class="bench-create-btn bench-edit-save-btn" id="benchEditSaveBtn">Save changes</button>
@@ -462,6 +467,7 @@
               <div class="chat-presets" id="chatChips"></div>
               <div class="cc-recording-pill" id="ccRecordingPill"><span class="cc-recording-dot"></span>Recording&hellip;</div>
               <div class="chat-dept-agents" id="chatDeptAgents" style="display:none;"></div>
+              <div class="cc-goal-chip" id="ccGoalChip" hidden></div>
               <div class="chat-mention-popover" id="chatMentionPopover"></div>
               <div class="chat-composer-wrap">
                 <div class="cc-attach-strip" id="ccAttachStrip" style="display:none;"></div>
@@ -937,7 +943,7 @@
     <div class="styled-onboarding-provider-row">
       <button type="button" class="styled-onboarding-choice" data-harness-provider="managed-router" aria-pressed="false">
         <span class="styled-onboarding-choice-icon choice-managed-router"><img src="assets/icons/mia-192.png" alt="" style="width:28px;height:28px;border-radius:6px;" /></span>
-        <span><strong data-managed-router-label>Managed Router</strong></span>
+        <span><strong data-managed-router-label>Managed Router</strong><small class="styled-onboarding-choice-error" data-managed-router-error hidden></small></span>
         <span class="styled-onboarding-choice-check" aria-hidden="true">✓</span>
       </button>
       <button type="button" class="styled-onboarding-connection-action" data-harness-disconnect="managed-router" hidden><span class="styled-onboarding-connection-icon" aria-hidden="true">↗</span><span class="styled-onboarding-connection-label">Connect</span></button>

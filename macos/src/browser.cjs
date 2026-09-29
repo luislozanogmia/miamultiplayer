@@ -106,6 +106,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     ? path.resolve(options.workspaceRoot)
     : "";
   let activeId = null;
+  let fullscreenId = null;
+  let windowWasFullscreen = false;
   let nextId = 1;
   let visible = false;
   let panelOpen = false;
@@ -370,13 +372,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return "";
     }
   }
+  // Copy buttons (navigator.clipboard.writeText) need clipboard write, which
+  // Chrome grants by default. Reading the clipboard stays denied so pages
+  // never see what the user copied elsewhere.
+  const CLIPBOARD_WRITE = "clipboard-sanitized-write";
   profile.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (permission === CLIPBOARD_WRITE || permission === "fullscreen") return callback(true);
     if (permission !== "media") return callback(false);
     const origin = mediaRequestOrigin(details, contents);
     if (!origin) return callback(false);
     decideMediaPermission(origin).then(callback).catch(() => callback(false));
   });
   profile.setPermissionCheckHandler((_contents, permission, requestingOrigin) => {
+    if (permission === CLIPBOARD_WRITE || permission === "fullscreen") return true;
     if (permission !== "media") return false;
     try {
       const origin = new URL(String(requestingOrigin)).origin;
@@ -631,9 +639,49 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const factor = Number(window.webContents.getZoomFactor && window.webContents.getZoomFactor());
     return Number.isFinite(factor) && factor > 0 ? factor : 1;
   }
+  // Page fullscreen: the tab fills the window and the window itself goes
+  // fullscreen, like Chrome. Leaving restores the window as it was.
+  function enterPageFullscreen(tab) {
+    if (disposed || window.isDestroyed()) return;
+    if (fullscreenId === null) windowWasFullscreen = window.isFullScreen();
+    fullscreenId = tab.id;
+    if (!windowWasFullscreen) window.setFullScreen(true);
+    layout();
+  }
+  function leavePageFullscreen(tab) {
+    if (fullscreenId === null || (tab && tab.id !== fullscreenId)) return;
+    fullscreenId = null;
+    if (disposed || window.isDestroyed()) return;
+    if (!windowWasFullscreen && window.isFullScreen()) window.setFullScreen(false);
+    requestLayout();
+  }
+  // Every way a tab becomes active (select, a new foreground tab, the agent's
+  // tab_switch) ends another tab's page fullscreen, or its video would keep
+  // covering the window over the tab now in front.
+  function activateTab(id) {
+    if (fullscreenId !== null && fullscreenId !== id) exitPageFullscreen();
+    activeId = id;
+  }
+
+  function exitPageFullscreen() {
+    const tab = tabs.get(fullscreenId);
+    if (tab && !tab.view.webContents.isDestroyed()) {
+      tab.view.webContents.executeJavaScript("document.fullscreenElement && document.exitFullscreen()").catch(() => {});
+    }
+    leavePageFullscreen();
+  }
   function layout() {
     if (disposed || window.isDestroyed()) return;
     const [width, height] = window.getContentSize();
+    const fullscreenTab = tabs.get(fullscreenId);
+    if (fullscreenTab) {
+      // A page in fullscreen (a video's ⤢ button) covers the whole window.
+      for (const tab of tabs.values()) {
+        if (tab === fullscreenTab) tab.view.setBounds({ x: 0, y: 0, width, height });
+        tab.view.setVisible(tab === fullscreenTab);
+      }
+      return;
+    }
     const scale = shellScale();
     const x = Math.min(width, Math.max(0, Math.round(bounds.x * scale)));
     const y = Math.min(height, Math.max(0, Math.round(bounds.y * scale)));
@@ -646,6 +694,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   function requestLayout() {
     if (disposed || window.isDestroyed()) return;
+    if (tabs.has(fullscreenId)) return layout();
     // A stale native view sits above the renderer and can cover chat after a
     // resize. Fail closed until the renderer reports the current DOM bounds.
     for (const tab of tabs.values()) tab.view.setVisible(false);
@@ -1002,7 +1051,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     if (method === "tab_switch") {
       const tab = protocolTab(params.tab_id);
-      activeId = tab.id;
+      activateTab(tab.id);
       layout();
       persistTabs();
       focusTabWebContents(tab);
@@ -1191,6 +1240,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       event.preventDefault(); runShortcut(key);
     } else if (key === "escape") active()?.view.webContents.stop();
   }
+  // Tabs keep the Map's insertion order; reordering rebuilds it.
+  function moveTab(id, index) {
+    const tab = tabs.get(id);
+    if (!tab) return false;
+    const order = [...tabs.values()].filter(item => item !== tab);
+    order.splice(Math.max(0, Math.min(order.length, Math.trunc(Number(index)) || 0)), 0, tab);
+    tabs.clear();
+    for (const item of order) tabs.set(item.id, item);
+    return true;
+  }
   function newTab(value, options = {}) {
     if (value) normalizeStoredTarget(value);
     const view = new WebContentsView({ webPreferences: {
@@ -1217,7 +1276,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       hiddenMediaPlaybackGuard: null,
     };
     tabs.set(tab.id, tab);
-    if (options.activate !== false || activeId === null) activeId = tab.id;
+    // A link opened from a page goes right after that page, like Chrome.
+    if (tabs.has(options.after)) moveTab(tab.id, [...tabs.keys()].indexOf(options.after) + 1);
+    if (options.activate !== false || activeId === null) activateTab(tab.id);
     window.contentView.addChildView(view);
     view.setBackgroundColor(darkTheme ? "#0B0A09" : "#ffffff");
     const wc = view.webContents;
@@ -1227,7 +1288,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         matches: result.matches, activeMatchOrdinal: result.activeMatchOrdinal,
       });
     });
-    wc.setWindowOpenHandler(({ url }) => {
+    wc.setWindowOpenHandler(({ url, disposition }) => {
       // GIS popup mode returns credentials to window.opener. Turning this into
       // a new tab destroys that relationship and strands the Google chooser.
       // Only the OAuth/GIS endpoints need the real popup: a plain Google
@@ -1254,7 +1315,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
           };
         }
       } catch (_) { /* Invalid targets are denied below. */ }
-      try { newTab(url); } catch (_) { /* Block non-web schemes and local-file popups. */ }
+      // Cmd/Ctrl+click arrives as "background-tab": open it without leaving
+      // this page. Cmd+Shift+click and target=_blank links switch to it.
+      try { newTab(url, { activate: disposition !== "background-tab", after: tab.id }); } catch (_) { /* Block non-web schemes and local-file popups. */ }
       return { action: "deny" };
     });
     const guard = (event) => {
@@ -1350,12 +1413,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (!mainFrame || code === -3) return;
       showLoadError(tab, url, description, code === -2);
     });
+    wc.on("enter-html-full-screen", () => enterPageFullscreen(tab));
+    wc.on("leave-html-full-screen", () => leavePageFullscreen(tab));
     wc.on("render-process-gone", () => {
       tab.error = "This tab stopped responding. Reload to try again."; layout(); publish();
     });
     wc.on("context-menu", (_event, params) => {
       const items = [];
-      if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: () => newTab(params.linkURL) });
+      if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: () => newTab(params.linkURL, { activate: false, after: tab.id }) });
       const imageURL = params.mediaType === "image" && typeof params.srcURL === "string"
         && (/^https?:\/\//i.test(params.srcURL) || /^blob:https?:\/\//i.test(params.srcURL) || /^data:image\//i.test(params.srcURL))
         ? params.srcURL
@@ -1379,6 +1444,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function closeTab(id) {
     const tab = tabs.get(id);
     if (!tab) return;
+    if (fullscreenId === id) exitPageFullscreen();
     tabs.delete(id);
     clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
@@ -1471,7 +1537,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         const wasVisible = visible;
         bounds = b; visible = command.visible === true;
         panelOpen = command.panelOpen === undefined ? visible : command.panelOpen === true;
-        if (wasVisible && !visible) holdAllMediaPausedWhileHidden();
+        if (wasVisible && !visible) { exitPageFullscreen(); holdAllMediaPausedWhileHidden(); }
         layout(); return;
       }
       if (command.action === "theme") {
@@ -1504,10 +1570,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       const tab = active();
       if (command.action === "navigate") navigate(tab, command.value);
       if (command.action === "select" && tabs.has(command.id)) {
-        activeId = command.id; layout(); persistTabs();
+        activateTab(command.id); layout(); persistTabs();
         focusTabWebContents(tabs.get(command.id));
       }
       if (command.action === "close") closeTab(command.id);
+      if (command.action === "move" && moveTab(command.id, command.index)) persistTabs();
       if (command.action === "back" && tab.view.webContents.navigationHistory.canGoBack()) tab.view.webContents.navigationHistory.goBack();
       if (command.action === "forward" && tab.view.webContents.navigationHistory.canGoForward()) tab.view.webContents.navigationHistory.goForward();
       if (command.action === "reload") { tab.error = ""; layout(); tab.view.webContents.reload(); }
@@ -1525,6 +1592,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   window.webContents.on("did-start-loading", () => { visible = false; panelOpen = false; layout(); });
   window.webContents.on("zoom-changed", requestLayout);
   window.on("resize", requestLayout);
+  // Leaving macOS fullscreen (green button, Ctrl-Cmd-F) also ends page fullscreen.
+  const leaveWindowFullscreen = () => { if (fullscreenId !== null) exitPageFullscreen(); };
+  window.on("leave-full-screen", leaveWindowFullscreen);
   // Cmd-tabbing away and back leaves OS keyboard focus on the window chrome,
   // not the embedded page, so arrows/scroll do nothing until the user clicks
   // the page. Refocus the active tab on window focus, but only when the
@@ -1543,6 +1613,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     disposed = true;
     if (!shellContents.isDestroyed()) shellContents.removeListener("zoom-changed", requestLayout);
     window.removeListener("resize", requestLayout);
+    window.removeListener("leave-full-screen", leaveWindowFullscreen);
     ipcMain.removeHandler(channel);
     profile.removeListener("will-download", downloadStarted);
     for (const tab of tabs.values()) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();

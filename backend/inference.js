@@ -777,6 +777,17 @@ function runInference(prompt, options) {
 // The native Mia gateway path uses one long-lived
 // Hermes gateway process, one persistent Hermes session per native
 // conversation, and one prompt.submit per new user turn.
+// A persistent session runs under Mia's agent profiles, or under the bot
+// profiles for a bot's own chat (botWorker), with the same vision fallback a
+// one-shot bot turn gets.
+function persistentSessionOptions(options) {
+  if (options && options.botWorker === true) return standaloneGatewayOptions(options);
+  const profile = options && options.profile === MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+    ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+    : MIAOS_AGENT_HERMES_PROFILE;
+  return { ...options, profile };
+}
+
 async function runInferenceViaHermesGateway({
   storedSessionId,
   seedMessages,
@@ -787,24 +798,59 @@ async function runInferenceViaHermesGateway({
   onSession,
   signal,
 }, client = getHermesGatewayClient()) {
-  const requestedProfile = options && options.profile === MIAOS_AGENT_GOOGLE_HERMES_PROFILE
-    ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
-    : MIAOS_AGENT_HERMES_PROFILE;
   const result = await client.run({
     storedSessionId,
     seedMessages,
     title,
     message,
-    options: {
-      ...options,
-      profile: requestedProfile,
-    },
+    options: persistentSessionOptions(options),
     imagePaths: imagePathsFromOptions(options),
     onEvent,
     onSession,
     signal,
   });
+  if (options && options.botWorker === true && result) {
+    return { ...result, text: stripHermesOperationalLines(result.text) };
+  }
   return result;
+}
+
+// Slash commands (/goal, /compress) on the same persistent session
+// runInferenceViaHermesGateway uses, so the command acts on that chat.
+async function runSlashCommandViaHermesGateway({
+  storedSessionId,
+  seedMessages,
+  title,
+  options,
+  name,
+  arg,
+  onEvent,
+  onSession,
+  onNotice,
+  signal,
+}, client = getHermesGatewayClient()) {
+  return client.runCommand({
+    storedSessionId,
+    seedMessages,
+    title,
+    options: persistentSessionOptions(options),
+    name,
+    arg,
+    onEvent,
+    onSession,
+    onNotice,
+    signal,
+  });
+}
+
+async function readHermesGatewaySessionControl(sessionId, client = getHermesGatewayClient()) {
+  return client.readSessionControl(sessionId);
+}
+
+// Turns and goal verdicts Hermes produces on its own (see
+// HermesGatewayClient.handleUnsolicitedEvent).
+function setHermesGatewaySessionEventHandler(handler, client = getHermesGatewayClient()) {
+  client.setSessionEventHandler(handler);
 }
 
 async function runBotInferenceViaHermesGateway(
@@ -837,6 +883,10 @@ module.exports = {
   runStandaloneInferenceViaHermesGateway,
   runInferenceViaHermesGateway,
   runBotInferenceViaHermesGateway,
+  runSlashCommandViaHermesGateway,
+  persistentSessionOptions,
+  readHermesGatewaySessionControl,
+  setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
   startHermesGatewayRuntime,

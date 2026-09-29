@@ -242,11 +242,15 @@ function createConversationService({ repository, authorization, realtime = null,
     authorization.authorize(callerPrincipal(principal, normalizedCompanyId, conversationId, 'manage_members'));
     const source = repository.getConversation({ companyId: normalizedCompanyId, id: conversationId });
     const sourceMetadata = source && source.metadata && typeof source.metadata === 'object' ? source.metadata : {};
-    if (!source || source.type !== 'bot' || typeof sourceMetadata.botId !== 'string' || !sourceMetadata.botId.trim()) {
-      invalidInput('a bot conversation is required');
+    // Mia gets the same "New conversation" as bots: a separate chat with a
+    // clean model session, while every older chat stays in History.
+    const miaSource = Boolean(source && source.type === 'agent' && sourceMetadata.agentId === 'gateway');
+    const botSource = Boolean(source && source.type === 'bot' && typeof sourceMetadata.botId === 'string' && sourceMetadata.botId.trim());
+    if (!miaSource && !botSource) {
+      invalidInput('a bot or Mia conversation is required');
     }
     const metadata = {
-      botId: sourceMetadata.botId.trim(),
+      ...(miaSource ? { agentId: 'gateway' } : { botId: sourceMetadata.botId.trim() }),
       ...(Array.isArray(sourceMetadata.departments) ? { departments: sourceMetadata.departments.slice() } : {}),
       ...(typeof sourceMetadata.workspaceId === 'string' && sourceMetadata.workspaceId.trim()
         ? { workspaceId: sourceMetadata.workspaceId.trim() }
@@ -261,7 +265,7 @@ function createConversationService({ repository, authorization, realtime = null,
     };
     const conversation = repository.createConversation({
       companyId: normalizedCompanyId,
-      type: 'bot',
+      type: miaSource ? 'agent' : 'bot',
       name: source.name,
       createdBy: owner.principalId,
       createdAt,
@@ -269,6 +273,7 @@ function createConversationService({ repository, authorization, realtime = null,
       owner,
     });
     ensureBotMember(conversation);
+    ensureGatewayMember(conversation);
     for (const member of repository.listMembers({
       companyId: normalizedCompanyId,
       conversationId: source.id,
@@ -362,6 +367,15 @@ function createConversationService({ repository, authorization, realtime = null,
   function createEvent({ companyId, conversationId, principal, routing = {}, ...input }) {
     authorization.authorize(callerPrincipal(principal, companyId, conversationId, 'send'));
     const conversation = repository.getConversation({ companyId, id: conversationId, includeDeleted: false });
+    // An archived bot's own chat stays readable, but nobody can post to it
+    // until the bot is restored.
+    const conversationMetadata = conversation && conversation.metadata && typeof conversation.metadata === 'object'
+      ? conversation.metadata : {};
+    if (conversation && conversation.type === 'bot' && conversationMetadata.botArchived === true) {
+      const error = new Error('This bot is archived. Restore it to chat again.');
+      error.code = 'READ_ONLY';
+      throw error;
+    }
     ensureBotMember(conversation);
     ensureConversationMembers(conversation);
     const result = repository.createEvent({
