@@ -251,6 +251,52 @@ test('archiving a bot parks it, leaves rooms, keeps a read-only chat, and restor
   assert.equal((await request(server, data.aliceSession, `/api/bots/archived/${bot.id}/restore`, { method: 'POST', headers })).status, 404);
 });
 
+test('a failed archive leaves the bot usable, and boot reopens a chat a crash left read-only', async (t) => {
+  const data = fixture(t);
+  let server = await startServer(data, t);
+  const headers = { 'x-miaos-workspace': 'solo' };
+  const created = await request(server, data.aliceSession, '/api/bots', {
+    method: 'POST', headers, body: JSON.stringify(draftBot('Stay Put')),
+  });
+  assert.equal(created.status, 201, server.logs.join(''));
+  const bot = (await created.json()).bot;
+  const chat = botConversation(data.dbPath, bot.id);
+  const room = await request(server, data.aliceSession, '/api/conversations', {
+    method: 'POST', headers, body: JSON.stringify({ type: 'group', name: 'Team room' }),
+  });
+  const roomId = (await room.json()).conversation.id;
+  await request(server, data.aliceSession, `/api/conversations/${roomId}/members`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ principalId: bot.id, principalType: 'bot', role: 'bot', metadata: { name: bot.name } }),
+  });
+
+  // The archive folder cannot be created, so the archive itself fails.
+  fs.writeFileSync(path.join(data.packages, '.archive'), 'not a directory');
+  const failed = await request(server, data.aliceSession, `/api/bots/${bot.id}`, { method: 'DELETE', headers });
+  assert.ok(failed.status >= 400, `archive should fail, got ${failed.status}`);
+
+  // Nothing else changed: still a bot, still in its room, chat still open.
+  assert.equal((await request(server, data.aliceSession, `/api/bots/${bot.id}`, { headers })).status, 200);
+  const members = await (await request(server, data.aliceSession, `/api/conversations/${roomId}/members`, { headers })).json();
+  assert.equal(members.members.some((member) => member.principalId === bot.id), true);
+  const sent = await request(server, data.aliceSession, `/api/conversations/${chat.id}/events`, {
+    method: 'POST', headers, body: JSON.stringify({ content: { text: 'still here?' } }),
+  });
+  assert.equal(sent.status, 201, server.logs.join(''));
+
+  // A crash under the old order could leave an active bot's chat read-only;
+  // the next boot reopens it.
+  await stopServer(server);
+  const database = new Database(data.dbPath);
+  database.prepare("UPDATE conversations SET metadata = json_set(metadata, '$.botArchived', json('true')) WHERE id = ?").run(chat.id);
+  database.close();
+  server = await startServer(data, t);
+  const reopened = await request(server, data.aliceSession, `/api/conversations/${chat.id}/events`, {
+    method: 'POST', headers, body: JSON.stringify({ content: { text: 'open again' } }),
+  });
+  assert.equal(reopened.status, 201, server.logs.join(''));
+});
+
 test('legacy .trash packages are left alone', async (t) => {
   const data = fixture(t);
   const legacy = path.join(data.packages, '.trash', 'old--bot-legacy');
