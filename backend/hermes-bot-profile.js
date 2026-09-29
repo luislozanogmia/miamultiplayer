@@ -145,7 +145,7 @@ function backgroundReviewEnabledForBot() {
 }
 
 function runtimeProfileConfig({
-  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, enforceToolsets = false,
+  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false,
 }) {
   const lines = [
     MANAGED_MARKER,
@@ -154,11 +154,6 @@ function runtimeProfileConfig({
     // route model-less dispatches to a provider the user never connected.
     'toolsets:',
     ...toolsets.map((name) => `  - ${name}`),
-    // Hermes' gateway resolves a session's tools from platform_toolsets.cli;
-    // top-level toolsets alone leaves it on the full default set (terminal,
-    // files, code execution, computer use, browser). Profiles whose safety
-    // depends on their list (Google, search-only) pin it there.
-    ...(enforceToolsets ? ['platform_toolsets:', '  cli:', ...toolsets.map((name) => `    - ${name}`)] : []),
     'agent:',
     `  max_turns: ${maxTurns}`,
     '  coding_context: off',
@@ -250,13 +245,12 @@ function provisionBundledPlugin(profileDir, plugin) {
 
 function provisionRuntimeProfile({
   profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false,
-  enforceToolsets = false,
 }) {
   const profileDir = path.join(profilesRoot, profile);
   const configPath = path.join(profileDir, 'config.yaml');
   const envPath = path.join(profileDir, '.env');
   const next = runtimeProfileConfig({
-    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots, enforceToolsets,
+    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots,
   });
   let existing = '';
   try { existing = fs.readFileSync(configPath, 'utf8'); } catch (error) {
@@ -320,7 +314,6 @@ function provisionHermesBotProfile({
     profilesRoot,
     profile: MIAOS_BOT_HERMES_PROFILE,
     toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
-    enforceToolsets: searchOnly,
     maxTurns: 100,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     backgroundReview: backgroundReviewEnabledForBot(),
@@ -335,7 +328,6 @@ function provisionHermesGoogleBotProfile({
     profilesRoot,
     profile: MIAOS_BOT_GOOGLE_HERMES_PROFILE,
     toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['memory', 'todo', 'clarify'],
-    enforceToolsets: true,
     maxTurns: 100,
     terminal: undefined,
     googleWorkspace: true,
@@ -361,7 +353,6 @@ function provisionHermesAgentProfile({
     profilesRoot,
     profile: MIAOS_AGENT_HERMES_PROFILE,
     toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : FULL_AGENT_TOOLSETS,
-    enforceToolsets: searchOnly,
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal,
     backgroundReview: backgroundReviewEnabledForGateway(),
@@ -382,7 +373,6 @@ function provisionHermesGoogleAgentProfile({
     profilesRoot,
     profile: MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
     toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : ['memory', 'session_search', 'todo', 'clarify'],
-    enforceToolsets: true,
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: undefined,
     googleWorkspace: true,
