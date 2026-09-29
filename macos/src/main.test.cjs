@@ -263,7 +263,7 @@ test("Claude callback automatically submits only the bound code using Mia's sess
   assert.equal(await main.completeClaudeAuthCallback(window, callback, contract, "http://localhost:4871"), false);
 });
 
-test("packaged runtime copy is replaced by a new build of the same commit", () => {
+test("packaged runtime copy is replaced by a new build of the same commit", async () => {
   const main = loadMain();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-runtime-sync-test-"));
   try {
@@ -274,20 +274,46 @@ test("packaged runtime copy is replaced by a new build of the same commit", () =
     fs.writeFileSync(path.join(source, "module.so"), "ad-hoc build");
     fs.utimesSync(path.join(source, ".miaos-source-commit"), new Date(1000000), new Date(1000000));
 
-    assert.equal(main.syncPackagedDirectory(source, destination), true);
-    assert.equal(main.syncPackagedDirectory(source, destination), false);
+    assert.equal(await main.syncPackagedDirectory(source, destination), true);
+    assert.equal(await main.syncPackagedDirectory(source, destination), false);
 
     // Same commit, rebuilt and re-signed: the stale copy must be replaced.
     fs.writeFileSync(path.join(source, "module.so"), "Developer ID build");
     fs.utimesSync(path.join(source, ".miaos-source-commit"), new Date(2000000), new Date(2000000));
-    assert.equal(main.syncPackagedDirectory(source, destination), true);
+    assert.equal(await main.syncPackagedDirectory(source, destination), true);
     assert.equal(fs.readFileSync(path.join(destination, "module.so"), "utf8"), "Developer ID build");
 
     // A copy made before build stamps existed is refreshed once.
     fs.rmSync(path.join(destination, ".miaos-packaged-build"));
-    assert.equal(main.syncPackagedDirectory(source, destination), true);
-    assert.equal(main.syncPackagedDirectory(source, destination), false);
+    assert.equal(await main.syncPackagedDirectory(source, destination), true);
+    assert.equal(await main.syncPackagedDirectory(source, destination), false);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime preparation yields while copying and retains the old runtime until verification", async () => {
+  const main = loadMain();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-runtime-responsive-"));
+  const source = path.join(root, "source"), destination = path.join(root, "runtime");
+  fs.mkdirSync(source); fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(source, ".miaos-source-commit"), "new");
+  fs.writeFileSync(path.join(destination, "old.txt"), "preserve until copied");
+  const copy = fs.promises.cp;
+  let entered, release;
+  const copying = new Promise(resolve => { entered = resolve; });
+  const resume = new Promise(resolve => { release = resolve; });
+  fs.promises.cp = async (...args) => { entered(); await resume; return copy(...args); };
+  try {
+    const result = main.syncPackagedDirectory(source, destination);
+    await copying;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fs.readFileSync(path.join(destination, "old.txt"), "utf8"), "preserve until copied");
+    release();
+    assert.equal(await result, true);
+    assert.equal(fs.existsSync(path.join(destination, "old.txt")), false);
+  } finally {
+    release(); fs.promises.cp = copy;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

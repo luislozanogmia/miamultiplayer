@@ -228,7 +228,7 @@ function receiveAuthCallback(value) {
 app.on("open-url", (event, value) => { event.preventDefault(); receiveAuthCallback(value); });
 
 const UPDATE_GITHUB_OWNER = "luislozanogmia";
-const UPDATE_GITHUB_REPO = "mia_multiplayer";
+const UPDATE_GITHUB_REPO = "miamultiplayer";
 
 function configuredUpdateFeedUrl() {
   const value = String(process.env.MIAOS_UPDATE_FEED_URL || "").trim();
@@ -263,9 +263,7 @@ function updateMessage(options) {
 function configureAutoUpdates() {
   if (autoUpdateConfigured) return true;
   // electron-updater covers both desktop targets: signed zip/dmg feeds on
-  // macOS and NSIS on Windows. A Windows build shipped as a plain zip makes
-  // the updater error harmlessly; those errors stay logged and stay silent
-  // outside an interactive check.
+  // macOS and the per-user NSIS installer on Windows.
   if (!app.isPackaged || !["darwin", "win32"].includes(process.platform)) return false;
   const autoUpdater = resolveAutoUpdater();
   if (!autoUpdater || typeof autoUpdater.setFeedURL !== "function") return false;
@@ -464,7 +462,7 @@ function packagedBuildStamp(source, marker) {
   return `${commit} ${Math.trunc(fs.statSync(markerPath).mtimeMs)}`;
 }
 
-function syncPackagedDirectory(source, destination) {
+async function syncPackagedDirectory(source, destination) {
   const marker = ".miaos-source-commit";
   const stampFile = ".miaos-packaged-build";
   const expected = fs.readFileSync(path.join(source, marker), "utf8").trim();
@@ -473,15 +471,15 @@ function syncPackagedDirectory(source, destination) {
   try { current = fs.readFileSync(path.join(destination, stampFile), "utf8").trim(); } catch (_) { /* first launch or older copy */ }
   if (current === stamp) return false;
   const next = `${destination}.next`;
-  fs.rmSync(next, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.cpSync(source, next, { recursive: true, dereference: false, verbatimSymlinks: true });
+  await fs.promises.rm(next, { recursive: true, force: true });
+  await fs.promises.mkdir(path.dirname(destination), { recursive: true });
+  await fs.promises.cp(source, next, { recursive: true, dereference: false, verbatimSymlinks: true });
   if (fs.readFileSync(path.join(next, marker), "utf8").trim() !== expected) {
     throw new Error(`Packaged runtime verification failed: ${destination}`);
   }
   fs.writeFileSync(path.join(next, stampFile), `${stamp}\n`);
-  fs.rmSync(destination, { recursive: true, force: true });
-  fs.renameSync(next, destination);
+  await fs.promises.rm(destination, { recursive: true, force: true });
+  await fs.promises.rename(next, destination);
   return true;
 }
 
@@ -537,7 +535,7 @@ function resolveGhostCliHome() {
   return "";
 }
 
-function preparePackagedRuntime() {
+async function preparePackagedRuntime() {
   if (!app.isPackaged) return null;
   if (packagedRuntimePrepared) return packagedRuntimePrepared;
   const userData = app.getPath("userData");
@@ -555,8 +553,8 @@ function preparePackagedRuntime() {
       throw new Error(`Packaged runtime is incomplete: ${required}`);
     }
   }
-  syncPackagedDirectory(path.join(PACKAGED_RUNTIME_ROOT, "hermes"), hermesInstall);
-  syncPackagedDirectory(path.join(PACKAGED_RUNTIME_ROOT, "ghost-cli"), ghostInstall);
+  await syncPackagedDirectory(path.join(PACKAGED_RUNTIME_ROOT, "hermes"), hermesInstall);
+  await syncPackagedDirectory(path.join(PACKAGED_RUNTIME_ROOT, "ghost-cli"), ghostInstall);
 
   const venvRoot = path.join(hermesInstall, "venv");
   const pyvenvPath = path.join(venvRoot, "pyvenv.cfg");
@@ -828,7 +826,7 @@ async function startLocalBackend(exactPort = null) {
     throw new Error(`Mia backend entrypoint is missing: ${BACKEND_ENTRYPOINT}`);
   }
 
-  const packagedRuntime = preparePackagedRuntime();
+  const packagedRuntime = await preparePackagedRuntime();
   const port = await selectLocalBackendPort(exactPort);
   const dataDirectory = app.getPath("userData");
   fs.mkdirSync(dataDirectory, { recursive: true });
@@ -848,6 +846,9 @@ async function startLocalBackend(exactPort = null) {
   const claudeCodeCommand = discoverClaudeCodeCommand({ home: app.getPath("home") });
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
+    // The desktop backend is private to this device. Never request LAN/public
+    // firewall access just because Clerk authentication is enabled.
+    MIAOS_BIND_HOST: "127.0.0.1",
     STATIC_DIR: "../frontend",
     DB_PATH: databasePath,
     // Install-specific identity and service credentials live beside the
@@ -940,6 +941,7 @@ async function startLocalBackend(exactPort = null) {
     cwd: BACKEND_ROOT,
     env: childEnvironment,
     detached: process.platform !== "win32",
+    windowsHide: true,
     // Packaged apps do not persist backend stdout/stderr, which may include
     // user content or provider diagnostics. Local development keeps the
     // owner-only, redacted live log used by the Development menu.
@@ -2376,17 +2378,34 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   // client-hint headers real Chrome sends (see browser-identity.cjs).
   app.userAgentFallback = sanitizeUserAgent(app.userAgentFallback, app.getName());
   installClientHints(session.defaultSession);
-  preparePackagedRuntime();
   createWindow();
+  if (app.isPackaged) {
+    await mainWindow.loadFile(path.join(__dirname, "renderer", "startup.html"));
+    revealMainWindow();
+  }
+  let runtimeReady = false;
+  try {
+    await preparePackagedRuntime();
+    runtimeReady = true;
+  } catch (error) {
+    desktopLog(`Packaged runtime preparation failed: ${error.message}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await mainWindow.loadFile(RENDERER_ENTRYPOINT);
+      revealMainWindow();
+    }
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   configureAutoUpdates();
   installBrowserMenu();
-  await loadMiaOS();
+  // Keep desktop services available if preparation fails. The fallback's
+  // Retry action can prepare the runtime again without requiring a restart.
+  if (runtimeReady) await loadMiaOS();
   await startGhostBridge();
   if (autoUpdateConfigured) {
     checkForMiaUpdate().catch(() => {});
     autoUpdateCheckTimer = scheduleUpdateChecks({ check: () => checkForMiaUpdate() });
   }
-  if (process.env.MIAOS_ARTIFACT_URL) await navigateArtifact(process.env.MIAOS_ARTIFACT_URL);
+  if (runtimeReady && process.env.MIAOS_ARTIFACT_URL) await navigateArtifact(process.env.MIAOS_ARTIFACT_URL);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) activateMainWindow();

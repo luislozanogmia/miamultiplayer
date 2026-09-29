@@ -389,6 +389,27 @@ test("artifact audit rejects exact private build roots, including binary content
   }
 });
 
+test("upstream build-path exception requires exact file, hash and matched prefix", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-upstream-path-test-"));
+  try {
+    const bytes = Buffer.from("\0/upstream-runner/cache\0/private-project/source\0");
+    const binary = path.join(root, "upstream.exe");
+    fs.writeFileSync(binary, bytes);
+    const exceptions = [{ path: "upstream.exe", paths: ["/upstream-runner"],
+      sha256: require("node:crypto").createHash("sha256").update(bytes).digest("hex") }];
+    assert.throws(() => assertNoPrivateBuildPaths(root, ["/upstream-runner"]), /Private build path/);
+    assert.doesNotThrow(() => assertNoPrivateBuildPaths(root, ["/upstream-runner"], exceptions));
+    assert.throws(() => assertNoPrivateBuildPaths(root, ["/upstream-runner", "/private-project"], exceptions), /Private build path/);
+    fs.appendFileSync(binary, "changed");
+    assert.throws(() => assertNoPrivateBuildPaths(root, ["/upstream-runner"], exceptions), /Private build path/);
+    fs.writeFileSync(binary, bytes);
+    fs.renameSync(binary, path.join(root, "other.exe"));
+    assert.throws(() => assertNoPrivateBuildPaths(root, ["/upstream-runner"], exceptions), /Private build path/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("artifact content audit rejects requested identities and recognizable live secrets", () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-private-content-test-"));
   try {

@@ -288,46 +288,10 @@ Write-Utf8NoBom -Path (Join-Path $hermesInstallDir ".miaos-source-commit") -Cont
 # ----------------------------------------------------------------------------
 
 # --- managed uv (install.sh::install_uv) -----------------------------------
-# Hermes owns its own uv at $HERMES_HOME\bin\uv.exe; the runtime update path
-# (hermes_cli/managed_uv.py) looks in the same place. The astral installer
-# honors UV_INSTALL_DIR on Windows (UV_UNMANAGED_INSTALL is the POSIX knob).
+# Hermes owns its uv at $HERMES_HOME\bin\uv.exe. Always populate it from the
+# pinned, hash-verified archive, including when an older managed uv exists.
 $uvCmd = Join-Path $hermesHome "bin\uv.exe"
-if (-not (Test-Path -LiteralPath $uvCmd)) {
-    Write-Host "Installing managed uv into $hermesHome\bin ..."
-    New-Item -ItemType Directory -Path (Join-Path $hermesHome "bin") -Force | Out-Null
-    $savedUvInstallDir = $env:UV_INSTALL_DIR
-    $env:UV_INSTALL_DIR = Join-Path $hermesHome "bin"
-    try {
-        $null = Invoke-Native "uv installer (astral.sh)" -IgnoreFailure {
-            & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
-        }
-        if (-not (Test-Path -LiteralPath $uvCmd)) {
-            Write-Host "astral.sh installer did not produce uv.exe; trying GitHub releases mirror ..."
-            $null = Invoke-Native "uv installer (GitHub mirror)" -IgnoreFailure {
-                & powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1 | iex"
-            }
-        }
-    } finally {
-        $env:UV_INSTALL_DIR = $savedUvInstallDir
-    }
-    if (-not (Test-Path -LiteralPath $uvCmd)) {
-        # Last resort: salvage an existing uv.exe into the managed location so
-        # the managed-first invariant holds (same rung as upstream install.ps1).
-        $existingUv = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1 -ExpandProperty Source
-        if (-not $existingUv) {
-            $defaultUv = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
-            if (Test-Path -LiteralPath $defaultUv) { $existingUv = $defaultUv }
-        }
-        if ($existingUv) {
-            Write-Host "Salvaging existing uv from $existingUv"
-            Copy-Item -LiteralPath $existingUv -Destination $uvCmd -Force
-        }
-    }
-    if (-not (Test-Path -LiteralPath $uvCmd)) {
-        throw "uv installation failed: $uvCmd not found"
-    }
-}
+& (Join-Path $scriptDir 'provision-uv-win.ps1') -Destination (Join-Path $hermesHome 'bin') -DownloadsDir $downloadsDir
 $null = Invoke-Native "uv --version" { & $uvCmd --version }
 
 # --- stage venv (install.sh::setup_venv) -----------------------------------
@@ -354,7 +318,8 @@ try {
     $env:VIRTUAL_ENV = Join-Path $hermesInstallDir "venv"
 
     # --- stage python-deps (install.sh::install_deps) -----------------------
-    # Tier 0: hash-verified `uv sync --extra all --locked` against uv.lock
+    # Hash-verified sync, including the optional Bedrock and Edge TTS packages,
+    # against uv.lock. No post-sync package resolution is allowed.
     # (NOT --all-extras: [matrix] needs python-olm which has no Windows wheel).
     # UV_PROJECT_ENVIRONMENT pins the sync target to venv\ (modern uv ignores
     # VIRTUAL_ENV for sync). Like install.sh::run_locked_uv_sync, ambient uv
@@ -376,14 +341,14 @@ try {
             $env:XDG_CONFIG_HOME = $isolatedUvConfig
             $env:XDG_CONFIG_DIRS = $isolatedUvConfig
             $env:UV_PROJECT_ENVIRONMENT = Join-Path $hermesInstallDir "venv"
-            $syncExit = Invoke-Native "uv sync --extra all --locked" -IgnoreFailure {
-                & $uvCmd sync --extra all --locked
+            $syncExit = Invoke-Native "uv sync --extra all --extra bedrock --extra edge-tts --locked" -IgnoreFailure {
+                & $uvCmd sync --extra all --extra bedrock --extra edge-tts --locked
             }
             if ($syncExit -eq 0) {
                 Write-Host "Main package installed (hash-verified via uv.lock)"
                 $installed = $true
             } else {
-                Write-Warning "uv.lock sync failed (lockfile may be stale), falling back to PyPI resolve..."
+                throw "Locked Hermes dependency installation failed; refusing unlocked fallback"
             }
         } finally {
             foreach ($name in $savedEnv.Keys) {
@@ -392,32 +357,10 @@ try {
             Remove-Tree $isolatedUvConfig
         }
     } else {
-        Write-Host "uv.lock not found -- falling back to PyPI resolve (no hash verification)"
+        throw "Pinned Hermes source has no uv.lock; refusing unlocked dependencies"
     }
     if (-not $installed) {
-        # Fallback tiers, as in install.sh::install_deps. The intermediate
-        # "[all] minus known-broken" tier is omitted: its broken-extras list
-        # is empty at this pin, which makes it byte-identical to tier ".[all]".
-        foreach ($tier in @(
-            @{ Name = "all";                    Spec = ".[all]" },
-            @{ Name = "core only (no extras)";  Spec = "." }
-        )) {
-            Write-Host "Trying tier: $($tier.Name) ..."
-            $tierExit = Invoke-Native "uv pip install -e $($tier.Spec)" -IgnoreFailure {
-                & $uvCmd pip install -e $tier.Spec
-            }
-            if ($tierExit -eq 0) {
-                Write-Host "Main package installed ($($tier.Name))"
-                if ($tier.Name -ne "all") {
-                    Write-Warning "Installed via fallback tier ($($tier.Name)); optional features may be missing."
-                }
-                $installed = $true
-                break
-            }
-        }
-    }
-    if (-not $installed) {
-        throw "Hermes Python package installation failed even with no extras."
+        throw "Locked Hermes Python package installation failed."
     }
 
     # --- stage node-deps (install.sh::install_node_deps) --------------------
@@ -507,12 +450,7 @@ try {
         "}`n"
     Write-Utf8NoBom -Path (Join-Path $hermesInstallDir ".hermes-bootstrap-complete") -Content $markerJson
 
-    # --- post-stage pins (install-local-mac.sh lines 79-82) -----------------
-    # Hermes otherwise downloads these optional dependencies while building the
-    # first Mia agent; keep the tested versions inside the shipped venv.
-    $null = Invoke-Native "uv pip install boto3/edge-tts" {
-        & $uvCmd pip install --quiet --python $venvPython "boto3==1.42.89" "edge-tts==7.2.7"
-    }
+    # Bedrock and Edge TTS were installed through the hash-verified lock above.
     Write-Utf8NoBom -Path (Join-Path $hermesInstallDir ".install_method") -Content "miaos-bundle`n"
 } finally {
     Pop-Location
