@@ -6055,7 +6055,18 @@ function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstr
     globalInstructions
   );
   const onboardingGuide = 'For a new user, help them get one useful thing done. Ask one relevant question at a time. If they ask to be shown around, briefly explain chat, connected apps, bots, and automations, then offer a small first task. Do not require a biography or invent a name from an email address. Respect the preferred name confirmed in the conversation.';
-  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext()].filter(Boolean).join('\n\n');
+  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext(), miaosBotInstructionsPromptContext()].filter(Boolean).join('\n\n');
+}
+
+// Mia edits bots in the background through their files. Driving the bot
+// editor in the app instead takes over the screen while the user works.
+function miaosBotInstructionsPromptContext() {
+  if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly) return '';
+  return [
+    `Each bot's instructions are the AGENTS.md file in its folder under ${BOT_PACKAGE_DIR} (folders are named <bot-name>--<bot-id>).`,
+    'To change what a bot does, edit that AGENTS.md directly with your file tools. Mia uses the new text from the bot\'s next chat and scheduled run.',
+    'Do not open or click through Mia\'s bot editor or other app screens to do this. Leave bot.yaml and automations.yaml alone; Mia regenerates them.',
+  ].join('\n');
 }
 
 function miaosAgentWorkspacePromptContext() {
