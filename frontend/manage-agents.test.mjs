@@ -759,8 +759,9 @@ test('failed activity refreshes clear stale automation and dispatch pulses', asy
   const automationLoader = source.match(/function loadActiveAutomationRuns\(\)\{[\s\S]*?\n  \}/)?.[0] || '';
   const dispatchLoader = source.match(/function loadActiveNativeDispatches\(roomId\)\{[\s\S]*?\n  \}/)?.[0] || '';
 
-  assert.match(automationLoader, /var next = res\.status === 200[\s\S]*?\? res\.data\.runs : \[\]/);
-  assert.match(automationLoader, /\.catch\(function\(\)\{[\s\S]*?chatWs\.automationRuns = \[\]/);
+  assert.match(automationLoader, /res\.status !== 200[\s\S]*?return clearStaleRuns\(\)/);
+  assert.match(automationLoader, /\.catch\(clearStaleRuns\)/);
+  assert.match(source, /var clearStaleRuns = function\(\)\{[\s\S]*?chatWs\.automationRuns = \[\]/);
   assert.match(dispatchLoader, /res\.status === 200 \? \(res\.data && res\.data\.dispatches \|\| \[\]\) : \[\]/);
   assert.match(dispatchLoader, /\.catch\(function\(\)\{[\s\S]*?setRoomNativeDispatches\(roomId, \[\]\)/);
 });

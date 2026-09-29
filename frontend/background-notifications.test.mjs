@@ -138,12 +138,17 @@ test('a failed active-runs request is not announced as finished runs', async () 
   context.chatInfo = { open: false };
   load(context, 'loadActiveAutomationRuns');
 
+  context.chatWs.knownAutomationRuns = running;
   context.api = async () => ({ status: 500, data: { error: 'boom' } });
   await context.loadActiveAutomationRuns();
   context.api = async () => { throw new Error('offline'); };
   await context.loadActiveAutomationRuns();
   assert.equal(shown.length, 0, 'an error says nothing about which runs finished');
-  assert.equal(context.chatWs.automationRuns, running, 'the last known runs are kept');
+  assert.equal(context.chatWs.automationRuns.length, 0, 'stale running pulses still clear');
+
+  context.api = async () => ({ status: 200, data: { runs: running } });
+  await context.loadActiveAutomationRuns();
+  assert.equal(shown.length, 0, 'a run still going after the outage is not announced');
 
   context.api = async () => ({ status: 200, data: { runs: [] } });
   await context.loadActiveAutomationRuns();
