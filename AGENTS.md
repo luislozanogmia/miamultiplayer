@@ -79,8 +79,9 @@ app writes into the user's Mia workspace (`backend/miaos-workspace.js`).
   instruction-file edits) stays bot-only; the ghost-cli-first browser guard
   applies to every profile with a terminal, Mia's included. Hermes' gateway
   reads a profile's tools from `platform_toolsets.cli`, not top-level
-  `toolsets`: only the Google and search-only profiles pin it today, so the
-  regular Mia and bot lists are not enforced yet.
+  `toolsets`, and Mia does not set it: every profile (Mia, bots, Google)
+  runs with Hermes' full default toolset. That is a deliberate choice
+  (2026-09-29); the top-level lists are not enforced.
 - **Passkeys:** Touch ID passkeys created in Mia work. iCloud Keychain
   passkeys need Apple's browser public-key credential entitlement plus native
   code; Electron doesn't ship Chrome's passkey UI. USB security keys don't
