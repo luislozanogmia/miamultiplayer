@@ -357,25 +357,51 @@ class Ctx:
     def register_hook(self, name, fn): hooks[name] = fn
 m.register(Ctx())
 h = hooks["pre_tool_call"]
+post = hooks["post_tool_call"]
+def ran(command, session_id, status="ok"):
+    h(tool_name="terminal", args={"command": command}, session_id=session_id)
+    post(tool_name="terminal", args={"command": command}, session_id=session_id, status=status)
+browse = lambda sid: h(tool_name="browser_navigate", args={"url": "https://linkedin.com"}, session_id=sid)
 out = [
-  h(tool_name="browser_navigate", args={"url": "https://linkedin.com"}, session_id="s1"),
+  browse("s1"),
   h(tool_name="tool_call", args={"name": "browser_exec"}, session_id="s1"),
   h(tool_name="web_search", args={"query": "x"}, session_id="s1"),
   h(tool_name="terminal", args={"command": "ghost-cli call ghost_instance_create"}, session_id="s1"),
-  h(tool_name="browser_navigate", args={"url": "https://linkedin.com"}, session_id="s1"),
-  h(tool_name="browser_exec", args={}, session_id="s2"),
+  browse("s1"),
 ]
+post(tool_name="terminal", args={"command": "ghost-cli call ghost_instance_create"}, session_id="s1", status="ok")
+out += [browse("s1"), h(tool_name="browser_exec", args={}, session_id="s2")]
+for sid, command in [("m1", "echo ghost-cli"), ("m2", "cat ~/ghost-cli.md"), ("m3", "grep -r 'ghost-cli call' .")]:
+    ran(command, sid)
+    out.append(browse(sid))
+ran("ghost-cli call ghost_instance_create", "b1", status="blocked")
+out.append(browse("b1"))
+for sid, command in [("r1", "cd /tmp && ghost-cli call x"), ("r2", "GHOST_TIMEOUT=5 /usr/local/bin/ghost-cli call x"), ("r3", "ghost-cli call x | head")]:
+    ran(command, sid)
+    out.append(browse(sid))
+ran("ghost-cli call ghost_instance_create", "f1", status="error")
+out.append(browse("f1"))
 print(json.dumps(out))
 `;
   const run = spawnSync('python3', ['-c', script, plugin], { encoding: 'utf8' });
   if (run.error && run.error.code === 'ENOENT') return t.skip('python3 is not installed');
   assert.equal(run.status, 0, run.stderr);
-  const [first, bridged, other, ghost, afterGhost, otherSession] = JSON.parse(run.stdout);
+  const [first, bridged, other, ghost, beforeItRan, afterGhost, otherSession, ...rest] = JSON.parse(run.stdout);
   assert.equal(first.action, 'block');
   assert.match(first.message, /There is no ghost-cli call in this session yet\. Use ghost-cli first/);
   assert.equal(bridged.action, 'block', 'the tool_call bridge cannot reach a browser tool either');
   assert.equal(other, null);
   assert.equal(ghost, null);
+  assert.equal(beforeItRan.action, 'block', 'a ghost-cli command counts only once it has run');
   assert.equal(afterGhost, null, 'after ghost-cli the built-in browser is the fallback');
   assert.equal(otherSession.action, 'block', 'each session tries ghost-cli first');
+  const [echo, cat, grep, blocked, chained, prefixed, piped, failed] = rest;
+  for (const [label, result] of [['echo', echo], ['cat', cat], ['grep', grep]]) {
+    assert.equal(result.action, 'block', `${label} only mentions ghost-cli`);
+  }
+  assert.equal(blocked.action, 'block', 'a blocked ghost-cli call never ran');
+  for (const [label, result] of [['after cd &&', chained], ['with env and full path', prefixed], ['piped', piped]]) {
+    assert.equal(result, null, `ghost-cli ${label} is a real attempt`);
+  }
+  assert.equal(failed, null, 'a ghost-cli run that failed still unlocks the fallback');
 });
