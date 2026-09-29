@@ -3901,17 +3901,29 @@ function harnessCliProviderForUser(email) {
   return HERMES_CLI_PROVIDER_BY_ONBOARDING_PROVIDER[preference.provider] || null;
 }
 
-// True when the turn ran on the user's Mia Router key: the message picked
-// the router's provider, or picked nothing and Mia Router is their default.
-// A user's own OpenRouter key is saved as an API provider, not managed-router.
+// True when the turn ran on Mia Router: the message picked it, or picked
+// nothing and it is the user's default. Onboarding saves Mia Router as the
+// openai-api provider with apiProvider openrouter, and while a router is
+// configured Mia's only OpenRouter credential is the minted router key
+// (installing it removes every other one), so openrouter means Mia Router.
+function turnUsesManagedRouter(preference, selection, routerConfigured) {
+  if (!routerConfigured) return false;
+  const isRouter = (provider) => {
+    const id = String(provider || '').trim().toLowerCase();
+    return id === MANAGED_ROUTER_HERMES_PROVIDER || id === 'managed-router' || id === 'mia-router';
+  };
+  const selected = selection && String(selection.provider || '').trim();
+  if (selected) return isRouter(selected);
+  if (!preference) return false;
+  return isRouter(preference.provider === 'openai-api' ? preference.apiProvider : preference.provider);
+}
+
 function dispatchUsesManagedRouter(trigger) {
   if (!trigger) return false;
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, trigger.senderId);
-  if (!preference || preference.provider !== 'managed-router') return false;
   const selection = trigger.metadata && trigger.metadata.chatModelSelection;
-  const selected = selection && String(selection.provider || '').trim().toLowerCase();
-  return !selected || selected === MANAGED_ROUTER_HERMES_PROVIDER || selected === 'managed-router';
+  return turnUsesManagedRouter(preference, selection, Boolean(MANAGED_ROUTER_URL));
 }
 
 function chatModelProviderIdsForPreference(preference) {
