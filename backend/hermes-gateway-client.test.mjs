@@ -835,3 +835,84 @@ test('reads the goal snapshot for the chip', async () => {
   assert.equal(control.goal.turns_used, 3);
   client.close();
 });
+
+// A goal continuation is streaming (Hermes started it) when the user sends
+// the next message. `status` is prompt.submit's answer for that message.
+async function submitDuringGoalTurn(status, followUp) {
+  const seen = [];
+  let submits = 0;
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'prompt.submit': (request, socket) => {
+      submits += 1;
+      if (submits === 1) {
+        socket.push('message.complete', { text: 'First step done.', status: 'complete' });
+        socket.push('message.start');
+        socket.push('message.delta', { text: 'Goal step ' });
+      } else {
+        followUp(socket);
+      }
+      return { status: submits === 1 ? 'streaming' : status };
+    },
+  });
+  const client = new HermesGatewayClient({
+    url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {},
+    onSessionEvent: (sessionId, kind, data) => seen.push({ kind, data }),
+  });
+  const first = await client.run({ message: 'go', options: {} });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const progress = [];
+  const second = await client.run({
+    storedSessionId: first.storedSessionId, message: 'new question', options: {},
+    onEvent: (type, payload) => progress.push([type, payload.text || '']),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  client.close();
+  return { second, seen, progress };
+}
+
+test('a message queued behind a goal turn gets its own answer, and the goal turn keeps its reply', async () => {
+  const { second, seen, progress } = await submitDuringGoalTurn('queued', (socket) => {
+    socket.push('message.delta', { text: 'continues.' });
+    socket.push('message.complete', { status: 'complete' });
+    socket.push('message.start');
+    socket.push('message.delta', { text: 'Answer to the new question.' });
+    socket.push('message.complete', { status: 'complete' });
+  });
+  assert.equal(second.text, 'Answer to the new question.');
+  const goalReplies = seen.filter((event) => event.kind === 'turn.complete').map((event) => event.data.text);
+  assert.deepEqual(goalReplies, ['Goal step continues.']);
+  assert.equal(progress.some(([, text]) => text === 'continues.'), false, 'the goal turn is not shown as this turn\'s progress');
+});
+
+test('a message Hermes folds into the streaming goal turn keeps the text streamed so far', async () => {
+  const { second, seen } = await submitDuringGoalTurn('redirected', (socket) => {
+    socket.push('message.delta', { text: 'now answers the new question.' });
+    socket.push('message.complete', { status: 'complete' });
+  });
+  assert.equal(second.text, 'Goal step now answers the new question.');
+  assert.equal(seen.some((event) => event.kind === 'turn.complete'), false, 'it is not also posted as a goal reply');
+});
+
+test('/subgoal edits the goal through session.control, which Hermes supports, not command.dispatch', async () => {
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'session.control': (request) => ({ control: {}, dispatch: { type: 'exec', output: `✓ ${request.params.action}` } }),
+    'session.control.read': () => ({ control: { goal: { title: 'ship it', subgoals: ['add tests', 'update docs'] } } }),
+  });
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {} });
+  assert.equal((await client.runCommand({ name: 'subgoal', arg: 'add tests', options: {} })).text, '✓ subgoal.add');
+  assert.equal((await client.runCommand({ name: 'subgoal', arg: 'remove 2', options: {} })).text, '✓ subgoal.remove');
+  assert.equal((await client.runCommand({ name: 'subgoal', arg: 'clear', options: {} })).text, '✓ subgoal.clear');
+  assert.equal((await client.runCommand({ name: 'subgoal', options: {} })).text, 'Goal: ship it\n1. add tests\n2. update docs');
+  const bad = await client.runCommand({ name: 'subgoal', arg: 'remove two', options: {} });
+  assert.equal(bad.commandError, true);
+  const controls = gateway.calls.filter((call) => call.method === 'session.control').map((call) => call.params);
+  assert.deepEqual(controls, [
+    { session_id: 'live-goal', action: 'subgoal.add', args: { text: 'add tests' } },
+    { session_id: 'live-goal', action: 'subgoal.remove', args: { index: 2 } },
+    { session_id: 'live-goal', action: 'subgoal.clear' },
+  ]);
+  assert.equal(gateway.calls.some((call) => call.method === 'command.dispatch'), false);
+  client.close();
+});

@@ -347,12 +347,7 @@ class HermesGatewayClient {
         if (sessionId && params.type === 'error') {
           this.sessionReadyWaiters.get(sessionId)?.reject(new Error(params.payload?.message || 'Hermes agent initialization failed'));
         }
-        const turn = sessionId ? this.turns.get(sessionId) : null;
-        if (turn && turn.onEvent) {
-          try { turn.onEvent(params.type, params.payload || {}); } catch (_) { /* chat diagnostics must not break the turn */ }
-        }
-        if (turn) this.handleTurnEvent(turn, params.type, params.payload || {});
-        else if (sessionId) this.handleUnsolicitedEvent(sessionId, params.type, params.payload || {});
+        if (sessionId) this.routeSessionEvent(sessionId, params.type, params.payload || {});
       }
     };
     socket.onerror = (event) => {
@@ -431,6 +426,49 @@ class HermesGatewayClient {
         reject(error);
       }
     });
+  }
+
+  // A turn submitted while a Hermes-started (goal) turn is streaming starts
+  // in 'pending': its events are held until prompt.submit says whether
+  // Hermes folded the prompt into that turn or queued it behind it.
+  routeSessionEvent(sessionId, type, payload) {
+    const turn = this.turns.get(sessionId);
+    if (turn && turn.mode === 'pending') {
+      turn.held.push([type, payload]);
+      return;
+    }
+    if (turn && turn.mode === 'after-unsolicited') {
+      this.handleUnsolicitedEvent(sessionId, type, payload);
+      if (type === 'message.complete') turn.mode = 'own';
+      return;
+    }
+    if (turn && turn.onEvent) {
+      try { turn.onEvent(type, payload); } catch (_) { /* chat diagnostics must not break the turn */ }
+    }
+    if (turn) this.handleTurnEvent(turn, type, payload);
+    else this.handleUnsolicitedEvent(sessionId, type, payload);
+  }
+
+  // Settle a pending turn once prompt.submit answers. "redirected"/"steered":
+  // the streaming turn now answers this prompt, so it takes over that text.
+  // "queued": the streaming turn finishes as its own reply and this prompt's
+  // turn starts after it. Anything else: Hermes started a fresh turn.
+  settlePendingTurn(sessionId, turn, status) {
+    if (!turn || turn.mode !== 'pending') return;
+    const held = turn.held;
+    turn.held = [];
+    if (status === 'redirected' || status === 'steered') {
+      const pending = this.unsolicitedTurns.get(sessionId);
+      this.unsolicitedTurns.delete(sessionId);
+      turn.text = pending ? pending.text : '';
+      turn.mode = 'own';
+    } else if (status === 'queued' && this.unsolicitedTurns.has(sessionId)) {
+      turn.mode = 'after-unsolicited';
+    } else {
+      this.unsolicitedTurns.delete(sessionId);
+      turn.mode = 'own';
+    }
+    for (const [type, payload] of held) this.routeSessionEvent(sessionId, type, payload);
   }
 
   handleTurnEvent(turn, type, payload) {
@@ -818,17 +856,18 @@ class HermesGatewayClient {
   async submitTurn(session, message, { onEvent = null, signal = null } = {}) {
     const existing = this.turns.get(session.sessionId);
     if (existing) throw new Error('Hermes gateway session already has a running turn');
-    // A reply already streaming for a Hermes-started turn now belongs to
-    // this turn; Hermes queues this prompt and runs it after that one.
-    this.unsolicitedTurns.delete(session.sessionId);
+    let turn = null;
     const result = new Promise((resolve, reject) => {
-      this.turns.set(session.sessionId, {
+      turn = {
         sessionId: session.sessionId,
         text: '',
         resolve,
         reject,
         onEvent: typeof onEvent === 'function' ? onEvent : null,
-      });
+        mode: this.unsolicitedTurns.has(session.sessionId) ? 'pending' : 'own',
+        held: [],
+      };
+      this.turns.set(session.sessionId, turn);
     });
     let rejectAbort = null;
     const aborted = new Promise((resolve, reject) => { rejectAbort = reject; });
@@ -839,10 +878,15 @@ class HermesGatewayClient {
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
     try {
       const submitted = this.request('prompt.submit', { session_id: session.sessionId, text: String(message || '') });
-      await (signal ? Promise.race([submitted, aborted]) : submitted);
+      const accepted = await (signal ? Promise.race([submitted, aborted]) : submitted);
+      this.settlePendingTurn(session.sessionId, turn, accepted && accepted.status);
       return await (signal ? Promise.race([result, aborted]) : result);
     } catch (error) {
-      this.turns.delete(session.sessionId);
+      if (this.turns.get(session.sessionId) === turn) this.turns.delete(session.sessionId);
+      // Events held for a turn that never started belong to the goal turn.
+      const held = turn && turn.mode === 'pending' ? turn.held : [];
+      if (turn) turn.held = [];
+      for (const [type, payload] of held) this.handleUnsolicitedEvent(session.sessionId, type, payload);
       throw error;
     } finally {
       if (signal) signal.removeEventListener('abort', onAbort);
@@ -868,6 +912,9 @@ class HermesGatewayClient {
     const session = await this.createOrResumeSession({ storedSessionId, seedMessages, title, options });
     if (typeof onSession === 'function') onSession(session);
     if (signal && signal.aborted) throw turnAbortError();
+    if (String(name || '') === 'subgoal') {
+      return { ...(await this.runSubgoal(session.sessionId, arg)), storedSessionId: session.storedSessionId, sessionId: session.sessionId };
+    }
     let dispatched;
     try {
       dispatched = await this.request('command.dispatch', {
@@ -900,6 +947,49 @@ class HermesGatewayClient {
       storedSessionId: session.storedSessionId,
       sessionId: session.sessionId,
     };
+  }
+
+  // /subgoal has no command.dispatch handler in Hermes; its gateway runs it
+  // through session.control. Same syntax as Hermes' own /subgoal: no
+  // argument lists them, "remove <n>" and "clear" edit, anything else adds.
+  async runSubgoal(sessionId, arg = '') {
+    const text = String(arg || '').trim();
+    const [verb = '', ...rest] = text.split(/\s+/);
+    let params;
+    if (!text) {
+      params = null;
+    } else if (verb.toLowerCase() === 'remove') {
+      const index = Number.parseInt(rest[0], 10);
+      if (!rest.length) return { text: 'Usage: /subgoal remove <n>', commandError: true };
+      if (!Number.isInteger(index) || String(index) !== rest[0]) {
+        return { text: '/subgoal remove: <n> must be an integer (1-based index).', commandError: true };
+      }
+      params = { action: 'subgoal.remove', args: { index } };
+    } else if (verb.toLowerCase() === 'clear' && rest.length === 0) {
+      params = { action: 'subgoal.clear' };
+    } else {
+      params = { action: 'subgoal.add', args: { text } };
+    }
+    try {
+      if (!params) {
+        const control = await this.readSessionControl(sessionId);
+        const goal = control && control.goal;
+        if (!goal) return { text: 'No active goal. Set one with /goal <text>.', commandError: true };
+        const subgoals = Array.isArray(goal.subgoals) ? goal.subgoals : [];
+        const list = subgoals.length ? subgoals.map((item, i) => `${i + 1}. ${item}`).join('\n') : 'No subgoals yet.';
+        return { text: `Goal: ${goal.title}\n${list}` };
+      }
+      const result = await this.request('session.control', { session_id: String(sessionId || ''), ...params });
+      const dispatch = result && result.dispatch && typeof result.dispatch === 'object' ? result.dispatch : {};
+      const output = String(dispatch.output || (dispatch.result && dispatch.result.output) || '').trim();
+      return { text: output || '/subgoal done.' };
+    } catch (error) {
+      if (error && error.gatewayError) {
+        const detail = String(error.gatewayError.message || error.message || '').trim();
+        return { text: detail || '/subgoal failed', commandError: true };
+      }
+      throw error;
+    }
   }
 
   // Frontend-safe goal/loop state of a live session (null goal = none).
