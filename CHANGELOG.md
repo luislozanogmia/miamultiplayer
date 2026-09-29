@@ -9,6 +9,41 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.14] — 2026-09-29
+
+### Added
+- Start fresh conversations with Mia while keeping earlier chats in History.
+- Use `/goal` and `/compact` in Mia and bot chats, with a command menu,
+  a goal-status chip, and `/clear` to start a new conversation.
+- Archive and restore bots while retaining their instructions and chat history.
+- Remember a separate model choice for each bot and allow an automation to
+  override its bot's model.
+- Receive desktop notifications and unread indicators for replies and finished
+  automation runs, with notification clicks opening the relevant chat.
+- Add a new tab to an approved Google Sheet through the Google integration.
+- Attach the open browser page's title and cleaned address as chat context.
+- Open browser links in background tabs and drag tabs to reorder them.
+
+### Fixed
+- Keep queued messages separate from autonomous goal replies and deliver files
+  produced by bot goal continuations.
+- Keep bots usable if archiving fails and recover chat state after interrupted
+  archive or restore operations.
+- Avoid false completion notifications when checking running automations fails.
+- Let Mia edit bot instruction files while retaining the bot instruction-file
+  approval guard.
+- Try Ghost before the separate browser fallback in profiles with the guard;
+  merely mentioning Ghost or placing it in a skipped conditional does not count.
+- Explain Mia Router connection failures and rejected credentials more clearly.
+- Remove URL credentials, fragments, and sensitive query parameters from
+  automatically attached browser context.
+- Allow browser copy buttons and fullscreen video; leave fullscreen when
+  switching to a new foreground tab.
+
+### Notes
+- `/subgoal` is not exposed in Mia's command menu or command-dispatch path.
+- Windows remains unsigned; macOS releases remain signed and notarized.
+
 ## [0.2.13] — 2026-09-28
 
 ### Added
