@@ -428,9 +428,9 @@ class HermesGatewayClient {
     });
   }
 
-  // A turn submitted while a Hermes-started (goal) turn is streaming starts
-  // in 'pending': its events are held until prompt.submit says whether
-  // Hermes folded the prompt into that turn or queued it behind it.
+  // Every submitted turn starts in 'pending': its events are held until
+  // prompt.submit answers, because Hermes can start a goal turn between our
+  // send and its reply, and that turn's answer is not ours.
   routeSessionEvent(sessionId, type, payload) {
     const turn = this.turns.get(sessionId);
     if (turn && turn.mode === 'pending') {
@@ -438,9 +438,16 @@ class HermesGatewayClient {
       return;
     }
     if (turn && turn.mode === 'after-unsolicited') {
-      this.handleUnsolicitedEvent(sessionId, type, payload);
-      if (type === 'message.complete') turn.mode = 'own';
-      return;
+      // One goal turn runs ahead of ours: its start (if not seen yet) and
+      // everything up to its completion belong to it; a later start is ours.
+      if (type === 'message.start' && turn.goalStarted) {
+        turn.mode = 'own';
+      } else {
+        if (type === 'message.start') turn.goalStarted = true;
+        this.handleUnsolicitedEvent(sessionId, type, payload);
+        if (type === 'message.complete') turn.mode = 'own';
+        return;
+      }
     }
     if (turn && turn.onEvent) {
       try { turn.onEvent(type, payload); } catch (_) { /* chat diagnostics must not break the turn */ }
@@ -451,8 +458,9 @@ class HermesGatewayClient {
 
   // Settle a pending turn once prompt.submit answers. "redirected"/"steered":
   // the streaming turn now answers this prompt, so it takes over that text.
-  // "queued": the streaming turn finishes as its own reply and this prompt's
-  // turn starts after it. Anything else: Hermes started a fresh turn.
+  // "queued", or a goal turn still open when Hermes answered: that turn
+  // finishes as its own reply and this prompt's turn follows it. Anything
+  // else: Hermes started a fresh turn.
   settlePendingTurn(sessionId, turn, status) {
     if (!turn || turn.mode !== 'pending') return;
     const held = turn.held;
@@ -462,7 +470,8 @@ class HermesGatewayClient {
       this.unsolicitedTurns.delete(sessionId);
       turn.text = pending ? pending.text : '';
       turn.mode = 'own';
-    } else if (status === 'queued' && this.unsolicitedTurns.has(sessionId)) {
+    } else if (status === 'queued' || this.unsolicitedTurns.has(sessionId)) {
+      turn.goalStarted = this.unsolicitedTurns.has(sessionId);
       turn.mode = 'after-unsolicited';
     } else {
       this.unsolicitedTurns.delete(sessionId);
@@ -864,7 +873,7 @@ class HermesGatewayClient {
         resolve,
         reject,
         onEvent: typeof onEvent === 'function' ? onEvent : null,
-        mode: this.unsolicitedTurns.has(session.sessionId) ? 'pending' : 'own',
+        mode: 'pending',
         held: [],
       };
       this.turns.set(session.sessionId, turn);
