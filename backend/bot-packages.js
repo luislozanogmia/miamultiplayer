@@ -314,19 +314,23 @@ function createBotPackageStore(rootDirectory) {
     const target = path.join(archiveRoot, path.basename(directory));
     const archived = { schemaVersion: 1, archivedAt, record };
     let moved = false;
+    let written = false;
     return {
+      // Write the record before moving, so a failed write (e.g. a full disk)
+      // leaves the bot where it was instead of an archive with no record.
       apply() {
         fs.mkdirSync(archiveRoot, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(path.join(directory, ARCHIVE_RECORD_FILE), JSON.stringify(archived, null, 2), { encoding: 'utf8', mode: 0o600 });
+        written = true;
         fs.renameSync(directory, target);
         moved = true;
-        fs.writeFileSync(path.join(target, ARCHIVE_RECORD_FILE), JSON.stringify(archived, null, 2), { encoding: 'utf8', mode: 0o600 });
       },
       finish() {},
       rollback() {
-        if (!moved) return;
-        fs.rmSync(path.join(target, ARCHIVE_RECORD_FILE), { force: true });
-        if (fs.existsSync(target) && !fs.existsSync(directory)) fs.renameSync(target, directory);
+        if (moved && fs.existsSync(target) && !fs.existsSync(directory)) fs.renameSync(target, directory);
         moved = false;
+        if (written) fs.rmSync(path.join(directory, ARCHIVE_RECORD_FILE), { force: true });
+        written = false;
       },
     };
   }

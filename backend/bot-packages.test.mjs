@@ -321,3 +321,26 @@ test('HTTP bot create/read/edit enforces revisions and rename preserves direct f
   assert.match(renamedDirectory, /^renamed-over-http--/);
   assert.equal(fs.readFileSync(path.join(fixture.packages, renamedDirectory, 'AGENTS.md'), 'utf8'), '# Preserve across rename\n');
 });
+
+test('a failed archive write leaves the bot active and in place', (t) => {
+  const fixture = tempFixture(t);
+  const db = dbStore.openDb(fixture.dbPath, fixture.dataDir, { botPackageDir: fixture.packages });
+  dbStore.insertOne(db, 'bots', 'bot-alpha', record());
+  const directory = onlyPackage(fixture.packages);
+  const bot = dbStore.loadOne(db, 'bots', 'bot-alpha');
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (String(file).endsWith('archived-bot.json')) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+    return realWrite(file, ...rest);
+  };
+  try {
+    assert.throws(() => dbStore.archiveBot(db, bot, new Date().toISOString()), /no space left/);
+  } finally {
+    fs.writeFileSync = realWrite;
+  }
+  assert.ok(fs.existsSync(directory), 'the package stays in the active folder');
+  assert.equal(fs.existsSync(path.join(directory, 'archived-bot.json')), false);
+  assert.ok(dbStore.loadOne(db, 'bots', 'bot-alpha'), 'the bot row stays');
+  assert.deepEqual(dbStore.listArchivedBots(db), []);
+  db.close();
+});

@@ -538,8 +538,8 @@ function archiveBot(db, record, archivedAt) {
   if (!store) throw new Error('bot packages are not configured');
   if (db.inTransaction) throw new Error('archiveBot cannot run inside a transaction');
   const change = store.prepareArchive(record, archivedAt);
-  change.apply();
   try {
+    change.apply();
     db.prepare('DELETE FROM bots WHERE id = ?').run(record.id);
   } catch (error) {
     change.rollback();
