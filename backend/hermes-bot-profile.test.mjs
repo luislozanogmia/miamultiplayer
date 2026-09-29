@@ -346,6 +346,25 @@ test('profiles with a terminal get the ghost-first guard; Google profiles do not
   }
 });
 
+test('Google profiles pin their tool list where Hermes\' gateway reads it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-platform-toolsets-'));
+  const profilesRoot = path.join(root, 'profiles');
+  const pinned = (config) => {
+    const match = /\nplatform_toolsets:\n  cli:\n((?:    - .+\n)+)/.exec(config);
+    return match ? match[1].trim().split('\n').map((line) => line.replace(/^\s*- /, '')) : null;
+  };
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir: path.join(root, 'Documents', 'mia'), searchOnly: false });
+    const read = (profile) => fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8');
+    // Without platform_toolsets.cli the gateway gives a session Hermes' full
+    // default set, terminal and files included.
+    assert.deepEqual(pinned(read(MIAOS_AGENT_GOOGLE_HERMES_PROFILE)), ['memory', 'session_search', 'todo', 'clarify']);
+    assert.deepEqual(pinned(read(MIAOS_BOT_GOOGLE_HERMES_PROFILE)), ['memory', 'todo', 'clarify']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('ghost-first guard refuses Hermes browser tools until ghost-cli has run in the session', (t) => {
   const plugin = path.join(path.dirname(new URL(import.meta.url).pathname), 'hermes-plugins', GHOST_FIRST_PLUGIN);
   const script = `
