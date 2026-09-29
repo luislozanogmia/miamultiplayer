@@ -371,12 +371,15 @@ out = [
 ]
 post(tool_name="terminal", args={"command": "ghost-cli call ghost_instance_create"}, session_id="s1", status="ok")
 out += [browse("s1"), h(tool_name="browser_exec", args={}, session_id="s2")]
-for sid, command in [("m1", "echo ghost-cli"), ("m2", "cat ~/ghost-cli.md"), ("m3", "grep -r 'ghost-cli call' .")]:
+for sid, command in [("m1", "echo ghost-cli"), ("m2", "cat ~/ghost-cli.md"), ("m3", "grep -r 'ghost-cli call' ."),
+                     ("m4", "true || ghost-cli call x"), ("m5", "false && ghost-cli call x"),
+                     ("m6", "if false; then ghost-cli call x; fi"), ("m7", "exit 0; ghost-cli call x"),
+                     ("m8", "ghost-cli() { :; }; ghost-cli"), ("m9", "true # ghost-cli call x")]:
     ran(command, sid)
     out.append(browse(sid))
 ran("ghost-cli call ghost_instance_create", "b1", status="blocked")
 out.append(browse("b1"))
-for sid, command in [("r1", "cd /tmp && ghost-cli call x"), ("r2", "GHOST_TIMEOUT=5 /usr/local/bin/ghost-cli call x"), ("r3", "ghost-cli call x | head")]:
+for sid, command in [("r1", "cd /tmp; ghost-cli call x"), ("r2", "GHOST_TIMEOUT=5 /usr/local/bin/ghost-cli call x"), ("r3", "ghost-cli call x | head")]:
     ran(command, sid)
     out.append(browse(sid))
 ran("ghost-cli call ghost_instance_create", "f1", status="error")
@@ -395,12 +398,15 @@ print(json.dumps(out))
   assert.equal(beforeItRan.action, 'block', 'a ghost-cli command counts only once it has run');
   assert.equal(afterGhost, null, 'after ghost-cli the built-in browser is the fallback');
   assert.equal(otherSession.action, 'block', 'each session tries ghost-cli first');
-  const [echo, cat, grep, blocked, chained, prefixed, piped, failed] = rest;
-  for (const [label, result] of [['echo', echo], ['cat', cat], ['grep', grep]]) {
+  const [echo, cat, grep, orElse, andThen, inIf, afterExit, asFunction, inComment, blocked, chained, prefixed, piped, failed] = rest;
+  for (const [label, result] of [['echo', echo], ['cat', cat], ['grep', grep], ['a comment', inComment]]) {
     assert.equal(result.action, 'block', `${label} only mentions ghost-cli`);
   }
+  for (const [label, result] of [['after ||', orElse], ['after &&', andThen], ['inside if', inIf], ['after exit', afterExit], ['a function named ghost-cli', asFunction]]) {
+    assert.equal(result.action, 'block', `ghost-cli ${label} may never have run`);
+  }
   assert.equal(blocked.action, 'block', 'a blocked ghost-cli call never ran');
-  for (const [label, result] of [['after cd &&', chained], ['with env and full path', prefixed], ['piped', piped]]) {
+  for (const [label, result] of [['after cd ;', chained], ['with env and full path', prefixed], ['piped', piped]]) {
     assert.equal(result, null, `ghost-cli ${label} is a real attempt`);
   }
   assert.equal(failed, null, 'a ghost-cli run that failed still unlocks the fallback');
