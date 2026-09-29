@@ -6148,6 +6148,7 @@ async function handleNativeHermesSessionEvent(sessionId, kind, data) {
   if (!target || !data) return;
   const metadata = { runtime: 'hermes', agentName: target.agentName || 'Mia' };
   let text = '';
+  let artifacts = [];
   if (kind === 'turn.complete') {
     if (data.status === 'interrupted') return;
     const signature = `[${metadata.agentName}]`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -6156,6 +6157,10 @@ async function handleNativeHermesSessionEvent(sessionId, kind, data) {
       .replace(new RegExp(`\\s*${signature}\\s*$`, 'i'), '')
       .trim();
     metadata.goalContinuation = true;
+    // Like a normal bot reply, only files inside the bot's workspace attach.
+    artifacts = target.agent
+      ? cronSync.validateBotArtifacts(target.agent, Array.isArray(data.artifacts) ? data.artifacts : [])
+      : [];
   } else if (kind === 'goal.status') {
     text = String(data.text || '').trim();
     metadata.goalStatus = true;
@@ -6166,19 +6171,32 @@ async function handleNativeHermesSessionEvent(sessionId, kind, data) {
   } else {
     return;
   }
-  if (!text) return;
+  if (!text && artifacts.length === 0) return;
   const conversation = nativeConversationRepository.getConversation({ companyId: target.companyId, id: target.conversationId });
   if (!conversation) return;
-  nativeConversationService.createEvent({
-    companyId: target.companyId,
-    conversationId: target.conversationId,
-    principal: target.botId
-      ? { companyId: target.companyId, principalId: target.botId, principalType: 'bot' }
-      : { companyId: target.companyId, principalId: 'gateway', principalType: 'agent' },
-    type: target.botId ? 'bot_message' : 'agent_message',
-    content: { text },
-    metadata,
-  });
+  const principal = target.botId
+    ? { companyId: target.companyId, principalId: target.botId, principalType: 'bot' }
+    : { companyId: target.companyId, principalId: 'gateway', principalType: 'agent' };
+  const type = target.botId ? 'bot_message' : 'agent_message';
+  if (artifacts.length === 0) {
+    nativeConversationService.createEvent({ companyId: target.companyId, conversationId: target.conversationId, principal, type, content: { text }, metadata });
+    return;
+  }
+  for (let index = 0; index < artifacts.length; index++) {
+    const artifact = artifacts[index];
+    const attachments = await createNativeArtifactAttachments({ conversation, principal, artifact });
+    const created = await nativeConversationService.createEvent({
+      companyId: target.companyId,
+      conversationId: target.conversationId,
+      principal,
+      type,
+      content: { text: index === 0 && text ? text : `Created ${artifact.filename}`, attachments },
+      metadata: { ...metadata, artifact: true, artifactSource: 'goal' },
+    });
+    for (const attachment of attachments) {
+      nativeConversationRepository.attachToEvent({ companyId: target.companyId, id: attachment.id, eventId: created.event.id });
+    }
+  }
 }
 
 function persistNativeHermesGatewaySession(conversation, eventId, storedSessionId, profile) {
@@ -7142,6 +7160,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
           conversationId: conversation.id,
           botId: agent.id,
           agentName: agent.name,
+          // Goal continuations validate their files against this bot's workspace.
+          agent,
         });
         persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, sessionKey);
       },

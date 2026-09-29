@@ -334,6 +334,7 @@ function botConversation(dbPath, botId) {
 test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (t) => {
   const data = fixture(t);
   let goal = null;
+  let reportArtifact = null;
   const script = (request, push) => {
     if (request.method === 'session.create') return { session_id: 'live-mia', stored_session_id: 'stored-bot' };
     if (request.method === 'session.resume') return { session_id: 'live-mia', session_key: 'stored-bot' };
@@ -356,6 +357,9 @@ test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (
           push('message.start');
           push('message.delta', { text: 'Revised the report and made the PDF.' });
           push('message.complete', { status: 'complete' });
+          // A continuation turn whose only output is a file.
+          push('message.start');
+          push('message.complete', { status: 'complete', artifacts: [reportArtifact] });
           goal = { ...goal, status: 'done', turns_used: 2 };
           push('status.update', { kind: 'goal', text: '✓ Goal achieved: report revised' });
         }, 150);
@@ -378,6 +382,16 @@ test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (
   const bot = (await created.json()).bot;
   const chat = botConversation(data.dbPath, bot.id);
   assert.ok(chat, 'bot chat provisioned');
+  const workspace = path.join(data.artifacts, `bot-${crypto.createHash('sha256').update(bot.id).digest('hex').slice(0, 32)}`);
+  fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
+  const pdf = Buffer.from('%PDF-1.4\n% revised report\n');
+  fs.writeFileSync(path.join(workspace, 'report.pdf'), pdf);
+  reportArtifact = {
+    filename: 'report.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: pdf.length,
+    sha256: crypto.createHash('sha256').update(pdf).digest('hex'),
+  };
   const events = async () => (await (await request(server, data.aliceSession,
     `/api/conversations/${chat.id}/events?limit=100`, { headers })).json()).events || [];
   const send = (text, metadata) => request(server, data.aliceSession, `/api/conversations/${chat.id}/events`, {
@@ -400,6 +414,9 @@ test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (
   const continuation = await botReply('Revised the report and made the PDF.');
   assert.equal(continuation.senderId, bot.id, 'Hermes\' own turn is posted as the bot');
   assert.equal(continuation.metadata.goalContinuation, true);
+  const delivered = await botReply('Created report.pdf');
+  assert.deepEqual((delivered.content.attachments || []).map((file) => file.filename), ['report.pdf'],
+    'a continuation that only made a file still delivers it');
   assert.equal(done.metadata.goal.status, 'done');
   assert.equal(hermes.calls.find((call) => call.method === 'command.dispatch').params.session_id, 'live-mia');
 });
