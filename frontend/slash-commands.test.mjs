@@ -60,8 +60,8 @@ function harness({ roomId = 'mia', kind = 'agent', messages = [] } = {}) {
 const names = (commands) => Array.from(commands, (command) => command.name);
 
 test('Mia\'s chat and a bot\'s own chat offer every command, other rooms none', () => {
-  assert.deepEqual(names(harness({ roomId: 'mia' }).context.composerSlashCommands()), ['goal', 'subgoal', 'compact', 'clear']);
-  assert.deepEqual(names(harness({ roomId: 'bot' }).context.composerSlashCommands()), ['goal', 'subgoal', 'compact', 'clear']);
+  assert.deepEqual(names(harness({ roomId: 'mia' }).context.composerSlashCommands()), ['goal', 'compact', 'clear']);
+  assert.deepEqual(names(harness({ roomId: 'bot' }).context.composerSlashCommands()), ['goal', 'compact', 'clear']);
   assert.deepEqual(names(harness({ roomId: 'dept', kind: 'department' }).context.composerSlashCommands()), []);
 });
 

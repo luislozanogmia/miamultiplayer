@@ -902,7 +902,7 @@ class HermesGatewayClient {
     }
   }
 
-  // Run a Hermes slash command (/goal, /subgoal, /compress) on the
+  // Run a Hermes slash command (/goal, /compress) on the
   // conversation's session. Commands go through command.dispatch; sent as
   // prompt text they would only reach the model. A command that starts work
   // (setting a goal) answers with a notice plus the first turn's prompt.
@@ -921,9 +921,6 @@ class HermesGatewayClient {
     const session = await this.createOrResumeSession({ storedSessionId, seedMessages, title, options });
     if (typeof onSession === 'function') onSession(session);
     if (signal && signal.aborted) throw turnAbortError();
-    if (String(name || '') === 'subgoal') {
-      return { ...(await this.runSubgoal(session.sessionId, arg)), storedSessionId: session.storedSessionId, sessionId: session.sessionId };
-    }
     let dispatched;
     try {
       dispatched = await this.request('command.dispatch', {
@@ -956,49 +953,6 @@ class HermesGatewayClient {
       storedSessionId: session.storedSessionId,
       sessionId: session.sessionId,
     };
-  }
-
-  // /subgoal has no command.dispatch handler in Hermes; its gateway runs it
-  // through session.control. Same syntax as Hermes' own /subgoal: no
-  // argument lists them, "remove <n>" and "clear" edit, anything else adds.
-  async runSubgoal(sessionId, arg = '') {
-    const text = String(arg || '').trim();
-    const [verb = '', ...rest] = text.split(/\s+/);
-    let params;
-    if (!text) {
-      params = null;
-    } else if (verb.toLowerCase() === 'remove') {
-      const index = Number.parseInt(rest[0], 10);
-      if (!rest.length) return { text: 'Usage: /subgoal remove <n>', commandError: true };
-      if (!Number.isInteger(index) || String(index) !== rest[0]) {
-        return { text: '/subgoal remove: <n> must be an integer (1-based index).', commandError: true };
-      }
-      params = { action: 'subgoal.remove', args: { index } };
-    } else if (verb.toLowerCase() === 'clear' && rest.length === 0) {
-      params = { action: 'subgoal.clear' };
-    } else {
-      params = { action: 'subgoal.add', args: { text } };
-    }
-    try {
-      if (!params) {
-        const control = await this.readSessionControl(sessionId);
-        const goal = control && control.goal;
-        if (!goal) return { text: 'No active goal. Set one with /goal <text>.', commandError: true };
-        const subgoals = Array.isArray(goal.subgoals) ? goal.subgoals : [];
-        const list = subgoals.length ? subgoals.map((item, i) => `${i + 1}. ${item}`).join('\n') : 'No subgoals yet.';
-        return { text: `Goal: ${goal.title}\n${list}` };
-      }
-      const result = await this.request('session.control', { session_id: String(sessionId || ''), ...params });
-      const dispatch = result && result.dispatch && typeof result.dispatch === 'object' ? result.dispatch : {};
-      const output = String(dispatch.output || (dispatch.result && dispatch.result.output) || '').trim();
-      return { text: output || '/subgoal done.' };
-    } catch (error) {
-      if (error && error.gatewayError) {
-        const detail = String(error.gatewayError.message || error.message || '').trim();
-        return { text: detail || '/subgoal failed', commandError: true };
-      }
-      throw error;
-    }
   }
 
   // Frontend-safe goal/loop state of a live session (null goal = none).

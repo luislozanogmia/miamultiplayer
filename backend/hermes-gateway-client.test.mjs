@@ -928,25 +928,3 @@ test('a message Hermes folds into the streaming goal turn keeps the text streame
   assert.equal(seen.some((event) => event.kind === 'turn.complete'), false, 'it is not also posted as a goal reply');
 });
 
-test('/subgoal edits the goal through session.control, which Hermes supports, not command.dispatch', async () => {
-  const gateway = scriptedGateway({
-    'session.create': createGoalSession,
-    'session.control': (request) => ({ control: {}, dispatch: { type: 'exec', output: `✓ ${request.params.action}` } }),
-    'session.control.read': () => ({ control: { goal: { title: 'ship it', subgoals: ['add tests', 'update docs'] } } }),
-  });
-  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {} });
-  assert.equal((await client.runCommand({ name: 'subgoal', arg: 'add tests', options: {} })).text, '✓ subgoal.add');
-  assert.equal((await client.runCommand({ name: 'subgoal', arg: 'remove 2', options: {} })).text, '✓ subgoal.remove');
-  assert.equal((await client.runCommand({ name: 'subgoal', arg: 'clear', options: {} })).text, '✓ subgoal.clear');
-  assert.equal((await client.runCommand({ name: 'subgoal', options: {} })).text, 'Goal: ship it\n1. add tests\n2. update docs');
-  const bad = await client.runCommand({ name: 'subgoal', arg: 'remove two', options: {} });
-  assert.equal(bad.commandError, true);
-  const controls = gateway.calls.filter((call) => call.method === 'session.control').map((call) => call.params);
-  assert.deepEqual(controls, [
-    { session_id: 'live-goal', action: 'subgoal.add', args: { text: 'add tests' } },
-    { session_id: 'live-goal', action: 'subgoal.remove', args: { index: 2 } },
-    { session_id: 'live-goal', action: 'subgoal.clear' },
-  ]);
-  assert.equal(gateway.calls.some((call) => call.method === 'command.dispatch'), false);
-  client.close();
-});

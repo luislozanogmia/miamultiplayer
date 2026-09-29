@@ -815,7 +815,7 @@ async function runInferenceViaHermesGateway({
   return result;
 }
 
-// Slash commands (/goal, /subgoal, /compress) on the same persistent session
+// Slash commands (/goal, /compress) on the same persistent session
 // runInferenceViaHermesGateway uses, so the command acts on that chat.
 async function runSlashCommandViaHermesGateway({
   storedSessionId,

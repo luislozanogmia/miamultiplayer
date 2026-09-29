@@ -6121,7 +6121,7 @@ function nativeHermesGatewaySeedMessages(systemPrompt, events, triggerId) {
 // (metadata.slashCommand) so a message that merely starts with "/" stays text.
 // /clear is a composer action (it starts a new conversation) and never
 // reaches the backend.
-const NATIVE_SLASH_COMMANDS = new Set(['goal', 'subgoal', 'compact', 'compress']);
+const NATIVE_SLASH_COMMANDS = new Set(['goal', 'compact', 'compress']);
 
 function nativeSlashCommand(trigger) {
   const metadata = trigger && trigger.metadata && typeof trigger.metadata === 'object' ? trigger.metadata : {};
@@ -7144,8 +7144,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
           }),
         })
         : await runInferenceViaHermesGateway({ ...gatewayRunArgs, message: gatewayMessage });
-      if (slashCommand && gatewayResult && gatewayResult.sessionId
-        && (slashCommand.name === 'goal' || slashCommand.name === 'subgoal')) {
+      if (slashCommand && gatewayResult && gatewayResult.sessionId && slashCommand.name === 'goal') {
         const goal = await nativeGoalSnapshot(gatewayResult.sessionId);
         if (goal !== undefined) gatewayResult.goal = goal;
       }
@@ -7226,8 +7225,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         }),
       })
       : await runInferenceViaHermesGateway({ ...botRunArgs, message: turnMessage });
-    if (slashCommand && inferenceResult && inferenceResult.sessionId
-      && (slashCommand.name === 'goal' || slashCommand.name === 'subgoal')) {
+    if (slashCommand && inferenceResult && inferenceResult.sessionId && slashCommand.name === 'goal') {
       const goal = await nativeGoalSnapshot(inferenceResult.sessionId);
       if (goal !== undefined) inferenceResult.goal = goal;
     }

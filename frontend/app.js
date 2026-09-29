@@ -11104,16 +11104,15 @@
     renderChatSuggestions(); // was deferred while the popover was open
   }
 
-  // Slash commands the composer offers. Hermes runs goal/subgoal/compact on
+  // Slash commands the composer offers. Hermes runs goal/compact on
   // the chat's own session (Mia's, or a bot's own chat); /clear is a composer action that starts a
   // new conversation and never reaches the backend.
   var COMPOSER_SLASH_COMMANDS = [
     {name: 'goal', args: '<what to achieve>', desc: 'Keep working until it is done'},
-    {name: 'subgoal', args: '<extra check>', desc: 'Add a requirement to the current goal'},
     {name: 'compact', args: '', desc: 'Summarize earlier messages to free up context'},
     {name: 'clear', args: '', desc: 'Start a new conversation'}
   ];
-  var HERMES_SLASH_COMMAND_NAMES = ['goal', 'subgoal', 'compact', 'compress'];
+  var HERMES_SLASH_COMMAND_NAMES = ['goal', 'compact', 'compress'];
 
   // The newest goal snapshot Hermes attached to one of Mia's or the bot's
   // messages in this room: an object, null once cleared, or undefined when no
