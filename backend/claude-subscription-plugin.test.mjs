@@ -4,8 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-const plugin = path.resolve('backend/hermes-plugins/claude-subscription-directsdk-experimental');
+const plugin = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'hermes-plugins/claude-subscription-directsdk-experimental',
+);
 
 function runPython(source, env = {}) {
   return spawnSync('python3', ['-c', source, plugin], {
