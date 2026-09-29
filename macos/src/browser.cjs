@@ -655,6 +655,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!windowWasFullscreen && window.isFullScreen()) window.setFullScreen(false);
     requestLayout();
   }
+  // Every way a tab becomes active (select, a new foreground tab, the agent's
+  // tab_switch) ends another tab's page fullscreen, or its video would keep
+  // covering the window over the tab now in front.
+  function activateTab(id) {
+    if (fullscreenId !== null && fullscreenId !== id) exitPageFullscreen();
+    activeId = id;
+  }
+
   function exitPageFullscreen() {
     const tab = tabs.get(fullscreenId);
     if (tab && !tab.view.webContents.isDestroyed()) {
@@ -1043,7 +1051,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     if (method === "tab_switch") {
       const tab = protocolTab(params.tab_id);
-      activeId = tab.id;
+      activateTab(tab.id);
       layout();
       persistTabs();
       focusTabWebContents(tab);
@@ -1270,7 +1278,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     tabs.set(tab.id, tab);
     // A link opened from a page goes right after that page, like Chrome.
     if (tabs.has(options.after)) moveTab(tab.id, [...tabs.keys()].indexOf(options.after) + 1);
-    if (options.activate !== false || activeId === null) activeId = tab.id;
+    if (options.activate !== false || activeId === null) activateTab(tab.id);
     window.contentView.addChildView(view);
     view.setBackgroundColor(darkTheme ? "#0B0A09" : "#ffffff");
     const wc = view.webContents;
@@ -1562,8 +1570,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       const tab = active();
       if (command.action === "navigate") navigate(tab, command.value);
       if (command.action === "select" && tabs.has(command.id)) {
-        if (fullscreenId !== null && fullscreenId !== command.id) exitPageFullscreen();
-        activeId = command.id; layout(); persistTabs();
+        activateTab(command.id); layout(); persistTabs();
         focusTabWebContents(tabs.get(command.id));
       }
       if (command.action === "close") closeTab(command.id);

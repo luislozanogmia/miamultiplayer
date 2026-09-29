@@ -888,6 +888,20 @@ test("a page's fullscreen request fills the window and leaving restores the pane
   assert.equal(JSON.stringify(h.views[0].bounds), JSON.stringify({ x: 0, y: 100, width: 700, height: 600 }));
 });
 
+test("opening a new foreground tab ends the old tab's page fullscreen", () => {
+  const h = harness();
+  h.command("navigate", { value: "https://www.youtube.com/watch?v=x" });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  const wc = h.views[0].webContents;
+  wc.emit("enter-html-full-screen");
+  assert.equal(h.window.fullScreen, true);
+  const created = h.command("new");
+  assert.equal(h.window.fullScreen, false, "the window leaves fullscreen");
+  assert.ok(wc.scripts.some(script => script.includes("document.exitFullscreen()")), "the video leaves fullscreen");
+  assert.equal(created.activeId, created.tabs.at(-1).id, "the new tab is in front");
+  assert.equal(h.views[0].visible, false, "the old video no longer covers the window");
+});
+
 test("page fullscreen keeps a window that was already fullscreen, and ends when the pane hides", () => {
   const h = harness();
   h.window.fullScreen = true;
