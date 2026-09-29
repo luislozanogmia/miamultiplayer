@@ -131,6 +131,25 @@ test('a finished automation notifies once, not again after its reply', () => {
   assert.equal(running.shown.length, 0, 'a run still active has not finished');
 });
 
+test('a failed active-runs request is not announced as finished runs', async () => {
+  const { context, shown } = harness({ activeRoomId: null });
+  const running = [{ id: 'run-1', name: 'Daily news', conversationId: 'bot-a' }];
+  context.chatWs.automationRuns = running;
+  context.chatInfo = { open: false };
+  load(context, 'loadActiveAutomationRuns');
+
+  context.api = async () => ({ status: 500, data: { error: 'boom' } });
+  await context.loadActiveAutomationRuns();
+  context.api = async () => { throw new Error('offline'); };
+  await context.loadActiveAutomationRuns();
+  assert.equal(shown.length, 0, 'an error says nothing about which runs finished');
+  assert.equal(context.chatWs.automationRuns, running, 'the last known runs are kept');
+
+  context.api = async () => ({ status: 200, data: { runs: [] } });
+  await context.loadActiveAutomationRuns();
+  assert.equal(shown.length, 1, 'a real empty list still announces the finish');
+});
+
 test('the conversation list keeps the watch socket subscribed to every chat', () => {
   const start = source.indexOf('  function applyNativeConversationList(conversations){');
   const end = source.indexOf('\n  function ', start + 1);

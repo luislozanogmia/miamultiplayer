@@ -6490,7 +6490,10 @@
 
   function loadActiveAutomationRuns(){
     return api('/api/automations/active').then(function(res){
-      var next = res.status === 200 && res.data && Array.isArray(res.data.runs) ? res.data.runs : [];
+      // A failed request says nothing about which runs finished; keep the
+      // last known list so an error is never announced as a completion.
+      if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return chatWs.automationRuns || [];
+      var next = res.data.runs;
       var changed = JSON.stringify(chatWs.automationRuns || []) !== JSON.stringify(next);
       notifyFinishedAutomationRuns(chatWs.automationRuns, next);
       chatWs.automationRuns = next;
@@ -6500,10 +6503,7 @@
       }
       return next;
     }).catch(function(){
-      var changed = (chatWs.automationRuns || []).length > 0;
-      chatWs.automationRuns = [];
-      if(changed) renderChatSidebar();
-      return [];
+      return chatWs.automationRuns || [];
     });
   }
 
