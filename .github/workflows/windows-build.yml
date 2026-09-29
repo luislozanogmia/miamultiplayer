@@ -22,6 +22,9 @@
 
 name: Windows build
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   push:
@@ -50,6 +53,8 @@ jobs:
       # (e.g. under $env:USERPROFILE or $env:RUNNER_TEMP).
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Node 22 LTS: repo has no .nvmrc/engines pin; 22 matches the
       # Electron 44 toolchain used for the macOS builds.
@@ -72,7 +77,7 @@ jobs:
       # HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, and GWS_BUNDLE_DIR to
       # $env:GITHUB_ENV per the contract at the top of this file.
       - name: Provision Hermes, Ghost, and Google Workspace runtimes
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-runtimes-win.ps1
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-runtimes-win.ps1 -PythonRuntimeDir "$env:HERMES_PYTHON_RUNTIME_DIR"
 
       # Fail fast with a clear message if a provisioning script did not
       # honor the GITHUB_ENV contract, instead of a packager error later.
@@ -98,18 +103,23 @@ jobs:
 
       - name: Install Electron shell dependencies
         working-directory: macos
-        run: npm ci --no-audit --no-fund
+        run: |
+          npm install --global npm@11.19.1 --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --no-audit --no-fund
 
       # Dependency: macos/scripts/package-win.cjs exposed as the
       # "package:win" npm script (sibling deliverable — win-packager /
       # main-cjs-win agents). Reads the four env vars exported above and
       # requires a clean git checkout (assertCleanReleaseCheckout).
-      - name: Package Windows app
+      # CI is a test candidate without the official Google registration.
+      # Official packaging uses the approval-bound 1Password build workflow.
+      - name: Package Windows test candidate (Google disconnected)
         working-directory: macos
-        env:
-          MIA_REQUIRE_GOOGLE_OAUTH: "1"
-          MIA_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.MIA_GOOGLE_OAUTH_CLIENT_ID }}
         run: npm run package:win
+
+      - name: Verify native long-path uninstall and rollback
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File macos/scripts/test-windows-uninstaller.ps1
 
       # The packager writes the distributable archive and its checksum
       # under macos/dist/ (mirroring package-mac.cjs output layout).
@@ -120,5 +130,9 @@ jobs:
           path: |
             macos/dist/*.zip
             macos/dist/*.sha256
+            macos/dist/*.exe
+            macos/dist/*.blockmap
+            macos/dist/latest.yml
+            macos/dist/*.runtime.json
           if-no-files-found: error
           retention-days: 14
