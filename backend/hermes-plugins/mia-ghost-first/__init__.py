@@ -4,8 +4,8 @@ Mia's agents browse through ghost-cli, which drives the browser embedded in
 Mia (the user's signed-in sessions live there). Hermes' own browser tools
 start a separate Chromium with none of those sessions, so they are a fallback
 only: a browser tool is refused until the session has run ghost-cli.
-A terminal command counts only once it has run and only if it invokes
-ghost-cli, not merely mentions it.
+A terminal command counts only once it has run and only if it certainly
+invokes ghost-cli, not merely mentions it or runs it conditionally.
 """
 
 import os
@@ -18,7 +18,8 @@ BLOCK_MESSAGE = (
     "drives the browser inside Mia, where the user is signed in (start with "
     "`ghost-cli call ghost_instance_create --arguments "
     "'{\"instance_id\":\"miaos\",\"miaos\":true}'`). Hermes' built-in browser "
-    "tools are a fallback only after ghost-cli has been tried."
+    "tools are a fallback only after ghost-cli has been tried. Run ghost-cli as "
+    "its own command: after && or ||, or inside if or while, it does not count."
 )
 
 _lock = threading.Lock()
@@ -29,13 +30,20 @@ def _is_browser_tool(name: Any) -> bool:
     return isinstance(name, str) and name.startswith("browser_")
 
 
-_SEPARATORS = {";", "&&", "||", "|", "&", "\n", "(", ")"}
+# After these the next command always runs; after && or || it may not.
+_UNCONDITIONAL = {";", "|", "&", "|&", "\n", "(", ")"}
+_CONDITIONAL = {"&&", "||"}
+# Anything after these words may never run.
+_STOP_WORDS = {"if", "while", "until", "for", "case", "select", "function",
+               "exit", "exec", "return", "logout"}
 
 
 def _invokes_ghost_cli(command: str) -> bool:
-    """True when some simple command in the line runs ghost-cli itself: the
-    first word after any VAR=value prefix. Mentioning it (``echo ghost-cli``,
-    ``cat ghost-cli.md``) is not an attempt."""
+    """True only when the line certainly runs ghost-cli: it is a command of
+    its own (after any VAR=value prefix) and nothing before it can skip it.
+    Mentioning it (``echo ghost-cli``), running it after && or || (``true ||
+    ghost-cli``), inside if/while, after exit/exec, or defining a function
+    named ghost-cli is not an attempt."""
     try:
         lexer = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -43,16 +51,23 @@ def _invokes_ghost_cli(command: str) -> bool:
     except ValueError:
         return False
     at_start = True
-    for token in tokens:
-        if token in _SEPARATORS or set(token) <= set(";&|()"):
+    for index, token in enumerate(tokens):
+        if token in _CONDITIONAL:
+            return False
+        if token in _UNCONDITIONAL or (token and set(token) <= set(";&|()")):
+            if "&&" in token or "||" in token:
+                return False
             at_start = True
             continue
         if not at_start:
             continue
         if "=" in token and not token.startswith("=") and token.split("=", 1)[0].isidentifier():
             continue
+        if token in _STOP_WORDS:
+            return False
         if os.path.basename(token) == "ghost-cli":
-            return True
+            following = tokens[index + 1] if index + 1 < len(tokens) else ""
+            return not following.startswith("(")
         at_start = False
     return False
 
