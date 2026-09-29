@@ -885,6 +885,40 @@ test('a message queued behind a goal turn gets its own answer, and the goal turn
   assert.equal(progress.some(([, text]) => text === 'continues.'), false, 'the goal turn is not shown as this turn\'s progress');
 });
 
+test('a goal turn that starts before Hermes acknowledges a new message keeps its own answer', async () => {
+  const seen = [];
+  let submits = 0;
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'prompt.submit': (request, socket) => {
+      submits += 1;
+      if (submits === 1) {
+        socket.push('message.complete', { text: 'First step done.', status: 'complete' });
+        return { status: 'streaming' };
+      }
+      // Nothing was streaming when Mia sent this, but Hermes started a goal
+      // turn first and queued the message behind it.
+      socket.push('message.start');
+      socket.push('message.delta', { text: 'Goal answer.' });
+      socket.push('message.complete', { status: 'complete' });
+      socket.push('message.start');
+      socket.push('message.delta', { text: 'Answer to the new question.' });
+      socket.push('message.complete', { status: 'complete' });
+      return { status: 'queued', text: request.params.text };
+    },
+  });
+  const client = new HermesGatewayClient({
+    url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {},
+    onSessionEvent: (sessionId, kind, data) => seen.push({ kind, data }),
+  });
+  const first = await client.run({ message: 'go', options: {} });
+  const second = await client.run({ storedSessionId: first.storedSessionId, message: 'new question', options: {} });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  client.close();
+  assert.equal(second.text, 'Answer to the new question.');
+  assert.deepEqual(seen.filter((event) => event.kind === 'turn.complete').map((event) => event.data.text), ['Goal answer.']);
+});
+
 test('a message Hermes folds into the streaming goal turn keeps the text streamed so far', async () => {
   const { second, seen } = await submitDuringGoalTurn('redirected', (socket) => {
     socket.push('message.delta', { text: 'now answers the new question.' });
