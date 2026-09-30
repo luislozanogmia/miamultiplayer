@@ -67,7 +67,26 @@ async function freePort() {
   });
 }
 
-async function startServer(data, t) {
+// freePort() closes its probe before the server binds, so another test
+// file (or any outgoing socket) can take the port in between. The server
+// then dies with EADDRINUSE; start it again on a fresh port.
+async function startServer(...args) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await startServerOnce(...args);
+    } catch (error) {
+      if (attempt >= 5 || !String(error && error.message).includes('EADDRINUSE')) throw error;
+    }
+  }
+}
+
+// /healthz can answer from another test's server that holds the port; only
+// this child's own listening line proves the answer came from it.
+function listeningOn(origin, logs) {
+  return logs.join('').includes(`listening on port ${new URL(origin).port}\n`);
+}
+
+async function startServerOnce(data, t) {
   const port = await freePort();
   const gatewayPort = await freePort();
   const origin = `http://127.0.0.1:${port}`;
@@ -112,7 +131,7 @@ async function startServer(data, t) {
     if (child.exitCode !== null) throw new Error(`server exited early: ${logs.join('')}`);
     try {
       const response = await fetch(`${origin}/healthz`);
-      if (response.ok) return server;
+      if (response.ok && listeningOn(origin, logs)) return server;
     } catch (_) { /* server is starting */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
