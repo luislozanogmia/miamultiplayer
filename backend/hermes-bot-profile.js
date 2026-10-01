@@ -144,14 +144,42 @@ function backgroundReviewEnabledForBot() {
   return backgroundReviewMode() === 'all';
 }
 
+// Every chat or automation turn pins its own model. Hermes work that runs
+// outside a turn (goal judge, background review, cron jobs created by the
+// agent itself) falls back to the profile's model block, so Mia records the
+// model of the latest turn there. Until a turn runs there is no block: a
+// guessed default could route to a provider the user never connected.
+function profileModelBlock(selection) {
+  const model = String((selection && selection.model) || '').trim();
+  const provider = String((selection && selection.provider) || '').trim();
+  if (!model || !provider || /[\r\n]/.test(model + provider)) return [];
+  return ['model:', `  default: ${JSON.stringify(model)}`, `  provider: ${JSON.stringify(provider)}`];
+}
+
+// The model block a previous turn wrote, so re-provisioning at boot keeps it.
+function existingProfileModel(config) {
+  const lines = String(config || '').split('\n');
+  const start = lines.indexOf('model:');
+  if (start < 0) return null;
+  const read = (key) => {
+    for (let index = start + 1; index < lines.length && lines[index].startsWith('  '); index += 1) {
+      const match = lines[index].match(new RegExp(`^  ${key}: (".*")$`));
+      if (match) {
+        try { return JSON.parse(match[1]); } catch (_) { return ''; }
+      }
+    }
+    return '';
+  };
+  const selection = { model: read('default'), provider: read('provider') };
+  return selection.model && selection.provider ? selection : null;
+}
+
 function runtimeProfileConfig({
-  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false,
+  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, model = null,
 }) {
   const lines = [
     MANAGED_MARKER,
-    // No model block on purpose: every dispatch pins the user's connected
-    // provider and model explicitly. A profile-level default would silently
-    // route model-less dispatches to a provider the user never connected.
+    ...profileModelBlock(model),
     'toolsets:',
     ...toolsets.map((name) => `  - ${name}`),
     'agent:',
@@ -249,13 +277,14 @@ function provisionRuntimeProfile({
   const profileDir = path.join(profilesRoot, profile);
   const configPath = path.join(profileDir, 'config.yaml');
   const envPath = path.join(profileDir, '.env');
-  const next = runtimeProfileConfig({
-    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots,
-  });
   let existing = '';
   try { existing = fs.readFileSync(configPath, 'utf8'); } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+  const next = runtimeProfileConfig({
+    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots,
+    model: existing.startsWith(MANAGED_MARKER) ? existingProfileModel(existing) : null,
+  });
 
   const ownedByMia = existing.startsWith(MANAGED_MARKER)
     || LEGACY_MANAGED_MARKERS.some((marker) => existing.startsWith(marker));
@@ -281,6 +310,29 @@ function provisionRuntimeProfile({
   }
   writeAtomic(configPath, next, 0o600);
   return { profile, changed: true };
+}
+
+// Record the latest turn's model as the profile default. Only Mia-managed
+// configs are touched; returns true when the file changed.
+function setHermesProfileModel(profile, selection, { profilesRoot = path.join(hermesHome(), 'profiles') } = {}) {
+  const block = profileModelBlock(selection);
+  if (!block.length || !/^[a-z0-9-]+$/.test(String(profile || ''))) return false;
+  const configPath = path.join(profilesRoot, profile, 'config.yaml');
+  let existing;
+  try { existing = fs.readFileSync(configPath, 'utf8'); } catch (_) { return false; }
+  if (!existing.startsWith(MANAGED_MARKER)) return false;
+  const lines = existing.split('\n');
+  const start = lines.indexOf('model:');
+  if (start >= 0) {
+    let end = start + 1;
+    while (end < lines.length && lines[end].startsWith('  ')) end += 1;
+    lines.splice(start, end - start);
+  }
+  lines.splice(1, 0, ...block);
+  const next = lines.join('\n');
+  if (next === existing) return false;
+  writeAtomic(configPath, next, 0o600);
+  return true;
 }
 
 // The guarded terminal both profiles share: workspace cwd plus the shell
@@ -409,6 +461,7 @@ module.exports = {
   backgroundReviewEnabledForGateway,
   backgroundReviewEnabledForBot,
   runtimeProfileConfig,
+  setHermesProfileModel,
   GHOST_FIRST_PLUGIN,
   provisionBundledPlugin,
   provisionHermesAgentProfile,
