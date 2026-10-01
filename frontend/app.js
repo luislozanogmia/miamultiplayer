@@ -14552,7 +14552,10 @@
   function tourGoto(routeName){
     if(!routeName) return;
     var hash = '#/' + routeName;
-    if(location.hash !== hash) location.hash = hash;
+    // Already on the step's route: re-running route() would re-initialise the
+    // whole chat workspace on every Next press, so only navigate when needed.
+    if(location.hash === hash) return;
+    location.hash = hash;
     route();
   }
 
@@ -14628,8 +14631,13 @@
     var steps = currentTourSteps();
     tour.step = Math.max(0, Math.min(index, steps.length - 1));
     var step = steps[tour.step];
-    if(step.route) tourGoto(step.route);
-    if(step.prepare) step.prepare();
+    // A step that cannot navigate or prepare its panel must not strand the
+    // card on the previous step; tourRender centres the card if the target
+    // is missing.
+    try{
+      if(step.route) tourGoto(step.route);
+      if(step.prepare) step.prepare();
+    }catch(e){}
     tourRender();
   }
 
