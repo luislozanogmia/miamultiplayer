@@ -84,6 +84,7 @@ const {
 const {
   listHermesCredentialProviders,
   readProviderRootCredentials,
+  removeProfileCopiesOfRootCredentials,
   removeProviderProfileCredentials,
   removeProviderRootCredentials,
   resetHermesHome,
@@ -7910,6 +7911,11 @@ function applyChatOutputSetting(output) {
 
 function onBackendListening() {
   console.log(`Mia backend listening on port ${PORT}`);
+  // The gateway is not up yet, so profile auth stores can change safely.
+  const profileCopies = removeProfileCopiesOfRootCredentials(process.env.HERMES_HOME);
+  if (profileCopies.providers.length) {
+    console.log('[hermes-auth] removed profile copies of root keys:', profileCopies.providers.join(', '));
+  }
   startHermesGatewayRuntime().catch((err) =>
     console.error('Mia Hermes runtime failed to start', err.message)
   );
