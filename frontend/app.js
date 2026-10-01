@@ -5174,7 +5174,7 @@
   }
   function googleDriveMessageChips(files){
     return files.length ? '<div class="chat-drive-files">' + files.map(function(file){
-      return '<a class="chat-drive-file" href="' + esc(file.url) + '" target="_blank" rel="noopener noreferrer"><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="Google Drive" /><span>' + esc(file.name) + '</span></a>';
+      return '<a class="chat-drive-file" href="' + esc(file.url) + '" target="_blank" rel="noopener noreferrer" data-chat-open-in-mia><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="Google Drive" /><span>' + esc(file.name) + '</span></a>';
     }).join('') + '</div>' : '';
   }
 
@@ -7586,17 +7586,38 @@
     var previewUrl = esc(media.previewUrl || ((media.url || '').indexOf('?') === -1 ? (media.url + '?preview=true') : (media.url + '&preview=true')));
     var mediaName = esc(media.filename || 'Attachment');
     var mediaType = String(media.mimeType || '').toLowerCase();
-    var previewButton = media.canPreview || nativeAttachmentCanPreview(mediaType)
+    var canPreview = !!(media.canPreview || nativeAttachmentCanPreview(mediaType));
+    var previewButton = canPreview
       ? '<button type="button" class="chat-artifact-preview" data-chat-artifact-preview data-preview-url="' + previewUrl + '">Preview</button>'
       : '';
+    // Clicking the card itself (thumbnail or name) previews it too; Download
+    // stays an explicit secondary action.
+    var openAttrs = canPreview ? ' data-chat-artifact-preview data-preview-url="' + previewUrl + '"' : '';
     var image = nativeAttachmentIsRaster(mediaType)
-      ? '<div class="chat-msg-media"><img class="chat-artifact-thumb" src="' + previewUrl + '" alt="' + mediaName + '" loading="lazy"></div>'
+      ? '<div class="chat-msg-media"' + openAttrs + '><img class="chat-artifact-thumb" src="' + previewUrl + '" alt="' + mediaName + '" loading="lazy"></div>'
       : '<span class="chat-artifact-icon" aria-hidden="true">&#128196;</span>';
     return '<div class="chat-artifact-card' + (nativeAttachmentIsRaster(mediaType) ? ' has-thumb' : '') + '">' + image +
-      '<div class="chat-artifact-copy"><div class="chat-artifact-name">' + mediaName + '</div>' +
+      '<div class="chat-artifact-copy"><div class="chat-artifact-name"' + openAttrs + '>' + mediaName + '</div>' +
       '<div class="chat-artifact-type">' + esc(mediaType || 'file') + '</div>' +
       '<div class="chat-artifact-actions">' + previewButton +
       '<a class="chat-artifact-download" href="' + mediaUrl + '" download="' + mediaName + '">Download</a></div></div></div>';
+  }
+
+  // Attachments open in Mia's in-app browser, attached to the chat that is
+  // active (openWebBrowserTool pins the browser to chatWs.activeRoomId, the
+  // same bot context every other browser entry point uses). The shell
+  // validates the URL and authorizes the browser's profile before we navigate.
+  function openAttachmentInMiaBrowser(url){
+    Promise.resolve(window.miaDesktop.browser.prepareAttachment(url)).then(function(result){
+      if(!result || !result.ok || !result.url){
+        showBenchToast(result && result.error || 'Attachment could not be opened.');
+        return;
+      }
+      openWebBrowserTool();
+      localBrowserNavigate(result.url);
+    }).catch(function(error){
+      showBenchToast(error && error.message || 'Attachment could not be opened.');
+    });
   }
 
   function wireChatArtifactPreviews(container){
@@ -7608,6 +7629,11 @@
       event.preventDefault();
       var url = button.getAttribute('data-preview-url');
       if(!url) return;
+      var desktopBrowser = window.miaDesktop && window.miaDesktop.browser;
+      if(desktopBrowser && typeof desktopBrowser.prepareAttachment === 'function' && window.miaNativeBrowser){
+        openAttachmentInMiaBrowser(url);
+        return;
+      }
       var desktop = window.miaDesktop && window.miaDesktop.artifact;
       if(desktop && typeof desktop.open === 'function'){
         Promise.resolve(desktop.open(url)).then(function(result){
@@ -11399,8 +11425,10 @@
   // whenever native events arrive.
   (function(){
     function openInsideMia(event){
-      var link = event.target.closest('a[data-chat-web-link]');
+      var link = event.target.closest('a[data-chat-web-link], a[data-chat-open-in-mia]');
       if(!link) return;
+      // Drive chips keep their normal new-tab link outside the desktop app.
+      if(link.hasAttribute('data-chat-open-in-mia') && !window.miaNativeBrowser) return;
       event.preventDefault();
       event.stopPropagation();
       var href = link.href;

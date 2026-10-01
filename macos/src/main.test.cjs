@@ -438,6 +438,7 @@ test("all privileged main-window IPC checks include renderer URL validation", ()
     "miaos-state-get",
     "miaos-state-set",
     "miaos-artifact-open",
+    "miaos-browser-attachment-prepare",
     "miaos-reset-relaunch",
   ]) {
     const start = source.indexOf(`\"${channel}\"`);
@@ -969,4 +970,18 @@ test("packaged app discovers bundled runtime and uses Electron's Node", () => {
   assert.match(source, /app\.isPackaged \? path\.join\(dataDirectory, "conversation-attachments"\)/);
   assert.match(source, /app\.isPackaged[\s\S]*path\.join\(process\.resourcesPath, "electron\.icns"\)/);
   assert.match(source, /process\.platform === "darwin" && !app\.isPackaged && app\.dock/);
+});
+
+test("chat attachments open in the in-app browser through a trusted, exact-URL IPC", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const preloadSource = fs.readFileSync(path.join(__dirname, "preload.cjs"), "utf8");
+  assert.match(preloadSource, /browser:\s*\{[\s\S]*prepareAttachment:\s*\(url\) => ipcRenderer\.invoke\("miaos-browser-attachment-prepare", url\)/);
+  const start = mainSource.indexOf('ipcMain.handle("miaos-browser-attachment-prepare"');
+  assert.ok(start >= 0);
+  const handler = mainSource.slice(start, mainSource.indexOf('ipcMain.handle("miaos-artifact-action"', start));
+  assert.match(handler, /isMainWindowSender\(event\)/);
+  assert.match(handler, /normalizeInAppArtifactTarget\(value, senderUrl\)/);
+  assert.match(handler, /isNativeArtifactTarget\(target\)/);
+  assert.match(handler, /syncArtifactSessionCookies\(target, session\.fromPartition\(BROWSER_PARTITION/);
+  assert.doesNotMatch(handler, /openExternal|file:|pathToFileURL/);
 });

@@ -948,6 +948,7 @@
   .chat-artifact-card{display:flex;align-items:center;gap:10px;min-width:0;width:min(100%,520px);padding:8px 10px;box-sizing:border-box;background:var(--sand-fill-bubble-agent,#f0f0f4);border:1px solid rgba(0,0,0,.08);border-radius:10px;color:var(--sand-text-primary,#222);}
   .chat-artifact-card .chat-msg-media{margin:0;flex:0 0 auto;}
   .chat-artifact-thumb{display:block;width:54px;height:54px;max-width:54px!important;max-height:54px!important;border-radius:7px!important;box-shadow:none!important;object-fit:cover!important;cursor:default!important;}
+  .chat-artifact-card [data-chat-artifact-preview]{cursor:pointer;}
   .chat-artifact-icon{display:flex;align-items:center;justify-content:center;flex:0 0 34px;width:34px;height:34px;font-size:22px;}
   .chat-artifact-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px;}
   .chat-artifact-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600;line-height:18px;}

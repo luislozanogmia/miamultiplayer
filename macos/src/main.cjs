@@ -1395,9 +1395,8 @@ function sendArtifactState() {
   artifactToolbarView.webContents.send("miaos-artifact-state", getArtifactState());
 }
 
-async function syncArtifactSessionCookies(target) {
+async function syncArtifactSessionCookies(target, destinationSession = configureArtifactSession()) {
   const sourceSession = mainWindow && mainWindow.webContents && mainWindow.webContents.session;
-  const destinationSession = configureArtifactSession();
   if (!sourceSession || !sourceSession.cookies || typeof sourceSession.cookies.get !== "function"
     || !destinationSession.cookies || typeof destinationSession.cookies.set !== "function") return;
   const targetUrl = new URL(target);
@@ -2287,6 +2286,32 @@ ipcMain.handle("miaos-artifact-open", async (event, value) => {
     return { ok: false, error: "Artifact preview authentication is unavailable." };
   }
   return navigateArtifact(target);
+});
+
+// Chat attachments open in Mia's in-app browser, not a separate pane. The
+// browser keeps its own profile, so give it the current UI session for the
+// exact Mia backend origin (same cookie copy the artifact pane uses), then
+// hand the validated URL back; the renderer navigates through the normal
+// browser path so the chat's bot stays the browser's context.
+ipcMain.handle("miaos-browser-attachment-prepare", async (event, value) => {
+  if (!isMainWindowSender(event)) return { ok: false, error: "Not authorized." };
+  let target;
+  try {
+    const senderUrl = typeof event.sender.getURL === "function" ? event.sender.getURL() : "";
+    target = normalizeInAppArtifactTarget(value, senderUrl);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (!isNativeArtifactTarget(target)) {
+    return { ok: false, error: "Only Mia conversation attachments can open here." };
+  }
+  try {
+    await syncArtifactSessionCookies(target, session.fromPartition(BROWSER_PARTITION, { cache: true }));
+  } catch (error) {
+    desktopLog(`attachment browser session sync failed: ${error.message}`);
+    return { ok: false, error: "Attachment authentication is unavailable." };
+  }
+  return { ok: true, url: target };
 });
 
 ipcMain.handle("miaos-artifact-action", (event, action) => {
