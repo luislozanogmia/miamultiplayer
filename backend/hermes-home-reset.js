@@ -239,10 +239,39 @@ function removeProviderProfileCredentials(hermesHome, provider) {
   return result;
 }
 
+// Every key Mia stores lives in the ROOT auth store. Hermes copies a root
+// key into a profile's own pool when it records that key's status (e.g.
+// marking it exhausted after a 401), and from then on the profile copy
+// outranks the root, so a re-minted key never reaches that profile. Run
+// before the gateway starts: drop profile entries for any provider the root
+// holds. Providers only a profile has (Hermes' own seeded logins) stay.
+function removeProfileCopiesOfRootCredentials(hermesHome) {
+  const root = String(hermesHome || '').trim();
+  const result = { providers: [], cleaned: [], failures: [] };
+  if (!root) return result;
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path.join(path.resolve(root), 'auth.json'), 'utf8'));
+  } catch (_) {
+    return result;
+  }
+  const pool = parsed && parsed.credential_pool;
+  if (!pool || typeof pool !== 'object' || Array.isArray(pool)) return result;
+  for (const [provider, entries] of Object.entries(pool)) {
+    if (!Array.isArray(entries) || !entries.length) continue;
+    const removed = removeProviderProfileCredentials(root, provider);
+    if (removed.cleaned.length) result.providers.push(provider.trim().toLowerCase());
+    result.cleaned.push(...removed.cleaned.filter((file) => !result.cleaned.includes(file)));
+    result.failures.push(...removed.failures);
+  }
+  return result;
+}
+
 module.exports = {
   RESET_ENTRIES,
   listHermesCredentialProviders,
   readProviderRootCredentials,
+  removeProfileCopiesOfRootCredentials,
   removeProviderProfileCredentials,
   removeProviderRootCredentials,
   resetHermesHome,
