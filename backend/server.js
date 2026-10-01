@@ -97,6 +97,7 @@ const {
   visibleChatModelInventory,
   normalizeChatModelSelection,
   chatModelSelectionInferenceOptions,
+  managedRouterKeyMessage,
   userFacingModelDispatchError,
 } = require('./chat-model-selection');
 const { sanitizeChatReply } = require('./chat-security');
@@ -3177,6 +3178,7 @@ const MANAGED_ROUTER_ERROR_MESSAGES = {
   limit_reached: `This account has reached its ${MANAGED_ROUTER_LABEL} usage limit.`,
   unavailable: `${MANAGED_ROUTER_LABEL} couldn't be reached. Check your connection and try again.`,
   sign_in_required: `Sign in to Mia again to connect ${MANAGED_ROUTER_LABEL}.`,
+  replaced_elsewhere: managedRouterKeyMessage(MANAGED_ROUTER_LABEL),
   install_failed: `Mia got a ${MANAGED_ROUTER_LABEL} key but couldn't save it. Try again.`,
 };
 
@@ -3301,6 +3303,7 @@ async function installManagedRouterKey(key) {
 
 async function autoProvisionManagedRouter(email, clerkToken, { force = false } = {}) {
   if (managedRouterProvisionedEmails.has(email)) return;
+  let replacedElsewhere = false;
   try {
     // A mint rotates the user's key server-side (the endpoint cannot re-read
     // an existing key's secret), so never mint while a stored key still
@@ -3327,10 +3330,13 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
         return;
       }
       if (stored.length) console.log('[managed-router] stored key is dead for', email, '- re-provisioning');
+      // A key that existed and died was almost always replaced by a sign-in
+      // on another computer: one live key per user.
+      replacedElsewhere = stored.length > 0;
     }
     const token = clerkToken || freshManagedRouterToken(email);
     if (!token) {
-      setManagedRouterError(email, 'sign_in_required');
+      setManagedRouterError(email, replacedElsewhere ? 'replaced_elsewhere' : 'sign_in_required');
       return;
     }
     const key = await provisionManagedRouterKey(email, token);
