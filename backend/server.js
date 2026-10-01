@@ -1783,6 +1783,34 @@ function removeDirectoryContents(dir, failures) {
   return removed;
 }
 
+// Bot files now live in the user's visible Mia folder, so a reset removes only
+// the per-bot folders Mia itself created (those carrying the artifact scope
+// marker), never anything else a person may have put under bots/.
+function removeMarkedBotWorkspaces(dir, failures) {
+  const root = String(dir || '').trim();
+  if (!root) return 0;
+  let entries = [];
+  try { entries = fs.readdirSync(root); } catch (error) {
+    if (error.code !== 'ENOENT') failures.push(`${root}: ${error.message}`);
+    return 0;
+  }
+  let removed = 0;
+  for (const name of entries) {
+    const target = path.join(root, name);
+    try {
+      const stat = fs.lstatSync(target);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+      const marker = fs.lstatSync(path.join(target, '.miaos-artifact-scope.json'));
+      if (marker.isSymbolicLink() || !marker.isFile()) continue;
+      fs.rmSync(target, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      if (error.code !== 'ENOENT') failures.push(`${target}: ${error.message}`);
+    }
+  }
+  return removed;
+}
+
 // Mia-side wipe for the everything scope: every table that holds user or
 // agent state, for every owner and workspace, plus the blob directories
 // behind them. The caller's own user row and session survive so the reset
@@ -1821,7 +1849,7 @@ function wipeMiaDataForEverything({ keepEmail, keepSessionToken }) {
   const directories = {
     attachments: removeDirectoryContents(NATIVE_ATTACHMENT_DIR, failures),
     workspaceArtifacts: removeDirectoryContents(WORKSPACE_ARTIFACT_DIR, failures),
-    automationArtifacts: removeDirectoryContents(process.env.MIAOS_AUTOMATION_ARTIFACT_DIR, failures),
+    automationArtifacts: removeMarkedBotWorkspaces(process.env.MIAOS_AUTOMATION_ARTIFACT_DIR, failures),
   };
   return { conversations, attachments, directories, failures };
 }
