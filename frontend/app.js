@@ -4906,6 +4906,7 @@
       var payload;
       try { payload = JSON.parse(message.data); } catch(err){ return; }
       if(payload.type === 'conversation.event') applyNativeEvent(payload.event, {autoOpenThread: true});
+      if(payload.type === 'conversation.activity') applyChatActivity(payload.conversationId, payload.activity);
       if(payload.type === 'history') (payload.events || []).forEach(function(event){ applyNativeEvent(event, {autoOpenThread: false}); });
     };
     socket.onclose = function(){
@@ -8242,10 +8243,69 @@
     });
   }
 
+  /* ============ CHAT: live agent status panel (#chatActivityPanel) ============
+     Fed by ephemeral "conversation.activity" socket signals (paths only, see
+     backend/agent-activity.js). Shows what the agent is doing now, the files
+     it is reading or editing, and elapsed time; once the turn ends it keeps
+     the last turn's file list. CSS hides it whenever another right-hand panel
+     is open or the window is narrow. */
+  var chatActivityByRoom = {};
+  var chatActivityTimer = null;
+
+  function applyChatActivity(conversationId, activity){
+    if(!conversationId || !window.MiaAgentActivity) return;
+    chatActivityByRoom[conversationId] = window.MiaAgentActivity.reduceActivity(chatActivityByRoom[conversationId], activity);
+    if(conversationId === chatWs.activeRoomId) renderChatActivityPanel();
+  }
+
+  function renderChatActivityPanel(){
+    var panel = el('#chatActivityPanel');
+    var util = window.MiaAgentActivity;
+    if(!panel || !util) return;
+    var roomId = chatWs.activeRoomId;
+    var running = roomId ? tasksForRoom(roomId).filter(function(task){ return task.kind === 'native-dispatch'; }) : [];
+    var task = running.sort(function(a, b){ return Number(b.startedAt || 0) - Number(a.startedAt || 0); })[0] || null;
+    var state = roomId ? chatActivityByRoom[roomId] : null;
+    var live = !!task;
+    // A new turn that has not reported a tool yet starts from a clean slate.
+    if(live && (!state || state.dispatchId !== task.id)) state = {dispatchId: task.id, label: '', files: [], startedAt: task.startedAt};
+    var files = state ? state.files : [];
+    if(!live && !files.length){
+      panel.hidden = true;
+      panel.innerHTML = '';
+      if(chatActivityTimer){ clearInterval(chatActivityTimer); chatActivityTimer = null; }
+      return;
+    }
+    var startedAt = Number(state.startedAt || Date.now());
+    var filesHtml = files.length ? '<ul class="cap-files">' + files.map(function(file){
+      return '<li class="cap-file" title="' + esc(file.path) + '"><span class="cap-file-name">' + esc(util.basename(file.path)) +
+        '</span><span class="cap-file-kind is-' + (file.kind === 'edit' ? 'edit' : 'read') + '">' + (file.kind === 'edit' ? 'Edited' : 'Read') + '</span></li>';
+    }).join('') + '</ul>' : '<div class="cap-empty">No files yet</div>';
+    panel.innerHTML =
+      '<div class="cap-head"><span class="cap-title">' + (live ? 'Working now' : 'Last turn') + '</span>' +
+      (live ? '<span class="cap-elapsed" data-cap-elapsed data-started-at="' + startedAt + '">' + esc(util.formatElapsed(Date.now() - startedAt)) + '</span>' : '') + '</div>' +
+      (live ? '<div class="cap-activity"><span class="cap-pulse" aria-hidden="true"></span>' + esc(state.label || 'Working') + '</div>' : '') +
+      '<div class="cap-section">Files</div>' + filesHtml;
+    panel.hidden = false;
+    if(live && !chatActivityTimer){
+      chatActivityTimer = setInterval(tickChatActivityElapsed, 1000);
+    } else if(!live && chatActivityTimer){
+      clearInterval(chatActivityTimer);
+      chatActivityTimer = null;
+    }
+  }
+
+  function tickChatActivityElapsed(){
+    var node = el('[data-cap-elapsed]');
+    if(!node){ if(chatActivityTimer){ clearInterval(chatActivityTimer); chatActivityTimer = null; } return; }
+    node.textContent = window.MiaAgentActivity.formatElapsed(Date.now() - Number(node.getAttribute('data-started-at') || Date.now()));
+  }
+
   function renderChatThread(options){
     var thread = el('#chatThread');
     if(!thread) return;
     renderGoalChip();
+    renderChatActivityPanel();
     captureRenderedChatScroll(thread);
     if(chatWs.activeKind === 'agent-setup'){
       thread.removeAttribute('data-chat-scroll-room');
@@ -12122,6 +12182,7 @@
     // whenever chatWs.tasks changes, same as the sidebar dots above.
     if(chatWs.activeRoomId && el('#channelHeader')) renderChatHeaderBar();
     if(el('#chatTasksPanel')) syncChatTasksPanel();
+    renderChatActivityPanel();
     if(chatInfo.mode === 'agents' && chatInfo.open) renderChatInfoPane();
     Object.keys(chatTaskStopPending).forEach(function(taskId){
       if(!(chatWs.tasks || []).some(function(task){ return task.id === taskId; })) delete chatTaskStopPending[taskId];

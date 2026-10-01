@@ -136,6 +136,7 @@ const { createConversationService, canonicalBotConversationCandidates } = requir
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
+const { extractToolActivity } = require('./agent-activity');
 const { createConversationAttachmentStore } = require('./conversation-attachments');
 const { createConversationRouter } = require('./conversation-router');
 const { attachConversationWebSocketServer } = require('./conversation-websocket');
@@ -7098,6 +7099,16 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         postProviderWaitStatus(wait.text);
         return;
       }
+    }
+    // Live status panel: an ephemeral, paths-only signal, independent of the
+    // verbose-diagnostics setting. Never persisted, never part of the transcript.
+    const toolActivity = extractToolActivity(type, payload);
+    if (toolActivity) {
+      try {
+        nativeConversationRealtime.publishActivity(dispatch.conversationId, {
+          dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), ...toolActivity,
+        });
+      } catch (_) { /* the status panel must never break a turn */ }
     }
     const diagnostics = getHermesDiagnostics();
     if (!diagnostics.verboseHermes && !diagnostics.traceCommands) return;
