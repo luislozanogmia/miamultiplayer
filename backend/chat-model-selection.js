@@ -188,5 +188,6 @@ module.exports = {
   visibleChatModelInventory,
   normalizeChatModelSelection,
   chatModelSelectionInferenceOptions,
+  managedRouterKeyMessage,
   userFacingModelDispatchError,
 };
