@@ -112,6 +112,7 @@ const googleWorkspaceContext = require('./google-workspace-context');
 const googleWorkspaceActions = require('./google-workspace-actions');
 const { createGoogleAccountConnector, createOwnerBoundGoogleAccount } = require('./google-account-connector');
 const { stripTaskOpeningNotice, humanTaskStatus, shouldPostTaskStatus } = require('./background-status');
+const { providerWaitStatus } = require('./provider-wait-status');
 const {
   buildAgentRevisionPrompt,
   buildAgentSetupPrompt,
@@ -7062,8 +7063,42 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     hermesDeltaCoalescer.flush();
     flushPendingReasoningSummary(replyText);
   };
+  // A provider wait notice becomes the turn's live status line for everyone,
+  // not only in verbose mode: a silent model otherwise looks like Mia
+  // thinking. It reuses the "working" progress row shape, so the final reply
+  // supersedes it like any other status line.
+  let providerWaitShown = false;
+  const postProviderWaitStatus = (text) => {
+    const sequence = ++hermesProgressIndex;
+    hermesProgressSequence = hermesProgressSequence.then(() => createNativeDispatchReplyEvent(dispatch, trigger, {
+      type: replyEventType,
+      content: { text },
+      parentEventId,
+      clientIdempotencyKey: `native-dispatch-provider-wait-${dispatch.id}-${sequence}`,
+      metadata: {
+        runtime: 'hermes',
+        dispatchId: dispatch.id,
+        status: 'waiting-on-provider',
+        progress: true,
+        agentName: agent.name,
+      },
+    })).catch(() => {});
+  };
   const postHermesProgress = (type, payload) => {
     if (trackBudget) trackBudget(type, payload);
+    if (type === 'thinking.delta') {
+      const wait = providerWaitStatus(payload && payload.text);
+      if (wait && wait.kind === 'cleared') {
+        if (providerWaitShown) {
+          providerWaitShown = false;
+          postProviderWaitStatus('The model is answering again.');
+        }
+      } else if (wait) {
+        providerWaitShown = true;
+        postProviderWaitStatus(wait.text);
+        return;
+      }
+    }
     const diagnostics = getHermesDiagnostics();
     if (!diagnostics.verboseHermes && !diagnostics.traceCommands) return;
     // Verbose mode surfaces the live thinking/reasoning stream instead of
