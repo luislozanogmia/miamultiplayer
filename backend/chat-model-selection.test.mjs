@@ -172,3 +172,12 @@ test('dispatch failures name Mia Router only for turns that ran on it', () => {
   assert.equal(uses({ provider: 'openai-api', apiProvider: 'deepseek' }, null), false, 'the user\'s own API key');
   assert.equal(uses(router, null, false), false, 'no Mia Router configured: OpenRouter is the user\'s own key');
 });
+
+test('a router key replaced on another computer keeps that explanation through sign-in failures', () => {
+  const { managedRouterErrorCode } = require('./chat-model-selection.js');
+  assert.equal(managedRouterErrorCode('session_rejected', true), 'replaced_elsewhere');
+  assert.equal(managedRouterErrorCode('sign_in_required', true), 'replaced_elsewhere');
+  assert.equal(managedRouterErrorCode('unavailable', true), 'unavailable');
+  assert.equal(managedRouterErrorCode('not_authorized', true), 'not_authorized');
+  assert.equal(managedRouterErrorCode('session_rejected', false), 'session_rejected');
+});

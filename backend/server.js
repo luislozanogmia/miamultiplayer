@@ -98,6 +98,7 @@ const {
   normalizeChatModelSelection,
   chatModelSelectionInferenceOptions,
   managedRouterKeyMessage,
+  managedRouterErrorCode,
   userFacingModelDispatchError,
 } = require('./chat-model-selection');
 const { sanitizeChatReply } = require('./chat-security');
@@ -3191,13 +3192,21 @@ function managedRouterErrorCodeForStatus(status) {
   return 'unavailable';
 }
 
+// Emails whose stored key died (replaced by a sign-in on another computer).
+// A later mint that fails for a sign-in reason keeps that explanation: the
+// fix is the same, and "didn't accept your sign-in" hides why it broke.
+const managedRouterReplacedEmails = new Set();
+
 function setManagedRouterError(email, code) {
+  if (code === 'replaced_elsewhere') managedRouterReplacedEmails.add(email);
+  code = managedRouterErrorCode(code, managedRouterReplacedEmails.has(email));
   managedRouterProvisionErrors.set(email, { code, message: MANAGED_ROUTER_ERROR_MESSAGES[code] });
   console.warn('[managed-router] provisioning failed for', email, code);
 }
 
 function clearManagedRouterError(email) {
   managedRouterProvisionErrors.delete(email);
+  managedRouterReplacedEmails.delete(email);
 }
 
 function managedRouterError(email) {
@@ -3335,6 +3344,7 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
       // A key that existed and died was almost always replaced by a sign-in
       // on another computer: one live key per user.
       replacedElsewhere = stored.length > 0;
+      if (replacedElsewhere) managedRouterReplacedEmails.add(email);
     }
     const token = clerkToken || freshManagedRouterToken(email);
     if (!token) {
