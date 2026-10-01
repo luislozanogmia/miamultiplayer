@@ -25,6 +25,7 @@ const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
+const { resolveMiaFolder } = require("./mia-folder.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
 const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
@@ -421,10 +422,23 @@ function hermesHomePath() {
   );
 }
 
+let resolvedMiaFolder = "";
+// The user-facing Mia folder (Documents/mia, or mia2, mia3, ... when that name
+// is taken by something else). Resolved once per launch and persisted. It must
+// first be resolved before the backend creates its database, which is how an
+// upgrade is told apart from a fresh install.
 function miaosWorkspacePath() {
-  return path.resolve(
-    String(process.env.MIAOS_WORKSPACE_DIR || path.join(app.getPath("documents"), "mia")).trim()
-  );
+  const override = String(process.env.MIAOS_WORKSPACE_DIR || "").trim();
+  if (override) return path.resolve(override);
+  if (!resolvedMiaFolder) {
+    resolvedMiaFolder = resolveMiaFolder({
+      documentsDir: app.getPath("documents"),
+      dataDir: app.getPath("userData"),
+      hasExistingInstall: fs.existsSync(backendDatabasePath()),
+      env: process.env,
+    });
+  }
+  return resolvedMiaFolder;
 }
 
 function openTerminalCommand(command) {
@@ -879,8 +893,11 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "jobs.json"),
     HERMES_CRON_EXECUTIONS_DB: process.env.HERMES_CRON_EXECUTIONS_DB
       || path.join(hermesHome, "cron", "executions.db"),
+    // Bot files live in readable per-bot folders inside the Mia folder. The
+    // old hidden folder is migrated into them on first use.
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
-      || path.join(dataDirectory, "bot-artifacts"),
+      || path.join(workspaceDir, "bots"),
+    MIAOS_LEGACY_AUTOMATION_ARTIFACT_DIR: path.join(dataDirectory, "bot-artifacts"),
     MIAOS_BOT_PACKAGE_DIR: process.env.MIAOS_BOT_PACKAGE_DIR
       || path.join(dataDirectory, "bots"),
     // Claude Code owns its credential store. Hermes' DirectSDK plugin receives

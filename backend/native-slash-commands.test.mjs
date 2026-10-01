@@ -412,8 +412,10 @@ test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (
   const bot = (await created.json()).bot;
   const chat = botConversation(data.dbPath, bot.id);
   assert.ok(chat, 'bot chat provisioned');
-  const workspace = path.join(data.artifacts, `bot-${crypto.createHash('sha256').update(bot.id).digest('hex').slice(0, 32)}`);
+  const workspace = path.join(data.artifacts, 'Research Reports');
   fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(workspace, '.miaos-artifact-scope.json'),
+    JSON.stringify({ kind: 'miaos-bot-artifact-workspace', botId: bot.id }), { mode: 0o600 });
   const pdf = Buffer.from('%PDF-1.4\n% revised report\n');
   fs.writeFileSync(path.join(workspace, 'report.pdf'), pdf);
   reportArtifact = {
