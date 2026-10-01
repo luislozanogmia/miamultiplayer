@@ -1399,6 +1399,31 @@
   .ctsk-status-running{color:oklch(0.5 0.16 42);background:oklch(0.95 0.03 60);}
   .ctsk-time{font-family:var(--styled-sans);font-size:11px;color:var(--sand-text-secondary);}
   .ctsk-empty{font-family:var(--styled-sans);font-size:12px;color:var(--sand-text-secondary);padding:8px 2px;}
+  /* Live agent status panel: a calm, compact right-hand column. Yields to the
+     other right-hand panels (one slot) and disappears on narrow windows. */
+  .chat-activity-panel{flex:0 0 232px;width:232px;box-sizing:border-box;min-width:0;display:flex;flex-direction:column;gap:6px;min-height:0;padding:14px 16px;background:var(--sand-bg-base);border-left:1px solid var(--sand-border-subtle);font-family:var(--styled-sans);overflow-y:auto;}
+  .chat-activity-panel[hidden]{display:none;}
+  .chat-info-pane.open ~ .chat-activity-panel,
+  .chat-thread-panel:not([hidden]) ~ .chat-activity-panel,
+  body.ctp-open .chat-activity-panel,
+  body.browser-collab-mode .chat-activity-panel{display:none;}
+  .cap-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
+  .cap-title{font-size:13px;line-height:16px;font-weight:500;color:var(--sand-text-primary);}
+  .cap-elapsed{font-size:12px;line-height:16px;color:var(--sand-text-secondary);font-variant-numeric:tabular-nums;}
+  .cap-activity{display:flex;align-items:center;gap:8px;font-size:12px;line-height:16px;color:var(--sand-text-secondary);}
+  .cap-pulse{flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:var(--sand-text-accent);animation:capPulse 1.4s ease-in-out infinite;}
+  @keyframes capPulse{0%,100%{opacity:.35;}50%{opacity:1;}}
+  @media (prefers-reduced-motion:reduce){.cap-pulse{animation:none;}}
+  .cap-section{margin-top:8px;font-size:11px;line-height:14px;letter-spacing:.02em;color:var(--sand-text-tertiary);}
+  .cap-files{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;}
+  .cap-file{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;font-size:12px;line-height:16px;color:var(--sand-text-primary);}
+  .cap-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cap-file-kind{flex:0 0 auto;font-size:10px;line-height:14px;padding:1px 6px;border-radius:5px;background:var(--sand-fill-secondary);color:var(--sand-text-secondary);}
+  .cap-file-kind.is-edit{background:var(--sand-fill-accent-subtle);color:var(--sand-text-accent);}
+  .cap-empty{font-size:12px;line-height:16px;color:var(--sand-text-secondary);}
+  @media (max-width:1279px){
+    .chat-activity-panel{display:none;}
+  }
   @media (max-width:1100px){
     .chat-thread-panel{position:absolute;top:0;right:0;bottom:0;height:100%;z-index:30;box-shadow:-8px 0 24px rgba(20,18,15,.12);}
     .chat-app{position:relative;}
