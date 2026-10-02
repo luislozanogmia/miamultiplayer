@@ -2,7 +2,7 @@
 
 // Resolves the user-facing Mia folder: where Mia's agent works and where bots
 // keep the files they create. Default ~/Documents/mia; if that name already
-// belongs to something else, mia2, mia3, ... The choice is persisted in Mia's
+// belongs to something else (a non-empty folder Mia didn't mark), mia2, mia3, ... The choice is persisted in Mia's
 // data directory so it never changes between launches.
 
 const fs = require("node:fs");
@@ -22,6 +22,16 @@ function hasMarker(directory) {
   try {
     const stored = JSON.parse(fs.readFileSync(path.join(directory, MARKER_FILENAME), "utf8"));
     return Boolean(stored) && stored.kind === MARKER_KIND;
+  } catch (_) {
+    return false;
+  }
+}
+
+// An empty folder (macOS Finder metadata aside) holds nothing to collide with,
+// so Mia may use it.
+function isEmptyDirectory(directory) {
+  try {
+    return fs.readdirSync(directory).every((entry) => entry === ".DS_Store");
   } catch (_) {
     return false;
   }
@@ -84,7 +94,7 @@ function resolveMiaFolder({ documentsDir, dataDir, hasExistingInstall = false, e
       try { fs.lstatSync(candidate); } catch (error) {
         if (error.code === "ENOENT") exists = false;
       }
-      if (!exists || (isDirectory(candidate) && hasMarker(candidate))) chosen = candidate;
+      if (!exists || (isDirectory(candidate) && (hasMarker(candidate) || isEmptyDirectory(candidate)))) chosen = candidate;
     }
     if (!chosen) throw new Error("No free Mia folder name found in Documents");
   }
