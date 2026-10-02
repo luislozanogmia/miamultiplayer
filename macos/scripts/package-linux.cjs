@@ -87,6 +87,50 @@ function requiredPythonRuntime() {
   return root;
 }
 
+function removeLinuxDependencyBuildState(root) {
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const target = path.join(root, entry.name);
+    // Never follow symlinks out of the staged dependencies.
+    if (entry.isDirectory()) {
+      if (entry.name === ".bin") fs.rmSync(target, { recursive: true, force: true });
+      else removeLinuxDependencyBuildState(target);
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".map")) {
+      fs.rmSync(target);
+    }
+  }
+}
+
+function stageLinuxGoogleWorkspaceRuntime(runtimeRoot, bundleDirectory = process.env.GWS_BUNDLE_DIR) {
+  const release = path.join(REPOSITORY_ROOT, "scripts", "gws-release.env");
+  const version = releaseValue(release, "GWS_VERSION");
+  const expected = releaseValue(release, "GWS_LINUX_X64_SHA256");
+  if (!bundleDirectory || !path.isAbsolute(bundleDirectory)
+      || !fs.lstatSync(bundleDirectory, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`GWS_BUNDLE_DIR must contain the official gws ${version} linux-x64 GNU binary and LICENSE`);
+  }
+  const source = path.join(bundleDirectory, "gws");
+  const license = path.join(bundleDirectory, "LICENSE");
+  if (!fs.lstatSync(source, { throwIfNoEntry: false })?.isFile()
+      || !fs.lstatSync(license, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error("Google Workspace bundle must contain regular gws and LICENSE files");
+  }
+  const digest = sha256(source);
+  if (digest !== expected) throw new Error(`Google Workspace binary does not match pinned gws ${version} linux-x64 GNU`);
+  fs.mkdirSync(path.join(runtimeRoot, "bin"), { recursive: true });
+  fs.copyFileSync(source, path.join(runtimeRoot, "bin", "gws"));
+  fs.chmodSync(path.join(runtimeRoot, "bin", "gws"), 0o755);
+  fs.copyFileSync(license, path.join(runtimeRoot, "gws-LICENSE"));
+  return { version, sha256: digest };
+}
+
+function stageLinuxGoogleOAuthClient(backendDirectory, env = process.env) {
+  const output = stageGoogleOAuthClient(backendDirectory, env);
+  // dpkg installs as root. This shipped Desktop registration (not a user's
+  // tokens) must be readable by the ordinary user running Mia.
+  if (output) fs.chmodSync(output, 0o644);
+  return output;
+}
+
 function removeLinuxPythonBuildState(root, originalRoot) {
   for (const relative of ["include", "share", "lib/pkgconfig", "lib/libpython3.11.a"]) {
     fs.rmSync(path.join(root, relative), { recursive: true, force: true });
@@ -109,7 +153,7 @@ function removeLinuxPythonBuildState(root, originalRoot) {
   visit(root);
 }
 
-function writeReleaseMetadata(artifact, hermesCommit, ghostCommit, pythonBuild) {
+function writeReleaseMetadata(artifact, hermesCommit, ghostCommit, pythonBuild, googleWorkspace) {
   const digest = sha256(artifact);
   fs.writeFileSync(`${artifact}.sha256`, `${digest}  ${path.basename(artifact)}\n`);
   const sbom = {
@@ -124,8 +168,11 @@ function writeReleaseMetadata(artifact, hermesCommit, ghostCommit, pythonBuild) 
       { name: "Hermes Agent", SPDXID: "SPDXRef-Hermes", versionInfo: hermesCommit, downloadLocation: releaseValue(path.join(REPOSITORY_ROOT, "scripts", "hermes-release.env"), "HERMES_SOURCE_URL"), filesAnalyzed: false },
       { name: "Ghost CLI", SPDXID: "SPDXRef-Ghost", versionInfo: ghostCommit, downloadLocation: releaseValue(path.join(REPOSITORY_ROOT, "scripts", "ghost-release.env"), "GHOST_SOURCE_URL"), filesAnalyzed: false },
       { name: "Python Runtime", SPDXID: "SPDXRef-Python", versionInfo: pythonBuild, downloadLocation: "NOASSERTION", filesAnalyzed: false },
+      { name: "Google Workspace CLI", SPDXID: "SPDXRef-Gws", versionInfo: googleWorkspace.version,
+        downloadLocation: `https://github.com/googleworkspace/cli/releases/tag/v${googleWorkspace.version}`,
+        checksums: [{ algorithm: "SHA256", checksumValue: googleWorkspace.sha256 }], filesAnalyzed: false },
     ],
-    relationships: ["SPDXRef-Mia", "SPDXRef-Hermes", "SPDXRef-Ghost", "SPDXRef-Python"].slice(1).map(relatedSpdxElement => ({ spdxElementId: "SPDXRef-Mia", relationshipType: "DEPENDS_ON", relatedSpdxElement })),
+    relationships: ["SPDXRef-Hermes", "SPDXRef-Ghost", "SPDXRef-Python", "SPDXRef-Gws"].map(relatedSpdxElement => ({ spdxElementId: "SPDXRef-Mia", relationshipType: "DEPENDS_ON", relatedSpdxElement })),
   };
   fs.writeFileSync(`${artifact}.spdx.json`, `${JSON.stringify(sbom, null, 2)}\n`);
 }
@@ -136,7 +183,7 @@ function writeExecutable(file, content) {
 }
 
 function linuxDesktopEntry() {
-  return "[Desktop Entry]\nType=Application\nName=Mia\nExec=mia %u\nIcon=miaos\nTerminal=false\nCategories=Office;Utility;\nStartupWMClass=miaos\nMimeType=x-scheme-handler/miamultiplayer;\n";
+  return "[Desktop Entry]\nType=Application\nName=Mia\nExec=mia %u\nIcon=miaos\nTerminal=false\nCategories=Office;Utility;\nStartupWMClass=mia\nMimeType=x-scheme-handler/miamultiplayer;\n";
 }
 
 function linuxAppExecLine() {
@@ -154,6 +201,11 @@ fi
 `;
 }
 
+function linuxPackageControl() {
+  // The pinned GNU gws binary requires glibc 2.39 (Ubuntu 24.04+).
+  return `Package: mia\nVersion: ${VERSION}\nArchitecture: amd64\nMaintainer: Mia contributors\nSection: utils\nPriority: optional\nDepends: libc6 (>= 2.39), libgtk-3-0t64 | libgtk-3-0, libnss3, libgbm1, libasound2t64 | libasound2, libsecret-1-0, xdg-utils\nDescription: Local AI workspace powered by Hermes Agent\n`;
+}
+
 async function buildLinuxPackage() {
   assertCleanReleaseCheckout();
   const hermesRelease = path.join(REPOSITORY_ROOT, "scripts", "hermes-release.env");
@@ -165,16 +217,22 @@ async function buildLinuxPackage() {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-linux-package-"));
   const runtimeRoot = path.join(temporaryRoot, "runtime");
   const packageRoot = path.join(temporaryRoot, "deb");
+  const installRoot = path.join(packageRoot, "opt", "miaos");
   try {
+    const googleWorkspace = stageLinuxGoogleWorkspaceRuntime(installRoot);
     const appSourceRoot = path.join(temporaryRoot, "app-source");
     copyTrackedArea("macos", appSourceRoot);
     const appSource = path.join(appSourceRoot, "macos");
     run("npm", ["ci", "--no-audit", "--no-fund"], { cwd: appSource });
+    // Packager 20 defaults to app.asar: clean dependency inputs before they
+    // enter the archive, rather than assuming resources/app remains a folder.
+    removeLinuxDependencyBuildState(path.join(appSource, "node_modules"));
     for (const area of ["backend", "frontend", "modules", "bots-catalog"]) copyTrackedArea(area, runtimeRoot);
-    stageGoogleOAuthClient(path.join(runtimeRoot, "backend"));
+    stageLinuxGoogleOAuthClient(path.join(runtimeRoot, "backend"));
     run("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: path.join(runtimeRoot, "backend") });
+    removeLinuxDependencyBuildState(path.join(runtimeRoot, "backend", "node_modules"));
     await rebuild({ buildPath: path.join(runtimeRoot, "backend"), electronVersion: ELECTRON_VERSION, onlyModules: ["better-sqlite3"], force: true });
-    fs.rmSync(path.join(runtimeRoot, "backend", "node_modules", ".bin"), { recursive: true, force: true });
+    removeLinuxDependencyBuildState(path.join(runtimeRoot, "backend", "node_modules"));
     fs.rmSync(path.join(runtimeRoot, "backend", "node_modules", "better-sqlite3", "build"), { recursive: true, force: true });
 
     const [electronRoot] = await packager({
@@ -183,7 +241,6 @@ async function buildLinuxPackage() {
       extraResource: [path.join(runtimeRoot, "backend"), path.join(runtimeRoot, "frontend"), path.join(runtimeRoot, "modules"), path.join(runtimeRoot, "bots-catalog")],
       ignore: [/^\/dist(?:\/|$)/, /^\/scripts(?:\/|$)/, /\.test\.cjs$/],
     });
-    const installRoot = path.join(packageRoot, "opt", "miaos");
     fs.cpSync(electronRoot, path.join(installRoot, "app"), { recursive: true, dereference: false });
     const stagedHermes = path.join(installRoot, "hermes");
     copyPortableRuntime(hermesBundle, stagedHermes, {
@@ -272,11 +329,11 @@ exec "\${runtime_home}/hermes/hermes-agent/venv/bin/python" /opt/miaos/app/resou
     fs.mkdirSync(iconDir, { recursive: true });
     fs.copyFileSync(path.join(MACOS_ROOT, "assets", "mia-512-linux.png"), path.join(iconDir, "miaos.png"));
     fs.mkdirSync(path.join(packageRoot, "DEBIAN"), { recursive: true });
-    fs.writeFileSync(path.join(packageRoot, "DEBIAN", "control"), `Package: mia\nVersion: ${VERSION}\nArchitecture: amd64\nMaintainer: Mia contributors\nSection: utils\nPriority: optional\nDescription: Local AI workspace powered by Hermes Agent\n`);
+    fs.writeFileSync(path.join(packageRoot, "DEBIAN", "control"), linuxPackageControl());
     writeExecutable(path.join(packageRoot, "DEBIAN", "postinst"), linuxPostInstallScript());
     assertNoRuntimeState(installRoot);
     assertNoPrivateBuildPaths(packageRoot, [
-      os.homedir(), REPOSITORY_ROOT, temporaryRoot, hermesBundle, ghostBundle, pythonRuntime,
+      os.homedir(), REPOSITORY_ROOT, temporaryRoot, hermesBundle, ghostBundle, pythonRuntime, process.env.GWS_BUNDLE_DIR,
     ]);
     assertNoPrivateContent(packageRoot);
     fs.mkdirSync(DIST_ROOT, { recursive: true });
@@ -292,6 +349,7 @@ exec "\${runtime_home}/hermes/hermes-agent/venv/bin/python" /opt/miaos/app/resou
       releaseValue(hermesRelease, "HERMES_COMMIT"),
       releaseValue(ghostRelease, "GHOST_COMMIT"),
       releaseValue(pythonRelease, "PYTHON_BUILD"),
+      googleWorkspace,
     );
     return artifact;
   } finally {
@@ -305,6 +363,10 @@ module.exports = {
   linuxAppExecLine,
   linuxDesktopEntry,
   linuxPostInstallScript,
+  linuxPackageControl,
+  removeLinuxDependencyBuildState,
+  stageLinuxGoogleWorkspaceRuntime,
+  stageLinuxGoogleOAuthClient,
   removeLinuxPythonBuildState,
   requiredDirectory,
   requiredPinnedDirectory,

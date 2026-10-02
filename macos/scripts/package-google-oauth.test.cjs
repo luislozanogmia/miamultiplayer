@@ -19,6 +19,11 @@ test("packaged native registration contains only an injected public client ID", 
 test("every desktop packager stages the same Google registration", () => {
   for (const platform of ["mac", "win", "linux"]) {
     const source = fs.readFileSync(path.join(__dirname, `package-${platform}.cjs`), "utf8");
+    if (platform === "linux") {
+      assert.match(source, /stageLinuxGoogleOAuthClient\(path\.join\(runtimeRoot, "backend"\)\)/);
+      assert.match(source, /stageGoogleOAuthClient\(backendDirectory, env\)/);
+      continue;
+    }
     assert.match(source, /require\("\.\/package-google-oauth\.cjs"\)/);
     assert.match(source, /stageGoogleOAuthClient\((?:stagedBackend|path\.join\(runtimeRoot, "backend"\))/);
   }
