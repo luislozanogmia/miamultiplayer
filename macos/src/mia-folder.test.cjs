@@ -93,3 +93,20 @@ test("MIAOS_WORKSPACE_DIR wins and is neither persisted nor created", () => {
   assert.equal(fs.existsSync(path.join(dataDir, CHOICE_FILENAME)), false);
   assert.equal(fs.existsSync(custom), false);
 });
+
+test("an empty existing mia folder is used on a fresh install", () => {
+  const { documentsDir, dataDir } = fixture();
+  fs.mkdirSync(path.join(documentsDir, "mia"));
+  fs.writeFileSync(path.join(documentsDir, "mia", ".DS_Store"), "");
+  const folder = resolveMiaFolder({ documentsDir, dataDir, env: {} });
+  assert.equal(folder, path.join(documentsDir, "mia"));
+  assert.ok(fs.existsSync(path.join(folder, MARKER_FILENAME)));
+});
+
+test("an empty mia2 is used when mia belongs to someone else", () => {
+  const { documentsDir, dataDir } = fixture();
+  foreign(path.join(documentsDir, "mia"));
+  fs.mkdirSync(path.join(documentsDir, "mia2"));
+  const folder = resolveMiaFolder({ documentsDir, dataDir, env: {} });
+  assert.equal(folder, path.join(documentsDir, "mia2"));
+});
