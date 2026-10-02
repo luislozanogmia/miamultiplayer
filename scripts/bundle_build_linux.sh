@@ -18,7 +18,10 @@
 #
 # package-linux.cjs also requires the same pinned runtime bundle env vars as
 # package-mac.cjs (HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, HERMES_PYTHON_RUNTIME_DIR
-# — see scripts/install-local-mac.sh) plus a clean git checkout.
+# — see scripts/install-local-mac.sh), GWS_BUNDLE_DIR with the pinned Linux GNU
+# gws binary and LICENSE, plus a clean git checkout. Verify its archive against
+# GWS_LINUX_X64_ARCHIVE_SHA256 in scripts/gws-release.env before extraction.
+# The package requires an amd64 desktop with glibc 2.39 (Ubuntu 24.04+).
 # Official builds additionally set MIA_REQUIRE_GOOGLE_OAUTH=1 and inject the
 # MIA_GOOGLE_OAUTH_CLIENT_ID and MIA_GOOGLE_OAUTH_CLIENT_SECRET. Forks may ship Google
 # disconnected until they supply their own Desktop OAuth client ID.
@@ -36,7 +39,7 @@ fi
 
 if [[ ! -d "$macos_root/node_modules" ]]; then
   echo "Installing macos/ dependencies…"
-  (cd "$macos_root" && npm install --no-audit --no-fund)
+  (cd "$macos_root" && npm ci --no-audit --no-fund)
 fi
 
 echo "Packaging the Linux app (npm run package:linux)…"
