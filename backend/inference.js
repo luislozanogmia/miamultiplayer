@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { externalChatEnabled } = require('./chat-security');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
+const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
 const { normalizedGatewayUrl } = require('./hermes-web-search-config');
 const {
   EFFECTIVE_RELEASE_PROFILE,
@@ -478,6 +479,16 @@ function hermesProcessEnv() {
 
 let hermesGatewayClient = null;
 
+// Hermes copies a root key into a profile when it records that key's status,
+// and the copy then outranks the root. Clear those copies only while no
+// gateway is running, so none can write its cached pool back afterwards.
+function removeStaleProfileCredentials() {
+  const removed = removeProfileCopiesOfRootCredentials(process.env.HERMES_HOME);
+  if (removed.providers.length) {
+    console.log('[hermes-auth] removed profile copies of root keys:', removed.providers.join(', '));
+  }
+}
+
 function getHermesGatewayClient() {
   if (!hermesGatewayClient) {
     hermesGatewayClient = new HermesGatewayClient({
@@ -490,6 +501,7 @@ function getHermesGatewayClient() {
       toolsets: MIAOS_HERMES_TOOLSETS,
       maxTurns: MIAOS_AGENT_MAX_TURNS,
       onEvent: recordHermesGatewayEvent,
+      beforeSpawn: removeStaleProfileCredentials,
     });
   }
   return hermesGatewayClient;
