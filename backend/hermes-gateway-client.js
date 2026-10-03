@@ -109,31 +109,57 @@ function turnAbortError() {
 }
 
 // Hermes' `gateway stop` reports success after waiting ten seconds even if
-// the gateway it signalled is still draining, and it leaves gateway.pid in
-// place while that process lives. Resolves true once no live gateway is
-// recorded for this Hermes home, false if one is still running at timeout.
+// the gateway it signalled is still draining. Hermes records a running
+// gateway in gateway.pid, gateway.lock, or (for a launch-service gateway)
+// only gateway_state.json. Resolves true once no live gateway is recorded in
+// any of them, false while one still runs at timeout or when a record exists
+// but cannot be read, since then nothing proves the gateway is gone.
+const GATEWAY_RECORD_FILES = ['gateway.pid', 'gateway.lock', 'gateway_state.json'];
+const INACTIVE_GATEWAY_STATES = new Set(['stopped', 'startup_failed']);
+
+function recordedGatewayPids(home) {
+  const pids = [];
+  for (const name of GATEWAY_RECORD_FILES) {
+    let text;
+    try {
+      text = fs.readFileSync(path.join(home, name), 'utf8').trim();
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      return null;
+    }
+    if (!text && name === 'gateway.lock') continue;
+    let record;
+    try {
+      record = /^\d+$/.test(text) ? { pid: text } : JSON.parse(text);
+    } catch (_) {
+      return null;
+    }
+    if (!record || typeof record !== 'object') return null;
+    if (name === 'gateway_state.json'
+      && (!record.gateway_state || INACTIVE_GATEWAY_STATES.has(record.gateway_state))) continue;
+    const pid = Number.parseInt(record.pid, 10);
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    if (pid !== process.pid && !pids.includes(pid)) pids.push(pid);
+  }
+  return pids;
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
 async function waitForRecordedGatewayExit(env, { timeoutMs = 10000, pollMs = 250 } = {}) {
   const home = String((env && env.HERMES_HOME) || '').trim();
   if (!home) return true;
-  let pid = null;
-  try {
-    const text = fs.readFileSync(path.join(home, 'gateway.pid'), 'utf8').trim();
-    const record = /^\d+$/.test(text) ? { pid: text } : JSON.parse(text);
-    pid = Number.parseInt(record && record.pid, 10);
-  } catch (_) {
-    return true;
-  }
-  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return true;
-  const alive = () => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return error.code === 'EPERM';
-    }
-  };
+  const pids = recordedGatewayPids(home);
+  if (pids === null) return false;
   const deadline = Date.now() + timeoutMs;
-  while (alive()) {
+  while (pids.some(processAlive)) {
     if (Date.now() >= deadline) return false;
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
@@ -278,7 +304,7 @@ class HermesGatewayClient {
         if (await this.waitForGatewayExitImpl(this.env)) {
           await this.beforeSpawn();
         } else {
-          console.warn('[hermes-auth] previous Hermes gateway is still running; skipped profile key cleanup');
+          console.warn('[hermes-auth] previous Hermes gateway may still be running; skipped profile key cleanup');
         }
       }
 
