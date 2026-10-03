@@ -6,6 +6,7 @@ const { EventEmitter } = require("node:events");
 const { spawn } = require("node:child_process");
 const {
   QUIT_SIGNALS,
+  createQuitShutdown,
   installQuitSignalHandlers,
   processGroupIsAlive,
   stopProcessGroup,
@@ -117,4 +118,43 @@ test("quit signals route the first request through the normal quit path", () => 
 
   uninstall();
   assert.deepEqual(QUIT_SIGNALS.map(signal => target.listenerCount(signal)), [0, 0, 0]);
+});
+
+test("a forced quit mid-shutdown still kills the backend the app stopped tracking", { skip: !unix }, async () => {
+  const { backend, gatewayPid } = await spawnBackendGroup({ backendIgnoresTerm: true, gatewayIgnoresTerm: true });
+  // Like main.cjs: the graceful stop clears the app's reference right away.
+  let current = backend;
+  const shutdown = createQuitShutdown({
+    currentProcess: () => current,
+    stopBackend: (child) => {
+      current = null;
+      return stopProcessGroup(child, { graceMs: 60000, groupGraceMs: 60000, pollMs: 20 });
+    },
+  });
+  try {
+    const graceful = shutdown.stop();
+    assert.equal(current, null);
+    shutdown.forceStop();
+    const deadline = Date.now() + 2000;
+    while ((isAlive(backend.pid) || isAlive(gatewayPid)) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(isAlive(gatewayPid), false, "gateway must not survive a forced quit");
+    assert.equal(await graceful, true);
+    assert.equal(shutdown.done, true);
+  } finally {
+    await cleanup(backend.pid);
+  }
+});
+
+test("every quit path shares one backend stop", async () => {
+  let calls = 0;
+  const shutdown = createQuitShutdown({
+    currentProcess: () => ({ pid: 1, exitCode: 0, signalCode: null }),
+    stopBackend: async () => { calls += 1; return true; },
+  });
+  assert.equal(shutdown.stop(), shutdown.stop());
+  await shutdown.stop();
+  assert.equal(calls, 1);
+  assert.equal(shutdown.done, true);
 });

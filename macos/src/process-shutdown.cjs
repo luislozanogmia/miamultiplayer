@@ -92,6 +92,52 @@ async function stopProcessGroup(child, {
   return exited;
 }
 
+// Kills a backend and everything in its group at once, for a quit that cannot
+// wait for the graceful path to finish.
+function forceStopProcessGroup(child, { platform = process.platform, killImpl = process.kill } = {}) {
+  if (!child || !child.pid) return;
+  if (platform === "win32") {
+    try { child.kill(); } catch (_) { /* already stopped */ }
+    return;
+  }
+  if (!signalProcessGroup(child.pid, "SIGKILL", killImpl)) {
+    try { child.kill("SIGKILL"); } catch (_) { /* already stopped */ }
+  }
+}
+
+// The one backend stop every quit path shares. It remembers which backend it
+// is stopping before the graceful stop clears the app's own reference, so a
+// forced quit that arrives mid-shutdown still kills that backend's group.
+function createQuitShutdown({ currentProcess, stopBackend, onError = () => {}, platform, killImpl } = {}) {
+  let target = null;
+  let pending = null;
+  let done = false;
+  return {
+    stop() {
+      if (!pending) {
+        target = currentProcess();
+        let stopping;
+        try {
+          stopping = Promise.resolve(stopBackend(target));
+        } catch (error) {
+          stopping = Promise.reject(error);
+        }
+        pending = stopping
+          .catch(onError)
+          .finally(() => { done = true; });
+      }
+      return pending;
+    },
+    get done() { return done; },
+    forceStop() {
+      const child = target || currentProcess();
+      if (child && child.exitCode === null && child.signalCode === null) {
+        forceStopProcessGroup(child, { platform, killImpl });
+      }
+    },
+  };
+}
+
 // Electron's default for SIGINT/SIGTERM/SIGHUP is to exit at once, skipping
 // before-quit/will-quit, which leaves the detached backend group running.
 // Route the first signal through the normal quit path. A Ctrl-C in `npm run
@@ -123,6 +169,8 @@ function installQuitSignalHandlers({
 
 module.exports = {
   QUIT_SIGNALS,
+  createQuitShutdown,
+  forceStopProcessGroup,
   installQuitSignalHandlers,
   processGroupIsAlive,
   signalProcessGroup,

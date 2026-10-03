@@ -32,7 +32,7 @@ const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc
 const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
 const { discoverClaudeCodeCommand, installClaudeCode } = require("./claude-code.cjs");
 const { createDesktopNotifications } = require("./desktop-notifications.cjs");
-const { installQuitSignalHandlers, signalProcessGroup, stopProcessGroup } = require("./process-shutdown.cjs");
+const { createQuitShutdown, installQuitSignalHandlers, stopProcessGroup } = require("./process-shutdown.cjs");
 
 const googleAuthOpenSecret = crypto.randomBytes(32).toString("base64url");
 
@@ -188,8 +188,6 @@ let backendProcess = null;
 let backendProcessUrl = null;
 let backendUrl = null;
 let isQuitting = false;
-let backendQuitShutdown = null;
-let backendQuitShutdownDone = false;
 let ghostBridge = null;
 let googleWorkspaceBroker = null;
 let artifactToolbarView = null;
@@ -822,25 +820,21 @@ function stopBackend(processToStop = backendProcess) {
 
 // One backend stop shared by every quit path (window close, Cmd-Q, a signal
 // from the terminal, an update restart), so will-quit can wait for it.
+const backendQuitShutdown = createQuitShutdown({
+  currentProcess: () => backendProcess,
+  stopBackend: processToStop => stopBackend(processToStop || undefined),
+  onError: error => desktopLog(`backend stop on quit failed: ${error.message}`),
+});
+
 function stopBackendForQuit() {
-  if (!backendQuitShutdown) {
-    backendQuitShutdown = stopBackend()
-      .catch(error => desktopLog(`backend stop on quit failed: ${error.message}`))
-      .finally(() => { backendQuitShutdownDone = true; });
-  }
-  return backendQuitShutdown;
+  return backendQuitShutdown.stop();
 }
 
+// A second quit signal means the person wants out now: kill the backend group
+// this shell is stopping (backend + Hermes gateway) instead of waiting.
 function forceStopBackendAndExit(signal) {
-  desktopLog(`received ${signal} again; exiting without waiting for the backend`);
-  const processToStop = backendProcess;
-  if (processToStop && processToStop.exitCode === null && processToStop.signalCode === null) {
-    if (process.platform === "win32") {
-      try { processToStop.kill(); } catch (_) { /* already stopped */ }
-    } else {
-      signalProcessGroup(processToStop.pid, "SIGTERM");
-    }
-  }
+  desktopLog(`received ${signal} again; killing the backend and exiting`);
+  backendQuitShutdown.forceStop();
   app.exit(1);
 }
 
@@ -2485,7 +2479,7 @@ app.on("before-quit", () => {
 app.on("will-quit", (event) => {
   // Hold the quit until the backend group (backend + Hermes gateway) is gone,
   // then resume it so relaunch and update installs keep their normal path.
-  if (backendQuitShutdownDone) return;
+  if (backendQuitShutdown.done) return;
   event.preventDefault();
   stopBackendForQuit().finally(() => app.quit());
 });
