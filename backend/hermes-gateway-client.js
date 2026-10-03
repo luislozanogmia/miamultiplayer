@@ -142,6 +142,7 @@ class HermesGatewayClient {
     onEvent = null,
     onSessionEvent = null,
     stopExternalGatewayImpl = stopExternalHermesGateway,
+    beforeSpawn = null,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
     this.binary = String(binary || '').trim();
@@ -170,6 +171,7 @@ class HermesGatewayClient {
     this.onEvent = typeof onEvent === 'function' ? onEvent : null;
     this.onSessionEvent = typeof onSessionEvent === 'function' ? onSessionEvent : null;
     this.stopExternalGatewayImpl = stopExternalGatewayImpl;
+    this.beforeSpawn = typeof beforeSpawn === 'function' ? beforeSpawn : null;
     this.toolProgressMode = String(this.env.HERMES_TUI_TOOL_PROGRESS || '').trim().toLowerCase() === 'verbose'
       ? 'verbose'
       : 'all';
@@ -234,6 +236,10 @@ class HermesGatewayClient {
       if (typeof this.stopExternalGatewayImpl === 'function') {
         await this.stopExternalGatewayImpl(this.launch, this.env);
       }
+      // Nothing Hermes is running for this home now, so its stores can be
+      // changed without a live process writing its cached copy back over
+      // them. A reused, already-listening gateway never reaches this point.
+      if (this.beforeSpawn) await this.beforeSpawn();
 
       const gatewayEnv = { ...this.env };
       gatewayEnv.HERMES_DASHBOARD_SESSION_TOKEN = this.gatewayToken;

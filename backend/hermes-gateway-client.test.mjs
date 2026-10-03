@@ -448,6 +448,7 @@ test('bootstraps one local gateway and terminates the process it owns on close',
     tokenFile: path.join(directory, 'gateway.token'),
     probePortImpl: async () => false,
     stopExternalGatewayImpl: async () => { lifecycle.push('external-stopped'); },
+    beforeSpawn: () => { lifecycle.push('stale-credentials-removed'); },
     spawnImpl: (binary, args, options) => {
       lifecycle.push('desktop-started');
       spawns.push({ binary, args, options });
@@ -460,7 +461,8 @@ test('bootstraps one local gateway and terminates the process it owns on close',
   assert.equal(spawns[0].options.detached, false);
   assert.equal(spawns[0].options.stdio, 'ignore');
   assert.equal(spawns[0].options.env.HERMES_DESKTOP, '1');
-  assert.deepEqual(lifecycle, ['external-stopped', 'desktop-started']);
+  // Stale profile credentials are cleared only once no Hermes is running.
+  assert.deepEqual(lifecycle, ['external-stopped', 'stale-credentials-removed', 'desktop-started']);
   assert.equal(unrefCalls, 0);
   assert.equal(client.child, child);
 
@@ -498,17 +500,22 @@ test('an argv launch vector spawns the interpreter with its prefix arguments', a
 
 test('reuses an already-running local gateway instead of spawning a second one', async () => {
   let spawnCalls = 0;
+  let cleanupCalls = 0;
   const client = new HermesGatewayClient({
     WebSocketImpl: class FakeWebSocket {},
     env: {},
     token: 'existing-token',
     tokenFile: '',
     probePortImpl: async () => true,
+    // A live gateway keeps its cached credential pool and could write it back,
+    // so stores are never cleaned underneath it.
+    beforeSpawn: () => { cleanupCalls += 1; },
     spawnImpl: () => { spawnCalls += 1; throw new Error('must not spawn'); },
   });
 
   await client.ensureGateway();
   assert.equal(spawnCalls, 0);
+  assert.equal(cleanupCalls, 0);
   assert.match(client.endpoint(), /token=existing-token/);
 });
 
