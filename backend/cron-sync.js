@@ -149,6 +149,17 @@ function isRealDirectory(target) {
   }
 }
 
+// True when anything at all occupies the path, including a symlink whose
+// target is gone (existsSync follows links and would call that free).
+function pathOccupied(target) {
+  try {
+    fs.lstatSync(target);
+    return true;
+  } catch (error) {
+    return error.code !== 'ENOENT';
+  }
+}
+
 // Move a bot's files out of the old hidden bot-artifacts/bot-<hash> folder.
 // Symlinks and entries that already exist at the destination are left behind;
 // the old folder is removed once nothing but its scope marker remains.
@@ -167,7 +178,7 @@ function migrateLegacyArtifacts(botId, workspace) {
     if (entry === ARTIFACT_MARKER) continue;
     const from = path.join(legacy, entry);
     const to = path.join(workspace, entry);
-    if (fs.lstatSync(from).isSymbolicLink() || fs.existsSync(to)) { leftover += 1; continue; }
+    if (fs.lstatSync(from).isSymbolicLink() || pathOccupied(to)) { leftover += 1; continue; }
     try {
       fs.renameSync(from, to);
     } catch (error) {

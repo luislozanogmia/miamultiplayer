@@ -1043,3 +1043,15 @@ test('legacy migration never overwrites, follows symlinks, or touches another bo
   assert.equal(fs.existsSync(path.join(otherLegacy, 'theirs.txt')), true);
   assert.equal(fs.existsSync(path.join(workspace, 'theirs.txt')), false);
 });
+
+test('legacy migration keeps a dangling symlink at the destination and the old file', () => {
+  const botId = 'bot-legacy-dangling';
+  const workspace = cronSync.artifactWorkspaceForBot({ id: botId, name: 'Dangling' });
+  fs.symlinkSync(path.join(tempDir, 'missing-target.txt'), path.join(workspace, 'report.txt'));
+  const legacy = legacyFolder(botId);
+  fs.writeFileSync(path.join(legacy, 'report.txt'), 'old report');
+
+  assert.equal(cronSync.artifactWorkspaceForBot({ id: botId, name: 'Dangling' }), workspace);
+  assert.equal(fs.lstatSync(path.join(workspace, 'report.txt')).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(path.join(legacy, 'report.txt'), 'utf8'), 'old report');
+});
