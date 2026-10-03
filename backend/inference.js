@@ -479,9 +479,9 @@ function hermesProcessEnv() {
 
 let hermesGatewayClient = null;
 
-// Hermes copies a root key into a profile when it records that key's status,
-// and the copy then outranks the root. Clear those copies only while no
-// gateway is running, so none can write its cached pool back afterwards.
+// A profile pool can shadow an updated root key. Clear Mia-managed copies
+// only while no gateway is running, so cached state cannot write them back.
+// Hermes should ultimately persist borrowed state to the owning root store.
 function removeStaleProfileCredentials() {
   const removed = removeProfileCopiesOfRootCredentials(process.env.HERMES_HOME);
   if (removed.failures.length) {
