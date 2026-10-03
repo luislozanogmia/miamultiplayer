@@ -110,3 +110,36 @@ test("an empty mia2 is used when mia belongs to someone else", () => {
   const folder = resolveMiaFolder({ documentsDir, dataDir, env: {} });
   assert.equal(folder, path.join(documentsDir, "mia2"));
 });
+
+test("a mia symlink to an empty folder is skipped and never marked", () => {
+  const { root, documentsDir, dataDir } = fixture();
+  const external = path.join(root, "external");
+  fs.mkdirSync(external);
+  fs.symlinkSync(external, path.join(documentsDir, "mia"));
+  const folder = resolveMiaFolder({ documentsDir, dataDir, env: {} });
+  assert.equal(folder, path.join(documentsDir, "mia2"));
+  assert.deepEqual(fs.readdirSync(external), []);
+});
+
+test("an upgrade does not adopt a mia symlink", () => {
+  const { root, documentsDir, dataDir } = fixture();
+  const external = path.join(root, "external");
+  fs.mkdirSync(external);
+  fs.symlinkSync(external, path.join(documentsDir, "mia"));
+  const folder = resolveMiaFolder({ documentsDir, dataDir, hasExistingInstall: true, env: {} });
+  assert.equal(folder, path.join(documentsDir, "mia2"));
+  assert.deepEqual(fs.readdirSync(external), []);
+});
+
+test("a saved choice replaced by a symlink is chosen again", () => {
+  const { root, documentsDir, dataDir } = fixture();
+  const first = resolveMiaFolder({ documentsDir, dataDir, env: {} });
+  fs.rmSync(first, { recursive: true });
+  const external = path.join(root, "external");
+  fs.mkdirSync(external);
+  fs.symlinkSync(external, first);
+  const folder = resolveMiaFolder({ documentsDir, dataDir, env: {} });
+  assert.equal(folder, path.join(documentsDir, "mia2"));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, CHOICE_FILENAME), "utf8")).path, folder);
+  assert.deepEqual(fs.readdirSync(external), []);
+});
