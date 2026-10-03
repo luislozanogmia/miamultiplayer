@@ -131,7 +131,15 @@ function createQuitShutdown({ currentProcess, stopBackend, onError = () => {}, p
     get done() { return done; },
     forceStop() {
       const child = target || currentProcess();
-      if (child && child.exitCode === null && child.signalCode === null) {
+      if (!child || !child.pid) return;
+      const leaderAlive = child.exitCode === null && child.signalCode === null;
+      if ((platform || process.platform) === "win32") {
+        if (leaderAlive) forceStopProcessGroup(child, { platform, killImpl });
+        return;
+      }
+      // The backend can exit while its gateway ignores SIGTERM. The group
+      // outlives its leader, so kill it whenever it still has members.
+      if (leaderAlive || processGroupIsAlive(child.pid, killImpl)) {
         forceStopProcessGroup(child, { platform, killImpl });
       }
     },
