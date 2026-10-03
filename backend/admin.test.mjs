@@ -55,7 +55,7 @@ async function waitForHealth(origin, child, logs) {
     if (child.exitCode !== null) throw new Error(`server exited early: ${logs.join('')}`);
     try {
       const response = await fetch(`${origin}/healthz`);
-      if (response.ok) return;
+      if (response.ok && listeningOn(origin, logs)) return;
     } catch {
       // still starting
     }
@@ -99,7 +99,26 @@ function seedUsers(dbPath, rows) {
 
 const BOOT_ADMIN = { email: 'boot-admin@example.com', password: 'correct-horse-battery-staple' };
 
-async function startServer({
+// freePort() closes its probe before the server binds, so another test
+// file (or any outgoing socket) can take the port in between. The server
+// then dies with EADDRINUSE; start it again on a fresh port.
+async function startServer(...args) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await startServerOnce(...args);
+    } catch (error) {
+      if (attempt >= 5 || !String(error && error.message).includes('EADDRINUSE')) throw error;
+    }
+  }
+}
+
+// /healthz can answer from another test's server that holds the port; only
+// this child's own listening line proves the answer came from it.
+function listeningOn(origin, logs) {
+  return logs.join('').includes(`listening on port ${new URL(origin).port}\n`);
+}
+
+async function startServerOnce({
   extraEnv = {}, seedRows = [], includeBootAdmin = true, preloadScript = '', cronRace = false,
   existingRoot = '',
 } = {}) {
@@ -801,6 +820,58 @@ test('process-global provider mutations require an admin browser session', async
     assert.equal(authRedirect.status, 403);
   } finally {
     await stopServer(server);
+  }
+});
+
+test('provider re-key does not report success when managed profile cleanup is unsafe', async () => {
+  const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'miaos-rekey-cli-'));
+  const invoked = path.join(fixtureDir, 'key-add-invoked');
+  const hermesFixture = path.join(fixtureDir, 'hermes-fixture');
+  fs.writeFileSync(hermesFixture,
+    `#!/usr/bin/env node\nif (process.argv[2] === 'auth' && process.argv[3] === 'add') require('node:fs').writeFileSync(${JSON.stringify(invoked)}, 'invoked');\n`,
+    { mode: 0o700 });
+  const server = await startServer({ extraEnv: { HERMES_BIN: hermesFixture } });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const profile = path.join(server.tempDir, 'hermes', 'profiles', 'miaos-agent-runtime');
+    fs.mkdirSync(profile, { recursive: true });
+    fs.writeFileSync(path.join(profile, 'config.yaml'), '# Managed by Mia. Runtime permissions are app-owned.');
+    const foreign = path.join(server.tempDir, 'foreign-auth.json');
+    fs.writeFileSync(foreign, JSON.stringify({ credential_pool: { 'openai-api': [{ id: 'independent' }] } }));
+    const auth = path.join(profile, 'auth.json');
+    if (fs.existsSync(auth)) fs.rmSync(auth);
+    fs.symlinkSync(foreign, auth);
+
+    const response = await fetch(`${server.origin}/api/settings/harness/api-key`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'openai-api', apiKey: 'fixture-provider-key' }),
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.match(body.error, /could not safely update stored provider credentials/i);
+    assert.doesNotMatch(JSON.stringify(body), /foreign-auth|fixture-provider-key|independent/);
+    assert.equal(fs.existsSync(invoked), false, 'unsafe profile is rejected before Hermes stores the new key');
+    assert.deepEqual(JSON.parse(fs.readFileSync(foreign, 'utf8')).credential_pool['openai-api'], [{ id: 'independent' }]);
+
+    fs.unlinkSync(auth);
+    const rootAuth = path.join(server.tempDir, 'hermes', 'auth.json');
+    const originalRoot = fs.existsSync(rootAuth) ? fs.readFileSync(rootAuth, 'utf8') : null;
+    if (fs.existsSync(rootAuth)) fs.unlinkSync(rootAuth);
+    fs.symlinkSync(foreign, rootAuth);
+    const rootResponse = await fetch(`${server.origin}/api/settings/harness/api-key`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'openai-api', apiKey: 'fixture-provider-key' }),
+    });
+    assert.equal(rootResponse.status, 502);
+    assert.equal(fs.existsSync(invoked), false, 'unsafe root auth is rejected before Hermes stores the new key');
+    assert.deepEqual(JSON.parse(fs.readFileSync(foreign, 'utf8')).credential_pool['openai-api'], [{ id: 'independent' }]);
+    fs.unlinkSync(rootAuth);
+    if (originalRoot !== null) fs.writeFileSync(rootAuth, originalRoot);
+  } finally {
+    await stopServer(server);
+    await rm(fixtureDir, { recursive: true, force: true });
   }
 });
 

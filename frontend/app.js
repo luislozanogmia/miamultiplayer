@@ -4906,6 +4906,7 @@
       var payload;
       try { payload = JSON.parse(message.data); } catch(err){ return; }
       if(payload.type === 'conversation.event') applyNativeEvent(payload.event, {autoOpenThread: true});
+      if(payload.type === 'conversation.activity') applyChatActivity(payload.conversationId, payload.activity);
       if(payload.type === 'history') (payload.events || []).forEach(function(event){ applyNativeEvent(event, {autoOpenThread: false}); });
     };
     socket.onclose = function(){
@@ -5174,7 +5175,7 @@
   }
   function googleDriveMessageChips(files){
     return files.length ? '<div class="chat-drive-files">' + files.map(function(file){
-      return '<a class="chat-drive-file" href="' + esc(file.url) + '" target="_blank" rel="noopener noreferrer"><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="Google Drive" /><span>' + esc(file.name) + '</span></a>';
+      return '<a class="chat-drive-file" href="' + esc(file.url) + '" target="_blank" rel="noopener noreferrer" data-chat-open-in-mia><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="Google Drive" /><span>' + esc(file.name) + '</span></a>';
     }).join('') + '</div>' : '';
   }
 
@@ -7586,17 +7587,38 @@
     var previewUrl = esc(media.previewUrl || ((media.url || '').indexOf('?') === -1 ? (media.url + '?preview=true') : (media.url + '&preview=true')));
     var mediaName = esc(media.filename || 'Attachment');
     var mediaType = String(media.mimeType || '').toLowerCase();
-    var previewButton = media.canPreview || nativeAttachmentCanPreview(mediaType)
+    var canPreview = !!(media.canPreview || nativeAttachmentCanPreview(mediaType));
+    var previewButton = canPreview
       ? '<button type="button" class="chat-artifact-preview" data-chat-artifact-preview data-preview-url="' + previewUrl + '">Preview</button>'
       : '';
+    // Clicking the card itself (thumbnail or name) previews it too; Download
+    // stays an explicit secondary action.
+    var openAttrs = canPreview ? ' data-chat-artifact-preview data-preview-url="' + previewUrl + '"' : '';
     var image = nativeAttachmentIsRaster(mediaType)
-      ? '<div class="chat-msg-media"><img class="chat-artifact-thumb" src="' + previewUrl + '" alt="' + mediaName + '" loading="lazy"></div>'
+      ? '<div class="chat-msg-media"' + openAttrs + '><img class="chat-artifact-thumb" src="' + previewUrl + '" alt="' + mediaName + '" loading="lazy"></div>'
       : '<span class="chat-artifact-icon" aria-hidden="true">&#128196;</span>';
     return '<div class="chat-artifact-card' + (nativeAttachmentIsRaster(mediaType) ? ' has-thumb' : '') + '">' + image +
-      '<div class="chat-artifact-copy"><div class="chat-artifact-name">' + mediaName + '</div>' +
+      '<div class="chat-artifact-copy"><div class="chat-artifact-name"' + openAttrs + '>' + mediaName + '</div>' +
       '<div class="chat-artifact-type">' + esc(mediaType || 'file') + '</div>' +
       '<div class="chat-artifact-actions">' + previewButton +
       '<a class="chat-artifact-download" href="' + mediaUrl + '" download="' + mediaName + '">Download</a></div></div></div>';
+  }
+
+  // Attachments open in Mia's in-app browser, attached to the chat that is
+  // active (openWebBrowserTool pins the browser to chatWs.activeRoomId, the
+  // same bot context every other browser entry point uses). The shell
+  // validates the URL and authorizes the browser's profile before we navigate.
+  function openAttachmentInMiaBrowser(url){
+    Promise.resolve(window.miaDesktop.browser.prepareAttachment(url)).then(function(result){
+      if(!result || !result.ok || !result.url){
+        showBenchToast(result && result.error || 'Attachment could not be opened.');
+        return;
+      }
+      openWebBrowserTool();
+      localBrowserNavigate(result.url);
+    }).catch(function(error){
+      showBenchToast(error && error.message || 'Attachment could not be opened.');
+    });
   }
 
   function wireChatArtifactPreviews(container){
@@ -7608,6 +7630,11 @@
       event.preventDefault();
       var url = button.getAttribute('data-preview-url');
       if(!url) return;
+      var desktopBrowser = window.miaDesktop && window.miaDesktop.browser;
+      if(desktopBrowser && typeof desktopBrowser.prepareAttachment === 'function' && window.miaNativeBrowser){
+        openAttachmentInMiaBrowser(url);
+        return;
+      }
       var desktop = window.miaDesktop && window.miaDesktop.artifact;
       if(desktop && typeof desktop.open === 'function'){
         Promise.resolve(desktop.open(url)).then(function(result){
@@ -8216,10 +8243,70 @@
     });
   }
 
+  /* ============ CHAT: live agent status panel (#chatActivityPanel) ============
+     Fed by ephemeral "conversation.activity" socket signals (filenames only, see
+     backend/agent-activity.js). Shows what the agent is doing now, the files
+     it is reading or editing, and elapsed time; once the turn ends it keeps
+     the last turn's file list. CSS hides it whenever another right-hand panel
+     is open or the window is narrow. */
+  var chatActivityByRoom = {};
+  var chatActivityTimer = null;
+
+  function applyChatActivity(conversationId, activity){
+    if(!conversationId || !window.MiaAgentActivity) return;
+    chatActivityByRoom[conversationId] = window.MiaAgentActivity.reduceActivity(chatActivityByRoom[conversationId], activity);
+    if(conversationId === chatWs.activeRoomId) renderChatActivityPanel();
+  }
+
+  function renderChatActivityPanel(){
+    var panel = el('#chatActivityPanel');
+    var util = window.MiaAgentActivity;
+    if(!panel || !util) return;
+    var roomId = chatWs.activeRoomId;
+    var running = roomId ? tasksForRoom(roomId).filter(function(task){ return task.kind === 'native-dispatch'; }) : [];
+    var task = running.sort(function(a, b){ return Number(b.startedAt || 0) - Number(a.startedAt || 0); })[0] || null;
+    var state = roomId ? chatActivityByRoom[roomId] : null;
+    var live = !!task;
+    // A new turn that has not reported a tool yet starts from a clean slate.
+    if(live && (!state || state.dispatchId !== task.id)) state = {dispatchId: task.id, label: '', files: [], startedAt: task.startedAt};
+    var files = state ? state.files : [];
+    if(!live && !files.length){
+      panel.hidden = true;
+      panel.innerHTML = '';
+      if(chatActivityTimer){ clearInterval(chatActivityTimer); chatActivityTimer = null; }
+      return;
+    }
+    var startedAt = Number(state.startedAt || Date.now());
+    var filesHtml = files.length ? '<ul class="cap-files">' + files.map(function(file){
+      var status = util.fileStatus(file, live);
+      return '<li class="cap-file" title="' + esc(file.name) + '"><span class="cap-file-name">' + esc(file.name) +
+        '</span><span class="cap-file-kind is-' + status.kind + '">' + esc(status.text) + '</span></li>';
+    }).join('') + '</ul>' : '<div class="cap-empty">No files yet</div>';
+    panel.innerHTML =
+      '<div class="cap-head"><span class="cap-title">' + (live ? 'Working now' : 'Last turn') + '</span>' +
+      (live ? '<span class="cap-elapsed" data-cap-elapsed data-started-at="' + startedAt + '">' + esc(util.formatElapsed(Date.now() - startedAt)) + '</span>' : '') + '</div>' +
+      (live ? '<div class="cap-activity"><span class="cap-pulse" aria-hidden="true"></span>' + esc(state.label || 'Working') + '</div>' : '') +
+      '<div class="cap-section">Files</div>' + filesHtml;
+    panel.hidden = false;
+    if(live && !chatActivityTimer){
+      chatActivityTimer = setInterval(tickChatActivityElapsed, 1000);
+    } else if(!live && chatActivityTimer){
+      clearInterval(chatActivityTimer);
+      chatActivityTimer = null;
+    }
+  }
+
+  function tickChatActivityElapsed(){
+    var node = el('[data-cap-elapsed]');
+    if(!node){ if(chatActivityTimer){ clearInterval(chatActivityTimer); chatActivityTimer = null; } return; }
+    node.textContent = window.MiaAgentActivity.formatElapsed(Date.now() - Number(node.getAttribute('data-started-at') || Date.now()));
+  }
+
   function renderChatThread(options){
     var thread = el('#chatThread');
     if(!thread) return;
     renderGoalChip();
+    renderChatActivityPanel();
     captureRenderedChatScroll(thread);
     if(chatWs.activeKind === 'agent-setup'){
       thread.removeAttribute('data-chat-scroll-room');
@@ -11399,8 +11486,10 @@
   // whenever native events arrive.
   (function(){
     function openInsideMia(event){
-      var link = event.target.closest('a[data-chat-web-link]');
+      var link = event.target.closest('a[data-chat-web-link], a[data-chat-open-in-mia]');
       if(!link) return;
+      // Drive chips keep their normal new-tab link outside the desktop app.
+      if(link.hasAttribute('data-chat-open-in-mia') && !window.miaNativeBrowser) return;
       event.preventDefault();
       event.stopPropagation();
       var href = link.href;
@@ -12094,6 +12183,7 @@
     // whenever chatWs.tasks changes, same as the sidebar dots above.
     if(chatWs.activeRoomId && el('#channelHeader')) renderChatHeaderBar();
     if(el('#chatTasksPanel')) syncChatTasksPanel();
+    renderChatActivityPanel();
     if(chatInfo.mode === 'agents' && chatInfo.open) renderChatInfoPane();
     Object.keys(chatTaskStopPending).forEach(function(taskId){
       if(!(chatWs.tasks || []).some(function(task){ return task.id === taskId; })) delete chatTaskStopPending[taskId];
@@ -14552,7 +14642,10 @@
   function tourGoto(routeName){
     if(!routeName) return;
     var hash = '#/' + routeName;
-    if(location.hash !== hash) location.hash = hash;
+    // Already on the step's route: re-running route() would re-initialise the
+    // whole chat workspace on every Next press, so only navigate when needed.
+    if(location.hash === hash) return;
+    location.hash = hash;
     route();
   }
 
@@ -14628,8 +14721,13 @@
     var steps = currentTourSteps();
     tour.step = Math.max(0, Math.min(index, steps.length - 1));
     var step = steps[tour.step];
-    if(step.route) tourGoto(step.route);
-    if(step.prepare) step.prepare();
+    // A step that cannot navigate or prepare its panel must not strand the
+    // card on the previous step; tourRender centres the card if the target
+    // is missing.
+    try{
+      if(step.route) tourGoto(step.route);
+      if(step.prepare) step.prepare();
+    }catch(e){}
     tourRender();
   }
 

@@ -102,3 +102,24 @@ test('unauthorized principals cannot subscribe', (t) => {
   });
   assert.throws(() => realtime.subscribe('conn_foreign', conversation.id), /active conversation membership is required/);
 });
+
+test('activity signals reach only authorized subscribers and are not events', (t) => {
+  const { db, conversation, realtime } = fixture();
+  t.after(() => db.close());
+  const seen = [];
+  const other = [];
+  const owner = realtime.connect({
+    id: 'conn_a', principal: { companyId: 'company-a', principalId: 'owner@example.com', principalType: 'user' },
+    send: (message) => seen.push(message),
+  });
+  realtime.connect({
+    id: 'conn_b', principal: { companyId: 'company-a', principalId: 'member@example.com', principalType: 'user' },
+    send: (message) => other.push(message),
+  });
+  realtime.subscribe(owner, conversation.id);
+  const activity = { dispatchId: 'd1', tool: 'read_file', paths: ['/a'] };
+  assert.deepEqual(realtime.publishActivity(conversation.id, activity), { delivered: 1, failed: 0 });
+  assert.deepEqual(seen, [{ type: 'conversation.activity', conversationId: conversation.id, activity }]);
+  assert.deepEqual(other, []);
+  assert.throws(() => realtime.publishActivity('', activity));
+});

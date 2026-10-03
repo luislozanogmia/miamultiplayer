@@ -25,12 +25,14 @@ const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
+const { resolveMiaFolder } = require("./mia-folder.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
 const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
 const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
 const { discoverClaudeCodeCommand, installClaudeCode } = require("./claude-code.cjs");
 const { createDesktopNotifications } = require("./desktop-notifications.cjs");
+const { createQuitShutdown, installQuitSignalHandlers, stopProcessGroup } = require("./process-shutdown.cjs");
 
 const googleAuthOpenSecret = crypto.randomBytes(32).toString("base64url");
 
@@ -421,10 +423,23 @@ function hermesHomePath() {
   );
 }
 
+let resolvedMiaFolder = "";
+// The user-facing Mia folder (Documents/mia, or mia2, mia3, ... when that name
+// is taken by something else). Resolved once per launch and persisted. It must
+// first be resolved before the backend creates its database, which is how an
+// upgrade is told apart from a fresh install.
 function miaosWorkspacePath() {
-  return path.resolve(
-    String(process.env.MIAOS_WORKSPACE_DIR || path.join(app.getPath("documents"), "mia")).trim()
-  );
+  const override = String(process.env.MIAOS_WORKSPACE_DIR || "").trim();
+  if (override) return path.resolve(override);
+  if (!resolvedMiaFolder) {
+    resolvedMiaFolder = resolveMiaFolder({
+      documentsDir: app.getPath("documents"),
+      dataDir: app.getPath("userData"),
+      hasExistingInstall: fs.existsSync(backendDatabasePath()),
+      env: process.env,
+    });
+  }
+  return resolvedMiaFolder;
 }
 
 function openTerminalCommand(command) {
@@ -791,34 +806,36 @@ function stopBackend(processToStop = backendProcess) {
     backendProcessUrl = null;
   }
 
-  const exited = new Promise(resolve => {
-    let settled = false;
-    let timer;
-    const finish = (didExit) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolve(didExit);
-    };
-    processToStop.once("exit", () => finish(true));
-    timer = setTimeout(() => finish(false), 5000);
-  });
-  try {
-    // On Windows, kill() is an unconditional TerminateProcess of the backend
-    // alone (no process group, no signal delivery); descendant cleanup is
-    // best-effort. Unix stops the whole detached group with SIGTERM.
-    if (process.platform === "win32") processToStop.kill();
-    else process.kill(-processToStop.pid, "SIGTERM");
-  } catch (_) {
-    try { processToStop.kill("SIGTERM"); } catch (_) { /* already stopped */ }
-  }
-  return exited.then(didExit => {
+  // Stops the backend's whole process group, which also holds the Hermes
+  // gateway the backend started; anything still in it after the grace period
+  // is killed so no port outlives this shell.
+  return stopProcessGroup(processToStop).then(didExit => {
     if (!didExit && wasCurrentProcess && !backendProcess) {
       backendProcess = processToStop;
       backendProcessUrl = processUrl;
     }
     return didExit;
   });
+}
+
+// One backend stop shared by every quit path (window close, Cmd-Q, a signal
+// from the terminal, an update restart), so will-quit can wait for it.
+const backendQuitShutdown = createQuitShutdown({
+  currentProcess: () => backendProcess,
+  stopBackend: processToStop => stopBackend(processToStop || undefined),
+  onError: error => desktopLog(`backend stop on quit failed: ${error.message}`),
+});
+
+function stopBackendForQuit() {
+  return backendQuitShutdown.stop();
+}
+
+// A second quit signal means the person wants out now: kill the backend group
+// this shell is stopping (backend + Hermes gateway) instead of waiting.
+function forceStopBackendAndExit(signal) {
+  desktopLog(`received ${signal} again; killing the backend and exiting`);
+  backendQuitShutdown.forceStop();
+  app.exit(1);
 }
 
 async function startLocalBackend(exactPort = null) {
@@ -879,8 +896,11 @@ async function startLocalBackend(exactPort = null) {
       || path.join(hermesHome, "cron", "jobs.json"),
     HERMES_CRON_EXECUTIONS_DB: process.env.HERMES_CRON_EXECUTIONS_DB
       || path.join(hermesHome, "cron", "executions.db"),
+    // Bot files live in readable per-bot folders inside the Mia folder. The
+    // old hidden folder is migrated into them on first use.
     MIAOS_AUTOMATION_ARTIFACT_DIR: process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
-      || path.join(dataDirectory, "bot-artifacts"),
+      || path.join(workspaceDir, "bots"),
+    MIAOS_LEGACY_AUTOMATION_ARTIFACT_DIR: path.join(dataDirectory, "bot-artifacts"),
     MIAOS_BOT_PACKAGE_DIR: process.env.MIAOS_BOT_PACKAGE_DIR
       || path.join(dataDirectory, "bots"),
     // Claude Code owns its credential store. Hermes' DirectSDK plugin receives
@@ -1395,9 +1415,8 @@ function sendArtifactState() {
   artifactToolbarView.webContents.send("miaos-artifact-state", getArtifactState());
 }
 
-async function syncArtifactSessionCookies(target) {
+async function syncArtifactSessionCookies(target, destinationSession = configureArtifactSession()) {
   const sourceSession = mainWindow && mainWindow.webContents && mainWindow.webContents.session;
-  const destinationSession = configureArtifactSession();
   if (!sourceSession || !sourceSession.cookies || typeof sourceSession.cookies.get !== "function"
     || !destinationSession.cookies || typeof destinationSession.cookies.set !== "function") return;
   const targetUrl = new URL(target);
@@ -2001,6 +2020,11 @@ async function loadMiaOS() {
     const resolvedBackend = await resolveBackend();
     desktopLog(`load target ${resolvedBackend || "fallback"}`);
     if (resolvedBackend) {
+      try {
+        await nativeBrowser?.clearLegacyAttachmentCookie?.();
+      } catch (error) {
+        desktopLog(`legacy attachment cookie cleanup failed: ${error.message}`);
+      }
       await withTimeout(
         mainWindow.loadURL(`${resolvedBackend}/#/chat`),
         15000,
@@ -2289,6 +2313,30 @@ ipcMain.handle("miaos-artifact-open", async (event, value) => {
   return navigateArtifact(target);
 });
 
+// Chat attachments open in Mia's in-app browser, not a separate pane. The
+// browser keeps its own profile. Authorize only this preview's top-level GET
+// in memory; never copy the UI's login cookie into that bot-controllable jar.
+ipcMain.handle("miaos-browser-attachment-prepare", async (event, value) => {
+  if (!isMainWindowSender(event)) return { ok: false, error: "Not authorized." };
+  let target;
+  try {
+    const senderUrl = typeof event.sender.getURL === "function" ? event.sender.getURL() : "";
+    target = normalizeInAppArtifactTarget(value, senderUrl);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (!isNativeArtifactTarget(target)) {
+    return { ok: false, error: "Only Mia conversation attachments can open here." };
+  }
+  try {
+    await nativeBrowser.prepareAttachment(target, mainWindow.webContents.session);
+  } catch (error) {
+    desktopLog(`attachment browser session sync failed: ${error.message}`);
+    return { ok: false, error: "Attachment authentication is unavailable." };
+  }
+  return { ok: true, url: target };
+});
+
 ipcMain.handle("miaos-artifact-action", (event, action) => {
   if (!isArtifactToolbarSender(event) || !artifactView || artifactView.webContents.isDestroyed()) {
     return getArtifactState();
@@ -2369,6 +2417,15 @@ function configurePasskeys() {
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
+  // Ctrl-C on `npm run dev` or a SIGTERM would otherwise end Electron without
+  // before-quit, orphaning the detached backend and its Hermes gateway.
+  installQuitSignalHandlers({
+    onQuit: (signal) => {
+      desktopLog(`received ${signal}; quitting`);
+      app.quit();
+    },
+    onForceQuit: forceStopBackendAndExit,
+  });
   applyAppBranding();
   nativeAuthProtocolReady = registerAuthProtocol(app);
   configurePasskeys();
@@ -2419,7 +2476,15 @@ app.on("before-quit", () => {
   nativeBrowser?.persist?.();
   ghostBridge?.stop().catch(error => desktopLog(`Ghost browser bridge stop failed: ${error.message}`));
   googleWorkspaceBroker?.close().catch(error => desktopLog(`Google credential broker stop failed: ${error.message}`));
-  stopBackend();
+  stopBackendForQuit();
+});
+
+app.on("will-quit", (event) => {
+  // Hold the quit until the backend group (backend + Hermes gateway) is gone,
+  // then resume it so relaunch and update installs keep their normal path.
+  if (backendQuitShutdown.done) return;
+  event.preventDefault();
+  stopBackendForQuit().finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {

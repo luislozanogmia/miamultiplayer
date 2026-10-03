@@ -152,6 +152,15 @@ function managedRouterKeyMessage(label) {
     + 'a new key, then try again.';
 }
 
+// After a stored key died (replaced by a sign-in elsewhere), a mint that
+// then fails for a sign-in reason keeps the one-computer explanation.
+function managedRouterErrorCode(code, keyReplacedElsewhere) {
+  if (keyReplacedElsewhere && (code === 'session_rejected' || code === 'sign_in_required')) {
+    return 'replaced_elsewhere';
+  }
+  return code;
+}
+
 function userFacingModelDispatchError(error, { managedRouter = false, managedRouterLabel = '' } = {}) {
   const message = String(error && error.message || error || '');
   if ((error && error.code === 'NATIVE_DISPATCH_TIMEOUT') || /native dispatch timed out/i.test(message)) {
@@ -188,5 +197,7 @@ module.exports = {
   visibleChatModelInventory,
   normalizeChatModelSelection,
   chatModelSelectionInferenceOptions,
+  managedRouterKeyMessage,
+  managedRouterErrorCode,
   userFacingModelDispatchError,
 };

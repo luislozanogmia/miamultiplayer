@@ -76,3 +76,43 @@ test('replaying the guide closes native browser before showing HTML and begins a
   context.tourStart();
   assert.deepEqual(calls, ['close-browser', 'build-guide', 0]);
 });
+
+test('Next walks every guide step without needing a target click and Done finishes', () => {
+  const nodes = {};
+  const node = () => ({textContent: '', style: {}, classList: {add: () => {}, remove: () => {}}});
+  ['#miaosTourTitle', '#miaosTourBody', '#miaosTourCount', '#miaosTourBack', '#miaosTourNext', '#miaosTourPopover'].forEach(id => { nodes[id] = node(); });
+  const steps = ['A', 'B', 'C', 'D'].map(title => ({title, body: title, route: 'chat'}));
+  const routed = [];
+  let finished = 0;
+  const context = {
+    tour: {active: true, step: 0, steps},
+    TOUR_LS_KEY: 'miaosTourDone',
+    localStorage: {setItem: () => { finished += 1; }},
+    location: {hash: '#/chat'},
+    route: () => routed.push('route'),
+    el: selector => nodes[selector] || null,
+    tourWaitFor: (selector, cb) => cb(null),
+    tourPosition: () => {},
+    requestAnimationFrame: fn => fn(),
+    tourTeardown: () => { context.tour.active = false; },
+  };
+  vm.createContext(context);
+  vm.runInContext(['currentTourSteps', 'tourGoto', 'tourRender', 'tourShowStep', 'tourNext', 'tourFinish'].map(functionSource).join('\n'), context);
+  context.tourShowStep(0);
+  assert.equal(nodes['#miaosTourCount'].textContent, '1 / 4');
+  const seen = [];
+  for(let i = 0; i < 3; i += 1){
+    context.tourNext();
+    seen.push(nodes['#miaosTourTitle'].textContent + ' ' + nodes['#miaosTourCount'].textContent);
+  }
+  assert.deepEqual(seen, ['B 2 / 4', 'C 3 / 4', 'D 4 / 4']);
+  assert.equal(nodes['#miaosTourNext'].textContent, 'Done');
+  assert.equal(finished, 0);
+  context.tourNext();
+  assert.equal(finished, 1);
+  assert.equal(context.tour.active, false);
+  assert.deepEqual(routed, []);
+  const wiring = source.slice(source.indexOf('function tourBuildDom'), source.indexOf('function tourGoto'));
+  assert.match(wiring, /miaosTourNext'\)\.addEventListener\('click', tourNext\)/);
+  assert.match(wiring, /miaosTourSkip'\)\.addEventListener\('click', tourFinish\)/);
+});

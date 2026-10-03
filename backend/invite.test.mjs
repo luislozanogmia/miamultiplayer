@@ -50,7 +50,7 @@ async function waitForHealth(origin, child, logs) {
     if (child.exitCode !== null) throw new Error(`server exited early: ${logs.join('')}`);
     try {
       const response = await fetch(`${origin}/healthz`);
-      if (response.ok) return;
+      if (response.ok && listeningOn(origin, logs)) return;
     } catch {
       // still starting
     }
@@ -73,7 +73,26 @@ function seedUsers(dbPath, rows) {
 
 const BOOT_ADMIN = { email: 'boot-admin@example.com', password: 'correct-horse-battery-staple' };
 
-async function startServer({ extraEnv = {} } = {}) {
+// freePort() closes its probe before the server binds, so another test
+// file (or any outgoing socket) can take the port in between. The server
+// then dies with EADDRINUSE; start it again on a fresh port.
+async function startServer(...args) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await startServerOnce(...args);
+    } catch (error) {
+      if (attempt >= 5 || !String(error && error.message).includes('EADDRINUSE')) throw error;
+    }
+  }
+}
+
+// /healthz can answer from another test's server that holds the port; only
+// this child's own listening line proves the answer came from it.
+function listeningOn(origin, logs) {
+  return logs.join('').includes(`listening on port ${new URL(origin).port}\n`);
+}
+
+async function startServerOnce({ extraEnv = {} } = {}) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'miaos-invite-test-'));
   const dbPath = path.join(tempDir, 'mia.db');
   seedUsers(dbPath, [{ ...BOOT_ADMIN, role: 'member' }]);

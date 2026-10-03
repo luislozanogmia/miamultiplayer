@@ -910,3 +910,28 @@ test('bots are archived with Restore, never permanently deleted from the UI', as
   assert.match(source, /var archivedBotsExpanded = false;/);
   assert.match(source, /'<div class="manage-agent-list"' \+ \(archivedBotsExpanded \? '' : ' hidden'\) \+ '>'/);
 });
+
+test('Drive chips and attachment cards open in the embedded Mia browser on desktop only', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  // Drive chips stay real new-tab links; desktop intercepts them.
+  assert.match(source, /class="chat-drive-file" href="' \+ esc\(file\.url\) \+ '" target="_blank" rel="noopener noreferrer" data-chat-open-in-mia>/);
+  assert.match(source, /a\[data-chat-web-link\], a\[data-chat-open-in-mia\]/);
+  assert.match(source, /hasAttribute\('data-chat-open-in-mia'\) && !window\.miaNativeBrowser\) return;/);
+  // Attachment cards: thumbnail, name and Preview share one attribute; Download stays.
+  const cardStart = source.indexOf('function chatArtifactCardHtml(');
+  const cardEnd = source.indexOf('function openAttachmentInMiaBrowser(', cardStart);
+  const card = source.slice(cardStart, cardEnd);
+  assert.match(card, /chat-msg-media"' \+ openAttrs/);
+  assert.match(card, /chat-artifact-name"' \+ openAttrs/);
+  assert.match(card, /class="chat-artifact-download" href="' \+ mediaUrl/);
+  // The shell authorizes the URL first, then the normal browser path navigates.
+  const openStart = source.indexOf('function openAttachmentInMiaBrowser(');
+  const openEnd = source.indexOf('function wireChatArtifactPreviews(', openStart);
+  const open = source.slice(openStart, openEnd);
+  assert.match(open, /miaDesktop\.browser\.prepareAttachment\(url\)/);
+  assert.match(open, /openWebBrowserTool\(\);\s*localBrowserNavigate\(result\.url\)/);
+  assert.doesNotMatch(open, /window\.open|location\.href|file:/);
+  const wire = source.slice(openEnd, source.indexOf('// opts.inThread:', openEnd));
+  assert.match(wire, /prepareAttachment === 'function' && window\.miaNativeBrowser\)\{\s*openAttachmentInMiaBrowser\(url\)/);
+  assert.match(wire, /Artifact previews are available in the Mia desktop app/);
+});

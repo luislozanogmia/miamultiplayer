@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { externalChatEnabled } = require('./chat-security');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
+const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
 const { normalizedGatewayUrl } = require('./hermes-web-search-config');
 const {
   EFFECTIVE_RELEASE_PROFILE,
@@ -29,6 +30,7 @@ const {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   FULL_AGENT_TOOLSETS,
   SEARCH_ONLY_TOOLSETS,
+  setHermesProfileModel,
 } = require('./hermes-bot-profile');
 
 const { configuredHermesLaunch } = require('./runtime-paths');
@@ -477,6 +479,21 @@ function hermesProcessEnv() {
 
 let hermesGatewayClient = null;
 
+// A profile pool can shadow an updated root key. Clear Mia-managed copies
+// only while no gateway is running, so cached state cannot write them back.
+// Hermes should ultimately persist borrowed state to the owning root store.
+function removeStaleProfileCredentials() {
+  const removed = removeProfileCopiesOfRootCredentials(process.env.HERMES_HOME);
+  if (removed.failures.length) {
+    // A profile known to contain a stale key must not outrank the root store.
+    // Keep auth-store paths out of logs and user-facing gateway errors.
+    throw new Error('Mia could not safely prepare stored provider credentials. Restart Mia and try again.');
+  }
+  if (removed.providers.length) {
+    console.log('[hermes-auth] removed profile copies of root keys:', removed.providers.join(', '));
+  }
+}
+
 function getHermesGatewayClient() {
   if (!hermesGatewayClient) {
     hermesGatewayClient = new HermesGatewayClient({
@@ -489,6 +506,7 @@ function getHermesGatewayClient() {
       toolsets: MIAOS_HERMES_TOOLSETS,
       maxTurns: MIAOS_AGENT_MAX_TURNS,
       onEvent: recordHermesGatewayEvent,
+      beforeSpawn: removeStaleProfileCredentials,
     });
   }
   return hermesGatewayClient;
@@ -744,6 +762,21 @@ function standaloneGatewayOptions(options = {}) {
   return gatewayOptions;
 }
 
+// The model a chat or automation turn pins becomes its profile's default, for
+// Hermes work that runs outside a turn (see setHermesProfileModel). Only a
+// model the caller chose counts, never the vision fallback. Never fails a turn.
+function rememberTurnModel(gatewayOptions, requested) {
+  if (!requested || !requested.provider || !requested.model || !String(process.env.HERMES_HOME || '').trim()) {
+    return gatewayOptions;
+  }
+  try {
+    setHermesProfileModel(gatewayOptions.profile, { provider: requested.provider, model: requested.model });
+  } catch (error) {
+    console.error('Mia could not record the Hermes profile model', error.message);
+  }
+  return gatewayOptions;
+}
+
 async function runStandaloneInferenceViaHermesGateway(
   prompt,
   options = {},
@@ -755,7 +788,7 @@ async function runStandaloneInferenceViaHermesGateway(
     seedMessages: Array.isArray(options.seedMessages) ? options.seedMessages : [],
     title: options.botWorker === true ? 'Mia bot task' : 'Mia assistant task',
     message: String(prompt || ''),
-    options: standaloneGatewayOptions(options),
+    options: rememberTurnModel(standaloneGatewayOptions(options), options),
     imagePaths,
     onEvent: typeof options.onEvent === 'function' ? options.onEvent : null,
     signal: options.signal || null,
@@ -803,7 +836,7 @@ async function runInferenceViaHermesGateway({
     seedMessages,
     title,
     message,
-    options: persistentSessionOptions(options),
+    options: rememberTurnModel(persistentSessionOptions(options), options),
     imagePaths: imagePathsFromOptions(options),
     onEvent,
     onSession,
@@ -890,6 +923,7 @@ module.exports = {
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
   startHermesGatewayRuntime,
+  removeStaleProfileCredentials,
   closeHermesGatewayRuntime,
   closeHermesGatewaySessions,
   deleteHermesGatewaySessions,

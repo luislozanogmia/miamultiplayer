@@ -74,9 +74,29 @@ async function freePort() {
   });
 }
 
-async function startServer(data, t) {
+// The fake Hermes is already listening on gatewayPort, so the server's first
+// gateway connection lands and no other test can take the port meanwhile.
+// freePort() closes its probe before the server binds, so another test
+// file (or any outgoing socket) can take the port in between. The server
+// then dies with EADDRINUSE; start it again on a fresh port.
+async function startServer(...args) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await startServerOnce(...args);
+    } catch (error) {
+      if (attempt >= 5 || !String(error && error.message).includes('EADDRINUSE')) throw error;
+    }
+  }
+}
+
+// /healthz can answer from another test's server that holds the port; only
+// this child's own listening line proves the answer came from it.
+function listeningOn(origin, logs) {
+  return logs.join('').includes(`listening on port ${new URL(origin).port}\n`);
+}
+
+async function startServerOnce(data, t, gatewayPort) {
   const port = await freePort();
-  const gatewayPort = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   const logs = [];
   const child = spawn(process.execPath, ['server.js'], {
@@ -119,7 +139,7 @@ async function startServer(data, t) {
     if (child.exitCode !== null) throw new Error(`server exited early: ${logs.join('')}`);
     try {
       const response = await fetch(`${origin}/healthz`);
-      if (response.ok) return server;
+      if (response.ok && listeningOn(origin, logs)) return server;
     } catch (_) { /* server is starting */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -139,6 +159,9 @@ function request(server, session, url, options = {}) {
       Origin: server.origin,
       Cookie: `miaos_sid=${session}`,
       'Content-Type': 'application/json',
+      // A fresh socket per request: a reused keep-alive socket that the
+      // just-spawned server has already dropped fails with ECONNRESET.
+      Connection: 'close',
       ...(options.headers || {}),
     },
   });
@@ -163,7 +186,7 @@ function decodeClientFrames(state, chunk, onText) {
   }
 }
 
-async function startFakeHermes(port, script) {
+async function startFakeHermes(script) {
   const calls = [];
   const sockets = new Set();
   const server = http.createServer((req, res) => { res.statusCode = 503; res.end('{}'); });
@@ -188,9 +211,10 @@ async function startFakeHermes(port, script) {
       }
     }));
   });
-  server.listen(port, '127.0.0.1');
+  server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   return {
+    port: server.address().port,
     calls,
     close() { for (const socket of sockets) socket.destroy(); server.close(); },
   };
@@ -198,12 +222,19 @@ async function startFakeHermes(port, script) {
 
 async function waitFor(check, label, timeoutMs = 8000) {
   const deadline = Date.now() + timeoutMs;
+  let lastError = null;
   while (Date.now() < deadline) {
-    const value = await check();
+    let value = null;
+    try {
+      value = await check();
+    } catch (error) {
+      // A poll can hit the server mid-restart; only the deadline decides.
+      lastError = error;
+    }
     if (value) return value;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`timed out waiting for ${label}`);
+  throw new Error(`timed out waiting for ${label}${lastError ? ` (last error: ${lastError.message})` : ''}`);
 }
 
 test('/goal runs as a Hermes command and its continuation turns land in Mia\'s chat', async (t) => {
@@ -237,10 +268,9 @@ test('/goal runs as a Hermes command and its continuation turns land in Mia\'s c
     }
     return {};
   };
-  const server = await startServer(data, t);
-  const gatewayPort = Number(new URL(server.gatewayUrl).port);
-  const hermes = await startFakeHermes(gatewayPort, script);
+  const hermes = await startFakeHermes(script);
   t.after(() => hermes.close());
+  const server = await startServer(data, t, hermes.port);
 
   const created = await request(server, data.aliceSession, '/api/conversations', {
     method: 'POST',
@@ -294,13 +324,13 @@ test('/goal runs as a Hermes command and its continuation turns land in Mia\'s c
 
 test('/compact compresses Mia\'s session and posts what Hermes reports', async (t) => {
   const data = fixture(t);
-  const server = await startServer(data, t);
-  const hermes = await startFakeHermes(Number(new URL(server.gatewayUrl).port), (request) => {
+  const hermes = await startFakeHermes((request) => {
     if (request.method === 'session.create') return { session_id: 'live-mia', stored_session_id: 'stored-mia' };
     if (request.method === 'command.dispatch') return { type: 'exec', output: 'Compressed 42 messages into a summary (18k → 3k tokens).' };
     return {};
   });
   t.after(() => hermes.close());
+  const server = await startServer(data, t, hermes.port);
   const created = await request(server, data.aliceSession, '/api/conversations', {
     method: 'POST',
     body: JSON.stringify({ type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' } }),
@@ -368,8 +398,8 @@ test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (
     }
     return {};
   };
-  const server = await startServer(data, t);
-  const hermes = await startFakeHermes(Number(new URL(server.gatewayUrl).port), script);
+  const hermes = await startFakeHermes(script);
+  const server = await startServer(data, t, hermes.port);
   t.after(() => hermes.close());
   const headers = { 'x-miaos-workspace': 'solo' };
 
@@ -382,8 +412,10 @@ test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (
   const bot = (await created.json()).bot;
   const chat = botConversation(data.dbPath, bot.id);
   assert.ok(chat, 'bot chat provisioned');
-  const workspace = path.join(data.artifacts, `bot-${crypto.createHash('sha256').update(bot.id).digest('hex').slice(0, 32)}`);
+  const workspace = path.join(data.artifacts, 'Research Reports');
   fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(workspace, '.miaos-artifact-scope.json'),
+    JSON.stringify({ kind: 'miaos-bot-artifact-workspace', botId: bot.id }), { mode: 0o600 });
   const pdf = Buffer.from('%PDF-1.4\n% revised report\n');
   fs.writeFileSync(path.join(workspace, 'report.pdf'), pdf);
   reportArtifact = {

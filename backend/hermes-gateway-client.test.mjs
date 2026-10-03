@@ -6,7 +6,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { HermesGatewayClient } = require('./hermes-gateway-client.js');
+const { HermesGatewayClient, waitForRecordedGatewayExit } = require('./hermes-gateway-client.js');
 
 test('a fresh session waits for constructor normalization before pinning and submitting its selected model', async () => {
   const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
@@ -448,6 +448,7 @@ test('bootstraps one local gateway and terminates the process it owns on close',
     tokenFile: path.join(directory, 'gateway.token'),
     probePortImpl: async () => false,
     stopExternalGatewayImpl: async () => { lifecycle.push('external-stopped'); },
+    beforeSpawn: () => { lifecycle.push('stale-credentials-removed'); },
     spawnImpl: (binary, args, options) => {
       lifecycle.push('desktop-started');
       spawns.push({ binary, args, options });
@@ -460,7 +461,8 @@ test('bootstraps one local gateway and terminates the process it owns on close',
   assert.equal(spawns[0].options.detached, false);
   assert.equal(spawns[0].options.stdio, 'ignore');
   assert.equal(spawns[0].options.env.HERMES_DESKTOP, '1');
-  assert.deepEqual(lifecycle, ['external-stopped', 'desktop-started']);
+  // Stale profile credentials are cleared only once no Hermes is running.
+  assert.deepEqual(lifecycle, ['external-stopped', 'stale-credentials-removed', 'desktop-started']);
   assert.equal(unrefCalls, 0);
   assert.equal(client.child, child);
 
@@ -498,17 +500,22 @@ test('an argv launch vector spawns the interpreter with its prefix arguments', a
 
 test('reuses an already-running local gateway instead of spawning a second one', async () => {
   let spawnCalls = 0;
+  let cleanupCalls = 0;
   const client = new HermesGatewayClient({
     WebSocketImpl: class FakeWebSocket {},
     env: {},
     token: 'existing-token',
     tokenFile: '',
     probePortImpl: async () => true,
+    // A live gateway keeps its cached credential pool and could write it back,
+    // so stores are never cleaned underneath it.
+    beforeSpawn: () => { cleanupCalls += 1; },
     spawnImpl: () => { spawnCalls += 1; throw new Error('must not spawn'); },
   });
 
   await client.ensureGateway();
   assert.equal(spawnCalls, 0);
+  assert.equal(cleanupCalls, 0);
   assert.match(client.endpoint(), /token=existing-token/);
 });
 
@@ -928,3 +935,88 @@ test('a message Hermes folds into the streaming goal turn keeps the text streame
   assert.equal(seen.some((event) => event.kind === 'turn.complete'), false, 'it is not also posted as a goal reply');
 });
 
+
+test('a previous gateway still draining after the stop skips the key cleanup', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-draining-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const lifecycle = [];
+  const client = new HermesGatewayClient({
+    binary: process.execPath,
+    WebSocketImpl: class FakeWebSocket {},
+    env: {},
+    tokenFile: path.join(directory, 'gateway.token'),
+    probePortImpl: async () => false,
+    stopExternalGatewayImpl: async () => { lifecycle.push('external-stopped'); return true; },
+    waitForGatewayExitImpl: async () => { lifecycle.push('still-running'); return false; },
+    beforeSpawn: () => { lifecycle.push('stale-credentials-removed'); },
+    spawnImpl: () => {
+      lifecycle.push('desktop-started');
+      return { unref: () => {}, once: () => {}, kill: () => {} };
+    },
+  });
+  await client.ensureGateway();
+  assert.deepEqual(lifecycle, ['external-stopped', 'still-running', 'desktop-started']);
+  client.close();
+});
+
+test('waits for the gateway recorded in gateway.pid to exit', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-pid-'));
+  const { spawn } = await import('node:child_process');
+  const survivor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => {
+    try { survivor.kill('SIGKILL'); } catch (_) { /* already gone */ }
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const env = { HERMES_HOME: home };
+  assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 50, pollMs: 10 }), true, 'no pid file');
+
+  fs.writeFileSync(path.join(home, 'gateway.pid'), JSON.stringify({ pid: survivor.pid }));
+  assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 200, pollMs: 20 }), false, 'still running');
+
+  setTimeout(() => survivor.kill('SIGKILL'), 50);
+  assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 3000, pollMs: 20 }), true, 'exits in time');
+
+  fs.writeFileSync(path.join(home, 'gateway.pid'), String(survivor.pid));
+  assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 50, pollMs: 10 }), true, 'bare pid, dead');
+});
+
+test('a gateway recorded only in gateway_state.json or gateway.lock still blocks cleanup', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-records-'));
+  const { spawn } = await import('node:child_process');
+  const survivor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => {
+    try { survivor.kill('SIGKILL'); } catch (_) { /* already gone */ }
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const env = { HERMES_HOME: home };
+  const wait = () => waitForRecordedGatewayExit(env, { timeoutMs: 100, pollMs: 20 });
+  const state = path.join(home, 'gateway_state.json');
+  const lock = path.join(home, 'gateway.lock');
+
+  // Launch-service gateway: no gateway.pid, only a live runtime record.
+  fs.writeFileSync(state, JSON.stringify({ pid: survivor.pid, gateway_state: 'running' }));
+  assert.equal(await wait(), false, 'live gateway in gateway_state.json');
+  fs.writeFileSync(state, JSON.stringify({ pid: survivor.pid, gateway_state: 'stopped' }));
+  assert.equal(await wait(), true, 'a stopped runtime record is not a live gateway');
+  fs.rmSync(state);
+
+  fs.writeFileSync(lock, JSON.stringify({ pid: survivor.pid }));
+  assert.equal(await wait(), false, 'live gateway in gateway.lock');
+  fs.rmSync(lock);
+  assert.equal(await wait(), true, 'no records at all is a cold start');
+});
+
+test('an unreadable gateway record is treated as a possibly running gateway', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-malformed-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const env = { HERMES_HOME: home };
+  const wait = () => waitForRecordedGatewayExit(env, { timeoutMs: 50, pollMs: 10 });
+  for (const name of ['gateway.pid', 'gateway.lock', 'gateway_state.json']) {
+    fs.writeFileSync(path.join(home, name), '{not json');
+    assert.equal(await wait(), false, `malformed ${name}`);
+    fs.writeFileSync(path.join(home, name), JSON.stringify({ gateway_state: 'running' }));
+    assert.equal(await wait(), false, `${name} without a pid`);
+    fs.rmSync(path.join(home, name));
+  }
+  assert.equal(await wait(), true);
+});
