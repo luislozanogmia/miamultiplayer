@@ -108,6 +108,64 @@ function turnAbortError() {
   return error;
 }
 
+// Hermes' `gateway stop` reports success after waiting ten seconds even if
+// the gateway it signalled is still draining. Hermes records a running
+// gateway in gateway.pid, gateway.lock, or (for a launch-service gateway)
+// only gateway_state.json. Resolves true once no live gateway is recorded in
+// any of them, false while one still runs at timeout or when a record exists
+// but cannot be read, since then nothing proves the gateway is gone.
+const GATEWAY_RECORD_FILES = ['gateway.pid', 'gateway.lock', 'gateway_state.json'];
+const INACTIVE_GATEWAY_STATES = new Set(['stopped', 'startup_failed']);
+
+function recordedGatewayPids(home) {
+  const pids = [];
+  for (const name of GATEWAY_RECORD_FILES) {
+    let text;
+    try {
+      text = fs.readFileSync(path.join(home, name), 'utf8').trim();
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      return null;
+    }
+    if (!text && name === 'gateway.lock') continue;
+    let record;
+    try {
+      record = /^\d+$/.test(text) ? { pid: text } : JSON.parse(text);
+    } catch (_) {
+      return null;
+    }
+    if (!record || typeof record !== 'object') return null;
+    if (name === 'gateway_state.json'
+      && (!record.gateway_state || INACTIVE_GATEWAY_STATES.has(record.gateway_state))) continue;
+    const pid = Number.parseInt(record.pid, 10);
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    if (pid !== process.pid && !pids.includes(pid)) pids.push(pid);
+  }
+  return pids;
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+async function waitForRecordedGatewayExit(env, { timeoutMs = 10000, pollMs = 250 } = {}) {
+  const home = String((env && env.HERMES_HOME) || '').trim();
+  if (!home) return true;
+  const pids = recordedGatewayPids(home);
+  if (pids === null) return false;
+  const deadline = Date.now() + timeoutMs;
+  while (pids.some(processAlive)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return true;
+}
+
 function stopExternalHermesGateway(launch, env) {
   return new Promise((resolve, reject) => {
     execFile(launch.command, [...launch.prefixArgs, 'gateway', 'stop'], {
@@ -142,6 +200,8 @@ class HermesGatewayClient {
     onEvent = null,
     onSessionEvent = null,
     stopExternalGatewayImpl = stopExternalHermesGateway,
+    beforeSpawn = null,
+    waitForGatewayExitImpl = waitForRecordedGatewayExit,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
     this.binary = String(binary || '').trim();
@@ -170,6 +230,8 @@ class HermesGatewayClient {
     this.onEvent = typeof onEvent === 'function' ? onEvent : null;
     this.onSessionEvent = typeof onSessionEvent === 'function' ? onSessionEvent : null;
     this.stopExternalGatewayImpl = stopExternalGatewayImpl;
+    this.beforeSpawn = typeof beforeSpawn === 'function' ? beforeSpawn : null;
+    this.waitForGatewayExitImpl = waitForGatewayExitImpl;
     this.toolProgressMode = String(this.env.HERMES_TUI_TOOL_PROGRESS || '').trim().toLowerCase() === 'verbose'
       ? 'verbose'
       : 'all';
@@ -233,6 +295,17 @@ class HermesGatewayClient {
 
       if (typeof this.stopExternalGatewayImpl === 'function') {
         await this.stopExternalGatewayImpl(this.launch, this.env);
+      }
+      // Stores are changed only once no Hermes is running for this home, so
+      // no live process can write its cached copy back over them. A reused,
+      // already-listening gateway never reaches this point, and an old one
+      // still draining after the stop skips the cleanup for this launch.
+      if (this.beforeSpawn) {
+        if (await this.waitForGatewayExitImpl(this.env)) {
+          await this.beforeSpawn();
+        } else {
+          console.warn('[hermes-auth] previous Hermes gateway may still be running; skipped profile key cleanup');
+        }
       }
 
       const gatewayEnv = { ...this.env };
@@ -996,6 +1069,7 @@ class HermesGatewayClient {
 }
 
 module.exports = {
+  waitForRecordedGatewayExit,
   HermesGatewayClient,
   DEFAULT_PORT,
 };

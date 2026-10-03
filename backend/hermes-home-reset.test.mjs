@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
   listHermesCredentialProviders,
+  removeProfileCopiesOfRootCredentials,
   removeProviderProfileCredentials,
   resetHermesHome,
 } = require('./hermes-home-reset.js');
@@ -125,6 +126,41 @@ test('re-keying a provider strips its stale credential from every profile pool o
     assert.deepEqual(removeProviderProfileCredentials(root, 'kimi').cleaned, []);
     assert.deepEqual(removeProviderProfileCredentials('', 'deepseek').cleaned, []);
     assert.deepEqual(removeProviderProfileCredentials(path.join(root, 'missing'), 'deepseek').cleaned, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('profile copies of root keys are removed; profile-only logins stay', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-root-copies-'));
+  try {
+    const write = (rel, value) => {
+      const file = path.join(root, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(value));
+      return file;
+    };
+    write('auth.json', { credential_pool: { openrouter: [{ id: 'live' }], deepseek: [{ id: 'd' }], empty: [] } });
+    const agent = write('profiles/miaos-agent-runtime/auth.json', {
+      credential_pool: { openrouter: [{ id: 'dead', last_status: 'exhausted' }], copilot: [{ id: 'gh' }] },
+    });
+    const bot = write('profiles/miaos-bot-worker/auth.json', { credential_pool: { openrouter: [{ id: 'dead' }] } });
+    write('profiles/untouched/auth.json', { credential_pool: { empty: [{ id: 'own' }] } });
+
+    const result = removeProfileCopiesOfRootCredentials(root);
+    assert.deepEqual(result.failures, []);
+    assert.deepEqual(result.providers, ['openrouter']);
+    assert.deepEqual(result.cleaned.sort(), [agent, bot].sort());
+    assert.deepEqual(JSON.parse(fs.readFileSync(agent, 'utf8')).credential_pool, { copilot: [{ id: 'gh' }] });
+    assert.deepEqual(JSON.parse(fs.readFileSync(bot, 'utf8')).credential_pool, {});
+    // A provider the root lists with no keys is not a root key to protect.
+    assert.match(fs.readFileSync(path.join(root, 'profiles/untouched/auth.json'), 'utf8'), /own/);
+    // The root store is the source of truth and is never changed.
+    assert.match(fs.readFileSync(path.join(root, 'auth.json'), 'utf8'), /live/);
+
+    assert.deepEqual(removeProfileCopiesOfRootCredentials(root).cleaned, []);
+    assert.deepEqual(removeProfileCopiesOfRootCredentials('').cleaned, []);
+    assert.deepEqual(removeProfileCopiesOfRootCredentials(path.join(root, 'missing')).cleaned, []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

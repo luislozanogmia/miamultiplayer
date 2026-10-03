@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { externalChatEnabled } = require('./chat-security');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
+const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
 const { normalizedGatewayUrl } = require('./hermes-web-search-config');
 const {
   EFFECTIVE_RELEASE_PROFILE,
@@ -29,6 +30,7 @@ const {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   FULL_AGENT_TOOLSETS,
   SEARCH_ONLY_TOOLSETS,
+  setHermesProfileModel,
 } = require('./hermes-bot-profile');
 
 const { configuredHermesLaunch } = require('./runtime-paths');
@@ -477,6 +479,16 @@ function hermesProcessEnv() {
 
 let hermesGatewayClient = null;
 
+// Hermes copies a root key into a profile when it records that key's status,
+// and the copy then outranks the root. Clear those copies only while no
+// gateway is running, so none can write its cached pool back afterwards.
+function removeStaleProfileCredentials() {
+  const removed = removeProfileCopiesOfRootCredentials(process.env.HERMES_HOME);
+  if (removed.providers.length) {
+    console.log('[hermes-auth] removed profile copies of root keys:', removed.providers.join(', '));
+  }
+}
+
 function getHermesGatewayClient() {
   if (!hermesGatewayClient) {
     hermesGatewayClient = new HermesGatewayClient({
@@ -489,6 +501,7 @@ function getHermesGatewayClient() {
       toolsets: MIAOS_HERMES_TOOLSETS,
       maxTurns: MIAOS_AGENT_MAX_TURNS,
       onEvent: recordHermesGatewayEvent,
+      beforeSpawn: removeStaleProfileCredentials,
     });
   }
   return hermesGatewayClient;
@@ -744,6 +757,21 @@ function standaloneGatewayOptions(options = {}) {
   return gatewayOptions;
 }
 
+// The model a chat or automation turn pins becomes its profile's default, for
+// Hermes work that runs outside a turn (see setHermesProfileModel). Only a
+// model the caller chose counts, never the vision fallback. Never fails a turn.
+function rememberTurnModel(gatewayOptions, requested) {
+  if (!requested || !requested.provider || !requested.model || !String(process.env.HERMES_HOME || '').trim()) {
+    return gatewayOptions;
+  }
+  try {
+    setHermesProfileModel(gatewayOptions.profile, { provider: requested.provider, model: requested.model });
+  } catch (error) {
+    console.error('Mia could not record the Hermes profile model', error.message);
+  }
+  return gatewayOptions;
+}
+
 async function runStandaloneInferenceViaHermesGateway(
   prompt,
   options = {},
@@ -755,7 +783,7 @@ async function runStandaloneInferenceViaHermesGateway(
     seedMessages: Array.isArray(options.seedMessages) ? options.seedMessages : [],
     title: options.botWorker === true ? 'Mia bot task' : 'Mia assistant task',
     message: String(prompt || ''),
-    options: standaloneGatewayOptions(options),
+    options: rememberTurnModel(standaloneGatewayOptions(options), options),
     imagePaths,
     onEvent: typeof options.onEvent === 'function' ? options.onEvent : null,
     signal: options.signal || null,
@@ -803,7 +831,7 @@ async function runInferenceViaHermesGateway({
     seedMessages,
     title,
     message,
-    options: persistentSessionOptions(options),
+    options: rememberTurnModel(persistentSessionOptions(options), options),
     imagePaths: imagePathsFromOptions(options),
     onEvent,
     onSession,

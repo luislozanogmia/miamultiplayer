@@ -16,6 +16,7 @@ const {
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   GHOST_FIRST_PLUGIN,
   provisionHermesRuntimeProfiles,
+  setHermesProfileModel,
 } = require('./hermes-bot-profile');
 
 test('Claude DirectSDK is provisioned unchanged for agent, Google-agent, and bot profiles', () => {
@@ -410,4 +411,46 @@ print(json.dumps(out))
     assert.equal(result, null, `ghost-cli ${label} is a real attempt`);
   }
   assert.equal(failed, null, 'a ghost-cli run that failed still unlocks the fallback');
+});
+
+test('the latest turn model becomes the profile default and survives re-provisioning', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-profile-model-'));
+  const profilesRoot = path.join(root, 'profiles');
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot });
+    const agentConfig = path.join(profilesRoot, MIAOS_AGENT_HERMES_PROFILE, 'config.yaml');
+    const botConfig = path.join(profilesRoot, MIAOS_BOT_HERMES_PROFILE, 'config.yaml');
+    // No turn yet: no guessed default.
+    assert.doesNotMatch(fs.readFileSync(agentConfig, 'utf8'), /^model:/m);
+
+    assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE,
+      { provider: 'openai-codex', model: 'gpt-5.6-luna' }, { profilesRoot }), true);
+    let config = fs.readFileSync(agentConfig, 'utf8');
+    assert.match(config, /^# Managed by Mia[^\n]*\nmodel:\n  default: "gpt-5\.6-luna"\n  provider: "openai-codex"\ntoolsets:/);
+    // Only the turn's own profile changes.
+    assert.doesNotMatch(fs.readFileSync(botConfig, 'utf8'), /^model:/m);
+    // The same model again is a no-op; a new pick replaces the block.
+    assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE,
+      { provider: 'openai-codex', model: 'gpt-5.6-luna' }, { profilesRoot }), false);
+    assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE,
+      { provider: 'deepseek', model: 'deepseek-flash' }, { profilesRoot }), true);
+    config = fs.readFileSync(agentConfig, 'utf8');
+    assert.equal(config.match(/^model:/gm).length, 1);
+    assert.match(config, /default: "deepseek-flash"\n  provider: "deepseek"/);
+
+    // Boot-time provisioning keeps the recorded model.
+    provisionHermesRuntimeProfiles({ profilesRoot });
+    assert.match(fs.readFileSync(agentConfig, 'utf8'), /default: "deepseek-flash"\n  provider: "deepseek"/);
+
+    // Incomplete or unsafe selections and unmanaged configs are ignored.
+    assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE, { model: 'x' }, { profilesRoot }), false);
+    assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE,
+      { provider: 'deepseek', model: 'a\nmodel: evil' }, { profilesRoot }), false);
+    assert.equal(setHermesProfileModel('../escape', { provider: 'p', model: 'm' }, { profilesRoot }), false);
+    fs.writeFileSync(botConfig, 'model: mine\n');
+    assert.equal(setHermesProfileModel(MIAOS_BOT_HERMES_PROFILE, { provider: 'p', model: 'm' }, { profilesRoot }), false);
+    assert.equal(fs.readFileSync(botConfig, 'utf8'), 'model: mine\n');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

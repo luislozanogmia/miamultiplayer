@@ -100,6 +100,127 @@ function runHermes(args) {
   });
 }
 
+const WINDOWS_RESERVED_NAMES = new Set([
+  'con', 'prn', 'aux', 'nul',
+  ...Array.from({ length: 9 }, (_, i) => `com${i + 1}`),
+  ...Array.from({ length: 9 }, (_, i) => `lpt${i + 1}`),
+]);
+const LEGACY_ARTIFACT_ROOT = String(process.env.MIAOS_LEGACY_AUTOMATION_ARTIFACT_DIR || '').trim()
+  ? path.resolve(process.env.MIAOS_LEGACY_AUTOMATION_ARTIFACT_DIR)
+  : '';
+const artifactWorkspaceCache = new Map();
+
+// A readable, filesystem-safe folder name derived from the bot's name.
+function botFolderBaseName(bot) {
+  let name = String(bot && bot.name || '').normalize('NFKC')
+    .replace(/[^\p{L}\p{N} _-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[.\- ]+|[.\- ]+$/g, '')
+    .slice(0, 48)
+    .trim();
+  if (!name) name = 'bot';
+  if (WINDOWS_RESERVED_NAMES.has(name.toLowerCase())) name = `${name}-bot`;
+  return name;
+}
+
+// Returns the marker's bot id, or null when there is no valid marker.
+function readArtifactMarker(workspace) {
+  const markerPath = path.join(workspace, ARTIFACT_MARKER);
+  try {
+    const markerStat = fs.lstatSync(markerPath);
+    if (markerStat.isSymbolicLink() || !markerStat.isFile()) {
+      throw new Error('bot artifact workspace marker must be a real file');
+    }
+    const stored = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+    return stored && stored.kind === 'miaos-bot-artifact-workspace' ? String(stored.botId || '') : null;
+  } catch (error) {
+    if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+function isRealDirectory(target) {
+  try {
+    const stat = fs.lstatSync(target);
+    return !stat.isSymbolicLink() && stat.isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
+// True when anything at all occupies the path, including a symlink whose
+// target is gone (existsSync follows links and would call that free).
+function pathOccupied(target) {
+  try {
+    fs.lstatSync(target);
+    return true;
+  } catch (error) {
+    return error.code !== 'ENOENT';
+  }
+}
+
+// Move a bot's files out of the old hidden bot-artifacts/bot-<hash> folder.
+// Symlinks and entries that already exist at the destination are left behind;
+// the old folder is removed once nothing but its scope marker remains.
+function migrateLegacyArtifacts(botId, workspace) {
+  if (!LEGACY_ARTIFACT_ROOT) return;
+  const key = crypto.createHash('sha256').update(botId).digest('hex').slice(0, 32);
+  const legacy = path.join(LEGACY_ARTIFACT_ROOT, `bot-${key}`);
+  if (!isRealDirectory(legacy)) return;
+  try {
+    if (readArtifactMarker(legacy) !== botId) return;
+  } catch (_) {
+    return;
+  }
+  let leftover = 0;
+  for (const entry of fs.readdirSync(legacy)) {
+    if (entry === ARTIFACT_MARKER) continue;
+    const from = path.join(legacy, entry);
+    const to = path.join(workspace, entry);
+    if (fs.lstatSync(from).isSymbolicLink() || pathOccupied(to)) { leftover += 1; continue; }
+    try {
+      fs.renameSync(from, to);
+    } catch (error) {
+      if (error.code !== 'EXDEV') { leftover += 1; continue; }
+      try {
+        fs.cpSync(from, to, { recursive: true, errorOnExist: true, force: false });
+        fs.rmSync(from, { recursive: true, force: true });
+      } catch (_) { leftover += 1; }
+    }
+  }
+  if (leftover === 0) fs.rmSync(legacy, { recursive: true, force: true });
+}
+
+function findBotWorkspace(botId) {
+  for (const entry of fs.readdirSync(ARTIFACT_ROOT)) {
+    const candidate = path.join(ARTIFACT_ROOT, entry);
+    if (!isRealDirectory(candidate)) continue;
+    let owner = null;
+    try { owner = readArtifactMarker(candidate); } catch (_) { continue; }
+    if (owner === botId) return candidate;
+  }
+  return '';
+}
+
+function createBotWorkspace(bot) {
+  const base = botFolderBaseName(bot);
+  for (let index = 1; index < 10000; index += 1) {
+    const workspace = path.join(ARTIFACT_ROOT, index === 1 ? base : `${base}-${index}`);
+    try {
+      fs.mkdirSync(workspace, { mode: 0o700 });
+    } catch (error) {
+      if (error.code === 'EEXIST') continue;
+      throw error;
+    }
+    return workspace;
+  }
+  throw new Error('no free bot artifact folder name');
+}
+
+// Bot files live in <Mia folder>/bots/<bot name>. A folder is bound to its bot
+// by the scope marker, so renaming a bot keeps its existing folder (and its
+// cron job path), and two bots with the same name get "name" and "name-2".
 function artifactWorkspaceForBot(bot) {
   const botId = String(bot && bot.id || '').trim();
   if (!botId) throw new Error('bot id is required for its artifact workspace');
@@ -109,16 +230,19 @@ function artifactWorkspaceForBot(bot) {
     throw new Error('bot artifact root must be a real directory');
   }
   fs.chmodSync(ARTIFACT_ROOT, 0o700);
-  const key = crypto.createHash('sha256').update(botId).digest('hex').slice(0, 32);
-  const workspace = path.join(ARTIFACT_ROOT, `bot-${key}`);
-  try {
-    const existing = fs.lstatSync(workspace);
-    if (existing.isSymbolicLink() || !existing.isDirectory()) {
-      throw new Error('bot artifact workspace must be a real directory');
-    }
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    fs.mkdirSync(workspace, { mode: 0o700 });
+
+  let workspace = artifactWorkspaceCache.get(botId);
+  if (workspace) {
+    const owner = isRealDirectory(workspace) ? readArtifactMarker(workspace) : null;
+    if (owner !== botId) workspace = '';
+  }
+  if (!workspace) workspace = findBotWorkspace(botId);
+  if (!workspace) workspace = createBotWorkspace(bot);
+  artifactWorkspaceCache.set(botId, workspace);
+
+  const existing = fs.lstatSync(workspace);
+  if (existing.isSymbolicLink() || !existing.isDirectory()) {
+    throw new Error('bot artifact workspace must be a real directory');
   }
   fs.chmodSync(workspace, 0o700);
   const markerPath = path.join(workspace, ARTIFACT_MARKER);
@@ -137,6 +261,7 @@ function artifactWorkspaceForBot(bot) {
     }
   }
   fs.chmodSync(markerPath, 0o600);
+  migrateLegacyArtifacts(botId, workspace);
   return workspace;
 }
 
