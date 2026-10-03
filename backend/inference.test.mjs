@@ -1,10 +1,33 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import inference from './inference.js';
 import hermesGatewayClientModule from './hermes-gateway-client.js';
 
 const { HermesGatewayClient } = hermesGatewayClientModule;
+
+test('gateway boot refuses a stale key in an unsafe profile auth store', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-unsafe-boot-auth-'));
+  const previousHome = process.env.HERMES_HOME;
+  try {
+    process.env.HERMES_HOME = root;
+    fs.writeFileSync(path.join(root, 'auth.json'), JSON.stringify({ credential_pool: { openrouter: [{ id: 'root' }] } }));
+    const profile = path.join(root, 'profiles', 'miaos-agent-runtime');
+    fs.mkdirSync(profile, { recursive: true });
+    fs.writeFileSync(path.join(profile, 'config.yaml'), '# Managed by Mia. Runtime permissions are app-owned.');
+    const outside = path.join(root, 'independent-auth.json');
+    fs.writeFileSync(outside, JSON.stringify({ credential_pool: { openrouter: [{ id: 'independent' }] } }));
+    fs.symlinkSync(outside, path.join(profile, 'auth.json'));
+    assert.throws(() => inference.removeStaleProfileCredentials(), /could not safely prepare stored provider credentials/);
+    assert.equal(JSON.parse(fs.readFileSync(outside, 'utf8')).credential_pool.openrouter[0].id, 'independent');
+  } finally {
+    if (previousHome === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = previousHome;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('Hermes subprocess environment is a strict allowlist', () => {
   const original = { ...process.env };

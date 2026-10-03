@@ -5,6 +5,7 @@ const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const { WebContentsView, app, session, ipcMain, Menu, nativeTheme, dialog, shell, systemPreferences } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
+const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
 const MAX_PROTOCOL_SELECTOR = 2000;
@@ -121,6 +122,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // sign in once and remain signed in across app restarts. This does not share
   // or import Chrome/Safari cookies; Clear Browser Data and clean slate erase it.
   const profile = session.fromPartition(BROWSER_PARTITION, { cache: true });
+  const attachmentAccess = createAttachmentPreviewAccess(profile, trustedOrigin);
   // Google's OAuth endpoints (and some other identity providers) reject
   // sessions that reveal an embedded framework — "Sign in with Google"
   // fails with "this browser or app may not be secure". Present the reduced
@@ -129,7 +131,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // (mia-multiplayer-macos) in dev (see browser-identity.cjs).
   const appName = app && typeof app.getName === "function" ? app.getName() : "Mia";
   profile.setUserAgent(sanitizeUserAgent(profile.getUserAgent(), appName));
-  installClientHints(profile);
+  installClientHints(profile, attachmentAccess.requestHeaders);
   // Favicons republished to the toolbar as data: URIs (see
   // page-favicon-updated) stay small enough for the per-tab state that
   // travels over IPC on every publish.
@@ -1631,7 +1633,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     persistTabs();
     publish();
   }
-  return { shortcut: runShortcut, protocol: protocolCommand, persist: persistTabs, prepareToClose: captureMediaState, clearData };
+  return {
+    shortcut: runShortcut, protocol: protocolCommand, persist: persistTabs,
+    prepareToClose: captureMediaState, clearData,
+    prepareAttachment: attachmentAccess.prepare,
+    clearLegacyAttachmentCookie: attachmentAccess.removeLegacyBrowserCookie,
+  };
 }
 
 module.exports = { BROWSER_PARTITION, createBrowser, normalizeTarget, normalizeLocalFileTarget };

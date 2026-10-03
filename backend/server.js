@@ -86,6 +86,7 @@ const {
   readProviderRootCredentials,
   removeProviderProfileCredentials,
   removeProviderRootCredentials,
+  requireCredentialCleanup,
   resetHermesHome,
 } = require('./hermes-home-reset');
 const {
@@ -96,6 +97,8 @@ const {
   visibleChatModelInventory,
   normalizeChatModelSelection,
   chatModelSelectionInferenceOptions,
+  managedRouterKeyMessage,
+  managedRouterErrorCode,
   userFacingModelDispatchError,
 } = require('./chat-model-selection');
 const { sanitizeChatReply } = require('./chat-security');
@@ -110,6 +113,7 @@ const googleWorkspaceContext = require('./google-workspace-context');
 const googleWorkspaceActions = require('./google-workspace-actions');
 const { createGoogleAccountConnector, createOwnerBoundGoogleAccount } = require('./google-account-connector');
 const { stripTaskOpeningNotice, humanTaskStatus, shouldPostTaskStatus } = require('./background-status');
+const { providerWaitStatus } = require('./provider-wait-status');
 const {
   buildAgentRevisionPrompt,
   buildAgentSetupPrompt,
@@ -133,6 +137,7 @@ const { createConversationService, canonicalBotConversationCandidates } = requir
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
+const { extractToolActivity } = require('./agent-activity');
 const { createConversationAttachmentStore } = require('./conversation-attachments');
 const { createConversationRouter } = require('./conversation-router');
 const { attachConversationWebSocketServer } = require('./conversation-websocket');
@@ -1778,6 +1783,34 @@ function removeDirectoryContents(dir, failures) {
   return removed;
 }
 
+// Bot files now live in the user's visible Mia folder, so a reset removes only
+// the per-bot folders Mia itself created (those carrying the artifact scope
+// marker), never anything else a person may have put under bots/.
+function removeMarkedBotWorkspaces(dir, failures) {
+  const root = String(dir || '').trim();
+  if (!root) return 0;
+  let entries = [];
+  try { entries = fs.readdirSync(root); } catch (error) {
+    if (error.code !== 'ENOENT') failures.push(`${root}: ${error.message}`);
+    return 0;
+  }
+  let removed = 0;
+  for (const name of entries) {
+    const target = path.join(root, name);
+    try {
+      const stat = fs.lstatSync(target);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+      const marker = fs.lstatSync(path.join(target, '.miaos-artifact-scope.json'));
+      if (marker.isSymbolicLink() || !marker.isFile()) continue;
+      fs.rmSync(target, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      if (error.code !== 'ENOENT') failures.push(`${target}: ${error.message}`);
+    }
+  }
+  return removed;
+}
+
 // Mia-side wipe for the everything scope: every table that holds user or
 // agent state, for every owner and workspace, plus the blob directories
 // behind them. The caller's own user row and session survive so the reset
@@ -1816,7 +1849,7 @@ function wipeMiaDataForEverything({ keepEmail, keepSessionToken }) {
   const directories = {
     attachments: removeDirectoryContents(NATIVE_ATTACHMENT_DIR, failures),
     workspaceArtifacts: removeDirectoryContents(WORKSPACE_ARTIFACT_DIR, failures),
-    automationArtifacts: removeDirectoryContents(process.env.MIAOS_AUTOMATION_ARTIFACT_DIR, failures),
+    automationArtifacts: removeMarkedBotWorkspaces(process.env.MIAOS_AUTOMATION_ARTIFACT_DIR, failures),
   };
   return { conversations, attachments, directories, failures };
 }
@@ -3176,6 +3209,7 @@ const MANAGED_ROUTER_ERROR_MESSAGES = {
   limit_reached: `This account has reached its ${MANAGED_ROUTER_LABEL} usage limit.`,
   unavailable: `${MANAGED_ROUTER_LABEL} couldn't be reached. Check your connection and try again.`,
   sign_in_required: `Sign in to Mia again to connect ${MANAGED_ROUTER_LABEL}.`,
+  replaced_elsewhere: managedRouterKeyMessage(MANAGED_ROUTER_LABEL),
   install_failed: `Mia got a ${MANAGED_ROUTER_LABEL} key but couldn't save it. Try again.`,
 };
 
@@ -3186,13 +3220,21 @@ function managedRouterErrorCodeForStatus(status) {
   return 'unavailable';
 }
 
+// Emails whose stored key died (replaced by a sign-in on another computer).
+// A later mint that fails for a sign-in reason keeps that explanation: the
+// fix is the same, and "didn't accept your sign-in" hides why it broke.
+const managedRouterReplacedEmails = new Set();
+
 function setManagedRouterError(email, code) {
+  if (code === 'replaced_elsewhere') managedRouterReplacedEmails.add(email);
+  code = managedRouterErrorCode(code, managedRouterReplacedEmails.has(email));
   managedRouterProvisionErrors.set(email, { code, message: MANAGED_ROUTER_ERROR_MESSAGES[code] });
   console.warn('[managed-router] provisioning failed for', email, code);
 }
 
 function clearManagedRouterError(email) {
   managedRouterProvisionErrors.delete(email);
+  managedRouterReplacedEmails.delete(email);
 }
 
 function managedRouterError(email) {
@@ -3292,14 +3334,20 @@ async function openRouterKeyIsLive(key) {
 // pool on shutdown, resurrecting exactly the dead keys being removed.
 async function installManagedRouterKey(key) {
   try { await stopHermesGatewayRuntime(); } catch (_) { /* not running */ }
-  removeProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
-  removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
-  await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
-  try { await startHermesGatewayRuntime(); } catch (_) { /* best effort */ }
+  try {
+    // Fail before changing the root key if a managed profile cannot be
+    // cleaned; otherwise its old key would keep shadowing the new one.
+    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER));
+    requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER));
+    await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
+  } finally {
+    try { await startHermesGatewayRuntime(); } catch (_) { /* best effort */ }
+  }
 }
 
 async function autoProvisionManagedRouter(email, clerkToken, { force = false } = {}) {
   if (managedRouterProvisionedEmails.has(email)) return;
+  let replacedElsewhere = false;
   try {
     // A mint rotates the user's key server-side (the endpoint cannot re-read
     // an existing key's secret), so never mint while a stored key still
@@ -3326,10 +3374,14 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
         return;
       }
       if (stored.length) console.log('[managed-router] stored key is dead for', email, '- re-provisioning');
+      // A key that existed and died was almost always replaced by a sign-in
+      // on another computer: one live key per user.
+      replacedElsewhere = stored.length > 0;
+      if (replacedElsewhere) managedRouterReplacedEmails.add(email);
     }
     const token = clerkToken || freshManagedRouterToken(email);
     if (!token) {
-      setManagedRouterError(email, 'sign_in_required');
+      setManagedRouterError(email, replacedElsewhere ? 'replaced_elsewhere' : 'sign_in_required');
       return;
     }
     const key = await provisionManagedRouterKey(email, token);
@@ -4480,12 +4532,16 @@ app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req
   }
   disconnectHermesAuth(req.userEmail, provider);
   try {
+    // Validate before Hermes persists the submitted key so malformed or
+    // externally linked profiles cannot leave a partial re-key behind.
+    requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
+    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
     await runHermesApiKeyAdd(provider, apiKey);
     // Re-keying must actually take effect: drop any stale copy of this
     // provider from the per-profile pools (the root store just written is
     // authoritative) and bounce the Mia-owned gateway so no live session
     // stays pinned to the credential it was built with.
-    removeProviderProfileCredentials(process.env.HERMES_HOME, provider);
+    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider));
     await restartHermesGatewayRuntime();
     hermesDisconnectedProviders.delete(provider);
     setHarnessProviderConnected(req.userEmail, provider, true);
@@ -6055,7 +6111,18 @@ function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstr
     globalInstructions
   );
   const onboardingGuide = 'For a new user, help them get one useful thing done. Ask one relevant question at a time. If they ask to be shown around, briefly explain chat, connected apps, bots, and automations, then offer a small first task. Do not require a biography or invent a name from an email address. Respect the preferred name confirmed in the conversation.';
-  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext()].filter(Boolean).join('\n\n');
+  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext(), miaosBotInstructionsPromptContext()].filter(Boolean).join('\n\n');
+}
+
+// Mia edits bots in the background through their files. Driving the bot
+// editor in the app instead takes over the screen while the user works.
+function miaosBotInstructionsPromptContext() {
+  if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly) return '';
+  return [
+    `Each bot's instructions are the AGENTS.md file in its folder under ${BOT_PACKAGE_DIR} (folders are named <bot-name>--<bot-id>).`,
+    'To change what a bot does, edit that AGENTS.md directly with your file tools. Mia uses the new text from the bot\'s next chat and scheduled run.',
+    'Do not open or click through Mia\'s bot editor or other app screens to do this. Leave bot.yaml and automations.yaml alone; Mia regenerates them.',
+  ].join('\n');
 }
 
 function miaosAgentWorkspacePromptContext() {
@@ -7044,8 +7111,52 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     hermesDeltaCoalescer.flush();
     flushPendingReasoningSummary(replyText);
   };
+  // A provider wait notice becomes the turn's live status line for everyone,
+  // not only in verbose mode: a silent model otherwise looks like Mia
+  // thinking. It reuses the "working" progress row shape, so the final reply
+  // supersedes it like any other status line.
+  let providerWaitShown = false;
+  const postProviderWaitStatus = (text) => {
+    const sequence = ++hermesProgressIndex;
+    hermesProgressSequence = hermesProgressSequence.then(() => createNativeDispatchReplyEvent(dispatch, trigger, {
+      type: replyEventType,
+      content: { text },
+      parentEventId,
+      clientIdempotencyKey: `native-dispatch-provider-wait-${dispatch.id}-${sequence}`,
+      metadata: {
+        runtime: 'hermes',
+        dispatchId: dispatch.id,
+        status: 'waiting-on-provider',
+        progress: true,
+        agentName: agent.name,
+      },
+    })).catch(() => {});
+  };
   const postHermesProgress = (type, payload) => {
     if (trackBudget) trackBudget(type, payload);
+    if (type === 'thinking.delta') {
+      const wait = providerWaitStatus(payload && payload.text);
+      if (wait && wait.kind === 'cleared') {
+        if (providerWaitShown) {
+          providerWaitShown = false;
+          postProviderWaitStatus('The model is answering again.');
+        }
+      } else if (wait) {
+        providerWaitShown = true;
+        postProviderWaitStatus(wait.text);
+        return;
+      }
+    }
+    // Live status panel: an ephemeral, paths-only signal, independent of the
+    // verbose-diagnostics setting. Never persisted, never part of the transcript.
+    const toolActivity = extractToolActivity(type, payload);
+    if (toolActivity) {
+      try {
+        nativeConversationRealtime.publishActivity(dispatch.conversationId, {
+          dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), ...toolActivity,
+        });
+      } catch (_) { /* the status panel must never break a turn */ }
+    }
     const diagnostics = getHermesDiagnostics();
     if (!diagnostics.verboseHermes && !diagnostics.traceCommands) return;
     // Verbose mode surfaces the live thinking/reasoning stream instead of
@@ -7899,6 +8010,8 @@ function applyChatOutputSetting(output) {
 
 function onBackendListening() {
   console.log(`Mia backend listening on port ${PORT}`);
+  // Starting the runtime also clears profile copies of root keys, but only
+  // when it launches a fresh gateway (see removeStaleProfileCredentials).
   startHermesGatewayRuntime().catch((err) =>
     console.error('Mia Hermes runtime failed to start', err.message)
   );

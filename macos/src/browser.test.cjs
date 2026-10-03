@@ -21,6 +21,15 @@ function harness(options = {}) {
   profile.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Mia/0.2.7 Chrome/132.0.0.0 Electron/44.2.0 Safari/537.36";
   profile.getUserAgent = () => profile.userAgent;
   profile.setUserAgent = value => { profile.userAgent = value; };
+  profile.webRequest = {
+    onBeforeRequest: (_filter, handler) => { profile.beforeRequest = handler; },
+    onBeforeSendHeaders: (_filter, handler) => { profile.beforeSendHeaders = handler; },
+    onHeadersReceived: (_filter, handler) => { profile.headersReceived = handler; },
+  };
+  profile.cookies = {
+    get: async () => [],
+    remove: async () => {},
+  };
   profile.setPermissionCheckHandler = callback => { profile.check = callback; };
   profile.setPermissionRequestHandler = callback => { profile.request = callback; };
   profile.setDevicePermissionHandler = callback => { profile.device = callback; };
@@ -150,6 +159,21 @@ test("browser profile is persistent, isolated, and can be cleared", async () => 
   assert.equal(h.profile.storageCleared, true);
   assert.equal(h.profile.cacheCleared, true);
   assert.equal(h.command("state").tabs.length, 1);
+});
+
+test("browser controller prepares a preview without storing a UI cookie in its profile", async () => {
+  const h = harness();
+  const url = "http://127.0.0.1:4870/api/conversations/c/attachments/a?preview=true";
+  const source = { cookies: { get: async () => [{ name: "miaos_sid", value: "test-session" }] } };
+  await h.controller.prepareAttachment(url, source);
+  let decision;
+  h.profile.beforeRequest({ url, method: "GET", resourceType: "mainFrame" }, value => { decision = value; });
+  assert.equal(decision.cancel, false);
+  h.profile.beforeSendHeaders({ url, method: "GET", resourceType: "mainFrame", requestHeaders: {} }, value => {
+    assert.equal(value.requestHeaders.Cookie, "miaos_sid=test-session");
+  });
+  h.profile.beforeRequest({ url: "http://127.0.0.1:4870/api/keys", method: "POST", resourceType: "xhr" }, value => { decision = value; });
+  assert.equal(decision.cancel, true);
 });
 
 test("new creates one tab; switching and hiding preserve loaded pages", () => {

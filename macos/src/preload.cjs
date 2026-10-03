@@ -60,6 +60,9 @@ contextBridge.exposeInMainWorld("miaDesktop", {
   },
   browser: {
     command: (command) => ipcRenderer.invoke("miaos-browser-command", command),
+    // Authorizes the in-app browser to load one Mia chat attachment preview.
+    // Resolves { ok: true, url } to navigate to, or { ok: false, error }.
+    prepareAttachment: (url) => ipcRenderer.invoke("miaos-browser-attachment-prepare", url),
     // Top visited-URL entries for the URL-bar autocomplete dropdown, ranked
     // by recency-weighted visit frequency. Resolves
     // { history: [{ url, title, count, lastVisit }, ...] } (most relevant

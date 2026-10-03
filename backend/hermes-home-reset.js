@@ -14,6 +14,21 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const {
+  MIAOS_AGENT_HERMES_PROFILE,
+  MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+  MIAOS_BOT_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+  isManagedProfileConfig,
+} = require('./hermes-bot-profile');
+
+const MANAGED_PROFILES = [
+  MIAOS_AGENT_HERMES_PROFILE,
+  MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+  MIAOS_BOT_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+];
 
 const RESET_ENTRIES = [
   'auth.json',
@@ -135,7 +150,7 @@ function resetHermesHome(hermesHome) {
 // Cleanup for the ROOT auth store: used when re-keying a provider so the
 // fresh key becomes the only credential (dead keys left in the pool get
 // picked by auxiliary clients and fail every call with 401).
-function removeProviderRootCredentials(hermesHome, provider) {
+function removeProviderRootCredentials(hermesHome, provider, { validateOnly = false } = {}) {
   const id = String(provider || '').trim().toLowerCase();
   const root = String(hermesHome || '').trim();
   const result = { cleaned: [], failures: [] };
@@ -143,12 +158,21 @@ function removeProviderRootCredentials(hermesHome, provider) {
   const authFile = path.join(path.resolve(root), 'auth.json');
   let parsed;
   try {
+    const authStat = fs.lstatSync(authFile);
+    if (!authStat.isFile() || authStat.nlink !== 1) {
+      result.failures.push(`${authFile}: not an independent regular file`);
+      return result;
+    }
     parsed = JSON.parse(fs.readFileSync(authFile, 'utf8'));
   } catch (error) {
-    if (error.code !== 'ENOENT') result.failures.push(`${authFile}: ${error.message}`);
+    if (error.code !== 'ENOENT') result.failures.push(`${authFile}: unreadable or invalid auth store`);
     return result;
   }
-  if (!parsed || typeof parsed !== 'object') return result;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    result.failures.push(`${authFile}: invalid auth store`);
+    return result;
+  }
+  if (validateOnly) return result;
   let changed = false;
   const pool = parsed.credential_pool;
   if (pool && typeof pool === 'object' && !Array.isArray(pool)) {
@@ -162,11 +186,14 @@ function removeProviderRootCredentials(hermesHome, provider) {
     }
   }
   if (!changed) return result;
+  const temporary = path.join(path.dirname(authFile), `.auth.json.mia-${crypto.randomUUID()}`);
   try {
-    fs.writeFileSync(authFile, `${JSON.stringify(parsed, null, 1)}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(temporary, `${JSON.stringify(parsed, null, 1)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporary, authFile);
     result.cleaned.push(authFile);
   } catch (error) {
-    result.failures.push(`${authFile}: ${error.message}`);
+    result.failures.push(`${authFile}: could not write auth store`);
+    try { fs.unlinkSync(temporary); } catch (_) { /* no temporary file remains */ }
   }
   return result;
 }
@@ -194,25 +221,60 @@ function readProviderRootCredentials(hermesHome, provider) {
     .filter(Boolean);
 }
 
-// Drop one provider's credentials from every Mia profile pool so the root
+// Drop one provider's credentials from Mia-owned runtime profile pools so the root
 // auth store is the single source of truth after a re-key. A stale profile
 // credential (e.g. a bad first paste the gateway cached) otherwise outranks
 // the root pool and keeps agent sessions failing with the dead key forever.
-function removeProviderProfileCredentials(hermesHome, provider) {
+function removeProviderProfileCredentials(hermesHome, provider, { validateOnly = false } = {}) {
   const id = String(provider || '').trim().toLowerCase();
   const root = String(hermesHome || '').trim();
   const result = { cleaned: [], failures: [] };
   if (!id || !root) return result;
   const profilesRoot = path.join(path.resolve(root), 'profiles');
-  let profiles = [];
-  try { profiles = fs.readdirSync(profilesRoot); } catch (_) { return result; }
-  for (const profile of profiles) {
-    const authFile = path.join(profilesRoot, profile, 'auth.json');
+  try {
+    if (!fs.lstatSync(profilesRoot).isDirectory()) {
+      result.failures.push(`${profilesRoot}: not a directory`);
+      return result;
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') result.failures.push(`${profilesRoot}: unavailable`);
+    return result;
+  }
+  for (const profile of MANAGED_PROFILES) {
+    const profileDir = path.join(profilesRoot, profile);
+    const configFile = path.join(profileDir, 'config.yaml');
+    const authFile = path.join(profileDir, 'auth.json');
     let parsed;
     try {
+      // A known name alone is insufficient: never follow a profile, config,
+      // or auth symlink into somebody else's Hermes login.
+      if (!fs.lstatSync(profileDir).isDirectory()) {
+        result.failures.push(`${profileDir}: not a directory`);
+        continue;
+      }
+      // An absent auth store has nothing to shadow the root key. If one is
+      // present, an unmarked or damaged reserved profile is unsafe to skip.
+      let authStat;
+      try { authStat = fs.lstatSync(authFile); } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+      if (!authStat.isFile() || authStat.nlink !== 1) {
+        result.failures.push(`${authFile}: not an independent regular file`);
+        continue;
+      }
+      let configStat;
+      try { configStat = fs.lstatSync(configFile); } catch (error) {
+        result.failures.push(`${configFile}: unavailable`);
+        continue;
+      }
+      if (!configStat.isFile() || !isManagedProfileConfig(fs.readFileSync(configFile, 'utf8'))) {
+        result.failures.push(`${configFile}: not a Mia-managed profile`);
+        continue;
+      }
       parsed = JSON.parse(fs.readFileSync(authFile, 'utf8'));
     } catch (error) {
-      if (error.code !== 'ENOENT') result.failures.push(`${authFile}: ${error.message}`);
+      if (error.code !== 'ENOENT') result.failures.push(`${authFile}: unreadable or invalid auth store`);
       continue;
     }
     if (!parsed || typeof parsed !== 'object') continue;
@@ -229,12 +291,54 @@ function removeProviderProfileCredentials(hermesHome, provider) {
       }
     }
     if (!changed) continue;
+    if (validateOnly) continue;
+    const temporary = path.join(profileDir, `.auth.json.mia-${crypto.randomUUID()}`);
     try {
-      fs.writeFileSync(authFile, `${JSON.stringify(parsed, null, 1)}\n`, { encoding: 'utf8', mode: 0o600 });
+      fs.writeFileSync(temporary, `${JSON.stringify(parsed, null, 1)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      fs.renameSync(temporary, authFile);
       result.cleaned.push(authFile);
     } catch (error) {
       result.failures.push(`${authFile}: ${error.message}`);
+      try { fs.unlinkSync(temporary); } catch (_) { /* no temporary file remains */ }
     }
+  }
+  return result;
+}
+
+function requireCredentialCleanup(result) {
+  if (result && Array.isArray(result.failures) && result.failures.length) {
+    // Never surface auth-store paths or parser errors to the renderer.
+    throw new Error('Mia could not safely update stored provider credentials. Restart Mia and try again.');
+  }
+  return result;
+}
+
+// Mia-managed provider keys are intended to live in Hermes' root auth store.
+// For some providers, a pool update can leave a root-borrowed credential in a
+// profile. A non-empty profile pool then takes precedence over the root, so an
+// older copy can mask a newly added key. Until Hermes consistently persists
+// borrowed provider state to its owning store, remove matching entries only
+// from Mia-managed profiles before a fresh gateway starts. Profile-only
+// providers and independent profiles stay untouched. This is stale-key
+// recovery, not a credential-access boundary.
+function removeProfileCopiesOfRootCredentials(hermesHome) {
+  const root = String(hermesHome || '').trim();
+  const result = { providers: [], cleaned: [], failures: [] };
+  if (!root) return result;
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path.join(path.resolve(root), 'auth.json'), 'utf8'));
+  } catch (_) {
+    return result;
+  }
+  const pool = parsed && parsed.credential_pool;
+  if (!pool || typeof pool !== 'object' || Array.isArray(pool)) return result;
+  for (const [provider, entries] of Object.entries(pool)) {
+    if (!Array.isArray(entries) || !entries.length) continue;
+    const removed = removeProviderProfileCredentials(root, provider);
+    if (removed.cleaned.length) result.providers.push(provider.trim().toLowerCase());
+    result.cleaned.push(...removed.cleaned.filter((file) => !result.cleaned.includes(file)));
+    result.failures.push(...removed.failures);
   }
   return result;
 }
@@ -243,7 +347,9 @@ module.exports = {
   RESET_ENTRIES,
   listHermesCredentialProviders,
   readProviderRootCredentials,
+  removeProfileCopiesOfRootCredentials,
   removeProviderProfileCredentials,
   removeProviderRootCredentials,
+  requireCredentialCleanup,
   resetHermesHome,
 };

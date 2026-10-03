@@ -53,23 +53,17 @@ function createConversationRealtime(authorization) {
     return connection.subscriptions.delete(required(conversationId, 'conversationId'));
   }
 
-  function publish(event) {
-    if (!event || typeof event.conversationId !== 'string') throw new Error('native event is required');
-    const message = {
-      type: 'conversation.event',
-      conversationId: event.conversationId,
-      event,
-    };
+  function deliver(conversationId, message) {
     let delivered = 0;
     let failed = 0;
     for (const [connectionId, connection] of connections) {
-      if (!connection.subscriptions.has(event.conversationId)) continue;
+      if (!connection.subscriptions.has(conversationId)) continue;
       if (!authorization.can({
         ...connection.principal,
-        conversationId: event.conversationId,
+        conversationId,
         operation: 'subscribe',
       })) {
-        connection.subscriptions.delete(event.conversationId);
+        connection.subscriptions.delete(conversationId);
         continue;
       }
       try {
@@ -82,11 +76,28 @@ function createConversationRealtime(authorization) {
     return { delivered, failed };
   }
 
+  function publish(event) {
+    if (!event || typeof event.conversationId !== 'string') throw new Error('native event is required');
+    return deliver(event.conversationId, {
+      type: 'conversation.event',
+      conversationId: event.conversationId,
+      event,
+    });
+  }
+
+  // Ephemeral, never-persisted signal (what the agent is doing right now).
+  // Same subscription and authorization filtering as publish().
+  function publishActivity(conversationId, activity) {
+    if (typeof conversationId !== 'string' || !conversationId) throw new Error('conversationId is required');
+    if (!activity || typeof activity !== 'object') throw new Error('activity is required');
+    return deliver(conversationId, { type: 'conversation.activity', conversationId, activity });
+  }
+
   function connectionCount() {
     return connections.size;
   }
 
-  return { connect, disconnect, subscribe, unsubscribe, publish, connectionCount };
+  return { connect, disconnect, subscribe, unsubscribe, publish, publishActivity, connectionCount };
 }
 
 module.exports = { createConversationRealtime };

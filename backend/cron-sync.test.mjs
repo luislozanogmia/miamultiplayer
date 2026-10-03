@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -15,6 +16,7 @@ const jobsFile = path.join(tempDir, 'jobs.json');
 const stateDbFile = path.join(tempDir, 'state.db');
 const executionsDbFile = path.join(tempDir, 'executions.db');
 const artifactRoot = path.join(tempDir, 'artifacts');
+const legacyArtifactRoot = path.join(tempDir, 'legacy-bot-artifacts');
 const botPackageRoot = path.join(tempDir, 'bots');
 const hermesHome = path.join(tempDir, 'hermes');
 const hermesAgentRoot = path.join(hermesHome, 'hermes-agent');
@@ -48,6 +50,7 @@ process.env.HERMES_CRON_JOBS_FILE = jobsFile;
 process.env.HERMES_STATE_DB = stateDbFile;
 process.env.HERMES_CRON_EXECUTIONS_DB = executionsDbFile;
 process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = artifactRoot;
+process.env.MIAOS_LEGACY_AUTOMATION_ARTIFACT_DIR = legacyArtifactRoot;
 process.env.MIAOS_BOT_PACKAGE_DIR = botPackageRoot;
 process.env.FAKE_HERMES_LOG = commandLog;
 process.env.FAKE_HERMES_PYTHON_LOG = pythonLog;
@@ -961,4 +964,94 @@ test('a symlinked workspace marker is rejected instead of followed', () => {
   fs.unlinkSync(marker);
   fs.symlinkSync(outside, marker);
   assert.throws(() => cronSync.artifactWorkspaceForBot(bot), /marker must be a real file/);
+});
+
+function legacyFolder(botId) {
+  const key = crypto.createHash('sha256').update(botId).digest('hex').slice(0, 32);
+  const legacy = path.join(legacyArtifactRoot, `bot-${key}`);
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(
+    path.join(legacy, '.miaos-artifact-scope.json'),
+    JSON.stringify({ kind: 'miaos-bot-artifact-workspace', botId }),
+  );
+  return legacy;
+}
+
+test('bot files go in a readable folder named after the bot', () => {
+  const bot = { id: 'bot-named-1', name: 'Daily News: AI/ML!' };
+  const workspace = cronSync.artifactWorkspaceForBot(bot);
+  assert.equal(path.dirname(workspace), artifactRoot);
+  assert.equal(path.basename(workspace), 'Daily News AI ML');
+  assert.equal(cronSync.artifactWorkspaceForBot(bot), workspace);
+});
+
+test('bots with the same name get distinct folders and unsafe names are neutralised', () => {
+  const first = cronSync.artifactWorkspaceForBot({ id: 'bot-dup-1', name: 'Reporter' });
+  const second = cronSync.artifactWorkspaceForBot({ id: 'bot-dup-2', name: 'Reporter' });
+  assert.equal(path.basename(first), 'Reporter');
+  assert.equal(path.basename(second), 'Reporter-2');
+  for (const name of ['../../escape', '..', '   ', '.hidden']) {
+    const workspace = cronSync.artifactWorkspaceForBot({ id: `bot-unsafe-${name}`, name });
+    assert.equal(path.dirname(workspace), artifactRoot, name);
+    assert.ok(!path.basename(workspace).startsWith('.'), name);
+  }
+  assert.equal(path.basename(cronSync.artifactWorkspaceForBot({ id: 'bot-con', name: 'con' })), 'con-bot');
+});
+
+test('renaming a bot keeps its folder and a user-made folder is never claimed', () => {
+  const original = cronSync.artifactWorkspaceForBot({ id: 'bot-rename', name: 'Old Name' });
+  fs.writeFileSync(path.join(original, 'report.txt'), 'kept');
+  const renamed = cronSync.artifactWorkspaceForBot({ id: 'bot-rename', name: 'New Name' });
+  assert.equal(renamed, original);
+  assert.equal(fs.readFileSync(path.join(renamed, 'report.txt'), 'utf8'), 'kept');
+
+  fs.mkdirSync(path.join(artifactRoot, 'Mine'));
+  fs.writeFileSync(path.join(artifactRoot, 'Mine', 'note.txt'), 'user file');
+  const other = cronSync.artifactWorkspaceForBot({ id: 'bot-mine', name: 'Mine' });
+  assert.equal(path.basename(other), 'Mine-2');
+  assert.equal(fs.readFileSync(path.join(artifactRoot, 'Mine', 'note.txt'), 'utf8'), 'user file');
+});
+
+test('files in the old hidden bot-artifacts folder move into the new bot folder', () => {
+  const botId = 'bot-legacy-migrate';
+  const legacy = legacyFolder(botId);
+  fs.mkdirSync(path.join(legacy, 'sub'));
+  fs.writeFileSync(path.join(legacy, 'chart.png'), 'png');
+  fs.writeFileSync(path.join(legacy, 'sub', 'a.txt'), 'a');
+  const workspace = cronSync.artifactWorkspaceForBot({ id: botId, name: 'Migrator' });
+  assert.equal(path.basename(workspace), 'Migrator');
+  assert.equal(fs.readFileSync(path.join(workspace, 'chart.png'), 'utf8'), 'png');
+  assert.equal(fs.readFileSync(path.join(workspace, 'sub', 'a.txt'), 'utf8'), 'a');
+  assert.equal(fs.existsSync(legacy), false);
+});
+
+test('legacy migration never overwrites, follows symlinks, or touches another bot', () => {
+  const botId = 'bot-legacy-safe';
+  const legacy = legacyFolder(botId);
+  const outside = path.join(tempDir, 'outside-secret.txt');
+  fs.writeFileSync(outside, 'secret');
+  fs.symlinkSync(outside, path.join(legacy, 'link.txt'));
+  fs.writeFileSync(path.join(legacy, 'same.txt'), 'old');
+
+  const otherLegacy = legacyFolder('bot-legacy-other');
+  fs.writeFileSync(path.join(otherLegacy, 'theirs.txt'), 'theirs');
+
+  const workspace = cronSync.artifactWorkspaceForBot({ id: botId, name: 'Safe' });
+  assert.equal(fs.existsSync(path.join(workspace, 'link.txt')), false);
+  assert.equal(fs.readFileSync(path.join(workspace, 'same.txt'), 'utf8'), 'old');
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'secret');
+  assert.equal(fs.existsSync(path.join(otherLegacy, 'theirs.txt')), true);
+  assert.equal(fs.existsSync(path.join(workspace, 'theirs.txt')), false);
+});
+
+test('legacy migration keeps a dangling symlink at the destination and the old file', () => {
+  const botId = 'bot-legacy-dangling';
+  const workspace = cronSync.artifactWorkspaceForBot({ id: botId, name: 'Dangling' });
+  fs.symlinkSync(path.join(tempDir, 'missing-target.txt'), path.join(workspace, 'report.txt'));
+  const legacy = legacyFolder(botId);
+  fs.writeFileSync(path.join(legacy, 'report.txt'), 'old report');
+
+  assert.equal(cronSync.artifactWorkspaceForBot({ id: botId, name: 'Dangling' }), workspace);
+  assert.equal(fs.lstatSync(path.join(workspace, 'report.txt')).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(path.join(legacy, 'report.txt'), 'utf8'), 'old report');
 });
