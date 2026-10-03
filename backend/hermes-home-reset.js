@@ -313,12 +313,14 @@ function requireCredentialCleanup(result) {
   return result;
 }
 
-// Every key Mia stores lives in the ROOT auth store. Hermes copies a root
-// key into a profile's own pool when it records that key's status (e.g.
-// marking it exhausted after a 401), and from then on the profile copy
-// outranks the root, so a re-minted key never reaches that profile. Run
-// before the gateway starts: drop profile entries for any provider the root
-// holds. Providers only a profile has (Hermes' own seeded logins) stay.
+// Mia-managed provider keys are intended to live in Hermes' root auth store.
+// For some providers, a pool update can leave a root-borrowed credential in a
+// profile. A non-empty profile pool then takes precedence over the root, so an
+// older copy can mask a newly added key. Until Hermes consistently persists
+// borrowed provider state to its owning store, remove matching entries only
+// from Mia-managed profiles before a fresh gateway starts. Profile-only
+// providers and independent profiles stay untouched. This is stale-key
+// recovery, not a credential-access boundary.
 function removeProfileCopiesOfRootCredentials(hermesHome) {
   const root = String(hermesHome || '').trim();
   const result = { providers: [], cleaned: [], failures: [] };
