@@ -108,6 +108,38 @@ function turnAbortError() {
   return error;
 }
 
+// Hermes' `gateway stop` reports success after waiting ten seconds even if
+// the gateway it signalled is still draining, and it leaves gateway.pid in
+// place while that process lives. Resolves true once no live gateway is
+// recorded for this Hermes home, false if one is still running at timeout.
+async function waitForRecordedGatewayExit(env, { timeoutMs = 10000, pollMs = 250 } = {}) {
+  const home = String((env && env.HERMES_HOME) || '').trim();
+  if (!home) return true;
+  let pid = null;
+  try {
+    const text = fs.readFileSync(path.join(home, 'gateway.pid'), 'utf8').trim();
+    const record = /^\d+$/.test(text) ? { pid: text } : JSON.parse(text);
+    pid = Number.parseInt(record && record.pid, 10);
+  } catch (_) {
+    return true;
+  }
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return true;
+  const alive = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error.code === 'EPERM';
+    }
+  };
+  const deadline = Date.now() + timeoutMs;
+  while (alive()) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return true;
+}
+
 function stopExternalHermesGateway(launch, env) {
   return new Promise((resolve, reject) => {
     execFile(launch.command, [...launch.prefixArgs, 'gateway', 'stop'], {
@@ -143,6 +175,7 @@ class HermesGatewayClient {
     onSessionEvent = null,
     stopExternalGatewayImpl = stopExternalHermesGateway,
     beforeSpawn = null,
+    waitForGatewayExitImpl = waitForRecordedGatewayExit,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
     this.binary = String(binary || '').trim();
@@ -172,6 +205,7 @@ class HermesGatewayClient {
     this.onSessionEvent = typeof onSessionEvent === 'function' ? onSessionEvent : null;
     this.stopExternalGatewayImpl = stopExternalGatewayImpl;
     this.beforeSpawn = typeof beforeSpawn === 'function' ? beforeSpawn : null;
+    this.waitForGatewayExitImpl = waitForGatewayExitImpl;
     this.toolProgressMode = String(this.env.HERMES_TUI_TOOL_PROGRESS || '').trim().toLowerCase() === 'verbose'
       ? 'verbose'
       : 'all';
@@ -236,10 +270,17 @@ class HermesGatewayClient {
       if (typeof this.stopExternalGatewayImpl === 'function') {
         await this.stopExternalGatewayImpl(this.launch, this.env);
       }
-      // Nothing Hermes is running for this home now, so its stores can be
-      // changed without a live process writing its cached copy back over
-      // them. A reused, already-listening gateway never reaches this point.
-      if (this.beforeSpawn) await this.beforeSpawn();
+      // Stores are changed only once no Hermes is running for this home, so
+      // no live process can write its cached copy back over them. A reused,
+      // already-listening gateway never reaches this point, and an old one
+      // still draining after the stop skips the cleanup for this launch.
+      if (this.beforeSpawn) {
+        if (await this.waitForGatewayExitImpl(this.env)) {
+          await this.beforeSpawn();
+        } else {
+          console.warn('[hermes-auth] previous Hermes gateway is still running; skipped profile key cleanup');
+        }
+      }
 
       const gatewayEnv = { ...this.env };
       gatewayEnv.HERMES_DASHBOARD_SESSION_TOKEN = this.gatewayToken;
@@ -1002,6 +1043,7 @@ class HermesGatewayClient {
 }
 
 module.exports = {
+  waitForRecordedGatewayExit,
   HermesGatewayClient,
   DEFAULT_PORT,
 };
