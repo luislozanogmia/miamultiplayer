@@ -6,7 +6,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { HermesGatewayClient } = require('./hermes-gateway-client.js');
+const { HermesGatewayClient, waitForRecordedGatewayExit } = require('./hermes-gateway-client.js');
 
 test('a fresh session waits for constructor normalization before pinning and submitting its selected model', async () => {
   const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
@@ -935,3 +935,47 @@ test('a message Hermes folds into the streaming goal turn keeps the text streame
   assert.equal(seen.some((event) => event.kind === 'turn.complete'), false, 'it is not also posted as a goal reply');
 });
 
+
+test('a previous gateway still draining after the stop skips the key cleanup', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-draining-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const lifecycle = [];
+  const client = new HermesGatewayClient({
+    binary: process.execPath,
+    WebSocketImpl: class FakeWebSocket {},
+    env: {},
+    tokenFile: path.join(directory, 'gateway.token'),
+    probePortImpl: async () => false,
+    stopExternalGatewayImpl: async () => { lifecycle.push('external-stopped'); return true; },
+    waitForGatewayExitImpl: async () => { lifecycle.push('still-running'); return false; },
+    beforeSpawn: () => { lifecycle.push('stale-credentials-removed'); },
+    spawnImpl: () => {
+      lifecycle.push('desktop-started');
+      return { unref: () => {}, once: () => {}, kill: () => {} };
+    },
+  });
+  await client.ensureGateway();
+  assert.deepEqual(lifecycle, ['external-stopped', 'still-running', 'desktop-started']);
+  client.close();
+});
+
+test('waits for the gateway recorded in gateway.pid to exit', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-pid-'));
+  const { spawn } = await import('node:child_process');
+  const survivor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => {
+    try { survivor.kill('SIGKILL'); } catch (_) { /* already gone */ }
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const env = { HERMES_HOME: home };
+  assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 50, pollMs: 10 }), true, 'no pid file');
+
+  fs.writeFileSync(path.join(home, 'gateway.pid'), JSON.stringify({ pid: survivor.pid }));
+  assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 200, pollMs: 20 }), false, 'still running');
+
+  setTimeout(() => survivor.kill('SIGKILL'), 50);
+  assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 3000, pollMs: 20 }), true, 'exits in time');
+
+  fs.writeFileSync(path.join(home, 'gateway.pid'), String(survivor.pid));
+  assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 50, pollMs: 10 }), true, 'bare pid, dead');
+});
