@@ -9,6 +9,33 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.15] — 2026-10-03
+
+### Added
+- Show live agent activity and file status beside chat without exposing local
+  file paths.
+- Open chat attachments and approved Drive links in Mia's in-app browser.
+- Keep Mia and bot files in a visible Documents/mia folder, choosing a new
+  folder when an existing one belongs to something else.
+
+### Fixed
+- Recover from stale provider-key copies in Mia-managed Hermes profiles while
+  preserving independent profiles and refusing unsafe credential-store updates.
+- Explain when a Mia Router key moved to another computer and retain useful
+  connection errors after a failed retry.
+- Use the last selected model for automation and goal work outside a chat turn.
+- Show a status message when a model takes too long to begin answering.
+- Advance the onboarding tour reliably and report successful or failed file
+  edits accurately.
+- Stop the development backend and Hermes gateway when the app quits.
+- Limit browser attachment authorization to the prepared file request and
+  prevent unrelated browser pages from receiving Mia's session cookie.
+- Include the pinned Google Workspace runtime and complete dependencies in
+  the Linux package.
+
+### Notes
+- Windows packages remain unsigned; macOS packages are signed and notarized.
+
 ## [0.2.14] — 2026-09-29
 
 ### Added
