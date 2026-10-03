@@ -3255,11 +3255,14 @@
     }
     renderChatStarterBots();
   }
+  function visibleChatStarterBots(){
+    var hidden = hiddenChatStarterBots();
+    return CHAT_STARTER_BOTS.filter(function(template){ return hidden.indexOf(template.name) === -1; });
+  }
   function renderChatStarterBots(){
     var wrap = el('#chatStarterBots');
     if(!wrap) return;
-    var hidden = hiddenChatStarterBots();
-    var visible = CHAT_STARTER_BOTS.filter(function(template){ return hidden.indexOf(template.name) === -1; });
+    var visible = visibleChatStarterBots();
     var group = el('#chatStarterBotsGroup');
     if(group) group.hidden = visible.length === 0;
     wrap.innerHTML = visible.map(function(template){
@@ -14568,6 +14571,9 @@
     {
       target: '#chatStarterBots',
       route: 'chat',
+      // Every starter dismissed: the section is hidden, so there is nothing
+      // to point at and the step is left out.
+      when: function(){ return visibleChatStarterBots().length > 0; },
       title: 'Start with a bot template',
       body: 'Choose a starter bot in the left panel to open setup with an editable prompt. Nothing is created until you confirm it.'
     },
@@ -14601,7 +14607,9 @@
     }).catch(function(error){showToast(error.message);});
   }
 
-  function currentTourSteps(){ return tour.steps || TOUR_STEPS; }
+  function currentTourSteps(){
+    return (tour.steps || TOUR_STEPS).filter(function(step){ return !step.when || step.when(); });
+  }
 
   function tourEl(tag, cls){
     var e = document.createElement(tag);
