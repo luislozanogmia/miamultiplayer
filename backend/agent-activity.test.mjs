@@ -71,3 +71,20 @@ test('drops URLs, multiline and oversized path values', () => {
 test('unknown tools get a generic label', () => {
   assert.equal(extractToolActivity('tool.start', {}).label, 'Working');
 });
+
+test('a completion says whether the tool succeeded, never what it returned', () => {
+  const done = (result) => extractToolActivity('tool.complete', {
+    name: 'write_file', tool_id: 'call_1', args: { path: '/work/a.js' }, result,
+  });
+  assert.deepEqual(done({ success: true, bytes_written: 12 }), {
+    phase: 'complete', tool: 'write_file', label: 'Editing files', kind: 'edit',
+    paths: ['/work/a.js'], toolId: 'call_1', ok: true,
+  });
+  assert.equal(done({ error: 'Write denied: /work/a.js is protected' }).ok, false);
+  assert.equal(done('{"error": "permission denied"}').ok, false);
+  assert.equal(done({ success: false }).ok, false);
+  assert.equal(done('Error: disk full').ok, false);
+  assert.equal(done(undefined).ok, true);
+  assert.doesNotMatch(JSON.stringify(done({ error: 'secret detail' })), /secret detail/);
+  assert.equal('ok' in extractToolActivity('tool.start', { name: 'write_file', tool_id: 'call_1', args: { path: '/a' } }), false);
+});

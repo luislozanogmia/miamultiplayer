@@ -8278,8 +8278,9 @@
     }
     var startedAt = Number(state.startedAt || Date.now());
     var filesHtml = files.length ? '<ul class="cap-files">' + files.map(function(file){
+      var status = util.fileStatus(file, live);
       return '<li class="cap-file" title="' + esc(file.path) + '"><span class="cap-file-name">' + esc(util.basename(file.path)) +
-        '</span><span class="cap-file-kind is-' + (file.kind === 'edit' ? 'edit' : 'read') + '">' + (file.kind === 'edit' ? 'Edited' : 'Read') + '</span></li>';
+        '</span><span class="cap-file-kind is-' + status.kind + '">' + esc(status.text) + '</span></li>';
     }).join('') + '</ul>' : '<div class="cap-empty">No files yet</div>';
     panel.innerHTML =
       '<div class="cap-head"><span class="cap-title">' + (live ? 'Working now' : 'Last turn') + '</span>' +

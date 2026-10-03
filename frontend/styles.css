@@ -1420,6 +1420,7 @@
   .cap-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .cap-file-kind{flex:0 0 auto;font-size:10px;line-height:14px;padding:1px 6px;border-radius:5px;background:var(--sand-fill-secondary);color:var(--sand-text-secondary);}
   .cap-file-kind.is-edit{background:var(--sand-fill-accent-subtle);color:var(--sand-text-accent);}
+  .cap-file-kind.is-failed{color:var(--sand-text-danger);}
   .cap-empty{font-size:12px;line-height:16px;color:var(--sand-text-secondary);}
   @media (max-width:1279px){
     .chat-activity-panel{display:none;}

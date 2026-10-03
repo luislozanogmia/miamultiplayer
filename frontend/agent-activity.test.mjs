@@ -23,9 +23,44 @@ test('tracks the current activity label per turn', () => {
 
 test('files are most recent first, deduplicated, and edits stick', () => {
   let state = activity.reduceActivity(null, sig({ paths: ['/a', '/b'] }));
-  state = activity.reduceActivity(state, sig({ kind: 'edit', paths: ['/a'], at: 2000 }));
+  state = activity.reduceActivity(state, sig({ kind: 'edit', toolId: 't1', paths: ['/a'], at: 2000 }));
+  state = activity.reduceActivity(state, sig({ phase: 'complete', kind: 'edit', toolId: 't1', paths: ['/a'], ok: true, at: 2500 }));
   state = activity.reduceActivity(state, sig({ kind: 'read', paths: ['/a'], at: 3000 }));
   assert.deepEqual(state.files.map((f) => [f.path, f.kind]), [['/a', 'edit'], ['/b', 'read']]);
+});
+
+const status = (state, path, live = true) => activity.fileStatus(state.files.find((f) => f.path === path), live).text;
+
+test('a write is "Editing" until it completes, and only a success shows "Edited"', () => {
+  let state = activity.reduceActivity(null, sig({ kind: 'edit', toolId: 't1', paths: ['/a'] }));
+  assert.equal(status(state, '/a'), 'Editing');
+  state = activity.reduceActivity(state, sig({ phase: 'complete', kind: 'edit', toolId: 't1', paths: [], ok: true, at: 2000 }));
+  assert.equal(status(state, '/a'), 'Edited');
+});
+
+test('a rejected or failed write never shows "Edited"', () => {
+  let state = activity.reduceActivity(null, sig({ kind: 'edit', toolId: 't1', paths: ['/a'] }));
+  state = activity.reduceActivity(state, sig({ phase: 'complete', kind: 'edit', toolId: 't1', paths: ['/a'], ok: false, at: 2000 }));
+  assert.equal(status(state, '/a'), 'Edit failed');
+  // The completion may omit the paths; the start's paths are used.
+  state = activity.reduceActivity(state, sig({ kind: 'edit', toolId: 't2', paths: ['/b'], at: 3000 }));
+  state = activity.reduceActivity(state, sig({ phase: 'complete', kind: 'edit', toolId: 't2', paths: [], ok: false, at: 4000 }));
+  assert.equal(status(state, '/b'), 'Edit failed');
+});
+
+test('a later failed write keeps an earlier successful edit', () => {
+  let state = activity.reduceActivity(null, sig({ kind: 'edit', toolId: 't1', paths: ['/a'] }));
+  state = activity.reduceActivity(state, sig({ phase: 'complete', kind: 'edit', toolId: 't1', paths: ['/a'], ok: true, at: 2000 }));
+  state = activity.reduceActivity(state, sig({ kind: 'edit', toolId: 't2', paths: ['/a'], at: 3000 }));
+  assert.equal(status(state, '/a'), 'Edited');
+  state = activity.reduceActivity(state, sig({ phase: 'complete', kind: 'edit', toolId: 't2', paths: ['/a'], ok: false, at: 4000 }));
+  assert.equal(status(state, '/a'), 'Edited');
+});
+
+test('a write that never completed is not reported as saved after the turn', () => {
+  const state = activity.reduceActivity(null, sig({ kind: 'edit', toolId: 't1', paths: ['/a'] }));
+  assert.equal(status(state, '/a', true), 'Editing');
+  assert.equal(status(state, '/a', false), 'Not saved');
 });
 
 test('a new dispatch replaces the previous turn and does not mutate old state', () => {

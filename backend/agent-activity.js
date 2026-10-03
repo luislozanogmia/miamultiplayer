@@ -3,8 +3,9 @@
 // Turns a raw Hermes tool event (tool.start / tool.complete) into the tiny,
 // safe record the chat's status panel shows: a plain-language activity label,
 // whether the tool reads or edits files, and the file paths it names. Only
-// paths ever leave this module — never file contents, commands, patch bodies,
-// results, or any other argument — so it is safe to send live to the room.
+// paths and whether the tool succeeded ever leave this module — never file
+// contents, commands, patch bodies, results, or any other argument — so it
+// is safe to send live to the room.
 const READ_TOOLS = new Set(['read_file', 'read', 'view', 'view_file', 'cat', 'open_file', 'read_many_files']);
 const EDIT_TOOLS = new Set([
   'write_file', 'write', 'create_file', 'patch', 'edit', 'edit_file', 'multiedit',
@@ -100,6 +101,20 @@ function extractToolPaths(toolKey, args) {
   return paths;
 }
 
+// Hermes reports a failed or refused tool as a result carrying `error` (its
+// tool_error helper) or `success: false`. Only this yes/no leaves the module.
+function toolSucceeded(result) {
+  let value = result;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (/^error\b/i.test(text)) return false;
+    try { value = JSON.parse(text); } catch (_) { return true; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return true;
+  if (value.error) return false;
+  return value.success !== false;
+}
+
 // Returns null for any event that is not a tool start/complete.
 function extractToolActivity(type, payload) {
   const phase = type === 'tool.start' ? 'start' : type === 'tool.complete' ? 'complete' : '';
@@ -110,7 +125,13 @@ function extractToolActivity(type, payload) {
   const kind = toolKind(toolKey);
   // Search tools take a directory in `path`, which is not a file being worked on.
   const paths = kind === 'other' ? [] : extractToolPaths(toolKey, parseArgs(event));
-  return { phase, tool: toolKey.slice(0, 64), label: toolLabel(toolKey), kind, paths };
+  const activity = { phase, tool: toolKey.slice(0, 64), label: toolLabel(toolKey), kind, paths };
+  // The id pairs a completion with its start, whose paths the completion may
+  // not repeat; it is an opaque Hermes call id, not tool input.
+  const toolId = typeof event.tool_id === 'string' ? event.tool_id.trim().slice(0, 128) : '';
+  if (toolId) activity.toolId = toolId;
+  if (phase === 'complete') activity.ok = toolSucceeded(event.result);
+  return activity;
 }
 
 module.exports = { extractToolActivity };
