@@ -101,9 +101,12 @@ function resolveMiaFolder({ documentsDir, dataDir, hasExistingInstall = false, e
   const persisted = readChoice(dataDir);
   if (persisted && (isRealDirectory(persisted) || !pathExists(persisted))) return adopt(persisted);
 
+  // Adopting an existing Documents/mia is only for an install from before
+  // the saved choice existed. A saved choice that had to be rejected means
+  // Mia already chose once, so it chooses again by the collision rules.
   const first = path.join(documentsDir, FOLDER_NAME);
   let chosen = "";
-  if (hasExistingInstall && isRealDirectory(first)) {
+  if (hasExistingInstall && !persisted && isRealDirectory(first)) {
     chosen = first;
   } else {
     for (let index = 1; index <= MAX_CANDIDATES && !chosen; index += 1) {

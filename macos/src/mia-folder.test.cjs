@@ -143,3 +143,18 @@ test("a saved choice replaced by a symlink is chosen again", () => {
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, CHOICE_FILENAME), "utf8")).path, folder);
   assert.deepEqual(fs.readdirSync(external), []);
 });
+
+test("a rejected saved choice on a later launch never adopts a foreign mia", () => {
+  const { root, documentsDir, dataDir } = fixture();
+  foreign(path.join(documentsDir, "mia"));
+  const first = resolveMiaFolder({ documentsDir, dataDir, env: {} });
+  assert.equal(first, path.join(documentsDir, "mia2"));
+  fs.rmSync(first, { recursive: true });
+  const external = path.join(root, "external");
+  fs.mkdirSync(external);
+  fs.symlinkSync(external, first);
+  const folder = resolveMiaFolder({ documentsDir, dataDir, hasExistingInstall: true, env: {} });
+  assert.equal(folder, path.join(documentsDir, "mia3"));
+  assert.equal(fs.existsSync(path.join(documentsDir, "mia", MARKER_FILENAME)), false);
+  assert.deepEqual(fs.readdirSync(external), []);
+});
