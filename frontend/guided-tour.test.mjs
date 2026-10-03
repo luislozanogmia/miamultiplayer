@@ -116,3 +116,16 @@ test('Next walks every guide step without needing a target click and Done finish
   assert.match(wiring, /miaosTourNext'\)\.addEventListener\('click', tourNext\)/);
   assert.match(wiring, /miaosTourSkip'\)\.addEventListener\('click', tourFinish\)/);
 });
+
+test('the starter-bots step is left out when every starter bot was dismissed', () => {
+  let visible = [];
+  const context = { tour: {}, visibleChatStarterBots: () => visible };
+  vm.createContext(context);
+  const steps = source.slice(source.indexOf('var TOUR_STEPS = ['), source.indexOf('];', source.indexOf('var TOUR_STEPS = [')) + 2);
+  vm.runInContext(steps.replace('var TOUR_STEPS', 'globalThis.TOUR_STEPS') + '\n' + functionSource('currentTourSteps'), context);
+  const targets = () => context.currentTourSteps().map(step => step.target);
+  assert.ok(!targets().includes('#chatStarterBots'));
+  assert.equal(context.currentTourSteps().length, context.TOUR_STEPS.length - 1);
+  visible = [{name: 'Inbox triage'}];
+  assert.ok(targets().includes('#chatStarterBots'));
+});
