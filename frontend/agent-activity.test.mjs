@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 
 const require = createRequire(import.meta.url);
 const activity = require('./agent-activity.js');
@@ -9,6 +10,15 @@ const { extractToolActivity } = require('../backend/agent-activity.js');
 const appSource = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+
+test('browser activity export and consumers agree on the public helper name', () => {
+  const window = {};
+  runInNewContext(readFileSync(new URL('./agent-activity.js', import.meta.url), 'utf8'), { window });
+  assert.equal(typeof window.MiaActivity.reduceActivity, 'function');
+  assert.equal(typeof window.MiaActivity.formatElapsed, 'function');
+  assert.match(appSource, /window\.MiaActivity\.reduceActivity/);
+  assert.match(appSource, /window\.MiaActivity\.formatElapsed/);
+});
 
 const sig = (extra = {}) => {
   const { paths = [], ...fields } = extra;

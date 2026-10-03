@@ -8253,14 +8253,14 @@
   var chatActivityTimer = null;
 
   function applyChatActivity(conversationId, activity){
-    if(!conversationId || !window.MiaAgentActivity) return;
-    chatActivityByRoom[conversationId] = window.MiaAgentActivity.reduceActivity(chatActivityByRoom[conversationId], activity);
+    if(!conversationId || !window.MiaActivity) return;
+    chatActivityByRoom[conversationId] = window.MiaActivity.reduceActivity(chatActivityByRoom[conversationId], activity);
     if(conversationId === chatWs.activeRoomId) renderChatActivityPanel();
   }
 
   function renderChatActivityPanel(){
     var panel = el('#chatActivityPanel');
-    var util = window.MiaAgentActivity;
+    var util = window.MiaActivity;
     if(!panel || !util) return;
     var roomId = chatWs.activeRoomId;
     var running = roomId ? tasksForRoom(roomId).filter(function(task){ return task.kind === 'native-dispatch'; }) : [];
@@ -8299,7 +8299,7 @@
   function tickChatActivityElapsed(){
     var node = el('[data-cap-elapsed]');
     if(!node){ if(chatActivityTimer){ clearInterval(chatActivityTimer); chatActivityTimer = null; } return; }
-    node.textContent = window.MiaAgentActivity.formatElapsed(Date.now() - Number(node.getAttribute('data-started-at') || Date.now()));
+    node.textContent = window.MiaActivity.formatElapsed(Date.now() - Number(node.getAttribute('data-started-at') || Date.now()));
   }
 
   function renderChatThread(options){

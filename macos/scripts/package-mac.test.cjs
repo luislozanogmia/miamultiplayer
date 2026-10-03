@@ -410,6 +410,18 @@ test("upstream build-path exception requires exact file, hash and matched prefix
   }
 });
 
+test("activity helper passes the unchanged artifact privacy audit", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-activity-privacy-test-"));
+  try {
+    const target = path.join(root, "resources", "frontend");
+    fs.mkdirSync(target, { recursive: true });
+    fs.copyFileSync(path.resolve(__dirname, "../../frontend/agent-activity.js"), path.join(target, "agent-activity.js"));
+    assert.doesNotThrow(() => assertNoPrivateContent(root));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("artifact content audit rejects requested identities and recognizable live secrets", () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-private-content-test-"));
   try {

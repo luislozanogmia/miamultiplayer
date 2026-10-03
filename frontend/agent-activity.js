@@ -1,7 +1,7 @@
 (function(root, factory){
   var api = factory();
   if(typeof module === 'object' && module.exports) module.exports = api;
-  else root.MiaAgentActivity = api;
+  else root.MiaActivity = api;
 })(typeof window !== 'undefined' ? window : globalThis, function(){
   'use strict';
   var MAX_FILES = 30;
