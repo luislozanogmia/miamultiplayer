@@ -979,3 +979,44 @@ test('waits for the gateway recorded in gateway.pid to exit', async (t) => {
   fs.writeFileSync(path.join(home, 'gateway.pid'), String(survivor.pid));
   assert.equal(await waitForRecordedGatewayExit(env, { timeoutMs: 50, pollMs: 10 }), true, 'bare pid, dead');
 });
+
+test('a gateway recorded only in gateway_state.json or gateway.lock still blocks cleanup', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-records-'));
+  const { spawn } = await import('node:child_process');
+  const survivor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => {
+    try { survivor.kill('SIGKILL'); } catch (_) { /* already gone */ }
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const env = { HERMES_HOME: home };
+  const wait = () => waitForRecordedGatewayExit(env, { timeoutMs: 100, pollMs: 20 });
+  const state = path.join(home, 'gateway_state.json');
+  const lock = path.join(home, 'gateway.lock');
+
+  // Launch-service gateway: no gateway.pid, only a live runtime record.
+  fs.writeFileSync(state, JSON.stringify({ pid: survivor.pid, gateway_state: 'running' }));
+  assert.equal(await wait(), false, 'live gateway in gateway_state.json');
+  fs.writeFileSync(state, JSON.stringify({ pid: survivor.pid, gateway_state: 'stopped' }));
+  assert.equal(await wait(), true, 'a stopped runtime record is not a live gateway');
+  fs.rmSync(state);
+
+  fs.writeFileSync(lock, JSON.stringify({ pid: survivor.pid }));
+  assert.equal(await wait(), false, 'live gateway in gateway.lock');
+  fs.rmSync(lock);
+  assert.equal(await wait(), true, 'no records at all is a cold start');
+});
+
+test('an unreadable gateway record is treated as a possibly running gateway', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-malformed-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const env = { HERMES_HOME: home };
+  const wait = () => waitForRecordedGatewayExit(env, { timeoutMs: 50, pollMs: 10 });
+  for (const name of ['gateway.pid', 'gateway.lock', 'gateway_state.json']) {
+    fs.writeFileSync(path.join(home, name), '{not json');
+    assert.equal(await wait(), false, `malformed ${name}`);
+    fs.writeFileSync(path.join(home, name), JSON.stringify({ gateway_state: 'running' }));
+    assert.equal(await wait(), false, `${name} without a pid`);
+    fs.rmSync(path.join(home, name));
+  }
+  assert.equal(await wait(), true);
+});
