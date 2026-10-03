@@ -158,3 +158,25 @@ test("every quit path shares one backend stop", async () => {
   assert.equal(calls, 1);
   assert.equal(shutdown.done, true);
 });
+
+test("a forced quit kills a surviving gateway after the backend already exited", { skip: !unix }, async () => {
+  const { backend, gatewayPid } = await spawnBackendGroup({ gatewayIgnoresTerm: true });
+  const shutdown = createQuitShutdown({
+    currentProcess: () => backend,
+    stopBackend: (child) => stopProcessGroup(child, { graceMs: 60000, groupGraceMs: 60000, pollMs: 20 }),
+  });
+  try {
+    shutdown.stop();
+    const exitDeadline = Date.now() + 2000;
+    while (isAlive(backend.pid) && Date.now() < exitDeadline) await new Promise(r => setTimeout(r, 20));
+    assert.notEqual(backend.exitCode === null && backend.signalCode === null, true, "backend should have exited");
+    assert.equal(isAlive(gatewayPid), true);
+    assert.equal(shutdown.done, false);
+    shutdown.forceStop();
+    const deadline = Date.now() + 2000;
+    while (isAlive(gatewayPid) && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+    assert.equal(isAlive(gatewayPid), false, "gateway must not survive a forced quit");
+  } finally {
+    await cleanup(backend.pid);
+  }
+});
