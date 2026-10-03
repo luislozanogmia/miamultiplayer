@@ -2020,6 +2020,11 @@ async function loadMiaOS() {
     const resolvedBackend = await resolveBackend();
     desktopLog(`load target ${resolvedBackend || "fallback"}`);
     if (resolvedBackend) {
+      try {
+        await nativeBrowser?.clearLegacyAttachmentCookie?.();
+      } catch (error) {
+        desktopLog(`legacy attachment cookie cleanup failed: ${error.message}`);
+      }
       await withTimeout(
         mainWindow.loadURL(`${resolvedBackend}/#/chat`),
         15000,
@@ -2309,10 +2314,8 @@ ipcMain.handle("miaos-artifact-open", async (event, value) => {
 });
 
 // Chat attachments open in Mia's in-app browser, not a separate pane. The
-// browser keeps its own profile, so give it the current UI session for the
-// exact Mia backend origin (same cookie copy the artifact pane uses), then
-// hand the validated URL back; the renderer navigates through the normal
-// browser path so the chat's bot stays the browser's context.
+// browser keeps its own profile. Authorize only this preview's top-level GET
+// in memory; never copy the UI's login cookie into that bot-controllable jar.
 ipcMain.handle("miaos-browser-attachment-prepare", async (event, value) => {
   if (!isMainWindowSender(event)) return { ok: false, error: "Not authorized." };
   let target;
@@ -2326,7 +2329,7 @@ ipcMain.handle("miaos-browser-attachment-prepare", async (event, value) => {
     return { ok: false, error: "Only Mia conversation attachments can open here." };
   }
   try {
-    await syncArtifactSessionCookies(target, session.fromPartition(BROWSER_PARTITION, { cache: true }));
+    await nativeBrowser.prepareAttachment(target, mainWindow.webContents.session);
   } catch (error) {
     desktopLog(`attachment browser session sync failed: ${error.message}`);
     return { ok: false, error: "Attachment authentication is unavailable." };

@@ -484,6 +484,11 @@ let hermesGatewayClient = null;
 // gateway is running, so none can write its cached pool back afterwards.
 function removeStaleProfileCredentials() {
   const removed = removeProfileCopiesOfRootCredentials(process.env.HERMES_HOME);
+  if (removed.failures.length) {
+    // A profile known to contain a stale key must not outrank the root store.
+    // Keep auth-store paths out of logs and user-facing gateway errors.
+    throw new Error('Mia could not safely prepare stored provider credentials. Restart Mia and try again.');
+  }
   if (removed.providers.length) {
     console.log('[hermes-auth] removed profile copies of root keys:', removed.providers.join(', '));
   }
@@ -918,6 +923,7 @@ module.exports = {
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
   startHermesGatewayRuntime,
+  removeStaleProfileCredentials,
   closeHermesGatewayRuntime,
   closeHermesGatewaySessions,
   deleteHermesGatewaySessions,

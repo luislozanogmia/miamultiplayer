@@ -58,6 +58,10 @@ const LEGACY_MANAGED_MARKERS = Object.freeze([
   '# Managed by MiaOS. Runtime permissions are app-owned.',
   '# Managed by MiaOS. Bots are bounded task workers, not full agents.',
 ]);
+const isManagedProfileConfig = text => typeof text === 'string' && (
+  text.startsWith(MANAGED_MARKER)
+  || LEGACY_MANAGED_MARKERS.some(marker => text.startsWith(marker))
+);
 
 const SHELL_GUARD = `#!/bin/bash
 # Managed by Mia. Keep browser launches inside the app-owned browser.
@@ -286,8 +290,7 @@ function provisionRuntimeProfile({
     model: existing.startsWith(MANAGED_MARKER) ? existingProfileModel(existing) : null,
   });
 
-  const ownedByMia = existing.startsWith(MANAGED_MARKER)
-    || LEGACY_MANAGED_MARKERS.some((marker) => existing.startsWith(marker));
+  const ownedByMia = isManagedProfileConfig(existing);
   if (existing && !ownedByMia) {
     throw new Error(`refusing to overwrite unmanaged Hermes profile: ${profile}`);
   }
@@ -443,6 +446,7 @@ function provisionHermesRuntimeProfiles(options = {}) {
 }
 
 module.exports = {
+  isManagedProfileConfig,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
