@@ -8244,7 +8244,7 @@
   }
 
   /* ============ CHAT: live agent status panel (#chatActivityPanel) ============
-     Fed by ephemeral "conversation.activity" socket signals (paths only, see
+     Fed by ephemeral "conversation.activity" socket signals (filenames only, see
      backend/agent-activity.js). Shows what the agent is doing now, the files
      it is reading or editing, and elapsed time; once the turn ends it keeps
      the last turn's file list. CSS hides it whenever another right-hand panel
@@ -8279,7 +8279,7 @@
     var startedAt = Number(state.startedAt || Date.now());
     var filesHtml = files.length ? '<ul class="cap-files">' + files.map(function(file){
       var status = util.fileStatus(file, live);
-      return '<li class="cap-file" title="' + esc(file.path) + '"><span class="cap-file-name">' + esc(util.basename(file.path)) +
+      return '<li class="cap-file" title="' + esc(file.name) + '"><span class="cap-file-name">' + esc(file.name) +
         '</span><span class="cap-file-kind is-' + status.kind + '">' + esc(status.text) + '</span></li>';
     }).join('') + '</ul>' : '<div class="cap-empty">No files yet</div>';
     panel.innerHTML =

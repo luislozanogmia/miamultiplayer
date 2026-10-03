@@ -44,18 +44,19 @@ function clientHintPlatform() {
 
 // Add Chrome's low-entropy client hints to requests that carry none, leaving
 // any request Chromium already hinted untouched.
-function installClientHints(session) {
+function installClientHints(session, requestHeaders = null) {
   if (!session || !session.webRequest || typeof session.webRequest.onBeforeSendHeaders !== "function") return;
-  session.webRequest.onBeforeSendHeaders({ urls: ["https://*/*"] }, (details, callback) => {
+  session.webRequest.onBeforeSendHeaders({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
     const headers = details.requestHeaders || {};
     const hinted = Object.keys(headers).some(name => name.toLowerCase() === "sec-ch-ua");
-    if (!hinted) {
+    if (details.url.startsWith("https:") && !hinted) {
       const userAgent = headers["User-Agent"] || headers["user-agent"];
       const major = chromeMajor(userAgent);
       headers["sec-ch-ua"] = `"Not(A:Brand";v="99", "Google Chrome";v="${major}", "Chromium";v="${major}"`;
       headers["sec-ch-ua-mobile"] = "?0";
       headers["sec-ch-ua-platform"] = clientHintPlatform();
     }
+    if (requestHeaders) requestHeaders(details, headers);
     callback({ requestHeaders: headers });
   });
 }

@@ -982,6 +982,7 @@ test("chat attachments open in the in-app browser through a trusted, exact-URL I
   assert.match(handler, /isMainWindowSender\(event\)/);
   assert.match(handler, /normalizeInAppArtifactTarget\(value, senderUrl\)/);
   assert.match(handler, /isNativeArtifactTarget\(target\)/);
-  assert.match(handler, /syncArtifactSessionCookies\(target, session\.fromPartition\(BROWSER_PARTITION/);
+  assert.match(handler, /nativeBrowser\.prepareAttachment\(target, mainWindow\.webContents\.session\)/);
+  assert.doesNotMatch(handler, /syncArtifactSessionCookies|session\.fromPartition\(BROWSER_PARTITION/);
   assert.doesNotMatch(handler, /openExternal|file:|pathToFileURL/);
 });

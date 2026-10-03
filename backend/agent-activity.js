@@ -2,10 +2,10 @@
 
 // Turns a raw Hermes tool event (tool.start / tool.complete) into the tiny,
 // safe record the chat's status panel shows: a plain-language activity label,
-// whether the tool reads or edits files, and the file paths it names. Only
-// paths and whether the tool succeeded ever leave this module — never file
-// contents, commands, patch bodies, results, or any other argument — so it
-// is safe to send live to the room.
+// whether the tool reads or edits files, and display names for those files.
+// Full local paths never leave this module; a keyed opaque id lets the UI
+// distinguish same-named files without revealing their parent directories.
+const crypto = require('node:crypto');
 const READ_TOOLS = new Set(['read_file', 'read', 'view', 'view_file', 'cat', 'open_file', 'read_many_files']);
 const EDIT_TOOLS = new Set([
   'write_file', 'write', 'create_file', 'patch', 'edit', 'edit_file', 'multiedit',
@@ -31,6 +31,15 @@ const LIST_PATH_KEYS = ['paths', 'files', 'file_paths'];
 const PATCH_TEXT_KEYS = ['patch', 'diff', 'input'];
 const MAX_PATH_LENGTH = 500;
 const MAX_PATHS_PER_EVENT = 20;
+const pathIdKey = crypto.randomBytes(32);
+
+function fileReference(filePath) {
+  const name = filePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  return {
+    id: crypto.createHmac('sha256', pathIdKey).update(filePath).digest('hex').slice(0, 24),
+    name,
+  };
+}
 
 function toolKind(toolKey) {
   if (READ_TOOLS.has(toolKey)) return 'read';
@@ -124,9 +133,9 @@ function extractToolActivity(type, payload) {
   const toolKey = name || 'tool';
   const kind = toolKind(toolKey);
   // Search tools take a directory in `path`, which is not a file being worked on.
-  const paths = kind === 'other' ? [] : extractToolPaths(toolKey, parseArgs(event));
-  const activity = { phase, tool: toolKey.slice(0, 64), label: toolLabel(toolKey), kind, paths };
-  // The id pairs a completion with its start, whose paths the completion may
+  const files = kind === 'other' ? [] : extractToolPaths(toolKey, parseArgs(event)).map(fileReference);
+  const activity = { phase, tool: toolKey.slice(0, 64), label: toolLabel(toolKey), kind, files };
+  // The id pairs a completion with its start, whose files the completion may
   // not repeat; it is an opaque Hermes call id, not tool input.
   const toolId = typeof event.tool_id === 'string' ? event.tool_id.trim().slice(0, 128) : '';
   if (toolId) activity.toolId = toolId;

@@ -20,17 +20,17 @@
     };
   }
 
-  function touchFile(next, path, kind, at){
+  function touchFile(next, file, kind, at){
     var edited = false;
     for(var j = 0; j < next.files.length; j++){
-      if(next.files[j].path === path){
+      if(next.files[j].id === file.id){
         edited = Boolean(next.files[j].edited);
         next.files.splice(j, 1);
         break;
       }
     }
     if(kind === 'edit') edited = true;
-    next.files.unshift({path: path, kind: edited ? 'edit' : kind, edited: edited, at: at});
+    next.files.unshift({id: file.id, name: file.name, kind: edited ? 'edit' : kind, edited: edited, at: at});
   }
 
   function reduceActivity(state, activity){
@@ -41,21 +41,23 @@
     };
     if(activity.phase === 'start' && activity.label) next.label = String(activity.label);
     var toolId = typeof activity.toolId === 'string' ? activity.toolId : '';
-    var paths = Array.isArray(activity.paths) ? activity.paths : [];
+    var files = Array.isArray(activity.files) ? activity.files : [];
     var isEdit = activity.kind === 'edit';
-    if(isEdit && activity.phase === 'complete' && !paths.length && toolId && next.pending[toolId]){
-      paths = next.pending[toolId];
+    if(isEdit && activity.phase === 'complete' && !files.length && toolId && next.pending[toolId]){
+      files = next.pending[toolId];
     }
     if(isEdit && toolId){
-      if(activity.phase === 'start') next.pending[toolId] = paths.slice();
+      if(activity.phase === 'start') next.pending[toolId] = files.slice();
       else delete next.pending[toolId];
     }
     var kind = !isEdit ? 'read'
       : activity.phase === 'start' ? 'editing'
         : activity.ok === false ? 'failed' : 'edit';
-    for(var i = 0; i < paths.length; i++){
-      var path = String(paths[i] || '');
-      if(path) touchFile(next, path, kind, at);
+    for(var i = 0; i < files.length; i++){
+      var file = files[i];
+      if(file && typeof file.id === 'string' && file.id && typeof file.name === 'string' && file.name){
+        touchFile(next, file, kind, at);
+      }
     }
     if(next.files.length > MAX_FILES) next.files.length = MAX_FILES;
     return next;

@@ -4,6 +4,11 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { extractToolActivity } = require('./agent-activity');
+const names = activity => activity.files.map(file => file.name);
+const opaque = activity => {
+  assert.ok(activity.files.every(file => /^[a-f0-9]{24}$/.test(file.id)));
+  assert.equal(JSON.stringify(activity).includes('/work/'), false);
+};
 
 test('ignores events that are not tool start/complete', () => {
   assert.equal(extractToolActivity('message.delta', { text: 'hi' }), null);
@@ -11,9 +16,11 @@ test('ignores events that are not tool start/complete', () => {
 });
 
 test('read tools report the path as read', () => {
-  assert.deepEqual(extractToolActivity('tool.start', { name: 'read_file', args: { path: '/work/a.js' } }), {
-    phase: 'start', tool: 'read_file', label: 'Reading files', kind: 'read', paths: ['/work/a.js'],
-  });
+  const activity = extractToolActivity('tool.start', { name: 'read_file', args: { path: '/work/a.js' } });
+  assert.equal(activity.label, 'Reading files');
+  assert.equal(activity.kind, 'read');
+  assert.deepEqual(names(activity), ['a.js']);
+  opaque(activity);
 });
 
 test('write and patch tools report the path as edited and never leak contents', () => {
@@ -23,13 +30,14 @@ test('write and patch tools report the path as edited and never leak contents', 
     result_text: 'ok',
   });
   assert.equal(write.kind, 'edit');
-  assert.deepEqual(write.paths, ['/work/b.md']);
+  assert.deepEqual(names(write), ['b.md']);
+  opaque(write);
   assert.equal(JSON.stringify(write).includes('SECRET'), false);
   const patch = extractToolActivity('tool.start', {
     name: 'patch',
     args: { path: 'src/x.js', old_string: 'token=ABC', new_string: 'token=DEF' },
   });
-  assert.deepEqual(patch.paths, ['src/x.js']);
+  assert.deepEqual(names(patch), ['x.js']);
   assert.equal(JSON.stringify(patch).includes('ABC'), false);
 });
 
@@ -39,7 +47,7 @@ test('multi-file patches yield only the file headers', () => {
     '*** Add File: two.js', '+hello', '*** End Patch',
   ].join('\n');
   const activity = extractToolActivity('tool.start', { name: 'apply_patch', args: { patch } });
-  assert.deepEqual(activity.paths, ['a/one.js', 'two.js']);
+  assert.deepEqual(names(activity), ['one.js', 'two.js']);
   assert.equal(JSON.stringify(activity).includes('hunter2'), false);
 });
 
@@ -48,15 +56,16 @@ test('accepts JSON string args, path lists, and de-duplicates', () => {
     name: 'read_file',
     args: JSON.stringify({ path: '/a', paths: ['/a', '/b', { path: '/c' }] }),
   });
-  assert.deepEqual(activity.paths, ['/a', '/b', '/c']);
+  assert.deepEqual(names(activity), ['a', 'b', 'c']);
+  assert.equal(new Set(activity.files.map(file => file.id)).size, 3);
 });
 
 test('terminal and search tools carry no paths or commands', () => {
   const terminal = extractToolActivity('tool.start', { name: 'terminal', args: { command: 'cat ~/.ssh/id_rsa', path: '/x' } });
-  assert.deepEqual(terminal, { phase: 'start', tool: 'terminal', label: 'Running a command', kind: 'other', paths: [] });
+  assert.deepEqual(terminal, { phase: 'start', tool: 'terminal', label: 'Running a command', kind: 'other', files: [] });
   const search = extractToolActivity('tool.start', { name: 'search_files', args: { path: '/repo', pattern: 'x' } });
   assert.equal(search.label, 'Searching files');
-  assert.deepEqual(search.paths, []);
+  assert.deepEqual(search.files, []);
   assert.equal(extractToolActivity('tool.start', { name: 'web_search', args: { query: 'q' } }).label, 'Searching the web');
 });
 
@@ -65,7 +74,7 @@ test('drops URLs, multiline and oversized path values', () => {
     name: 'read_file',
     args: { paths: ['https://example.com/x', 'a\nb', 'x'.repeat(600), '/ok'] },
   });
-  assert.deepEqual(activity.paths, ['/ok']);
+  assert.deepEqual(names(activity), ['ok']);
 });
 
 test('unknown tools get a generic label', () => {
@@ -76,10 +85,13 @@ test('a completion says whether the tool succeeded, never what it returned', () 
   const done = (result) => extractToolActivity('tool.complete', {
     name: 'write_file', tool_id: 'call_1', args: { path: '/work/a.js' }, result,
   });
-  assert.deepEqual(done({ success: true, bytes_written: 12 }), {
-    phase: 'complete', tool: 'write_file', label: 'Editing files', kind: 'edit',
-    paths: ['/work/a.js'], toolId: 'call_1', ok: true,
-  });
+  const completed = done({ success: true, bytes_written: 12 });
+  assert.equal(completed.phase, 'complete');
+  assert.equal(completed.kind, 'edit');
+  assert.deepEqual(names(completed), ['a.js']);
+  assert.equal(completed.toolId, 'call_1');
+  assert.equal(completed.ok, true);
+  opaque(completed);
   assert.equal(done({ error: 'Write denied: /work/a.js is protected' }).ok, false);
   assert.equal(done('{"error": "permission denied"}').ok, false);
   assert.equal(done({ success: false }).ok, false);
@@ -87,4 +99,13 @@ test('a completion says whether the tool succeeded, never what it returned', () 
   assert.equal(done(undefined).ok, true);
   assert.doesNotMatch(JSON.stringify(done({ error: 'secret detail' })), /secret detail/);
   assert.equal('ok' in extractToolActivity('tool.start', { name: 'write_file', tool_id: 'call_1', args: { path: '/a' } }), false);
+});
+
+test('same-named files retain distinct opaque identities without parent directories', () => {
+  const activity = extractToolActivity('tool.start', {
+    name: 'read_many_files', args: { paths: ['/private/client-a/plan.md', '/private/client-b/plan.md'] },
+  });
+  assert.deepEqual(names(activity), ['plan.md', 'plan.md']);
+  assert.notEqual(activity.files[0].id, activity.files[1].id);
+  assert.doesNotMatch(JSON.stringify(activity), /client-a|client-b|\/private/);
 });

@@ -5,11 +5,16 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const activity = require('./agent-activity.js');
+const { extractToolActivity } = require('../backend/agent-activity.js');
 const appSource = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
 
-const sig = (extra) => Object.assign({ dispatchId: 'd1', phase: 'start', label: 'Reading files', kind: 'read', paths: [], at: 1000 }, extra);
+const sig = (extra = {}) => {
+  const { paths = [], ...fields } = extra;
+  return Object.assign({ dispatchId: 'd1', phase: 'start', label: 'Reading files', kind: 'read', files: [], at: 1000 },
+    fields, { files: paths.map(value => ({ id: value, name: activity.basename(value) })) });
+};
 
 test('tracks the current activity label per turn', () => {
   let state = activity.reduceActivity(null, sig({ label: 'Searching the web' }));
@@ -26,10 +31,10 @@ test('files are most recent first, deduplicated, and edits stick', () => {
   state = activity.reduceActivity(state, sig({ kind: 'edit', toolId: 't1', paths: ['/a'], at: 2000 }));
   state = activity.reduceActivity(state, sig({ phase: 'complete', kind: 'edit', toolId: 't1', paths: ['/a'], ok: true, at: 2500 }));
   state = activity.reduceActivity(state, sig({ kind: 'read', paths: ['/a'], at: 3000 }));
-  assert.deepEqual(state.files.map((f) => [f.path, f.kind]), [['/a', 'edit'], ['/b', 'read']]);
+  assert.deepEqual(state.files.map((f) => [f.id, f.kind]), [['/a', 'edit'], ['/b', 'read']]);
 });
 
-const status = (state, path, live = true) => activity.fileStatus(state.files.find((f) => f.path === path), live).text;
+const status = (state, id, live = true) => activity.fileStatus(state.files.find((f) => f.id === id), live).text;
 
 test('a write is "Editing" until it completes, and only a success shows "Edited"', () => {
   let state = activity.reduceActivity(null, sig({ kind: 'edit', toolId: 't1', paths: ['/a'] }));
@@ -66,9 +71,9 @@ test('a write that never completed is not reported as saved after the turn', () 
 test('a new dispatch replaces the previous turn and does not mutate old state', () => {
   const first = activity.reduceActivity(null, sig({ paths: ['/a'] }));
   const second = activity.reduceActivity(first, sig({ dispatchId: 'd2', paths: ['/z'], at: 9000 }));
-  assert.deepEqual(second.files.map((f) => f.path), ['/z']);
+  assert.deepEqual(second.files.map((f) => f.id), ['/z']);
   assert.equal(second.startedAt, 9000);
-  assert.deepEqual(first.files.map((f) => f.path), ['/a']);
+  assert.deepEqual(first.files.map((f) => f.id), ['/a']);
 });
 
 test('ignores signals without a dispatch id and caps the file list', () => {
@@ -76,7 +81,29 @@ test('ignores signals without a dispatch id and caps the file list', () => {
   const paths = Array.from({ length: 50 }, (_, i) => `/f${i}`);
   const state = activity.reduceActivity(null, sig({ paths }));
   assert.equal(state.files.length, activity.MAX_FILES);
-  assert.equal(state.files[0].path, '/f49');
+  assert.equal(state.files[0].id, '/f49');
+});
+
+test('same-named files remain separate and the panel renders only names', () => {
+  const state = activity.reduceActivity(null, sig({ paths: ['/one/report.md', '/two/report.md'] }));
+  assert.deepEqual(state.files.map(file => file.name), ['report.md', 'report.md']);
+  assert.notEqual(state.files[0].id, state.files[1].id);
+  assert.match(appSource, /title="' \+ esc\(file\.name\)/);
+  assert.doesNotMatch(appSource, /esc\(file\.path\)/);
+});
+
+test('real backend activity records keep edit status without exposing local paths', () => {
+  const start = extractToolActivity('tool.start', {
+    name: 'write_file', tool_id: 'call-1', args: { path: '/private/client/report.md' },
+  });
+  const complete = extractToolActivity('tool.complete', {
+    name: 'write_file', tool_id: 'call-1', args: {}, result: { success: true },
+  });
+  const first = activity.reduceActivity(null, { ...start, dispatchId: 'd1', at: 1000 });
+  const final = activity.reduceActivity(first, { ...complete, dispatchId: 'd1', at: 2000 });
+  assert.equal(final.files[0].name, 'report.md');
+  assert.equal(activity.fileStatus(final.files[0], false).text, 'Edited');
+  assert.doesNotMatch(JSON.stringify(start), /\/private\/client/);
 });
 
 test('basename and elapsed formatting', () => {

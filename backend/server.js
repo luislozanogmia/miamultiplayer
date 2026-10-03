@@ -86,6 +86,7 @@ const {
   readProviderRootCredentials,
   removeProviderProfileCredentials,
   removeProviderRootCredentials,
+  requireCredentialCleanup,
   resetHermesHome,
 } = require('./hermes-home-reset');
 const {
@@ -3333,10 +3334,15 @@ async function openRouterKeyIsLive(key) {
 // pool on shutdown, resurrecting exactly the dead keys being removed.
 async function installManagedRouterKey(key) {
   try { await stopHermesGatewayRuntime(); } catch (_) { /* not running */ }
-  removeProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
-  removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER);
-  await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
-  try { await startHermesGatewayRuntime(); } catch (_) { /* best effort */ }
+  try {
+    // Fail before changing the root key if a managed profile cannot be
+    // cleaned; otherwise its old key would keep shadowing the new one.
+    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER));
+    requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER));
+    await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
+  } finally {
+    try { await startHermesGatewayRuntime(); } catch (_) { /* best effort */ }
+  }
 }
 
 async function autoProvisionManagedRouter(email, clerkToken, { force = false } = {}) {
@@ -4526,12 +4532,16 @@ app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req
   }
   disconnectHermesAuth(req.userEmail, provider);
   try {
+    // Validate before Hermes persists the submitted key so malformed or
+    // externally linked profiles cannot leave a partial re-key behind.
+    requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
+    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
     await runHermesApiKeyAdd(provider, apiKey);
     // Re-keying must actually take effect: drop any stale copy of this
     // provider from the per-profile pools (the root store just written is
     // authoritative) and bounce the Mia-owned gateway so no live session
     // stays pinned to the credential it was built with.
-    removeProviderProfileCredentials(process.env.HERMES_HOME, provider);
+    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider));
     await restartHermesGatewayRuntime();
     hermesDisconnectedProviders.delete(provider);
     setHarnessProviderConnected(req.userEmail, provider, true);
