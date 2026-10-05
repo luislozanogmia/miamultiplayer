@@ -264,6 +264,7 @@ function conversationRow(row) {
     archivedAt: row.archived_at,
     deletedAt: row.deleted_at,
     metadata: fromJson(row.metadata, 'conversation.metadata'),
+    ...(row.last_event_at !== undefined ? { lastEventAt: row.last_event_at || null } : {}),
   };
 }
 
@@ -955,10 +956,16 @@ function createConversationRepository(db) {
   function listConversations({ companyId, includeDeleted = false, limit = 100 } = {}) {
     const normalizedCompanyId = requiredString(companyId, 'companyId');
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) fail('INVALID_INPUT', 'limit must be an integer from 1 to 1000');
+    // New messages do not touch updated_at, so the list also carries when the
+    // newest live message was posted; History dates a chat by that.
     return db.prepare(
-      `SELECT * FROM conversations
-        WHERE company_id = ?${includeDeleted ? '' : ' AND deleted_at IS NULL'}
-        ORDER BY updated_at DESC, id DESC
+      `SELECT c.*,
+              (SELECT e.created_at FROM events e
+                WHERE e.company_id = c.company_id AND e.conversation_id = c.id AND e.deleted_at IS NULL
+                ORDER BY e.sequence DESC LIMIT 1) AS last_event_at
+         FROM conversations c
+        WHERE c.company_id = ?${includeDeleted ? '' : ' AND c.deleted_at IS NULL'}
+        ORDER BY c.updated_at DESC, c.id DESC
         LIMIT ?`
     ).all(normalizedCompanyId, limit).map(conversationRow);
   }

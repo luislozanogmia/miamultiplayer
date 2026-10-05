@@ -5031,9 +5031,14 @@
     chatWs.rooms.dms = rooms.filter(function(room){ return room.kind === 'dm' || room.kind === 'group'; });
     var agentRooms = rooms.filter(function(room){ return room.kind === 'agent'; });
     var seenBotRooms = {};
+    // A bot's sidebar row is its main chat; chats started with "New
+    // conversation" live in History and only stand in when nothing else exists.
     var uniqueBotRooms = agentRooms.filter(function(room){ return !isNativeMiaConversation(room.nativeConversation); })
       .sort(function(left, right){
-        return (Date.parse(left.createdAt || '') || 0) - (Date.parse(right.createdAt || '') || 0);
+        var leftFresh = left.metadata && left.metadata.conversationMode === 'fresh' ? 1 : 0;
+        var rightFresh = right.metadata && right.metadata.conversationMode === 'fresh' ? 1 : 0;
+        return leftFresh - rightFresh
+          || (Date.parse(left.createdAt || '') || 0) - (Date.parse(right.createdAt || '') || 0);
       }).filter(function(room){
         var key = String(room.agentId || room.id || '');
         if(seenBotRooms[key]) return false;
@@ -11849,6 +11854,10 @@
         return agentId === 'gateway'
           ? conversation.type === 'agent' && (metadata.agentId === 'gateway' || String(conversation.name || '').toLowerCase() === 'mia')
           : conversation.type === 'bot' && metadata.botId === agentId;
+      }).sort(function(left, right){
+        var leftFresh = left.metadata && left.metadata.conversationMode === 'fresh' ? 1 : 0;
+        var rightFresh = right.metadata && right.metadata.conversationMode === 'fresh' ? 1 : 0;
+        return leftFresh - rightFresh;
       })[0];
       return agentRoom ? agentRoom.id : null;
     }
@@ -13195,9 +13204,12 @@
 
   function conversationHistoryTimestamp(conversation){
     var state = conversation && chatWs.byRoom[conversation.id];
+    // A chat is as recent as its newest message; updatedAt only tracks
+    // settings changes. Older servers do not send lastEventAt.
+    var hasLastEvent = !!conversation && Object.prototype.hasOwnProperty.call(conversation, 'lastEventAt');
     return Math.max(
       Number(state && state.lastTs) || 0,
-      Date.parse(conversation && conversation.updatedAt || '') || 0,
+      Date.parse(hasLastEvent ? conversation.lastEventAt || '' : conversation && conversation.updatedAt || '') || 0,
       Date.parse(conversation && conversation.createdAt || '') || 0
     );
   }
