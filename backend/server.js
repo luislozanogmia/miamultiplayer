@@ -134,6 +134,7 @@ const {
 } = require('./conversation-repository');
 const { createConversationAuthorization } = require('./conversation-authorization');
 const { createConversationService, canonicalBotConversationCandidates } = require('./conversation-service');
+const { isRetiredHermesModel, currentHermesModel } = require('./retired-models');
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
@@ -7892,6 +7893,14 @@ function migrateWorkspaceOwnership() {
     if (record.model && !record.modelProvider) {
       record.modelProvider = harnessCliProviderForUser(record.owner);
       touched = true;
+    }
+    // A bot or schedule saved on a model Mia retired moves to its successor,
+    // so cron jobs stop running the old model and the bot keeps its tier.
+    for (const holder of [record, ...(Array.isArray(record.automations) ? record.automations : [])]) {
+      if (holder && holder.model && isRetiredHermesModel(holder.modelProvider, holder.model)) {
+        holder.model = currentHermesModel(holder.modelProvider, holder.model);
+        touched = true;
+      }
     }
     if (String(record.id || '').startsWith('builtin-') && !record.builtinSlug) {
       record.builtinSlug = String(record.id).slice('builtin-'.length);
