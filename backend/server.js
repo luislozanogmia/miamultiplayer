@@ -6205,10 +6205,22 @@ function ownsPrivateBotConversation(conversation, agent, trigger) {
   const metadata = conversation && conversation.metadata && typeof conversation.metadata === 'object'
     ? conversation.metadata
     : {};
-  return Boolean(conversation && agent && trigger)
-    && conversation.type === 'bot'
-    && metadata.botId === agent.id
-    && String(conversation.createdBy || '').trim().toLowerCase() === String(trigger.senderId || '').trim().toLowerCase();
+  const sender = String(trigger && trigger.senderId || '').trim().toLowerCase();
+  if (!conversation || !agent || !trigger || conversation.type !== 'bot') return false;
+  if (String(conversation.createdBy || '').trim().toLowerCase() !== sender) return false;
+  if (metadata.botId) return metadata.botId === agent.id;
+  // Bot chats made before Mia recorded botId only name their bot through
+  // membership. They count as the bot's own chat when the sender and this
+  // bot are its only members.
+  const members = nativeConversationRepository.listMembers({
+    companyId: conversation.companyId,
+    conversationId: conversation.id,
+    includeRemoved: false,
+  });
+  return members.length === 2
+    && members.some((member) => member.principalType === 'bot' && member.principalId === agent.id)
+    && members.some((member) => member.principalType === 'user'
+      && String(member.principalId || '').trim().toLowerCase() === sender);
 }
 
 // The saved session is only reused while it runs on the same profile with the
