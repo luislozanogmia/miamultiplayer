@@ -1178,7 +1178,7 @@ exit 8
     });
     const selectedBody = await selected.json();
     assert.equal(selected.status, 200, JSON.stringify(selectedBody));
-    assert.equal(selectedBody.harness.model, 'claude-sonnet-5[1m]');
+    assert.equal(selectedBody.harness.model, 'claude-sonnet-5-5[1m]');
     const invalidModel = await fetch(`${server.origin}/api/settings/harness`, {
       method: 'POST', headers, body: JSON.stringify({ provider, model: 'not-a-claude-model', mode: 'solo' }),
     });
@@ -1331,7 +1331,7 @@ exit 9
     const selected = await fetch(`${first.origin}/api/settings/harness`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ provider, model: 'claude-sonnet-5[1m]', mode: 'solo' }),
+      body: JSON.stringify({ provider, model: 'claude-sonnet-5-5[1m]', mode: 'solo' }),
     });
     assert.equal(selected.status, 200, await selected.text());
 
