@@ -2,6 +2,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const os = require("node:os");
+const { prepareWindowsInstallerProgress } = require("./windows-install-progress.cjs");
 
 function windowsInstallerConfig(outputDirectory, iconPath) {
   return {
@@ -28,13 +30,25 @@ function windowsInstallerConfig(outputDirectory, iconPath) {
 
 async function buildWindowsInstaller(packagedRoot, outputDirectory, projectDir, electronVersion, iconPath) {
   const { build, Platform, Arch } = require("electron-builder");
-  await build({
-    projectDir,
-    prepackaged: packagedRoot,
-    targets: Platform.WINDOWS.createTarget(["nsis"], Arch.x64),
-    publish: "never",
-    config: { ...windowsInstallerConfig(outputDirectory, iconPath), electronVersion },
-  });
+  const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-nsis-progress-"));
+  try {
+    const config = windowsInstallerConfig(outputDirectory, iconPath);
+    const progress = prepareWindowsInstallerProgress(progressDirectory);
+    config.nsis.include = progress.include;
+    await build({
+      projectDir,
+      prepackaged: packagedRoot,
+      targets: Platform.WINDOWS.createTarget(["nsis"], Arch.x64),
+      publish: "never",
+      effectiveOptionComputed: async ([, commands]) => {
+        Object.assign(commands, progress.compilerCommands);
+        return false;
+      },
+      config: { ...config, electronVersion },
+    });
+  } finally {
+    fs.rmSync(progressDirectory, { recursive: true, force: true });
+  }
   const version = require(path.join(projectDir, "package.json")).version;
   const installer = path.join(outputDirectory, `Mia-Setup-${version}-x64.exe`);
   if (!fs.existsSync(installer) || !fs.existsSync(path.join(outputDirectory, "latest.yml"))) {

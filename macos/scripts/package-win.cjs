@@ -10,6 +10,7 @@ const { rebuild } = require("@electron/rebuild");
 const { stageGoogleOAuthClient } = require("./package-google-oauth.cjs");
 const { buildWindowsInstaller } = require("./windows-installer.cjs");
 const { buildWindowsIcon } = require("./build-windows-icon.cjs");
+const { pruneWindowsBackendDependencies } = require("./windows-backend-dependencies.cjs");
 const {
   assertNoPrivateBuildPaths,
   assertNoPrivateContent,
@@ -358,6 +359,8 @@ async function buildWindowsPackage() {
     const stagedBackend = path.join(temporaryRoot, "backend");
     stageGoogleOAuthClient(stagedBackend);
     runNpm(["ci", "--omit=dev", "--no-audit", "--no-fund"], stagedBackend);
+    const dependencyPlan = pruneWindowsBackendDependencies(stagedBackend);
+    process.stdout.write(`Windows backend dependencies: kept ${dependencyPlan.retainedPackages} packages; removed ${dependencyPlan.removedPackages} unused packages\n`);
     function stripDependencyState(directory) {
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         const target = path.join(directory, entry.name);
