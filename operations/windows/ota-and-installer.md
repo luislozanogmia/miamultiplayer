@@ -4,6 +4,31 @@
 NSIS installer from the same packaged app. `windows-installer.cjs` owns NSIS
 configuration; `package-win.cjs` owns the application and runtime payload.
 
+## Installation performance
+
+Windows staging keeps the complete Node dependency closure for backend
+packages, including installed peer/optional dependencies and native binaries.
+Clerk JS and UI are served as prebuilt browser assets; their published assets,
+chunks and licenses remain, but npm packages used only to build those assets
+are excluded by `windows-backend-dependencies.cjs`. The source checkout and
+macOS packaging are unaffected. Missing required packages or browser entry
+files stop staging before pruning.
+
+The one-click installer reports preparation, unpacking, copying and finishing
+stages. `windows-install-progress.cjs` adds status calls to pinned
+electron-builder 26.15.3 templates without changing extraction, retries or
+rollback. Compilation uses its generated template directory while retaining
+upstream include paths and the default uninstaller generation. A builder
+upgrade requires reviewing these hooks and compiling/testing them on Windows.
+
+For performance comparisons, use isolated fixture installers with a separate
+app ID and install directory on the same machine. Compare clean installation
+and replacement separately, retain antivirus settings, and check native
+SQLite loading, backend startup and the served Clerk browser chunks after
+pruning. Fixture timings do not establish production OTA or sign-in acceptance.
+See [install-performance-acceptance.md](install-performance-acceptance.md) for
+the measured payload and independently labelled native acceptance results.
+
 ## Artifact contract
 
 - `Mia-Setup-<version>-x64.exe`: per-user, one-click installer.
