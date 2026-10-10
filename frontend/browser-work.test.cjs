@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { configuredModelIndex, connectedModels, recoveryState, pageOrigin, visibleTabs, projection } = require('./browser-work.js');
+const { taskRecoveryState, configuredModelIndex, connectedModels, recoveryState, pageOrigin, visibleTabs, projection } = require('./browser-work.js');
 
 test('connected inventory selects exact bot modelProvider and never substitutes an unavailable model', () => {
   const models = connectedModels([{id:'openai-codex',label:'ChatGPT',models:['gpt-6.1-sol','gpt-6-luna']},{id:'other',models:['gpt-6.1-sol']}]);
@@ -53,6 +53,15 @@ test('personal Mia partial synthesis and its history remain distinct from worker
   shown=projection(record,'g'); assert.equal(shown.synthesis.text,'Fresh combined answer'); assert.equal(shown.preservedResponses.length,1);
   assert.deepEqual(shown.preservedResponses[0].tags,['Previous attempt','Incomplete','Unverified for current attempt','Saved text truncated']);
   assert.equal(shown.preservedResponses[0].goal,'Combine findings'); assert.equal(shown.preservedResponses[0].text,'The comparison is unfinished');
+});
+
+test('stopped personal synthesis exposes safe task recovery even when every worker is done', () => {
+  const work={id:'w',groupId:'g',goal:'Combine',status:'cancelled',workers:[{id:'a',status:'done'},{id:'b',status:'done'}],synthesis:{text:'Unfinished synthesis',status:'stopped',incomplete:true},operations:[{workerId:'a',status:'done'}]};
+  let shown=projection(work,'g'); assert.deepEqual(taskRecoveryState(shown),{held:false,workerIds:['a','b'],eligible:true});
+  assert.equal(recoveryState(shown,'a').eligible,false,'task recovery covers the completed-worker gap');
+  work.status='waiting_for_user';assert.equal(taskRecoveryState(projection(work,'g')).eligible,true);
+  work.operations.push({workerId:'b',status:'uncertain'});assert.equal(taskRecoveryState(projection(work,'g')).eligible,false);assert.equal(taskRecoveryState(work).held,true);
+  work.operations=[];work.status='working';assert.equal(taskRecoveryState(work).eligible,false);
 });
 
 test('planning context removes URL paths, queries, fragments and unsupported schemes', () => {
@@ -118,7 +127,7 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
   assert.ok(nodes.browserWorkList.querySelectorAll('button').some(b=>b.textContent==='Approve once'));
   nodes.browserWorkList.querySelectorAll('button').find(b=>b.textContent==='Stop bot').listeners.click(); await flush();
   assert.equal(stopped,true); assert.deepEqual(calls[1],['stop','work','worker']);
-  assert.equal(nodes.browserWorkList.querySelectorAll('button').length,2); // only authoritative pending approval remains
+  assert.equal(nodes.browserWorkList.querySelectorAll('button').length,3); // only authoritative pending approval remains
   assert.equal(ui.projection(record,'g').results[0].text,'Partial');
   await nodes.browserWorkAssignments.onclick();
   const candidate=nodes.browserWorkCandidates.children[0]; const picks=candidate.querySelectorAll('select');
