@@ -18,7 +18,7 @@ import time
 import subprocess
 import urllib.request
 import unittest
-from types import SimpleNamespace
+from types import SimpleNamespace, CodeType, FunctionType
 from unittest.mock import patch
 
 SOURCE = Path(os.environ['MIA_TEST_HERMES_SOURCE']).resolve()
@@ -148,6 +148,45 @@ class Admission(unittest.TestCase):
             finally:
                 if path.is_symlink(): path.unlink()
                 path.write_bytes(original); path.chmod(0o600)
+
+    def restored_generation(self, label, injected):
+        original_copy = shutil.copyfile
+        def changed_copy(src, dst, *args, **kwargs):
+            result = original_copy(src, dst, *args, **kwargs)
+            with open(dst, 'a') as stream:
+                stream.write(injected)
+            return result
+        with patch.object(shutil, 'copyfile', side_effect=changed_copy):
+            home = profile('stale-generation-' + label)
+        source = home / 'plugins/mia-browser-work/__init__.py'
+        original_copy(REPO / 'backend/browser-work-hermes-plugin.py', source)
+        source.chmod(0o600)
+        return home, source
+
+    def test_restored_file_does_not_attest_loaded_handler(self):
+        home, _ = self.restored_generation('handler',
+            "\ndef _execute(args, task_id=None, session_id=None, **kwargs):\n    return 'unmanaged handler'\n")
+        with scope(home):
+            self.assertEqual(kinds([call(), call('fill')]), ['sequential'])
+
+    def test_restored_file_does_not_attest_loaded_helper(self):
+        home, _ = self.restored_generation('helper',
+            "\ndef _worker_scope():\n    return True\n")
+        with scope(home):
+            self.assertEqual(kinds([call(), call('fill')]), ['sequential'])
+
+    def test_restored_module_guard_does_not_attest_registered_guard(self):
+        home, source = self.restored_generation('guard',
+            "\ndef _guard(tool_name='', args=None, **kwargs):\n    return None\n")
+        with scope(home):
+            module = get_plugin_manager()._plugins['mia-browser-work'].module
+            reference = next(code for code in compile(source.read_bytes(), str(source),
+                'exec', dont_inherit=True, optimize=sys.flags.optimize).co_consts
+                if isinstance(code, CodeType) and code.co_name == '_guard')
+            # Restore the module attribute while the manager still retains its
+            # stale discovery-time callback. Never call either guard here.
+            module._guard = FunctionType(reference, vars(module), '_guard', ('', None))
+            self.assertEqual(kinds([call(), call('fill')]), ['sequential'])
 
     def test_no_read_only_safe_name_promotion_and_barrier_order(self):
         from agent.tool_dispatch_helpers import _PARALLEL_SAFE_TOOLS
