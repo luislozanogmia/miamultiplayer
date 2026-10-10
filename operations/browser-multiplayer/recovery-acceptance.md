@@ -34,8 +34,37 @@ Run against a specific source tree:
 MIA_TEST_SOURCE=/absolute/integration/tree node --test operations/browser-multiplayer/recovery-evidence.test.mjs
 ```
 
-Builder commits and integrated review are pending. Criteria 13/14's newly
-expanded recoverable Stop behavior remain open. The real Hermes and manual UI
-gates remain blocked by the locked DCV desktop and unconnected isolated profile.
-Preserve the existing live app PID 627467 and its disposable profile; this lane
-does not restart it or inspect credentials for this review.
+Integrated review source: `2572ef70455c37f087242d7df8eebb6147f275bd`,
+including coordinator candidate `c7bef13c04fca101119617ab7c788fc66411f173`
+and UI candidates `686bfd7fc8f8b2c926cfed1220c8d127b777375b` / `b5ac873`.
+
+Independent local checks completed:
+
+- All three regressions above PASS against that exact integrated source with
+  Node 22.22.3. These use the actual coordinator and encrypted store, scripted
+  transports, actual pinned gateway event shape, and disposable random keys.
+- Independent UI projection assertions PASS: stopped/waiting personal Mia text
+  is preserved with Incomplete labels and excluded from completed synthesis;
+  all-done workers still expose explicit task recovery; any uncertain write
+  blocks task recovery. Read-only rendering review confirms textContent use,
+  original task context, and explicit fresh-session/page-check notice.
+- Read-only coordinator review confirms bounded visible output (16,000
+  characters), five retained attempts, three 2,000-character prior text entries
+  per context kind; hidden reasoning/tool payloads are not captured. Recovery
+  clears current sessions/results/errors, archives prior output as unverified
+  context, and invalidates worker/synthesis generations. Owner/group checks and
+  dependent uncertain-write holds remain in the recovery path.
+- Root's integrated focused test log
+  `/tmp/mia-recoverable-stop-integrated.log` reports 45 PASS / 0 FAIL. This is
+  root-run local evidence inspected by this lane, separate from the three
+  independently executed regressions and UI assertions.
+
+The baseline failures are resolved in these local automated checks. Criteria
+13/14's newly expanded behavior remains PARTIAL until actual Hermes interruption
+and rendered UI acceptance are completed. The desktop remains locked and the
+isolated profile unconnected; no real model calls, manual UI acceptance, push,
+main merge, deployment, or release is established by this evidence. This lane
+preserved the live app and its disposable profile without restarting it or
+inspecting credentials. The next acceptance action is to unlock the DCV desktop
+and connect a model in that isolated app, then exercise worker and personal Mia
+Stop/recovery through the rendered UI.
