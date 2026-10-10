@@ -896,6 +896,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     })()`;
     let result;
     try {
+      if (params.actor_id) {
+        const previousSnapshot = tab.snapshots.get(params.actor_id);
+        // A bound reread retires its own numbered-element proof immediately.
+        // Failed reads stay fail-closed; observer reads leave every actor intact.
+        tab.snapshots.delete(params.actor_id);
+        if (previousSnapshot) await executeProtocolScript(tab.view.webContents, `(() => {
+          const store = globalThis.__miaBrowserSnapshots;
+          const actorId = ${JSON.stringify(params.actor_id)};
+          if (store?.get(actorId)?.id === ${JSON.stringify(previousSnapshot.id)}) store.delete(actorId);
+        })()`, true); // Do not erase a newer concurrently completed vacuum.
+      }
       result = await executeProtocolScript(tab.view.webContents, script);
     } catch (error) {
       throw protocolError("BROWSER_ERROR", error.message);
