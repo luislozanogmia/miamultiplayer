@@ -447,6 +447,16 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     let changed = true;
     while (changed) { changed = false; for (const worker of work.workers) if (!reset.has(worker.id) && work.dependencies[worker.id].some(dependency => reset.has(dependency))) { reset.add(worker.id); changed = true; } }
     if (work.operations.some(operation => operation.status === 'uncertain' && reset.has(operation.workerId))) throw failure('dependent uncertain write requires effect review', 409);
+    // Every reset worker must also be clear of unresolved upstream effects.
+    // Check historical operations too: advancing an epoch does not resolve a write.
+    const prerequisites = new Set(), pending = [...reset];
+    while (pending.length) {
+      for (const dependency of work.dependencies[pending.pop()] || []) {
+        if (prerequisites.has(dependency)) continue;
+        prerequisites.add(dependency); pending.push(dependency);
+      }
+    }
+    if (work.operations.some(operation => operation.status === 'uncertain' && prerequisites.has(operation.workerId))) throw failure('uncertain prerequisite write requires external effect review before recovery', 409);
     return update(workId, saved => {
       saved.epoch++; saved.synthesisEpoch = (saved.synthesisEpoch || 0) + 1; saved.status = 'queued'; delete saved.personalStoredSessionId; delete saved.error;
       if (saved.synthesis) {
