@@ -1,8 +1,8 @@
 diff --git a/agent/tool_dispatch_helpers.py b/agent/tool_dispatch_helpers.py
-index 2ec4672..8def2b3 100644
+index 2ec4672..fe39024 100644
 --- a/agent/tool_dispatch_helpers.py
 +++ b/agent/tool_dispatch_helpers.py
-@@ -131,6 +131,98 @@ def _peel_bridge_call(tool_name: str, function_args: dict) -> tuple[str, dict]:
+@@ -131,6 +131,131 @@ def _peel_bridge_call(tool_name: str, function_args: dict) -> tuple[str, dict]:
          return tool_name, function_args
 
 
@@ -44,9 +44,11 @@ index 2ec4672..8def2b3 100644
 +        if "wait" in params and (not isinstance(params["wait"], str) or params["wait"] not in {"none", "load", "networkidle"}):
 +            return False
 +    try:
++        import ast
 +        import hashlib
 +        import stat
 +        import sys
++        from types import CodeType, FunctionType
 +        from hermes_constants import get_hermes_home, get_hermes_home_override, hermes_home_key
 +        from hermes_cli.plugins import get_plugin_manager
 +        from tools.registry import registry
@@ -92,6 +94,37 @@ index 2ec4672..8def2b3 100644
 +            contents = stream.read(65537)
 +        if len(contents) > 65536 or hashlib.sha256(contents).hexdigest() != _MIA_WORKER_PLUGIN_SHA256:
 +            return False
++        # Current file bytes alone do not attest code already loaded by discovery.
++        # Compile the verified bytes only; never execute a reference plugin or
++        # use compilation in place of the authority/provenance checks above.
++        reference = compile(contents, str(source), "exec", dont_inherit=True,
++                            optimize=sys.flags.optimize)
++        definitions = {node.name: node for node in ast.parse(contents).body
++                       if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
++        codes = {code.co_name: code for code in reference.co_consts
++                 if isinstance(code, CodeType) and code.co_name in definitions}
++        functions = {name: value for name, value in vars(module).items()
++                     if isinstance(value, FunctionType) and value.__module__ == module.__name__}
++        if set(codes) != set(definitions) or set(functions) != set(definitions):
++            return False
++        for name, code in codes.items():
++            function = functions[name]
++            definition = definitions[name]
++            defaults = tuple(ast.literal_eval(value) for value in definition.args.defaults) or None
++            kwdefaults = {arg.arg: ast.literal_eval(value) for arg, value in
++                          zip(definition.args.kwonlyargs, definition.args.kw_defaults)
++                          if value is not None} or None
++            if (function.__globals__ is not vars(module) or function.__name__ != name
++                    or function.__code__.co_filename != str(source) or function.__code__ != code
++                    or function.__closure__ is not None or function.__defaults__ != defaults
++                    or function.__kwdefaults__ != kwdefaults):
++                return False
++        # A module attribute restored after discovery cannot hide a stale hook
++        # still retained by the scoped manager's normal registration.
++        guards = [callback for callback in manager._hooks.get("pre_tool_call", ())
++                  if getattr(callback, "__module__", None) == module.__name__]
++        if len(guards) != 1 or guards[0] is not functions.get("_guard"):
++            return False
 +        return registry.snapshot_registration("mia_browser_work", scope=scope) is entry
 +    except Exception:
 +        # Missing identity, provenance, filesystem support or plugin state is a barrier.
@@ -101,7 +134,7 @@ index 2ec4672..8def2b3 100644
  def _batch_admission(tool_call, execution_cwd: Optional[Path]) -> tuple[str, List[Path], bool] | None:
      """Classify one call for the planner: ``None`` = sequential barrier, else
      ``(effective_name, scoped_paths, is_writer)`` (empty paths = unscoped parallel-safe)."""
-@@ -150,6 +242,8 @@ def _batch_admission(tool_call, execution_cwd: Optional[Path]) -> tuple[str, Lis
+@@ -150,6 +275,8 @@ def _batch_admission(tool_call, execution_cwd: Optional[Path]) -> tuple[str, Lis
          logging.debug("Non-dict args for %s (%s) — treating as sequential barrier", tool_name, type(function_args).__name__)
          return None
 
