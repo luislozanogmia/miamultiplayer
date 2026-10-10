@@ -6063,7 +6063,12 @@
     }
     window.MiaBrowserWork.mount({ browser: window.miaDesktop.browser,
       getBots: function(){ return api('/api/bots').then(function(res){ if(res.status !== 200) throw new Error('Could not load your bots.'); return res.data.bots || []; }); },
+      getModels: function(){ return api('/api/settings/harness/chat-models?refresh=true').then(function(res){ if(res.status !== 200) throw new Error(res.data.error || 'Connected models unavailable.'); return normalizeChatModelProviders(res.data.providers); }); },
       transport: {
+        start: function(id){ return request('/' + encodeURIComponent(id) + '/start', {method:'POST', body:{}}); },
+        stopGroup: function(groupId){ return request('/group/' + encodeURIComponent(groupId) + '/stop', {method:'POST', body:{}}); },
+        recover: function(id, workerIds){ return request('/' + encodeURIComponent(id) + '/recover', {method:'POST', body:{workerIds:workerIds}}).then(function(){ return request('/' + encodeURIComponent(id) + '/start', {method:'POST', body:{}}); }); },
+        exportReusable: function(id, workerId){ return request('/' + encodeURIComponent(id) + '/reusable', {method:'POST', body:{workerId:workerId}}); },
         list: function(groupId){ return request('?groupId=' + encodeURIComponent(groupId || '')).then(function(data){ return data.works; }); },
         plan: function(payload){ return request('/plan', {method:'POST', body:payload}).then(function(data){ return request('/' + encodeURIComponent(data.work.id) + '/start', {method:'POST', body:{}}); }); },
         cancel: function(id, workerId){ return request('/' + encodeURIComponent(id) + '/stop', {method:'POST', body:workerId ? {workerId:workerId} : {}}); },
