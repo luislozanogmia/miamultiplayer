@@ -94,6 +94,17 @@ app.whenReady().then(async () => {
     await new Promise(resolve => setTimeout(resolve, 25));
   } while (Date.now() < writeDeadline);
   assert.equal(counter.writes.length, 1);
+  const replacedApproval = await approve(a, click);
+  await browser.protocol("eval", { tab_id: a.tabId, script: "() => {let e=document.querySelector('#write');e.replaceWith(e.cloneNode(true));return true;}" });
+  await deny(() => browser.execute(a, click, { approval: replacedApproval }), ["APPROVAL_TARGET_CHANGED"]);
+  counter = await fetch(`${origin}/evidence`).then(r => r.json()); assert.equal(counter.writes.length, 1);
+  const isolatedSnap = await browser.execute(a, operation("vacuum"));
+  await browser.protocol("eval", { tab_id: a.tabId, script: "() => {globalThis.__miaBrowserSnapshots=new Map();return true;}" });
+  const isolatedChoice = isolatedSnap.elements.find(e => e.selector === "#draft").number;
+  await browser.execute(a, operation("fill", { choice: isolatedChoice, snapshot_id: isolatedSnap.snapshot_id, value: "isolated map preserved" }));
+  const isolatedValue = await browser.protocol("eval", { tab_id: a.tabId, script: "() => document.querySelector('#draft').value" });
+  assert.equal(isolatedValue.result, "isolated map preserved");
+  outcomes.push("grant target replacement denied; page cannot replace isolated snapshot map");
   const beforeNavigation = await approve(a, click);
   await browser.execute(a, operation("navigate", { url: `${origin}/replacement`, wait: "load" }));
   await deny(() => browser.execute(a, click, { approval: beforeNavigation }), ["APPROVAL_REQUIRED"]);
@@ -146,6 +157,17 @@ app.whenReady().then(async () => {
   assert.equal(command("state").selectedGroupId, research);
   assert.equal(command("state").activeId, beta.tab_id);
   outcomes.push("group names/order/selection/per-group selected tabs survive native owner restart");
+  command("group-create", { name: "Empty selected group" });
+  const empty = command("state").groups.find(g => g.name === "Empty selected group").id;
+  command("group-select", { groupId: empty });
+  assert.equal(command("state").activeId, null);
+  browser.persist(); window.destroy();
+  window = new BrowserWindow({ show: false, webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+  await window.loadURL("data:text/html,<title>Disposable browser shell</title>");
+  browser = createBrowser(window, () => "null", () => {}, { statePath });
+  assert.equal(command("state").selectedGroupId, empty);
+  assert.equal(command("state").activeId, null);
+  outcomes.push("empty selected group remains selected after native owner restart");
   console.log(JSON.stringify({ evidenceClass: "local", sourceRoot, outcomes, failures, limitations: ["not integrated Mia frontend", "not manual UI", "no real Hermes/model execution", "no coordinator Stop/restart proof"] }));
   window.destroy(); await new Promise(resolve => server.close(resolve)); app.exit(failures.length ? 1 : 0);
 }).catch(async error => {
