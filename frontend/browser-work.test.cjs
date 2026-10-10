@@ -34,6 +34,7 @@ test('projection never invents progress; uses stored results and personal synthe
   assert.equal(projection(record,'other'), null);
   const shown = projection(record,'g'); assert.equal(shown.status,'Queued'); assert.equal(shown.terminal,false);
   assert.equal(shown.results[0].text,'Evidence'); assert.deepEqual(shown.synthesis,{text:'Combined'}); assert.equal(shown.approvals.length,1);
+  record.results.a.verified = false; assert.equal(projection(record, 'g').results[0].title, 'Unverified bot response · a');
   record.status = 'cancelled'; assert.equal(projection(record,'g').terminal,true); assert.equal(projection(record,'g').results[0].text,'Evidence');
   record.status = 'unknown'; assert.equal(projection(record,'g').status,'Unknown state');
 });
