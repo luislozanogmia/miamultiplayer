@@ -24,7 +24,7 @@ function fixture(t, overrides = {}) {
     async interrupt() {},
     async plan() { return { text: JSON.stringify({ workers: [{ id: '0', goal: 'read first', needs: [] }, { id: '1', goal: 'compare', needs: ['0'] }] }), storedSessionId: 'personal-mia' }; },
   };
-  const browser = { async approve() { return 'opaque-runtime-approval'; }, async validate() { return { documentGeneration: 1, url: 'https://example.test/', requiresApproval: false }; }, async execute() { return { text: 'page evidence' }; } };
+  const browser = { async revoke() {}, async approve() { return 'opaque-runtime-approval'; }, async validate() { return { documentGeneration: 1, url: 'https://example.test/', requiresApproval: false }; }, async execute() { return { text: 'page evidence' }; } };
   const options = { store, hermes, browser, authorizeGroup: async (owner, group, tab) => owner === 'owner' && group === 'group' && (tab === undefined || [1, 2].includes(tab)), resolveBot: async (owner, bot) => ({ ownerId: owner, profile: `bot-${bot}` }), personalOptions: async () => ({ profile: 'personal-mia', model: 'personal-model', provider: 'personal-provider' }), ...overrides };
   const coordinator = createBrowserWorkCoordinator(options);
   const input = { groupId: 'group', goal: 'compare pages', context: { groupName: 'Research' }, workers: [{ id: 'first', botId: 'bot1', tabId: 1, goal: 'read', model: 'model-a', provider: 'provider-a', needs: [] }, { id: 'second', botId: 'bot2', tabId: 2, goal: 'compare', model: 'model-b', provider: 'provider-b', needs: ['first'] }] };
@@ -70,9 +70,10 @@ test('Stop suppresses late worker output, preserves partial results and interrup
   const f = fixture(t); let release; let interrupted;
   f.hermes.worker = async args => { args.onSession({ sessionId: 'live', storedSessionId: 'stored' }); return new Promise(resolve => { release = () => resolve({ text: 'late reply', storedSessionId: 'stored' }); }); };
   f.hermes.interrupt = async session => { interrupted = session; };
+  const revoked = []; f.browser.revoke = async binding => revoked.push(binding);
   const work = await f.coordinator.create('owner', f.input); const running = f.coordinator.start('owner', work.id);
   await until(() => release); await f.coordinator.stop('owner', work.id); release(); await running;
-  assert.equal(interrupted, 'live'); assert.deepEqual(f.store.get(work.id).results, {}); assert.equal(f.store.get(work.id).status, 'cancelled');
+  assert.equal(interrupted, 'live'); assert.equal(revoked.length, 2); assert.deepEqual(revoked.map(binding => binding.tabId), [1, 2]); assert.deepEqual(f.store.get(work.id).results, {}); assert.equal(f.store.get(work.id).status, 'cancelled');
 });
 
 async function approvalFixture(t) {
@@ -192,4 +193,38 @@ test('public work serialization omits native approval capability and runtime pro
   const publicWork = serializeBrowserWork(saved);
   assert.equal(publicWork.approvals[0].runtimeApproval, undefined); assert.equal(publicWork.workers[0].profile, undefined); assert.equal(publicWork.workers[0].workspaceDir, undefined);
   assert.equal(saved.approvals[0].runtimeApproval, 'opaque-native-token');
+});
+
+test('Hermes worker tool executes only its assigned validated reusable reference', async t => {
+  const f = fixture(t); let reads = 0;
+  f.browser.execute = async () => ({ text: `fresh-${++reads}` });
+  f.hermes.worker = async args => { await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} }); return { text: 'source', storedSessionId: 'source' }; };
+  const source = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); await f.coordinator.start('owner', source.id);
+  const reusable = await f.coordinator.exportReusable('owner', source.id, 'first');
+  f.hermes.worker = async args => {
+    assert.ok(args.message.includes('run_reusable'));
+    assert.ok(args.message.includes(reusable.id));
+    await assert.rejects(f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'run_reusable', params: { sourceWorkId: source.id, reusableId: 'foreign' } }), /binding mismatch/);
+    const results = await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'run_reusable', params: args.worker.reusable });
+    assert.equal(results[0].text, 'fresh-2');
+    return { text: 'validated reusable executed', storedSessionId: 'target' };
+  };
+  const target = await f.coordinator.create('owner', { ...f.input, workers: [{ ...f.input.workers[0], reusable: { sourceWorkId: source.id, reusableId: reusable.id } }] });
+  assert.equal((await f.coordinator.start('owner', target.id)).status, 'done'); assert.equal(reads, 2);
+});
+
+test('reusable export rejects recorded numbered targets and arbitrary scripts', async t => {
+  const f = fixture(t); const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const saved = f.store.get(work.id); saved.status = 'done'; saved.workers[0].status = 'done';
+  for (const operation of [{ method: 'click', params: { choice: 1, snapshot_id: 'stale' } }, { method: 'eval', params: { script: 'arbitrary' } }, { method: 'fill', params: { value: 'text' } }]) {
+    saved.operations = [{ id: 'operation', workerId: 'first', operation, status: 'done' }]; f.store.put(saved);
+    await assert.rejects(f.coordinator.exportReusable('owner', work.id, 'first'), /stable selector/);
+  }
+});
+
+test('existing personal Mia session comes only from trusted owner resolver', async t => {
+  const f = fixture(t, { resolvePersonalSession: async owner => owner === 'owner' ? 'owned-personal-session' : undefined });
+  const work = await f.coordinator.create('owner', { ...f.input, personalStoredSessionId: 'attacker-session' }); assert.equal(work.personalStoredSessionId, 'owned-personal-session');
+  f.hermes.plan = async args => { assert.equal(args.work.personalStoredSessionId, 'owned-personal-session'); return { text: '{"workers":[{"id":"0","goal":"read","needs":[]}]}', storedSessionId: 'owned-personal-session' }; };
+  await f.coordinator.plan('owner', { ...f.input, candidates: f.input.workers, personalStoredSessionId: 'attacker-session' });
 });
