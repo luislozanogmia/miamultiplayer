@@ -909,6 +909,7 @@ async function startHermesGatewayRuntime() {
 }
 
 module.exports = {
+  getHermesGatewayClient,
   buildContext,
   buildBotContext,
   buildScheduledBotPrompt,

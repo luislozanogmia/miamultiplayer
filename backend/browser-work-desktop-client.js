@@ -52,7 +52,7 @@ function createBrowserWorkDesktopClient({ url, token, timeoutMs = 120000 }) {
     unbindSession: (session, binding) => request('revoke', { binding, sessionId: session?.sessionId }),
     validate: (binding, operation) => request('validate', { binding, operation }),
     execute: (binding, operation, { signal, approval } = {}) => request('execute', { binding, operation, approval }, { signal }),
-    approve: (binding, operation) => request('approve', { binding, operation }),
+    approve: (binding, operation, approval) => request('approve', { binding, operation, approval }),
     reject: (binding, operation) => request('reject', { binding, operation }),
     revoke: binding => request('revoke', { binding }),
   };

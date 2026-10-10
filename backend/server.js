@@ -1,5 +1,8 @@
 'use strict';
 
+// Capture private desktop capabilities before any child runtime is configured.
+const browserWorkDesktopConfig = Object.freeze({ url: process.env.MIA_BROWSER_WORK_URL, token: process.env.MIA_BROWSER_WORK_TOKEN, key: process.env.MIA_BROWSER_WORK_KEY });
+for (const name of ['MIA_BROWSER_WORK_URL', 'MIA_BROWSER_WORK_TOKEN', 'MIA_BROWSER_WORK_KEY']) delete process.env[name];
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -56,6 +59,7 @@ const {
   setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
+  getHermesGatewayClient,
   startHermesGatewayRuntime,
   closeHermesGatewayRuntime,
   HERMES_SUBSCRIPTION_MODEL_OPTIONS,
@@ -7956,6 +7960,7 @@ function shutdownBackend() {
   if (backendShutdownStarted) return;
   backendShutdownStarted = true;
   disconnectAllHermesAuth();
+  browserWorkWorkerBroker?.stop().catch(() => {});
   closeHermesGatewayRuntime();
   nativeConversationWebSocket.close();
 
@@ -8067,7 +8072,74 @@ function applyChatOutputSetting(output) {
   setHermesDiagnostics({ verboseHermes: verbose, traceCommands: verbose });
 }
 
-function onBackendListening() {
+
+// Browser collaboration uses the existing Hermes gateway and the desktop's
+// private authority. No worker receives the desktop capability or storage key.
+let browserWorkWorkerBroker = null;
+async function initializeBrowserWork() {
+  if (!browserWorkDesktopConfig.url || !browserWorkDesktopConfig.token || !browserWorkDesktopConfig.key) return;
+  const { createBrowserWorkDesktopClient } = require('./browser-work-desktop-client');
+  const { createBrowserWorkWorkerBroker } = require('./browser-work-worker-broker');
+  const { createBrowserWorkStore } = require('./browser-work-store');
+  const { createBrowserWorkCoordinator } = require('./browser-work-coordinator');
+  const { createBrowserWorkHermes } = require('./browser-work-hermes');
+  const { provisionBrowserWorkProfile } = require('./browser-work-hermes-profile');
+  const { registerBrowserWorkRoutes } = require('./browser-work-routes');
+  const desktop = createBrowserWorkDesktopClient(browserWorkDesktopConfig);
+  const store = createBrowserWorkStore({ filePath: path.join(RUNTIME_DIR, 'browser-work.enc.json'), key: Buffer.from(browserWorkDesktopConfig.key, 'base64') });
+  let coordinator;
+  const workerBroker = await createBrowserWorkWorkerBroker({ executeOperation: (...args) => coordinator.executeOperation(...args) });
+  browserWorkWorkerBroker = workerBroker;
+  const client = getHermesGatewayClient();
+  if (client.readyPromise || client.gatewayReadyPromise || client.configuredUrl) { await workerBroker.stop(); throw new Error('Browser worker capability requires this app-owned fresh gateway'); }
+  // The pinned gateway strips GATEWAY_RELAY_*_TOKEN from every model-directed
+  // subprocess. Its in-process worker plugin is the only capability consumer.
+  client.env.GATEWAY_RELAY_MIA_BROWSER_WORK_TOKEN = workerBroker.token;
+  client.env.MIA_BROWSER_WORK_TOOL_URL = workerBroker.url;
+  const hermes = createBrowserWorkHermes({ client, bindSession: desktop.bindSession,
+    registerSession: workerBroker.registerSession,
+    prepareWorker: (worker, binding) => provisionBrowserWorkProfile({ profilesRoot: path.join(process.env.HERMES_HOME, 'profiles'), worker, binding }),
+    executeOperation: (...args) => coordinator.executeOperation(...args),
+  });
+  coordinator = createBrowserWorkCoordinator({ store, hermes, browser: desktop,
+    async authorizeGroup(owner, groupId, tabId) {
+      if (owner !== String(DEFAULT_OWNER).toLowerCase() || !isActiveWorkspaceUser(owner)) return false;
+      const state = await desktop.getState();
+      const group = state.groups?.find(group => group.id === groupId);
+      return !!group && (tabId === undefined || group.tabIds.includes(tabId));
+    },
+    resolveBot(owner, botId) {
+      const bot = db.loadOne(conn, 'bots', botId);
+      if (!bot || !sameOwner(bot, owner) || !isActiveWorkspaceUser(owner)) return null;
+      return { ownerId: ownerOf(bot), name: bot.name, ownerColor: '#60a5fa', profile: MIAOS_BOT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir(), isPersonalMia: false };
+    },
+    async personalOptions(owner) {
+      const preference = harnessPreferenceForUser(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS), owner);
+      const provider = harnessCliProviderForUser(owner);
+      if (!provider) throw Object.assign(new Error('Connect a model for Mia before delegating browser work'), { status: 409 });
+      await getHermesGatewayModelOptions({ refresh: true }).then(rememberNativeChatModelInventory);
+      const options = inferenceOptionsForUser(owner, { profile: MIAOS_AGENT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir() });
+      if (!options.model) throw Object.assign(new Error('Choose a connected model for Mia'), { status: 409 });
+      return options;
+    },
+  });
+  coordinator.recoverInterrupted();
+  app.use('/api/browser-work', requireAuth, async (req, res, next) => {
+    try {
+      for (const candidate of req.body?.candidates || req.body?.workers || []) {
+        const selection = await chatModelSelectionForUser({ provider: candidate.provider, model: candidate.model }, req.userEmail);
+        if (!selection) return res.status(400).json({ error: 'Choose a connected worker model' });
+      }
+      next();
+    } catch (_) { res.status(409).json({ error: 'Worker model inventory is unavailable' }); }
+  });
+  registerBrowserWorkRoutes(app, { coordinator, ownerFromRequest: req => req.userEmail,
+    onError: () => console.error('Browser work stopped before completion'),
+  });
+}
+
+async function onBackendListening() {
+  await initializeBrowserWork().catch(() => console.error("Browser collaboration unavailable; check secure runtime readiness."));
   console.log(`Mia backend listening on port ${PORT}`);
   // Starting the runtime also clears profile copies of root keys, but only
   // when it launches a fresh gateway (see removeStaleProfileCredentials).
