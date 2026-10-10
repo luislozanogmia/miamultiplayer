@@ -16,6 +16,9 @@ function provisionBrowserWorkProfile({ profilesRoot, worker, binding }) {
   fs.writeFileSync(path.join(home, 'config.yaml'), [
     '# Managed by Mia browser work. No credentials.',
     'platform_toolsets:', '  cli:', '    - mia_browser_work',
+    // Keep the sole bound tool eager: the pinned scheduler admits its exact
+    // native name, while deferred tool_call wrappers remain sequential.
+    'tools:', '  tool_search:', '    enabled: off',
     'agent:', '  coding_context: off', '  max_turns: 40',
     'plugins:', '  enabled:', '    - mia-browser-work',
     'mcp_servers: {}', ...require('./hermes-runtime-secret-source').runtimeSecretSourceLines(),
