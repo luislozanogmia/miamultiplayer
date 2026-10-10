@@ -33,14 +33,35 @@
     var worker = (work.workers || []).find(function (w) { return w.id === workerId; });
     return { held: uncertain, eligible: !uncertain && !!worker && ['waiting_for_user', 'failed', 'cancelled'].includes(work.rawStatus || work.status) && ['waiting_for_user', 'failed', 'cancelled'].includes(worker.status), workerIds: Array.from(reset) };
   }
+  function preservedResponse(result, worker, work, historical, personal) {
+    if (!result || typeof result.text !== 'string' || !result.text.trim()) return null;
+    var incomplete = result.incomplete === true || ['stopped', 'incomplete'].includes(result.status);
+    if (!historical && !incomplete) return null;
+    var tags = historical ? ['Previous attempt'] : [];
+    if (result.status === 'stopped') tags.push('Stopped');
+    if (incomplete) tags.push('Incomplete');
+    tags.push(historical ? 'Unverified for current attempt' : 'Unverified');
+    if (result.truncated === true) tags.push('Saved text truncated');
+    return { text: result.text, tags: tags, historical: !!historical, workerId: worker && worker.id || result.workerId,
+      name: personal ? 'Mia · Personal agent' : worker && (worker.botName || worker.name || worker.botId || worker.id) || result.workerId || 'Bot',
+      personal: !!personal, goal: result.goal || (personal ? work.goal : worker && worker.goal) || '', overallGoal: String(work.goal || ''), context: typeof work.context === 'string' ? work.context : JSON.stringify(work.context || ''),
+      workEpoch: result.workEpoch, workerEpoch: result.workerEpoch, at: result.at };
+  }
   function projection(work, groupId) {
     if (!work || work.groupId !== groupId) return null;
+    var workers = Array.isArray(work.workers) ? work.workers : [];
+    var results = Array.isArray(work.results) ? work.results : Object.keys(work.results || {}).map(function (id) { return Object.assign({ workerId: id, title: (work.results[id].verified === false ? 'Unverified bot response · ' : 'Stored result · ') + id }, work.results[id]); });
+    var preserved = results.map(function (result) { return preservedResponse(result, workers.find(function (w) { return w.id === result.workerId; }), work, false); }).filter(Boolean);
+    workers.forEach(function (worker) { (Array.isArray(worker.previousAttempts) ? worker.previousAttempts : []).forEach(function (attempt) { var response = preservedResponse(attempt, worker, work, true); if (response) preserved.push(response); }); });
+    var personalPartial = preservedResponse(work.synthesis, null, work, false, true);
+    if (personalPartial) preserved.push(personalPartial);
+    (Array.isArray(work.previousSynthesisAttempts) ? work.previousSynthesisAttempts : []).forEach(function (attempt) { var response = preservedResponse(attempt, null, work, true, true); if (response) preserved.push(response); });
     return { id: work.id, goal: String(work.goal || ''), status: labels[work.status] || 'Unknown state',
       terminal: ['done', 'failed', 'cancelled'].includes(work.status),
-      workers: Array.isArray(work.workers) ? work.workers : [],
-      results: Array.isArray(work.results) ? work.results : Object.keys(work.results || {}).map(function (id) { return Object.assign({ title: (work.results[id].verified === false ? 'Unverified bot response · ' : 'Stored result · ') + id }, work.results[id]); }),
+      workers: workers, preservedResponses: preserved,
+      results: results.filter(function (result) { return result.incomplete !== true && !['stopped', 'incomplete'].includes(result.status); }),
       approvals: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) { return a.status === 'pending'; }),
-      synthesis: work.synthesis || null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
+      synthesis: work.synthesis && work.synthesis.incomplete !== true && !['stopped', 'incomplete'].includes(work.synthesis.status) ? work.synthesis : null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
   }
   function node(tag, className, text) {
     var n = document.createElement(tag); if (className) n.className = className;
@@ -135,13 +156,14 @@
       work.workers.forEach(function (worker) {
         var row = node('div', 'browser-work-worker'); var mote = node('img', 'browser-work-mote'); mote.src = 'assets/mote/mote.svg'; mote.alt = '';
         row.append(mote, node('span', '', String(worker.botName || worker.name || worker.botId || worker.actorId) + ' · Tab ' + worker.tabId), node('span', 'browser-work-status', labels[worker.status] || 'Unknown state'));
+        if (worker.previousAttemptsOmitted > 0) row.append(node('small', '', worker.previousAttemptsOmitted + ' older attempts are outside the retained history.'));
         if (worker.model) row.append(node('small', '', worker.model + ' · ' + (worker.provider || 'Provider unavailable')));
         if (worker.task || worker.goal) row.append(node('p', '', worker.task || worker.goal));
         if (!work.terminal && !['done', 'failed', 'cancelled'].includes(worker.status)) row.append(button('Stop bot', function () { mutate('stop:' + worker.actorId, function () { return transport.cancel(work.id, worker.id); }); }, !transport || pending.has('stop:' + worker.actorId)));
         var recovery = recoveryState(work, worker.id);
         if (recovery.held) row.append(node('p', 'browser-work-hold', 'Recovery held · a write outcome is uncertain. Review its external effect before recovery.'));
         else if (recovery.eligible && transport && transport.recover) {
-          row.append(node('p', '', 'Restarting this bot also restarts dependent bots and replaces their stored results. New sessions check the current tabs.'));
+          row.append(node('p', '', 'Recovering this bot also starts dependent bots in fresh sessions. Previous attempts stay available as context; fresh work must verify the current page again.'));
           row.append(button('Restart bot and dependents', function () { mutate('recover:' + worker.id, function () { return transport.recover(work.id, [worker.id]); }); }, pending.has('recover:' + worker.id)));
         }
         var steps = work.operations.filter(function (op) { return op.workerId === worker.id; });
@@ -165,6 +187,16 @@
           row.append(button(label, function () { mutate(key, function () { return transport.approval(work.id, approval, i === 1); }); }, !transport || work.terminal || !!expired || pending.has(key)));
         });
         if (expired) row.append(node('small', '', 'Expired · request a new approval.')); card.append(row);
+      });
+      work.preservedResponses.forEach(function (response) {
+        var section = node('section', 'browser-work-preserved');
+        section.append(node('strong', '', response.name + ' · ' + (response.historical ? 'Previous answer' : 'Preserved answer')));
+        var tags = node('div', 'browser-work-preserved-labels'); response.tags.forEach(function (tag) { tags.append(node('span', '', tag)); }); section.append(tags);
+        section.append(node('p', 'browser-work-preserved-notice', 'This answer is retained as context. It is not a completed result or current page verification.'));
+        section.append(node('pre', 'browser-work-preserved-text', response.text));
+        var context = node('details', 'browser-work-attempt-context'); context.append(node('summary', '', 'Original task context'), node('p', '', 'Overall goal: ' + response.overallGoal), node('p', '', (response.personal ? 'Mia task: ' : 'Bot task: ') + response.goal));
+        if (response.context) context.append(node('pre', '', response.context));
+        section.append(context); card.append(section);
       });
       work.results.forEach(function (result) { var row = node('details', 'browser-work-result'); row.append(node('summary', '', result.title || 'Stored result'), node('pre', '', result.text || result.content || JSON.stringify(result))); card.append(row); });
       if (work.synthesis) card.append(node('pre', 'browser-work-synthesis', typeof work.synthesis === 'string' ? work.synthesis : work.synthesis.text || JSON.stringify(work.synthesis)));
@@ -249,5 +281,5 @@
     bridge.command({ action: 'state' }).then(updateBrowserState).catch(function () { error('Browser unavailable.'); });
     if (timer) clearInterval(timer); timer = setInterval(refresh, 2000); refresh();
   }
-  return { configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
+  return { preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
 });
