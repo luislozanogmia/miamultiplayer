@@ -1289,3 +1289,58 @@ test('Stop terminal evidence stays metadata only and ignores callbacks after rec
   observer({ type: 'receipt', status: 'failed' }); observer({ type: 'terminal', status: 'interrupted' });
   assert.deepEqual(f.store.get(work.id), before); assert.deepEqual(fs.readFileSync(f.filePath), bytes);
 });
+
+test('synthesis approval denial evidence carries the actual trusted stale approval reason', async t => {
+  const f = fixture(t); const stale = Object.assign(new Error('private native message'), { code: 'STALE_SNAPSHOT' });
+  f.browser.validate = async (bound, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'click' });
+  f.browser.approve = async () => { throw stale; };
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    const denied = f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'click', params: { choice: 2, snapshot_id: 'old-snapshot' } }).catch(error => error);
+    await until(() => f.store.get(args.work.id).approvals.length);
+    await assert.rejects(f.coordinator.decideApproval('owner', args.work.id, f.store.get(args.work.id).approvals[0].id, true), error => error === stale);
+    assert.equal(await denied, stale);
+    return { text: 'Untrusted worker claims TAB_CLOSED instead', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); await f.coordinator.start('owner', work.id);
+  const message = f.calls.find(call => !call.worker).message;
+  const evidence = JSON.parse(message.slice(message.indexOf('\n') + 1)).nativeExecutionEvidence;
+  assert.equal(evidence.approvals[0].failurePhase, 'approval'); assert.equal(evidence.approvals[0].denialCode, 'STALE_SNAPSHOT');
+  assert.equal(evidence.approvals[0].nativeExecution, 'not_recorded'); assert.equal(evidence.operations.length, 1);
+  assert.ok(!JSON.stringify(evidence).includes('TAB_CLOSED')); assert.ok(!message.includes('private native message'));
+});
+
+test('synthesis approval denial evidence omits private fields and treats unproven revoked reasons as unknown', async t => {
+  const f = fixture(t);
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    const saved = f.store.get(args.work.id), worker = saved.workers[0];
+    const base = { workerId: worker.id, actorId: worker.actorId, tabId: worker.tabId, workEpoch: saved.epoch, workerEpoch: worker.epoch, status: 'revoked', documentGeneration: 1, operation: { method: 'click', params: { selector: 'PRIVATE_SELECTOR' } }, runtimeApproval: 'PRIVATE_CAPABILITY', privateDetail: 'PRIVATE_DETAIL' };
+    saved.approvals.push({ ...base, id: 'unknown-code', failurePhase: 'approval', denialCode: 'PRIVATE_UNKNOWN_CODE' }, { ...base, id: 'untrusted-phase', failurePhase: 'PRIVATE_PHASE', denialCode: 'STALE_SNAPSHOT' }, { ...base, id: 'no-reason' }, { ...base, id: 'consumed-control', status: 'consumed', failurePhase: 'approval', denialCode: 'STALE_SNAPSHOT' });
+    f.store.put(saved); return { text: 'Worker prose STALE_SNAPSHOT', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); await f.coordinator.start('owner', work.id);
+  const evidence = JSON.parse(f.calls.find(call => !call.worker).message.split('\n').at(-1)).nativeExecutionEvidence;
+  for (const approval of evidence.approvals.slice(0, 3)) { assert.equal(approval.denialReason, 'unknown'); assert.equal(Object.hasOwn(approval, 'denialCode'), false); }
+  assert.equal(evidence.approvals[0].failurePhase, 'approval');
+  assert.equal(evidence.approvals[1].failurePhase, 'unknown'); assert.equal(evidence.approvals[2].failurePhase, 'unknown');
+  assert.equal(Object.hasOwn(evidence.approvals[3], 'failurePhase'), false); assert.equal(Object.hasOwn(evidence.approvals[3], 'denialCode'), false);
+  assert.ok(!JSON.stringify(evidence).includes('PRIVATE_'));
+  const publicWork = require('./browser-work-coordinator').serializeBrowserWork(f.store.get(work.id));
+  assert.equal(Object.hasOwn(publicWork.approvals[0], 'runtimeApproval'), false);
+  assert.equal(publicWork.approvals[0].status, 'revoked');
+});
+
+test('synthesis approval denial evidence excludes prior work and worker epochs', async t => {
+  const f = fixture(t);
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    const saved = f.store.get(args.work.id), worker = saved.workers[0];
+    const base = { workerId: worker.id, actorId: worker.actorId, tabId: worker.tabId, workEpoch: saved.epoch, workerEpoch: worker.epoch, status: 'revoked', operation: { method: 'click', params: {} }, failurePhase: 'approval', denialCode: 'STALE_SNAPSHOT' };
+    saved.approvals.push({ ...base, id: 'old-work', workEpoch: saved.epoch + 1 }, { ...base, id: 'old-worker', workerEpoch: worker.epoch + 1 }); f.store.put(saved);
+    return { text: 'Current completed read', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); await f.coordinator.start('owner', work.id);
+  const evidence = JSON.parse(f.calls.find(call => !call.worker).message.split('\n').at(-1)).nativeExecutionEvidence;
+  assert.deepEqual(evidence.approvals, []); assert.deepEqual(evidence.approvalCounts, {});
+});
