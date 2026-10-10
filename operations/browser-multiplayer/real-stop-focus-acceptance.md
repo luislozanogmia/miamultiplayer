@@ -69,7 +69,12 @@ remain separate gates.
 
 Independent API inspection after root's UI recovery finds the original goal
 unchanged, epoch 2, and new stored worker sessions. Both workers completed;
-the work was still working with personal synthesis not complete at that check.
+the work was still working with personal synthesis not complete at the first
+check. A later independent API check confirms work done, both workers done and
+verified, and personal synthesis complete. All cited current result read proof
+resolves to successful epoch 2/2 operations. The new synthesis combines Alpha
+17 and Beta 29 and their read-only limits; this run is not claimed to repeat the
+first run's arithmetic sum task.
 Each previousAttempts entry exactly matches its original stopped text and
 remains verified false / incomplete true. This independently confirms the
 historical text is still available after the root-reported restart/recovery.
@@ -83,12 +88,14 @@ Narrow read-only SQLite metadata confirms both new sessions model
 `deepseek-flash` / billing provider `deepseek`. Alpha has 4 messages, 1 tool call,
 2 API calls; Beta has 6 messages, 2 tool calls, 3 API calls at inspection. The
 session IDs differ from interrupted sessions, and fresh read proof is distinct
-from old epoch 0/0 history. Root also reports typing a new human draft with
-caret/focus retained during recovery; no corresponding independent DOM record
-was supplied at this checkpoint, so that observation remains root-reported.
+from old epoch 0/0 history. Independent inspection of
+`/tmp/mia-human-focus-recovery-after.json` at completed recovery confirms full
+value `Recovered work keeps human control.`, selection start/end 8, activeElement
+`draft`, focused true. Typing the new draft is a root-reported UI action; its
+final DOM observation is independently inspected.
 
 This establishes the exercised actual read-only group Stop and fresh-worker
 recovery path, with evidence provenance separated. It does not establish
-individual-worker Stop isolation, Stop during personal Mia synthesis, recovered
-final synthesis, uncertain-write no-replay, consequential approval UI, or every
+individual-worker Stop isolation, Stop during personal Mia synthesis,
+uncertain-write no-replay, consequential approval UI, or every
 group/lifecycle gate. All fifteen frozen criteria must retain those open checks.
