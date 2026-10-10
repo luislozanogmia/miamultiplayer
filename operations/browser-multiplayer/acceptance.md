@@ -117,6 +117,9 @@ Browser-owner smoke first passed integrated browser modules at
 `c447db29e2773a8832b291cad54941ba76260824`. The latter tree was clean when
 inspected. Eleven real Electron scenario groups pass, including exclusive tab
 claims and revocation suppressing both late native results and queued work.
+The final expanded twelve-scenario harness also passed against final source
+`8e8f685a64b81ada81671f34276932916a831f77`, including one bot's second-tab
+claim denial and selected native-tab reorder preserving group selection.
 The harness uses actual browser modules from that tree. It does not import
 the frontend or claim actual Hermes model execution.
 
@@ -133,7 +136,7 @@ the frontend or claim actual Hermes model execution.
 |9|Native-owner local checks pass|Reread/cross-actor/cross-tab/replaced-node snapshots denied. Page's main-world snapshot-map overwrite cannot alter isolated-world snapshot.|
 |10|Native-owner local checks pass|Actual hidden Alpha/Beta captures contain distinct correct red/green pixels and expected tab IDs; host window visible, workers hidden. Compositor readiness is required; no active-human capture fallback.|
 |11|Integrated source/mock frontend checks; rendered acceptance unverified|Runtime emits operation status/targets; frontend maps them to real-state ownership UI. Cannot manually inspect motes/rings/targets in locked app.|
-|12|New autosave path failing; prior negative checks pass|Reject/change/reuse/navigation/replaced-target and queued revocation deny dispatch, but hidden fill can trigger an unapproved autosave. No actual UI approval click.|
+|12|Native-owner local checks pass; human approval UI unverified|Reject/change/reuse/navigation/replaced-target and queued revocation deny dispatch. Autosave regression now denies fill before an input event, with zero writes; one explicit current grant permits exactly one write. No actual UI approval click.|
 |13|Native-owner local + mocked coordinator checks pass; real Hermes Stop unverified|Revocation suppresses late native result/queued mutation. Coordinator tests preserve partial results, suppress late scripted model output and hold uncertain writes after interruption/restart. Real Hermes interrupt and app UI Stop remain unverified.|
 |14|Encrypted store/mock proof checks pass; real reusable execution unverified|Wrong key/tampering and restart tests pass; proof authorization and uncertainty tested with scripted runtime. Actual app private key file is 0600. No actual model-produced durable/reusable output or replay.|
 |15|Blocked|GNOME desktop is locked; no connected model in the isolated profile. Zero real bot executions, zero real Mia synthesis, no manual three-tab/focus/group persistence acceptance.|
@@ -150,8 +153,12 @@ marked disposable root at `c447db29e2773a8832b291cad54941ba76260824` returned
 boundary. This is actual local app/backend startup evidence, not a manual
 Development-menu restart.
 
-Current preserved app: PID 617198; backend PID 617285; URL
-`http://localhost:4967`; data root `/tmp/mia-browser-mvp-ui-verifier-20261009-01`.
+Final preserved app: PID 627467; backend PID 627557; URL
+`http://localhost:4969`; data root `/tmp/mia-browser-mvp-ui-verifier-20261009-01`.
+It was gracefully relaunched from final implementation
+`8e8f685a64b81ada81671f34276932916a831f77`; previous owned app/backend PIDs
+were confirmed stopped. Its `/api/browser-work` request returns 401 before
+sign-in. This root is kept for Luis rather than removed as a transient fixture.
 Port selection advanced automatically rather than reusing a busy port. No
 existing app/profile data or credential contents were copied into this root.
 The OS keyring is available, and `desktop/browser-work-key.enc` mode is 0600.
@@ -176,8 +183,13 @@ copied into this lane. Independently running the coordinator's policy/registry
 test against clean `/tmp/mia-browser-work-pinned` at that exact pin passed plugin
 registration, configured CLI tool policy, seven tool-bypass denials, environment
 capability scrub, runtime-injected session identity and Ghost method normalization.
-That test makes no model call. The fourteen coordinator Node tests also passed
-independently; they use scripted Hermes/browser transports.
+That test makes no model call. The final twenty coordinator Node tests also
+passed independently at `3acbeaaae46e1713743a212eb8d8a6d9b02bf53f`; they use
+scripted Hermes/browser transports. They additionally require successful
+current-attempt read/vacuum/screenshot proof before completion, preserve
+model-only text as unverified and block synthesis, reject stale attempt proof,
+and reject structured native errors. This minimum provenance gate does not
+establish semantic task correctness or real model execution.
 
 ### New failing consequential-input regression
 
@@ -187,7 +199,37 @@ listener on a disposable hidden worker page. Runtime validation reported
 `requiresApproval: false`, unapproved fill succeeded, and the independent
 fixture server recorded one POST write. The probe exited 1. This is a real
 consequential write, not a scripted model or inferred risk. Criteria 12 and the
-uncertain-write parts of 13/14 remain open until runtime authority gates fill
+uncertain-write parts of 13/14 remained open until runtime authority gated fill
 and related consequential navigation without relying on model-provided flags.
-Root/runtime lane is implementing the fix. The probe's safe outcome is
-`needsApproval: true`, `denied: true`, `writes: 0`, exit 0; rerun after integration.
+Root/runtime lane implemented the fix at integrated
+`f73a11d0da01884b7a2cd182ec77a8b547f015b1`. The independent probe passed:
+`needsApproval: true`, `denied: true`, `writes: 0`, `approvedWrites: 1`, exit 0.
+Runtime authority also requires approval for navigation, URL-changing vacuum,
+back, forward and reload. Current grants are explicit in the updated native
+smoke. Real model/UI uncertain-write recovery remains unverified.
+
+### Final source review and suite evidence
+
+Final implementation is `8e8f685a64b81ada81671f34276932916a831f77`. Root's full
+backend suite reported 538 tests: 535 passed, three skipped, zero failed; its
+desktop/frontend suite reported 459 passed, zero skipped/failed. Verification
+independently inspected the exact summary logs at
+`/tmp/mia-mvp-final-backend.log` and `/tmp/mia-mvp-final-desktop-frontend.log`.
+These are local automated checks, including mocked boundaries and disposable
+server processes, not external model/manual UI proof.
+
+Independent review found no additional blocker after the concrete autosave
+fix. Non-GET browser-work routes require interactive authentication rather
+than accepting a bot/API bearer credential as a human approval. Native
+presence colors are bounded hex colors. Runtime authority, snapshot identity,
+operation-bound one-use grants and Stop epochs remain separate from page/model
+text. Root's actual HTTP regression failed with 404 against pre-fix `8de474c`
+and passed with 401 after mounting the browser-work router before the fallback.
+Its bearer fixture permits authorized GET but denies approval POST with 401.
+Those root checks are recorded as root-provided evidence; the verifier also
+observed the actual isolated app's 404-to-401 transition independently.
+
+No pushes, merges to main, releases, deployments or real-data migrations were
+performed by this lane. All fifteen criteria remain in this ledger; the full
+MVP cannot be marked complete while criterion 15 and the explicit real model
+and manual interaction gates above remain blocked.

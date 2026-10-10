@@ -31,7 +31,18 @@ app.whenReady().then(async () => {
     if (writes) break;
     await new Promise(resolve => setTimeout(resolve, 25));
   } while (!denied && Date.now() < deadline);
-  console.log(JSON.stringify({ evidenceClass: "local", sourceRoot, needsApproval: checked.requiresApproval, denied, writes, scope: "real isolated DOM autosave; no model/front-end" }));
+  let approvedWrites = null;
+  if (denied && !writes) {
+    const grant = await browser.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: operation.method, params: { ...operation.params, actor_id: binding.actorId, tab_id: binding.tabId } });
+    await browser.execute(binding, operation, { approval: grant.approval_id });
+    const acceptedDeadline = Date.now() + 1000;
+    do {
+      approvedWrites = (await fetch(`${origin}/evidence`).then(r => r.json())).writes.length;
+      if (approvedWrites) break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    } while (Date.now() < acceptedDeadline);
+  }
+  console.log(JSON.stringify({ evidenceClass: "local", sourceRoot, needsApproval: checked.requiresApproval, denied, writes, approvedWrites, scope: "real isolated DOM autosave; no model/front-end" }));
   window.destroy(); await new Promise(resolve => server.close(resolve));
-  fs.rmSync(root, { recursive: true, force: true }); app.exit(denied && !writes ? 0 : 1);
+  fs.rmSync(root, { recursive: true, force: true }); app.exit(denied && !writes && approvedWrites === 1 ? 0 : 1);
 }).catch(() => app.exit(1));

@@ -39,15 +39,17 @@ app.whenReady().then(async () => {
   const a = bind("worker-a", "bot-a", alpha.tab_id), b = bind("worker-b", "bot-b", beta.tab_id);
   browser.actors.bind(a); browser.actors.bind(b);
   assert.throws(() => browser.actors.bind(bind("competing-actor", "competing-bot", alpha.tab_id)), error => error.code === "TAB_ALREADY_BOUND");
+  assert.throws(() => browser.actors.bind(bind("same-bot-other-tab", a.botId, human.tab_id)), error => error.code === "BOT_ALREADY_BOUND");
   const operation = (method, params = {}) => ({ method, params });
   const approve = async (binding, op) => (await browser.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: op.method, params: { ...op.params, actor_id: binding.actorId, tab_id: binding.tabId } })).approval_id;
+  const approved = async (binding, op) => browser.execute(binding, op, { approval: await approve(binding, op) });
   await deny(() => browser.protocol("read", { actor_id: a.actorId, tab_id: a.tabId }), ["TRUSTED_ACTOR_REQUIRED"]);
   await deny(() => browser.execute(a, operation("read", { tab_id: b.tabId })), ["TAB_NOT_OWNED"]);
   await deny(() => browser.execute({ ...a, ownerId: "other-owner" }, operation("read")), ["ACTOR_REVOKED"]);
   outcomes.push("actor/tab/owner spoof rejected");
   const [ra, rb] = await Promise.all([browser.execute(a, operation("read")), browser.execute(b, operation("read"))]);
   assert.match(JSON.stringify(ra), /ALPHA result 17/); assert.match(JSON.stringify(rb), /BETA result 29/);
-  await browser.execute(a, operation("fill", { selector: "#draft", value: "background worker fill" }));
+  await approved(a, operation("fill", { selector: "#draft", value: "background worker fill" }));
   await browser.execute(b, operation("scroll", { amount: 400 }));
   assert.equal((await browser.protocol("status")).active_tab_id, human.tab_id);
   const draft = await browser.protocol("eval", { tab_id: human.tab_id, script: "() => ({value:document.querySelector('#draft').value,caret:document.querySelector('#draft').selectionStart,focused:document.activeElement.id})" });
@@ -71,11 +73,12 @@ app.whenReady().then(async () => {
   const choice = snap.elements.find(e => e.selector === "#draft").number;
   const stale = operation("fill", { choice, snapshot_id: snap.snapshot_id, value: "should not fill" });
   await browser.execute(a, operation("vacuum"));
-  await deny(() => browser.execute(a, stale), ["STALE_SNAPSHOT"]);
-  await deny(() => browser.execute(b, stale), ["STALE_SNAPSHOT"]);
+  await deny(() => approved(a, stale), ["STALE_SNAPSHOT"]);
+  await deny(() => approved(b, stale), ["STALE_SNAPSHOT"]);
   const fresh = await browser.execute(a, operation("vacuum"));
   await browser.protocol("eval", { tab_id: a.tabId, script: "() => {let e=document.querySelector('#draft');e.replaceWith(e.cloneNode());return true;}" });
-  await deny(() => browser.execute(a, operation("fill", { choice, snapshot_id: fresh.snapshot_id, value: "should not fill" })), ["STALE_SNAPSHOT"]);
+  // A required grant now rejects a disconnected target before dispatch.
+  await deny(() => approved(a, operation("fill", { choice, snapshot_id: fresh.snapshot_id, value: "should not fill" })), ["STALE_SNAPSHOT", "ELEMENT_NOT_FOUND"]);
   outcomes.push("snapshot reread, cross actor/tab, replaced DOM node fail closed");
   const click = operation("click", { selector: "#write" });
   await deny(() => browser.execute(a, click), ["APPROVAL_REQUIRED"]);
@@ -102,12 +105,12 @@ app.whenReady().then(async () => {
   const isolatedSnap = await browser.execute(a, operation("vacuum"));
   await browser.protocol("eval", { tab_id: a.tabId, script: "() => {globalThis.__miaBrowserSnapshots=new Map();return true;}" });
   const isolatedChoice = isolatedSnap.elements.find(e => e.selector === "#draft").number;
-  await browser.execute(a, operation("fill", { choice: isolatedChoice, snapshot_id: isolatedSnap.snapshot_id, value: "isolated map preserved" }));
+  await approved(a, operation("fill", { choice: isolatedChoice, snapshot_id: isolatedSnap.snapshot_id, value: "isolated map preserved" }));
   const isolatedValue = await browser.protocol("eval", { tab_id: a.tabId, script: "() => document.querySelector('#draft').value" });
   assert.equal(isolatedValue.result, "isolated map preserved");
   outcomes.push("grant target replacement denied; page cannot replace isolated snapshot map");
   const beforeNavigation = await approve(a, click);
-  await browser.execute(a, operation("navigate", { url: `${origin}/replacement`, wait: "load" }));
+  await approved(a, operation("navigate", { url: `${origin}/replacement`, wait: "load" }));
   await deny(() => browser.execute(a, click, { approval: beforeNavigation }), ["APPROVAL_REQUIRED"]);
   outcomes.push("approval required, rejection/change/reuse/navigation denied; one approved fixture write");
   // A real asynchronous page mutation holds Alpha's queue while Beta progresses.
@@ -123,7 +126,7 @@ app.whenReady().then(async () => {
   await first; await deniedSecond;
   await browser.execute(a, operation("scroll", { amount: 20 }));
   outcomes.push("different tab progresses while mutation queues; cancelled pending mutation releases queue");
-  await browser.execute(a, operation("navigate", { url: `${origin}/worker-a`, wait: "load" }));
+  await approved(a, operation("navigate", { url: `${origin}/worker-a`, wait: "load" }));
   const blockerApproval = await approve(a, delayed);
   const blocker = browser.execute(a, delayed, { approval: blockerApproval });
   const queuedClick = operation("click", { selector: "#local" });
@@ -147,6 +150,10 @@ app.whenReady().then(async () => {
   const released = bind("released-actor", "released-bot", a.tabId);
   browser.actors.bind(released); browser.actors.revoke(released.actorId);
   outcomes.push("exclusive tab claim; revocation releases claim, suppresses late result and queued execution");
+  command("move", { id: human.tab_id, index: 2 });
+  assert.equal(command("state").activeId, human.tab_id);
+  assert.equal(command("state").groups.find(g => g.tabIds.includes(human.tab_id)).selectedTabId, human.tab_id);
+  outcomes.push("reordering selected native tab preserves group selected identity");
   const group = command("group-create", { name: "Fixture Research" });
   assert.ok(!group?.error, JSON.stringify(group));
   const state = command("state");
@@ -179,11 +186,13 @@ app.whenReady().then(async () => {
   assert.equal(command("state").activeId, null);
   outcomes.push("empty selected group remains selected after native owner restart");
   console.log(JSON.stringify({ evidenceClass: "local", sourceRoot, outcomes, failures, limitations: ["not integrated Mia frontend", "not manual UI", "no real Hermes/model execution", "no coordinator Stop/restart proof"] }));
-  window.destroy(); await new Promise(resolve => server.close(resolve)); app.exit(failures.length ? 1 : 0);
+  window.destroy(); await new Promise(resolve => server.close(resolve));
+  fs.rmSync(root, { recursive: true, force: true }); app.exit(failures.length ? 1 : 0);
 }).catch(async error => {
   console.error(JSON.stringify({ evidenceClass: "local", outcomes, failure: error.message, code: error.code || null }));
   if (window && !window.isDestroyed()) window.destroy();
   if (server) server.close();
+  fs.rmSync(root, { recursive: true, force: true });
   app.exit(1);
 });
 app.on("will-quit", () => fs.rmSync(root, { recursive: true, force: true }));
