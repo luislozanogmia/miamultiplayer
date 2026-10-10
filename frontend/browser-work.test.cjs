@@ -1,7 +1,13 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { visibleTabs, projection } = require('./browser-work.js');
+const { pageOrigin, visibleTabs, projection } = require('./browser-work.js');
+
+test('planning context removes URL paths, queries, fragments and unsupported schemes', () => {
+  assert.equal(pageOrigin('https://example.test/private-path?q=private#private'), 'https://example.test');
+  assert.equal(pageOrigin('file:///private/location'), '');
+  assert.equal(pageOrigin('invalid'), '');
+});
 
 test('selected group shows only its ordered live tabs, including an empty group', () => {
   const state = { tabs: [{id:1}, {id:2}, {id:3}], groups: [{id:'research',tabIds:[3,2,99]}, {id:'empty',tabIds:[]}], selectedGroupId:'research' };

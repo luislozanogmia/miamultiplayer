@@ -100,7 +100,8 @@
   function renderWorks() {
     if (!host) return;
     var records = works.map(function (w) { return projection(w, browserState.selectedGroupId); }).filter(Boolean);
-    var signature = JSON.stringify([records, loaded, !!transport, Array.from(pending)]);
+    var expiredApprovals = records.map(function (w) { return w.approvals.map(function (a) { var expiry = typeof a.expiresAt === 'number' ? a.expiresAt : Date.parse(a.expiresAt); return Number.isFinite(expiry) && expiry <= Date.now(); }); });
+    var signature = JSON.stringify([records, loaded, !!transport, Array.from(pending), expiredApprovals]);
     if (signature === lastWorkRender) return; lastWorkRender = signature;
     var list = document.getElementById('browserWorkList'); list.replaceChildren();
     document.getElementById('browserWorkEmpty').hidden = records.length > 0;
@@ -159,6 +160,8 @@
       });
     } catch (e) { error(e.message || 'Could not load your bots.'); }
   }
+  // Planning receives site origins, never credential-bearing paths/query/hash.
+  function pageOrigin(value) { try { var url = new URL(value); return ['https:', 'http:'].includes(url.protocol) ? url.origin : ''; } catch (_) { return ''; } }
   async function startWork(event) {
     event.preventDefault(); if (!transport || pending.has('start')) return;
     var candidates = Array.from(document.querySelectorAll('.browser-work-candidate')).map(function (row) {
@@ -171,7 +174,7 @@
     if (!selected || candidates.some(function (c) { return !selected.tabIds.includes(c.tabId); })) { error('Tabs changed. Choose bots again.'); return; }
     var goal = document.getElementById('browserWorkGoal').value.trim(); if (!goal) return;
     pending.add('start'); var start = document.getElementById('browserWorkStart'); start.disabled = true; error('');
-    try { await transport.plan({ groupId: selected.id, goal: goal, context: { groupName: selected.name, tabs: visibleTabs(browserState).map(function (t) { return { id: t.id, title: t.title, url: t.url }; }) }, candidates: candidates }); await refresh(); }
+    try { await transport.plan({ groupId: selected.id, goal: goal, context: { groupName: selected.name, tabs: visibleTabs(browserState).map(function (t) { return { id: t.id, title: t.title, origin: pageOrigin(t.url) }; }) }, candidates: candidates }); await refresh(); }
     catch (e) { error(e.message || 'Mia could not start browser work.'); }
     finally { pending.delete('start'); start.disabled = false; }
   }
@@ -193,5 +196,5 @@
     bridge.command({ action: 'state' }).then(updateBrowserState).catch(function () { error('Browser unavailable.'); });
     if (timer) clearInterval(timer); timer = setInterval(refresh, 2000); refresh();
   }
-  return { visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
+  return { pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
 });
