@@ -48,7 +48,7 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
     return { approval_id: id, expires_at: expiresAt };
   }
   function reject(id) { approvals.delete(id); }
-  const needsApproval = (method, params, tab) => mutations.has(method) && (method !== "vacuum" || !!params.url) && (isHumanViewing(tab.id) || ["click", "key", "eval", "tab_close"].includes(method) || params.consequential === true);
+  const needsApproval = (method, params, tab) => mutations.has(method) && (method !== "vacuum" || !!params.url) && (isHumanViewing(tab.id) || ["click", "fill", "navigate", "back", "forward", "reload", "key", "eval", "tab_close"].includes(method) || (method === "vacuum" && !!params.url) || params.consequential === true);
   function inspect(method, params) {
     const binding = bindings.get(params.actor_id);
     const tab = validate(params, binding);

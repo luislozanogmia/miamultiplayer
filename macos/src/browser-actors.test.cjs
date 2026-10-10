@@ -20,20 +20,20 @@ test("actor binding rejects missing/mismatched tabs and expected URL", async () 
 test("tabs progress concurrently but same-tab mutation waits for previous settlement", async () => {
   const { runtime } = fixture();
   let release; const blocked = new Promise(resolve => { release = resolve; }); const order = [];
-  const first = runtime.run("fill", params(), async () => { order.push("first"); await blocked; order.push("settled"); });
-  const second = runtime.run("fill", params(), () => { order.push("second"); });
-  await runtime.run("fill", params("b", 2), () => order.push("other-tab"));
+  const first = runtime.run("scroll", params(), async () => { order.push("first"); await blocked; order.push("settled"); });
+  const second = runtime.run("scroll", params(), () => { order.push("second"); });
+  await runtime.run("scroll", params("b", 2), () => order.push("other-tab"));
   assert.deepEqual(order, ["first", "other-tab"]);
   release(); await Promise.all([first, second]); assert.deepEqual(order, ["first", "other-tab", "settled", "second"]);
 });
 test("Stop rejects queued and stale completed work; fresh assignment can progress", async () => {
   const { runtime, bind } = fixture();
   let release; const blocked = new Promise(resolve => { release = resolve; });
-  const running = runtime.run("fill", params(), () => blocked);
-  const queued = runtime.run("fill", params(), () => assert.fail("queued write ran"));
+  const running = runtime.run("scroll", params(), () => blocked);
+  const queued = runtime.run("scroll", params(), () => assert.fail("queued write ran"));
   await new Promise(resolve => setImmediate(resolve)); runtime.revoke("a"); release({ filled: true });
   await assert.rejects(running, { code: "ACTOR_REVOKED" }); await assert.rejects(queued, { code: "ACTOR_REVOKED" });
-  bind("a", 1); assert.equal(await runtime.run("fill", params(), () => "fresh"), "fresh");
+  bind("a", 1); assert.equal(await runtime.run("scroll", params(), () => "fresh"), "fresh");
 });
 test("human-view mutation requires one-use exact operation approval", async () => {
   const { runtime, viewing } = fixture(); viewing(1);
@@ -72,4 +72,20 @@ test("a live tab claim excludes another bot across works and owners until revoke
   runtime.bind(competing);
   assert.equal(runtime.list().filter(actor => actor.tabId === 1).length, 1);
   assert.equal(runtime.list().find(actor => actor.tabId === 1).actorId, "c");
+});
+
+test("background fill and navigation never trust a model's consequence assessment", async () => {
+  const { runtime } = fixture();
+  let writes = 0;
+  for (const method of ["fill", "navigate", "back", "forward", "reload", "vacuum"]) {
+    const p = { ...params(), consequential: false, ...(method === "vacuum" ? { url: "https://example.com/new" } : {}) };
+    assert.equal(runtime.inspect(method, p).needs_approval, true, method + " needs owner approval");
+    await assert.rejects(runtime.run(method, p, () => { writes++; }), { code: "APPROVAL_REQUIRED" });
+    assert.equal(writes, 0);
+  }
+  const p = { ...params(), selector: "#autosave", value: "approved" };
+  const approval = runtime.approve({ actorId: "a", ownerId: "owner", method: "fill", params: p });
+  await runtime.run("fill", { ...p, approval_id: approval.approval_id }, () => { writes++; });
+  assert.equal(writes, 1);
+  assert.equal(runtime.inspect("vacuum", params()).needs_approval, false);
 });
