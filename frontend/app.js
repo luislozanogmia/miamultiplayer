@@ -6053,6 +6053,25 @@
     renderLocalBrowser();
   })();
 
+  (function wireBrowserWork(){
+    if (!window.MiaBrowserWork || !window.miaDesktop || !window.miaDesktop.browser) return;
+    function request(path, opts){
+      return api('/api/browser-work' + path, opts).then(function(res){
+        if (res.status < 200 || res.status >= 300) throw new Error(res.data.error || 'Browser work unavailable.');
+        return res.data;
+      });
+    }
+    window.MiaBrowserWork.mount({ browser: window.miaDesktop.browser,
+      getBots: function(){ return api('/api/bots').then(function(res){ if(res.status !== 200) throw new Error('Could not load your bots.'); return res.data.bots || []; }); },
+      transport: {
+        list: function(groupId){ return request('?groupId=' + encodeURIComponent(groupId || '')).then(function(data){ return data.works; }); },
+        plan: function(payload){ return request('/plan', {method:'POST', body:payload}).then(function(data){ return request('/' + encodeURIComponent(data.work.id) + '/start', {method:'POST', body:{}}); }); },
+        cancel: function(id, workerId){ return request('/' + encodeURIComponent(id) + '/stop', {method:'POST', body:workerId ? {workerId:workerId} : {}}); },
+        approval: function(id, approval, accept){ return request('/' + encodeURIComponent(id) + '/approvals/' + encodeURIComponent(approval.id), {method:'POST', body:{accept:accept}}); }
+      }
+    });
+  })();
+
   (function wireAppDevelopment(){
     var panel = el('#appDevelopmentPanel');
     var close = el('#appDevelopmentClose');
