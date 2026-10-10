@@ -1344,3 +1344,50 @@ test('synthesis approval denial evidence excludes prior work and worker epochs',
   const evidence = JSON.parse(f.calls.find(call => !call.worker).message.split('\n').at(-1)).nativeExecutionEvidence;
   assert.deepEqual(evidence.approvals, []); assert.deepEqual(evidence.approvalCounts, {});
 });
+
+test('approval reporting challenges a worker no-approval claim using its current consumed native grant', async t => {
+  const f = fixture(t); let workerMessage;
+  const claim = 'The fresh click ran without an approval card appearing to me; the runtime decided approval was not required.';
+  f.browser.validate = async (bound, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'click' });
+  f.browser.execute = async (bound, operation) => operation.method === 'click' ? { clicked: true } : { text: 'page evidence' };
+  f.hermes.worker = async args => {
+    workerMessage = args.message;
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    const click = f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'click', params: { selector: '#fixture-local' } });
+    await until(() => f.store.get(args.work.id).approvals.length);
+    await f.coordinator.decideApproval('owner', args.work.id, f.store.get(args.work.id).approvals[0].id, true);
+    assert.deepEqual(await click, { clicked: true }, 'Browser tool result remains page data, not a card-visibility attestation');
+    return { text: claim, storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const done = await f.coordinator.start('owner', work.id),message = f.calls.find(call => !call.worker).message;
+  const input = JSON.parse(message.split('\n').at(-1)), evidence = input.nativeExecutionEvidence;
+  const approval = evidence.approvals.find(row => row.status === 'consumed'),operation = evidence.operations.find(row => row.method === 'click');
+  assert.equal(input.results.first.text, claim, 'Preserve the original contrary claim for model comparison');
+  assert.equal(operation.consequential, true); assert.equal(operation.approvalId, approval.approvalId);
+  assert.equal(approval.operationId, operation.operationId); assert.equal(approval.nativeExecution, 'completed');
+  assert.equal(operation.workerId, 'first'); assert.equal(operation.workEpoch, 0); assert.equal(operation.workerEpoch, 0);
+  assert.equal(evidence.externalEffectVerification, 'not_established'); assert.ok(!JSON.stringify(evidence).includes('opaque-runtime-approval'));
+  assert.match(message, /Explicitly flag worker approval claims that contradict current native approval metadata/);
+  assert.match(message, /cite the matching worker, approval and operation IDs/);
+  assert.match(message, /does not establish whether the worker saw the approval card/);
+  assert.match(workerMessage, /A successful tool result does not mean approval was unnecessary/);
+  assert.match(workerMessage, /Do not infer that approval was waived from not seeing a card/);
+  assert.equal(done.results.first.text, claim); assert.equal(done.synthesis.text, 'fixture synthesis', 'No scripted correction or completion-flag grading replaces model output');
+});
+
+test('approval reporting keeps ordinary read and historical grants separate from current worker claims', async t => {
+  const f = fixture(t);
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    const saved = f.store.get(args.work.id),worker = saved.workers[0];
+    saved.approvals.push({ id: 'historical-approved-click', workerId: worker.id, actorId: worker.actorId, tabId: worker.tabId, workEpoch: saved.epoch + 1, workerEpoch: worker.epoch, status: 'consumed', operation: { method: 'click', params: {} } });
+    f.store.put(saved); return { text: 'This ordinary read required no approval.', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });await f.coordinator.start('owner', work.id);
+  const message = f.calls.find(call => !call.worker).message,input = JSON.parse(message.split('\n').at(-1));
+  assert.deepEqual(input.nativeExecutionEvidence.approvals, []); assert.equal(input.nativeExecutionEvidence.operations[0].consequential, false);
+  assert.equal(input.results.first.text, 'This ordinary read required no approval.');
+  assert.match(message, /Do not turn a worker's limited UI visibility into a proven card-visibility claim/);
+  assert.match(message, /For current completed ordinary read-only operations marked consequential:false, no approval card is expected/);
+});
