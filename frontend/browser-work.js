@@ -33,6 +33,11 @@
     var worker = (work.workers || []).find(function (w) { return w.id === workerId; });
     return { held: uncertain, eligible: !uncertain && !!worker && ['waiting_for_user', 'failed', 'cancelled'].includes(work.rawStatus || work.status) && ['waiting_for_user', 'failed', 'cancelled'].includes(worker.status), workerIds: Array.from(reset) };
   }
+  function taskRecoveryState(work) {
+    var held = (work.operations || []).some(function (operation) { return operation.status === 'uncertain'; });
+    var workerIds = (work.workers || []).map(function (worker) { return worker.id; });
+    return { held: held, workerIds: workerIds, eligible: !held && workerIds.length > 0 && ['waiting_for_user', 'failed', 'cancelled'].includes(work.rawStatus || work.status) };
+  }
   function preservedResponse(result, worker, work, historical, personal) {
     if (!result || typeof result.text !== 'string' || !result.text.trim()) return null;
     var incomplete = result.incomplete === true || ['stopped', 'incomplete'].includes(result.status);
@@ -151,7 +156,13 @@
       var header = node('div', 'browser-work-heading'); header.append(node('span', 'browser-work-status', work.status));
       if (!work.terminal) header.append(button('Stop this task', function () { mutate('stop:' + work.id, function () { return transport.cancel(work.id); }); }, !transport || pending.has('stop:' + work.id)));
       if (work.rawStatus === 'queued' && transport && transport.start) header.append(button('Start queued task', function () { mutate('start:' + work.id, function () { return transport.start(work.id); }); }, pending.has('start:' + work.id)));
+      var taskRecovery = taskRecoveryState(work);
+      if (taskRecovery.held) header.append(node('span', 'browser-work-hold', 'Task recovery held · uncertain write outcome'));
+      else if (taskRecovery.eligible && transport && transport.recover) {
+        header.append(button('Recover task with fresh page checks', function () { mutate('recover-task:' + work.id, function () { return transport.recover(work.id, taskRecovery.workerIds); }); }, pending.has('recover-task:' + work.id)));
+      }
       card.append(header);
+      if (taskRecovery.eligible) card.append(node('p', 'browser-work-preserved-notice', 'Task recovery starts every bot in a fresh session. Earlier answers and Mia synthesis remain context; every page must be checked again before new completion.'));
       card.append(node('div', 'browser-work-coordinator', 'Mia · Personal agent · Planning and synthesis'));
       work.workers.forEach(function (worker) {
         var row = node('div', 'browser-work-worker'); var mote = node('img', 'browser-work-mote'); mote.src = 'assets/mote/mote.svg'; mote.alt = '';
@@ -281,5 +292,5 @@
     bridge.command({ action: 'state' }).then(updateBrowserState).catch(function () { error('Browser unavailable.'); });
     if (timer) clearInterval(timer); timer = setInterval(refresh, 2000); refresh();
   }
-  return { preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
+  return { taskRecoveryState: taskRecoveryState, preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
 });
