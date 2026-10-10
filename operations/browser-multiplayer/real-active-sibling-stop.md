@@ -63,10 +63,9 @@ active Alpha Stop acceptance is derived from that earlier attempt. The separate
 fb9bc378 attempt in real-individual-stop-acceptance.md preserved an already-done
 sibling; this new run supplies the previously missing post-Stop fresh operation.
 
-Root reports human draft setup Stopping Alpha keeps Beta and this draft. at caret
-8. No final draft/focus JSON or rendered Stop screenshot was independently
-reviewed here; no continuous focus, draft persistence or rendered partial-state
-claim follows from API evidence. Personal Mia Stop, group Stop, crash recovery,
+No final draft/focus JSON or rendered Stop screenshot was independently
+reviewed for this attempt. No focus, draft persistence or rendered partial-state
+claim follows from this API evidence. Personal Mia Stop, group Stop, crash recovery,
 queued permission changes and other retained contract gates remain separate.
 No verifier display/API mutation, model call, secret access, product implementation
 or unchanged suite rerun occurred.
