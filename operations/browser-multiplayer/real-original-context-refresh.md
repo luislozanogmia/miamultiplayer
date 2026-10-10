@@ -1,0 +1,9 @@
+# Actual Original task context refresh
+
+October 10, 2026, mia-dev-aws Linux, loaded source2656430, isolated local profile and real DeepSeek Flash through Mia UI. New work `8df5808d-5b61-4151-8463-a69be810e20c` assigned only Beta/tab3 to read, native wait ms30000, and fresh read. No navigation, write, retry or tab switch was requested. This is not the full two-bot gate.
+
+While that work ran, root manually opened the older stopped personal48161 Original task context. Actual Tab then Shift+Tab focused its summary, creating a visible outline. The matching focused-before screenshot shows it open, focused and positioned with Overall goal and Mia task visible. The matching API capture has current new work working with three operations and a924-character incomplete synthesis. The focused-after capture has new work done and complete2591-character synthesis. Without further UI input, the same older context remains open, the same summary outline remains and the reading landmarks stay at the same positions.
+
+This changes actual authoritative work state while preserving the stopped detail. It does not infer changed state from an unchanged poll or combine the earlier unfocused capture with the later focused pair. No human input-focus claim is made while the human deliberately focuses a shell summary.
+
+Raw local artifacts: `/tmp/mia-context-details-focused-before.png`, `/tmp/mia-context-details-focused-after.png`, and matching `-before-work.json`/`-after-work.json`. Earlier `/tmp/mia-context-details-before.png` is the separate unfocused interaction and is not the focused acceptance pair. Independent read-only review confirmed the focused pixel pair and authoritative synthesis change. The worker is already DONE in both focused snapshots; workers, results and the three operations remain exactly unchanged. The changed event is synthesis completion, not a worker Working-to-Done transition.
