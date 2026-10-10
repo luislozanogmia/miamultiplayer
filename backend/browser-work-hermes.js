@@ -41,7 +41,7 @@ function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOp
   }
   return {
     plan: args => run(args), worker: args => run(args), synthesize: args => run(args),
-    interrupt: sessionId => client.interrupt(sessionId),
+    interrupt: (sessionId, options) => client.interrupt(sessionId, options),
     async dispatchWorkerTool(sessionId, operation) {
       const binding = bindings.get(sessionId);
       if (!binding || typeof executeOperation !== 'function') throw new Error('worker session is not bound');

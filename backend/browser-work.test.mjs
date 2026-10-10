@@ -502,6 +502,7 @@ test('approval failure settlement preserves Stop during a delayed grant and clea
   const approval = f.store.get(f.work.id).approvals[0];
   const deciding = f.coordinator.decideApproval('owner', f.work.id, approval.id, true).catch(error => error);
   await until(() => releaseGrant); await f.coordinator.stop('owner', f.work.id, 'first');
+  await until(() => f.store.get(f.work.id).interruptions.every(item => item.status !== 'pending'));
   const stopped = f.store.get(f.work.id), bytes = fs.readFileSync(f.filePath);
   const grant = { approval_id: 'synthetic-native-grant' }; releaseGrant(grant);
   assert.match((await deciding).message, /invalidated/); assert.match((await operation).message, /revoked/);
@@ -934,6 +935,29 @@ test('crash-state reload preserves visible text and labels it incomplete before 
   const recovered = await restarted.recover('owner', work.id, ['first']); assert.equal(recovered.workers[0].previousAttempts[0].text, 'Draft retained across crash.');
 });
 
+test('Stop interrupt evidence distinguishes receipt, rejection and timeout without changing frozen output', async t => {
+  for (const outcome of ['acknowledged', 'failed', 'timed_out']) await t.test(outcome, async st => {
+    const f = fixture(st); let releaseTurn, settleInterrupt, event;
+    f.hermes.synthesize = async args => { event = args.onEvent; args.onSession({ sessionId: 'mia-live', storedSessionId: 'mia-stored' }); return new Promise(resolve => { releaseTurn = () => resolve({ text: 'late body', storedSessionId: 'mia-stored' }); }); };
+    f.hermes.interrupt = async () => new Promise((resolve, reject) => { settleInterrupt = () => outcome === 'acknowledged' ? resolve({ status: 'interrupted', turn_isolation: true, private: 'hidden receipt body' }) : reject(Object.assign(new Error('hidden exception detail'), { code: outcome === 'timed_out' ? 'GATEWAY_REQUEST_TIMEOUT' : 5019 })); });
+    const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+    const running = f.coordinator.start('owner', work.id); await until(() => releaseTurn);
+    st.after(async () => { releaseTurn(); await running; });
+    event('message.delta', { text: 'Frozen partial' });
+    const results = f.store.get(work.id).results;
+    await f.coordinator.stop('owner', work.id);
+    let stopped = f.store.get(work.id);
+    assert.equal(stopped.status, 'cancelled'); assert.equal(stopped.synthesis.text, 'Frozen partial');
+    assert.equal(stopped.interruptions?.[0].status, 'pending');
+    settleInterrupt(); await until(() => f.store.get(work.id).interruptions?.[0].status === outcome);
+    stopped = f.store.get(work.id);
+    assert.equal(stopped.interruptions[0].sessionId, 'mia-live'); assert.equal(stopped.interruptions[0].target, 'mia');
+    assert.equal(stopped.interruptions[0].providerHalt, 'not_established');
+    assert.equal(stopped.synthesis.text, 'Frozen partial'); assert.equal(stopped.synthesis.verified, false);
+    assert.deepEqual(stopped.results, results); assert.ok(!JSON.stringify(stopped).includes('hidden'));
+  });
+});
+
 for (const workerId of [undefined, 'first']) test(`Stop ${workerId ? 'worker' : 'group'} during personal Mia synthesis preserves text and rejects late completion`, async t => {
   const f = fixture(t); let event, release, interrupted;
   f.hermes.synthesize = async args => { event = args.onEvent; args.onSession({ sessionId: 'mia-live', storedSessionId: 'mia-stored' }); return new Promise(resolve => { release = () => resolve({ text: 'late synthesis must not finish', storedSessionId: 'mia-stored' }); }); };
@@ -1030,4 +1054,30 @@ test('omitted personal selection preserves legacy personal option callback behav
   const f = fixture(t, { personalOptions: async (...args) => { argCounts.push(args.length); return { profile: 'personal-mia', model: 'legacy-choice', provider: 'legacy-provider' }; } });
   const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); assert.equal(work.personalSelection, undefined); assert.deepEqual(argCounts, []);
   await f.coordinator.start('owner', work.id); assert.deepEqual(argCounts, [1]); assert.equal(f.calls.find(call => !call.worker).options.model, 'legacy-choice');
+});
+
+
+test('adapter interrupt forwards metadata observer without changing live session identity', async () => {
+  let received;
+  const client = { createOrResumeSession() {}, submitTurn() {}, async interrupt(sessionId, options) { received = sessionId; options.onEvidence({ type: 'terminal', status: 'interrupted', text: 'hidden ignored by owner' }); return { status: 'interrupted' }; } };
+  const adapter = createBrowserWorkHermes({ client }); const events = [];
+  await adapter.interrupt('live', { onEvidence: evidence => events.push(evidence) });
+  assert.equal(received, 'live'); assert.equal(events[0].status, 'interrupted');
+});
+
+
+test('Stop terminal evidence stays metadata only and ignores callbacks after recovery', async t => {
+  const f = fixture(t); let release, event, observer;
+  f.hermes.synthesize = async args => { event = args.onEvent; args.onSession({ sessionId: 'mia-live', storedSessionId: 'mia-stored' }); return new Promise(resolve => { release = () => resolve({ text: 'late', storedSessionId: 'mia-stored' }); }); };
+  f.hermes.interrupt = async (sessionId, options) => { observer = options.onEvidence; return { status: 'interrupted' }; };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); const running = f.coordinator.start('owner', work.id);
+  await until(() => release); event('message.delta', { text: 'Frozen' }); await f.coordinator.stop('owner', work.id);
+  await until(() => observer); observer({ type: 'terminal', status: 'interrupted', text: 'hidden body', reasoning: 'hidden reasoning' });
+  const stopped = f.store.get(work.id);
+  assert.equal(stopped.interruptions[0].terminalStatus, 'interrupted'); assert.equal(stopped.interruptions[0].providerHalt, 'not_established');
+  assert.equal(stopped.synthesis.text, 'Frozen'); assert.ok(!JSON.stringify(stopped).includes('hidden'));
+  release(); await running; await f.coordinator.recover('owner', work.id, ['first']);
+  const before = f.store.get(work.id), bytes = fs.readFileSync(f.filePath);
+  observer({ type: 'receipt', status: 'failed' }); observer({ type: 'terminal', status: 'interrupted' });
+  assert.deepEqual(f.store.get(work.id), before); assert.deepEqual(fs.readFileSync(f.filePath), bytes);
 });
