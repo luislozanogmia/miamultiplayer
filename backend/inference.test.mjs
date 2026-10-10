@@ -34,6 +34,7 @@ test('Hermes subprocess environment is a strict allowlist', () => {
   const allowed = {
     PATH: '/safe/bin',
     HOME: '/safe/home',
+    USERNAME: 'safe-runtime-user',
     DEEPSEEK_API_KEY: 'deepseek-provider-key',
     DEEPSEEK_BASE_URL: 'https://provider.example/v1',
     XAI_API_KEY: 'xai-provider-key',
@@ -88,7 +89,7 @@ test('Hermes subprocess environment is a strict allowlist', () => {
     assert.equal(childEnv.MIAOS_EXTERNAL_CHAT, '1');
     assert.ok(Object.keys(childEnv).every((key) => [
       'PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'COLORTERM',
-      'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'NO_COLOR', 'CI',
+      'TMPDIR', 'USER', 'USERNAME', 'LOGNAME', 'SHELL', 'NO_COLOR', 'CI',
       'PYTHONDONTWRITEBYTECODE',
       'PYTHONPYCACHEPREFIX',
       'CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND', 'CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR',
