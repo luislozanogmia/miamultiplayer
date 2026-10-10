@@ -6,11 +6,22 @@ configuration, prompt or result. Profiles have no terminal/file/delegate tools.
 """
 import json
 import os
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
 TOOL = "mia_browser_work"
+DENIED_MESSAGE = "Bound browser operation denied or interrupted. Check Mia's task status; do not repeat uncertain writes."
+ERROR_BODY_LIMIT = 4096
+# Exact emitted categories from browser.cjs/browser-actors.cjs and the worker
+# broker's missing-session check. Codes describe denial, never retry permission
+# or evidence that a consequential effect did not occur. No message is relayed.
+SAFE_DENIAL_CODES = {code: code for code in (
+    "STALE_SNAPSHOT", "ELEMENT_NOT_FOUND", "TAB_NAVIGATED", "ACTOR_REVOKED",
+    "TAB_NOT_OWNED", "TAB_CLOSED", "TAB_CRASHED", "APPROVAL_REQUIRED",
+    "APPROVAL_TARGET_CHANGED", "CANCELLED", "WORKER_SESSION_REVOKED",
+)}
 # Canonical assigned-tab methods from browser.cjs, excluding actor-forbidden
 # tab/global controls and native keys; run_reusable is coordinator-owned.
 METHODS = ("read", "vacuum", "click", "fill", "scroll", "navigate", "screenshot", "wait", "back", "forward", "reload", "stop", "eval", "tab_close", "run_reusable")
@@ -120,6 +131,24 @@ def _guard(tool_name="", args=None, **kwargs):
     return None
 
 
+def _http_denial_code(error):
+    try:
+        body = error.read(ERROR_BODY_LIMIT + 1)
+        if len(body) > ERROR_BODY_LIMIT:
+            return None
+        payload = json.loads(body)
+        details = payload.get("error") if isinstance(payload, dict) else None
+        code = details.get("code") if isinstance(details, dict) else None
+        return SAFE_DENIAL_CODES.get(code) if isinstance(code, str) else None
+    except Exception:
+        return None
+    finally:
+        try:
+            error.close()
+        except Exception:
+            pass
+
+
 def _execute(args, task_id=None, session_id=None, **kwargs):
     try:
         if not _worker_scope() or not isinstance(args, dict) or set(args) != {"method", "params"} or not isinstance(args["params"], dict):
@@ -146,9 +175,12 @@ def _execute(args, task_id=None, session_id=None, **kwargs):
         with urllib.request.urlopen(request, timeout=180) as response:
             result = json.loads(response.read(8 * 1024 * 1024 + 1))
         return json.dumps({"untrusted_page_data": result.get("result")})
+    except urllib.error.HTTPError as error:
+        code = _http_denial_code(error)
+        return json.dumps({"error": DENIED_MESSAGE, **({"code": code} if code else {})})
     except Exception:
         # Provider/broker errors can contain credentials; emit a stable message.
-        return json.dumps({"error": "Bound browser operation denied or interrupted. Check Mia's task status; do not repeat uncertain writes."})
+        return json.dumps({"error": DENIED_MESSAGE})
 
 
 def register(ctx):
