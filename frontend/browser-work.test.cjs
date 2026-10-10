@@ -17,6 +17,44 @@ test('recovery blocks uncertain writes including dependent workers and only offe
   work.status='working'; assert.equal(recoveryState(work,'a').eligible,false);
 });
 
+test('stopped streaming response is visible as incomplete/unverified and never a completed result', () => {
+  const record={id:'w',groupId:'g',goal:'Compare both websites',context:{groupName:'Research'},status:'cancelled',workers:[{id:'a',botName:'Reader',goal:'Read Alpha',status:'cancelled'}],results:{a:{text:'Alpha appears to be 17; comparison unfinished.',verified:false,incomplete:true,status:'stopped',workEpoch:1,workerEpoch:2,browserEvidence:[],reasoning:'not visible'}}};
+  const shown=projection(record,'g');
+  assert.equal(shown.status,'Stopped'); assert.equal(shown.results.length,0);
+  assert.equal(shown.preservedResponses.length,1);
+  assert.deepEqual(shown.preservedResponses[0].tags,['Stopped','Incomplete','Unverified']);
+  assert.equal(shown.preservedResponses[0].text,record.results.a.text);
+  assert.equal(shown.preservedResponses[0].goal,'Read Alpha'); assert.equal(shown.preservedResponses[0].overallGoal,'Compare both websites');
+  assert.equal(shown.preservedResponses[0].context,JSON.stringify(record.context));
+  assert.equal('reasoning' in shown.preservedResponses[0],false); assert.equal('browserEvidence' in shown.preservedResponses[0],false);
+  assert.equal(record.results.a.status,'stopped','projection does not rewrite durable state');
+});
+test('recovery keeps historical text distinct while new current completion retains its own verification', () => {
+  const previous={text:'Unfinished earlier answer',status:'stopped',incomplete:true,verified:false,workEpoch:1,workerEpoch:1};
+  const record={id:'w',groupId:'g',goal:'Compare',status:'working',workers:[{id:'a',goal:'Read Alpha',status:'working',previousAttempts:[previous]}],results:{}};
+  let shown=projection(record,'g'); assert.equal(shown.results.length,0); assert.equal(shown.preservedResponses[0].historical,true);
+  assert.deepEqual(shown.preservedResponses[0].tags,['Previous attempt','Stopped','Incomplete','Unverified for current attempt']);
+  record.results.a={text:'Fresh result',verified:true,browserEvidence:[{operationId:'fresh'}]};
+  shown=projection(record,'g'); assert.equal(shown.results[0].text,'Fresh result'); assert.equal(shown.preservedResponses[0].text,previous.text);
+  assert.equal(shown.results[0].verified,true); assert.equal('verified' in shown.preservedResponses[0],false);
+});
+test('incomplete failure is not labelled stopped and empty partial text does not invent an answer', () => {
+  const record={id:'w',groupId:'g',goal:'Read',status:'failed',workers:[{id:'a'}],results:{a:{text:'Partial visible text',incomplete:true,status:'incomplete',verified:false}}};
+  assert.deepEqual(projection(record,'g').preservedResponses[0].tags,['Incomplete','Unverified']);
+  record.results.a.text=' '; assert.deepEqual(projection(record,'g').preservedResponses,[]); assert.equal(projection(record,'g').results.length,0);
+});
+
+test('personal Mia partial synthesis and its history remain distinct from workers and completed synthesis', () => {
+  const record={id:'w',groupId:'g',goal:'Combine findings',context:'Original overall context',status:'cancelled',workers:[],synthesis:{text:'The comparison is unfinished',incomplete:true,verified:false,status:'stopped',workEpoch:1,synthesisEpoch:2}};
+  let shown=projection(record,'g'); assert.equal(shown.workers.length,0); assert.equal(shown.synthesis,null);
+  assert.equal(shown.preservedResponses[0].name,'Mia · Personal agent'); assert.equal(shown.preservedResponses[0].personal,true);
+  assert.deepEqual(shown.preservedResponses[0].tags,['Stopped','Incomplete','Unverified']);
+  record.previousSynthesisAttempts=[{...record.synthesis,goal:'Combine findings',status:'historical',truncated:true}]; record.synthesis={text:'Fresh combined answer',status:'complete',incomplete:false};
+  shown=projection(record,'g'); assert.equal(shown.synthesis.text,'Fresh combined answer'); assert.equal(shown.preservedResponses.length,1);
+  assert.deepEqual(shown.preservedResponses[0].tags,['Previous attempt','Incomplete','Unverified for current attempt','Saved text truncated']);
+  assert.equal(shown.preservedResponses[0].goal,'Combine findings'); assert.equal(shown.preservedResponses[0].text,'The comparison is unfinished');
+});
+
 test('planning context removes URL paths, queries, fragments and unsupported schemes', () => {
   assert.equal(pageOrigin('https://example.test/private-path?q=private#private'), 'https://example.test');
   assert.equal(pageOrigin('file:///private/location'), '');
@@ -68,7 +106,7 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
     list:async()=>{ if(refreshQueue.length) return await refreshQueue.shift(); return records; },
     approval:async(id,approval,accept)=>{calls.push(['approval',id,approval.id,accept]);},
     cancel:async(id,workerId)=>{calls.push(['stop',id,workerId]);stopped=true;record.status='cancelled';},
-    recover:async(id,ids)=>{calls.push(['recover',id,ids]);record.status='queued';record.workers[0].status='queued';},
+    recover:async(id,ids)=>{calls.push(['recover',id,ids]);record.workers[0].previousAttempts=[record.results.worker];delete record.results.worker;record.status='queued';record.workers[0].status='queued';},
     exportReusable:async(id,workerId)=>{calls.push(['export',id,workerId]);record.reusable=[{id:'saved',workerId:'worker',proof:[{operationId:'step'}]}];},
     plan:async(payload)=>{calls.push(['plan',payload]);}
   }});
@@ -85,11 +123,14 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
   await nodes.browserWorkAssignments.onclick();
   const candidate=nodes.browserWorkCandidates.children[0]; const picks=candidate.querySelectorAll('select');
   picks[0].value='bot'; picks[0].listeners.change(); assert.equal(picks[1].value,'0'); assert.equal(candidate.querySelectorAll('input').length,0);
+  record.results.worker={text:'Preserved streamed answer',verified:false,incomplete:true,status:'stopped'}; await ui.refresh();
+  const allText=n=>[n.textContent,...n.children.flatMap(c=>allText(c))];
+  let displayed=allText(nodes.browserWorkList); assert.ok(displayed.includes('Preserved streamed answer')); assert.ok(displayed.includes('Stopped')); assert.ok(displayed.includes('Incomplete')); assert.ok(displayed.includes('Unverified'));
   record.workers[0].status='cancelled';record.operations=[{workerId:'worker',status:'uncertain'}];
   await ui.refresh(); assert.equal(nodes.browserWorkList.querySelectorAll('button').some(b=>b.textContent==='Restart bot and dependents'),false);
   record.operations=[]; await ui.refresh();
   nodes.browserWorkList.querySelectorAll('button').find(b=>b.textContent==='Restart bot and dependents').listeners.click(); await flush();
-  assert.deepEqual(calls.at(-1),['recover','work',['worker']]);
+  assert.deepEqual(calls.at(-1),['recover','work',['worker']]); displayed=allText(nodes.browserWorkList); assert.ok(displayed.includes('Preserved streamed answer')); assert.ok(displayed.includes('Previous attempt')); assert.ok(displayed.includes('Unverified for current attempt'));
   record.status='done'; record.workers[0].status='done'; record.operations=[{id:'step',workerId:'worker',status:'done'}]; await ui.refresh();
   nodes.browserWorkList.querySelectorAll('button').find(b=>b.textContent==='Save reusable steps').listeners.click(); await flush();
   assert.deepEqual(calls.at(-1),['export','work','worker']);
