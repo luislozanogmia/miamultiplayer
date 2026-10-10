@@ -18,7 +18,7 @@ function provisionBrowserWorkProfile({ profilesRoot, worker, binding }) {
     'platform_toolsets:', '  cli:', '    - mia_browser_work',
     'agent:', '  coding_context: off', '  max_turns: 40',
     'plugins:', '  enabled:', '    - mia-browser-work',
-    'mcp_servers: {}', 'secrets:', '  sources: []',
+    'mcp_servers: {}', ...require('./hermes-runtime-secret-source').runtimeSecretSourceLines(),
     'auxiliary:', '  background_review:', '    enabled: false',
     '',
   ].join('\n'), { mode: 0o600 });

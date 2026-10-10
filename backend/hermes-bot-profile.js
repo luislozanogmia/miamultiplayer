@@ -195,8 +195,7 @@ function runtimeProfileConfig({
     // approval floors still block destructive commands unconditionally.
     'approvals:',
     '  mode: "off"',
-    'secrets:',
-    '  sources: []',
+    ...require('./hermes-runtime-secret-source').runtimeSecretSourceLines(),
     '  onepassword:',
     '    enabled: false',
     'auxiliary:',
