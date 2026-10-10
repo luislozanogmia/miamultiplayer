@@ -11,6 +11,16 @@ function createBrowserWorkDesktopClient({ url, token, timeoutMs = 120000 }) {
   }
   if (typeof token !== 'string' || token.length < 32) throw new Error('Browser work capability is required');
   function request(method, params, { signal } = {}) {
+    let requestTimeoutMs = timeoutMs;
+    if (method === 'execute' && params.operation?.method === 'wait') {
+      // Native wait permits up to 120 seconds. Its response needs headroom
+      // beyond that deadline, including a final bounded selector probe (10s).
+      // Match protocolWait normalization; other operations keep their timeout.
+      const waitParams = params.operation.params || {};
+      const value = Number(waitParams.timeout ?? waitParams.ms);
+      const waitMs = Number.isFinite(value) ? Math.max(0, Math.min(120000, Math.trunc(value))) : 10000;
+      requestTimeoutMs = Math.max(timeoutMs, waitMs + 15000);
+    }
     return new Promise((resolve, reject) => {
       if (signal?.aborted) { const error = new Error('Browser work stopped'); error.code = 'ABORT_ERR'; reject(error); return; }
       const bytes = Buffer.from(JSON.stringify({ method, params }));
@@ -38,7 +48,7 @@ function createBrowserWorkDesktopClient({ url, token, timeoutMs = 120000 }) {
       signal?.addEventListener('abort', abort, { once: true });
       req.once('close', () => signal?.removeEventListener('abort', abort));
       req.once('error', reject);
-      req.setTimeout(timeoutMs, () => { const error = new Error('Browser work operation timed out; outcome requires verification'); error.code = 'OUTCOME_UNKNOWN'; req.destroy(error); });
+      req.setTimeout(requestTimeoutMs, () => { const error = new Error('Browser work operation timed out; outcome requires verification'); error.code = 'OUTCOME_UNKNOWN'; req.destroy(error); });
       // Never retry a disconnected operation: it may already have executed.
       req.end(bytes);
     });
