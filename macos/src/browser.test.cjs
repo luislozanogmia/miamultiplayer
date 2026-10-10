@@ -951,9 +951,13 @@ test("trusted actor execution targets its tab without human selection or focus",
   await assert.rejects(h.controller.protocol("read", { actor_id: "bot", tab_id: first.tab_id }), { code: "TRUSTED_ACTOR_REQUIRED" });
   const result = await h.controller.execute(binding, { method: "read", params: {} });
   assert.equal(result.tab_id, first.tab_id);
-  await h.controller.execute(binding, { method: "fill", params: { selector: "input", value: "hello", wait: "none" } });
+  const fill = { method: "fill", params: { selector: "input", value: "hello", wait: "none" } };
+  const fillApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: fill.method, params: { ...fill.params, actor_id: binding.actorId, tab_id: binding.tabId } });
+  await h.controller.execute(binding, fill, { approval: fillApproval.approval_id });
   await h.controller.execute(binding, { method: "scroll", params: {} });
-  await h.controller.execute(binding, { method: "navigate", params: { url: "https://example.com/next", wait: "none" } });
+  const navigate = { method: "navigate", params: { url: "https://example.com/next", wait: "none" } };
+  const navigateApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: navigate.method, params: { ...navigate.params, actor_id: binding.actorId, tab_id: binding.tabId } });
+  await h.controller.execute(binding, navigate, { approval: navigateApproval.approval_id });
   assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), before);
   assert.equal(h.command("state").activeId, 2);
   await assert.rejects(h.controller.execute(binding, { method: "read", params: { tab_id: 2 } }), { code: "TAB_NOT_OWNED" });
