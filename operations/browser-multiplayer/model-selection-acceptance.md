@@ -35,3 +35,8 @@ did not read credentials or authentication files, call a model, restart either
 app, or mutate those native tabs. Actual model and manual UI acceptance were
 pending when this evidence was recorded; the desktop lock still blocks manual
 interaction, while the new local app's connection is available for automation.
+
+Luis subsequently clarified that Flash must run through Mia's bot UI. Direct
+provider/API calls are diagnosis and cannot close the rendered UI acceptance
+gate. Successful runtime dispatch still needs separate evidence from launching
+the bot task and inspecting the actual answer in that UI.
