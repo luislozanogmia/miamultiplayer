@@ -1,0 +1,112 @@
+diff --git a/agent/tool_dispatch_helpers.py b/agent/tool_dispatch_helpers.py
+index 2ec4672..8def2b3 100644
+--- a/agent/tool_dispatch_helpers.py
++++ b/agent/tool_dispatch_helpers.py
+@@ -131,6 +131,98 @@ def _peel_bridge_call(tool_name: str, function_args: dict) -> tuple[str, dict]:
+         return tool_name, function_args
+
+
++# Mia's existing mutations may overlap at dispatch only for its exact managed
++# plugin. Native per-tab serialization and independent approvals remain owners.
++# Deliberately version-coupled: a plugin update must review this digest again.
++_MIA_WORKER_PLUGIN_SHA256 = "9b9d1de457f8d31434a0ac5fc79bb97c7783b6cb705b83065f283cc65f2e9bb8"
++
++
++def _mia_worker_batch_admitted(args: dict) -> bool:
++    if set(args) != {"method", "params"} or not isinstance(args.get("method"), str) or args["method"] not in {"eval", "fill"}:
++        return False
++    params = args.get("params")
++    if not isinstance(params, dict):
++        return False
++    common = {"expected_url", "document_generation", "consequential"}
++    allowed = {"script"} if args["method"] == "eval" else {"selector", "choice", "snapshot_id", "value", "wait"}
++    if set(params) - allowed - common:
++        return False
++    if "expected_url" in params and not isinstance(params["expected_url"], str):
++        return False
++    if "document_generation" in params and (type(params["document_generation"]) is not int or params["document_generation"] < 0):
++        return False
++    if "consequential" in params and type(params["consequential"]) is not bool:
++        return False
++    if args["method"] == "eval":
++        if not isinstance(params.get("script"), str) or not params["script"].strip():
++            return False
++    else:
++        selector = isinstance(params.get("selector"), str) and bool(params["selector"].strip())
++        choice = type(params.get("choice")) is int and params["choice"] > 0
++        if selector == choice or ("choice" in params and not choice) or ("selector" in params and not selector):
++            return False
++        if not isinstance(params.get("value"), str):
++            return False
++        if choice or "snapshot_id" in params:
++            if not isinstance(params.get("snapshot_id"), str) or not params["snapshot_id"].strip():
++                return False
++        if "wait" in params and (not isinstance(params["wait"], str) or params["wait"] not in {"none", "load", "networkidle"}):
++            return False
++    try:
++        import hashlib
++        import stat
++        import sys
++        from hermes_constants import get_hermes_home, get_hermes_home_override, hermes_home_key
++        from hermes_cli.plugins import get_plugin_manager
++        from tools.registry import registry
++
++        # No process-env fallback: concurrent turns must carry their own scope.
++        if not get_hermes_home_override() or not hasattr(os, "getuid"):
++            return False
++        home = get_hermes_home().absolute()
++        if home != home.resolve() or not re.fullmatch(r"mia-browser-work-[0-9a-f]{24}", home.name):
++            return False
++        plugin = home / "plugins" / "mia-browser-work"
++        source = plugin / "__init__.py"
++        for path in (home, home / "plugins", plugin, source):
++            info = path.lstat()
++            if stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
++                return False
++            if not (stat.S_ISREG(info.st_mode) if path == source else stat.S_ISDIR(info.st_mode)):
++                return False
++        scope = hermes_home_key(home)
++        entry = registry.snapshot_registration("mia_browser_work", scope=scope)
++        manager = get_plugin_manager()
++        loaded = manager._plugins.get("mia-browser-work")
++        if (entry is None or entry.name != "mia_browser_work" or entry.toolset != "mia_browser_work" or entry.is_async
++                or manager.scope_key != scope or loaded is None or not loaded.enabled or loaded.error
++                or "mia_browser_work" not in loaded.tools_registered
++                or loaded.manifest.source != "user" or Path(loaded.manifest.path).absolute() != plugin):
++            return False
++        module = loaded.module
++        handler = entry.handler
++        if (module is None or sys.modules.get(module.__name__) is not module
++                or getattr(module, "__file__", None) != str(source)
++                or getattr(module, "_execute", None) is not handler
++                or getattr(handler, "__globals__", None) is not vars(module)
++                or getattr(handler, "__name__", None) != "_execute"
++                or registry.snapshot_plugin_override_policy(module.__name__, scope=scope) is None):
++            return False
++        # Opening with NOFOLLOW also excludes a final-component replacement race.
++        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
++        with os.fdopen(fd, "rb") as stream:
++            info = os.fstat(stream.fileno())
++            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
++                return False
++            contents = stream.read(65537)
++        if len(contents) > 65536 or hashlib.sha256(contents).hexdigest() != _MIA_WORKER_PLUGIN_SHA256:
++            return False
++        return registry.snapshot_registration("mia_browser_work", scope=scope) is entry
++    except Exception:
++        # Missing identity, provenance, filesystem support or plugin state is a barrier.
++        return False
++
++
+ def _batch_admission(tool_call, execution_cwd: Optional[Path]) -> tuple[str, List[Path], bool] | None:
+     """Classify one call for the planner: ``None`` = sequential barrier, else
+     ``(effective_name, scoped_paths, is_writer)`` (empty paths = unscoped parallel-safe)."""
+@@ -150,6 +242,8 @@ def _batch_admission(tool_call, execution_cwd: Optional[Path]) -> tuple[str, Lis
+         logging.debug("Non-dict args for %s (%s) — treating as sequential barrier", tool_name, type(function_args).__name__)
+         return None
+
++    if tool_name == "mia_browser_work":
++        return (tool_name, [], False) if _mia_worker_batch_admitted(function_args) else None
+     name, args = _peel_bridge_call(tool_name, function_args)
+     if name in _NEVER_PARALLEL_TOOLS:
+         return None
