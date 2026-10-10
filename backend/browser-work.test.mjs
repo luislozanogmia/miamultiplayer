@@ -150,6 +150,62 @@ test('planner and worker guidance request approval through the bound tool instea
   }
 });
 
+test('approval context guidance makes cards conditional in both planner and worker prompts', async t => {
+  const f = fixture(t); let plannerMessage;
+  f.hermes.plan = async args => { plannerMessage = args.message; return { text: JSON.stringify({ workers: [{ id: '0', tabId: 1, goal: 'Read the page, wait 10000 and read fresh', needs: [] }] }) }; };
+  const work = await f.coordinator.plan('owner', { ...f.input, goal: 'Read, wait 10000, read fresh; no mutations', candidates: [f.input.workers[0]] });
+  await f.coordinator.start('owner', work.id);
+  const workerMessage = f.calls.find(call => call.worker).message;
+  for (const [role, message] of [['planner', plannerMessage], ['worker', workerMessage]]) await t.test(role, () => {
+    const instructions = message.split('\n')[0];
+    assert.match(instructions, /native runtime decides.*approval.*method.*context/i);
+    assert.match(instructions, /read.*vacuum.*screenshot.*wait.*without.*approval card/i);
+    assert.match(instructions, /vacuum with a URL.*navigation.*approval/i);
+    assert.match(instructions, /consequential.*human-viewed disruptive.*approval/i);
+    assert.doesNotMatch(instructions, /For an allowed browser action explicitly requested by the user, request approval/);
+    assert.doesNotMatch(instructions, /Worker goals must include the requested action and its tool-based approval request/);
+    assert.match(instructions, /not final prose or fabricated preapproval/);
+    assert.match(instructions, /denied, expired or revoked.*held.*do not retry.*uncertain writes/);
+  });
+});
+
+test('approval context guidance leaves native read-only and contextual mutation approval authoritative', async t => {
+  const { createActorRuntime } = require('../macos/src/browser-actors.cjs');
+  for (const mutation of [{ method: 'vacuum', params: { url: 'https://example.test/next' } }, { method: 'scroll', params: { direction: 'down', amount: 400 } }]) await t.test(mutation.method, async st => {
+    const f = fixture(st), executed = [];
+    const tab = { id: 1, sequence: 1, url: 'https://example.test/', view: { webContents: { isDestroyed: () => false } } };
+    const runtime = createActorRuntime({ getTab: id => id === 1 ? tab : null, isHumanViewing: () => true });
+    st.after(() => runtime.dispose());
+    const params = (bound, operation) => ({ ...operation.params, actor_id: bound.actorId, tab_id: bound.tabId });
+    f.browser.validate = async (bound, operation) => {
+      if (!runtime.list().length) runtime.bind(bound);
+      const info = runtime.inspect(operation.method, params(bound, operation));
+      return { documentGeneration: info.document_generation, url: info.url, requiresApproval: info.needs_approval };
+    };
+    f.browser.revoke = async bound => runtime.revoke(bound.actorId);
+    f.browser.execute = async (bound, operation) => runtime.run(operation.method, params(bound, operation), () => { executed.push(operation.method); return { text: 'local actor evidence' }; });
+    let cardObserved;
+    f.hermes.worker = async args => {
+      for (const operation of [{ method: 'read', params: {} }, { method: 'vacuum', params: {} }, { method: 'screenshot', params: {} }, { method: 'wait', params: { ms: 10000 } }]) {
+        await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, operation);
+        assert.deepEqual(f.store.get(args.work.id).approvals, []);
+      }
+      await assert.rejects(f.coordinator.executeOperation('owner', args.work.id, args.worker.id, mutation), /user rejected/);
+      cardObserved = true; return { text: 'Mutation rejected; read-only evidence retained', storedSessionId: 'worker' };
+    };
+    const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+    const running = f.coordinator.start('owner', work.id);
+    await until(() => f.store.get(work.id).approvals.length);
+    assert.deepEqual(executed, ['read', 'vacuum', 'screenshot', 'wait']);
+    const pending = f.store.get(work.id).approvals[0]; assert.equal(pending.status, 'pending');
+    assert.deepEqual(pending.operation, mutation);
+    await f.coordinator.decideApproval('owner', work.id, pending.id, false); await running;
+    assert.equal(cardObserved, true); assert.deepEqual(executed, ['read', 'vacuum', 'screenshot', 'wait']);
+    assert.equal(f.store.get(work.id).approvals[0].status, 'rejected');
+    assert.ok(f.store.get(work.id).operations.every(operation => operation.consequential === false));
+  });
+});
+
 test('synthesis keeps the original exact goal authoritative over shortened worker prose', async t => {
   const f = fixture(t);
   f.hermes.worker = async args => {
