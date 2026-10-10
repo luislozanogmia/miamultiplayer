@@ -338,7 +338,33 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       for (const operation of work.operations) if ((!workerId || operation.workerId === workerId) && operation.status === 'dispatching') operation.status = 'uncertain';
     });
     const keys = [...aborts.keys()].filter(key => key.startsWith(`${workId}:`) && (!workerId || key === `${workId}:${workerId}` || key === `${workId}:mia`));
-    for (const key of keys) { aborts.get(key)?.abort(); if (sessions.has(key)) hermes.interrupt(sessions.get(key)).catch(() => {}); }
+    for (const key of keys) {
+      const sessionId = sessions.get(key);
+      let requestId;
+      if (sessionId) {
+        requestId = id();
+        update(workId, work => {
+          work.interruptions = [...(work.interruptions || []), { id: requestId, target: key.slice(workId.length + 1), sessionId: String(sessionId).slice(0, 256), workEpoch: stopped.epoch, synthesisEpoch: stopped.synthesisEpoch, requestedAt: now(), status: 'pending', providerHalt: 'not_established' }].slice(-32);
+        });
+      }
+      aborts.get(key)?.abort();
+      if (sessionId) {
+        const onEvidence = evidence => {
+          const latest = store.get(workId);
+          if (latest?.epoch !== stopped.epoch || latest?.synthesisEpoch !== stopped.synthesisEpoch || !latest.interruptions?.some(item => item.id === requestId)) return;
+          if (evidence?.type === 'terminal' && evidence.status === 'interrupted') {
+            update(workId, work => { const item = work.interruptions.find(item => item.id === requestId); item.terminalStatus = 'interrupted'; item.terminalAt = now(); });
+          } else if (evidence?.type === 'receipt' && ['acknowledged', 'not_interrupted', 'failed', 'timed_out'].includes(evidence.status)) {
+            update(workId, work => { const item = work.interruptions.find(item => item.id === requestId); item.status = evidence.status; item.receivedAt = now(); });
+          }
+        };
+        // Receipt is recorded asynchronously: app Stop never waits for the RPC.
+        Promise.resolve().then(() => hermes.interrupt(sessionId, { onEvidence })).then(
+          result => onEvidence({ type: 'receipt', status: result?.status === 'interrupted' ? 'acknowledged' : result?.status === 'not_interrupted' ? 'not_interrupted' : 'failed' }),
+          error => onEvidence({ type: 'receipt', status: error?.code === 'GATEWAY_REQUEST_TIMEOUT' ? 'timed_out' : 'failed' }),
+        );
+      }
+    }
     for (const approval of stopped.approvals) if (approval.status === 'revoked') { waiters.get(approval.id)?.reject(failure('approval revoked', 409)); waiters.delete(approval.id); }
     if (typeof browser.revoke !== 'function') throw failure('Stop recorded; native worker revocation unavailable', 503);
     const revoked = await Promise.allSettled(stopped.workers.filter(worker => !workerId || worker.id === workerId).map(worker => browser.revoke({ ownerId, groupId: stopped.groupId, workId, workerId: worker.id, taskId: worker.id, actorId: worker.actorId, botId: worker.botId, tabId: worker.tabId })));
