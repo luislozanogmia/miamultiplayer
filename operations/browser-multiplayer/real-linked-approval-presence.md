@@ -51,6 +51,29 @@ geometry and original-document event handling. Local logs are
 `/tmp/mia-presence-independent-tests.log`; no implementation was edited by
 verification and its isolated display lease was released.
 
+Corrected candidate `0b71ff9489c4f9f674cc2626fa2ee64c4907082f`, following
+preserved `d615570`, passes independent combined source review and the pinned
+Electron native probe's 21 assertions. Three focused queued-generation,
+original-event-generation and navigation tests pass. The verifier's original
+50ms delayed-handler case now returns target x539.9375, matching the actual
+element x539.9375; the rendered marker x539.938 differs only by CSS rounding.
+Navigation click now returns null target with no surviving highlight. This
+directly corrects the previously observed stale returned geometry.
+
+The owner pins the actual action node in an isolated-world map, measures it
+after waiting only within its original native document generation, and cleans
+the reference in finally. Target events retain the operation's original
+generation, which presence checks before queuing/rendering. No new permission,
+tab selection, focus or sandbox behavior is added. Independent image inspection
+retains the generated label/mote/border and current fill target; actual page
+text identical to the label remains readable. Local logs:
+`/tmp/mia-presence-corrected-independent-native.log`,
+`/tmp/mia-presence-corrected-independent-original.log`,
+`/tmp/mia-presence-corrected-independent-tests.log`, and
+`/tmp/mia-presence-corrected-independent-navigation.log`. The candidate has no
+remaining review blocker for central integration of both commits; corrected
+integrated manual cleanup acceptance remains required.
+
 Actual approval revalidation negatives, corrected cleanup integration/manual
 acceptance, reusable replay, and remaining MVP gates stay separate. No full
 MVP, production Router, or Mac/Windows acceptance is claimed.
