@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <link rel="stylesheet" href="styles.css?v=20260920-conversation-drawer-1" />
+<link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
      never flashes while app.js is loading. app.js still reapplies the class
@@ -607,6 +608,25 @@
       </button>
       <button type="button" class="local-browser-btn local-browser-close-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser">&times;</button>
     </div>
+    <div class="browser-group-bar" aria-label="Tab groups">
+      <div id="browserGroupList" class="browser-group-list" role="group" aria-label="Browser groups"></div>
+      <details class="browser-group-tools"><summary>Groups</summary><div>
+        <label>New group <input id="browserGroupNewName" maxlength="80" placeholder="Research" /></label><button type="button" id="browserGroupAdd">Add</button>
+        <label>Selected group <input id="browserGroupName" maxlength="80" /></label><button type="button" id="browserGroupRename">Rename</button><button type="button" id="browserGroupEarlier">Move earlier</button><button type="button" id="browserGroupRemove">Remove empty group</button>
+        <label>Move selected tab to <select id="browserMoveTabGroup"></select></label><button type="button" id="browserMoveTab">Move tab</button>
+      </div></details>
+    </div>
+    <details id="browserWorkPanel" class="browser-work-panel"><summary>Browser work · Mia and your bots</summary>
+      <div class="browser-work-content">
+        <button type="button" id="browserWorkStopGroup">Stop all work in this group</button>
+        <p id="browserWorkError" role="alert" hidden></p>
+        <form id="browserWorkCreate"><label>Goal for Mia <input id="browserWorkGoal" required maxlength="8000" placeholder="Compare these sites and combine the findings" /></label>
+          <button type="button" id="browserWorkAssignments">Choose bots for tabs</button><div id="browserWorkCandidates"></div>
+          <button type="submit" id="browserWorkStart">Ask Mia to plan and start</button>
+        </form>
+        <p id="browserWorkEmpty">Browser work is unavailable in this build.</p><div id="browserWorkList"></div>
+      </div>
+    </details>
     <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off">
       <span class="local-browser-dot" id="localBrowserDot" aria-hidden="true" title="Connected"></span>
       <span class="local-browser-status" id="localBrowserStatus" hidden></span>
@@ -1136,6 +1156,7 @@
 <script src="chat-scroll.js?v=20260921-scroll-follow-1"></script>
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
+    <script src="browser-work.js"></script>
     <script src="native-browser.js?v=20260908-native-theme-1"></script>
     <script src="app.js?v=20260920-conversation-drawer-1"></script>
 </body>

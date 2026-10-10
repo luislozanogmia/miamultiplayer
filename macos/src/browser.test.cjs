@@ -50,6 +50,7 @@ function harness(options = {}) {
       this.sent = [];
       this.navigationHistory = { canGoBack: () => false, canGoForward: () => false };
     }
+    insertCSS(css) { this.styles = [...(this.styles || []), css]; return Promise.resolve("style-key"); }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
     getURL() { return this.shownUrl || ""; }
     isLoading() { return false; }
@@ -70,6 +71,8 @@ function harness(options = {}) {
       if (script.includes('document.querySelector("video")') && script.includes("return { currentTime")) {
         return Promise.resolve(options.mediaCapture || null);
       }
+      if (script.includes("__miaApprovedTargets") && script.includes("return true;")) return Promise.resolve(true);
+      if (script.includes("__miaActionTargets?.get")) return Promise.resolve({ x: 10, y: 20, width: 100, height: 30 });
       if (script.includes("const nodes =")) {
         return Promise.resolve({
           elements: [
@@ -88,6 +91,7 @@ function harness(options = {}) {
       if (script.includes("document.title")) return Promise.resolve("evaluated");
       return Promise.resolve({});
     }
+    executeJavaScriptInIsolatedWorld(_world, scripts) { return this.executeJavaScript(scripts[0].code); }
     setWindowOpenHandler(callback) { this.popup = callback; }
     getZoomFactor() { return options.shellZoomFactor || 1; }
     send(channel, payload) { this.sent.push({ channel, payload }); }
@@ -111,6 +115,7 @@ function harness(options = {}) {
     session: { fromPartition: partition => { profile.partition = partition; return profile; } },
     ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
     Menu: { buildFromTemplate: template => { menuTemplates.push(template); return { popup() {} }; } },
+    nativeImage: { createFromBuffer: data => ({ toPNG: () => data, toJPEG: () => data, isEmpty: () => !data.length, getSize: () => ({ width: 800, height: 600 }) }) },
     nativeTheme: { themeSource: "light" },
     dialog: { showMessageBox: (...args) => { dialogCalls.push(args); return Promise.resolve({ response: dialogResponse.value }); } },
     systemPreferences: { askForMediaAccess: async () => true },
@@ -937,4 +942,193 @@ test("page fullscreen keeps a window that was already fullscreen, and ends when 
   assert.ok(wc.scripts.some(script => script.includes("document.exitFullscreen()")));
   assert.equal(h.window.fullScreen, true, "the window stays fullscreen as the user had it");
   assert.equal(h.views[0].visible, false);
+});
+
+test("trusted actor execution targets its tab without human selection or focus", async () => {
+  const h = harness();
+  const first = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  const binding = { actorId: "bot", botId: "bot", tabId: first.tab_id, groupId: "default", ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const before = h.views.map(view => view.webContents.focusCalls || 0);
+  await assert.rejects(h.controller.protocol("read", { actor_id: "bot", tab_id: first.tab_id }), { code: "TRUSTED_ACTOR_REQUIRED" });
+  const result = await h.controller.execute(binding, { method: "read", params: {} });
+  assert.equal(result.tab_id, first.tab_id);
+  const fill = { method: "fill", params: { selector: "input", value: "hello", wait: "none" } };
+  const fillApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: fill.method, params: { ...fill.params, actor_id: binding.actorId, tab_id: binding.tabId } });
+  await h.controller.execute(binding, fill, { approval: fillApproval.approval_id });
+  await h.controller.execute(binding, { method: "scroll", params: {} });
+  const navigate = { method: "navigate", params: { url: "https://example.com/next", wait: "none" } };
+  const navigateApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: navigate.method, params: { ...navigate.params, actor_id: binding.actorId, tab_id: binding.tabId } });
+  await h.controller.execute(binding, navigate, { approval: navigateApproval.approval_id });
+  assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), before);
+  assert.equal(h.command("state").activeId, 2);
+  await assert.rejects(h.controller.execute(binding, { method: "read", params: { tab_id: 2 } }), { code: "TAB_NOT_OWNED" });
+  await assert.rejects(h.controller.execute(binding, { method: "key", params: { text: "steal" } }), { code: "UNTARGETED_KEY_FORBIDDEN" });
+});
+
+test("numbered snapshots are isolated, replaced snapshots and navigation fail closed", async () => {
+  const h = harness(); const tab = await h.controller.protocol("tab_open", { url: "https://example.com/", wait: "none" });
+  const binding = { actorId: "a", botId: "a", tabId: tab.tab_id, groupId: "default", ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const otherTab = await h.controller.protocol("tab_open", { url: "https://example.com/other", wait: "none" });
+  const second = { ...binding, actorId: "b", botId: "b", tabId: otherTab.tab_id }; h.controller.actors.bind(second);
+  const snapshot = await h.controller.execute(binding, { method: "vacuum", params: {} });
+  await h.controller.execute(second, { method: "vacuum", params: {} });
+  const op = { method: "fill", params: { choice: 2, snapshot_id: snapshot.snapshot_id, value: "hello", wait: "none" } };
+  const approval = await h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
+  await h.controller.execute(binding, op, { approval: approval.approval_id });
+  await h.controller.execute(binding, { method: "vacuum", params: {} });
+  const approve = () => h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
+  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+  const current = await h.controller.execute(binding, { method: "vacuum", params: {} });
+  h.views[0].webContents.emit("did-start-navigation", {}, "https://example.com/", false, true);
+  op.params.snapshot_id = current.snapshot_id;
+  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+});
+
+test("groups survive restart including an empty selected group", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-groups-")); const statePath = path.join(root, "browser.json");
+  try {
+    const h = harness({ statePath }); h.command("new"); h.command("navigate", { value: "https://example.com/" });
+    h.command("group-create", { name: "Research" });
+    const groupId = h.command("state").groups.find(g => g.name === "Research").id;
+    h.command("group-select", { groupId }); assert.equal(h.command("state").activeId, null);
+    h.controller.persist(); h.window.emit("closed");
+    const restored = harness({ statePath }); assert.equal(restored.command("state").selectedGroupId, groupId); assert.equal(restored.command("state").activeId, null);
+    restored.command("new"); const state = restored.command("state"); assert.equal(state.groups.find(g => g.id === groupId).selectedTabId, state.activeId);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("hidden screenshot forces assigned page frames and rejects navigation without changing selection", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  const binding = { actorId: "a", botId: "a", tabId: worker.tab_id, groupId: "default", ownerId: "owner", taskId: "task" }; h.controller.actors.bind(binding);
+  const wc = h.views[0].webContents; const calls = []; let attached = false;
+  wc.debugger = {
+    isAttached: () => attached,
+    attach: version => { attached = true; calls.push({ attach: version }); },
+    detach: () => { attached = false; calls.push({ detach: true }); },
+    sendCommand: async (method, params) => { calls.push({ method, params }); return { data: Buffer.from("worker-pixels").toString("base64") }; },
+  };
+  for (const view of h.views) view.webContents.capturePage = () => assert.fail("hidden capture used a native surface");
+  const focus = h.views.map(view => view.webContents.focusCalls || 0);
+  const result = await h.controller.execute(binding, { method: "screenshot", params: {} });
+  assert.equal(result.tab_id, worker.tab_id); assert.equal(result.data_url, "data:image/png;base64," + Buffer.from("worker-pixels").toString("base64"));
+  assert.equal(calls[0].attach, "1.3"); assert.equal(calls[1].method, "Page.captureScreenshot");
+  assert.equal(calls[1].params.fromSurface, true); assert.equal(calls[1].params.captureBeyondViewport, false);
+  assert.equal(calls[2].detach, true); assert.equal(attached, false); assert.equal(h.controller.state().activeId, 2);
+  assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), focus);
+  wc.debugger.sendCommand = async () => { wc.emit("did-start-navigation", {}, "https://example.com/changed", false, true); return { data: Buffer.from("stale").toString("base64") }; };
+  await assert.rejects(h.controller.execute(binding, { method: "screenshot", params: {} }), { code: "TAB_NAVIGATED" });
+  assert.equal(attached, false);
+});
+
+test("hidden capture preserves another debugger owner and releases failed transport", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  const wc = h.views[0].webContents; let attached = true; let attachCalls = 0; let detachCalls = 0;
+  wc.debugger = { isAttached: () => attached, attach: () => { attachCalls++; attached = true; }, detach: () => { detachCalls++; attached = false; }, sendCommand: async () => { throw new Error("private transport detail"); } };
+  await assert.rejects(h.controller.protocol("screenshot", { tab_id: worker.tab_id }), { code: "CAPTURE_BUSY" });
+  assert.equal(attachCalls, 0); assert.equal(detachCalls, 0); assert.equal(attached, true);
+  attached = false;
+  await assert.rejects(h.controller.protocol("screenshot", { tab_id: worker.tab_id }), { code: "CAPTURE_UNAVAILABLE", message: "Assigned page could not render capture pixels." });
+  assert.equal(attachCalls, 1); assert.equal(detachCalls, 1); assert.equal(attached, false);
+});
+
+test("overlapping hidden captures serialize their debugger attachments and return fresh frames", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  const wc = h.views[0].webContents; let attached = false; let frame = 0; let release; let started;
+  const firstStarted = new Promise(resolve => { started = resolve; });
+  wc.debugger = { isAttached: () => attached, attach: () => { assert.equal(attached, false); attached = true; }, detach: () => { attached = false; }, sendCommand: async () => {
+    const current = ++frame;
+    if (current === 1) { started(); await new Promise(resolve => { release = resolve; }); }
+    return { data: Buffer.from("frame-" + current).toString("base64") };
+  } };
+  const first = h.controller.protocol("screenshot", { tab_id: worker.tab_id }); await firstStarted;
+  const second = h.controller.protocol("screenshot", { tab_id: worker.tab_id });
+  assert.equal(frame, 1); release();
+  const results = await Promise.all([first, second]);
+  assert.equal(frame, 2); assert.equal(attached, false);
+  assert.equal(results[0].data_url, "data:image/png;base64," + Buffer.from("frame-1").toString("base64"));
+  assert.equal(results[1].data_url, "data:image/png;base64," + Buffer.from("frame-2").toString("base64"));
+  assert.equal(h.controller.state().activeId, 2);
+});
+
+test("group-local drag order and selected tab persist across browser-owner restart", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-group-drag-"));
+  const statePath = path.join(root, "browser.json");
+  try {
+    const h = harness({ statePath });
+    const first = h.command("new").activeId;
+    const second = h.command("new").activeId;
+    const third = h.command("new").activeId;
+    h.command("select", { id: first });
+    h.command("group-move-tab", { id: first, groupId: "default", index: 2 });
+    const moved = h.command("state");
+    assert.deepEqual([...moved.groups[0].tabIds], [second, third, first]);
+    assert.equal(moved.activeId, first, "reordering keeps the viewed tab");
+    assert.equal(moved.groups[0].selectedTabId, first);
+    h.window.emit("closed");
+    const restored = harness({ statePath }).command("state");
+    assert.deepEqual([...restored.groups[0].tabIds], [second, third, first]);
+    assert.equal(restored.activeId, first);
+    assert.equal(restored.groups[0].selectedTabId, first);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("legacy global move maps into the source group's local index without crossing groups", () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  const third = h.command("new").activeId;
+  h.command("group-create", { name: "Other" });
+  const otherId = h.command("state").groups.find(group => group.name === "Other").id;
+  h.command("group-move-tab", { id: second, groupId: otherId });
+  h.command("select", { id: first });
+  h.command("move", { id: first, index: 2 });
+  const state = h.command("state");
+  assert.deepEqual([...state.tabs.map(tab => tab.id)], [second, third, first]);
+  assert.deepEqual([...state.groups.find(group => group.id === "default").tabIds], [third, first]);
+  assert.deepEqual([...state.groups.find(group => group.id === otherId).tabIds], [second]);
+  assert.equal(state.activeId, first);
+});
+
+
+test("presence queues reject stale document events and install only one label stylesheet", async () => {
+  const h = harness(); const page = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  const wc = h.views[0].webContents; let release;
+  wc.insertCSS = css => { wc.styles = [...(wc.styles || []), css]; return new Promise(resolve => { release = resolve; }); };
+  wc.emit("dom-ready");
+  const binding = { actorId: "presence-a", botId: "presence-b", tabId: page.tab_id, groupId: "default", ownerId: "owner", taskId: "task" }; h.controller.actors.bind(binding);
+  await new Promise(setImmediate);
+  wc.emit("did-start-navigation", {}, "https://example.com/new", false, true);
+  release("old-style"); await new Promise(setImmediate);
+  assert.equal(wc.scripts.some(script => script.includes("data-mia-presence")), false, "old document must not receive delayed marker");
+  wc.insertCSS = async css => { wc.styles.push(css); return "new-style"; };
+  wc.emit("dom-ready"); await new Promise(setImmediate);
+  const marker = wc.scripts.find(script => script.includes("data-mia-presence"));
+  assert.ok(marker.includes("__miaPresenceGeneration !== 1"));
+  assert.ok(marker.includes("--mia-presence-label")); assert.equal(marker.includes("createTextNode"), false);
+  assert.equal(wc.styles.length, 2);
+  h.controller.actors.revoke(binding.actorId); await new Promise(setImmediate);
+  assert.equal(wc.styles.length, 2, "status/revoke reuse current document stylesheet");
+});
+
+
+test("click navigation while waiting discards original document target", async () => {
+  const h = harness(); const page = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  const wc = h.views[0].webContents; const original = wc.executeJavaScript.bind(wc);
+  wc.executeJavaScript = script => {
+    if (script.includes("const currentTarget")) {
+      wc.isLoading = () => true;
+      setTimeout(() => { wc.emit("did-start-navigation", {}, "https://example.com/new", false, true); wc.isLoading = () => false; }, 10);
+      return Promise.resolve({ clicked: true, target: { x: 1, y: 2, width: 3, height: 4 } });
+    }
+    return original(script);
+  };
+  const result = await h.controller.protocol("click", { tab_id: page.tab_id, selector: "a", wait: "load" });
+  assert.equal(result.clicked, true); assert.equal(result.target, null);
+  assert.equal(wc.scripts.some(script => script.includes("__miaActionTargets?.get")), false, "never retarget new document");
 });

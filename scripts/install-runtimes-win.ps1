@@ -265,6 +265,9 @@ try {
     $null = Invoke-Native "git apply hermes-gpt6-tiers.patch" {
         & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-gpt6-tiers.patch")
     }
+    $null = Invoke-Native "git apply hermes-mia-browser-worker-scheduler.patch" {
+        & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-mia-browser-worker-scheduler.patch")
+    }
 } finally {
     Pop-Location
 }

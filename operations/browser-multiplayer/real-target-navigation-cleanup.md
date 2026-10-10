@@ -1,0 +1,11 @@
+# Actual target region navigation cleanup
+
+October10 2026, isolated Linux Mia app loaded97898ac. Real DeepSeek Flash work2d4b2723-e405-425c-bf5f-a16728f7d960. Alpha/tab2 was selected before its fill request; Beta/tab3 independently read29. Actual UI Approve once consumed922edfba, linked native fill80f54cc3 completed #draft=Visible target gate once. The positive screenshot shows the literal draft surrounded by the purple target rectangle, alongside Alpha ownership border/working badge and shell ring/mote.
+
+Root manually navigated Alpha via the native address bar from?snapshot4 to?snapshot5, with no observer eval between the positive screenshot and navigation. The new page has empty draft and no old target rectangle. Its ownership border and assigned badge remain, as navigation preserves assignment. A later read-only legacy observer confirms URL5, targets0 and owners1. Independent read-only review confirmed pixels, exact grant/fill geometry and native observations.
+
+This passes target-region cleanup on actual navigation. The former e57d attempt lacked a positive target rectangle and remains insufficient for this gate. Source review clarifies that purely querying legacy eval without actor_id does not inherently clear targets; the earlier observer-clear explanation was speculative, not proven. Actor-bound eval emits operation-start, which removes the target highlight, while DOM/layout/page events can also clear a highlight.
+
+Navigation invalidated Alpha's in-flight wait e9c83183 against document1; it failed and must not be counted as successful30000ms completion. Alpha then completed fresh read925487e6 on document2/current?snapshot5. At the initial review both workers' current records and all four earlier operations were unchanged except the manual native page transition; subsequent fresh read is separate later evidence. Personal Stop/synthesis is not established by this packet and is tested separately.
+
+Raw local artifacts: `/tmp/mia-target-positive.png`, `/tmp/mia-target-after-fill.json`, `/tmp/mia-target-after-navigation.png`, `/tmp/mia-target-after-navigation.json`, `/tmp/mia-target-native-after-navigation.json`, `/tmp/mia-target-stop-latest.json`. Independent review did not invoke current browser/profile/model processes.
