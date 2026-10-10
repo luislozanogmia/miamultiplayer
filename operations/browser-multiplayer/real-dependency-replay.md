@@ -6,7 +6,7 @@ Root initiated the actual UI/model run and reported its final rendered screensho
 
 ## Dependency sequence and result propagation
 
-The stored dependency map was `{"0":["1"],"1":[]}`. Alpha was worker `1`, tab `2`; Beta was worker `0`, tab `3`. An intermediate observation showed Alpha working while Beta remained queued with no stored session. This establishes the gate before dispatch, beyond final timestamp ordering.
+The stored dependency map was `{"0":["1"],"1":[]}`. Alpha was worker `1`, tab `2`; Beta was worker `0`, tab `3`. Intermediate observations showed Alpha still active while Beta remained queued with no stored session; the saved root queued artifact records Alpha as `needs_approval`. This establishes the gate before dispatch, beyond final timestamp ordering.
 
 Alpha's current verified result was recorded at 23:18:27.700. Beta's native read `108d5c72-9d8d-4594-8e4c-bcd5474af3fe` began at 23:18:32.370 and completed at 23:18:32.387. All times are America/Monterrey. Both workers finished done with verified results at work/worker epochs `0/0`.
 
