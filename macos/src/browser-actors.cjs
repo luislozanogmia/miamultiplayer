@@ -16,6 +16,7 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
     if (!getTab(binding.tabId)) throw fail("TAB_CLOSED", "Assigned tab is unavailable.");
     if (bindings.has(binding.actorId)) throw fail("ACTOR_ALREADY_BOUND", "Revoke the previous assignment before rebinding.");
     if ([...bindings.values()].some(existing => existing.botId === binding.botId)) throw fail("BOT_ALREADY_BOUND", "A bot can own only one tab at a time.");
+    if ([...bindings.values()].some(existing => existing.tabId === binding.tabId)) throw fail("TAB_ALREADY_BOUND", "This tab is already assigned to another bot.");
     const value = { ...binding, status: "idle", token: randomUUID(), cancelled: false };
     bindings.set(value.actorId, value); emit({ type: "bound", ...binding });
     return { ...binding };
