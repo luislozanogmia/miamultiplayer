@@ -1110,3 +1110,18 @@ test('interrupt terminal observers retire on disconnect, new owned turn and the 
     assert.equal(client.interruptObservers.size, 0);
   });
 });
+
+test('interrupt never upgrades captured pending or unsolicited turns into terminal eligibility', async t => {
+  for (const mode of ['pending', 'after-unsolicited']) await t.test(mode, async st => {
+    const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+    st.after(() => client.close());
+    const turn = { mode, goalStarted: true, held: [], sessionId: 'live', text: '', resolve() {}, reject() {} };
+    const events = []; client.turns.set('live', turn); client.request = async () => ({ status: 'interrupted' });
+    await client.interrupt('live', { onEvidence: event => events.push(event) });
+    if (mode === 'pending') client.settlePendingTurn('live', turn, 'streaming');
+    else client.routeSessionEvent('live', 'message.complete', { status: 'complete', text: 'earlier unrelated turn' });
+    client.routeSessionEvent('live', 'message.start', {});
+    client.routeSessionEvent('live', 'message.complete', { status: 'interrupted', text: 'later owned turn' });
+    assert.deepEqual(events, [{ type: 'receipt', status: 'acknowledged' }]);
+  });
+});
