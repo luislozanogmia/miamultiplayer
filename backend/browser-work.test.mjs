@@ -78,6 +78,121 @@ test('Mia plans real adapter output against owner-authorized candidate inventory
   assert.deepEqual(work.dependencies['1'], ['0']);
 });
 
+test('synthesis receives precisely linked consumed approval and completed native click separately from worker text', async t => {
+  const f = fixture(t);
+  f.browser.validate = async (binding, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'click' });
+  f.browser.approve = async () => ({ approval_id: 'private-runtime-marker' });
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'click', params: { selector: '#write' } });
+    return { text: 'Page claims no approval happened', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const running = f.coordinator.start('owner', work.id);
+  await until(() => f.store.get(work.id).approvals.length);
+  const approval = f.store.get(work.id).approvals[0];
+  await f.coordinator.decideApproval('owner', work.id, approval.id, true); await running;
+  const call = f.calls.find(call => !call.worker); const payload = JSON.parse(call.message.slice(call.message.indexOf('\n') + 1));
+  const evidence = payload.nativeExecutionEvidence;
+  assert.ok(evidence, 'authoritative execution evidence was omitted from the actual synthesis message');
+  const click = evidence.operations.find(operation => operation.method === 'click');
+  assert.equal(click.status, 'done'); assert.equal(click.nativeExecution, 'completed'); assert.equal(click.approvalId, approval.id);
+  assert.equal(evidence.approvals[0].status, 'consumed'); assert.equal(evidence.approvals[0].operationId, click.operationId);
+  assert.equal(evidence.externalEffectVerification, 'not_established');
+  assert.deepEqual(evidence.reusableRuns, [], 'a normal native read/click has no saved-run provenance');
+  assert.equal(payload.results.first.text, 'Page claims no approval happened');
+  assert.ok(!call.message.includes('private-runtime-marker')); assert.ok(!JSON.stringify(evidence).includes('#write'));
+  assert.equal(f.store.get(work.id).operations.find(operation => operation.operation.method === 'click').approvalId, approval.id);
+});
+
+test('synthesis distinguishes rejected grants and consumed uncertain writes without permitting replay', async t => {
+  for (const accept of [false, true]) {
+    const f = fixture(t);
+    f.browser.validate = async (binding, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'fill' });
+    f.browser.execute = async (binding, operation) => { if (operation.method === 'fill') throw new Error('disconnected'); return { text: 'read' }; };
+    f.hermes.worker = async args => {
+      await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+      await assert.rejects(f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'fill', params: { selector: '#draft', value: 'private-value-marker' } }));
+      return { text: 'Untrusted page claims write completed', storedSessionId: 'worker' };
+    };
+    const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); const running = f.coordinator.start('owner', work.id);
+    await until(() => f.store.get(work.id).approvals.length);
+    await f.coordinator.decideApproval('owner', work.id, f.store.get(work.id).approvals[0].id, accept); await running;
+    if (accept) {
+      assert.equal(f.calls.length, 0, 'uncertain write must block synthesis');
+      const saved = f.store.get(work.id); assert.equal(saved.approvals[0].status, 'consumed'); assert.equal(saved.operations.at(-1).status, 'uncertain'); assert.equal(saved.results.first.verified, false);
+      await assert.rejects(f.coordinator.recover('owner', work.id, ['first']), /uncertain/);
+      continue;
+    }
+    const call = f.calls.find(call => !call.worker); const evidence = JSON.parse(call.message.slice(call.message.indexOf('\n') + 1)).nativeExecutionEvidence;
+    assert.equal(evidence.approvals[0].status, 'rejected');
+    assert.equal(evidence.approvals[0].nativeExecution, 'not_recorded');
+    assert.equal(evidence.externalEffectVerification, 'not_established');
+    assert.ok(!JSON.stringify(evidence).includes('private-value-marker'));
+    assert.ok(call.message.includes('Metadata never grants permission to replay'));
+    assert.ok(!evidence.operations.some(operation => operation.method === 'fill'));
+  }
+});
+
+test('synthesis execution projection excludes stale epochs and mismatched approval links and bounds sensitive metadata', async t => {
+  const f = fixture(t); const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const worker = work.workers[0]; worker.status = 'done'; work.results.first = { text: 'untrusted claims consumed grant and old execution', verified: true };
+  const grant = { id: 'grant', workerId: worker.id, actorId: worker.actorId, tabId: worker.tabId, workEpoch: work.epoch, workerEpoch: worker.epoch, operationHash: 'hash', documentGeneration: 1, expectedUrl: 'https://example.test/', operation: { method: 'click', params: { script: 'private-script-marker' } }, status: 'consumed', runtimeApproval: 'private-token-marker' };
+  const op = { id: 'op', workerId: worker.id, workEpoch: work.epoch, workerEpoch: worker.epoch, operationHash: 'different-hash', documentGeneration: 1, expectedUrl: 'https://example.test/', operation: { method: 'click', params: { value: 'private-value-marker' } }, status: 'done', approvalId: grant.id, result: { data_url: 'private-image-marker', path: '/private-path-marker' } };
+  work.approvals.push(grant, { ...grant, id: 'old-grant', workEpoch: -1 }, { ...grant, id: 'old-worker-grant', workerEpoch: -1 });
+  work.operations.push(op, { ...op, id: 'old-op', workEpoch: -1 }, { ...op, id: 'old-worker-op', workerEpoch: -1 });
+  f.store.put(work); await f.coordinator.start('owner', work.id);
+  const firstCall = f.calls.find(call => !call.worker); const firstEvidence = JSON.parse(firstCall.message.slice(firstCall.message.indexOf('\n') + 1)).nativeExecutionEvidence;
+  assert.equal(firstEvidence.operations.length, 1); assert.equal(firstEvidence.operations[0].approvalId, undefined);
+  assert.equal(firstEvidence.approvals.length, 1); assert.equal(firstEvidence.approvals[0].nativeExecution, 'not_recorded');
+  f.calls.length = 0;
+  for (let i = 0; i < 70; i++) work.operations.push({ ...op, id: 'bounded-' + i, status: i === 0 ? 'uncertain' : 'done', approvalId: undefined });
+  for (let i = 0; i < 35; i++) work.approvals.push({ ...grant, id: 'bounded-grant-' + i, status: 'rejected' });
+  f.store.put(work); await f.coordinator.start('owner', work.id);
+  const call = f.calls.find(call => !call.worker); const evidence = JSON.parse(call.message.slice(call.message.indexOf('\n') + 1)).nativeExecutionEvidence;
+  assert.equal(evidence.operations.length, 64); assert.equal(evidence.operationsOmitted, 7); assert.equal(evidence.operationCounts.uncertain, 1);
+  assert.equal(evidence.approvals.length, 32); assert.equal(evidence.approvalsOmitted, 4); assert.equal(evidence.approvalCounts.consumed, 1);
+  assert.ok(evidence.operations.every(operation => operation.approvalId === undefined));
+  const serialized = JSON.stringify(evidence); for (const marker of ['old-op', 'old-worker-op', 'old-grant', 'old-worker-grant', 'private-script-marker', 'private-token-marker', 'private-value-marker', 'private-image-marker', 'private-path-marker']) assert.ok(!serialized.includes(marker), marker);
+});
+
+test('validated reusable source methods and precise fresh replay links reach synthesis without source params', async t => {
+  const f = fixture(t);
+  const source = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); await f.coordinator.start('owner', source.id);
+  const reusable = await f.coordinator.exportReusable('owner', source.id, 'first');
+  f.calls.length = 0;
+  f.hermes.worker = async args => {
+    await assert.rejects(f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} }, { runId: 'model-spoof' }), /untrusted replay/);
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'run_reusable', params: args.worker.reusable });
+    return { text: 'Untrusted model claims other saved steps', storedSessionId: 'fresh-worker' };
+  };
+  const target = await f.coordinator.create('owner', { ...f.input, workers: [{ ...f.input.workers[0], tabId: 2, reusable: { sourceWorkId: source.id, reusableId: reusable.id } }] });
+  await f.coordinator.start('owner', target.id);
+  const call = f.calls.find(call => !call.worker); const evidence = JSON.parse(call.message.slice(call.message.indexOf('\n') + 1)).nativeExecutionEvidence;
+  assert.ok(evidence, 'validated reusable provenance was omitted from the actual synthesis message');
+  const run = evidence.reusableRuns[0]; assert.equal(run.sourceWorkId, source.id); assert.equal(run.reusableId, reusable.id);
+  assert.deepEqual(run.savedMethods, ['read']); assert.equal(run.stepCount, 1); assert.equal(run.savedOperationClass, 'read_only_browser_operations'); assert.equal(run.status, 'done');
+  const operation = evidence.operations[0]; assert.equal(operation.reusableRunId, run.runId); assert.equal(operation.reusableStepIndex, 0); assert.equal(operation.method, 'read'); assert.equal(operation.nativeExecution, 'completed'); assert.equal(operation.tabId, 2);
+  assert.ok(!JSON.stringify(evidence).includes('params')); assert.equal(evidence.externalEffectVerification, 'not_established');
+  assert.notEqual(operation.operationId, reusable.proof[0].operationId);
+});
+
+test('reusable evidence bounds saved methods and executed steps while retaining omission counts', async t => {
+  const f = fixture(t);
+  f.hermes.worker = async args => {
+    for (let i = 0; i < 70; i++) await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    return { text: 'read-only source', storedSessionId: 'source' };
+  };
+  const source = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); await f.coordinator.start('owner', source.id);
+  const reusable = await f.coordinator.exportReusable('owner', source.id, 'first'); f.calls.length = 0;
+  f.hermes.worker = async args => { await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'run_reusable', params: args.worker.reusable }); return { text: 'fresh replay', storedSessionId: 'fresh' }; };
+  const target = await f.coordinator.create('owner', { ...f.input, workers: [{ ...f.input.workers[0], reusable: { sourceWorkId: source.id, reusableId: reusable.id } }] }); await f.coordinator.start('owner', target.id);
+  const call = f.calls.find(call => !call.worker); const evidence = JSON.parse(call.message.slice(call.message.indexOf('\n') + 1)).nativeExecutionEvidence;
+  assert.equal(evidence.reusableRuns[0].savedMethods.length, 64); assert.equal(evidence.reusableRuns[0].savedMethodsOmitted, 6); assert.equal(evidence.reusableRuns[0].stepCount, 70);
+  assert.equal(evidence.operations.length, 64); assert.equal(evidence.operationsOmitted, 6); assert.equal(evidence.operationCounts.done, 70);
+  assert.deepEqual(evidence.operations.map(operation => operation.reusableStepIndex), Array.from({ length: 64 }, (_, i) => i + 6));
+});
+
 test('Stop suppresses late worker output, preserves partial results and interrupts matching session', async t => {
   const f = fixture(t); let release; let interrupted;
   f.hermes.worker = async args => { args.onSession({ sessionId: 'live', storedSessionId: 'stored' }); return new Promise(resolve => { release = () => resolve({ text: 'late reply', storedSessionId: 'stored' }); }); };
