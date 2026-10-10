@@ -14,6 +14,12 @@ profile in execution session 61380. These process/UI/restart observations are
 root-provided, not independently witnessed by verification. The exit cause is
 unknown; no intentional Stop, crash trigger, or diagnosis is inferred.
 
+Subsequent root-reported lifecycle inspection found a SIGTERM entry at
+23:30:56.901 America/Monterrey. This supports signal-triggered exit handling,
+consistent with exit code 0, but the sender and reason remain unknown. The
+verifier did not independently inspect that lifecycle log; no lane, user
+action, crash test or external process is attributed as the sender.
+
 After the API returned, verification independently inspected authorized
 synthetic work records. Work and both workers are `waiting_for_user`, at epoch
 1. Alpha's pending fill grant `722c3b81-a293-4d63-8acb-e30442554f4c` is revoked,
