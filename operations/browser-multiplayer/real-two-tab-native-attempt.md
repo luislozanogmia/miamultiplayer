@@ -60,8 +60,8 @@ observations corroborate cards remaining pending, then expiring. Supplied
 No native old-snapshot click operation, explicit native STALE_SNAPSHOT denial,
 final fresh vacuum or final fresh read was recorded. Worker output receives
 generic denied/interrupted messages and reports those later steps incomplete.
-Approval expiry proves the operation remained unexecuted, not the requested
-coded stale rejection. The stale invalid-approval waiting defect is separate
+These records establish expiry without recorded native dispatch; they do not
+establish the requested coded stale rejection. The stale invalid-approval waiting defect is separate
 from safe absence of native dispatch; root assigned coordination diagnosis.
 
 ## Final personal Mia synthesis and acceptance limits
