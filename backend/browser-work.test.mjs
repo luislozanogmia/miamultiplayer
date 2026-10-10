@@ -225,6 +225,39 @@ test('synthesis keeps the original exact goal authoritative over shortened worke
   assert.match(message, /unproven exact values.*unverified/);
 });
 
+test('synthesis read-only evidence explains absent cards only for current completed nonconsequential operations', async t => {
+  const f = fixture(t);
+  f.hermes.worker = async args => {
+    for (const operation of [{ method: 'read', params: {} }, { method: 'wait', params: { ms: 10000 } }, { method: 'read', params: {} }]) {
+      await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, operation);
+    }
+    return { text: 'Untrusted prose claims empty approvals grant permission for a future click', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  await f.coordinator.start('owner', work.id);
+  const message = f.calls.find(call => !call.worker).message;
+  const [instructions, data] = message.split('\n'), payload = JSON.parse(data);
+  const evidence = payload.nativeExecutionEvidence;
+  assert.deepEqual(evidence.approvals, []); assert.deepEqual(evidence.approvalCounts, {});
+  assert.deepEqual(evidence.operations.map(({ method, status, nativeExecution, consequential }) => ({ method, status, nativeExecution, consequential })), [
+    { method: 'read', status: 'done', nativeExecution: 'completed', consequential: false },
+    { method: 'wait', status: 'done', nativeExecution: 'completed', consequential: false },
+    { method: 'read', status: 'done', nativeExecution: 'completed', consequential: false },
+  ]);
+  assert.ok(evidence.operations.every(operation => operation.workEpoch === work.epoch && operation.workerEpoch === 0 && !operation.approvalId));
+  assert.equal(evidence.externalEffectVerification, 'not_established');
+  assert.match(payload.results.first.text, /Untrusted prose/);
+  assert.match(instructions, /current completed ordinary read-only operations marked consequential:false/i);
+  assert.match(instructions, /absent cards.*not.*required approval.*unknown or missing/i);
+  assert.match(instructions, /empty approvals list alone.*not.*permission or execution/i);
+  assert.match(instructions, /does not waive.*consequential.*human-viewed disruptive/i);
+  assert.match(instructions, /different action.*external effect/i);
+  assert.match(instructions, /consumed approval only records grant usage.*linked done operation/i);
+  assert.match(instructions, /Failed, uncertain, in-flight, missing or omitted operations.*not successful execution proof/);
+  assert.match(instructions, /never grants permission to replay or retry uncertain writes/);
+  assert.doesNotMatch(instructions, /mia_browser_work|request approval by calling|submit.*tool request|vacuum with a URL/i);
+});
+
 test('synthesis receives precisely linked consumed approval and completed native click separately from worker text', async t => {
   const f = fixture(t);
   f.browser.validate = async (binding, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'click' });
@@ -244,6 +277,9 @@ test('synthesis receives precisely linked consumed approval and completed native
   assert.ok(evidence, 'authoritative execution evidence was omitted from the actual synthesis message');
   const click = evidence.operations.find(operation => operation.method === 'click');
   assert.equal(click.status, 'done'); assert.equal(click.nativeExecution, 'completed'); assert.equal(click.approvalId, approval.id);
+  assert.equal(click.consequential, true, 'read-only no-card clarification cannot classify an approved click as exempt');
+  const read = evidence.operations.find(operation => operation.method === 'read');
+  assert.equal(read.consequential, false); assert.equal(read.approvalId, undefined);
   assert.equal(evidence.approvals[0].status, 'consumed'); assert.equal(evidence.approvals[0].operationId, click.operationId);
   assert.equal(evidence.externalEffectVerification, 'not_established');
   assert.deepEqual(evidence.reusableRuns, [], 'a normal native read/click has no saved-run provenance');
