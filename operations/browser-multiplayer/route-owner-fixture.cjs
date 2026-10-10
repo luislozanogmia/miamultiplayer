@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, execFileSync } = require('node:child_process');
-const source = path.resolve(__dirname, '../..');
+const source = path.resolve(process.env.MIA_TEST_SOURCE || path.join(__dirname, '../..'));
+const proofOnly = process.env.MIA_FIXTURE_CASES === 'proof';
 const use = name => require(path.join(source, name));
 const hash = value => crypto.createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 if (process.env.MIA_FIXTURE_SEED === '1') {
@@ -29,7 +30,7 @@ if (process.env.MIA_FIXTURE_SEED === '1') {
   const report = { source: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim(), root,
     evidenceClass: 'actual-mounted-local-auth/native-owner; synthetic encrypted records; no model/UI/Clerk acceptance',
     modules: {}, matrix, dispatches, events, seeds: [], startup: [], cleanup: {} };
-  for (const file of ['backend/server.js', 'backend/browser-work-routes.js', 'backend/browser-work-coordinator.js', 'backend/browser-work-store.js', 'macos/src/browser.cjs', 'macos/src/browser-work-dispatch.cjs', 'operations/browser-multiplayer/route-owner-fixture.cjs']) report.modules[file] = hash(fs.readFileSync(path.join(source, file)));
+  for (const file of ['backend/server.js', 'backend/browser-work-routes.js', 'backend/browser-work-coordinator.js', 'backend/browser-work-store.js', 'macos/src/browser.cjs', 'macos/src/browser-work-dispatch.cjs', 'operations/browser-multiplayer/route-owner-fixture.cjs']) report.modules[file] = hash(fs.readFileSync(file.endsWith('route-owner-fixture.cjs') ? __filename : path.join(source, file)));
   const node = '/opt/node-v22.22.3/bin/node';
   const env = { PATH: '/opt/node-v22.22.3/bin:/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8',
     NODE_PATH: process.env.NODE_PATH, MIAOS_ENV_FILE: '/dev/null', MIAOS_BIND_HOST: '127.0.0.1',
@@ -37,7 +38,7 @@ if (process.env.MIA_FIXTURE_SEED === '1') {
     DB_PATH: path.join(root, 'mia.db'), MIAOS_RUNTIME_DIR: root, HERMES_HOME: path.join(root, 'hermes'),
     MIAOS_WORKSPACE_DIR: path.join(root, 'workspace'), MIAOS_BOT_PACKAGE_DIR: path.join(root, 'bots') };
   fs.mkdirSync(env.HERMES_HOME); fs.mkdirSync(env.MIAOS_WORKSPACE_DIR);
-  const session = JSON.parse(execFileSync(node, [__filename], { env: { ...env, MIA_FIXTURE_SEED: '1' }, encoding: 'utf8' }));
+  const session = JSON.parse(execFileSync(node, [__filename], { env: { ...env, MIA_TEST_SOURCE: source, MIA_FIXTURE_SEED: '1' }, encoding: 'utf8' }));
   const key = crypto.randomBytes(32), storePath = path.join(root, 'browser-work.enc.json');
   const store = use('backend/browser-work-store.js').createBrowserWorkStore({ filePath: storePath, key });
   const snapshot = () => use('backend/browser-work-store.js').createBrowserWorkStore({ filePath: storePath, key }).list();
@@ -111,12 +112,18 @@ if (process.env.MIA_FIXTURE_SEED === '1') {
     await request('own encrypted work positive', '/own', 200);
     await request('owner-filtered list', '', 200);
     await request('foreign results hidden', '/foreign?ownerId=' + other, 404);
-    await request('foreign mutation owner spoof', '/foreign/reusable', 404, { body: { ownerId: other, workerId: 'worker' } });
-    await request('proof-free export', '/no-proof/reusable', 409, { body: { workerId: 'worker' } });
-    for (const id of ['foreign', 'group-source', 'bad-proof', 'foreign-ref', 'empty-proof', 'empty-plan', 'missing-proof', 'uncertain']) await request(id, '/target/reusable/ref/run', id === 'foreign' ? 404 : 409, { body: { sourceWorkId: id, workerId: 'worker' } });
-    report.beforeRestart = stateHash(); await stopBackend(); await startBackend();
-    await request('restart own ciphertext reload', '/own', 200); await request('restart foreign denied', '/foreign', 404);
-    report.afterRestart = stateHash(); report.restartEqual = report.beforeRestart === report.afterRestart;
+    if (!proofOnly) {
+      await request('foreign mutation owner spoof', '/foreign/reusable', 404, { body: { ownerId: other, workerId: 'worker' } });
+      await request('proof-free export', '/no-proof/reusable', 409, { body: { workerId: 'worker' } });
+    }
+    const cases = proofOnly ? ['bad-proof', 'empty-proof', 'empty-plan', 'missing-proof'] : ['foreign', 'group-source', 'bad-proof', 'foreign-ref', 'empty-proof', 'empty-plan', 'missing-proof', 'uncertain'];
+    report.caseSelection = proofOnly ? 'changed proof cases plus essential auth controls' : 'baseline full matrix';
+    for (const id of cases) await request(id, '/target/reusable/ref/run', id === 'foreign' ? 404 : 409, { body: { sourceWorkId: id, workerId: 'worker' } });
+    if (!proofOnly) {
+      report.beforeRestart = stateHash(); await stopBackend(); await startBackend();
+      await request('restart own ciphertext reload', '/own', 200); await request('restart foreign denied', '/foreign', 404);
+      report.afterRestart = stateHash(); report.restartEqual = report.beforeRestart === report.afterRestart;
+    }
     report.summary = { pass: matrix.filter(r => r.pass).length, fail: matrix.filter(r => !r.pass).length, nativeExecutionDispatches: dispatches.filter(d => d.method === 'execute').length };
   }).catch(error => { report.blocker = error.message; process.exitCode = 1; }).finally(async () => {
     await stopBackend(); if (broker) await broker.stop(); if (window && !window.isDestroyed()) window.destroy();
