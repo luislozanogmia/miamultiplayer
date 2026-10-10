@@ -1,6 +1,9 @@
 'use strict';
 const crypto = require('node:crypto');
 const terminal = new Set(['done', 'failed', 'cancelled']);
+// Same exact source-emitted categories as the bound worker plugin; never store
+// arbitrary exception details in a user-visible approval failure marker.
+const approvalDenialCodes = new Set(['STALE_SNAPSHOT', 'ELEMENT_NOT_FOUND', 'TAB_NAVIGATED', 'ACTOR_REVOKED', 'TAB_NOT_OWNED', 'TAB_CLOSED', 'TAB_CRASHED', 'APPROVAL_REQUIRED', 'APPROVAL_TARGET_CHANGED', 'CANCELLED', 'WORKER_SESSION_REVOKED']);
 const clone = value => structuredClone(value);
 function failure(message, status = 400) { const error = new Error(message); error.status = status; return error; }
 function text(value, name, max = 12000) {
@@ -398,18 +401,44 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     const approval = work.approvals.find(item => item.id === approvalId);
     if (!approval || approval.status !== 'pending' || !waiters.has(approvalId) || approval.expiresAt <= now() || terminal.has(work.status)) throw failure('approval is no longer actionable', 409);
     if (typeof accept !== 'boolean') throw failure('approval decision required');
+    const waiter = waiters.get(approvalId);
     let runtimeApproval;
     if (accept) {
       const worker = work.workers.find(item => item.id === approval.workerId);
-      const bound = await binding(work, worker);
-      const checked = await browser.validate(bound, approval.operation);
-      if (checked.documentGeneration !== approval.documentGeneration || checked.url !== approval.expectedUrl) throw failure('approval target changed', 409);
-      if (typeof browser.approve !== 'function') throw failure('native approval broker unavailable', 409);
-      runtimeApproval = await browser.approve(bound, approval.operation, approval);
-      if (!runtimeApproval) throw failure('native approval was not granted', 409);
-      const latest = await get(ownerId, workId);
-      const pending = latest.approvals.find(item => item.id === approvalId);
-      if (latest.epoch !== work.epoch || latest.workers.find(item => item.id === worker.id).epoch !== worker.epoch || pending?.status !== 'pending' || !waiters.has(approvalId) || approval.expiresAt <= now()) throw failure('approval invalidated', 409);
+      let bound;
+      const pendingCurrent = () => {
+        const latest = store.get(workId), target = latest?.workers.find(item => item.id === worker.id);
+        const pending = latest?.approvals.find(item => item.id === approvalId);
+        return latest?.epoch === work.epoch && target?.epoch === worker.epoch && !terminal.has(latest.status) && ['working', 'needs_approval'].includes(target?.status) && pending?.status === 'pending' && waiters.get(approvalId) === waiter && approval.expiresAt > now();
+      };
+      try {
+        bound = await binding(work, worker);
+        const checked = await browser.validate(bound, approval.operation);
+        if (checked.documentGeneration !== approval.documentGeneration || checked.url !== approval.expectedUrl) throw failure('approval target changed', 409);
+        if (typeof browser.approve !== 'function') throw failure('native approval broker unavailable', 409);
+        runtimeApproval = await browser.approve(bound, approval.operation, approval);
+        if (!runtimeApproval) throw failure('native approval was not granted', 409);
+        await get(ownerId, workId);
+        if (!pendingCurrent()) throw failure('approval invalidated', 409);
+      } catch (error) {
+        if (pendingCurrent()) {
+          update(workId, saved => {
+            const pending = saved.approvals.find(item => item.id === approvalId);
+            pending.status = 'revoked'; pending.decidedAt = now();
+            pending.failurePhase = 'approval';
+            if (typeof error.code === 'string' && approvalDenialCodes.has(error.code)) pending.denialCode = error.code;
+            saved.workers.find(item => item.id === worker.id).status = 'working';
+            saved.status = saved.approvals.some(item => item.status === 'pending') ? 'needs_approval' : 'working';
+          });
+          waiters.delete(approvalId); waiter.reject(error);
+        }
+        // A lost decision must revoke only its own minted grant. Cleanup never
+        // permits dispatch and cannot replace the original worker/native error.
+        if (runtimeApproval && typeof browser.reject === 'function') {
+          try { await browser.reject(bound, approval.operation, { ...approval, runtimeApproval }); } catch (_) {}
+        }
+        throw error;
+      }
     }
     const saved = update(workId, target => {
       const item = target.approvals.find(item => item.id === approvalId);
@@ -418,7 +447,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       target.workers.find(item => item.id === approval.workerId).status = 'working';
       target.status = target.approvals.some(item => item.status === 'pending') ? 'needs_approval' : 'working';
     });
-    const waiter = waiters.get(approvalId); waiters.delete(approvalId);
+    waiters.delete(approvalId);
     if (accept) waiter.resolve(); else waiter.reject(failure('user rejected operation', 403));
     return saved;
   }

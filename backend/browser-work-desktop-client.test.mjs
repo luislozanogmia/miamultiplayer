@@ -66,3 +66,27 @@ test('wait transport budget matches native normalization and is limited to execu
   await client.validate({}, { method: 'wait', params: { ms: 120000 } });
   assert.deepEqual(budgets, [135000, 135000, 120000, 135000, 120000, 120000, 120000]);
 });
+
+test('reject optionally forwards the exact minted grant while preserving the legacy payload', async t => {
+  const payloads = [];
+  const client = await fixture(t, (req, res) => {
+    const chunks = []; req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => { payloads.push(JSON.parse(Buffer.concat(chunks))); res.end(JSON.stringify({ result: true })); });
+  });
+  const binding = { ownerId: 'owner', actorId: 'actor', tabId: 2 }, operation = { method: 'click', params: { selector: '#write' } };
+  const approval = { id: 'coordinator-card', runtimeApproval: { approval_id: 'exact-native-grant' } };
+  await client.reject(binding, operation); await client.reject(binding, operation, approval);
+  assert.deepEqual(payloads, [{ method: 'reject', params: { binding, operation } }, { method: 'reject', params: { binding, operation, approval } }]);
+});
+
+test('reject reaches native dispatch with only the exact optional grant identity', async t => {
+  const { createBrowserWorkBroker } = require('../macos/src/browser-work-broker.cjs');
+  const { createBrowserWorkDispatch } = require('../macos/src/browser-work-dispatch.cjs');
+  const revoked = [];
+  const browser = { work: { actors: { reject: id => { revoked.push(id); return true; } } } };
+  const bridge = await createBrowserWorkBroker({ dispatch: createBrowserWorkDispatch(() => browser) });
+  t.after(() => bridge.stop());
+  const client = createBrowserWorkDesktopClient(bridge);
+  await client.reject({ actorId: 'actor', tabId: 2 }, { method: 'click', params: { selector: '#write' } }, { runtimeApproval: { approval_id: 'exact-losing-grant' } });
+  assert.deepEqual(revoked, ['exact-losing-grant']);
+});
