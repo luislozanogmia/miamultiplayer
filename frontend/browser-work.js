@@ -73,7 +73,7 @@
       approvalFailures: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) {
         return a.status === 'revoked' && a.failurePhase === 'approval' && !(work.operations || []).some(function (op) { return op.approvalId === a.id; });
       }).sort(function (a, b) { return (b.decidedAt || 0) - (a.decidedAt || 0); }).slice(0, 3).map(function (a) {
-        return { id: a.id, tabId: a.tabId, category: Object.prototype.hasOwnProperty.call(approvalDenialLabels, a.denialCode) ? approvalDenialLabels[a.denialCode] : '' };
+        return { id: a.id, tabId: a.tabId, category: typeof a.denialCode === 'string' && Object.prototype.hasOwnProperty.call(approvalDenialLabels, a.denialCode) ? approvalDenialLabels[a.denialCode] : '' };
       }),
       personalSelection: work.personalSelection || null, synthesis: work.synthesis && work.synthesis.incomplete !== true && !['stopped', 'incomplete'].includes(work.synthesis.status) ? work.synthesis : null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
   }

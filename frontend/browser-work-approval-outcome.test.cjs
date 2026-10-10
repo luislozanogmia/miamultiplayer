@@ -19,7 +19,7 @@ test('only marked predispatch approval failures produce bounded static notices',
   for(const status of ['dispatching','done','uncertain','failed']){
     assert.deepEqual(projection({...work,operations:[{approvalId:'safe',status}]},'g').approvalFailures,[],status);
   }
-  for(const denialCode of ['PRIVATE_URL_AND_RAW_ERROR','__proto__',undefined]){
+  for(const denialCode of ['PRIVATE_URL_AND_RAW_ERROR','__proto__',undefined,['STALE_SNAPSHOT'],{toString:null},{},null,17,true]){
     assert.deepEqual(projection({...work,approvals:[{...marked,denialCode,message:'PRIVATE'}]},'g').approvalFailures,[{id:'safe',tabId:2,category:''}]);
   }
   const many=Array.from({length:8},(_,i)=>({...marked,id:String(i),decidedAt:i}));
