@@ -21,7 +21,7 @@ app.whenReady().then(async()=>{
  const reports={readUnchanged:before.text===after.text};
  const marker="[...document.body.children].find(e=>e.style.position==='fixed'&&e.style.pointerEvents==='none')";
  const target=()=>evalPage(`!!(${marker})?.querySelector('i')`);
- const click=async()=>{const op={method:'click',params:{selector:'#local',wait:'none'}};const a=await browser.actors.approve({actorId:binding.actorId,ownerId:binding.ownerId,method:op.method,params:{...op.params,actor_id:binding.actorId,tab_id:binding.tabId}});const result=await browser.execute(binding,op,{approval:a.approval_id});await wait();return result;};
+ const click=async(waitMode='none')=>{const op={method:'click',params:{selector:'#local',wait:waitMode}};const a=await browser.actors.approve({actorId:binding.actorId,ownerId:binding.ownerId,method:op.method,params:{...op.params,actor_id:binding.actorId,tab_id:binding.tabId}});const result=await browser.execute(binding,op,{approval:a.approval_id});await wait();return result;};
  await evalPage("document.querySelector('#local').onclick=()=>{document.querySelector('#local').style.marginLeft='100px';};true");const result=await click();reports.targetCreated=await target();reports.postHandlerRect=Math.abs(result.target.x-(await evalPage("document.querySelector('#local').getBoundingClientRect().x")))<1;
  await evalPage('window.scrollBy(0,100)');await browser.protocol('screenshot',{tab_id:worker.tab_id});await wait();reports.scrollCleared=!(await target());
  await evalPage('window.scrollTo(0,0)');await wait();await click();await browser.execute(binding,{method:'read',params:{selector:'#result'}});await wait();reports.readRetainsTarget=await target();
@@ -40,6 +40,11 @@ app.whenReady().then(async()=>{
  const label=await evalPage(`(()=>{let m=${marker};let l=m.firstChild;return {content:getComputedStyle(l,'::after').content,text:l.textContent,visible:getComputedStyle(l).display!=='none'};})()`);reports.generatedVisibleLabel=label.visible&&label.content.includes('PRESENCE_ONLY_LABEL')&&label.text==='';
  const shot=await browser.protocol('screenshot',{tab_id:worker.tab_id});fs.writeFileSync('/tmp/mia-native-presence.png',nativeImage.createFromDataURL(shot.data_url).toPNG());
  await evalPage("document.querySelector('#local').onclick=()=>document.querySelector('#local').remove();true");const disconnected=await click();reports.disconnectedHasNoTarget=disconnected.target===null&&!(await target());
+ await browser.protocol('reload',{tab_id:worker.tab_id});await new Promise(r=>setTimeout(r,500));
+ await evalPage("document.querySelector('#local').onclick=()=>{queueMicrotask(()=>document.querySelector('#local').style.marginLeft='250px');};true");
+ const delayed=await click('networkidle');reports.afterWaitRect=Math.abs(delayed.target.x-(await evalPage("document.querySelector('#local').getBoundingClientRect().x")))<1;
+ await evalPage("document.querySelector('#local').onclick=()=>{location.href='/replacement';};true");
+ const navigated=await click('networkidle');reports.navigationResultHasNoTarget=navigated.target===null;reports.navigationActionHasNoHighlight=!(await target());
  await browser.protocol('reload',{tab_id:worker.tab_id});await new Promise(r=>setTimeout(r,500));
  reports.fullNavigationRestoresMarker=(await evalPage(`!!(${marker})`))&&!(await target());
  const freshRead=await read();reports.freshDocumentReadClean=!freshRead.text.includes('PRESENCE_ONLY_LABEL');

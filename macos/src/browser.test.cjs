@@ -72,6 +72,7 @@ function harness(options = {}) {
         return Promise.resolve(options.mediaCapture || null);
       }
       if (script.includes("__miaApprovedTargets") && script.includes("return true;")) return Promise.resolve(true);
+      if (script.includes("__miaActionTargets?.get")) return Promise.resolve({ x: 10, y: 20, width: 100, height: 30 });
       if (script.includes("const nodes =")) {
         return Promise.resolve({
           elements: [
@@ -1113,4 +1114,21 @@ test("presence queues reject stale document events and install only one label st
   assert.equal(wc.styles.length, 2);
   h.controller.actors.revoke(binding.actorId); await new Promise(setImmediate);
   assert.equal(wc.styles.length, 2, "status/revoke reuse current document stylesheet");
+});
+
+
+test("click navigation while waiting discards original document target", async () => {
+  const h = harness(); const page = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  const wc = h.views[0].webContents; const original = wc.executeJavaScript.bind(wc);
+  wc.executeJavaScript = script => {
+    if (script.includes("const currentTarget")) {
+      wc.isLoading = () => true;
+      setTimeout(() => { wc.emit("did-start-navigation", {}, "https://example.com/new", false, true); wc.isLoading = () => false; }, 10);
+      return Promise.resolve({ clicked: true, target: { x: 1, y: 2, width: 3, height: 4 } });
+    }
+    return original(script);
+  };
+  const result = await h.controller.protocol("click", { tab_id: page.tab_id, selector: "a", wait: "load" });
+  assert.equal(result.clicked, true); assert.equal(result.target, null);
+  assert.equal(wc.scripts.some(script => script.includes("__miaActionTargets?.get")), false, "never retarget new document");
 });

@@ -80,7 +80,7 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
         if (params.signal?.aborted) throw fail("CANCELLED", "Operation was cancelled; writes already dispatched may have completed.");
         if (!["navigate", "click", "back", "forward", "reload", "stop", "tab_close"].includes(method) && current.sequence !== generation) throw fail("TAB_NAVIGATED", "Document changed during operation.");
         binding.status = "idle";
-        if (result?.target) emit({ type: "target", actorId: binding.actorId, tabId: tab.id, taskId: binding.taskId, target: result.target });
+        if (result?.target) emit({ type: "target", actorId: binding.actorId, tabId: tab.id, taskId: binding.taskId, generation, target: result.target });
         emit({ type: "operation-done", actorId: binding.actorId, tabId: tab.id, taskId: binding.taskId, method });
         return result;
       } catch (error) {
