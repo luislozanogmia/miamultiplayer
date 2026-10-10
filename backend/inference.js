@@ -1,5 +1,7 @@
 'use strict';
 
+const { currentHermesModel } = require('./retired-models');
+
 // v0 of a deterministic context-engineering layer for native conversation replies.
 // Structured as two swappable pieces on purpose: buildContext() decides what
 // the model sees (persona + transcript + new message), runInference() decides
@@ -302,7 +304,7 @@ const VISION_MODEL = /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(process.env.MIAOS_VISI
 // with the session request.
 const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
   'claude-subscription-directsdk-experimental': Object.freeze([
-    Object.freeze({ id: 'sonnet', model: 'claude-sonnet-5[1m]', label: 'Sonnet 5', fast: false }),
+    Object.freeze({ id: 'sonnet', model: 'claude-sonnet-5-5[1m]', label: 'Sonnet 5.5', fast: false }),
     Object.freeze({ id: 'haiku', model: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', fast: false }),
     Object.freeze({ id: 'claude-opus-5-5[1m]', model: 'claude-opus-5-5[1m]', label: 'Opus 5.5', fast: false }),
     Object.freeze({ id: 'opus', model: 'claude-opus-5[1m]', label: 'Opus 5', fast: false }),
@@ -312,8 +314,7 @@ const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
   'openai-codex': Object.freeze([
     Object.freeze({ id: 'fast', model: 'gpt-5.6-luna', label: 'Fast', fast: true }),
     Object.freeze({ id: 'gpt-6-astra', model: 'gpt-6-astra', label: 'GPT-6 Astra', fast: false }),
-    Object.freeze({ id: 'gpt-6-sol', model: 'gpt-6-sol', label: 'GPT-6 Sol', fast: false }),
-    Object.freeze({ id: 'gpt-6-luna', model: 'gpt-6-luna', label: 'GPT-6 Luna', fast: false }),
+    Object.freeze({ id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', fast: false }),
     Object.freeze({ id: 'gpt-5.6-sol', model: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', fast: false }),
     Object.freeze({ id: 'gpt-5.6-terra', model: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', fast: false }),
     Object.freeze({ id: 'gpt-5.6-luna', model: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', fast: false }),
@@ -335,11 +336,11 @@ const MANAGED_ROUTER_HERMES_PROVIDER = 'openrouter';
 
 const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
   'claude-subscription-directsdk-experimental': Object.freeze([
-    'claude-sonnet-5[1m]', 'claude-haiku-4-5-20251001', 'claude-opus-5-5[1m]',
+    'claude-sonnet-5-5[1m]', 'claude-haiku-4-5-20251001', 'claude-opus-5-5[1m]',
     'claude-opus-5[1m]', 'claude-opus-4-8[1m]', 'claude-fable-5-1[1m]',
   ]),
   'openai-codex': Object.freeze([
-    'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+    'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
   ]),
   'xai-oauth': Object.freeze([
     'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-composer-2.5-fast',
@@ -351,7 +352,7 @@ const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
 });
 
 const HERMES_DEFAULT_MODEL_BY_PROVIDER = Object.freeze({
-  'claude-subscription-directsdk-experimental': 'claude-sonnet-5[1m]',
+  'claude-subscription-directsdk-experimental': 'claude-sonnet-5-5[1m]',
   'openai-codex': 'gpt-5.6-luna',
   'xai-oauth': 'grok-4.6',
 });
@@ -362,7 +363,7 @@ function defaultHermesModel(provider) {
 
 function normalizeHermesModelSelection(provider, requestedModel, fast) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
-  const rawModel = String(requestedModel || '').trim().toLowerCase();
+  const rawModel = currentHermesModel(normalizedProvider, requestedModel).toLowerCase();
   const options = HERMES_SUBSCRIPTION_MODEL_OPTIONS[normalizedProvider];
   if (options) {
     const choice = options.find((entry) => entry.id === rawModel || entry.model === rawModel);
@@ -381,7 +382,7 @@ function normalizeHermesModelSelection(provider, requestedModel, fast) {
 
 function isAllowedHermesModel(provider, requestedModel, fast) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
-  const rawModel = String(requestedModel || '').trim().toLowerCase();
+  const rawModel = currentHermesModel(normalizedProvider, requestedModel).toLowerCase();
   if (normalizedProvider === 'openai-codex' && rawModel === 'fast') return true;
   const allowed = HERMES_ALLOWED_MODELS_BY_PROVIDER[normalizedProvider] || [];
   if (!allowed.includes(rawModel)) return false;

@@ -168,7 +168,7 @@ test('provider status checks use bounded subprocess concurrency', () => {
 
 test('subscription model selections stay inside the provider allowlist', () => {
   assert.deepEqual(inference.normalizeHermesModelSelection('claude-subscription-directsdk-experimental', 'sonnet', false), {
-    model: 'claude-sonnet-5[1m]',
+    model: 'claude-sonnet-5-5[1m]',
     fast: false,
   });
   assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5[1m]', false), true);
@@ -195,10 +195,16 @@ test('subscription model selections stay inside the provider allowlist', () => {
   });
   assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-6-astra', false), true);
   assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-6-astra', true), false);
+  assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', 'gpt-6.1-sol', false), { model: 'gpt-6.1-sol', fast: false });
+  // Retired models keep working on their successor instead of failing.
   for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
-    assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', model, false), { model, fast: false });
+    assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', model, false), { model: 'gpt-6.1-sol', fast: false });
     assert.equal(inference.isAllowedHermesModel('openai-codex', model, false), true);
   }
+  assert.deepEqual(inference.normalizeHermesModelSelection('claude-subscription-directsdk-experimental', 'claude-sonnet-5[1m]', false), {
+    model: 'claude-sonnet-5-5[1m]',
+    fast: false,
+  });
   assert.equal(inference.isAllowedHermesModel('xai-oauth', 'deepseek-v4-flash', false), false);
   assert.equal(inference.MIAOS_BOT_MAX_TURNS, 100);
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200 }), 200);

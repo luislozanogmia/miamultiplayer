@@ -11,5 +11,8 @@ test('chat sidebar exposes starter bot templates without pre-creating bots', () 
   assert.match(source, /function renderChatStarterBots\(\)[\s\S]*startAgentSetupChat\(\)[\s\S]*input\.value = template\.prompt/);
   assert.match(source, /CHAT_STARTER_BOTS_HIDDEN_KEY[\s\S]*data-dismiss-starter-bot[\s\S]*hideChatStarterBot/);
   assert.match(source, /group\.hidden = visible\.length === 0/);
+  // The group's display:flex must not override [hidden], or an empty
+  // "Starter bots" header stays on screen.
+  assert.match(readFileSync(new URL('./styles.css', import.meta.url), 'utf8'), /\.chat-recents-group\[hidden\]\{display:none;\}/);
   assert.match(source, /allWrap\.innerHTML = dmRowsHtml \+ hiddenHtml;\s*renderChatStarterBots\(\);/);
 });

@@ -134,6 +134,7 @@ const {
 } = require('./conversation-repository');
 const { createConversationAuthorization } = require('./conversation-authorization');
 const { createConversationService, canonicalBotConversationCandidates } = require('./conversation-service');
+const { isRetiredHermesModel, currentHermesModel } = require('./retired-models');
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
@@ -2598,10 +2599,48 @@ async function ensureNativeBotConversation(bot) {
   return conversation;
 }
 
+// Bot chats made before Mia recorded botId name their bot only through
+// membership, so the sidebar, History and scheduled deliveries could not find
+// them. Give each such chat its botId. Whichever of the bot's main chats has
+// the newest message stays its main chat; the others move to History as
+// "fresh" chats. Nothing is merged.
+function repairLegacyBotConversations(bot) {
+  const companyId = nativeCompanyId(workspaceIdForRecord(bot), ownerOf(bot));
+  const conversations = nativeConversationRepository.listConversations({ companyId, limit: 1000 })
+    .filter((conversation) => conversation.type === 'bot');
+  const legacy = conversations.filter((conversation) => {
+    const metadata = conversation.metadata && typeof conversation.metadata === 'object' ? conversation.metadata : {};
+    if (metadata.botId) return false;
+    const members = nativeConversationRepository.listMembers({ companyId, conversationId: conversation.id, includeRemoved: false });
+    const creator = String(conversation.createdBy || '').trim().toLowerCase();
+    return members.length === 2
+      && members.some((member) => member.principalType === 'bot' && member.principalId === bot.id)
+      && members.some((member) => member.principalType === 'user' && String(member.principalId || '').trim().toLowerCase() === creator);
+  });
+  if (!legacy.length) return;
+  const current = canonicalBotConversationCandidates(conversations.filter((conversation) =>
+    conversation.metadata && conversation.metadata.botId === bot.id));
+  const activity = (conversation) => String(conversation.lastEventAt || conversation.createdAt || '');
+  const mains = legacy.concat(current).sort((left, right) =>
+    activity(right).localeCompare(activity(left)) || right.id.localeCompare(left.id));
+  for (const conversation of mains) {
+    const metadata = { ...(conversation.metadata || {}), botId: bot.id };
+    if (conversation.id !== mains[0].id) metadata.conversationMode = 'fresh';
+    nativeConversationRepository.updateConversation({
+      companyId,
+      id: conversation.id,
+      metadata,
+      updatedAt: conversation.updatedAt || conversation.createdAt,
+    });
+  }
+  console.log(`native bot reconciliation: linked ${legacy.length} older chat(s) to ${bot.id}; main chat ${mains[0].id}`);
+}
+
 async function reconcileNativeBotConversations() {
   reconcileBotConversationArchiveFlags();
   for (const bot of db.loadAll(conn, 'bots')) {
     try {
+      repairLegacyBotConversations(bot);
       const candidates = canonicalBotConversationCandidates(nativeBotConversations(bot));
       if (candidates.length > 1) {
         let canonical = candidates[0];
@@ -6205,10 +6244,22 @@ function ownsPrivateBotConversation(conversation, agent, trigger) {
   const metadata = conversation && conversation.metadata && typeof conversation.metadata === 'object'
     ? conversation.metadata
     : {};
-  return Boolean(conversation && agent && trigger)
-    && conversation.type === 'bot'
-    && metadata.botId === agent.id
-    && String(conversation.createdBy || '').trim().toLowerCase() === String(trigger.senderId || '').trim().toLowerCase();
+  const sender = String(trigger && trigger.senderId || '').trim().toLowerCase();
+  if (!conversation || !agent || !trigger || conversation.type !== 'bot') return false;
+  if (String(conversation.createdBy || '').trim().toLowerCase() !== sender) return false;
+  if (metadata.botId) return metadata.botId === agent.id;
+  // Bot chats made before Mia recorded botId only name their bot through
+  // membership. They count as the bot's own chat when the sender and this
+  // bot are its only members.
+  const members = nativeConversationRepository.listMembers({
+    companyId: conversation.companyId,
+    conversationId: conversation.id,
+    includeRemoved: false,
+  });
+  return members.length === 2
+    && members.some((member) => member.principalType === 'bot' && member.principalId === agent.id)
+    && members.some((member) => member.principalType === 'user'
+      && String(member.principalId || '').trim().toLowerCase() === sender);
 }
 
 // The saved session is only reused while it runs on the same profile with the
@@ -7842,6 +7893,14 @@ function migrateWorkspaceOwnership() {
     if (record.model && !record.modelProvider) {
       record.modelProvider = harnessCliProviderForUser(record.owner);
       touched = true;
+    }
+    // A bot or schedule saved on a model Mia retired moves to its successor,
+    // so cron jobs stop running the old model and the bot keeps its tier.
+    for (const holder of [record, ...(Array.isArray(record.automations) ? record.automations : [])]) {
+      if (holder && holder.model && isRetiredHermesModel(holder.modelProvider, holder.model)) {
+        holder.model = currentHermesModel(holder.modelProvider, holder.model);
+        touched = true;
+      }
     }
     if (String(record.id || '').startsWith('builtin-') && !record.builtinSlug) {
       record.builtinSlug = String(record.id).slice('builtin-'.length);

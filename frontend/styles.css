@@ -1235,6 +1235,7 @@
   .chat-search-result-empty{padding:8px;font-size:12px;color:var(--sand-text-secondary);}
   .chat-sidebar-scroll{flex:1;min-height:0;overflow:auto;padding:0 8px 12px;display:flex;flex-direction:column;gap:12px;}
   .chat-recents-group{display:flex;flex-direction:column;gap:1px;position:relative;}
+  .chat-recents-group[hidden]{display:none;}
   .chat-recents-head{display:flex;align-items:center;gap:8px;padding:6px 8px 4px;}
   .chat-recents-head.filtered-empty{display:none;}
   .chat-section-toggle{appearance:none;border:0;background:transparent;color:var(--sand-text-secondary);width:18px;height:18px;padding:0;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:0 0 auto;}

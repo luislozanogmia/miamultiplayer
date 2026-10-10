@@ -1,5 +1,5 @@
 diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
-index 7000f34..6b78b37 100644
+index 7000f34261..5af8e7214c 100644
 --- a/agent/auxiliary_client.py
 +++ b/agent/auxiliary_client.py
 @@ -603,7 +603,7 @@ _CODEX_SPARK_COMPACTION_THRESHOLD = 0.70
@@ -7,7 +7,7 @@ index 7000f34..6b78b37 100644
  
  def _is_codex_gpt54_or_gpt55(model: Optional[str], provider: Optional[str] = None) -> bool:
 -    """True for gpt-5.4/5.5/5.6, gpt-6 Astra (and the Daybreak Sol alias) on the Codex OAuth route only.
-+    """True for gpt-5.4/5.5/5.6, gpt-6 Sol/Terra/Luna, gpt-6 Astra (and the Daybreak Sol alias) on the Codex OAuth route only.
++    """True for gpt-5.4/5.5/5.6, gpt-6 Sol/Terra/Luna, gpt-6.1 Sol, gpt-6 Astra (and the Daybreak Sol alias) on the Codex OAuth route only.
  
      Other routes expose a larger window for the same slug and keep the user's threshold.
      Prefix-matched so ``-pro`` and dated snapshots track every 272K-capped family; ``-900k``
@@ -16,32 +16,33 @@ index 7000f34..6b78b37 100644
      return bare == "gpt-daybreak-blue-latest" or any(
          bare == fam or bare.startswith(fam + "-") or bare.startswith(fam + ".")
 -        for fam in ("gpt-5.4", "gpt-5.5", "gpt-5.6"))
-+        for fam in ("gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6-sol", "gpt-6-luna"))
++        for fam in ("gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"))
  
  
  def _codex_route_bare_model(model: Optional[str], provider: Optional[str]) -> Optional[str]:
 diff --git a/agent/model_metadata.py b/agent/model_metadata.py
-index 421700f..2ee9382 100644
+index 421700f6be..90b1304672 100644
 --- a/agent/model_metadata.py
 +++ b/agent/model_metadata.py
-@@ -343,6 +343,7 @@ DEFAULT_CONTEXT_LENGTHS = {
+@@ -343,6 +343,8 @@ DEFAULT_CONTEXT_LENGTHS = {
      # its own branch). 5.4-nano/-mini are 400k, not 1.05M; gpt-5.3-codex-spark is
      # Codex-OAuth-only and listed so "gpt-5" (400k) doesn't win.
      "gpt-6-astra": 1050000,  # also matches -pro (verified live on OpenRouter)
++    "gpt-6.1-sol": 1050000,  # -pro too (OpenAI model page + OpenRouter live 2026-09-29)
 +    "gpt-6-sol": 1050000, "gpt-6-luna": 1050000,  # -pro too (OpenRouter live 2026-09-22)
      "gpt-5.6-luna": 1050000, "gpt-5.6-terra": 1050000, "gpt-5.6-sol": 1050000, "gpt-5.5": 1050000,
      "gpt-5.4-nano": 400000, "gpt-5.4-mini": 400000, "gpt-5.4": 1050000,
      "gpt-5.3-codex-spark": 128000, "gpt-5.1-chat": 128000, "gpt-5": 400000,
-@@ -1721,7 +1722,7 @@ def _query_anthropic_context_length(model: str, base_url: str, api_key: Any) ->
+@@ -1721,7 +1723,7 @@ def _query_anthropic_context_length(model: str, base_url: str, api_key: Any) ->
  # Codex OAuth `context_window` values (what Codex enforces — lower than the direct API for the same
  # slugs). Fallback when the live probe fails; longest-key-first. gpt-5.3-codex-spark is listed so "gpt-5.3-codex" doesn't win.
  _CODEX_OAUTH_CONTEXT_FALLBACK: Dict[str, int] = {
 -    "gpt-6-astra": 272_000,
-+    "gpt-6-astra": 272_000, "gpt-6-sol": 272_000, "gpt-6-luna": 272_000,
++    "gpt-6-astra": 272_000, "gpt-6.1-sol": 272_000, "gpt-6-sol": 272_000, "gpt-6-luna": 272_000,
      "gpt-5.1-codex-max": 272_000, "gpt-5.1-codex-mini": 272_000, "gpt-5.3-codex": 272_000,
      "gpt-5.3-codex-spark": 128_000, "gpt-5.2-codex": 272_000, "gpt-5.4-mini": 272_000,
      "gpt-5.6-sol": 272_000, "gpt-5.6-terra": 272_000, "gpt-5.6-luna": 272_000, "gpt-daybreak-blue-latest": 272_000,
-@@ -1730,9 +1731,14 @@ _CODEX_OAUTH_CONTEXT_FALLBACK: Dict[str, int] = {
+@@ -1730,19 +1732,27 @@ _CODEX_OAUTH_CONTEXT_FALLBACK: Dict[str, int] = {
  # Codex OAuth advertises 272K for these families but ACCEPTS ~900K+ (verified live; gpt-5.5 and
  # gpt-5.4-mini genuinely reject >272K). 900K keeps ≥11K margin. OPT-IN ONLY via explicit ``-900k``
  # picker variants (a 900K default burned subscription usage); the suffix is stripped before the wire.
@@ -58,19 +59,24 @@ index 421700f..2ee9382 100644
 +}
  _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_EXACT: Dict[str, int] = {
      "gpt-5.4": 900_000, "gpt-daybreak-blue-latest": 900_000,
++    # gpt-6.1-sol: by exact slug, so no -pro variant is synthesized (live 2026-09-29: 918,137
++    # input OK, ~931K rejected; the live catalog's 872K ceiling still caps the bump).
++    "gpt-6.1-sol": 900_000,
      "gpt-6-astra": 900_000,  # advertised 272K; 920,043 input OK, 1,000,043 rejected (live 2026-09-04)
-@@ -1740,8 +1746,8 @@ _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_EXACT: Dict[str, int] = {
+ }
  _CODEX_OAUTH_STALE_ADVERTISED_CTX = 272_000  # the only advertised value the bump may override
  CODEX_CONTEXT_VARIANT_SUFFIX = "-900k"  # picker-only opt-in suffix; never sent on the wire
  # The ONLY bases eligible for ``-900k``: routable, live-verified. No family prefixing (it would synthesize
 -# dead ``-pro`` variants); dated snapshots of the 5.6 bases are allowed. gpt-daybreak-blue-latest is a verified Sol alias.
 -_CODEX_900K_SNAPSHOT_BASES = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+-_CODEX_900K_ELIGIBLE_BASES = frozenset({*_CODEX_900K_SNAPSHOT_BASES, "gpt-5.4", "gpt-daybreak-blue-latest", "gpt-6-astra"})
 +# dead ``-pro`` variants); dated snapshots of the 5.6 / gpt-6 tier bases are allowed. gpt-daybreak-blue-latest is a verified Sol alias.
 +_CODEX_900K_SNAPSHOT_BASES = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-sol", "gpt-6-luna")
- _CODEX_900K_ELIGIBLE_BASES = frozenset({*_CODEX_900K_SNAPSHOT_BASES, "gpt-5.4", "gpt-daybreak-blue-latest", "gpt-6-astra"})
++_CODEX_900K_ELIGIBLE_BASES = frozenset({*_CODEX_900K_SNAPSHOT_BASES, "gpt-5.4", "gpt-daybreak-blue-latest", "gpt-6-astra", "gpt-6.1-sol"})
  _CODEX_900K_SNAPSHOT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
  
-@@ -1760,7 +1766,7 @@ def is_codex_900k_base(model: Optional[str]) -> bool:
+ 
+@@ -1760,7 +1770,7 @@ def is_codex_900k_base(model: Optional[str]) -> bool:
      slug = _bare_codex_slug(model)
      if not slug or slug.endswith(CODEX_CONTEXT_VARIANT_SUFFIX):
          return False
@@ -80,10 +86,10 @@ index 421700f..2ee9382 100644
          slug.startswith(base + "-") and _CODEX_900K_SNAPSHOT_RE.match(slug[len(base) + 1:]) for base in _CODEX_900K_SNAPSHOT_BASES
      )
 diff --git a/agent/reasoning_effort.py b/agent/reasoning_effort.py
-index 9d79e72..88d4d3c 100644
+index 9d79e72c39..917e80c77c 100644
 --- a/agent/reasoning_effort.py
 +++ b/agent/reasoning_effort.py
-@@ -28,13 +28,15 @@ EFFORT_LADDER: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "x
+@@ -28,13 +28,18 @@ EFFORT_LADDER: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "x
  OPENAI_COMPAT_WIRE_EFFORTS: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
  
  #: OpenAI/Codex Responses per model generation (live-verified): ``minimal`` is rejected by
@@ -97,11 +103,21 @@ index 9d79e72..88d4d3c 100644
  ASTRA_MODEL_IDS: frozenset[str] = frozenset({"gpt-6-astra", "gpt-6-astra-900k"})
 +#: GPT-6 Sol/Terra/Luna (the 5.6 successors; ``-pro``/``-900k``/dated snapshots share the prefix).
 +GPT6_TIER_PREFIXES: tuple[str, ...] = ("gpt-6-sol", "gpt-6-luna")
++#: GPT-6.1 Sol takes Astra's ``low..max`` ladder (``none`` 400s, live 2026-09-29) without Astra's
++#: account gating, so it stays in the static catalogs.
++NO_DISABLE_TIER_PREFIXES: tuple[str, ...] = ("gpt-6.1-sol",)
  DAYBREAK_MODEL_IDS: frozenset[str] = frozenset(
      {"gpt-daybreak-blue-latest", "gpt-daybreak-blue-latest-900k"}
  )
-@@ -99,7 +101,7 @@ def codex_supported_efforts(model: Optional[str]) -> tuple[str, ...]:
+@@ -94,12 +99,12 @@ def is_astra_model(model: Optional[str]) -> bool:
+ 
+ def codex_supported_efforts(model: Optional[str]) -> tuple[str, ...]:
+     """Supported effort set for an OpenAI/Codex Responses model."""
+-    if is_astra_model(model):
+-        return CODEX_ASTRA_EFFORTS
      bare = (model or "").strip().lower().rsplit("/", 1)[-1]
++    if is_astra_model(model) or bare.startswith(NO_DISABLE_TIER_PREFIXES):
++        return CODEX_ASTRA_EFFORTS
      return (
          CODEX_GPT56_EFFORTS
 -        if "gpt-5.6" in bare or bare in DAYBREAK_MODEL_IDS
@@ -110,7 +126,7 @@ index 9d79e72..88d4d3c 100644
      )
  
 diff --git a/hermes_cli/codex_models.py b/hermes_cli/codex_models.py
-index e5d8560..7dd29bf 100644
+index e5d85602a7..7dd29bf493 100644
 --- a/hermes_cli/codex_models.py
 +++ b/hermes_cli/codex_models.py
 @@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
@@ -132,7 +148,7 @@ index e5d8560..7dd29bf 100644
      ("gpt-5.6-terra", ("gpt-5.5", "gpt-5.4")),
      ("gpt-5.6-luna", ("gpt-5.5", "gpt-5.4")),
 diff --git a/hermes_cli/model_switch.py b/hermes_cli/model_switch.py
-index 07fd016..0074eaf 100644
+index 07fd0162d9..0074eaf496 100644
 --- a/hermes_cli/model_switch.py
 +++ b/hermes_cli/model_switch.py
 @@ -670,8 +670,9 @@ def _model_sort_key(model_id: str, prefix: str) -> tuple:

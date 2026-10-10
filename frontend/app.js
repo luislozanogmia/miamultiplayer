@@ -1058,8 +1058,7 @@
       options: [
         {id:'fast', model:'gpt-5.6-luna', label:'Fast', fast:true},
         {id:'gpt-6-astra', model:'gpt-6-astra', label:'GPT-6 Astra'},
-        {id:'gpt-6-sol', model:'gpt-6-sol', label:'GPT-6 Sol'},
-        {id:'gpt-6-luna', model:'gpt-6-luna', label:'GPT-6 Luna'},
+        {id:'gpt-6.1-sol', model:'gpt-6.1-sol', label:'GPT-6.1 Sol'},
         {id:'gpt-5.6-sol', model:'gpt-5.6-sol', label:'GPT-5.6 Sol'},
         {id:'gpt-5.6-terra', model:'gpt-5.6-terra', label:'GPT-5.6 Terra'},
         {id:'gpt-5.6-luna', model:'gpt-5.6-luna', label:'GPT-5.6 Luna'}
@@ -3255,11 +3254,14 @@
     }
     renderChatStarterBots();
   }
+  function visibleChatStarterBots(){
+    var hidden = hiddenChatStarterBots();
+    return CHAT_STARTER_BOTS.filter(function(template){ return hidden.indexOf(template.name) === -1; });
+  }
   function renderChatStarterBots(){
     var wrap = el('#chatStarterBots');
     if(!wrap) return;
-    var hidden = hiddenChatStarterBots();
-    var visible = CHAT_STARTER_BOTS.filter(function(template){ return hidden.indexOf(template.name) === -1; });
+    var visible = visibleChatStarterBots();
     var group = el('#chatStarterBotsGroup');
     if(group) group.hidden = visible.length === 0;
     wrap.innerHTML = visible.map(function(template){
@@ -5028,9 +5030,14 @@
     chatWs.rooms.dms = rooms.filter(function(room){ return room.kind === 'dm' || room.kind === 'group'; });
     var agentRooms = rooms.filter(function(room){ return room.kind === 'agent'; });
     var seenBotRooms = {};
+    // A bot's sidebar row is its main chat; chats started with "New
+    // conversation" live in History and only stand in when nothing else exists.
     var uniqueBotRooms = agentRooms.filter(function(room){ return !isNativeMiaConversation(room.nativeConversation); })
       .sort(function(left, right){
-        return (Date.parse(left.createdAt || '') || 0) - (Date.parse(right.createdAt || '') || 0);
+        var leftFresh = left.metadata && left.metadata.conversationMode === 'fresh' ? 1 : 0;
+        var rightFresh = right.metadata && right.metadata.conversationMode === 'fresh' ? 1 : 0;
+        return leftFresh - rightFresh
+          || (Date.parse(left.createdAt || '') || 0) - (Date.parse(right.createdAt || '') || 0);
       }).filter(function(room){
         var key = String(room.agentId || room.id || '');
         if(seenBotRooms[key]) return false;
@@ -11846,6 +11853,10 @@
         return agentId === 'gateway'
           ? conversation.type === 'agent' && (metadata.agentId === 'gateway' || String(conversation.name || '').toLowerCase() === 'mia')
           : conversation.type === 'bot' && metadata.botId === agentId;
+      }).sort(function(left, right){
+        var leftFresh = left.metadata && left.metadata.conversationMode === 'fresh' ? 1 : 0;
+        var rightFresh = right.metadata && right.metadata.conversationMode === 'fresh' ? 1 : 0;
+        return leftFresh - rightFresh;
       })[0];
       return agentRoom ? agentRoom.id : null;
     }
@@ -13192,9 +13203,12 @@
 
   function conversationHistoryTimestamp(conversation){
     var state = conversation && chatWs.byRoom[conversation.id];
+    // A chat is as recent as its newest message; updatedAt only tracks
+    // settings changes. Older servers do not send lastEventAt.
+    var hasLastEvent = !!conversation && Object.prototype.hasOwnProperty.call(conversation, 'lastEventAt');
     return Math.max(
       Number(state && state.lastTs) || 0,
-      Date.parse(conversation && conversation.updatedAt || '') || 0,
+      Date.parse(hasLastEvent ? conversation.lastEventAt || '' : conversation && conversation.updatedAt || '') || 0,
       Date.parse(conversation && conversation.createdAt || '') || 0
     );
   }
@@ -14568,6 +14582,9 @@
     {
       target: '#chatStarterBots',
       route: 'chat',
+      // Every starter dismissed: the section is hidden, so there is nothing
+      // to point at and the step is left out.
+      when: function(){ return visibleChatStarterBots().length > 0; },
       title: 'Start with a bot template',
       body: 'Choose a starter bot in the left panel to open setup with an editable prompt. Nothing is created until you confirm it.'
     },
@@ -14601,7 +14618,9 @@
     }).catch(function(error){showToast(error.message);});
   }
 
-  function currentTourSteps(){ return tour.steps || TOUR_STEPS; }
+  function currentTourSteps(){
+    return (tour.steps || TOUR_STEPS).filter(function(step){ return !step.when || step.when(); });
+  }
 
   function tourEl(tag, cls){
     var e = document.createElement(tag);
