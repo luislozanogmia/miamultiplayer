@@ -266,3 +266,103 @@ test('structured native browser errors cannot become successful completion evide
   const result = await f.coordinator.start('owner', work.id);
   assert.equal(result.status, 'failed'); assert.equal(result.operations[0].status, 'failed'); assert.equal(result.results.first.verified, false); assert.equal(result.synthesis, undefined);
 });
+
+test('Stop preserves only visible assistant text in encrypted state and suppresses late events', async t => {
+  const f = fixture(t); let event, release;
+  f.hermes.worker = async args => { event = args.onEvent; args.onSession({ sessionId: 'live', storedSessionId: 'stored' }); return new Promise(resolve => { release = () => resolve({ text: 'late final reply', storedSessionId: 'stored' }); }); };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const running = f.coordinator.start('owner', work.id); await until(() => release);
+  event('reasoning.delta', { text: 'hidden analysis marker' }); event('tool.start', { args: { value: 'private tool argument marker' } });
+  event('message.delta', { text: 'Visible partial answer.' });
+  await f.coordinator.stop('owner', work.id);
+  event('message.delta', { text: 'late event must disappear' }); event('message.complete', { text: 'late completion must disappear' });
+  release(); await running;
+  const saved = f.store.get(work.id);
+  assert.equal(saved.goal, f.input.goal); assert.equal(saved.results.first.text, 'Visible partial answer.');
+  assert.equal(saved.results.first.status, 'stopped'); assert.equal(saved.results.first.incomplete, true); assert.equal(saved.results.first.verified, false);
+  const serialized = JSON.stringify(saved); assert.ok(!serialized.includes('hidden analysis marker')); assert.ok(!serialized.includes('private tool argument marker')); assert.ok(!serialized.includes('late event')); assert.ok(!serialized.includes('late completion'));
+  const reopened = createBrowserWorkStore({ key: f.key, filePath: f.filePath }); assert.equal(reopened.get(work.id).results.first.text, 'Visible partial answer.');
+  assert.ok(!fs.readFileSync(f.filePath, 'utf8').includes('Visible partial answer.'));
+});
+
+test('recovery retains stopped text and supplies bounded untrusted context without prior authority or proof', async t => {
+  const f = fixture(t); let event, release;
+  f.hermes.worker = async args => { event = args.onEvent; args.onSession({ sessionId: 'old-live', storedSessionId: 'old-stored' }); await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} }); return new Promise(resolve => { release = () => resolve({ text: 'late ignored', storedSessionId: 'old-stored' }); }); };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); const running = f.coordinator.start('owner', work.id); await until(() => release);
+  event('message.delta', { text: 'Prior visible answer: ' + 'a'.repeat(20000) }); await f.coordinator.stop('owner', work.id); release(); await running;
+  const stopped = f.store.get(work.id).results.first; assert.equal(stopped.text.length, 16000); assert.equal(stopped.truncated, true);
+  const recovered = await f.coordinator.recover('owner', work.id, ['first']);
+  assert.equal(recovered.results.first, undefined); assert.equal(recovered.workers[0].storedSessionId, undefined); assert.equal(recovered.personalStoredSessionId, undefined);
+  assert.equal(recovered.workers[0].previousAttempts[0].text, stopped.text); assert.equal(recovered.workers[0].previousAttempts[0].verified, false);
+  f.hermes.worker = async args => {
+    assert.equal(args.worker.storedSessionId, undefined);
+    const context = JSON.parse(args.message.slice(args.message.indexOf('\n') + 1));
+    assert.equal(context.goal, f.input.workers[0].goal); assert.equal(context.priorAttempts.length, 1); assert.equal(context.priorAttempts[0].text.length, 2000);
+    assert.equal(context.priorAttempts[0].verified, false); assert.match(args.message, /untrusted historical/);
+    assert.deepEqual(Object.keys(context.priorAttempts[0]).sort(), ['goal','incomplete','status','text','textTruncated','verified'].sort());
+    event('message.delta', { text: 'old callback after recovery must not contaminate' });
+    return { text: 'new model-only attempt', storedSessionId: 'fresh-stored' };
+  };
+  const resumed = await f.coordinator.start('owner', work.id);
+  assert.equal(resumed.status, 'failed'); assert.equal(resumed.results.first.verified, false); assert.deepEqual(resumed.results.first.browserEvidence, []); assert.equal(resumed.synthesis, undefined);
+  assert.ok(!JSON.stringify(resumed).includes('old callback after recovery'));
+});
+
+test('crash-state reload preserves visible text and labels it incomplete before explicit recovery', async t => {
+  const f = fixture(t); let event, release;
+  f.hermes.worker = async args => { event = args.onEvent; return new Promise(resolve => { release = () => resolve({ text: 'late', storedSessionId: 'old' }); }); };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); const running = f.coordinator.start('owner', work.id); await until(() => release);
+  event('message.delta', { text: 'Draft retained across crash.' });
+  const encryptedCrashState = fs.readFileSync(f.filePath);
+  await f.coordinator.stop('owner', work.id); release(); await running;
+  fs.writeFileSync(f.filePath, encryptedCrashState);
+  const reopened = createBrowserWorkStore({ key: f.key, filePath: f.filePath }); const restarted = createBrowserWorkCoordinator({ ...f.options, store: reopened });
+  restarted.recoverInterrupted();
+  const saved = reopened.get(work.id); assert.equal(saved.status, 'waiting_for_user'); assert.equal(saved.results.first.text, 'Draft retained across crash.'); assert.equal(saved.results.first.status, 'incomplete'); assert.equal(saved.results.first.interruptedBy, 'restart'); assert.equal(saved.results.first.verified, false);
+  await assert.rejects(restarted.start('owner', work.id), /explicit recovery/);
+  const recovered = await restarted.recover('owner', work.id, ['first']); assert.equal(recovered.workers[0].previousAttempts[0].text, 'Draft retained across crash.');
+});
+
+for (const workerId of [undefined, 'first']) test(`Stop ${workerId ? 'worker' : 'group'} during personal Mia synthesis preserves text and rejects late completion`, async t => {
+  const f = fixture(t); let event, release, interrupted;
+  f.hermes.synthesize = async args => { event = args.onEvent; args.onSession({ sessionId: 'mia-live', storedSessionId: 'mia-stored' }); return new Promise(resolve => { release = () => resolve({ text: 'late synthesis must not finish', storedSessionId: 'mia-stored' }); }); };
+  f.hermes.interrupt = async session => { interrupted = session; };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); const running = f.coordinator.start('owner', work.id); await until(() => release);
+  event('reasoning.delta', { text: 'hidden personal reasoning' }); event('message.delta', { text: 'Personal Mia visible partial synthesis.' });
+  await f.coordinator.stop('owner', work.id, workerId);
+  event('message.delta', { text: 'late delta' }); event('message.complete', { text: 'late complete' }); release(); await running;
+  const stopped = f.store.get(work.id); assert.equal(stopped.status, workerId ? 'waiting_for_user' : 'cancelled'); assert.equal(stopped.synthesis.text, 'Personal Mia visible partial synthesis.'); assert.equal(stopped.synthesis.status, 'stopped'); assert.equal(stopped.synthesis.incomplete, true); assert.equal(stopped.synthesis.verified, false); assert.equal(interrupted, 'mia-live'); assert.ok(!JSON.stringify(stopped).includes('hidden personal reasoning'));
+  const recovered = await f.coordinator.recover('owner', work.id, ['first']); assert.equal(recovered.synthesis, undefined); assert.equal(recovered.personalStoredSessionId, undefined); assert.equal(recovered.previousSynthesisAttempts[0].text, 'Personal Mia visible partial synthesis.'); assert.equal(recovered.previousSynthesisAttempts[0].verified, false);
+});
+
+test('visible completion and runtime error status are preserved without hidden reasoning fields', async t => {
+  const f = fixture(t); let event, release;
+  f.hermes.worker = async args => { event = args.onEvent; return new Promise(resolve => { release = () => resolve({ text: 'late', storedSessionId: 'old' }); }); };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); const running = f.coordinator.start('owner', work.id); await until(() => release);
+  event('message.complete', { text: 'Actual visible completed text', status: 'error', reasoning: 'hidden complete reasoning', usage: { secret: 'hidden payload marker' } });
+  await f.coordinator.stop('owner', work.id); release(); await running;
+  const output = f.store.get(work.id).results.first; assert.equal(output.text, 'Actual visible completed text'); assert.equal(output.sourceEvent, 'message.complete'); assert.equal(output.runtimeStatus, 'error'); assert.ok(!JSON.stringify(output).includes('hidden'));
+});
+
+test('attempt and personal synthesis histories remain bounded with omission accounting', async t => {
+  const f = fixture(t); const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  for (let i = 0; i < 7; i++) { await f.coordinator.start('owner', work.id); await f.coordinator.recover('owner', work.id, ['first']); }
+  const saved = f.store.get(work.id); assert.equal(saved.workers[0].previousAttempts.length, 5); assert.equal(saved.workers[0].previousAttemptsOmitted, 2); assert.equal(saved.previousSynthesisAttempts.length, 5); assert.equal(saved.previousSynthesisAttemptsOmitted, 2); assert.ok(saved.workers[0].previousAttempts.every(output => output.verified === false && output.invalidatedByRecovery));
+});
+
+test('error completion keeps the useful visible draft and its truncation marker', async t => {
+  const f = fixture(t); let event, release;
+  f.hermes.worker = async args => { event = args.onEvent; return new Promise(resolve => { release = () => resolve({ text: 'late', storedSessionId: 'old' }); }); };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); const running = f.coordinator.start('owner', work.id); await until(() => release);
+  event('message.delta', { text: 'Useful draft: ' + 'x'.repeat(20000) }); event('message.complete', { text: 'Runtime reported an error.', status: 'error', reasoning: 'not visible' });
+  await f.coordinator.stop('owner', work.id); release(); await running;
+  const saved = f.store.get(work.id).results.first; assert.match(saved.text, /^Useful draft:/); assert.equal(saved.truncated, true); assert.equal(saved.runtimeStatus, 'error'); assert.equal(saved.sourceEvent, 'message.delta');
+});
+
+test('recovery clears stale current failure labels while preserving prior output', async t => {
+  const f = fixture(t);
+  f.hermes.worker = async args => { args.onEvent('status.update', {}); return { text: 'Incomplete model-only output', storedSessionId: 'old' }; };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); await f.coordinator.start('owner', work.id);
+  assert.ok(f.store.get(work.id).workers[0].error);
+  const recovered = await f.coordinator.recover('owner', work.id, ['first']); assert.equal(recovered.workers[0].error, undefined); assert.equal(recovered.workers[0].lastEvent, undefined); assert.equal(recovered.workers[0].previousAttempts[0].text, 'Incomplete model-only output');
+});
