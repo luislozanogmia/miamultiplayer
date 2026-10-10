@@ -19,6 +19,15 @@ independently reviews their combined changes. Existing turn limits remain.
 The actual Linux UI and real Hermes interruption/resumption gates remain
 unverified until exercised; automated transport fixtures cannot close them.
 
+Integrated implementation `2572ef7` preserves visible worker and personal Mia
+text, bounded prior-attempt history, and fresh recovery context. Root's combined
+focused checks pass 45/45, including three independent regressions that failed
+against the baseline. Full backend checks pass 544 with three optional probes
+skipped; frontend and desktop checks pass 464. Independent review is recorded
+in `recovery-acceptance.md`. These are automated local/integrated checks.
+The live app remains on the earlier source intentionally: DCV reports locked
+and `/api/browser-work` returns 401. No real model or manual UI result is claimed.
+
 Frozen contract: `operations/browser-multiplayer-mvp.md`, all 15 criteria. Base
 `0eb6c0ba7cfa8f49788355468c04a1d33968d0c7`. Verification lane owns only this
 directory and focused tests. Candidate modules do not establish integration.
