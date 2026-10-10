@@ -7815,6 +7815,8 @@ app.use(
 // Keep the API contract JSON even when a client reaches an unknown endpoint.
 // Without this boundary Express emits an HTML 404 page, which is especially
 // confusing for the Hermes onboarding client because it expects JSON.
+const browserWorkRouter = express.Router();
+app.use(browserWorkRouter);
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'not_found' });
 });
@@ -8114,6 +8116,11 @@ async function initializeBrowserWork() {
       if (!bot || !sameOwner(bot, owner) || !isActiveWorkspaceUser(owner)) return null;
       return { ownerId: ownerOf(bot), name: bot.name, ownerColor: '#60a5fa', profile: MIAOS_BOT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir(), isPersonalMia: false };
     },
+    resolvePersonalSession(owner) {
+      const conversation = nativeConversationRepository.listGatewayConversations({ companyId: nativeCompanyId('solo', owner), createdBy: owner })[0];
+      if (conversation?.metadata?.hermesGatewayProfile !== MIAOS_AGENT_HERMES_PROFILE) return undefined;
+      return conversation.metadata.hermesGatewaySessionId || undefined;
+    },
     async personalOptions(owner) {
       const preference = harnessPreferenceForUser(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS), owner);
       const provider = harnessCliProviderForUser(owner);
@@ -8125,7 +8132,7 @@ async function initializeBrowserWork() {
     },
   });
   coordinator.recoverInterrupted();
-  app.use('/api/browser-work', requireAuth, async (req, res, next) => {
+  browserWorkRouter.use('/api/browser-work', requireAuth, async (req, res, next) => {
     try {
       for (const candidate of req.body?.candidates || req.body?.workers || []) {
         const selection = await chatModelSelectionForUser({ provider: candidate.provider, model: candidate.model }, req.userEmail);
@@ -8134,7 +8141,7 @@ async function initializeBrowserWork() {
       next();
     } catch (_) { res.status(409).json({ error: 'Worker model inventory is unavailable' }); }
   });
-  registerBrowserWorkRoutes(app, { coordinator, ownerFromRequest: req => req.userEmail,
+  registerBrowserWorkRoutes(browserWorkRouter, { coordinator, ownerFromRequest: req => req.userEmail,
     onError: () => console.error('Browser work stopped before completion'),
   });
 }
