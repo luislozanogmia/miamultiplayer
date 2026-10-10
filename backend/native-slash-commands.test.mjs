@@ -453,3 +453,43 @@ test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (
   assert.equal(hermes.calls.find((call) => call.method === 'command.dispatch').params.session_id, 'live-mia');
 });
 
+
+test('a bot chat saved before botId was recorded still counts as the bot\'s own chat', async (t) => {
+  const data = fixture(t);
+  const script = (request) => {
+    if (request.method === 'session.create') return { session_id: 'live-bot', stored_session_id: 'stored-bot' };
+    if (request.method === 'command.dispatch') return { type: 'notice', notice: '⊙ Goal set' };
+    if (request.method === 'session.control.read') return { control: { goal: null } };
+    return {};
+  };
+  const hermes = await startFakeHermes(script);
+  const server = await startServer(data, t, hermes.port);
+  t.after(() => hermes.close());
+  const headers = { 'x-miaos-workspace': 'solo' };
+
+  const created = await request(server, data.aliceSession, '/api/bots', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Legacy Bot', instructions: '# Legacy\n', model: 'fixture-model', status: 'running', automations: [], departments: [] }),
+  });
+  assert.equal(created.status, 201, server.logs.join(''));
+  const bot = (await created.json()).bot;
+  const chat = botConversation(data.dbPath, bot.id);
+  assert.ok(chat, 'bot chat provisioned');
+  // Older chats name their bot only through membership.
+  const database = new Database(data.dbPath);
+  try {
+    database.prepare("UPDATE conversations SET metadata = '{\"historyResetAt\":\"2026-10-05T17:29:03.751Z\"}' WHERE id = ?").run(chat.id);
+  } finally {
+    database.close();
+  }
+
+  assert.equal((await request(server, data.aliceSession, `/api/conversations/${chat.id}/events`, {
+    method: 'POST', headers, body: JSON.stringify({ type: 'message', content: { text: '/goal finish the list' }, metadata: { slashCommand: true } }),
+  })).status, 201);
+  await waitFor(async () => hermes.calls.find((call) => call.method === 'command.dispatch'), 'goal reaches Hermes');
+  const list = (await (await request(server, data.aliceSession, `/api/conversations/${chat.id}/events?limit=100`, { headers })).json()).events || [];
+  assert.equal(list.some((event) => /works in your own chat/.test(String(event.content && event.content.text || ''))), false);
+  assert.deepEqual(hermes.calls.find((call) => call.method === 'command.dispatch').params,
+    { session_id: 'live-bot', name: 'goal', arg: 'finish the list' });
+});

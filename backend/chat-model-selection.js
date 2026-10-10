@@ -1,5 +1,7 @@
 'use strict';
 
+const { isRetiredHermesModel, currentHermesModel } = require('./retired-models');
+
 const CHAT_REASONING_EFFORTS = Object.freeze([
   'none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
 ]);
@@ -76,7 +78,8 @@ function visibleChatModelInventory(providers, providerIds) {
   const result = {};
   for (const [id, provider] of Object.entries(providers || {})) {
     if (!allowed.has(cleanId(id))) continue;
-    const models = provider.models.filter((model) => !/-900k$/i.test(String(model || '').trim()));
+    const models = provider.models.filter((model) => !/-900k$/i.test(String(model || '').trim())
+      && !isRetiredHermesModel(id, model));
     if (!models.length) continue;
     result[id] = {
       ...provider,
@@ -101,7 +104,7 @@ function findProviderModel(providers, providerId, modelId) {
 
 function normalizeChatModelSelection(raw, providers) {
   if (!raw || typeof raw !== 'object') return null;
-  const found = findProviderModel(providers, raw.provider, raw.model);
+  const found = findProviderModel(providers, raw.provider, currentHermesModel(raw.provider, raw.model));
   if (!found) throw new Error('selected model is not available for the connected provider');
 
   const reasoningEffort = cleanId(raw.reasoningEffort || raw.reasoning_effort || 'high');
