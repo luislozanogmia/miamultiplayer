@@ -50,6 +50,7 @@ function harness(options = {}) {
       this.sent = [];
       this.navigationHistory = { canGoBack: () => false, canGoForward: () => false };
     }
+    insertCSS(css) { this.styles = [...(this.styles || []), css]; return Promise.resolve("style-key"); }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
     getURL() { return this.shownUrl || ""; }
     isLoading() { return false; }
@@ -1091,4 +1092,25 @@ test("legacy global move maps into the source group's local index without crossi
   assert.deepEqual([...state.groups.find(group => group.id === "default").tabIds], [third, first]);
   assert.deepEqual([...state.groups.find(group => group.id === otherId).tabIds], [second]);
   assert.equal(state.activeId, first);
+});
+
+
+test("presence queues reject stale document events and install only one label stylesheet", async () => {
+  const h = harness(); const page = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  const wc = h.views[0].webContents; let release;
+  wc.insertCSS = css => { wc.styles = [...(wc.styles || []), css]; return new Promise(resolve => { release = resolve; }); };
+  wc.emit("dom-ready");
+  const binding = { actorId: "presence-a", botId: "presence-b", tabId: page.tab_id, groupId: "default", ownerId: "owner", taskId: "task" }; h.controller.actors.bind(binding);
+  await new Promise(setImmediate);
+  wc.emit("did-start-navigation", {}, "https://example.com/new", false, true);
+  release("old-style"); await new Promise(setImmediate);
+  assert.equal(wc.scripts.some(script => script.includes("data-mia-presence")), false, "old document must not receive delayed marker");
+  wc.insertCSS = async css => { wc.styles.push(css); return "new-style"; };
+  wc.emit("dom-ready"); await new Promise(setImmediate);
+  const marker = wc.scripts.find(script => script.includes("data-mia-presence"));
+  assert.ok(marker.includes("__miaPresenceGeneration !== 1"));
+  assert.ok(marker.includes("--mia-presence-label")); assert.equal(marker.includes("createTextNode"), false);
+  assert.equal(wc.styles.length, 2);
+  h.controller.actors.revoke(binding.actorId); await new Promise(setImmediate);
+  assert.equal(wc.styles.length, 2, "status/revoke reuse current document stylesheet");
 });

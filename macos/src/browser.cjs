@@ -1062,12 +1062,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (!approved || approved.el !== el || !el?.isConnected || approved.fingerprint(el) !== approved.value) return { error: 'Approval target changed.', code: 'APPROVAL_TARGET_CHANGED' };
       }
       if (!el) return { error: 'Element is no longer present. Vacuum the page again.' };
-      const rect = el.getBoundingClientRect();
-      const target = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      const currentTarget = () => {
+        if (!el.isConnected || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden') return null;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+      };
       const text = String(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().slice(0, 200);
       if (${JSON.stringify(action)} === 'click') {
         el.click();
-        return { clicked: true, tag: el.localName, text, target };
+        return { clicked: true, tag: el.localName, text, target: currentTarget() };
       }
       const nextValue = ${JSON.stringify(value)};
       const prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
@@ -1077,7 +1080,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (setter) setter.call(el, nextValue); else el.value = nextValue;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      return { filled: true, target, tag: el.localName, value: String(el.value || nextValue).slice(0, 100000) };
+      return { filled: true, target: currentTarget(), tag: el.localName, value: String(el.value || nextValue).slice(0, 100000) };
     })()`;
     let result;
     try {
@@ -1158,43 +1161,85 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   async function executeActorOperation(binding, operation, context) {
     const call = actorOperation(binding, operation, context);
-    return protocolCommand(call.method, call.params);
+    const result = await protocolCommand(call.method, call.params);
+    await tabs.get(call.params.tab_id)?.presencePending;
+    return result;
   }
   // Native views cover the shell DOM. Presence therefore lives in the assigned
   // page, is noninteractive, and is driven only by real runtime events.
+  function queuePresence(tab, generation, script) {
+    const pending = (tab.presencePending || Promise.resolve()).catch(() => {}).then(async () => {
+      if (tabs.get(tab.id) !== tab || tab.sequence !== generation || tab.view.webContents.isDestroyed()) return;
+      tab.presenceStylePromise ||= tab.view.webContents.insertCSS('[data-mia-presence-label]::after{content:var(--mia-presence-label);}', { cssOrigin: 'user' });
+      await tab.presenceStylePromise;
+      if (tab.sequence !== generation || tab.view.webContents.isDestroyed()) return;
+      await executeProtocolScript(tab.view.webContents, script, true);
+    }).catch(() => {});
+    tab.presencePending = pending;
+    return pending;
+  }
+  function initializePresenceDocument(tab) {
+    const generation = tab.sequence;
+    return queuePresence(tab, generation, `globalThis.__miaPresenceGeneration = ${generation}; for (const marker of globalThis.__miaActorMarkers?.values() || []) marker.querySelector('i')?.remove();`);
+  }
+  function clearPresenceTargets(tab) {
+    const generation = tab.sequence;
+    return queuePresence(tab, generation, `if (globalThis.__miaPresenceGeneration === ${generation}) for (const marker of globalThis.__miaActorMarkers?.values() || []) marker.querySelector('i')?.remove();`);
+  }
   function updateActorPresence(event) {
     if (event.type === "operation-settled") return;
     const tab = tabs.get(event.tabId);
     if (!tab || tab.view.webContents.isDestroyed()) return;
+    const generation = tab.sequence;
     const actor = actorRuntime.list().find(item => item.actorId === event.actorId);
     const color = value => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#b79bff";
     const actorColor = color(actor?.color), ownerColor = color(actor?.ownerColor);
     const script = `(() => {
+      if (globalThis.__miaPresenceGeneration !== ${generation}) return;
       const id = ${JSON.stringify(event.actorId)};
       const markers = globalThis.__miaActorMarkers ||= new Map();
       let marker = markers.get(id);
       if (${JSON.stringify(event.type)} === 'cancelled') { marker?.remove(); markers.delete(id); return; }
       if (!document.body) return;
+      if (!globalThis.__miaPresenceCleanup) {
+        const clear = () => { for (const m of markers.values()) m.querySelector('i')?.remove(); };
+        const owned = node => [...markers.values()].some(m => m === node || m.contains(node));
+        const observer = new MutationObserver(records => {
+          if (records.some(r => !owned(r.target) && !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(owned)))) clear();
+        });
+        observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+        document.addEventListener('load', clear, true);
+        document.addEventListener('animationstart', clear, true);
+        document.addEventListener('transitionrun', clear, true);
+        document.fonts?.addEventListener('loadingdone', clear);
+        document.addEventListener('scroll', clear, true);
+        window.addEventListener('scroll', clear, true);
+        window.addEventListener('resize', clear);
+        window.addEventListener('popstate', clear);
+        window.addEventListener('hashchange', clear);
+        globalThis.__miaPresenceCleanup = true;
+      }
       if (!marker) {
-        marker = document.createElement('div');
+        marker = document.createElement('div'); marker.setAttribute('data-mia-presence', '');
         marker.style.cssText = 'position:fixed;inset:3px;border:2px solid ' + ${JSON.stringify(ownerColor)} + ';border-radius:6px;pointer-events:none;z-index:2147483646;';
-        const label = document.createElement('span');
+        const label = document.createElement('span'); label.setAttribute('data-mia-presence-label', '');
         label.style.cssText = 'position:absolute;right:4px;top:4px;background:#34234d;color:white;font:11px system-ui;padding:3px 6px;border-radius:8px;';
         const mote = document.createElement('b');
         mote.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:' + ${JSON.stringify(actorColor)} + ';box-shadow:0 0 0 2px ' + ${JSON.stringify(ownerColor)};
-        label.append(mote, document.createTextNode(''));
-        marker.append(label); document.body.append(marker); markers.set(id, marker);
+        label.append(mote); marker.append(label); markers.set(id, marker); document.body.append(marker);
       }
+      if (${JSON.stringify(event.type)} === 'operation-error' || (${JSON.stringify(event.type)} === 'operation-start' && ${JSON.stringify(["click", "fill", "navigate", "back", "forward", "reload", "stop", "scroll", "eval", "key", "tab_close"].includes(event.method))})) marker.querySelector('i')?.remove();
       if (${JSON.stringify(event.type)} === 'target') {
-        let target = marker.querySelector('i');
-        if (!target) { target = document.createElement('i'); marker.append(target); }
+        marker.querySelector('i')?.remove();
         const rect = ${JSON.stringify(event.target || null)};
-        if (rect) target.style.cssText = 'position:fixed;border:2px solid #b79bff;background:#b79bff22;border-radius:4px;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;';
+        if (!rect || ![rect.x,rect.y,rect.width,rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return;
+        const target = document.createElement('i'); marker.append(target);
+        target.style.cssText = 'position:fixed;border:2px solid #b79bff;background:#b79bff22;border-radius:4px;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;';
         return;
       }
-      marker.firstChild.lastChild.textContent = ${JSON.stringify(actor?.botName || actor?.name || event.actorId)} + ' · ' + ${JSON.stringify(event.type === "operation-start" ? "working" : event.type === "operation-error" ? "failed" : event.type === "operation-done" ? "idle" : "assigned")};
+      marker.firstChild.style.setProperty('--mia-presence-label', JSON.stringify(${JSON.stringify(String(actor?.botName || actor?.name || event.actorId).slice(0, 128))} + ' · ' + ${JSON.stringify(event.type === "operation-start" ? "working" : event.type === "operation-error" ? "failed" : event.type === "operation-done" ? "idle" : "assigned")}));
     })()`;
-    void executeProtocolScript(tab.view.webContents, script).catch(() => {});
+    void queuePresence(tab, generation, script);
   }
   async function protocolCommand(method, params = {}) {
     if (params && Object.hasOwn(params, "actor_id") && params[actorCapability] !== true) throw protocolError("TRUSTED_ACTOR_REQUIRED", "Actor identity must come from trusted coordinator dispatch.");
@@ -1572,6 +1617,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("will-navigate", guard);
     wc.on("will-redirect", guard);
     wc.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame) clearPresenceTargets(tab);
       if (mainFrame && !inPlace) {
         tab.sequence++;
         tab.snapshots.clear();
@@ -1588,7 +1634,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     });
     wc.on("did-start-loading", publish);
     wc.on("did-stop-loading", () => { collectTiming(tab); publish(); });
-    wc.on("dom-ready", () => { collectTiming(tab); for (const actor of actorRuntime.list()) if (actor.tabId === tab.id) updateActorPresence({ type: "bound", ...actor }); });
+    wc.on("dom-ready", () => { tab.presenceStylePromise = null; initializePresenceDocument(tab); collectTiming(tab); for (const actor of actorRuntime.list()) if (actor.tabId === tab.id) updateActorPresence({ type: "bound", ...actor }); });
     wc.on("did-finish-load", () => setImmediate(() => {
       collectTiming(tab, true);
       restoreMediaState(tab);
@@ -1625,6 +1671,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("did-navigate-in-page", (event, url, mainFrame) => {
       if (mainFrame) {
         tab.sequence++;
+        initializePresenceDocument(tab);
         tab.snapshots.clear();
         tab.vacuumElements = [];
         tab.crashed = false;
