@@ -74,7 +74,7 @@ An independent later GET confirms the failure's persisted state: queued work at
 epoch 2, Beta queued at epoch 2, Alpha waiting_for_user at epoch 1, same three
 operations with the click uncertain, no synthesis, and unchanged incomplete
 Alpha result. Root reports no /start was issued; API/fixture observations show
-no added operation or write attempt. Thus the failure is unauthorized dependent
+no added operation or write attempt. Thus the failure is incorrectly permitted dependent
 recovery state mutation, not an observed repeated write or Beta execution.
 
 Root assigned a separate coordination fix for transitive prerequisite uncertainty
