@@ -8121,19 +8121,26 @@ async function initializeBrowserWork() {
       if (conversation?.metadata?.hermesGatewayProfile !== MIAOS_AGENT_HERMES_PROFILE) return undefined;
       return conversation.metadata.hermesGatewaySessionId || undefined;
     },
-    async personalOptions(owner) {
+    async personalOptions(owner, requested) {
       const preference = harnessPreferenceForUser(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS), owner);
       const provider = harnessCliProviderForUser(owner);
       if (!provider) throw Object.assign(new Error('Connect a model for Mia before delegating browser work'), { status: 409 });
-      await getHermesGatewayModelOptions({ refresh: true }).then(rememberNativeChatModelInventory);
-      const options = inferenceOptionsForUser(owner, { profile: MIAOS_AGENT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir() });
-      if (!options.model) throw Object.assign(new Error('Choose a connected model for Mia'), { status: 409 });
-      return options;
+      return require('./browser-work-personal-options').resolveBrowserWorkPersonalOptions({
+        owner, requested,
+        refreshInventory: () => getHermesGatewayModelOptions({ refresh: true }).then(rememberNativeChatModelInventory),
+        resolveSelection: chatModelSelectionForUser,
+        defaultOptions: () => inferenceOptionsForUser(owner, { profile: MIAOS_AGENT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir() }),
+      });
     },
   });
   coordinator.recoverInterrupted();
   browserWorkRouter.use('/api/browser-work', requireAuth, (req, res, next) => req.method === 'GET' ? next() : requireInteractiveAuth(req, res, next), async (req, res, next) => {
     try {
+      if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'personalSelection')) {
+        const selection = await chatModelSelectionForUser(req.body.personalSelection, req.userEmail);
+        if (!selection) return res.status(400).json({ error: 'Choose a connected model for Mia' });
+        req.body.personalSelection = selection;
+      }
       for (const candidate of req.body?.candidates || req.body?.workers || []) {
         const selection = await chatModelSelectionForUser({ provider: candidate.provider, model: candidate.model }, req.userEmail);
         if (!selection) return res.status(400).json({ error: 'Choose a connected worker model' });

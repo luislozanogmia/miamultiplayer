@@ -1,5 +1,16 @@
 # Browser multiplayer acceptance evidence
 
+## Explicit personal Mia model selection
+
+Luis authorized a fresh local-only profile and direct DeepSeek credentials for
+testing, selecting V4.1 Flash. The live API accepts `deepseek-flash`. Local mode
+does not verify Clerk or Mia Router. Baseline `d2d5dd5` picks the first connected
+API model for personal Mia, which is Pro in the current live inventory.
+The new gate requires an explicit per-work personal selection to reach both
+planning and synthesis, fresh connected-inventory validation, rejection of an
+unavailable choice without default fallback, and a UI choice distinct from bot
+models. Automated regression and actual Hermes session evidence are required.
+
 ## Recoverable Stop addendum
 
 Luis requested this addition after the initial integration: preserve useful
