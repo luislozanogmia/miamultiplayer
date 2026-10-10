@@ -117,7 +117,7 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
   let calls=[], refreshQueue=[], stopped=false, callback;
   const record={id:'work',groupId:'g',goal:'Read',status:'needs_approval',workers:[{id:'worker',actorId:'actor',tabId:1,status:'working'}],approvals:[{id:'approval',status:'pending',tabId:1,actorId:'actor'}],results:{worker:{text:'Partial'}}};
   const records=[record];
-  ui.mount({browser:{onState:fn=>callback=fn,command:async()=>state},getBots:async()=>[{id:'bot',model:'chosen',modelProvider:'connected'}],getModels:async()=>[{id:'connected',models:['chosen']}],transport:{
+  ui.mount({browser:{onState:fn=>callback=fn,command:async()=>state},getBots:async()=>[{id:'bot',model:'chosen',modelProvider:'connected'}],getModels:async()=>[{id:'connected',models:['unrequested-pro','chosen']}],transport:{
     list:async()=>{ if(refreshQueue.length) return await refreshQueue.shift(); return records; },
     approval:async(id,approval,accept)=>{calls.push(['approval',id,approval.id,accept]);},
     cancel:async(id,workerId)=>{calls.push(['stop',id,workerId]);stopped=true;record.status='cancelled';},
@@ -137,7 +137,7 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
   assert.equal(ui.projection(record,'g').results[0].text,'Partial');
   await nodes.browserWorkAssignments.onclick();
   const candidate=nodes.browserWorkCandidates.children.find(row=>row.className==='browser-work-candidate'); const picks=candidate.querySelectorAll('select');
-  picks[0].value='bot'; picks[0].listeners.change(); assert.equal(picks[1].value,'0'); assert.equal(candidate.querySelectorAll('input').length,0);
+  picks[0].value='bot'; picks[0].listeners.change(); assert.equal(picks[1].value,'1'); assert.equal(candidate.querySelectorAll('input').length,0);
   record.results.worker={text:'Preserved streamed answer',verified:false,incomplete:true,status:'stopped'}; await ui.refresh();
   const allText=n=>[n.textContent,...n.children.flatMap(c=>allText(c))];
   let displayed=allText(nodes.browserWorkList); assert.ok(displayed.includes('Preserved streamed answer')); assert.ok(displayed.includes('Stopped')); assert.ok(displayed.includes('Incomplete')); assert.ok(displayed.includes('Unverified'));
@@ -153,7 +153,7 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
   const reusePicks=nodes.browserWorkCandidates.children.find(row=>row.className==='browser-work-candidate').querySelectorAll('select'); reusePicks[0].value='bot'; reusePicks[0].listeners.change(); reusePicks[2].value=JSON.stringify({sourceWorkId:'work',reusableId:'saved'});
   nodes.browserWorkGoal.value='Run the saved steps';
   const callsBeforeMissingPersonal=calls.length; await nodes.browserWorkCreate.listeners.submit({preventDefault(){}}); assert.equal(calls.length,callsBeforeMissingPersonal); assert.equal(nodes.browserWorkError.textContent,'Choose a connected model for your personal Mia agent.');
-  const personalModel=global.document.getElementById('browserWorkPersonalModel'); assert.equal(personalModel.value,''); personalModel.value='0'; personalModel.listeners.change();
+  const personalModel=global.document.getElementById('browserWorkPersonalModel'); assert.equal(personalModel.value,''); personalModel.value='1'; personalModel.listeners.change();
   await nodes.browserWorkCreate.listeners.submit({preventDefault(){}});
   assert.equal(calls.at(-1)[0],'plan'); assert.deepEqual(calls.at(-1)[1].personalSelection,{model:'chosen',provider:'connected'}); assert.deepEqual(calls.at(-1)[1].candidates[0],{botId:'bot',tabId:1,model:'chosen',provider:'connected',reusable:{sourceWorkId:'work',reusableId:'saved'}});
   let resolveOld;
