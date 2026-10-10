@@ -1,5 +1,18 @@
 # Browser multiplayer acceptance evidence
 
+Current evidence includes actual DeepSeek Flash execution through Mia's bot UI
+on isolated Linux display `:100`, followed by independent stored-work, runtime
+session metadata and rendered-output checks. See
+[root UI run](flash-ui-acceptance.md) and
+[independent real Flash evidence](real-flash-acceptance.md), both tied to app
+source `944a8ca`. Ledger reconciled from integration `c84a396`.
+Personal Mia and two real workers completed Alpha 17 + Beta 29 = 46.
+The original locked DCV session remains preserved; it no longer blocks this
+separate display's exercised path. The disposable app uses supported local
+mode, which does not establish Clerk or Mia Router authorization. Full MVP
+acceptance remains open for the unverified gates in the current table below.
+Earlier starting states and incident observations are explicitly historical.
+
 ## Explicit personal Mia model selection
 
 Luis authorized a fresh local-only profile and direct DeepSeek credentials for
@@ -36,14 +49,16 @@ focused checks pass 45/45, including three independent regressions that failed
 against the baseline. Full backend checks pass 544 with three optional probes
 skipped; frontend and desktop checks pass 464. Independent review is recorded
 in `recovery-acceptance.md`. These are automated local/integrated checks.
-The live app remains on the earlier source intentionally: DCV reports locked
-and `/api/browser-work` returns 401. No real model or manual UI result is claimed.
+At that historical stage the original isolated app remained on earlier source:
+DCV reported locked and `/api/browser-work` returned 401. That stage established
+no real model or manual UI result. The later separate-display Flash run above
+supersedes that starting limitation for its exercised path only.
 
 Frozen contract: `operations/browser-multiplayer-mvp.md`, all 15 criteria. Base
 `0eb6c0ba7cfa8f49788355468c04a1d33968d0c7`. Verification lane owns only this
 directory and focused tests. Candidate modules do not establish integration.
 
-## Baseline and readiness
+## Historical baseline and readiness
 
 `baseline.json` records all 15 starting states. Existing browser and bridge tests:
 40 passed, zero failed. These use an Electron boundary double (`mocked`).
@@ -135,10 +150,12 @@ mutable candidate at `/2371`, seven scenario groups passed: actor/tab/owner
 denial, background operation draft/caret preservation, distinct screenshot
 pixels, stale/replaced snapshots, approval denial/one-use/write observation,
 revocation and group persistence. These remain local candidate evidence until
-rerun against an immutable integrated source SHA. Real UI and real model gates
-are still open. No source path alone establishes a candidate revision.
+rerun against an immutable integrated source SHA. At that candidate stage,
+real UI and real model gates remained open. Later integrated and actual Flash
+evidence is recorded in the current table. No source path alone establishes a
+candidate revision.
 
-## Incident and preserved boundaries
+## Historical incident and preserved boundaries
 
 At 2026-10-09 21:15 America/Monterrey, invoking the existing packaged binary
 with `--version` entered app startup and began copying runtime staging into
@@ -150,6 +167,21 @@ runtime-copy mutation is separate from disposable checks and precludes claiming
 the installed profile was untouched. All later checks use isolated Electron.
 
 ## Current integrated evidence: all 15 criteria
+
+Actual UI initiation is root-reported computer-use evidence. Independent
+verification inspected the final screenshot, real stored replies, current
+native read operations and narrow runtime session metadata. It did not witness
+initiation. Actual runtime metadata confirms `deepseek-flash` / `deepseek` for
+personal Mia and both workers, beyond requested options or inventory. Alpha's
+three unsupported method attempts failed before its successful `read`; failed
+operations are excluded from completion proof. Read-only success does not
+establish approval, mutation, interruption or restart acceptance.
+
+The [recoverable Stop review](recovery-acceptance.md),
+[explicit model review](model-selection-acceptance.md) and
+[runtime helper review](secret-helper-acceptance.md) supply integrated local
+regression evidence, distinct from the actual Flash run. Previous native-owner
+smoke evidence remains applicable to its tested scope:
 
 Browser-owner smoke first passed integrated browser modules at
 `8939dbaabee0e523d68f7983ae5d7a665c4d2dea`, then expanded smoke passed at
@@ -164,23 +196,23 @@ the frontend or claim actual Hermes model execution.
 
 | # | Current result | Evidence and remaining gate |
 |---|---|---|
-|1|Native-owner local checks pass; actual UI unverified|Names, group order, active group, per-group selected tabs and empty selected group survive owner close/recreate. Existing mocked suite covers legacy tabs. Actual app UI group restart remains unverified.|
-|2|Integrated source and mocked preflight; real execution blocked|Personal Mia is distinct from worker bots; candidate coordinator tests exercise overall context/dependencies/results. No actual personal Mia planning/synthesis turn.|
-|3|Native-owner local checks pass; bot lifecycle unverified|Trusted capability required; actor/tab/owner spoof denied; competing bot claim denied; revocation releases claim. No actual model-driven bot dispatch.|
-|4|Pinned-Hermes policy preflight passes; real model blocked|Actual clean pinned Hermes plugin loads; runtime registry injects session identity; worker policy is bounded. Node adapter tests pass requested model/provider. No inference acknowledgement proves effective model.|
-|5|Mocked coordinator preflight passes; real synthesis blocked|Stored dependency results feed scripted Hermes adapter synthesis. Must still execute two real workers and personal Mia synthesis.|
-|6|Native-owner local checks pass; real worker concurrency unverified|Beta read completes while Alpha's real asynchronous mutation is queued; same-tab pending cancellation denies and next operation proceeds. Coordinator parallel/dependency test passes with scripted transport.|
-|7|Native-owner local checks pass; manual UI unverified|Correct Alpha/Beta reads, background fill/scroll/navigation, no human-tab selection. Actual app user interaction remains blocked.|
-|8|Native-owner local checks pass; human interaction unverified|Human draft, DOM focus and caret survive background actions. Current approvals protect disruptive operations. OS keyboard focus during real human typing cannot be verified behind lock screen.|
-|9|Native-owner local checks pass|Reread/cross-actor/cross-tab/replaced-node snapshots denied. Page's main-world snapshot-map overwrite cannot alter isolated-world snapshot.|
-|10|Native-owner local checks pass|Actual hidden Alpha/Beta captures contain distinct correct red/green pixels and expected tab IDs; host window visible, workers hidden. Compositor readiness is required; no active-human capture fallback.|
-|11|Integrated source/mock frontend checks; rendered acceptance unverified|Runtime emits operation status/targets; frontend maps them to real-state ownership UI. Cannot manually inspect motes/rings/targets in locked app.|
-|12|Native-owner local checks pass; human approval UI unverified|Reject/change/reuse/navigation/replaced-target and queued revocation deny dispatch. Autosave regression now denies fill before an input event, with zero writes; one explicit current grant permits exactly one write. No actual UI approval click.|
-|13|Native-owner local + mocked coordinator checks pass; real Hermes Stop unverified|Revocation suppresses late native result/queued mutation. Coordinator tests preserve partial results, suppress late scripted model output and hold uncertain writes after interruption/restart. Real Hermes interrupt and app UI Stop remain unverified.|
-|14|Encrypted store/mock proof checks pass; real reusable execution unverified|Wrong key/tampering and restart tests pass; proof authorization and uncertainty tested with scripted runtime. Actual app private key file is 0600. No actual model-produced durable/reusable output or replay.|
-|15|Blocked|GNOME desktop is locked; no connected model in the isolated profile. Zero real bot executions, zero real Mia synthesis, no manual three-tab/focus/group persistence acceptance.|
+|1|PARTIAL: native-owner persistence passes; actual UI restart unverified|Names, group order, active group, per-group selected tabs and empty group survive local owner recreate; mocked legacy tabs load. Actual named-group order/selection through app close/restart remains open.|
+|2|PARTIAL: actual personal Mia planning/synthesis; lifecycle checks open|UI selected personal Mia separately from bots; its real session planned the work and synthesized two stored replies to the overall goal. Group context/dependency retention has integrated scripted coverage; broader lifecycle remains open.|
+|3|PARTIAL: actual bound reads; native negative checks pass|Two distinct actors/bots read explicit tabs 2/3 at current epoch 0. Local trusted-capability, actor/tab/owner spoof, competing claim and revocation tests pass. Actual UI reassignment/revocation lifecycle remains unverified.|
+|4|PASS for exercised Flash dispatch; other model choices unverified|Requested personal and worker `deepseek-flash` matches all three actual runtime session rows with billing provider `deepseek`. Explicit-selection persistence/no-fallback regressions pass. No claim for other providers/models.|
+|5|PARTIAL: two real workers and personal synthesis complete|Current successful native reads feed actual stored Alpha 17/Beta 29 replies and personal synthesis 46. Dependency ordering is scripted-test evidence; a non-empty dependency chain through real Hermes remains unverified.|
+|6|PARTIAL: native concurrency/queue checks pass|Native Beta progresses while Alpha's asynchronous mutation queues; same-tab cancellation releases queue. Actual work has two separate worker sessions, but same-tab model mutation serialization/cancellation and actual concurrency timing are not established by final records alone.|
+|7|PARTIAL: actual background reads preserve selected human tab|Actual worker reads return the assigned Alpha/Beta pages while the final UI shows Human workspace selected. Background fill/scroll/navigation pass local native tests; real model-driven mutation UI paths remain unverified.|
+|8|PARTIAL: human draft visible after real worker run|Final screenshot shows selected human page and unfinished draft; local native tests preserve full draft, DOM focus/caret and approval boundaries. Full real-run draft value/caret/keyboard focus, continued typing and disruptive shared-tab approval remain open.|
+|9|PARTIAL: native snapshot negative checks pass|Reread/cross-actor/cross-tab/replaced-node snapshots are denied; main-world overwrite cannot change isolated snapshots. These are actual native-owner tests; model-driven stale/document-change snapshot paths through the app UI remain unverified.|
+|10|PARTIAL: native hidden capture checks pass|Local native hidden Alpha/Beta captures contain distinct correct red/green pixels and expected tab IDs; host visible, workers hidden, no active-human fallback. Actual model-driven hidden screenshot execution in the live app remains unverified.|
+|11|PARTIAL: actual results/synthesis rendered|Independent screenshot shows the actual browser-work results and personal synthesis 17/29/46. Frontend/status projection tests pass. Live motes, ownership rings and target regions matching execution events still need explicit rendered observation.|
+|12|PARTIAL: native approval checks pass; human approval UI unverified|Reject/change/reuse/navigation/replaced-target and queued revocation deny dispatch. Autosave regression now denies fill before an input event, with zero writes; one explicit current grant permits exactly one write. No actual UI approval click.|
+|13|PARTIAL: integrated recoverable Stop regressions pass; actual interruption unverified|Worker and personal Mia visible partial text survive encrypted reopen; late scripted/native replies are suppressed, recovery keeps historical context without current proof and holds uncertain writes. Real Hermes worker/group/personal-synthesis Stop, fresh UI recovery and uncertain-write no-replay remain open.|
+|14|PARTIAL: actual stored model output evidenced; restart/reuse gates open|Real worker replies, native proof and personal synthesis are stored and API-readable under the synthetic local owner. Encryption/tampering, owner checks and proof/uncertainty tests pass locally. Actual app restart retention, cross-owner exposure denial and model-driven reusable execution/replay remain unverified; local mode does not prove production auth.|
+|15|PARTIAL: actual Linux UI two-bot Flash path complete|Root started the actual Mia UI task on isolated display :100; independent runtime rows confirm Flash for both bots and personal Mia, native reads yield 17/29 and rendered synthesis 46. Human tab/draft visible. Full human focus/caret/draft, named groups and close/restart persistence remain open. No native Mac/Windows acceptance inferred.|
 
-### Actual app startup and mounted-route observation
+### Historical original app startup and mounted-route observation
 
 Isolated app started from `8de474ca44617c62c6466277e1e5f79e399c995e` with
 production Clerk authentication enabled, its own database and desktop profile.
@@ -192,7 +224,7 @@ marked disposable root at `c447db29e2773a8832b291cad54941ba76260824` returned
 boundary. This is actual local app/backend startup evidence, not a manual
 Development-menu restart.
 
-Final preserved app: PID 627467; backend PID 627557; URL
+Original preserved app at that stage: PID 627467; backend PID 627557; URL
 `http://localhost:4969`; data root `/tmp/mia-browser-mvp-ui-verifier-20261009-01`.
 It was gracefully relaunched from final implementation
 `8e8f685a64b81ada81671f34276932916a831f77`; previous owned app/backend PIDs
@@ -203,15 +235,17 @@ existing app/profile data or credential contents were copied into this root.
 The OS keyring is available, and `desktop/browser-work-key.enc` mode is 0600.
 File presence establishes private key persistence, not a model connection.
 
-Manual X11 acceptance is blocked: the actual DISPLAY `:0` screenshot showed
+Manual X11 acceptance was blocked on the original DISPLAY `:0`: its screenshot showed
 GNOME's locked desktop and X window activation failed. The real Mia window
 exists, titled `Mia - Solo`; no UI interactions were claimed. Preserve this
 app for Luis, who must unlock the mia-dev-aws DCV desktop and complete the
 supported production Clerk/model connection flow in this fresh profile. Root
 must coordinate any restart after sign-in. No authentication, encryption or
-Chromium sandbox bypass is permitted.
+Chromium sandbox bypass was permitted. Later root-authorized supported local
+mode on a separate disposable profile/display established the Flash UI path;
+it did not establish production Clerk/Router acceptance or unlock this profile.
 
-### Hermes provenance
+### Historical Hermes provenance and independent policy checks
 
 Readiness uses PR39's existing installed runtime: source HEAD is the pinned
 `eeb220d40c2fb6cb33d61a9b792ca68811408b3a` with eight tracked local changes
@@ -230,7 +264,7 @@ model-only text as unverified and block synthesis, reject stale attempt proof,
 and reject structured native errors. This minimum provenance gate does not
 establish semantic task correctness or real model execution.
 
-### New failing consequential-input regression
+### Historical consequential-input regression and fix
 
 Independent `fill-approval-probe.cjs` against clean integrated
 `c55bc93130e9ab9e4f9d263225568d2a8735560a` attached a real input-event autosave
@@ -247,9 +281,9 @@ Runtime authority also requires approval for navigation, URL-changing vacuum,
 back, forward and reload. Current grants are explicit in the updated native
 smoke. Real model/UI uncertain-write recovery remains unverified.
 
-### Final source review and suite evidence
+### Historical initial integration review and suite evidence
 
-Final implementation is `8e8f685a64b81ada81671f34276932916a831f77`. Root's full
+Initial final implementation was `8e8f685a64b81ada81671f34276932916a831f77`. Root's full
 backend suite reported 538 tests: 535 passed, three skipped, zero failed; its
 desktop/frontend suite reported 459 passed, zero skipped/failed. Verification
 independently inspected the exact summary logs at
@@ -270,5 +304,7 @@ observed the actual isolated app's 404-to-401 transition independently.
 
 No pushes, merges to main, releases, deployments or real-data migrations were
 performed by this lane. All fifteen criteria remain in this ledger; the full
-MVP cannot be marked complete while criterion 15 and the explicit real model
-and manual interaction gates above remain blocked.
+MVP cannot be marked complete while criterion 15's remaining focus/group/restart
+checks and the other explicit actual UI/lifecycle gates in the current table
+remain unverified. The real Flash execution evidence supersedes the historical
+zero-execution state without closing those separate checks.
