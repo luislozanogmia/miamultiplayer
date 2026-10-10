@@ -89,3 +89,15 @@ test("background fill and navigation never trust a model's consequence assessmen
   assert.equal(writes, 1);
   assert.equal(runtime.inspect("vacuum", params()).needs_approval, false);
 });
+
+
+test("target event retains operation origin generation after click navigation", async () => {
+  const { runtime, tabs, events } = fixture(); const p = { ...params(), selector: "a" };
+  const grant = runtime.approve({ actorId: "a", ownerId: "owner", method: "click", params: p });
+  await runtime.run("click", { ...p, approval_id: grant.approval_id }, () => {
+    tabs.get(1).sequence++;
+    return { clicked: true, target: { x: 1, y: 2, width: 3, height: 4 } };
+  });
+  assert.equal(events.find(event => event.type === "target").generation, 1);
+  assert.equal(tabs.get(1).sequence, 2);
+});

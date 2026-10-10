@@ -52,3 +52,33 @@ Syntax, diff and staged leak checks are handoff gates.
 Run native-presence.cjs with DISPLAY=:101 and MIA_TEST_SOURCE set to the tested
 source, using the existing pinned Electron binary. No live display, credentials
 or models are used. Criterion 11 is not integrated/manual accepted by this probe.
+
+## Independent challenge and async wait correction
+
+The initial d615570 candidate passed the original 18 assertions but computed
+result geometry before the optional load/networkidle wait. Independent review
+confirmed stale returned geometry for a delayed handler layout change; its
+separate navigation endpoint had no surviving highlight. That review did not
+prove persistent visual staleness. Preserve those evidence boundaries.
+
+A followup native probe on immutable d615570 adds a deterministic handler
+microtask layout change during networkidle wait and click-triggered full
+navigation. It reports afterWaitRect false, navigationResultHasNoTarget false,
+and navigationActionHasNoHighlight false. This exact probe reproduced both
+stale result geometry and an old target present on the replacement page; it
+is distinct from the independent navigation timing that cleared successfully.
+
+Correction pins the actual action node in a temporary isolated-world map,
+recomputes its connected/visible rectangle after the wait within the original
+native document generation, and deletes the temporary reference on success or
+failure. A changed generation returns null target without re-resolving a
+selector on the new document. Actor target events carry their original
+operation generation; the presence owner rejects mismatches rather than
+sampling the new generation. Click success, text/tag/value and approval gates
+remain unchanged. No permission or replay behavior is added.
+
+Extended local native probe passes all 21 assertions on corrected source.
+Focused tests pass 59/59; the two new focused navigation/origin-generation
+regressions fail 0/2 against d615570. Logs are local under
+/tmp/mia-presence-async-baseline.log and /tmp/mia-presence-async-candidate.log.
+Independent review and root's integrated real UI gate remain required.

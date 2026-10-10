@@ -1045,6 +1045,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (action === "fill" && typeof params.value !== "string") {
       throw protocolError("INVALID_PARAMS", "value is required for fill.");
     }
+    const generation = tab.sequence;
+    const targetKey = randomUUID();
     const value = action === "fill" ? params.value.slice(0, MAX_PROTOCOL_PAGE_TEXT) : "";
     const script = `(() => {
       const snapshot = globalThis.__miaBrowserSnapshots?.get(${JSON.stringify(params.actor_id || "legacy")});
@@ -1062,6 +1064,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (!approved || approved.el !== el || !el?.isConnected || approved.fingerprint(el) !== approved.value) return { error: 'Approval target changed.', code: 'APPROVAL_TARGET_CHANGED' };
       }
       if (!el) return { error: 'Element is no longer present. Vacuum the page again.' };
+      (globalThis.__miaActionTargets ||= new Map()).set(${JSON.stringify(targetKey)}, el);
       const currentTarget = () => {
         if (!el.isConnected || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden') return null;
         const rect = el.getBoundingClientRect();
@@ -1084,13 +1087,26 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     })()`;
     let result;
     try {
-      result = await executeProtocolScript(tab.view.webContents, script, true);
-    } catch (error) {
-      throw protocolError("BROWSER_ERROR", error.message);
+      try { result = await executeProtocolScript(tab.view.webContents, script, true); }
+      catch (error) { throw protocolError("BROWSER_ERROR", error.message); }
+      if (result && result.error) throw protocolError(result.code || "ELEMENT_NOT_FOUND", result.error);
+      await waitForProtocolPage(tab, params.wait || "load", params.signal);
+      if (result) {
+        result.target = null;
+        if (tab.sequence === generation && !tab.view.webContents.isDestroyed()) {
+          const target = await executeProtocolScript(tab.view.webContents, `(() => {
+            const el = globalThis.__miaActionTargets?.get(${JSON.stringify(targetKey)});
+            if (!el?.isConnected || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden') return null;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+          })()`, true);
+          if (tab.sequence === generation) result.target = target;
+        }
+      }
+      return result || {};
+    } finally {
+      if (!tab.view.webContents.isDestroyed()) await executeProtocolScript(tab.view.webContents, `globalThis.__miaActionTargets?.delete(${JSON.stringify(targetKey)});`, true).catch(() => {});
     }
-    if (result && result.error) throw protocolError(result.code || "ELEMENT_NOT_FOUND", result.error);
-    await waitForProtocolPage(tab, params.wait || "load", params.signal);
-    return result || {};
   }
 
   async function protocolWait(tab, params) {
@@ -1190,7 +1206,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (event.type === "operation-settled") return;
     const tab = tabs.get(event.tabId);
     if (!tab || tab.view.webContents.isDestroyed()) return;
-    const generation = tab.sequence;
+    const generation = event.type === "target" ? event.generation : tab.sequence;
+    if (generation !== tab.sequence) return;
     const actor = actorRuntime.list().find(item => item.actorId === event.actorId);
     const color = value => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#b79bff";
     const actorColor = color(actor?.color), ownerColor = color(actor?.ownerColor);
