@@ -9,6 +9,7 @@ const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs
 
 const { createBrowserGroups } = require("./browser-groups.cjs");
 const { createActorRuntime } = require("./browser-actors.cjs");
+const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { randomUUID } = require("node:crypto");
 
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
@@ -1178,7 +1179,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     return approval;
   }
-  const publicActors = { bind: actorRuntime.bind, revoke: actorRuntime.revoke, approve: approveActorOperation, reject: actorRuntime.reject, list: actorRuntime.list };
+  const publicActors = { bind: binding => bindActorWithDiagnostics(actorRuntime.bind, binding, options.onActorEvent), revoke: actorRuntime.revoke, approve: approveActorOperation, reject: actorRuntime.reject, list: actorRuntime.list };
   function actorOperation(binding, operation, context = {}) {
     if (!binding || !operation || typeof operation.method !== "string") throw protocolError("INVALID_PARAMS", "Binding and browser operation are required.");
     binding = { ...binding, taskId: binding.taskId || binding.workId };
