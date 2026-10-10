@@ -53,7 +53,7 @@ Independent viewing of /tmp/mia-uncertain-restart-ui.png shows Alpha Preserved
 answer with Incomplete/Unverified labels and context-only warning. It shows the
 human page with an empty input; it does not prove draft persistence or visibly
 establish the separate waiting/uncertain state outside the displayed viewport.
-Rendered waiting-state acceptance remains pending.
+The later current-state image below separately establishes rendered uncertainty.
 
 ## Authorized challenge exposes a blocker
 
@@ -89,3 +89,19 @@ were root-reported, sender unresolved, no crash helper invoked and no effect
 claimed. It is not this controlled dispatch evidence. All effects here are
 synthetic local fixture writes; no external production, credential, security,
 Mac/Windows or full MVP acceptance is established.
+
+## Later rendered uncertainty and bounded stability
+
+Independent viewing of /tmp/mia-crash-current-state-ui.png shows the task's red
+Task recovery held · uncertain write outcome label, Alpha Waiting for you and
+its red Recovery held · a write outcome is uncertain warning requiring external
+effect review. This closes the bounded rendered-uncertainty observation. The
+same image also shows Queued and Start queued task following the failed Beta
+recovery request; this inconsistent queued path must not be called full recovery
+acceptance. Root reports not clicking Start. Beta is mostly outside the viewport.
+
+Root's /tmp/mia-crash-later-stability.json at 1791611375904 repeats only the same
+three operations, queued work epoch 2, waiting Alpha epoch 1, queued Beta epoch 2
+and fixture sequence/writeAttempts 1. This supplied later observation corroborates
+the independently read state; it is not a new independent API observation or an
+indefinite no-replay guarantee. The dependent recovery blocker remains open.
