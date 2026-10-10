@@ -1026,15 +1026,31 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (hasChoice === hasSelector) {
       throw protocolError("INVALID_PARAMS", "Provide exactly one of choice or selector.");
     }
-    if (hasSelector) return { selector: params.selector.trim(), number: null, name: params.selector.trim() };
+    if (hasSelector && !Object.hasOwn(params, "snapshot_id")) return { selector: params.selector.trim(), number: null, name: params.selector.trim() };
     const choice = Number(params.choice);
     const snapshot = tab.snapshots.get(params.actor_id || "legacy");
-    if (!snapshot || snapshot.generation !== tab.sequence || snapshot.url !== tab.url || (params.actor_id && snapshot.id !== params.snapshot_id)) {
+    if (!snapshot || snapshot.generation !== tab.sequence || snapshot.url !== tab.url || ((params.actor_id || Object.hasOwn(params, "snapshot_id")) && snapshot.id !== params.snapshot_id)) {
       throw protocolError("STALE_SNAPSHOT", "Take a fresh snapshot for this actor and tab.");
     }
+    if (hasSelector) return { selector: params.selector.trim(), number: null, name: params.selector.trim(), snapshotId: snapshot.id };
     const element = snapshot.elements.find(candidate => candidate.number === choice);
     if (!element) throw protocolError("ELEMENT_NOT_FOUND", `Element [${params.choice}] is not available. Vacuum the page first.`);
     return { ...element, snapshotId: snapshot.id };
+  }
+
+  // Explicit snapshot IDs are target preconditions even for selector actions.
+  // Resolve/check in the isolated world both when approving and dispatching.
+  function protocolTargetScript(element, actorId) {
+    return `
+      const snapshot = globalThis.__miaBrowserSnapshots?.get(${JSON.stringify(actorId || "legacy")});
+      const numbered = ${element.number !== null};
+      const scoped = ${element.snapshotId !== undefined};
+      if (scoped && (!snapshot || snapshot.id !== ${JSON.stringify(element.snapshotId)})) return { error: 'Snapshot was replaced.', code: 'STALE_SNAPSHOT' };
+      const el = numbered ? snapshot.nodes[${Number(element.number) - 1}] : document.querySelector(${JSON.stringify(element.selector)});
+      const snapshotIndex = scoped ? (numbered ? ${Number(element.number) - 1} : snapshot.nodes.indexOf(el)) : -1;
+      if (scoped && (!el?.isConnected || snapshotIndex < 0 || (numbered && document.querySelector(${JSON.stringify(element.selector)}) !== el))) return { error: 'Snapshot target was replaced.', code: 'STALE_SNAPSHOT' };
+      if (scoped && snapshot.fingerprint(el) !== snapshot.fingerprints[snapshotIndex]) return { error: 'Snapshot target changed.', code: 'STALE_SNAPSHOT' };
+    `;
   }
 
   async function protocolElementAction(tab, params, action) {
@@ -1049,12 +1065,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const targetKey = randomUUID();
     const value = action === "fill" ? params.value.slice(0, MAX_PROTOCOL_PAGE_TEXT) : "";
     const script = `(() => {
-      const snapshot = globalThis.__miaBrowserSnapshots?.get(${JSON.stringify(params.actor_id || "legacy")});
-      const numbered = ${element.number !== null};
-      if (numbered && (!snapshot || snapshot.id !== ${JSON.stringify(element.snapshotId)})) return { error: 'Snapshot was replaced.', code: 'STALE_SNAPSHOT' };
-      const el = numbered ? snapshot.nodes[${Number(element.number) - 1}] : document.querySelector(${JSON.stringify(element.selector)});
-      if (numbered && (!el?.isConnected || document.querySelector(${JSON.stringify(element.selector)}) !== el)) return { error: 'Numbered target was replaced.', code: 'STALE_SNAPSHOT' };
-      if (numbered && snapshot.fingerprint(el) !== snapshot.fingerprints[${Number(element.number) - 1}]) return { error: 'Numbered target changed.', code: 'STALE_SNAPSHOT' };
+      ${protocolTargetScript(element, params.actor_id)}
       if (el && (el.disabled || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden')) return { error: 'Target is unavailable.', code: 'ELEMENT_NOT_FOUND' };
       const approvalId = ${JSON.stringify(params.approval_id || null)};
       if (approvalId) {
@@ -1143,14 +1154,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       try {
         const element = protocolElement(tab, request.params);
         const result = await executeProtocolScript(tab.view.webContents, `(() => {
-          const snapshot = globalThis.__miaBrowserSnapshots?.get(${JSON.stringify(request.params.actor_id)});
-          const el = ${element.number !== null} ? snapshot?.nodes[${Number(element.number) - 1}] : document.querySelector(${JSON.stringify(element.selector)});
+          ${protocolTargetScript(element, request.params.actor_id)}
           if (!el?.isConnected) return false;
           const fingerprint = el => JSON.stringify([el.localName,el.getAttribute('role'),el.getAttribute('aria-label'),el.getAttribute('href'),el.innerText,el.value]);
           const store = globalThis.__miaApprovedTargets ||= new Map();
           store.set(${JSON.stringify(approval.approval_id)}, { el, fingerprint, value: fingerprint(el) });
           return true;
         })()`, true);
+        if (result?.error) throw protocolError(result.code, result.error);
         if (!result) throw protocolError("ELEMENT_NOT_FOUND", "Approval target is unavailable.");
       } catch (error) { actorRuntime.reject(approval.approval_id); throw error; }
     }
