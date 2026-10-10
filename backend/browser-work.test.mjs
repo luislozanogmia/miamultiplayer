@@ -78,6 +78,47 @@ test('Mia plans real adapter output against owner-authorized candidate inventory
   assert.deepEqual(work.dependencies['1'], ['0']);
 });
 
+test('planner and worker guidance request approval through the bound tool instead of final prose', async t => {
+  const f = fixture(t); let plannerMessage;
+  f.hermes.plan = async args => {
+    plannerMessage = args.message;
+    return { text: JSON.stringify({ workers: [{ id: '0', goal: 'Read then request approval to fill the assigned field', needs: [] }] }) };
+  };
+  const work = await f.coordinator.plan('owner', { ...f.input, goal: 'Read/vacuum then obtain approval to fill selector #draft with exact literal Alpha acceptance and scroll amount 400', candidates: [f.input.workers[0]] });
+  await f.coordinator.start('owner', work.id);
+  const workerMessage = f.calls.find(call => call.worker).message;
+  assert.match(plannerMessage, /Preserve exact user-specified literals, selectors and amounts verbatim/);
+  const originalGoal = 'Read/vacuum then obtain approval to fill selector #draft with exact literal Alpha acceptance and scroll amount 400';
+  assert.equal(JSON.parse(plannerMessage.split('\n').at(-1)).goal, originalGoal);
+  assert.equal(JSON.parse(workerMessage.split('\n').at(-1)).overallGoal, originalGoal);
+  for (const message of [plannerMessage, workerMessage]) {
+    assert.match(message, /request approval by calling mia_browser_work/);
+    assert.match(message, /creates the actionable approval card/);
+    assert.match(message, /waits for the human decision before execution/);
+    assert.match(message, /not final prose or fabricated preapproval/);
+    assert.match(message, /denied, expired or revoked.*held.*do not retry/);
+  }
+});
+
+test('synthesis keeps the original exact goal authoritative over shortened worker prose', async t => {
+  const f = fixture(t);
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    return { text: 'Delegated goal #draft=Alpha; completed Alpha', storedSessionId: 'worker-session' };
+  };
+  const originalGoal = 'Fill selector #draft with exact value Alpha acceptance after human approval';
+  const work = await f.coordinator.create('owner', { ...f.input, goal: originalGoal, workers: [f.input.workers[0]] });
+  await f.coordinator.start('owner', work.id);
+  const message = f.calls.find(call => !call.worker).message;
+  const payload = JSON.parse(message.split('\n').at(-1));
+  assert.equal(payload.goal, originalGoal);
+  assert.match(payload.results.first.text, /#draft=Alpha/);
+  assert.match(message, /original goal.*authoritative over delegated plans and worker prose/);
+  assert.match(message, /exact user-specified literals, selectors and amounts/);
+  assert.match(message, /explicitly flag mismatched values/);
+  assert.match(message, /unproven exact values.*unverified/);
+});
+
 test('synthesis receives precisely linked consumed approval and completed native click separately from worker text', async t => {
   const f = fixture(t);
   f.browser.validate = async (binding, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'click' });
@@ -213,6 +254,41 @@ async function approvalFixture(t) {
   t.after(async () => { await f.coordinator.stop('owner', work.id); release(); await running; });
   return { ...f, work };
 }
+
+test('bound fill request creates a pending card and waits without execution until owner acceptance', async t => {
+  const f = await approvalFixture(t); const executed = [];
+  f.browser.execute = async (bound, op, context) => { executed.push({ bound, op, context }); return { filled: true }; };
+  const requested = { method: 'fill', params: { selector: '#draft', value: 'Alpha acceptance' } };
+  let settled = false;
+  const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', requested).then(result => { settled = true; return result; });
+  await until(() => f.store.get(f.work.id).approvals.length);
+  const waiting = f.store.get(f.work.id), grant = waiting.approvals[0];
+  assert.equal(waiting.status, 'needs_approval'); assert.equal(waiting.workers[0].status, 'needs_approval');
+  assert.deepEqual(grant.operation, requested); assert.equal(grant.status, 'pending');
+  assert.equal(settled, false); assert.deepEqual(executed, []); assert.deepEqual(waiting.operations, []);
+  await f.coordinator.decideApproval('owner', f.work.id, grant.id, true);
+  assert.deepEqual(await operation, { filled: true }); assert.equal(executed.length, 1);
+  const done = f.store.get(f.work.id); assert.equal(done.approvals[0].status, 'consumed');
+  assert.equal(done.operations[0].approvalId, grant.id); assert.equal(done.operations[0].status, 'done');
+  assert.deepEqual(executed[0].op, requested);
+  assert.equal(executed[0].context.approval.id, grant.id);
+});
+
+test('expired bound fill request remains unexecuted and cannot be accepted afterward', async t => {
+  const f = await approvalFixture(t); let executions = 0;
+  f.browser.execute = async () => { executions++; };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'fill', params: { selector: '#draft', value: 'Held text' } });
+    const expired = assert.rejects(operation, /approval expired/);
+    await until(() => f.store.get(f.work.id).approvals.length);
+    const grant = f.store.get(f.work.id).approvals[0];
+    assert.equal(executions, 0); t.mock.timers.tick(120000); await expired;
+    assert.equal(f.store.get(f.work.id).approvals[0].status, 'expired');
+    await assert.rejects(f.coordinator.decideApproval('owner', f.work.id, grant.id, true), /no longer actionable/);
+    assert.equal(executions, 0); assert.deepEqual(f.store.get(f.work.id).operations, []);
+  } finally { t.mock.timers.reset(); }
+});
 
 test('approval rejects execution and identity overrides fail closed', async t => {
   const f = await approvalFixture(t); let executions = 0; f.browser.execute = async () => { executions++; };
