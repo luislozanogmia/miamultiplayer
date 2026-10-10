@@ -51,8 +51,11 @@ active draft at the endpoint and no refocus after initial setup. Independent
 viewing of /tmp/mia-exact-wait-current-ui.png corroborates the human page and
 focused draft prefix; the field clips the full value. This image displays a
 historical stopped work card, not the current run's completed synthesis. No
-continuous focus sampling, full value/caret verification from pixels, final
-rendered sum or restart draft persistence is established. Actual native waits
+continuous focus sampling, full value/caret verification from pixels or restart
+draft persistence is established. Independent later viewing of
+/tmp/mia-exact-wait-final-synthesis-ui.png confirms the current rendered synthesis
+shows240000ms/alternative31 and Alpha2 versus ALPHA17 mismatch limits beside the
+focused human draft. Those pixels corroborate the semantic failure, not sum46. Actual native waits
 and fresh reads are separate from the failed final arithmetic/task semantics.
 Root owns the next explicit page-result disambiguation and fresh model retest;
 no full fifteen-criterion MVP, external effect or other-platform pass follows.
