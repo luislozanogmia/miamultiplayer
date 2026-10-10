@@ -19,7 +19,7 @@ function fixture(t, overrides = {}) {
   const store = createBrowserWorkStore({ key, filePath });
   const calls = [];
   const hermes = {
-    async worker(args) { calls.push(args); args.onSession?.({ sessionId: `live-${args.worker.id}`, storedSessionId: `stored-${args.worker.id}` }); return { text: `actual fixture ${args.worker.goal}`, storedSessionId: `stored-${args.worker.id}` }; },
+    async worker(args) { calls.push(args); args.onSession?.({ sessionId: `live-${args.worker.id}`, storedSessionId: `stored-${args.worker.id}` }); await coordinator.executeOperation(args.work.ownerId, args.work.id, args.worker.id, { method: 'read', params: {} }); return { text: `actual fixture ${args.worker.goal}`, storedSessionId: `stored-${args.worker.id}` }; },
     async synthesize(args) { calls.push(args); return { text: 'fixture synthesis', storedSessionId: 'mia-session' }; },
     async interrupt() {},
     async plan() { return { text: JSON.stringify({ workers: [{ id: '0', goal: 'read first', needs: [] }, { id: '1', goal: 'compare', needs: ['0'] }] }), storedSessionId: 'personal-mia' }; },
@@ -152,7 +152,7 @@ test('dedicated profile declares actual cli tool policy and no credentials', t =
 
 test('separate ready worker jobs execute concurrently; dependency job waits for durable outputs', async t => {
   const f = fixture(t); const pending = new Map();
-  f.hermes.worker = async args => new Promise(resolve => pending.set(args.worker.id, () => resolve({ text: `output-${args.worker.id}`, storedSessionId: args.worker.id })));
+  f.hermes.worker = async args => { await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} }); return new Promise(resolve => pending.set(args.worker.id, () => resolve({ text: `output-${args.worker.id}`, storedSessionId: args.worker.id }))); };
   const work = await f.coordinator.create('owner', { ...f.input, workers: f.input.workers.map(worker => ({ ...worker, needs: [] })) });
   const running = f.coordinator.start('owner', work.id);
   await until(() => pending.size === 2);
@@ -228,4 +228,41 @@ test('existing personal Mia session comes only from trusted owner resolver', asy
   const work = await f.coordinator.create('owner', { ...f.input, personalStoredSessionId: 'attacker-session' }); assert.equal(work.personalStoredSessionId, 'owned-personal-session');
   f.hermes.plan = async args => { assert.equal(args.work.personalStoredSessionId, 'owned-personal-session'); return { text: '{"workers":[{"id":"0","goal":"read","needs":[]}]}', storedSessionId: 'owned-personal-session' }; };
   await f.coordinator.plan('owner', { ...f.input, candidates: f.input.workers, personalStoredSessionId: 'attacker-session' });
+});
+
+test('model-only browser completion fails, preserves unverified text and blocks dependent work and synthesis', async t => {
+  const f = fixture(t);
+  f.hermes.worker = async () => ({ text: 'I found the answer without calling a browser tool', storedSessionId: 'model-only' });
+  const work = await f.coordinator.create('owner', f.input);
+  const result = await f.coordinator.start('owner', work.id);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.workers[0].status, 'failed');
+  assert.equal(result.workers[1].status, 'queued');
+  assert.equal(result.results.first.verified, false);
+  assert.match(result.results.first.text, /without calling/);
+  assert.equal(result.synthesis, undefined);
+  assert.equal(f.calls.length, 0);
+});
+
+test('successful browser evidence from a previous attempt cannot validate a recovered model-only reply', async t => {
+  const f = fixture(t);
+  const first = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  await f.coordinator.start('owner', first.id);
+  assert.equal(f.store.get(first.id).results.first.verified, true);
+  await f.coordinator.recover('owner', first.id, ['first']);
+  f.hermes.worker = async () => ({ text: 'new attempt without a browser read', storedSessionId: 'new-session' });
+  const resumed = await f.coordinator.start('owner', first.id);
+  assert.equal(resumed.status, 'failed'); assert.equal(resumed.results.first.verified, false); assert.deepEqual(resumed.results.first.browserEvidence, []); assert.equal(resumed.synthesis, undefined);
+});
+
+test('structured native browser errors cannot become successful completion evidence', async t => {
+  const f = fixture(t);
+  f.browser.execute = async () => ({ ok: false, error: 'read failed' });
+  f.hermes.worker = async args => {
+    await assert.rejects(f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} }), /native browser operation failed/);
+    return { text: 'claimed complete despite failed read', storedSessionId: 'claimed' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const result = await f.coordinator.start('owner', work.id);
+  assert.equal(result.status, 'failed'); assert.equal(result.operations[0].status, 'failed'); assert.equal(result.results.first.verified, false); assert.equal(result.synthesis, undefined);
 });

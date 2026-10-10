@@ -162,8 +162,13 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       if (!current()) return;
       update(workId, saved => {
         const target = saved.workers.find(item => item.id === workerId);
-        target.status = 'done'; target.storedSessionId = result.storedSessionId;
-        saved.results[workerId] = { text: result.text, at: now(), model: worker.model, provider: worker.provider, storedSessionId: result.storedSessionId };
+        const attemptOperations = saved.operations.filter(operation => operation.workerId === workerId && operation.workEpoch === epoch && operation.workerEpoch === workerEpoch);
+        const evidence = attemptOperations.filter(operation => operation.status === 'done' && ['read', 'vacuum', 'screenshot'].includes(operation.operation.method));
+        const uncertain = attemptOperations.some(operation => ['dispatching', 'uncertain'].includes(operation.status));
+        const verified = evidence.length > 0 && !uncertain;
+        target.status = verified ? 'done' : 'failed'; target.storedSessionId = result.storedSessionId;
+        if (!verified) target.error = uncertain ? 'Browser outcome is uncertain; review effects before continuing.' : 'Worker returned without successful assigned-tab read, vacuum or screenshot evidence.';
+        saved.results[workerId] = { text: result.text, verified, browserEvidence: evidence.map(operation => ({ operationId: operation.id, method: operation.operation.method, documentGeneration: operation.documentGeneration })), at: now(), model: worker.model, provider: worker.provider, storedSessionId: result.storedSessionId };
       });
     } catch (error) {
       if (current()) update(workId, saved => { const target = saved.workers.find(item => item.id === workerId); target.status = 'failed'; target.error = 'Worker execution failed; inspect runtime diagnostics.'; });
@@ -271,13 +276,14 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       if (rechecked.documentGeneration !== approval.documentGeneration || rechecked.url !== approval.expectedUrl || digest(operation) !== approval.operationHash) throw failure('approval target changed', 409);
     }
     if (!current()) throw failure('work stopped', 409);
-    const record = { id: id(), workerId, operation, operationHash: digest(operation), documentGeneration: checked.documentGeneration, expectedUrl: checked.url, consequential: checked.requiresApproval, status: 'dispatching', at: now() };
+    const record = { id: id(), workerId, workEpoch: epoch, workerEpoch, operation, operationHash: digest(operation), documentGeneration: checked.documentGeneration, expectedUrl: checked.url, consequential: checked.requiresApproval, status: 'dispatching', at: now() };
     update(workId, saved => { saved.operations.push(record); if (approval) saved.approvals.find(item => item.id === approval.id).status = 'consumed'; });
     try {
       // Runtime MUST repeat identity/document/approval checks atomically with
       // dispatch. Backend validation cannot close native-navigation races.
       const result = await browser.execute(bound, operation, { signal: aborts.get(`${workId}:${workerId}`)?.signal, approval });
       if (!current()) throw failure('work stopped during operation', 409);
+      if (result && typeof result === 'object' && (result.error || result.ok === false || result.success === false)) throw failure('native browser operation failed', 409);
       update(workId, saved => { const item = saved.operations.find(item => item.id === record.id); item.status = 'done'; item.result = clone(result); item.completedAt = now(); });
       return result;
     } catch (error) {
