@@ -8114,7 +8114,7 @@ async function initializeBrowserWork() {
     resolveBot(owner, botId) {
       const bot = db.loadOne(conn, 'bots', botId);
       if (!bot || !sameOwner(bot, owner) || !isActiveWorkspaceUser(owner)) return null;
-      return { ownerId: ownerOf(bot), name: bot.name, ownerColor: '#60a5fa', profile: MIAOS_BOT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir(), isPersonalMia: false };
+      return { ownerId: ownerOf(bot), name: bot.name, color: bot.avatarColor, ownerColor: '#60a5fa', profile: MIAOS_BOT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir(), isPersonalMia: false };
     },
     resolvePersonalSession(owner) {
       const conversation = nativeConversationRepository.listGatewayConversations({ companyId: nativeCompanyId('solo', owner), createdBy: owner })[0];

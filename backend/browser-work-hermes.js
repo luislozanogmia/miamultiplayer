@@ -7,7 +7,7 @@ function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOp
   if (!client || typeof client.createOrResumeSession !== 'function' || typeof client.submitTurn !== 'function') throw new Error('Hermes gateway client required');
   const bindings = new Map();
   async function run({ work, worker, message, signal, onSession, onEvent, options }) {
-    const binding = worker && { ownerId: work.ownerId, groupId: work.groupId, workId: work.id, workerId: worker.id, taskId: worker.id, botName: worker.botName, ownerColor: worker.ownerColor, actorId: worker.actorId, botId: worker.botId, tabId: worker.tabId };
+    const binding = worker && { ownerId: work.ownerId, groupId: work.groupId, workId: work.id, workerId: worker.id, taskId: worker.id, botName: worker.botName, color: worker.color, ownerColor: worker.ownerColor, actorId: worker.actorId, botId: worker.botId, tabId: worker.tabId };
     if (worker) {
       if (typeof bindSession !== 'function' || typeof prepareWorker !== 'function') throw new Error('secure browser worker runtime unavailable');
       const prepared = await prepareWorker(worker, binding);
