@@ -7,8 +7,9 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
   var browserState = { tabs: [] }, works = [], host, bridge, transport, loaded = false;
-  var requestGeneration = 0, timer, pending = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', lastGroupRender = '';
+  var requestGeneration = 0, timer, pending = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', lastGroupRender = '', mutationError = '';
   var labels = { idle: 'Idle', queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', needs_approval: 'Needs approval', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
+  var approvalDenialLabels = { STALE_SNAPSHOT: 'Page target is stale.', ELEMENT_NOT_FOUND: 'Page element is unavailable.', TAB_NAVIGATED: 'Page changed.', ACTOR_REVOKED: 'Bot access was revoked.', TAB_NOT_OWNED: 'Tab ownership changed.', TAB_CLOSED: 'Tab closed.', TAB_CRASHED: 'Tab became unavailable.', APPROVAL_REQUIRED: 'A current approval is required.', APPROVAL_TARGET_CHANGED: 'Approval target changed.', CANCELLED: 'Request cancelled.', WORKER_SESSION_REVOKED: 'Bot session was revoked.' };
   function visibleTabs(state) {
     var group = (state.groups || []).find(function (g) { return g.id === state.selectedGroupId; });
     if (!group) return state.tabs || [];
@@ -67,6 +68,13 @@
       workers: workers, preservedResponses: preserved,
       results: results.filter(function (result) { return result.incomplete !== true && !['stopped', 'incomplete'].includes(result.status); }),
       approvals: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) { return a.status === 'pending'; }),
+      // Only the coordinator's predispatch failure marker supports this notice.
+      // Generic revocation, expiry and any linked dispatch remain separate states.
+      approvalFailures: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) {
+        return a.status === 'revoked' && a.failurePhase === 'approval' && !(work.operations || []).some(function (op) { return op.approvalId === a.id; });
+      }).sort(function (a, b) { return (b.decidedAt || 0) - (a.decidedAt || 0); }).slice(0, 3).map(function (a) {
+        return { id: a.id, tabId: a.tabId, category: Object.prototype.hasOwnProperty.call(approvalDenialLabels, a.denialCode) ? approvalDenialLabels[a.denialCode] : '' };
+      }),
       personalSelection: work.personalSelection || null, synthesis: work.synthesis && work.synthesis.incomplete !== true && !['stopped', 'incomplete'].includes(work.synthesis.status) ? work.synthesis : null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
   }
   function node(tag, className, text) {
@@ -135,12 +143,19 @@
     try {
       var records = await transport.list(browserState.selectedGroupId);
       if (generation !== requestGeneration) return;
-      works = Array.isArray(records) ? records : []; loaded = true; error(''); renderWorks();
+      works = Array.isArray(records) ? records : []; loaded = true; error(mutationError); renderWorks();
     } catch (e) { if (generation === requestGeneration) { error(e.message || 'Browser work unavailable.'); } }
   }
   async function mutate(key, callback) {
-    if (pending.has(key)) return; pending.add(key); renderWorks(); error('');
-    try { await callback(); await refresh(); } catch (e) { error(e.message || 'Could not update browser work.'); }
+    if (pending.has(key)) return; pending.add(key); renderWorks(); mutationError = ''; error('');
+    var groupId = browserState.selectedGroupId;
+    try { await callback(); await refresh(); } catch (e) {
+      if (groupId !== browserState.selectedGroupId) return;
+      mutationError = e.message || 'Could not update browser work.';
+      // A failed decision can still durably revoke its grant. Fetch that state
+      // before enabling controls again, retaining the action error across polls.
+      await refresh(); error(mutationError);
+    }
     finally { pending.delete(key); renderWorks(); }
   }
   function renderWorks() {
@@ -217,6 +232,12 @@
         });
         if (expired) row.append(node('small', '', 'Expired · request a new approval.')); card.append(row);
       });
+      work.approvalFailures.forEach(function (approval) {
+        var row = node('section', 'browser-work-approval browser-work-approval-failure');
+        row.append(node('strong', '', 'Approval failed'), node('small', '', 'Tab ' + approval.tabId));
+        if (approval.category) row.append(node('p', '', approval.category));
+        card.append(row);
+      });
       work.preservedResponses.forEach(function (response) {
         var section = node('section', 'browser-work-preserved');
         section.append(node('strong', '', response.name + ' · ' + (response.historical ? 'Previous answer' : 'Preserved answer')));
@@ -243,7 +264,7 @@
     if (!state || !Array.isArray(state.tabs)) return;
     var changedGroup = browserState.selectedGroupId !== state.selectedGroupId;
     browserState = state; if (!host) return;
-    if (changedGroup) { requestGeneration++; works = []; loaded = false; document.getElementById('browserWorkCandidates').replaceChildren(); refresh(); }
+    if (changedGroup) { requestGeneration++; works = []; loaded = false; mutationError = ''; document.getElementById('browserWorkCandidates').replaceChildren(); refresh(); }
     renderGroups(); renderWorks();
   }
   async function chooseBots(selectedReusable) {
@@ -302,7 +323,7 @@
     var selected = (browserState.groups || []).find(function (g) { return g.id === browserState.selectedGroupId; });
     if (!selected || candidates.some(function (c) { return !selected.tabIds.includes(c.tabId); })) { error('Tabs changed. Choose bots again.'); return; }
     var goal = document.getElementById('browserWorkGoal').value.trim(); if (!goal) return;
-    pending.add('start'); var start = document.getElementById('browserWorkStart'); start.disabled = true; error('');
+    pending.add('start'); var start = document.getElementById('browserWorkStart'); start.disabled = true; mutationError = ''; error('');
     try { await transport.plan({ groupId: selected.id, goal: goal, personalSelection: { provider: chosenPersonal.provider, model: chosenPersonal.model }, context: { groupName: selected.name, tabs: visibleTabs(browserState).map(function (t) { return { id: t.id, title: t.title, origin: pageOrigin(t.url) }; }) }, candidates: candidates }); await refresh(); }
     catch (e) { error(e.message || 'Mia could not start browser work.'); }
     finally { pending.delete('start'); start.disabled = false; }
