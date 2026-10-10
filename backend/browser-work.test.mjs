@@ -225,6 +225,63 @@ test('synthesis keeps the original exact goal authoritative over shortened worke
   assert.match(message, /unproven exact values.*unverified/);
 });
 
+test('synthesis lifecycle input treats a future human Stop as planned rather than observed', async t => {
+  const f = fixture(t); let captured;
+  f.hermes.synthesize = async args => { captured = args; return { text: 'Current explanation', storedSessionId: 'mia' }; };
+  const goal = 'Compute 17+29=46, then begin a 1500-word explanation. Human will Stop Mia while streaming.';
+  const work = await f.coordinator.create('owner', { ...f.input, goal, workers: [f.input.workers[0]] });
+  const done = await f.coordinator.start('owner', work.id);
+  const payload = JSON.parse(captured.message.split('\n').at(-1));
+  assert.deepEqual(payload.currentSynthesis, { phase: 'synthesizing', workStatus: 'working', workEpoch: 0, synthesisEpoch: 0, stopRequested: false });
+  assert.equal(payload.goal, goal); assert.deepEqual(payload.priorSynthesis, []);
+  assert.match(captured.message, /snapshot at synthesis start.*not evidence of a later outcome/);
+  assert.match(captured.message, /future human Stop.*planned action.*not an observed interruption/);
+  assert.match(captured.message, /Continue the requested explanation while this attempt is active/);
+  assert.match(captured.message, /Do not claim.*stopped.*preserved partial.*never began/);
+  assert.equal(done.status, 'done'); assert.equal(done.interruptions, undefined);
+});
+
+test('synthesis lifecycle input separates recovered stopped history from a new active epoch', async t => {
+  const f = fixture(t); let release, captured;
+  f.hermes.synthesize = async args => {
+    args.onSession({ sessionId: 'old-mia-live', storedSessionId: 'old-mia' });
+    args.onEvent('message.delta', { text: 'Actual historical partial before Stop.' });
+    return new Promise(resolve => { release = () => resolve({ text: 'late ignored', storedSessionId: 'old-mia' }); });
+  };
+  f.hermes.interrupt = async () => ({ status: 'interrupted' });
+  const goal = 'Explain the fresh results; human will Stop the explanation while streaming.';
+  const work = await f.coordinator.create('owner', { ...f.input, goal, workers: [f.input.workers[0]] });
+  const running = f.coordinator.start('owner', work.id); await until(() => release);
+  await f.coordinator.stop('owner', work.id); release(); await running;
+  await until(() => f.store.get(work.id).interruptions?.[0]?.status === 'acknowledged');
+  const stopped = f.store.get(work.id); const oldInterruptions = structuredClone(stopped.interruptions);
+  assert.equal(stopped.synthesis.status, 'stopped');
+  const recovered = await f.coordinator.recover('owner', work.id, ['first']);
+  const historical = structuredClone(recovered.previousSynthesisAttempts);
+  f.hermes.synthesize = async args => { captured = args; return { text: 'Fresh explanation', storedSessionId: 'new-mia' }; };
+  const done = await f.coordinator.start('owner', work.id);
+  const payload = JSON.parse(captured.message.split('\n').at(-1));
+  assert.deepEqual(payload.currentSynthesis, { phase: 'synthesizing', workStatus: 'working', workEpoch: recovered.epoch, synthesisEpoch: recovered.synthesisEpoch, stopRequested: false });
+  assert.ok(payload.currentSynthesis.workEpoch > stopped.epoch);
+  assert.equal(payload.priorSynthesis[0].text, 'Actual historical partial before Stop.');
+  assert.equal(payload.priorSynthesis[0].status, 'historical'); assert.equal(payload.priorSynthesis[0].verified, false);
+  assert.match(captured.message, /prior stopped attempts.*not the lifecycle of this active attempt/);
+  assert.deepEqual(done.interruptions, oldInterruptions); assert.deepEqual(done.previousSynthesisAttempts, historical);
+  assert.equal(done.status, 'done'); assert.equal(done.synthesis.text, 'Fresh explanation');
+});
+
+test('synthesis lifecycle input is not submitted after Stop during option resolution', async t => {
+  let resolveOptions, synthesisCalls = 0;
+  const f = fixture(t, { personalOptions: async () => new Promise(resolve => { resolveOptions = resolve; }) });
+  f.hermes.synthesize = async () => { synthesisCalls++; return { text: 'Must not start', storedSessionId: 'mia' }; };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const running = f.coordinator.start('owner', work.id); await until(() => resolveOptions);
+  await f.coordinator.stop('owner', work.id);
+  const stopped = f.store.get(work.id), bytes = fs.readFileSync(f.filePath);
+  resolveOptions({ profile: 'personal-mia', model: 'personal-model', provider: 'personal-provider' }); await running;
+  assert.equal(synthesisCalls, 0); assert.deepEqual(f.store.get(work.id), stopped); assert.deepEqual(fs.readFileSync(f.filePath), bytes);
+});
+
 test('synthesis read-only evidence explains absent cards only for current completed nonconsequential operations', async t => {
   const f = fixture(t);
   f.hermes.worker = async args => {
