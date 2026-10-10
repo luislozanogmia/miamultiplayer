@@ -58,6 +58,40 @@ try:
     assert not get_pre_tool_call_block_message('mia_browser_work', {'method': 'read', 'params': {}})
     assert get_pre_tool_call_block_message('mia_browser_work', {'method': 'read', 'params': {}, 'session_id': 'model-spoof'})
     assert 'GATEWAY_RELAY_MIA_BROWSER_WORK_TOKEN' not in hermes_subprocess_env(inherit_credentials=True)
+    # Actual model regression: native scroll ignores deltaY and defaults to
+    # amount 500. The plugin must reject it before any broker traffic instead.
+    rejected_scroll = json.loads(registry.dispatch('mia_browser_work', {'method': 'scroll', 'params': {'deltaY': 400}}, session_id='runtime-stored-session'))
+    assert rejected_scroll.get('code') == 'INVALID_PARAMS', 'deltaY was silently sent to native scroll'
+    assert requests == [], 'invalid scroll accessed broker'
+    assert 'direction' in rejected_scroll['allowed_params'] and 'amount' in rejected_scroll['allowed_params']
+    assert get_pre_tool_call_block_message('mia_browser_work', {'method': 'ghost_scroll', 'params': {'deltaY': 400}})
+    params_schema = schema['parameters']['properties']['params']
+    assert params_schema.get('additionalProperties') is False
+    assert 'deltaY' not in params_schema['properties'] and 'number' not in params_schema['properties']
+    assert {'direction', 'amount', 'choice', 'snapshot_id', 'value', 'selector', 'url'} <= set(params_schema['properties'])
+    invalid_parameters = [
+        ('scroll', {'deltaY': 400}), ('ghost_scroll', {'deltaY': 400}),
+        ('click', {'selector': '#write', 'snapshot_id': 'current', 'number': 3}),
+        ('click', {'element': 3, 'snapshot_id': 'current'}), ('click', {'choice': 3}),
+        ('click', {'selector': '#write', 'choice': 3, 'snapshot_id': 'current'}),
+        ('fill', {'selector': '#draft'}), ('navigate', {}), ('eval', {}), ('run_reusable', {}),
+        ('run_reusable', {'sourceWorkId': 'source', 'reusableId': 'reference', 'expected_url': 'https://example.test/'}),
+        ('read', {'script': 'untrusted-input-marker'}), ('screenshot', {'full_page': True}),
+    ]
+    invalid_parameters += [('read', {field: 'untrusted-input-marker'}) for field in ('actor_id', 'tab_id', 'owner_id', 'group_id', 'human_ok', 'approval_id', 'approval', 'capability', 'signal')]
+    for method, params in invalid_parameters:
+        args = {'method': method, 'params': params}
+        denied = json.loads(registry.dispatch('mia_browser_work', args, session_id='runtime-stored-session'))
+        assert denied.get('code') == 'INVALID_PARAMS', (method, params)
+        assert 'untrusted-input-marker' not in json.dumps(denied)
+        assert 'do not repeat uncertain writes' in denied['error']
+        assert requests == [], 'invalid parameters accessed broker'
+        assert get_pre_tool_call_block_message('mia_browser_work', args)
+        previous_url = os.environ.pop('MIA_BROWSER_WORK_TOOL_URL')
+        try:
+            assert json.loads(registry.dispatch('mia_browser_work', args, session_id='runtime-stored-session')) == denied
+        finally:
+            os.environ['MIA_BROWSER_WORK_TOOL_URL'] = previous_url
     # Even a model ignoring the enum must not reach the broker. Compare its
     # stable correction with broker configured and absent, never echoing input.
     stable_denial = None
@@ -78,9 +112,17 @@ try:
             os.environ['MIA_BROWSER_WORK_TOOL_URL'] = previous_url
         assert get_pre_tool_call_block_message('mia_browser_work', {'method': method, 'params': {}}), 'unsupported method must fail pre-tool guard'
     assert not get_pre_tool_call_block_message('mia_browser_work', {'method': 'ghost_read', 'params': {}})
+    valid_params = {
+        'read': {}, 'vacuum': {}, 'click': {'selector': '#write'},
+        'fill': {'choice': 3, 'snapshot_id': 'current', 'value': 'fixture'},
+        'scroll': {'direction': 'down', 'amount': 400}, 'navigate': {'url': 'https://example.test/'},
+        'screenshot': {}, 'wait': {}, 'back': {}, 'forward': {}, 'reload': {}, 'stop': {},
+        'eval': {'script': '() => document.title'}, 'tab_close': {},
+        'run_reusable': {'sourceWorkId': 'source', 'reusableId': 'reference'},
+    }
     for method in canonical_methods:
         for alias in (method, 'ghost_' + method):
-            assert not get_pre_tool_call_block_message('mia_browser_work', {'method': alias, 'params': {}}), alias
+            assert not get_pre_tool_call_block_message('mia_browser_work', {'method': alias, 'params': valid_params[method]}), alias
     result = json.loads(registry.dispatch('mia_browser_work', {'method': 'ghost_read', 'params': {}}, session_id='runtime-stored-session', task_id='runtime-task'))
     assert result['untrusted_page_data']['text'] == 'disposable page evidence'
     assert requests == [{'sessionId': 'runtime-stored-session', 'operation': {'method': 'read', 'params': {}}}]
@@ -91,6 +133,27 @@ try:
         assert result['untrusted_page_data']['text'] == 'disposable page evidence'
         assert len(requests) == before + 1
         assert requests[-1] == {'sessionId': 'runtime-stored-session', 'operation': {'method': method.removeprefix('ghost_'), 'params': params}}
+    # Freeze native field compatibility and preserve the exact payload, including
+    # optional preconditions and the wait alias. No operation is rewritten.
+    native_cases = {
+        'read': {'selector': 'main', 'max_chars': 8000},
+        'vacuum': {'selector': 'main', 'limit': 40, 'url': 'https://example.test/', 'wait': 'networkidle'},
+        'click': {'selector': '#write', 'snapshot_id': 'current', 'wait': 'none'},
+        'fill': {'choice': '3', 'snapshot_id': 'current', 'value': '', 'wait': 'load'},
+        'scroll': {'direction': 'down', 'amount': 400}, 'navigate': {'url': 'https://example.test/', 'wait': 'load'},
+        'screenshot': {'format': 'jpeg', 'quality': 85}, 'wait': {'selector': '#ready', 'timeout': 0, 'ms': 20},
+        'back': {}, 'forward': {}, 'reload': {}, 'stop': {}, 'eval': {'script': '() => document.title'}, 'tab_close': {},
+    }
+    common = {'expected_url': 'https://example.test/', 'document_generation': 1, 'consequential': True}
+    for method, params in native_cases.items():
+        params = {**params, **common}
+        for name in (method, 'ghost_' + method):
+            before = len(requests)
+            assert not get_pre_tool_call_block_message('mia_browser_work', {'method': name, 'params': params}), name
+            result = json.loads(registry.dispatch('mia_browser_work', {'method': name, 'params': params}, session_id='runtime-stored-session'))
+            assert result['untrusted_page_data']['text'] == 'disposable page evidence'
+            assert len(requests) == before + 1
+            assert requests[-1] == {'sessionId': 'runtime-stored-session', 'operation': {'method': method, 'params': params}}
     # Actual pinned dispatcher injects IDs in kwargs, never from model args.
     code = (source / 'model_tools.py').read_text()
     assert '"task_id": ids.task_id, "session_id": ids.session_id' in code
