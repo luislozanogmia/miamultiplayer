@@ -38,7 +38,7 @@
     return { id: work.id, goal: String(work.goal || ''), status: labels[work.status] || 'Unknown state',
       terminal: ['done', 'failed', 'cancelled'].includes(work.status),
       workers: Array.isArray(work.workers) ? work.workers : [],
-      results: Array.isArray(work.results) ? work.results : Object.keys(work.results || {}).map(function (id) { return Object.assign({ title: 'Stored result · ' + id }, work.results[id]); }),
+      results: Array.isArray(work.results) ? work.results : Object.keys(work.results || {}).map(function (id) { return Object.assign({ title: (work.results[id].verified === false ? 'Unverified bot response · ' : 'Stored result · ') + id }, work.results[id]); }),
       approvals: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) { return a.status === 'pending'; }),
       synthesis: work.synthesis || null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
   }
@@ -134,7 +134,7 @@
       card.append(node('div', 'browser-work-coordinator', 'Mia · Personal agent · Planning and synthesis'));
       work.workers.forEach(function (worker) {
         var row = node('div', 'browser-work-worker'); var mote = node('img', 'browser-work-mote'); mote.src = 'assets/mote/mote.svg'; mote.alt = '';
-        row.append(mote, node('span', '', String(worker.name || worker.botId || worker.actorId) + ' · Tab ' + worker.tabId), node('span', 'browser-work-status', labels[worker.status] || 'Unknown state'));
+        row.append(mote, node('span', '', String(worker.botName || worker.name || worker.botId || worker.actorId) + ' · Tab ' + worker.tabId), node('span', 'browser-work-status', labels[worker.status] || 'Unknown state'));
         if (worker.model) row.append(node('small', '', worker.model + ' · ' + (worker.provider || 'Provider unavailable')));
         if (worker.task || worker.goal) row.append(node('p', '', worker.task || worker.goal));
         if (!work.terminal && !['done', 'failed', 'cancelled'].includes(worker.status)) row.append(button('Stop bot', function () { mutate('stop:' + worker.actorId, function () { return transport.cancel(work.id, worker.id); }); }, !transport || pending.has('stop:' + worker.actorId)));
