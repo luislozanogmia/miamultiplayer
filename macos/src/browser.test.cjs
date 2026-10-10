@@ -964,7 +964,8 @@ test("numbered snapshots are isolated, replaced snapshots and navigation fail cl
   const h = harness(); const tab = await h.controller.protocol("tab_open", { url: "https://example.com/", wait: "none" });
   const binding = { actorId: "a", botId: "a", tabId: tab.tab_id, groupId: "default", ownerId: "owner", taskId: "task" };
   h.controller.actors.bind(binding);
-  const second = { ...binding, actorId: "b", botId: "b" }; h.controller.actors.bind(second);
+  const otherTab = await h.controller.protocol("tab_open", { url: "https://example.com/other", wait: "none" });
+  const second = { ...binding, actorId: "b", botId: "b", tabId: otherTab.tab_id }; h.controller.actors.bind(second);
   const snapshot = await h.controller.execute(binding, { method: "vacuum", params: {} });
   await h.controller.execute(second, { method: "vacuum", params: {} });
   const op = { method: "fill", params: { choice: 2, snapshot_id: snapshot.snapshot_id, value: "hello", wait: "none" } };

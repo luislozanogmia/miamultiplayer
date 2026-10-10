@@ -61,3 +61,15 @@ test("closed/crashed/navigation lifecycle and abort errors are typed", async () 
   await assert.rejects(runtime.run("fill", { ...params(), signal: signal.signal }, () => assert.fail()), { code: "CANCELLED" });
   tabs.delete(1); await assert.rejects(runtime.run("read", params(), () => {}), { code: "TAB_CLOSED" });
 });
+
+test("a live tab claim excludes another bot across works and owners until revoked", () => {
+  const { runtime } = fixture();
+  const competing = { actorId: "c", botId: "c", tabId: 1, groupId: "other-group", ownerId: "other-owner", taskId: "other-work" };
+  assert.throws(() => runtime.bind(competing), { code: "TAB_ALREADY_BOUND" });
+  assert.equal(runtime.list().length, 2);
+  assert.equal(runtime.list().find(actor => actor.tabId === 1).actorId, "a");
+  runtime.revoke("a");
+  runtime.bind(competing);
+  assert.equal(runtime.list().filter(actor => actor.tabId === 1).length, 1);
+  assert.equal(runtime.list().find(actor => actor.tabId === 1).actorId, "c");
+});
