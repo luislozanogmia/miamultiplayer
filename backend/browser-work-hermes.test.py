@@ -18,14 +18,16 @@ source = Path(sys.argv[1]).resolve()
 assert subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip() == PIN
 fixture = Path(tempfile.mkdtemp(prefix='mia-browser-work-hermes-'))
 requests = []
+reply_status = 200
+reply_bytes = None
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         assert self.path == '/worker-operation'
         payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         requests.append(payload)
-        self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
-        self.wfile.write(json.dumps({'result': {'text': 'disposable page evidence'}}).encode())
+        self.send_response(reply_status); self.send_header('Content-Type', 'application/json'); self.end_headers()
+        self.wfile.write(reply_bytes if reply_bytes is not None else json.dumps({'result': {'text': 'disposable page evidence'}}).encode())
     def log_message(self, *args):
         pass
 
@@ -154,12 +156,33 @@ try:
             assert result['untrusted_page_data']['text'] == 'disposable page evidence'
             assert len(requests) == before + 1
             assert requests[-1] == {'sessionId': 'runtime-stored-session', 'operation': {'method': method, 'params': params}}
+    # Actual pinned registry dispatch across loopback HTTPError: only static
+    # emitted categories survive; all broker message/body fields stay private.
+    generic = {'error': "Bound browser operation denied or interrupted. Check Mia's task status; do not repeat uncertain writes."}
+    safe_codes = ('STALE_SNAPSHOT', 'ELEMENT_NOT_FOUND', 'TAB_NAVIGATED', 'ACTOR_REVOKED', 'TAB_NOT_OWNED', 'TAB_CLOSED', 'TAB_CRASHED', 'APPROVAL_REQUIRED', 'APPROVAL_TARGET_CHANGED', 'CANCELLED', 'WORKER_SESSION_REVOKED')
+    repo = Path(__file__).resolve().parent.parent
+    native_code = '\n'.join((repo / relative).read_text() for relative in ('macos/src/browser.cjs', 'macos/src/browser-actors.cjs', 'backend/browser-work-worker-broker.js'))
+    for code in safe_codes:
+        assert code in native_code, 'do not invent a native denial code'
+        reply_status = 403 if code == 'WORKER_SESSION_REVOKED' else 409
+        reply_bytes = json.dumps({'error': {'code': code, 'message': 'synthetic-private-marker', 'capability': 'synthetic-private-marker'}, 'result': 'synthetic-private-marker'}).encode()
+        before = len(requests)
+        denied = json.loads(registry.dispatch('mia_browser_work', {'method': 'read', 'params': {}}, session_id='runtime-stored-session'))
+        assert denied == {**generic, 'code': code}, 'registered worker dropped or leaked native denial'
+        assert len(requests) == before + 1, 'error must not retry broker operation'
+    for payload in (b'{malformed', json.dumps({'error': {'code': 'synthetic-private-marker', 'message': 'synthetic-private-marker'}}).encode(), json.dumps({'error': {'code': 'STALE_ELEMENT'}}).encode(), json.dumps({'error': {'code': 'STALE_SNAPSHOT'}}).encode() + b' ' * 4097):
+        reply_status = 409; reply_bytes = payload
+        before = len(requests)
+        denied = json.loads(registry.dispatch('mia_browser_work', {'method': 'read', 'params': {}}, session_id='runtime-stored-session'))
+        assert denied == generic, 'unknown, malformed or oversized denial must remain exactly generic'
+        assert len(requests) == before + 1
+    reply_status = 200; reply_bytes = None
     # Actual pinned dispatcher injects IDs in kwargs, never from model args.
     code = (source / 'model_tools.py').read_text()
     assert '"task_id": ids.task_id, "session_id": ids.session_id' in code
     session_code = (source / 'tui_gateway' / 'methods_session.py').read_text()
     assert '_make_agent(sid, key, session_id=key' in session_code
-    print('PASS: pinned plugin registration, exact method schema/guidance, local unsupported denial, cli policy, seven bypass denials, capability scrub, runtime-injected read/vacuum/reusable dispatch and Ghost alias compatibility')
+    print('PASS: pinned plugin registration, schema/guidance, cli policy, bypass denials, capability scrub, injected dispatch, Ghost aliases and bounded static native HTTP denial categories')
 finally:
     server.shutdown(); server.server_close(); thread.join(timeout=2)
     shutil.rmtree(fixture)
