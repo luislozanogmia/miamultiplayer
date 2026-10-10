@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, app, session, ipcMain, Menu, nativeTheme, dialog, shell, systemPreferences } = require("electron");
+const { WebContentsView, app, session, ipcMain, Menu, nativeTheme, dialog, shell, systemPreferences, nativeImage } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 
@@ -842,6 +842,37 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (wait === "networkidle") await new Promise(resolve => setTimeout(resolve, 500));
   }
 
+  async function captureHiddenPage(tab) {
+    // capturePage() checks for a copyable surface before it requests frames in
+    // Electron 44.2. Cold restored hidden views have never produced that surface.
+    // Page.captureScreenshot forces a frame on this exact WebContents without
+    // showing its native view, selecting a tab or changing page visibility.
+    const previous = tab.capturePending || Promise.resolve();
+    const pending = previous.catch(() => {}).then(async () => {
+      const wc = tab.view.webContents;
+      if (tabs.get(tab.id) !== tab || wc.isDestroyed()) throw protocolError("TAB_CLOSED", "Assigned tab closed before capture.");
+      if (!wc.debugger || wc.debugger.isAttached()) throw protocolError("CAPTURE_BUSY", "Assigned page capture transport is already in use.");
+      let timer, attached = false;
+      try {
+        wc.debugger.attach("1.3"); attached = true;
+        const result = await Promise.race([
+          wc.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(protocolError("BROWSER_TIMEOUT", "Assigned page capture timed out.")), PROTOCOL_SCRIPT_TIMEOUT_MS); }),
+        ]);
+        if (!result || typeof result.data !== "string" || result.data.length > 24 * 1024 * 1024) throw protocolError("CAPTURE_UNAVAILABLE", "Assigned page returned invalid capture pixels.");
+        return nativeImage.createFromBuffer(Buffer.from(result.data, "base64"));
+      } catch (error) {
+        if (["TAB_CLOSED", "CAPTURE_BUSY", "CAPTURE_UNAVAILABLE", "BROWSER_TIMEOUT"].includes(error.code)) throw error;
+        throw protocolError("CAPTURE_UNAVAILABLE", "Assigned page could not render capture pixels.");
+      } finally {
+        clearTimeout(timer);
+        // Never detach a debugger that was attached by another owner.
+        if (attached && !wc.isDestroyed() && wc.debugger.isAttached()) wc.debugger.detach();
+      }
+    });
+    tab.capturePending = pending;
+    try { return await pending; } finally { if (tab.capturePending === pending) tab.capturePending = null; }
+  }
   function protocolText(value, maximum = MAX_PROTOCOL_PAGE_TEXT) {
     const text = String(value || "");
     return text.length > maximum ? text.slice(0, maximum) : text;
@@ -1318,12 +1349,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       const generation = tab.sequence;
       const wc = tab.view.webContents;
       if (wc.isLoading()) throw protocolError("CAPTURE_NOT_READY", "Page is still loading.");
-      // capturePage targets this WebContents even when its view is hidden;
-      // never select/show the tab or capture the containing BrowserWindow.
+      // Both capture paths target this exact WebContents; never select/show
+      // the tab or capture the containing BrowserWindow.
       let image;
       // Viz may not have allocated a surface immediately after first layout.
       // Retry only this tab, without showing it or changing human selection.
-      for (let attempt = 0; attempt < 4; attempt++) {
+      if (!visible || activeId !== tab.id) image = await captureHiddenPage(tab);
+      else for (let attempt = 0; attempt < 4; attempt++) {
         if (wc.isDestroyed()) throw protocolError("TAB_CLOSED", "Assigned tab closed during capture.");
         if (tab.sequence !== generation) throw protocolError("TAB_NAVIGATED", "Document changed during capture.");
         try { image = await wc.capturePage(undefined, { stayHidden: true, stayAwake: true }); break; }

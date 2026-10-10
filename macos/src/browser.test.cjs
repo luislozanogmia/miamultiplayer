@@ -113,6 +113,7 @@ function harness(options = {}) {
     session: { fromPartition: partition => { profile.partition = partition; return profile; } },
     ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
     Menu: { buildFromTemplate: template => { menuTemplates.push(template); return { popup() {} }; } },
+    nativeImage: { createFromBuffer: data => ({ toPNG: () => data, toJPEG: () => data, isEmpty: () => !data.length, getSize: () => ({ width: 800, height: 600 }) }) },
     nativeTheme: { themeSource: "light" },
     dialog: { showMessageBox: (...args) => { dialogCalls.push(args); return Promise.resolve({ response: dialogResponse.value }); } },
     systemPreferences: { askForMediaAccess: async () => true },
@@ -997,23 +998,60 @@ test("groups survive restart including an empty selected group", async () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("hidden screenshot captures assigned WebContents, retries surface readiness and preserves selection", async () => {
+test("hidden screenshot forces assigned page frames and rejects navigation without changing selection", async () => {
   const h = harness(); const worker = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
   await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
   const binding = { actorId: "a", botId: "a", tabId: worker.tab_id, groupId: "default", ownerId: "owner", taskId: "task" }; h.controller.actors.bind(binding);
-  const calls = []; let attempt = 0;
-  h.views[0].webContents.capturePage = async (rect, options) => {
-    calls.push({ rect, options }); if (++attempt === 1) throw new Error("UnknownVizError");
-    return { toPNG: () => Buffer.from("worker-pixels"), isEmpty: () => false, getSize: () => ({ width: 800, height: 600 }) };
+  const wc = h.views[0].webContents; const calls = []; let attached = false;
+  wc.debugger = {
+    isAttached: () => attached,
+    attach: version => { attached = true; calls.push({ attach: version }); },
+    detach: () => { attached = false; calls.push({ detach: true }); },
+    sendCommand: async (method, params) => { calls.push({ method, params }); return { data: Buffer.from("worker-pixels").toString("base64") }; },
   };
-  h.views[1].webContents.capturePage = () => assert.fail("human tab was captured");
+  for (const view of h.views) view.webContents.capturePage = () => assert.fail("hidden capture used a native surface");
   const focus = h.views.map(view => view.webContents.focusCalls || 0);
   const result = await h.controller.execute(binding, { method: "screenshot", params: {} });
   assert.equal(result.tab_id, worker.tab_id); assert.equal(result.data_url, "data:image/png;base64," + Buffer.from("worker-pixels").toString("base64"));
-  assert.equal(calls.length, 2); assert.equal(calls[0].options.stayHidden, true); assert.equal(h.controller.state().activeId, 2);
+  assert.equal(calls[0].attach, "1.3"); assert.equal(calls[1].method, "Page.captureScreenshot");
+  assert.equal(calls[1].params.fromSurface, true); assert.equal(calls[1].params.captureBeyondViewport, false);
+  assert.equal(calls[2].detach, true); assert.equal(attached, false); assert.equal(h.controller.state().activeId, 2);
   assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), focus);
-  h.views[0].webContents.capturePage = async () => { h.views[0].webContents.emit("did-start-navigation", {}, "https://example.com/changed", false, true); return { toPNG: () => Buffer.from("stale"), isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }; };
+  wc.debugger.sendCommand = async () => { wc.emit("did-start-navigation", {}, "https://example.com/changed", false, true); return { data: Buffer.from("stale").toString("base64") }; };
   await assert.rejects(h.controller.execute(binding, { method: "screenshot", params: {} }), { code: "TAB_NAVIGATED" });
+  assert.equal(attached, false);
+});
+
+test("hidden capture preserves another debugger owner and releases failed transport", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  const wc = h.views[0].webContents; let attached = true; let attachCalls = 0; let detachCalls = 0;
+  wc.debugger = { isAttached: () => attached, attach: () => { attachCalls++; attached = true; }, detach: () => { detachCalls++; attached = false; }, sendCommand: async () => { throw new Error("private transport detail"); } };
+  await assert.rejects(h.controller.protocol("screenshot", { tab_id: worker.tab_id }), { code: "CAPTURE_BUSY" });
+  assert.equal(attachCalls, 0); assert.equal(detachCalls, 0); assert.equal(attached, true);
+  attached = false;
+  await assert.rejects(h.controller.protocol("screenshot", { tab_id: worker.tab_id }), { code: "CAPTURE_UNAVAILABLE", message: "Assigned page could not render capture pixels." });
+  assert.equal(attachCalls, 1); assert.equal(detachCalls, 1); assert.equal(attached, false);
+});
+
+test("overlapping hidden captures serialize their debugger attachments and return fresh frames", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  const wc = h.views[0].webContents; let attached = false; let frame = 0; let release; let started;
+  const firstStarted = new Promise(resolve => { started = resolve; });
+  wc.debugger = { isAttached: () => attached, attach: () => { assert.equal(attached, false); attached = true; }, detach: () => { attached = false; }, sendCommand: async () => {
+    const current = ++frame;
+    if (current === 1) { started(); await new Promise(resolve => { release = resolve; }); }
+    return { data: Buffer.from("frame-" + current).toString("base64") };
+  } };
+  const first = h.controller.protocol("screenshot", { tab_id: worker.tab_id }); await firstStarted;
+  const second = h.controller.protocol("screenshot", { tab_id: worker.tab_id });
+  assert.equal(frame, 1); release();
+  const results = await Promise.all([first, second]);
+  assert.equal(frame, 2); assert.equal(attached, false);
+  assert.equal(results[0].data_url, "data:image/png;base64," + Buffer.from("frame-1").toString("base64"));
+  assert.equal(results[1].data_url, "data:image/png;base64," + Buffer.from("frame-2").toString("base64"));
+  assert.equal(h.controller.state().activeId, 2);
 });
 
 test("group-local drag order and selected tab persist across browser-owner restart", () => {

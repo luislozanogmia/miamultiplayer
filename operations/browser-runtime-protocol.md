@@ -21,7 +21,12 @@ Actor operations require one explicit assigned tab. They never switch/open human
 
 `vacuum` returns `snapshot_id` and `document_generation`. Numbered click/fill must provide the actor's current `snapshot_id`. Snapshot identity is scoped to actor/tab/document; reread replaces only that actor's snapshot. Main-frame and SPA navigation invalidate it. Isolated-world node references plus fingerprints reject removed, replaced or changed targets, rather than re-resolving old selectors to a different node. Renderer crash and close fail with typed errors.
 
-Screenshots use assigned `webContents.capturePage(undefined,{stayHidden:true,stayAwake:true})`; no human tab/window capture or selection occurs. Four bounded attempts allow initial compositor surface readiness. Each attempt and returned pixels are generation-checked. Missing surface returns `CAPTURE_UNAVAILABLE`, empty pixels are denied, loading pages return `CAPTURE_NOT_READY`. A wholly hidden native host window can lack a display surface on Linux; it is not substituted with human pixels.
+Screenshots capture only the assigned WebContents. Hidden pages use
+`Page.captureScreenshot` as described below; selected visible pages use
+`capturePage(undefined,{stayHidden:true,stayAwake:true})` with four bounded
+surface-readiness attempts. Returned pixels are generation-checked, empty
+pixels are denied, and loading pages return `CAPTURE_NOT_READY`. No capture
+selects a tab or substitutes human/window pixels.
 
 The shared per-tab queue serializes both personal protocol mutations and worker mutations; different tabs progress independently. Read operations can progress during waits. Rendering-script timeout is ten seconds, and load/element waits check cancellation. A timed-out dispatched page script may have an uncertain outcome: coordinator must hold it, not replay it as an ordinary safe retry.
 
@@ -52,3 +57,11 @@ Starting status for every contract criterion was unknown. Before this candidate,
 Local automated checks: `node --test macos/src/browser-actors.test.cjs macos/src/browser.test.cjs macos/src/browser-attachment-auth.test.cjs` (50 passing); syntax and diff checks. Independent local actual Electron evidence is verifier commit `b0c7d9f`, `operations/browser-multiplayer/native-smoke.cjs`, running against this candidate tree. These are disposable native fixtures, not manual integrated Mia UI or live model proof. No push, main merge, release, deployment, infrastructure or real-data schema migration occurred.
 
 Follow-up regressions: grouped dragging preserves the selected tab through owner restart; legacy global moves update only the source group's local order (two mocked tests failed before repair). Exclusive bot/tab claims reject cross-work claim attempts and permit reassignment after revoke. The conservative mutation policy always requires approval for fill and navigation, irrespective of `consequential:false`: the new policy regression failed on background fill before repair. After repair, 54 owner/actor/attachment tests pass. Independent verifier autosave probe run against this tree using pinned Electron returned `needsApproval:true`, `denied:true`, `writes:0` (local real isolated DOM, no model/frontend). This does not close integrated approval UX or actual model acceptance.
+
+Cold restored hidden views use the assigned WebContents debugger transport
+(`Page.captureScreenshot`) to request current frames without showing/focusing
+the native view or changing page visibility. Visible selected views retain
+`capturePage`. Hidden capture attachments serialize per tab, time out after
+10 seconds, and detach only their own session. An existing debugger attachment
+fails closed with `CAPTURE_BUSY`; no active-tab or window fallback is used.
+Document generation and output size checks still apply.
