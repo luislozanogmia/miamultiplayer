@@ -7,12 +7,31 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
   var browserState = { tabs: [] }, works = [], host, bridge, transport, loaded = false;
-  var requestGeneration = 0, timer, pending = new Set(), getBots, lastWorkRender = '', lastGroupRender = '';
+  var requestGeneration = 0, timer, pending = new Set(), getBots, getModels, modelInventory = [], lastWorkRender = '', lastGroupRender = '';
   var labels = { idle: 'Idle', queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', needs_approval: 'Needs approval', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
   function visibleTabs(state) {
     var group = (state.groups || []).find(function (g) { return g.id === state.selectedGroupId; });
     if (!group) return state.tabs || [];
     return group.tabIds.map(function (id) { return (state.tabs || []).find(function (t) { return t.id === id; }); }).filter(Boolean);
+  }
+  function connectedModels(providers) {
+    var entries = [];
+    (Array.isArray(providers) ? providers : []).forEach(function (p) {
+      if (!p || !p.id || !Array.isArray(p.models)) return;
+      p.models.forEach(function (model) { if (typeof model === 'string' && model.trim()) entries.push({ provider: p.id, model: model, label: (p.label || p.id) + ' · ' + model }); });
+    });
+    return entries;
+  }
+  function configuredModelIndex(entries, bot) { return entries.findIndex(function (entry) { return bot && entry.model === bot.model && entry.provider === (bot.modelProvider || bot.provider); }); }
+  function recoveryState(work, workerId) {
+    var reset = new Set([workerId]), changed = true;
+    while (changed) {
+      changed = false;
+      (work.workers || []).forEach(function (w) { if (!reset.has(w.id) && ((work.dependencies || {})[w.id] || []).some(function (id) { return reset.has(id); })) { reset.add(w.id); changed = true; } });
+    }
+    var uncertain = (work.operations || []).some(function (op) { return op.status === 'uncertain' && reset.has(op.workerId); });
+    var worker = (work.workers || []).find(function (w) { return w.id === workerId; });
+    return { held: uncertain, eligible: !uncertain && !!worker && ['waiting_for_user', 'failed', 'cancelled'].includes(work.rawStatus || work.status) && ['waiting_for_user', 'failed', 'cancelled'].includes(worker.status), workerIds: Array.from(reset) };
   }
   function projection(work, groupId) {
     if (!work || work.groupId !== groupId) return null;
@@ -21,7 +40,7 @@
       workers: Array.isArray(work.workers) ? work.workers : [],
       results: Array.isArray(work.results) ? work.results : Object.keys(work.results || {}).map(function (id) { return Object.assign({ title: 'Stored result · ' + id }, work.results[id]); }),
       approvals: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) { return a.status === 'pending'; }),
-      synthesis: work.synthesis || null };
+      synthesis: work.synthesis || null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
   }
   function node(tag, className, text) {
     var n = document.createElement(tag); if (className) n.className = className;
@@ -109,15 +128,32 @@
     records.forEach(function (work) {
       var card = node('article', 'browser-work-card'); card.append(node('strong', '', work.goal));
       var header = node('div', 'browser-work-heading'); header.append(node('span', 'browser-work-status', work.status));
-      if (!work.terminal) header.append(button('Stop group work', function () { mutate('stop:' + work.id, function () { return transport.cancel(work.id); }); }, !transport || pending.has('stop:' + work.id)));
+      if (!work.terminal) header.append(button('Stop this task', function () { mutate('stop:' + work.id, function () { return transport.cancel(work.id); }); }, !transport || pending.has('stop:' + work.id)));
+      if (work.rawStatus === 'queued' && transport && transport.start) header.append(button('Start queued task', function () { mutate('start:' + work.id, function () { return transport.start(work.id); }); }, pending.has('start:' + work.id)));
       card.append(header);
       card.append(node('div', 'browser-work-coordinator', 'Mia · Personal agent · Planning and synthesis'));
       work.workers.forEach(function (worker) {
         var row = node('div', 'browser-work-worker'); var mote = node('img', 'browser-work-mote'); mote.src = 'assets/mote/mote.svg'; mote.alt = '';
         row.append(mote, node('span', '', String(worker.name || worker.botId || worker.actorId) + ' · Tab ' + worker.tabId), node('span', 'browser-work-status', labels[worker.status] || 'Unknown state'));
+        if (worker.model) row.append(node('small', '', worker.model + ' · ' + (worker.provider || 'Provider unavailable')));
         if (worker.task || worker.goal) row.append(node('p', '', worker.task || worker.goal));
         if (!work.terminal && !['done', 'failed', 'cancelled'].includes(worker.status)) row.append(button('Stop bot', function () { mutate('stop:' + worker.actorId, function () { return transport.cancel(work.id, worker.id); }); }, !transport || pending.has('stop:' + worker.actorId)));
+        var recovery = recoveryState(work, worker.id);
+        if (recovery.held) row.append(node('p', 'browser-work-hold', 'Recovery held · a write outcome is uncertain. Review its external effect before recovery.'));
+        else if (recovery.eligible && transport && transport.recover) {
+          row.append(node('p', '', 'Restarting this bot also restarts dependent bots and replaces their stored results. New sessions check the current tabs.'));
+          row.append(button('Restart bot and dependents', function () { mutate('recover:' + worker.id, function () { return transport.recover(work.id, [worker.id]); }); }, pending.has('recover:' + worker.id)));
+        }
+        var steps = work.operations.filter(function (op) { return op.workerId === worker.id; });
+        if (worker.status === 'done' && steps.length && steps.every(function (op) { return op.status === 'done'; }) && !work.operations.some(function (op) { return op.status === 'uncertain'; }) && transport && transport.exportReusable) {
+          row.append(button('Save reusable steps', function () { mutate('export:' + worker.id, function () { return transport.exportReusable(work.id, worker.id); }); }, pending.has('export:' + worker.id)));
+        }
         card.append(row);
+      });
+      work.reusable.forEach(function (saved) {
+        var section = node('section', 'browser-work-reusable'); section.append(node('strong', '', 'Saved steps · ' + saved.workerId), node('p', '', String((saved.proof || []).length) + ' recorded execution proofs · each new run checks its current target and requests approvals.'));
+        section.append(button('Choose tab for saved steps', function () { return chooseBots({ sourceWorkId: work.id, reusableId: saved.id }); }, !transport || !saved.proof || !saved.proof.length || work.operations.some(function (op) { return op.status === 'uncertain'; })));
+        card.append(section);
       });
       work.approvals.forEach(function (approval) {
         var row = node('section', 'browser-work-approval'); row.append(node('strong', '', 'Approval required'), node('p', '', approval.description || (typeof approval.operation === 'string' ? approval.operation : JSON.stringify(approval.operation || {})) || 'Browser operation'), node('small', '', 'Tab ' + approval.tabId + ' · ' + (approval.actorId || 'Bot')));
@@ -142,22 +178,35 @@
     if (changedGroup) { requestGeneration++; works = []; loaded = false; document.getElementById('browserWorkCandidates').replaceChildren(); refresh(); }
     renderGroups(); renderWorks();
   }
-  async function chooseBots() {
+  async function chooseBots(selectedReusable) {
     var box = document.getElementById('browserWorkCandidates'); box.replaceChildren(); error('');
     var groupId = browserState.selectedGroupId;
     try {
-      var bots = await getBots(); if (groupId !== browserState.selectedGroupId) return;
+      var inventory = await Promise.all([getBots(), getModels()]); var bots = inventory[0]; modelInventory = connectedModels(inventory[1]);
+      if (!modelInventory.length) throw new Error('No connected models are available. Connect a model in setup.');
+      if (groupId !== browserState.selectedGroupId) return;
       visibleTabs(browserState).forEach(function (tab) {
         var row = node('label', 'browser-work-candidate'); row.setAttribute('data-tab-id', tab.id);
         row.append(node('span', '', 'Tab ' + tab.id + ' · ' + (tab.title || 'New tab')));
         var select = node('select'); select.setAttribute('aria-label', 'Bot for tab ' + tab.id);
         var blank = node('option', '', 'Human · no bot'); blank.value = ''; select.append(blank);
         bots.forEach(function (bot) { var option = node('option', '', bot.name || bot.id); option.value = bot.id; select.append(option); });
-        var model = node('input'); model.placeholder = 'Model'; model.setAttribute('aria-label', 'Model for tab ' + tab.id);
-        var provider = node('input'); provider.placeholder = 'Provider'; provider.setAttribute('aria-label', 'Provider for tab ' + tab.id);
-        select.addEventListener('change', function () { var bot = bots.find(function (b) { return b.id === select.value; }); model.value = bot && bot.model || ''; provider.value = bot && bot.provider || ''; });
-        row.append(select, model, provider); box.append(row);
+        var model = node('select'); model.setAttribute('aria-label', 'Connected model for tab ' + tab.id);
+        var unselected = node('option', '', 'Choose connected model'); unselected.value = ''; model.append(unselected);
+        modelInventory.forEach(function (entry, index) { var option = node('option', '', entry.label); option.value = String(index); model.append(option); });
+        select.addEventListener('change', function () {
+          var bot = bots.find(function (b) { return b.id === select.value; });
+          var match = configuredModelIndex(modelInventory, bot);
+          model.value = match >= 0 ? String(match) : '';
+        });
+        var reusable = node('select'); reusable.setAttribute('aria-label', 'Saved steps for tab ' + tab.id);
+        var noSteps = node('option', '', 'New bot task'); noSteps.value = ''; reusable.append(noSteps);
+        works.filter(function (work) { return work.groupId === groupId && !(work.operations || []).some(function (op) { return op.status === 'uncertain'; }); }).forEach(function (work) {
+          (work.reusable || []).filter(function (saved) { return saved.proof && saved.proof.length; }).forEach(function (saved) { var option = node('option', '', 'Saved steps · ' + work.goal + ' · ' + saved.workerId); option.value = JSON.stringify({sourceWorkId:work.id,reusableId:saved.id}); reusable.append(option); });
+        });
+        row.append(select, model, reusable); box.append(row);
       });
+      if (selectedReusable && selectedReusable.reusableId) { box.append(node('p', '', 'Choose a bot, connected model and the saved steps for the target tab, then ask Mia to plan and start.')); if (box.scrollIntoView) box.scrollIntoView({block:'nearest'}); }
     } catch (e) { error(e.message || 'Could not load your bots.'); }
   }
   // Planning receives site origins, never credential-bearing paths/query/hash.
@@ -165,10 +214,12 @@
   async function startWork(event) {
     event.preventDefault(); if (!transport || pending.has('start')) return;
     var candidates = Array.from(document.querySelectorAll('.browser-work-candidate')).map(function (row) {
-      var botId = row.querySelector('select').value; var inputs = row.querySelectorAll('input');
-      return { botId: botId, tabId: Number(row.getAttribute('data-tab-id')), model: inputs[0].value.trim(), provider: inputs[1].value.trim() };
+      var selects = row.querySelectorAll('select'); var botId = selects[0].value; var entry = selects[1].value === '' ? null : modelInventory[Number(selects[1].value)];
+      var candidate = { botId: botId, tabId: Number(row.getAttribute('data-tab-id')), model: entry && entry.model, provider: entry && entry.provider };
+      if (selects[2].value) candidate.reusable = JSON.parse(selects[2].value);
+      return candidate;
     }).filter(function (c) { return c.botId; });
-    if (!candidates.length || candidates.some(function (c) { return !c.model || !c.provider; })) { error('Choose at least one bot with a model and provider.'); return; }
+    if (!candidates.length || candidates.some(function (c) { return !c.model || !c.provider; })) { error('Choose at least one bot and a connected model for each assigned tab.'); return; }
     if (new Set(candidates.map(function (c) { return c.botId; })).size !== candidates.length) { error('Each bot can own one tab. Choose a different bot for each tab.'); return; }
     var selected = (browserState.groups || []).find(function (g) { return g.id === browserState.selectedGroupId; });
     if (!selected || candidates.some(function (c) { return !selected.tabIds.includes(c.tabId); })) { error('Tabs changed. Choose bots again.'); return; }
@@ -180,10 +231,12 @@
   }
   function mount(options) {
     host = document.getElementById('browserWorkPanel'); if (!host) return;
-    bridge = options.browser; transport = options.transport || null; getBots = options.getBots;
+    bridge = options.browser; transport = options.transport || null; getBots = options.getBots; getModels = options.getModels;
     document.getElementById('browserWorkAssignments').onclick = chooseBots;
     document.getElementById('browserWorkCreate').addEventListener('submit', startWork);
     document.getElementById('browserWorkStart').disabled = !transport;
+    var stopGroup = document.getElementById('browserWorkStopGroup');
+    if (stopGroup) { stopGroup.disabled = !transport || !transport.stopGroup; stopGroup.onclick = function () { var groupId = browserState.selectedGroupId; if (!groupId) return; stopGroup.disabled = true; mutate('stop-group:' + groupId, function () { return transport.stopGroup(groupId); }).finally(function () { stopGroup.disabled = false; }); }; }
     bridge.onState(updateBrowserState);
     document.getElementById('browserGroupAdd').onclick = function () {
       groupCommand('group-create', { name: document.getElementById('browserGroupNewName').value });
@@ -196,5 +249,5 @@
     bridge.command({ action: 'state' }).then(updateBrowserState).catch(function () { error('Browser unavailable.'); });
     if (timer) clearInterval(timer); timer = setInterval(refresh, 2000); refresh();
   }
-  return { pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
+  return { configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
 });
