@@ -773,6 +773,70 @@ test('separate ready worker jobs execute concurrently; dependency job waits for 
   assert.equal(f.store.get(work.id).status, 'done');
 });
 
+test('reusable admission rejects invalid proof before durable state or dispatch', async t => {
+  const mutations = [
+    ['empty proof with read', r => { r.proof = []; }],
+    ['empty proof and plan', r => { r.proof = []; r.operations = []; r.hash = crypto.createHash('sha256').update('[]').digest('hex'); }],
+    ['missing proof', r => { delete r.proof; }],
+    ['null proof item', r => { r.proof = [null]; }],
+    ['nonarray proof', r => { r.proof = {}; }],
+    ['duplicate proof step', r => { r.operations.push(structuredClone(r.operations[0])); r.proof.push(structuredClone(r.proof[0])); r.hash = crypto.createHash('sha256').update(JSON.stringify(r.operations)).digest('hex'); }],
+    ['durable step hash differs', (r, source) => { source.operations[0].operation.params = { extra: 'changed' }; }],
+    ['durable step belongs to another worker', (r, source) => { source.operations[0].workerId = 'other'; }],
+    ['missing plan', r => { delete r.operations; }],
+    ['wrong source identity', r => { r.sourceWorkId = 'other'; }],
+    ['wrong completion time', r => { r.proof[0].completedAt++; }],
+    ['unsupported matching step', (r, source) => {
+      r.operations[0] = { method: 'eval', params: { script: '1' } };
+      const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+      r.hash = hash(r.operations); r.proof[0].operationHash = hash(r.operations[0]);
+      const step = source.operations[0]; step.operation = r.operations[0]; step.operationHash = r.proof[0].operationHash;
+    }],
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async st => {
+    const f = fixture(st); const input = { ...f.input, workers: [f.input.workers[0]] };
+    const source = await f.coordinator.create('owner', input); await f.coordinator.start('owner', source.id);
+    const reusable = await f.coordinator.exportReusable('owner', source.id, 'first');
+    const saved = f.store.get(source.id); mutate(saved.reusable[0], saved); f.store.put(saved);
+    const target = await f.coordinator.create('owner', input);
+    const active = f.store.get(target.id); active.status = 'working'; active.workers[0].status = 'working'; f.store.put(active);
+    const bytes = fs.readFileSync(f.filePath), records = f.store.list(); let calls = 0;
+    f.browser.validate = f.browser.execute = async () => { calls++; throw new Error('invalid replay dispatched'); };
+    await assert.rejects(f.coordinator.runReusable('owner', source.id, reusable.id, target.id, 'first'), error => error.status === 409);
+    assert.deepEqual(f.store.list(), records); assert.deepEqual(fs.readFileSync(f.filePath), bytes); assert.equal(calls, 0);
+    await assert.rejects(f.coordinator.create('owner', { ...input, workers: [{ ...input.workers[0], reusable: { sourceWorkId: source.id, reusableId: reusable.id } }] }), error => error.status === 409);
+    assert.deepEqual(f.store.list(), records); assert.deepEqual(fs.readFileSync(f.filePath), bytes); assert.equal(calls, 0);
+  });
+});
+
+test('reusable admission requires executing target before a durable run', async t => {
+  const f = fixture(t), input = { ...f.input, workers: [f.input.workers[0]] };
+  const source = await f.coordinator.create('owner', input); await f.coordinator.start('owner', source.id);
+  const reusable = await f.coordinator.exportReusable('owner', source.id, 'first');
+  const target = await f.coordinator.create('owner', input), bytes = fs.readFileSync(f.filePath);
+  await assert.rejects(f.coordinator.runReusable('owner', source.id, reusable.id, target.id, 'first'), error => error.status === 409);
+  assert.deepEqual(fs.readFileSync(f.filePath), bytes);
+});
+
+test('reusable historical done proof survives source epoch change and encrypted reload', async t => {
+  const f = fixture(t), input = { ...f.input, workers: [f.input.workers[0]] };
+  const source = await f.coordinator.create('owner', input); await f.coordinator.start('owner', source.id);
+  const reusable = await f.coordinator.exportReusable('owner', source.id, 'first');
+  const saved = f.store.get(source.id); saved.epoch++; saved.workers[0].epoch++; saved.workers[0].status = 'queued'; f.store.put(saved);
+  const reopened = createBrowserWorkStore({ key: f.key, filePath: f.filePath });
+  const coordinator = createBrowserWorkCoordinator({ ...f.options, store: reopened });
+  let fresh = 0; f.browser.execute = async () => { fresh++; return { text: 'fresh after reload' }; };
+  f.hermes.worker = async args => {
+    await coordinator.runReusable('owner', source.id, reusable.id, args.work.id, args.worker.id);
+    return { text: 'replayed', storedSessionId: 'fresh' };
+  };
+  const target = await coordinator.create('owner', { ...input, workers: [{ ...input.workers[0], reusable: { sourceWorkId: source.id, reusableId: reusable.id } }] });
+  const done = await coordinator.start('owner', target.id);
+  assert.equal(done.status, 'done'); assert.equal(fresh, 1);
+  assert.equal(done.operations[0].status, 'done'); assert.equal(done.reusableRuns[0].status, 'done');
+  assert.deepEqual(reopened.get(source.id).reusable[0].proof, reusable.proof);
+});
+
 test('reusable execution keeps stored proof, revalidates current target and records fresh operation', async t => {
   const f = fixture(t); let reads = 0;
   f.browser.execute = async () => ({ text: `read-${++reads}` });

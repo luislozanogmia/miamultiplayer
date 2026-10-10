@@ -30,6 +30,35 @@ const OUTPUT_TEXT_LIMIT = 16000;
 const ATTEMPT_HISTORY_LIMIT = 5;
 const PRIOR_CONTEXT_ATTEMPTS = 3;
 const PRIOR_CONTEXT_TEXT_LIMIT = 2000;
+const reusableMethods = new Set(['read', 'vacuum', 'screenshot', 'navigate', 'click', 'fill', 'scroll', 'wait', 'back', 'forward', 'reload']);
+function reusableOperation(operation) {
+  const params = operation?.params;
+  return operation && reusableMethods.has(operation.method) && params && typeof params === 'object' && !Array.isArray(params)
+    && !['snapshot_id', 'choice', 'element', 'ref', 'element_id', 'document_generation', 'actor_id', 'tab_id', 'owner_id', 'group_id', 'human_ok', 'approval_id', 'approval', 'capability'].some(key => key in params)
+    && (!['click', 'fill'].includes(operation.method) || (typeof params.selector === 'string' && !!params.selector.trim()));
+}
+function reusableProofAvailable(source, reusable, ownerId, groupId) {
+  if (!reusable || reusable.ownerId !== ownerId || source.ownerId !== ownerId || reusable.sourceWorkId !== source.id
+      || reusable.groupId !== source.groupId || reusable.groupId !== groupId
+      || !Array.isArray(reusable.operations) || !reusable.operations.length || !reusable.operations.every(reusableOperation)
+      || !Array.isArray(reusable.proof) || reusable.proof.length !== reusable.operations.length
+      || digest(reusable.operations) !== reusable.hash || !Array.isArray(source.operations)
+      || source.operations.some(step => step?.status === 'uncertain')) return false;
+  const worker = source.workers?.find(item => item.id === reusable.workerId);
+  if (!worker) return false;
+  const seen = new Set();
+  return reusable.proof.every((proof, index) => {
+    if (!proof || typeof proof.operationId !== 'string' || !proof.operationId || seen.has(proof.operationId)
+        || typeof proof.operationHash !== 'string' || !Number.isFinite(proof.completedAt)) return false;
+    seen.add(proof.operationId);
+    const step = source.operations.find(item => item?.id === proof.operationId);
+    return step?.status === 'done' && step.workerId === worker.id
+      && Number.isSafeInteger(step.workEpoch) && step.workEpoch >= 0 && Number.isSafeInteger(step.workerEpoch) && step.workerEpoch >= 0
+      && step.completedAt === proof.completedAt && step.operationHash === proof.operationHash
+      && reusableOperation(step.operation) && digest(step.operation) === proof.operationHash
+      && digest(reusable.operations[index]) === proof.operationHash;
+  });
+}
 const approvalProtocolGuidance = 'Submit an allowed browser action explicitly requested by the user through mia_browser_work with that exact action, parameters and current page target. The native runtime decides whether approval is required from the method and current context; neither the model nor task prose can waive native approval. Ordinary read, vacuum {}, screenshot and wait run without an approval card; do not invent a card or wait for human preapproval for these read-only calls. A vacuum with a URL performs navigation and retains native navigation approval. Consequential and human-viewed disruptive actions still require native approval as applicable. When the runtime requires approval, request approval by calling mia_browser_work with the exact action; only then the coordinator creates the actionable approval card and the tool call waits for the human decision before execution. Requesting approval does not grant permission to execute. Use this tool request, not final prose or fabricated preapproval; do not finish merely saying that approval is needed or wait for the coordinator to relay approval before submitting the request. Keep denied, expired or revoked actions held; do not retry them or uncertain writes. Report an unexecuted action as incomplete.';
 function visibleOutput(previous, type, payload, metadata) {
   if (!payload || typeof payload.text !== 'string' || !payload.text) return null;
@@ -152,7 +181,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       if (candidate.reusable) {
         const source = await get(ownerId, text(candidate.reusable.sourceWorkId, 'reusable source', 256));
         const reusable = source.reusable?.find(item => item.id === candidate.reusable.reusableId);
-        if (!reusable || reusable.groupId !== groupId || digest(reusable.operations) !== reusable.hash || source.operations.some(step => step.status === 'uncertain')) throw failure('reusable proof unavailable', 409);
+        if (!reusableProofAvailable(source, reusable, ownerId, groupId)) throw failure('reusable proof unavailable', 409);
         worker.reusable = { sourceWorkId: source.id, reusableId: reusable.id };
       }
       worker.workspaceDir = bot.workspaceDir;
@@ -547,22 +576,22 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     const steps = work.operations.filter(operation => operation.workerId === workerId);
     if (!steps.length || steps.some(step => step.status !== 'done') || work.workers.find(worker => worker.id === workerId)?.status !== 'done') throw failure('completed execution proof required', 409);
     const operations = steps.map(step => clone(step.operation));
-    const reusableMethods = new Set(['read', 'vacuum', 'screenshot', 'navigate', 'click', 'fill', 'scroll', 'wait', 'back', 'forward', 'reload']);
     for (const operation of operations) {
-      const params = operation.params;
-      if (!reusableMethods.has(operation.method) || ['snapshot_id', 'choice', 'element', 'ref', 'element_id', 'document_generation'].some(key => key in params) || (['click', 'fill'].includes(operation.method) && (typeof params.selector !== 'string' || !params.selector.trim()))) throw failure('reusable work requires stable selector-based steps; ephemeral snapshots and scripts cannot be replayed', 409);
+      if (!reusableOperation(operation)) throw failure('reusable work requires stable selector-based steps; ephemeral snapshots and scripts cannot be replayed', 409);
     }
     // Proof is read from runtime-completed records, never accepted from a model.
     const reusable = { id: id(), ownerId, groupId: work.groupId, workerId, operations, hash: digest(operations), proof: steps.map(step => ({ operationId: step.id, operationHash: step.operationHash, completedAt: step.completedAt })), sourceWorkId: work.id };
+    if (!reusableProofAvailable(work, reusable, ownerId, work.groupId)) throw failure('completed execution proof required', 409);
     return update(workId, saved => { (saved.reusable ||= []).push(reusable); }).reusable.at(-1);
   }
   async function runReusable(ownerId, sourceWorkId, reusableId, workId, workerId) {
     const source = await get(ownerId, sourceWorkId);
     const reusable = source.reusable?.find(item => item.id === reusableId);
     const target = await get(ownerId, workId);
-    if (!reusable || reusable.proof.some(proof => !source.operations.some(step => step.id === proof.operationId && step.status === 'done' && step.operationHash === proof.operationHash)) || reusable.ownerId !== ownerId || reusable.groupId !== target.groupId || digest(reusable.operations) !== reusable.hash || source.operations.some(step => step.status === 'uncertain')) throw failure('reusable proof unavailable', 409);
+    if (!reusableProofAvailable(source, reusable, ownerId, target.groupId)) throw failure('reusable proof unavailable', 409);
     const worker = target.workers.find(worker => worker.id === workerId);
     if (!worker) throw failure('worker not found', 404);
+    if (worker.status !== 'working' || terminal.has(target.status)) throw failure('worker is not executing', 409);
     const run = { id: id(), workerId, workEpoch: target.epoch, workerEpoch: worker.epoch, sourceWorkId, reusableId, savedMethods: reusable.operations.slice(0, EVIDENCE_OPERATIONS_LIMIT).map(operation => operation.method), savedMethodsOmitted: Math.max(0, reusable.operations.length - EVIDENCE_OPERATIONS_LIMIT), stepCount: reusable.operations.length, savedOperationClass: reusable.operations.every(operation => ['read', 'screenshot', 'wait'].includes(operation.method) || (operation.method === 'vacuum' && !operation.params.url)) ? 'read_only_browser_operations' : 'may_mutate', status: 'dispatching' };
     update(workId, saved => { (saved.reusableRuns ||= []).push(run); });
     const results = [];
