@@ -22,7 +22,7 @@ function fixture(t, overrides = {}) {
     async worker(args) { calls.push(args); args.onSession?.({ sessionId: `live-${args.worker.id}`, storedSessionId: `stored-${args.worker.id}` }); await coordinator.executeOperation(args.work.ownerId, args.work.id, args.worker.id, { method: 'read', params: {} }); return { text: `actual fixture ${args.worker.goal}`, storedSessionId: `stored-${args.worker.id}` }; },
     async synthesize(args) { calls.push(args); return { text: 'fixture synthesis', storedSessionId: 'mia-session' }; },
     async interrupt() {},
-    async plan() { return { text: JSON.stringify({ workers: [{ id: '0', goal: 'read first', needs: [] }, { id: '1', goal: 'compare', needs: ['0'] }] }), storedSessionId: 'personal-mia' }; },
+    async plan() { return { text: JSON.stringify({ workers: [{ id: '0', tabId: 1, goal: 'read first', needs: [] }, { id: '1', tabId: 2, goal: 'compare', needs: ['0'] }] }), storedSessionId: 'personal-mia' }; },
   };
   const browser = { async revoke() {}, async approve() { return 'opaque-runtime-approval'; }, async validate() { return { documentGeneration: 1, url: 'https://example.test/', requiresApproval: false }; }, async execute() { return { text: 'page evidence' }; } };
   const options = { store, hermes, browser, authorizeGroup: async (owner, group, tab) => owner === 'owner' && group === 'group' && (tab === undefined || [1, 2].includes(tab)), resolveBot: async (owner, bot) => ({ ownerId: owner, profile: `bot-${bot}`, color: '#12ab34' }), personalOptions: async () => ({ profile: 'personal-mia', model: 'personal-model', provider: 'personal-provider' }), ...overrides };
@@ -78,11 +78,61 @@ test('Mia plans real adapter output against owner-authorized candidate inventory
   assert.deepEqual(work.dependencies['1'], ['0']);
 });
 
+test('planner target contract rejects invalid output tuples before create, binding or persistence', async t => {
+  const cases = [
+    ['swapped tab', [{ id: '0', tabId: 2, goal: 'same literal', needs: [] }]],
+    ['missing tab', [{ id: '0', goal: 'same literal', needs: [] }]],
+    ['string tab', [{ id: '0', tabId: '1', goal: 'same literal', needs: [] }]],
+    ['unknown tab', [{ id: '0', tabId: 99, goal: 'same literal', needs: [] }]],
+    ['unknown id', [{ id: 'unknown', tabId: 1, goal: 'same literal', needs: [] }]],
+    ['numeric id', [{ id: 0, tabId: 1, goal: 'same literal', needs: [] }]],
+    ['duplicate id', [{ id: '0', tabId: 1, goal: 'first', needs: [] }, { id: '0', tabId: 1, goal: 'second', needs: [] }]],
+    ['late mismatch', [{ id: '0', tabId: 1, goal: 'valid first', needs: [] }, { id: '1', tabId: 1, goal: 'wrong second', needs: [] }]],
+    ['null worker', [null]],
+  ];
+  for (const [name, workers] of cases) await t.test(name, async st => {
+    let resolves = 0, tabChecks = 0, modelCalls = 0;
+    const f = fixture(st, {
+      resolveBot: async (owner, bot) => { resolves++; return { ownerId: owner, profile: `bot-${bot}` }; },
+      authorizeGroup: async (owner, group, tab) => { if (tab !== undefined) tabChecks++; return owner === 'owner' && group === 'group'; },
+    });
+    f.hermes.plan = async () => { modelCalls++; return { text: JSON.stringify({ workers }) }; };
+    await assert.rejects(f.coordinator.plan('owner', { ...f.input, candidates: f.input.workers }), { status: 502 });
+    assert.equal(modelCalls, 1); assert.equal(resolves, 2); assert.equal(tabChecks, 2);
+    assert.deepEqual(f.store.list(), []); assert.equal(fs.existsSync(f.filePath), false); assert.deepEqual(f.calls, []);
+  });
+});
+
+test('planner target contract preserves exact tuples, literals and dependencies in reversed output order', async t => {
+  const f = fixture(t); const literal = 'Fill #draft with "Alpha acceptance"; scroll 400.';
+  const workers = [{ id: '1', tabId: 2, goal: literal, needs: ['0'] }, { id: '0', tabId: 1, goal: 'Read assigned page', needs: [] }];
+  f.hermes.plan = async () => ({ text: JSON.stringify({ workers }), storedSessionId: 'owned-plan' });
+  const work = await f.coordinator.plan('owner', { ...f.input, candidates: f.input.workers });
+  assert.deepEqual(work.workers.map(w => ({ id: w.id, tabId: w.tabId, botId: w.botId, goal: w.goal })), [
+    { id: '1', tabId: 2, botId: 'bot2', goal: literal }, { id: '0', tabId: 1, botId: 'bot1', goal: 'Read assigned page' },
+  ]);
+  assert.deepEqual(work.dependencies, { '1': ['0'], '0': [] });
+  assert.equal(work.plan, JSON.stringify({ workers }));
+});
+
+test('planner target contract uses server resolved names and immutable candidate identities in its prompt', async t => {
+  const f = fixture(t, { resolveBot: async (owner, bot) => ({ ownerId: owner, profile: `bot-${bot}`, name: bot === 'bot1' ? 'Alpha reader' : 'Beta reader' }) });
+  let prompt;
+  f.hermes.plan = async args => { prompt = args.message; return { text: JSON.stringify({ workers: [{ id: '0', tabId: 1, goal: 'Read assigned page', needs: [] }] }) }; };
+  await f.coordinator.plan('owner', { ...f.input, candidates: f.input.workers.map(c => ({ ...c, botName: 'untrusted name', id: 'untrusted id' })) });
+  const candidates = JSON.parse(prompt.split('\n').at(-1)).candidates;
+  assert.deepEqual(candidates.map(({ id, botId, botName, tabId }) => ({ id, botId, botName, tabId })), [
+    { id: '0', botId: 'bot1', botName: 'Alpha reader', tabId: 1 }, { id: '1', botId: 'bot2', botName: 'Beta reader', tabId: 2 },
+  ]);
+  assert.match(prompt, /immutable/); assert.match(prompt, /tabId/); assert.match(prompt, /candidate id/);
+  assert.ok(!prompt.includes('untrusted name')); assert.ok(!prompt.includes('untrusted id'));
+});
+
 test('planner and worker guidance request approval through the bound tool instead of final prose', async t => {
   const f = fixture(t); let plannerMessage;
   f.hermes.plan = async args => {
     plannerMessage = args.message;
-    return { text: JSON.stringify({ workers: [{ id: '0', goal: 'Read then request approval to fill the assigned field', needs: [] }] }) };
+    return { text: JSON.stringify({ workers: [{ id: '0', tabId: 1, goal: 'Read then request approval to fill the assigned field', needs: [] }] }) };
   };
   const work = await f.coordinator.plan('owner', { ...f.input, goal: 'Read/vacuum then obtain approval to fill selector #draft with exact literal Alpha acceptance and scroll amount 400', candidates: [f.input.workers[0]] });
   await f.coordinator.start('owner', work.id);
@@ -695,7 +745,7 @@ test('reusable export rejects recorded numbered targets and arbitrary scripts', 
 test('existing personal Mia session comes only from trusted owner resolver', async t => {
   const f = fixture(t, { resolvePersonalSession: async owner => owner === 'owner' ? 'owned-personal-session' : undefined });
   const work = await f.coordinator.create('owner', { ...f.input, personalStoredSessionId: 'attacker-session' }); assert.equal(work.personalStoredSessionId, 'owned-personal-session');
-  f.hermes.plan = async args => { assert.equal(args.work.personalStoredSessionId, 'owned-personal-session'); return { text: '{"workers":[{"id":"0","goal":"read","needs":[]}]}', storedSessionId: 'owned-personal-session' }; };
+  f.hermes.plan = async args => { assert.equal(args.work.personalStoredSessionId, 'owned-personal-session'); return { text: '{"workers":[{"id":"0","tabId":1,"goal":"read","needs":[]}]}', storedSessionId: 'owned-personal-session' }; };
   await f.coordinator.plan('owner', { ...f.input, candidates: f.input.workers, personalStoredSessionId: 'attacker-session' });
 });
 
@@ -840,7 +890,7 @@ test('explicit personal Mia selection reaches both planning and synthesis withou
   const selection = { provider: 'deepseek', model: 'deepseek-flash', reasoningEffort: 'medium' };
   const validated = [];
   const f = fixture(t, { personalOptions: async (owner, requested) => { validated.push(requested); return { profile: 'personal-mia', provider: requested?.provider || 'deepseek', model: requested?.model || 'deepseek-v4-pro', reasoningEffort: requested?.reasoningEffort }; } });
-  f.hermes.plan = async args => { assert.equal(args.options.model, 'deepseek-flash'); assert.equal(args.options.provider, 'deepseek'); return { text: '{"workers":[{"id":"0","goal":"read","needs":[]}]}', storedSessionId: 'personal' }; };
+  f.hermes.plan = async args => { assert.equal(args.options.model, 'deepseek-flash'); assert.equal(args.options.provider, 'deepseek'); return { text: '{"workers":[{"id":"0","tabId":1,"goal":"read","needs":[]}]}', storedSessionId: 'personal' }; };
   const work = await f.coordinator.plan('owner', { ...f.input, personalSelection: selection, candidates: [f.input.workers[0]] });
   assert.deepEqual(work.personalSelection, selection);
   await f.coordinator.start('owner', work.id);

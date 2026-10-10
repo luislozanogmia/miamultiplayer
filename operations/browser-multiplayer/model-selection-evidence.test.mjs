@@ -19,7 +19,7 @@ test('explicit personal Flash selection survives plan, store reopen, synthesis a
   const dispatched = [];
   let coordinator, drift = false;
   const hermes = {
-    async plan(args) { dispatched.push(['plan', args.options]); return { text: '{"workers":[{"id":"0","goal":"Read page","needs":[]}]}', storedSessionId: 'planner' }; },
+    async plan(args) { dispatched.push(['plan', args.options]); return { text: '{"workers":[{"id":"0","tabId":1,"goal":"Read page","needs":[]}]}', storedSessionId: 'planner' }; },
     async worker(args) { dispatched.push(['worker', args.options]); await coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} }); return { text: 'Actual scripted worker reply', storedSessionId: 'worker' }; },
     async synthesize(args) { dispatched.push(['synthesis', args.options]); return { text: 'Actual scripted synthesis', storedSessionId: 'personal' }; },
     async interrupt() {},
