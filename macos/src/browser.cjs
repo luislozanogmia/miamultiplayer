@@ -1406,6 +1406,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     } else if (key === "escape") active()?.view.webContents.stop();
   }
   // Tabs keep the Map's insertion order; reordering rebuilds it.
+  function moveGroupTab(id, groupId, index) {
+    const snapshot = groups.snapshot();
+    const source = snapshot.groups.find(group => group.tabIds.includes(id));
+    groups.moveTab(id, groupId, index);
+    // Reordering a selected tab within its group must preserve that selection.
+    if (source?.id === groupId && source.selectedTabId !== null) {
+      groups.selectTab(source.selectedTabId);
+      groups.selectGroup(snapshot.selectedGroupId);
+    }
+  }
   function moveTab(id, index) {
     const tab = tabs.get(id);
     if (!tab) return false;
@@ -1413,6 +1423,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     order.splice(Math.max(0, Math.min(order.length, Math.trunc(Number(index)) || 0)), 0, tab);
     tabs.clear();
     for (const item of order) tabs.set(item.id, item);
+    if (groups) {
+      groups.reconcile([...tabs.keys()], null);
+      const group = groups.snapshot().groups.find(group => group.tabIds.includes(id));
+      const before = new Set(order.slice(0, order.indexOf(tab)).map(item => item.id));
+      const localIndex = group.tabIds.filter(tabId => before.has(tabId)).length;
+      moveGroupTab(id, group.id, localIndex);
+    }
     return true;
   }
   function newTab(value, options = {}) {
@@ -1751,7 +1768,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (command.action === "group-create") groups.create(command.name);
         else if (command.action === "group-rename") groups.rename(command.groupId, command.name);
         else if (command.action === "group-reorder") groups.reorder(command.groupIds);
-        else if (command.action === "group-move-tab") { groups.moveTab(command.id, command.groupId, command.index); activeId = groups.selectGroup(groups.snapshot().selectedGroupId); }
+        else if (command.action === "group-move-tab") { moveGroupTab(command.id, command.groupId, command.index); activeId = groups.selectGroup(groups.snapshot().selectedGroupId); }
         else if (command.action === "group-select") { activateTab(groups.selectGroup(command.groupId)); focusTabWebContents(active()); }
         else if (command.action === "group-remove") activateTab(groups.remove(command.groupId));
         else throw protocolError("UNKNOWN_METHOD", "Unknown group action.");
