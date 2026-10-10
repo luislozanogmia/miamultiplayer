@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { taskRecoveryState, configuredModelIndex, connectedModels, recoveryState, pageOrigin, visibleTabs, projection } = require('./browser-work.js');
+const { selectedConnectedModel, taskRecoveryState, configuredModelIndex, connectedModels, recoveryState, pageOrigin, visibleTabs, projection } = require('./browser-work.js');
 
 test('connected inventory selects exact bot modelProvider and never substitutes an unavailable model', () => {
   const models = connectedModels([{id:'openai-codex',label:'ChatGPT',models:['gpt-6.1-sol','gpt-6-luna']},{id:'other',models:['gpt-6.1-sol']}]);
@@ -10,6 +10,12 @@ test('connected inventory selects exact bot modelProvider and never substitutes 
   assert.equal(models[0].provider,'openai-codex');
   assert.deepEqual(connectedModels(null),[]);
 });
+test('personal model choice requires an explicit inventory index and never defaults to first model', () => {
+  const models=connectedModels([{id:'api',models:['pro','flash']}]);
+  assert.equal(selectedConnectedModel(models,''),null); assert.equal(selectedConnectedModel(models,'99'),null);
+  assert.deepEqual(selectedConnectedModel(models,'1'),{provider:'api',model:'flash',label:'api · flash'});
+});
+
 test('recovery blocks uncertain writes including dependent workers and only offers interrupted work', () => {
   const work={status:'waiting_for_user',workers:[{id:'a',status:'waiting_for_user'},{id:'b',status:'failed'}],dependencies:{a:[],b:['a']},operations:[{workerId:'b',status:'uncertain'}]};
   assert.deepEqual(recoveryState(work,'a'),{held:true,eligible:false,workerIds:['a','b']});
@@ -103,7 +109,7 @@ const flush = () => new Promise(resolve=>setImmediate(resolve));
 test('approval reject and Stop call matching IDs, wait for authoritative state, preserve partial results', async () => {
   const nodes={};
   for(const id of ['browserWorkPanel','browserWorkError','browserGroupList','browserGroupName','browserMoveTabGroup','browserMoveTab','browserGroupEarlier','browserWorkList','browserWorkEmpty','browserWorkCandidates','browserGroupAdd','browserGroupNewName','browserGroupRename','browserGroupRemove','browserWorkAssignments','browserWorkCreate','browserWorkStart','browserWorkGoal','localBrowserOverlay']) nodes[id]=new Element();
-  global.document={getElementById:id=>nodes[id],createElement:tag=>new Element(tag),activeElement:null,querySelectorAll:selector=>nodes.browserWorkCandidates.querySelectorAll(selector)};
+  global.document={getElementById:id=>nodes[id] || nodes.browserWorkCandidates.children.flatMap(row=>row.children).find(child=>child.id===id),createElement:tag=>new Element(tag),activeElement:null,querySelectorAll:selector=>nodes.browserWorkCandidates.querySelectorAll(selector)};
   global.MutationObserver=class {observe(){}};
   const originalSetInterval=global.setInterval; global.setInterval=()=>1;
   delete require.cache[require.resolve('./browser-work.js')]; const ui=require('./browser-work.js');
@@ -130,7 +136,7 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
   assert.equal(nodes.browserWorkList.querySelectorAll('button').length,3); // only authoritative pending approval remains
   assert.equal(ui.projection(record,'g').results[0].text,'Partial');
   await nodes.browserWorkAssignments.onclick();
-  const candidate=nodes.browserWorkCandidates.children[0]; const picks=candidate.querySelectorAll('select');
+  const candidate=nodes.browserWorkCandidates.children.find(row=>row.className==='browser-work-candidate'); const picks=candidate.querySelectorAll('select');
   picks[0].value='bot'; picks[0].listeners.change(); assert.equal(picks[1].value,'0'); assert.equal(candidate.querySelectorAll('input').length,0);
   record.results.worker={text:'Preserved streamed answer',verified:false,incomplete:true,status:'stopped'}; await ui.refresh();
   const allText=n=>[n.textContent,...n.children.flatMap(c=>allText(c))];
@@ -144,9 +150,12 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
   nodes.browserWorkList.querySelectorAll('button').find(b=>b.textContent==='Save reusable steps').listeners.click(); await flush();
   assert.deepEqual(calls.at(-1),['export','work','worker']);
   await nodes.browserWorkList.querySelectorAll('button').find(b=>b.textContent==='Choose tab for saved steps').listeners.click();
-  const reusePicks=nodes.browserWorkCandidates.children[0].querySelectorAll('select'); reusePicks[0].value='bot'; reusePicks[0].listeners.change(); reusePicks[2].value=JSON.stringify({sourceWorkId:'work',reusableId:'saved'});
-  nodes.browserWorkGoal.value='Run the saved steps'; await nodes.browserWorkCreate.listeners.submit({preventDefault(){}});
-  assert.equal(calls.at(-1)[0],'plan'); assert.deepEqual(calls.at(-1)[1].candidates[0],{botId:'bot',tabId:1,model:'chosen',provider:'connected',reusable:{sourceWorkId:'work',reusableId:'saved'}});
+  const reusePicks=nodes.browserWorkCandidates.children.find(row=>row.className==='browser-work-candidate').querySelectorAll('select'); reusePicks[0].value='bot'; reusePicks[0].listeners.change(); reusePicks[2].value=JSON.stringify({sourceWorkId:'work',reusableId:'saved'});
+  nodes.browserWorkGoal.value='Run the saved steps';
+  const callsBeforeMissingPersonal=calls.length; await nodes.browserWorkCreate.listeners.submit({preventDefault(){}}); assert.equal(calls.length,callsBeforeMissingPersonal); assert.equal(nodes.browserWorkError.textContent,'Choose a connected model for your personal Mia agent.');
+  const personalModel=global.document.getElementById('browserWorkPersonalModel'); assert.equal(personalModel.value,''); personalModel.value='0'; personalModel.listeners.change();
+  await nodes.browserWorkCreate.listeners.submit({preventDefault(){}});
+  assert.equal(calls.at(-1)[0],'plan'); assert.deepEqual(calls.at(-1)[1].personalSelection,{model:'chosen',provider:'connected'}); assert.deepEqual(calls.at(-1)[1].candidates[0],{botId:'bot',tabId:1,model:'chosen',provider:'connected',reusable:{sourceWorkId:'work',reusableId:'saved'}});
   let resolveOld;
   refreshQueue.push(new Promise(resolve=>resolveOld=resolve)); const old=ui.refresh();
   callback({...state,selectedGroupId:'other',groups:[...state.groups,{id:'other',name:'Other',tabIds:[]}]}); await flush();
