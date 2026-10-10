@@ -96,6 +96,7 @@ test('projection never invents progress; uses stored results and personal synthe
 // evidence, distinct from the required real Electron manual acceptance.
 class Element {
   constructor(tag='div') { this.tag=tag; this.children=[]; this.attributes={}; this.listeners={}; this.value=''; this.hidden=false; this.className=''; this.textContent=''; this.classList={toggle:()=>{}}; }
+  get firstChild() { return this.children[0] || null; }
   append(...nodes) { this.children.push(...nodes); nodes.forEach(n => n.parent=this); }
   replaceChildren(...nodes) { this.children=[]; this.append(...nodes); }
   setAttribute(k,v) { this.attributes[k]=String(v); }
