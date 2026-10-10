@@ -1011,3 +1011,42 @@ test("hidden screenshot captures assigned WebContents, retries surface readiness
   h.views[0].webContents.capturePage = async () => { h.views[0].webContents.emit("did-start-navigation", {}, "https://example.com/changed", false, true); return { toPNG: () => Buffer.from("stale"), isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }; };
   await assert.rejects(h.controller.execute(binding, { method: "screenshot", params: {} }), { code: "TAB_NAVIGATED" });
 });
+
+test("group-local drag order and selected tab persist across browser-owner restart", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-group-drag-"));
+  const statePath = path.join(root, "browser.json");
+  try {
+    const h = harness({ statePath });
+    const first = h.command("new").activeId;
+    const second = h.command("new").activeId;
+    const third = h.command("new").activeId;
+    h.command("select", { id: first });
+    h.command("group-move-tab", { id: first, groupId: "default", index: 2 });
+    const moved = h.command("state");
+    assert.deepEqual([...moved.groups[0].tabIds], [second, third, first]);
+    assert.equal(moved.activeId, first, "reordering keeps the viewed tab");
+    assert.equal(moved.groups[0].selectedTabId, first);
+    h.window.emit("closed");
+    const restored = harness({ statePath }).command("state");
+    assert.deepEqual([...restored.groups[0].tabIds], [second, third, first]);
+    assert.equal(restored.activeId, first);
+    assert.equal(restored.groups[0].selectedTabId, first);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("legacy global move maps into the source group's local index without crossing groups", () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  const third = h.command("new").activeId;
+  h.command("group-create", { name: "Other" });
+  const otherId = h.command("state").groups.find(group => group.name === "Other").id;
+  h.command("group-move-tab", { id: second, groupId: otherId });
+  h.command("select", { id: first });
+  h.command("move", { id: first, index: 2 });
+  const state = h.command("state");
+  assert.deepEqual([...state.tabs.map(tab => tab.id)], [second, third, first]);
+  assert.deepEqual([...state.groups.find(group => group.id === "default").tabIds], [third, first]);
+  assert.deepEqual([...state.groups.find(group => group.id === otherId).tabIds], [second]);
+  assert.equal(state.activeId, first);
+});
