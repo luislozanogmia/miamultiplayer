@@ -59,6 +59,17 @@ test('personal Mia remains coordinator; dependency results and requested worker 
   await assert.rejects(f.coordinator.create('owner', { ...f.input, workers: f.input.workers.map(worker => ({ ...worker, needs: [worker.id] })) }), /cycle/);
 });
 
+test('worker guidance gives an exact assigned-page read and current vacuum snapshot instructions', async t => {
+  const f = fixture(t); const work = await f.coordinator.create('owner', f.input); await f.coordinator.start('owner', work.id);
+  for (const call of f.calls.filter(call => call.worker)) {
+    assert.ok(call.message.includes('mia_browser_work with {"method":"read","params":{}}'));
+    assert.ok(call.message.includes('{"method":"vacuum","params":{}}'));
+    assert.ok(call.message.includes('snapshot_id'));
+    assert.ok(call.message.includes('run_reusable'));
+    assert.ok(call.message.includes('do not repeat uncertain writes'));
+  }
+});
+
 test('Mia plans real adapter output against owner-authorized candidate inventory', async t => {
   const f = fixture(t);
   const work = await f.coordinator.plan('owner', { ...f.input, candidates: f.input.workers });
