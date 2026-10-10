@@ -1,0 +1,132 @@
+"use strict";
+// Actual pinned Electron + native browser owner; this is local automated
+// evidence, not manual Mia UI or real Hermes acceptance.
+const { app, BrowserWindow, ipcMain, nativeImage } = require("electron");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-native-smoke-"));
+app.setPath("userData", root); app.enableSandbox();
+app.on("window-all-closed", () => {}); // allow disposable owner restart
+const outcomes = [];
+const failures = [];
+const handlers = new Map();
+const originalHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (name, callback) => { handlers.set(name, callback); originalHandle(name, callback); };
+const deny = async (call, codes) => assert.rejects(Promise.resolve().then(call), error => codes.includes(error.code));
+let server, window;
+app.whenReady().then(async () => {
+  const sourceRoot = path.resolve(process.env.MIA_TEST_SOURCE || path.join(__dirname, "../.."));
+  const { createBrowser } = require(path.join(sourceRoot, "macos/src/browser.cjs"));
+  const fixture = await import("./fixture-server.mjs");
+  ({ server } = fixture.createFixtureServer());
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  window = new BrowserWindow({ width: 900, height: 650, show: process.env.MIA_TEST_VISIBLE === "1", webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+  await window.loadURL("data:text/html,<title>Disposable browser shell</title>");
+  const statePath = path.join(root, "browser.json");
+  let browser = createBrowser(window, () => "null", () => {}, { statePath });
+  const command = (action, params = {}) => handlers.get("miaos-browser-command")({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, { action, ...params });
+  command("layout", { visible: true, panelOpen: true, bounds: { x: 0, y: 0, width: 800, height: 600 } });
+  const human = await browser.protocol("tab_open", { url: `${origin}/human`, wait: "load" });
+  const alpha = await browser.protocol("tab_open", { url: `${origin}/worker-a`, wait: "load" });
+  const beta = await browser.protocol("tab_open", { url: `${origin}/worker-b`, wait: "load" });
+  await browser.protocol("tab_switch", { tab_id: human.tab_id });
+  await browser.protocol("eval", { tab_id: human.tab_id, script: "() => { const e=document.querySelector('#draft');e.value='preserved unfinished draft';e.focus();e.setSelectionRange(10,10);return true; }" });
+  assert.ok(browser.actors && browser.execute, "candidate actor API must exist");
+  const bind = (actorId, botId, tabId) => ({ actorId, botId, tabId, groupId: "default", ownerId: "fixture-owner", taskId: "fixture-work" });
+  const a = bind("worker-a", "bot-a", alpha.tab_id), b = bind("worker-b", "bot-b", beta.tab_id);
+  browser.actors.bind(a); browser.actors.bind(b);
+  const operation = (method, params = {}) => ({ method, params });
+  const approve = async (binding, op) => (await browser.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: op.method, params: { ...op.params, actor_id: binding.actorId, tab_id: binding.tabId } })).approval_id;
+  await deny(() => browser.protocol("read", { actor_id: a.actorId, tab_id: a.tabId }), ["TRUSTED_ACTOR_REQUIRED"]);
+  await deny(() => browser.execute(a, operation("read", { tab_id: b.tabId })), ["TAB_NOT_OWNED"]);
+  await deny(() => browser.execute({ ...a, ownerId: "other-owner" }, operation("read")), ["ACTOR_REVOKED"]);
+  outcomes.push("actor/tab/owner spoof rejected");
+  const [ra, rb] = await Promise.all([browser.execute(a, operation("read")), browser.execute(b, operation("read"))]);
+  assert.match(JSON.stringify(ra), /ALPHA result 17/); assert.match(JSON.stringify(rb), /BETA result 29/);
+  await browser.execute(a, operation("fill", { selector: "#draft", value: "background worker fill" }));
+  await browser.execute(b, operation("scroll", { amount: 400 }));
+  assert.equal((await browser.protocol("status")).active_tab_id, human.tab_id);
+  const draft = await browser.protocol("eval", { tab_id: human.tab_id, script: "() => ({value:document.querySelector('#draft').value,caret:document.querySelector('#draft').selectionStart,focused:document.activeElement.id})" });
+  assert.deepEqual(draft.result, { value: "preserved unfinished draft", caret: 10, focused: "draft" });
+  outcomes.push("background read/fill/scroll preserves human tab, draft and DOM caret");
+  // Let the real compositor settle after initial native layout.
+  await new Promise(resolve => setTimeout(resolve, 300));
+  for (const binding of [a, b]) {
+    try {
+    const shot = await browser.execute(binding, operation("screenshot"));
+    assert.equal(shot.tab_id, binding.tabId); assert.ok(shot.width > 100 && shot.height > 100);
+    const image = nativeImage.createFromDataURL(shot.data_url), bitmap = image.toBitmap();
+    const offset = (200 * image.getSize().width + 100) * 4;
+    const [blue, green, red] = bitmap.subarray(offset, offset + 3);
+    if (binding === a) assert.ok(red > green + 20 && red > blue + 20, "Alpha screenshot must be red fixture");
+    else assert.ok(green > red + 20 && green > blue + 20, "Beta screenshot must be green fixture");
+    } catch (error) { failures.push({ criterion: 10, actor: binding.actorId, error: error.message }); }
+  }
+  if (!failures.length) outcomes.push("hidden screenshot correct native pixels per worker, human selection unchanged");
+  let snap = await browser.execute(a, operation("vacuum"));
+  const choice = snap.elements.find(e => e.selector === "#draft").number;
+  const stale = operation("fill", { choice, snapshot_id: snap.snapshot_id, value: "should not fill" });
+  await browser.execute(a, operation("vacuum"));
+  await deny(() => browser.execute(a, stale), ["STALE_SNAPSHOT"]);
+  await deny(() => browser.execute(b, stale), ["STALE_SNAPSHOT"]);
+  const fresh = await browser.execute(a, operation("vacuum"));
+  await browser.protocol("eval", { tab_id: a.tabId, script: "() => {let e=document.querySelector('#draft');e.replaceWith(e.cloneNode());return true;}" });
+  await deny(() => browser.execute(a, operation("fill", { choice, snapshot_id: fresh.snapshot_id, value: "should not fill" })), ["STALE_SNAPSHOT"]);
+  outcomes.push("snapshot reread, cross actor/tab, replaced DOM node fail closed");
+  const click = operation("click", { selector: "#write" });
+  await deny(() => browser.execute(a, click), ["APPROVAL_REQUIRED"]);
+  const rejected = await approve(a, click); browser.actors.reject(rejected);
+  await deny(() => browser.execute(a, click, { approval: rejected }), ["APPROVAL_REQUIRED"]);
+  const altered = await approve(a, click);
+  await deny(() => browser.execute(a, operation("click", { selector: "#local" }), { approval: altered }), ["APPROVAL_REQUIRED"]);
+  let counter = await fetch(`${origin}/evidence`).then(r => r.json()); assert.equal(counter.writes.length, 0);
+  const accepted = await approve(a, click);
+  await browser.execute(a, click, { approval: accepted });
+  await deny(() => browser.execute(a, click, { approval: accepted }), ["APPROVAL_REQUIRED"]);
+  // DOM dispatch acknowledgement does not prove the asynchronous fetch arrived.
+  const writeDeadline = Date.now() + 2000;
+  do {
+    counter = await fetch(`${origin}/evidence`).then(r => r.json());
+    if (counter.writes.length) break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  } while (Date.now() < writeDeadline);
+  assert.equal(counter.writes.length, 1);
+  const beforeNavigation = await approve(a, click);
+  await browser.execute(a, operation("navigate", { url: `${origin}/replacement`, wait: "load" }));
+  await deny(() => browser.execute(a, click, { approval: beforeNavigation }), ["APPROVAL_REQUIRED"]);
+  outcomes.push("approval required, rejection/change/reuse/navigation denied; one approved fixture write");
+  browser.actors.revoke(a.actorId);
+  await deny(() => browser.execute(a, operation("read")), ["ACTOR_REVOKED"]);
+  outcomes.push("revoked actor cannot execute");
+  const group = command("group-create", { name: "Fixture Research" });
+  assert.ok(!group?.error, JSON.stringify(group));
+  const state = command("state");
+  assert.ok(state.groups.some(g => g.name === "Fixture Research"));
+  const research = state.groups.find(g => g.name === "Fixture Research").id;
+  command("group-rename", { groupId: research, name: "Persistent Research" });
+  command("group-move-tab", { id: beta.tab_id, groupId: research });
+  command("group-select", { groupId: research });
+  command("group-reorder", { groupIds: [research, ...command("state").groups.filter(g => g.id !== research).map(g => g.id)] });
+  const expectedGroups = command("state").groups;
+  assert.equal(command("state").activeId, beta.tab_id);
+  await browser.prepareToClose(); browser.persist();
+  window.destroy();
+  window = new BrowserWindow({ show: false, webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+  await window.loadURL("data:text/html,<title>Disposable browser shell</title>");
+  browser = createBrowser(window, () => "null", () => {}, { statePath });
+  assert.deepEqual(command("state").groups, expectedGroups);
+  assert.equal(command("state").selectedGroupId, research);
+  assert.equal(command("state").activeId, beta.tab_id);
+  outcomes.push("group names/order/selection/per-group selected tabs survive native owner restart");
+  console.log(JSON.stringify({ evidenceClass: "local", sourceRoot, outcomes, failures, limitations: ["not integrated Mia frontend", "not manual UI", "no real Hermes/model execution", "no coordinator Stop/restart proof"] }));
+  window.destroy(); await new Promise(resolve => server.close(resolve)); app.exit(failures.length ? 1 : 0);
+}).catch(async error => {
+  console.error(JSON.stringify({ evidenceClass: "local", outcomes, failure: error.message, code: error.code || null }));
+  if (window && !window.isDestroyed()) window.destroy();
+  if (server) server.close();
+  app.exit(1);
+});
+app.on("will-quit", () => fs.rmSync(root, { recursive: true, force: true }));
