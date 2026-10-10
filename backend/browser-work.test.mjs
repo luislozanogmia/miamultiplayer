@@ -290,6 +290,197 @@ test('expired bound fill request remains unexecuted and cannot be accepted after
   } finally { t.mock.timers.reset(); }
 });
 
+test('approval failure settlement revokes a stale card and gives the waiting tool its original typed error', async t => {
+  const f = await approvalFixture(t); let executions = 0;
+  f.browser.execute = async () => { executions++; };
+  const nativeError = Object.assign(new Error('synthetic native detail'), { code: 'STALE_SNAPSHOT' });
+  const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { choice: 2, snapshot_id: 'old' } }).catch(error => error);
+  await until(() => f.store.get(f.work.id).approvals.length);
+  const approval = f.store.get(f.work.id).approvals[0];
+  f.browser.approve = async () => { throw nativeError; };
+  await assert.rejects(f.coordinator.decideApproval('owner', f.work.id, approval.id, true), error => error === nativeError);
+  const saved = f.store.get(f.work.id);
+  assert.equal(saved.approvals[0].status, 'revoked');
+  assert.equal(saved.approvals[0].failurePhase, 'approval'); assert.equal(saved.approvals[0].denialCode, 'STALE_SNAPSHOT');
+  assert.equal(await operation, nativeError); assert.equal(saved.workers[0].status, 'working');
+  assert.equal(executions, 0); assert.deepEqual(saved.operations, []);
+  assert.ok(!JSON.stringify(saved).includes('synthetic native detail'));
+  await assert.rejects(f.coordinator.decideApproval('owner', f.work.id, approval.id, true), /no longer actionable/);
+});
+
+test('approval failure settlement covers validation errors and preserves another pending card', async t => {
+  const f = fixture(t); const releases = [];
+  f.hermes.worker = async () => new Promise(resolve => releases.push(resolve));
+  f.browser.validate = async () => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: true });
+  const work = await f.coordinator.create('owner', { ...f.input, workers: f.input.workers.map(worker => ({ ...worker, needs: [] })) });
+  const running = f.coordinator.start('owner', work.id); await until(() => releases.length === 2);
+  t.after(async () => { await f.coordinator.stop('owner', work.id); releases.forEach(release => release({ text: 'stopped' })); await running; });
+  const first = f.coordinator.executeOperation('owner', work.id, 'first', { method: 'click', params: { selector: '#first' } }).catch(error => error);
+  const second = f.coordinator.executeOperation('owner', work.id, 'second', { method: 'click', params: { selector: '#second' } }).catch(error => error);
+  await until(() => f.store.get(work.id).approvals.length === 2);
+  const cards = f.store.get(work.id).approvals;
+  const nativeError = Object.assign(new Error('document changed'), { code: 'TAB_NAVIGATED' });
+  f.browser.validate = async () => { throw nativeError; };
+  await assert.rejects(f.coordinator.decideApproval('owner', work.id, cards[0].id, true), error => error === nativeError);
+  assert.equal(f.store.get(work.id).approvals[0].status, 'revoked');
+  assert.equal(f.store.get(work.id).approvals[0].denialCode, 'TAB_NAVIGATED');
+  assert.equal(await first, nativeError);
+  const saved = f.store.get(work.id); assert.equal(saved.status, 'needs_approval');
+  assert.equal(saved.approvals[1].status, 'pending'); assert.equal(saved.workers[1].status, 'needs_approval');
+  await f.coordinator.decideApproval('owner', work.id, cards[1].id, false);
+  assert.match((await second).message, /user rejected/); assert.deepEqual(f.store.get(work.id).operations, []);
+});
+
+test('approval failure settlement settles a same-worker sibling after the first acceptance changes worker status', async t => {
+  const f = await approvalFixture(t); let executions = 0;
+  f.browser.execute = async () => { executions++; return { clicked: true }; };
+  const first = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#first' } });
+  const second = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#second' } }).catch(error => error);
+  await until(() => f.store.get(f.work.id).approvals.length === 2);
+  const cards = f.store.get(f.work.id).approvals;
+  await f.coordinator.decideApproval('owner', f.work.id, cards[0].id, true); await first;
+  assert.equal(f.store.get(f.work.id).workers[0].status, 'working');
+  assert.equal(f.store.get(f.work.id).approvals[1].status, 'pending');
+  const nativeError = Object.assign(new Error('stale second target'), { code: 'STALE_SNAPSHOT' });
+  f.browser.approve = async () => { throw nativeError; };
+  await assert.rejects(f.coordinator.decideApproval('owner', f.work.id, cards[1].id, true), error => error === nativeError);
+  const saved = f.store.get(f.work.id);
+  assert.equal(saved.approvals[1].status, 'revoked');
+  assert.equal(saved.approvals[1].failurePhase, 'approval'); assert.equal(saved.approvals[1].denialCode, 'STALE_SNAPSHOT');
+  assert.equal(await second, nativeError); assert.equal(executions, 1);
+  assert.equal(saved.approvals[0].status, 'consumed'); assert.equal(saved.operations.length, 1);
+});
+
+test('approval failure settlement preserves Stop during a delayed grant and cleans the exact minted grant', async t => {
+  const f = await approvalFixture(t); let releaseGrant, cleanup;
+  f.browser.approve = async () => new Promise(resolve => { releaseGrant = resolve; });
+  f.browser.reject = async (...args) => { cleanup = args; };
+  const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#write' } }).catch(error => error);
+  await until(() => f.store.get(f.work.id).approvals.length);
+  const approval = f.store.get(f.work.id).approvals[0];
+  const deciding = f.coordinator.decideApproval('owner', f.work.id, approval.id, true).catch(error => error);
+  await until(() => releaseGrant); await f.coordinator.stop('owner', f.work.id, 'first');
+  const stopped = f.store.get(f.work.id), bytes = fs.readFileSync(f.filePath);
+  const grant = { approval_id: 'synthetic-native-grant' }; releaseGrant(grant);
+  assert.match((await deciding).message, /invalidated/); assert.match((await operation).message, /revoked/);
+  assert.deepEqual(f.store.get(f.work.id), stopped); assert.deepEqual(fs.readFileSync(f.filePath), bytes);
+  assert.equal(cleanup[0].actorId, stopped.workers[0].actorId); assert.deepEqual(cleanup[1], approval.operation);
+  assert.deepEqual(cleanup[2].runtimeApproval, grant); assert.equal(cleanup[2].id, approval.id);
+});
+
+test('approval failure settlement leaves expiry authoritative after a delayed grant', async t => {
+  const f = await approvalFixture(t); let releaseGrant, cleanup = 0;
+  f.browser.approve = async () => new Promise(resolve => { releaseGrant = resolve; });
+  f.browser.reject = async () => { cleanup++; };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#write' } }).catch(error => error);
+    await until(() => f.store.get(f.work.id).approvals.length);
+    const card = f.store.get(f.work.id).approvals[0];
+    const deciding = f.coordinator.decideApproval('owner', f.work.id, card.id, true).catch(error => error);
+    await until(() => releaseGrant); t.mock.timers.tick(120000); assert.match((await operation).message, /expired/);
+    const expired = f.store.get(f.work.id), bytes = fs.readFileSync(f.filePath);
+    releaseGrant({ approval_id: 'expired-native-grant' }); assert.match((await deciding).message, /invalidated/);
+    assert.deepEqual(f.store.get(f.work.id), expired); assert.deepEqual(fs.readFileSync(f.filePath), bytes); assert.equal(cleanup, 1);
+  } finally { t.mock.timers.reset(); }
+});
+
+test('approval failure settlement does not overwrite a concurrent rejection', async t => {
+  const f = await approvalFixture(t); let releaseGrant, cleaned;
+  f.browser.approve = async () => new Promise(resolve => { releaseGrant = resolve; });
+  f.browser.reject = async (bound, operation, approval) => { cleaned = approval.runtimeApproval; };
+  const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#write' } }).catch(error => error);
+  await until(() => f.store.get(f.work.id).approvals.length);
+  const card = f.store.get(f.work.id).approvals[0];
+  const accepting = f.coordinator.decideApproval('owner', f.work.id, card.id, true).catch(error => error);
+  await until(() => releaseGrant); await f.coordinator.decideApproval('owner', f.work.id, card.id, false);
+  const rejected = f.store.get(f.work.id), bytes = fs.readFileSync(f.filePath);
+  const grant = { approval_id: 'losing-grant' }; releaseGrant(grant);
+  assert.match((await accepting).message, /invalidated/); assert.match((await operation).message, /rejected/);
+  assert.deepEqual(f.store.get(f.work.id), rejected); assert.deepEqual(fs.readFileSync(f.filePath), bytes); assert.deepEqual(cleaned, grant);
+});
+
+test('approval failure settlement marks only predispatch failure with safe code and never raw error details', async t => {
+  const f = await approvalFixture(t);
+  for (const code of ['private-error-marker', { private: 'private-error-marker' }, undefined]) {
+    const nativeError = Object.assign(new Error('private-error-marker'), { code });
+    f.browser.approve = async () => { throw nativeError; };
+    const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#write' } }).catch(error => error);
+    await until(() => f.store.get(f.work.id).approvals.some(card => card.status === 'pending'));
+    const card = f.store.get(f.work.id).approvals.at(-1);
+    await assert.rejects(f.coordinator.decideApproval('owner', f.work.id, card.id, true), error => error === nativeError);
+    assert.equal(await operation, nativeError);
+    const saved = f.store.get(f.work.id), failed = saved.approvals.at(-1);
+    assert.equal(failed.failurePhase, 'approval'); assert.equal(Object.hasOwn(failed, 'denialCode'), false);
+    assert.equal(failed.status, 'revoked'); assert.deepEqual(saved.operations, []);
+    assert.ok(!JSON.stringify(saved).includes('private-error-marker'));
+  }
+});
+
+test('approval failure settlement never labels a consumed dispatched uncertain write as approval failure', async t => {
+  const f = await approvalFixture(t);
+  f.browser.execute = async () => { throw Object.assign(new Error('effect may have occurred'), { code: 'STALE_SNAPSHOT' }); };
+  const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#write' } }).catch(error => error);
+  await until(() => f.store.get(f.work.id).approvals.length);
+  const card = f.store.get(f.work.id).approvals[0];
+  await f.coordinator.decideApproval('owner', f.work.id, card.id, true); assert.equal((await operation).code, 'STALE_SNAPSHOT');
+  const saved = f.store.get(f.work.id);
+  assert.equal(saved.approvals[0].status, 'consumed'); assert.equal(saved.operations[0].status, 'uncertain');
+  assert.equal(Object.hasOwn(saved.approvals[0], 'failurePhase'), false); assert.equal(Object.hasOwn(saved.approvals[0], 'denialCode'), false);
+});
+
+test('approval failure settlement carries original typed denial through the actual worker HTTP broker', async t => {
+  const { createBrowserWorkWorkerBroker } = require('./browser-work-worker-broker');
+  const f = await approvalFixture(t);
+  const broker = await createBrowserWorkWorkerBroker({ executeOperation: f.coordinator.executeOperation });
+  t.after(() => broker.stop());
+  broker.registerSession({ sessionId: 'synthetic-live' }, { ownerId: 'owner', workId: f.work.id, workerId: 'first' });
+  f.browser.approve = async () => { throw Object.assign(new Error('synthetic broker detail'), { code: 'STALE_SNAPSHOT' }); };
+  const response = fetch(broker.url, { method: 'POST', headers: { Authorization: `Bearer ${broker.token}` }, body: JSON.stringify({ sessionId: 'synthetic-live', operation: { method: 'click', params: { choice: 2, snapshot_id: 'old' } } }) });
+  await until(() => f.store.get(f.work.id).approvals.length);
+  const card = f.store.get(f.work.id).approvals[0];
+  await assert.rejects(f.coordinator.decideApproval('owner', f.work.id, card.id, true), { code: 'STALE_SNAPSHOT' });
+  const reply = await response; assert.equal(reply.status, 409); assert.equal((await reply.json()).error.code, 'STALE_SNAPSHOT');
+  assert.deepEqual(f.store.get(f.work.id).operations, []);
+});
+
+test('approval failure settlement preserves a concurrent successful decision and cleans only the losing grant', async t => {
+  const f = await approvalFixture(t), grants = [], cleanups = []; let executions = 0;
+  f.browser.approve = async () => new Promise(resolve => grants.push(resolve));
+  f.browser.reject = async (bound, operation, card) => cleanups.push(card.runtimeApproval);
+  f.browser.execute = async () => { executions++; return { clicked: true }; };
+  const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#write' } });
+  await until(() => f.store.get(f.work.id).approvals.length);
+  const card = f.store.get(f.work.id).approvals[0];
+  const winner = f.coordinator.decideApproval('owner', f.work.id, card.id, true);
+  const loser = f.coordinator.decideApproval('owner', f.work.id, card.id, true).catch(error => error);
+  await until(() => grants.length === 2);
+  const firstGrant = { approval_id: 'winner' }, secondGrant = { approval_id: 'loser' };
+  grants[0](firstGrant); await winner; assert.deepEqual(await operation, { clicked: true });
+  const before = f.store.get(f.work.id), bytes = fs.readFileSync(f.filePath);
+  grants[1](secondGrant); assert.match((await loser).message, /invalidated/);
+  assert.deepEqual(f.store.get(f.work.id), before); assert.deepEqual(fs.readFileSync(f.filePath), bytes);
+  assert.deepEqual(cleanups, [secondGrant]); assert.equal(executions, 1);
+  assert.equal(before.approvals[0].status, 'consumed'); assert.equal(before.approvals[0].failurePhase, undefined);
+  assert.deepEqual(before.approvals[0].runtimeApproval, firstGrant);
+});
+
+test('approval failure settlement cancels expiry so it cannot overwrite the revoked marker', async t => {
+  const f = await approvalFixture(t); const nativeError = Object.assign(new Error('stale target'), { code: 'STALE_SNAPSHOT' });
+  f.browser.approve = async () => { throw nativeError; };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const operation = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { choice: 2, snapshot_id: 'old' } }).catch(error => error);
+    await until(() => f.store.get(f.work.id).approvals.length);
+    const card = f.store.get(f.work.id).approvals[0];
+    await assert.rejects(f.coordinator.decideApproval('owner', f.work.id, card.id, true), error => error === nativeError); assert.equal(await operation, nativeError);
+    const before = f.store.get(f.work.id), bytes = fs.readFileSync(f.filePath);
+    t.mock.timers.tick(120000); await tick();
+    assert.deepEqual(f.store.get(f.work.id), before); assert.deepEqual(fs.readFileSync(f.filePath), bytes);
+    assert.equal(before.approvals[0].failurePhase, 'approval'); assert.equal(before.approvals[0].denialCode, 'STALE_SNAPSHOT');
+  } finally { t.mock.timers.reset(); }
+});
+
 test('approval rejects execution and identity overrides fail closed', async t => {
   const f = await approvalFixture(t); let executions = 0; f.browser.execute = async () => { executions++; };
   await assert.rejects(f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'ghost_click', params: { tab_id: 2 } }), /identity/);

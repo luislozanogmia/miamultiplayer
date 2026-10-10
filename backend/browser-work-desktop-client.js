@@ -63,7 +63,7 @@ function createBrowserWorkDesktopClient({ url, token, timeoutMs = 120000 }) {
     validate: (binding, operation) => request('validate', { binding, operation }),
     execute: (binding, operation, { signal, approval } = {}) => request('execute', { binding, operation, approval }, { signal }),
     approve: (binding, operation, approval) => request('approve', { binding, operation, approval }),
-    reject: (binding, operation) => request('reject', { binding, operation }),
+    reject: (binding, operation, approval) => request('reject', { binding, operation, ...(approval ? { approval } : {}) }),
     revoke: binding => request('revoke', { binding }),
   };
 }
