@@ -52,7 +52,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     if (!(await authorizeGroup(work.ownerId, work.groupId, worker.tabId))) throw failure('tab access revoked', 403);
     const bot = await resolveBot(work.ownerId, worker.botId);
     if (!bot || bot.ownerId !== work.ownerId || bot.isPersonalMia) throw failure('worker bot access denied', 403);
-    return { ownerId: work.ownerId, groupId: work.groupId, workId: work.id, workerId: worker.id, taskId: worker.id, botName: worker.botName, ownerColor: worker.ownerColor, actorId: worker.actorId, botId: worker.botId, tabId: worker.tabId };
+    return { ownerId: work.ownerId, groupId: work.groupId, workId: work.id, workerId: worker.id, taskId: worker.id, botName: worker.botName, color: worker.color, ownerColor: worker.ownerColor, actorId: worker.actorId, botId: worker.botId, tabId: worker.tabId };
   }
   async function create(ownerId, input) {
     text(ownerId, 'owner', 256);
@@ -71,6 +71,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       worker.profile = text(bot.profile, 'bot Hermes profile', 256);
       worker.botName = String(bot.name || worker.botId).slice(0, 120);
       worker.ownerColor = bot.ownerColor;
+      worker.color = /^#[0-9a-f]{6}$/i.test(bot.color || '') ? bot.color : '#b79bff';
       if (candidate.reusable) {
         const source = await get(ownerId, text(candidate.reusable.sourceWorkId, 'reusable source', 256));
         const reusable = source.reusable?.find(item => item.id === candidate.reusable.reusableId);

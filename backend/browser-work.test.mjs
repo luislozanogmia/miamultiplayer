@@ -25,7 +25,7 @@ function fixture(t, overrides = {}) {
     async plan() { return { text: JSON.stringify({ workers: [{ id: '0', goal: 'read first', needs: [] }, { id: '1', goal: 'compare', needs: ['0'] }] }), storedSessionId: 'personal-mia' }; },
   };
   const browser = { async revoke() {}, async approve() { return 'opaque-runtime-approval'; }, async validate() { return { documentGeneration: 1, url: 'https://example.test/', requiresApproval: false }; }, async execute() { return { text: 'page evidence' }; } };
-  const options = { store, hermes, browser, authorizeGroup: async (owner, group, tab) => owner === 'owner' && group === 'group' && (tab === undefined || [1, 2].includes(tab)), resolveBot: async (owner, bot) => ({ ownerId: owner, profile: `bot-${bot}` }), personalOptions: async () => ({ profile: 'personal-mia', model: 'personal-model', provider: 'personal-provider' }), ...overrides };
+  const options = { store, hermes, browser, authorizeGroup: async (owner, group, tab) => owner === 'owner' && group === 'group' && (tab === undefined || [1, 2].includes(tab)), resolveBot: async (owner, bot) => ({ ownerId: owner, profile: `bot-${bot}`, color: '#12ab34' }), personalOptions: async () => ({ profile: 'personal-mia', model: 'personal-model', provider: 'personal-provider' }), ...overrides };
   const coordinator = createBrowserWorkCoordinator(options);
   const input = { groupId: 'group', goal: 'compare pages', context: { groupName: 'Research' }, workers: [{ id: 'first', botId: 'bot1', tabId: 1, goal: 'read', model: 'model-a', provider: 'provider-a', needs: [] }, { id: 'second', botId: 'bot2', tabId: 2, goal: 'compare', model: 'model-b', provider: 'provider-b', needs: ['first'] }] };
   return { dir, key, filePath, store, calls, hermes, browser, options, coordinator, input };
@@ -51,6 +51,7 @@ test('personal Mia remains coordinator; dependency results and requested worker 
   assert.equal(f.calls[2].options.profile, 'personal-mia'); assert.equal(f.calls[2].worker, undefined);
   assert.ok(f.calls[2].message.includes('actual fixture compare'));
   assert.ok(work.context.includes('Research'));
+  assert.equal(work.workers[0].color, '#12ab34');
   assert.deepEqual(work.workers.map(worker => worker.tabId), [1, 2]);
   await assert.rejects(f.coordinator.get('other', work.id), /not found/);
   await assert.rejects(f.coordinator.create('owner', { ...f.input, workers: [{ ...f.input.workers[0], tabId: 99 }] }), /revoked/);
@@ -134,8 +135,8 @@ test('Hermes binding completes before dispatch; model/provider propagated; relea
   const events = []; let adapter; let sessionKey;
   const client = { async createOrResumeSession(args) { assert.equal(args.options.model, 'chosen'); assert.equal(args.options.profile, 'restricted'); return { sessionId: 'live', storedSessionId: 'stored' }; },
     async submitTurn(session) { events.push('submit'); assert.equal(session.sessionId, 'live'); assert.equal(await adapter.dispatchWorkerTool('stored', { method: 'ghost_read', params: {} }), 'page'); return { text: 'real transport fixture' }; }, interrupt() {} };
-  adapter = createBrowserWorkHermes({ client, prepareWorker: async () => ({ profile: 'restricted', restricted: true }), bindSession: async () => { await tick(); events.push('bind'); return () => events.push('release'); }, executeOperation: async (owner, work, worker) => { sessionKey = [owner, work, worker]; return 'page'; } });
-  await adapter.worker({ work: { id: 'work', ownerId: 'owner', groupId: 'group' }, worker: { id: 'worker', botId: 'bot', tabId: 1, actorId: 'actor' }, options: { model: 'chosen', provider: 'selected' }, message: 'bounded' });
+  adapter = createBrowserWorkHermes({ client, prepareWorker: async () => ({ profile: 'restricted', restricted: true }), bindSession: async (session, binding) => { assert.equal(binding.color, '#12ab34'); await tick(); events.push('bind'); return () => events.push('release'); }, executeOperation: async (owner, work, worker) => { sessionKey = [owner, work, worker]; return 'page'; } });
+  await adapter.worker({ work: { id: 'work', ownerId: 'owner', groupId: 'group' }, worker: { id: 'worker', botId: 'bot', tabId: 1, actorId: 'actor', color: '#12ab34' }, options: { model: 'chosen', provider: 'selected' }, message: 'bounded' });
   assert.deepEqual(events, ['bind', 'submit', 'release']); assert.deepEqual(sessionKey, ['owner', 'work', 'worker']);
   await assert.rejects(adapter.dispatchWorkerTool('stored', {}), /not bound/);
   const unsafe = createBrowserWorkHermes({ client, bindSession: async () => () => {} });
