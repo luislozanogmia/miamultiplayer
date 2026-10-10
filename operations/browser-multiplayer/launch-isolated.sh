@@ -2,8 +2,8 @@
 # Dev UI launcher. Does not install, copy credentials, disable authentication,
 # disable encryption, or bypass Chromium's sandbox. Existing profiles are refused.
 set -euo pipefail
-if [[ $# -ne 6 ]]; then
-  echo 'Usage: launch-isolated.sh source-tree electron dependency-tree runtime-root new-data-root port' >&2
+if [[ $# -ne 6 && $# -ne 7 ]]; then
+  echo 'Usage: launch-isolated.sh source-tree electron dependency-tree runtime-root data-root port [--resume-isolated]' >&2
   exit 2
 fi
 test_source=$(realpath "$1")
@@ -14,7 +14,11 @@ test_data=$(realpath -m "$5")
 test_port=$6
 [[ $test_port =~ ^[0-9]+$ ]] && (( test_port > 1024 && test_port < 64000 )) || exit 2
 [[ -f "$test_source/macos/src/main.cjs" && -x "$test_electron" && -x "$test_runtime/hermes-launcher" && -x "$test_runtime/hermes/hermes-agent/venv/bin/python" ]] || exit 2
-[[ ! -e "$test_data" ]] || { echo 'Choose a new disposable data root; existing data is preserved.' >&2; exit 2; }
+if [[ -e "$test_data" ]]; then
+  [[ ${7:-} == --resume-isolated && -f "$test_data/verification-source.txt" && $(<"$test_data/verification-source.txt") == "$test_source" ]] || {
+    echo 'Existing data is preserved. Resume requires this launcher’s matching isolated marker.' >&2; exit 2;
+  }
+fi
 umask 077
 mkdir -p "$test_data/data" "$test_data/workspace" "$test_data/provider-home" "$test_data/hermes"
 printf '%s\n' "$test_source" > "$test_data/verification-source.txt"

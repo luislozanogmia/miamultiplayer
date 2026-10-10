@@ -38,6 +38,7 @@ app.whenReady().then(async () => {
   const bind = (actorId, botId, tabId) => ({ actorId, botId, tabId, groupId: "default", ownerId: "fixture-owner", taskId: "fixture-work" });
   const a = bind("worker-a", "bot-a", alpha.tab_id), b = bind("worker-b", "bot-b", beta.tab_id);
   browser.actors.bind(a); browser.actors.bind(b);
+  assert.throws(() => browser.actors.bind(bind("competing-actor", "competing-bot", alpha.tab_id)), error => error.code === "TAB_ALREADY_BOUND");
   const operation = (method, params = {}) => ({ method, params });
   const approve = async (binding, op) => (await browser.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: op.method, params: { ...op.params, actor_id: binding.actorId, tab_id: binding.tabId } })).approval_id;
   await deny(() => browser.protocol("read", { actor_id: a.actorId, tab_id: a.tabId }), ["TRUSTED_ACTOR_REQUIRED"]);
@@ -134,9 +135,18 @@ app.whenReady().then(async () => {
   const clickCount = await browser.protocol("eval", { tab_id: a.tabId, script: "() => document.querySelector('#count').textContent" });
   assert.equal(clickCount.result, "0");
   outcomes.push("approval revoked while queued prevents DOM dispatch");
+  const lateApproval = await approve(a, delayed);
+  const late = browser.execute(a, delayed, { approval: lateApproval });
+  const lateDenied = deny(() => late, ["ACTOR_REVOKED"]);
+  await new Promise(resolve => setTimeout(resolve, 25));
+  const stoppedQueued = browser.execute(a, operation("scroll", { amount: 20 }));
+  const queueDenied = deny(() => stoppedQueued, ["ACTOR_REVOKED"]);
   browser.actors.revoke(a.actorId);
+  await lateDenied; await queueDenied;
   await deny(() => browser.execute(a, operation("read")), ["ACTOR_REVOKED"]);
-  outcomes.push("revoked actor cannot execute");
+  const released = bind("released-actor", "released-bot", a.tabId);
+  browser.actors.bind(released); browser.actors.revoke(released.actorId);
+  outcomes.push("exclusive tab claim; revocation releases claim, suppresses late result and queued execution");
   const group = command("group-create", { name: "Fixture Research" });
   assert.ok(!group?.error, JSON.stringify(group));
   const state = command("state");
