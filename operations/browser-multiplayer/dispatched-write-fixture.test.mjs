@@ -70,7 +70,8 @@ test('client disconnect retains durable effect and closes pending marker', async
 });
 
 function sample(origin = 'http://127.0.0.1:12345') {
-  const at = Date.now();
+  // A recorded effect must already exist when the real HTTP observer reads it.
+  const at = Date.now() - 100;
   return { fixtureOrigin: origin, fixtureId: 'fixture-1', workerId: '1', observedAt: at + 20,
     fixture: { fixtureId: 'fixture-1', effect: { fixtureId: 'fixture-1', sequence: 1, recordedAt: at + 10, responseDeadlineAt: at + 30000 }, writeAttempts: 1, responseOpen: true },
     work: { id: 'work-1', ownerId: 'owner-1', epoch: 0, status: 'working', workers: [{ id: '1', actorId: 'actor-1', tabId: 2, epoch: 0, status: 'working' }],
