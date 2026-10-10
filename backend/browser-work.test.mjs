@@ -333,6 +333,82 @@ test('restart preserves partial outputs, revokes approvals and holds active writ
   await assert.rejects(f.coordinator.recover('owner', work.id, ['second']), /uncertain/);
 });
 
+async function uncertainPrerequisiteFixture(t, { sharedDescendant = false, uncertainWorker = 'first' } = {}) {
+  const f = fixture(t, { authorizeGroup: async (owner, group, tab) => owner === 'owner' && group === 'group' && (tab === undefined || [1, 2, 3, 4, 5].includes(tab)) });
+  const workers = [
+    f.input.workers[0], f.input.workers[1],
+    { ...f.input.workers[1], id: 'third', botId: 'bot3', tabId: 3, needs: ['second'] },
+    { ...f.input.workers[0], id: 'safe', botId: 'bot4', tabId: 4, needs: [] },
+    ...(sharedDescendant ? [{ ...f.input.workers[1], id: 'shared', botId: 'bot5', tabId: 5, needs: ['safe', 'second'] }] : []),
+  ];
+  const work = await f.coordinator.create('owner', { ...f.input, workers });
+  // Seed a synthetic crash boundary, then reload the real encrypted local store.
+  work.status = 'working';
+  for (const worker of work.workers) {
+    worker.status = 'working'; worker.storedSessionId = `prior-${worker.id}`;
+    work.results[worker.id] = { text: `partial ${worker.id}`, incomplete: true, verified: false, workEpoch: 0, workerEpoch: 0 };
+  }
+  work.synthesis = { text: 'partial Mia synthesis', incomplete: true, verified: false };
+  work.operations.push({ id: 'pending-write', workerId: uncertainWorker, workEpoch: 0, workerEpoch: 0, operation: { method: 'click', params: { selector: '#write' } }, status: 'dispatching', consequential: true });
+  work.approvals.push({ id: 'used-grant', status: 'consumed', workerId: uncertainWorker });
+  f.store.put(work);
+  const store = createBrowserWorkStore({ key: f.key, filePath: f.filePath });
+  const coordinator = createBrowserWorkCoordinator({ ...f.options, store });
+  coordinator.recoverInterrupted();
+  assert.equal(store.get(work.id).operations[0].status, 'uncertain');
+  return { ...f, store, coordinator, workId: work.id };
+}
+
+async function rejectsRecoveryWithoutMutation(f, workers) {
+  const before = f.store.get(f.workId), encryptedBefore = fs.readFileSync(f.filePath);
+  await assert.rejects(f.coordinator.recover('owner', f.workId, workers), error => error.status === 409 && /uncertain/.test(error.message));
+  assert.deepEqual(f.store.get(f.workId), before, 'denial must preserve all work, worker, output, approval and epoch state');
+  assert.deepEqual(fs.readFileSync(f.filePath), encryptedBefore, 'denial must perform no persistent write');
+  assert.deepEqual(f.calls, [], 'recovery denial cannot dispatch Hermes');
+}
+
+test('uncertain prerequisite recovery rejects direct dependent without changing persisted state', async t => {
+  const f = await uncertainPrerequisiteFixture(t);
+  await rejectsRecoveryWithoutMutation(f, ['second']);
+});
+
+test('uncertain prerequisite recovery rejects transitive dependent without changing persisted state', async t => {
+  const f = await uncertainPrerequisiteFixture(t);
+  await rejectsRecoveryWithoutMutation(f, ['third']);
+});
+
+test('uncertain prerequisite recovery checks every downstream reset worker ancestry', async t => {
+  const f = await uncertainPrerequisiteFixture(t, { sharedDescendant: true });
+  // Recovering safe also resets shared, whose other branch still depends on first.
+  await rejectsRecoveryWithoutMutation(f, ['safe']);
+});
+
+test('uncertain prerequisite recovery rejects a mixed batch atomically', async t => {
+  const f = await uncertainPrerequisiteFixture(t);
+  await rejectsRecoveryWithoutMutation(f, ['safe', 'third']);
+});
+
+test('uncertain prerequisite recovery retains the existing downstream uncertainty hold', async t => {
+  const f = await uncertainPrerequisiteFixture(t, { uncertainWorker: 'third' });
+  await rejectsRecoveryWithoutMutation(f, ['second']);
+});
+
+test('uncertain prerequisite recovery permits an independent worker and retains old epoch uncertainty hold', async t => {
+  const f = await uncertainPrerequisiteFixture(t), before = f.store.get(f.workId);
+  const recovered = await f.coordinator.recover('owner', f.workId, ['safe']);
+  assert.equal(recovered.status, 'queued'); assert.equal(recovered.epoch, before.epoch + 1);
+  for (const id of ['first', 'second', 'third']) {
+    assert.deepEqual(recovered.workers.find(worker => worker.id === id), before.workers.find(worker => worker.id === id));
+    assert.deepEqual(recovered.results[id], before.results[id]);
+  }
+  const safe = recovered.workers.find(worker => worker.id === 'safe');
+  assert.equal(safe.status, 'queued'); assert.equal(safe.epoch, before.workers.find(worker => worker.id === 'safe').epoch + 1);
+  assert.equal(recovered.results.safe, undefined); assert.equal(safe.storedSessionId, undefined);
+  assert.deepEqual(recovered.operations, before.operations); assert.deepEqual(recovered.approvals, before.approvals);
+  assert.equal(recovered.operations[0].workEpoch, 0);
+  await rejectsRecoveryWithoutMutation(f, ['second']);
+});
+
 test('Hermes binding completes before dispatch; model/provider propagated; release invalidates tool identity', async () => {
   const events = []; let adapter; let sessionKey;
   const client = { async createOrResumeSession(args) { assert.equal(args.options.model, 'chosen'); assert.equal(args.options.profile, 'restricted'); return { sessionId: 'live', storedSessionId: 'stored' }; },
