@@ -42,11 +42,95 @@ app.whenReady().then(async () => {
     assert.deepEqual(await observe(tab), before, 'denied precondition must have no fixture effect');
   }
   async function check(name, fn) {
+    if (process.env.MIA_TEST_CASE_FILTER && !name.includes(process.env.MIA_TEST_CASE_FILTER)) return;
     await browser.protocol('navigate', { tab_id: aTab, url: origin + '/alpha?case=' + outcomes.length, wait: 'load' });
     await browser.protocol('navigate', { tab_id: bTab, url: origin + '/beta?case=' + outcomes.length, wait: 'load' });
-    try { await fn(); outcomes.push({ name, pass: true }); }
-    catch (error) { outcomes.push({ name, pass: false, assertion: error.message }); }
+    const before = { alpha: await observe(aTab), beta: await observe(bTab) };
+    try { await fn(); outcomes.push({ name, pass: true, before, after: { alpha: await observe(aTab), beta: await observe(bTab) } }); }
+    catch (error) { outcomes.push({ name, pass: false, assertion: error.message, before, after: { alpha: await observe(aTab), beta: await observe(bTab) } }); }
   }
+  await check('plain actor read invalidates old numbered snapshot', async () => {
+    const old = await snap(); const choice = old.elements.find(e => e.selector === '#local').number;
+    await browser.execute(a, { method: 'read', params: {} });
+    await denied(() => act(a, op({ choice, snapshot_id: old.snapshot_id })));
+    const retained = await contents(aTab).executeJavaScriptInIsolatedWorld(1001,
+      [{ code: 'globalThis.__miaBrowserSnapshots?.has("alpha") || false' }]);
+    assert.equal(retained, false, 'old isolated node bucket must also be removed');
+  });
+  await check('plain actor read invalidates explicit selector snapshot', async () => {
+    const old = await snap(); await browser.execute(a, { method: 'read', params: {} });
+    await denied(() => act(a, op({ selector: '#local', snapshot_id: old.snapshot_id })));
+  });
+  await check('plain actor read revalidates previously approved snapshot', async () => {
+    const old = await snap(); const operation = op({ choice: old.elements.find(e => e.selector === '#local').number, snapshot_id: old.snapshot_id });
+    const approval = await grant(a, operation);
+    await browser.execute(a, { method: 'read', params: {} });
+    await denied(() => browser.execute(a, operation, { approval }));
+  });
+  await check('plain actor read permits fresh vacuum positive control', async () => {
+    await snap(); await browser.execute(a, { method: 'read', params: {} });
+    const fresh = await snap(); const choice = fresh.elements.find(e => e.selector === '#local').number;
+    await act(a, op({ choice, snapshot_id: fresh.snapshot_id }));
+    assert.equal((await observe(aTab)).clicks, 1);
+  });
+  await check('plain actor read preserves sibling actor and same tab legacy bucket', async () => {
+    const other = await snap(b); const legacy = await browser.protocol('vacuum', { tab_id: aTab });
+    await snap(); await browser.execute(a, { method: 'read', params: {} });
+    await act(b, op({ choice: other.elements.find(e => e.selector === '#local').number, snapshot_id: other.snapshot_id }));
+    await browser.protocol('click', { tab_id: aTab, choice: legacy.elements.find(e => e.selector === '#local').number, wait: 'none' });
+    assert.equal((await observe(bTab)).clicks, 1); assert.equal((await observe(aTab)).clicks, 1);
+  });
+  await check('plain legacy observer read preserves bound snapshot', async () => {
+    const current = await snap(); await browser.protocol('read', { tab_id: aTab });
+    await act(a, op({ choice: current.elements.find(e => e.selector === '#local').number, snapshot_id: current.snapshot_id }));
+    assert.equal((await observe(aTab)).clicks, 1);
+  });
+  await check('plain failed page read keeps old snapshot invalid', async () => {
+    const old = await snap();
+    await assert.rejects(() => browser.execute(a, { method: 'read', params: { selector: '#missing' } }), error => error.code === 'INVALID_PARAMS');
+    await denied(() => act(a, op({ choice: old.elements.find(e => e.selector === '#local').number, snapshot_id: old.snapshot_id })));
+  });
+  await check('plain failed isolated cleanup leaves native snapshot denied', async () => {
+    const old = await snap(); const wc = contents(aTab);
+    const original = wc.executeJavaScriptInIsolatedWorld;
+    wc.executeJavaScriptInIsolatedWorld = async function(world, scripts, ...args) {
+      if (scripts.some(script => script.code.includes(old.snapshot_id))) throw new Error('unit cleanup failure');
+      return original.call(this, world, scripts, ...args);
+    };
+    try {
+      await assert.rejects(() => browser.execute(a, { method: 'read', params: {} }), error => error.code === 'BROWSER_ERROR');
+    } finally { wc.executeJavaScriptInIsolatedWorld = original; }
+    await denied(() => act(a, op({ choice: old.elements.find(e => e.selector === '#local').number, snapshot_id: old.snapshot_id })));
+  });
+  await check('plain invalid read parameters preserve previous snapshot', async () => {
+    const old = await snap();
+    await assert.rejects(() => browser.execute(a, { method: 'read', params: { selector: '#'.repeat(5000) } }), error => error.code === 'INVALID_PARAMS');
+    await act(a, op({ choice: old.elements.find(e => e.selector === '#local').number, snapshot_id: old.snapshot_id }));
+    assert.equal((await observe(aTab)).clicks, 1);
+  });
+  await check('plain read cleanup preserves vacuum started after invalidation', async () => {
+    const old = await snap(); const wc = contents(aTab);
+    const original = wc.executeJavaScriptInIsolatedWorld;
+    let release, entered; const gate = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    wc.executeJavaScriptInIsolatedWorld = async function(world, scripts, ...args) {
+      if (scripts.some(script => script.code.includes(old.snapshot_id))) {
+        entered(true); await gate;
+      }
+      return original.call(this, world, scripts, ...args);
+    };
+    const reading = browser.execute(a, { method: 'read', params: {} });
+    try {
+      const reached = await Promise.race([started, reading.then(() => false)]);
+      assert.equal(reached, true, 'cleanup must run after native bucket invalidation');
+      const fresh = await snap(); release(); await reading;
+      await act(a, op({ choice: fresh.elements.find(e => e.selector === '#local').number, snapshot_id: fresh.snapshot_id }));
+      assert.equal((await observe(aTab)).clicks, 1);
+    } finally {
+      release(); wc.executeJavaScriptInIsolatedWorld = original;
+      await Promise.allSettled([reading]);
+    }
+  });
   await check('selector explicit obsolete snapshot after reread denied', async () => {
     const old = await snap(); await snap(); await denied(() => act(a, op({ selector: '#local', snapshot_id: old.snapshot_id })));
   });
