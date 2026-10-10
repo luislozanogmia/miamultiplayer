@@ -510,10 +510,10 @@ class HermesGatewayClient {
   // send and its reply, and that turn's answer is not ours.
   routeSessionEvent(sessionId, type, payload) {
     let observation = this.interruptObservers.get(sessionId);
-    if (observation && type === 'message.start' && this.turns.get(sessionId) !== observation.turn) { observation.finish(); observation = null; }
+    if (observation && (type === 'message.start' || (type === 'message.complete' && payload?.status !== 'interrupted'))) { observation.finish(); observation = null; }
     if (observation && type === 'message.complete' && payload?.status === 'interrupted') {
       const current = this.turns.get(sessionId);
-      if (observation.turn?.mode === 'own' && (!current || current === observation.turn)) {
+      if (observation.eligible && (!current || current === observation.turn)) {
         observation.emit({ type: 'terminal', status: 'interrupted' });
       }
       observation.finish();
@@ -910,7 +910,8 @@ class HermesGatewayClient {
     let observation = this.interruptObservers.get(sessionId);
     if (!observation) {
       const callbacks = new Set(), history = [];
-      observation = { turn: this.turns.get(sessionId), callbacks, history,
+      const turn = this.turns.get(sessionId);
+      observation = { turn, eligible: turn?.mode === 'own', callbacks, history,
         emit: evidence => {
           history.push(evidence);
           for (const callback of callbacks) { try { callback({ ...evidence }); } catch (_) {} }
