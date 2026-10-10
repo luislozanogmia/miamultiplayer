@@ -473,6 +473,93 @@ test('bound fill request creates a pending card and waits without execution unti
   assert.equal(executed[0].context.approval.id, grant.id);
 });
 
+test('expired current approval cannot be fulfilled by earlier read proof and caught partial text', async t => {
+  const f = fixture(t); let mutations = 0, synthesis = 0;
+  f.browser.validate = async (bound, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'fill' });
+  f.browser.execute = async (bound, operation) => { if (operation.method === 'fill') mutations++; return { text: 'fresh assigned read' }; };
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    if (args.worker.id === 'first') {
+      await assert.rejects(f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'fill', params: { selector: '#draft', value: 'Requested exact value' } }), /approval expired/);
+      return { text: 'Read succeeded; requested fill was not executed.', storedSessionId: 'partial' };
+    }
+    return { text: 'Sibling read completed', storedSessionId: 'sibling' };
+  };
+  f.hermes.synthesize = async () => { synthesis++; return { text: 'Must not mark full work verified', storedSessionId: 'mia' }; };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const work = await f.coordinator.create('owner', { ...f.input, workers: f.input.workers.map(worker => ({ ...worker, needs: [] })) });
+    const running = f.coordinator.start('owner', work.id);
+    await until(() => f.store.get(work.id).approvals.length && f.store.get(work.id).workers[1].status === 'done');
+    t.mock.timers.tick(120000); const saved = await running;
+    assert.equal(saved.approvals[0].status, 'expired'); assert.equal(mutations, 0);
+    assert.equal(saved.workers[0].status, 'failed'); assert.equal(saved.workers[1].status, 'done');
+    assert.equal(saved.results.first.text, 'Read succeeded; requested fill was not executed.');
+    assert.equal(saved.results.first.incomplete, true); assert.equal(saved.results.first.verified, false);
+    assert.equal(saved.results.first.browserEvidence.length, 1);
+    assert.equal(saved.status, 'failed'); assert.equal(saved.synthesis, undefined); assert.equal(synthesis, 0);
+    const expiredCard = structuredClone(saved.approvals[0]);
+    await f.coordinator.recover('owner', work.id, ['first']);
+    f.hermes.worker = async args => {
+      await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+      const filling = f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'fill', params: { selector: '#draft', value: 'Requested exact value' } });
+      await until(() => f.store.get(work.id).approvals.length === 2);
+      await f.coordinator.decideApproval('owner', work.id, f.store.get(work.id).approvals[1].id, true); await filling;
+      return { text: 'Fresh approved action completed', storedSessionId: 'recovered' };
+    };
+    f.hermes.synthesize = async () => ({ text: 'New attempt synthesis', storedSessionId: 'new-mia' });
+    const recovered = await f.coordinator.start('owner', work.id);
+    assert.equal(recovered.status, 'done'); assert.equal(recovered.results.first.verified, true);
+    assert.equal(mutations, 1); assert.deepEqual(recovered.approvals[0], expiredCard);
+    assert.equal(recovered.approvals[1].status, 'consumed');
+    assert.equal(recovered.workers[1].status, 'done');
+  } finally { t.mock.timers.reset(); }
+});
+
+test('resolved current approval admits synthesis with working aggregate state', async t => {
+  const f = fixture(t); let captured;
+  f.browser.validate = async (bound, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'fill' });
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    const filling = f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'fill', params: { selector: '#draft', value: 'Approved exact value' } });
+    await until(() => f.store.get(args.work.id).approvals.length);
+    await f.coordinator.decideApproval('owner', args.work.id, f.store.get(args.work.id).approvals[0].id, true); await filling;
+    // A stale aggregate snapshot is fixture input; actual grant and done proof remain intact.
+    const stale = f.store.get(args.work.id); stale.status = 'needs_approval'; f.store.put(stale);
+    return { text: 'Read and approved fill completed', storedSessionId: 'worker' };
+  };
+  f.hermes.synthesize = async args => { captured = args; assert.equal(f.store.get(args.work.id).status, 'working'); return { text: 'Current synthesis', storedSessionId: 'mia' }; };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const done = await f.coordinator.start('owner', work.id);
+  assert.equal(done.status, 'done'); assert.equal(done.approvals[0].status, 'consumed');
+  assert.equal(done.operations.find(op => op.operation.method === 'fill').status, 'done');
+  assert.equal(JSON.parse(captured.message.split('\n').at(-1)).currentSynthesis.workStatus, 'working');
+});
+
+test('intentional rejection and stale-target negative goals retain native completion behavior', async t => {
+  for (const kind of ['rejected', 'revoked']) await t.test(kind, async st => {
+    const f = fixture(st); let mutations = 0;
+    f.browser.validate = async (bound, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'fill' });
+    f.browser.execute = async (bound, operation) => { if (operation.method === 'fill') mutations++; return { text: 'fresh read' }; };
+    const stale = Object.assign(new Error('Expected stale target denial'), { code: 'STALE_SNAPSHOT' });
+    if (kind === 'revoked') f.browser.approve = async () => { throw stale; };
+    f.hermes.worker = async args => {
+      await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+      const operation = f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'fill', params: { selector: '#draft', value: 'Must be denied' } });
+      const denied = assert.rejects(operation, kind === 'revoked' ? error => error === stale : /user rejected/);
+      await until(() => f.store.get(args.work.id).approvals.length);
+      const id = f.store.get(args.work.id).approvals[0].id;
+      if (kind === 'revoked') await assert.rejects(f.coordinator.decideApproval('owner', args.work.id, id, true), error => error === stale);
+      else await f.coordinator.decideApproval('owner', args.work.id, id, false);
+      await denied; return { text: 'Expected negative outcome confirmed; no fill executed.', storedSessionId: 'worker' };
+    };
+    const work = await f.coordinator.create('owner', { ...f.input, goal: 'Verify denial prevents execution', workers: [f.input.workers[0]] });
+    const done = await f.coordinator.start('owner', work.id);
+    assert.equal(done.status, 'done'); assert.equal(done.workers[0].status, 'done'); assert.equal(done.results.first.verified, true);
+    assert.equal(done.approvals[0].status, kind); assert.equal(mutations, 0);
+  });
+});
+
 test('expired bound fill request remains unexecuted and cannot be accepted afterward', async t => {
   const f = await approvalFixture(t); let executions = 0;
   f.browser.execute = async () => { executions++; };

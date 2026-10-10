@@ -282,9 +282,11 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
         const attemptOperations = saved.operations.filter(operation => operation.workerId === workerId && operation.workEpoch === epoch && operation.workerEpoch === workerEpoch);
         const evidence = attemptOperations.filter(operation => operation.status === 'done' && ['read', 'vacuum', 'screenshot'].includes(operation.operation.method));
         const uncertain = attemptOperations.some(operation => ['dispatching', 'uncertain'].includes(operation.status));
-        const verified = evidence.length > 0 && !uncertain;
+        const unmetExpiredApproval = saved.approvals.some(approval => approval.workerId === workerId && approval.workEpoch === epoch && approval.workerEpoch === workerEpoch
+          && approval.status === 'expired' && !attemptOperations.some(operation => operation.approvalId === approval.id && operation.status === 'done'));
+        const verified = evidence.length > 0 && !uncertain && !unmetExpiredApproval;
         target.status = verified ? 'done' : 'failed'; target.storedSessionId = result.storedSessionId;
-        if (!verified) target.error = uncertain ? 'Browser outcome is uncertain; review effects before continuing.' : 'Worker returned without successful assigned-tab read, vacuum or screenshot evidence.';
+        if (!verified) target.error = uncertain ? 'Browser outcome is uncertain; review effects before continuing.' : unmetExpiredApproval ? 'Approval expired before execution; worker task remains incomplete.' : 'Worker returned without successful assigned-tab read, vacuum or screenshot evidence.';
         saved.results[workerId] = { text: result.text.slice(0, OUTPUT_TEXT_LIMIT), truncated: result.text.length > OUTPUT_TEXT_LIMIT, visibleCharacters: result.text.length, workerId, goal: worker.goal, workEpoch: epoch, workerEpoch, status: verified ? 'complete' : 'incomplete', incomplete: !verified, sourceEvent: saved.results[workerId]?.sourceEvent || 'hermes.return', ...(saved.results[workerId]?.runtimeStatus ? { runtimeStatus: saved.results[workerId].runtimeStatus } : {}), verified, browserEvidence: evidence.map(operation => ({ operationId: operation.id, method: operation.operation.method, documentGeneration: operation.documentGeneration })), at: now(), model: worker.model, provider: worker.provider, storedSessionId: result.storedSessionId };
       });
     } catch (error) {
@@ -306,6 +308,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     let work = await get(ownerId, workId);
     if (work.epoch !== epoch || terminal.has(work.status)) return work;
     if (work.workers.some(worker => worker.status !== 'done')) return update(workId, saved => { saved.status = saved.workers.some(worker => ['waiting_for_user', 'needs_approval'].includes(worker.status)) ? 'waiting_for_user' : 'failed'; });
+    work = update(workId, saved => { saved.status = 'working'; });
     const controller = new AbortController(); const key = `${workId}:mia`; aborts.set(key, controller);
     const synthesisEpoch = work.synthesisEpoch || 0;
     const workerEpochs = new Map(work.workers.map(worker => [worker.id, worker.epoch]));
