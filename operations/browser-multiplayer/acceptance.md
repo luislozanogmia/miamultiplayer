@@ -133,7 +133,7 @@ the frontend or claim actual Hermes model execution.
 |9|Native-owner local checks pass|Reread/cross-actor/cross-tab/replaced-node snapshots denied. Page's main-world snapshot-map overwrite cannot alter isolated-world snapshot.|
 |10|Native-owner local checks pass|Actual hidden Alpha/Beta captures contain distinct correct red/green pixels and expected tab IDs; host window visible, workers hidden. Compositor readiness is required; no active-human capture fallback.|
 |11|Integrated source/mock frontend checks; rendered acceptance unverified|Runtime emits operation status/targets; frontend maps them to real-state ownership UI. Cannot manually inspect motes/rings/targets in locked app.|
-|12|Native-owner local checks pass; human approval UI unverified|Reject/change/reuse/navigation/replaced-target and queued revocation deny dispatch; independent fixture counter shows exactly one approved write. No actual UI approval click.|
+|12|New autosave path failing; prior negative checks pass|Reject/change/reuse/navigation/replaced-target and queued revocation deny dispatch, but hidden fill can trigger an unapproved autosave. No actual UI approval click.|
 |13|Native-owner local + mocked coordinator checks pass; real Hermes Stop unverified|Revocation suppresses late native result/queued mutation. Coordinator tests preserve partial results, suppress late scripted model output and hold uncertain writes after interruption/restart. Real Hermes interrupt and app UI Stop remain unverified.|
 |14|Encrypted store/mock proof checks pass; real reusable execution unverified|Wrong key/tampering and restart tests pass; proof authorization and uncertainty tested with scripted runtime. Actual app private key file is 0600. No actual model-produced durable/reusable output or replay.|
 |15|Blocked|GNOME desktop is locked; no connected model in the isolated profile. Zero real bot executions, zero real Mia synthesis, no manual three-tab/focus/group persistence acceptance.|
@@ -178,3 +178,16 @@ registration, configured CLI tool policy, seven tool-bypass denials, environment
 capability scrub, runtime-injected session identity and Ghost method normalization.
 That test makes no model call. The fourteen coordinator Node tests also passed
 independently; they use scripted Hermes/browser transports.
+
+### New failing consequential-input regression
+
+Independent `fill-approval-probe.cjs` against clean integrated
+`c55bc93130e9ab9e4f9d263225568d2a8735560a` attached a real input-event autosave
+listener on a disposable hidden worker page. Runtime validation reported
+`requiresApproval: false`, unapproved fill succeeded, and the independent
+fixture server recorded one POST write. The probe exited 1. This is a real
+consequential write, not a scripted model or inferred risk. Criteria 12 and the
+uncertain-write parts of 13/14 remain open until runtime authority gates fill
+and related consequential navigation without relying on model-provided flags.
+Root/runtime lane is implementing the fix. The probe's safe outcome is
+`needsApproval: true`, `denied: true`, `writes: 0`, exit 0; rerun after integration.
