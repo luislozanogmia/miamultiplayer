@@ -7,7 +7,7 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
   var browserState = { tabs: [] }, works = [], host, bridge, transport, loaded = false;
-  var requestGeneration = 0, timer, pending = new Set(), getBots, getModels, modelInventory = [], lastWorkRender = '', lastGroupRender = '';
+  var requestGeneration = 0, timer, pending = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', lastGroupRender = '';
   var labels = { idle: 'Idle', queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', needs_approval: 'Needs approval', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
   function visibleTabs(state) {
     var group = (state.groups || []).find(function (g) { return g.id === state.selectedGroupId; });
@@ -22,6 +22,7 @@
     });
     return entries;
   }
+  function selectedConnectedModel(entries, value) { return typeof value === 'string' && /^\d+$/.test(value) ? entries[Number(value)] || null : null; }
   function configuredModelIndex(entries, bot) { return entries.findIndex(function (entry) { return bot && entry.model === bot.model && entry.provider === (bot.modelProvider || bot.provider); }); }
   function recoveryState(work, workerId) {
     var reset = new Set([workerId]), changed = true;
@@ -66,7 +67,7 @@
       workers: workers, preservedResponses: preserved,
       results: results.filter(function (result) { return result.incomplete !== true && !['stopped', 'incomplete'].includes(result.status); }),
       approvals: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) { return a.status === 'pending'; }),
-      synthesis: work.synthesis && work.synthesis.incomplete !== true && !['stopped', 'incomplete'].includes(work.synthesis.status) ? work.synthesis : null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
+      personalSelection: work.personalSelection || null, synthesis: work.synthesis && work.synthesis.incomplete !== true && !['stopped', 'incomplete'].includes(work.synthesis.status) ? work.synthesis : null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
   }
   function node(tag, className, text) {
     var n = document.createElement(tag); if (className) n.className = className;
@@ -163,7 +164,7 @@
       }
       card.append(header);
       if (taskRecovery.eligible) card.append(node('p', 'browser-work-preserved-notice', 'Task recovery starts every bot in a fresh session. Earlier answers and Mia synthesis remain context; every page must be checked again before new completion.'));
-      card.append(node('div', 'browser-work-coordinator', 'Mia · Personal agent · Planning and synthesis'));
+      card.append(node('div', 'browser-work-coordinator', 'Mia · Personal agent · Planning and synthesis' + (work.personalSelection ? ' · ' + work.personalSelection.model + ' · ' + work.personalSelection.provider : '')));
       work.workers.forEach(function (worker) {
         var row = node('div', 'browser-work-worker'); var mote = node('img', 'browser-work-mote'); mote.src = 'assets/mote/mote.svg'; mote.alt = '';
         row.append(mote, node('span', '', String(worker.botName || worker.name || worker.botId || worker.actorId) + ' · Tab ' + worker.tabId), node('span', 'browser-work-status', labels[worker.status] || 'Unknown state'));
@@ -228,6 +229,13 @@
       var inventory = await Promise.all([getBots(), getModels()]); var bots = inventory[0]; modelInventory = connectedModels(inventory[1]);
       if (!modelInventory.length) throw new Error('No connected models are available. Connect a model in setup.');
       if (groupId !== browserState.selectedGroupId) return;
+      var personalRow = node('label', 'browser-work-personal-model'); personalRow.append(node('span', '', 'Mia · Personal agent model'));
+      var personalModel = node('select'); personalModel.id = 'browserWorkPersonalModel'; personalModel.setAttribute('aria-label', 'Connected model for personal Mia');
+      var choosePersonal = node('option', '', 'Choose Mia’s connected model'); choosePersonal.value = ''; personalModel.append(choosePersonal);
+      modelInventory.forEach(function (entry, index) { var option = node('option', '', entry.label); option.value = String(index); personalModel.append(option); });
+      var retained = configuredModelIndex(modelInventory, personalSelection); personalModel.value = retained >= 0 ? String(retained) : '';
+      personalModel.addEventListener('change', function () { personalSelection = selectedConnectedModel(modelInventory, personalModel.value); });
+      personalRow.append(personalModel); box.append(personalRow);
       visibleTabs(browserState).forEach(function (tab) {
         var row = node('label', 'browser-work-candidate'); row.setAttribute('data-tab-id', tab.id);
         row.append(node('span', '', 'Tab ' + tab.id + ' · ' + (tab.title || 'New tab')));
@@ -257,18 +265,21 @@
   async function startWork(event) {
     event.preventDefault(); if (!transport || pending.has('start')) return;
     var candidates = Array.from(document.querySelectorAll('.browser-work-candidate')).map(function (row) {
-      var selects = row.querySelectorAll('select'); var botId = selects[0].value; var entry = selects[1].value === '' ? null : modelInventory[Number(selects[1].value)];
+      var selects = row.querySelectorAll('select'); var botId = selects[0].value; var entry = selectedConnectedModel(modelInventory, selects[1].value);
       var candidate = { botId: botId, tabId: Number(row.getAttribute('data-tab-id')), model: entry && entry.model, provider: entry && entry.provider };
       if (selects[2].value) candidate.reusable = JSON.parse(selects[2].value);
       return candidate;
     }).filter(function (c) { return c.botId; });
+    var personalModel = document.getElementById('browserWorkPersonalModel');
+    var chosenPersonal = personalModel && selectedConnectedModel(modelInventory, personalModel.value);
+    if (!chosenPersonal) { error('Choose a connected model for your personal Mia agent.'); return; }
     if (!candidates.length || candidates.some(function (c) { return !c.model || !c.provider; })) { error('Choose at least one bot and a connected model for each assigned tab.'); return; }
     if (new Set(candidates.map(function (c) { return c.botId; })).size !== candidates.length) { error('Each bot can own one tab. Choose a different bot for each tab.'); return; }
     var selected = (browserState.groups || []).find(function (g) { return g.id === browserState.selectedGroupId; });
     if (!selected || candidates.some(function (c) { return !selected.tabIds.includes(c.tabId); })) { error('Tabs changed. Choose bots again.'); return; }
     var goal = document.getElementById('browserWorkGoal').value.trim(); if (!goal) return;
     pending.add('start'); var start = document.getElementById('browserWorkStart'); start.disabled = true; error('');
-    try { await transport.plan({ groupId: selected.id, goal: goal, context: { groupName: selected.name, tabs: visibleTabs(browserState).map(function (t) { return { id: t.id, title: t.title, origin: pageOrigin(t.url) }; }) }, candidates: candidates }); await refresh(); }
+    try { await transport.plan({ groupId: selected.id, goal: goal, personalSelection: { provider: chosenPersonal.provider, model: chosenPersonal.model }, context: { groupName: selected.name, tabs: visibleTabs(browserState).map(function (t) { return { id: t.id, title: t.title, origin: pageOrigin(t.url) }; }) }, candidates: candidates }); await refresh(); }
     catch (e) { error(e.message || 'Mia could not start browser work.'); }
     finally { pending.delete('start'); start.disabled = false; }
   }
@@ -292,5 +303,5 @@
     bridge.command({ action: 'state' }).then(updateBrowserState).catch(function () { error('Browser unavailable.'); });
     if (timer) clearInterval(timer); timer = setInterval(refresh, 2000); refresh();
   }
-  return { taskRecoveryState: taskRecoveryState, preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
+  return { selectedConnectedModel: selectedConnectedModel, taskRecoveryState: taskRecoveryState, preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
 });
