@@ -1,5 +1,24 @@
 # Browser multiplayer acceptance evidence
 
+## Recoverable Stop addendum
+
+Luis requested this addition after the initial integration: preserve useful
+partial work when interrupted, inspired by a supplied vendor UX description.
+That description is design input, not measured reliability evidence.
+Baseline for this addition is `63082c8`.
+
+| Required behavior | Starting evidence | Acceptance gate |
+|---|---|---|
+| Original goal and actual visible streamed answer survive Stop and process restart | Goal already stored; streaming text not persisted | Interrupted worker regression plus encrypted-store reload |
+| Partial answer remains explicitly stopped, incomplete and unverified | Stopped label exists; partial output absent | UI projection regression and actual Linux UI interaction |
+| Recovery retains prior attempts as context while requiring fresh browser evidence | Recovery deletes prior result | Recovery prompt/state regression; no prior proof promotion |
+| Late replies cannot change stopped output; uncertain writes cannot replay | Existing epoch and uncertain-write guards | Retain negative coverage across the new path |
+
+Agent 2 owns coordination and durable state, agent 3 owns display, and agent 4
+independently reviews their combined changes. Existing turn limits remain.
+The actual Linux UI and real Hermes interruption/resumption gates remain
+unverified until exercised; automated transport fixtures cannot close them.
+
 Frozen contract: `operations/browser-multiplayer-mvp.md`, all 15 criteria. Base
 `0eb6c0ba7cfa8f49788355468c04a1d33968d0c7`. Verification lane owns only this
 directory and focused tests. Candidate modules do not establish integration.
