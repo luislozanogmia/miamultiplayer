@@ -8,7 +8,7 @@
   'use strict';
   var browserState = { tabs: [] }, works = [], host, bridge, transport, loaded = false;
   var requestGeneration = 0, timer, pending = new Set(), getBots, lastWorkRender = '', lastGroupRender = '';
-  var labels = { queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', needs_approval: 'Needs approval', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
+  var labels = { idle: 'Idle', queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', needs_approval: 'Needs approval', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
   function visibleTabs(state) {
     var group = (state.groups || []).find(function (g) { return g.id === state.selectedGroupId; });
     if (!group) return state.tabs || [];
