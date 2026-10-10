@@ -23,6 +23,7 @@ const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
+const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 const { createBrowserWorkBroker } = require("./browser-work-broker.cjs");
@@ -1952,6 +1953,10 @@ function createWindow() {
     {
       statePath: path.join(app.getPath("userData"), "miaos-browser-state.json"),
       workspaceRoot: miaosWorkspacePath(),
+      onActorEvent: createActorDiagnostics({
+        enabled: !app.isPackaged && process.env.MIAOS_LOCAL_PROFILE === "1" && process.env.MIAOS_BROWSER_ACTOR_DIAGNOSTICS === "1",
+        log: desktopLog,
+      }),
     },
   );
   const windowNativeBrowser = nativeBrowser;
