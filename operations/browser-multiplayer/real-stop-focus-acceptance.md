@@ -99,3 +99,18 @@ recovery path, with evidence provenance separated. It does not establish
 individual-worker Stop isolation, Stop during personal Mia synthesis,
 uncertain-write no-replay, consequential approval UI, or every
 group/lifecycle gate. All fifteen frozen criteria must retain those open checks.
+
+## Comparison with the canonical combined report
+
+Read-only comparison with root commit
+`68363399526e09d25c12c92c52837b3d0a44650f`,
+`live-stop-and-groups.md`, found no material claim conflict. The overlapping
+full DOM records, stopped snapshot, new sessions/current read proof, completed
+recovery and visible tab/group restoration match this independent review.
+Root's additional observations of UI initiation, exact IDs, empty-group null
+selection, process exit and the intermediate stopped equality window remain
+root-reported evidence. The report explicitly distinguishes Move tab from drag,
+and excludes unsaved form retention through restart and the untouched
+individual/personal Stop, approval and uncertain-write cases. This review does
+not update the authoritative ledger or make claims about the later approval or
+screenshot phase.
