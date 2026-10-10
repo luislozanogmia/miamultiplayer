@@ -1,8 +1,11 @@
 # Runtime secret helper preflight
 
-Read-only review of root's uncommitted candidate atop
-`bf059f63195921a476e704cf2dc31cafb2b405a9`. This is candidate evidence,
-not integrated or actual provider/UI acceptance.
+Final read-only review of committed integration source
+`6d027a4f5b73e74c23a301e4de75b96e299d22f9`. All three implementation files
+are byte-identical to the previously tested candidate atop
+`bf059f63195921a476e704cf2dc31cafb2b405a9`, confirmed by the hashes below.
+This establishes integrated local preflight evidence, not actual provider/UI
+acceptance. The verifier did not repeat unchanged passing checks.
 
 Reviewed file SHA-256 values:
 
@@ -33,6 +36,8 @@ Pinned Hermes command sources run once at startup with empty
 single-key value. The configured helper timeout is three seconds; Hermes
 captures its output and emits structured failure diagnostics.
 
-Root must commit the candidate and establish actual provider dispatch from
-Mia's bot UI. This preflight cannot resolve the diagnosed `missing_api_key`
-failure by itself and does not establish actual worker answers or synthesis.
+No acceptance-blocking defect was found in this bounded configuration review.
+Root must establish actual provider dispatch from Mia's bot UI. This preflight
+cannot resolve the diagnosed `missing_api_key` failure by itself and does not
+establish actual worker answers or synthesis. Direct provider/API probes are
+diagnosis and do not satisfy Luis's explicit bot UI requirement.
