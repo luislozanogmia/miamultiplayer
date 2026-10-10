@@ -8094,6 +8094,7 @@ async function initializeBrowserWork() {
   if (client.readyPromise || client.gatewayReadyPromise || client.configuredUrl) { await workerBroker.stop(); throw new Error('Browser worker capability requires this app-owned fresh gateway'); }
   // The pinned gateway strips GATEWAY_RELAY_*_TOKEN from every model-directed
   // subprocess. Its in-process worker plugin is the only capability consumer.
+  delete client.env.HERMES_TUI_TOOLSETS;
   client.env.GATEWAY_RELAY_MIA_BROWSER_WORK_TOKEN = workerBroker.token;
   client.env.MIA_BROWSER_WORK_TOOL_URL = workerBroker.url;
   const hermes = createBrowserWorkHermes({ client, bindSession: desktop.bindSession,
