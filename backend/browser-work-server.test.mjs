@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { createBrowserWorkBroker } = require('../macos/src/browser-work-broker.cjs');
@@ -47,4 +48,13 @@ test('actual server mounts browser-work authentication before its API fallback',
   }
   assert.equal(response?.status, 401, 'browser-work must reach its authentication gate rather than the API fallback: ' + diagnostics);
   assert.deepEqual(await response.json(), { error: 'unauthorized' });
+  const database = new (require('better-sqlite3'))(path.join(root, 'mia.db'));
+  const key = 'mia_' + randomBytes(24).toString('hex');
+  require('./db').createApiKey(database, { id: 'test-only', name: 'test-only', keyHash: createHash('sha256').update(key).digest('hex'), keyPrefix: 'test-only', ownerEmail: 'local-user@localhost' });
+  database.close();
+  const headers = { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' };
+  const read = await fetch(`http://127.0.0.1:${port}/api/browser-work`, { headers });
+  assert.equal(read.status, 200, 'valid owner automation key may read work');
+  const mutation = await fetch(`http://127.0.0.1:${port}/api/browser-work/work/approvals/approval`, { method: 'POST', headers, body: JSON.stringify({ accept: true }) });
+  assert.equal(mutation.status, 401, 'automation key cannot impersonate human acceptance');
 });

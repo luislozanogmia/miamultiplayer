@@ -8132,7 +8132,7 @@ async function initializeBrowserWork() {
     },
   });
   coordinator.recoverInterrupted();
-  browserWorkRouter.use('/api/browser-work', requireAuth, async (req, res, next) => {
+  browserWorkRouter.use('/api/browser-work', requireAuth, (req, res, next) => req.method === 'GET' ? next() : requireInteractiveAuth(req, res, next), async (req, res, next) => {
     try {
       for (const candidate of req.body?.candidates || req.body?.workers || []) {
         const selection = await chatModelSelectionForUser({ provider: candidate.provider, model: candidate.model }, req.userEmail);
