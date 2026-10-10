@@ -149,18 +149,35 @@
     var expiredApprovals = records.map(function (w) { return w.approvals.map(function (a) { var expiry = typeof a.expiresAt === 'number' ? a.expiresAt : Date.parse(a.expiresAt); return Number.isFinite(expiry) && expiry <= Date.now(); }); });
     var signature = JSON.stringify([records, loaded, !!transport, Array.from(pending), expiredApprovals]);
     if (signature === lastWorkRender) return; lastWorkRender = signature;
-    var list = document.getElementById('browserWorkList'); list.replaceChildren();
+    var list = document.getElementById('browserWorkList');
+    var viewport = host.querySelector('.browser-work-content');
+    var scrollTop = viewport && viewport.scrollTop;
+    var openDetails = new Set(Array.from(list.querySelectorAll('details[data-work-view-key]')).filter(function (detail) { return detail.open; }).map(function (detail) { return detail.getAttribute('data-work-view-key'); }));
+    var active = document.activeElement;
+    // Only restore a control that this render removes. External inputs and
+    // native-page focus stay under the human's control.
+    var focusKey = (typeof document.hasFocus !== 'function' || document.hasFocus()) && active && typeof list.contains === 'function' && list.contains(active) && !active.disabled ? active.getAttribute('data-work-control-key') : null;
+    list.replaceChildren();
     document.getElementById('browserWorkEmpty').hidden = records.length > 0;
     document.getElementById('browserWorkEmpty').textContent = !transport ? 'Browser work is unavailable in this build.' : !loaded ? 'Loading browser work…' : 'No browser work in this group.';
     records.forEach(function (work) {
+      function viewKey(kind, identity) { return JSON.stringify([browserState.selectedGroupId, work.id, kind, identity]); }
+      function workButton(kind, identity, label, callback, disabled) {
+        var control = button(label, callback, disabled);
+        control.setAttribute('data-work-control-key', viewKey(kind, identity)); return control;
+      }
+      function detailKey(detail, kind, identity) {
+        var key = viewKey(kind, identity); detail.setAttribute('data-work-view-key', key);
+        detail.firstChild.setAttribute('data-work-control-key', key); return detail;
+      }
       var card = node('article', 'browser-work-card'); card.append(node('strong', '', work.goal));
       var header = node('div', 'browser-work-heading'); header.append(node('span', 'browser-work-status', work.status));
-      if (!work.terminal) header.append(button('Stop this task', function () { mutate('stop:' + work.id, function () { return transport.cancel(work.id); }); }, !transport || pending.has('stop:' + work.id)));
-      if (work.rawStatus === 'queued' && transport && transport.start) header.append(button('Start queued task', function () { mutate('start:' + work.id, function () { return transport.start(work.id); }); }, pending.has('start:' + work.id)));
+      if (!work.terminal) header.append(workButton('stop-task', null, 'Stop this task', function () { mutate('stop:' + work.id, function () { return transport.cancel(work.id); }); }, !transport || pending.has('stop:' + work.id)));
+      if (work.rawStatus === 'queued' && transport && transport.start) header.append(workButton('start-task', null, 'Start queued task', function () { mutate('start:' + work.id, function () { return transport.start(work.id); }); }, pending.has('start:' + work.id)));
       var taskRecovery = taskRecoveryState(work);
       if (taskRecovery.held) header.append(node('span', 'browser-work-hold', 'Task recovery held · uncertain write outcome'));
       else if (taskRecovery.eligible && transport && transport.recover) {
-        header.append(button('Recover task with fresh page checks', function () { mutate('recover-task:' + work.id, function () { return transport.recover(work.id, taskRecovery.workerIds); }); }, pending.has('recover-task:' + work.id)));
+        header.append(workButton('recover-task', null, 'Recover task with fresh page checks', function () { mutate('recover-task:' + work.id, function () { return transport.recover(work.id, taskRecovery.workerIds); }); }, pending.has('recover-task:' + work.id)));
       }
       card.append(header);
       if (taskRecovery.eligible) card.append(node('p', 'browser-work-preserved-notice', 'Task recovery starts every bot in a fresh session. Earlier answers and Mia synthesis remain context; every page must be checked again before new completion.'));
@@ -171,22 +188,22 @@
         if (worker.previousAttemptsOmitted > 0) row.append(node('small', '', worker.previousAttemptsOmitted + ' older attempts are outside the retained history.'));
         if (worker.model) row.append(node('small', '', worker.model + ' · ' + (worker.provider || 'Provider unavailable')));
         if (worker.task || worker.goal) row.append(node('p', '', worker.task || worker.goal));
-        if (!work.terminal && !['done', 'failed', 'cancelled'].includes(worker.status)) row.append(button('Stop bot', function () { mutate('stop:' + worker.actorId, function () { return transport.cancel(work.id, worker.id); }); }, !transport || pending.has('stop:' + worker.actorId)));
+        if (!work.terminal && !['done', 'failed', 'cancelled'].includes(worker.status)) row.append(workButton('stop-worker', [worker.id, worker.actorId], 'Stop bot', function () { mutate('stop:' + worker.actorId, function () { return transport.cancel(work.id, worker.id); }); }, !transport || pending.has('stop:' + worker.actorId)));
         var recovery = recoveryState(work, worker.id);
         if (recovery.held) row.append(node('p', 'browser-work-hold', 'Recovery held · a write outcome is uncertain. Review its external effect before recovery.'));
         else if (recovery.eligible && transport && transport.recover) {
           row.append(node('p', '', 'Recovering this bot also starts dependent bots in fresh sessions. Previous attempts stay available as context; fresh work must verify the current page again.'));
-          row.append(button('Restart bot and dependents', function () { mutate('recover:' + worker.id, function () { return transport.recover(work.id, [worker.id]); }); }, pending.has('recover:' + worker.id)));
+          row.append(workButton('recover-worker', [worker.id, worker.actorId], 'Restart bot and dependents', function () { mutate('recover:' + worker.id, function () { return transport.recover(work.id, [worker.id]); }); }, pending.has('recover:' + worker.id)));
         }
         var steps = work.operations.filter(function (op) { return op.workerId === worker.id; });
         if (worker.status === 'done' && steps.length && steps.every(function (op) { return op.status === 'done'; }) && !work.operations.some(function (op) { return op.status === 'uncertain'; }) && transport && transport.exportReusable) {
-          row.append(button('Save reusable steps', function () { mutate('export:' + worker.id, function () { return transport.exportReusable(work.id, worker.id); }); }, pending.has('export:' + worker.id)));
+          row.append(workButton('export-worker', [worker.id, worker.actorId], 'Save reusable steps', function () { mutate('export:' + worker.id, function () { return transport.exportReusable(work.id, worker.id); }); }, pending.has('export:' + worker.id)));
         }
         card.append(row);
       });
       work.reusable.forEach(function (saved) {
         var section = node('section', 'browser-work-reusable'); section.append(node('strong', '', 'Saved steps · ' + saved.workerId), node('p', '', String((saved.proof || []).length) + ' recorded execution proofs · each new run checks its current target and requests approvals.'));
-        section.append(button('Choose tab for saved steps', function () { return chooseBots({ sourceWorkId: work.id, reusableId: saved.id }); }, !transport || !saved.proof || !saved.proof.length || work.operations.some(function (op) { return op.status === 'uncertain'; })));
+        section.append(workButton('choose-saved', saved.id, 'Choose tab for saved steps', function () { return chooseBots({ sourceWorkId: work.id, reusableId: saved.id }); }, !transport || !saved.proof || !saved.proof.length || work.operations.some(function (op) { return op.status === 'uncertain'; })));
         card.append(section);
       });
       work.approvals.forEach(function (approval) {
@@ -196,7 +213,7 @@
         var expiration = typeof approval.expiresAt === 'number' ? approval.expiresAt : Date.parse(approval.expiresAt);
         var expired = Number.isFinite(expiration) && expiration <= Date.now();
         ['Reject', 'Approve once'].forEach(function (label, i) {
-          row.append(button(label, function () { mutate(key, function () { return transport.approval(work.id, approval, i === 1); }); }, !transport || work.terminal || !!expired || pending.has(key)));
+          row.append(workButton('approval-action', [approval.id, approval.actorId, approval.tabId, approval.documentGeneration, approval.expectedUrl, approval.operationHash, i], label, function () { mutate(key, function () { return transport.approval(work.id, approval, i === 1); }); }, !transport || work.terminal || !!expired || pending.has(key)));
         });
         if (expired) row.append(node('small', '', 'Expired · request a new approval.')); card.append(row);
       });
@@ -208,12 +225,19 @@
         section.append(node('pre', 'browser-work-preserved-text', response.text));
         var context = node('details', 'browser-work-attempt-context'); context.append(node('summary', '', 'Original task context'), node('p', '', 'Overall goal: ' + response.overallGoal), node('p', '', (response.personal ? 'Mia task: ' : 'Bot task: ') + response.goal));
         if (response.context) context.append(node('pre', '', response.context));
-        section.append(context); card.append(section);
+        section.append(detailKey(context, 'attempt-context', [response.workerId, response.personal, response.historical, response.workEpoch, response.workerEpoch, response.historical ? response.at : null])); card.append(section);
       });
-      work.results.forEach(function (result) { var row = node('details', 'browser-work-result'); row.append(node('summary', '', result.title || 'Stored result'), node('pre', '', result.text || result.content || JSON.stringify(result))); card.append(row); });
+      work.results.forEach(function (result) { var row = node('details', 'browser-work-result'); row.append(node('summary', '', result.title || 'Stored result'), node('pre', '', result.text || result.content || JSON.stringify(result))); card.append(detailKey(row, 'result', [result.workerId || result.id || result.title])); });
       if (work.synthesis) card.append(node('pre', 'browser-work-synthesis', typeof work.synthesis === 'string' ? work.synthesis : work.synthesis.text || JSON.stringify(work.synthesis)));
       list.append(card);
     });
+    Array.from(list.querySelectorAll('details[data-work-view-key]')).forEach(function (detail) { detail.open = openDetails.has(detail.getAttribute('data-work-view-key')); });
+    // Expand first so restoring the viewport is not clamped by collapsed text.
+    if (viewport) viewport.scrollTop = scrollTop;
+    if (focusKey) {
+      var control = Array.from(list.querySelectorAll('[data-work-control-key]')).find(function (item) { return item.getAttribute('data-work-control-key') === focusKey; });
+      if (control && !control.disabled && !control.hidden && control.getClientRects().length) control.focus({ preventScroll: true });
+    }
   }
   function updateBrowserState(state) {
     if (!state || !Array.isArray(state.tabs)) return;
