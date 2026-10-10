@@ -1,5 +1,7 @@
 # Browser multiplayer acceptance evidence
 
+The authoritative latest disposition is [final Linux developer-runtime acceptance](final-linux-acceptance.md): all fifteen original criteria are satisfied in the exercised scope. Its availability and environment limits remain explicit. The sections below preserve the earlier evidence and starting gates; their PARTIAL labels are historical, not the latest disposition.
+
 Current evidence includes actual DeepSeek Flash execution through Mia's bot UI
 on isolated Linux display `:100`, followed by independent stored-work, runtime
 session metadata and rendered-output checks. See
@@ -9,8 +11,8 @@ source `944a8ca`. Subsequent actual Stop/group/approval/reuse evidence uses app 
 Personal Mia and two real workers completed Alpha 17 + Beta 29 = 46.
 The original locked DCV session remains preserved; it no longer blocks this
 separate display's exercised path. The disposable app uses supported local
-mode, which does not establish Clerk or Mia Router authorization. Full MVP
-acceptance remains open for the unverified gates in the current table below.
+mode, which does not establish Clerk or Mia Router authorization. At this earlier checkpoint, full MVP
+acceptance remained open for the unverified gates in the table below.
 Earlier starting states and incident observations are explicitly historical.
 
 ## Explicit personal Mia model selection
@@ -166,7 +168,7 @@ read. No cleanup was attempted; uncertain content is preserved. This incidental
 runtime-copy mutation is separate from disposable checks and precludes claiming
 the installed profile was untouched. All later checks use isolated Electron.
 
-## Current integrated evidence: all 15 criteria
+## Historical integrated checkpoint: all 15 criteria
 
 Actual UI initiation is root-reported computer-use evidence. Independent
 verification inspected the final screenshot, real stored replies, current
@@ -194,7 +196,7 @@ claim denial and selected native-tab reorder preserving group selection.
 The harness uses actual browser modules from that tree. It does not import
 the frontend or claim actual Hermes model execution.
 
-| # | Current result | Evidence and remaining gate |
+| # | Result at this historical checkpoint | Evidence and then-remaining gate |
 |---|---|---|
 |1|PASS for exercised Linux groups and full-process legacy restoration|Manual UI named groups, empty group, tab reordering via Move tab, active group and selected tab survived actual app quit/relaunch. See group-ui-acceptance.md and live-stop-and-groups.md. Legacy v1 loading and v2 reopening now pass the actual sandboxed native probe; see legacy-state-restore.md for its same-process/native-owner limits. Subsequently a fresh tabs-only legacy profile loaded and migrated in the actual Mia process, preserved IDs/order/default group/selected Alpha across File > Quit and distinct-process relaunch, and rendered Alpha17 both times. Independent packet review passed; see real-legacy-full-process-restore.md. Provider onboarding/tab switching in that fresh keyless profile and native Mac/Windows are not established.|
 |2|PARTIAL: actual personal Mia planning/synthesis; lifecycle checks open|UI selected personal Mia separately from bots; its real session planned the work and synthesized two stored replies to the overall goal. Group context/dependency retention has integrated scripted coverage; broader lifecycle remains open.|
@@ -303,8 +305,8 @@ Those root checks are recorded as root-provided evidence; the verifier also
 observed the actual isolated app's 404-to-401 transition independently.
 
 No pushes, merges to main, releases, deployments or real-data migrations were
-performed by this lane. All fifteen criteria remain in this ledger; the full
-MVP cannot be marked complete while criterion 15's remaining focus/group/restart
+performed by this lane. At that checkpoint all fifteen criteria remained in this ledger; the full
+MVP could not be marked complete while criterion 15's remaining focus/group/restart
 checks and the other explicit actual UI/lifecycle gates in the current table
 remain unverified. The real Flash execution evidence supersedes the historical
 zero-execution state without closing those separate checks.
