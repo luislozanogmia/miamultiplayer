@@ -1089,3 +1089,24 @@ test('interrupt nonacceptance and malformed receipts never attest interruption',
     assert.equal(events.length, 1, 'no captured owned turn means no terminal attestation'); client.close();
   }
 });
+
+test('interrupt terminal observers retire on disconnect, new owned turn and the bounded deadline', async t => {
+  for (const boundary of ['disconnect', 'new turn', 'deadline']) await t.test(boundary, async st => {
+    const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+    st.after(() => client.close());
+    client.turns.set('live', { mode: 'own', sessionId: 'live', resolve() {}, reject() {} });
+    const events = []; let calls = 0;
+    client.request = async () => { calls++; return { status: 'interrupted' }; };
+    if (boundary === 'deadline') st.mock.timers.enable({ apis: ['setTimeout'] });
+    const first = client.interrupt('live', { onEvidence: event => events.push(event) });
+    const duplicate = client.interrupt('live');
+    await first; await duplicate; assert.equal(calls, 1);
+    client.turns.delete('live');
+    if (boundary === 'disconnect') client.failConnection(new Error('hidden disconnect details'));
+    else if (boundary === 'new turn') client.turns.set('live', { mode: 'own', sessionId: 'live', resolve() {}, reject() {} });
+    else { st.mock.timers.tick(30000); st.mock.timers.reset(); }
+    client.routeSessionEvent('live', 'message.complete', { status: 'interrupted', text: 'hidden late body' });
+    assert.deepEqual(events, [{ type: 'receipt', status: 'acknowledged' }]);
+    assert.equal(client.interruptObservers.size, 0);
+  });
+});
