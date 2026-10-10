@@ -31,9 +31,12 @@ and linked completed native click, separately from worker/page prose. It
 explicitly says external effect is not established by that metadata and does
 not infer a write from page strings. The verifier's separate fixture check is
 not model-visible evidence. This repairs the exercised prior omission where
-Mia called approval unverified despite the native grant/click. A rendered final
-synthesis screenshot remains a separate observation; the supplied screenshot
-shows the earlier execution/target state.
+Mia called approval unverified despite the native grant/click. Independent
+inspection of `/tmp/mia-approved-provenance-final.png` shows the rendered final
+synthesis's scope and effect/replay limits, with human selected and the draft
+focused. The approval IDs and native-completion section are above its visible
+scroll position; their exact content is verified from the stored completed
+synthesis API rather than claimed visible in that screenshot.
 
 This positive actual presence observation does not accept cleanup candidate
 `d615570`. Independent isolated Electron checks passed its original 18 presence
