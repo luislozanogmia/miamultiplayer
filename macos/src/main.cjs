@@ -25,6 +25,9 @@ const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
+const { createBrowserWorkBroker } = require("./browser-work-broker.cjs");
+const { loadBrowserWorkKey } = require("./browser-work-key.cjs");
+const { createBrowserWorkDispatch } = require("./browser-work-dispatch.cjs");
 const { resolveMiaFolder } = require("./mia-folder.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
@@ -184,6 +187,8 @@ if (!hasSingleInstanceLock) app.quit();
 
 let mainWindow = null;
 let nativeBrowser = null;
+let browserWorkBroker = null;
+let browserWorkKey = null;
 let backendProcess = null;
 let backendProcessUrl = null;
 let backendUrl = null;
@@ -855,6 +860,14 @@ async function startLocalBackend(exactPort = null) {
       });
     }
   }
+  if (!browserWorkBroker) {
+    try {
+      browserWorkKey = await loadBrowserWorkKey({ directory: dataDirectory, safeStorage });
+      browserWorkBroker = await createBrowserWorkBroker({ dispatch: createBrowserWorkDispatch(() => nativeBrowser) });
+    } catch (_) {
+      desktopLog("Browser collaboration unavailable: secure desktop storage is required.");
+    }
+  }
   const databasePath = backendDatabasePath();
   const hermesHome = path.resolve(process.env.HERMES_HOME || path.join(dataDirectory, "hermes"));
   const workspaceDir = miaosWorkspacePath();
@@ -863,6 +876,7 @@ async function startLocalBackend(exactPort = null) {
   const claudeCodeCommand = discoverClaudeCodeCommand({ home: app.getPath("home") });
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
+    ...(browserWorkBroker ? { MIA_BROWSER_WORK_URL: browserWorkBroker.url, MIA_BROWSER_WORK_TOKEN: browserWorkBroker.token, MIA_BROWSER_WORK_KEY: browserWorkKey.toString("base64") } : {}),
     // The desktop backend is private to this device. Never request LAN/public
     // firewall access just because Clerk authentication is enabled.
     MIAOS_BIND_HOST: "127.0.0.1",
@@ -2474,6 +2488,7 @@ app.on("before-quit", () => {
   isQuitting = true;
   if (autoUpdateCheckTimer) clearInterval(autoUpdateCheckTimer);
   nativeBrowser?.persist?.();
+  browserWorkBroker?.stop().catch(() => {});
   ghostBridge?.stop().catch(error => desktopLog(`Ghost browser bridge stop failed: ${error.message}`));
   googleWorkspaceBroker?.close().catch(error => desktopLog(`Google credential broker stop failed: ${error.message}`));
   stopBackendForQuit();
