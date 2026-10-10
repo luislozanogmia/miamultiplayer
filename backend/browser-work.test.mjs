@@ -366,3 +366,57 @@ test('recovery clears stale current failure labels while preserving prior output
   assert.ok(f.store.get(work.id).workers[0].error);
   const recovered = await f.coordinator.recover('owner', work.id, ['first']); assert.equal(recovered.workers[0].error, undefined); assert.equal(recovered.workers[0].lastEvent, undefined); assert.equal(recovered.workers[0].previousAttempts[0].text, 'Incomplete model-only output');
 });
+
+test('explicit personal Mia selection reaches both planning and synthesis without a default model substitution', async t => {
+  const selection = { provider: 'deepseek', model: 'deepseek-flash', reasoningEffort: 'medium' };
+  const validated = [];
+  const f = fixture(t, { personalOptions: async (owner, requested) => { validated.push(requested); return { profile: 'personal-mia', provider: requested?.provider || 'deepseek', model: requested?.model || 'deepseek-v4-pro', reasoningEffort: requested?.reasoningEffort }; } });
+  f.hermes.plan = async args => { assert.equal(args.options.model, 'deepseek-flash'); assert.equal(args.options.provider, 'deepseek'); return { text: '{"workers":[{"id":"0","goal":"read","needs":[]}]}', storedSessionId: 'personal' }; };
+  const work = await f.coordinator.plan('owner', { ...f.input, personalSelection: selection, candidates: [f.input.workers[0]] });
+  assert.deepEqual(work.personalSelection, selection);
+  await f.coordinator.start('owner', work.id);
+  const synthesis = f.calls.find(call => !call.worker); assert.equal(synthesis.options.model, 'deepseek-flash'); assert.equal(synthesis.options.reasoningEffort, 'medium');
+  assert.ok(validated.length >= 2); assert.ok(validated.every(requested => requested.model === 'deepseek-flash'));
+});
+
+test('unknown or substituted personal model selection is rejected before planning or worker dispatch', async t => {
+  const selected = { provider: 'deepseek', model: 'unknown-model' };
+  const f = fixture(t, { personalOptions: async () => { const error = new Error('Unknown connected personal model'); error.status = 400; throw error; } });
+  let plans = 0; f.hermes.plan = async () => { plans++; throw new Error('must not dispatch'); };
+  await assert.rejects(f.coordinator.plan('owner', { ...f.input, personalSelection: selected, candidates: f.input.workers }), /Unknown connected/);
+  await assert.rejects(f.coordinator.create('owner', { ...f.input, personalSelection: selected }), /Unknown connected/);
+  assert.equal(plans, 0); assert.equal(f.calls.length, 0); assert.equal(f.store.list().length, 0);
+  const substitution = fixture(t, { personalOptions: async () => ({ provider: 'deepseek', model: 'deepseek-v4-pro' }) });
+  await assert.rejects(substitution.coordinator.plan('owner', { ...substitution.input, personalSelection: { provider: 'deepseek', model: 'deepseek-flash' }, candidates: substitution.input.workers }), /did not retain/);
+  assert.equal(substitution.store.list().length, 0);
+});
+
+test('selection revoked after create blocks start before worker operations and a later synthesis mismatch cannot commit', async t => {
+  let available = true;
+  const selection = { provider: 'deepseek', model: 'deepseek-flash' };
+  const f = fixture(t, { personalOptions: async () => { if (!available) throw new Error('Selected model disconnected'); return { profile: 'personal-mia', ...selection }; } });
+  const work = await f.coordinator.create('owner', { ...f.input, personalSelection: selection });
+  available = false; await assert.rejects(f.coordinator.start('owner', work.id), /disconnected/); assert.equal(f.calls.length, 0); assert.equal(f.store.get(work.id).operations.length, 0);
+  available = true;
+  f.hermes.worker = async args => { await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} }); available = false; return { text: 'real fixture read completed', storedSessionId: 'worker' }; };
+  const finished = await f.coordinator.start('owner', work.id); assert.equal(finished.status, 'failed'); assert.equal(finished.synthesis, undefined); assert.ok(Object.values(finished.results).every(result => result.verified === true));
+});
+
+test('personal selection persists through encrypted restart and recovery without promoting prior browser proof', async t => {
+  const selection = { provider: 'deepseek', model: 'deepseek-flash', ignoredField: 'disposable-noncredential-field' };
+  const f = fixture(t, { personalOptions: async (owner, requested) => ({ profile: 'personal-mia', provider: requested.provider, model: requested.model }) });
+  const work = await f.coordinator.create('owner', { ...f.input, personalSelection: selection, workers: [f.input.workers[0]] }); await f.coordinator.start('owner', work.id);
+  const reopened = createBrowserWorkStore({ key: f.key, filePath: f.filePath }); const coordinator = createBrowserWorkCoordinator({ ...f.options, store: reopened });
+  assert.deepEqual(reopened.get(work.id).personalSelection, { provider: 'deepseek', model: 'deepseek-flash' });
+  await coordinator.recover('owner', work.id, ['first']);
+  f.hermes.worker = async () => ({ text: 'fresh model-only reply', storedSessionId: 'new' });
+  const resumed = await coordinator.start('owner', work.id); assert.equal(resumed.status, 'failed'); assert.equal(resumed.results.first.verified, false); assert.deepEqual(resumed.personalSelection, { provider: 'deepseek', model: 'deepseek-flash' });
+  await assert.rejects(coordinator.create('owner', { ...f.input, personalSelection: null }), /invalid personal/);
+});
+
+test('omitted personal selection preserves legacy personal option callback behavior', async t => {
+  const argCounts = [];
+  const f = fixture(t, { personalOptions: async (...args) => { argCounts.push(args.length); return { profile: 'personal-mia', model: 'legacy-choice', provider: 'legacy-provider' }; } });
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] }); assert.equal(work.personalSelection, undefined); assert.deepEqual(argCounts, []);
+  await f.coordinator.start('owner', work.id); assert.deepEqual(argCounts, [1]); assert.equal(f.calls.find(call => !call.worker).options.model, 'legacy-choice');
+});
