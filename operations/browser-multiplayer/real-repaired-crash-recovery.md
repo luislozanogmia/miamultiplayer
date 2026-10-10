@@ -78,3 +78,22 @@ reusable-source replay, personal Mia Stop, arbitrary crash timing, Mac/Windows,
 or full fifteen-criterion MVP acceptance is established. Root owns remaining
 integration and acceptance reconciliation; this evidence closes the recorded
 prerequisite uncertainty bypass for the exercised Linux synthetic lifecycle.
+
+## Separate current-source automated checks
+
+Root reports desktop/frontend 472/472 passing without skips. The broad backend
+run is not wholly green: verification read /tmp/mia-current-backend-suite.log,
+574 total, 569 pass, two fail and three optional skips. The two failed local HTTP
+startup cases reported EADDRINUSE on callback port 4870 before affected product
+assertions. Root reports that port belongs to the running disposable actual app's
+auxiliary OAuth listener; verification did not inspect process environment or
+operate that app.
+
+Root rechecked only the two affected files with the test-process configuration
+GOOGLE_REDIRECT_URI=https://mia-test.invalid/callback to disable their auxiliary
+loopback listener. Verification read /tmp/mia-backend-callback-isolated-recheck.log:
+eight pass, zero failures/skips, including the two previously blocked cases.
+This is a passing focused local automated recheck under a changed test runtime
+condition, not a passing rerun of the entire original backend suite. No product
+source change or unchanged broad-suite rerun was required for this environment
+collision, and neither suite class substitutes for the actual recovery evidence.
