@@ -70,6 +70,7 @@ function harness(options = {}) {
       if (script.includes('document.querySelector("video")') && script.includes("return { currentTime")) {
         return Promise.resolve(options.mediaCapture || null);
       }
+      if (script.includes("__miaApprovedTargets") && script.includes("return true;")) return Promise.resolve(true);
       if (script.includes("const nodes =")) {
         return Promise.resolve({
           elements: [
@@ -88,6 +89,7 @@ function harness(options = {}) {
       if (script.includes("document.title")) return Promise.resolve("evaluated");
       return Promise.resolve({});
     }
+    executeJavaScriptInIsolatedWorld(_world, scripts) { return this.executeJavaScript(scripts[0].code); }
     setWindowOpenHandler(callback) { this.popup = callback; }
     getZoomFactor() { return options.shellZoomFactor || 1; }
     send(channel, payload) { this.sent.push({ channel, payload }); }
@@ -937,4 +939,74 @@ test("page fullscreen keeps a window that was already fullscreen, and ends when 
   assert.ok(wc.scripts.some(script => script.includes("document.exitFullscreen()")));
   assert.equal(h.window.fullScreen, true, "the window stays fullscreen as the user had it");
   assert.equal(h.views[0].visible, false);
+});
+
+test("trusted actor execution targets its tab without human selection or focus", async () => {
+  const h = harness();
+  const first = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  const binding = { actorId: "bot", botId: "bot", tabId: first.tab_id, groupId: "default", ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const before = h.views.map(view => view.webContents.focusCalls || 0);
+  await assert.rejects(h.controller.protocol("read", { actor_id: "bot", tab_id: first.tab_id }), { code: "TRUSTED_ACTOR_REQUIRED" });
+  const result = await h.controller.execute(binding, { method: "read", params: {} });
+  assert.equal(result.tab_id, first.tab_id);
+  await h.controller.execute(binding, { method: "fill", params: { selector: "input", value: "hello", wait: "none" } });
+  await h.controller.execute(binding, { method: "scroll", params: {} });
+  await h.controller.execute(binding, { method: "navigate", params: { url: "https://example.com/next", wait: "none" } });
+  assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), before);
+  assert.equal(h.command("state").activeId, 2);
+  await assert.rejects(h.controller.execute(binding, { method: "read", params: { tab_id: 2 } }), { code: "TAB_NOT_OWNED" });
+  await assert.rejects(h.controller.execute(binding, { method: "key", params: { text: "steal" } }), { code: "UNTARGETED_KEY_FORBIDDEN" });
+});
+
+test("numbered snapshots are isolated, replaced snapshots and navigation fail closed", async () => {
+  const h = harness(); const tab = await h.controller.protocol("tab_open", { url: "https://example.com/", wait: "none" });
+  const binding = { actorId: "a", botId: "a", tabId: tab.tab_id, groupId: "default", ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const second = { ...binding, actorId: "b", botId: "b" }; h.controller.actors.bind(second);
+  const snapshot = await h.controller.execute(binding, { method: "vacuum", params: {} });
+  await h.controller.execute(second, { method: "vacuum", params: {} });
+  const op = { method: "fill", params: { choice: 2, snapshot_id: snapshot.snapshot_id, value: "hello", wait: "none" } };
+  const approval = await h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
+  await h.controller.execute(binding, op, { approval: approval.approval_id });
+  await h.controller.execute(binding, { method: "vacuum", params: {} });
+  const approve = () => h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
+  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+  const current = await h.controller.execute(binding, { method: "vacuum", params: {} });
+  h.views[0].webContents.emit("did-start-navigation", {}, "https://example.com/", false, true);
+  op.params.snapshot_id = current.snapshot_id;
+  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+});
+
+test("groups survive restart including an empty selected group", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-groups-")); const statePath = path.join(root, "browser.json");
+  try {
+    const h = harness({ statePath }); h.command("new"); h.command("navigate", { value: "https://example.com/" });
+    h.command("group-create", { name: "Research" });
+    const groupId = h.command("state").groups.find(g => g.name === "Research").id;
+    h.command("group-select", { groupId }); assert.equal(h.command("state").activeId, null);
+    h.controller.persist(); h.window.emit("closed");
+    const restored = harness({ statePath }); assert.equal(restored.command("state").selectedGroupId, groupId); assert.equal(restored.command("state").activeId, null);
+    restored.command("new"); const state = restored.command("state"); assert.equal(state.groups.find(g => g.id === groupId).selectedTabId, state.activeId);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("hidden screenshot captures assigned WebContents, retries surface readiness and preserves selection", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  const binding = { actorId: "a", botId: "a", tabId: worker.tab_id, groupId: "default", ownerId: "owner", taskId: "task" }; h.controller.actors.bind(binding);
+  const calls = []; let attempt = 0;
+  h.views[0].webContents.capturePage = async (rect, options) => {
+    calls.push({ rect, options }); if (++attempt === 1) throw new Error("UnknownVizError");
+    return { toPNG: () => Buffer.from("worker-pixels"), isEmpty: () => false, getSize: () => ({ width: 800, height: 600 }) };
+  };
+  h.views[1].webContents.capturePage = () => assert.fail("human tab was captured");
+  const focus = h.views.map(view => view.webContents.focusCalls || 0);
+  const result = await h.controller.execute(binding, { method: "screenshot", params: {} });
+  assert.equal(result.tab_id, worker.tab_id); assert.equal(result.data_url, "data:image/png;base64," + Buffer.from("worker-pixels").toString("base64"));
+  assert.equal(calls.length, 2); assert.equal(calls[0].options.stayHidden, true); assert.equal(h.controller.state().activeId, 2);
+  assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), focus);
+  h.views[0].webContents.capturePage = async () => { h.views[0].webContents.emit("did-start-navigation", {}, "https://example.com/changed", false, true); return { toPNG: () => Buffer.from("stale"), isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }; };
+  await assert.rejects(h.controller.execute(binding, { method: "screenshot", params: {} }), { code: "TAB_NAVIGATED" });
 });
