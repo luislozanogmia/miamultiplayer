@@ -2329,20 +2329,44 @@
   // Feedback goes out through the user's own mail client — no backend, no
   // credentials. The Electron shell only opens this exact mailto address.
   var FEEDBACK_EMAIL = 'hello@mia-labs.com';
+  // The optional technical report is content-free by construction: app
+  // version, platform, and the managed-router provisioning trail (step names,
+  // statuses, exit codes — see the status endpoint). Never conversation text,
+  // never key material. Kept short so mailto bodies survive every mail client.
+  function buildFeedbackTechnicalReport(){
+    return api('/api/settings/managed-router/status').then(function(result){
+      var data = result && result.data || {};
+      var version = '';
+      try { version = (window.miaDesktop && window.miaDesktop.version && window.miaDesktop.version()) || ''; } catch(_e){}
+      var lines = [
+        '--- Technical report (no credentials or conversation text) ---',
+        'Mia ' + (version || 'unknown version') + ' on ' + navigator.platform,
+        'Router: ' + (data.provisioned ? 'connected' : (data.errorCode || 'not connected'))
+      ];
+      var trail = Array.isArray(data.diagnostics) ? data.diagnostics.slice(-12) : [];
+      return lines.concat(trail).join('\n');
+    }).catch(function(){ return ''; });
+  }
   var settingsFeedbackSend = el('#settingsFeedbackSend');
   if(settingsFeedbackSend) settingsFeedbackSend.addEventListener('click', function(){
     var box = el('#settingsFeedbackText');
     var text = box && box.value ? box.value.trim() : '';
     if(!text){ if(box) box.focus(); return; }
-    var url = 'mailto:' + FEEDBACK_EMAIL +
-      '?subject=' + encodeURIComponent('Mia feedback') +
-      '&body=' + encodeURIComponent(text);
-    window.open(url);
-    var note = el('#settingsFeedbackSent');
-    if(note){
-      note.classList.add('visible');
-      setTimeout(function(){ note.classList.remove('visible'); }, 4000);
-    }
+    var attach = el('#settingsFeedbackReport');
+    var withReport = attach && attach.checked
+      ? buildFeedbackTechnicalReport().then(function(report){ return report ? text + '\n\n' + report : text; })
+      : Promise.resolve(text);
+    withReport.then(function(body){
+      var url = 'mailto:' + FEEDBACK_EMAIL +
+        '?subject=' + encodeURIComponent('Mia feedback') +
+        '&body=' + encodeURIComponent(body);
+      window.open(url);
+      var note = el('#settingsFeedbackSent');
+      if(note){
+        note.classList.add('visible');
+        setTimeout(function(){ note.classList.remove('visible'); }, 4000);
+      }
+    });
   });
   var settingsInstructionsSave = el('#settingsInstructionsSave');
   if(settingsInstructionsSave) settingsInstructionsSave.addEventListener('click', function(){

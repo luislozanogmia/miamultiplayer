@@ -9,6 +9,17 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+### Fixed
+- Give Mia Router key saves a 60-second ceiling so slow cold starts on
+  Windows (antivirus scanning, first run) no longer lose the freshly minted
+  key and loop provisioning forever.
+
+### Added
+- Record a content-free Mia Router provisioning trail (step names, statuses,
+  exit codes — never keys or conversation text) and let Send feedback attach
+  it as an optional technical report, so connection failures on a user's
+  machine are diagnosable from one email.
+
 ## [0.2.15] — 2026-10-03
 
 ### Added
