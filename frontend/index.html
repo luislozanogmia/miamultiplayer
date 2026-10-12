@@ -810,6 +810,10 @@
           <div><div class="styled-settings-row-label">Send feedback</div><div class="styled-settings-row-desc">Found a bug or want a feature? This opens an email to the Mia team in your mail app</div></div>
         </div>
         <textarea class="styled-settings-field styled-settings-feedback-text" id="settingsFeedbackText" placeholder="What happened, or what would you like Mia to do?" maxlength="1500"></textarea>
+        <label class="styled-settings-row-desc" for="settingsFeedbackReport" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="settingsFeedbackReport" checked>
+          Attach a technical report. Version, platform and connection steps only; no credentials or conversation text.
+        </label>
         <div class="styled-settings-row styled-settings-row-actions">
           <span class="styled-settings-form-note" id="settingsFeedbackSent">Opened in your mail app</span>
           <button class="styled-settings-pill-btn" id="settingsFeedbackSend">Send feedback</button>
