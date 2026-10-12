@@ -3252,6 +3252,20 @@ const MANAGED_ROUTER_ERROR_MESSAGES = {
   install_failed: `Mia got a ${MANAGED_ROUTER_LABEL} key but couldn't save it. Try again.`,
 };
 
+// Content-free provisioning trail for support reports: timestamps, step names,
+// HTTP statuses, exit codes and sanitized CLI error text only — never key
+// material, account emails, or conversation content. Bounded, in-memory, and
+// served with the managed-router status so the Settings feedback report can
+// carry it. This exists because packaged apps intentionally persist no backend
+// log: without it a failed key save on a user's machine is undiagnosable.
+const MANAGED_ROUTER_DIAG_LIMIT = 50;
+const managedRouterDiagnostics = [];
+function recordManagedRouterDiagnostic(step, detail) {
+  const text = detail ? ` ${String(detail).replace(/\s+/g, ' ').trim().slice(0, 300)}` : '';
+  managedRouterDiagnostics.push(`${new Date().toISOString()} ${step}${text}`);
+  if (managedRouterDiagnostics.length > MANAGED_ROUTER_DIAG_LIMIT) managedRouterDiagnostics.shift();
+}
+
 function managedRouterErrorCodeForStatus(status) {
   if (status === 401) return 'session_rejected';
   if (status === 403) return 'not_authorized';
@@ -3268,6 +3282,7 @@ function setManagedRouterError(email, code) {
   if (code === 'replaced_elsewhere') managedRouterReplacedEmails.add(email);
   code = managedRouterErrorCode(code, managedRouterReplacedEmails.has(email));
   managedRouterProvisionErrors.set(email, { code, message: MANAGED_ROUTER_ERROR_MESSAGES[code] });
+  recordManagedRouterDiagnostic('provision_failed', code);
   console.warn('[managed-router] provisioning failed for', email, code);
 }
 
@@ -3331,12 +3346,15 @@ async function provisionManagedRouterKey(email, clerkToken) {
     });
     const result = await response.json().catch(() => null);
     if (!response.ok || !result?.key) {
+      recordManagedRouterDiagnostic('mint_failed', `http ${response.status}`);
       setManagedRouterError(email, response.ok ? 'unavailable' : managedRouterErrorCodeForStatus(response.status));
       return null;
     }
+    recordManagedRouterDiagnostic('mint_ok');
     console.log('[managed-router] provisioned key for', email);
     return result.key;
-  } catch (_error) {
+  } catch (error) {
+    recordManagedRouterDiagnostic('mint_unreachable', error && error.name);
     setManagedRouterError(email, 'unavailable');
     return null;
   } finally {
@@ -3412,7 +3430,12 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
         hermesDisconnectedProviders.delete('managed-router');
         return;
       }
-      if (stored.length) console.log('[managed-router] stored key is dead for', email, '- re-provisioning');
+      if (stored.length) {
+        recordManagedRouterDiagnostic('stored_key_dead', `count ${stored.length}`);
+        console.log('[managed-router] stored key is dead for', email, '- re-provisioning');
+      } else {
+        recordManagedRouterDiagnostic('no_stored_key');
+      }
       // A key that existed and died was almost always replaced by a sign-in
       // on another computer: one live key per user.
       replacedElsewhere = stored.length > 0;
@@ -3427,7 +3450,9 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
     if (!key) return;
     try {
       await installManagedRouterKey(key);
-    } catch (_error) {
+      recordManagedRouterDiagnostic('install_ok');
+    } catch (error) {
+      recordManagedRouterDiagnostic('install_error', (error && (error.cliDetail || error.message)) || 'unknown');
       setManagedRouterError(email, 'install_failed');
       return;
     }
@@ -3469,7 +3494,11 @@ let nativeChatModelProviders = {};
 // completes for it.
 const hermesDisconnectedProviders = new Set();
 const HERMES_LOGOUT_TIMEOUT_MS = 15 * 1000;
-const HERMES_API_KEY_TIMEOUT_MS = 15 * 1000;
+// Key saves run the Hermes CLI, which on Windows is a cold Python start that
+// antivirus scanning can stretch well past 15s. Killing the CLI mid-write
+// loses the key and loops Mia Router provisioning forever, so give the write
+// a generous ceiling: it is one local file transaction after interpreter boot.
+const HERMES_API_KEY_TIMEOUT_MS = 60 * 1000;
 const HERMES_STATUS_TIMEOUT_MS = 10 * 1000;
 const HERMES_STATUS_CONCURRENCY = 4;
 
@@ -3889,28 +3918,43 @@ function runHermesApiKeyAdd(provider, apiKey) {
       else resolve();
     };
     let child;
+    // The thrown message stays generic (it can reach API responses); the
+    // sanitized failure detail rides on error.cliDetail for the bounded
+    // managed-router diagnostic trail only.
+    const fail = (message, detail) => {
+      const error = new Error(message);
+      if (detail) error.cliDetail = detail;
+      finish(error);
+    };
     try {
       // Pass the key through Hermes' documented --api-key flag. Feeding the
       // hidden prompt over a stdin pipe is not part of the CLI contract and
       // hangs on Windows, where Python getpass reads the console rather than
       // stdin. The argv value is visible only to same-user processes for the
-      // seconds the command runs; stdout/stderr stay discarded so the key
-      // never reaches Mia's logs or API responses.
+      // seconds the command runs; stdout stays discarded and stderr is kept
+      // only as a bounded, key-scrubbed tail so a failed save is diagnosable
+      // without the key ever reaching Mia's logs or API responses.
       child = spawnHermesCli([
         'auth', 'add', provider, '--type', 'api-key', '--api-key', apiKey,
       ], {
         cwd: process.cwd(),
         env: hermesCredentialProcessEnv(),
-        stdio: ['ignore', 'ignore', 'ignore'],
+        stdio: ['ignore', 'ignore', 'pipe'],
       });
-      child.once('error', () => finish(new Error('Could not add API credential')));
-      child.once('close', (code) => {
+      let stderrTail = '';
+      if (child.stderr) {
+        child.stderr.on('data', (chunk) => {
+          stderrTail = (stderrTail + String(chunk)).split(apiKey).join('[key]').slice(-2048);
+        });
+      }
+      child.once('error', (error) => fail('Could not add API credential', `spawn ${error.code || error.message}`));
+      child.once('close', (code, signal) => {
         if (code === 0) finish();
-        else finish(new Error('Could not add API credential'));
+        else fail('Could not add API credential', `exit ${code === null ? `signal ${signal}` : code}: ${stderrTail.trim().slice(-400) || 'no stderr'}`);
       });
       timeout = setTimeout(() => {
         try { child.kill('SIGTERM'); } catch (_) { /* process may already be gone */ }
-        finish(new Error('API credential setup timed out'));
+        fail('API credential setup timed out', `timeout after ${HERMES_API_KEY_TIMEOUT_MS}ms`);
       }, HERMES_API_KEY_TIMEOUT_MS);
       timeout.unref();
     } catch (_) {
@@ -4382,6 +4426,9 @@ app.get('/api/settings/managed-router/status', requireAuth, (req, res) => {
     label: MANAGED_ROUTER_LABEL,
     error: error && error.message,
     errorCode: error && error.code,
+    // Content-free provisioning trail (step names, statuses, exit codes) for
+    // the Settings feedback report. See recordManagedRouterDiagnostic.
+    diagnostics: managedRouterDiagnostics.slice(-30),
   });
 });
 
