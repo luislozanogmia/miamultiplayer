@@ -127,18 +127,22 @@ test('Hermes process environment never receives hosted-search credentials', () =
   }
 });
 
-test('provider API-key setup uses the documented --api-key flag with discarded stdio', () => {
+test('provider API-key setup uses the documented --api-key flag without echoing the key', () => {
   // The key travels on Hermes' public CLI contract (--api-key). Feeding the
   // hidden prompt over a stdin pipe hung on Windows, where Python getpass
-  // reads the console rather than stdin. All stdio is discarded so the key
-  // can never echo back through Mia's logs or API responses.
+  // reads the console rather than stdin. stdin and stdout stay discarded;
+  // stderr is kept only as a bounded tail with every occurrence of the key
+  // scrubbed before it can reach any log or API response, because a failed
+  // save (e.g. a Windows cold start killed mid-write) was undiagnosable with
+  // all output discarded.
   const source = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
   const start = source.indexOf('function runHermesApiKeyAdd');
   const end = source.indexOf('\nfunction runHermesAuthStatus', start);
   const implementation = source.slice(start, end);
   assert.ok(start >= 0 && end > start);
   assert.match(implementation, /'--api-key', apiKey/);
-  assert.match(implementation, /stdio:\s*\['ignore', 'ignore', 'ignore'\]/);
+  assert.match(implementation, /stdio:\s*\['ignore', 'ignore', 'pipe'\]/);
+  assert.match(implementation, /split\(apiKey\)\.join\('\[key\]'\)/);
   assert.match(implementation, /env:\s*hermesCredentialProcessEnv\(\)/);
   assert.doesNotMatch(implementation, /child\.stdin/);
 });
