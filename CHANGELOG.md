@@ -9,7 +9,11 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.16] — 2026-10-13
+
 ### Fixed
+- Save Mia Router keys noninteractively on Windows by supplying the credential
+  label, avoiding an invisible optional-label prompt during sign-in.
 - Give Mia Router key saves a 60-second ceiling so slow cold starts on
   Windows (antivirus scanning, first run) no longer lose the freshly minted
   key and loop provisioning forever.
