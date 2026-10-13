@@ -6,6 +6,12 @@ A desktop OS layer (Electron) that gives users an AI agent (Mia) with chat,
 automations, browser control, Google Workspace integration, and bot creation.
 Open-source core at github.com/luislozanogmia/miamultiplayer.
 
+## Browser multiplayer — approved direction and first MVP
+
+The Mia app browser is the shared working surface: websites are the canvas. Later, Chrome extension participants and multiple humans may join; other native applications come later. First deliver one human collaborating with their personal Mia agent and multiple bots inside Mia's browser. Mia owns the overall goal, context, delegation, dependency tracking and synthesis; each bot owns one explicit tab and a bounded task. Named tab groups preserve related sites and working state. Bots work in parallel across tabs without stealing the human's view or typing focus. Activity, ownership, approvals, Stop and results remain visible. Adapt Mia Browser Use interactions to Mia's pinned Hermes runtime; smaller models handle suitable bounded tasks and validated scripts provide deterministic replay. Archived Canvas remains a demo reference, not the product architecture.
+
+Implementation and acceptance are tracked in [browser-multiplayer-mvp.md](browser-multiplayer-mvp.md). This section records approved scope, not completed behavior.
+
 ## Bot creation in Mia chat — review candidate
 
 Ask Mia to build a bot. If the request is vague, Mia uses a recent, explicit

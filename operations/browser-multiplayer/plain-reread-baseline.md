@@ -1,0 +1,21 @@
+# Plain reread snapshot baseline failure
+
+October10 2026, Linux mia-dev-aws. Frozen source `952b749c0c11f2a69193483d4b3ceaff8372a2a1`, sandboxed Electron44.2.0. Root authorized a bounded operations-only fixture, not a production repair. The frozen criterion9 negative table requires an old numbered snapshot after reread to fail closed; this fixture uses plain `read {}`, never substitutes a second vacuum for that step.
+
+The actual native owner binds one synthetic actor/task/bot to an explicit fixture tab through production desktop client `bindSession`, loopback broker, dispatch and browser/group modules. The synthetic page has a stable #local button and #count; clicking increments a physical DOM counter and appends a page event. There is no #write/external action. The window is hidden, sandbox=true, contextIsolation=true and nodeIntegration=false; the physical observation reports require undefined. All data/profile paths are new0700 fixture roots, and launcher environment is whitelisted on reserved DISPLAY102. No model, provider, actual user profile, installed runtime or DISPLAY100 is used. Approval is programmatic fixture evidence, not manual UI/model acceptance.
+
+## Actual result
+
+Raw report `/tmp/mia-plain-reread-CDlZzo/report.json` contains exact source, runtime versions, seven conventional raw-file SHA256 hashes, snapshot IDs/elements/document generation, validation, numbered tool parameters, grant success, native event ordering and before/after physical effects. Launcher logs `/tmp/mia-plain-reread-launch-uexh7rml/` are private. Matrix result is1PASS/1FAIL; normal fixture exit0 means the experiment completed, not that criterion9 passed.
+
+1. Bound actor executes vacuum S and plain read on the same unchanged page/document.
+2. Old S numbered #local click goes through normal trusted validation, requires approval, receives one native grant, then **succeeds**. Counter changes0→1 and one actual click event is recorded. Expected STALE_SNAPSHOT/no effect fails. Native click start/done/settled independently corroborate completion; no stale error is returned.
+3. Same actor takes fresh vacuum T (distinct snapshot ID) and explicitly approves/executes its numbered #local click once. Counter changes1→2 with the second event. Positive control passes, demonstrating the path is not a blanket deny or disconnected fixture.
+
+S, plain read and T have the same document generation. Plain read returns stable page text; there is no intervening navigation, node replacement or second vacuum before the negative click. Read-only physical observations use legacy eval outside the actor snapshot bucket; they inspect #count/window.localEffects without mutating the page. Production protocolRead does not clear/replace snapshots, consistent with the observed old-S success. This is an actual local native boundary failure, not proof about real model behavior or manual app acceptance. No frozen expectation was weakened and no browser production file was edited.
+
+## Provenance and cleanup
+
+Initial setup-only attempt `/tmp/mia-plain-reread-7axxJj/report.json` failed because the fixture called nonexistent desktop.bind. Corrected fixture uses the supported bindSession API; the setup failure is retained and is not a product snapshot result. Only that failed setup was rerun. The meaningful baseline has not been repeated.
+
+The fixture revokes its own actor, stops its broker, destroys its window and closes its synthetic server. Separate `/tmp/mia-plain-reread-CDlZzo/cleanup-audit.json` confirms both exact-owned dynamic ports closed and no Electron/Node children on DISPLAY102; existing Xvfb is preserved. Private roots are retained outside the public repository for independent review. No capability, session cookie, grant identity or credential value is included in public evidence. Syntax and staged leak/whitespace checks pass. Independent read-only source/raw/doc review accepted the bounded baseline, verified all seven raw-file hashes and event/effect ordering, and confirmed that the product expectation fails. Generic earlier ledger wording about reread denial must distinguish snapshot replacement by vacuum from this plain-read failure. Runtime owner repair and a new actual app/model test remain required; this document does not mark criterion9 complete.

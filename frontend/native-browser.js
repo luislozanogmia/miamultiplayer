@@ -120,15 +120,18 @@
     foot.textContent = parts.join(' \u00b7 ') || 'Native browser \u00b7 Mia is available on the right';
     if (state.download) foot.textContent += ' \u00b7 ' + state.download;
     renderDownloads();
-    var signature = JSON.stringify([state.activeId, state.tabs.map(function (t) { return [t.id, t.title, t.favicon]; })]);
+    if (window.MiaBrowserWork) window.MiaBrowserWork.updateBrowserState(state);
+    var visibleTabs = window.MiaBrowserWork ? window.MiaBrowserWork.visibleTabs(state) : state.tabs;
+    var signature = JSON.stringify([state.activeId, visibleTabs.map(function (t) { return [t.id, t.title, t.favicon]; })]);
     // Redrawing mid-drag would drop the dragged tab; catch up once it ends.
     if (signature !== lastTabs && draggingTabId === null) {
       lastTabs = signature;
       strip.replaceChildren();
-      state.tabs.forEach(function (t, index) {
+      visibleTabs.forEach(function (t, index) {
         var group = document.createElement('div');
         group.className = 'native-browser-tab' + (t.id === state.activeId ? ' active' : '');
         // Drag a tab onto another to put it in that tab's place.
+        group.setAttribute('data-tab-id', String(t.id));
         group.draggable = true;
         group.addEventListener('dragstart', function (event) {
           draggingTabId = t.id;
@@ -153,7 +156,8 @@
           event.preventDefault();
           group.classList.remove('drop-target');
           if (draggingTabId === null || draggingTabId === t.id) return;
-          command('move', { id: draggingTabId, index: index });
+          if (state.groups && window.MiaBrowserWork) command('group-move-tab', { id: draggingTabId, groupId: state.selectedGroupId, index: index });
+          else command('move', { id: draggingTabId, index: index });
         });
         var button = document.createElement('button');
         button.type = 'button'; button.title = t.title || 'New tab';
@@ -180,6 +184,7 @@
       add.onclick = function () { command('new').then(focusLocation); };
       strip.append(add);
     }
+    if (window.MiaBrowserWork) window.MiaBrowserWork.decorateTabs(strip, state);
     layout();
   }
   function formatBytes(bytes) {
