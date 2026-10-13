@@ -3934,8 +3934,11 @@ function runHermesApiKeyAdd(provider, apiKey) {
       // seconds the command runs; stdout stays discarded and stderr is kept
       // only as a bounded, key-scrubbed tail so a failed save is diagnosable
       // without the key ever reaching Mia's logs or API responses.
+      // Supplying the optional label also keeps the command noninteractive:
+      // Windows can report a console stdin and otherwise prompt for a label
+      // after receiving the key, failing before it is saved.
       child = spawnHermesCli([
-        'auth', 'add', provider, '--type', 'api-key', '--api-key', apiKey,
+        'auth', 'add', provider, '--type', 'api-key', '--label', 'Mia', '--api-key', apiKey,
       ], {
         cwd: process.cwd(),
         env: hermesCredentialProcessEnv(),
