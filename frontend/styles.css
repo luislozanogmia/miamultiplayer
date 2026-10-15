@@ -282,6 +282,10 @@
   .native-clerk-form .native-clerk-google{background:#fff;color:#171717;border:1px solid #d9d7d1;}
   .native-clerk-divider{text-align:center;color:#737373;font-size:13px;margin:18px 0;}
   .native-clerk-status{font-size:13px;line-height:1.5;color:#626262;min-height:20px;margin:14px 0 4px;}
+  .native-clerk-browser-link{margin:12px 0;font-size:13px;color:#626262;}
+  .native-clerk-browser-link label{display:block;margin-bottom:6px;}
+  .native-clerk-browser-link input{box-sizing:border-box;width:100%;border:1px solid #d9d7d1;border-radius:6px;padding:8px;font:inherit;color:#171717;background:#fff;}
+  .native-clerk-copy{margin-top:6px;padding:7px 10px;border:1px solid #d9d7d1;border-radius:6px;background:#fff;color:#171717;font:inherit;cursor:pointer;}
   .native-clerk-cancel{border:0;background:none;font:inherit;font-size:13px;padding:8px 0;text-decoration:underline;cursor:pointer;}
   .native-clerk-form button:disabled{opacity:.55;cursor:default;}
   .native-clerk-google{display:flex;align-items:center;justify-content:center;gap:10px;}

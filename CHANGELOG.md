@@ -10,6 +10,20 @@ automatically through the in-app updater.
 ## [Unreleased]
 
 ### Fixed
+- Register Linux browser sign-in with the installed desktop identity, so a
+  freshly installed Mia can open Google and receive its callback.
+- Detect a missing Linux browser opener and bound stalled handoffs; keep
+  Google retry, email sign-in, and cancellation available while waiting.
+
+### Added
+- Offer a short-lived, copyable Google sign-in link on Linux when the browser
+  cannot open, and while waiting for browser sign-in to finish.
+
+## [0.2.16] — 2026-10-13
+
+### Fixed
+- Save Mia Router keys noninteractively by supplying the credential label,
+  avoiding an invisible optional-label prompt on Windows.
 - Give Mia Router key saves a 60-second ceiling so slow cold starts on
   Windows (antivirus scanning, first run) no longer lose the freshly minted
   key and loop provisioning forever.
