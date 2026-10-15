@@ -73,7 +73,7 @@ test("Linux package declares its runtime dependencies and keeps Chromium sandbox
   assert.match(linuxPackageControl(), /Depends: libc6 \(>= 2\.39\).*libsecret-1-0.*xdg-utils/);
   assert.match(linuxPostInstallScript(), /chown root:root .*chrome-sandbox/);
   assert.match(linuxPostInstallScript(), /chmod 4755 .*chrome-sandbox/);
-  assert.match(linuxDesktopEntry(), /^StartupWMClass=mia$/m);
+  assert.match(linuxDesktopEntry(), /^StartupWMClass=miaos$/m);
   const source = fs.readFileSync(require.resolve("./package-linux.cjs"), "utf8");
   assert.doesNotMatch(source, /--no-sandbox/);
   assert.match(source, /stageLinuxGoogleWorkspaceRuntime\(installRoot\)/);
