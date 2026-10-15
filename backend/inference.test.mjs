@@ -220,16 +220,16 @@ test('Claude picker offers Sonnet 5.5 and both current and saved Haiku routes', 
   const provider = 'claude-subscription-directsdk-experimental';
   const choices = inference.HERMES_SUBSCRIPTION_MODEL_OPTIONS[provider];
   assert.ok(choices.some(row => row.label === 'Sonnet 5.5' && row.model === 'claude-sonnet-5-5[1m]'));
-  assert.ok(choices.some(row => row.label === 'Haiku 5.5' && row.model === 'claude-haiku-5-5[1m]'));
+  assert.ok(choices.some(row => row.label === 'Haiku 5.5' && row.model === 'claude-haiku-5-5'));
   assert.deepEqual(inference.normalizeHermesModelSelection(provider, 'haiku', false), {
-    model: 'claude-haiku-5-5[1m]', fast: false,
+    model: 'claude-haiku-5-5', fast: false,
   });
-  for (const model of ['claude-sonnet-5-5[1m]', 'claude-haiku-5-5[1m]', 'claude-haiku-4-5-20251001']) {
+  for (const model of ['claude-sonnet-5-5[1m]', 'claude-haiku-5-5', 'claude-haiku-4-5-20251001']) {
     assert.equal(inference.isAllowedHermesModel(provider, model, false), true, model);
     assert.deepEqual(inference.normalizeHermesModelSelection(provider, model, false), { model, fast: false });
   }
   assert.equal(inference.isAllowedHermesModel(provider, 'claude-haiku-4-5-20251001[1m]', false), false);
-  assert.equal(inference.isAllowedHermesModel('openai-codex', 'claude-haiku-5-5[1m]', false), false);
+  assert.equal(inference.isAllowedHermesModel('openai-codex', 'claude-haiku-5-5', false), false);
 });
 
 test('the output token budget defaults safely, clamps a request, and converts to a char budget', () => {

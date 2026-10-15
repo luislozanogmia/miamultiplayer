@@ -8,7 +8,7 @@ CONTEXT_WINDOWS = {
     'claude-opus-4-8': 250_000,
     'claude-fable-5-1': 250_000,
 }
-LONG_CONTEXT_ROUTES = frozenset(model for model in CONTEXT_WINDOWS if model != 'claude-haiku-4-5-20251001')
+LONG_CONTEXT_ROUTES = frozenset(model for model in CONTEXT_WINDOWS if 'haiku' not in model)
 ALIASES = {
     'sonnet': 'claude-sonnet-5-5',
     # Retired by Mia; saved Sonnet 5 choices run on 5.5.
@@ -32,7 +32,8 @@ def native_model(model):
         if model.endswith('[1m]'):
             raise ValueError('Haiku 4.5 does not support a 1M context window')
         return canonical
-    return model
+    # Haiku 5.5 uses its plain ID: Claude Code provides 1M by default.
+    return canonical if window is not None else model
 
 
 MODEL_METADATA = {

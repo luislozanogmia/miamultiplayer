@@ -17,3 +17,7 @@ real `[1m]` route selector. `plugin.yaml` and `LICENSE` remain unchanged. See
 The `haiku` alias selects Haiku 5.5. Explicit Haiku 4.5 choices remain on
 4.5. Model availability is still checked against the signed-in account’s
 Claude Code discovery; a catalog entry does not grant model access.
+
+Haiku 5.5 uses the plain `claude-haiku-5-5` ID; Claude Code 2.1.293+
+provides its 1M window without a selector. See the official
+[model configuration](https://code.claude.com/docs/en/model-config).
