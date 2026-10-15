@@ -36,6 +36,8 @@ test('email code submits through native API and failure remains readable',async(
   h.elements.get('#nativeClerkCode').value='123456';h.form.handlers.submit({preventDefault(){}});await settle();
   assert.deepEqual(calls,['a@b.example','123456']);
   assert.equal(h.elements.get('.native-clerk-status').textContent,'The code was not accepted.');
+  assert.equal(h.elements.get('.native-clerk-cancel').hidden,false);
+  h.elements.get('.native-clerk-cancel').handlers.click();await settle();assert.equal(h.cancelled,1);
   assert.equal(h.signedIn,0);h.dispose();
 });
 test('native auth is wired before Clerk browser assets, and restarts refresh the session',()=>{
