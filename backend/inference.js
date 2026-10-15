@@ -305,10 +305,8 @@ const VISION_MODEL = /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(process.env.MIAOS_VISI
 const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
   'claude-subscription-directsdk-experimental': Object.freeze([
     Object.freeze({ id: 'sonnet', model: 'claude-sonnet-5-5[1m]', label: 'Sonnet 5.5', fast: false }),
-    Object.freeze({ id: 'haiku', model: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', fast: false }),
-    Object.freeze({ id: 'claude-opus-5-5[1m]', model: 'claude-opus-5-5[1m]', label: 'Opus 5.5', fast: false }),
-    Object.freeze({ id: 'opus', model: 'claude-opus-5[1m]', label: 'Opus 5', fast: false }),
-    Object.freeze({ id: 'claude-opus-4-8[1m]', model: 'claude-opus-4-8[1m]', label: 'Opus 4.8', fast: false }),
+    Object.freeze({ id: 'haiku', model: 'claude-haiku-5-5', label: 'Haiku 5.5', fast: false }),
+    Object.freeze({ id: 'opus', model: 'claude-opus-5-5[1m]', label: 'Opus 5.5', fast: false }),
     Object.freeze({ id: 'fable', model: 'claude-fable-5-1[1m]', label: 'Fable 5.1', fast: false }),
   ]),
   'openai-codex': Object.freeze([
@@ -336,8 +334,8 @@ const MANAGED_ROUTER_HERMES_PROVIDER = 'openrouter';
 
 const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
   'claude-subscription-directsdk-experimental': Object.freeze([
-    'claude-sonnet-5-5[1m]', 'claude-haiku-4-5-20251001', 'claude-opus-5-5[1m]',
-    'claude-opus-5[1m]', 'claude-opus-4-8[1m]', 'claude-fable-5-1[1m]',
+    'claude-sonnet-5-5[1m]', 'claude-haiku-5-5', 'claude-opus-5-5[1m]',
+    'claude-fable-5-1[1m]',
   ]),
   'openai-codex': Object.freeze([
     'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',

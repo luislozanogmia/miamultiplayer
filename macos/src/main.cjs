@@ -29,6 +29,7 @@ const { resolveMiaFolder } = require("./mia-folder.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
 const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
+const { openClerkBrowser } = require("./clerk-browser-open.cjs");
 const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
 const { discoverClaudeCodeCommand, installClaudeCode } = require("./claude-code.cjs");
 const { createDesktopNotifications } = require("./desktop-notifications.cjs");
@@ -216,7 +217,8 @@ const desktopAuth = createDesktopAuth({
       storage: createClerkCredentialStore({ directory: app.getPath("userData"), issuer: CLERK_ISSUER_ORIGIN, safeStorage }),
     });
   },
-  openExternal: url => shell.openExternal(url),
+  openExternal: url => openClerkBrowser(url, { openExternal: value => shell.openExternal(value) }),
+  browserFallback: process.platform === "linux",
   canOpenGoogle: () => nativeAuthProtocolReady,
 });
 
