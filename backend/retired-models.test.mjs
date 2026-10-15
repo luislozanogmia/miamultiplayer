@@ -22,3 +22,16 @@ test('the chat picker hides retired models a provider still lists', () => {
   }, ['openai-codex']);
   assert.deepEqual(visible['openai-codex'].models, ['gpt-6.1-sol']);
 });
+
+test('Claude retired Haiku and Opus choices migrate and disappear from account inventory', () => {
+  const provider = 'claude-subscription-directsdk-experimental';
+  const old = ['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-opus-5', 'claude-opus-5[1m]', 'claude-opus-4-8', 'claude-opus-4-8[1m]'];
+  for (const model of old) {
+    const next = model.includes('haiku') ? 'claude-haiku-5-5' : 'claude-opus-5-5[1m]';
+    assert.equal(currentHermesModel(provider, model), next, model);
+    assert.equal(currentHermesModel('copilot', model), model);
+  }
+  const current = ['claude-sonnet-5-5[1m]', 'claude-haiku-5-5', 'claude-opus-5-5[1m]'];
+  const visible = visibleChatModelInventory({ [provider]: { models: [...old, ...current], capabilities: {} } }, [provider]);
+  assert.deepEqual(visible[provider].models, current);
+});

@@ -51,9 +51,10 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
 
     def fetch_models(self, **kwargs):
         # No HTTP /models endpoint: the account's own picker (CLI `initialize` handshake) is the
-        # live list for /model, the Desktop picker and `hermes model`; None degrades to the catalog.
+        # live list for /model, the Desktop picker and `hermes model`; unavailable or
+        # successfully empty discovery must not grant the curated model catalog.
         rows = self.discover_models(**kwargs)
-        return [row["id"] for row in rows] if rows else None
+        return [row["id"] for row in rows] if rows is not None else None
 
     def setup_status(self, **kwargs):
         try:
@@ -87,7 +88,7 @@ profile = ClaudeOAuthDirectSDKProfile(
     process_args=(),
     process_command_env_vars=('CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND',),
     default_aux_model='claude-sonnet-5-5[1m]',
-    fallback_models=tuple(MODEL_METADATA),
+    fallback_models=(),
     model_aliases={alias: native_model(alias) for alias in ALIASES},
 )
 register_provider(profile)

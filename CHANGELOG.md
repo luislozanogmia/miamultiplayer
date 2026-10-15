@@ -17,7 +17,8 @@ automatically through the in-app updater.
 
 ### Added
 - Add Haiku 5.5 to Claude subscription model choices alongside Sonnet 5.5,
-  retaining explicit Haiku 4.5 choices.
+  replacing Haiku 4.5. Keep Opus 5.5 and retire Opus 5/4.8; saved retired
+  selections migrate to their 5.5 successors.
 - Offer a short-lived, copyable Google sign-in link on Linux when the browser
   cannot open, and while waiting for browser sign-in to finish.
 
