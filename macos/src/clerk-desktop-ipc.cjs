@@ -22,7 +22,7 @@ function registerAuthProtocol(app, platform = process.platform, execPath = proce
   return false;
 }
 
-function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openExternal, canOpenGoogle = () => true }) {
+function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openExternal, browserFallback = false, canOpenGoogle = () => true }) {
   let client;
   let flow;
   let busy = false;
@@ -38,7 +38,7 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
   function init() {
     if (!client) {
       client = getClient();
-      flow = createClerkDesktopFlow({ client, openExternal, notify });
+      flow = createClerkDesktopFlow({ client, openExternal, browserFallback, notify });
     }
   }
   ipcMain.handle(CHANNEL, async (event, action, value) => {
@@ -53,10 +53,12 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
       if (action === "status") {
         result = flow.status();
         if (result && result.status === "expired") { await flow.cancel(); result = null; }
-        if (!result) result = await client.status();
-        // A reloaded renderer cannot resume an old Google attempt as an
-        // email-code form. Only authenticated sessions survive a UI restart.
-        if (!["active", "waiting"].includes(result.status)) result = { status: "signed_out" };
+        if (!result) {
+          result = await client.status();
+          // A reloaded renderer cannot resume an old email-code form.
+          // In-memory Google challenges (including fallback) are handled above.
+          if (!["active", "waiting"].includes(result.status)) result = { status: "signed_out" };
+        }
       }
       if (action === "google") {
         if (!canOpenGoogle()) throw new Error("protocol_unavailable");

@@ -1,7 +1,7 @@
 # Linux desktop package
 
 The Linux candidate is an amd64 `.deb`, not an AppImage or a Linux OTA feed.
-Version comes from `macos/package.json`; this packaging repair keeps 0.2.14.
+Version comes from `macos/package.json`; the next candidate is 0.2.17.
 The pinned GNU Google Workspace CLI requires glibc 2.39: target Ubuntu 24.04
 or newer. Older distributions are not supported by this candidate.
 
@@ -38,3 +38,12 @@ The desktop keyring must be unlocked; never reset a user's keyring or use
 unencrypted credential storage to get a test passing.
 Record these separately from unit tests and package creation. PR review,
 merge, publication approval, and release-asset upload remain separate gates.
+
+The Electron `desktopName` must match the installed `miaos.desktop` entry.
+Do not create a per-user `mia.desktop` alias to make package acceptance pass.
+Test Google with `xdg-open` present and absent: the failure state must offer a
+copyable sign-in link, retry, email, and cancellation. Restore the opener
+before normal acceptance. Keep sign-in URLs out of logs, screenshots shared
+publicly, and persistent app data; they belong only to the active sign-in UI.
+A failed browser launch retains its short-lived callback challenge so the
+manual link can complete; cancel, retry, email sign-in, and expiry invalidate it.

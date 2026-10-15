@@ -67,6 +67,8 @@ test("Linux Desktop registration is readable after root-owned installation, abse
 }));
 
 test("Linux package declares its runtime dependencies and keeps Chromium sandbox enabled", () => {
+  assert.equal(require("../package.json").desktopName, "miaos.desktop",
+    "Electron must resolve the actual installed desktop entry before registering auth callbacks");
   assert.ok(linuxPackageControl().includes(`Version: ${require("../package.json").version}\n`));
   assert.match(linuxPackageControl(), /Depends: libc6 \(>= 2\.39\).*libsecret-1-0.*xdg-utils/);
   assert.match(linuxPostInstallScript(), /chown root:root .*chrome-sandbox/);
