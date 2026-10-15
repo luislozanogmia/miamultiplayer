@@ -176,7 +176,8 @@ test('subscription model selections stay inside the provider allowlist', () => {
     fast: false,
   });
   assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5[1m]', false), true);
-  assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5', false), false);
+  assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5', false), true);
+  assert.deepEqual(inference.normalizeHermesModelSelection('claude-subscription-directsdk-experimental', 'claude-opus-5', false), { model: 'claude-opus-5-5[1m]', fast: false });
   assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', null, false), {
     model: 'gpt-5.6-luna',
     fast: false,
@@ -214,6 +215,29 @@ test('subscription model selections stay inside the provider allowlist', () => {
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200 }), 200);
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 201 }), 200);
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200, botWorker: true }), inference.MIAOS_BOT_MAX_TURNS);
+});
+
+test('Claude picker offers current models and migrates saved retired choices', () => {
+  const provider = 'claude-subscription-directsdk-experimental';
+  const choices = inference.HERMES_SUBSCRIPTION_MODEL_OPTIONS[provider];
+  assert.ok(choices.some(row => row.label === 'Sonnet 5.5' && row.model === 'claude-sonnet-5-5[1m]'));
+  assert.ok(choices.some(row => row.label === 'Haiku 5.5' && row.model === 'claude-haiku-5-5'));
+  assert.deepEqual(inference.normalizeHermesModelSelection(provider, 'haiku', false), {
+    model: 'claude-haiku-5-5', fast: false,
+  });
+  for (const model of ['claude-sonnet-5-5[1m]', 'claude-haiku-5-5', 'claude-opus-5-5[1m]']) {
+    assert.equal(inference.isAllowedHermesModel(provider, model, false), true, model);
+    assert.deepEqual(inference.normalizeHermesModelSelection(provider, model, false), { model, fast: false });
+  }
+  assert.deepEqual(inference.normalizeHermesModelSelection(provider, 'opus', false), { model: 'claude-opus-5-5[1m]', fast: false });
+  assert.ok(choices.some(row => row.label === 'Opus 5.5' && row.model === 'claude-opus-5-5[1m]'));
+  assert.ok(choices.every(row => !['Haiku 4.5', 'Opus 5', 'Opus 4.8'].includes(row.label)));
+  for (const model of ['claude-haiku-4-5-20251001', 'claude-opus-5[1m]', 'claude-opus-4-8[1m]']) {
+    const next = model.includes('haiku') ? 'claude-haiku-5-5' : 'claude-opus-5-5[1m]';
+    assert.deepEqual(inference.normalizeHermesModelSelection(provider, model, false), { model: next, fast: false });
+  }
+  assert.equal(inference.isAllowedHermesModel(provider, 'claude-haiku-4-5-20251001[1m]', false), false);
+  assert.equal(inference.isAllowedHermesModel('openai-codex', 'claude-haiku-5-5', false), false);
 });
 
 test('the output token budget defaults safely, clamps a request, and converts to a char budget', () => {

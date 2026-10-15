@@ -29,17 +29,23 @@ function isGoogleAuthorizationUrl(value) {
   } catch (_) { return false; }
 }
 
-function createClerkDesktopFlow({ client, openExternal, notify = () => {}, now = Date.now, randomState = () => crypto.randomBytes(32).toString("hex") }) {
+function createClerkDesktopFlow({ client, openExternal, browserFallback = false, notify = () => {}, now = Date.now, randomState = () => crypto.randomBytes(32).toString("hex") }) {
   let pending = null;
   const publish = state => { notify(state); return state; };
+  const stateFor = flow => ({
+    status: flow.browserError ? "error" : "waiting", expiresAt: flow.expiresAt,
+    ...(browserFallback && flow.authorizationUrl ? { authorizationUrl: flow.authorizationUrl } : {}),
+    ...(flow.browserError ? { error: "Your browser could not be opened. Open the sign-in link in your browser, or sign in with your email instead." } : {}),
+  });
   return {
     status() {
       if (!pending) return null;
       if (now() >= pending.expiresAt) return { status: "expired" };
-      return { status: "waiting", expiresAt: pending.expiresAt };
+      return stateFor(pending);
     },
     async startGoogle() {
-      if (pending && now() < pending.expiresAt) throw new Error("Sign-in is already open. Finish it or cancel before trying again.");
+      if (pending && now() < pending.expiresAt && !browserFallback) throw new Error("Sign-in is already open. Finish it or cancel before trying again.");
+      if (pending && browserFallback) { pending = null; await client.cancel(); }
       const flow = { state: randomState(), expiresAt: now() + FLOW_TTL_MS, completing: false };
       pending = flow;
       const redirect = new URL(CALLBACK_URL);
@@ -48,8 +54,17 @@ function createClerkDesktopFlow({ client, openExternal, notify = () => {}, now =
         const result = await client.startGoogle({ redirectUrl: redirect.href });
         if (pending !== flow) return { status: "cancelled" };
         if (!isGoogleAuthorizationUrl(result.url)) throw new Error("Clerk returned an unsupported sign-in destination.");
-        await openExternal(result.url);
-        return publish({ status: "waiting", expiresAt: flow.expiresAt });
+        if (browserFallback) flow.authorizationUrl = result.url;
+        try { await openExternal(result.url); }
+        catch (error) {
+          if (!browserFallback) throw error;
+          // Keep the short-lived challenge so a manually opened link can
+          // still complete. Retry, email sign-in, cancellation and TTL all
+          // invalidate it; raw opener errors and URLs are never logged.
+          flow.browserError = true;
+        }
+        if (pending !== flow) return { status: "cancelled" };
+        return publish(stateFor(flow));
       } catch (error) {
         if (pending === flow) pending = null;
         throw error;

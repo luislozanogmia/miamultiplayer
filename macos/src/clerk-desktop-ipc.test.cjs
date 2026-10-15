@@ -52,3 +52,17 @@ test("actual registered IPC routes narrow actions, refuses web pages and redacts
   const error=await handler(event,"verify","123456");
   assert.equal(error.ok,false); assert.doesNotMatch(error.error,/SECRET/);
 });
+
+test("Linux fallback URL is recoverable only through the authorized local frame", async () => {
+  const {window,event,notifications}=fixture();let handler,cancels=0;
+  const client={startGoogle:async()=>({url:"https://accounts.google.com/o/oauth2/auth"}),cancel:async()=>{cancels++;},status:async()=>({status:"signed_out"}),startEmail:async()=>({status:"needs_verification"})};
+  createDesktopAuth({ipcMain:{handle(_channel,fn){handler=fn;}},getWindow:()=>window,getBackendUrl:()=>"http://localhost:4871",getClient:()=>client,browserFallback:true,openExternal:async()=>{throw new Error("PRIVATE-OPENER-ERROR");}});
+  const response=await handler(event,"google");
+  assert.equal(response.ok,true);assert.equal(response.result.status,"error");
+  assert.equal((await handler(event,"status")).result.authorizationUrl,response.result.authorizationUrl);
+  assert.deepEqual(await handler({...event,senderFrame:{url:"https://evil.example/"}},"status"),{ok:false,error:"Not authorized."});
+  assert.doesNotMatch(JSON.stringify(notifications),/PRIVATE-OPENER-ERROR/);
+  assert.equal((await handler(event,"google")).result.status,"error");assert.equal(cancels,1);
+  await handler(event,"email","a@b.example");
+  assert.equal((await handler(event,"status")).result.status,"signed_out");
+});

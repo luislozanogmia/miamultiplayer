@@ -183,7 +183,7 @@ function writeExecutable(file, content) {
 }
 
 function linuxDesktopEntry() {
-  return "[Desktop Entry]\nType=Application\nName=Mia\nExec=mia %u\nIcon=miaos\nTerminal=false\nCategories=Office;Utility;\nStartupWMClass=mia\nMimeType=x-scheme-handler/miamultiplayer;\n";
+  return "[Desktop Entry]\nType=Application\nName=Mia\nExec=mia %u\nIcon=miaos\nTerminal=false\nCategories=Office;Utility;\nStartupWMClass=miaos\nMimeType=x-scheme-handler/miamultiplayer;\n";
 }
 
 function linuxAppExecLine() {

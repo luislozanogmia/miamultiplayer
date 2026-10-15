@@ -12,6 +12,12 @@ const RETIRED_HERMES_MODELS = Object.freeze({
   'claude-subscription-directsdk-experimental': Object.freeze({
     'claude-sonnet-5': 'claude-sonnet-5-5[1m]',
     'claude-sonnet-5[1m]': 'claude-sonnet-5-5[1m]',
+    'claude-haiku-4-5': 'claude-haiku-5-5',
+    'claude-haiku-4-5-20251001': 'claude-haiku-5-5',
+    'claude-opus-5': 'claude-opus-5-5[1m]',
+    'claude-opus-5[1m]': 'claude-opus-5-5[1m]',
+    'claude-opus-4-8': 'claude-opus-5-5[1m]',
+    'claude-opus-4-8[1m]': 'claude-opus-5-5[1m]',
   }),
 });
 
