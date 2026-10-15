@@ -76,7 +76,7 @@
     async function run(action){
       if(busy) return;
       clearTimeout(expiryTimer); manualLink = false;
-      link.value = ''; linkBox.hidden = true; cancel.hidden = true;
+      link.value = ''; linkBox.hidden = true;
       busy = true; controls(false); status.textContent = 'Connecting…';
       try {
         var next = unwrap(await action());
