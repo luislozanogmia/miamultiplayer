@@ -6,6 +6,15 @@ A desktop OS layer (Electron) that gives users an AI agent (Mia) with chat,
 automations, browser control, Google Workspace integration, and bot creation.
 Open-source core at github.com/luislozanogmia/miamultiplayer.
 
+## Linux browser sign-in — 0.2.17 review candidate
+
+Installed Linux builds use the packaged desktop identity for Google browser
+handoff. While a Google attempt is pending, users can copy its short-lived
+sign-in link, retry Google, use email, or cancel. A missing or stalled browser
+opener produces a visible recovery message. A new attempt invalidates the old
+link; cancellation and expiry clear it. macOS and Windows retain their current
+browser handoff. This candidate is not a published release.
+
 ## Bot creation in Mia chat — review candidate
 
 Ask Mia to build a bot. If the request is vague, Mia uses a recent, explicit
