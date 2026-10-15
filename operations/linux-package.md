@@ -47,3 +47,18 @@ before normal acceptance. Keep sign-in URLs out of logs, screenshots shared
 publicly, and persistent app data; they belong only to the active sign-in UI.
 A failed browser launch retains its short-lived callback challenge so the
 manual link can complete; cancel, retry, email sign-in, and expiry invalidate it.
+
+### 0.2.17 review-candidate acceptance
+
+The QA-only package built from `0bc353c` was installed on Ubuntu 24.04.4
+with a fresh user, encrypted desktop keyring and Chromium sandbox enabled.
+Manual computer-use checks confirmed Google launches Chrome without a
+`mia.desktop` alias; waiting exposes recovery controls; Copy confirms success;
+a missing `xdg-open` gives a recoverable error; retry and Cancel remain usable.
+The opener was restored afterward. First-run Chrome terms were dismissed.
+Full Google account completion, real email-code verification, native macOS and
+Windows checks, and OTA remain unverified for this candidate.
+
+Screenshots are cropped from the running installed app to exclude the private
+sign-in URL: [opener recovery](images/linux-signin-opener-recovery.png) and
+[Copy confirmation](images/linux-signin-copy-confirmed.png).
