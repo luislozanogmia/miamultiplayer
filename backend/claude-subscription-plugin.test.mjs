@@ -30,10 +30,10 @@ test('Mia caps advertised Claude context while preserving real upstream route id
     ' assert "[250k]" not in route',
     ' assert MODEL_METADATA[route]["canonical_model"] == canonical',
     ' assert MODEL_METADATA[route]["context_window"] == expected[canonical]',
-    'assert native_model("haiku") == "claude-haiku-5-5[1m]"',
+    'assert native_model("haiku") == "claude-haiku-5-5"',
     'assert native_model("claude-haiku-4-5") == "claude-haiku-4-5-20251001"',
-    'assert native_model("claude-haiku-5-5") == "claude-haiku-5-5[1m]"',
-    'assert all(native_model(model).endswith("[1m]") for model in expected if expected[model] == 250000)',
+    'assert native_model("claude-haiku-5-5") == "claude-haiku-5-5"',
+    'assert all(native_model(model).endswith("[1m]") for model in expected if expected[model] == 250000 and model != "claude-haiku-5-5")',
     'print(json.dumps(MODEL_METADATA,sort_keys=True))',
   ].join('\n'));
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -51,7 +51,7 @@ test('account model discovery retains Sonnet and Haiku 5.5 without granting unkn
     'gate=SimpleNamespace(url="http://127.0.0.1:1",used=False,close=lambda:None)',
     'with patch.object(setup,"_resolve",return_value=["test-claude"]), patch.object(setup,"setup_status",return_value={"logged_in":True}), patch.object(setup,"Admission",return_value=gate), patch.object(setup.subprocess,"run",return_value=SimpleNamespace(stdout=json.dumps(reply))):',
     ' rows=setup.discover_models(env={})',
-    ' assert [r["id"] for r in rows] == ["claude-sonnet-5-5[1m]", "claude-haiku-5-5[1m]", "claude-haiku-4-5-20251001"], rows',
+    ' assert [r["id"] for r in rows] == ["claude-sonnet-5-5[1m]", "claude-haiku-5-5", "claude-haiku-4-5-20251001"], rows',
     ' assert all(r["upstream_requests"] == 0 for r in rows)',
   ].join('\n'));
   assert.equal(result.status, 0, result.stderr || result.stdout);
