@@ -4,8 +4,9 @@
   "version": "0.3.0",
   "commit": "c92c27c9f919178a58974a72333b473c6cb2e71d",
   "localModifications": [
-    "model_catalog.py advertises Mia context budgets of 250000 tokens for listed non-Haiku models and 200000 for Haiku while retaining upstream route IDs",
+    "model_catalog.py advertises Mia context budgets of 250000 tokens for 1M-capable models and 200000 for Haiku 4.5 while retaining upstream route IDs",
     "model_catalog.py lists claude-opus-5-5 so the account picker's Opus 5.5 route is not filtered out",
-    "model_catalog.py lists claude-sonnet-5-5 in place of claude-sonnet-5 (the sonnet alias and saved claude-sonnet-5 choices resolve to it), and __init__.py uses it as the default auxiliary model"
+    "model_catalog.py lists claude-sonnet-5-5 in place of claude-sonnet-5 (the sonnet alias and saved claude-sonnet-5 choices resolve to it), and __init__.py uses it as the default auxiliary model",
+    "model_catalog.py adds claude-haiku-5-5 with its [1m] route and updates the haiku alias, retaining explicit Haiku 4.5 routes"
   ]
 }

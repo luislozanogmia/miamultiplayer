@@ -16,6 +16,8 @@ automatically through the in-app updater.
   Google retry, email sign-in, and cancellation available while waiting.
 
 ### Added
+- Add Haiku 5.5 to Claude subscription model choices alongside Sonnet 5.5,
+  retaining explicit Haiku 4.5 choices.
 - Offer a short-lived, copyable Google sign-in link on Linux when the browser
   cannot open, and while waiting for browser sign-in to finish.
 

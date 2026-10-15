@@ -1,18 +1,19 @@
 """Pinned native routes with Mia's bounded advertised context policy."""
 CONTEXT_WINDOWS = {
     'claude-sonnet-5-5': 250_000,
+    'claude-haiku-5-5': 250_000,
     'claude-haiku-4-5-20251001': 200_000,
     'claude-opus-5-5': 250_000,
     'claude-opus-5': 250_000,
     'claude-opus-4-8': 250_000,
     'claude-fable-5-1': 250_000,
 }
-LONG_CONTEXT_ROUTES = frozenset(model for model in CONTEXT_WINDOWS if 'haiku' not in model)
+LONG_CONTEXT_ROUTES = frozenset(model for model in CONTEXT_WINDOWS if model != 'claude-haiku-4-5-20251001')
 ALIASES = {
     'sonnet': 'claude-sonnet-5-5',
     # Retired by Mia; saved Sonnet 5 choices run on 5.5.
     'claude-sonnet-5': 'claude-sonnet-5-5',
-    'haiku': 'claude-haiku-4-5-20251001',
+    'haiku': 'claude-haiku-5-5',
     'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
     'opus': 'claude-opus-5',
     'fable': 'claude-fable-5-1',
