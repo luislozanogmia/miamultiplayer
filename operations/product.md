@@ -30,6 +30,15 @@ The visible catalog name is **Bot Marketplace**. This change does not relax
 instruction-file approvals or establish per-bot filesystem isolation; that
 permissions work remains separate.
 
+## Claude subscription models — 0.2.17 review candidate
+
+Sonnet 5.5 remains available. Haiku 5.5 joins the Claude model choices; the
+`haiku` alias selects it, while explicit Haiku 4.5 choices stay on 4.5.
+The signed-in Claude account's live discovery still determines access.
+Mia advertises a bounded 250K context budget for Haiku 5.5's long-context
+route; Haiku 4.5 keeps its 200K budget. Live account inference remains a
+candidate acceptance gate.
+
 ## Inference routing
 
 ### Current (Beta)
