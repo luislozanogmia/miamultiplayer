@@ -4,9 +4,10 @@
   "version": "0.3.0",
   "commit": "c92c27c9f919178a58974a72333b473c6cb2e71d",
   "localModifications": [
-    "model_catalog.py advertises Mia context budgets of 250000 tokens for 1M-capable models and 200000 for Haiku 4.5 while retaining upstream route IDs",
+    "model_catalog.py advertises Mia context budgets of 250000 tokens for the offered 1M-capable models while retaining native route IDs",
     "model_catalog.py lists claude-opus-5-5 so the account picker's Opus 5.5 route is not filtered out",
     "model_catalog.py lists claude-sonnet-5-5 in place of claude-sonnet-5 (the sonnet alias and saved claude-sonnet-5 choices resolve to it), and __init__.py uses it as the default auxiliary model",
-    "model_catalog.py adds claude-haiku-5-5 with its plain native route (1M context by default in current Claude Code) and updates the haiku alias, retaining explicit Haiku 4.5 routes"
+    "model_catalog.py offers Haiku 5.5 through its plain native route (1M context by default in Claude Code 2.1.293+); retired Haiku 4.5 and Opus 5/4.8 aliases resolve to their 5.5 successors",
+    "directsdk_setup.py preserves successful empty discovery, __init__.py preserves that result and removes curated fallback_models so account-only retired rows cannot advertise unreported successor models"
   ]
 }

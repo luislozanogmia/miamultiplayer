@@ -33,10 +33,11 @@ permissions work remains separate.
 ## Claude subscription models — 0.2.17 review candidate
 
 Sonnet 5.5 remains available. Haiku 5.5 joins the Claude model choices; the
-`haiku` alias selects it, while explicit Haiku 4.5 choices stay on 4.5.
+`haiku` alias and saved Haiku 4.5 choices select it. Opus 5.5 replaces
+Opus 5 and 4.8 in the picker; their saved choices migrate to 5.5.
 The signed-in Claude account's live discovery still determines access.
 Mia advertises a bounded 250K context budget for Haiku 5.5's long-context
-route; Haiku 4.5 keeps its 200K budget. Live account inference remains a
+route, consistent with the other offered Claude models. Live account inference remains a
 candidate acceptance gate.
 
 ## Inference routing

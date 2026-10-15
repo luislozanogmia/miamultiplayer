@@ -48,6 +48,13 @@ with tempfile.TemporaryDirectory(prefix='mia-provider-regression-') as directory
     shutil.copytree(sys.argv[2], late / 'plugins' / name)
     assert bound(late, lambda: providers.get_provider_profile(name)) is not None
     assert bound(secondary, lambda: providers.get_provider_profile(name).get_model_context_length('sonnet')) == 250000
+    def empty_account_models():
+        profile = providers.get_provider_profile(name)
+        assert profile.fallback_models == (), 'account models must not fall back to unreported entitlements'
+        with patch.object(profile, 'discover_models', return_value=[]):
+            assert profile.fetch_models() == []
+            assert not models.merge_profile_catalog(name, profile, profile.fetch_models())
+    bound(secondary, empty_account_models)
     def picker_rows():
         found = []
         build = SimpleNamespace(seen_slugs=set(), excluded=set(), current_provider='', curated={},

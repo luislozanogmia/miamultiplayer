@@ -96,7 +96,7 @@ def discover_models(command=None, env=None, timeout=40):
         return None
     finally:
         gate.close()
-    if upstream or not native:
+    if upstream:
         return None
     # Pro / Team-standard seats bill Fable to usage credits from the first request; the CLI only
     # says so at request time, so apply the documented plan rule here.
@@ -113,4 +113,4 @@ def discover_models(command=None, env=None, timeout=40):
         entry = routes.setdefault(route, {"id": route, "label": label, "note": "", "upstream_requests": upstream})
         if "usage credit" in str(row.get("description") or "").lower() or base in credit_billed_on_plan:
             entry["note"] = "usage credits"
-    return list(routes.values()) or None
+    return list(routes.values())
