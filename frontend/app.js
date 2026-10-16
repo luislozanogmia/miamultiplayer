@@ -1910,12 +1910,17 @@
     var apiReady = isManagedRouter || harnessOnboardingState.provider !== 'openai-api' || !!(apiKey && apiKey.value.trim()) || harnessConnectionState[selectedApiProvider] === true;
     var busy = harnessConnectionValidationPending || !!harnessConnectionPending || harnessAuthSaveInProgress || harnessAuthAwaitingSave;
     var needsClaudeCode = false;
+    var updateClaudeCode = false;
     if(selectedProvider === 'claude-subscription-directsdk-experimental' && window.miaDesktop && window.miaDesktop.claudeCode){
-      try { needsClaudeCode = !window.miaDesktop.claudeCode.status().available; } catch(_) { needsClaudeCode = true; }
+      try {
+        var dependencyStatus = window.miaDesktop.claudeCode.status();
+        needsClaudeCode = !dependencyStatus.available;
+        updateClaudeCode = needsClaudeCode && dependencyStatus.installed;
+      } catch(_) { needsClaudeCode = true; }
     }
     if(continueBtn){
       continueBtn.disabled = busy || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
-      setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (selectedProviderConnected ? 'Start with Mia' : (needsClaudeCode ? 'Install Claude Code' : 'Connect')));
+      setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (needsClaudeCode ? (updateClaudeCode ? 'Update Claude Code' : 'Install Claude Code') : (selectedProviderConnected ? 'Start with Mia' : 'Connect')));
     }
     els('[data-harness-provider]').forEach(function(choice){
       var choiceProvider = choice.getAttribute('data-harness-provider');
@@ -2201,22 +2206,19 @@
       saveHarnessSelection();
       return;
     }
-    if(harnessConnectionState[authProvider] === true && !harnessAuthAwaitingSave){
-      saveHarnessSelection();
-      return;
-    }
     if(authProvider === 'claude-subscription-directsdk-experimental' && window.miaDesktop && window.miaDesktop.claudeCode){
       var claudeCode = window.miaDesktop.claudeCode;
       var claudeStatus;
       try { claudeStatus = claudeCode.status(); }
       catch(_) { claudeStatus = {available:false}; }
       if(!claudeStatus || !claudeStatus.available){
-        setHarnessActionLabel(button, 'Installing…');
+        var dependencyUpdating = !!(claudeStatus && claudeStatus.installed);
+        setHarnessActionLabel(button, dependencyUpdating ? 'Updating…' : 'Installing…');
         claudeCode.install().then(function(result){
           button.disabled = false;
           if(error) error.textContent = result && result.ok
-            ? 'Claude Code is ready. Click Connect to sign in with your Claude account.'
-            : (result && result.cancelled ? 'Installation cancelled. Claude Code is needed to connect.' : (result && result.error) || 'Claude Code could not be installed.');
+            ? 'Claude Code is ready. Click again to continue.'
+            : (result && result.cancelled ? 'Setup cancelled. Claude Code is needed to connect.' : (result && result.error) || 'Claude Code could not be installed.');
           renderHarnessOnboarding();
         }).catch(function(){
           button.disabled = false;
@@ -2225,6 +2227,10 @@
         });
         return;
       }
+    }
+    if(harnessConnectionState[authProvider] === true && !harnessAuthAwaitingSave){
+      saveHarnessSelection();
+      return;
     }
     harnessAuthAwaitingSave = true;
     harnessConnectionPending = authProvider;
@@ -3170,59 +3176,6 @@
     return null;
   }
 
-  function styledAgentModelLabel(model){
-    return String(chatModelParts(model).variant || model || 'Choose model').replace(/^GPT (\d)/, 'GPT-$1');
-  }
-
-  function styledAgentModelMenuOptionsHtml(){
-    if(!chatModelPicker.loaded){
-      return '<div class="cc-model-selection">' + esc(chatModelPicker.loading ? 'Loading connected models…' : (chatModelPicker.error || 'Connected models unavailable.')) + '</div>';
-    }
-    var entries = chatConnectedModelEntries();
-    if(styledAgentModelPicker.stage === 'variant'){
-      var variants = entries.filter(function(item){ return item.familyKey === styledAgentModelPicker.familyKey; });
-      return variants.map(function(item){
-        return '<button type="button" class="cc-model-option" data-styled-agent-model="' + esc(item.model) + '"><span class="cc-model-option-label">' + esc(item.variant) + '</span><span class="cc-model-option-meta">' + esc(item.providerLabel) + '</span></button>';
-      }).join('') || '<div class="cc-model-selection">No connected models are available.</div>';
-    }
-    var families = {};
-    entries.forEach(function(item){
-      if(!families[item.familyKey]) families[item.familyKey] = {key:item.familyKey, family:item.family, provider:item.providerLabel};
-    });
-    return Object.keys(families).map(function(key){
-      var item = families[key];
-      return '<button type="button" class="cc-model-option" data-styled-agent-family="' + esc(item.key) + '"><span class="cc-model-option-label">' + esc(item.family) + '</span><span class="cc-model-option-meta">' + esc(item.provider) + '</span></button>';
-    }).join('') || '<div class="cc-model-selection">No connected models are available.</div>';
-  }
-
-  function renderStyledAgentModelPicker(){
-    var wrap = el('#styledAgentModelPicker');
-    if(!wrap || !editState.agentId) return;
-    var label = el('#styledAgentEditModelLabel', wrap);
-    var title = el('#styledAgentModelTitle', wrap);
-    var back = el('#styledAgentModelBack', wrap);
-    var options = el('#styledAgentModelOptions', wrap);
-    var summary = el('#styledAgentModelSummary', wrap);
-    if(label) label.textContent = styledAgentModelLabel(editState.model);
-    if(title) title.textContent = styledAgentModelPicker.stage === 'variant' ? 'Choose a model' : 'Choose a model family';
-    if(back) back.hidden = styledAgentModelPicker.stage !== 'variant';
-    if(options) options.innerHTML = styledAgentModelMenuOptionsHtml();
-    if(summary) summary.textContent = editState.model || 'No model selected';
-  }
-
-  function closeStyledAgentModelPickerMenu(){
-    var menu = el('#styledAgentModelMenu');
-    var button = el('#styledAgentEditModel');
-    if(menu) menu.classList.remove('open');
-    if(button) button.setAttribute('aria-expanded', 'false');
-  }
-
-  document.addEventListener('click', function(e){
-    var wrap = el('#styledAgentModelPicker');
-    if(wrap && !wrap.contains(e.target)) closeStyledAgentModelPickerMenu();
-  });
-
-  function refreshStyledAgentModelSelect(){ renderStyledAgentModelPicker(); }
   // Generic fallback shown while workspace-grounded suggestions load.
   var BENCH_EXAMPLES = [
     'Summarize new files every Friday',
@@ -3342,7 +3295,6 @@
     buildController: null, buildTimeoutTimer: null, buildTimedOut: false, buildStatus: 'idle', buildError: ''};
   var editState = {agentId:null, isBuiltin:false, instructions:'', instructionsRevision:null, model:'', modelIx:0, departments:[], avatarColor:'', suggestion:'', suggestDismissed:false,
     testScopes:[], testRuns:[], testBusy:false, removedImprovements:[]};
-  var styledAgentModelPicker = {stage:'family', familyKey:''};
   // Whichever element opened the bot editor (an avatar/mote click, most
   // often) — restored on close so Escape/close never strands keyboard
   // focus at document.body, especially over the browser overlay where
@@ -3583,9 +3535,6 @@
         styledAgentAutomationMarkup(a) +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">WORKPLACES</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditWorkplacesInfo" aria-label="Workplaces information" title="Workplaces information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditWorkplacesInfo" role="tooltip">The workplace this bot belongs to. In multiplayer you can share it with the people in your workplace.</span></span></div><div class="styled-agent-edit-select styled-agent-edit-workspace" id="styledAgentEditWorkspace">' + esc(workspaceLabel()) + '</div></section>' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">AVATAR COLOR</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditAvatarInfo" aria-label="Avatar color information" title="Avatar color information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditAvatarInfo" role="tooltip">Automatic follows the bot identity.</span></span></div><div class="styled-agent-edit-color-control"><div class="styled-agent-color-options" id="styledAgentEditColorOptions" role="group" aria-label="Bot avatar color">' + colorMarkup + '</div></div></section>' +
-        '<section class="styled-agent-edit-section styled-agent-edit-model-section"><div class="styled-agent-edit-section-label">MODEL</div>' +
-          '<div class="styled-agent-model-picker" id="styledAgentModelPicker"><button type="button" class="styled-agent-edit-model" id="styledAgentEditModel" aria-haspopup="dialog" aria-expanded="false" aria-label="Choose bot model"><span id="styledAgentEditModelLabel">' + esc(styledAgentModelLabel(editState.model || a.model)) + '</span><span aria-hidden="true">&#8250;</span></button>' +
-            '<div class="cc-model-menu styled-agent-model-menu" id="styledAgentModelMenu"><div class="cc-model-menu-head"><button type="button" class="cc-model-back" id="styledAgentModelBack" aria-label="Back" title="Back" hidden>&#8249;</button><div class="cc-model-menu-title" id="styledAgentModelTitle">Choose a model family</div></div><div class="cc-model-options" id="styledAgentModelOptions">' + styledAgentModelMenuOptionsHtml() + '</div><div class="cc-model-selection" id="styledAgentModelSummary">' + esc(editState.model || a.model || 'No model selected') + '</div></div></div></section>' +
       '</div>' +
       '<div class="styled-agent-edit-footer"><button type="button" class="styled-agent-edit-delete" id="styledAgentEditDelete">Archive bot</button><span class="styled-agent-edit-footer-spacer"></span><button type="button" class="styled-agent-edit-cancel" id="styledAgentEditCancel">Cancel</button><button type="button" class="styled-agent-edit-save" id="styledAgentEditSave">Save changes</button></div>' +
     '</div>';
@@ -3604,11 +3553,6 @@
     var cancel = el('#styledAgentEditCancel', pane);
     var save = el('#styledAgentEditSave', pane);
     var remove = el('#styledAgentEditDelete', pane);
-    var model = el('#styledAgentEditModel', pane);
-    var modelWrap = el('#styledAgentModelPicker', pane);
-    var modelMenu = el('#styledAgentModelMenu', pane);
-    var modelBack = el('#styledAgentModelBack', pane);
-    var modelOptions = el('#styledAgentModelOptions', pane);
     var automations = els('[data-bot-id][data-automation-id]', pane);
     var addAutomation = el('#styledAgentAddAutomation', pane);
     els('[data-agent-info-trigger]', pane).forEach(function(trigger){
@@ -3639,40 +3583,6 @@
     if(cancel) cancel.addEventListener('click', closeCinema);
     if(save) save.addEventListener('click', saveEditCinema);
     if(remove) remove.addEventListener('click', deleteEditCinemaAgent);
-    if(model) model.addEventListener('click', function(e){
-      e.stopPropagation();
-      var opening = modelMenu && !modelMenu.classList.contains('open');
-      if(modelMenu) modelMenu.classList.toggle('open', opening);
-      model.setAttribute('aria-expanded', opening ? 'true' : 'false');
-      if(opening) renderStyledAgentModelPicker();
-    });
-    if(modelBack) modelBack.addEventListener('click', function(e){
-      e.preventDefault(); e.stopPropagation();
-      styledAgentModelPicker.stage = 'family';
-      styledAgentModelPicker.familyKey = '';
-      renderStyledAgentModelPicker();
-    });
-    if(modelOptions) modelOptions.addEventListener('click', function(e){
-      var family = e.target.closest('[data-styled-agent-family]');
-      var choice = e.target.closest('[data-styled-agent-model]');
-      if(family){
-        styledAgentModelPicker.stage = 'variant';
-        styledAgentModelPicker.familyKey = family.getAttribute('data-styled-agent-family');
-        renderStyledAgentModelPicker();
-      } else if(choice){
-        editState.model = choice.getAttribute('data-styled-agent-model');
-        editState.modelIx = Math.max(0, BENCH_MODELS.indexOf(editState.model));
-        styledAgentModelPicker.stage = 'family';
-        styledAgentModelPicker.familyKey = '';
-        renderStyledAgentModelPicker();
-        closeStyledAgentModelPickerMenu();
-      }
-    });
-    if(modelWrap){
-      modelWrap.addEventListener('click', function(e){ e.stopPropagation(); });
-      modelWrap.addEventListener('keydown', function(e){ if(e.key === 'Escape'){ e.preventDefault(); closeStyledAgentModelPickerMenu(); model.focus(); } });
-    }
-    if(chatModelPicker && typeof chatModelPicker.ensureLoaded === 'function') chatModelPicker.ensureLoaded();
     automations.forEach(function(automation){ automation.addEventListener('click', function(){
       var botId = automation.getAttribute('data-bot-id');
       var automationId = automation.getAttribute('data-automation-id');
@@ -3809,7 +3719,6 @@
     var modelIx = BENCH_MODELS.indexOf(a.model);
     var k = matchBenchKind(text) || BENCH_FALLBACK_KIND;
     var currentDepts = agentDepartments(a);
-    styledAgentModelPicker = {stage:'family', familyKey:''};
     editState = {
       agentId: id, isBuiltin: a.isBuiltin, name: a.name,
       instructions: text, instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
@@ -3842,10 +3751,10 @@
     if(!a) return;
     var instructions = editState.instructions.trim();
     if(!instructions) return;
-    var model = editState.model || BENCH_MODELS[editState.modelIx];
-    if(!model){ showBenchToast('Connect and choose a model before saving'); return; }
-    var name = String(editState.name || '').trim() || a.name;
     var styledEditOpen = STYLED_SKIN && chatInfo.mode === 'agent-edit';
+    var model = editState.model || BENCH_MODELS[editState.modelIx];
+    if(!styledEditOpen && !model){ showBenchToast('Connect and choose a model before saving'); return; }
+    var name = String(editState.name || '').trim() || a.name;
     var reopenAndClose = function(){
       closeCinema();
       loadBenchAgents().then(function(){
@@ -3859,9 +3768,11 @@
     };
     var targetId = a.isBuiltin ? a.agentId : a.id;
     if(!targetId) return;
-    // The styled editor no longer edits departments (a MiaOS leftover); the
-    // stored value stays untouched by omitting the key from the update.
-    api('/api/bots/' + targetId, {method:'PUT', body:{name: name, instructions: instructions, expectedInstructionsRevision: editState.instructionsRevision, model: model, avatarColor: editState.avatarColor || null}}).then(function(res){
+    // Profile edits leave model selection to chat. Omit it so a stale editor
+    // cannot overwrite the current model or require a connected provider.
+    var body = {name: name, instructions: instructions, expectedInstructionsRevision: editState.instructionsRevision, avatarColor: editState.avatarColor || null};
+    if(!styledEditOpen) body.model = model;
+    api('/api/bots/' + targetId, {method:'PUT', body:body}).then(function(res){
       if(res.status === 200) reopenAndClose();
       else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
     }).catch(function(){});
@@ -12815,7 +12726,7 @@
       return '<article class="hermes-connector hermes-google-account" data-hermes-connector="' + GOOGLE_ACCOUNT_ID + '">' +
         '<div class="styled-connector-item">' + connectorIcon(entry) +
         '<span class="styled-connector-copy"><span class="styled-connector-name">Google Account <span class="styled-connector-status' + statusClass + '">' + esc(googleAccountStatusLabel()) + '</span></span>' +
-        '<span class="styled-connector-desc">One connection for your Google tools.</span></span>' +
+        '<span class="styled-connector-desc">' + esc(connected && googleAccountStatus.googleEmail ? googleAccountStatus.googleEmail : 'One connection for your Google tools.') + '</span></span>' +
         actionButton + '</div>' +
         '<section class="hermes-connector-setup-panel" id="' + esc(panelId) + '" tabindex="-1"' + (googleAccountPanelOpen ? '' : ' hidden') + '>' +
         (connected ? '<p>Use the Drive icon in chat to attach files.</p>' : '<p>' + esc(body) + '</p>') +
@@ -12851,10 +12762,12 @@
       if(preservePending && googleAccountStatus.state === 'awaiting_approval' && !next.connected && (next.state === 'not_connected' || next.state === 'setup_required')){
         next = Object.assign({}, next, {state:'awaiting_approval'});
       }
+      var previousRevision = googleAccountStatus.connectionRevision;
+      var previousEmail = googleAccountStatus.googleEmail;
       googleAccountStatus = next;
       var driveButton=el('#ccDriveBtn');
       if(driveButton) driveButton.hidden=!next.connected;
-      if(!next.connected){googleDriveDrafts={};renderGoogleDriveAttachments();}
+      if(!next.connected || (previousRevision && previousRevision !== next.connectionRevision) || (previousEmail && previousEmail !== next.googleEmail)){googleDriveDrafts={};renderGoogleDriveAttachments();}
       if(typeof feedback === 'string') googleAccountFeedback = feedback;
       renderConnectors();
       if(next.connected && googleAccountPollTimer){
@@ -14516,7 +14429,6 @@
       }).then(function(){
         picker.loading = false;
         render();
-        refreshStyledAgentModelSelect();
       });
     }
 

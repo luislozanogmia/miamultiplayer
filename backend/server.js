@@ -10,6 +10,8 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'mia-os.db');
 const RUNTIME_DIR = path.resolve(
   process.env.MIAOS_RUNTIME_DIR || path.dirname(path.resolve(DB_PATH))
 );
+process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = String(process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR || '').trim()
+  || path.join(RUNTIME_DIR, 'google-workspace');
 process.env.HERMES_HOME = String(process.env.HERMES_HOME || '').trim()
   || path.join(RUNTIME_DIR, 'hermes');
 process.env.MIAOS_HERMES_GATEWAY_TOKEN_FILE = String(process.env.MIAOS_HERMES_GATEWAY_TOKEN_FILE || '').trim()
@@ -363,7 +365,23 @@ function googleAccountBindingRevoked(ownerEmail) {
   }
 }
 
-const googleAccountConnector = createGoogleAccountConnector();
+const GOOGLE_ACCOUNT_BINDING_META_KEY = 'google.account.binding';
+function googleConnectionOwnerIdentity() {
+  const linked = clerkAccountProfile();
+  const identity = linked ? ['clerk', linked.issuer, linked.subject] : ['user', googleAccountOwnerEmail];
+  return crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+}
+const googleAccountConnector = createGoogleAccountConnector({
+  binding: {
+    currentOwner: googleConnectionOwnerIdentity,
+    read: () => { try { return JSON.parse(db.getMeta(conn, GOOGLE_ACCOUNT_BINDING_META_KEY) || '{}'); } catch (_) { return {}; } },
+    write: (value) => db.setMeta(conn, GOOGLE_ACCOUNT_BINDING_META_KEY, JSON.stringify(value)),
+  },
+  onConnectionChanged: () => {
+    bumpVersion();
+    return closeHermesGatewaySessions();
+  },
+});
 const googleAccountOwnerEmail = String(
   process.env.MIAOS_GOOGLE_ACCOUNT_OWNER || MIAOS_SINGLE_USER_EMAIL || DEFAULT_OWNER || ''
 ).trim().toLowerCase();
@@ -4136,7 +4154,6 @@ function chatModelStatusProviderId(id) {
 // per turn, so connecting a second provider (for example Mia Router after
 // Claude) never hides the first one.
 function chatModelProviderIdsForUser(providers, settings, email, preference) {
-  if (!preference || !preference.onboardingComplete) return [];
   const owner = String(email || '').trim().toLowerCase();
   const connected = new Set(harnessConnectedProvidersForUser(settings, owner));
   if (managedRouterProvisionedEmails.has(managedRouterAccountEmail(owner))) connected.add(MANAGED_ROUTER_HERMES_PROVIDER);
@@ -4180,27 +4197,47 @@ function visibleChatModelProvidersForUser(providers, email) {
   return visible;
 }
 
-function inferenceOptionsForUser(email, baseOptions) {
+async function inferenceOptionsForUser(email, baseOptions) {
   const options = Object.assign({}, baseOptions || {});
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, email);
-  const provider = harnessCliProviderForUser(email);
+  // baseOptions may carry a per-turn selection already validated against the
+  // user's connected inventory. It takes precedence over a disconnected default.
+  const explicitSelection = Boolean(options.provider && options.model);
+  const provider = explicitSelection ? options.provider : harnessCliProviderForUser(email);
+  const preferredProvider = preference.provider === 'openai-api' ? preference.apiProvider : preference.provider;
+  const statusProvider = chatModelStatusProviderId(provider || preferredProvider);
+  if (hermesDisconnectedProviders.has(statusProvider)
+    || harnessProviderDisconnectedForUser(settings, email, statusProvider)) {
+    throw new Error(`no usable credentials: ${statusProvider} was disconnected for this user`);
+  }
   if (provider) options.provider = provider;
-  if (provider && preference.model) {
+  if (!explicitSelection && provider && preference.model) {
     options.model = preference.model;
     if (preference.fast) options.fast = true;
   } else if (provider && !options.model) {
-    // A provider without a model is never applied downstream (the gateway
-    // client only pins provider alongside an explicit model), which would
-    // silently hand the turn to whatever the Hermes profile defaults to.
-    // Resolve the user's first visible model instead — for a managed router
-    // that is the allowlisted model.
-    // Several providers can be visible; only the preferred one (under
-    // either of its Hermes ids) may supply the default model.
-    const visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
-    const entry = visible[provider] || chatModelProviderIdsForPreference(preference)
+    // A provider-only request cannot replace a remembered profile model.
+    // Hydrate its visible inventory before deciding whether a concrete pin
+    // is available, including for helpers that run outside a chat turn.
+    let visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
+    const entryForProvider = () => visible[provider] || chatModelProviderIdsForPreference(preference)
       .map((id) => visible[id]).find(Boolean);
+    if (!entryForProvider()) {
+      try {
+        rememberNativeChatModelInventory(await getHermesGatewayModelOptions({ refresh: true }));
+        visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
+      } catch (_) { /* the post-disconnect guard below must not allow a default fallback */ }
+    }
+    const entry = entryForProvider();
     if (entry && entry.models.length) options.model = entry.models[0];
+  }
+  const owner = String(email || '').trim().toLowerCase();
+  const disconnected = settings.harnessDisconnectedByUser && settings.harnessDisconnectedByUser[owner];
+  if ((hermesDisconnectedProviders.size || (Array.isArray(disconnected) && disconnected.length))
+    && (!options.provider || !options.model)) {
+    // The shared profile can still remember a provider this user revoked.
+    // Preserve that profile and the external login, but never inherit it.
+    throw new Error('no usable credentials: choose a connected model before running inference');
   }
   return Object.keys(options).length ? options : undefined;
 }
@@ -4864,17 +4901,18 @@ function googleWorkspaceStatusHandler(req, res) {
 async function googleWorkspaceAgentContextForOwner(ownerEmail, message) {
   const connector = googleAccountOwnerBinding.connectorFor(ownerEmail);
   if (!connector) {
-    return 'Google Workspace connector (authoritative server state): NOT CONNECTED for this user. Ask them to connect it from Plugins.';
+    return { text: 'Google Workspace connector (authoritative server state): NOT CONNECTED for this user. Ask them to connect it from Plugins.', connectionRevision: '' };
   }
+  const status = await connector.status();
   const result = await googleWorkspaceContext.buildGoogleWorkspaceAgentContext({
     // The authenticated event owner is resolved by native authorization
     // before this function is called. Google OAuth and resource operations are
     // owned by Hermes; no Mia refresh-token row is consulted here.
-    connector,
+    connector: Object.assign({}, connector, { status: async () => status }),
     ownerEmail,
     message,
   });
-  return result.text;
+  return { text: result.text, connectionRevision: status.connected ? status.connectionRevision : '' };
 }
 
 // Legacy route intentionally unregistered.
@@ -5139,7 +5177,7 @@ app.get('/api/bots/examples', requireAuth, async (req, res) => {
     const reply = await scheduleInference(
       prompt,
       'suggestion',
-      inferenceOptionsForUser(req.userEmail)
+      await inferenceOptionsForUser(req.userEmail)
     );
     const examples = String(reply || '')
       .replace(/\r\n/g, '\n')
@@ -5228,10 +5266,7 @@ app.post('/api/bots/interpret', requireAuth, async (req, res) => {
     const reply = await scheduleInference(
       currentDraft ? buildAgentRevisionPrompt(intent, currentDraft, change) : buildAgentSetupPrompt(intent),
       'suggestion',
-      chatModelSelectionInferenceOptions(
-        inferenceOptionsForUser(req.userEmail),
-        modelSelection
-      )
+      await inferenceOptionsForUser(req.userEmail, chatModelSelectionInferenceOptions(null, modelSelection))
     );
     draft = currentDraft
       ? normalizeAgentRevision(reply, intent, currentDraft, change)
@@ -5546,7 +5581,7 @@ app.post('/api/bots/suggest-name', requireAuth, async (req, res) => {
     const reply = await scheduleInference(
       prompt,
       'suggestion',
-      inferenceOptionsForUser(req.userEmail)
+      await inferenceOptionsForUser(req.userEmail)
     );
     const name = String(reply || '')
       .split(/\r?\n/)[0]
@@ -6838,21 +6873,17 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     ? dispatch.metadata.automationTask
     : triggerMessage;
   const rawChatModelSelection = trigger.metadata && trigger.metadata.chatModelSelection;
-  // After Disconnect the resumed gateway session would still answer with the
-  // agent it built from the removed key. Refuse before touching the gateway
-  // when the user's provider was disconnected here, so "no model" in the
-  // composer means no model answers. (Inventory emptiness is not the signal:
-  // a rate-limited provider also disappears from it and must still dispatch
-  // so the user gets the usage-limit reply.)
-  const dispatchProvider = isGatewayAgent ? harnessCliProviderForUser(trigger.senderId) : null;
-  if (dispatchProvider && hermesDisconnectedProviders.has(dispatchProvider)) {
-    throw new Error(`no usable credentials: ${dispatchProvider} was disconnected for this user`);
-  }
   const chatModelSelection = await chatModelSelectionForUser(
     rawChatModelSelection,
     trigger.senderId
   );
   if (!message) return;
+  // Resolve both Mia and bot selections before any gateway/session work. A
+  // null default after disconnect must not become an unpinned Hermes turn.
+  const userOptions = await inferenceOptionsForUser(
+    trigger.senderId,
+    chatModelSelectionInferenceOptions(null, chatModelSelection)
+  );
   const parentEventId = nativeReplyParentEventId(trigger);
   const agent = nativeDispatchActor(dispatch, conversation, trigger);
   const globalInstructions = currentInstructionSettings(isGatewayAgent ? trigger.senderId : ownerOf(agent));
@@ -7105,7 +7136,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const googleWorkspaceDocsWriteRequested = googleWorkspaceActions.explicitDocsWriteRequested(message, googleResourceRefs);
   const googleWorkspaceWriteKinds = googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs);
   const googleWorkspaceWriteRequested = googleWorkspaceSheetWriteRequested || googleWorkspaceDocsWriteRequested;
-  const workspaceContext = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
+  const workspaceConnection = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
+  const workspaceContext = workspaceConnection.text;
   const googleWorkspaceConnected = /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''));
   const safeGoogleRefs = googleWorkspaceConnected
     ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs)
@@ -7117,6 +7149,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const googleGatewayProfile = googleProfileAuthorized
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     : MIAOS_AGENT_HERMES_PROFILE;
+  const googleGatewaySessionKey = googleProfileAuthorized
+    ? googleGatewayProfile + ':' + workspaceConnection.connectionRevision : googleGatewayProfile;
   const googleBotProfile = googleProfileAuthorized
     ? MIAOS_BOT_GOOGLE_HERMES_PROFILE
     : MIAOS_BOT_HERMES_PROFILE;
@@ -7125,16 +7159,6 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     && googleWorkspaceConnected;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
-  // Without an explicit model the gateway session would fall back to profile
-  // defaults, so hydrate the inventory when the composer sent no selection
-  // and the cache cannot resolve one (e.g. right after a gateway restart).
-  let userOptions = inferenceOptionsForUser(trigger.senderId);
-  if (!chatModelSelection && userOptions && userOptions.provider && !userOptions.model) {
-    try {
-      rememberNativeChatModelInventory(await getHermesGatewayModelOptions({ refresh: true }));
-      userOptions = inferenceOptionsForUser(trigger.senderId);
-    } catch (_) { /* inventory unavailable; dispatch surfaces the real error */ }
-  }
   const inferenceOptions = {
     ...userOptions,
     ...(chatModelSelection ? {
@@ -7317,7 +7341,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     const gatewayRunArgs = {
       storedSessionId: ownsPrivateAgentConversation && conversation.metadata
         && (conversation.metadata.hermesGatewayProfile
-          ? conversation.metadata.hermesGatewayProfile === googleGatewayProfile
+          ? conversation.metadata.hermesGatewayProfile === googleGatewaySessionKey
           : googleGatewayProfile === MIAOS_AGENT_HERMES_PROFILE)
         ? conversation.metadata.hermesGatewaySessionId
         : null,
@@ -7334,7 +7358,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
             companyId: conversation.companyId,
             conversationId: conversation.id,
           });
-          persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, googleGatewayProfile);
+          persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, googleGatewaySessionKey);
         }
       },
       signal,
@@ -7375,7 +7399,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         conversation,
         trigger.id,
         gatewayResult.storedSessionId,
-        googleGatewayProfile
+        googleGatewaySessionKey
       );
       if (gatewayResult.storedSessionId && !sessionOwner) return;
     }
@@ -7386,7 +7410,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // session once; what changes per turn (platform state, Google write
     // instructions) travels with each message instead.
     const systemPrompt = buildHermesTaskPrompt(agent, [], '', senderLabel, '', [], false, globalInstructions.bot);
-    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt);
+    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + (googleProfileAuthorized ? '\nGoogle connection: ' + workspaceConnection.connectionRevision : ''));
     const googleActionInstruction = googleWorkspaceWriteAuthorized
       && /authoritative server state\): CONNECTED/.test(String(platformContext || ''))
       ? googleWorkspaceActions.googleWorkspaceActionInstruction(
@@ -7771,7 +7795,7 @@ app.post('/api/chat/suggestions', requireAuth, async (req, res) => {
     const reply = await scheduleInference(
       prompt,
       'suggestion',
-      inferenceOptionsForUser(req.userEmail)
+      await inferenceOptionsForUser(req.userEmail)
     );
     const suggestions = String(reply || '')
       .replace(/\r\n/g, '\n')

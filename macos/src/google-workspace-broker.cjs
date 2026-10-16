@@ -8,6 +8,7 @@ const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 
 const ALLOWED_PREFIXES = Object.freeze([
+  ["gmail", "users", "getProfile"],
   ["gmail", "users", "messages", "list"],
   ["gmail", "users", "messages", "get"],
   ["gmail", "users", "messages", "send"],

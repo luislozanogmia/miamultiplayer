@@ -107,11 +107,15 @@ test('embedded browser toolbar keeps status transient in the connection dot', as
   assert.doesNotMatch(nativeBrowser, /Chromium/);
 });
 
-test('embedded browser performance timings appear only in Developer Mode', async () => {
-  const nativeBrowser = await readFile(nativeBrowserUrl, 'utf8');
-
-  assert.match(nativeBrowser, /function developerModeEnabled\(\) \{ return document\.documentElement\.getAttribute\('data-theme'\) === 'developer'; \}/);
-  assert.match(nativeBrowser, /if \(developerModeEnabled\(\) && timing\) \{[\s\S]*First paint[\s\S]*DOM ready[\s\S]*Page load[\s\S]*\}/);
+test('embedded browser hides its idle footer and preserves meaningful PR46 status', async () => {
+  const [nativeBrowser, html, styles] = await Promise.all([
+    readFile(nativeBrowserUrl, 'utf8'), readFile(htmlUrl, 'utf8'),
+    readFile(new URL('./styles.css', import.meta.url), 'utf8'),
+  ]);
+  assert.match(html, /<footer class="local-browser-foot" hidden>/);
+  assert.match(styles, /\.local-browser-foot\[hidden\]\{display:none;\}/);
+  assert.match(nativeBrowser, /foot\.textContent = parts\.join[\s\S]*foot\.hidden = !parts\.length/);
+  assert.doesNotMatch(nativeBrowser, /Mia is available on the right/);
   assert.match(nativeBrowser, /function syncNativeTheme\(\) \{[\s\S]*render\(state\);[\s\S]*dark: developerModeEnabled\(\)/);
 });
 
@@ -687,18 +691,11 @@ test('agent editor exposes a persisted avatar color with an automatic fallback',
   assert.match(styles, /\.mote-avatar-img\[role="button"\]/);
 });
 
-test('bot profile model list is sourced from the same connected inventory as chat', async () => {
+test('chat and legacy bot creation retain connected model inventory after profile picker removal', async () => {
   const source = await readFile(appUrl, 'utf8');
   assert.match(source, /function chatConnectedModelEntries\(\)/);
   assert.match(source, /function entries\(\)\{ return chatConnectedModelEntries\(\); \}/);
-  assert.match(source, /function styledAgentModelMenuOptionsHtml\(\)/);
-  assert.match(source, /chatConnectedModelEntries\(\)/);
-  assert.match(source, /class="cc-model-menu styled-agent-model-menu"/);
-  assert.match(source, /data-styled-agent-family/);
-  assert.match(source, /data-styled-agent-model/);
-  assert.match(source, /function closeStyledAgentModelPickerMenu\(\)/);
-  assert.match(source, /if\(wrap && !wrap\.contains\(e\.target\)\) closeStyledAgentModelPickerMenu\(\)/);
-  assert.doesNotMatch(source, /styledAgentModelPicker[\s\S]{0,3000}addEventListener\('focusout'/);
+  assert.doesNotMatch(source, /styledAgentModelPicker|styledAgentEditModel|data-styled-agent-model/);
   assert.match(source, /syncBenchModelsFromChatInventory\(\)/);
   assert.match(source, /var BENCH_MODELS = \[\]/);
   assert.match(source, /function selectedConnectedBotModel\(\)/);

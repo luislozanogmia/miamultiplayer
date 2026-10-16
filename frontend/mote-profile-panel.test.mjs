@@ -71,9 +71,8 @@ test('the compact Mote profile editor renders and persists the agent color picke
   assert.doesNotMatch(html, /id="benchDetailColorOptions"/);
   // Saves through the compact editor's existing bot update endpoint without
   // carrying the deprecated Agent Bench departments field into this surface.
-  assert.match(
-    source,
-    /api\('\/api\/bots\/' \+ targetId, \{method:'PUT', body:\{name: name, instructions: instructions, expectedInstructionsRevision: editState\.instructionsRevision, model: model, avatarColor: editState\.avatarColor \|\| null\}\}\)/
-  );
+  assert.match(source, /var body = \{name: name, instructions: instructions, expectedInstructionsRevision: editState\.instructionsRevision, avatarColor: editState\.avatarColor \|\| null\}/);
+  assert.match(source, /if\(!styledEditOpen\) body\.model = model/);
+  assert.match(source, /api\('\/api\/bots\/' \+ targetId, \{method:'PUT', body:body\}\)/);
   assert.match(source, /body:\{name: name, model: a\.model, departments: agentDepartments\(a\)\}/);
 });

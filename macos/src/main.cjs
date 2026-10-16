@@ -31,7 +31,7 @@ const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs")
 const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
 const { openClerkBrowser } = require("./clerk-browser-open.cjs");
 const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
-const { discoverClaudeCodeCommand, installClaudeCode } = require("./claude-code.cjs");
+const { discoverClaudeCodeCommand, createClaudeCodeManager } = require("./claude-code.cjs");
 const { createDesktopNotifications } = require("./desktop-notifications.cjs");
 const { createQuitShutdown, installQuitSignalHandlers, stopProcessGroup } = require("./process-shutdown.cjs");
 
@@ -2105,42 +2105,66 @@ ipcMain.handle("miaos-retry-connection", async (event) => {
   return loadMiaOS();
 });
 
+let claudeCodeManager = null;
+function desktopClaudeCodeManager() {
+  if (!claudeCodeManager) claudeCodeManager = createClaudeCodeManager({ home: app.getPath("home") });
+  return claudeCodeManager;
+}
+
+async function maintainDesktopClaudeCode({ installMissing = false } = {}) {
+  const result = await desktopClaudeCodeManager().ensure({ installMissing });
+  if (result.available) process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND = result.command;
+  else if (result.error) desktopLog(`Claude Code maintenance: ${result.error}`);
+  return result;
+}
+
+function notifyClaudeMaintenanceFailure(status) {
+  if (!status || status.available || !status.installed || !status.error
+    || !mainWindow || mainWindow.isDestroyed?.()) return Promise.resolve();
+  return dialog.showMessageBox(mainWindow, {
+    type: "warning",
+    title: "Claude update needs attention",
+    message: "Mia couldn’t update Claude Code.",
+    detail: "Open Initial setup from your account menu and choose Update Claude Code to retry. You can continue using other connections.",
+    buttons: ["OK"],
+    noLink: true,
+  });
+}
+
 ipcMain.on("miaos-claude-code-status", (event) => {
-  event.returnValue = isMainWindowSender(event)
-    ? { available: Boolean(discoverClaudeCodeCommand({ home: app.getPath("home") })) }
-    : { available: false };
+  const { command, ...status } = isMainWindowSender(event)
+    ? desktopClaudeCodeManager().status() : { available: false };
+  event.returnValue = status;
 });
 
 let claudeCodeInstallPromise = null;
 ipcMain.handle("miaos-claude-code-install", async (event) => {
   if (!isMainWindowSender(event)) return { ok: false, error: "This request did not come from Mia." };
-  const existing = discoverClaudeCodeCommand({ home: app.getPath("home") });
-  if (existing) return { ok: true, alreadyInstalled: true };
-  if (claudeCodeInstallPromise) return { ok: false, error: "Claude Code installation is already running." };
-  claudeCodeInstallPromise = (async () => {
+  if (claudeCodeInstallPromise) return { ok: false, error: "Claude Code maintenance is already running." };
+  claudeCodeInstallPromise = Promise.resolve().then(async () => {
     try {
+      const status = desktopClaudeCodeManager().status();
+      if (status.available) return { ok: true, alreadyInstalled: true, version: status.version };
+      const updating = status.installed;
       const choice = await dialog.showMessageBox(mainWindow, {
         type: "question",
-        buttons: ["Cancel", "Install Claude Code"],
+        buttons: ["Cancel", updating ? "Update Claude Code" : "Install Claude Code"],
         defaultId: 0,
         cancelId: 0,
-        title: "Install Claude Code",
-        message: "Install Anthropic's Claude Code command?",
-        detail: "Mia will download and run Anthropic's official installer from claude.ai. Claude Desktop is separate. You will sign in to Claude Code afterward; Mia will not copy your Claude Desktop login.",
+        title: updating ? "Update Claude Code" : "Install Claude Code",
+        message: updating ? "Update Claude Code for Mia?" : "Install Anthropic's Claude Code command?",
+        detail: "Mia will download and run Anthropic's official installer from claude.ai and verify a compatible version. Mia does not change your Claude login. Claude Desktop is separate.",
         noLink: true,
       });
       if (choice.response !== 1) return { ok: false, cancelled: true };
-      const command = await installClaudeCode({ home: app.getPath("home") });
-      process.env.CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND = command;
+      const result = await maintainDesktopClaudeCode({ installMissing: true });
+      if (!result.available) return { ok: false, error: result.error || "Claude Code could not be updated. Try again in Mia." };
       await developmentRestartServer({ reload: false });
-      return { ok: true, installed: true };
-    } catch (error) {
-      desktopLog(`Claude Code installation failed: ${error.message}`);
-      return { ok: false, error: error.message || "Claude Code could not be installed." };
-    } finally {
-      claudeCodeInstallPromise = null;
+      return { ok: true, installed: true, version: result.version };
+    } catch (_) {
+      return { ok: false, error: "Claude Code could not be prepared. Try again in Mia." };
     }
-  })();
+  }).finally(() => { claudeCodeInstallPromise = null; });
   return claudeCodeInstallPromise;
 });
 
@@ -2461,7 +2485,14 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   installBrowserMenu();
   // Keep desktop services available if preparation fails. The fallback's
   // Retry action can prepare the runtime again without requiring a restart.
-  if (runtimeReady) await loadMiaOS();
+  if (runtimeReady) {
+    // Run on each launch, including the first launch after a Mia OTA update.
+    // Existing older CLIs are maintained before Hermes can cache their inventory.
+    // Missing CLIs retain the explicit first-install consent in onboarding.
+    const claudeDependency = await maintainDesktopClaudeCode();
+    await loadMiaOS();
+    notifyClaudeMaintenanceFailure(claudeDependency).catch(() => {});
+  }
   await startGhostBridge();
   if (autoUpdateConfigured) {
     checkForMiaUpdate().catch(() => {});

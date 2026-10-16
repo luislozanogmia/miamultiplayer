@@ -9,6 +9,35 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.18] — 2026-10-16
+
+### Added
+- Let users hide/show Mia beside the browser and resize its pane; remember
+  pane visibility and width on the device.
+- Show the connected Google account email in Connected apps.
+
+### Changed
+- Polish browser tabs and toolbar, simplify displayed addresses, and keep
+  the idle status footer hidden. Align native macOS window controls with
+  the app's top row.
+- Let the message composer grow with the draft up to a third of the window.
+- Keep model selection in chat instead of the bot profile editor.
+
+### Fixed
+- Bind Google connections to the current Mia identity. Reconnecting a different
+  Google account refreshes Mia/bot session bindings and clears stale Drive
+  selections; existing unverified connections require one explicit reconnect.
+- Keep agent Google commands on Mia's app-scoped configuration instead of
+  accidentally using a previous global Google account.
+- Prevent later Mia/bot requests and setup helpers from inheriting a saved
+  Claude profile after disconnect. Explicit reconnect and other connected
+  providers remain available; independently scheduled work is unchanged.
+- Check Claude Code compatibility when Mia starts; maintain older native
+  installations, verify the resulting version, preserve newer versions, and
+  offer an in-app retry when setup fails. Missing installations retain consent.
+
+## [0.2.17] — 2026-10-15
+
 ### Fixed
 - Register Linux browser sign-in with the installed desktop identity, so a
   freshly installed Mia can open Google and receive its callback.
