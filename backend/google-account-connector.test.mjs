@@ -373,7 +373,7 @@ test('durable deletion tombstone blocks same-email Google credential inheritance
 
 test('server registers only the Hermes-owned Google Account lifecycle routes', async () => {
   const source = await readFile(new URL('./server.js', import.meta.url), 'utf8');
-  assert.match(source, /createGoogleAccountConnector\(\)/);
+  assert.match(source, /createGoogleAccountConnector\(\{/);
   assert.match(source, /SELECT 1 FROM deleted_users WHERE lower\(email\) = \? LIMIT 1/);
   assert.match(source, /isRevoked: googleAccountBindingRevoked/);
   assert.match(source, /googleAccountOwnerBinding\.disconnectFor\(owner\)/);
