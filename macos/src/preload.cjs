@@ -99,5 +99,11 @@ contextBridge.exposeInMainWorld("miaDesktop", {
       ipcRenderer.on("miaos-browser-find-result", listener);
       return () => ipcRenderer.removeListener("miaos-browser-find-result", listener);
     },
+    // Asks the tab strip to start editing a tab group's name.
+    onGroupEdit: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("miaos-browser-group-edit", listener);
+      return () => ipcRenderer.removeListener("miaos-browser-group-edit", listener);
+    },
   },
 });

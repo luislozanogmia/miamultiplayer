@@ -2731,6 +2731,25 @@
   .native-browser-tab button.native-browser-tab-close:hover{background:#0000001a;border-radius:50%;}
   .native-browser-new-tab{width:28px;height:28px;padding:0;margin:0 0 3px 4px;border-radius:50%;font-size:18px;line-height:28px;color:#474747;}
   .native-browser-new-tab:hover{background:#0000001a;border-radius:50%;}
+  /* Tab groups: Chrome's colors; a pill label before the group's tabs and a
+     line in the group color under each of them. */
+  [data-group-color="grey"]{--tab-group-color:#5f6368;}
+  [data-group-color="blue"]{--tab-group-color:#1a73e8;}
+  [data-group-color="red"]{--tab-group-color:#d93025;}
+  [data-group-color="yellow"]{--tab-group-color:#e8a200;}
+  [data-group-color="green"]{--tab-group-color:#188038;}
+  [data-group-color="pink"]{--tab-group-color:#d01884;}
+  [data-group-color="purple"]{--tab-group-color:#a142f4;}
+  [data-group-color="cyan"]{--tab-group-color:#007b83;}
+  [data-group-color="orange"]{--tab-group-color:#e8710a;}
+  .native-browser-group{appearance:none;flex:none;align-self:center;max-width:160px;height:22px;margin:0 6px 0 8px;padding:0 9px;border:0;border-radius:6px;background:var(--tab-group-color);color:#fff;font:600 12px/22px -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;-webkit-app-region:no-drag;}
+  .native-browser-group.unnamed{width:14px;height:14px;padding:0;border-radius:50%;}
+  .native-browser-group.collapsed{opacity:.85;}
+  .native-browser-group:hover{filter:brightness(1.08);}
+  .native-browser-group:focus-visible{outline:2px solid var(--tab-group-color);outline-offset:2px;}
+  .native-browser-group.drop-target{box-shadow:0 0 0 2px #fff,0 0 0 4px var(--tab-group-color);}
+  .native-browser-group-name{flex:none;align-self:center;width:140px;height:22px;margin:0 6px 0 8px;padding:0 8px;border:2px solid var(--tab-group-color);border-radius:6px;background:#fff;color:#1f1f1f;font:12px/18px -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;outline:none;-webkit-app-region:no-drag;}
+  .native-browser-tab.in-group,.native-browser-tab.in-group.active{box-shadow:inset 0 -3px 0 var(--tab-group-color);}
   .native-browser-tabs-row .local-browser-btn{margin-bottom:3px;border-radius:50%;}
   /* Same size, icon weight, and right edge as the toolbar's downloads button
      below it, so the two line up in one column. */

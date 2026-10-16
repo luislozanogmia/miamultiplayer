@@ -92,6 +92,18 @@ function isLocalFileTarget(value) {
   return /^file:/i.test(String(value || "").trim()) || path.isAbsolute(String(value || "").trim());
 }
 
+// Chrome's tab group colors, in the order new groups take them.
+const GROUP_COLORS = ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
+function normalizeGroupRecord(item) {
+  if (!item || typeof item.id !== "string" || !/^g[1-9][0-9]{0,5}$/.test(item.id)) return null;
+  return {
+    id: item.id,
+    name: typeof item.name === "string" ? item.name.trim().slice(0, 80) : "",
+    color: GROUP_COLORS.includes(item.color) ? item.color : "grey",
+    collapsed: item.collapsed === true,
+  };
+}
+
 function createBrowser(window, trustedOrigin, log, options = {}) {
   const tabs = new Map();
   const shellContents = window.webContents;
@@ -107,6 +119,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     ? path.resolve(options.workspaceRoot)
     : "";
   let activeId = null;
+  // Chrome-style tab groups: a named, colored run of adjacent tabs. A tab
+  // belongs to at most one group (tab.groupId); a group with no tabs is gone.
+  const groups = new Map();
+  let nextGroupNumber = 1;
   let fullscreenId = null;
   let windowWasFullscreen = false;
   let nextId = 1;
@@ -428,7 +444,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!statePath) return null;
     try {
       const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
-      if (!saved || ![1, 2].includes(saved.version) || !Array.isArray(saved.tabs)) return null;
+      if (!saved || ![1, 2, 3].includes(saved.version) || !Array.isArray(saved.tabs)) return null;
+      const savedGroups = [];
+      for (const item of Array.isArray(saved.groups) ? saved.groups.slice(0, 50) : []) {
+        const group = normalizeGroupRecord(item);
+        if (group && !savedGroups.some(other => other.id === group.id)) savedGroups.push(group);
+      }
       const seen = new Set();
       const savedTabs = [];
       for (const item of saved.tabs.slice(0, 50)) {
@@ -448,9 +469,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
           media: item.media && Number.isFinite(Number(item.media.currentTime))
             ? { currentTime: Math.max(0, Math.min(604800, Number(item.media.currentTime))) }
             : null,
+          groupId: savedGroups.some(group => group.id === item.groupId) ? item.groupId : null,
         });
       }
-      return { activeId: Number(saved.activeId), tabs: savedTabs };
+      return { activeId: Number(saved.activeId), tabs: savedTabs, groups: savedGroups };
     } catch (_) {
       return null;
     }
@@ -459,13 +481,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function persistTabs() {
     if (!statePath || restoring) return;
     const snapshot = {
-      version: 2,
+      version: 3,
       activeId,
+      groups: groupList(),
       tabs: [...tabs.values()].slice(0, 50).map(tab => ({
         id: tab.id,
         url: tab.url,
         title: tab.title,
         media: tab.media || null,
+        groupId: tab.groupId || null,
       })),
     };
     const temporaryPath = `${statePath}.${process.pid}.tmp`;
@@ -622,8 +646,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   const active = () => tabs.get(activeId);
-  const state = () => ({ activeId, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ activeId, download, downloads: downloadList(), groups: groupList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
+    groupId: tab.groupId || null,
     active: tab.id === activeId,
     loading: tab.view.webContents.isLoading(), timing: tab.timing,
     canGoBack: tab.view.webContents.navigationHistory.canGoBack(),
@@ -663,6 +688,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function activateTab(id) {
     if (fullscreenId !== null && fullscreenId !== id) exitPageFullscreen();
     activeId = id;
+    // The tab in front is never hidden inside a collapsed group.
+    const group = groups.get(tabs.get(id)?.groupId);
+    if (group) group.collapsed = false;
   }
 
   function exitPageFullscreen() {
@@ -1271,6 +1299,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         ? options.title.slice(0, 500) : "New tab", error: "", favicon: null, faviconPending: false,
       faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [],
       media: options.media || null,
+      // A tab opened from a grouped tab (a link, New Tab to the Right,
+      // Duplicate) joins its opener's group, as in Chrome.
+      groupId: groups.has(options.groupId) ? options.groupId
+        : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null,
       restoreMediaPending: !!options.media,
       mediaRestoreTarget: null,
       mediaRestoreUntil: 0,
@@ -1443,6 +1475,146 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (tab.id === activeId) focusTabWebContents(tab);
     return tab;
   }
+  function groupList() {
+    return [...groups.values()].map(group => ({ ...group }));
+  }
+  // Keeps every group's tabs adjacent (at its first tab's position) and
+  // forgets groups that no longer have tabs.
+  function normalizeGroups() {
+    const order = [];
+    const placed = new Set();
+    const all = [...tabs.values()];
+    for (const tab of all) {
+      if (!groups.has(tab.groupId)) tab.groupId = null;
+      if (!tab.groupId) { order.push(tab); continue; }
+      if (placed.has(tab.groupId)) continue;
+      placed.add(tab.groupId);
+      for (const member of all) if (member.groupId === tab.groupId) order.push(member);
+    }
+    tabs.clear();
+    for (const tab of order) tabs.set(tab.id, tab);
+    for (const id of [...groups.keys()]) if (!placed.has(id)) groups.delete(id);
+  }
+  function groupTabs(groupId) {
+    return [...tabs.values()].filter(tab => tab.groupId === groupId);
+  }
+  function createGroup(tabId) {
+    const tab = tabs.get(tabId);
+    if (!tab) return null;
+    const used = new Set([...groups.values()].map(group => group.color));
+    const color = GROUP_COLORS.find(item => !used.has(item)) || GROUP_COLORS[groups.size % GROUP_COLORS.length];
+    const group = { id: `g${nextGroupNumber++}`, name: "", color, collapsed: false };
+    groups.set(group.id, group);
+    tab.groupId = group.id;
+    normalizeGroups();
+    return group;
+  }
+  // Adds a tab to the end of a group, the way Chrome's "Add tab to group" does.
+  function addTabToGroup(tabId, groupId) {
+    const tab = tabs.get(tabId);
+    if (!tab || !groups.has(groupId) || tab.groupId === groupId) return;
+    const members = groupTabs(groupId);
+    tab.groupId = groupId;
+    const order = [...tabs.keys()].filter(id => id !== tabId);
+    moveTab(tabId, order.indexOf(members.at(-1).id) + 1);
+    normalizeGroups();
+  }
+  // Removing a tab from a group moves it just past the group's end.
+  function removeTabFromGroup(tabId) {
+    const tab = tabs.get(tabId);
+    if (!tab || !tab.groupId) return;
+    const members = groupTabs(tab.groupId);
+    tab.groupId = null;
+    const order = [...tabs.keys()].filter(id => id !== tabId);
+    const last = members.filter(member => member !== tab).at(-1);
+    if (last) moveTab(tabId, order.indexOf(last.id) + 1);
+    normalizeGroups();
+  }
+  function setGroupCollapsed(groupId, collapsed) {
+    const group = groups.get(groupId);
+    if (!group) return;
+    group.collapsed = collapsed === true;
+    if (!group.collapsed || tabs.get(activeId)?.groupId !== groupId) return;
+    // Collapsing the group in front moves to the nearest tab outside it.
+    const order = [...tabs.values()];
+    const index = order.findIndex(tab => tab.id === activeId);
+    const outside = order.filter(tab => tab.groupId !== groupId && !groups.get(tab.groupId)?.collapsed);
+    const next = outside.find(tab => order.indexOf(tab) > index) || outside.at(-1);
+    if (next) activateTab(next.id);
+    else { newTab(); }
+  }
+  function updateGroup(groupId, changes = {}) {
+    const group = groups.get(groupId);
+    if (!group) return;
+    if (typeof changes.name === "string") group.name = changes.name.trim().slice(0, 80);
+    if (GROUP_COLORS.includes(changes.color)) group.color = changes.color;
+    if (typeof changes.collapsed === "boolean") setGroupCollapsed(groupId, changes.collapsed);
+  }
+  function closeTabs(ids) {
+    for (const id of ids) if (tabs.has(id)) closeTab(id);
+  }
+  function editGroupName(groupId) {
+    if (!disposed && !window.isDestroyed()) window.webContents.send("miaos-browser-group-edit", { groupId });
+  }
+  // Menu actions run outside the command handler, so they finish the same way.
+  const menuAction = fn => () => {
+    if (disposed) return;
+    fn(); normalizeGroups(); layout(); persistTabs(); publish();
+  };
+  function showTabMenu(tabId) {
+    const tab = tabs.get(tabId);
+    if (!tab) return;
+    const order = [...tabs.keys()];
+    const others = [...groups.values()].filter(group => group.id !== tab.groupId);
+    const items = [
+      { label: "New Tab to the Right", click: menuAction(() => newTab(undefined, { after: tabId })) },
+      { type: "separator" },
+      { label: "Add Tab to New Group", click: menuAction(() => {
+        if (tab.groupId) removeTabFromGroup(tabId);
+        const group = createGroup(tabId);
+        if (group) editGroupName(group.id);
+      }) },
+    ];
+    if (others.length) {
+      items.push({ label: "Add Tab to Group", submenu: others.map(group => ({
+        label: group.name || `Unnamed ${group.color} group`,
+        click: menuAction(() => addTabToGroup(tabId, group.id)),
+      })) });
+    }
+    if (tab.groupId) items.push({ label: "Remove From Group", click: menuAction(() => removeTabFromGroup(tabId)) });
+    items.push(
+      { type: "separator" },
+      { label: "Reload", enabled: !!tab.url, click: menuAction(() => { tab.error = ""; tab.view.webContents.reload(); }) },
+      { label: "Duplicate", enabled: !!tab.url, click: menuAction(() => newTab(tab.url, { after: tabId })) },
+      { type: "separator" },
+      { label: "Close", click: menuAction(() => closeTab(tabId)) },
+      { label: "Close Other Tabs", enabled: tabs.size > 1, click: menuAction(() => closeTabs(order.filter(id => id !== tabId))) },
+      { label: "Close Tabs to the Right", enabled: order.indexOf(tabId) < order.length - 1,
+        click: menuAction(() => closeTabs(order.slice(order.indexOf(tabId) + 1))) },
+    );
+    Menu.buildFromTemplate(items).popup({ window });
+  }
+  function showGroupMenu(groupId) {
+    const group = groups.get(groupId);
+    if (!group) return;
+    Menu.buildFromTemplate([
+      { label: "Rename Group…", click: () => editGroupName(groupId) },
+      { label: "Color", submenu: GROUP_COLORS.map(color => ({
+        label: color[0].toUpperCase() + color.slice(1), type: "radio", checked: group.color === color,
+        click: menuAction(() => updateGroup(groupId, { color })),
+      })) },
+      { type: "separator" },
+      { label: "New Tab in Group", click: menuAction(() => {
+        const last = groupTabs(groupId).at(-1);
+        newTab(undefined, { after: last && last.id, groupId });
+      }) },
+      { label: group.collapsed ? "Expand Group" : "Collapse Group",
+        click: menuAction(() => setGroupCollapsed(groupId, !group.collapsed)) },
+      { label: "Ungroup", click: menuAction(() => { for (const tab of groupTabs(groupId)) tab.groupId = null; }) },
+      { type: "separator" },
+      { label: "Close Group", click: menuAction(() => closeTabs(groupTabs(groupId).map(tab => tab.id))) },
+    ]).popup({ window });
+  }
   function closeTab(id) {
     const tab = tabs.get(id);
     if (!tab) return;
@@ -1451,7 +1623,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
     tab.view.webContents.close();
-    if (activeId === id) activeId = [...tabs.keys()].at(-1) || null;
+    normalizeGroups();
+    if (activeId === id) {
+      const remaining = [...tabs.values()];
+      const shown = remaining.filter(item => !groups.get(item.groupId)?.collapsed);
+      const next = shown.at(-1) || remaining.at(-1);
+      activeId = null;
+      if (next) activateTab(next.id);
+    }
     if (!tabs.size) newTab();
     layout(); persistTabs(); publish();
   }
@@ -1576,7 +1755,26 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         focusTabWebContents(tabs.get(command.id));
       }
       if (command.action === "close") closeTab(command.id);
-      if (command.action === "move" && moveTab(command.id, command.index)) persistTabs();
+      if (command.action === "move" && moveTab(command.id, command.index)) {
+        // Dropping onto a tab joins that tab's group (or leaves groups).
+        const moved = tabs.get(command.id);
+        if (command.groupId === null || groups.has(command.groupId)) moved.groupId = command.groupId;
+        normalizeGroups(); persistTabs();
+      }
+      if (command.action === "tabMenu") showTabMenu(command.id);
+      if (command.action === "groupMenu") showGroupMenu(command.groupId);
+      if (command.action === "groupCreate" && tabs.has(command.id)) {
+        const group = createGroup(command.id);
+        if (group) { updateGroup(group.id, { name: command.name }); persistTabs(); }
+      }
+      if (command.action === "groupAdd") { addTabToGroup(command.id, command.groupId); persistTabs(); }
+      if (command.action === "groupRemoveTab") { removeTabFromGroup(command.id); persistTabs(); }
+      if (command.action === "groupUpdate") { updateGroup(command.groupId, command); layout(); persistTabs(); }
+      if (command.action === "groupUngroup") {
+        for (const item of groupTabs(command.groupId)) item.groupId = null;
+        normalizeGroups(); persistTabs();
+      }
+      if (command.action === "groupClose") closeTabs(groupTabs(command.groupId).map(item => item.id));
       if (command.action === "back" && tab.view.webContents.navigationHistory.canGoBack()) tab.view.webContents.navigationHistory.goBack();
       if (command.action === "forward" && tab.view.webContents.navigationHistory.canGoForward()) tab.view.webContents.navigationHistory.goForward();
       if (command.action === "reload") { tab.error = ""; layout(); tab.view.webContents.reload(); }
@@ -1624,10 +1822,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const restored = persistedTabs();
   if (restored && restored.tabs.length) {
     restoring = true;
-    for (const savedTab of restored.tabs) {
-      newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false });
+    for (const group of restored.groups) {
+      groups.set(group.id, group);
+      const number = Number(group.id.slice(1));
+      if (Number.isInteger(number)) nextGroupNumber = Math.max(nextGroupNumber, number + 1);
     }
-    activeId = tabs.has(restored.activeId) ? restored.activeId : [...tabs.keys()].at(-1);
+    for (const savedTab of restored.tabs) {
+      newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false,
+        groupId: savedTab.groupId });
+    }
+    normalizeGroups();
+    activateTab(tabs.has(restored.activeId) ? restored.activeId : [...tabs.keys()].at(-1));
     restoring = false;
     layout();
     persistTabs();
