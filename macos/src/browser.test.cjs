@@ -314,7 +314,7 @@ test("browser media position survives close and restores paused", async () => {
     first.command("navigate", { value: "https://www.youtube.com/watch?v=example" });
     await first.controller.prepareToClose();
     const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    assert.equal(saved.version, 2);
+    assert.equal(saved.version, 3);
     assert.equal(saved.tabs[0].media.currentTime, 42.5);
     first.window.emit("closed");
 
@@ -937,4 +937,137 @@ test("page fullscreen keeps a window that was already fullscreen, and ends when 
   assert.ok(wc.scripts.some(script => script.includes("document.exitFullscreen()")));
   assert.equal(h.window.fullScreen, true, "the window stays fullscreen as the user had it");
   assert.equal(h.views[0].visible, false);
+});
+
+// State crosses from the VM realm; compare it as plain JSON.
+const plain = value => JSON.parse(JSON.stringify(value));
+
+test("tab groups: right-click menu creates, fills, and leaves a group", () => {
+  const h = harness();
+  const ids = s => s.tabs.map(t => t.id);
+  const a = h.command("new").activeId;
+  const b = h.command("new").activeId;
+  const c = h.command("new").activeId;
+  h.command("tabMenu", { id: a });
+  const menu = h.menuTemplates.at(-1);
+  assert.deepEqual(plain(menu.filter(item => item.label).map(item => item.label)), [
+    "New Tab to the Right", "Add Tab to New Group", "Reload", "Duplicate",
+    "Close", "Close Other Tabs", "Close Tabs to the Right",
+  ]);
+  menu.find(item => item.label === "Add Tab to New Group").click();
+  let state = h.command("state");
+  assert.equal(state.groups.length, 1);
+  const group = state.groups[0];
+  assert.equal(state.tabs.find(t => t.id === a).groupId, group.id);
+  assert.ok(h.window.webContents.sent.some(m => m.channel === "miaos-browser-group-edit" && m.payload.groupId === group.id),
+    "a new group asks the tab strip to name it");
+
+  // "Add Tab to Group" moves the tab to the end of the group, next to its tabs.
+  h.command("tabMenu", { id: c });
+  h.menuTemplates.at(-1).find(item => item.label === "Add Tab to Group").submenu[0].click();
+  state = h.command("state");
+  assert.deepEqual(plain(ids(state)), [a, c, b]);
+  assert.equal(state.tabs[1].groupId, group.id);
+
+  // Tabs opened from a grouped tab join its group.
+  h.command("tabMenu", { id: a });
+  h.menuTemplates.at(-1).find(item => item.label === "New Tab to the Right").click();
+  state = h.command("state");
+  assert.equal(state.tabs[1].groupId, group.id);
+  const opened = state.tabs[1].id;
+
+  // Remove From Group drops the tab just past the group.
+  h.command("tabMenu", { id: a });
+  h.menuTemplates.at(-1).find(item => item.label === "Remove From Group").click();
+  state = h.command("state");
+  assert.deepEqual(plain(ids(state)), [opened, c, a, b]);
+  assert.equal(state.tabs[2].groupId, null);
+
+  h.command("groupUpdate", { groupId: group.id, name: "  Research  ", color: "blue" });
+  state = h.command("state");
+  assert.equal(state.groups[0].name, "Research");
+  assert.equal(state.groups[0].color, "blue");
+  h.command("groupUpdate", { groupId: group.id, color: "magenta" });
+  assert.equal(h.command("state").groups[0].color, "blue", "unknown colors are ignored");
+
+  h.command("groupUngroup", { groupId: group.id });
+  state = h.command("state");
+  assert.deepEqual(plain(state.groups), [], "a group without tabs disappears");
+  assert.ok(state.tabs.every(t => t.groupId === null));
+});
+
+test("tab groups: collapsing hides the group and never leaves its tab in front", () => {
+  const h = harness();
+  const a = h.command("new").activeId;
+  const b = h.command("new").activeId;
+  h.command("groupCreate", { id: b, name: "Work" });
+  const groupId = h.command("state").groups[0].id;
+  h.command("select", { id: b });
+  h.command("groupUpdate", { groupId, collapsed: true });
+  let state = h.command("state");
+  assert.equal(state.groups[0].collapsed, true);
+  assert.equal(state.activeId, a, "collapsing the group in front moves to a tab outside it");
+  h.command("select", { id: b });
+  state = h.command("state");
+  assert.equal(state.groups[0].collapsed, false, "selecting a hidden tab expands its group");
+
+  // Collapsing when every tab is in the group opens a fresh tab.
+  h.command("groupAdd", { id: a, groupId });
+  h.command("groupUpdate", { groupId, collapsed: true });
+  state = h.command("state");
+  assert.equal(state.tabs.length, 3);
+  assert.equal(state.tabs.find(t => t.id === state.activeId).groupId, null);
+});
+
+test("tab groups: dragging into or out of a group, and closing a group", () => {
+  const h = harness();
+  const a = h.command("new").activeId;
+  const b = h.command("new").activeId;
+  const c = h.command("new").activeId;
+  h.command("groupCreate", { id: a });
+  const groupId = h.command("state").groups[0].id;
+  h.command("move", { id: c, index: 0, groupId });
+  let state = h.command("state");
+  assert.deepEqual(plain(state.tabs.map(t => [t.id, t.groupId])), [[c, groupId], [a, groupId], [b, null]]);
+  h.command("move", { id: a, index: 2, groupId: null });
+  state = h.command("state");
+  assert.deepEqual(plain(state.tabs.map(t => [t.id, t.groupId])), [[c, groupId], [b, null], [a, null]]);
+  h.command("groupMenu", { groupId });
+  h.menuTemplates.at(-1).find(item => item.label === "Close Group").click();
+  state = h.command("state");
+  assert.deepEqual(plain(state.tabs.map(t => t.id)), [b, a]);
+  assert.deepEqual(plain(state.groups), []);
+});
+
+test("tab groups survive a restart; version 2 state still loads", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-groups-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    const first = harness({ statePath });
+    first.command("new"); first.command("navigate", { value: "https://example.com" });
+    const b = first.command("new").activeId; first.command("navigate", { value: "https://example.org" });
+    first.command("groupCreate", { id: b, name: "Testing group" });
+    const groupId = first.command("state").groups[0].id;
+    first.command("groupUpdate", { groupId, color: "green", collapsed: true });
+    first.window.emit("closed");
+
+    const restored = harness({ statePath });
+    let state = restored.command("state");
+    assert.deepEqual(plain(state.groups), [{ id: groupId, name: "Testing group", color: "green", collapsed: true }]);
+    assert.equal(state.tabs.find(t => t.id === b).groupId, groupId);
+    assert.notEqual(state.activeId, b, "a collapsed group's tab does not reopen in front");
+    restored.command("groupCreate", { id: state.tabs[0].id });
+    state = restored.command("state");
+    assert.equal(new Set(state.groups.map(g => g.id)).size, 2, "new group ids never reuse restored ones");
+    restored.window.emit("closed");
+
+    fs.writeFileSync(statePath, JSON.stringify({ version: 2, activeId: 1, tabs: [{ id: 1, url: "https://example.com/", title: "Example" }] }));
+    const legacy = harness({ statePath });
+    state = legacy.command("state");
+    assert.deepEqual(plain(state.groups), []);
+    assert.equal(state.tabs[0].groupId, null);
+    legacy.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

@@ -111,7 +111,9 @@
   var downloadsClear = document.getElementById('localBrowserDownloadsClear');
   var downloadsOpen = false;
   var lastDownloads = '';
-  var state = { tabs: [], activeId: null, downloads: [] };
+  var state = { tabs: [], groups: [], activeId: null, downloads: [] };
+  var editingGroupId = null;
+  var pendingEditGroupId = null;
   var open = false;
   var scheduled = false;
   var lastLayout = '';
@@ -210,14 +212,27 @@
     foot.textContent = parts.join(' \u00b7 ');
     foot.hidden = !parts.length;
     renderDownloads();
-    var signature = JSON.stringify([state.activeId, state.tabs.map(function (t) { return [t.id, t.title, t.favicon]; })]);
-    // Redrawing mid-drag would drop the dragged tab; catch up once it ends.
-    if (signature !== lastTabs && draggingTabId === null) {
+    var groups = {};
+    (state.groups || []).forEach(function (g) { groups[g.id] = g; });
+    var signature = JSON.stringify([state.activeId, state.groups, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId]; })]);
+    // Redrawing mid-drag or mid-rename would drop what the user is doing;
+    // catch up once it ends.
+    if (signature !== lastTabs && draggingTabId === null && editingGroupId === null) {
       lastTabs = signature;
       strip.replaceChildren();
+      var previousGroupId = null;
       state.tabs.forEach(function (t, index) {
+        var tabGroup = groups[t.groupId] || null;
+        if (tabGroup && t.groupId !== previousGroupId) strip.append(groupChip(tabGroup, index));
+        previousGroupId = t.groupId || null;
+        if (tabGroup && tabGroup.collapsed) return;
         var group = document.createElement('div');
-        group.className = 'native-browser-tab' + (t.id === state.activeId ? ' active' : '');
+        group.className = 'native-browser-tab' + (t.id === state.activeId ? ' active' : '') + (tabGroup ? ' in-group' : '');
+        if (tabGroup) group.setAttribute('data-group-color', tabGroup.color);
+        group.addEventListener('contextmenu', function (event) {
+          event.preventDefault();
+          command('tabMenu', { id: t.id });
+        });
         // Drag a tab onto another to put it in that tab's place.
         group.draggable = true;
         group.addEventListener('dragstart', function (event) {
@@ -243,7 +258,7 @@
           event.preventDefault();
           group.classList.remove('drop-target');
           if (draggingTabId === null || draggingTabId === t.id) return;
-          command('move', { id: draggingTabId, index: index });
+          command('move', { id: draggingTabId, index: index, groupId: t.groupId || null });
         });
         var button = document.createElement('button');
         button.type = 'button'; button.title = t.title || 'New tab';
@@ -265,7 +280,69 @@
         group.append(button, close); strip.append(group);
       });
     }
+    if (pendingEditGroupId && strip.querySelector('[data-group-id="' + pendingEditGroupId + '"]')) {
+      var editId = pendingEditGroupId;
+      pendingEditGroupId = null;
+      editGroup(editId);
+    }
     layout();
+  }
+  // A group's label sits before its tabs. Click collapses or expands it;
+  // right-click opens the group menu; dropping a tab on it joins the group.
+  function groupChip(g, index) {
+    var chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'native-browser-group' + (g.name ? '' : ' unnamed') + (g.collapsed ? ' collapsed' : '');
+    chip.setAttribute('data-group-color', g.color);
+    chip.setAttribute('data-group-id', g.id);
+    chip.setAttribute('aria-expanded', String(!g.collapsed));
+    chip.title = (g.name || 'Unnamed group') + (g.collapsed ? ' (collapsed)' : '');
+    chip.textContent = g.name;
+    chip.onclick = function () { command('groupUpdate', { groupId: g.id, collapsed: !g.collapsed }); };
+    chip.addEventListener('contextmenu', function (event) {
+      event.preventDefault();
+      command('groupMenu', { groupId: g.id });
+    });
+    chip.addEventListener('dragover', function (event) {
+      if (draggingTabId === null) return;
+      event.preventDefault();
+      chip.classList.add('drop-target');
+    });
+    chip.addEventListener('dragleave', function () { chip.classList.remove('drop-target'); });
+    chip.addEventListener('drop', function (event) {
+      event.preventDefault();
+      chip.classList.remove('drop-target');
+      if (draggingTabId !== null) command('move', { id: draggingTabId, index: index, groupId: g.id });
+    });
+    return chip;
+  }
+  function editGroup(groupId) {
+    var g = (state.groups || []).find(function (item) { return item.id === groupId; });
+    var chip = strip.querySelector('[data-group-id="' + groupId + '"]');
+    if (!g || !chip) return;
+    editingGroupId = groupId;
+    var field = document.createElement('input');
+    field.type = 'text'; field.className = 'native-browser-group-name';
+    field.value = g.name; field.maxLength = 80;
+    field.placeholder = 'Name this group';
+    field.setAttribute('aria-label', 'Group name');
+    field.setAttribute('data-group-color', g.color);
+    var done = false;
+    function finish(save) {
+      if (done) return;
+      done = true;
+      editingGroupId = null;
+      lastTabs = '';
+      if (save) command('groupUpdate', { groupId: groupId, name: field.value });
+      else render(state);
+    }
+    field.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { event.preventDefault(); finish(true); }
+      if (event.key === 'Escape') { event.preventDefault(); finish(false); }
+    });
+    field.addEventListener('blur', function () { finish(true); });
+    chip.replaceWith(field);
+    field.focus(); field.select();
   }
   function formatBytes(bytes) {
     if (!bytes) return '';
@@ -346,6 +423,11 @@
   bridge.onState(render);
   bridge.onFocus(focusLocation);
   if (bridge.onLayoutRequest) bridge.onLayoutRequest(function () { lastLayout = ''; layout(); });
+  if (bridge.onGroupEdit) bridge.onGroupEdit(function (payload) {
+    // The new group's chip may arrive with the next state; render() retries.
+    pendingEditGroupId = payload && payload.groupId || null;
+    if (pendingEditGroupId) command('state');
+  });
   bridge.onFind(function () { findBar.hidden = false; findInput.focus(); findInput.select(); layout(); });
   bridge.onFindResult(function (result) { findResult.textContent = result.activeMatchOrdinal + ' / ' + result.matches; });
   findInput.addEventListener('input', function () { command('find', { value: findInput.value }); });
