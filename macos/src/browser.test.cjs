@@ -703,7 +703,7 @@ test("a link that becomes a download is not shown as a load error", async () => 
   assert.equal(real.command("state").tabs[0].error, "ERR_NAME_NOT_RESOLVED");
   real.window.emit("closed");
 
-  // A new tab opened only for the download closes, as in Chrome.
+  // A new tab opened only for the download closes.
   const blank = harness();
   blank.command("new");
   blank.command("new");

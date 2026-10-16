@@ -38,9 +38,9 @@ function nodePathFix() {
   }
 }
 
-function fixture(t) {
+function fixture(t, { preserve = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-bot-archive-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  if (!preserve) t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = {
     root,
     dbPath: path.join(root, 'mia.sqlite'),
@@ -95,7 +95,7 @@ function listeningOn(origin, logs) {
   return logs.join('').includes(`listening on port ${new URL(origin).port}\n`);
 }
 
-async function startServerOnce(data, t, gatewayPort) {
+async function startServerOnce(data, t, gatewayPort, extraEnv = {}) {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   const logs = [];
@@ -103,7 +103,8 @@ async function startServerOnce(data, t, gatewayPort) {
     cwd: BACKEND_DIR,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
-      ...process.env,
+      PATH: process.env.PATH,
+      NODE_PATH: process.env.NODE_PATH,
       ...(nodePathFix() ? { NODE_PATH: nodePathFix() } : {}),
       PORT: String(port),
       MIAOS_BIND_HOST: '127.0.0.1',
@@ -125,9 +126,11 @@ async function startServerOnce(data, t, gatewayPort) {
       MIAOS_LOCAL_PROFILE: '0',
       MIAOS_CLERK_AUTH: '0',
       MIAOS_SINGLE_USER_EMAIL: '',
+      MIAOS_MANAGED_ROUTER_URL: '',
       INSTANCE_DOMAINS: 'example.com',
       ADMIN_EMAILS: ALICE,
       GOOGLE_REDIRECT_URI: `${origin}/api/connections/google/callback`,
+      ...extraEnv,
     },
   });
   child.stdout.on('data', (chunk) => logs.push(chunk.toString()));
@@ -186,10 +189,14 @@ function decodeClientFrames(state, chunk, onText) {
   }
 }
 
-async function startFakeHermes(script) {
+async function startFakeHermes(script, inventory = null) {
   const calls = [];
   const sockets = new Set();
-  const server = http.createServer((req, res) => { res.statusCode = 503; res.end('{}'); });
+  const server = http.createServer((req, res) => {
+    res.statusCode = inventory ? 200 : 503;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(inventory || {}));
+  });
   server.on('upgrade', (request, socket) => {
     const accept = crypto.createHash('sha1')
       .update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
@@ -492,4 +499,280 @@ test('a bot chat saved before botId was recorded still counts as the bot\'s own 
   assert.equal(list.some((event) => /works in your own chat/.test(String(event.content && event.content.text || ''))), false);
   assert.deepEqual(hermes.calls.find((call) => call.method === 'command.dispatch').params,
     { session_id: 'live-bot', name: 'goal', arg: 'finish the list' });
+});
+
+
+const CLAUDE = 'claude-subscription-directsdk-experimental';
+const CLAUDE_MODEL = 'claude-sonnet-5-5[1m]';
+const GROK = 'xai-oauth';
+const GROK_MODEL = 'grok-4.6';
+
+// A real backend, real managed profiles, and credential-free scripted gateway.
+// Retain these temporary fixtures as review evidence; no provider is contacted.
+async function disconnectedProviderFixture(t, { extraEnv = {}, configure = () => {} } = {}) {
+  const data = fixture(t, { preserve: true });
+  configure(data);
+  const inventory = { providers: [
+    { slug: CLAUDE, authenticated: true, models: [CLAUDE_MODEL] },
+    { slug: GROK, authenticated: true, models: [GROK_MODEL] },
+    { slug: 'openrouter', authenticated: true, models: ['deepseek/deepseek-v4.1-flash', 'unadvertised-fixture-model'] },
+  ] };
+  let sequence = 0;
+  const hermes = await startFakeHermes((call, push) => {
+    if (call.method === 'session.create') return { session_id: 'live-mia', stored_session_id: `stored-${++sequence}` };
+    if (call.method === 'session.resume') return { session_id: 'live-mia', session_key: call.params.session_id };
+    if (call.method === 'prompt.submit') {
+      setTimeout(() => push('message.complete', { text: 'Fixture answer.', status: 'complete' }), 5);
+      return { status: 'streaming' };
+    }
+    if (call.method === 'command.dispatch') return { type: 'exec', output: 'Fixture command.' };
+    return {};
+  }, inventory);
+  t.after(() => hermes.close());
+  let server = await startServer(data, t, hermes.port, extraEnv);
+  const headers = { 'x-miaos-workspace': 'solo' };
+  const call = (url, body) => request(server, data.aliceSession, url, { method: 'POST', headers, body: JSON.stringify(body) });
+  const select = async (provider) => {
+    const response = await call('/api/settings/harness', { provider, model: provider === CLAUDE ? CLAUDE_MODEL : GROK_MODEL, mode: 'solo' });
+    assert.equal(response.status, 200, await response.clone().text());
+  };
+  const createTarget = async (actor, name = 'Fixture') => {
+    if (actor === 'Mia') {
+      const response = await call('/api/conversations', { type: 'agent', name, metadata: { agentId: 'gateway' } });
+      assert.equal(response.status, 201, await response.clone().text());
+      return (await response.json()).conversation.id;
+    }
+    const response = await call('/api/bots', { name, instructions: 'Answer the synthetic test only.', model: CLAUDE_MODEL, automations: [] });
+    assert.equal(response.status, 201, await response.clone().text());
+    return botConversation(data.dbPath, (await response.json()).bot.id).id;
+  };
+  const send = async (conversationId, text, metadata) => {
+    const before = (await (await request(server, data.aliceSession, `/api/conversations/${conversationId}/events?limit=100`, { headers })).json()).events || [];
+    const seen = new Set(before.map(event => event.id));
+    const response = await call(`/api/conversations/${conversationId}/events`, { type: 'message', content: { text }, ...(metadata ? { metadata } : {}) });
+    assert.equal(response.status, 201, await response.clone().text());
+    return waitFor(async () => {
+      const events = (await (await request(server, data.aliceSession, `/api/conversations/${conversationId}/events?limit=100`, { headers })).json()).events || [];
+      return events.find(event => !seen.has(event.id) && ['agent', 'bot'].includes(event.senderType)
+        && event.metadata && !event.metadata.progress && (event.metadata.status === 'failed' || event.content?.text === 'Fixture answer.' || event.content?.text === 'Fixture command.'));
+    }, 'final response to synthetic turn');
+  };
+  const disconnect = async () => {
+    const response = await call('/api/settings/harness/auth/logout', { provider: CLAUDE });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal((await response.json()).externalCredentialsPreserved, true);
+  };
+  const runtimeCalls = () => hermes.calls.filter(call => ['session.create', 'session.resume', 'prompt.submit', 'command.dispatch'].includes(call.method));
+  const restart = async () => { await stopServer(server); server = await startServer(data, t, hermes.port, extraEnv); };
+  t.after(() => {
+    fs.writeFileSync(path.join(data.root, 'disconnect-gateway-calls.json'), JSON.stringify(hermes.calls, null, 2));
+    fs.writeFileSync(path.join(data.root, 'disconnect-backend.log'), server.logs.join(''));
+  });
+  console.log(`provider-disconnect evidence: ${data.root}`);
+  const get = url => request(server, data.aliceSession, url, { headers });
+  const getAsOther = url => request(server, data.bobSession, url, { headers });
+  return { data, hermes, inventory, call, get, getAsOther, select, createTarget, send, disconnect, runtimeCalls, restart };
+}
+
+for (const actor of ['Mia', 'bot']) {
+  for (const session of ['new', 'resumed']) {
+    test(`provider disconnect blocks ${actor} ${session} turns before retained profile defaults can answer`, async t => {
+      const f = await disconnectedProviderFixture(t);
+      await f.select(CLAUDE);
+      const prior = await f.createTarget(actor, 'Prior synthetic chat');
+      assert.equal((await f.send(prior, 'warm the managed profile')).content.text, 'Fixture answer.');
+      const profile = actor === 'Mia' ? 'miaos-agent-runtime' : 'miaos-bot-worker';
+      const profilePath = path.join(f.data.hermesHome, 'profiles', profile, 'config.yaml');
+      assert.match(fs.readFileSync(profilePath, 'utf8'), new RegExp(CLAUDE), 'a real prior turn persisted Claude as the managed default');
+      const target = session === 'resumed' ? prior : await f.createTarget(actor, 'New synthetic chat');
+      await f.disconnect();
+      await f.restart();
+      const before = f.runtimeCalls().length;
+      const result = await f.send(target, 'answer after disconnect');
+      assert.equal(result.metadata.status, 'failed', JSON.stringify(result));
+      assert.match(result.content.text, /Connect one in Settings/);
+      assert.equal(f.runtimeCalls().length, before, 'no create, resume, prompt, or command reached Hermes');
+      const command = await f.send(target, '/compact', { slashCommand: true });
+      assert.equal(command.metadata.status, 'failed');
+      assert.equal(f.runtimeCalls().length, before, 'marked commands also cannot resume disconnected sessions');
+      const staleSelection = await f.send(target, 'stale disconnected picker selection', { chatModelSelection: { provider: CLAUDE, model: CLAUDE_MODEL } });
+      assert.equal(staleSelection.metadata.status, 'failed');
+      assert.equal(f.runtimeCalls().length, before, 'stale explicit Claude selection cannot reconnect implicitly');
+      assert.match(fs.readFileSync(profilePath, 'utf8'), new RegExp(CLAUDE), 'blocking does not rewrite shared defaults or credentials');
+    });
+  }
+}
+
+test('provider disconnect permits another connected model and explicit Claude reconnect for Mia and bots', async t => {
+  const f = await disconnectedProviderFixture(t);
+  await f.select(GROK);
+  await f.select(CLAUDE);
+  const mia = await f.createTarget('Mia');
+  const bot = await f.createTarget('bot');
+  await f.send(mia, 'warm Mia');
+  await f.send(bot, 'warm bot');
+  await f.disconnect();
+  // The default is disconnected, but the other connected provider remains an
+  // authorized explicit per-turn choice; no re-registration or admin wall.
+  for (const target of [mia, bot]) {
+    const result = await f.send(target, 'use the selected other model', { chatModelSelection: { provider: GROK, model: GROK_MODEL } });
+    assert.equal(result.content.text, 'Fixture answer.', JSON.stringify(result));
+  }
+  const pins = f.hermes.calls.filter(call => call.method === 'config.set' && call.params.key === 'model');
+  assert.ok(pins.some(call => call.params.value === `${GROK_MODEL} --provider ${GROK}`));
+  await f.select(CLAUDE);
+  for (const target of [mia, bot]) assert.equal((await f.send(target, 'explicitly reconnected')).content.text, 'Fixture answer.');
+  assert.equal(f.hermes.calls.filter(call => call.method === 'config.set' && call.params.key === 'model').at(-1).params.value, `${CLAUDE_MODEL} --provider ${CLAUDE}`);
+});
+
+test('provider disconnect blocks outside-turn suggestion inference instead of falling back to profile defaults', async t => {
+  const f = await disconnectedProviderFixture(t);
+  await f.select(CLAUDE);
+  const mia = await f.createTarget('Mia');
+  await f.send(mia, 'warm shared profile');
+  await f.disconnect();
+  const before = f.runtimeCalls().length;
+  const examples = await f.get('/api/bots/examples');
+  assert.deepEqual((await examples.json()).examples, []);
+  const name = await f.call('/api/bots/suggest-name', { instructions: 'Synthetic notes' });
+  assert.equal(name.status, 502);
+  const suggestions = await f.call('/api/chat/suggestions', { transcript: ['Synthetic notes'] });
+  assert.deepEqual((await suggestions.json()).suggestions, []);
+  const draft = await f.call('/api/bots/interpret', { intent: 'Summarize synthetic notes' });
+  assert.equal(draft.status, 200, 'the deterministic draft remains available');
+  assert.ok((await draft.json()).draft);
+  assert.equal(f.runtimeCalls().length, before, 'outside-turn helpers never send unpinned work');
+});
+
+test('provider disconnect rejects provider-only fallback if another selected API model cannot be resolved', async t => {
+  const f = await disconnectedProviderFixture(t);
+  await f.select(CLAUDE);
+  const mia = await f.createTarget('Mia');
+  await f.send(mia, 'warm retained Claude profile');
+  await f.disconnect();
+  const selected = await f.call('/api/settings/harness', { provider: 'openai-api', apiProvider: 'openai-api', mode: 'solo' });
+  assert.equal(selected.status, 200);
+  const before = f.runtimeCalls().length;
+  const result = await f.send(mia, 'cannot inherit Claude through a provider-only selection');
+  assert.equal(result.metadata.status, 'failed');
+  assert.equal(f.runtimeCalls().length, before);
+});
+
+test('provider disconnect still permits automatic connected-provider and allowlisted router model pins', async t => {
+  const f = await disconnectedProviderFixture(t);
+  await f.select(CLAUDE);
+  const mia = await f.createTarget('Mia');
+  const bot = await f.createTarget('bot');
+  await f.send(mia, 'warm Claude before selecting another default');
+  await f.disconnect();
+  await f.select(GROK);
+  for (const target of [mia, bot]) assert.equal((await f.send(target, 'use the automatic Grok default')).content.text, 'Fixture answer.');
+  assert.equal(f.hermes.calls.filter(call => call.method === 'config.set' && call.params.key === 'model').at(-1).params.value, `${GROK_MODEL} --provider ${GROK}`);
+  const selected = await f.call('/api/settings/harness', { provider: 'managed-router', mode: 'solo' });
+  assert.equal(selected.status, 200);
+  for (const target of [mia, bot]) assert.equal((await f.send(target, 'use automatic Mia Router model')).content.text, 'Fixture answer.');
+  assert.equal(f.hermes.calls.filter(call => call.method === 'config.set' && call.params.key === 'model').at(-1).params.value, 'deepseek/deepseek-v4.1-flash --provider openrouter');
+});
+
+test('provider disconnect preserves connected xai/openai inventory aliases as explicit selections', async t => {
+  const f = await disconnectedProviderFixture(t);
+  f.inventory.providers.find(provider => provider.slug === GROK).slug = 'xai';
+  f.inventory.providers.push({ slug: 'openai', authenticated: true, models: ['fixture-openai-model'] });
+  await f.select(GROK);
+  assert.equal((await f.call('/api/settings/harness', { provider: 'openai-api', apiProvider: 'openai-api', mode: 'solo' })).status, 200);
+  await f.select(CLAUDE);
+  const mia = await f.createTarget('Mia');
+  const bot = await f.createTarget('bot');
+  await f.send(mia, 'warm Claude before alias selections');
+  await f.disconnect();
+  for (const target of [mia, bot]) {
+    for (const selection of [{ provider: 'xai', model: GROK_MODEL }, { provider: 'openai', model: 'fixture-openai-model' }]) {
+      assert.equal((await f.send(target, 'use connected inventory alias', { chatModelSelection: selection })).content.text, 'Fixture answer.');
+      assert.equal(f.hermes.calls.filter(call => call.method === 'config.set' && call.params.key === 'model').at(-1).params.value, `${selection.model} --provider ${selection.provider}`);
+    }
+  }
+});
+
+
+async function googleIdentityFixture(t, { clerk = false } = {}) {
+  let email = 'google-a@example.com';
+  const calls = [];
+  const broker = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      const args = JSON.parse(body).args || [];
+      calls.push(args);
+      const payload = args[0] === 'auth'
+        ? { token_valid: true, scopes: ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/contacts.readonly'] }
+        : args[2] === 'getProfile' ? { emailAddress: email } : { files: [] };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ code: 0, stdout: JSON.stringify(payload), stderr: '' }));
+    });
+  });
+  broker.listen(0, '127.0.0.1'); await once(broker, 'listening');
+  t.after(() => broker.close());
+  const f = await disconnectedProviderFixture(t, {
+    extraEnv: { HERMES_GWS_BIN: '/usr/bin/false', HERMES_PYTHON: '/usr/bin/python3', MIAOS_CLERK_AUTH: clerk ? '1' : '0',
+      MIA_GOOGLE_BROKER_URL: `http://127.0.0.1:${broker.address().port}`, MIA_GOOGLE_BROKER_TOKEN: 'g'.repeat(43) },
+    configure(data) {
+      const database = store.openDb(data.dbPath, data.dataDir, { botPackageDir: data.packages });
+      const identity = clerk ? ['clerk', 'https://fixture-issuer.example', 'fixture-subject-a'] : ['user', ALICE];
+      if (clerk) {
+        store.setMeta(database, 'clerk.installation.subject', 'fixture-subject-a');
+        store.setMeta(database, 'clerk.installation.issuer', 'https://fixture-issuer.example');
+      }
+      const owner = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+      store.setMeta(database, 'google.account.binding', JSON.stringify({ owner, revision: 'fixture-google-a', googleEmail: email }));
+      database.close();
+    },
+  });
+  return { ...f, calls, replaceAccount: next => { email = next; } };
+}
+
+for (const actor of ['Mia', 'bot']) {
+  test(`Google replacement uses B identity and fresh ${actor} Google sessions while isolating another Mia user`, async t => {
+    const f = await googleIdentityFixture(t);
+    await f.select(GROK);
+    const target = await f.createTarget(actor);
+    const initial = await f.get('/api/connections/google/account');
+    const initialStatus = await initial.json();
+    await f.send(target, 'Check my Gmail inbox using the current Google connection');
+    const before = f.hermes.calls.filter(call => call.method === 'session.create').length;
+    f.replaceAccount('google-b@example.com');
+    const current = await f.get('/api/connections/google/account');
+    const currentStatus = await current.json();
+    const boundary = f.hermes.calls.length;
+    await f.send(target, 'Check my Gmail inbox again using the current Google connection');
+    assert.equal(f.hermes.calls.filter(call => call.method === 'session.create').length, before + 1);
+    assert.equal(f.hermes.calls.slice(boundary).some(call => call.method === 'session.resume'), false, 'never resume the prior account session');
+    const lastPrompt = f.hermes.calls.filter(call => call.method === 'prompt.submit').at(-1).params.text;
+    assert.match(lastPrompt, /CONNECTED as google-b@example.com/);
+    assert.equal(initialStatus.googleEmail, 'google-a@example.com');
+    assert.equal(currentStatus.googleEmail, 'google-b@example.com');
+    const priorCalls = f.calls.length;
+    const other = await f.getAsOther('/api/connections/google/account');
+    const status = await other.json();
+    assert.equal(status.connected, false);
+    assert.equal(status.googleEmail, undefined);
+    assert.equal(f.calls.length, priorCalls, 'unowned status never probes the owner grant');
+  });
+}
+
+test('Google identity relink cannot inherit the previous Clerk subject grant through the same local principal', async t => {
+  const f = await googleIdentityFixture(t, { clerk: true });
+  await f.select(GROK);
+  assert.equal((await (await f.get('/api/connections/google/account')).json()).connected, true);
+  const database = store.openDb(f.data.dbPath, f.data.dataDir, { botPackageDir: f.data.packages });
+  store.setMeta(database, 'clerk.installation.subject', 'fixture-subject-b');
+  database.close();
+  const status = await (await f.get('/api/connections/google/account')).json();
+  assert.equal(status.connected, false);
+  assert.equal(status.state, 'needs_reconnect');
+  assert.equal(status.googleEmail, undefined);
+  const target = await f.createTarget('Mia');
+  await f.send(target, 'Check Gmail using my connection');
+  const created = f.hermes.calls.filter(call => call.method === 'session.create').at(-1);
+  assert.equal(created.params.profile, 'miaos-agent-runtime');
+  assert.match(f.hermes.calls.filter(call => call.method === 'prompt.submit').at(-1).params.text, /RECONNECT REQUIRED/);
 });

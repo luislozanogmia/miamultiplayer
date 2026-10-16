@@ -868,6 +868,12 @@
      metrics and --sand-* colors. */
   .chat-thread{flex:1;min-width:0;max-width:100%;min-height:0;display:flex;flex-direction:column;gap:3px;overflow-x:hidden;overflow-y:auto;padding:16px 24px 8px;box-sizing:border-box;font-family:var(--styled-sans);}
   .chat-jump-latest{position:absolute;z-index:12;left:50%;bottom:106px;display:flex;align-items:center;justify-content:center;gap:6px;width:34px;height:34px;padding:0;border:1px solid var(--sand-border-default);border-radius:999px;transform:translateX(-50%);background:var(--sand-bg-elevated);color:var(--sand-text-primary);box-shadow:0 5px 16px #0000001f;cursor:pointer;}
+  /* Follow the bottom of the message list so the button stays above the
+     composer while the composer grows with a long draft. */
+  @supports (anchor-name: --a){
+    .chat-thread{anchor-name:--chat-thread;}
+    .chat-jump-latest{bottom:calc(anchor(--chat-thread bottom) - 6px);}
+  }
   .chat-jump-latest.has-new-messages{width:auto;min-width:34px;padding:0 10px 0 12px;}
   .chat-jump-latest-label{display:none;white-space:nowrap;font:600 12px/16px var(--styled-sans);}
   .chat-jump-latest.has-new-messages .chat-jump-latest-label{display:inline;}
@@ -2325,11 +2331,12 @@
 
   /* Composer: the legacy markup keeps the input before the action cluster;
      absolute positioning puts the plus circle back on the left edge of the
-     pill without changing the send/mention wiring. */
+     pill without changing the send/mention wiring. The input grows with its
+     text up to a third of the window, then scrolls. */
   body.styled-skin .chat-composer-wrap{padding:0 16px 16px;}
-  body.styled-skin .chat-composer{position:relative;width:100%;height:96px;box-sizing:border-box;padding:10px;border-radius:18px;background:var(--sand-bg-base);box-shadow:0 2px 8px -1px #0000000d,0 1px 2px #00000008;display:flex;flex-direction:column;align-items:stretch;gap:4px;}
+  body.styled-skin .chat-composer{position:relative;width:100%;height:auto;min-height:96px;box-sizing:border-box;padding:10px;border-radius:18px;background:var(--sand-bg-base);box-shadow:0 2px 8px -1px #0000000d,0 1px 2px #00000008;display:flex;flex-direction:column;align-items:stretch;gap:4px;}
   body.styled-skin .cc-input-row{width:100%;height:auto;min-height:32px;flex:1 1 auto;align-items:flex-start;}
-  body.styled-skin .cc-input{height:100%;min-height:32px;box-sizing:border-box;font-size:14px;line-height:22px;padding:4px 1px;}
+  body.styled-skin .cc-input{height:auto;min-height:44px;max-height:33vh;field-sizing:content;box-sizing:border-box;font-size:14px;line-height:22px;padding:4px 1px;}
   body.styled-skin .cc-bottom-row{position:static;inset:auto;width:100%;height:28px;flex:0 0 28px;display:flex;align-items:center;justify-content:space-between;pointer-events:auto;}
   body.styled-skin .cc-plus-btn,
   body.styled-skin .cc-right-cluster{pointer-events:auto;}
@@ -2442,11 +2449,6 @@
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-color-custom input{appearance:none;width:18px;height:18px;flex:0 0 18px;padding:0;border:2px solid var(--sand-bg-elevated);border-radius:50%;background:transparent;overflow:hidden;cursor:pointer;}
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-color-custom input::-webkit-color-swatch-wrapper{padding:0;}
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-color-custom input::-webkit-color-swatch{border:0;border-radius:50%;}
-  body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-model-section{padding-top:2px;}
-  body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-model-picker{position:relative;align-self:flex-start;max-width:100%;}
-  body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-model{appearance:none;display:flex;align-items:center;justify-content:space-between;gap:8px;max-width:100%;height:32px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:8px;background:var(--sand-bg-base);color:var(--sand-text-primary);font:400 12px/16px var(--styled-sans);cursor:pointer;}
-  body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-model-menu{left:0;right:auto;width:min(280px,calc(var(--sand-info-pane-width) - 32px));max-width:calc(var(--sand-info-pane-width) - 32px);z-index:80;}
-  body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-model:hover,
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-select:hover{background:var(--sand-fill-secondary);}
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-workspace,
   body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-workspace:hover{cursor:default;background:var(--sand-bg-base);}
@@ -2707,6 +2709,80 @@
   .local-browser-blocked a{color:var(--sand-text-accent);text-decoration:underline;}
   .local-browser-empty-title{font-size:17px;color:var(--sand-text-primary);}
   .local-browser-foot{height:32px;min-height:32px;display:flex;align-items:center;padding:0 14px;border-top:1px solid var(--sand-border-subtle);background:#f7f7f5;color:var(--sand-text-secondary);font-size:10px;}
+  /* Browser frame: a gray tab strip whose active tab merges into
+     a white toolbar, a pill-shaped address field, and minimal window controls. */
+  .local-browser-overlay,.local-browser-window{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;}
+  .native-browser-tabs-row{background:#dfe3e7;padding-top:6px;align-items:flex-end;}
+  .native-browser-tabs{gap:0;min-height:34px;padding:0 8px;background:transparent;align-items:flex-end;overflow-y:hidden;}
+  .native-browser-tab{position:relative;flex:0 1 220px;min-width:64px;max-width:240px;height:34px;align-items:center;border-radius:10px 10px 0 0;background:transparent;box-shadow:none;}
+  .native-browser-tab:not(.active):hover{background:#ffffff73;}
+  .native-browser-tab.active{background:#fff;box-shadow:none;}
+  .native-browser-tab.active::before,.native-browser-tab.active::after{content:"";position:absolute;bottom:0;width:10px;height:10px;pointer-events:none;}
+  .native-browser-tab.active::before{left:-10px;background:radial-gradient(circle at 0 0,transparent 10px,#fff 10.5px);}
+  .native-browser-tab.active::after{right:-10px;background:radial-gradient(circle at 100% 0,transparent 10px,#fff 10.5px);}
+  .native-browser-tab:not(.active):not(:hover)+.native-browser-tab:not(.active):not(:hover)::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:1px;background:#a8adb3;}
+  .native-browser-tab button,.native-browser-new-tab{color:#1f1f1f;font-family:inherit;font-size:12px;line-height:18px;}
+  .native-browser-tab button[role="tab"]{gap:8px;padding:6px 6px 6px 12px;}
+  .native-browser-tab:not(.active) button[role="tab"]{color:#474747;}
+  .native-browser-tab-icon{width:16px;height:16px;border-radius:2px;}
+  .native-browser-tab button:hover{background:transparent;}
+  .native-browser-tab button.native-browser-tab-close{width:20px;height:20px;padding:0;margin-right:8px;border-radius:50%;font-size:15px;line-height:20px;color:#474747;opacity:0;}
+  .native-browser-tab.active button.native-browser-tab-close,.native-browser-tab:hover button.native-browser-tab-close{opacity:1;}
+  .native-browser-tab button.native-browser-tab-close:hover{background:#0000001a;border-radius:50%;}
+  .native-browser-new-tab{width:28px;height:28px;padding:0;margin:0 0 3px 4px;border-radius:50%;font-size:18px;line-height:28px;color:#474747;}
+  .native-browser-new-tab:hover{background:#0000001a;border-radius:50%;}
+  .native-browser-tabs-row .local-browser-btn{margin-bottom:3px;border-radius:50%;}
+  /* Same size, icon weight, and right edge as the toolbar's downloads button
+     below it, so the two line up in one column. */
+  .native-browser-tabs-row .local-browser-close-btn{align-self:center;width:32px;height:32px;margin:0 8px 0 0;color:#474747;}
+  .native-browser-tabs-row .native-browser-new-tab{align-self:center;display:grid;place-items:center;width:32px;height:32px;margin:0 2px 0 8px;padding:0;-webkit-app-region:no-drag;}
+  .native-browser-tabs-row .native-browser-new-tab svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;}
+  .native-browser-tabs-row .local-browser-close-btn:hover{background:#0000000f;color:#1f1f1f;}
+  .native-browser-tabs-row .local-browser-close-btn svg{width:18px;height:18px;stroke-width:2;}
+  .local-browser-toolbar{position:relative;height:42px;min-height:42px;gap:2px;padding:4px 8px;background:#fff;border-bottom:1px solid #e3e3e3;}
+  .local-browser-toolbar .local-browser-dot{display:none;}
+  .local-browser-toolbar .local-browser-btn{width:32px;height:32px;border-radius:50%;color:#474747;}
+  .local-browser-toolbar .local-browser-btn:hover:not(:disabled){background:#0000000f;color:#1f1f1f;}
+  .local-browser-toolbar .local-browser-btn svg{width:18px;height:18px;stroke-width:2;}
+  .local-browser-url-wrap{align-items:center;height:34px;margin:0 6px;border-radius:17px;background:#edf2fa;transition:background .12s;}
+  .local-browser-url-wrap:hover{background:#e3e8ef;}
+  .local-browser-url-wrap:focus-within{background:#fff;box-shadow:0 0 0 2px #0b57d0;}
+  .local-browser-search-engine{height:26px;margin-left:4px;padding:0;gap:0;border:0;border-radius:13px;background:transparent;}
+  .local-browser-search-engine-btn{width:26px;height:26px;padding:5px;border-radius:50%;opacity:.45;}
+  .local-browser-search-engine-btn[aria-pressed="true"]{background:transparent;box-shadow:none;opacity:1;}
+  .local-browser-search-engine-btn:hover{background:#0000000f;opacity:1;}
+  .local-browser-toolbar input{height:34px;margin:0;padding:0 14px 0 6px;border:0;border-radius:0 17px 17px 0;background:transparent;color:#1f1f1f;font-family:inherit;font-size:14px;line-height:1.2;}
+  .local-browser-toolbar input:focus{border:0;box-shadow:none;}
+  .local-browser-toolbar input.is-display-url{color:#5f6368;}
+  .local-browser-suggest{left:0;right:0;border-radius:12px;border-color:#e3e3e3;}
+  .local-browser-suggest-url{font-family:inherit;}
+  .local-browser-go-btn,.local-browser-share-btn{display:none;}
+  .local-browser-overlay[data-loading="true"] .local-browser-toolbar::after{content:"";position:absolute;left:0;bottom:-1px;height:2px;width:40%;background:#0b57d0;animation:local-browser-loading 1.1s ease-in-out infinite;}
+  @keyframes local-browser-loading{0%{left:-40%;}100%{left:100%;}}
+  .local-browser-foot{height:22px;min-height:22px;padding:0 10px;border-top:0;background:#fff;font-size:11px;}
+  .local-browser-foot[hidden]{display:none;}
+  /* Mac window without a title bar: the window buttons sit at the left of the
+     top row, and empty space in that row drags the window. */
+  html.mac-inset-titlebar .native-browser-tabs-row{padding-left:76px;-webkit-app-region:drag;}
+  html.mac-inset-titlebar .chat-new-btn-wrap{padding-left:84px;-webkit-app-region:drag;}
+  html.mac-inset-titlebar .channel-header{-webkit-app-region:drag;}
+  html.mac-inset-titlebar .native-browser-tabs-row button,html.mac-inset-titlebar .native-browser-tab,
+  html.mac-inset-titlebar .chat-new-btn-wrap button,html.mac-inset-titlebar .chat-new-btn-wrap a,html.mac-inset-titlebar .chat-new-btn-wrap [role="menu"],
+  html.mac-inset-titlebar .channel-header button,html.mac-inset-titlebar .channel-header a,html.mac-inset-titlebar .channel-header input{-webkit-app-region:no-drag;}
+  @media (max-width:1100px){html.mac-inset-titlebar .chat-new-btn-wrap{padding-left:12px;padding-top:40px;}}
+  /* Mia's side pane in the browser can be hidden for a full-width browser, and
+     its left edge drags to resize it (limits are enforced in native-browser.js). */
+  .local-browser-mia-resize{display:none;}
+  body.browser-collab-mode .local-browser-mia-resize{display:block;position:fixed;z-index:125;top:0;bottom:0;right:calc(var(--browser-mia-pane-width) - 7px);width:7px;cursor:col-resize;-webkit-app-region:no-drag;}
+  body.browser-collab-mode .local-browser-mia-resize::after{content:"";position:absolute;top:0;bottom:0;left:0;width:2px;background:transparent;transition:background .12s;}
+  body.browser-collab-mode .local-browser-mia-resize:hover::after,body.browser-mia-resizing .local-browser-mia-resize::after{background:#0b57d0;}
+  body.browser-mia-resizing,body.browser-mia-resizing *{cursor:col-resize!important;user-select:none!important;}
+  body.browser-collab-mode.browser-mia-collapsed{--browser-mia-pane-width:0px!important;}
+  body.browser-collab-mode.browser-mia-collapsed .chat-app,
+  body.browser-collab-mode.browser-mia-collapsed .chat-thread-panel,
+  body.browser-collab-mode.browser-mia-collapsed .chat-info-pane,
+  body.browser-collab-mode.browser-mia-collapsed .local-browser-mia-resize{display:none!important;}
+  .local-browser-mia-toggle[aria-pressed="true"]{color:#0b57d0!important;}
 
   /* Web browser collaboration keeps the native Mia conversation fixed at
      the right. The normal
