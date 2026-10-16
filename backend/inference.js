@@ -448,6 +448,10 @@ const HERMES_ENV_ALLOWLIST = Object.freeze([
   // execs; without it the adapter falls back to whichever python3 PATH finds.
   'HERMES_HOME', 'HERMES_PYTHON', 'HERMES_STATE_DB', 'HERMES_CRON_JOBS_FILE',
   'HERMES_CRON_EXECUTIONS_DB', 'MIAOS_AUTOMATION_ARTIFACT_DIR',
+  // Ordinary gws calls must use Mia's profile, never a previous ambient login.
+  // Broker-backed installs keep durable credentials in safeStorage; raw gws
+  // has no credential there and Google work uses the brokered connected tools.
+  'GOOGLE_WORKSPACE_CLI_CONFIG_DIR', 'GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND',
   // Ghost CLI receives only filesystem coordinates for the app-owned local
   // bridge. It reads the owner-only token itself and never receives it here.
   'GHOST_CLI_HOME', 'GHOST_IN_APP_BROWSER_SOCKET', 'GHOST_IN_APP_BROWSER_TOKEN_FILE',
