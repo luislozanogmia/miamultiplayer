@@ -242,7 +242,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       log(`browser history save failed: ${error.message}`);
     }
   }
-  // Download list for the Downloads view, like Chrome's. Stores names,
+  // Download list for the Downloads view. Stores names,
   // save paths and states only (never file contents), next to the history
   // file. Clearing the list never deletes the downloaded files.
   const DOWNLOADS_MAX_ENTRIES = 100;
@@ -374,8 +374,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return "";
     }
   }
-  // Copy buttons (navigator.clipboard.writeText) need clipboard write, which
-  // Chrome grants by default. Reading the clipboard stays denied so pages
+  // Copy buttons (navigator.clipboard.writeText) need clipboard write permission.
+  // Allow writing; reading the clipboard stays denied so pages
   // never see what the user copied elsewhere.
   const CLIPBOARD_WRITE = "clipboard-sanitized-write";
   profile.setPermissionRequestHandler((contents, permission, callback, details) => {
@@ -642,7 +642,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return Number.isFinite(factor) && factor > 0 ? factor : 1;
   }
   // Page fullscreen: the tab fills the window and the window itself goes
-  // fullscreen, like Chrome. Leaving restores the window as it was.
+  // fullscreen. Leaving restores the window as it was.
   function enterPageFullscreen(tab) {
     if (disposed || window.isDestroyed()) return;
     if (fullscreenId === null) windowWasFullscreen = window.isFullScreen();
@@ -706,7 +706,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     window.webContents.focus();
     window.webContents.send("miaos-browser-focus");
   }
-  // Chrome moves keyboard focus into the page when a tab becomes active, so
+  // Move keyboard focus into the page when a tab becomes active, so
   // arrow keys/scroll/typing reach the page instead of being swallowed by
   // the app shell. Guard for a webContents that closed mid-switch.
   function focusTabWebContents(tab) {
@@ -1278,7 +1278,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       hiddenMediaPlaybackGuard: null,
     };
     tabs.set(tab.id, tab);
-    // A link opened from a page goes right after that page, like Chrome.
+    // A link opened from a page goes immediately after its source tab.
     if (tabs.has(options.after)) moveTab(tab.id, [...tabs.keys()].indexOf(options.after) + 1);
     if (options.activate !== false || activeId === null) activateTab(tab.id);
     window.contentView.addChildView(view);
@@ -1510,7 +1510,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   // The download may be reported before or after its page load fails, so
   // clear any error already shown and return the tab to the page it still
-  // displays. A tab opened only for the download closes, as in Chrome.
+  // displays. A tab opened only for the download closes.
   function downloadEndedNavigation(tab, url) {
     tab.downloadUrl = url;
     clearPendingLoadError(tab);

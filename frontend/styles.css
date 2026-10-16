@@ -2709,8 +2709,8 @@
   .local-browser-blocked a{color:var(--sand-text-accent);text-decoration:underline;}
   .local-browser-empty-title{font-size:17px;color:var(--sand-text-primary);}
   .local-browser-foot{height:32px;min-height:32px;display:flex;align-items:center;padding:0 14px;border-top:1px solid var(--sand-border-subtle);background:#f7f7f5;color:var(--sand-text-secondary);font-size:10px;}
-  /* Chrome-like browser frame: a gray tab strip whose active tab merges into
-     a white toolbar, a pill-shaped address field, and no extra chrome. */
+  /* Browser frame: a gray tab strip whose active tab merges into
+     a white toolbar, a pill-shaped address field, and minimal window controls. */
   .local-browser-overlay,.local-browser-window{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;}
   .native-browser-tabs-row{background:#dfe3e7;padding-top:6px;align-items:flex-end;}
   .native-browser-tabs{gap:0;min-height:34px;padding:0 8px;background:transparent;align-items:flex-end;overflow-y:hidden;}

@@ -126,7 +126,7 @@
   function focusLocation() { input.focus(); input.select(); }
   var RELOAD_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"></path></svg>';
   var STOP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>';
-  // Like Chrome, show the address without its scheme or "www." until the
+  // Show the address without its scheme or "www." until the
   // field is focused; editing always starts from the full address.
   function displayUrl(url) {
     if (!/^https?:\/\//i.test(url)) return url;
