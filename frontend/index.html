@@ -605,25 +605,28 @@
       <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
         <img class="local-browser-mote" src="assets/mote/mote.svg" alt="" draggable="false" />
       </button>
-      <button type="button" class="local-browser-btn local-browser-close-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser">&times;</button>
+      <button type="button" class="local-browser-btn local-browser-close-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
     </div>
     <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off">
       <span class="local-browser-dot" id="localBrowserDot" aria-hidden="true" title="Connected"></span>
       <span class="local-browser-status" id="localBrowserStatus" hidden></span>
-      <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled>&lsaquo;</button>
-      <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled>&rsaquo;</button>
-      <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled>&#8635;</button>
-      <div class="local-browser-search-engine" id="localBrowserSearchEngine" role="group" aria-label="Search engine">
-        <button type="button" class="local-browser-search-engine-btn" data-search-engine="google" aria-label="Search with Google" title="Search with Google" aria-pressed="true"><img src="assets/connectors/google-g.svg" alt="" /></button>
-        <button type="button" class="local-browser-search-engine-btn" data-search-engine="x" aria-label="Search with X" title="Search with X" aria-pressed="false"><img src="assets/icons/x-logo.svg" alt="" /></button>
-      </div>
+      <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m0 0 6-6m-6 6 6 6"></path></svg></button>
+      <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m0 0-6-6m6 6-6 6"></path></svg></button>
+      <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"></path></svg></button>
       <div class="local-browser-url-wrap">
+        <div class="local-browser-search-engine" id="localBrowserSearchEngine" role="group" aria-label="Search engine">
+          <button type="button" class="local-browser-search-engine-btn" data-search-engine="google" aria-label="Search with Google" title="Search with Google" aria-pressed="true"><img src="assets/connectors/google-g.svg" alt="" /></button>
+          <button type="button" class="local-browser-search-engine-btn" data-search-engine="x" aria-label="Search with X" title="Search with X" aria-pressed="false"><img src="assets/icons/x-logo.svg" alt="" /></button>
+        </div>
         <input type="text" id="localBrowserUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search or enter a web address" aria-label="Web address" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="localBrowserUrlSuggest" />
         <div class="local-browser-suggest" id="localBrowserUrlSuggest" role="listbox" hidden></div>
       </div>
       <button type="submit" class="local-browser-go-btn">Go</button>
       <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
+      </button>
+      <button type="button" class="local-browser-btn local-browser-mia-toggle" id="localBrowserMiaToggle" title="Hide Mia" aria-label="Hide Mia" aria-pressed="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M14.5 4.5v15"></path></svg>
       </button>
       <button type="button" class="local-browser-share-btn" id="localBrowserShareBtn" title="Share — coming soon" aria-label="Share — coming soon" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
@@ -650,7 +653,7 @@
         <a id="localBrowserBlockedLink" href="#" target="_blank" rel="noopener" hidden>Open in a browser tab</a>
       </div>
     </div>
-    <footer class="local-browser-foot">Local browser · Mia is available on the right</footer>
+    <footer class="local-browser-foot" hidden>Local browser · Mia is available on the right</footer>
   </section>
 </div>
 
@@ -1140,7 +1143,7 @@
 <script src="chat-scroll.js?v=20260921-scroll-follow-1"></script>
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
-    <script src="native-browser.js?v=20260908-native-theme-1"></script>
+    <script src="native-browser.js?v=20261015-chrome-polish-1"></script>
     <script src="app.js?v=20260920-conversation-drawer-1"></script>
 </body>
 </html>
