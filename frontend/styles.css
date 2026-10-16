@@ -2713,7 +2713,8 @@
      a white toolbar, a pill-shaped address field, and minimal window controls. */
   .local-browser-overlay,.local-browser-window{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;}
   .native-browser-tabs-row{background:#dfe3e7;padding-top:6px;align-items:flex-end;}
-  .native-browser-tabs{gap:0;min-height:34px;padding:0 8px;background:transparent;align-items:flex-end;overflow-y:hidden;}
+  .native-browser-tabs{gap:0;min-height:34px;padding:0 8px;background:transparent;align-items:flex-end;overflow-y:hidden;scrollbar-width:none;}
+  .native-browser-tabs::-webkit-scrollbar{display:none;}
   .native-browser-tab{position:relative;flex:0 1 220px;min-width:64px;max-width:240px;height:34px;align-items:center;border-radius:10px 10px 0 0;background:transparent;box-shadow:none;}
   .native-browser-tab:not(.active):hover{background:#ffffff73;}
   .native-browser-tab.active{background:#fff;box-shadow:none;}
@@ -2732,6 +2733,7 @@
   .native-browser-new-tab{width:28px;height:28px;padding:0;margin:0 0 3px 4px;border-radius:50%;font-size:18px;line-height:28px;color:#474747;}
   .native-browser-new-tab:hover{background:#0000001a;border-radius:50%;}
   .native-browser-tabs-row .local-browser-btn{margin-bottom:3px;border-radius:50%;}
+  .native-browser-tabs-row .local-browser-sidebar-btn{align-self:center;height:34px;padding:0;margin-bottom:0;}
   /* Same size, icon weight, and right edge as the toolbar's downloads button
      below it, so the two line up in one column. */
   .native-browser-tabs-row .local-browser-close-btn{align-self:center;width:32px;height:32px;margin:0 8px 0 0;color:#474747;}
