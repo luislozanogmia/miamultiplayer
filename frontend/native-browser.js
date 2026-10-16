@@ -1,6 +1,9 @@
 /* Native desktop browser UI. Page rendering stays outside the Mia renderer. */
 (function () {
   'use strict';
+  // The Mac desktop window has no title bar, so the top row of the app
+  // leaves room for the window buttons and works as the drag handle.
+  if (window.miaDesktop && /Mac/i.test(navigator.platform || '')) document.documentElement.classList.add('mac-inset-titlebar');
   var bridge = window.miaDesktop && window.miaDesktop.browser;
   if (!bridge) return;
   var screen = document.getElementById('localBrowserScreen');
@@ -21,6 +24,15 @@
   // close button at the far right — like a browser profile button.
   if (tabsRow) tabsRow.insertBefore(strip, document.getElementById('localBrowserCloseBtn'));
   else overlay.querySelector('.local-browser-toolbar').before(strip);
+  // New-tab button sits beside the close-browser button, so the two line up
+  // above the downloads and Mia buttons in the toolbar below.
+  var add = document.createElement('button');
+  add.type = 'button'; add.className = 'native-browser-new-tab';
+  add.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
+  add.title = 'New tab'; add.setAttribute('aria-label', 'New browser tab');
+  add.onclick = function () { command('new').then(focusLocation); };
+  if (tabsRow) tabsRow.insertBefore(add, document.getElementById('localBrowserCloseBtn'));
+  else strip.after(add);
   var findBar = document.createElement('div');
   findBar.className = 'native-browser-find'; findBar.hidden = true;
   var findInput = document.createElement('input');
@@ -38,6 +50,60 @@
     findBar.append(button);
   });
   screen.before(findBar);
+  // Mia's side pane: hide it for a full-width browser, or drag its left edge
+  // to resize it. Both choices are remembered on this device.
+  var MIA_PANE_KEY = 'mia.browser.miaPane';
+  var MIA_PANE_MIN = 320;
+  var miaToggle = document.getElementById('localBrowserMiaToggle');
+  var miaPane = { width: null, collapsed: false };
+  try { Object.assign(miaPane, JSON.parse(localStorage.getItem(MIA_PANE_KEY) || '{}')); } catch (_paneReadError) {}
+  function miaPaneMax() { return Math.max(MIA_PANE_MIN, Math.min(720, Math.round(window.innerWidth * 0.6))); }
+  function saveMiaPane() { try { localStorage.setItem(MIA_PANE_KEY, JSON.stringify(miaPane)); } catch (_paneWriteError) {} }
+  function applyMiaPane() {
+    if (miaPane.width) {
+      miaPane.width = Math.min(miaPaneMax(), Math.max(MIA_PANE_MIN, miaPane.width));
+      document.body.style.setProperty('--browser-mia-pane-width', miaPane.width + 'px');
+    } else {
+      document.body.style.removeProperty('--browser-mia-pane-width');
+    }
+    document.body.classList.toggle('browser-mia-collapsed', !!miaPane.collapsed);
+    if (miaToggle) {
+      var label = miaPane.collapsed ? 'Show Mia' : 'Hide Mia';
+      miaToggle.title = label; miaToggle.setAttribute('aria-label', label);
+      miaToggle.setAttribute('aria-pressed', String(!miaPane.collapsed));
+    }
+  }
+  if (miaToggle) miaToggle.onclick = function () { miaPane.collapsed = !miaPane.collapsed; applyMiaPane(); saveMiaPane(); };
+  var miaResize = document.createElement('div');
+  miaResize.className = 'local-browser-mia-resize';
+  miaResize.setAttribute('role', 'separator');
+  miaResize.setAttribute('aria-orientation', 'vertical');
+  miaResize.setAttribute('aria-label', 'Resize Mia panel');
+  miaResize.title = 'Drag to resize. Double-click to reset.';
+  document.body.append(miaResize);
+  miaResize.addEventListener('pointerdown', function (event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    miaResize.setPointerCapture(event.pointerId);
+    document.body.classList.add('browser-mia-resizing');
+    function move(e) {
+      miaPane.width = window.innerWidth - e.clientX;
+      applyMiaPane();
+    }
+    function end() {
+      miaResize.removeEventListener('pointermove', move);
+      miaResize.removeEventListener('pointerup', end);
+      miaResize.removeEventListener('pointercancel', end);
+      document.body.classList.remove('browser-mia-resizing');
+      saveMiaPane();
+    }
+    miaResize.addEventListener('pointermove', move);
+    miaResize.addEventListener('pointerup', end);
+    miaResize.addEventListener('pointercancel', end);
+  });
+  miaResize.addEventListener('dblclick', function () { miaPane.width = null; applyMiaPane(); saveMiaPane(); });
+  window.addEventListener('resize', function () { if (miaPane.width) applyMiaPane(); });
+  applyMiaPane();
   var downloadsBtn = document.getElementById('localBrowserDownloadsBtn');
   var downloadsView = document.getElementById('localBrowserDownloads');
   var downloadsList = document.getElementById('localBrowserDownloadsList');
@@ -58,6 +124,27 @@
   function developerModeEnabled() { return document.documentElement.getAttribute('data-theme') === 'developer'; }
   function closeFind() { findBar.hidden = true; command('find', { value: '' }); layout(); }
   function focusLocation() { input.focus(); input.select(); }
+  var RELOAD_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"></path></svg>';
+  var STOP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>';
+  // Like Chrome, show the address without its scheme or "www." until the
+  // field is focused; editing always starts from the full address.
+  function displayUrl(url) {
+    if (!/^https?:\/\//i.test(url)) return url;
+    return url.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '');
+  }
+  function showUrl(url) {
+    var focused = document.activeElement === input;
+    input.value = focused ? url : displayUrl(url);
+    input.classList.toggle('is-display-url', !focused && input.value !== url);
+  }
+  input.addEventListener('focus', function () {
+    var tab = selected();
+    if (input.classList.contains('is-display-url') && tab && tab.url) { showUrl(tab.url); input.select(); }
+  });
+  input.addEventListener('blur', function () {
+    var tab = selected();
+    if (tab && tab.url && (input.value === tab.url || input.value === displayUrl(tab.url))) showUrl(tab.url);
+  });
   function command(action, extra) {
     return bridge.command(Object.assign({ action: action }, extra)).then(function (next) {
       if (next && next.error) { status.textContent = next.error; input.setAttribute('aria-invalid', 'true'); }
@@ -88,14 +175,15 @@
     state = next;
     var tab = selected();
     var url = tab && tab.url || '';
-    if (changedTab || document.activeElement !== input) input.value = url;
+    if (changedTab || document.activeElement !== input) showUrl(url);
     if (changedTab) { findBar.hidden = true; findResult.textContent = ''; }
     input.setAttribute('aria-invalid', tab && tab.error ? 'true' : 'false');
     document.getElementById('localBrowserBackBtn').disabled = !tab || !tab.canGoBack;
     document.getElementById('localBrowserForwardBtn').disabled = !tab || !tab.canGoForward;
     var reload = document.getElementById('localBrowserReloadBtn');
     reload.disabled = !url;
-    reload.textContent = tab && tab.loading ? '\u00d7' : '\u21bb';
+    reload.innerHTML = tab && tab.loading ? STOP_ICON : RELOAD_ICON;
+    overlay.setAttribute('data-loading', tab && tab.loading ? 'true' : 'false');
     reload.title = tab && tab.loading ? 'Stop loading' : 'Reload';
     reload.setAttribute('aria-label', reload.title);
     document.getElementById('localBrowserEmpty').hidden = !!url;
@@ -117,8 +205,10 @@
       if (timing.dom) parts.push('DOM ready ' + (timing.dom / 1000).toFixed(2) + ' s');
       if (timing.load) parts.push('Page load ' + (timing.load / 1000).toFixed(2) + ' s');
     }
-    foot.textContent = parts.join(' \u00b7 ') || 'Native browser \u00b7 Mia is available on the right';
-    if (state.download) foot.textContent += ' \u00b7 ' + state.download;
+    // The status line only appears when it has something to say.
+    if (state.download) parts.push(state.download);
+    foot.textContent = parts.join(' \u00b7 ');
+    foot.hidden = !parts.length;
     renderDownloads();
     var signature = JSON.stringify([state.activeId, state.tabs.map(function (t) { return [t.id, t.title, t.favicon]; })]);
     // Redrawing mid-drag would drop the dragged tab; catch up once it ends.
@@ -174,11 +264,6 @@
         close.onclick = function () { command('close', { id: t.id }); };
         group.append(button, close); strip.append(group);
       });
-      var add = document.createElement('button');
-      add.type = 'button'; add.textContent = '+'; add.className = 'native-browser-new-tab';
-      add.setAttribute('aria-label', 'New browser tab');
-      add.onclick = function () { command('new').then(focusLocation); };
-      strip.append(add);
     }
     layout();
   }

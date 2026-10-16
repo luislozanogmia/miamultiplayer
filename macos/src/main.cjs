@@ -1924,6 +1924,9 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: "#f5f6f8",
     icon: fs.existsSync(windowIconPath) ? windowIconPath : undefined,
+    // Like Chrome and other modern Mac apps, drop the title bar and keep the
+    // window buttons inline with the top row of the app.
+    ...(process.platform === "darwin" ? { titleBarStyle: "hidden", trafficLightPosition: { x: 14, y: 14 } } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

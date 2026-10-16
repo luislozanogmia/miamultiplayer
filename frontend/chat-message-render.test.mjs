@@ -13,7 +13,11 @@ test('chat composer sends with Enter and preserves Shift+Enter for a new line', 
   assert.match(source, /if\(e\.key === 'Enter' && !e\.shiftKey\)\{ e\.preventDefault\(\); submit\(\); \}/);
   assert.doesNotMatch(source, /if\(e\.key === 'Enter'\)\{ e\.preventDefault\(\); submit\(\); \}/);
   assert.match(styles, /\.cc-input\{[^}]*resize:none;[^}]*overflow-y:auto;/);
-  assert.match(styles, /body\.styled-skin \.cc-input\{[^}]*height:100%;[^}]*min-height:32px;/);
+  // The composer grows with the draft up to a third of the window, then scrolls.
+  assert.match(styles, /body\.styled-skin \.chat-composer\{[^}]*height:auto;[^}]*min-height:96px;/);
+  assert.match(styles, /body\.styled-skin \.cc-input\{[^}]*height:auto;[^}]*max-height:33vh;[^}]*field-sizing:content;/);
+  // The jump-to-latest button follows the message list, so a tall draft never covers it.
+  assert.match(styles, /\.chat-jump-latest\{bottom:calc\(anchor\(--chat-thread bottom\)/);
 });
 
 test('human DM alignment is based on the authenticated sender, not human kind', async () => {
