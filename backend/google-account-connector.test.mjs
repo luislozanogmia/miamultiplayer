@@ -385,3 +385,23 @@ test('server registers only the Hermes-owned Google Account lifecycle routes', a
   assert.doesNotMatch(source, /app\.post\('\/api\/connections\/google\/:service\/test'/);
   assert.doesNotMatch(source, /app\.delete\('\/api\/connections\/google\/(?:workspace|gmail)'/);
 });
+
+// Keep permission requests aligned with the supported desktop tools.
+test('Google connection needs only five supported scopes and refuses Contacts operations', async () => {
+  const scopes = ['openid', 'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/drive.file'];
+  assert.deepEqual(googleAccount.GWS_OAUTH_SCOPES, scopes);
+  let operations = 0;
+  const connector = googleAccount.createGoogleAccountConnector({
+    runtime: { available: true, gwsBin: '/fixture/gws' },
+    runProcess: async (_file, args) => {
+      if (args[0] !== 'auth') operations += 1;
+      return { code: 0, stdout: JSON.stringify({ token_valid: true, scopes }) };
+    },
+  });
+  assert.equal((await connector.status()).state, 'connected');
+  await assert.rejects(connector.runOperation('contacts.list', []));
+  assert.equal(operations, 0);
+});
