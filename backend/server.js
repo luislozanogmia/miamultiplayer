@@ -6273,6 +6273,13 @@ function nativeBrowserContextNote(trigger, { ghostCli = true } = {}) {
   ].filter(Boolean).join('\n');
 }
 
+// Bot sessions keep the system prompt they started with, so the tab-list
+// pointer rides on every bot turn instead.
+function botBrowserTabsNote({ ghostCli = true } = {}) {
+  if (!ghostCli) return '';
+  return 'Your Mia browser tabs (not Google Sheets tabs) are in your own tab group. Before answering about them, list them with: ghost-cli call ghost_tab_list --arguments \'{"instance_id":"miaos"}\'';
+}
+
 function buildHermesGatewayTurnMessage(message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite, globalInstructions) {
   const actionInstruction = allowGoogleWorkspaceWrite
     && /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''))
@@ -6359,6 +6366,25 @@ function nativeBotSessionKey(profile, systemPrompt) {
 // /goal keeps working after a turn ends; those turns arrive with no dispatch
 // waiting, and this map is how they find their chat.
 const nativeGatewaySessionConversations = new Map();
+
+// The desktop browser asks which bot a live Hermes session belongs to, so a
+// page a bot opens lands in that bot's tab group. Mia's own sessions, ended
+// sessions and conversations the caller cannot read all answer null.
+app.get('/api/browser/actor', requireAuth, (req, res) => {
+  const sessionId = String(req.query.session || '').trim();
+  const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
+  if (!target || !target.botId) return res.status(200).json({ actor: null });
+  try {
+    nativeConversationService.getConversation({
+      companyId: target.companyId,
+      conversationId: target.conversationId,
+      principal: { principalId: String(req.userEmail || '').trim().toLowerCase(), principalType: 'user' },
+    });
+  } catch (_) {
+    return res.status(200).json({ actor: null });
+  }
+  return res.status(200).json({ actor: { botId: String(target.botId), name: String(target.agentName || 'Bot') } });
+});
 // Per-session chain so a verdict that waits on the goal snapshot still posts
 // before the continuation turn that follows it.
 const nativeHermesSessionEventChains = new Map();
@@ -7423,6 +7449,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleActionInstruction,
       nativePromptLine(trigger) || message,
       nativeBrowserContextNote(trigger, { ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
+      botBrowserTabsNote({ ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
     ].filter(Boolean).join('\n\n');
     const botRunArgs = {
       storedSessionId: conversation.metadata && conversation.metadata.hermesGatewayProfile === sessionKey
@@ -7489,6 +7516,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     const replyPrompt = [
       nativePromptLine(trigger) || message,
       nativeBrowserContextNote(trigger, { ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
+      botBrowserTabsNote({ ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
     ].filter(Boolean).join('\n\n');
     inferenceResult = await scheduleInference(replyPrompt, 'reply', {
       ...inferenceOptions,

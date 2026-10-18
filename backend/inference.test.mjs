@@ -401,6 +401,8 @@ test('full-mode bot workers get a compact local-browser boundary without the ful
   assert.match(policy, /Do not inspect Mia's source code, databases, logs/);
   assert.doesNotMatch(policy, /miaos-bot create/);
   assert.doesNotMatch(policy, /# Mia browser/);
+  assert.match(policy, /ghost-cli call ghost_tab_list/, 'bots know how to list their own browser tabs');
+  assert.match(policy, /not Google Sheets tabs/);
 });
 
 test('bot context keeps durable instructions while Hermes owns structured conversation context', () => {
@@ -430,7 +432,10 @@ test('bot context keeps durable instructions while Hermes owns structured conver
   assert.doesNotMatch(prompt, /Luis: run it now/);
   assert.match(prompt, /latest explicit user instruction overrides older scope/);
   assert.match(prompt, /says “full stop,” or says not to overengineer/);
-  assert.match(prompt, /Once the requested result is sufficient, stop/);
+  assert.match(prompt, /Once the requested result is sufficient and every look-up the user asked for is done, stop/);
+  const rules = prompt.slice(prompt.indexOf('Operating rules:'));
+  assert.match(rules, /^Operating rules:\n- Look facts up before answering\./, 'the look-it-up rule leads the operating rules');
+  assert.match(prompt, /If you answer from memory, say so\./);
 });
 
 test('scheduled bot prompt states bot, Mia, owner, scope, and exact automation task', () => {

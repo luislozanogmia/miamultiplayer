@@ -88,7 +88,7 @@ function loadRoomContext({ state, api }) {
     Promise, Date, Number, activeWorkspaceKey: 'solo', AGENT_SETUP_ROOM_ID: '__setup__',
     chatRoster: {},
     chatWs: { native: false, nativeSocketConversationId: null, activeRoomId: null, configured: true, byRoom: { 'room-a': state } },
-    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {},
+    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {}, swapChatDraft() {},
     chatModelPicker: null, saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     chatRoomState(roomId) { return context.chatWs.byRoom[roomId]; }, api,
     nativeEventsUrl() { return '/events'; },
@@ -218,8 +218,9 @@ test('native browser visibility owner occludes and restores the live view withou
   context.downloadsOpen = true;
   context.lastLayout = '';
   context.layout();
-  assert.equal(commands.at(-1).visible, false, 'the Downloads view covers the page');
-  assert.equal(commands.at(-1).panelOpen, true, 'the browser stays open behind the Downloads view');
+  assert.equal(commands.at(-1).visible, false, 'the Downloads menu floats over a still of the page');
+  assert.equal(commands.at(-1).menu, true, 'a menu hide keeps the page playing');
+  assert.equal(commands.at(-1).panelOpen, true, 'the browser stays open behind the Downloads menu');
   context.downloadsOpen = false;
   classes.add('native-browser-occluded-conversation');
   context.lastLayout = '';

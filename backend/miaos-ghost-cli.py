@@ -38,6 +38,7 @@ SUPPORTED_METHODS = {
     "ghost_scroll": "scroll",
     "ghost_wait": "wait",
     "ghost_file_open": "file_open",
+    "ghost_downloads": "downloads",
 }
 
 
@@ -98,8 +99,13 @@ def call_tool(tool_name: str, arguments: dict) -> dict:
         raise ValueError(f"Unsupported Mia Ghost command: {tool_name}")
     params = {
         key: value for key, value in arguments.items()
-        if key not in {"instance_id", "miaos", "open_browser", "reuse_only", "headless"}
+        if key not in {"instance_id", "miaos", "open_browser", "reuse_only", "headless", "actor_session"}
     }
+    # Hermes gives every command its live session id. The app uses it to keep
+    # a bot's pages in that bot's own tab group instead of the user's tab.
+    actor_session = os.environ.get("HERMES_UI_SESSION_ID", "").strip()
+    if actor_session:
+        params["actor_session"] = actor_session[:200]
     return transport.call(method, params)
 
 

@@ -105,5 +105,12 @@ contextBridge.exposeInMainWorld("miaDesktop", {
       ipcRenderer.on("miaos-browser-group-edit", listener);
       return () => ipcRenderer.removeListener("miaos-browser-group-edit", listener);
     },
+    // { action: "choose", groupId } opens a group's bot picker;
+    // { action: "stop", botId } stops a bot that just lost its group.
+    onGroupBot: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("miaos-browser-group-bot", listener);
+      return () => ipcRenderer.removeListener("miaos-browser-group-bot", listener);
+    },
   },
 });

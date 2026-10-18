@@ -2,8 +2,9 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { checkDownload } = require("./download-check.cjs");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, app, session, ipcMain, Menu, nativeTheme, dialog, shell, systemPreferences } = require("electron");
+const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 
@@ -101,6 +102,9 @@ function normalizeGroupRecord(item) {
     name: typeof item.name === "string" ? item.name.trim().slice(0, 80) : "",
     color: GROUP_COLORS.includes(item.color) ? item.color : "grey",
     collapsed: item.collapsed === true,
+    // The bot that owns this group: its pages land here and the chat panel
+    // shows its conversation while one of these tabs is in front.
+    botId: typeof item.botId === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(item.botId) ? item.botId : null,
   };
 }
 
@@ -123,6 +127,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // belongs to at most one group (tab.groupId); a group with no tabs is gone.
   const groups = new Map();
   let nextGroupNumber = 1;
+  let botUseCounter = 0;
   let fullscreenId = null;
   let windowWasFullscreen = false;
   let nextId = 1;
@@ -264,6 +269,42 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const DOWNLOADS_MAX_ENTRIES = 100;
   const downloadsPath = statePath ? `${statePath.replace(/\.json$/, "")}-downloads.json` : "";
   const DOWNLOAD_STATES = new Set(["progressing", "completed", "cancelled", "interrupted"]);
+  const SAFETY_VERDICTS = new Set(["safe", "review", "blocked", "missing"]);
+  // Who started a download: a bot ({ botId, name }), Mia, or (null) the user.
+  function downloadWorker(value) {
+    if (!value || typeof value !== "object") return null;
+    if (value.botId === null || value.botId === undefined) return value.mia ? { mia: true } : null;
+    return typeof value.botId === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(value.botId)
+      ? { botId: value.botId, name: String(value.name || "").slice(0, 80) } : null;
+  }
+  function downloadSafety(value) {
+    // A check still running when Mia quit runs again at the next start.
+    return value && SAFETY_VERDICTS.has(value.verdict)
+      ? { verdict: value.verdict, reason: String(value.reason || "").slice(0, 300) } : null;
+  }
+  const downloadsDir = typeof options.downloadsDir === "string" && options.downloadsDir.trim()
+    ? path.resolve(options.downloadsDir)
+    : (app && typeof app.getPath === "function" ? app.getPath("downloads") : "");
+  // "report.pdf", then "report (1).pdf", like Chrome.
+  function freeDownloadPath(filename) {
+    const safe = path.basename(String(filename || "download")).replace(/[\x00-\x1f/:]/g, "_").slice(0, 200) || "download";
+    const ext = path.extname(safe);
+    const stem = safe.slice(0, safe.length - ext.length) || "download";
+    for (let n = 0; n < 1000; n += 1) {
+      const candidate = path.join(downloadsDir, n ? `${stem} (${n})${ext}` : safe);
+      if (!fs.existsSync(candidate) && ![...downloadItems.values()].some(item => item.getSavePath && item.getSavePath() === candidate)) return candidate;
+    }
+    return path.join(downloadsDir, `${stem} ${Date.now()}${ext}`);
+  }
+  function checkDownloadSafety(entry) {
+    entry.safety = { verdict: "checking", reason: "" };
+    publish();
+    return checkDownload(entry.path).then(result => result, error => ({ verdict: "review", reason: `Mia could not check this file (${error.message}).` }))
+      .then(result => {
+        entry.safety = downloadSafety(result);
+        persistDownloads(); publish();
+      });
+  }
   const downloadItems = new Map();
   let downloadEntries = [];
   let nextDownloadId = 1;
@@ -284,8 +325,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             received: Number(item.received) || 0,
             total: Number(item.total) || 0,
             startedAt: Number(item.startedAt) || 0,
+            by: downloadWorker(item.by),
+            safety: downloadSafety(item.safety),
           }));
         for (const entry of downloadEntries) entry.id = nextDownloadId++;
+        setImmediate(() => {
+          for (const entry of downloadEntries) {
+            if (!disposed && entry.by && entry.state === "completed" && entry.path && !entry.safety) checkDownloadSafety(entry);
+          }
+        });
       }
     } catch (_) { /* First run or unreadable list: start empty. */ }
   }
@@ -653,7 +701,64 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     loading: tab.view.webContents.isLoading(), timing: tab.timing,
     canGoBack: tab.view.webContents.navigationHistory.canGoBack(),
     canGoForward: tab.view.webContents.navigationHistory.canGoForward(),
+    botActivity: botActivityFor(tab),
+    botWorkAt: tab.botWorker && tab.botWorker.botId ? { botId: tab.botWorker.botId, at: tab.botWorkAt || 0 } : null,
   })) });
+  // A tab shows its bot as working while a command runs on it and briefly
+  // after, so a burst of quick commands reads as one stretch of work.
+  const BOT_WORK_LINGER_MS = 2500;
+  // A download that starts this soon after a bot's command on that tab is
+  // the bot's (a click often triggers it just after the command returns).
+  const AGENT_DOWNLOAD_WINDOW_MS = 15000;
+  // Mia's own browser work is shown the same way as a bot's, under her name.
+  const MIA_WORKER = { botId: "mia", name: "Mia" };
+  // While Mia or a bot drives a tab, its page carries an edge glow that fades
+  // inward, like the glow around a screen under computer use: gold for Mia,
+  // the bot's own color for a bot. It is a click-through stylesheet layer,
+  // added when a command starts on the page and removed when the work ends.
+  function botGlowCss(hue) {
+    const [h, s, l] = hue === null ? [41, 76, 60] : [hue, 78, 58];
+    const tone = alpha => `hsla(${h},${s}%,${l}%,${alpha})`;
+    return `html::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:2147483647;
+    box-shadow:inset 0 0 18px 4px ${tone(.7)},inset 0 0 60px 12px ${tone(.22)};
+    animation:mia-bot-glow 2.4s ease-in-out infinite;}
+    @keyframes mia-bot-glow{50%{opacity:.6}}
+    @media (prefers-reduced-motion: reduce){html::after{animation:none}}`;
+  }
+  // Bot colors (hues) and which tabs stay lit come from the tab strip, which
+  // knows each bot's color and whether a reply is still running.
+  let botHues = new Map();
+  let heldByRenderer = new Set();
+  function glowWanted(tab) {
+    if (!tab.botWorker) return null;
+    const working = (tab.botWork || 0) > 0 || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
+    return working || heldByRenderer.has(tab.id) ? { by: tab.botWorker.botId } : null;
+  }
+  function syncBotGlow(tab) {
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed()) return;
+    const wanted = glowWanted(tab);
+    const css = wanted ? botGlowCss(wanted.by === MIA_WORKER.botId ? null : (botHues.has(wanted.by) ? botHues.get(wanted.by) : 41)) : null;
+    if (tab.botGlowPending || css === (tab.botGlowCss || null)) return;
+    if (tab.botGlowKey) {
+      Promise.resolve(wc.removeInsertedCSS(tab.botGlowKey)).catch(() => {});
+      tab.botGlowKey = null;
+    }
+    tab.botGlowCss = null;
+    if (!css) return;
+    tab.botGlowPending = true;
+    Promise.resolve(wc.insertCSS(css)).then(key => {
+      tab.botGlowPending = false;
+      tab.botGlowKey = key;
+      tab.botGlowCss = css;
+      syncBotGlow(tab);
+    }).catch(() => { tab.botGlowPending = false; });
+  }
+  function botActivityFor(tab) {
+    if (!tab.botWorker) return null;
+    if ((tab.botWork || 0) > 0 || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS) return { ...tab.botWorker };
+    return null;
+  }
   function publish() {
     if (queued || disposed) return;
     queued = true;
@@ -729,6 +834,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // resize. Fail closed until the renderer reports the current DOM bounds.
     for (const tab of tabs.values()) tab.view.setVisible(false);
     if (!window.webContents.isDestroyed()) window.webContents.send("miaos-browser-layout-request");
+  }
+  // Where the user's keyboard focus is: the app (chat, address bar) or the
+  // page in front. A bot working in a background tab must never take it.
+  let userFocus = null;
+  function restoreUserFocus(target = userFocus) {
+    setImmediate(() => {
+      if (disposed || !target || target.isDestroyed()) return;
+      if (target.isFocused && target.isFocused()) return;
+      target.focus();
+    });
   }
   function focusLocation() {
     window.webContents.focus();
@@ -821,6 +936,93 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return error;
   }
 
+  // Which bot sent a Ghost request, from the Hermes session id ghost-cli
+  // attaches. Mia's own sessions and unknown ids resolve to null, which keeps
+  // the original behavior of acting on the tab in front.
+  async function protocolActor(sessionId) {
+    if (typeof sessionId !== "string" || !sessionId.trim() || typeof options.resolveActor !== "function") return null;
+    try {
+      const actor = await options.resolveActor(sessionId.trim().slice(0, 200));
+      return actor && typeof actor.botId === "string" && actor.botId ? actor : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  function ownedByOtherBot(actor, tab) {
+    const owner = tab && groups.get(tab.groupId)?.botId;
+    return Boolean(owner && owner !== actor.botId);
+  }
+  // Keys and screenshots only work on the tab in front. A bot borrows the
+  // front for that one action, then the previous tab comes back. Borrowing is
+  // serialized so two bots never capture or type into each other's page.
+  let frontBorrow = Promise.resolve();
+  let borrowingTabId = null;
+  function borrowFront(actor, tab, action) {
+    if (!actor) return Promise.resolve().then(action);
+    const run = frontBorrow.then(async () => {
+      const previous = activeId;
+      const focusBefore = userFocus;
+      borrowingTabId = tab.id;
+      if (tab.id !== activeId) { activateTab(tab.id); layout(); publish(); }
+      try {
+        return await action();
+      } finally {
+        borrowingTabId = null;
+        if (activeId === tab.id && previous !== tab.id && tabs.has(previous)) activateTab(previous);
+        layout(); persistTabs(); publish();
+        restoreUserFocus(focusBefore);
+      }
+    });
+    frontBorrow = run.catch(() => {});
+    return run;
+  }
+  function botOwnsTab(actor, tab) {
+    return Boolean(tab && groups.get(tab.groupId)?.botId === actor.botId);
+  }
+  function botGroup(botId) {
+    return [...groups.values()].find(group => group.botId === botId) || null;
+  }
+  // Puts a tab a bot opened into that bot's group, creating the group (named
+  // after the bot) the first time.
+  function placeInBotGroup(tab, actor) {
+    const existing = botGroup(actor.botId);
+    if (existing) addTabToGroup(tab.id, existing.id);
+    else {
+      const group = createGroup(tab.id);
+      if (group) Object.assign(group, { name: String(actor.name || "").trim().slice(0, 80), botId: actor.botId });
+    }
+    tab.botUsedAt = ++botUseCounter;
+    normalizeGroups(); layout(); persistTabs(); publish();
+  }
+  // A bot works in its own tabs: the one in front if it is the bot's, else
+  // the one it used last. A bot with no tab yet reads the page in front, and
+  // navigating opens a new tab in its group rather than taking the user's.
+  function botProtocolTab(actor, method, tabId) {
+    const explicit = tabId === undefined || tabId === null ? null : tabs.get(Number(tabId));
+    if (tabId !== undefined && tabId !== null && !explicit) {
+      throw protocolError("TAB_NOT_FOUND", `Tab ${tabId} does not exist.`);
+    }
+    const owned = tab => botOwnsTab(actor, tab);
+    const current = active();
+    let tab = explicit || (current && owned(current) ? current : null)
+      || [...tabs.values()].filter(owned).sort((a, b) => (b.botUsedAt || 0) - (a.botUsedAt || 0))[0] || null;
+    if (!tab && method === "navigate") {
+      tab = newTab(undefined, { activate: false });
+      placeInBotGroup(tab, actor);
+    }
+    if (!tab) {
+      if (!tabs.size) newTab();
+      tab = protocolTab(undefined);
+    }
+    // Bots work side by side: none may drive a tab another bot owns.
+    if (ownedByOtherBot(actor, tab)) {
+      throw protocolError("TAB_NOT_FOUND", explicit
+        ? `Tab ${tab.id} belongs to another bot.`
+        : "The tab in front belongs to another bot. Open your own page with ghost_navigate first.");
+    }
+    if (owned(tab)) tab.botUsedAt = ++botUseCounter;
+    return tab;
+  }
   function protocolTab(tabId) {
     const tab = tabId === undefined || tabId === null ? active() : tabs.get(Number(tabId));
     if (!tab) throw protocolError("TAB_NOT_FOUND", `Tab ${tabId ?? activeId ?? "active"} does not exist.`);
@@ -1060,27 +1262,76 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!params || typeof params !== "object" || Array.isArray(params)) {
       throw protocolError("INVALID_PARAMS", "params must be an object.");
     }
+    const actor = await protocolActor(params.actor_session);
+    const touched = new Set();
+    // As a command starts on a page, the tab shows who is working there
+    // (Mia or a bot): the glow, the working dot and Take over.
+    const touch = tab => {
+      if (!tab || touched.has(tab)) return;
+      touched.add(tab);
+      tab.botWork = (tab.botWork || 0) + 1;
+      tab.botWorker = actor ? { botId: actor.botId, name: String(actor.name || "").slice(0, 80) } : { ...MIA_WORKER };
+      syncBotGlow(tab);
+      publish();
+    };
+    try {
+      return await runProtocolCommand(method, params, actor, touch);
+    } finally {
+      for (const tab of touched) {
+        tab.botWork = Math.max(0, (tab.botWork || 0) - 1);
+        tab.botWorkAt = Date.now();
+      }
+      if (touched.size) {
+        publish();
+        setTimeout(() => {
+          for (const tab of touched) if (tabs.has(tab.id)) syncBotGlow(tab);
+          publish();
+        }, BOT_WORK_LINGER_MS + 50).unref?.();
+      }
+    }
+  }
+
+  async function runProtocolCommand(method, params, actor, touch) {
+    params = { ...params };
+    delete params.actor_session;
     if (method === "status") {
       const current = active();
-      return {
+      const status = {
         connected: true,
         tabs: tabs.size,
         active_tab_id: current ? current.id : null,
         active_url: current ? current.url : "",
         active_title: current ? (current.title || current.url || "New tab") : "",
       };
+      if (actor) status.your_tabs = [...tabs.values()].filter(tab => botOwnsTab(actor, tab)).length;
+      return status;
     }
     if (method === "tab_list") {
-      return { tabs: [...tabs.values()].map(tab => ({ ...protocolTabResult(tab), active: tab.id === activeId })) };
+      // A bot sees only the tabs in the groups it owns; Mia sees every tab.
+      const listed = actor ? [...tabs.values()].filter(tab => botOwnsTab(actor, tab)) : [...tabs.values()];
+      return {
+        tabs: listed.map(tab => {
+          const group = groups.get(tab.groupId);
+          return {
+            ...protocolTabResult(tab),
+            active: tab.id === activeId,
+            group: group ? (group.name || "") : null,
+          };
+        }),
+      };
     }
     if (method === "tab_open") {
-      const tab = newTab();
+      // A bot's new tab opens behind, so it never takes the tab in front.
+      const tab = actor ? newTab(undefined, { activate: false }) : newTab();
+      if (actor) placeInBotGroup(tab, actor);
+      touch(tab);
       if (params.url) navigate(tab, params.url);
       await waitForProtocolPage(tab, params.wait || "load");
       return protocolTabResult(tab);
     }
     if (method === "tab_switch") {
       const tab = protocolTab(params.tab_id);
+      if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", `Tab ${tab.id} is not one of your tabs.`);
       activateTab(tab.id);
       layout();
       persistTabs();
@@ -1090,8 +1341,33 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     if (method === "tab_close") {
       const tab = protocolTab(params.tab_id);
+      if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", `Tab ${tab.id} is not one of your tabs.`);
       closeTab(tab.id);
       return { closed: true, tab_id: tab.id };
+    }
+    if (method === "downloads") {
+      // What actually landed on disk, so a bot reports only real files. A
+      // bot sees its own downloads; Mia sees every bot's and her own.
+      const mine = () => downloadEntries.filter(entry => entry.by && (actor ? entry.by.botId === actor.botId : true));
+      const waitMs = boundedInteger(params.wait_ms, 0, 0, 60000);
+      const deadline = Date.now() + waitMs;
+      while (Date.now() < deadline && mine().some(entry => entry.state === "progressing" || entry.safety?.verdict === "checking")) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      return {
+        downloads: mine().slice(0, 20).map(entry => {
+          const saved = entry.state === "completed" && Boolean(entry.path) && fs.existsSync(entry.path);
+          return {
+            filename: entry.filename,
+            state: entry.state === "completed" && !saved ? "missing" : entry.state,
+            path: saved ? entry.path : "",
+            bytes: entry.received,
+            started_by: entry.by.botId ? entry.by.name || entry.by.botId : "Mia",
+            safety: entry.safety ? entry.safety.verdict : (saved ? "checking" : "none"),
+            safety_reason: entry.safety ? entry.safety.reason : "",
+          };
+        }),
+      };
     }
     if (method === "file_open") {
       const filePath = params.path === undefined ? params.file_path : params.path;
@@ -1099,6 +1375,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         throw protocolError("INVALID_PARAMS", "path is required.");
       }
       const tab = newTab();
+      if (actor) placeInBotGroup(tab, actor);
       openLocalFile(tab, filePath);
       // A Ghost command is an app-owned browser entry point, so surface the
       // native browser panel even when the user was still in chat.
@@ -1113,8 +1390,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     ].includes(method);
     if (!supportedTabMethod) throw protocolError("UNKNOWN_METHOD", `Unknown browser method: ${method}`);
 
-    if (!tabs.size) newTab();
-    const tab = protocolTab(method === "navigate" ? params.tab_id : undefined);
+    let tab;
+    if (actor) {
+      tab = botProtocolTab(actor, method, params.tab_id);
+      touch(tab);
+    } else {
+      if (!tabs.size) newTab();
+      tab = protocolTab(method === "navigate" ? params.tab_id : undefined);
+      touch(tab);
+    }
     if (method === "navigate") {
       if (!params.url) throw protocolError("INVALID_PARAMS", "url is required.");
       navigate(tab, params.url);
@@ -1176,17 +1460,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       const hasKey = typeof params.key === "string" && params.key.length > 0;
       const hasText = typeof params.text === "string" && params.text.length > 0;
       if (hasKey === hasText) throw protocolError("INVALID_PARAMS", "Provide exactly one of key or text.");
-      tab.view.webContents.focus();
-      if (hasText) tab.view.webContents.insertText(params.text.slice(0, MAX_PROTOCOL_PAGE_TEXT));
-      if (hasKey) {
-        const key = params.key.slice(0, 100);
-        const repeat = boundedInteger(params.repeat, 1, 1, 20);
-        for (let index = 0; index < repeat; index += 1) {
-          tab.view.webContents.sendInputEvent({ type: "keyDown", keyCode: key });
-          tab.view.webContents.sendInputEvent({ type: "keyUp", keyCode: key });
+      return borrowFront(actor, tab, () => {
+        tab.view.webContents.focus();
+        if (hasText) tab.view.webContents.insertText(params.text.slice(0, MAX_PROTOCOL_PAGE_TEXT));
+        if (hasKey) {
+          const key = params.key.slice(0, 100);
+          const repeat = boundedInteger(params.repeat, 1, 1, 20);
+          for (let index = 0; index < repeat; index += 1) {
+            tab.view.webContents.sendInputEvent({ type: "keyDown", keyCode: key });
+            tab.view.webContents.sendInputEvent({ type: "keyUp", keyCode: key });
+          }
         }
-      }
-      return { key: params.key || null, text: params.text || null, pressed: true };
+        return { key: params.key || null, text: params.text || null, pressed: true };
+      });
     }
     if (["back", "forward", "reload", "stop"].includes(method)) {
       const history = tab.view.webContents.navigationHistory;
@@ -1198,7 +1484,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return protocolTabResult(tab);
     }
     if (method === "screenshot") {
-      const image = await tab.view.webContents.capturePage();
+      const image = await borrowFront(actor, tab, () => tab.view.webContents.capturePage());
       const format = String(params.format || "png").toLowerCase() === "jpeg" ? "jpeg" : "png";
       const quality = boundedInteger(params.quality, 80, 1, 100);
       const data = format === "jpeg" ? image.toJPEG(quality) : image.toPNG();
@@ -1317,6 +1603,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     view.setBackgroundColor(darkTheme ? "#0B0A09" : "#ffffff");
     const wc = view.webContents;
     wc.on("before-input-event", shortcut);
+    // A navigation drops inserted styles; put the bot glow back if needed.
+    wc.on("dom-ready", () => { tab.botGlowKey = null; tab.botGlowCss = null; syncBotGlow(tab); });
+    // Pages focus themselves as they load (search boxes, editors). Only the
+    // tab in front may hold focus; a background tab gives it straight back.
+    wc.on("focus", () => {
+      if (borrowingTabId === tab.id) return;
+      if (tab.id === activeId) userFocus = wc;
+      else restoreUserFocus();
+    });
     wc.on("found-in-page", (_event, result) => {
       if (tab.id === activeId) window.webContents.send("miaos-browser-find-result", {
         matches: result.matches, activeMatchOrdinal: result.activeMatchOrdinal,
@@ -1503,7 +1798,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!tab) return null;
     const used = new Set([...groups.values()].map(group => group.color));
     const color = GROUP_COLORS.find(item => !used.has(item)) || GROUP_COLORS[groups.size % GROUP_COLORS.length];
-    const group = { id: `g${nextGroupNumber++}`, name: "", color, collapsed: false };
+    const group = { id: `g${nextGroupNumber++}`, name: "", color, collapsed: false, botId: null };
     groups.set(group.id, group);
     tab.groupId = group.id;
     normalizeGroups();
@@ -1594,11 +1889,103 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     );
     Menu.buildFromTemplate(items).popup({ window });
   }
+  // Gives a group to a bot (or back to Mia with null). An unnamed group takes
+  // the bot's name so the label says who works there.
+  function assignGroupBot(groupId, bot) {
+    const group = groups.get(groupId);
+    if (!group) return;
+    const record = normalizeGroupRecord({ id: group.id, botId: bot && bot.botId });
+    group.botId = record ? record.botId : null;
+    if (group.botId && !group.name && bot && typeof bot.name === "string") group.name = bot.name.trim().slice(0, 80);
+  }
+  // A 32px PNG the renderer drew (a bot's mote or Mia's mark), shown at
+  // 16pt on Retina. Anything else gets no icon.
+  function menuIcon(dataUrl) {
+    if (typeof dataUrl !== "string" || dataUrl.length > 40000 || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(dataUrl)) return undefined;
+    try {
+      const image = nativeImage.createEmpty();
+      image.addRepresentation({ scaleFactor: 2, dataURL: dataUrl });
+      return image.isEmpty() ? undefined : image;
+    } catch (_) {
+      return undefined;
+    }
+  }
+  function groupBotEvent(payload) {
+    if (!disposed && !window.isDestroyed()) window.webContents.send("miaos-browser-group-bot", payload);
+  }
+  // Asks the chat window, at click time, whether a bot still has a reply
+  // running; the answer given when the menu opened may be stale by now.
+  async function botStillRunning(botId) {
+    try {
+      const script = "Boolean(window.miaBrowserAgents && window.miaBrowserAgents.isRunning && window.miaBrowserAgents.isRunning("
+        + JSON.stringify(String(botId)) + "))";
+      return (await window.webContents.executeJavaScript(script)) === true;
+    } catch (_) {
+      return false;
+    }
+  }
+  // Switching away from a bot that is still working asks first, then stops
+  // that bot so it does not keep going in a group it no longer owns.
+  async function switchGroupBot(groupId, bot, busy) {
+    const group = groups.get(groupId);
+    if (!group) return;
+    const previous = group.botId;
+    const next = bot ? bot.botId : null;
+    if (previous === next) return;
+    if (previous && busy && !disposed && await botStillRunning(previous)) {
+      const { response } = await dialog.showMessageBox(window, {
+        type: "question", buttons: ["Stop and Switch", "Cancel"], defaultId: 0, cancelId: 1,
+        message: (busy.name || "This bot") + " is still working in this group.",
+        detail: "Stop it and give the group to " + (bot ? bot.name : "Mia") + "?",
+      });
+      if (response !== 0 || disposed || !groups.has(groupId) || groups.get(groupId).botId !== previous) return;
+      groupBotEvent({ action: "stop", botId: previous });
+    }
+    menuAction(() => assignGroupBot(groupId, bot))();
+  }
+  function showGroupBotMenu(groupId, bots, miaIcon, busy) {
+    const group = groups.get(groupId);
+    if (!group) return;
+    const list = (Array.isArray(bots) ? bots : []).slice(0, 100)
+      .filter(bot => bot && typeof bot.botId === "string" && typeof bot.name === "string");
+    // The renderer says whether the current owner still has a reply running.
+    const working = busy && typeof busy === "object" && busy.botId === group.botId
+      ? { name: String(busy.name || "").slice(0, 80) } : null;
+    Menu.buildFromTemplate([
+      { label: "Mia (no bot)", type: "checkbox", checked: !group.botId, icon: menuIcon(miaIcon),
+        click: () => { switchGroupBot(groupId, null, working); } },
+      ...(list.length ? [{ type: "separator" }] : []),
+      ...list.map(bot => ({
+        label: bot.name.slice(0, 80), type: "checkbox", checked: group.botId === bot.botId, icon: menuIcon(bot.icon),
+        click: () => { switchGroupBot(groupId, bot, working); },
+      })),
+    ]).popup({ window });
+  }
+  // The » menu lists groups the crowded strip had no room for; picking one
+  // brings its last tab to the front, which opens the group again.
+  function showGroupOverflowMenu(groupIds) {
+    const list = (Array.isArray(groupIds) ? groupIds : []).slice(0, 200).filter(id => groups.has(id));
+    if (!list.length) return;
+    Menu.buildFromTemplate(list.map(id => {
+      const group = groups.get(id);
+      const members = groupTabs(id);
+      const count = members.length;
+      return {
+        label: `${(group.name || "Unnamed group").slice(0, 80)} (${count} tab${count === 1 ? "" : "s"})`,
+        click: menuAction(() => {
+          if (group.collapsed) group.collapsed = false;
+          const last = members.at(-1);
+          if (last && tabs.has(last.id)) activateTab(last.id);
+        }),
+      };
+    })).popup({ window });
+  }
   function showGroupMenu(groupId) {
     const group = groups.get(groupId);
     if (!group) return;
     Menu.buildFromTemplate([
       { label: "Rename Group…", click: () => editGroupName(groupId) },
+      { label: "Change Bot…", click: () => groupBotEvent({ action: "choose", groupId }) },
       { label: "Color", submenu: GROUP_COLORS.map(color => ({
         label: color[0].toUpperCase() + color.slice(1), type: "radio", checked: group.color === color,
         click: menuAction(() => updateGroup(groupId, { color })),
@@ -1619,6 +2006,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
     if (fullscreenId === id) exitPageFullscreen();
+    // Closing the active tab lands on its neighbor, staying inside its group
+    // when the group has other tabs, so a bot's work stays in view.
+    const order = [...tabs.keys()];
+    const at = order.indexOf(id);
+    const visible = other => other !== id && !groups.get(tabs.get(other).groupId)?.collapsed;
+    const sameGroup = other => tab.groupId && tabs.get(other).groupId === tab.groupId;
+    const neighbors = [...order.slice(at + 1), ...order.slice(0, at).reverse()].filter(visible);
+    const successor = neighbors.find(sameGroup) || order.slice(at + 1).find(visible) || order.slice(0, at).reverse().find(visible);
     tabs.delete(id);
     clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
@@ -1626,8 +2021,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     normalizeGroups();
     if (activeId === id) {
       const remaining = [...tabs.values()];
-      const shown = remaining.filter(item => !groups.get(item.groupId)?.collapsed);
-      const next = shown.at(-1) || remaining.at(-1);
+      const next = (successor !== undefined && tabs.get(successor)) || remaining.at(-1);
       activeId = null;
       if (next) activateTab(next.id);
     }
@@ -1655,7 +2049,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const tab = [...tabs.values()].find(candidate => candidate.view.webContents === contents);
     if (!tab) return;
     downloadEndedNavigation(tab, item.getURL());
-    // Electron's native Save dialog chooses the destination; never auto-open files.
+    // A download a bot or Mia started goes straight to Downloads, so one
+    // bot's Save dialog never blocks the window. The user's own downloads
+    // still ask where to save. Files never auto-open.
+    const worker = tab.botWorker && (tab.botWork > 0 || Date.now() - (tab.botWorkAt || 0) < AGENT_DOWNLOAD_WINDOW_MS)
+      ? downloadWorker(tab.botWorker.botId ? tab.botWorker : { mia: true }) : null;
+    if (worker && downloadsDir && item.setSavePath) item.setSavePath(freeDownloadPath(item.getFilename()));
     download = `Downloading ${item.getFilename()}`;
     const entry = {
       id: nextDownloadId++,
@@ -1666,7 +2065,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       received: 0,
       total: Number(item.getTotalBytes && item.getTotalBytes()) || 0,
       startedAt: Date.now(),
+      by: worker,
+      safety: null,
     };
+    if (worker && item.getSavePath) entry.path = String(item.getSavePath() || "");
     downloadEntries.unshift(entry);
     downloadEntries = downloadEntries.slice(0, DOWNLOADS_MAX_ENTRIES);
     downloadItems.set(entry.id, item);
@@ -1685,6 +2087,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       entry.received = Number(item.getReceivedBytes && item.getReceivedBytes()) || entry.received;
       download = `${result === "completed" ? "Saved" : result}: ${item.getFilename()}`;
       persistDownloads(); publish();
+      if (entry.state === "completed" && entry.path) checkDownloadSafety(entry);
     });
   }
   // The download may be reported before or after its page load fails, so
@@ -1718,14 +2121,41 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         const wasVisible = visible;
         bounds = b; visible = command.visible === true;
         panelOpen = command.panelOpen === undefined ? visible : command.panelOpen === true;
-        if (wasVisible && !visible) { exitPageFullscreen(); holdAllMediaPausedWhileHidden(); }
+        // A menu drawn over a still of the page hides the view only for a
+        // moment; the page keeps playing and stays in fullscreen.
+        if (wasVisible && !visible && command.menu !== true) { exitPageFullscreen(); holdAllMediaPausedWhileHidden(); }
         layout(); return;
+      }
+      if (command.action === "snapshot") {
+        // A still of the page in front, shown under an app menu while the
+        // live view steps aside.
+        const tab = active();
+        if (!tab || !visible || tab.view.webContents.isDestroyed()) return { error: "No page to capture." };
+        return tab.view.webContents.capturePage().then(image => (image.isEmpty()
+          ? { error: "No page to capture." }
+          : { dataUrl: `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}` }));
       }
       if (command.action === "theme") {
         applyNativeTheme(command.dark === true);
         return state();
       }
       if (command.action === "state") return state();
+      // The tab strip knows when a bot's reply is still running and keeps
+      // its tabs lit through the pauses between browser commands.
+      if (command.action === "botColors") {
+        const hues = command.hues && typeof command.hues === "object" ? command.hues : {};
+        botHues = new Map(Object.entries(hues).slice(0, 200)
+          .filter(([id, hue]) => typeof id === "string" && id.length <= 200 && Number.isFinite(hue))
+          .map(([id, hue]) => [id, Math.round(((hue % 360) + 360) % 360)]));
+        for (const tab of tabs.values()) syncBotGlow(tab);
+        return { ok: true };
+      }
+      if (command.action === "botHeld") {
+        const ids = Array.isArray(command.ids) ? command.ids.map(Number).filter(id => tabs.has(id)).slice(0, 200) : [];
+        heldByRenderer = new Set(ids);
+        for (const tab of tabs.values()) syncBotGlow(tab);
+        return { ok: true };
+      }
       if (command.action === "history") return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       if (command.action === "new") { newTab(); return state(); }
       if (command.action === "downloadShow") {
@@ -1734,6 +2164,32 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
           return { error: "This file was moved or deleted." };
         }
         shell.showItemInFolder(entry.path);
+        return state();
+      }
+      if (command.action === "downloadOpen") {
+        const entry = downloadEntries.find(item => item.id === command.id);
+        if (!entry || entry.state !== "completed" || !entry.path || !fs.existsSync(entry.path)) {
+          return { error: "This file was moved or deleted." };
+        }
+        const safety = entry.safety || {};
+        if (safety.verdict === "blocked") return { error: `Mia blocked this file. ${safety.reason}` };
+        const open = () => shell.openPath(entry.path).then(error => { if (error) log(`browser download open failed: ${error}`); });
+        if (safety.verdict === "review" || safety.verdict === "checking") {
+          dialog.showMessageBox(window, {
+            type: "warning", buttons: ["Open", "Cancel"], defaultId: 1, cancelId: 1,
+            message: `Open ${entry.filename}?`,
+            detail: safety.verdict === "checking" ? "Mia is still checking this file." : safety.reason,
+          }).then(({ response }) => { if (response === 0) open(); });
+          return state();
+        }
+        open();
+        return state();
+      }
+      if (command.action === "downloadRemove") {
+        // Drops one finished entry from the list; the file stays where it is.
+        const before = downloadEntries.length;
+        downloadEntries = downloadEntries.filter(entry => entry.id !== command.id || entry.state === "progressing");
+        if (downloadEntries.length !== before) { persistDownloads(); publish(); }
         return state();
       }
       if (command.action === "downloadCancel") {
@@ -1763,6 +2219,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
       if (command.action === "tabMenu") showTabMenu(command.id);
       if (command.action === "groupMenu") showGroupMenu(command.groupId);
+      if (command.action === "groupOverflowMenu") showGroupOverflowMenu(command.groupIds);
+      if (command.action === "groupBotMenu") showGroupBotMenu(command.groupId, command.bots, command.miaIcon, command.busy);
+      if (command.action === "groupAssignBot") { assignGroupBot(command.groupId, command.bot); persistTabs(); }
       if (command.action === "groupCreate" && tabs.has(command.id)) {
         const group = createGroup(command.id);
         if (group) { updateGroup(group.id, { name: command.name }); persistTabs(); }
@@ -1788,6 +2247,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     } catch (error) { return { error: error.message }; }
   });
   window.webContents.on("before-input-event", shortcut);
+  window.webContents.on("focus", () => { userFocus = window.webContents; });
   // A shell reload/log-out must never leave a foreign native surface over the app.
   window.webContents.on("did-start-loading", () => { visible = false; panelOpen = false; layout(); });
   window.webContents.on("zoom-changed", requestLayout);

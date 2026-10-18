@@ -2725,6 +2725,7 @@
     if(typeof chatWs === 'undefined' || !chatWs) return records;
     var existing = Array.isArray(chatWs.allAgents) ? chatWs.allAgents : [];
     chatWs.botRecords = records.slice();
+    chatWs.botRecordsLoaded = true;
     chatWs.allAgents = records.map(function(record){
       var binding = existing.filter(function(agent){ return String(agent.id || '') === String(record.id || ''); })[0];
       if(!binding) return record;
@@ -2734,6 +2735,8 @@
         nativeConversationId: binding.nativeConversationId || binding.conversationId || binding.roomId || null
       });
     });
+    // The browser tab strip draws group owners from these records.
+    try { window.dispatchEvent(new Event('mia-bots-changed')); } catch(_botsEventError) {}
     return chatWs.allAgents;
   }
   function loadAgents(){
@@ -4939,6 +4942,12 @@
     var metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : {};
     var message = nativeEventToChatMessage(event);
     var roomId = String(event.conversationId);
+    // A reply in a chat you aren't looking at still ends that bot's task, so
+    // its running dot and its hold on browser tabs clear when it answers.
+    if(roomId !== chatWs.activeRoomId){
+      syncNativeDispatchFromEvent(event);
+      renderComposerTaskControl();
+    }
     if(recordWatchedSidebarMessage(roomId, message)) renderChatSidebar();
     // Progress stays quiet so a long task produces one notification, not a stream.
     if(metadata.progress === true && metadata.status !== 'failed') return;
@@ -5762,8 +5771,140 @@
     renderChatInfoPane();
     renderChatHeaderBar();
     renderLocalBrowser();
+    browserFollowKey = '';
+    followBrowserTab(null);
     startLocalBrowserPromptRotation();
     if(options && options.restoring) showBenchToast('Browser restored where you left off. Playback is paused.');
+  }
+
+  // Tab groups can belong to a bot. While the browser is open, the chat pane
+  // follows the tab in front: a bot's group shows that bot's chat, any other
+  // tab shows Mia. It switches only when the tab in front (or its owner)
+  // changes, so picking another chat by hand sticks until then.
+  var browserFollowKey = '';
+  var browserFollowState = null;
+  function browserBotRecord(botId){
+    return (chatWs.botRecords || []).filter(function(record){ return String(record.id) === String(botId); })[0] || null;
+  }
+  // The browser names Mia's own work "mia"; every other id is a bot's.
+  function browserBotRunningTasks(botId){
+    var rooms = (chatWs.nativeConversations || []).filter(function(c){
+      if(botId === 'mia') return isNativeMiaConversation(c);
+      return c.type === 'bot' && c.metadata && String(c.metadata.botId) === String(botId);
+    }).map(function(c){ return c.id; });
+    return (chatWs.tasks || []).filter(function(task){
+      return task.kind === 'native-dispatch' && rooms.indexOf(task.roomId) !== -1 && task.status !== 'stopping';
+    });
+  }
+  function activeConversationOwner(){
+    var conversation = (chatWs.nativeConversations || []).filter(function(c){ return c.id === chatWs.activeRoomId; })[0];
+    if(!conversation) return null;
+    if(isNativeMiaConversation(conversation)) return 'mia';
+    var metadata = conversation.metadata || {};
+    return conversation.type === 'bot' && metadata.botId ? 'bot:' + metadata.botId : null;
+  }
+  function followBrowserTab(browserState){
+    if(browserState) browserFollowState = browserState;
+    browserState = browserFollowState;
+    if(!browserState){
+      // No state event yet (the tab strip fetched its first state directly).
+      var desktopBrowser = window.miaDesktop && window.miaDesktop.browser;
+      if(desktopBrowser && desktopBrowser.command){
+        Promise.resolve(desktopBrowser.command({ action: 'state' })).then(function(fetched){
+          if(fetched && !browserFollowState) followBrowserTab(fetched);
+        }).catch(function(){});
+      }
+      return;
+    }
+    if(!browserState || !localBrowserState.open || !document.body.classList.contains('browser-collab-mode')) return;
+    var tab = (browserState.tabs || []).filter(function(t){ return t.id === browserState.activeId; })[0];
+    if(!tab) return;
+    var group = (browserState.groups || []).filter(function(g){ return g.id === tab.groupId; })[0];
+    var bot = group && group.botId ? browserBotRecord(group.botId) : null;
+    // The bot list may not have loaded yet; decide once it has.
+    if(group && group.botId && !bot && !chatWs.botRecordsLoaded) return;
+    var owner = bot ? 'bot:' + bot.id : 'mia';
+    var key = tab.id + '|' + owner;
+    if(key === browserFollowKey) return;
+    browserFollowKey = key;
+    if(activeConversationOwner() === owner) return;
+    var agent = bot
+      ? (chatWs.allAgents || []).filter(function(a){ return String(a.id) === String(bot.id); })[0]
+      : chatWs.gatewayAgent;
+    if(!agent) return;
+    navigateToAgentChat(agent, false);
+    localBrowserState.roomId = chatWs.activeRoomId;
+  }
+  if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onState){
+    window.miaDesktop.browser.onState(followBrowserTab);
+  }
+  window.addEventListener('mia-bots-changed', function(){ followBrowserTab(null); });
+  // The tab strip (native-browser.js) draws each group's owner with these.
+  window.miaBrowserAgents = {
+    // Whether this bot still has a reply running, so the browser keeps its
+    // tab marked through the pauses between browser commands.
+    isRunning: function(botId){ return browserBotRunningTasks(botId).length > 0; },
+    // Each bot's color as a hue, for the glow around a page the bot works on.
+    hues: function(){
+      var hues = {};
+      (chatWs.botRecords || []).forEach(function(bot){
+        var name = String(bot.name || 'Bot');
+        var hue = avatarColorHue(normalizeAgentAvatarColor(bot.avatarColor) || agentAvatarColorFor(name, bot.id));
+        hues[String(bot.id)] = hue === null ? MOTE_COLOR_PALETTE[moteColorSlotFor(name)] : hue;
+      });
+      return hues;
+    },
+    // "Take over" in the browser stops whatever this bot is running now.
+    takeOver: function(botId){
+      var running = browserBotRunningTasks(botId);
+      if(!running.length){ showToast(botId === 'mia' ? 'Mia has already finished.' : 'That bot has already finished.'); return; }
+      running.forEach(function(task){ stopTaskFromComposer(task.id); });
+    },
+    // The group this bot worked in was given to someone else.
+    stopQuietly: function(botId){
+      browserBotRunningTasks(botId).forEach(function(task){ stopTaskFromComposer(task.id); });
+    },
+    moteHtml: function(botId){
+      var bot = botId ? browserBotRecord(botId) : null;
+      return bot ? agentAvatarHtml(bot.name, bot.id, 24, 'static', bot.avatarColor) : '';
+    },
+    name: function(botId){
+      var bot = botId ? browserBotRecord(botId) : null;
+      return bot ? String(bot.name || '') : '';
+    },
+    // The bot list with each bot's own mote (and Mia's mark) drawn as a small
+    // PNG, so the native owner menu shows the same faces as the tab strip.
+    menuBots: function(){
+      var bots = (chatWs.botRecords || []).map(function(bot){
+        var name = String(bot.name || 'Bot');
+        return browserMenuIcon(moteSrcFor(name, true), moteColorFilterFor(name, normalizeAgentAvatarColor(bot.avatarColor) || agentAvatarColorFor(name, bot.id)))
+          .then(function(icon){ return { botId: String(bot.id), name: name, icon: icon }; });
+      });
+      return Promise.all([browserMenuIcon('assets/favicon.svg', 'none')].concat(bots)).then(function(all){
+        return { miaIcon: all[0], bots: all.slice(1) };
+      });
+    },
+  };
+  var browserMenuIconCache = {};
+  function browserMenuIcon(src, filter){
+    var key = src + '|' + filter;
+    if(browserMenuIconCache[key]) return browserMenuIconCache[key];
+    browserMenuIconCache[key] = new Promise(function(resolve){
+      var img = new Image();
+      img.onload = function(){
+        try {
+          var canvas = document.createElement('canvas');
+          canvas.width = 32; canvas.height = 32;
+          var ctx = canvas.getContext('2d');
+          ctx.filter = filter;
+          ctx.drawImage(img, 0, 0, 32, 32);
+          resolve(canvas.toDataURL('image/png'));
+        } catch(_iconError) { resolve(''); }
+      };
+      img.onerror = function(){ resolve(''); };
+      img.src = src;
+    });
+    return browserMenuIconCache[key];
   }
 
   function shouldRestoreLocalBrowser(){
@@ -5974,15 +6115,12 @@
       event.stopImmediatePropagation();
       setBrowserSidebarOpen(false);
     }, true);
-    // Picking a bot or conversation from the drawer is a destination choice:
-    // collapse the drawer so the chosen chat is immediately visible. Row
-    // tools (hide, dismiss, context-menu actions) keep the drawer open.
-    var drawer = el('.chat-sidebar');
-    if(drawer) drawer.addEventListener('click', function(e){
-      if(!document.body.classList.contains('browser-sidebar-open')) return;
-      var pick = e.target.closest('.chat-recent-row, .chat-starter-bot');
-      if(!pick || pick.classList.contains('chat-row-hidden')) return;
-      if(e.target.closest('.chat-row-hide, .chat-starter-bot-dismiss, [data-sidebar-action]')) return;
+    // Picking a chat keeps the drawer open, so you can flick between bots;
+    // the chat opens beside it. The button, Esc, or a click outside (which
+    // is swallowed, never landing on a tab) closes it.
+    document.addEventListener('keydown', function(event){
+      if(event.key !== 'Escape' || !document.body.classList.contains('browser-sidebar-open')) return;
+      if(event.target && event.target.closest && event.target.closest('input, textarea, [contenteditable="true"]')) return;
       setBrowserSidebarOpen(false);
     });
     renderLocalBrowser();
@@ -10056,7 +10194,9 @@
     return api('/api/onboarding/chat', {method:'POST', body:{}}).then(function(res){
       if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not start onboarding.');
       miaOnboardingChat = res.data;
-      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1){
+      // A bot-owned browser tab in front keeps that bot's chat in the panel.
+      var followingBot = String(browserFollowKey || '').indexOf('|bot:') !== -1;
+      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1 && !followingBot){
         loadChatRoom(res.data.conversationId, 'agent', 'Mia');
       } else if(chatWs.activeRoomId === res.data.conversationId){
         renderChatThread();
@@ -10333,12 +10473,28 @@
 
   /* Switching rooms loads the durable native event history before opening the
      realtime subscription. */
+  // Each chat keeps its own unsent text, so a draft written for one bot never
+  // shows up (or gets sent) in another bot's chat.
+  var chatTextDrafts = {};
+  function swapChatDraft(fromRoomId, toRoomId){
+    var input = el('#ccInput');
+    if(!input || fromRoomId === toRoomId) return;
+    if(fromRoomId){
+      if(input.value) chatTextDrafts[fromRoomId] = input.value;
+      else delete chatTextDrafts[fromRoomId];
+    }
+    var next = (toRoomId && chatTextDrafts[toRoomId]) || '';
+    if(input.value === next) return;
+    input.value = next;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
   function loadChatRoom(roomId, kind, label){
     setLocalChatTypingActivity(false);
     closeMentionPopover();
     chatRoster.open = null;
     clearChatAttention(roomId);
     if(chatWs.native && chatWs.nativeSocketConversationId !== roomId) closeNativeChatSocket();
+    swapChatDraft(chatWs.activeRoomId, roomId);
     chatWs.activeRoomId = roomId;
     chatWs.activeKind = kind;
     chatWs.activeLabel = label;
@@ -13047,6 +13203,7 @@
     return '<div class="conversation-header-actions" role="group" aria-label="Conversation actions">' +
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShareConversation" title="Copy conversation ID" aria-label="Copy conversation ID"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v13"></path><path d="m16 6-4-4-4 4"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path></svg></button>' +
       '<button type="button" class="ch-icon-btn conversation-action-btn' + (pinned ? ' active' : '') + '" id="chatBookmarkConversation" title="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-label="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-pressed="' + (pinned ? 'true' : 'false') + '"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg></button>' +
+      (activeBotTabsAvailable(activeConversation) ? '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShowBotTabsBtn" title="Show this bot\'s tabs" aria-label="Show this bot\'s tabs in the browser"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg></button>' : '') +
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatHistoryBtn" title="History" aria-label="Open conversation history"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></button>' +
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="' + esc(freshTitle) + '" aria-label="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '') + '><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button>' +
     '</div>';
@@ -13093,7 +13250,38 @@
     return request.promise;
   }
 
+  // "Show this bot's tabs" jumps the browser to the tab the bot worked in
+  // most recently, so you can watch it without hunting through the strip.
+  function activeBotTabsAvailable(conversation){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    return !!(browser && browser.command && conversation && conversation.type === 'bot' && conversation.metadata && conversation.metadata.botId);
+  }
+  function botBrowserTab(state, botId){
+    if(!state || !botId) return null;
+    var owned = {};
+    (state.groups || []).forEach(function(g){ if(String(g.botId) === String(botId)) owned[g.id] = true; });
+    var tabs = (state.tabs || []).filter(function(t){ return owned[t.groupId]; });
+    var worked = function(t){ return t.botWorkAt && String(t.botWorkAt.botId) === String(botId) ? t.botWorkAt.at : 0; };
+    var working = tabs.filter(function(t){ return t.botActivity && String(t.botActivity.botId) === String(botId); });
+    var pick = (working.length ? working : tabs).slice().sort(function(a, b){ return worked(b) - worked(a); })[0];
+    return pick || null;
+  }
+  function showActiveBotTabs(){
+    var conversation = (chatWs.nativeConversations || []).filter(function(c){ return c.id === chatWs.activeRoomId; })[0];
+    var botId = conversation && conversation.metadata && conversation.metadata.botId;
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!botId || !browser) return;
+    browser.command({ action: 'state' }).then(function(state){
+      var tab = botBrowserTab(state, botId);
+      if(!tab){ showToast('This bot has no browser tabs yet.'); return; }
+      if(!localBrowserState.open) openWebBrowserTool();
+      return browser.command({ action: 'select', id: tab.id });
+    }).catch(function(){ showToast('Could not reach the browser.'); });
+  }
+
   function wireConversationHeaderActions(header){
+    var showTabs = el('#chatShowBotTabsBtn', header);
+    if(showTabs) showTabs.addEventListener('click', showActiveBotTabs);
     var share = el('#chatShareConversation', header);
     var bookmark = el('#chatBookmarkConversation', header);
     var history = el('#chatHistoryBtn', header);

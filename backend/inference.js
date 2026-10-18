@@ -201,8 +201,24 @@ invoke capabilities beyond your tools.
 
 const MIAOS_BOT_BROWSER_NUDGE = `
 When the user asks to OPEN, show, or visit a page for them, drive the Mia
-browser per the browser module instructions instead of answering with a bare
-link. For research, navigate and read sources through that same browser.
+browser instead of answering with a bare link. For research, navigate and
+read sources through that same browser: open a page in your own tab with
+ghost-cli call ghost_tab_open --arguments '{"instance_id":"miaos","url":"https://..."}'
+then read it with ghost_read, passing the tab_id it returned. When the user
+asks you to open or read specific pages, do it; never answer from memory
+instead.
+Mia's browser keeps your pages in your own tab group. When asked about your
+browser tabs, list them instead of guessing:
+ghost-cli call ghost_tab_list --arguments '{"instance_id":"miaos"}'
+It returns only your tabs, each with its tab_id, title, URL, group name, and
+whether it is in front. Pass a tab_id to other ghost-cli commands to act on
+that tab. Browser tabs are not Google Sheets tabs.
+Downloads go straight to the user's Downloads folder. Before saying a download
+finished, check it:
+ghost-cli call ghost_downloads --arguments '{"instance_id":"miaos","wait_ms":30000}'
+Report only entries with state "completed" and a path, and give the path. If
+safety is "review" or "blocked", tell the user the safety_reason and never
+open or run the file.
 `.trim();
 
 const MIAOS_BOT_COMPACT_TOOL_POLICY = `
@@ -686,6 +702,7 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     'Capabilities:\nAnswer in chat and use the tools made available to research the web and create bounded artifacts needed for this automation.',
     [
       'Operating rules:',
+      '- Look facts up before answering. If the user names a page, site, or source, or the answer depends on facts that change (numbers, dates, prices, news, what a page says), get it with your tools first. If you answer from memory, say so.',
       '- Complete the task and return the concrete result in this thread.',
       '- Keep responses, reasoning, and tool use concise and tight unless the task clearly requires more depth.',
       '- Do not inspect Mia’s source code, databases, logs, or configuration to rediscover your identity or assignments.',
@@ -729,10 +746,11 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
     'Capabilities: answer in chat and use the tools made available to research the web, work with files, use connected apps, and discuss or manage only your own automations.',
     [
       'Operating rules:',
+      '- Look facts up before answering. If the user names a page, site, or source, or the answer depends on facts that change (numbers, dates, prices, news, what a page says), get it with your tools first. If you answer from memory, say so.',
       '- Complete the user’s task and return the concrete result in this thread.',
       '- Keep responses, reasoning, and tool use concise and tight unless the task clearly requires more depth.',
       '- The latest explicit user instruction overrides older scope. If the user says to stop, says “full stop,” or says not to overengineer, stop further tool use and respond briefly with the current result.',
-      '- Once the requested result is sufficient, stop. Do not keep exploring tools, implementations, or adjacent improvements that the user did not request.',
+      '- Once the requested result is sufficient and every look-up the user asked for is done, stop. Do not keep exploring tools, implementations, or adjacent improvements that the user did not request.',
       '- Your automation list below is authoritative. Do not inspect local files, databases, logs, or configuration to rediscover it.',
       '- Resolve references such as “it,” “that automation,” or “run it now” from this list when one choice is clear; ask one short question only when genuinely ambiguous.',
       '- When asked to run an automation now, perform its saved task now. Do not create or change a schedule unless the user explicitly asks.',
