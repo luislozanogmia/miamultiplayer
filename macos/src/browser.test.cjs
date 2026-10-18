@@ -16,7 +16,9 @@ function harness(options = {}) {
   const menuTemplates = [];
   const dialogCalls = [];
   const dialogResponse = { value: 0 };
+  const botRunning = { value: true };
   const shown = [];
+  const opened = [];
   const profile = new EventEmitter();
   profile.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Mia/0.2.7 Chrome/132.0.0.0 Electron/44.2.0 Safari/537.36";
   profile.getUserAgent = () => profile.userAgent;
@@ -54,6 +56,8 @@ function harness(options = {}) {
     getURL() { return this.shownUrl || ""; }
     isLoading() { return false; }
     isDestroyed() { return this.closed; }
+    insertCSS(css) { this.insertedCSS = (this.insertedCSS || 0) + 1; this.lastCSS = css; return Promise.resolve(`css-${this.insertedCSS}`); }
+    removeInsertedCSS() { return Promise.resolve(); }
     close() { this.closed = true; }
     removeListener(...args) {
       if (this.closed) throw new Error("Object has been destroyed");
@@ -64,6 +68,7 @@ function harness(options = {}) {
     stop() { this.stopped = true; }
     focus() { this.focusCalls = (this.focusCalls || 0) + 1; }
     insertText(text) { this.insertedText = text; }
+    capturePage() { return Promise.resolve({ isEmpty: () => false, toJPEG: () => Buffer.from("jpg") }); }
     sendInputEvent(event) { this.inputEvents = [...(this.inputEvents || []), event]; }
     executeJavaScript(script) {
       this.scripts.push(script);
@@ -81,6 +86,7 @@ function harness(options = {}) {
       if (script.includes("text_length")) {
         return Promise.resolve({ text: "Example page", text_length: 12, text_truncated: false });
       }
+      if (script.includes("miaBrowserAgents.isRunning(")) return Promise.resolve(botRunning.value);
       if (script.startsWith("Boolean(")) return Promise.resolve(true);
       if (script.includes('if ("click"')) return Promise.resolve({ clicked: true, tag: "a", text: "Example" });
       if (script.includes('if ("fill"')) return Promise.resolve({ filled: true, tag: "input", value: "hello" });
@@ -112,9 +118,13 @@ function harness(options = {}) {
     ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
     Menu: { buildFromTemplate: template => { menuTemplates.push(template); return { popup() {} }; } },
     nativeTheme: { themeSource: "light" },
+    nativeImage: { createEmpty: () => {
+      const reps = [];
+      return { reps, addRepresentation: rep => reps.push(rep), isEmpty: () => !reps.length };
+    } },
     dialog: { showMessageBox: (...args) => { dialogCalls.push(args); return Promise.resolve({ response: dialogResponse.value }); } },
     systemPreferences: { askForMediaAccess: async () => true },
-    shell: { showItemInFolder: target => { shown.push(target); } },
+    shell: { showItemInFolder: target => { shown.push(target); }, openPath: target => { opened.push(target); return Promise.resolve(""); } },
   };
   const context = {
     require: request => request === "electron" ? electron : require(request),
@@ -126,7 +136,7 @@ function harness(options = {}) {
   const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, ...options });
   const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   const command = (action, extra = {}, event = sender) => handlers.get("miaos-browser-command")(event, { action, ...extra });
-  return { command, window, views, sender, profile, handlers, shown, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, menuTemplates };
+  return { command, window, views, sender, profile, handlers, shown, opened, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, botRunning, menuTemplates };
 }
 
 test("search, domain ports, loopback and prohibited schemes", () => {
@@ -196,6 +206,23 @@ test("new creates one tab; switching and hiding preserve loaded pages", () => {
   assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
   h.views[0].webContents.emit("media-started-playing");
   assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
+});
+
+test("a menu over a page still hides the view without pausing its media", async () => {
+  const h = harness();
+  h.command("new");
+  h.command("navigate", { value: "https://example.com/video" });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  assert.equal(h.views[0].visible, true);
+  const snapshot = await h.command("snapshot");
+  assert.equal(snapshot.dataUrl, `data:image/jpeg;base64,${Buffer.from("jpg").toString("base64")}`);
+  const scripts = h.views[0].webContents.scripts.length;
+  h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  assert.equal(h.views[0].visible, false);
+  assert.equal(h.views[0].webContents.scripts.length, scripts, "no pause script runs for a menu");
+  assert.match((await h.command("snapshot")).error, /No page/, "nothing to capture while the view is hidden");
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
+  assert.equal(h.views[0].visible, true);
 });
 
 test("tab favicon is refetched as a data: URI and clears on navigation", async () => {
@@ -713,7 +740,7 @@ test("a link that becomes a download is not shown as a load error", async () => 
   blank.window.emit("closed");
 });
 
-test("downloads are listed, persisted, shown in Finder, cancelled and cleared", () => {
+test("downloads are listed, persisted, shown in Finder, cancelled and cleared", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-downloads-"));
   try {
     const statePath = path.join(directory, "browser.json");
@@ -731,13 +758,19 @@ test("downloads are listed, persisted, shown in Finder, cancelled and cleared", 
     h.profile.emit("will-download", {}, done, wc);
     assert.equal(h.command("state").downloads[0].state, "progressing");
     done.emit("done", {}, "completed");
+    await new Promise(setImmediate);
     let [entry] = h.command("state").downloads;
     assert.equal(entry.state, "completed");
+    assert.equal(entry.safety.verdict, "review", "an .xlsx that isn't a real spreadsheet is flagged");
     assert.equal(entry.exists, true);
     assert.equal(entry.path, saved);
 
     h.command("downloadShow", { id: entry.id });
     assert.deepEqual(h.shown, [saved]);
+    h.command("downloadOpen", { id: entry.id });
+    await new Promise(setImmediate);
+    assert.match(h.dialogCalls.at(-1)[1].detail, /don't look like a \.xlsx/);
+    assert.deepEqual(h.opened, [saved]);
 
     const running = item("https://files.example/big.zip", "big.zip", path.join(directory, "big.zip"));
     h.profile.emit("will-download", {}, running, wc);
@@ -755,6 +788,13 @@ test("downloads are listed, persisted, shown in Finder, cancelled and cleared", 
     assert.equal(downloads[1].exists, false);
     assert.match(reopened.command("downloadShow", { id: downloads[1].id }).error, /moved or deleted/);
     assert.deepEqual(reopened.shown, []);
+    assert.match(reopened.command("downloadOpen", { id: downloads[1].id }).error, /moved or deleted/);
+    assert.deepEqual(reopened.opened, []);
+
+    // Removing one entry keeps the others and the file on disk.
+    reopened.command("downloadRemove", { id: downloads[0].id });
+    assert.equal(JSON.stringify(reopened.command("state").downloads.map(d => d.filename)), '["report.xlsx"]');
+    assert.equal(JSON.stringify(harness({ statePath }).command("state").downloads.map(d => d.filename)), '["report.xlsx"]');
 
     // Clearing the list removes entries but never touches files.
     fs.writeFileSync(saved, "x");
@@ -1053,7 +1093,7 @@ test("tab groups survive a restart; version 2 state still loads", () => {
 
     const restored = harness({ statePath });
     let state = restored.command("state");
-    assert.deepEqual(plain(state.groups), [{ id: groupId, name: "Testing group", color: "green", collapsed: true }]);
+    assert.deepEqual(plain(state.groups), [{ id: groupId, name: "Testing group", color: "green", collapsed: true, botId: null }]);
     assert.equal(state.tabs.find(t => t.id === b).groupId, groupId);
     assert.notEqual(state.activeId, b, "a collapsed group's tab does not reopen in front");
     restored.command("groupCreate", { id: state.tabs[0].id });
@@ -1067,6 +1107,341 @@ test("tab groups survive a restart; version 2 state still loads", () => {
     assert.deepEqual(plain(state.groups), []);
     assert.equal(state.tabs[0].groupId, null);
     legacy.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("bot tab groups: a bot's pages land in its own group, never the user's tab", async () => {
+  const sessions = { "s-scout": { botId: "bot-scout", name: "Scout" }, "s-pat": { botId: "bot-pat", name: "Pat" } };
+  const resolved = [];
+  const h = harness({ resolveActor: async sessionId => { resolved.push(sessionId); return sessions[sessionId] || null; } });
+  const mine = h.command("new").activeId;
+  h.command("navigate", { value: "https://example.com" });
+
+  // Mia's own session (unknown to the lookup) keeps acting on the tab in front.
+  const miaNav = await h.controller.protocol("navigate", { url: "example.org", actor_session: "s-mia" });
+  assert.equal(miaNav.tab_id, mine);
+
+  // A bot navigating with no tab of its own opens one in a group named after it.
+  const scoutNav = await h.controller.protocol("navigate", { url: "example.net", actor_session: "s-scout" });
+  assert.notEqual(scoutNav.tab_id, mine);
+  let state = h.command("state");
+  const scoutGroup = state.groups.find(g => g.botId === "bot-scout");
+  assert.equal(scoutGroup.name, "Scout");
+  assert.equal(state.tabs.find(t => t.id === scoutNav.tab_id).groupId, scoutGroup.id);
+  assert.equal(state.tabs.find(t => t.id === mine).groupId, null);
+
+  // With the user back on their tab, the bot keeps working in its own tab.
+  h.command("select", { id: mine });
+  const scoutRead = await h.controller.protocol("navigate", { url: "example.edu", actor_session: "s-scout" });
+  assert.equal(scoutRead.tab_id, scoutNav.tab_id);
+  assert.equal(h.command("state").activeId, mine, "a bot's navigation does not take the tab in front");
+
+  // tab_open joins the existing group; a second bot gets a separate group.
+  const scoutTab = await h.controller.protocol("tab_open", { url: "example.com", actor_session: "s-scout", wait: "none" });
+  const patTab = await h.controller.protocol("tab_open", { url: "example.com", actor_session: "s-pat", wait: "none" });
+  state = h.command("state");
+  assert.equal(state.tabs.find(t => t.id === scoutTab.tab_id).groupId, scoutGroup.id);
+  const patGroup = state.groups.find(g => g.botId === "bot-pat");
+  assert.equal(patGroup.name, "Pat");
+  assert.equal(state.tabs.find(t => t.id === patTab.tab_id).groupId, patGroup.id);
+  assert.equal(state.groups.length, 2);
+  assert.ok(resolved.every(id => !id.includes("actor")), "only the session id reaches the lookup");
+});
+
+test("bot downloads save straight to Downloads, get checked, and are reported only once on disk", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-bot-downloads-"));
+  try {
+    const sessions = { "s-scout": { botId: "bot-scout", name: "Scout" }, "s-pat": { botId: "bot-pat", name: "Pat" } };
+    const h = harness({ resolveActor: async sessionId => sessions[sessionId] || null, downloadsDir: directory });
+    h.command("new");
+    await h.controller.protocol("tab_open", { url: "example.net", actor_session: "s-scout", wait: "none" });
+    const wc = h.views.at(-1).webContents;
+    fs.writeFileSync(path.join(directory, "report.pdf"), "older file");
+    const item = Object.assign(new EventEmitter(), {
+      savePath: "", getURL: () => "https://files.example/report.pdf", getFilename: () => "report.pdf",
+      setSavePath(value) { this.savePath = value; }, getSavePath() { return this.savePath; },
+      getTotalBytes: () => 9, getReceivedBytes: () => 9,
+    });
+    h.profile.emit("will-download", {}, item, wc);
+    assert.equal(item.savePath, path.join(directory, "report (1).pdf"), "no Save dialog, and no overwrite");
+    let report = await h.controller.protocol("downloads", { actor_session: "s-scout" });
+    assert.equal(report.downloads[0].state, "progressing");
+    assert.equal(report.downloads[0].path, "", "nothing is reported as saved before it is");
+
+    fs.writeFileSync(item.savePath, "%PDF-1.7");
+    item.emit("done", {}, "completed");
+    report = await h.controller.protocol("downloads", { actor_session: "s-scout", wait_ms: 2000 });
+    assert.deepEqual(plain(report.downloads.map(d => [d.filename, d.state, d.path, d.safety, d.started_by])),
+      [["report.pdf", "completed", item.savePath, "safe", "Scout"]]);
+    assert.equal((await h.controller.protocol("downloads", { actor_session: "s-pat" })).downloads.length, 0, "a bot sees only its own downloads");
+    assert.equal((await h.controller.protocol("downloads", {})).downloads.length, 1, "Mia sees every bot's downloads");
+
+    fs.rmSync(item.savePath);
+    report = await h.controller.protocol("downloads", { actor_session: "s-scout" });
+    assert.equal(report.downloads[0].state, "missing");
+    h.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("bot tab groups: a bot lists and manages only its own tabs", async () => {
+  const sessions = { "s-scout": { botId: "bot-scout", name: "Scout" }, "s-pat": { botId: "bot-pat", name: "Pat" } };
+  const h = harness({ resolveActor: async sessionId => sessions[sessionId] || null });
+  const mine = h.command("new").activeId;
+  h.command("navigate", { value: "https://example.com" });
+  const scoutA = await h.controller.protocol("tab_open", { url: "example.net", actor_session: "s-scout", wait: "none" });
+  const scoutB = await h.controller.protocol("tab_open", { url: "example.org", actor_session: "s-scout", wait: "none" });
+  const pat = await h.controller.protocol("tab_open", { url: "example.edu", actor_session: "s-pat", wait: "none" });
+
+  const scoutList = await h.controller.protocol("tab_list", { actor_session: "s-scout" });
+  assert.deepEqual(plain(scoutList.tabs.map(t => t.tab_id).sort()), [scoutA.tab_id, scoutB.tab_id].sort());
+  assert.ok(scoutList.tabs.every(t => t.group === "Scout"));
+  const scoutStatus = await h.controller.protocol("status", { actor_session: "s-scout" });
+  assert.equal(scoutStatus.your_tabs, 2);
+
+  // Mia (no bot) still sees every tab.
+  const all = await h.controller.protocol("tab_list", { actor_session: "s-mia" });
+  assert.equal(all.tabs.length, 4);
+  assert.equal(all.tabs.find(t => t.tab_id === mine).group, null);
+
+  await assert.rejects(h.controller.protocol("tab_close", { tab_id: mine, actor_session: "s-scout" }), /not one of your tabs/);
+  await assert.rejects(h.controller.protocol("tab_switch", { tab_id: pat.tab_id, actor_session: "s-scout" }), /not one of your tabs/);
+  await h.controller.protocol("tab_switch", { tab_id: scoutB.tab_id, actor_session: "s-scout" });
+  assert.equal(h.command("state").activeId, scoutB.tab_id);
+});
+
+test("bot tab groups: bots work at the same time without taking the user's tab or each other's", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "A" }, "s-b": { botId: "bot-b", name: "B" }, "s-c": { botId: "bot-c", name: "C" } };
+  const h = harness({ resolveActor: async id => sessions[id] || null });
+  const mine = h.command("new").activeId;
+  h.command("navigate", { value: "https://example.com" });
+
+  // Two bots open pages at once; the user's tab stays in front.
+  const [a, b] = await Promise.all([
+    h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" }),
+    h.controller.protocol("navigate", { url: "b.example", actor_session: "s-b", wait: "none" }),
+  ]);
+  let state = h.command("state");
+  assert.equal(state.activeId, mine);
+  assert.notEqual(state.tabs.find(t => t.id === a.tab_id).groupId, state.tabs.find(t => t.id === b.tab_id).groupId);
+
+  // Neither bot can drive the other's tab.
+  await assert.rejects(h.controller.protocol("navigate", { url: "x.example", tab_id: b.tab_id, actor_session: "s-a", wait: "none" }), /belongs to another bot/);
+  await assert.rejects(h.controller.protocol("read", { tab_id: a.tab_id, actor_session: "s-b" }), /belongs to another bot/);
+
+  // A bot with no tab of its own may not act on another bot's tab in front.
+  h.command("select", { id: a.tab_id });
+  await assert.rejects(h.controller.protocol("eval", { script: "() => 1", actor_session: "s-c" }), /belongs to another bot/);
+
+  // Screenshots and keys borrow the front for one action, then give it back.
+  h.command("select", { id: mine });
+  await Promise.all([
+    h.controller.protocol("screenshot", { actor_session: "s-a" }).catch(() => {}),
+    h.controller.protocol("key", { key: "Tab", actor_session: "s-b" }).catch(() => {}),
+  ]);
+  assert.equal(h.command("state").activeId, mine);
+});
+
+test("bot tab groups: the state marks a tab while its bot is working", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: async id => sessions[id] || null });
+  const mine = h.command("new").activeId;
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const state = h.command("state");
+  assert.deepEqual(plain(state.tabs.find(t => t.id === opened.tab_id).botActivity), { botId: "bot-a", name: "Scout" });
+  assert.equal(state.tabs.find(t => t.id === mine).botActivity, null);
+  // Mia's own commands mark the tab under her name, the same way.
+  await h.controller.protocol("navigate", { url: "b.example", actor_session: "s-mia", wait: "none" });
+  assert.deepEqual(plain(h.command("state").tabs.find(t => t.id === mine).botActivity), { botId: "mia", name: "Mia" });
+});
+
+test("bot tab groups: the golden glow stays through a reply and comes back after a page load", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: async id => sessions[id] || null });
+  const mine = h.command("new").activeId;
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const botPage = h.views[h.views.length - 1].webContents;
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await flush();
+  assert.equal(botPage.insertedCSS, 1, "the bot's page glows while it works");
+
+  // A navigation drops inserted styles; the glow goes back on.
+  botPage.emit("dom-ready");
+  await flush();
+  assert.equal(botPage.insertedCSS, 2);
+
+  // The tab strip holds the bot's tab; the user's own tab never glows.
+  await h.command("botHeld", { ids: [opened.tab_id, mine] });
+  await flush();
+  const userPage = h.views.find(v => v.webContents !== botPage).webContents;
+  assert.ok(!userPage.insertedCSS, "the user's tab is never lit");
+});
+
+test("bot tab groups: the glow is gold for Mia and the bot's own color for a bot", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: async id => sessions[id] || null });
+  h.command("new");
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await h.command("botColors", { hues: { "bot-a": 200 } });
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const botPage = h.views[h.views.length - 1].webContents;
+  await flush();
+  assert.match(botPage.lastCSS, /hsla\(200,/);
+  assert.doesNotMatch(botPage.lastCSS, /0 0 0 2px/, "no solid frame line, only the glow");
+
+  // Mia's command lights the page in front with gold the moment it starts.
+  const userPage = h.views.find(v => v.webContents !== botPage).webContents;
+  await h.controller.protocol("read", { actor_session: "s-mia" });
+  await flush();
+  assert.match(userPage.lastCSS, /hsla\(41,/);
+  assert.ok(opened.tab_id);
+});
+
+test("bot tab groups: a bot working in the background never takes the user's focus", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: async id => sessions[id] || null });
+  h.command("new");
+  const app = h.window.webContents;
+  app.emit("focus"); // The user is typing in chat.
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const botView = h.views.find(v => h.command("state").tabs.find(t => t.id === opened.tab_id) && v === h.views[h.views.length - 1]);
+  const before = app.focusCalls || 0;
+  botView.webContents.emit("focus"); // The page focused its search box while loading.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls, before + 1, "focus goes back to the app");
+
+  // A key press borrows the front and still returns focus afterwards.
+  const beforeKey = app.focusCalls;
+  await h.controller.protocol("key", { key: "Tab", actor_session: "s-a" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls, beforeKey + 1);
+});
+
+test("bot tab groups: a failing lookup falls back to the tab in front", async () => {
+  const h = harness({ resolveActor: async () => { throw new Error("backend down"); } });
+  const mine = h.command("new").activeId;
+  const result = await h.controller.protocol("navigate", { url: "example.org", actor_session: "s-scout" });
+  assert.equal(result.tab_id, mine);
+  assert.deepEqual(plain(h.command("state").groups), []);
+});
+
+test("the » menu brings a group the strip had no room for back to the front", () => {
+  const h = harness();
+  const mine = h.command("new").activeId;
+  const hidden = h.command("new").activeId;
+  h.command("groupCreate", { id: hidden });
+  const groupId = h.command("state").groups[0].id;
+  h.command("groupUpdate", { groupId, name: "Finance" });
+  h.command("select", { id: mine });
+  h.command("groupOverflowMenu", { groupIds: [groupId, "not-a-group"] });
+  const menu = h.menuTemplates.at(-1);
+  assert.deepEqual(plain(menu.map(item => item.label)), ["Finance (1 tab)"]);
+  menu[0].click();
+  assert.equal(h.command("state").activeId, hidden);
+  h.window.emit("closed");
+});
+
+test("closing a grouped tab lands on the next tab in the same group", () => {
+  const h = harness();
+  const mine = h.command("new").activeId;
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  h.command("groupCreate", { id: first });
+  const groupId = h.command("state").groups[0].id;
+  h.command("move", { id: second, index: 1, groupId });
+  const after = h.command("new").activeId;
+  h.command("select", { id: first });
+  h.command("close", { id: first });
+  assert.equal(h.command("state").activeId, second, "stays in the bot's group");
+  h.command("close", { id: second });
+  assert.equal(h.command("state").activeId, after, "an emptied group hands off to its right-hand neighbor");
+  assert.ok(mine);
+  h.window.emit("closed");
+});
+
+test("bot tab groups: switching away from a working bot asks, then stops it", async () => {
+  const h = harness();
+  const a = h.command("new").activeId; h.command("navigate", { value: "https://example.com" });
+  h.command("groupCreate", { id: a });
+  const groupId = h.command("state").groups[0].id;
+  h.command("groupAssignBot", { groupId, bot: { botId: "bot-news", name: "News" } });
+  const bots = [{ botId: "bot-news", name: "News" }, { botId: "bot-mail", name: "Mail" }];
+  const stops = () => h.window.webContents.sent.filter(item => item.channel === "miaos-browser-group-bot");
+
+  h.dialogResponse.value = 1;
+  h.command("groupBotMenu", { groupId, bots, busy: { botId: "bot-news", name: "News" } });
+  h.menuTemplates.at(-1).find(item => item.label === "Mail").click();
+  await new Promise(setImmediate);
+  assert.equal(h.dialogCalls.at(-1)[1].message, "News is still working in this group.");
+  assert.equal(h.command("state").groups[0].botId, "bot-news", "Cancel keeps the working bot");
+  assert.equal(stops().length, 0);
+
+  h.dialogResponse.value = 0;
+  h.command("groupBotMenu", { groupId, bots, busy: { botId: "bot-news", name: "News" } });
+  h.menuTemplates.at(-1).find(item => item.label === "Mail").click();
+  await new Promise(setImmediate);
+  assert.equal(h.command("state").groups[0].botId, "bot-mail");
+  assert.deepEqual(plain(stops().map(item => item.payload)), [{ action: "stop", botId: "bot-news" }]);
+
+  // The bot finished while the menu was open: no question, just the swap.
+  let asked = h.dialogCalls.length;
+  h.botRunning.value = false;
+  h.command("groupBotMenu", { groupId, bots, busy: { botId: "bot-mail", name: "Mail" } });
+  h.menuTemplates.at(-1).find(item => item.label === "News").click();
+  await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.equal(h.dialogCalls.length, asked, "a bot that already finished is swapped without asking");
+  assert.equal(h.command("state").groups[0].botId, "bot-news");
+  assert.equal(stops().length, 1, "nothing is stopped");
+  h.botRunning.value = true;
+  h.command("groupAssignBot", { groupId, bot: { botId: "bot-mail", name: "Mail" } });
+
+  asked = h.dialogCalls.length;
+  h.command("groupBotMenu", { groupId, bots });
+  h.menuTemplates.at(-1).find(item => item.label === "News").click();
+  await new Promise(setImmediate);
+  assert.equal(h.dialogCalls.length, asked, "an idle bot is swapped without asking");
+  assert.equal(h.command("state").groups[0].botId, "bot-news");
+
+  h.command("groupMenu", { groupId });
+  h.menuTemplates.at(-1).find(item => item.label === "Change Bot…").click();
+  assert.deepEqual(plain(stops().at(-1).payload), { action: "choose", groupId });
+  h.window.emit("closed");
+});
+
+test("bot tab groups: the owner menu assigns a bot and survives a restart", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-bot-groups-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    const first = harness({ statePath });
+    const a = first.command("new").activeId; first.command("navigate", { value: "https://example.com" });
+    first.command("groupCreate", { id: a });
+    const groupId = first.command("state").groups[0].id;
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    first.command("groupBotMenu", { groupId, miaIcon: png,
+      bots: [{ botId: "bot-scout", name: "Scout", icon: png }, { botId: "bot-pat", name: "Pat", icon: "javascript:alert(1)" }] });
+    const menu = first.menuTemplates.at(-1);
+    assert.equal(menu[0].icon.reps[0].scaleFactor, 2, "Mia's mark is shown at Retina scale");
+    assert.equal(menu.find(item => item.label === "Scout").icon.reps[0].dataURL, png);
+    assert.equal(menu.find(item => item.label === "Pat").icon, undefined, "only PNG data URLs become icons");
+    assert.deepEqual(plain(menu.filter(item => item.label).map(item => [item.label, item.checked])),
+      [["Mia (no bot)", true], ["Scout", false], ["Pat", false]]);
+    menu.find(item => item.label === "Scout").click();
+    await new Promise(setImmediate);
+    let state = first.command("state");
+    assert.equal(state.groups[0].botId, "bot-scout");
+    assert.equal(state.groups[0].name, "Scout", "an unnamed group takes the bot's name");
+    first.command("groupAssignBot", { groupId, bot: { botId: "../not an id", name: "x" } });
+    assert.equal(first.command("state").groups[0].botId, null, "malformed bot ids are refused");
+    first.command("groupAssignBot", { groupId, bot: { botId: "bot-scout", name: "Scout" } });
+    first.window.emit("closed");
+
+    const restored = harness({ statePath });
+    state = restored.command("state");
+    assert.equal(state.groups[0].botId, "bot-scout");
+    restored.window.emit("closed");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

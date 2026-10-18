@@ -1943,6 +1943,7 @@ function createWindow() {
     {
       statePath: path.join(app.getPath("userData"), "miaos-browser-state.json"),
       workspaceRoot: miaosWorkspacePath(),
+      resolveActor: sessionId => resolveBrowserActor(window, sessionId),
     },
   );
   const windowNativeBrowser = nativeBrowser;
@@ -2059,6 +2060,40 @@ async function loadMiaOS() {
     try { await mainWindow.loadFile(RENDERER_ENTRYPOINT); } catch (_) { /* window is closing */ }
     return false;
   }
+}
+
+// Hermes session id -> { actor, at }. A bot's browser calls arrive in bursts
+// from one session, so a short cache keeps each call off the backend.
+const browserActorCache = new Map();
+const BROWSER_ACTOR_TTL_MS = 60_000;
+
+// Asks the backend which bot a Ghost request's Hermes session belongs to,
+// through the signed-in app session. Any failure means "not a bot".
+async function resolveBrowserActor(window, sessionId) {
+  const cached = browserActorCache.get(sessionId);
+  if (cached && Date.now() - cached.at < BROWSER_ACTOR_TTL_MS) return cached.actor;
+  if (!backendUrl || !window || window.isDestroyed()) return null;
+  let actor = null;
+  try {
+    const url = new URL("/api/browser/actor", backendUrl);
+    url.searchParams.set("session", sessionId);
+    const response = await window.webContents.session.fetch(url.href, {
+      credentials: "include",
+      redirect: "error",
+      headers: { Origin: new URL(backendUrl).origin },
+      signal: AbortSignal.timeout(3000),
+    });
+    const body = response.ok ? await response.json() : null;
+    const found = body && body.actor;
+    if (found && typeof found.botId === "string" && found.botId) {
+      actor = { botId: found.botId, name: typeof found.name === "string" ? found.name : "" };
+    }
+  } catch (_) {
+    return null;
+  }
+  if (browserActorCache.size > 200) browserActorCache.clear();
+  browserActorCache.set(sessionId, { actor, at: Date.now() });
+  return actor;
 }
 
 async function startGhostBridge() {

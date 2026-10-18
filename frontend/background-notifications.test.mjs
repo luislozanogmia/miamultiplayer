@@ -47,12 +47,15 @@ function harness({ activeRoomId = 'bot-a', focused = true, permission = 'granted
     chatWs: {
       activeRoomId,
       lastNotifiedAt: {},
+      tasks: [],
       nativeConversations: [
         { id: 'bot-a', type: 'agent', name: 'Researcher' },
         { id: 'bot-b', type: 'agent', name: 'Writer' },
       ],
     },
     chatAttentionRooms: attention,
+    chatTaskStopPending: {},
+    renderComposerTaskControl() {},
     saveChatAttention() {},
     renderChatSidebar() { sidebarRenders += 1; },
     chatAttentionLabel: (roomId) => ({ 'bot-a': 'Researcher', 'bot-b': 'Writer' })[roomId] || 'New message',
@@ -72,7 +75,7 @@ function harness({ activeRoomId = 'bot-a', focused = true, permission = 'granted
     'syncDesktopNotificationControl', 'requestDesktopNotifications', 'recordWatchedSidebarMessage',
     'isIncomingAttentionMessage', 'appInForeground', 'conversationNotificationLabel',
     'showDesktopNotification', 'notifyDesktopChatMessage', 'applyWatchedNativeEvent',
-    'notifyFinishedAutomationRuns',
+    'notifyFinishedAutomationRuns', 'nativeDispatchTask', 'syncNativeDispatchFromEvent',
   ]) load(context, name);
   return { context, shown, attention, rooms, toasts, stored, statusNode, sidebarRenders: () => sidebarRenders };
 }
@@ -285,4 +288,13 @@ test('the native switch turns off, and turning it on shows a confirmation', asyn
   assert.equal(statusNode.textContent, 'On');
   assert.equal(bridge.shown.at(-1).body, 'Desktop notifications are on.');
   assert.equal(toasts.at(-1), 'Desktop notifications are on.');
+});
+
+test('a bot replying in another chat ends its task there too', () => {
+  const { context } = harness({ activeRoomId: 'bot-a' });
+  const progress = { conversationId: 'bot-b', senderType: 'bot', senderId: 'writer', body: 'Working…', createdAt: '2026-10-17T22:07:00Z', metadata: { progress: true, dispatchId: 'dsp_1' } };
+  context.applyWatchedNativeEvent(progress);
+  assert.deepEqual(context.chatWs.tasks.map((task) => task.id), ['dsp_1'], 'progress in another chat counts as running');
+  context.applyWatchedNativeEvent({ ...finished('bot-b', 'done waiting.'), metadata: { dispatchId: 'dsp_1' } });
+  assert.equal(context.chatWs.tasks.length, 0, 'the reply clears the running task without opening that chat');
 });

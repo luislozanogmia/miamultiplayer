@@ -633,14 +633,20 @@
       </button>
     </form>
     <div class="local-browser-screen" id="localBrowserScreen">
-      <section class="local-browser-downloads" id="localBrowserDownloads" aria-label="Downloads" hidden>
+      <img class="local-browser-snapshot" id="localBrowserSnapshot" alt="" aria-hidden="true" hidden />
+      <section class="local-browser-downloads" id="localBrowserDownloads" role="dialog" aria-label="Downloads" hidden>
         <header class="local-browser-downloads-head">
           <h2>Downloads</h2>
-          <button type="button" class="local-browser-downloads-clear" id="localBrowserDownloadsClear">Clear list</button>
-          <button type="button" class="local-browser-btn" id="localBrowserDownloadsClose" title="Close downloads" aria-label="Close downloads">&times;</button>
+          <button type="button" class="local-browser-downloads-clear" id="localBrowserDownloadsClear" title="Clears the list. Your files stay where they are.">Clear all</button>
+          <button type="button" class="local-browser-downloads-icon-btn" id="localBrowserDownloadsClose" title="Close downloads" aria-label="Close downloads">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+          </button>
         </header>
-        <p class="local-browser-downloads-note">Clearing the list keeps your files.</p>
-        <ul class="local-browser-downloads-list" id="localBrowserDownloadsList"></ul>
+        <label class="local-browser-downloads-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+          <input type="search" id="localBrowserDownloadsSearch" placeholder="Search downloads" aria-label="Search downloads" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="local-browser-downloads-list" id="localBrowserDownloadsList"></div>
         <p class="local-browser-downloads-empty" id="localBrowserDownloadsEmpty">Files you download in Mia's browser appear here.</p>
       </section>
       <div class="local-browser-empty" id="localBrowserEmpty">

@@ -384,7 +384,7 @@ test('a bot\'s own chat keeps one Hermes session, so /goal works there', async (
       const text = String(request.params.text || '');
       setTimeout(() => {
         if (!goal) {
-          push('message.complete', { text: text.endsWith('first') ? 'First answer.' : 'Second answer.', status: 'complete' });
+          push('message.complete', { text: text.includes('answer this first') ? 'First answer.' : 'Second answer.', status: 'complete' });
           return;
         }
         push('message.complete', { text: 'Audited the evidence.', status: 'complete' });

@@ -30,7 +30,8 @@ test('conversation actions use one canonical Lucide icon grid', async () => {
   const actionEnd = source.indexOf('\n\n  function wireConversationHeaderActions', actionStart);
   const actions = source.slice(actionStart, actionEnd);
 
-  assert.equal((actions.match(/data-icon-set="lucide"/g) || []).length, 4);
+  assert.equal((actions.match(/data-icon-set="lucide"/g) || []).length, 5);
+  assert.match(actions, /<rect x="2" y="4" width="20" height="16" rx="2"><\/rect><path d="M10 4v4"><\/path>/); // App Window (bot chats only)
   assert.match(actions, /M12 2v13/); // Share
   assert.match(actions, /m19 21-7-4-7 4V5/); // Bookmark
   assert.match(actions, /M3 12a9 9 0 1 0 9-9/); // History
