@@ -144,8 +144,15 @@
         return item.host === best && item.display.toLowerCase().indexOf(bare) === 0;
       }).sort(function(a, b){ return a.display.length - b.display.length || b.score - a.score; })[0];
     }
-    return {url:target.url, title:target.title || '', icon:target.icon || site.best.icon || '',
-      display:target.display, remainder:target.display.slice(bare.length)};
+    var remainder = target.display.slice(bare.length);
+    var url = target.url;
+    // An explicit web address belongs to the user. History supplies only the
+    // suffix: its scheme (or www. spelling) must not replace what is visible.
+    if(/^https?:\/\//i.test(raw)){
+      try { url = new URL(raw + remainder).href; } catch(_error) { return null; }
+    }
+    return {url:url, title:target.title || '', icon:target.icon || site.best.icon || '',
+      display:target.display, remainder:remainder};
   }
 
   function siteUrl(url){
@@ -190,7 +197,7 @@
   }
 
   // Splits text into [{text, match}] pieces, marking where a typed word
-  // starts a word (Chrome bolds those), or its first appearance otherwise.
+  // starts a word, or its first appearance otherwise.
   function highlight(text, query){
     text = String(text || '');
     var marks = [];
