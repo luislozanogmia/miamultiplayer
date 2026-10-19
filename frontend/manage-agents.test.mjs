@@ -91,6 +91,10 @@ test('Web browser has one native Mia path with no iframe or localhost bridge fal
   assert.match(styles, /body\.browser-collab-mode \.local-browser-overlay\.open\{right:var\(--browser-mia-pane-width\);\}/);
   assert.match(styles, /body\.browser-collab-mode \.chat-app\{[^}]*position:fixed!important;[^}]*inset:0 0 0 auto;/);
   assert.match(styles, /body\.browser-collab-mode\.browser-sidebar-open \.chat-sidebar\{transform:translateX\(0\);\}/);
+  // Tabs pick the bot and the close button returns to chat, so the toolbar
+  // has no separate "Your bots" drawer button.
+  assert.doesNotMatch(html, /localBrowserSidebarBtn|local-browser-mote/);
+  assert.doesNotMatch(styles, /local-browser-sidebar-btn/);
 });
 
 test('embedded browser toolbar keeps status transient in the connection dot', async () => {
