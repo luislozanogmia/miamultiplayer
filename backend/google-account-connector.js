@@ -26,7 +26,6 @@ const GWS_OAUTH_SCOPES = Object.freeze([
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/drive.file',
-  'https://www.googleapis.com/auth/contacts.readonly',
 ]);
 
 // Exact Discovery-method prefixes. No raw gws command is accepted from the
@@ -45,7 +44,6 @@ const ALLOWED_GWS_COMMANDS = Object.freeze({
   'drive.files.get': Object.freeze(['drive', 'files', 'get']),
   'drive.files.create': Object.freeze(['drive', 'files', 'create']),
   'drive.permissions.create': Object.freeze(['drive', 'permissions', 'create']),
-  'contacts.list': Object.freeze(['people', 'people', 'connections', 'list']),
   'sheets.spreadsheets.get': Object.freeze(['sheets', 'spreadsheets', 'get']),
   'sheets.spreadsheets.create': Object.freeze(['sheets', 'spreadsheets', 'create']),
   'sheets.values.get': Object.freeze(['sheets', 'spreadsheets', 'values', 'get']),

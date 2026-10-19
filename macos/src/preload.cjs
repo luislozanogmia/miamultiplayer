@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     // first, capped at `limit`, default/max 20/200). Local-only state; never
     // sent anywhere but this renderer.
     history: (limit) => ipcRenderer.invoke("miaos-browser-command", { action: "history", limit }),
+    historyRemove: (url, limit) => ipcRenderer.invoke("miaos-browser-command", { action: "historyRemove", url, limit }),
     onState: (callback) => {
       const listener = (_event, state) => callback(state);
       ipcRenderer.on("miaos-browser-state", listener);
@@ -98,6 +99,19 @@ contextBridge.exposeInMainWorld("miaDesktop", {
       const listener = (_event, result) => callback(result);
       ipcRenderer.on("miaos-browser-find-result", listener);
       return () => ipcRenderer.removeListener("miaos-browser-find-result", listener);
+    },
+    // Asks the tab strip to start editing a tab group's name.
+    onGroupEdit: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("miaos-browser-group-edit", listener);
+      return () => ipcRenderer.removeListener("miaos-browser-group-edit", listener);
+    },
+    // { action: "choose", groupId } opens a group's bot picker;
+    // { action: "stop", botId } stops a bot that just lost its group.
+    onGroupBot: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("miaos-browser-group-bot", listener);
+      return () => ipcRenderer.removeListener("miaos-browser-group-bot", listener);
     },
   },
 });

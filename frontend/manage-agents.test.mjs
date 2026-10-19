@@ -91,6 +91,11 @@ test('Web browser has one native Mia path with no iframe or localhost bridge fal
   assert.match(styles, /body\.browser-collab-mode \.local-browser-overlay\.open\{right:var\(--browser-mia-pane-width\);\}/);
   assert.match(styles, /body\.browser-collab-mode \.chat-app\{[^}]*position:fixed!important;[^}]*inset:0 0 0 auto;/);
   assert.match(styles, /body\.browser-collab-mode\.browser-sidebar-open \.chat-sidebar\{transform:translateX\(0\);\}/);
+  // The "Your bots" drawer opens from a left-pane icon that mirrors the
+  // right-pane Mia toggle at the start of the address row, not a mote.
+  assert.doesNotMatch(html, /local-browser-mote/);
+  assert.match(html, /id="localBrowserSidebarBtn"[^>]*>\s*<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3\.5" y="4\.5" width="17" height="15" rx="2\.5"><\/rect><path d="M9\.5 4\.5v15"><\/path><\/svg>\s*<\/button>\s*<button type="button" class="local-browser-btn" id="localBrowserBackBtn"/);
+  assert.match(styles, /\.local-browser-sidebar-btn\[aria-expanded="true"\]\{color:#0b57d0!important;\}/);
 });
 
 test('embedded browser toolbar keeps status transient in the connection dot', async () => {
@@ -865,15 +870,18 @@ test('URL bar autocomplete degrades to nothing when the desktop shell has no his
     readFile(stylesUrl, 'utf8'),
   ]);
   assert.match(html, /id="localBrowserUrlSuggest"[^>]+role="listbox"[^>]+hidden/);
-  assert.match(source, /function localBrowserHistorySupported\(\)\{\s*return !!\(window\.miaDesktop && window\.miaDesktop\.browser && typeof window\.miaDesktop\.browser\.history === 'function'\);/);
-  assert.match(source, /function loadLocalBrowserHistory\(\)\{\s*if\(!localBrowserHistorySupported\(\)\) return Promise\.resolve\(\[\]\);/);
-  assert.match(source, /window\.miaDesktop\.browser\.history\(20\)/);
+  assert.match(html, /<script src="browser-omnibox\.js[^"]*"><\/script>[\s\S]*<script src="app\.js/, 'the ranking helper loads before the app');
+  assert.match(source, /function localBrowserHistorySupported\(\)\{\s*return !!\(window\.MiaBrowserOmnibox && window\.miaDesktop && window\.miaDesktop\.browser && typeof window\.miaDesktop\.browser\.history === 'function'\);/);
+  assert.match(source, /function loadLocalBrowserHistory\(fresh\)\{\s*if\(!localBrowserHistorySupported\(\)\) return Promise\.resolve\(\[\]\);/);
+  assert.match(source, /window\.miaDesktop\.browser\.history\(LOCAL_BROWSER_HISTORY_LIMIT\)/);
   assert.match(source, /if\(input && localBrowserHistorySupported\(\)\)\{/);
   assert.match(source, /event\.key === 'ArrowDown'/);
   assert.match(source, /event\.key === 'ArrowUp'/);
   assert.match(source, /event\.key === 'Enter'\)\{\s*if\(localBrowserSuggestIndex < 0\) return; \/\/ no selection: keep the normal submit behavior/);
+  assert.match(source, /if\(event\.key !== 'Escape' \|\| !localBrowserSuggestCompletion[^\n]*\n\s*event\.preventDefault\(\);\s*event\.stopImmediatePropagation\(\);\s*input\.value = localBrowserSuggestTyped;[\s\S]*?\}, true\);/, 'the first Escape takes back the completion before the native handler leaves the bar');
   assert.match(source, /event\.key === 'Escape'\)\{\s*closeLocalBrowserSuggest\(\);/);
-  assert.match(source, /\.slice\(0, 5\);/);
+  assert.match(source, /typeof window\.miaDesktop\.browser\.historyRemove !== 'function'\) return;/, 'older shells without remove keep the list read-only');
+  assert.match(source, /window\.miaNativeBrowser\.coverForSuggestions\(true\)/, 'the list draws over a still of the page');
   assert.match(styles, /\.local-browser-suggest\{/);
 });
 

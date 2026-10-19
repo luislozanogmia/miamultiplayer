@@ -2725,6 +2725,7 @@
     if(typeof chatWs === 'undefined' || !chatWs) return records;
     var existing = Array.isArray(chatWs.allAgents) ? chatWs.allAgents : [];
     chatWs.botRecords = records.slice();
+    chatWs.botRecordsLoaded = true;
     chatWs.allAgents = records.map(function(record){
       var binding = existing.filter(function(agent){ return String(agent.id || '') === String(record.id || ''); })[0];
       if(!binding) return record;
@@ -2734,6 +2735,8 @@
         nativeConversationId: binding.nativeConversationId || binding.conversationId || binding.roomId || null
       });
     });
+    // The browser tab strip draws group owners from these records.
+    try { window.dispatchEvent(new Event('mia-bots-changed')); } catch(_botsEventError) {}
     return chatWs.allAgents;
   }
   function loadAgents(){
@@ -4939,6 +4942,12 @@
     var metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : {};
     var message = nativeEventToChatMessage(event);
     var roomId = String(event.conversationId);
+    // A reply in a chat you aren't looking at still ends that bot's task, so
+    // its running dot and its hold on browser tabs clear when it answers.
+    if(roomId !== chatWs.activeRoomId){
+      syncNativeDispatchFromEvent(event);
+      renderComposerTaskControl();
+    }
     if(recordWatchedSidebarMessage(roomId, message)) renderChatSidebar();
     // Progress stays quiet so a long task produces one notification, not a stream.
     if(metadata.progress === true && metadata.status !== 'failed') return;
@@ -5762,8 +5771,153 @@
     renderChatInfoPane();
     renderChatHeaderBar();
     renderLocalBrowser();
+    browserFollowKey = '';
+    followBrowserTab(null);
     startLocalBrowserPromptRotation();
     if(options && options.restoring) showBenchToast('Browser restored where you left off. Playback is paused.');
+  }
+
+  // Tab groups can belong to a bot. While the browser is open, the chat pane
+  // follows the tab in front: a bot's group shows that bot's chat, any other
+  // tab shows Mia. It switches only when the tab in front (or its owner)
+  // changes, so picking another chat by hand sticks until then.
+  var browserFollowKey = '';
+  var browserFollowState = null;
+  function browserBotRecord(botId){
+    return (chatWs.botRecords || []).filter(function(record){ return String(record.id) === String(botId); })[0] || null;
+  }
+  // The browser names Mia's own work "mia"; every other id is a bot's.
+  function browserBotRunningTasks(botId){
+    var rooms = (chatWs.nativeConversations || []).filter(function(c){
+      if(botId === 'mia') return isNativeMiaConversation(c);
+      return c.type === 'bot' && c.metadata && String(c.metadata.botId) === String(botId);
+    }).map(function(c){ return c.id; });
+    return (chatWs.tasks || []).filter(function(task){
+      return task.kind === 'native-dispatch' && rooms.indexOf(task.roomId) !== -1 && task.status !== 'stopping';
+    });
+  }
+  function activeConversationOwner(){
+    var conversation = (chatWs.nativeConversations || []).filter(function(c){ return c.id === chatWs.activeRoomId; })[0];
+    if(!conversation) return null;
+    if(isNativeMiaConversation(conversation)) return 'mia';
+    var metadata = conversation.metadata || {};
+    return conversation.type === 'bot' && metadata.botId ? 'bot:' + metadata.botId : null;
+  }
+  function followBrowserTab(browserState){
+    if(browserState) browserFollowState = browserState;
+    browserState = browserFollowState;
+    if(!browserState){
+      // No state event yet (the tab strip fetched its first state directly).
+      var desktopBrowser = window.miaDesktop && window.miaDesktop.browser;
+      if(desktopBrowser && desktopBrowser.command){
+        Promise.resolve(desktopBrowser.command({ action: 'state' })).then(function(fetched){
+          if(fetched && !browserFollowState) followBrowserTab(fetched);
+        }).catch(function(){});
+      }
+      return;
+    }
+    if(!browserState || !localBrowserState.open || !document.body.classList.contains('browser-collab-mode')) return;
+    var tab = (browserState.tabs || []).filter(function(t){ return t.id === browserState.activeId; })[0];
+    if(!tab) return;
+    var group = (browserState.groups || []).filter(function(g){ return g.id === tab.groupId; })[0];
+    var bot = group && group.botId ? browserBotRecord(group.botId) : null;
+    // The bot list may not have loaded yet; decide once it has.
+    if(group && group.botId && !bot && !chatWs.botRecordsLoaded) return;
+    var owner = bot ? 'bot:' + bot.id : 'mia';
+    var key = tab.id + '|' + owner;
+    if(key === browserFollowKey) return;
+    if(activeConversationOwner() === owner){ browserFollowKey = key; return; }
+    var agent = bot
+      ? (chatWs.allAgents || []).filter(function(a){ return String(a.id) === String(bot.id); })[0]
+      : chatWs.gatewayAgent;
+    if(!agent) return;
+    browserFollowKey = key;
+    Promise.resolve(navigateToAgentChat(agent, false, function(){
+      return browserFollowKey === key && localBrowserState.open && document.body.classList.contains('browser-collab-mode');
+    })).then(function(){
+      if(browserFollowKey === key && activeConversationOwner() === owner) localBrowserState.roomId = chatWs.activeRoomId;
+    });
+  }
+  if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onState){
+    window.miaDesktop.browser.onState(followBrowserTab);
+  }
+  window.addEventListener('mia-bots-changed', function(){ followBrowserTab(null); });
+  // The tab strip (native-browser.js) draws each group's owner with these.
+  window.miaBrowserAgents = {
+    // Whether this bot still has a reply running, so the browser keeps its
+    // tab marked through the pauses between browser commands.
+    isRunning: function(botId){ return browserBotRunningTasks(botId).length > 0; },
+    // Each bot's color as a hue, for the glow around a page the bot works on.
+    hues: function(){
+      var hues = {};
+      (chatWs.botRecords || []).forEach(function(bot){
+        var name = String(bot.name || 'Bot');
+        var hue = avatarColorHue(normalizeAgentAvatarColor(bot.avatarColor) || agentAvatarColorFor(name, bot.id));
+        hues[String(bot.id)] = hue === null ? MOTE_COLOR_PALETTE[moteColorSlotFor(name)] : hue;
+      });
+      return hues;
+    },
+    // "Take over" in the browser stops whatever this bot is running now.
+    takeOver: function(botId){
+      return stopBrowserBot(botId);
+    },
+    // The group this bot worked in was given to someone else.
+    stopQuietly: function(botId){
+      return stopBrowserBot(botId);
+    },
+    moteHtml: function(botId){
+      var bot = botId ? browserBotRecord(botId) : null;
+      return bot ? agentAvatarHtml(bot.name, bot.id, 24, 'static', bot.avatarColor) : '';
+    },
+    name: function(botId){
+      var bot = botId ? browserBotRecord(botId) : null;
+      return bot ? String(bot.name || '') : '';
+    },
+    // The bot list with each bot's own mote (and Mia's mark) drawn as a small
+    // PNG, so the native owner menu shows the same faces as the tab strip.
+    menuBots: function(){
+      var bots = (chatWs.botRecords || []).map(function(bot){
+        var name = String(bot.name || 'Bot');
+        return browserMenuIcon(moteSrcFor(name, true), moteColorFilterFor(name, normalizeAgentAvatarColor(bot.avatarColor) || agentAvatarColorFor(name, bot.id)))
+          .then(function(icon){ return { botId: String(bot.id), name: name, icon: icon }; });
+      });
+      return Promise.all([browserMenuIcon('assets/favicon.svg', 'none')].concat(bots)).then(function(all){
+        return { miaIcon: all[0], bots: all.slice(1) };
+      });
+    },
+  };
+  var browserMenuIconCache = {};
+  function stopBrowserBot(botId){
+    var running = browserBotRunningTasks(botId);
+    if(!running.length){
+      showToast('Could not confirm that the response stopped. Check its chat before taking over.');
+      return Promise.resolve(false);
+    }
+    return Promise.all(running.map(function(task){ return stopTaskFromComposer(task.id); })).then(function(results){
+      var stopped = results.every(function(result){ return result === true; });
+      if(!stopped) showToast('Could not stop every response. The bot may still be working; try again.');
+      return stopped;
+    });
+  }
+  function browserMenuIcon(src, filter){
+    var key = src + '|' + filter;
+    if(browserMenuIconCache[key]) return browserMenuIconCache[key];
+    browserMenuIconCache[key] = new Promise(function(resolve){
+      var img = new Image();
+      img.onload = function(){
+        try {
+          var canvas = document.createElement('canvas');
+          canvas.width = 32; canvas.height = 32;
+          var ctx = canvas.getContext('2d');
+          ctx.filter = filter;
+          ctx.drawImage(img, 0, 0, 32, 32);
+          resolve(canvas.toDataURL('image/png'));
+        } catch(_iconError) { resolve(''); }
+      };
+      img.onerror = function(){ resolve(''); };
+      img.src = src;
+    });
+    return browserMenuIconCache[key];
   }
 
   function shouldRestoreLocalBrowser(){
@@ -5781,72 +5935,169 @@
     if(shouldRestoreLocalBrowser()) openWebBrowserTool({restoring:true});
   }
 
-  // URL-bar autocomplete: a lightweight custom dropdown backed by the
-  // Electron shell's visit history (window.miaDesktop.browser.history).
-  // Older shells / the web build don't expose it — every call below is
-  // guarded so the feature quietly does nothing there.
+  // URL-bar autocomplete backed by the Electron shell's visit history
+  // (window.miaDesktop.browser.history), ranked by browser-omnibox.js:
+  // inline completion, a first row that is exactly what Enter opens, then
+  // matching pages with their site icons. Older shells and the web build
+  // don't expose history, so the feature quietly does nothing there.
+  var LOCAL_BROWSER_HISTORY_LIMIT = 200;
   var localBrowserHistoryCache = null;
   var localBrowserSuggestItems = [];
   var localBrowserSuggestIndex = -1;
+  var localBrowserSuggestTyped = '';
+  var localBrowserSuggestCompletion = null;
+  var localBrowserSuggestGeneration = 0;
+  var LOCAL_BROWSER_SUGGEST_GLOBE = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.4 2.4 3.5 5.2 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.2-3.5-8.5s1.1-6.1 3.5-8.5Z"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_SEARCH = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m15 15 5 5"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_REMOVE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"></path></svg>';
   function localBrowserHistorySupported(){
-    return !!(window.miaDesktop && window.miaDesktop.browser && typeof window.miaDesktop.browser.history === 'function');
+    return !!(window.MiaBrowserOmnibox && window.miaDesktop && window.miaDesktop.browser && typeof window.miaDesktop.browser.history === 'function');
   }
-  function loadLocalBrowserHistory(){
+  function loadLocalBrowserHistory(fresh){
     if(!localBrowserHistorySupported()) return Promise.resolve([]);
-    if(localBrowserHistoryCache) return Promise.resolve(localBrowserHistoryCache);
-    return Promise.resolve(window.miaDesktop.browser.history(20)).then(function(res){
+    if(localBrowserHistoryCache && !fresh) return Promise.resolve(localBrowserHistoryCache);
+    return Promise.resolve(window.miaDesktop.browser.history(LOCAL_BROWSER_HISTORY_LIMIT)).then(function(res){
       localBrowserHistoryCache = (res && Array.isArray(res.history)) ? res.history : [];
       return localBrowserHistoryCache;
-    }).catch(function(){ return []; });
+    }).catch(function(){ return localBrowserHistoryCache || []; });
   }
-  function filterLocalBrowserHistory(history, query){
-    var q = String(query || '').trim().toLowerCase();
-    if(!q) return [];
-    return (history || []).filter(function(item){
-      return (item.url && String(item.url).toLowerCase().indexOf(q) !== -1) ||
-        (item.title && String(item.title).toLowerCase().indexOf(q) !== -1);
-    }).slice(0, 5);
+  // Whether Enter opens the typing as an address rather than searching it.
+  function localBrowserLooksLikeUrl(value){
+    try {
+      var target = localBrowserNormalizeUrl(value, 'google');
+      return !/^https:\/\/www\.google\.com\/search\?/.test(target);
+    } catch(_error) { return false; }
   }
-  function closeLocalBrowserSuggest(){
+  function closeLocalBrowserSuggest(keepCover){
+    localBrowserSuggestGeneration += 1;
     var box = el('#localBrowserUrlSuggest');
     if(box){ box.hidden = true; box.innerHTML = ''; }
     var input = el('#localBrowserUrl');
-    if(input) input.setAttribute('aria-expanded', 'false');
+    if(input){ input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); }
     localBrowserSuggestItems = [];
     localBrowserSuggestIndex = -1;
+    localBrowserSuggestCompletion = null;
+    if(!keepCover && window.miaNativeBrowser && window.miaNativeBrowser.coverForSuggestions) window.miaNativeBrowser.coverForSuggestions(false);
   }
   function updateLocalBrowserSuggestHighlight(){
     var box = el('#localBrowserUrlSuggest');
     if(!box) return;
-    els('.local-browser-suggest-item', box).forEach(function(btn, i){
-      btn.classList.toggle('active', i === localBrowserSuggestIndex);
+    var input = el('#localBrowserUrl');
+    els('.local-browser-suggest-item', box).forEach(function(row, i){
+      var active = i === localBrowserSuggestIndex;
+      row.classList.toggle('active', active);
+      row.setAttribute('aria-selected', active ? 'true' : 'false');
+      if(active && input) input.setAttribute('aria-activedescendant', row.id);
     });
   }
-  function renderLocalBrowserSuggest(items){
+  function localBrowserSuggestMarkup(text, query){
+    return window.MiaBrowserOmnibox.highlight(text, query).map(function(piece){
+      return piece.match ? '<strong>' + esc(piece.text) + '</strong>' : esc(piece.text);
+    }).join('');
+  }
+  function localBrowserSuggestRow(item, i, query){
+    var icon, line;
+    if(item.kind === 'search'){
+      icon = '<span class="local-browser-suggest-icon">' + LOCAL_BROWSER_SUGGEST_SEARCH + '</span>';
+      line = '<span class="local-browser-suggest-title">' + esc(item.query) + '</span>' +
+        '<span class="local-browser-suggest-sep"> – </span>' +
+        '<span class="local-browser-suggest-hint">' + (localBrowserSearchEngine === 'x' ? 'Search on X' : 'Google Search') + '</span>';
+    } else {
+      icon = '<span class="local-browser-suggest-icon">' +
+        (/^data:image\//i.test(item.icon || '') ? '<img src="' + esc(item.icon) + '" alt="">' : LOCAL_BROWSER_SUGGEST_GLOBE) + '</span>';
+      line = (item.title
+        ? '<span class="local-browser-suggest-title">' + localBrowserSuggestMarkup(item.title, query) + '</span>' +
+          '<span class="local-browser-suggest-sep"> – </span>'
+        : '') +
+        '<span class="local-browser-suggest-url">' + localBrowserSuggestMarkup(item.display, query) + '</span>';
+    }
+    var remove = item.kind === 'history'
+      ? '<button type="button" class="local-browser-suggest-remove" data-suggest-remove="' + i + '" tabindex="-1" aria-label="Remove from history" title="Remove from history">' + LOCAL_BROWSER_SUGGEST_REMOVE + '</button>'
+      : '';
+    return '<div class="local-browser-suggest-item" id="localBrowserSuggest' + i + '" role="option" aria-selected="false" data-suggest-index="' + i + '">' +
+      icon + '<span class="local-browser-suggest-line">' + line + '</span>' + remove + '</div>';
+  }
+  function renderLocalBrowserSuggest(result){
     var box = el('#localBrowserUrlSuggest');
     if(!box) return;
-    localBrowserSuggestItems = items || [];
-    localBrowserSuggestIndex = -1;
+    localBrowserSuggestItems = (result && result.rows) || [];
+    localBrowserSuggestIndex = localBrowserSuggestItems.length ? 0 : -1;
     var input = el('#localBrowserUrl');
     if(!localBrowserSuggestItems.length){
-      box.hidden = true;
-      box.innerHTML = '';
-      if(input) input.setAttribute('aria-expanded', 'false');
+      closeLocalBrowserSuggest();
       return;
     }
     box.innerHTML = localBrowserSuggestItems.map(function(item, i){
-      return '<button type="button" class="local-browser-suggest-item" role="option" data-suggest-index="' + i + '">' +
-        '<span class="local-browser-suggest-title">' + esc(item.title || item.url) + '</span>' +
-        '<span class="local-browser-suggest-url">' + esc(item.url) + '</span></button>';
+      return localBrowserSuggestRow(item, i, localBrowserSuggestTyped);
     }).join('');
     box.hidden = false;
     if(input) input.setAttribute('aria-expanded', 'true');
+    updateLocalBrowserSuggestHighlight();
+    if(window.miaNativeBrowser && window.miaNativeBrowser.coverForSuggestions) window.miaNativeBrowser.coverForSuggestions(true);
+  }
+  // Recomputes suggestions for what was typed and, unless the user is
+  // deleting, fills in the rest of the best address and selects it.
+  function refreshLocalBrowserSuggest(input, history, complete, edit){
+    edit = edit || { value: input.value, start: input.selectionStart, end: input.selectionEnd };
+    var caretAtEnd = edit.start === edit.value.length && edit.end === edit.value.length;
+    localBrowserSuggestTyped = edit.value;
+    var result = window.MiaBrowserOmnibox.suggest(history, localBrowserSuggestTyped, {
+      complete: complete && caretAtEnd,
+      looksLikeUrl: localBrowserLooksLikeUrl,
+    });
+    localBrowserSuggestCompletion = result.completion && result.completion.remainder ? result.completion : null;
+    if(localBrowserSuggestCompletion){
+      input.value = localBrowserSuggestTyped + localBrowserSuggestCompletion.remainder;
+      input.setSelectionRange(localBrowserSuggestTyped.length, input.value.length);
+    }
+    renderLocalBrowserSuggest(result);
+  }
+  function queueLocalBrowserSuggest(input, complete){
+    // Freeze the actual edit before history IPC resolves. An inline completion
+    // is a render result, never a new user edit for another pending response.
+    var edit = { value: input.value, start: input.selectionStart, end: input.selectionEnd };
+    // Drop stale rows immediately, retaining the current page cover while
+    // replacement suggestions load. Closing/reopening it can capture a still
+    // while the native page view has not yet been restored.
+    closeLocalBrowserSuggest(true);
+    var generation = localBrowserSuggestGeneration;
+    return loadLocalBrowserHistory().then(function(history){
+      if(generation !== localBrowserSuggestGeneration) return;
+      if(document.activeElement !== input || input.value !== edit.value || input.selectionStart !== edit.start || input.selectionEnd !== edit.end){
+        closeLocalBrowserSuggest();
+        return;
+      }
+      refreshLocalBrowserSuggest(input, history, complete, edit);
+    });
   }
   function chooseLocalBrowserSuggest(item, input){
     if(!item) return;
-    if(input) input.value = item.url;
+    var target = item.kind === 'search' ? item.query : (item.url || item.value);
+    if(input) input.value = item.kind === 'search' ? item.query : (item.url || item.value);
     closeLocalBrowserSuggest();
-    localBrowserNavigate(item.url);
+    if(item.kind === 'search' && localBrowserLooksLikeUrl(target)){
+      // A search row for address-like text still searches.
+      target = localBrowserSearchEngine === 'x'
+        ? 'https://x.com/search?q=' + encodeURIComponent(target) + '&src=typed_query'
+        : 'https://www.google.com/search?q=' + encodeURIComponent(target) + '&igu=1';
+    }
+    localBrowserNavigate(target);
+  }
+  function removeLocalBrowserSuggest(index, input){
+    var item = localBrowserSuggestItems[index];
+    if(!item || item.kind !== 'history' || typeof window.miaDesktop.browser.historyRemove !== 'function') return;
+    var hadCompletion = !!localBrowserSuggestCompletion;
+    var generation = ++localBrowserSuggestGeneration;
+    var value = input.value;
+    var typed = hadCompletion ? localBrowserSuggestTyped : value;
+    Promise.resolve(window.miaDesktop.browser.historyRemove(item.url, LOCAL_BROWSER_HISTORY_LIMIT)).then(function(res){
+      localBrowserHistoryCache = (res && Array.isArray(res.history)) ? res.history : [];
+      if(generation !== localBrowserSuggestGeneration || document.activeElement !== input || input.value !== value) return;
+      if(hadCompletion){ input.value = typed; input.setSelectionRange(typed.length, typed.length); }
+      // Removing a row keeps the address filled in, as long as some other
+      // page still completes it.
+      refreshLocalBrowserSuggest(input, localBrowserHistoryCache, hadCompletion);
+    }).catch(function(){});
   }
 
   function browserSidebarOwnsClick(target, drawer, toggle, portaledMenu){
@@ -5896,18 +6147,34 @@
     }
     if(form) form.addEventListener('submit', function(event){
       event.preventDefault();
+      closeLocalBrowserSuggest();
       localBrowserNavigate(input ? input.value : '');
     });
     var suggestBox = el('#localBrowserUrlSuggest');
     if(input && localBrowserHistorySupported()){
-      var refreshSuggest = function(){
-        loadLocalBrowserHistory().then(function(history){
-          if(document.activeElement !== input) return;
-          renderLocalBrowserSuggest(filterLocalBrowserHistory(history, input.value));
-        });
-      };
-      input.addEventListener('focus', refreshSuggest);
-      input.addEventListener('input', refreshSuggest);
+      input.addEventListener('focus', function(){
+        // History changes as you browse, so each visit to the bar reloads it.
+        loadLocalBrowserHistory(true);
+      });
+      input.addEventListener('input', function(event){
+        var deleting = !!(event && event.inputType && /^delete/.test(event.inputType));
+        queueLocalBrowserSuggest(input, !deleting);
+      });
+      // First Escape takes back the filled-in completion and keeps editing.
+      // Captured so it runs before native-browser.js, whose
+      // Escape restores the page address and leaves the bar.
+      input.addEventListener('keydown', function(event){
+        if(event.key === 'Escape'){
+          localBrowserSuggestGeneration += 1;
+          if(!localBrowserSuggestCompletion || input.value === localBrowserSuggestTyped) closeLocalBrowserSuggest();
+        }
+        if(event.key !== 'Escape' || !localBrowserSuggestCompletion || input.value === localBrowserSuggestTyped) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        input.value = localBrowserSuggestTyped;
+        input.setSelectionRange(input.value.length, input.value.length);
+        queueLocalBrowserSuggest(input, false);
+      }, true);
       input.addEventListener('keydown', function(event){
         if(!localBrowserSuggestItems.length) return;
         if(event.key === 'ArrowDown'){
@@ -5924,18 +6191,28 @@
           chooseLocalBrowserSuggest(localBrowserSuggestItems[localBrowserSuggestIndex], input);
         } else if(event.key === 'Escape'){
           closeLocalBrowserSuggest();
+        } else if((event.key === 'Delete' || event.key === 'Backspace') && event.shiftKey && localBrowserSuggestIndex >= 0){
+          // Shift+Delete removes the highlighted history entry.
+          if(localBrowserSuggestItems[localBrowserSuggestIndex].kind !== 'history') return;
+          event.preventDefault();
+          removeLocalBrowserSuggest(localBrowserSuggestIndex, input);
         }
       });
       input.addEventListener('blur', function(){
-        // Deferred so a suggestion's mousedown/click can still register.
-        setTimeout(closeLocalBrowserSuggest, 150);
+        var generation = ++localBrowserSuggestGeneration;
+        // Deferred so a suggestion's mousedown/click can still register. A
+        // refocus with no new edit must not leave a retained cover stranded.
+        setTimeout(function(){
+          if(document.activeElement !== input || generation === localBrowserSuggestGeneration) closeLocalBrowserSuggest();
+        }, 150);
       });
       if(suggestBox) suggestBox.addEventListener('mousedown', function(event){
-        var btn = event.target.closest('.local-browser-suggest-item');
-        if(!btn) return;
+        var row = event.target.closest('.local-browser-suggest-item');
+        if(!row) return;
         event.preventDefault();
-        var idx = Number(btn.getAttribute('data-suggest-index'));
-        chooseLocalBrowserSuggest(localBrowserSuggestItems[idx], input);
+        var remove = event.target.closest('[data-suggest-remove]');
+        if(remove){ removeLocalBrowserSuggest(Number(remove.getAttribute('data-suggest-remove')), input); return; }
+        chooseLocalBrowserSuggest(localBrowserSuggestItems[Number(row.getAttribute('data-suggest-index'))], input);
       });
     }
     if(back) back.addEventListener('click', function(){
@@ -5974,15 +6251,12 @@
       event.stopImmediatePropagation();
       setBrowserSidebarOpen(false);
     }, true);
-    // Picking a bot or conversation from the drawer is a destination choice:
-    // collapse the drawer so the chosen chat is immediately visible. Row
-    // tools (hide, dismiss, context-menu actions) keep the drawer open.
-    var drawer = el('.chat-sidebar');
-    if(drawer) drawer.addEventListener('click', function(e){
-      if(!document.body.classList.contains('browser-sidebar-open')) return;
-      var pick = e.target.closest('.chat-recent-row, .chat-starter-bot');
-      if(!pick || pick.classList.contains('chat-row-hidden')) return;
-      if(e.target.closest('.chat-row-hide, .chat-starter-bot-dismiss, [data-sidebar-action]')) return;
+    // Picking a chat keeps the drawer open, so you can flick between bots;
+    // the chat opens beside it. The button, Esc, or a click outside (which
+    // is swallowed, never landing on a tab) closes it.
+    document.addEventListener('keydown', function(event){
+      if(event.key !== 'Escape' || !document.body.classList.contains('browser-sidebar-open')) return;
+      if(event.target && event.target.closest && event.target.closest('input, textarea, [contenteditable="true"]')) return;
       setBrowserSidebarOpen(false);
     });
     renderLocalBrowser();
@@ -6575,7 +6849,7 @@
 
   function stopTaskFromComposer(taskId){
     var task = (chatWs.tasks || []).filter(function(candidate){ return candidate.id === taskId; })[0];
-    if(!task || task.kind !== 'native-dispatch' || chatTaskStopPending[taskId]) return;
+    if(!task || task.kind !== 'native-dispatch' || chatTaskStopPending[taskId]) return Promise.resolve(false);
     chatTaskStopPending[taskId] = true;
     renderComposerTaskControl();
     return api(nativeConversationPath(task.roomId, '/dispatches/' + encodeURIComponent(taskId) + '/stop'), {
@@ -6587,9 +6861,11 @@
       delete chatTaskStopPending[taskId];
       stopChatThinking(task.roomId);
       renderLiveViews();
+      return true;
     }).catch(function(){
       delete chatTaskStopPending[taskId];
       renderComposerTaskControl();
+      return false;
     });
   }
 
@@ -7980,6 +8256,7 @@
   }
 
   function startAgentSetupChat(){
+    chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     clearAgentSetupRequest(true);
     rememberChatBack('agent-setup', AGENT_SETUP_ROOM_ID);
     closeManageAgentsPane();
@@ -8599,13 +8876,13 @@
     clearChatActive();
     loadChatRoom(previous.roomId, previous.kind, previous.label);
   }
-  function navigateToAgentChat(agent, keepBack){
+  function navigateToAgentChat(agent, keepBack, canNavigate){
     if(!agent) return;
     if(keepBack) rememberChatBack('agent', agent.roomId || agent.nativeConversationId || null);
     else clearChatBack();
     chatRoster.open = null;
     clearChatActive();
-    selectAgentRoom(agent);
+    return selectAgentRoom(agent, canNavigate);
   }
 
   function chatVisibleHumans(humans){
@@ -10056,7 +10333,9 @@
     return api('/api/onboarding/chat', {method:'POST', body:{}}).then(function(res){
       if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not start onboarding.');
       miaOnboardingChat = res.data;
-      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1){
+      // A bot-owned browser tab in front keeps that bot's chat in the panel.
+      var followingBot = String(browserFollowKey || '').indexOf('|bot:') !== -1;
+      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1 && !followingBot){
         loadChatRoom(res.data.conversationId, 'agent', 'Mia');
       } else if(chatWs.activeRoomId === res.data.conversationId){
         renderChatThread();
@@ -10333,12 +10612,29 @@
 
   /* Switching rooms loads the durable native event history before opening the
      realtime subscription. */
+  // Each chat keeps its own unsent text, so a draft written for one bot never
+  // shows up (or gets sent) in another bot's chat.
+  var chatTextDrafts = {};
+  function swapChatDraft(fromRoomId, toRoomId){
+    var input = el('#ccInput');
+    if(!input || fromRoomId === toRoomId) return;
+    if(fromRoomId){
+      if(input.value) chatTextDrafts[fromRoomId] = input.value;
+      else delete chatTextDrafts[fromRoomId];
+    }
+    var next = (toRoomId && chatTextDrafts[toRoomId]) || '';
+    if(input.value === next) return;
+    input.value = next;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
   function loadChatRoom(roomId, kind, label){
+    chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     setLocalChatTypingActivity(false);
     closeMentionPopover();
     chatRoster.open = null;
     clearChatAttention(roomId);
     if(chatWs.native && chatWs.nativeSocketConversationId !== roomId) closeNativeChatSocket();
+    swapChatDraft(chatWs.activeRoomId, roomId);
     chatWs.activeRoomId = roomId;
     chatWs.activeKind = kind;
     chatWs.activeLabel = label;
@@ -10405,7 +10701,10 @@
     loadChatRoom(chatWs.rooms.home.roomId, 'home', chatWs.rooms.home.name || 'Multiplayer Test');
   }
 
-  function selectAgentRoom(agent){
+  function selectAgentRoom(agent, canNavigate){
+    var generation = chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
+    function current(){ return chatWs.navigationGeneration === generation && (!canNavigate || canNavigate()); }
+    if(!current()) return;
     if(agent.roomId || agent.nativeConversationId){
       return loadChatRoom(agent.roomId || agent.nativeConversationId, 'agent', agent.name);
     }
@@ -10422,7 +10721,9 @@
       chatWs.nativeConversations.push(res.data.conversation);
       applyNativeConversationList(chatWs.nativeConversations);
       renderChatSidebar();
-      loadChatRoom(res.data.conversation.id, 'agent', agent.name);
+      // Keep a chat created by an earlier choice, but never let its late
+      // response replace a newer tab or a manually selected conversation.
+      if(current()) return loadChatRoom(res.data.conversation.id, 'agent', agent.name);
     }).catch(function(){});
   }
 
@@ -13047,6 +13348,7 @@
     return '<div class="conversation-header-actions" role="group" aria-label="Conversation actions">' +
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShareConversation" title="Copy conversation ID" aria-label="Copy conversation ID"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v13"></path><path d="m16 6-4-4-4 4"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path></svg></button>' +
       '<button type="button" class="ch-icon-btn conversation-action-btn' + (pinned ? ' active' : '') + '" id="chatBookmarkConversation" title="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-label="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-pressed="' + (pinned ? 'true' : 'false') + '"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg></button>' +
+      (activeBotTabsAvailable(activeConversation) ? '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShowBotTabsBtn" title="Show this bot\'s tabs" aria-label="Show this bot\'s tabs in the browser"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg></button>' : '') +
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatHistoryBtn" title="History" aria-label="Open conversation history"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></button>' +
       '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="' + esc(freshTitle) + '" aria-label="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '') + '><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button>' +
     '</div>';
@@ -13093,7 +13395,38 @@
     return request.promise;
   }
 
+  // "Show this bot's tabs" jumps the browser to the tab the bot worked in
+  // most recently, so you can watch it without hunting through the strip.
+  function activeBotTabsAvailable(conversation){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    return !!(browser && browser.command && conversation && conversation.type === 'bot' && conversation.metadata && conversation.metadata.botId);
+  }
+  function botBrowserTab(state, botId){
+    if(!state || !botId) return null;
+    var owned = {};
+    (state.groups || []).forEach(function(g){ if(String(g.botId) === String(botId)) owned[g.id] = true; });
+    var tabs = (state.tabs || []).filter(function(t){ return owned[t.groupId]; });
+    var worked = function(t){ return t.botWorkAt && String(t.botWorkAt.botId) === String(botId) ? t.botWorkAt.at : 0; };
+    var working = tabs.filter(function(t){ return t.botActivity && String(t.botActivity.botId) === String(botId); });
+    var pick = (working.length ? working : tabs).slice().sort(function(a, b){ return worked(b) - worked(a); })[0];
+    return pick || null;
+  }
+  function showActiveBotTabs(){
+    var conversation = (chatWs.nativeConversations || []).filter(function(c){ return c.id === chatWs.activeRoomId; })[0];
+    var botId = conversation && conversation.metadata && conversation.metadata.botId;
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!botId || !browser) return;
+    browser.command({ action: 'state' }).then(function(state){
+      var tab = botBrowserTab(state, botId);
+      if(!tab){ showToast('This bot has no browser tabs yet.'); return; }
+      if(!localBrowserState.open) openWebBrowserTool();
+      return browser.command({ action: 'select', id: tab.id });
+    }).catch(function(){ showToast('Could not reach the browser.'); });
+  }
+
   function wireConversationHeaderActions(header){
+    var showTabs = el('#chatShowBotTabsBtn', header);
+    if(showTabs) showTabs.addEventListener('click', showActiveBotTabs);
     var share = el('#chatShareConversation', header);
     var bookmark = el('#chatBookmarkConversation', header);
     var history = el('#chatHistoryBtn', header);
