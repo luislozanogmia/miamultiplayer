@@ -29,7 +29,10 @@ automatically through the in-app updater.
 - Keep later chat choices selected when a previous browser chat opens late.
 - Reject unresolved browser actors, confirm potentially unsafe downloads,
   and wait for runtime cancellation acknowledgement before releasing a tab.
-- Expose Google tools directly to bots using the Google connection profile.
+- Expose Google tools directly to Mia and bots on each connected chat turn;
+  refresh account/grant capabilities after connection changes and prevent
+  resumed or steered turns from inheriting an older connection.
+- Request only the five supported Google scopes; remove unused Contacts access.
 
 ### Notes
 - Windows packages remain unsigned; macOS packages must be signed and notarized.

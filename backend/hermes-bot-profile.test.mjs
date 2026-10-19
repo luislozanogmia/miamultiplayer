@@ -7,6 +7,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const YAML = require('yaml');
 const {
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
@@ -17,6 +18,7 @@ const {
   GHOST_FIRST_PLUGIN,
   GOOGLE_WORKSPACE_MCP_SERVER,
   GOOGLE_WORKSPACE_MCP_TOOLS,
+  googleWorkspaceToolsConfigured,
   provisionHermesRuntimeProfiles,
   setHermesProfileModel,
 } = require('./hermes-bot-profile');
@@ -57,7 +59,7 @@ test('Claude DirectSDK is provisioned unchanged for agent, Google-agent, and bot
   }
 });
 
-test('Mia provisions full-agent and restricted-bot sessions in the shared Hermes runtime', () => {
+test('Mia provisions agent and bot configurations in the shared Hermes runtime', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-bot-'));
   const profileRoot = path.join(root, 'profiles');
   const result = provisionHermesRuntimeProfiles({ profilesRoot: profileRoot });
@@ -151,7 +153,7 @@ test('MIAOS_BACKGROUND_REVIEW=all enables background_review everywhere, =off dis
   }
 });
 
-test('Mia registers its bounded bundled Google Workspace tools for Mia and all Bots', () => {
+test('Mia registers its bundled Google Workspace MCP tool list for Mia and all Bots', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-google-'));
   const profilesRoot = path.join(root, 'profiles');
   const python = path.join(root, 'python');
@@ -170,6 +172,11 @@ test('Mia registers its bounded bundled Google Workspace tools for Mia and all B
     process.env.MIA_GOOGLE_BROKER_TOKEN = 't'.repeat(43);
     process.env.HOME = root;
     process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(root, 'google-profile');
+    assert.equal(googleWorkspaceToolsConfigured(), true);
+    const configuredBrokerUrl = process.env.MIA_GOOGLE_BROKER_URL;
+    delete process.env.MIA_GOOGLE_BROKER_URL;
+    assert.equal(googleWorkspaceToolsConfigured(), false);
+    process.env.MIA_GOOGLE_BROKER_URL = configuredBrokerUrl;
     provisionHermesRuntimeProfiles({ profilesRoot });
     const agent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_HERMES_PROFILE, 'config.yaml'), 'utf8');
     const googleAgent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
@@ -195,7 +202,7 @@ test('Mia registers its bounded bundled Google Workspace tools for Mia and all B
       assert.ok(profile.includes('MIA_GOOGLE_BROKER_URL: "http://127.0.0.1:54321"'));
       assert.ok(profile.includes(`MIA_GOOGLE_BROKER_TOKEN: ${JSON.stringify('t'.repeat(43))}`));
       assert.doesNotMatch(profile, /HERMES_GWS_BIN|GOOGLE_WORKSPACE_CLI_CONFIG_DIR/);
-      assert.doesNotMatch(profile, /  - terminal\n|\nterminal:/);
+      assert.doesNotMatch(profile, /\nterminal:/, 'without a configured workspace there is no terminal setup');
       assert.match(profile, /\ntools:\n  tool_search:\n    enabled: "off"\n/, 'Google tools are shown directly, not behind tool_search');
     }
     assert.doesNotMatch(bot, /tool_search/);
@@ -221,7 +228,7 @@ test('Mia registers its bounded bundled Google Workspace tools for Mia and all B
   }
 });
 
-test('search-only release profile cannot access host files, terminals, memory, or prior sessions', () => {
+test('search-only profile configuration omits terminal setup and retains its advisory tool list', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-search-only-'));
   const profilesRoot = path.join(root, 'profiles');
   const result = provisionHermesRuntimeProfiles({ profilesRoot, searchOnly: true });
@@ -336,24 +343,31 @@ test('default runtime profiles follow HERMES_HOME for isolated installations', (
   }
 });
 
-test('profiles with a terminal get the ghost-first guard; Google profiles do not', () => {
+test('full workspace profiles all receive the Ghost-first plugin; search-only profiles do not enable it', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-ghost-first-'));
-  const profilesRoot = path.join(root, 'profiles');
+  const profiles = [MIAOS_AGENT_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE,
+    MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE];
   try {
+    const profilesRoot = path.join(root, 'profiles');
     provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir: path.join(root, 'Documents', 'mia') });
-    for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE]) {
-      const config = fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8');
-      assert.match(config, new RegExp(`plugins:\\n  enabled:\\n    - ${GHOST_FIRST_PLUGIN}\\n`), profile);
+    for (const profile of profiles) {
+      const config = YAML.parse(fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8'));
+      assert.ok(config.plugins.enabled.includes(GHOST_FIRST_PLUGIN), profile);
       assert.ok(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN, '__init__.py')), profile);
+      assert.equal(config.platform_toolsets, undefined, 'does not introduce a gateway CLI toolset override');
     }
-    for (const profile of [MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE]) {
-      const config = fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8');
-      assert.doesNotMatch(config, new RegExp(GHOST_FIRST_PLUGIN), `${profile} cannot run ghost-cli`);
-      assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN)), false, profile);
+    for (const [label, options] of [['search-only', { searchOnly: true, workspaceDir: path.join(root, 'search-workspace') }],
+      ['no-workspace', { workspaceDir: '' }]]) {
+      const profilesRoot = path.join(root, label, 'profiles');
+      provisionHermesRuntimeProfiles({ profilesRoot, ...options });
+      for (const profile of profiles) {
+        const config = YAML.parse(fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8'));
+        assert.equal(config.terminal, undefined, profile);
+        assert.equal(config.plugins, undefined, profile);
+        assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN)), false, profile);
+      }
     }
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('ghost-first guard refuses Hermes browser tools until ghost-cli has run in the session', (t) => {
@@ -460,6 +474,57 @@ test('the latest turn model becomes the profile default and survives re-provisio
     assert.equal(setHermesProfileModel(MIAOS_BOT_HERMES_PROFILE, { provider: 'p', model: 'm' }, { profilesRoot }), false);
     assert.equal(fs.readFileSync(botConfig, 'utf8'), 'model: mine\n');
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('Google workspace profiles keep browser guards and MCP registration through provider switches', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-google-browser-switch-'));
+  const profilesRoot = path.join(root, 'profiles'), workspaceDir = path.join(root, 'workspace');
+  const profiles = [MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE];
+  const previous = new Map(['HERMES_PYTHON', 'MIA_GOOGLE_BROKER_URL', 'MIA_GOOGLE_BROKER_TOKEN'].map(key => [key, process.env[key]]));
+  const python = path.join(root, 'fixture-python'); fs.writeFileSync(python, 'fixture only');
+  process.env.HERMES_PYTHON = python;
+  process.env.MIA_GOOGLE_BROKER_URL = 'http://127.0.0.1:54321';
+  process.env.MIA_GOOGLE_BROKER_TOKEN = 't'.repeat(43);
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir });
+    for (const selection of [{ provider: 'openai-codex', model: 'gpt-5.6-luna' }, { provider: 'deepseek', model: 'deepseek-flash' }]) {
+      for (const profile of profiles) assert.equal(setHermesProfileModel(profile, selection, { profilesRoot }), true);
+      provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir });
+      for (const profile of profiles) {
+        const config = YAML.parse(fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8'));
+        assert.deepEqual(config.model, { default: selection.model, provider: selection.provider });
+        assert.equal(config.terminal.cwd, workspaceDir);
+        assert.equal(config.terminal.auto_source_bashrc, false);
+        assert.equal(config.terminal.shell_init_files.length, 1);
+        const guardPath = config.terminal.shell_init_files[0];
+        const guard = spawnSync('/bin/bash', ['-c', '. "$1"; open "$2"', 'mia-guard-test', guardPath, path.join(workspaceDir, 'report.html')],
+          { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
+        assert.equal(guard.status, 126, profile);
+        assert.match(guard.stderr, /external browser launch is disabled/i);
+        assert.ok(config.plugins.enabled.includes(GHOST_FIRST_PLUGIN), profile);
+        assert.ok(config.mcp_servers.google.tools.include.includes('google_sheets_get'), 'MCP registration survives model/provider changes');
+        assert.equal(config.platform_toolsets, undefined, 'top-level lists do not change the approved gateway defaults');
+        const plugin = path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN, '__init__.py');
+        const check = spawnSync('python3', ['-c', `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("installed_ghost_guard", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn): hooks[name] = fn
+m.register(Ctx())
+result = hooks["pre_tool_call"](tool_name="browser_navigate", args={"url":"https://example.test"}, session_id="fixture-session")
+print(json.dumps({"blocked":result.get("action") == "block"}))
+`, plugin], { encoding: 'utf8' });
+        assert.equal(check.status, 0, 'installed Google-profile plugin runs');
+        assert.equal(JSON.parse(check.stdout).blocked, true);
+      }
+    }
+  } finally {
+    for (const [key, value] of previous) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
