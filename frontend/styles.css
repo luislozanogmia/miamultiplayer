@@ -2624,8 +2624,6 @@
   .local-browser-btn:hover:not(:disabled){background:#0000000a;color:#30302e;}
   .local-browser-btn:disabled{cursor:default;opacity:.35;}
   .local-browser-btn svg{display:block;width:18px;height:18px;margin:auto;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
-  .local-browser-sidebar-btn{display:none;width:34px;flex:none;margin-left:6px;}
-  .local-browser-sidebar-btn .local-browser-mote{display:block;width:26px;height:24px;margin:auto;object-fit:contain;}
   .local-browser-toolbar{height:44px;min-height:44px;display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid var(--sand-border-subtle);background:#f7f7f5;}
   .local-browser-search-engine{display:flex;align-items:center;gap:2px;flex:none;height:32px;padding:2px;border:1px solid #d0d2ce;border-radius:9px;background:#fff;}
   .local-browser-search-engine-btn{appearance:none;display:grid;place-items:center;width:27px;height:26px;padding:5px;border:0;border-radius:6px;background:transparent;cursor:pointer;outline:none;}
@@ -2961,7 +2959,6 @@
   body.styled-skin.browser-collab-mode .chat-pre-reasoning-toggle[hidden]{display:none;}
   body.browser-collab-mode .chat-sidebar{position:fixed!important;z-index:130;inset:0 auto 0 0;width:var(--sand-sidebar-width)!important;display:flex!important;transform:translateX(-102%);transition:transform .16s ease;box-shadow:12px 0 30px #0000002b;}
   body.browser-collab-mode.browser-sidebar-open .chat-sidebar{transform:translateX(0);}
-  body.browser-collab-mode .local-browser-sidebar-btn{display:inline-flex;align-items:center;justify-content:center;}
   /* The drawer floats over the browser with no scrim, so it carries its own
      close affordance; outside collab mode the sidebar is a fixed column and
      the button stays hidden. */
