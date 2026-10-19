@@ -20,6 +20,9 @@ test("download check: documents pass, programs need review, disguised programs a
     assert.equal((await checkDownload(file("photo.jpg", "#!/bin/sh\nrm -rf ~"))).verdict, "blocked");
     assert.equal((await checkDownload(file("install.sh", "#!/bin/sh\n"))).verdict, "review");
     assert.equal((await checkDownload(file("setup.exe", "MZ\x90\x00"))).verdict, "review");
+    for (const name of ["invoice.lnk", "invoice.hta", "unknown.custom", "README"]) {
+      assert.equal((await checkDownload(file(name, "unrecognized contents"), { platform: "win32" })).verdict, "review", name);
+    }
 
     const calls = [];
     const rejected = await checkDownload(file("Tool.dmg", "koly"), { platform: "darwin", run: (cmd, args, _opts, done) => { calls.push([cmd, args]); done(new Error("rejected")); } });

@@ -52,3 +52,12 @@ test('ghost-cli lets a bot check its downloads in the app', () => {
     { HERMES_UI_SESSION_ID: 'session-123' });
   assert.deepEqual(sent, { method: 'downloads', params: { wait_ms: 5000, actor_session: 'session-123' } });
 });
+
+test('ghost instance validation includes the live actor identity before the first page action', () => {
+  for (const tool of ['ghost_instance_create', 'ghost_instance_list']) {
+    const sent = runGhostCli(['call', tool, '--arguments', '{"instance_id":"miaos","actor_session":"forged"}'],
+      { HERMES_UI_SESSION_ID: 'live-session' });
+    const status = tool === 'ghost_instance_create' ? sent.status : sent.instances[0].status;
+    assert.deepEqual(status, { method: 'status', params: { actor_session: 'live-session' } });
+  }
+});
