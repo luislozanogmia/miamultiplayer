@@ -28,7 +28,8 @@ process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = String(process.env.MIAOS_AUTOMATION_
   || path.join(RUNTIME_DIR, 'bot-artifacts');
 const { EFFECTIVE_RELEASE_PROFILE, MIAOS_AGENT_SEARCH_ONLY } = require('./release-profile');
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
-const { provisionHermesRuntimeProfiles } = require('./hermes-bot-profile');
+const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
+const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const { safeBrowserContext } = require('./browser-context');
 // Only terminal-free search releases receive the hosted-search credential.
 // Full local agents can execute commands and must not share that secret scope.
@@ -55,6 +56,7 @@ const {
   runInferenceViaHermesGateway,
   runSlashCommandViaHermesGateway,
   readHermesGatewaySessionControl,
+  cancelHermesGatewayTurn,
   setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
@@ -622,9 +624,12 @@ const nativeConversationDispatch = {
     }
     return result;
   },
-  cancelRunning(dispatch) {
+  async cancelRunning(dispatch) {
     const controller = dispatch && nativeDispatchAbortControllers.get(dispatch.id);
-    if (controller && !controller.signal.aborted) controller.abort();
+    if (controller && !controller.signal.aborted) {
+      await cancelHermesGatewayTurn(controller.signal);
+      controller.abort();
+    }
   },
 };
 
@@ -4901,9 +4906,11 @@ function googleWorkspaceStatusHandler(req, res) {
 async function googleWorkspaceAgentContextForOwner(ownerEmail, message) {
   const connector = googleAccountOwnerBinding.connectorFor(ownerEmail);
   if (!connector) {
-    return { text: 'Google Workspace connector (authoritative server state): NOT CONNECTED for this user. Ask them to connect it from Plugins.', connectionRevision: '' };
+    return { text: 'Google Workspace connector (authoritative server state): NOT CONNECTED for this user. Ask them to connect it from Plugins.', connectionRevision: '', status: { connected: false, state: 'not_connected' }, ownerAuthorized: false };
   }
-  const status = await connector.status();
+  let status;
+  try { status = await connector.status(); }
+  catch (_) { status = { connected: false, state: 'connection_error' }; }
   const result = await googleWorkspaceContext.buildGoogleWorkspaceAgentContext({
     // The authenticated event owner is resolved by native authorization
     // before this function is called. Google OAuth and resource operations are
@@ -4912,7 +4919,27 @@ async function googleWorkspaceAgentContextForOwner(ownerEmail, message) {
     ownerEmail,
     message,
   });
-  return { text: result.text, connectionRevision: status.connected ? status.connectionRevision : '' };
+  return { text: result.text, connectionRevision: status.connected ? status.connectionRevision : '', status, ownerAuthorized: true };
+}
+
+// Each agent receives the entire current snapshot even when unchanged. This
+// bounded cache only adds a change notice; losing it on restart cannot hide an
+// app or preserve access. Owner/agent isolation matters in shared rooms.
+const connectedAppsTurnRevisions = new Map();
+function connectedAppsForTurn(workspaceConnection, ownerEmail, conversation, agent, remember = true) {
+  const key = JSON.stringify([String(ownerEmail || '').trim().toLowerCase(), conversation.companyId, conversation.id, agent.id]);
+  const snapshot = buildConnectedAppsTurn({
+    ownerEmail, status: workspaceConnection.status,
+    ownerAuthorized: workspaceConnection.ownerAuthorized,
+    toolsConfigured: googleWorkspaceToolsConfigured(),
+    previousRevision: connectedAppsTurnRevisions.get(key),
+  });
+  if (remember) {
+    connectedAppsTurnRevisions.delete(key);
+    connectedAppsTurnRevisions.set(key, snapshot.revision);
+    if (connectedAppsTurnRevisions.size > 2000) connectedAppsTurnRevisions.delete(connectedAppsTurnRevisions.keys().next().value);
+  }
+  return snapshot;
 }
 
 // Legacy route intentionally unregistered.
@@ -6273,6 +6300,13 @@ function nativeBrowserContextNote(trigger, { ghostCli = true } = {}) {
   ].filter(Boolean).join('\n');
 }
 
+// Bot sessions keep the system prompt they started with, so the tab-list
+// pointer rides on every bot turn instead.
+function botBrowserTabsNote({ ghostCli = true } = {}) {
+  if (!ghostCli) return '';
+  return 'Your Mia browser tabs (not Google Sheets tabs) are in your own tab group. Before answering about them, list them with: ghost-cli call ghost_tab_list --arguments \'{"instance_id":"miaos"}\'';
+}
+
 function buildHermesGatewayTurnMessage(message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite, globalInstructions) {
   const actionInstruction = allowGoogleWorkspaceWrite
     && /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''))
@@ -6359,6 +6393,27 @@ function nativeBotSessionKey(profile, systemPrompt) {
 // /goal keeps working after a turn ends; those turns arrive with no dispatch
 // waiting, and this map is how they find their chat.
 const nativeGatewaySessionConversations = new Map();
+
+// The desktop browser asks which bot a live Hermes session belongs to, so a
+// page a bot opens lands in that bot's tab group. Mia is an explicit verified
+// identity; unknown sessions and inaccessible conversations never become Mia.
+app.get('/api/browser/actor', requireAuth, (req, res) => {
+  const sessionId = String(req.query.session || '').trim();
+  const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
+  if (!target) return res.status(200).json({ actor: null });
+  try {
+    nativeConversationService.getConversation({
+      companyId: target.companyId,
+      conversationId: target.conversationId,
+      principal: { principalId: String(req.userEmail || '').trim().toLowerCase(), principalType: 'user' },
+    });
+  } catch (_) {
+    return res.status(200).json({ actor: null });
+  }
+  return res.status(200).json({ actor: target.botId
+    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot') }
+    : { kind: 'mia' } });
+});
 // Per-session chain so a verdict that waits on the goal snapshot still posts
 // before the continuation turn that follows it.
 const nativeHermesSessionEventChains = new Map();
@@ -6816,14 +6871,23 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   // runs as its own dispatch once that turn ends.
   if (nativeSlashCommand(trigger)) return false;
   if (cancelNativeDispatchForInactiveUser(dispatch, trigger)) return true;
+  // A message sent while Mia is working can be steered into its existing
+  // turn. Refresh at this entry point too; a changed capability set must
+  // instead run as a new dispatch/session once the current work settles.
+  const conversation = nativeConversationRepository.getConversation({ companyId: dispatch.companyId, id: dispatch.conversationId });
+  if (!conversation) return false;
+  const workspaceConnection = await googleWorkspaceAgentContextForOwner(trigger.senderId, '');
+  const inventory = connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: GATEWAY_AGENT_ID }, false);
+  if (inventory.revision !== activeGateway.capabilityRevision) return false;
   let result;
   try {
-    result = await steerHermesGatewaySession(activeGateway.sessionId, message);
+    result = await steerHermesGatewaySession(activeGateway.sessionId, inventory.note + '\n\nUser: ' + message);
   } catch (_) {
     return false;
   }
   if (cancelNativeDispatchForInactiveUser(dispatch, trigger)) return true;
   if (!result || result.status !== 'queued') return false;
+  connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: GATEWAY_AGENT_ID });
   const claimToken = `native-steer-${crypto.randomUUID()}`;
   const claimed = nativeConversationRepository.claimDispatch({
     companyId: dispatch.companyId,
@@ -7137,20 +7201,17 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const googleWorkspaceWriteKinds = googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs);
   const googleWorkspaceWriteRequested = googleWorkspaceSheetWriteRequested || googleWorkspaceDocsWriteRequested;
   const workspaceConnection = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
-  const workspaceContext = workspaceConnection.text;
-  const googleWorkspaceConnected = /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''));
+  const connectionInventory = connectedAppsForTurn(workspaceConnection, senderLabel, conversation, agent);
+  const workspaceContext = [workspaceConnection.text, connectionInventory.note].filter(Boolean).join('\n\n');
+  const googleWorkspaceConnected = workspaceConnection.ownerAuthorized === true && workspaceConnection.status.connected === true;
   const safeGoogleRefs = googleWorkspaceConnected
     ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs)
     : [];
-  const googleToolRequested = safeGoogleRefs.length > 0
-    || /\b(?:google\s+(?:drive|docs?|sheets?|slides?|calendar)|gmail|inbox|email|calendar event|spreadsheet|presentation)\b/i.test(message);
-  const googleProfileAuthorized = googleWorkspaceConnected && googleToolRequested
-    && googleAccountOwnerBinding.connectorFor(senderLabel);
+  const googleProfileAuthorized = connectionInventory.googleToolsEnabled;
   const googleGatewayProfile = googleProfileAuthorized
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     : MIAOS_AGENT_HERMES_PROFILE;
-  const googleGatewaySessionKey = googleProfileAuthorized
-    ? googleGatewayProfile + ':' + workspaceConnection.connectionRevision : googleGatewayProfile;
+  const googleGatewaySessionKey = googleGatewayProfile + ':' + connectionInventory.revision;
   const googleBotProfile = googleProfileAuthorized
     ? MIAOS_BOT_GOOGLE_HERMES_PROFILE
     : MIAOS_BOT_HERMES_PROFILE;
@@ -7321,7 +7382,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleWorkspaceWriteAuthorized && googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
       globalInstructions.agent
     ), nativeBrowserContextNote(trigger, {
-      ghostCli: googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+      ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly,
     })].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
     const ownsPrivateAgentConversation = conversation.type === 'agent'
@@ -7351,7 +7412,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
-        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId };
+        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision };
         nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
         if (ownsPrivateAgentConversation) {
           nativeGatewaySessionConversations.set(String(session.sessionId), {
@@ -7410,7 +7471,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // session once; what changes per turn (platform state, Google write
     // instructions) travels with each message instead.
     const systemPrompt = buildHermesTaskPrompt(agent, [], '', senderLabel, '', [], false, globalInstructions.bot);
-    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + (googleProfileAuthorized ? '\nGoogle connection: ' + workspaceConnection.connectionRevision : ''));
+    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + '\nConnection capabilities: ' + connectionInventory.revision);
     const googleActionInstruction = googleWorkspaceWriteAuthorized
       && /authoritative server state\): CONNECTED/.test(String(platformContext || ''))
       ? googleWorkspaceActions.googleWorkspaceActionInstruction(
@@ -7422,7 +7483,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       platformContext ? `Current Mia platform state for this turn (authoritative):\n${String(platformContext).trim()}` : '',
       googleActionInstruction,
       nativePromptLine(trigger) || message,
-      nativeBrowserContextNote(trigger, { ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
+      nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
     ].filter(Boolean).join('\n\n');
     const botRunArgs = {
       storedSessionId: conversation.metadata && conversation.metadata.hermesGatewayProfile === sessionKey
@@ -7488,7 +7550,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     );
     const replyPrompt = [
       nativePromptLine(trigger) || message,
-      nativeBrowserContextNote(trigger, { ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
+      nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
     ].filter(Boolean).join('\n\n');
     inferenceResult = await scheduleInference(replyPrompt, 'reply', {
       ...inferenceOptions,

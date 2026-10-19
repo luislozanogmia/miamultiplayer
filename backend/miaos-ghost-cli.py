@@ -38,6 +38,7 @@ SUPPORTED_METHODS = {
     "ghost_scroll": "scroll",
     "ghost_wait": "wait",
     "ghost_file_open": "file_open",
+    "ghost_downloads": "downloads",
 }
 
 
@@ -84,11 +85,16 @@ def call_tool(tool_name: str, arguments: dict) -> dict:
     if instance_id != "miaos":
         raise ValueError("Mia exposes one native browser instance named 'miaos'.")
 
+    # Every bridge method, including the initial instance status check,
+    # carries the live session identity supplied by Hermes, never arguments.
+    actor_session = os.environ.get("HERMES_UI_SESSION_ID", "").strip()
+    actor_params = {"actor_session": actor_session[:200]} if actor_session else {}
+
     if tool_name == "ghost_instance_create":
-        status = transport.call("status", timeout=5)
+        status = transport.call("status", actor_params, timeout=5)
         return {"created": False, "instance_id": "miaos", "status": status}
     if tool_name == "ghost_instance_list":
-        status = transport.call("status", timeout=5)
+        status = transport.call("status", actor_params, timeout=5)
         return {"count": 1, "instances": [{"instance_id": "miaos", "status": status}]}
     if tool_name == "ghost_instance_close":
         raise ValueError("The Mia browser is app-owned and cannot be closed by Ghost CLI.")
@@ -98,8 +104,9 @@ def call_tool(tool_name: str, arguments: dict) -> dict:
         raise ValueError(f"Unsupported Mia Ghost command: {tool_name}")
     params = {
         key: value for key, value in arguments.items()
-        if key not in {"instance_id", "miaos", "open_browser", "reuse_only", "headless"}
+        if key not in {"instance_id", "miaos", "open_browser", "reuse_only", "headless", "actor_session"}
     }
+    params.update(actor_params)
     return transport.call(method, params)
 
 

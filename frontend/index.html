@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=20260822-1" />
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
-<link rel="stylesheet" href="styles.css?v=20260920-conversation-drawer-1" />
+<link rel="stylesheet" href="styles.css?v=20261019-omnibox-1" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
      never flashes while app.js is loading. app.js still reapplies the class
@@ -602,14 +602,14 @@
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
     <div class="native-browser-tabs-row" id="localBrowserTabsRow">
-      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
-        <img class="local-browser-mote" src="assets/mote/mote.svg" alt="" draggable="false" />
-      </button>
       <button type="button" class="local-browser-btn local-browser-close-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
     </div>
     <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off">
       <span class="local-browser-dot" id="localBrowserDot" aria-hidden="true" title="Connected"></span>
       <span class="local-browser-status" id="localBrowserStatus" hidden></span>
+      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M9.5 4.5v15"></path></svg>
+      </button>
       <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m0 0 6-6m-6 6 6 6"></path></svg></button>
       <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m0 0-6-6m6 6-6 6"></path></svg></button>
       <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"></path></svg></button>
@@ -633,14 +633,20 @@
       </button>
     </form>
     <div class="local-browser-screen" id="localBrowserScreen">
-      <section class="local-browser-downloads" id="localBrowserDownloads" aria-label="Downloads" hidden>
+      <img class="local-browser-snapshot" id="localBrowserSnapshot" alt="" aria-hidden="true" hidden />
+      <section class="local-browser-downloads" id="localBrowserDownloads" role="dialog" aria-label="Downloads" hidden>
         <header class="local-browser-downloads-head">
           <h2>Downloads</h2>
-          <button type="button" class="local-browser-downloads-clear" id="localBrowserDownloadsClear">Clear list</button>
-          <button type="button" class="local-browser-btn" id="localBrowserDownloadsClose" title="Close downloads" aria-label="Close downloads">&times;</button>
+          <button type="button" class="local-browser-downloads-clear" id="localBrowserDownloadsClear" title="Clears the list. Your files stay where they are.">Clear all</button>
+          <button type="button" class="local-browser-downloads-icon-btn" id="localBrowserDownloadsClose" title="Close downloads" aria-label="Close downloads">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+          </button>
         </header>
-        <p class="local-browser-downloads-note">Clearing the list keeps your files.</p>
-        <ul class="local-browser-downloads-list" id="localBrowserDownloadsList"></ul>
+        <label class="local-browser-downloads-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+          <input type="search" id="localBrowserDownloadsSearch" placeholder="Search downloads" aria-label="Search downloads" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="local-browser-downloads-list" id="localBrowserDownloadsList"></div>
         <p class="local-browser-downloads-empty" id="localBrowserDownloadsEmpty">Files you download in Mia's browser appear here.</p>
       </section>
       <div class="local-browser-empty" id="localBrowserEmpty">
@@ -1143,7 +1149,8 @@
 <script src="chat-scroll.js?v=20260921-scroll-follow-1"></script>
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
-    <script src="native-browser.js?v=20261015-browser-polish-1"></script>
-    <script src="app.js?v=20260920-conversation-drawer-1"></script>
+    <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
+    <script src="native-browser.js?v=20261019-omnibox-1"></script>
+    <script src="app.js?v=20261019-omnibox-1"></script>
 </body>
 </html>

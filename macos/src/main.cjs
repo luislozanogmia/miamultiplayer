@@ -1943,6 +1943,7 @@ function createWindow() {
     {
       statePath: path.join(app.getPath("userData"), "miaos-browser-state.json"),
       workspaceRoot: miaosWorkspacePath(),
+      resolveActor: sessionId => resolveBrowserActor(window, sessionId),
     },
   );
   const windowNativeBrowser = nativeBrowser;
@@ -2059,6 +2060,44 @@ async function loadMiaOS() {
     try { await mainWindow.loadFile(RENDERER_ENTRYPOINT); } catch (_) { /* window is closing */ }
     return false;
   }
+}
+
+// Hermes session id -> { actor, at }. A bot's browser calls arrive in bursts
+// from one session, so a short cache keeps each call off the backend.
+const browserActorCache = new Map();
+const BROWSER_ACTOR_TTL_MS = 60_000;
+
+// Asks the backend which bot a Ghost request's Hermes session belongs to,
+// through the signed-in app session. Only verified identities are cached.
+async function resolveBrowserActor(window, sessionId) {
+  const unavailable = () => new Error("Mia could not verify this browser session. Try again when the app connection is available.");
+  if (!backendUrl || !window || window.isDestroyed()) throw unavailable();
+  const cached = browserActorCache.get(sessionId);
+  if (cached && Date.now() - cached.at < BROWSER_ACTOR_TTL_MS) return cached.actor;
+  let actor;
+  try {
+    const url = new URL("/api/browser/actor", backendUrl);
+    url.searchParams.set("session", sessionId);
+    const response = await window.webContents.session.fetch(url.href, {
+      credentials: "include",
+      redirect: "error",
+      headers: { Origin: new URL(backendUrl).origin },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) throw unavailable();
+    const body = await response.json();
+    const found = body && body.actor;
+    if (found && found.kind === "mia" && found.botId == null) actor = { kind: "mia" };
+    else if (found && found.kind === "bot" && typeof found.botId === "string"
+        && /^[A-Za-z0-9_.:-]{1,120}$/.test(found.botId)) {
+      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "" };
+    } else throw unavailable();
+  } catch (_) {
+    throw unavailable();
+  }
+  if (browserActorCache.size > 200) browserActorCache.clear();
+  browserActorCache.set(sessionId, { actor, at: Date.now() });
+  return actor;
 }
 
 async function startGhostBridge() {

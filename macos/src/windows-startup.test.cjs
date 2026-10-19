@@ -29,7 +29,9 @@ test("preparation failure preserves desktop services for fallback retry", () => 
   const startup = source.slice(source.indexOf('if (hasSingleInstanceLock) app.whenReady()'));
   const recovery = startup.slice(startup.indexOf('} catch (error)'), startup.indexOf('if (!mainWindow'));
   assert.doesNotMatch(recovery, /\breturn\b/);
-  assert.match(startup, /if \(runtimeReady\) await loadMiaOS\(\)/);
+  const readyBlock = startup.match(/if \(runtimeReady\) \{([\s\S]*?)\n  \}/);
+  assert.ok(readyBlock, "normal startup is guarded by successful runtime preparation");
+  assert.match(readyBlock[1], /await loadMiaOS\(\);/);
   assert.ok(startup.indexOf('configureAutoUpdates();') > startup.indexOf('} catch (error)'));
   assert.ok(startup.indexOf('await startGhostBridge();') > startup.indexOf('} catch (error)'));
 });
