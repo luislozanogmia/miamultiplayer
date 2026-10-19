@@ -526,6 +526,12 @@ function getHermesGatewayClient() {
       maxTurns: MIAOS_AGENT_MAX_TURNS,
       onEvent: recordHermesGatewayEvent,
       beforeSpawn: removeStaleProfileCredentials,
+      secretEnv: process.env.MIA_GOOGLE_BROKER_URL && process.env.MIA_GOOGLE_BROKER_RUN_TOKEN ? {
+        MIA_GOOGLE_BROKER_URL: process.env.MIA_GOOGLE_BROKER_URL,
+        MIA_GOOGLE_BROKER_RUN_TOKEN: process.env.MIA_GOOGLE_BROKER_RUN_TOKEN,
+        MIA_GOOGLE_MCP_SERVER: path.join(__dirname, 'mia-google-workspace-mcp.py'),
+        MIA_GOOGLE_MCP_PYTHON: process.env.HERMES_PYTHON,
+      } : null,
     });
   }
   return hermesGatewayClient;

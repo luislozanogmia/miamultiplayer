@@ -15,6 +15,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require('./process-secrets');
 
 const DEFAULT_PORT = 9121;
 const CONNECT_TIMEOUT_MS = 30000;
@@ -203,6 +204,7 @@ class HermesGatewayClient {
     stopExternalGatewayImpl = stopExternalHermesGateway,
     beforeSpawn = null,
     waitForGatewayExitImpl = waitForRecordedGatewayExit,
+    secretEnv = null,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
     this.binary = String(binary || '').trim();
@@ -233,6 +235,7 @@ class HermesGatewayClient {
     this.stopExternalGatewayImpl = stopExternalGatewayImpl;
     this.beforeSpawn = typeof beforeSpawn === 'function' ? beforeSpawn : null;
     this.waitForGatewayExitImpl = waitForGatewayExitImpl;
+    this.secretEnv = secretEnv && typeof secretEnv === 'object' ? { ...secretEnv } : {};
     this.toolProgressMode = String(this.env.HERMES_TUI_TOOL_PROGRESS || '').trim().toLowerCase() === 'verbose'
       ? 'verbose'
       : 'all';
@@ -319,6 +322,7 @@ class HermesGatewayClient {
       // security postures and is therefore intentionally not set here.
       gatewayEnv.HERMES_TUI_MAX_TURNS = String(this.maxTurns);
       gatewayEnv.MIAOS_EXTERNAL_CHAT = '1';
+      if (Object.keys(this.secretEnv).length) gatewayEnv[PROCESS_SECRETS_MARKER] = '1';
       // The desktop server owns both native chat sessions and cron ticks.
       // Running the scheduler inside this process prevents a second launchd
       // Hermes gateway from drifting onto different credentials/configuration.
@@ -336,9 +340,10 @@ class HermesGatewayClient {
           // model switches). HERMES_HOME survives reinstalls.
           cwd: gatewayEnv.HERMES_HOME || os.homedir(),
           detached: false,
-          stdio: 'ignore',
+          stdio: Object.keys(this.secretEnv).length ? ['pipe', 'ignore', 'ignore'] : 'ignore',
         }
       );
+      if (Object.keys(this.secretEnv).length) sendProcessSecrets(child, this.secretEnv);
 
       // Mia owns only the local runtime it starts. Keep the child attached
       // so backend shutdown can terminate it; an already-listening external

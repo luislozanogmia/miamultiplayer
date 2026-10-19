@@ -197,26 +197,37 @@ function runGws(gwsBin, args, { credentials, cwd }) {
 }
 
 async function createGoogleWorkspaceBroker({ directory, safeStorage, gwsBin }) {
-  const token = crypto.randomBytes(32).toString("base64url");
+  const runToken = crypto.randomBytes(32).toString("base64url");
+  const adminToken = crypto.randomBytes(32).toString("base64url");
   const store = secureStore({ directory, safeStorage });
   await migrateLegacyFileCredential(directory, store);
   const server = http.createServer(async (req, res) => {
     const supplied = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
     const suppliedBytes = Buffer.from(supplied);
-    const tokenBytes = Buffer.from(token);
-    const authorized = /^[A-Za-z0-9_-]{43}$/.test(supplied)
-      && suppliedBytes.length === tokenBytes.length
-      && crypto.timingSafeEqual(suppliedBytes, tokenBytes);
+    const matches = expected => {
+      const expectedBytes = Buffer.from(expected);
+      return /^[A-Za-z0-9_-]{43}$/.test(supplied)
+        && suppliedBytes.length === expectedBytes.length
+        && crypto.timingSafeEqual(suppliedBytes, expectedBytes);
+    };
     const send = (status, value) => {
       res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(JSON.stringify(value));
     };
-    if (!authorized || req.method !== "POST") { send(403, { ok: false }); return; }
+    const endpointToken = req.url === "/run" ? runToken
+      : (["/credentials", "/logout"].includes(req.url) ? adminToken : null);
+    if (req.method !== "POST") { send(403, { ok: false }); return; }
+    if (!endpointToken) { send(400, { ok: false }); return; }
+    if (!matches(endpointToken)) { send(403, { ok: false }); return; }
     try {
       const body = await readJson(req);
-      if (req.url === "/credentials") { await store.save(body); send(200, { ok: true }); return; }
-      if (req.url === "/logout") { await store.clear(); send(200, { ok: true }); return; }
-      if (req.url !== "/run" || !validRun(body)) { send(400, { ok: false }); return; }
+      if (req.url === "/credentials") {
+        await store.save(body); send(200, { ok: true }); return;
+      }
+      if (req.url === "/logout") {
+        await store.clear(); send(200, { ok: true }); return;
+      }
+      if (!validRun(body)) { send(400, { ok: false }); return; }
       const credentials = await store.load();
       if (!credentials) { send(200, { code: 2, stdout: "", stderr: "" }); return; }
       send(200, await runGws(gwsBin, body.args, { credentials, cwd: body.cwd }));
@@ -226,7 +237,7 @@ async function createGoogleWorkspaceBroker({ directory, safeStorage, gwsBin }) {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
-  return { url: `http://127.0.0.1:${server.address().port}`, token,
+  return { url: `http://127.0.0.1:${server.address().port}`, runToken, adminToken,
     close: () => new Promise(resolve => server.close(resolve)) };
 }
 

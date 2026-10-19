@@ -142,7 +142,7 @@ test('dev login sends the injected client secret only in the token exchange and 
 test('packaged login stores the refresh token through the local credential broker', async t => {
   const brokerRequests = [];
   const brokerEnv = { MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321',
-    MIA_GOOGLE_BROKER_TOKEN: 't'.repeat(43) };
+    MIA_GOOGLE_BROKER_ADMIN_TOKEN: 'a'.repeat(43) };
   const login = await startNativeGoogleLogin({ env: brokerEnv, client, scopes: ['openid'],
     fetchImpl: async (url, options) => {
       if (url === 'https://oauth2.googleapis.com/token') {
@@ -155,6 +155,7 @@ test('packaged login stores the refresh token through the local credential broke
   assert.equal((await fetch(callback(login))).status,200);
   assert.equal(brokerRequests.length,1);
   assert.equal(brokerRequests[0].url,`${brokerEnv.MIA_GOOGLE_BROKER_URL}/credentials`);
+  assert.equal(brokerRequests[0].options.headers.Authorization, `Bearer ${brokerEnv.MIA_GOOGLE_BROKER_ADMIN_TOKEN}`);
   assert.deepEqual(JSON.parse(brokerRequests[0].options.body),{
     type:'authorized_user',client_id:client.client_id,refresh_token:'fixture-refresh',
   });

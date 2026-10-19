@@ -161,7 +161,7 @@ test('Mia registers its bundled Google Workspace MCP tool list for Mia and all B
   const previous = {
     HERMES_PYTHON: process.env.HERMES_PYTHON,
     MIA_GOOGLE_BROKER_URL: process.env.MIA_GOOGLE_BROKER_URL,
-    MIA_GOOGLE_BROKER_TOKEN: process.env.MIA_GOOGLE_BROKER_TOKEN,
+    MIA_GOOGLE_BROKER_RUN_TOKEN: process.env.MIA_GOOGLE_BROKER_RUN_TOKEN,
     HOME: process.env.HOME,
     USERPROFILE: process.env.USERPROFILE,
     GOOGLE_WORKSPACE_CLI_CONFIG_DIR: process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR,
@@ -169,7 +169,7 @@ test('Mia registers its bundled Google Workspace MCP tool list for Mia and all B
   try {
     process.env.HERMES_PYTHON = python;
     process.env.MIA_GOOGLE_BROKER_URL = 'http://127.0.0.1:54321';
-    process.env.MIA_GOOGLE_BROKER_TOKEN = 't'.repeat(43);
+    process.env.MIA_GOOGLE_BROKER_RUN_TOKEN = 'r'.repeat(43);
     process.env.HOME = root;
     process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(root, 'google-profile');
     assert.equal(googleWorkspaceToolsConfigured(), true);
@@ -187,7 +187,7 @@ test('Mia registers its bundled Google Workspace MCP tool list for Mia and all B
     assert.match(googleAgent, /google_sheets_get/);
     assert.match(googleAgent, /google_docs_create/);
     assert.match(googleAgent, /google_slides_add_text_slide/);
-    assert.doesNotMatch(bot, /mcp_servers|MIA_GOOGLE_BROKER_URL|MIA_GOOGLE_BROKER_TOKEN/);
+    assert.doesNotMatch(bot, /mcp_servers|MIA_GOOGLE_BROKER_URL|MIA_GOOGLE_BROKER_RUN_TOKEN/);
     assert.match(googleBot, /mcp_servers:\n  google:/);
     assert.match(googleBot, /google_gmail_list/);
     assert.match(googleBot, /google_calendar_create/);
@@ -199,8 +199,8 @@ test('Mia registers its bundled Google Workspace MCP tool list for Mia and all B
     assert.doesNotMatch(googleBot, /google_drive_trash_file/);
     assert.match(googleAgent, /google_drive_get_content/);
     for (const profile of [googleAgent, googleBot]) {
-      assert.ok(profile.includes('MIA_GOOGLE_BROKER_URL: "http://127.0.0.1:54321"'));
-      assert.ok(profile.includes(`MIA_GOOGLE_BROKER_TOKEN: ${JSON.stringify('t'.repeat(43))}`));
+      assert.doesNotMatch(profile, /MIA_GOOGLE_BROKER_|\$\{env:/, 'broker transport credentials and references stay outside model-readable config');
+      assert.doesNotMatch(profile, /r{43}/, 'the broker credential is never written to a model-readable profile');
       assert.doesNotMatch(profile, /HERMES_GWS_BIN|GOOGLE_WORKSPACE_CLI_CONFIG_DIR/);
       assert.doesNotMatch(profile, /\nterminal:/, 'without a configured workspace there is no terminal setup');
       assert.match(profile, /\ntools:\n  tool_search:\n    enabled: "off"\n/, 'Google tools are shown directly, not behind tool_search');
@@ -483,11 +483,11 @@ test('Google workspace profiles keep browser guards and MCP registration through
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-google-browser-switch-'));
   const profilesRoot = path.join(root, 'profiles'), workspaceDir = path.join(root, 'workspace');
   const profiles = [MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE];
-  const previous = new Map(['HERMES_PYTHON', 'MIA_GOOGLE_BROKER_URL', 'MIA_GOOGLE_BROKER_TOKEN'].map(key => [key, process.env[key]]));
+  const previous = new Map(['HERMES_PYTHON', 'MIA_GOOGLE_BROKER_URL', 'MIA_GOOGLE_BROKER_RUN_TOKEN'].map(key => [key, process.env[key]]));
   const python = path.join(root, 'fixture-python'); fs.writeFileSync(python, 'fixture only');
   process.env.HERMES_PYTHON = python;
   process.env.MIA_GOOGLE_BROKER_URL = 'http://127.0.0.1:54321';
-  process.env.MIA_GOOGLE_BROKER_TOKEN = 't'.repeat(43);
+  process.env.MIA_GOOGLE_BROKER_RUN_TOKEN = 'r'.repeat(43);
   try {
     provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir });
     for (const selection of [{ provider: 'openai-codex', model: 'gpt-5.6-luna' }, { provider: 'deepseek', model: 'deepseek-flash' }]) {
