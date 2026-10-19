@@ -4,7 +4,8 @@
 
 The candidate builds on browser PR #50 through b6cd3d6 (including 17c2ae1),
 with explicit-address preservation, screenshot lifecycle and delayed-history
-fixes. `macos/package.json` is authoritative and the lockfile agrees.
+fixes. It also includes PR #49's unused Contacts permission removal and the
+per-turn Google connection/tool refresh requested for Mia and bots. `macos/package.json` is authoritative and the lockfile agrees.
 
 The first browser owner fix wave ends at ec254b2; Google tool visibility is
 94bd43f, address suggestions c97781e, and the address-row bots control b6cd3d6.
@@ -42,7 +43,7 @@ merge, build, upload, publication or OTA verification.
 - Frontend: 319 automated tests passed, including explicit HTTPS, delayed
   history/keyboard restoration and screenshot lifecycle regressions. The new
   regression cases fail their earlier source baselines.
-- Backend: 554 passed, 3 optional fixture tests skipped. Packaging contracts:
+- Backend: 562 passed, 3 optional fixture tests skipped. Packaging contracts:
   34 passed, 2 platform/runtime-dependent tests skipped.
 - Desktop source tests: 219 passed after correcting a pre-existing startup
   assertion that expected a single-line conditional. Startup application code
@@ -62,3 +63,29 @@ merge, build, upload, publication or OTA verification.
 
 ![Native address after Enter preserves HTTPS](screenshots/browser-0.2.19-https.png)
 ![Reopened suggestions cover the current page](screenshots/browser-0.2.19-suggestions.png)
+
+## Connection changes included in the train
+
+Every dispatched Mia/bot turn receives the authorized owner's current Google
+connection/account/access and configured tool catalog. Connection, grant,
+account, access or runtime changes alter the capability revision, invalidating
+older resume bindings. A busy turn is steered only under the same revision;
+otherwise the new message waits for a fresh dispatch. The current snapshot is
+still supplied when unchanged; the bounded revision cache is informational.
+
+The Google MCP server keeps the short `google` name and directly exposed tool
+catalog. Full Google profiles retain the normal guarded terminal/browser
+integration. This does not change the deliberately trusted full default Hermes
+CLI toolset into a connector-only sandbox. Snapshot data excludes credentials,
+raw provider responses and message contents. Tool configuration is not proof
+of a registered tool or a successful external action.
+
+The requested grant is openid, userinfo.email, gmail.modify, calendar.events
+and drive.file. Removing Contacts does not revoke an older Google grant;
+existing users may still have an earlier permission until they revoke it.
+
+Source review and unit coverage include connection replacement/disconnect,
+owner isolation, non-English follow-ups, resume invalidation and busy steering.
+A final native connected-account turn remains required after this integration;
+no new claim of a completed OAuth replacement or external Google action follows
+from the fixture tests alone.

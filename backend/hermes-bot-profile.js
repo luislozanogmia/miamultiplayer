@@ -20,6 +20,9 @@ const CLAUDE_SUBSCRIPTION_PLUGIN = 'claude-subscription-directsdk-experimental';
 const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
 // Refuses Hermes' own browser tools until the session has tried ghost-cli.
 const GHOST_FIRST_PLUGIN = 'mia-ghost-first';
+// These top-level lists describe profile intent; the pinned gateway uses its
+// full CLI defaults because Mia does not set platform_toolsets.cli. Google
+// MCP tools are additive, not a confinement boundary for other runtime tools.
 const FULL_AGENT_TOOLSETS = Object.freeze(['file', 'terminal', 'memory', 'session_search', 'todo', 'clarify']);
 const SEARCH_ONLY_TOOLSETS = Object.freeze(['web', 'todo', 'clarify']);
 const GOOGLE_WORKSPACE_MCP_SERVER = 'google';
@@ -129,6 +132,12 @@ function googleWorkspaceMcpConfig() {
     '  tool_search:',
     '    enabled: "off"',
   ];
+}
+
+// Capability only: callers must never expose the generated config or broker
+// credentials when describing available connected-app tools to a model.
+function googleWorkspaceToolsConfigured() {
+  return googleWorkspaceMcpConfig().length > 0;
 }
 
 // Hermes' background_review auxiliary (agent/background_review.py) forks a
@@ -347,9 +356,9 @@ function setHermesProfileModel(profile, selection, { profilesRoot = path.join(he
   return true;
 }
 
-// The guarded terminal both profiles share: workspace cwd plus the shell
+// The guarded terminal all full-mode profiles share: workspace cwd plus the shell
 // guard that keeps browser launches inside the app-owned Mia browser.
-// Returns undefined (no terminal toolset) in search-only mode or when no
+// Returns undefined (no workspace terminal configuration) in search-only mode or when no
 // workspace is configured.
 function guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }) {
   const configuredWorkspace = workspaceDir === undefined
@@ -371,9 +380,8 @@ function provisionHermesBotProfile({
   searchOnly = MIAOS_AGENT_SEARCH_ONLY,
   workspaceDir,
 } = {}) {
-  // Ordinary bot work may use the guarded terminal. Google tools live in a
-  // separate no-terminal profile so the model cannot bypass their curated
-  // MCP surface to inspect or invoke raw credential machinery.
+  // Bot and Google-enabled bot profiles share the same full-mode guarded
+  // terminal posture; the Google profile adds the app's MCP connection tools.
   return provisionRuntimeProfile({
     profilesRoot,
     profile: MIAOS_BOT_HERMES_PROFILE,
@@ -387,13 +395,14 @@ function provisionHermesBotProfile({
 function provisionHermesGoogleBotProfile({
   profilesRoot = path.join(hermesHome(), 'profiles'),
   searchOnly = MIAOS_AGENT_SEARCH_ONLY,
+  workspaceDir,
 } = {}) {
   return provisionRuntimeProfile({
     profilesRoot,
     profile: MIAOS_BOT_GOOGLE_HERMES_PROFILE,
-    toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['memory', 'todo', 'clarify'],
+    toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
     maxTurns: 100,
-    terminal: undefined,
+    terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForBot(),
   });
@@ -436,9 +445,9 @@ function provisionHermesGoogleAgentProfile({
   return provisionRuntimeProfile({
     profilesRoot,
     profile: MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
-    toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : ['memory', 'session_search', 'todo', 'clarify'],
+    toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : FULL_AGENT_TOOLSETS,
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
-    terminal: undefined,
+    terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForGateway(),
     editsBots: !searchOnly,
@@ -468,6 +477,7 @@ module.exports = {
   SEARCH_ONLY_TOOLSETS,
   GOOGLE_WORKSPACE_MCP_SERVER,
   GOOGLE_WORKSPACE_MCP_TOOLS,
+  googleWorkspaceToolsConfigured,
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   SHELL_GUARD,
