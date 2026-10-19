@@ -9,6 +9,31 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.19] — 2026-10-19
+
+### Added
+- Let bots work in separate browser tab groups while the user and Mia keep
+  their own conversations; show bot activity and return to a bot's tabs.
+- Complete addresses from local browsing history, with matching suggestions,
+  site icons and keyboard navigation.
+
+### Changed
+- Open Your bots from a left-pane icon at the start of the address row;
+  remove the separate pink mote from the tab strip.
+- Present the Downloads panel over a still of the current page.
+
+### Fixed
+- Preserve explicitly typed HTTPS when completing an address from history.
+- Discard dismissed or outdated page captures, and preserve typed text when
+  delayed history responses arrive or Escape removes a completion.
+- Keep later chat choices selected when a previous browser chat opens late.
+- Reject unresolved browser actors, confirm potentially unsafe downloads,
+  and wait for runtime cancellation acknowledgement before releasing a tab.
+- Expose Google tools directly to bots using the Google connection profile.
+
+### Notes
+- Windows packages remain unsigned; macOS packages must be signed and notarized.
+
 ## [0.2.18] — 2026-10-16
 
 ### Added
