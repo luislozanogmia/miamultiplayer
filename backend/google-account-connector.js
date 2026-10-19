@@ -133,7 +133,7 @@ function defaultProcessRunner(file, args, options = {}) {
 
 async function runBroker(env, args, cwd, fetchImpl = fetch) {
   const base = String(env.MIA_GOOGLE_BROKER_URL || '').trim();
-  const token = String(env.MIA_GOOGLE_BROKER_TOKEN || '');
+  const token = String(env.MIA_GOOGLE_BROKER_RUN_TOKEN || '');
   if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base) || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
   try {
     const response = await fetchImpl(`${base}/run`, { method: 'POST', redirect: 'error', headers: {
@@ -536,10 +536,11 @@ function createGoogleAccountConnector(options = {}) {
     // A pending browser login can otherwise finish after account deletion and
     // repopulate the process-scoped profile with the deleted user's token.
     cancelActiveLogin();
-    if (env.MIA_GOOGLE_BROKER_URL && env.MIA_GOOGLE_BROKER_TOKEN) {
+    const adminToken = env.MIA_GOOGLE_BROKER_ADMIN_TOKEN;
+    if (env.MIA_GOOGLE_BROKER_URL && adminToken) {
       try {
         const response = await fetchImpl(`${env.MIA_GOOGLE_BROKER_URL}/logout`, { method: 'POST', redirect: 'error', headers: {
-          Authorization: `Bearer ${env.MIA_GOOGLE_BROKER_TOKEN}`, 'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json',
         }, body: '{}' });
         return response.ok ? publicStatus('not_connected') : publicStatus('connection_error');
       } catch (_) { return publicStatus('connection_error'); }

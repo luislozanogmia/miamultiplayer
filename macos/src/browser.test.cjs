@@ -1193,7 +1193,7 @@ test("tab groups survive a restart; version 2 state still loads", () => {
   }
 });
 
-test("bot tab groups: a bot's pages land in its own group, never the user's tab", async () => {
+test("bot tab groups: a bot's pages land in its own group, never Mia's tab", async () => {
   const sessions = { "s-scout": { botId: "bot-scout", name: "Scout" }, "s-pat": { botId: "bot-pat", name: "Pat" } };
   const resolved = [];
   const h = harness({ resolveActor: async sessionId => { resolved.push(sessionId); return knownActor(sessions)(sessionId); } });
@@ -1213,7 +1213,7 @@ test("bot tab groups: a bot's pages land in its own group, never the user's tab"
   assert.equal(state.tabs.find(t => t.id === scoutNav.tab_id).groupId, scoutGroup.id);
   assert.equal(state.tabs.find(t => t.id === mine).groupId, null);
 
-  // With the user back on their tab, the bot keeps working in its own tab.
+  // With Mia's tab back in front, the bot keeps working in its own tab.
   h.command("select", { id: mine });
   const scoutRead = await h.controller.protocol("navigate", { url: "example.edu", actor_session: "s-scout" });
   assert.equal(scoutRead.tab_id, scoutNav.tab_id);
@@ -1283,24 +1283,29 @@ test("bot tab groups: a bot lists and manages only its own tabs", async () => {
   const scoutStatus = await h.controller.protocol("status", { actor_session: "s-scout" });
   assert.equal(scoutStatus.your_tabs, 2);
 
-  // Mia (no bot) still sees every tab.
+  // Mia is the controller of every tab outside a bot-owned group and can
+  // oversee every tab.
   const all = await h.controller.protocol("tab_list", { actor_session: "s-mia" });
   assert.equal(all.tabs.length, 4);
   assert.equal(all.tabs.find(t => t.tab_id === mine).group, null);
 
   await assert.rejects(h.controller.protocol("tab_close", { tab_id: mine, actor_session: "s-scout" }), /not one of your tabs/);
   await assert.rejects(h.controller.protocol("tab_switch", { tab_id: pat.tab_id, actor_session: "s-scout" }), /not one of your tabs/);
+  await assert.rejects(h.controller.protocol("read", { tab_id: mine, actor_session: "s-scout" }), /not one of your tabs/);
+  const status = await h.controller.protocol("status", { actor_session: "s-scout" });
+  assert.equal(status.tabs, 2, "bot status counts only tabs assigned to that bot");
+  assert.ok([scoutA.tab_id, scoutB.tab_id].includes(status.active_tab_id), "bot status never exposes Mia's foreground tab");
   await h.controller.protocol("tab_switch", { tab_id: scoutB.tab_id, actor_session: "s-scout" });
   assert.equal(h.command("state").activeId, scoutB.tab_id);
 });
 
-test("bot tab groups: bots work at the same time without taking the user's tab or each other's", async () => {
+test("bot tab groups: bots work at the same time without taking Mia's tab or each other's", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "A" }, "s-b": { botId: "bot-b", name: "B" }, "s-c": { botId: "bot-c", name: "C" } };
   const h = harness({ resolveActor: knownActor(sessions) });
   const mine = h.command("new").activeId;
   h.command("navigate", { value: "https://example.com" });
 
-  // Two bots open pages at once; the user's tab stays in front.
+  // Two bots open pages at once; Mia's tab stays in front.
   const [a, b] = await Promise.all([
     h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" }),
     h.controller.protocol("navigate", { url: "b.example", actor_session: "s-b", wait: "none" }),
@@ -1310,12 +1315,14 @@ test("bot tab groups: bots work at the same time without taking the user's tab o
   assert.notEqual(state.tabs.find(t => t.id === a.tab_id).groupId, state.tabs.find(t => t.id === b.tab_id).groupId);
 
   // Neither bot can drive the other's tab.
-  await assert.rejects(h.controller.protocol("navigate", { url: "x.example", tab_id: b.tab_id, actor_session: "s-a", wait: "none" }), /belongs to another bot/);
-  await assert.rejects(h.controller.protocol("read", { tab_id: a.tab_id, actor_session: "s-b" }), /belongs to another bot/);
+  await assert.rejects(h.controller.protocol("navigate", { url: "x.example", tab_id: b.tab_id, actor_session: "s-a", wait: "none" }), /not one of your tabs/);
+  await assert.rejects(h.controller.protocol("read", { tab_id: a.tab_id, actor_session: "s-b" }), /not one of your tabs/);
 
-  // A bot with no tab of its own may not act on another bot's tab in front.
+  // A bot with no tab of its own may not act on any other controller's tab.
   h.command("select", { id: a.tab_id });
-  await assert.rejects(h.controller.protocol("eval", { script: "() => 1", actor_session: "s-c" }), /belongs to another bot/);
+  await assert.rejects(h.controller.protocol("eval", { script: "() => 1", actor_session: "s-c" }), /no browser tab yet/);
+  h.command("select", { id: mine });
+  await assert.rejects(h.controller.protocol("read", { actor_session: "s-c" }), /no browser tab yet/);
 
   // Screenshots and keys borrow the front for one action, then give it back.
   h.command("select", { id: mine });
@@ -1324,6 +1331,56 @@ test("bot tab groups: bots work at the same time without taking the user's tab o
     h.controller.protocol("key", { key: "Tab", actor_session: "s-b" }).catch(() => {}),
   ]);
   assert.equal(h.command("state").activeId, mine);
+});
+
+test("bot id mia cannot impersonate Mia's tab controller", async () => {
+  const h = harness({ resolveActor: knownActor({ "s-collision": { botId: "mia", name: "Other" } }) });
+  const miaTab = h.command("new").activeId;
+  await assert.rejects(h.controller.protocol("read", { tab_id: miaTab, actor_session: "s-collision" }), /not one of your tabs/);
+  const status = await h.controller.protocol("status", { actor_session: "s-collision" });
+  assert.equal(status.tabs, 0);
+  assert.equal(status.active_tab_id, null);
+  const own = await h.controller.protocol("navigate", { url: "example.net", actor_session: "s-collision", wait: "none" });
+  assert.notEqual(own.tab_id, miaTab);
+});
+
+test("queued bot screenshots recheck ownership after a group is assigned to Mia", async () => {
+  const h = harness({ resolveActor: knownActor({ "s-a": { botId: "bot-a", name: "Scout" } }) });
+  h.command("new");
+  const opened = await h.controller.protocol("tab_open", { url: "example.net", actor_session: "s-a", wait: "none" });
+  const page = h.views.at(-1).webContents;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let captures = 0;
+  page.capturePage = async () => { captures++; await gate; return { isEmpty: () => false, toJPEG: () => Buffer.from("jpg"), toPNG: () => Buffer.from("png"), getSize: () => ({ width: 1, height: 1 }) }; };
+  const first = h.controller.protocol("screenshot", { actor_session: "s-a" });
+  const firstDenied = assert.rejects(first, /no longer assigned/);
+  while (!captures) await new Promise(resolve => setImmediate(resolve));
+  const second = h.controller.protocol("screenshot", { actor_session: "s-a" });
+  const denied = assert.rejects(second, /no longer assigned/);
+  await new Promise(resolve => setImmediate(resolve));
+  const groupId = h.command("state").tabs.find(tab => tab.id === opened.tab_id).groupId;
+  h.command("groupAssignBot", { groupId, bot: null });
+  release();
+  await firstDenied;
+  await denied;
+  assert.equal(captures, 1);
+});
+
+test("bot vacuum never reads a tab reassigned while its navigation is pending", async () => {
+  const h = harness({ resolveActor: knownActor({ "s-a": { botId: "bot-a", name: "Scout" } }) });
+  h.command("new");
+  const opened = await h.controller.protocol("tab_open", { url: "example.net", actor_session: "s-a", wait: "none" });
+  const page = h.views.at(-1).webContents;
+  let loading = true;
+  page.isLoading = () => loading;
+  const pending = h.controller.protocol("vacuum", { url: "example.org", wait: "load", actor_session: "s-a" });
+  const denied = assert.rejects(pending, /no longer assigned/);
+  await new Promise(resolve => setImmediate(resolve));
+  const groupId = h.command("state").tabs.find(tab => tab.id === opened.tab_id).groupId;
+  h.command("groupAssignBot", { groupId, bot: null });
+  loading = false;
+  await denied;
 });
 
 test("bot tab groups: the state marks a tab while its bot is working", async () => {
@@ -1354,11 +1411,11 @@ test("bot tab groups: the golden glow stays through a reply and comes back after
   await flush();
   assert.equal(botPage.insertedCSS, 2);
 
-  // The tab strip holds the bot's tab; the user's own tab never glows.
+  // The tab strip holds the bot's tab; Mia's own tab never glows.
   await h.command("botHeld", { ids: [opened.tab_id, mine] });
   await flush();
   const userPage = h.views.find(v => v.webContents !== botPage).webContents;
-  assert.ok(!userPage.insertedCSS, "the user's tab is never lit");
+  assert.ok(!userPage.insertedCSS, "Mia's tab is never lit as bot work");
 });
 
 test("bot tab groups: the glow is gold for Mia and the bot's own color for a bot", async () => {
@@ -1381,7 +1438,7 @@ test("bot tab groups: the glow is gold for Mia and the bot's own color for a bot
   assert.ok(opened.tab_id);
 });
 
-test("bot tab groups: a bot working in the background never takes the user's focus", async () => {
+test("bot tab groups: a bot working in the background never takes foreground focus", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
   const h = harness({ resolveActor: knownActor(sessions) });
   h.command("new");
@@ -1510,7 +1567,7 @@ test("bot tab groups: the owner menu assigns a bot and survives a restart", asyn
     assert.equal(menu.find(item => item.label === "Scout").icon.reps[0].dataURL, png);
     assert.equal(menu.find(item => item.label === "Pat").icon, undefined, "only PNG data URLs become icons");
     assert.deepEqual(plain(menu.filter(item => item.label).map(item => [item.label, item.checked])),
-      [["Mia (no bot)", true], ["Scout", false], ["Pat", false]]);
+      [["Mia", true], ["Scout", false], ["Pat", false]]);
     menu.find(item => item.label === "Scout").click();
     await new Promise(setImmediate);
     let state = first.command("state");

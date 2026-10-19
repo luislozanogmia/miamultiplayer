@@ -23,6 +23,10 @@ automatically through the in-app updater.
 - Present the Downloads panel over a still of the current page.
 
 ### Fixed
+- Enforce Mia-or-bot browser tab assignments for explicit targets, queued
+  actions and ownership changes while a bot is waiting.
+- Keep Google broker credentials out of agent-readable profile files and
+  process launch environments; separate tool execution from connection management.
 - Preserve explicitly typed HTTPS when completing an address from history.
 - Discard dismissed or outdated page captures, and preserve typed text when
   delayed history responses arrive or Escape removes a completion.

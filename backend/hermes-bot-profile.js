@@ -106,7 +106,7 @@ function hermesHome() {
 function googleWorkspaceMcpConfig() {
   const python = String(process.env.HERMES_PYTHON || '').trim();
   const brokerUrl = String(process.env.MIA_GOOGLE_BROKER_URL || '').trim();
-  const brokerToken = String(process.env.MIA_GOOGLE_BROKER_TOKEN || '').trim();
+  const brokerToken = String(process.env.MIA_GOOGLE_BROKER_RUN_TOKEN || '').trim();
   if (!python || !/^http:\/\/127\.0\.0\.1:\d+$/.test(brokerUrl)
       || !/^[A-Za-z0-9_-]{43}$/.test(brokerToken)) return [];
   const server = path.join(__dirname, 'mia-google-workspace-mcp.py');
@@ -119,9 +119,8 @@ function googleWorkspaceMcpConfig() {
     `    command: ${JSON.stringify(python)}`,
     '    args:',
     `      - ${JSON.stringify(server)}`,
-    '    env:',
-    `      MIA_GOOGLE_BROKER_URL: ${JSON.stringify(brokerUrl)}`,
-    `      MIA_GOOGLE_BROKER_TOKEN: ${JSON.stringify(brokerToken)}`,
+    // The trusted gateway recognizes this exact adapter path. Its credential
+    // arrives over the private MCP pipe before initialization, never in config.
     '    tools:',
     '      include:',
     ...GOOGLE_WORKSPACE_MCP_TOOLS.map((name) => `        - ${name}`),
