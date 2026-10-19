@@ -897,6 +897,11 @@ async function runSlashCommandViaHermesGateway({
   });
 }
 
+// Stop shares the exact client and AbortSignal used by Mia, bot and standalone turns.
+async function cancelHermesGatewayTurn(signal, client = getHermesGatewayClient()) {
+  return client.cancelTurn(signal);
+}
+
 async function readHermesGatewaySessionControl(sessionId, client = getHermesGatewayClient()) {
   return client.readSessionControl(sessionId);
 }
@@ -940,6 +945,7 @@ module.exports = {
   runSlashCommandViaHermesGateway,
   persistentSessionOptions,
   readHermesGatewaySessionControl,
+  cancelHermesGatewayTurn,
   setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,

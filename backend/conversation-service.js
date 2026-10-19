@@ -558,13 +558,22 @@ function createConversationService({ repository, authorization, realtime = null,
 
   async function stopDispatch({ companyId, conversationId, principal, dispatchId }) {
     authorization.authorize(callerPrincipal(principal, companyId, conversationId, 'send'));
+    const id = required(dispatchId, 'dispatchId');
+    const current = repository.getDispatch({ companyId, id });
+    if (!current || current.conversationId !== conversationId) {
+      const error = new Error('dispatch not found'); error.code = 'NOT_FOUND'; throw error;
+    }
+    // Do not durably cancel on a failed/unknown runtime acknowledgement.
+    // Independent turn completion/failure can still change its row. Even a
+    // terminal row may have an in-memory runtime from an earlier stop attempt,
+    // so let the runtime owner check it before returning idempotent success.
+    if (dispatch && typeof dispatch.cancelRunning === 'function') await dispatch.cancelRunning(current);
     const result = repository.cancelDispatch({
       companyId,
       conversationId,
-      id: required(dispatchId, 'dispatchId'),
+      id,
     });
     if (!result.idempotent) {
-      if (dispatch && typeof dispatch.cancelRunning === 'function') await dispatch.cancelRunning(result.dispatch);
       postStopNotice({ companyId, conversationId, stoppedDispatch: result.dispatch });
     }
     return { ...result, dispatch: publicDispatch(result.dispatch) };

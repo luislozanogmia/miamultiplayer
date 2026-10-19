@@ -55,6 +55,7 @@ const {
   runInferenceViaHermesGateway,
   runSlashCommandViaHermesGateway,
   readHermesGatewaySessionControl,
+  cancelHermesGatewayTurn,
   setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
@@ -622,9 +623,12 @@ const nativeConversationDispatch = {
     }
     return result;
   },
-  cancelRunning(dispatch) {
+  async cancelRunning(dispatch) {
     const controller = dispatch && nativeDispatchAbortControllers.get(dispatch.id);
-    if (controller && !controller.signal.aborted) controller.abort();
+    if (controller && !controller.signal.aborted) {
+      await cancelHermesGatewayTurn(controller.signal);
+      controller.abort();
+    }
   },
 };
 
