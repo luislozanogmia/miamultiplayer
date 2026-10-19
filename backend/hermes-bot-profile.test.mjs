@@ -15,6 +15,8 @@ const {
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   GHOST_FIRST_PLUGIN,
+  GOOGLE_WORKSPACE_MCP_SERVER,
+  GOOGLE_WORKSPACE_MCP_TOOLS,
   provisionHermesRuntimeProfiles,
   setHermesProfileModel,
 } = require('./hermes-bot-profile');
@@ -173,13 +175,13 @@ test('Mia registers its bounded bundled Google Workspace tools for Mia and all B
     const googleAgent = fs.readFileSync(path.join(profilesRoot, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
     const bot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_HERMES_PROFILE, 'config.yaml'), 'utf8');
     const googleBot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
-    assert.doesNotMatch(agent, /mia-google-workspace|google_sheets_get|google_docs_create|google_slides/);
-    assert.match(googleAgent, /mcp_servers:\n  mia-google-workspace:/);
+    assert.doesNotMatch(agent, /mcp_servers|google_sheets_get|google_docs_create|google_slides/);
+    assert.match(googleAgent, /mcp_servers:\n  google:/);
     assert.match(googleAgent, /google_sheets_get/);
     assert.match(googleAgent, /google_docs_create/);
     assert.match(googleAgent, /google_slides_add_text_slide/);
-    assert.doesNotMatch(bot, /mia-google-workspace|MIA_GOOGLE_BROKER_URL|MIA_GOOGLE_BROKER_TOKEN/);
-    assert.match(googleBot, /mcp_servers:\n  mia-google-workspace:/);
+    assert.doesNotMatch(bot, /mcp_servers|MIA_GOOGLE_BROKER_URL|MIA_GOOGLE_BROKER_TOKEN/);
+    assert.match(googleBot, /mcp_servers:\n  google:/);
     assert.match(googleBot, /google_gmail_list/);
     assert.match(googleBot, /google_calendar_create/);
     assert.match(googleBot, /google_drive_create/);
@@ -194,6 +196,13 @@ test('Mia registers its bounded bundled Google Workspace tools for Mia and all B
       assert.ok(profile.includes(`MIA_GOOGLE_BROKER_TOKEN: ${JSON.stringify('t'.repeat(43))}`));
       assert.doesNotMatch(profile, /HERMES_GWS_BIN|GOOGLE_WORKSPACE_CLI_CONFIG_DIR/);
       assert.doesNotMatch(profile, /  - terminal\n|\nterminal:/);
+      assert.match(profile, /\ntools:\n  tool_search:\n    enabled: "off"\n/, 'Google tools are shown directly, not behind tool_search');
+    }
+    assert.doesNotMatch(bot, /tool_search/);
+    // Hermes exposes mcp__<server>__<tool>; Claude refuses names over 50.
+    for (const name of GOOGLE_WORKSPACE_MCP_TOOLS) {
+      const exposed = `mcp__${GOOGLE_WORKSPACE_MCP_SERVER.replace(/-/g, '_')}__${name}`;
+      assert.ok(exposed.length <= 50, `${exposed} is ${exposed.length} characters`);
     }
     assert.match(googleBot, /google_sheets_get/);
     assert.match(googleBot, /google_docs_create/);
@@ -203,7 +212,7 @@ test('Mia registers its bounded bundled Google Workspace tools for Mia and all B
     delete process.env.USERPROFILE;
     provisionHermesRuntimeProfiles({ profilesRoot });
     const windowsBot = fs.readFileSync(path.join(profilesRoot, MIAOS_BOT_GOOGLE_HERMES_PROFILE, 'config.yaml'), 'utf8');
-    assert.match(windowsBot, /mia-google-workspace:/);
+    assert.match(windowsBot, /mcp_servers:\n  google:/);
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
