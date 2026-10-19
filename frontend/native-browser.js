@@ -24,22 +24,21 @@
   // close button at the far right — like a browser profile button.
   if (tabsRow) tabsRow.insertBefore(strip, document.getElementById('localBrowserCloseBtn'));
   else overlay.querySelector('.local-browser-toolbar').before(strip);
-  // New-tab button sits beside the close-browser button, so the two line up
-  // above the downloads and Mia buttons in the toolbar below.
+  // New-tab button follows the last tab, like Chrome, and sticks to the
+  // strip's edge once the tabs overflow so it is always in reach.
   var add = document.createElement('button');
   add.type = 'button'; add.className = 'native-browser-new-tab';
   add.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
   add.title = 'New tab'; add.setAttribute('aria-label', 'New browser tab');
   add.onclick = function () { command('new').then(focusLocation); };
-  if (tabsRow) tabsRow.insertBefore(add, document.getElementById('localBrowserCloseBtn'));
-  else strip.after(add);
+  strip.append(add);
   // » lists the groups a crowded strip had no room for. It sits outside the
   // scrolling strip so it is always in reach.
   var more = document.createElement('button');
   more.type = 'button'; more.className = 'native-browser-groups-more'; more.hidden = true;
   more.textContent = '\u00bb';
   more.onclick = function () { command('groupOverflowMenu', { groupIds: (more.groupIds || []).slice() }); };
-  add.before(more);
+  strip.after(more);
   var findBar = document.createElement('div');
   findBar.className = 'native-browser-find'; findBar.hidden = true;
   var findInput = document.createElement('input');
@@ -401,6 +400,7 @@
         close.onclick = function () { command('close', { id: t.id }); };
         group.append(button, close); strip.append(group);
       });
+      strip.append(add);
       more.groupIds = crowd.hidden;
       more.hidden = !crowd.hidden.length;
       more.title = crowd.hidden.length + ' more group' + (crowd.hidden.length === 1 ? '' : 's');
@@ -449,7 +449,7 @@
     var ids = Object.keys(counts);
     ids.forEach(function (id) { if (!groupUsedAt[id]) groupUsedAt[id] = 0; });
     var oldestFirst = ids.slice().sort(function (a, b) { return groupUsedAt[a] - groupUsedAt[b]; });
-    var width = strip.clientWidth || 0;
+    var width = Math.max(0, (strip.clientWidth || 0) - (add.offsetWidth || 0));
     var folded = [], hidden = [];
     if (!width) return { folded: folded, hidden: hidden };
     var shown = function (id) { return groups[id].collapsed || folded.indexOf(id) >= 0 ? 0 : counts[id]; };
