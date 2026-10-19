@@ -203,7 +203,7 @@ test('native browser visibility owner occludes and restores the live view withou
   const commands = [];
   const classes = new Set();
   const context = {
-    scheduled: false, open: true, lastLayout: '', downloadsOpen: false,
+    scheduled: false, open: true, lastLayout: '', downloadsOpen: false, suggestCovered: false,
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
     overlay: { hidden: false },
@@ -222,6 +222,12 @@ test('native browser visibility owner occludes and restores the live view withou
   assert.equal(commands.at(-1).menu, true, 'a menu hide keeps the page playing');
   assert.equal(commands.at(-1).panelOpen, true, 'the browser stays open behind the Downloads menu');
   context.downloadsOpen = false;
+  context.suggestCovered = true;
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, false, 'address-bar suggestions also float over a still of the page');
+  assert.equal(commands.at(-1).menu, true);
+  context.suggestCovered = false;
   classes.add('native-browser-occluded-conversation');
   context.lastLayout = '';
   context.layout();

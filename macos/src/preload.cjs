@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     // first, capped at `limit`, default/max 20/200). Local-only state; never
     // sent anywhere but this renderer.
     history: (limit) => ipcRenderer.invoke("miaos-browser-command", { action: "history", limit }),
+    historyRemove: (url, limit) => ipcRenderer.invoke("miaos-browser-command", { action: "historyRemove", url, limit }),
     onState: (callback) => {
       const listener = (_event, state) => callback(state);
       ipcRenderer.on("miaos-browser-state", listener);

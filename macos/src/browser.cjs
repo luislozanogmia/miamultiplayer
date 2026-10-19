@@ -176,6 +176,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (inline) {
       tab.faviconPending = false;
       tab.favicon = inline;
+      rememberSiteIcon(tab.url, inline);
       publish();
       return;
     }
@@ -199,6 +200,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (tab.faviconRequest !== request || tab.sequence !== sequence || tabs.get(tab.id) !== tab) return;
         if (uri) {
           tab.favicon = uri;
+          rememberSiteIcon(tab.url, uri);
           publish();
           return;
         }
@@ -233,8 +235,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // only, next to the tab-persistence and permissions files under the app's
   // userData directory — never written into the repo.
   const HISTORY_MAX_ENTRIES = 200;
+  // Site icons shown beside history suggestions, one per host. Small icons
+  // only, so the history file stays a few hundred KB at most.
+  const HISTORY_ICON_MAX_CHARS = 32 * 1024;
   const historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
   let historyEntries = [];
+  let historyIcons = new Map();
   if (historyPath) {
     try {
       const saved = JSON.parse(fs.readFileSync(historyPath, "utf8"));
@@ -248,6 +254,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             count: Number.isInteger(Number(item.count)) && Number(item.count) > 0 ? Number(item.count) : 1,
             lastVisit: Number.isFinite(Number(item.lastVisit)) ? Number(item.lastVisit) : Date.now(),
           }));
+        const hosts = new Set(historyEntries.map(entry => historyHost(entry.url)));
+        if (saved.icons && typeof saved.icons === "object") {
+          historyIcons = new Map(Object.entries(saved.icons)
+            .filter(([host, icon]) => hosts.has(host) && typeof icon === "string"
+              && /^data:image\//i.test(icon) && icon.length <= HISTORY_ICON_MAX_CHARS));
+        }
       }
     } catch (_) { /* First run or unreadable history: start empty. */ }
   }
@@ -256,7 +268,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const temporaryPath = `${historyPath}.${process.pid}.tmp`;
     try {
       fs.mkdirSync(path.dirname(historyPath), { recursive: true });
-      fs.writeFileSync(temporaryPath, JSON.stringify({ version: 1, entries: historyEntries }), { mode: 0o600 });
+      fs.writeFileSync(temporaryPath, JSON.stringify({ version: 1, entries: historyEntries, icons: Object.fromEntries(historyIcons) }), { mode: 0o600 });
       fs.renameSync(temporaryPath, historyPath);
     } catch (error) {
       try { fs.rmSync(temporaryPath, { force: true }); } catch (_) { /* best effort cleanup */ }
@@ -356,6 +368,29 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       exists: entry.state === "completed" && Boolean(entry.path) && fs.existsSync(entry.path),
     }));
   }
+  function historyHost(url) {
+    try { return new URL(url).hostname.toLowerCase(); } catch (_) { return ""; }
+  }
+  // Drops icons for hosts that no longer have any history entry.
+  function pruneHistoryIcons() {
+    const hosts = new Set(historyEntries.map(entry => historyHost(entry.url)));
+    for (const host of historyIcons.keys()) if (!hosts.has(host)) historyIcons.delete(host);
+  }
+  function rememberSiteIcon(pageUrl, icon) {
+    if (!historyPath || typeof icon !== "string" || !/^data:image\//i.test(icon) || icon.length > HISTORY_ICON_MAX_CHARS) return;
+    const host = historyHost(pageUrl);
+    if (!host || !historyEntries.some(entry => historyHost(entry.url) === host)) return;
+    if (historyIcons.get(host) === icon) return;
+    historyIcons.set(host, icon);
+    persistHistory();
+  }
+  function removeVisit(url) {
+    const before = historyEntries.length;
+    historyEntries = historyEntries.filter(entry => entry.url !== url);
+    if (historyEntries.length === before) return;
+    pruneHistoryIcons();
+    persistHistory();
+  }
   function recordVisit(url, title) {
     if (!historyPath || !/^https?:\/\//i.test(String(url || ""))) return;
     const now = Date.now();
@@ -369,6 +404,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     historyEntries.sort((a, b) => b.lastVisit - a.lastVisit);
     if (historyEntries.length > HISTORY_MAX_ENTRIES) historyEntries.length = HISTORY_MAX_ENTRIES;
+    pruneHistoryIcons();
     persistHistory();
   }
   function updateVisitTitle(url, title) {
@@ -392,7 +428,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       })
       .sort((a, b) => b.score - a.score || b.entry.lastVisit - a.entry.lastVisit)
       .slice(0, limit)
-      .map(({ entry }) => ({ url: entry.url, title: entry.title, count: entry.count, lastVisit: entry.lastVisit }));
+      .map(({ entry }) => ({ url: entry.url, title: entry.title, count: entry.count, lastVisit: entry.lastVisit,
+        icon: historyIcons.get(historyHost(entry.url)) || "" }));
   }
   async function ensureSystemMediaAccess() {
     if (process.platform !== "darwin" || !systemPreferences || typeof systemPreferences.askForMediaAccess !== "function") return;
@@ -2050,6 +2087,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     activeId = null;
     historyEntries = [];
+    historyIcons = new Map();
     downloadEntries = downloadEntries.filter(entry => entry.state === "progressing");
     try { if (downloadsPath) fs.rmSync(downloadsPath, { force: true }); } catch (error) { log(`browser downloads cleanup failed: ${error.message}`); }
     try { if (statePath) fs.rmSync(statePath, { force: true }); } catch (error) { log(`browser state cleanup failed: ${error.message}`); }
@@ -2169,6 +2207,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return { ok: true };
       }
       if (command.action === "history") return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
+      if (command.action === "historyRemove") {
+        if (typeof command.url === "string") removeVisit(command.url);
+        return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
+      }
       if (command.action === "new") { newTab(); return state(); }
       if (command.action === "downloadShow") {
         const entry = downloadEntries.find(item => item.id === command.id);
