@@ -921,6 +921,79 @@ test("history survives a new browser owner and honors a caller-supplied limit", 
   }
 });
 
+test("history keeps each site's icon and can forget a single entry", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-history-icons-"));
+  const statePath = path.join(directory, "browser.json");
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  try {
+    const h = harness({ statePath });
+    h.command("new");
+    const wc = h.views[0].webContents;
+    wc.emit("did-navigate", null, "https://www.linkedin.com/feed/");
+    wc.emit("page-favicon-updated", null, ["https://www.linkedin.com/favicon.ico"]);
+    await flush();
+    wc.emit("did-navigate", null, "https://www.linkedin.com/");
+    wc.emit("did-navigate", null, "https://example.com/");
+
+    let history = h.command("history").history;
+    const icons = Object.fromEntries(history.map(item => [item.url, item.icon]));
+    assert.equal(icons["https://www.linkedin.com/feed/"], "data:image/png;base64,AQID");
+    assert.equal(icons["https://www.linkedin.com/"], "data:image/png;base64,AQID", "one icon serves every page of a site");
+    assert.equal(icons["https://example.com/"], "", "a site without a fetched icon has none");
+
+    // Removing one page keeps the site's icon while another page needs it.
+    history = h.command("historyRemove", { url: "https://www.linkedin.com/feed/" }).history;
+    assert.deepEqual(Array.from(history, item => item.url).sort(), ["https://example.com/", "https://www.linkedin.com/"]);
+    let saved = JSON.parse(fs.readFileSync(path.join(directory, "browser-history.json"), "utf8"));
+    assert.equal(saved.icons["www.linkedin.com"], "data:image/png;base64,AQID");
+
+    // The last page of a site takes the icon with it.
+    h.command("historyRemove", { url: "https://www.linkedin.com/" });
+    saved = JSON.parse(fs.readFileSync(path.join(directory, "browser-history.json"), "utf8"));
+    assert.deepEqual(saved.entries.map(entry => entry.url), ["https://example.com/"]);
+    assert.equal(saved.icons["www.linkedin.com"], undefined);
+    assert.equal(h.command("historyRemove", { url: 42 }).history.length, 1, "a bad request removes nothing");
+    h.window.emit("closed");
+
+    const restored = harness({ statePath });
+    assert.deepEqual(Array.from(restored.command("history").history, item => item.url), ["https://example.com/"]);
+    restored.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("history icons survive a restart and drop oversized or non-image values", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-history-icons-restore-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    fs.writeFileSync(path.join(directory, "browser-history.json"), JSON.stringify({
+      version: 1,
+      entries: [
+        { url: "https://a.example/", title: "A", count: 1, lastVisit: Date.now() },
+        { url: "https://b.example/", title: "B", count: 1, lastVisit: Date.now() - 1000 },
+      ],
+      icons: {
+        "a.example": "data:image/png;base64,AQID",
+        "b.example": `data:image/png;base64,${"A".repeat(40 * 1024)}`,
+        "gone.example": "data:image/png;base64,AQID",
+        "c.example": "javascript:alert(1)",
+      },
+    }));
+    const h = harness({ statePath });
+    const icons = Object.fromEntries(h.command("history").history.map(item => [item.url, item.icon]));
+    assert.equal(icons["https://a.example/"], "data:image/png;base64,AQID");
+    assert.equal(icons["https://b.example/"], "", "an oversized icon is dropped");
+    h.command("new");
+    h.views[0].webContents.emit("did-navigate", null, "https://a.example/next");
+    const saved = JSON.parse(fs.readFileSync(path.join(directory, "browser-history.json"), "utf8"));
+    assert.deepEqual(Object.keys(saved.icons), ["a.example"], "icons for unknown hosts are not kept");
+    h.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("clean slate clears visited-URL history alongside tabs and cookies", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-history-clear-"));
   const statePath = path.join(directory, "browser.json");

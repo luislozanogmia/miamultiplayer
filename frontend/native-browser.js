@@ -117,6 +117,9 @@
   var downloadsEmpty = document.getElementById('localBrowserDownloadsEmpty');
   var downloadsClear = document.getElementById('localBrowserDownloadsClear');
   var downloadsOpen = false;
+  // The address-bar suggestions also drop over the page, so they get the
+  // same still-of-the-page treatment as the Downloads menu.
+  var suggestCovered = false;
   var lastDownloads = '';
   var state = { tabs: [], groups: [], activeId: null, downloads: [] };
   var editingGroupId = null;
@@ -249,7 +252,7 @@
       scheduled = false;
       var rect = screen.getBoundingClientRect();
       // Native views sit above HTML; hide them while the sidebar drawer covers it.
-      var visible = open && !overlay.hidden && !downloadsOpen &&
+      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered &&
         !document.body.classList.contains('browser-sidebar-open') &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation');
@@ -257,7 +260,7 @@
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view
       // steps aside without pausing what it plays.
-      if (downloadsOpen) payload.menu = true;
+      if (downloadsOpen || suggestCovered) payload.menu = true;
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
@@ -716,6 +719,40 @@
     var tab = selected();
     return Boolean(open && !overlay.hidden && tab && tab.url && !tab.error);
   }
+  function showStill() {
+    clearTimeout(snapshotTimer);
+    if (!snapshot.hidden) return Promise.resolve();
+    return pageShowing()
+      ? command('snapshot').then(function (result) {
+        if (!result || !result.dataUrl) return;
+        snapshot.src = result.dataUrl;
+        return snapshot.decode().then(function () { snapshot.hidden = false; });
+      }).catch(function () {})
+      : Promise.resolve();
+  }
+  function hideStill() {
+    if (downloadsOpen || suggestCovered) return;
+    // Keep the still up until the live page is back in front.
+    clearTimeout(snapshotTimer);
+    snapshotTimer = setTimeout(function () { snapshot.hidden = true; snapshot.removeAttribute('src'); }, 150);
+  }
+  var suggestToken = 0;
+  function setSuggestCover(next) {
+    var token = ++suggestToken;
+    if (!next) {
+      if (!suggestCovered) return;
+      suggestCovered = false;
+      layout();
+      hideStill();
+      return;
+    }
+    if (suggestCovered) return;
+    showStill().then(function () {
+      if (token !== suggestToken) return;
+      suggestCovered = true;
+      layout();
+    });
+  }
   function setDownloadsOpen(next) {
     var token = ++downloadsToken;
     if (!next) {
@@ -724,20 +761,10 @@
       downloadsBtn.setAttribute('aria-expanded', 'false');
       if (downloadsSearch.value) downloadsSearch.value = '';
       layout();
-      // Keep the still up until the live page is back in front.
-      clearTimeout(snapshotTimer);
-      snapshotTimer = setTimeout(function () { snapshot.hidden = true; snapshot.removeAttribute('src'); }, 150);
+      hideStill();
       return Promise.resolve();
     }
-    clearTimeout(snapshotTimer);
-    var still = pageShowing()
-      ? command('snapshot').then(function (result) {
-        if (!result || !result.dataUrl) return;
-        snapshot.src = result.dataUrl;
-        return snapshot.decode().then(function () { snapshot.hidden = false; });
-      }).catch(function () {})
-      : Promise.resolve();
-    return still.then(function () {
+    return showStill().then(function () {
       if (token !== downloadsToken) return;
       var screenRect = screen.getBoundingClientRect();
       var buttonRect = downloadsBtn.getBoundingClientRect();
@@ -835,6 +862,9 @@
       if (!tab || !/^https?:\/\//i.test(tab.url || '')) return null;
       return { url: tab.url, title: tab.title || '' };
     },
+    // While address-bar suggestions are open, a still of the page stands in
+    // for the live view so the list can draw over it.
+    coverForSuggestions: function (covered) { setSuggestCover(covered === true); },
     menuAction: function (key) {
       if (key === 't') command('new').then(focusLocation);
       else if (key === 'l') focusLocation();

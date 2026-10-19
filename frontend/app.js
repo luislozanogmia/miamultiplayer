@@ -5935,72 +5935,145 @@
     if(shouldRestoreLocalBrowser()) openWebBrowserTool({restoring:true});
   }
 
-  // URL-bar autocomplete: a lightweight custom dropdown backed by the
-  // Electron shell's visit history (window.miaDesktop.browser.history).
-  // Older shells / the web build don't expose it — every call below is
-  // guarded so the feature quietly does nothing there.
+  // URL-bar autocomplete backed by the Electron shell's visit history
+  // (window.miaDesktop.browser.history), ranked by browser-omnibox.js:
+  // inline completion, a first row that is exactly what Enter opens, then
+  // matching pages with their site icons. Older shells and the web build
+  // don't expose history, so the feature quietly does nothing there.
+  var LOCAL_BROWSER_HISTORY_LIMIT = 200;
   var localBrowserHistoryCache = null;
   var localBrowserSuggestItems = [];
   var localBrowserSuggestIndex = -1;
+  var localBrowserSuggestTyped = '';
+  var localBrowserSuggestCompletion = null;
+  var LOCAL_BROWSER_SUGGEST_GLOBE = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.4 2.4 3.5 5.2 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.2-3.5-8.5s1.1-6.1 3.5-8.5Z"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_SEARCH = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m15 15 5 5"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_REMOVE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"></path></svg>';
   function localBrowserHistorySupported(){
-    return !!(window.miaDesktop && window.miaDesktop.browser && typeof window.miaDesktop.browser.history === 'function');
+    return !!(window.MiaBrowserOmnibox && window.miaDesktop && window.miaDesktop.browser && typeof window.miaDesktop.browser.history === 'function');
   }
-  function loadLocalBrowserHistory(){
+  function loadLocalBrowserHistory(fresh){
     if(!localBrowserHistorySupported()) return Promise.resolve([]);
-    if(localBrowserHistoryCache) return Promise.resolve(localBrowserHistoryCache);
-    return Promise.resolve(window.miaDesktop.browser.history(20)).then(function(res){
+    if(localBrowserHistoryCache && !fresh) return Promise.resolve(localBrowserHistoryCache);
+    return Promise.resolve(window.miaDesktop.browser.history(LOCAL_BROWSER_HISTORY_LIMIT)).then(function(res){
       localBrowserHistoryCache = (res && Array.isArray(res.history)) ? res.history : [];
       return localBrowserHistoryCache;
-    }).catch(function(){ return []; });
+    }).catch(function(){ return localBrowserHistoryCache || []; });
   }
-  function filterLocalBrowserHistory(history, query){
-    var q = String(query || '').trim().toLowerCase();
-    if(!q) return [];
-    return (history || []).filter(function(item){
-      return (item.url && String(item.url).toLowerCase().indexOf(q) !== -1) ||
-        (item.title && String(item.title).toLowerCase().indexOf(q) !== -1);
-    }).slice(0, 5);
+  // Whether Enter opens the typing as an address rather than searching it.
+  function localBrowserLooksLikeUrl(value){
+    try {
+      var target = localBrowserNormalizeUrl(value, 'google');
+      return !/^https:\/\/www\.google\.com\/search\?/.test(target);
+    } catch(_error) { return false; }
   }
   function closeLocalBrowserSuggest(){
     var box = el('#localBrowserUrlSuggest');
     if(box){ box.hidden = true; box.innerHTML = ''; }
     var input = el('#localBrowserUrl');
-    if(input) input.setAttribute('aria-expanded', 'false');
+    if(input){ input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); }
     localBrowserSuggestItems = [];
     localBrowserSuggestIndex = -1;
+    localBrowserSuggestCompletion = null;
+    if(window.miaNativeBrowser && window.miaNativeBrowser.coverForSuggestions) window.miaNativeBrowser.coverForSuggestions(false);
   }
   function updateLocalBrowserSuggestHighlight(){
     var box = el('#localBrowserUrlSuggest');
     if(!box) return;
-    els('.local-browser-suggest-item', box).forEach(function(btn, i){
-      btn.classList.toggle('active', i === localBrowserSuggestIndex);
+    var input = el('#localBrowserUrl');
+    els('.local-browser-suggest-item', box).forEach(function(row, i){
+      var active = i === localBrowserSuggestIndex;
+      row.classList.toggle('active', active);
+      row.setAttribute('aria-selected', active ? 'true' : 'false');
+      if(active && input) input.setAttribute('aria-activedescendant', row.id);
     });
   }
-  function renderLocalBrowserSuggest(items){
+  function localBrowserSuggestMarkup(text, query){
+    return window.MiaBrowserOmnibox.highlight(text, query).map(function(piece){
+      return piece.match ? '<strong>' + esc(piece.text) + '</strong>' : esc(piece.text);
+    }).join('');
+  }
+  function localBrowserSuggestRow(item, i, query){
+    var icon, line;
+    if(item.kind === 'search'){
+      icon = '<span class="local-browser-suggest-icon">' + LOCAL_BROWSER_SUGGEST_SEARCH + '</span>';
+      line = '<span class="local-browser-suggest-title">' + esc(item.query) + '</span>' +
+        '<span class="local-browser-suggest-sep"> – </span>' +
+        '<span class="local-browser-suggest-hint">' + (localBrowserSearchEngine === 'x' ? 'Search on X' : 'Google Search') + '</span>';
+    } else {
+      icon = '<span class="local-browser-suggest-icon">' +
+        (/^data:image\//i.test(item.icon || '') ? '<img src="' + esc(item.icon) + '" alt="">' : LOCAL_BROWSER_SUGGEST_GLOBE) + '</span>';
+      line = (item.title
+        ? '<span class="local-browser-suggest-title">' + localBrowserSuggestMarkup(item.title, query) + '</span>' +
+          '<span class="local-browser-suggest-sep"> – </span>'
+        : '') +
+        '<span class="local-browser-suggest-url">' + localBrowserSuggestMarkup(item.display, query) + '</span>';
+    }
+    var remove = item.kind === 'history'
+      ? '<button type="button" class="local-browser-suggest-remove" data-suggest-remove="' + i + '" tabindex="-1" aria-label="Remove from history" title="Remove from history">' + LOCAL_BROWSER_SUGGEST_REMOVE + '</button>'
+      : '';
+    return '<div class="local-browser-suggest-item" id="localBrowserSuggest' + i + '" role="option" aria-selected="false" data-suggest-index="' + i + '">' +
+      icon + '<span class="local-browser-suggest-line">' + line + '</span>' + remove + '</div>';
+  }
+  function renderLocalBrowserSuggest(result){
     var box = el('#localBrowserUrlSuggest');
     if(!box) return;
-    localBrowserSuggestItems = items || [];
-    localBrowserSuggestIndex = -1;
+    localBrowserSuggestItems = (result && result.rows) || [];
+    localBrowserSuggestIndex = localBrowserSuggestItems.length ? 0 : -1;
     var input = el('#localBrowserUrl');
     if(!localBrowserSuggestItems.length){
-      box.hidden = true;
-      box.innerHTML = '';
-      if(input) input.setAttribute('aria-expanded', 'false');
+      closeLocalBrowserSuggest();
       return;
     }
     box.innerHTML = localBrowserSuggestItems.map(function(item, i){
-      return '<button type="button" class="local-browser-suggest-item" role="option" data-suggest-index="' + i + '">' +
-        '<span class="local-browser-suggest-title">' + esc(item.title || item.url) + '</span>' +
-        '<span class="local-browser-suggest-url">' + esc(item.url) + '</span></button>';
+      return localBrowserSuggestRow(item, i, localBrowserSuggestTyped);
     }).join('');
     box.hidden = false;
     if(input) input.setAttribute('aria-expanded', 'true');
+    updateLocalBrowserSuggestHighlight();
+    if(window.miaNativeBrowser && window.miaNativeBrowser.coverForSuggestions) window.miaNativeBrowser.coverForSuggestions(true);
+  }
+  // Recomputes suggestions for what was typed and, unless the user is
+  // deleting, fills in the rest of the best address and selects it.
+  function refreshLocalBrowserSuggest(input, history, complete){
+    var caretAtEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+    localBrowserSuggestTyped = input.value;
+    var result = window.MiaBrowserOmnibox.suggest(history, localBrowserSuggestTyped, {
+      complete: complete && caretAtEnd,
+      looksLikeUrl: localBrowserLooksLikeUrl,
+    });
+    localBrowserSuggestCompletion = result.completion && result.completion.remainder ? result.completion : null;
+    if(localBrowserSuggestCompletion){
+      input.value = localBrowserSuggestTyped + localBrowserSuggestCompletion.remainder;
+      input.setSelectionRange(localBrowserSuggestTyped.length, input.value.length);
+    }
+    renderLocalBrowserSuggest(result);
   }
   function chooseLocalBrowserSuggest(item, input){
     if(!item) return;
-    if(input) input.value = item.url;
+    var target = item.kind === 'search' ? item.query : (item.url || item.value);
+    if(input) input.value = item.kind === 'search' ? item.query : (item.url || item.value);
     closeLocalBrowserSuggest();
-    localBrowserNavigate(item.url);
+    if(item.kind === 'search' && localBrowserLooksLikeUrl(target)){
+      // A search row for address-like text still searches.
+      target = localBrowserSearchEngine === 'x'
+        ? 'https://x.com/search?q=' + encodeURIComponent(target) + '&src=typed_query'
+        : 'https://www.google.com/search?q=' + encodeURIComponent(target) + '&igu=1';
+    }
+    localBrowserNavigate(target);
+  }
+  function removeLocalBrowserSuggest(index, input){
+    var item = localBrowserSuggestItems[index];
+    if(!item || item.kind !== 'history' || typeof window.miaDesktop.browser.historyRemove !== 'function') return;
+    var hadCompletion = !!localBrowserSuggestCompletion;
+    Promise.resolve(window.miaDesktop.browser.historyRemove(item.url, LOCAL_BROWSER_HISTORY_LIMIT)).then(function(res){
+      localBrowserHistoryCache = (res && Array.isArray(res.history)) ? res.history : [];
+      if(document.activeElement !== input) return;
+      if(localBrowserSuggestCompletion) input.value = localBrowserSuggestTyped;
+      // Removing a row keeps the address filled in, as long as some other
+      // page still completes it.
+      refreshLocalBrowserSuggest(input, localBrowserHistoryCache, hadCompletion);
+    }).catch(function(){});
   }
 
   function browserSidebarOwnsClick(target, drawer, toggle, portaledMenu){
@@ -6054,14 +6127,27 @@
     });
     var suggestBox = el('#localBrowserUrlSuggest');
     if(input && localBrowserHistorySupported()){
-      var refreshSuggest = function(){
+      input.addEventListener('focus', function(){
+        // History changes as you browse, so each visit to the bar reloads it.
+        loadLocalBrowserHistory(true);
+      });
+      input.addEventListener('input', function(event){
+        var deleting = !!(event && event.inputType && /^delete/.test(event.inputType));
         loadLocalBrowserHistory().then(function(history){
           if(document.activeElement !== input) return;
-          renderLocalBrowserSuggest(filterLocalBrowserHistory(history, input.value));
+          refreshLocalBrowserSuggest(input, history, !deleting);
         });
-      };
-      input.addEventListener('focus', refreshSuggest);
-      input.addEventListener('input', refreshSuggest);
+      });
+      // First Escape takes back the filled-in completion and keeps editing,
+      // like Chrome. Captured so it runs before native-browser.js, whose
+      // Escape restores the page address and leaves the bar.
+      input.addEventListener('keydown', function(event){
+        if(event.key !== 'Escape' || !localBrowserSuggestCompletion || input.value === localBrowserSuggestTyped) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        input.value = localBrowserSuggestTyped;
+        loadLocalBrowserHistory().then(function(history){ refreshLocalBrowserSuggest(input, history, false); });
+      }, true);
       input.addEventListener('keydown', function(event){
         if(!localBrowserSuggestItems.length) return;
         if(event.key === 'ArrowDown'){
@@ -6078,18 +6164,24 @@
           chooseLocalBrowserSuggest(localBrowserSuggestItems[localBrowserSuggestIndex], input);
         } else if(event.key === 'Escape'){
           closeLocalBrowserSuggest();
+        } else if((event.key === 'Delete' || event.key === 'Backspace') && event.shiftKey && localBrowserSuggestIndex >= 0){
+          // Shift+Delete removes the highlighted history entry, as in Chrome.
+          if(localBrowserSuggestItems[localBrowserSuggestIndex].kind !== 'history') return;
+          event.preventDefault();
+          removeLocalBrowserSuggest(localBrowserSuggestIndex, input);
         }
       });
       input.addEventListener('blur', function(){
         // Deferred so a suggestion's mousedown/click can still register.
-        setTimeout(closeLocalBrowserSuggest, 150);
+        setTimeout(function(){ if(document.activeElement !== input) closeLocalBrowserSuggest(); }, 150);
       });
       if(suggestBox) suggestBox.addEventListener('mousedown', function(event){
-        var btn = event.target.closest('.local-browser-suggest-item');
-        if(!btn) return;
+        var row = event.target.closest('.local-browser-suggest-item');
+        if(!row) return;
         event.preventDefault();
-        var idx = Number(btn.getAttribute('data-suggest-index'));
-        chooseLocalBrowserSuggest(localBrowserSuggestItems[idx], input);
+        var remove = event.target.closest('[data-suggest-remove]');
+        if(remove){ removeLocalBrowserSuggest(Number(remove.getAttribute('data-suggest-remove')), input); return; }
+        chooseLocalBrowserSuggest(localBrowserSuggestItems[Number(row.getAttribute('data-suggest-index'))], input);
       });
     }
     if(back) back.addEventListener('click', function(){
