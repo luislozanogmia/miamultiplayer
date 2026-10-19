@@ -91,10 +91,11 @@ test('Web browser has one native Mia path with no iframe or localhost bridge fal
   assert.match(styles, /body\.browser-collab-mode \.local-browser-overlay\.open\{right:var\(--browser-mia-pane-width\);\}/);
   assert.match(styles, /body\.browser-collab-mode \.chat-app\{[^}]*position:fixed!important;[^}]*inset:0 0 0 auto;/);
   assert.match(styles, /body\.browser-collab-mode\.browser-sidebar-open \.chat-sidebar\{transform:translateX\(0\);\}/);
-  // Tabs pick the bot and the close button returns to chat, so the toolbar
-  // has no separate "Your bots" drawer button.
-  assert.doesNotMatch(html, /localBrowserSidebarBtn|local-browser-mote/);
-  assert.doesNotMatch(styles, /local-browser-sidebar-btn/);
+  // The "Your bots" drawer opens from a left-pane icon that mirrors the
+  // right-pane Mia toggle at the start of the address row, not a mote.
+  assert.doesNotMatch(html, /local-browser-mote/);
+  assert.match(html, /id="localBrowserSidebarBtn"[^>]*>\s*<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3\.5" y="4\.5" width="17" height="15" rx="2\.5"><\/rect><path d="M9\.5 4\.5v15"><\/path><\/svg>\s*<\/button>\s*<button type="button" class="local-browser-btn" id="localBrowserBackBtn"/);
+  assert.match(styles, /\.local-browser-sidebar-btn\[aria-expanded="true"\]\{color:#0b57d0!important;\}/);
 });
 
 test('embedded browser toolbar keeps status transient in the connection dot', async () => {

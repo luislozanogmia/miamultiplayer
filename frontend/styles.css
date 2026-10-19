@@ -2897,6 +2897,9 @@
   body.browser-collab-mode.browser-mia-collapsed .chat-info-pane,
   body.browser-collab-mode.browser-mia-collapsed .local-browser-mia-resize{display:none!important;}
   .local-browser-mia-toggle[aria-pressed="true"]{color:#0b57d0!important;}
+  .local-browser-sidebar-btn{display:none;}
+  body.browser-collab-mode .local-browser-sidebar-btn{display:inline-flex;}
+  .local-browser-sidebar-btn[aria-expanded="true"]{color:#0b57d0!important;}
 
   /* Web browser collaboration keeps the native Mia conversation fixed at
      the right. The normal
