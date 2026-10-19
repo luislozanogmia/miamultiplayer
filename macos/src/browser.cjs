@@ -93,7 +93,7 @@ function isLocalFileTarget(value) {
   return /^file:/i.test(String(value || "").trim()) || path.isAbsolute(String(value || "").trim());
 }
 
-// Chrome's tab group colors, in the order new groups take them.
+// Tab group colors, in the order new groups take them.
 const GROUP_COLORS = ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
 function normalizeGroupRecord(item) {
   if (!item || typeof item.id !== "string" || !/^g[1-9][0-9]{0,5}$/.test(item.id)) return null;
@@ -123,7 +123,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     ? path.resolve(options.workspaceRoot)
     : "";
   let activeId = null;
-  // Chrome-style tab groups: a named, colored run of adjacent tabs. A tab
+  // Tab groups are a named, colored run of adjacent tabs. A tab
   // belongs to at most one group (tab.groupId); a group with no tabs is gone.
   const groups = new Map();
   let nextGroupNumber = 1;
@@ -285,7 +285,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const downloadsDir = typeof options.downloadsDir === "string" && options.downloadsDir.trim()
     ? path.resolve(options.downloadsDir)
     : (app && typeof app.getPath === "function" ? app.getPath("downloads") : "");
-  // "report.pdf", then "report (1).pdf", like Chrome.
+  // "report.pdf", then "report (1).pdf", without overwriting a file.
   function freeDownloadPath(filename) {
     const safe = path.basename(String(filename || "download")).replace(/[\x00-\x1f/:]/g, "_").slice(0, 200) || "download";
     const ext = path.extname(safe);
@@ -936,17 +936,20 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return error;
   }
 
-  // Which bot sent a Ghost request, from the Hermes session id ghost-cli
-  // attaches. Mia's own sessions and unknown ids resolve to null, which keeps
-  // the original behavior of acting on the tab in front.
+  // Only an authorized, known Mia session may use the foreground/all-tabs
+  // route. Missing, unknown or unavailable identities must never become Mia.
   async function protocolActor(sessionId) {
-    if (typeof sessionId !== "string" || !sessionId.trim() || typeof options.resolveActor !== "function") return null;
-    try {
-      const actor = await options.resolveActor(sessionId.trim().slice(0, 200));
-      return actor && typeof actor.botId === "string" && actor.botId ? actor : null;
-    } catch (_) {
-      return null;
-    }
+    const unavailable = () => protocolError("BROWSER_ACTOR_UNAVAILABLE",
+      "Mia could not verify this browser session. Retry from Mia. Background or scheduled sessions without a verified mapped identity cannot use the browser.");
+    if (typeof sessionId !== "string" || !sessionId.trim() || sessionId.trim().length > 200
+        || typeof options.resolveActor !== "function") throw unavailable();
+    let actor;
+    try { actor = await options.resolveActor(sessionId.trim()); }
+    catch (_) { throw unavailable(); }
+    if (actor && actor.kind === "mia" && actor.botId == null) return null;
+    if (actor && actor.kind === "bot" && typeof actor.botId === "string"
+        && /^[A-Za-z0-9_.:-]{1,120}$/.test(actor.botId)) return actor;
+    throw unavailable();
   }
   function ownedByOtherBot(actor, tab) {
     const owner = tab && groups.get(tab.groupId)?.botId;
@@ -1586,7 +1589,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [],
       media: options.media || null,
       // A tab opened from a grouped tab (a link, New Tab to the Right,
-      // Duplicate) joins its opener's group, as in Chrome.
+      // Duplicate) joins its opener's group.
       groupId: groups.has(options.groupId) ? options.groupId
         : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null,
       restoreMediaPending: !!options.media,
@@ -1804,7 +1807,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     normalizeGroups();
     return group;
   }
-  // Adds a tab to the end of a group, the way Chrome's "Add tab to group" does.
+  // Adds a tab to the end of a group.
   function addTabToGroup(tabId, groupId) {
     const tab = tabs.get(tabId);
     if (!tab || !groups.has(groupId) || tab.groupId === groupId) return;
@@ -1913,17 +1916,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function groupBotEvent(payload) {
     if (!disposed && !window.isDestroyed()) window.webContents.send("miaos-browser-group-bot", payload);
   }
-  // Asks the chat window, at click time, whether a bot still has a reply
-  // running; the answer given when the menu opened may be stale by now.
-  async function botStillRunning(botId) {
-    try {
-      const script = "Boolean(window.miaBrowserAgents && window.miaBrowserAgents.isRunning && window.miaBrowserAgents.isRunning("
-        + JSON.stringify(String(botId)) + "))";
-      return (await window.webContents.executeJavaScript(script)) === true;
-    } catch (_) {
-      return false;
-    }
-  }
   // Switching away from a bot that is still working asks first, then stops
   // that bot so it does not keep going in a group it no longer owns.
   async function switchGroupBot(groupId, bot, busy) {
@@ -1932,14 +1924,34 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const previous = group.botId;
     const next = bot ? bot.botId : null;
     if (previous === next) return;
-    if (previous && busy && !disposed && await botStillRunning(previous)) {
+    if (previous && busy && !disposed) {
       const { response } = await dialog.showMessageBox(window, {
         type: "question", buttons: ["Stop and Switch", "Cancel"], defaultId: 0, cancelId: 1,
         message: (busy.name || "This bot") + " is still working in this group.",
         detail: "Stop it and give the group to " + (bot ? bot.name : "Mia") + "?",
       });
       if (response !== 0 || disposed || !groups.has(groupId) || groups.get(groupId).botId !== previous) return;
-      groupBotEvent({ action: "stop", botId: previous });
+      // Once offered as busy, a later empty renderer cache cannot prove the
+      // bot finished. Require the stop acknowledgement even in that case.
+      // This is the trusted app renderer, never a browser page. Ownership
+      // changes only after every running dispatch acknowledges cancellation.
+      let stopped = false;
+      try {
+        if (authorized({ sender: window.webContents, senderFrame: window.webContents.mainFrame })) {
+          stopped = (await window.webContents.executeJavaScript(
+            "window.miaBrowserAgents && window.miaBrowserAgents.stopQuietly && window.miaBrowserAgents.stopQuietly("
+            + JSON.stringify(String(previous)) + ")")) === true;
+        }
+      } catch (_) { /* A failed stop leaves the old owner in place. */ }
+      if (!stopped) {
+        if (!disposed && !window.isDestroyed()) void dialog.showMessageBox(window, {
+          type: "error", buttons: ["OK"], message: "Mia could not switch this group.",
+          detail: "The bot could not be stopped. It still owns this group. Try again after it stops.",
+        }).catch(() => {});
+        return;
+      }
+      if (disposed || !groups.has(groupId) || groups.get(groupId).botId !== previous
+          || !authorized({ sender: window.webContents, senderFrame: window.webContents.mainFrame })) return;
     }
     menuAction(() => assignGroupBot(groupId, bot))();
   }

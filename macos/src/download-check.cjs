@@ -14,7 +14,7 @@ const PROGRAM_EXTENSIONS = new Set([
   "app", "dmg", "pkg", "mpkg", "command", "tool", "terminal", "sh", "bash", "zsh", "csh", "fish",
   "py", "rb", "pl", "php", "scpt", "applescript", "workflow", "action", "jar", "dylib", "kext",
   "prefpane", "plugin", "osax", "iso", "exe", "msi", "bat", "cmd", "com", "scr", "ps1", "vbs",
-  "js", "jse", "wsf", "deb", "rpm", "appimage",
+  "js", "jse", "wsf", "lnk", "hta", "deb", "rpm", "appimage",
 ]);
 const DOCUMENT_EXTENSIONS = new Set([
   "pdf", "png", "jpg", "jpeg", "gif", "webp", "heic", "svg", "txt", "csv", "tsv", "md", "json",
@@ -80,6 +80,9 @@ async function checkDownload(filePath, { platform = process.platform, run = exec
         : `macOS could not verify who made it. Open it only if you trust where it came from.`;
     }
     return { verdict: "review", reason };
+  }
+  if (!DOCUMENT_EXTENSIONS.has(ext)) {
+    return { verdict: "review", reason: `Mia does not recognize this ${label} file type. Open it only if you trust where it came from.` };
   }
   return { verdict: "safe", reason: stat.size ? `An ordinary ${label} file.` : "An empty file." };
 }

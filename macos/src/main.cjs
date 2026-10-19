@@ -2068,12 +2068,13 @@ const browserActorCache = new Map();
 const BROWSER_ACTOR_TTL_MS = 60_000;
 
 // Asks the backend which bot a Ghost request's Hermes session belongs to,
-// through the signed-in app session. Any failure means "not a bot".
+// through the signed-in app session. Only verified identities are cached.
 async function resolveBrowserActor(window, sessionId) {
+  const unavailable = () => new Error("Mia could not verify this browser session. Try again when the app connection is available.");
+  if (!backendUrl || !window || window.isDestroyed()) throw unavailable();
   const cached = browserActorCache.get(sessionId);
   if (cached && Date.now() - cached.at < BROWSER_ACTOR_TTL_MS) return cached.actor;
-  if (!backendUrl || !window || window.isDestroyed()) return null;
-  let actor = null;
+  let actor;
   try {
     const url = new URL("/api/browser/actor", backendUrl);
     url.searchParams.set("session", sessionId);
@@ -2083,13 +2084,16 @@ async function resolveBrowserActor(window, sessionId) {
       headers: { Origin: new URL(backendUrl).origin },
       signal: AbortSignal.timeout(3000),
     });
-    const body = response.ok ? await response.json() : null;
+    if (!response.ok) throw unavailable();
+    const body = await response.json();
     const found = body && body.actor;
-    if (found && typeof found.botId === "string" && found.botId) {
-      actor = { botId: found.botId, name: typeof found.name === "string" ? found.name : "" };
-    }
+    if (found && found.kind === "mia" && found.botId == null) actor = { kind: "mia" };
+    else if (found && found.kind === "bot" && typeof found.botId === "string"
+        && /^[A-Za-z0-9_.:-]{1,120}$/.test(found.botId)) {
+      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "" };
+    } else throw unavailable();
   } catch (_) {
-    return null;
+    throw unavailable();
   }
   if (browserActorCache.size > 200) browserActorCache.clear();
   browserActorCache.set(sessionId, { actor, at: Date.now() });

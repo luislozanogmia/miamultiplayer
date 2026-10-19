@@ -6368,12 +6368,12 @@ function nativeBotSessionKey(profile, systemPrompt) {
 const nativeGatewaySessionConversations = new Map();
 
 // The desktop browser asks which bot a live Hermes session belongs to, so a
-// page a bot opens lands in that bot's tab group. Mia's own sessions, ended
-// sessions and conversations the caller cannot read all answer null.
+// page a bot opens lands in that bot's tab group. Mia is an explicit verified
+// identity; unknown sessions and inaccessible conversations never become Mia.
 app.get('/api/browser/actor', requireAuth, (req, res) => {
   const sessionId = String(req.query.session || '').trim();
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
-  if (!target || !target.botId) return res.status(200).json({ actor: null });
+  if (!target) return res.status(200).json({ actor: null });
   try {
     nativeConversationService.getConversation({
       companyId: target.companyId,
@@ -6383,7 +6383,9 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   } catch (_) {
     return res.status(200).json({ actor: null });
   }
-  return res.status(200).json({ actor: { botId: String(target.botId), name: String(target.agentName || 'Bot') } });
+  return res.status(200).json({ actor: target.botId
+    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot') }
+    : { kind: 'mia' } });
 });
 // Per-session chain so a verdict that waits on the goal snapshot still posts
 // before the continuation turn that follows it.

@@ -8,6 +8,9 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { EventEmitter } = require("node:events");
 
+const knownActor = sessions => async id => id === "s-mia" ? { kind: "mia" }
+  : sessions[id] ? { kind: "bot", ...sessions[id] } : null;
+
 // Exercise the actual native-browser owner with an Electron boundary double.
 // This proves command authorization/lifecycle, not live Chromium rendering.
 function harness(options = {}) {
@@ -17,6 +20,7 @@ function harness(options = {}) {
   const dialogCalls = [];
   const dialogResponse = { value: 0 };
   const botRunning = { value: true };
+  const stopResult = { value: true, calls: [] };
   const shown = [];
   const opened = [];
   const profile = new EventEmitter();
@@ -86,6 +90,10 @@ function harness(options = {}) {
       if (script.includes("text_length")) {
         return Promise.resolve({ text: "Example page", text_length: 12, text_truncated: false });
       }
+      if (script.includes("miaBrowserAgents.stopQuietly(")) {
+        stopResult.calls.push(script);
+        return Promise.resolve().then(() => typeof stopResult.value === "function" ? stopResult.value() : stopResult.value);
+      }
       if (script.includes("miaBrowserAgents.isRunning(")) return Promise.resolve(botRunning.value);
       if (script.startsWith("Boolean(")) return Promise.resolve(true);
       if (script.includes('if ("click"')) return Promise.resolve({ clicked: true, tag: "a", text: "Example" });
@@ -133,10 +141,10 @@ function harness(options = {}) {
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
   const { createBrowser, normalizeTarget, normalizeLocalFileTarget } = context.module.exports;
-  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, ...options });
+  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, resolveActor: knownActor({}), ...options });
   const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   const command = (action, extra = {}, event = sender) => handlers.get("miaos-browser-command")(event, { action, ...extra });
-  return { command, window, views, sender, profile, handlers, shown, opened, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, botRunning, menuTemplates };
+  return { command, window, views, sender, profile, handlers, shown, opened, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, botRunning, stopResult, menuTemplates };
 }
 
 test("search, domain ports, loopback and prohibited schemes", () => {
@@ -579,30 +587,30 @@ test("menu shortcuts close the last tab repeatedly without handing off to window
 
 test("protocol commands dispatch through the native WebContentsView", async () => {
   const h = harness();
-  const emptyStatus = await h.controller.protocol("status", {});
+  const emptyStatus = await h.controller.protocol("status", { actor_session: "s-mia" });
   assert.equal(emptyStatus.connected, true);
   assert.equal(emptyStatus.tabs, 0);
   assert.equal(emptyStatus.active_tab_id, null);
   assert.equal(emptyStatus.active_url, "");
   assert.equal(emptyStatus.active_title, "");
 
-  const opened = await h.controller.protocol("tab_open", { url: "example.com" });
+  const opened = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "example.com" });
   assert.equal(opened.tab_id, 1);
   assert.equal(opened.url, "https://example.com/");
 
-  const read = await h.controller.protocol("read", { max_chars: 100 });
+  const read = await h.controller.protocol("read", { actor_session: "s-mia", max_chars: 100 });
   assert.equal(read.text, "Example page");
 
-  const vacuum = await h.controller.protocol("vacuum", { limit: 1, wait: "none" });
+  const vacuum = await h.controller.protocol("vacuum", { actor_session: "s-mia", limit: 1, wait: "none" });
   assert.equal(vacuum.element_count, 2);
   assert.equal(vacuum.elements[0].name, "Example");
   assert.equal(vacuum.has_more, true);
 
-  const clicked = await h.controller.protocol("click", { choice: 1, wait: "none" });
+  const clicked = await h.controller.protocol("click", { actor_session: "s-mia", choice: 1, wait: "none" });
   assert.equal(clicked.clicked, true);
-  const filled = await h.controller.protocol("fill", { choice: 2, value: "hello", wait: "none" });
+  const filled = await h.controller.protocol("fill", { actor_session: "s-mia", choice: 2, value: "hello", wait: "none" });
   assert.equal(filled.filled, true);
-  const keyed = await h.controller.protocol("key", { key: "Enter" });
+  const keyed = await h.controller.protocol("key", { actor_session: "s-mia", key: "Enter" });
   assert.equal(keyed.pressed, true);
   assert.deepEqual(h.views[0].webContents.inputEvents.map(event => event.keyCode), ["Enter", "Enter"]);
 });
@@ -613,7 +621,7 @@ test("Ghost can open only workspace files in the embedded browser", async () => 
     const htmlPath = path.join(workspace, "report.html");
     fs.writeFileSync(htmlPath, "<h1>Mia report</h1>");
     const h = harness({ workspaceRoot: workspace });
-    const opened = await h.controller.protocol("file_open", { path: htmlPath });
+    const opened = await h.controller.protocol("file_open", { actor_session: "s-mia", path: htmlPath });
     assert.equal(opened.tab_id, 1);
     assert.match(opened.url, /^file:\/\//);
     assert.equal(h.views[0].webContents.loads[0], opened.url);
@@ -621,7 +629,7 @@ test("Ghost can open only workspace files in the embedded browser", async () => 
     assert.equal(h.window.webContents.sent.at(-1).payload, "web-browser");
 
     await assert.rejects(
-      h.controller.protocol("file_open", { path: path.join(workspace, "..", "outside.html") }),
+      h.controller.protocol("file_open", { actor_session: "s-mia", path: path.join(workspace, "..", "outside.html") }),
       /not found|limited to the Mia workspace/,
     );
     assert.throws(() => h.normalizeLocalFileTarget(path.join(workspace, "..", "outside.html"), workspace));
@@ -1115,11 +1123,11 @@ test("tab groups survive a restart; version 2 state still loads", () => {
 test("bot tab groups: a bot's pages land in its own group, never the user's tab", async () => {
   const sessions = { "s-scout": { botId: "bot-scout", name: "Scout" }, "s-pat": { botId: "bot-pat", name: "Pat" } };
   const resolved = [];
-  const h = harness({ resolveActor: async sessionId => { resolved.push(sessionId); return sessions[sessionId] || null; } });
+  const h = harness({ resolveActor: async sessionId => { resolved.push(sessionId); return knownActor(sessions)(sessionId); } });
   const mine = h.command("new").activeId;
   h.command("navigate", { value: "https://example.com" });
 
-  // Mia's own session (unknown to the lookup) keeps acting on the tab in front.
+  // Mia's own verified session keeps acting on the tab in front.
   const miaNav = await h.controller.protocol("navigate", { url: "example.org", actor_session: "s-mia" });
   assert.equal(miaNav.tab_id, mine);
 
@@ -1154,7 +1162,7 @@ test("bot downloads save straight to Downloads, get checked, and are reported on
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-bot-downloads-"));
   try {
     const sessions = { "s-scout": { botId: "bot-scout", name: "Scout" }, "s-pat": { botId: "bot-pat", name: "Pat" } };
-    const h = harness({ resolveActor: async sessionId => sessions[sessionId] || null, downloadsDir: directory });
+    const h = harness({ resolveActor: knownActor(sessions), downloadsDir: directory });
     h.command("new");
     await h.controller.protocol("tab_open", { url: "example.net", actor_session: "s-scout", wait: "none" });
     const wc = h.views.at(-1).webContents;
@@ -1176,7 +1184,7 @@ test("bot downloads save straight to Downloads, get checked, and are reported on
     assert.deepEqual(plain(report.downloads.map(d => [d.filename, d.state, d.path, d.safety, d.started_by])),
       [["report.pdf", "completed", item.savePath, "safe", "Scout"]]);
     assert.equal((await h.controller.protocol("downloads", { actor_session: "s-pat" })).downloads.length, 0, "a bot sees only its own downloads");
-    assert.equal((await h.controller.protocol("downloads", {})).downloads.length, 1, "Mia sees every bot's downloads");
+    assert.equal((await h.controller.protocol("downloads", { actor_session: "s-mia" })).downloads.length, 1, "Mia sees every bot's downloads");
 
     fs.rmSync(item.savePath);
     report = await h.controller.protocol("downloads", { actor_session: "s-scout" });
@@ -1189,7 +1197,7 @@ test("bot downloads save straight to Downloads, get checked, and are reported on
 
 test("bot tab groups: a bot lists and manages only its own tabs", async () => {
   const sessions = { "s-scout": { botId: "bot-scout", name: "Scout" }, "s-pat": { botId: "bot-pat", name: "Pat" } };
-  const h = harness({ resolveActor: async sessionId => sessions[sessionId] || null });
+  const h = harness({ resolveActor: knownActor(sessions) });
   const mine = h.command("new").activeId;
   h.command("navigate", { value: "https://example.com" });
   const scoutA = await h.controller.protocol("tab_open", { url: "example.net", actor_session: "s-scout", wait: "none" });
@@ -1215,7 +1223,7 @@ test("bot tab groups: a bot lists and manages only its own tabs", async () => {
 
 test("bot tab groups: bots work at the same time without taking the user's tab or each other's", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "A" }, "s-b": { botId: "bot-b", name: "B" }, "s-c": { botId: "bot-c", name: "C" } };
-  const h = harness({ resolveActor: async id => sessions[id] || null });
+  const h = harness({ resolveActor: knownActor(sessions) });
   const mine = h.command("new").activeId;
   h.command("navigate", { value: "https://example.com" });
 
@@ -1247,7 +1255,7 @@ test("bot tab groups: bots work at the same time without taking the user's tab o
 
 test("bot tab groups: the state marks a tab while its bot is working", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
-  const h = harness({ resolveActor: async id => sessions[id] || null });
+  const h = harness({ resolveActor: knownActor(sessions) });
   const mine = h.command("new").activeId;
   const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
   const state = h.command("state");
@@ -1260,7 +1268,7 @@ test("bot tab groups: the state marks a tab while its bot is working", async () 
 
 test("bot tab groups: the golden glow stays through a reply and comes back after a page load", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
-  const h = harness({ resolveActor: async id => sessions[id] || null });
+  const h = harness({ resolveActor: knownActor(sessions) });
   const mine = h.command("new").activeId;
   const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
   const botPage = h.views[h.views.length - 1].webContents;
@@ -1282,7 +1290,7 @@ test("bot tab groups: the golden glow stays through a reply and comes back after
 
 test("bot tab groups: the glow is gold for Mia and the bot's own color for a bot", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
-  const h = harness({ resolveActor: async id => sessions[id] || null });
+  const h = harness({ resolveActor: knownActor(sessions) });
   h.command("new");
   const flush = () => new Promise(resolve => setImmediate(resolve));
   await h.command("botColors", { hues: { "bot-a": 200 } });
@@ -1302,7 +1310,7 @@ test("bot tab groups: the glow is gold for Mia and the bot's own color for a bot
 
 test("bot tab groups: a bot working in the background never takes the user's focus", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
-  const h = harness({ resolveActor: async id => sessions[id] || null });
+  const h = harness({ resolveActor: knownActor(sessions) });
   h.command("new");
   const app = h.window.webContents;
   app.emit("focus"); // The user is typing in chat.
@@ -1320,11 +1328,12 @@ test("bot tab groups: a bot working in the background never takes the user's foc
   assert.equal(app.focusCalls, beforeKey + 1);
 });
 
-test("bot tab groups: a failing lookup falls back to the tab in front", async () => {
+test("bot tab groups: a failing lookup rejects without touching the tab in front", async () => {
   const h = harness({ resolveActor: async () => { throw new Error("backend down"); } });
   const mine = h.command("new").activeId;
-  const result = await h.controller.protocol("navigate", { url: "example.org", actor_session: "s-scout" });
-  assert.equal(result.tab_id, mine);
+  await assert.rejects(h.controller.protocol("navigate", { url: "example.org", actor_session: "s-scout" }), /could not verify|unavailable/i);
+  assert.equal(h.command("state").activeId, mine);
+  assert.equal(h.command("state").tabs[0].url, "");
   assert.deepEqual(plain(h.command("state").groups), []);
 });
 
@@ -1384,17 +1393,18 @@ test("bot tab groups: switching away from a working bot asks, then stops it", as
   h.menuTemplates.at(-1).find(item => item.label === "Mail").click();
   await new Promise(setImmediate);
   assert.equal(h.command("state").groups[0].botId, "bot-mail");
-  assert.deepEqual(plain(stops().map(item => item.payload)), [{ action: "stop", botId: "bot-news" }]);
+  assert.equal(h.stopResult.calls.length, 1, "waits for the main renderer stop acknowledgement");
 
-  // The bot finished while the menu was open: no question, just the swap.
+  // A later idle-looking cache is not an acknowledgement that the bot stopped.
   let asked = h.dialogCalls.length;
-  h.botRunning.value = false;
+  h.botRunning.value = false; h.stopResult.value = false;
   h.command("groupBotMenu", { groupId, bots, busy: { botId: "bot-mail", name: "Mail" } });
   h.menuTemplates.at(-1).find(item => item.label === "News").click();
   await new Promise(setImmediate); await new Promise(setImmediate);
-  assert.equal(h.dialogCalls.length, asked, "a bot that already finished is swapped without asking");
-  assert.equal(h.command("state").groups[0].botId, "bot-news");
-  assert.equal(stops().length, 1, "nothing is stopped");
+  assert.ok(h.dialogCalls.length > asked, "still requires confirmation and a stop acknowledgement");
+  assert.equal(h.command("state").groups[0].botId, "bot-mail");
+  assert.equal(h.stopResult.calls.length, 2, "the stale cache cannot skip the stop request");
+  h.stopResult.value = true;
   h.botRunning.value = true;
   h.command("groupAssignBot", { groupId, bot: { botId: "bot-mail", name: "Mail" } });
 
@@ -1445,4 +1455,81 @@ test("bot tab groups: the owner menu assigns a bot and survives a restart", asyn
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+
+test("unknown, missing and failed actor identities cannot list or close another bot's tabs", async () => {
+  let identity = { kind: "bot", botId: "bot-a", name: "A" };
+  const h = harness({ resolveActor: async () => identity });
+  const a = await h.controller.protocol("tab_open", { actor_session: "s-a", url: "a.example", wait: "none" });
+  identity = { kind: "bot", botId: "bot-b", name: "B" };
+  const b = await h.controller.protocol("tab_open", { actor_session: "s-b", url: "b.example", wait: "none" });
+  for (const invalid of [null, {}, { botId: "bot-a" }, { kind: "mia", botId: "bot-a" }]) {
+    identity = invalid;
+    await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-a" }), /verify|unavailable/i);
+    await assert.rejects(h.controller.protocol("tab_close", { actor_session: "s-a", tab_id: b.tab_id }), /verify|unavailable/i);
+  }
+  identity = { kind: "mia" };
+  await assert.rejects(h.controller.protocol("tab_list", {}), /verify|session/i);
+  assert.equal((await h.controller.protocol("tab_list", { actor_session: "s-mia" })).tabs.length, 2);
+  identity = { kind: "bot", botId: "bot-a", name: "A" };
+  assert.deepEqual(plain((await h.controller.protocol("tab_list", { actor_session: "s-a" })).tabs.map(t => t.tab_id)), [a.tab_id]);
+  await assert.rejects(h.controller.protocol("tab_close", { actor_session: "s-a", tab_id: b.tab_id }), /not one of your tabs/);
+  h.window.emit("closed");
+});
+
+test("download Open requires confirmation for Windows launchers and unknown types", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-download-launchers-"));
+  const h = harness(); h.command("new");
+  try {
+    for (const [name, bytes] of [["invoice.lnk", Buffer.from("4c0000000114020000000000c000000000000046", "hex")],
+      ["invoice.hta", "<hta:application></hta:application>"], ["unknown.custom", "unknown"], ["README", "unknown"]]) {
+      const target = path.join(directory, name); fs.writeFileSync(target, bytes);
+      const item = Object.assign(new EventEmitter(), { getURL: () => "https://files.example/file", getFilename: () => name,
+        getSavePath: () => target, getTotalBytes: () => 10, getReceivedBytes: () => 10 });
+      h.profile.emit("will-download", {}, item, h.views[0].webContents); item.emit("done", {}, "completed");
+      await new Promise(setImmediate);
+      const entry = h.command("state").downloads[0]; assert.equal(entry.safety.verdict, "review", name);
+      h.dialogResponse.value = 1; h.command("downloadOpen", { id: entry.id }); await new Promise(setImmediate);
+      assert.equal(h.opened.includes(target), false, "Cancel never invokes the system handler");
+      h.dialogResponse.value = 0; h.command("downloadOpen", { id: entry.id }); await new Promise(setImmediate);
+      assert.equal(h.opened.includes(target), true, "only explicit acceptance invokes the system handler");
+    }
+  } finally { h.window.emit("closed"); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("Stop and Switch retains ownership until a successful stop acknowledgement", async () => {
+  const h = harness(); const tab = h.command("new").activeId; h.command("groupCreate", { id: tab });
+  const groupId = h.command("state").groups[0].id;
+  h.command("groupAssignBot", { groupId, bot: { botId: "bot-a", name: "A" } });
+  const choose = () => {
+    h.command("groupBotMenu", { groupId, bots: [{ botId: "bot-b", name: "B" }], busy: { botId: "bot-a", name: "A" } });
+    h.menuTemplates.at(-1).find(item => item.label === "B").click();
+  };
+  h.botRunning.value = false; // A stale cache must not bypass cancellation once the menu said busy.
+  for (const outcome of [false, () => Promise.reject(new Error("network unavailable"))]) {
+    h.stopResult.value = outcome; choose(); await new Promise(setImmediate); await new Promise(setImmediate);
+    assert.equal(h.command("state").groups[0].botId, "bot-a", "failed stop keeps ownership");
+  }
+  let acknowledge; h.stopResult.value = () => new Promise(resolve => { acknowledge = resolve; });
+  choose(); await new Promise(setImmediate);
+  assert.equal(h.command("state").groups[0].botId, "bot-a", "pending stop keeps ownership");
+  acknowledge(true); await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.equal(h.command("state").groups[0].botId, "bot-b");
+  h.window.emit("closed");
+});
+
+
+test("Stop and Switch never evaluates the stop API in a foreign renderer", async () => {
+  const h = harness(); const tab = h.command("new").activeId; h.command("groupCreate", { id: tab });
+  const groupId = h.command("state").groups[0].id;
+  h.command("groupAssignBot", { groupId, bot: { botId: "bot-a", name: "A" } });
+  h.command("groupBotMenu", { groupId, bots: [{ botId: "bot-b", name: "B" }], busy: { botId: "bot-a", name: "A" } });
+  h.window.webContents.mainFrame.url = "https://foreign.example";
+  h.menuTemplates.at(-1).find(item => item.label === "B").click();
+  await new Promise(setImmediate); await new Promise(setImmediate);
+  h.window.webContents.mainFrame.url = "http://127.0.0.1:4870/#/chat";
+  assert.equal(h.command("state").groups[0].botId, "bot-a");
+  assert.equal(h.stopResult.calls.length, 0);
+  h.window.emit("closed");
 });
