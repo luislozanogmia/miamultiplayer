@@ -2850,7 +2850,8 @@
   /* Same size, icon weight, and right edge as the toolbar's downloads button
      below it, so the two line up in one column. */
   .native-browser-tabs-row .local-browser-close-btn{align-self:center;width:32px;height:32px;margin:0 8px 0 0;color:#474747;}
-  .native-browser-tabs-row .native-browser-new-tab{align-self:center;display:grid;place-items:center;width:32px;height:32px;margin:0 2px 0 8px;padding:0;-webkit-app-region:no-drag;}
+  .native-browser-tabs-row .native-browser-new-tab{align-self:center;flex:none;position:sticky;right:0;display:grid;place-items:center;width:32px;height:32px;margin:0 0 0 4px;padding:0;background:#dfe3e7;-webkit-app-region:no-drag;}
+  .native-browser-tabs-row .native-browser-new-tab:hover{background:#cfd4d9;}
   .native-browser-tabs-row .native-browser-new-tab svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;}
   .native-browser-tabs-row .local-browser-close-btn:hover{background:#0000000f;color:#1f1f1f;}
   .native-browser-tabs-row .local-browser-close-btn svg{width:18px;height:18px;stroke-width:2;}
