@@ -498,6 +498,40 @@ test('an argv launch vector spawns the interpreter with its prefix arguments', a
   client.close();
 });
 
+test('connected-app credentials reach Hermes through stdin and stay out of its launch environment', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-secret-pipe-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  let spawnRecord;
+  let payload = '';
+  const stdin = { on() {}, end(value) { payload = value; } };
+  const client = new HermesGatewayClient({
+    binary: process.execPath,
+    WebSocketImpl: class FakeWebSocket {},
+    env: {},
+    secretEnv: {
+      MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321',
+      MIA_GOOGLE_BROKER_RUN_TOKEN: 'r'.repeat(43),
+    },
+    tokenFile: path.join(directory, 'gateway.token'),
+    probePortImpl: async () => false,
+    stopExternalGatewayImpl: async () => {},
+    spawnImpl: (binary, args, options) => {
+      spawnRecord = { binary, args, options };
+      return { stdin, once() {}, kill() {} };
+    },
+  });
+  await client.ensureGateway();
+  assert.equal(spawnRecord.options.stdio[0], 'pipe');
+  assert.equal(spawnRecord.options.env.MIAOS_PROCESS_SECRETS_STDIN, '1');
+  assert.equal(spawnRecord.options.env.MIA_GOOGLE_BROKER_RUN_TOKEN, undefined);
+  assert.equal(spawnRecord.options.env.MIA_GOOGLE_BROKER_URL, undefined);
+  assert.deepEqual(JSON.parse(payload), {
+    MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321',
+    MIA_GOOGLE_BROKER_RUN_TOKEN: 'r'.repeat(43),
+  });
+  client.close();
+});
+
 test('reuses an already-running local gateway instead of spawning a second one', async () => {
   let spawnCalls = 0;
   let cleanupCalls = 0;

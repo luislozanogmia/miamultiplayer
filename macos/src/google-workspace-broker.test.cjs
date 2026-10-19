@@ -63,12 +63,14 @@ process.stdout.write(JSON.stringify({ok:true,args:process.argv.slice(2),temporar
 `, { mode: 0o700 });
   const broker = await createGoogleWorkspaceBroker({ directory: path.join(root, "data"), safeStorage, gwsBin: executable });
   t.after(() => broker.close());
-  const request = (endpoint, body, token = broker.token) => fetch(`${broker.url}${endpoint}`, {
+  const request = (endpoint, body, token = endpoint === "/run" ? broker.runToken : broker.adminToken) => fetch(`${broker.url}${endpoint}`, {
     method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   assert.equal((await request("/credentials", credentials, "wrong")).status, 403);
   assert.equal((await request("/credentials", credentials, "é".repeat(43))).status, 403);
+  assert.equal((await request("/credentials", credentials, broker.runToken)).status, 403);
   assert.equal((await request("/credentials", credentials)).status, 200);
+  assert.equal((await request("/run", { args: ["auth", "status"] }, broker.adminToken)).status, 403);
   const response = await request("/run", { args: ["gmail", "users", "labels", "list", "--params", "{\"userId\":\"me\"}"] });
   assert.equal(response.status, 200);
   const result = await response.json();

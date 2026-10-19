@@ -988,9 +988,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         && /^[A-Za-z0-9_.:-]{1,120}$/.test(actor.botId)) return actor;
     throw unavailable();
   }
-  function ownedByOtherBot(actor, tab) {
-    const owner = tab && groups.get(tab.groupId)?.botId;
-    return Boolean(owner && owner !== actor.botId);
+  // Every tab has exactly one controller. Tabs outside a bot-owned group are
+  // Mia's; a bot-owned group assigns all of its tabs to that one bot.
+  function tabController(tab) {
+    const botId = tab && groups.get(tab.groupId)?.botId;
+    return botId ? { kind: "bot", botId } : { kind: "mia" };
   }
   // Keys and screenshots only work on the tab in front. A bot borrows the
   // front for that one action, then the previous tab comes back. Borrowing is
@@ -1000,6 +1002,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function borrowFront(actor, tab, action) {
     if (!actor) return Promise.resolve().then(action);
     const run = frontBorrow.then(async () => {
+      if (!tabs.has(tab.id) || !botOwnsTab(actor, tab)) {
+        throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
+      }
       const previous = activeId;
       const focusBefore = userFocus;
       borrowingTabId = tab.id;
@@ -1017,7 +1022,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return run;
   }
   function botOwnsTab(actor, tab) {
-    return Boolean(tab && groups.get(tab.groupId)?.botId === actor.botId);
+    const controller = tabController(tab);
+    return Boolean(tab && controller.kind === "bot" && controller.botId === actor.botId);
   }
   function botGroup(botId) {
     return [...groups.values()].find(group => group.botId === botId) || null;
@@ -1034,15 +1040,18 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     tab.botUsedAt = ++botUseCounter;
     normalizeGroups(); layout(); persistTabs(); publish();
   }
-  // A bot works in its own tabs: the one in front if it is the bot's, else
-  // the one it used last. A bot with no tab yet reads the page in front, and
-  // navigating opens a new tab in its group rather than taking the user's.
+  // A bot works only in its own tabs: the one in front if it is the bot's,
+  // otherwise the one it used last. Navigating creates a first bot-owned tab;
+  // every other operation requires an existing tab assigned to that bot.
   function botProtocolTab(actor, method, tabId) {
     const explicit = tabId === undefined || tabId === null ? null : tabs.get(Number(tabId));
     if (tabId !== undefined && tabId !== null && !explicit) {
       throw protocolError("TAB_NOT_FOUND", `Tab ${tabId} does not exist.`);
     }
     const owned = tab => botOwnsTab(actor, tab);
+    if (explicit && !owned(explicit)) {
+      throw protocolError("TAB_NOT_FOUND", `Tab ${explicit.id} is not one of your tabs.`);
+    }
     const current = active();
     let tab = explicit || (current && owned(current) ? current : null)
       || [...tabs.values()].filter(owned).sort((a, b) => (b.botUsedAt || 0) - (a.botUsedAt || 0))[0] || null;
@@ -1050,16 +1059,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       tab = newTab(undefined, { activate: false });
       placeInBotGroup(tab, actor);
     }
-    if (!tab) {
-      if (!tabs.size) newTab();
-      tab = protocolTab(undefined);
-    }
-    // Bots work side by side: none may drive a tab another bot owns.
-    if (ownedByOtherBot(actor, tab)) {
-      throw protocolError("TAB_NOT_FOUND", explicit
-        ? `Tab ${tab.id} belongs to another bot.`
-        : "The tab in front belongs to another bot. Open your own page with ghost_navigate first.");
-    }
+    if (!tab) throw protocolError("TAB_NOT_FOUND",
+      "This bot has no browser tab yet. Open its page with ghost_navigate first.");
     if (owned(tab)) tab.botUsedAt = ++botUseCounter;
     return tab;
   }
@@ -1273,7 +1274,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return result || {};
   }
 
-  async function protocolWait(tab, params) {
+  async function protocolWait(tab, params, assertAccess = () => {}) {
     const timeout = boundedInteger(params.timeout ?? params.ms, 10000, 0, 120000);
     if (params.selector) {
       const selector = String(params.selector).trim();
@@ -1282,6 +1283,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
       const deadline = Date.now() + timeout;
       while (Date.now() <= deadline) {
+        assertAccess();
         let present = false;
         try {
           present = Boolean(await executeProtocolScript(
@@ -1289,6 +1291,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             `Boolean(document.querySelector(${JSON.stringify(selector)}))`
           ));
         } catch (_) { /* The page may be navigating; try again until timeout. */ }
+        assertAccess();
         if (present) return { found: true, selector };
         await new Promise(resolve => setTimeout(resolve, 50));
       }
@@ -1315,7 +1318,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       publish();
     };
     try {
-      return await runProtocolCommand(method, params, actor, touch);
+      const result = await runProtocolCommand(method, params, actor, touch);
+      if (actor && [...touched].some(tab => !tabs.has(tab.id) || !botOwnsTab(actor, tab))
+          && method !== "tab_close") {
+        throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
+      }
+      return result;
     } finally {
       for (const tab of touched) {
         tab.botWork = Math.max(0, (tab.botWork || 0) - 1);
@@ -1335,15 +1343,20 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     params = { ...params };
     delete params.actor_session;
     if (method === "status") {
-      const current = active();
+      const ownedTabs = actor ? [...tabs.values()].filter(tab => botOwnsTab(actor, tab)) : [...tabs.values()];
+      const foreground = active();
+      const current = actor
+        ? (foreground && botOwnsTab(actor, foreground) ? foreground : ownedTabs
+          .sort((a, b) => (b.botUsedAt || 0) - (a.botUsedAt || 0))[0] || null)
+        : foreground;
       const status = {
         connected: true,
-        tabs: tabs.size,
+        tabs: ownedTabs.length,
         active_tab_id: current ? current.id : null,
         active_url: current ? current.url : "",
         active_title: current ? (current.title || current.url || "New tab") : "",
       };
-      if (actor) status.your_tabs = [...tabs.values()].filter(tab => botOwnsTab(actor, tab)).length;
+      if (actor) status.your_tabs = ownedTabs.length;
       return status;
     }
     if (method === "tab_list") {
@@ -1447,6 +1460,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     if (method === "read") {
       await waitForProtocolPage(tab, "none");
+      if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
       return protocolRead(tab, params);
     }
     if (method === "vacuum") {
@@ -1454,6 +1468,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         navigate(tab, params.url);
         await waitForProtocolPage(tab, params.wait || "load");
       }
+      if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
       return protocolVacuum(tab, params);
     }
     if (method === "click" || method === "fill") return protocolElementAction(tab, params, method);
@@ -1543,7 +1558,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       await executeProtocolScript(tab.view.webContents, script);
       return { scrolled: true, direction, amount };
     }
-    if (method === "wait") return protocolWait(tab, params);
+    if (method === "wait") return protocolWait(tab, params, () => {
+      if (actor && (!tabs.has(tab.id) || !botOwnsTab(actor, tab))) {
+        throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
+      }
+    });
     throw protocolError("UNKNOWN_METHOD", `Unknown browser method: ${method}`);
   }
   async function collectTiming(tab, waitForPaint = false) {
@@ -2001,7 +2020,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const working = busy && typeof busy === "object" && busy.botId === group.botId
       ? { name: String(busy.name || "").slice(0, 80) } : null;
     Menu.buildFromTemplate([
-      { label: "Mia (no bot)", type: "checkbox", checked: !group.botId, icon: menuIcon(miaIcon),
+      { label: "Mia", type: "checkbox", checked: !group.botId, icon: menuIcon(miaIcon),
         click: () => { switchGroupBot(groupId, null, working); } },
       ...(list.length ? [{ type: "separator" }] : []),
       ...list.map(bot => ({
