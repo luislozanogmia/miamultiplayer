@@ -22,6 +22,7 @@ const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins',
 const GHOST_FIRST_PLUGIN = 'mia-ghost-first';
 const FULL_AGENT_TOOLSETS = Object.freeze(['file', 'terminal', 'memory', 'session_search', 'todo', 'clarify']);
 const SEARCH_ONLY_TOOLSETS = Object.freeze(['web', 'todo', 'clarify']);
+const GOOGLE_WORKSPACE_MCP_SERVER = 'google';
 const GOOGLE_WORKSPACE_MCP_TOOLS = Object.freeze([
   'google_gmail_list',
   'google_gmail_get',
@@ -109,7 +110,9 @@ function googleWorkspaceMcpConfig() {
   if (!fs.existsSync(python) || !fs.existsSync(server)) return [];
   return [
     'mcp_servers:',
-    '  mia-google-workspace:',
+    // Hermes names each tool mcp__<server>__<tool>, and Claude rejects tool
+    // names over 50 characters, so the server name stays short.
+    `  ${GOOGLE_WORKSPACE_MCP_SERVER}:`,
     `    command: ${JSON.stringify(python)}`,
     '    args:',
     `      - ${JSON.stringify(server)}`,
@@ -119,6 +122,12 @@ function googleWorkspaceMcpConfig() {
     '    tools:',
     '      include:',
     ...GOOGLE_WORKSPACE_MCP_TOOLS.map((name) => `        - ${name}`),
+    // Hermes hides MCP tools behind tool_search by default, so a bot asked
+    // to triage the inbox saw no Gmail tool and said it had none. Mia's
+    // Google tools are a short fixed list; show them directly.
+    'tools:',
+    '  tool_search:',
+    '    enabled: "off"',
   ];
 }
 
@@ -457,6 +466,7 @@ module.exports = {
   MIAOS_AGENT_MAX_TURNS,
   FULL_AGENT_TOOLSETS,
   SEARCH_ONLY_TOOLSETS,
+  GOOGLE_WORKSPACE_MCP_SERVER,
   GOOGLE_WORKSPACE_MCP_TOOLS,
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
