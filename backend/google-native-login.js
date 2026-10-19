@@ -44,7 +44,7 @@ function authorizationProof(env, authorizationUrl) {
 
 async function brokerRequest(env, endpoint, value, fetchImpl = fetch) {
   const base = String(env.MIA_GOOGLE_BROKER_URL || '').trim();
-  const token = String(env.MIA_GOOGLE_BROKER_TOKEN || '');
+  const token = String(env.MIA_GOOGLE_BROKER_ADMIN_TOKEN || '');
   if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base) || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
     throw new Error('Google credential broker is unavailable');
   }
@@ -93,7 +93,8 @@ function saveCredentials(directory, credentials) {
 async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = fetch,
   timeoutMs = 5 * 60 * 1000, client, directory, persist,
   filePicker = false, onPicked, log = message => console.error(message) } = {}) {
-  const brokered = Boolean(env.MIA_GOOGLE_BROKER_URL && env.MIA_GOOGLE_BROKER_TOKEN);
+  const brokered = Boolean(env.MIA_GOOGLE_BROKER_URL
+    && env.MIA_GOOGLE_BROKER_ADMIN_TOKEN);
   if (!brokered && env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND !== 'file') {
     return { ok: false, child: null, authorizationUrl: null };
   }
@@ -225,7 +226,8 @@ async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = f
 function hasNativeGoogleClient(env) {
   try {
     readClient(env, googleConfigDir(env));
-    return Boolean(env.MIA_GOOGLE_BROKER_URL && env.MIA_GOOGLE_BROKER_TOKEN)
+    return Boolean(env.MIA_GOOGLE_BROKER_URL
+      && env.MIA_GOOGLE_BROKER_ADMIN_TOKEN)
       || env.GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND === 'file';
   }
   catch (_) { return false; }

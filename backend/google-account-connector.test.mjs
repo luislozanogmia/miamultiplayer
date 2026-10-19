@@ -88,7 +88,8 @@ test('status invokes gws auth status and never infers connected from exit zero a
 
 test('brokered connector never launches raw gws and clears credentials through the broker', async () => {
   const calls = [];
-  const env = { MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321', MIA_GOOGLE_BROKER_TOKEN: 't'.repeat(43) };
+  const env = { MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321',
+    MIA_GOOGLE_BROKER_RUN_TOKEN: 'r'.repeat(43), MIA_GOOGLE_BROKER_ADMIN_TOKEN: 'a'.repeat(43) };
   const fetchImpl = async (url, options) => {
     calls.push({ url, options });
     return { ok: true, json: async () => ({ code: 0, stdout: JSON.stringify({
@@ -103,8 +104,10 @@ test('brokered connector never launches raw gws and clears credentials through t
   assert.equal(rawLaunches, 0);
   assert.equal(calls[0].url, `${env.MIA_GOOGLE_BROKER_URL}/run`);
   assert.deepEqual(JSON.parse(calls[0].options.body).args, ['auth', 'status']);
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${env.MIA_GOOGLE_BROKER_RUN_TOKEN}`);
   assert.equal((await connector.disconnect()).state, 'not_connected');
   assert.equal(calls[1].url, `${env.MIA_GOOGLE_BROKER_URL}/logout`);
+  assert.equal(calls[1].options.headers.Authorization, `Bearer ${env.MIA_GOOGLE_BROKER_ADMIN_TOKEN}`);
 });
 
 test('revoked tokens and unknown grants cannot masquerade as connected', async () => {

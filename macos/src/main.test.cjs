@@ -587,7 +587,7 @@ test("packaged desktop disables developer menus and backend output capture", () 
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /if \(!app\.isPackaged\) viewItems\.unshift\(\{ role: "toggleDevTools" \}\)/);
   assert.match(source, /if \(!app\.isPackaged\) template\.splice\(5, 0, createDevelopmentMenu\(\)\)/);
-  assert.match(source, /stdio: app\.isPackaged \? "ignore"/);
+  assert.match(source, /stdio: app\.isPackaged \? \["pipe", "ignore", "ignore"\]/);
 });
 
 test("Development server actions share one in-flight operation", async () => {

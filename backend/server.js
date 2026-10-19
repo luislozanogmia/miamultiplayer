@@ -1,5 +1,13 @@
 'use strict';
 
+const { loadProcessSecretsFromStdin } = require('./process-secrets');
+loadProcessSecretsFromStdin([
+  'MIA_GOOGLE_BROKER_URL',
+  'MIA_GOOGLE_BROKER_RUN_TOKEN',
+  'MIA_GOOGLE_BROKER_ADMIN_TOKEN',
+  'MIA_GOOGLE_AUTH_OPEN_SECRET',
+]);
+
 const path = require('path');
 const http = require('http');
 const fs = require('fs');

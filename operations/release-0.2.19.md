@@ -38,6 +38,44 @@ and positively acknowledged cancellation remain release criteria.
 This document records the required train, not completed native acceptance,
 merge, build, upload, publication or OTA verification.
 
+## Security follow-up candidate
+
+The post-merge audit found that bot commands could target Mia-controlled tabs
+and that Google broker credentials were serialized into profiles readable by
+agents with terminal access. The follow-up assigns every tab to Mia or one bot,
+rejects cross-controller access, and rechecks ownership after queued or delayed
+work. An ungrouped tab belongs to Mia; it is not a separate human-owned class.
+
+The connected-app adapter needs a broker credential; the model does not.
+Desktop-to-backend, backend-to-gateway and gateway-to-adapter handoffs use
+anonymous pipes. The gateway and adapter keep the run credential in memory;
+profile configuration and launch environments contain no broker credential.
+Connection management has a separate admin credential unavailable to the
+gateway. A synthetic native-runtime smoke gate exercises the pinned Hermes
+MCP transport, initialization and a bounded tool call without a real account.
+
+This closes the reviewed broker-token disclosure route. It does not turn the
+intentionally full, same-user terminal into an operating-system sandbox. In
+particular, the existing Google CLI's temporary OAuth credential-file lifecycle
+is a separate limitation requiring its own isolation work.
+
+Rebuild every platform from the new reviewed, merged source. Earlier 0.2.19
+artifacts built from b29137d are superseded and cannot satisfy the final gates.
+
+Source follow-up verification on 2026-10-19: 566 backend checks passed with three
+optional checks skipped; 276 desktop/packaging checks passed with two optional
+checks skipped. The backend suite used an inert Google callback URL to avoid
+colliding with the existing local preview's port. Independent source challenge
+found and resolved the MCP child environment leak, a reserved-ID collision,
+queued ownership changes and delayed vacuum access.
+
+The synthetic adapter handshake and bounded tool invocation passed on native
+Linux, Windows and macOS interpreters. Linux additionally exercised the actual
+patched `MCPServerTask._run_stdio` and verified that a sibling could not find
+the fixture token in child startup environment or arguments. This is runtime
+preflight; new packaged-app acceptance and Daybreak package review remain
+required on the final merged candidate.
+
 ## Candidate source verification (2026-10-19)
 
 - Frontend: 319 automated tests passed, including explicit HTTPS, delayed

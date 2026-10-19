@@ -714,7 +714,7 @@ async function googleIdentityFixture(t, { clerk = false } = {}) {
   t.after(() => broker.close());
   const f = await disconnectedProviderFixture(t, {
     extraEnv: { HERMES_GWS_BIN: '/usr/bin/false', HERMES_PYTHON: '/usr/bin/python3', MIAOS_CLERK_AUTH: clerk ? '1' : '0',
-      MIA_GOOGLE_BROKER_URL: `http://127.0.0.1:${broker.address().port}`, MIA_GOOGLE_BROKER_TOKEN: 'g'.repeat(43) },
+      MIA_GOOGLE_BROKER_URL: `http://127.0.0.1:${broker.address().port}`, MIA_GOOGLE_BROKER_RUN_TOKEN: 'g'.repeat(43) },
     configure(data) {
       const database = store.openDb(data.dbPath, data.dataDir, { botPackageDir: data.packages });
       const identity = clerk ? ['clerk', 'https://fixture-issuer.example', 'fixture-subject-a'] : ['user', ALICE];
