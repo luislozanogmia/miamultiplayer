@@ -22,6 +22,7 @@ function navigationHarness() {
     localBrowserState: { open: true }, document: { body: { classList: { contains: () => true } } }, window: {},
     setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {}, saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     clearChatBack() {}, rememberChatBack() {}, clearChatActive() {},
+    clearAgentSetupRequest() {}, closeManageAgentsPane() {}, chatInfo: {}, setTimeout() {},
     isNativeMiaConversation: c => c.type === 'agent', applyNativeConversationList() {},
     el: selector => selector === '#ccInput' ? input : null,
     chatRoomState(id) { return states[id] ||= { messages: [], historyRequestId: 0 }; },
@@ -33,7 +34,7 @@ function navigationHarness() {
   };
   vm.createContext(ctx);
   vm.runInContext("var browserFollowKey='', browserFollowState=null; var chatTextDrafts={};\n" +
-    ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat'].map(sourceFunction).join('\n'), ctx);
+    ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat', 'startAgentSetupChat'].map(sourceFunction).join('\n'), ctx);
   const follow = (id, botId) => ctx.followBrowserTab({ activeId: id, tabs: [{ id, groupId: 'g' + id }], groups: [{ id: 'g' + id, botId }] });
   function created(botId) {
     requests.get(botId).resolve({ status: 201, data: { conversation: { id: 'room-' + botId, type: 'bot', metadata: { botId } } } });
@@ -63,6 +64,17 @@ test('a manual chat choice invalidates pending browser navigation and preserves 
   assert.equal(h.ctx.chatWs.activeRoomId, 'manual-room'); assert.equal(h.input.value, 'Manual draft');
   h.follow(1, 'a'); assert.equal(h.ctx.chatWs.activeRoomId, 'manual-room', 'unchanged tab state respects manual selection');
   h.ctx.loadChatRoom('room-b', 'agent', 'B'); assert.equal(h.input.value, 'For B only');
+});
+
+test('starting New Bot setup invalidates pending browser chat creation', async () => {
+  const h = navigationHarness();
+  h.follow(1, 'a'); h.ctx.startAgentSetupChat();
+  assert.equal(h.ctx.chatWs.activeRoomId, '__setup__');
+  h.created('a'); await flush();
+  assert.equal(h.ctx.chatWs.activeRoomId, '__setup__');
+  assert.equal(h.ctx.chatWs.activeKind, 'agent-setup');
+  assert.equal(h.ctx.agentSetup.phase, 'intent');
+  assert.ok(h.ctx.chatWs.nativeConversations.some(c => c.id === 'room-a'), 'retain the completed creation without leaving setup');
 });
 
 test('closing the browser invalidates a pending first-time bot chat navigation', async () => {

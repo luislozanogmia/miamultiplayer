@@ -8133,6 +8133,7 @@
   }
 
   function startAgentSetupChat(){
+    chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     clearAgentSetupRequest(true);
     rememberChatBack('agent-setup', AGENT_SETUP_ROOM_ID);
     closeManageAgentsPane();
