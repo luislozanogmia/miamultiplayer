@@ -5826,14 +5826,17 @@
     var owner = bot ? 'bot:' + bot.id : 'mia';
     var key = tab.id + '|' + owner;
     if(key === browserFollowKey) return;
-    browserFollowKey = key;
-    if(activeConversationOwner() === owner) return;
+    if(activeConversationOwner() === owner){ browserFollowKey = key; return; }
     var agent = bot
       ? (chatWs.allAgents || []).filter(function(a){ return String(a.id) === String(bot.id); })[0]
       : chatWs.gatewayAgent;
     if(!agent) return;
-    navigateToAgentChat(agent, false);
-    localBrowserState.roomId = chatWs.activeRoomId;
+    browserFollowKey = key;
+    Promise.resolve(navigateToAgentChat(agent, false, function(){
+      return browserFollowKey === key && localBrowserState.open && document.body.classList.contains('browser-collab-mode');
+    })).then(function(){
+      if(browserFollowKey === key && activeConversationOwner() === owner) localBrowserState.roomId = chatWs.activeRoomId;
+    });
   }
   if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onState){
     window.miaDesktop.browser.onState(followBrowserTab);
@@ -5856,13 +5859,11 @@
     },
     // "Take over" in the browser stops whatever this bot is running now.
     takeOver: function(botId){
-      var running = browserBotRunningTasks(botId);
-      if(!running.length){ showToast(botId === 'mia' ? 'Mia has already finished.' : 'That bot has already finished.'); return; }
-      running.forEach(function(task){ stopTaskFromComposer(task.id); });
+      return stopBrowserBot(botId);
     },
     // The group this bot worked in was given to someone else.
     stopQuietly: function(botId){
-      browserBotRunningTasks(botId).forEach(function(task){ stopTaskFromComposer(task.id); });
+      return stopBrowserBot(botId);
     },
     moteHtml: function(botId){
       var bot = botId ? browserBotRecord(botId) : null;
@@ -5886,6 +5887,18 @@
     },
   };
   var browserMenuIconCache = {};
+  function stopBrowserBot(botId){
+    var running = browserBotRunningTasks(botId);
+    if(!running.length){
+      showToast('Could not confirm that the response stopped. Check its chat before taking over.');
+      return Promise.resolve(false);
+    }
+    return Promise.all(running.map(function(task){ return stopTaskFromComposer(task.id); })).then(function(results){
+      var stopped = results.every(function(result){ return result === true; });
+      if(!stopped) showToast('Could not stop every response. The bot may still be working; try again.');
+      return stopped;
+    });
+  }
   function browserMenuIcon(src, filter){
     var key = src + '|' + filter;
     if(browserMenuIconCache[key]) return browserMenuIconCache[key];
@@ -6713,7 +6726,7 @@
 
   function stopTaskFromComposer(taskId){
     var task = (chatWs.tasks || []).filter(function(candidate){ return candidate.id === taskId; })[0];
-    if(!task || task.kind !== 'native-dispatch' || chatTaskStopPending[taskId]) return;
+    if(!task || task.kind !== 'native-dispatch' || chatTaskStopPending[taskId]) return Promise.resolve(false);
     chatTaskStopPending[taskId] = true;
     renderComposerTaskControl();
     return api(nativeConversationPath(task.roomId, '/dispatches/' + encodeURIComponent(taskId) + '/stop'), {
@@ -6725,9 +6738,11 @@
       delete chatTaskStopPending[taskId];
       stopChatThinking(task.roomId);
       renderLiveViews();
+      return true;
     }).catch(function(){
       delete chatTaskStopPending[taskId];
       renderComposerTaskControl();
+      return false;
     });
   }
 
@@ -8737,13 +8752,13 @@
     clearChatActive();
     loadChatRoom(previous.roomId, previous.kind, previous.label);
   }
-  function navigateToAgentChat(agent, keepBack){
+  function navigateToAgentChat(agent, keepBack, canNavigate){
     if(!agent) return;
     if(keepBack) rememberChatBack('agent', agent.roomId || agent.nativeConversationId || null);
     else clearChatBack();
     chatRoster.open = null;
     clearChatActive();
-    selectAgentRoom(agent);
+    return selectAgentRoom(agent, canNavigate);
   }
 
   function chatVisibleHumans(humans){
@@ -10489,6 +10504,7 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
   function loadChatRoom(roomId, kind, label){
+    chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     setLocalChatTypingActivity(false);
     closeMentionPopover();
     chatRoster.open = null;
@@ -10561,7 +10577,10 @@
     loadChatRoom(chatWs.rooms.home.roomId, 'home', chatWs.rooms.home.name || 'Multiplayer Test');
   }
 
-  function selectAgentRoom(agent){
+  function selectAgentRoom(agent, canNavigate){
+    var generation = chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
+    function current(){ return chatWs.navigationGeneration === generation && (!canNavigate || canNavigate()); }
+    if(!current()) return;
     if(agent.roomId || agent.nativeConversationId){
       return loadChatRoom(agent.roomId || agent.nativeConversationId, 'agent', agent.name);
     }
@@ -10578,7 +10597,9 @@
       chatWs.nativeConversations.push(res.data.conversation);
       applyNativeConversationList(chatWs.nativeConversations);
       renderChatSidebar();
-      loadChatRoom(res.data.conversation.id, 'agent', agent.name);
+      // Keep a chat created by an earlier choice, but never let its late
+      // response replace a newer tab or a manually selected conversation.
+      if(current()) return loadChatRoom(res.data.conversation.id, 'agent', agent.name);
     }).catch(function(){});
   }
 

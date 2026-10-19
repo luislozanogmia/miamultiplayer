@@ -17,7 +17,7 @@ test('browser tabs shrink to fit before the strip has to scroll', async () => {
   assert.match(source, /\.native-browser-tabs::-webkit-scrollbar\{display:none;\}/);
 });
 
-test('downloads open as a menu card over a page still, with Chrome-style row actions', async () => {
+test('downloads open as a menu card over a page still, with compact row actions', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
   const js = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');

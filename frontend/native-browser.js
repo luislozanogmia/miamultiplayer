@@ -174,12 +174,22 @@
   if (urlWrap) urlWrap.after(botControl);
   takeOver.onclick = function () {
     var botId = botControl.getAttribute('data-bot-id');
-    if (!botId) return;
-    if (window.miaBrowserAgents && window.miaBrowserAgents.takeOver) window.miaBrowserAgents.takeOver(botId);
-    // Drop the marks now rather than after the bot's last command lingers.
-    botReleasedAt[botId] = Date.now();
-    Object.keys(botHolds).forEach(function (id) { if (botHolds[id].botId === botId) delete botHolds[id]; });
-    render(state);
+    var agents = window.miaBrowserAgents;
+    if (!botId || takeOver.disabled || !agents || !agents.takeOver) return;
+    takeOver.disabled = true;
+    takeOver.textContent = 'Stopping…';
+    return Promise.resolve().then(function () { return agents.takeOver(botId); }).then(function (stopped) {
+      if (stopped !== true) return;
+      // Control stays with the bot until every cancellation is acknowledged.
+      botReleasedAt[botId] = Date.now();
+      Object.keys(botHolds).forEach(function (id) { if (botHolds[id].botId === botId) delete botHolds[id]; });
+      render(state);
+    }).catch(function () {
+      botControlLabel.textContent = 'Could not stop. The bot may still be working.';
+    }).finally(function () {
+      takeOver.disabled = false;
+      takeOver.textContent = 'Take over';
+    });
   };
   // A tab stays marked from a bot's first command until that bot's reply
   // ends, so the marks don't blink off while it thinks between steps.
