@@ -601,11 +601,11 @@ async function preparePackagedRuntime() {
   process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(userData, "google-workspace");
   // Windows packaged builds cannot spawn the .cmd Hermes shim from Node
   // (CVE-2024-27980), so the backend receives the launcher as an argv
-  // vector (interpreter + script) plus the venv coordinates the .cmd
-  // shim used to export per invocation.
+  // vector (venv interpreter + script). The venv processes dependency .pth
+  // files, including the Windows DLL paths needed by the MCP transport.
   if (process.platform === "win32") {
     process.env.MIAOS_HERMES_ARGV_JSON = JSON.stringify([
-      pythonExecutable,
+      process.env.HERMES_PYTHON,
       path.join(hermesInstall, "hermes"),
     ]);
     process.env.PYTHONPATH = path.join(venvRoot, "Lib", "site-packages");
