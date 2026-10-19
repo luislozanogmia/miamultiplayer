@@ -268,6 +268,7 @@
   function render(next) {
     var changedTab = state.activeId !== next.activeId;
     state = next;
+    syncStillPage();
     var tab = selected();
     var url = tab && tab.url || '';
     if (changedTab || document.activeElement !== input) showUrl(url);
@@ -719,42 +720,94 @@
     var tab = selected();
     return Boolean(open && !overlay.hidden && tab && tab.url && !tab.error);
   }
+  var stillGeneration = 0;
+  var stillPage = '';
+  var stillPending = null;
+  var suggestRequested = false;
+  var downloadsRequested = false;
+  function stillPageKey() {
+    var tab = selected();
+    return JSON.stringify([open, overlay.hidden, tab && tab.id, tab && tab.url,
+      tab && tab.loading, tab && tab.error, tab && tab.timing]);
+  }
+  function discardStill() {
+    ++stillGeneration;
+    stillPending = null;
+    clearTimeout(snapshotTimer);
+    snapshot.hidden = true;
+    snapshot.removeAttribute('src');
+  }
+  function syncStillPage() {
+    var key = stillPageKey();
+    if (key === stillPage) return;
+    stillPage = key;
+    discardStill();
+  }
   function showStill() {
     clearTimeout(snapshotTimer);
-    if (!snapshot.hidden) return Promise.resolve();
-    return pageShowing()
-      ? command('snapshot').then(function (result) {
-        if (!result || !result.dataUrl) return;
+    syncStillPage();
+    if (!snapshot.hidden && (suggestCovered || downloadsOpen)) return Promise.resolve(true);
+    if (!suggestCovered && !downloadsOpen) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
+    if (stillPending) return stillPending;
+    if (!pageShowing()) return Promise.resolve(true);
+    var generation = stillGeneration;
+    var key = stillPage;
+    function current() {
+      return generation === stillGeneration && key === stillPageKey() &&
+        (suggestRequested || downloadsRequested);
+    }
+    var pending = command('snapshot').then(function (result) {
+      if (!current()) return false;
+      if (!result || !result.dataUrl) return true;
+      // Decode away from the displayed image: a dismissed capture must not
+      // mutate its source or become visible after a later page takes over.
+      var image = new Image();
+      image.src = result.dataUrl;
+      return image.decode().then(function () {
+        if (!current()) return false;
         snapshot.src = result.dataUrl;
-        return snapshot.decode().then(function () { snapshot.hidden = false; });
-      }).catch(function () {})
-      : Promise.resolve();
+        snapshot.hidden = false;
+        return true;
+      });
+    }).catch(function () { return current(); });
+    stillPending = pending;
+    pending.then(function () { if (stillPending === pending) stillPending = null; });
+    return pending;
   }
   function hideStill() {
-    if (downloadsOpen || suggestCovered) return;
-    // Keep the still up until the live page is back in front.
+    if (downloadsRequested || suggestRequested) return;
+    // Invalidate capture/decode immediately, even before either menu has
+    // committed its cover. Keep only an already visible still for the
+    // native view's short return transition; a reopen always captures anew.
+    ++stillGeneration;
+    stillPending = null;
     clearTimeout(snapshotTimer);
-    snapshotTimer = setTimeout(function () { snapshot.hidden = true; snapshot.removeAttribute('src'); }, 150);
+    snapshotTimer = setTimeout(function () {
+      snapshot.hidden = true;
+      snapshot.removeAttribute('src');
+    }, 150);
   }
   var suggestToken = 0;
   function setSuggestCover(next) {
     var token = ++suggestToken;
+    suggestRequested = next;
     if (!next) {
-      if (!suggestCovered) return;
       suggestCovered = false;
       layout();
       hideStill();
       return;
     }
     if (suggestCovered) return;
-    showStill().then(function () {
+    showStill().then(function (ready) {
       if (token !== suggestToken) return;
+      if (!ready) { if (suggestRequested) setSuggestCover(true); return; }
       suggestCovered = true;
       layout();
     });
   }
   function setDownloadsOpen(next) {
     var token = ++downloadsToken;
+    downloadsRequested = next;
     if (!next) {
       downloadsOpen = false;
       downloadsView.hidden = true;
@@ -764,8 +817,9 @@
       hideStill();
       return Promise.resolve();
     }
-    return showStill().then(function () {
+    return showStill().then(function (ready) {
       if (token !== downloadsToken) return;
+      if (!ready) return downloadsRequested ? setDownloadsOpen(true) : undefined;
       var screenRect = screen.getBoundingClientRect();
       var buttonRect = downloadsBtn.getBoundingClientRect();
       downloadsView.style.setProperty('--downloads-right', Math.max(8, Math.round(screenRect.right - buttonRect.right)) + 'px');
@@ -832,6 +886,9 @@
       var opening = visible && !open;
       open = visible;
       if (!visible) {
+        setSuggestCover(false);
+        setDownloadsOpen(false);
+        discardStill();
         // The native WebContentsView sits above the HTML renderer. Hiding the
         // overlay first can prevent a deferred animation-frame layout from
         // running, leaving the last browser pixels over chat. Hide the native
