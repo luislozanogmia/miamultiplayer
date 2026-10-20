@@ -23,6 +23,10 @@ automatically through the in-app updater.
 - Present the Downloads panel over a still of the current page.
 
 ### Fixed
+- Start the Windows, macOS and Linux agent connection on an available local
+  port when the default port is reserved by the operating system.
+- Serialize provider connection saves and agent restarts; preserve saved keys
+  on a failed startup and report when the connection is not ready.
 - Enforce Mia-or-bot browser tab assignments for explicit targets and queued
   actions; keep a tab with its controller until pending page operations settle,
   including operations that outlast an API timeout.

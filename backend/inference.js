@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { externalChatEnabled } = require('./chat-security');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
+const { HermesRuntimeController } = require('./hermes-runtime-controller');
 const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
 const { normalizedGatewayUrl } = require('./hermes-web-search-config');
 const {
@@ -137,8 +138,9 @@ function setHermesDiagnostics({ verboseHermes, traceCommands } = {}) {
   if (typeof traceCommands === 'boolean') hermesDiagnostics.traceCommands = traceCommands;
   hermesDiagnostics.updatedAt = new Date().toISOString();
   if (!hermesDiagnostics.traceCommands) hermesDiagnostics.events = [];
-  if (hermesGatewayClient && typeof hermesGatewayClient.setToolProgressMode === 'function') {
-    void hermesGatewayClient.setToolProgressMode(hermesDiagnostics.verboseHermes ? 'verbose' : 'all');
+  const client = hermesGatewayRuntime.current;
+  if (client && typeof client.setToolProgressMode === 'function') {
+    void client.setToolProgressMode(hermesDiagnostics.verboseHermes ? 'verbose' : 'all');
   }
   return getHermesDiagnostics();
 }
@@ -496,7 +498,8 @@ function hermesProcessEnv() {
   return env;
 }
 
-let hermesGatewayClient = null;
+let hermesGatewaySessionEventHandler = null;
+const hermesGatewayRuntime = new HermesRuntimeController(createHermesGatewayClient);
 
 // A profile pool can shadow an updated root key. Clear Mia-managed copies
 // only while no gateway is running, so cached state cannot write them back.
@@ -513,34 +516,37 @@ function removeStaleProfileCredentials() {
   }
 }
 
+function createHermesGatewayClient() {
+  const client = new HermesGatewayClient({
+    binary: HERMES_BIN,
+    launch: hermesGatewayLaunch(),
+    env: {
+      ...hermesProcessEnv(),
+      ...(hermesDiagnostics.verboseHermes ? { HERMES_TUI_TOOL_PROGRESS: 'verbose' } : {}),
+    },
+    toolsets: MIAOS_HERMES_TOOLSETS,
+    maxTurns: MIAOS_AGENT_MAX_TURNS,
+    onEvent: recordHermesGatewayEvent,
+    beforeSpawn: removeStaleProfileCredentials,
+    secretEnv: process.env.MIA_GOOGLE_BROKER_URL && process.env.MIA_GOOGLE_BROKER_RUN_TOKEN ? {
+      MIA_GOOGLE_BROKER_URL: process.env.MIA_GOOGLE_BROKER_URL,
+      MIA_GOOGLE_BROKER_RUN_TOKEN: process.env.MIA_GOOGLE_BROKER_RUN_TOKEN,
+      MIA_GOOGLE_MCP_SERVER: path.join(__dirname, 'mia-google-workspace-mcp.py'),
+      MIA_GOOGLE_MCP_PYTHON: process.env.HERMES_PYTHON,
+    } : null,
+  });
+  if (hermesGatewaySessionEventHandler) client.setSessionEventHandler(hermesGatewaySessionEventHandler);
+  return client;
+}
+
 function getHermesGatewayClient() {
-  if (!hermesGatewayClient) {
-    hermesGatewayClient = new HermesGatewayClient({
-      binary: HERMES_BIN,
-      launch: hermesGatewayLaunch(),
-      env: {
-        ...hermesProcessEnv(),
-        ...(hermesDiagnostics.verboseHermes ? { HERMES_TUI_TOOL_PROGRESS: 'verbose' } : {}),
-      },
-      toolsets: MIAOS_HERMES_TOOLSETS,
-      maxTurns: MIAOS_AGENT_MAX_TURNS,
-      onEvent: recordHermesGatewayEvent,
-      beforeSpawn: removeStaleProfileCredentials,
-      secretEnv: process.env.MIA_GOOGLE_BROKER_URL && process.env.MIA_GOOGLE_BROKER_RUN_TOKEN ? {
-        MIA_GOOGLE_BROKER_URL: process.env.MIA_GOOGLE_BROKER_URL,
-        MIA_GOOGLE_BROKER_RUN_TOKEN: process.env.MIA_GOOGLE_BROKER_RUN_TOKEN,
-        MIA_GOOGLE_MCP_SERVER: path.join(__dirname, 'mia-google-workspace-mcp.py'),
-        MIA_GOOGLE_MCP_PYTHON: process.env.HERMES_PYTHON,
-      } : null,
-    });
-  }
-  return hermesGatewayClient;
+  return hermesGatewayRuntime.get();
 }
 
 // Close every live gateway session this backend opened. Used by provider
 // disconnect and clean slate; never spawns a gateway just to close nothing.
 async function closeHermesGatewaySessions() {
-  const client = hermesGatewayClient;
+  const client = hermesGatewayRuntime.current;
   if (!client) return 0;
   return client.closeLiveSessions();
 }
@@ -551,39 +557,29 @@ async function closeHermesGatewaySessions() {
 async function deleteHermesGatewaySessions(storedSessionIds) {
   const ids = (storedSessionIds || []).filter(Boolean);
   if (!ids.length) return 0;
-  const client = getHermesGatewayClient();
+  const client = await getHermesGatewayClient();
   await client.closeLiveSessions();
   return client.deleteStoredSessions(ids);
 }
 
 // Bounce the gateway Mia started so its in-memory credential pool and live
 // agents are gone after a clean slate. An external gateway is left alone.
-async function restartHermesGatewayRuntime() {
-  const client = hermesGatewayClient;
-  if (!client) return false;
-  const stopped = await client.stopOwnedGateway();
-  if (!stopped) return false;
-  hermesGatewayClient = null;
-  await getHermesGatewayClient().connect();
-  return true;
+function restartHermesGatewayRuntime() {
+  return hermesGatewayRuntime.restart();
 }
 
-// Stop the gateway Mia owns and forget the client, so on-disk Hermes state
-// can be replaced underneath it before startHermesGatewayRuntime() brings a
-// fresh one up. Resolves false when no owned gateway was running.
-async function stopHermesGatewayRuntime() {
-  const client = hermesGatewayClient;
-  if (!client) return false;
-  hermesGatewayClient = null;
-  return client.stopOwnedGateway();
+function stopHermesGatewayRuntime() {
+  return hermesGatewayRuntime.stop();
+}
+
+// The callback writes credentials only. Readers stay behind the same barrier
+// through both the write and the subsequent gateway readiness check.
+function withStoppedHermesGateway(operation) {
+  return hermesGatewayRuntime.withStopped(operation);
 }
 
 function closeHermesGatewayRuntime() {
-  const client = hermesGatewayClient;
-  hermesGatewayClient = null;
-  if (!client) return false;
-  client.close();
-  return true;
+  return hermesGatewayRuntime.close();
 }
 
 process.once('exit', closeHermesGatewayRuntime);
@@ -807,8 +803,9 @@ function rememberTurnModel(gatewayOptions, requested) {
 async function runStandaloneInferenceViaHermesGateway(
   prompt,
   options = {},
-  client = options.gatewayClient || getHermesGatewayClient()
+  client = null
 ) {
+  client = client || options.gatewayClient || await getHermesGatewayClient();
   const imagePaths = imagePathsFromOptions(options);
   const result = await client.run({
     storedSessionId: null,
@@ -857,7 +854,8 @@ async function runInferenceViaHermesGateway({
   onEvent,
   onSession,
   signal,
-}, client = getHermesGatewayClient()) {
+}, client = null) {
+  client = client || await getHermesGatewayClient();
   const result = await client.run({
     storedSessionId,
     seedMessages,
@@ -888,7 +886,8 @@ async function runSlashCommandViaHermesGateway({
   onSession,
   onNotice,
   signal,
-}, client = getHermesGatewayClient()) {
+}, client = null) {
+  client = client || await getHermesGatewayClient();
   return client.runCommand({
     storedSessionId,
     seedMessages,
@@ -904,39 +903,43 @@ async function runSlashCommandViaHermesGateway({
 }
 
 // Stop shares the exact client and AbortSignal used by Mia, bot and standalone turns.
-async function cancelHermesGatewayTurn(signal, client = getHermesGatewayClient()) {
+async function cancelHermesGatewayTurn(signal, client = null) {
+  client = client || await getHermesGatewayClient();
   return client.cancelTurn(signal);
 }
 
-async function readHermesGatewaySessionControl(sessionId, client = getHermesGatewayClient()) {
+async function readHermesGatewaySessionControl(sessionId, client = null) {
+  client = client || await getHermesGatewayClient();
   return client.readSessionControl(sessionId);
 }
 
 // Turns and goal verdicts Hermes produces on its own (see
 // HermesGatewayClient.handleUnsolicitedEvent).
-function setHermesGatewaySessionEventHandler(handler, client = getHermesGatewayClient()) {
-  client.setSessionEventHandler(handler);
+function setHermesGatewaySessionEventHandler(handler, client = null) {
+  if (client) return client.setSessionEventHandler(handler);
+  hermesGatewaySessionEventHandler = handler;
+  hermesGatewayRuntime.current?.setSessionEventHandler(handler);
 }
 
 async function runBotInferenceViaHermesGateway(
   prompt,
   options = {},
-  client = options.gatewayClient || getHermesGatewayClient()
+  client = null
 ) {
   return runStandaloneInferenceViaHermesGateway(prompt, { ...options, botWorker: true }, client);
 }
 
-async function steerHermesGatewaySession(sessionId, text, client = getHermesGatewayClient()) {
+async function steerHermesGatewaySession(sessionId, text, client = null) {
+  client = client || await getHermesGatewayClient();
   return client.steer(sessionId, text);
 }
 
 async function getHermesGatewayModelOptions(options) {
-  return getHermesGatewayClient().modelOptions({ ...options, profile: MIAOS_AGENT_HERMES_PROFILE });
+  return (await getHermesGatewayClient()).modelOptions({ ...options, profile: MIAOS_AGENT_HERMES_PROFILE });
 }
 
 async function startHermesGatewayRuntime() {
-  await getHermesGatewayClient().connect();
-  return true;
+  return hermesGatewayRuntime.start();
 }
 
 module.exports = {
@@ -956,6 +959,7 @@ module.exports = {
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
   startHermesGatewayRuntime,
+  withStoppedHermesGateway,
   removeStaleProfileCredentials,
   closeHermesGatewayRuntime,
   closeHermesGatewaySessions,
