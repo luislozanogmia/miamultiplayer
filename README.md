@@ -150,5 +150,5 @@ repositories, GitHub authentication, SSH keys, and unrelated applications.
 Copyright © 2026 Mia Labs and contributors. Licensed under the MIT License.
 [MIT License](LICENSE).
 
-Hermes Agent and Ghost CLI are separate MIT-licensed projects. See
+Hermes Agent and Mia Browser (previously Ghost CLI) are separate MIT-licensed projects. See
 [Third-party notices](THIRD_PARTY_NOTICES.md) for details.
