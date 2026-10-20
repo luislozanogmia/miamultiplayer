@@ -917,6 +917,7 @@ test('Mia Router failures reach the local-profile UI as a safe reason', async ()
 const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
 inference.startHermesGatewayRuntime = async () => {};
 inference.stopHermesGatewayRuntime = async () => {};
+inference.withStoppedHermesGateway = async (operation) => ({ value: await operation(), runtimeReady: true, runtimeError: null });
 inference.closeHermesGatewaySessions = async () => 0;
 `;
     server = await startServer({
@@ -1905,4 +1906,29 @@ test('POST /api/admin/users with no password returns an invite link instead of c
   } finally {
     await stopServer(server);
   }
+});
+
+
+test('API key route distinguishes a successful writer from failed runtime startup (mocked runtime)', async () => {
+  const preloadScript = `
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.withStoppedHermesGateway = async (operation) => ({
+  value: await operation(), runtimeReady: false, runtimeError: new Error('fixture runtime unavailable')
+});
+`;
+  const server = await startServer({ preloadScript, extraEnv: { HERMES_BIN: '/usr/bin/true' } });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const response = await fetch(`${server.origin}/api/settings/harness/api-key`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'deepseek', apiKey: 'fixture-provider-key' }),
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.equal(body.credentialSaved, true);
+    assert.equal(body.runtimeReady, false);
+    assert.equal(body.code, 'runtime_unavailable');
+    assert.match(body.error, /saved/);
+    assert.doesNotMatch(JSON.stringify(body), /fixture-provider-key/);
+  } finally { await stopServer(server); }
 });

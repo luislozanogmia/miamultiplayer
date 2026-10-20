@@ -1389,13 +1389,26 @@
     return realProfileName(profile && profile.displayName);
   }
 
+  function managedRouterRuntimeReady(data){
+    return !!(data && (data.provisioned || data.credentialSaved) && data.runtimeReady !== false && !data.error);
+  }
+
+  function managedRouterConnectionError(data){
+    if(!data || managedRouterRuntimeReady(data)) return '';
+    if(data.error) return String(data.error);
+    return (data.provisioned || data.credentialSaved) && data.runtimeReady === false
+      ? String(data.label || 'Mia Router') + ' connection is unavailable. Try again.'
+      : '';
+  }
+
   function renderHarnessConnectionInventory(connections, runtimes, routerStatus){
     var wrap = el('#settingsHarnessConnections');
     var connected = [];
-    var routerError = routerStatus && !routerStatus.provisioned && routerStatus.error;
+    var routerError = managedRouterConnectionError(routerStatus);
     if(connections && connections['openai-codex'] === true) connected.push({label:'ChatGPT subscription'});
     if(connections && connections['xai-oauth'] === true) connected.push({label:'Grok subscription'});
     harnessApiProviderCatalog.forEach(function(provider){
+      if(routerError && (provider.id === 'openrouter' || provider.id === 'managed-router')) return;
       if(connections && connections[provider.id] === true){
         connected.push({label:provider.label + ' API key'});
       }
@@ -1827,7 +1840,7 @@
   function applyManagedRouterStatus(data){
     var bannerLabel = el('#miaRouterBannerLabel');
     if(bannerLabel && data && data.label) bannerLabel.textContent = data.label;
-    managedRouterStatusError = data && !data.provisioned && data.error ? String(data.error) : '';
+    managedRouterStatusError = managedRouterConnectionError(data);
     var note = el('[data-managed-router-error]');
     if(note){ note.textContent = managedRouterStatusError; note.hidden = !managedRouterStatusError; }
     var banner = el('#miaRouterBanner');
@@ -1868,7 +1881,10 @@
       }
       managedRouterAvailable = !!(routerRes.data && routerRes.data.available);
       applyManagedRouterStatus(routerRes.data);
-      if(routerRes.data && routerRes.data.provisioned) harnessConnectionState['openrouter'] = true;
+      if(routerRes.data && (routerRes.data.provisioned || routerRes.data.credentialSaved || managedRouterConnectionError(routerRes.data))){
+        harnessConnectionState['openrouter'] = managedRouterRuntimeReady(routerRes.data);
+        if(!harnessConnectionState['openrouter']) harnessConnectionState['managed-router'] = false;
+      }
       var managedRouterCard = el('[data-harness-provider="managed-router"]');
       if(managedRouterCard) managedRouterCard.closest('.styled-onboarding-provider-row').hidden = !managedRouterAvailable;
       // The card's display name is deployment branding served by the backend.
@@ -2347,7 +2363,9 @@
       var lines = [
         '--- Technical report (no credentials or conversation text) ---',
         'Mia ' + (version || 'unknown version') + ' on ' + navigator.platform,
-        'Router: ' + (data.provisioned ? 'connected' : (data.errorCode || 'not connected'))
+        'Router: ' + (managedRouterRuntimeReady(data) ? 'connected'
+          : (((data.provisioned || data.credentialSaved) ? 'credential saved; ' : '')
+            + (data.errorCode || ((data.provisioned || data.credentialSaved) && data.runtimeReady === false ? 'runtime unavailable' : 'not connected'))))
       ];
       var trail = Array.isArray(data.diagnostics) ? data.diagnostics.slice(-12) : [];
       return lines.concat(trail).join('\n');
