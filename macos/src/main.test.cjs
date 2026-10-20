@@ -388,6 +388,7 @@ test("packaged runtime resolves platform layout through shared helpers", () => {
   assert.match(source, /const ghostLauncher = runtimeLauncherPath\(runtimeBin, "ghost-cli"\)/);
   assert.match(source, /const gwsLauncher = nativeRuntimeBinaryPath\(runtimeBin, "gws"\)/);
   assert.match(source, /process\.env\.HERMES_PYTHON = venvPythonPath\(venvRoot\)/);
+  assert.match(source, /process\.env\.MIAOS_HERMES_ARGV_JSON = JSON\.stringify\(\[\s*process\.env\.HERMES_PYTHON,/);
   assert.match(source, /venvPythonPath\(path\.join\(hermesHome, "hermes-agent", "venv"\)\)/);
   // The Unix shell launchers are regenerated only where they exist; Windows
   // venvs keep their shipped Scripts\python.exe redirector.

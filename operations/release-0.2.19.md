@@ -54,10 +54,13 @@ Connection management has a separate admin credential unavailable to the
 gateway. A synthetic native-runtime smoke gate exercises the pinned Hermes
 MCP transport, initialization and a bounded tool call without a real account.
 
-This closes the reviewed broker-token disclosure route. It does not turn the
-intentionally full, same-user terminal into an operating-system sandbox. In
-particular, the existing Google CLI's temporary OAuth credential-file lifecycle
-is a separate limitation requiring its own isolation work.
+The later broker repair also removes the Google CLI's temporary plaintext OAuth
+credential files. Existing allowlisted operations now use fixed Google HTTPS
+endpoints inside the desktop process. Refresh/access credentials remain in
+memory, with durable credentials protected by platform storage. Account changes
+invalidate cached access and pending responses; already accepted remote writes
+cannot be undone by disconnecting. This is not an operating-system sandbox
+against a deliberately trusted same-user terminal or process-memory inspection.
 
 Rebuild every platform from the new reviewed, merged source. Earlier 0.2.19
 artifacts built from b29137d are superseded and cannot satisfy the final gates.
@@ -127,3 +130,30 @@ owner isolation, non-English follow-ups, resume invalidation and busy steering.
 A final native connected-account turn remains required after this integration;
 no new claim of a completed OAuth replacement or external Google action follows
 from the fixture tests alone.
+
+## Remaining source repairs after PR51
+
+PR50 and PR51 are merged. The next source candidate includes these additional
+repairs before the final platform rebuilds:
+
+- The Windows package restores the pinned CPython generic venv interpreter and
+  uses it for Hermes, allowing dependency path initialization and native MCP
+  imports. Native isolated runtime imports and the actual patched Hermes MCP
+  transport passed; final NSIS installation remains a separate gate.
+- Controller and group membership changes are rejected while underlying page
+  scripts or loads remain pending, including after the public API times out.
+  Stop acknowledgement alone cannot transfer a tab still executing page work.
+  Bot file opening checks group availability before allocating a background tab.
+  This does not claim cancellation of detached page timers or registered callbacks.
+- The Google broker maps the existing bounded tool protocol to 26 fixed REST
+  operations. Redirects are refused, media and responses are bounded, provider
+  diagnostics are not forwarded, and writes are never automatically replayed.
+  A trusted token-info request supplies scope details when refresh omits them.
+  Overlapping account saves are serialized before dispatch can read credentials.
+
+Source checks and synthetic transport evidence do not establish final installed
+acceptance, signing/notarization, public assets, or OTA. Earlier b29137d and
+e33c966 artifacts are preserved candidate evidence, not publishable final builds.
+Merge the reviewed complete candidate before freezing a new release SHA and
+rebuilding all three platforms. Independent source/package release review and
+installed connected-account testing remain required.
