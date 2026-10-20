@@ -13,6 +13,21 @@ const MAX_PROTOCOL_SELECTOR = 2000;
 const MAX_PROTOCOL_ELEMENTS = 500;
 const PROTOCOL_SCRIPT_TIMEOUT_MS = 10000;
 const BROWSER_PARTITION = "persist:mia-browser";
+// A timeout only stops waiting for a page script; it does not cancel its
+// execution in Chromium. Keep the real operation locked until it settles.
+const pendingBrowserOperations = new WeakMap();
+function trackBrowserOperation(webContents, operation, onSettled) {
+  const pending = pendingBrowserOperations.get(webContents) || new Set();
+  pendingBrowserOperations.set(webContents, pending);
+  const promise = Promise.resolve(operation);
+  pending.add(promise);
+  const settled = () => {
+    pending.delete(promise);
+    onSettled?.();
+  };
+  promise.then(settled, settled);
+  return promise;
+}
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const number = Number(value);
@@ -20,11 +35,11 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Math.trunc(number)));
 }
 
-async function executeProtocolScript(webContents, script) {
+async function executeProtocolScript(webContents, script, onSettled) {
   let timer;
   try {
     return await Promise.race([
-      webContents.executeJavaScript(script, true),
+      trackBrowserOperation(webContents, webContents.executeJavaScript(script, true), onSettled),
       new Promise((_, reject) => {
         timer = setTimeout(() => {
           const error = new Error(`Page script timed out after ${PROTOCOL_SCRIPT_TIMEOUT_MS}ms.`);
@@ -768,7 +783,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   let heldByRenderer = new Set();
   function glowWanted(tab) {
     if (!tab.botWorker) return null;
-    const working = (tab.botWork || 0) > 0 || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
+    const working = browserWorkPending(tab) || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
     return working || heldByRenderer.has(tab.id) ? { by: tab.botWorker.botId } : null;
   }
   function syncBotGlow(tab) {
@@ -793,7 +808,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   function botActivityFor(tab) {
     if (!tab.botWorker) return null;
-    if ((tab.botWork || 0) > 0 || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS) return { ...tab.botWorker };
+    if (browserWorkPending(tab) || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS) return { ...tab.botWorker };
     return null;
   }
   function publish() {
@@ -946,7 +961,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     layout();
     persistTabs();
     // Do not hold the toolbar IPC open until every page resource has loaded.
-    tab.view.webContents.loadURL(target).catch(error => reportLoadError(tab, target, error));
+    trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
+      () => browserWorkSettled(tab)).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -958,7 +974,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     clearPendingLoadError(tab);
     layout();
     persistTabs();
-    tab.view.webContents.loadURL(target).catch(error => reportLoadError(tab, target, error));
+    trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
+      () => browserWorkSettled(tab)).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -993,6 +1010,31 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function tabController(tab) {
     const botId = tab && groups.get(tab.groupId)?.botId;
     return botId ? { kind: "bot", botId } : { kind: "mia" };
+  }
+  function browserWorkPending(tab) {
+    return Boolean(tab && ((tab.botWork || 0) > 0
+      || pendingBrowserOperations.get(tab.view.webContents)?.size
+      || tab.view.webContents.isLoading()));
+  }
+  function browserWorkSettled(tab) {
+    if (disposed || !tabs.has(tab.id)) return;
+    syncBotGlow(tab);
+    publish();
+  }
+  function protocolScript(tab, script) {
+    return executeProtocolScript(tab.view.webContents, script, () => browserWorkSettled(tab));
+  }
+  function requireGroupIdle(groupId) {
+    if (groupId && groupTabs(groupId).some(browserWorkPending)) {
+      throw protocolError("BROWSER_BUSY", "This group still has browser work in progress. Wait for it to finish before changing its controller or tabs.");
+    }
+  }
+  function requireMembershipIdle(tab, nextGroupId = null) {
+    if (browserWorkPending(tab)) {
+      throw protocolError("BROWSER_BUSY", "This tab still has browser work in progress. Wait for it to finish before moving it.");
+    }
+    requireGroupIdle(tab?.groupId);
+    requireGroupIdle(nextGroupId);
   }
   // Keys and screenshots only work on the tab in front. A bot borrows the
   // front for that one action, then the previous tab comes back. Borrowing is
@@ -1111,7 +1153,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     })()`;
     let result;
     try {
-      result = await executeProtocolScript(tab.view.webContents, script);
+      result = await protocolScript(tab, script);
     } catch (error) {
       throw protocolError("BROWSER_ERROR", error.message);
     }
@@ -1194,7 +1236,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     })()`;
     let result;
     try {
-      result = await executeProtocolScript(tab.view.webContents, script);
+      result = await protocolScript(tab, script);
     } catch (error) {
       throw protocolError("BROWSER_ERROR", error.message);
     }
@@ -1265,7 +1307,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     })()`;
     let result;
     try {
-      result = await executeProtocolScript(tab.view.webContents, script);
+      result = await protocolScript(tab, script);
     } catch (error) {
       throw protocolError("BROWSER_ERROR", error.message);
     }
@@ -1286,8 +1328,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         assertAccess();
         let present = false;
         try {
-          present = Boolean(await executeProtocolScript(
-            tab.view.webContents,
+          present = Boolean(await protocolScript(
+            tab,
             `Boolean(document.querySelector(${JSON.stringify(selector)}))`
           ));
         } catch (_) { /* The page may be navigating; try again until timeout. */ }
@@ -1375,6 +1417,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     if (method === "tab_open") {
       // A bot's new tab opens behind, so it never takes the tab in front.
+      if (actor) requireGroupIdle(botGroup(actor.botId)?.id);
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
       touch(tab);
@@ -1427,9 +1470,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (typeof filePath !== "string" || !filePath.trim()) {
         throw protocolError("INVALID_PARAMS", "path is required.");
       }
-      const tab = newTab();
+      if (actor) requireGroupIdle(botGroup(actor.botId)?.id);
+      const target = normalizeLocalFileTarget(filePath, workspaceRoot);
+      const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
-      openLocalFile(tab, filePath);
+      openLocalFile(tab, target);
       // A Ghost command is an app-owned browser entry point, so surface the
       // native browser panel even when the user was still in chat.
       openBrowserSurface();
@@ -1499,7 +1544,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         }
       })()`;
       let outcome;
-      try { outcome = await executeProtocolScript(tab.view.webContents, wrapped); }
+      try { outcome = await protocolScript(tab, wrapped); }
       catch (error) {
         throw protocolError("BROWSER_ERROR",
           `${error.message} (The script ran but its result could not be returned — return JSON-serializable data.)`);
@@ -1555,7 +1600,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       const script = direction === "top" ? "window.scrollTo(0, 0)" : direction === "bottom"
         ? "window.scrollTo(0, document.documentElement.scrollHeight)"
         : `window.scrollBy(0, ${direction === "up" ? -amount : amount})`;
-      await executeProtocolScript(tab.view.webContents, script);
+      await protocolScript(tab, script);
       return { scrolled: true, direction, amount };
     }
     if (method === "wait") return protocolWait(tab, params, () => {
@@ -1569,7 +1614,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (tab.documentTimingValid === false) return;
     const sequence = tab.sequence;
     try {
-      const result = await executeProtocolScript(tab.view.webContents, `(async () => {
+      const result = await protocolScript(tab, `(async () => {
         if (${waitForPaint} && !performance.getEntriesByName('first-contentful-paint').length) {
           await new Promise(resolve => {
             const observer = new PerformanceObserver(list => {
@@ -1627,6 +1672,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   function newTab(value, options = {}) {
     if (value) normalizeStoredTarget(value);
+    const groupId = groups.has(options.groupId) ? options.groupId
+      : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null;
+    if (!restoring) requireGroupIdle(groupId);
     const view = new WebContentsView({ webPreferences: {
       session: profile, sandbox: true, contextIsolation: true, nodeIntegration: false,
       webSecurity: true, allowRunningInsecureContent: false,
@@ -1646,8 +1694,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       media: options.media || null,
       // A tab opened from a grouped tab (a link, New Tab to the Right,
       // Duplicate) joins its opener's group.
-      groupId: groups.has(options.groupId) ? options.groupId
-        : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null,
+      groupId,
       restoreMediaPending: !!options.media,
       mediaRestoreTarget: null,
       mediaRestoreUntil: 0,
@@ -1808,7 +1855,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     });
     wc.on("context-menu", (_event, params) => {
       const items = [];
-      if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: () => newTab(params.linkURL, { activate: false, after: tab.id }) });
+      if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: menuAction(() => newTab(params.linkURL, { activate: false, after: tab.id })) });
       const imageURL = params.mediaType === "image" && typeof params.srcURL === "string"
         && (/^https?:\/\//i.test(params.srcURL) || /^blob:https?:\/\//i.test(params.srcURL) || /^data:image\//i.test(params.srcURL))
         ? params.srcURL
@@ -1855,6 +1902,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function createGroup(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return null;
+    requireMembershipIdle(tab);
     const used = new Set([...groups.values()].map(group => group.color));
     const color = GROUP_COLORS.find(item => !used.has(item)) || GROUP_COLORS[groups.size % GROUP_COLORS.length];
     const group = { id: `g${nextGroupNumber++}`, name: "", color, collapsed: false, botId: null };
@@ -1867,6 +1915,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function addTabToGroup(tabId, groupId) {
     const tab = tabs.get(tabId);
     if (!tab || !groups.has(groupId) || tab.groupId === groupId) return;
+    requireMembershipIdle(tab, groupId);
     const members = groupTabs(groupId);
     tab.groupId = groupId;
     const order = [...tabs.keys()].filter(id => id !== tabId);
@@ -1877,12 +1926,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function removeTabFromGroup(tabId) {
     const tab = tabs.get(tabId);
     if (!tab || !tab.groupId) return;
+    requireMembershipIdle(tab);
     const members = groupTabs(tab.groupId);
     tab.groupId = null;
     const order = [...tabs.keys()].filter(id => id !== tabId);
     const last = members.filter(member => member !== tab).at(-1);
     if (last) moveTab(tabId, order.indexOf(last.id) + 1);
     normalizeGroups();
+  }
+  function ungroup(groupId) {
+    requireGroupIdle(groupId);
+    for (const tab of groupTabs(groupId)) tab.groupId = null;
   }
   function setGroupCollapsed(groupId, collapsed) {
     const group = groups.get(groupId);
@@ -1913,7 +1967,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Menu actions run outside the command handler, so they finish the same way.
   const menuAction = fn => () => {
     if (disposed) return;
-    fn(); normalizeGroups(); layout(); persistTabs(); publish();
+    try {
+      fn(); normalizeGroups(); layout(); persistTabs(); publish();
+    } catch (error) {
+      if (error.code !== "BROWSER_BUSY") throw error;
+      void dialog.showMessageBox(window, {
+        type: "info", buttons: ["OK"], message: "Browser work is still finishing.", detail: error.message,
+      }).catch(() => {});
+    }
   };
   function showTabMenu(tabId) {
     const tab = tabs.get(tabId);
@@ -1954,6 +2015,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const group = groups.get(groupId);
     if (!group) return;
     const record = normalizeGroupRecord({ id: group.id, botId: bot && bot.botId });
+    if (group.botId === (record ? record.botId : null)) return;
+    requireGroupIdle(groupId);
     group.botId = record ? record.botId : null;
     if (group.botId && !group.name && bot && typeof bot.name === "string") group.name = bot.name.trim().slice(0, 80);
   }
@@ -1990,7 +2053,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       // Once offered as busy, a later empty renderer cache cannot prove the
       // bot finished. Require the stop acknowledgement even in that case.
       // This is the trusted app renderer, never a browser page. Ownership
-      // changes only after every running dispatch acknowledges cancellation.
+      // still requires the real page work to drain after acknowledgement.
       let stopped = false;
       try {
         if (authorized({ sender: window.webContents, senderFrame: window.webContents.mainFrame })) {
@@ -2065,7 +2128,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }) },
       { label: group.collapsed ? "Expand Group" : "Collapse Group",
         click: menuAction(() => setGroupCollapsed(groupId, !group.collapsed)) },
-      { label: "Ungroup", click: menuAction(() => { for (const tab of groupTabs(groupId)) tab.groupId = null; }) },
+      { label: "Ungroup", click: menuAction(() => ungroup(groupId)) },
       { type: "separator" },
       { label: "Close Group", click: menuAction(() => closeTabs(groupTabs(groupId).map(tab => tab.id))) },
     ]).popup({ window });
@@ -2284,6 +2347,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         focusTabWebContents(tabs.get(command.id));
       }
       if (command.action === "close") closeTab(command.id);
+      if (command.action === "move") {
+        const moved = tabs.get(command.id);
+        const nextGroup = command.groupId === null || groups.has(command.groupId) ? command.groupId : moved?.groupId;
+        if (moved && moved.groupId !== nextGroup) requireMembershipIdle(moved, nextGroup);
+      }
       if (command.action === "move" && moveTab(command.id, command.index)) {
         // Dropping onto a tab joins that tab's group (or leaves groups).
         const moved = tabs.get(command.id);
@@ -2303,7 +2371,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "groupRemoveTab") { removeTabFromGroup(command.id); persistTabs(); }
       if (command.action === "groupUpdate") { updateGroup(command.groupId, command); layout(); persistTabs(); }
       if (command.action === "groupUngroup") {
-        for (const item of groupTabs(command.groupId)) item.groupId = null;
+        ungroup(command.groupId);
         normalizeGroups(); persistTabs();
       }
       if (command.action === "groupClose") closeTabs(groupTabs(command.groupId).map(item => item.id));
