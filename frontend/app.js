@@ -5747,6 +5747,7 @@
   }
 
   function openWebBrowserTool(options){
+    closeAutomationsPage();
     localBrowserState.open = true;
     try {
       if(window.miaDesktop && window.miaDesktop.state) window.miaDesktop.state.set(LOCAL_BROWSER_OPEN_STATE_KEY, '1');
@@ -5776,6 +5777,196 @@
     startLocalBrowserPromptRotation();
     if(options && options.restoring) showBenchToast('Browser restored where you left off. Playback is paused.');
   }
+
+  // Automations page: every bot's automations in the center with the chat
+  // on the right, the same layout as the browser. Rows open a step page and
+  // switch the chat to the bot that owns the automation.
+  var AUTOMATIONS_GROUP_KEY = 'mia.automations.group';
+  var automationsPage = {open:false, botId:null, automationId:null, group:'status'};
+  try { if(localStorage.getItem(AUTOMATIONS_GROUP_KEY) === 'bot') automationsPage.group = 'bot'; } catch(_automationsGroupError) {}
+
+  function automationsBoardRows(){
+    if(!window.MiaAutomationsBoard) return [];
+    return window.MiaAutomationsBoard.entries(chatWs.botRecords || [], chatWs.automationRuns || [], automationScheduleText, chatWs.automationChecklists || []);
+  }
+
+  function automationsRowHtml(row){
+    var side = row.status === 'running' ? '<span class="automations-live" aria-hidden="true"></span>Running'
+      : row.status === 'needs' ? 'Review' : '';
+    return '<button type="button" class="automations-row" data-status="' + esc(row.status) + '" data-automations-bot="' + esc(row.botId) + '" data-automations-id="' + esc(row.automationId) + '">' +
+      '<span class="automations-row-avatar">' + agentAvatarHtml(row.botName, row.botId, 24, 'static', row.color) + '</span>' +
+      '<span><div class="automations-row-name">' + esc(automationsPage.group === 'bot' ? row.name : row.botName + ' · ' + row.name) + '</div>' +
+      '<div class="automations-row-detail">' + esc(row.detail || '') + '</div></span>' +
+      '<span class="automations-row-side">' + side + '</span></button>';
+  }
+
+  function automationsBoardHtml(rows){
+    if(!rows.length) return '<div class="automations-empty">No automations yet. Ask a bot to do something on a schedule, like "every weekday at 9, send me the AI news", and it shows up here.</div>';
+    return window.MiaAutomationsBoard.groups(rows, automationsPage.group).map(function(group){
+      var dot = automationsPage.group === 'bot' ? '<span class="automations-group-dot" style="background:' + esc(normalizeAgentAvatarColor(group.color) || agentAvatarColorFor(group.title, group.botId) || '#999') + '"></span>' : '';
+      return '<div class="automations-group-title">' + dot + esc(group.title) + '</div>' + group.rows.map(automationsRowHtml).join('');
+    }).join('');
+  }
+
+  function automationStepStateLabel(state){
+    return {done:'Done', skipped:'Skipped', failed:'Failed', escalated:'Needs you', unreported:'Not reported', pending:'Not started'}[state] || '';
+  }
+
+  function automationRunTime(value){
+    var numeric = Number(value);
+    var date = Number.isFinite(numeric) && String(value).trim() !== '' ? new Date(numeric * (numeric < 10000000000 ? 1000 : 1)) : new Date(String(value));
+    return isNaN(date.getTime()) ? '' : date.toLocaleString([], {dateStyle:'medium', timeStyle:'short'});
+  }
+
+  function automationsDetailHtml(row, automation, bot){
+    var side = row.status === 'running' ? '<span class="automations-live" aria-hidden="true"></span>Running now'
+      : row.status === 'needs' ? row.detail : row.status === 'paused' ? 'Paused' : '';
+    var body;
+    var checklist = row.checklist;
+    if(row.steps.length){
+      // With a run on record, each step shows what the bot reported for it.
+      var states = {};
+      if(checklist) (checklist.steps || []).forEach(function(item){ states[item.n] = item; });
+      body = '<ol class="automations-steps">' + row.steps.map(function(step, index){
+        var item = states[index + 1];
+        var state = item ? item.state : '';
+        var mark = state ? '<span class="automations-step-mark" data-state="' + esc(state) + '" title="' + esc(automationStepStateLabel(state)) + '"></span>' : '';
+        var note = item && item.note ? '<div class="automations-step-note">' + esc(item.note) + '</div>' : '';
+        return '<li class="automations-step" data-state="' + esc(state) + '"><span class="automations-step-n">' + mark + (index + 1) + '</span><span>' + esc(step) + note + '</span></li>';
+      }).join('') + '</ol>';
+      if(checklist && checklist.startedAt){
+        var when = automationRunTime(checklist.startedAt);
+        var progress = checklist.runStatus === 'claimed' || checklist.runStatus === 'running' ? 'This run' : 'Last run';
+        body += '<p class="automations-note">' + esc(progress + (when ? ' started ' + when : '') + ' · ' + checklist.done + ' of ' + checklist.total + ' steps done') + '</p>';
+      }
+    } else if(String(automation.prompt || '').trim()){
+      body = '<div class="automations-instructions">' + esc(automation.prompt) + '</div>' +
+        '<p class="automations-note">This runs as one instruction. Split it into steps so the bot does them one at a time, in order.</p>';
+    } else {
+      body = '<p class="automations-note">No steps yet. Add the steps this automation should follow.</p>';
+    }
+    var delivery = bot && bot.hermesCronDeliveries && bot.hermesCronDeliveries[automation.id];
+    var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
+    return '<button type="button" class="automations-back" id="automationsBack">← All automations</button>' +
+      '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
+      '<div class="automations-detail-sub">' + esc([row.schedule, row.botName].filter(Boolean).join(' · ')) + '</div></div>' +
+      '<span class="automations-row-side">' + side + '</span></div>' + body + last +
+      '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">' + (row.steps.length ? 'Edit' : 'Add steps') + '</button></div>';
+  }
+
+  function renderAutomationsPage(){
+    var overlay = el('#automationsOverlay');
+    if(!overlay) return;
+    overlay.hidden = !automationsPage.open;
+    overlay.setAttribute('aria-hidden', automationsPage.open ? 'false' : 'true');
+    overlay.classList.toggle('open', automationsPage.open);
+    if(!automationsPage.open) return;
+    var rows = automationsBoardRows();
+    var summary = el('#automationsSummary');
+    if(summary) summary.textContent = window.MiaAutomationsBoard ? window.MiaAutomationsBoard.summary(rows) : '';
+    els('[data-automations-group]', overlay).forEach(function(button){
+      button.setAttribute('aria-pressed', button.getAttribute('data-automations-group') === automationsPage.group ? 'true' : 'false');
+    });
+    var toggle = el('#automationsGroupToggle');
+    var row = automationsPage.automationId ? rows.filter(function(item){
+      return item.botId === automationsPage.botId && item.automationId === automationsPage.automationId;
+    })[0] : null;
+    var found = row && automationRecordById(row.botId, row.automationId);
+    if(automationsPage.automationId && !found){ automationsPage.botId = null; automationsPage.automationId = null; }
+    if(toggle) toggle.hidden = !!found;
+    var body = el('#automationsBody');
+    if(!body) return;
+    var scroll = body.scrollTop;
+    body.innerHTML = '<div class="automations-content">' + (found ? automationsDetailHtml(row, found.automation, found.bot) : automationsBoardHtml(rows)) + '</div>';
+    if(!found) body.scrollTop = scroll;
+    els('[data-automations-id]', body).forEach(function(button){
+      button.addEventListener('click', function(){
+        openAutomationsDetail(button.getAttribute('data-automations-bot'), button.getAttribute('data-automations-id'));
+      });
+    });
+    var back = el('#automationsBack', body);
+    if(back) back.addEventListener('click', function(){
+      automationsPage.botId = null;
+      automationsPage.automationId = null;
+      if(chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
+      renderAutomationsPage();
+    });
+    var edit = el('#automationsEdit', body);
+    if(edit && found) edit.addEventListener('click', function(){ openAutomationDetail(found.bot.id, found.automation.id); });
+  }
+
+  // The chat follows the automation: its live run's conversation, else the
+  // conversation it posts results to, else the bot's own chat.
+  function showAutomationsChat(botId, automationId){
+    var run = (chatWs.automationRuns || []).filter(function(item){
+      return item && String(item.botId) === String(botId) && String(item.automationId) === String(automationId);
+    })[0];
+    var found = automationRecordById(botId, automationId);
+    var targets = [run && run.conversationId, found && found.automation.deliveryConversationId].filter(Boolean);
+    for(var i = 0; i < targets.length; i += 1){
+      var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item && String(item.id) === String(targets[i]); })[0];
+      if(conversation){
+        loadChatRoom(conversation.id, nativeConversationKind(conversation.type), conversation.name || (found && found.bot.name) || 'Automation');
+        return;
+      }
+    }
+    var agent = (chatWs.allAgents || []).filter(function(item){ return item && String(item.id) === String(botId); })[0];
+    if(agent) navigateToAgentChat(agent, true);
+  }
+
+  function openAutomationsDetail(botId, automationId){
+    automationsPage.botId = String(botId);
+    automationsPage.automationId = String(automationId);
+    showAutomationsChat(botId, automationId);
+    renderAutomationsPage();
+    var body = el('#automationsBody');
+    if(body) body.scrollTop = 0;
+  }
+
+  function openAutomationsPage(){
+    closeLocalBrowser();
+    automationsPage.open = true;
+    automationsPage.botId = null;
+    automationsPage.automationId = null;
+    document.body.classList.add('browser-collab-mode', 'automations-mode');
+    document.body.classList.remove('browser-sidebar-open');
+    closeChatThread();
+    closeChatTasksPanel();
+    chatInfo.mode = 'automations';
+    chatInfo.open = false;
+    if(!chatWs.activeRoomId && chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
+    renderChatInfoPane();
+    renderChatHeaderBar();
+    renderAutomationsPage();
+    loadActiveAutomationRuns();
+  }
+
+  function closeAutomationsPage(){
+    if(!automationsPage.open) return;
+    automationsPage.open = false;
+    automationsPage.botId = null;
+    automationsPage.automationId = null;
+    document.body.classList.remove('automations-mode', 'browser-sidebar-open');
+    if(!localBrowserState.open) document.body.classList.remove('browser-collab-mode');
+    renderAutomationsPage();
+    renderChatInfoPane();
+    renderChatHeaderBar();
+  }
+
+  (function wireAutomationsPage(){
+    var overlay = el('#automationsOverlay');
+    if(!overlay) return;
+    els('[data-automations-group]', overlay).forEach(function(button){
+      button.addEventListener('click', function(){
+        automationsPage.group = button.getAttribute('data-automations-group') === 'bot' ? 'bot' : 'status';
+        try { localStorage.setItem(AUTOMATIONS_GROUP_KEY, automationsPage.group); } catch(_automationsGroupError) {}
+        renderAutomationsPage();
+      });
+    });
+    var close = el('#automationsCloseBtn');
+    if(close) close.addEventListener('click', closeAutomationsPage);
+    window.addEventListener('mia-bots-changed', function(){ if(automationsPage.open) renderAutomationsPage(); });
+  })();
 
   // Tab groups can belong to a bot. While the browser is open, the chat pane
   // follows the tab in front: a bot's group shows that bot's chat, any other
@@ -6195,15 +6386,21 @@
     });
     if(close) close.addEventListener('click', closeLocalBrowser);
     var sidebarClose = el('#chatSidebarDrawerClose');
+    // The browser toolbar and the Automations page each have a "Your bots"
+    // icon; both open the same drawer.
+    var sidebarToggles = [sidebar, el('#automationsSidebarBtn')].filter(Boolean);
     function setBrowserSidebarOpen(open){
       document.body.classList.toggle('browser-sidebar-open', open);
-      if(!sidebar) return;
-      sidebar.setAttribute('aria-expanded', open ? 'true' : 'false');
-      sidebar.setAttribute('aria-label', open ? 'Close your bots' : 'Open your bots');
-      sidebar.setAttribute('title', 'Your bots');
+      sidebarToggles.forEach(function(toggle){
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        toggle.setAttribute('aria-label', open ? 'Close your bots' : 'Open your bots');
+        toggle.setAttribute('title', 'Your bots');
+      });
     }
-    if(sidebar) sidebar.addEventListener('click', function(){
-      setBrowserSidebarOpen(!document.body.classList.contains('browser-sidebar-open'));
+    sidebarToggles.forEach(function(toggle){
+      toggle.addEventListener('click', function(){
+        setBrowserSidebarOpen(!document.body.classList.contains('browser-sidebar-open'));
+      });
     });
     if(sidebarClose) sidebarClose.addEventListener('click', function(){
       setBrowserSidebarOpen(false);
@@ -6212,7 +6409,8 @@
       if(!document.body.classList.contains('browser-sidebar-open')) return;
       var drawer = el('.chat-sidebar');
       var portaledMenu = el('#chatSidebarCtxMenu');
-      if(browserSidebarOwnsClick(event.target, drawer, sidebar, portaledMenu)) return;
+      var toggles = {contains:function(target){ return sidebarToggles.some(function(toggle){ return toggle.contains(target); }); }};
+      if(browserSidebarOwnsClick(event.target, drawer, toggles, portaledMenu)) return;
       // Capture and consume the click before any underlying chat, toolbar, or
       // restored native browser surface can act on it.
       event.preventDefault();
@@ -6461,7 +6659,7 @@
   function automationScheduleText(automation){
     if(!automation) return '';
     if(automation.frequency === 'none') return 'Not scheduled';
-    if(automation.enabled === true && !String(automation.prompt || '').trim()) return 'Paused · add a prompt';
+    if(automation.enabled === true && !automationHasTask(automation)) return 'Paused · add steps or a prompt';
     var prefix = automation.enabled === true ? '' : 'Paused · ';
     if(automation.frequency === 'interval'){
       var intervalMinutes = Number(automation.intervalMinutes || 0);
@@ -6477,6 +6675,11 @@
     if(automation.frequency === 'weekly') return prefix + 'Every ' + (automation.day || 'week') + (automation.time ? ' at ' + automation.time : '');
     if(automation.frequency === 'monthly') return prefix + 'Every month' + (automation.day ? ' on day ' + automation.day : '') + (automation.time ? ' at ' + automation.time : '');
     return prefix + 'Scheduled';
+  }
+
+  function automationHasTask(automation){
+    return !!String(automation && automation.prompt || '').trim()
+      || (Array.isArray(automation && automation.steps) && automation.steps.some(function(step){ return String(step || '').trim(); }));
   }
 
   function automationIntervalParts(intervalMinutes){
@@ -6594,9 +6797,16 @@
       delete automation.model;
       delete automation.modelProvider;
     }
+    var steps = values.steps === undefined ? (Array.isArray(automation.steps) ? automation.steps : [])
+      : String(values.steps || '').split('\n');
+    steps = steps.map(function(step){ return String(step || '').trim(); }).filter(Boolean);
+    if(steps.length > 20) throw new Error('An automation can have up to 20 steps.');
+    if(steps.some(function(step){ return step.length > 500; })) throw new Error('Keep each step under 500 characters.');
+    if(steps.length) automation.steps = steps;
+    else delete automation.steps;
     var prompt = String(values.prompt || '').trim();
     if(prompt) automation.prompt = prompt;
-    else if(enabled) throw new Error('Add the task prompt this automation should run.');
+    else if(enabled && !steps.length) throw new Error('Add the steps or the task prompt this automation should run.');
     else delete automation.prompt;
     if(frequency === 'interval'){
       automation.intervalMinutes = values.intervalValue !== undefined
@@ -6687,6 +6897,10 @@
     return api('/api/automations/active').then(function(res){
       if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return clearStaleRuns();
       var next = res.data.runs;
+      var checklists = Array.isArray(res.data.checklists) ? res.data.checklists : [];
+      var checklistsChanged = JSON.stringify(chatWs.automationChecklists || []) !== JSON.stringify(checklists);
+      chatWs.automationChecklists = checklists;
+      if(checklistsChanged && automationsPage.open) renderAutomationsPage();
       var changed = JSON.stringify(chatWs.automationRuns || []) !== JSON.stringify(next);
       notifyFinishedAutomationRuns(chatWs.knownAutomationRuns || chatWs.automationRuns, next);
       chatWs.knownAutomationRuns = next;
@@ -6694,6 +6908,7 @@
       if(changed){
         renderChatSidebar();
         if(chatInfo.open && chatInfo.mode === 'automations' && !liveRefreshBlocked()) renderChatInfoPane();
+        if(automationsPage.open) renderAutomationsPage();
       }
       return next;
     }).catch(clearStaleRuns);
@@ -7487,8 +7702,102 @@
       html += '<div class="msg-callout"><div><div class="mc-label">' + esc(m.flag.label || 'Flagged') + '</div>' +
         '<div class="mc-body">' + esc(m.flag.body || '') + '</div></div></div>';
     }
+    if(window.MiaAutomationProposalCard && m.nativeEvent){
+      var cardState = automationCardStates[m.nativeEvent.id] || {};
+      html += window.MiaAutomationProposalCard.html(m, {
+        esc: esc,
+        canEdit: true,
+        busy: !!cardState.busy,
+        error: cardState.error || '',
+        draft: cardState.draft || null,
+        timezone: automationCardTimezone()
+      });
+    }
     return html;
   }
+
+  // Unsaved edits, busy state and errors for bot automation cards, by event
+  // id, so a thread re-render for a new message keeps what the user typed.
+  var automationCardStates = {};
+
+  function automationCardTimezone(){
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch(_) { return ''; }
+  }
+
+  function automationCardMessage(eventId){
+    var state = chatRoomState(chatWs.activeRoomId);
+    return (state.messages || []).filter(function(message){ return message.nativeEvent && message.nativeEvent.id === eventId; })[0] || null;
+  }
+
+  function answerAutomationCard(card, decision){
+    var eventId = card.getAttribute('data-automation-proposal');
+    var message = automationCardMessage(eventId);
+    var proposal = message && message.nativeEvent.metadata && message.nativeEvent.metadata.automationProposal;
+    if(!proposal) return;
+    var cardState = automationCardStates[eventId] = automationCardStates[eventId] || {};
+    var fields = window.MiaAutomationProposalCard.readFields(card);
+    cardState.draft = fields;
+    cardState.busy = true;
+    cardState.error = '';
+    renderChatThread();
+    api('/api/bots/' + encodeURIComponent(proposal.botId) + '/automation-proposals/' + encodeURIComponent(eventId), {
+      method: 'POST',
+      body: decision === 'accept' ? {decision: 'accept', automation: fields} : {decision: 'dismiss'}
+    }).then(function(res){
+      cardState.busy = false;
+      if(res.status !== 200 || !res.data.event){
+        cardState.error = res.status === 409 ? 'This card was already answered.' : ((res.data && res.data.message) || 'That didn’t save. Check the fields and try again.');
+        if(res.status === 409 && res.data.proposal){
+          var answered = Object.assign({}, message.nativeEvent, {metadata: Object.assign({}, message.nativeEvent.metadata, {automationProposal: res.data.proposal})});
+          delete automationCardStates[eventId];
+          applyNativeEvent(answered);
+          return;
+        }
+        renderChatThread();
+        return;
+      }
+      delete automationCardStates[eventId];
+      if(res.data.bot){
+        chatWs.botRecords = (chatWs.botRecords || []).map(function(record){ return String(record.id) === String(res.data.bot.id) ? res.data.bot : record; });
+        if(automationsPage.open) renderAutomationsPage();
+      }
+      applyNativeEvent(res.data.event);
+    }).catch(function(){
+      cardState.busy = false;
+      cardState.error = 'That didn’t save. Try again.';
+      renderChatThread();
+    });
+  }
+
+  (function(){
+    var thread = el('#chatThread');
+    if(!thread) return;
+    thread.addEventListener('click', function(e){
+      var decision = e.target.closest('[data-automation-decision]');
+      if(decision){
+        var card = decision.closest('[data-automation-proposal]');
+        if(card) answerAutomationCard(card, decision.getAttribute('data-automation-decision'));
+        return;
+      }
+      var open = e.target.closest('[data-automation-open]');
+      if(open){
+        var botId = open.getAttribute('data-automation-bot') || '';
+        openAutomationsPage();
+        if(botId) openAutomationsDetail(botId, open.getAttribute('data-automation-open'));
+      }
+    });
+    function keepDraft(e){
+      var card = e.target.closest && e.target.closest('[data-automation-proposal]');
+      if(!card) return;
+      var eventId = card.getAttribute('data-automation-proposal');
+      var cardState = automationCardStates[eventId] = automationCardStates[eventId] || {};
+      cardState.draft = window.MiaAutomationProposalCard.readFields(card);
+      // A new frequency shows different schedule fields.
+      if(e.type === 'change' && e.target.getAttribute('data-field') === 'frequency') renderChatThread();
+    }
+    thread.addEventListener('input', keepDraft);
+    thread.addEventListener('change', keepDraft);
+  })();
 
   // esc()+linkify for message bodies: URLs become real links, everything else
   // stays escaped exactly as before. Trailing punctuation (incl. the ")" in
@@ -9336,7 +9645,7 @@
 
   function renderAutomationDetailPane(pane, bot, automation, isNew){
     automation = automation || {name:'New automation', enabled:false, frequency:'none'};
-    var promptMissing = automation.enabled === true && !String(automation.prompt || '').trim();
+    var promptMissing = automation.enabled === true && !automationHasTask(automation);
     var frequency = automation.frequency === 'daily' && automation.weekdaysOnly ? 'weekdays' : ['interval', 'daily', 'weekly', 'monthly'].indexOf(automation.frequency) !== -1 ? automation.frequency : 'interval';
     var intervalParts = automationIntervalParts(automation.intervalMinutes || 5);
     var fields = automationDetailFields(bot, automation).filter(function(field){
@@ -9376,13 +9685,14 @@
       '<form class="cip-automation-form" id="automationDetailForm">' +
         '<label class="cip-field"><span class="cip-field-label">Name</span><input type="text" id="automationEditName" value="' + esc(automation.name || '') + '" maxlength="80" required></label>' +
         '<div class="cip-editor-row-top"><span class="cip-editor-active-label">Active</span><label class="styled-toggle"><input type="checkbox" id="automationEditEnabled"' + (automation.enabled === true && !promptMissing ? ' checked' : '') + '><span class="gt-track"></span></label></div>' +
-        (promptMissing ? '<div class="cip-automation-prompt-warning" role="status">Paused until you add a task prompt and turn Active on.</div>' : '') +
+        (promptMissing ? '<div class="cip-automation-prompt-warning" role="status">Paused until you add steps or a prompt and turn Active on.</div>' : '') +
         '<label class="cip-field"><span class="cip-field-label">Schedule</span><select id="automationEditFrequency">' + frequencyOptions + '</select></label>' +
         '<label class="cip-field" data-frequency-control="interval"><span class="cip-field-label">Timer</span><span class="cip-automation-timer"><span>Every</span><input type="number" id="automationEditInterval" min="1" max="' + (intervalParts.unit === 'hours' ? '24' : '60') + '" value="' + esc(intervalParts.value) + '"><select id="automationEditIntervalUnit" aria-label="Timer unit"><option value="minutes"' + (intervalParts.unit === 'minutes' ? ' selected' : '') + '>minutes</option><option value="hours"' + (intervalParts.unit === 'hours' ? ' selected' : '') + '>hours</option></select></span></label>' +
         '<label class="cip-field" data-frequency-control="weekly"><span class="cip-field-label">Weekday</span><select id="automationEditWeekday">' + weekdayOptions + '</select></label>' +
         '<label class="cip-field" data-frequency-control="monthly"><span class="cip-field-label">Day of month</span><input type="number" id="automationEditMonthDay" min="1" max="31" value="' + esc(automation.day || 1) + '"></label>' +
         '<label class="cip-field" data-frequency-control="time"><span class="cip-field-label">Time' + (Number.isInteger(automation.utcOffsetMinutes) ? ' · ' + newsTimeZoneLabel(automation.utcOffsetMinutes) : '') + '</span><input type="time" id="automationEditTime" value="' + esc(automation.time || '09:00') + '"></label>' +
         '<label class="cip-field"><span class="cip-field-label">Model</span><select id="automationEditModel">' + modelOptions + '</select></label>' +
+        '<label class="cip-field"><span class="cip-field-label">Steps · one per line, done in order</span><textarea id="automationEditSteps" rows="6" placeholder="Search the web for today\'s AI news&#10;Pick the 5 that matter most&#10;Post the briefing here">' + esc((Array.isArray(automation.steps) ? automation.steps : []).join('\n')) + '</textarea></label>' +
         '<label class="cip-field"><span class="cip-field-label">Prompt</span><textarea id="automationEditPrompt" rows="6">' + esc(automation.prompt || '') + '</textarea></label>' +
         '<div class="cip-automation-form-error" id="automationDetailError" role="alert"></div>' +
         '<div class="cip-editor-actions">' + (!isNew ? '<button type="button" class="styled-btn-secondary danger" id="automationDetailDelete">Delete</button>' : '') + '<button type="button" class="styled-btn-secondary" id="automationDetailCancel">Cancel</button><button type="submit" class="styled-btn-primary" id="automationDetailSave">' + (isNew ? 'Add automation' : 'Save') + '</button></div>' +
@@ -9422,7 +9732,8 @@
           day: frequencyInput.value === 'weekly' ? el('#automationEditWeekday', pane).value : el('#automationEditMonthDay', pane).value,
           time: el('#automationEditTime', pane).value,
           model: el('#automationEditModel', pane).value,
-          prompt: el('#automationEditPrompt', pane).value
+          prompt: el('#automationEditPrompt', pane).value,
+          steps: el('#automationEditSteps', pane).value
         });
       } catch(error) {
         errorNode.textContent = error.message || 'Check the automation fields.';
@@ -9441,6 +9752,7 @@
         chatInfo.automationId = savedAutomation ? savedAutomation.id : null;
         renderAutomationDetailPane(pane, saved, savedAutomation, false);
         renderChatSidebar();
+        if(automationsPage.open) renderAutomationsPage();
       }).catch(function(error){
         errorNode.textContent = error.message || 'Could not save automation.';
         save.disabled = false;
@@ -9480,6 +9792,7 @@
         chatInfo.automationBotId = null;
         chatInfo.automationId = null;
         renderChatInfoPane();
+        if(automationsPage.open) renderAutomationsPage();
       }).catch(function(error){
         el('#automationDetailError', pane).textContent = error.message || 'Could not delete automation.';
         remove.disabled = false;
@@ -9753,22 +10066,6 @@
         if(!agent) return showBenchToast('Open a bot conversation to add an automation.');
         if(!openAutomationDetail(agent.id, null, true)) showBenchToast('This bot already has 10 automations.');
       });
-    });
-  }
-
-  function openAutomationsFromTools(){
-    closeLocalBrowser();
-    var selection;
-    if(!isInfoPaneAvailable() || chatWs.activeKind !== 'agent'){
-      if(!chatWs.gatewayAgent){ showBenchToast('Mia is still loading. Try again in a moment.'); return; }
-      selection = selectAgentRoom(chatWs.gatewayAgent);
-    }
-    Promise.resolve(selection).then(function(){
-      if(!isInfoPaneAvailable()){ showBenchToast('Open a Mia or bot conversation to see its automations.'); return; }
-      localStorage.setItem('styledInfoPaneOpen', '1');
-      renderChatHeaderBar();
-      prepareChatUtilityPane('automations');
-      renderChatInfoPane();
     });
   }
 
@@ -12580,11 +12877,10 @@
   function closeBrowserSidebarDrawer(){
     if(!document.body.classList.contains('browser-sidebar-open')) return;
     document.body.classList.remove('browser-sidebar-open');
-    var sidebar = el('#localBrowserSidebarBtn');
-    if(sidebar){
+    els('#localBrowserSidebarBtn, #automationsSidebarBtn').forEach(function(sidebar){
       sidebar.setAttribute('aria-expanded', 'false');
       sidebar.setAttribute('aria-label', 'Open your bots');
-    }
+    });
   }
   function runToolsAction(action){
     // A tool action is a destination choice: collapse the browser-mode
@@ -12596,13 +12892,14 @@
     // layout back — closing the browser here would kill browser mode for no
     // reason. Every other tools-menu action still needs the full layout.
     if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store') closeLocalBrowser();
+    if(automationsPage.open && action !== 'automations' && action !== 'new-bot' && action !== 'bot-store') closeAutomationsPage();
     if(action === 'new-chat') openDmCompose();
     else if(action === 'new-bot') startAgentSetupChat();
     else if(action === 'new-agent') openHarnessAgentSetup();
     else if(action === 'new-channel') openNewChannelFlow();
     else if(action === 'bot-store') openBotStorePane();
     else if(action === 'connected-apps') openPluginPane();
-    else if(action === 'automations') openAutomationsFromTools();
+    else if(action === 'automations') openAutomationsPage();
     else if(action === 'web-browser') openWebBrowserTool();
   }
 
@@ -13945,8 +14242,7 @@
       // opened, covering the page for no reason.
       if(document.body.classList.contains('browser-sidebar-open')){
         document.body.classList.remove('browser-sidebar-open');
-        var sidebarBtn = el('#localBrowserSidebarBtn');
-        if(sidebarBtn){ sidebarBtn.setAttribute('aria-expanded', 'false'); sidebarBtn.setAttribute('aria-label', 'Open your bots'); }
+        els('#localBrowserSidebarBtn, #automationsSidebarBtn').forEach(function(sidebarBtn){ sidebarBtn.setAttribute('aria-expanded', 'false'); sidebarBtn.setAttribute('aria-label', 'Open your bots'); });
       }
       if(agent){
         closeChatThread();

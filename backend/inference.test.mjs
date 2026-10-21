@@ -460,6 +460,24 @@ test('scheduled bot prompt states bot, Mia, owner, scope, and exact automation t
   assert.match(prompt, /Task:\nCreate today’s concise news briefing about architecture in Mexico\.$/);
 });
 
+test('scheduled bot prompt runs saved steps one at a time, in order', () => {
+  const bot = { name: 'News briefing', instructions: 'Research news.' };
+  const base = { name: 'My news briefing', enabled: true, frequency: 'daily', time: '09:00' };
+  const prompt = inference.buildScheduledBotPrompt(bot, {
+    ...base,
+    prompt: 'Today’s AI news.',
+    steps: ['Search the web for today’s AI news', '  Pick the 5 that matter most  ', '', 'Post the briefing here'],
+  });
+  assert.match(prompt, /Task:\nToday’s AI news\.\n\nSteps:\nDo these steps one at a time, in order\./);
+  assert.match(prompt, /If a step cannot be done, stop and say which step failed and why\.\n1\. Search the web for today’s AI news\n2\. Pick the 5 that matter most\n3\. Post the briefing here$/);
+  const stepsOnly = inference.buildScheduledBotPrompt(bot, { ...base, steps: ['Only step'] });
+  assert.doesNotMatch(stepsOnly, /Task:/);
+  assert.match(stepsOnly, /\n1\. Only step$/);
+  assert.doesNotMatch(prompt, /mia-run/, 'an automation without an id cannot report progress');
+  assert.equal(inference.buildScheduledBotPrompt(bot, { ...base, steps: [' '] }), null, 'no prompt and no real steps means no job');
+  assert.doesNotMatch(inference.buildScheduledBotPrompt(bot, { ...base, prompt: 'Run.' }), /Steps:/, 'automations without steps are unchanged');
+});
+
 test('bot replies use a restricted session in the existing Hermes runtime', async () => {
   const requests = [];
   const gatewayClient = {

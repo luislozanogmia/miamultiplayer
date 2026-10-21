@@ -265,7 +265,7 @@ test('temporary drawer backdrops dismiss safely while docked panes remain non-mo
   assert.equal(ownsClick(menuItem, null, null, contains(menuItem)), true, 'portaled menu clicks stay inside');
   assert.equal(ownsClick(toggleIcon, null, contains(toggleIcon), null), true, 'toggle controls its own close');
   assert.equal(ownsClick(outsideChat, contains(inside), contains(toggleIcon), contains(menuItem)), false, 'chat and toolbar clicks dismiss');
-  assert.match(source, /document\.addEventListener\('click', function\(event\)\{[\s\S]*browser-sidebar-open[\s\S]*browserSidebarOwnsClick\(event\.target, drawer, sidebar, portaledMenu\)[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*event\.stopImmediatePropagation\(\);[\s\S]*setBrowserSidebarOpen\(false\);[\s\S]*\}, true\)/);
+  assert.match(source, /document\.addEventListener\('click', function\(event\)\{[\s\S]*browser-sidebar-open[\s\S]*browserSidebarOwnsClick\(event\.target, drawer, toggles, portaledMenu\)[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*event\.stopImmediatePropagation\(\);[\s\S]*setBrowserSidebarOpen\(false\);[\s\S]*\}, true\)/);
   assert.match(source, /if\(overlay\) overlay\.addEventListener\('click', function\(event\)\{[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*closeDmCompose\(\)/);
   assert.match(source, /el\('#settingsOverlay'\)\.addEventListener\('click', closeSettingsDrawer\)/);
   assert.match(source, /el\('#harnessOnboardingOverlay'\)\.addEventListener\('click'/);
