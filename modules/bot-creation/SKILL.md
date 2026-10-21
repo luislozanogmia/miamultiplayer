@@ -5,6 +5,10 @@ description: Create a Mia bot from chat through the guarded local Mia bot comman
 
 # Mia bot creation
 
+In Mia's own chat in the app, follow the turn's "Bot setup" instruction
+instead: it opens the setup card the user reviews and accepts. Use
+`miaos-bot` only where that instruction is not given.
+
 Create bots through `miaos-bot`; do not inspect the source tree, edit files,
 write to SQLite, or improvise a different creation path.
 
@@ -28,8 +32,9 @@ miaos-bot create --confirmed <<'MIAOS_BOT_JSON'
 MIAOS_BOT_JSON
 ```
 
-Use valid JSON and preserve the user's meaning. Do not add an automation unless
-the user explicitly requests a schedule. Treat a result with `status` equal to
+Use valid JSON and preserve the user's meaning. This command never creates
+automations: once the bot exists, ask it in its own chat to propose any
+schedule the user wants, and the user confirms it there. Treat a result with `status` equal to
 `created` or `existing` as success and tell the user the bot's name. If the
 command reports that Mia is unavailable or authorization is required, report
 that directly; do not attempt to obtain credentials or bypass the API.

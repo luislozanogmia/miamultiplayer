@@ -129,13 +129,8 @@ const botAutomationActions = require('./bot-automation-actions');
 const { createGoogleAccountConnector, createOwnerBoundGoogleAccount } = require('./google-account-connector');
 const { stripTaskOpeningNotice, humanTaskStatus, shouldPostTaskStatus } = require('./background-status');
 const { providerWaitStatus } = require('./provider-wait-status');
-const {
-  buildAgentRevisionPrompt,
-  buildAgentSetupPrompt,
-  fallbackAgentDraft,
-  normalizeAgentDraft,
-  normalizeAgentRevision,
-} = require('./agent-setup');
+const { buildAgentSetupPrompt, normalizeAgentDraft } = require('./agent-setup');
+const miaBotSetupActions = require('./mia-bot-setup-actions');
 const { INSTANCE_NAME, INSTANCE_TEAM_DESCRIPTION, INSTANCE_DOMAINS, INSTANCE_PASSWORD } = require('./instance');
 const cronSync = require('./cron-sync');
 const {
@@ -5329,28 +5324,21 @@ app.post('/api/bots/interpret', requireAuth, async (req, res) => {
       message: userFacingModelDispatchError(error),
     });
   }
-  // Mia's chat revises a draft in place: `currentDraft` is the proposal the
-  // user is reviewing (with any hand edits) and `change` is what they asked
-  // Mia to change about it.
-  const body = req.body || {};
-  const change = String(body.change || '').trim().slice(0, 2000);
-  const currentDraft = change && body.currentDraft && typeof body.currentDraft === 'object' && !Array.isArray(body.currentDraft)
-    ? body.currentDraft : null;
-  let draft = currentDraft
-    ? normalizeAgentRevision('', intent, currentDraft, change)
-    : fallbackAgentDraft(intent);
+  // The model reads the request; when it can't, the user tries again.
+  // There is no keyword-built stand-in draft.
+  let draft = null;
   try {
     const reply = await scheduleInference(
-      currentDraft ? buildAgentRevisionPrompt(intent, currentDraft, change) : buildAgentSetupPrompt(intent),
+      buildAgentSetupPrompt(intent),
       'suggestion',
       await inferenceOptionsForUser(req.userEmail, chatModelSelectionInferenceOptions(null, modelSelection))
     );
-    draft = currentDraft
-      ? normalizeAgentRevision(reply, intent, currentDraft, change)
-      : normalizeAgentDraft(reply, intent);
+    draft = normalizeAgentDraft(reply);
   } catch (err) {
-    // Naming/setup inference is UX assistance, not an availability boundary.
-    // A deterministic proposal still lets the user edit and confirm safely.
+    draft = null;
+  }
+  if (!draft) {
+    return res.status(502).json({ error: 'draft_unavailable', message: 'The model didn’t return a bot draft. Try again.' });
   }
   res.status(200).json({ draft });
 });
@@ -5717,6 +5705,37 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireAuth, async (req,
   const updated = answer({ status: 'accepted', automationId: record.id, automation: checked.proposal.automation, schedule });
   bumpVersion();
   return res.status(200).json({ event: updated, bot: savedBot });
+});
+
+// Mia's bot setup card answers her <MIA_BOT_SETUP> request: accepted once
+// the user creates the bot from the card, dismissed when they close it.
+// Only the person who asked, in their own Mia chat, can answer it.
+app.post('/api/mia/bot-setup-requests/:eventId', requireAuth, (req, res) => {
+  const owner = String(req.userEmail || '').toLowerCase();
+  const companyId = nativeCompanyId(workspaceIdFromRequest(req), owner);
+  const decision = String((req.body || {}).decision || '');
+  if (decision !== 'accepted' && decision !== 'dismissed') return res.status(400).json({ error: 'decision must be accepted or dismissed' });
+  const event = nativeConversationRepository.getEvent({ companyId, id: req.params.eventId, includeDeleted: false });
+  const request = event && event.metadata && event.metadata.botSetupRequest;
+  const conversation = event && nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
+  if (!request || !conversation || conversation.type !== 'agent'
+    || String(conversation.createdBy || '').toLowerCase() !== owner
+    || String(request.requestedBy || '').toLowerCase() !== owner) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  if (request.status !== 'pending') return res.status(409).json({ error: 'already_answered', request });
+  const botId = decision === 'accepted' ? String((req.body || {}).botId || '').slice(0, 120) : '';
+  const updated = nativeConversationRepository.updateEvent({
+    companyId,
+    id: event.id,
+    metadata: {
+      ...event.metadata,
+      botSetupRequest: { ...request, status: decision, ...(botId ? { botId } : {}), answeredAt: new Date().toISOString() },
+    },
+    editedAt: event.editedAt || event.createdAt,
+  });
+  bumpVersion();
+  return res.status(200).json({ event: updated });
 });
 
 app.post('/api/bots/:id/departments', requireAuth, async (req, res) => {
@@ -6193,48 +6212,6 @@ function nativeDispatchActor(dispatch, conversation, trigger) {
   });
 }
 
-function nativeBotCreationRequest(message) {
-  const text = String(message || '').trim();
-  // Questions about the product ("how do I create a bot?") are answered by
-  // Mia, never turned into a creation side effect.
-  if (/^(?:how|what|why|where|when|which|is|are|does|do i|should)\b/i.test(text.replace(/^(?:hey|hi|hello|mia)[,!\s]+/i, ''))) return null;
-  // Explicitly named forms: "create/make/build/add/set up a (new) bot/agent
-  // named/called X [that/who/to Y]".
-  const named = /\b(?:create|make|build|add|set\s*up|spin\s*up)\s+(?:an?\s+)?(?:new\s+)?(?:bot|agent)\s+(?:named|called)\s+["']?([^"'\n]+?)["']?(?:\s+(?:that|who|to)\s+(.+?))?[.!?]?\s*$/i.exec(text);
-  if (named) {
-    return {
-      name: named[1].trim(),
-      role: (named[2] || '').trim() || 'Help with the work described in the request.',
-    };
-  }
-  // Descriptive form with no explicit name: "can we create a newsletter
-  // agent?", "make a research bot that tracks AI papers". The words between
-  // the verb and bot/agent name the bot; a trailing that/who/to clause is
-  // its role.
-  const descriptive = /\b(?:create|make|build|add|set\s*up|spin\s*up)\s+(?:an?\s+)?(?:new\s+)?((?:[A-Za-z][\w-]*\s+){0,4}?)(?:bot|agent)\b\s*(.*)$/i.exec(text);
-  if (!descriptive) return null;
-  const modifier = String(descriptive[1] || '').replace(/\b(?:new|another|little|simple|quick)\b/gi, ' ').replace(/\s+/g, ' ').trim();
-  const clause = /^(?:that|who|to)\s+(.+?)[.!?]?\s*$/i.exec(String(descriptive[2] || '').trim());
-  if (!modifier && !clause) return null;
-  const name = modifier
-    ? modifier.split(/\s+/).slice(0, 3).map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ')
-    : null;
-  const role = clause
-    ? clause[1].trim()
-    : `Help with ${modifier.toLowerCase()} work.`;
-  if (!name) {
-    // "create a bot that tracks AI news" — name it from the role's leading words.
-    const roleWords = role.replace(/[^\w\s-]/g, ' ').split(/\s+/).filter((word) =>
-      word && !/^(?:the|a|an|my|our|and|for|with|that|who|to)$/i.test(word)).slice(0, 2);
-    if (!roleWords.length) return null;
-    return {
-      name: roleWords.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' '),
-      role,
-    };
-  }
-  return { name, role };
-}
-
 function nativeReplyParentEventId(trigger) {
   // A normal chat event is already a root message. Only preserve an existing
   // parent when the user explicitly replied from an open thread; automatic Mia
@@ -6326,49 +6303,6 @@ async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, 
     });
     return result.dispatch || null;
   }));
-}
-
-async function createNativeBotFromMiaRequest(companyId, ownerEmail, message, model, modelProvider) {
-  const request = nativeBotCreationRequest(message);
-  if (!request || !request.name || !request.role) return null;
-  if (!model) throw new Error('Choose a connected model before asking Mia to create a bot');
-  if (!modelProvider) throw new Error('Choose a connected model provider before asking Mia to create a bot');
-  const owner = String(ownerEmail || '').trim().toLowerCase();
-  const name = request.name.slice(0, 40);
-  const role = request.role.slice(0, 500);
-  let bot = db.loadAll(conn, 'bots').find((candidate) =>
-    recordBelongsToCompany(candidate, NATIVE_COMPANY_ID, companyId)
-      && String(candidate.name || '').trim().toLowerCase() === name.toLowerCase()
-  );
-  if (!bot) {
-    const existingBots = db.loadAll(conn, 'bots');
-    if (existingBots.length >= MAX_BOTS) throw new Error(`This Mia installation supports up to ${MAX_BOTS} bots.`);
-    const now = new Date().toISOString();
-    bot = {
-      id: `bot-${crypto.randomUUID()}`,
-      name,
-      role,
-      output: 'A clear one-sentence answer to the user’s question.',
-      instructions: `Role: ${role}\n\nDesired output: A clear one-sentence answer to the user’s question.`,
-      model,
-      modelProvider,
-      status: 'running',
-      replyAlways: false,
-      departments: [],
-      owner,
-      workspaceId: companyId === NATIVE_COMPANY_ID ? DEFAULT_WORKSPACE_ID : 'solo',
-      createdAt: now,
-      updatedAt: now,
-      timeline: [{ ts: now, event: 'bot created by Mia in native channel' }],
-    };
-    db.insertOne(conn, 'bots', bot.id, bot);
-    bumpVersion();
-  }
-  const conversation = nativeConversationRepository.listConversations({ companyId, limit: 1000 }).find((candidate) => {
-    const metadata = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
-    return candidate.type === 'bot' && metadata.botId === bot.id;
-  }) || await ensureNativeBotConversation(bot);
-  return { bot, conversation };
 }
 
 // Native dispatches are already durable: the dispatch row is claimed before
@@ -6858,6 +6792,38 @@ function localTimezoneName() {
 // Reads a bot's <MIA_AUTOMATION> block. create/update become a pending card
 // the user reviews (see /api/bots/:id/automation-proposals); run_now starts
 // an automation that is already on. -> { text, fallbackText, metadata }
+// Action blocks are read by Mia, never shown: a bot's <MIA_AUTOMATION> and
+// Mia's own <MIA_BOT_SETUP>.
+function stripAgentActionBlocks(text) {
+  return miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text));
+}
+
+// Reads Mia's <MIA_BOT_SETUP> block in her own chat: it becomes a pending
+// request the app shows as the bot setup card. -> { text, fallbackText, metadata }
+function nativeMiaBotSetupRequest(replyText, senderLabel) {
+  const extracted = miaBotSetupActions.extractBotSetupRequest(replyText);
+  if (!extracted.request && !extracted.error) return { text: extracted.text, metadata: null };
+  if (extracted.error) {
+    return {
+      text: extracted.text,
+      fallbackText: 'I tried to open the bot setup but the details were incomplete. Tell me again what the bot should do.',
+      metadata: { botSetupError: String(extracted.error).slice(0, 200) },
+    };
+  }
+  return {
+    text: extracted.text,
+    fallbackText: 'Here’s a draft of the bot for you to review.',
+    metadata: {
+      botSetupRequest: {
+        id: `bot-setup-${crypto.randomUUID()}`,
+        request: extracted.request.request,
+        requestedBy: senderLabel,
+        status: 'pending',
+      },
+    },
+  };
+}
+
 async function nativeBotAutomationAction(agent, replyText, trigger) {
   const extracted = botAutomationActions.extractAutomationAction(replyText);
   if (!extracted.action && !extracted.error) return { text: extracted.text, metadata: null };
@@ -7169,26 +7135,6 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   });
   throwIfNativeDispatchStopped(signal);
   throwIfNativeDispatchUserInactive(dispatch, trigger);
-  if (dispatch.targetType === 'gateway' && !slashCommand) {
-    throwIfNativeDispatchUserInactive(dispatch, trigger);
-    const created = await createNativeBotFromMiaRequest(
-      dispatch.companyId,
-      trigger.senderId,
-      message,
-      chatModelSelection && chatModelSelection.model,
-      chatModelSelection && chatModelSelection.provider
-    );
-    throwIfNativeDispatchUserInactive(dispatch, trigger);
-    if (created) {
-      return createNativeDispatchReplyEvent(dispatch, trigger, {
-        type: 'agent_message',
-        content: { text: `Created ${created.bot.name}. The bot is ready in its native chat.` },
-        parentEventId,
-        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-        metadata: { runtime: 'hermes', dispatchId: dispatch.id, action: 'create-native-bot', botId: created.bot.id, agentName: 'Mia' },
-      });
-    }
-  }
   const historyEvents = allNativeConversationEvents({
     companyId: dispatch.companyId,
     conversationId: dispatch.conversationId,
@@ -7254,6 +7200,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   let rawReply;
   let inferenceResult;
   let validatedArtifacts = [];
+  // Set for a normal turn in Mia's own chat, the only place her bot setup
+  // block opens the setup card.
+  let ownsMiaChat = false;
   // Shared verbose-diagnostics progress poster. Both dispatch flavors route
   // gateway events through the same Hermes gateway client (client.run()'s
   // onEvent), so both need the same coalescing/posting wiring — this used to
@@ -7265,7 +7214,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const postHermesProgressText = (hermesEventType, rawText) => {
     // Progress notes can echo the reply, and the reply's automation block is
     // read by Mia, never shown.
-    const text = botAutomationActions.stripAutomationBlocks(rawText);
+    const text = stripAgentActionBlocks(rawText);
     if (!text) return;
     const sequence = ++hermesProgressIndex;
     hermesProgressSequence = hermesProgressSequence.then(() => createNativeDispatchReplyEvent(dispatch, trigger, {
@@ -7297,11 +7246,11 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const sameReplyText = (a, b) => String(a || '').replace(/\s+/g, ' ').trim()
     === String(b || '').replace(/\s+/g, ' ').trim();
   const flushPendingReasoningSummary = (replyText) => {
-    const text = botAutomationActions.stripAutomationBlocks(pendingReasoningSummary);
+    const text = stripAgentActionBlocks(pendingReasoningSummary);
     pendingReasoningSummary = '';
     if (!text) return;
     if (replyText && sameReplyText(text.replace(/^Reasoning summary\n/, ''),
-      botAutomationActions.stripAutomationBlocks(redactHermesChatDetail(replyText)))) return;
+      stripAgentActionBlocks(redactHermesChatDetail(replyText)))) return;
     for (const chunk of splitHermesDebugText(text)) postHermesProgressText('reasoning.available', chunk);
   };
   const flushHermesProgress = (replyText) => {
@@ -7385,6 +7334,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   };
   if (dispatch.targetType === 'gateway') {
     const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel, globalInstructions.agent);
+    const ownsPrivateAgentConversation = conversation.type === 'agent'
+      && String(conversation.createdBy || '').toLowerCase() === senderLabel;
     const gatewayMessage = [buildHermesGatewayTurnMessage(
       message,
       senderLabel,
@@ -7394,10 +7345,12 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       globalInstructions.agent
     ), nativeBrowserContextNote(trigger, {
       ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly,
-    })].filter(Boolean).join('\n\n');
+    }),
+    // Only Mia's own chat shows the bot setup card.
+    ownsPrivateAgentConversation && !slashCommand ? miaBotSetupActions.botSetupInstruction() : '',
+    ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
-    const ownsPrivateAgentConversation = conversation.type === 'agent'
-      && String(conversation.createdBy || '').toLowerCase() === senderLabel;
+    ownsMiaChat = ownsPrivateAgentConversation && !slashCommand;
     if (slashCommand && !ownsPrivateAgentConversation) {
       return createNativeDispatchReplyEvent(dispatch, trigger, {
         type: replyEventType,
@@ -7611,9 +7564,12 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   throwIfNativeDispatchUserInactive(dispatch, trigger);
   // Only the bot's own chat may act on its automations; anywhere else the
   // block is dropped unread.
+  // Mia's block only counts in her own chat.
   const automationAction = privateBotChat
-    ? await nativeBotAutomationAction(agent, actionReply, trigger)
-    : { text: botAutomationActions.stripAutomationBlocks(actionReply), metadata: null };
+    ? await nativeBotAutomationAction(agent, miaBotSetupActions.stripBotSetupBlocks(actionReply), trigger)
+    : ownsMiaChat
+      ? nativeMiaBotSetupRequest(botAutomationActions.stripAutomationBlocks(actionReply), senderLabel)
+      : { text: stripAgentActionBlocks(actionReply), metadata: null };
   const safeReply = sanitizeChatReply(automationAction.text || automationAction.fallbackText || '')
     .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, '')
     .replace(new RegExp(`\\s*${escapedSignature}\\s*$`, 'i'), '')
