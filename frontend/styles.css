@@ -3073,6 +3073,8 @@
   body.styled-skin .agent-setup-field input,
   body.styled-skin .agent-setup-field textarea,
   body.styled-skin .agent-setup-field select{width:100%;min-width:0;padding:10px 11px;border:1px solid var(--sand-border-default);border-radius:10px;background:var(--sand-bg-base);color:var(--sand-text-primary);font:inherit;line-height:1.4;box-sizing:border-box;outline:none;}
+  body.styled-skin .agent-setup-field>.agent-setup-automation-choice{display:flex;align-items:flex-start;gap:8px;font-size:13px;line-height:1.45;color:var(--sand-text-primary);text-transform:none;letter-spacing:0;}
+  body.styled-skin .agent-setup-automation-choice input{width:auto;margin:3px 0 0;padding:0;flex:none;}
   body.styled-skin .agent-setup-field textarea{resize:vertical;min-height:72px;}
   body.styled-skin .agent-setup-field input:focus,
   body.styled-skin .agent-setup-field textarea:focus,

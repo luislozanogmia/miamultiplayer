@@ -8297,36 +8297,27 @@
       '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + chatMsgExtras(m) + (opts.footerHtml || '') + '</div></div>';
   }
 
-  function agentSetupAutomationText(automation){
-    if(!automation || !automation.enabled || automation.frequency === 'none') return 'No automation';
-    if(automation.frequency === 'interval'){
-      var intervalMinutes = Number(automation.intervalMinutes || 0);
-      if(intervalMinutes === 1) return 'Every minute';
-      if(intervalMinutes === 60) return 'Every hour';
-      if(intervalMinutes > 60 && intervalMinutes % 60 === 0){
-        var intervalHours = intervalMinutes / 60;
-        return 'Every ' + intervalHours + (intervalHours === 1 ? ' hour' : ' hours');
-      }
-      return 'Every ' + intervalMinutes + ' minutes';
-    }
-    var text = automation.frequency === 'daily' ? 'Every day'
-      : automation.frequency === 'weekly' ? 'Every ' + (automation.day || 'week')
-      : 'Every month' + (automation.day ? ' on day ' + automation.day : '');
-    return text + (automation.time ? ' at ' + automation.time : '');
+  // Bot setup only creates the bot. A schedule the user asked for is handed
+  // to the new bot as its first message, so the bot proposes the automation
+  // (with its steps) through its own automation card.
+  function agentSetupAutomationRequest(draft){
+    return draft && draft.automationWanted !== false ? String(draft.automationRequest || '').trim() : '';
   }
 
-  function normalizedAgentSetupAutomation(automation){
-    var source = automation || {};
-    var enabled = source.enabled === true && source.frequency !== 'none';
-    var normalized = {
-      enabled: enabled,
-      frequency: enabled ? source.frequency : 'none'
-    };
-    if(enabled && source.frequency === 'interval') normalized.intervalMinutes = Number(source.intervalMinutes || 1);
-    if(enabled && source.day) normalized.day = String(source.day);
-    if(enabled && source.time) normalized.time = String(source.time);
-    if(enabled && source.prompt) normalized.prompt = String(source.prompt).trim();
-    return normalized;
+  function handOffAgentSetupAutomation(conversationId, draft){
+    var request = agentSetupAutomationRequest(draft);
+    if(!request) return false;
+    // Posted directly rather than through the composer path: the bot's room
+    // may not be loaded yet, so a local "sending" copy would never be swapped
+    // for the real message. The room shows the message when it loads.
+    var chatModelMetadata = chatModelSelectionMetadata();
+    api(nativeConversationPath(conversationId, '/events'), {method:'POST', body:Object.assign({
+      type: 'message',
+      content: {text: 'Set up an automation for this request: ' + request},
+      parentEventId: null,
+      clientIdempotencyKey: 'bot-setup-automation-' + conversationId
+    }, chatModelMetadata ? {metadata: {chatModelSelection: chatModelMetadata}} : {})});
+    return true;
   }
 
   // Builds the greeting a freshly-activated bot "says" the moment its room
@@ -8343,15 +8334,9 @@
   function agentSetupWelcomeBody(created, draft){
     var name = (created && created.name) || (draft && draft.name) || 'your new bot';
     var roleSummary = agentSetupWelcomeExcerpt(draft && draft.role, 24).replace(/[.\s]+$/, '');
-    var automation = draft && draft.automation;
     var sentences = ['I’m ' + name + '.'];
     if(roleSummary) sentences.push('I handle ' + roleSummary + '.');
-    if(automation && automation.enabled && String(automation.prompt || '').trim()){
-      var task = agentSetupWelcomeExcerpt(automation.prompt, 16).replace(/[.\s]+$/, '');
-      sentences.push('Want me to run ' + task + ' now, or is there something related you’d like first?');
-    } else {
-      sentences.push('What should I work on first?');
-    }
+    sentences.push('What should I work on first?');
     return sentences.join(' ');
   }
 
@@ -8393,7 +8378,7 @@
       '',
       'Name: **' + draft.name + '**',
       'Role: ' + draft.role,
-      'Automation: ' + agentSetupAutomationText(draft.automation),
+      'Automation: ' + (agentSetupAutomationRequest(draft) ? 'proposed by the bot after setup' : 'none'),
       'Output: ' + draft.output,
       '',
       'Do you want me to activate this bot?'
@@ -8408,39 +8393,20 @@
     view = view || {};
     var draft = flow.draft || {};
     var busy = flow.phase === 'activating';
-    var automation = draft.automation || {enabled:false, frequency:'none', day:'', time:''};
-    var frequency = automation.enabled ? automation.frequency : 'none';
-    var intervalMinutes = frequency === 'interval' ? Number(automation.intervalMinutes || 1) : 0;
-    var cadence = frequency;
-    var intervalParts = automationIntervalParts(intervalMinutes);
-    function option(value, label){ return '<option value="' + value + '"' + (cadence === value ? ' selected' : '') + '>' + label + '</option>'; }
-    var dayField = '';
-    if(frequency === 'weekly'){
-      dayField = '<label class="agent-setup-field"><span>Day</span><select id="agentSetupDay">' +
-        ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(function(day){
-          return '<option value="' + day + '"' + (automation.day === day ? ' selected' : '') + '>' + day + '</option>';
-        }).join('') + '</select></label>';
-    } else if(frequency === 'monthly'){
-      dayField = '<label class="agent-setup-field"><span>Day of month</span><input id="agentSetupDay" type="number" min="1" max="31" value="' + esc(automation.day || '1') + '"></label>';
-    }
-    var scheduleFields = frequency === 'interval'
-      ? '<div class="agent-setup-timer-row"><span class="agent-setup-timer-prefix">Every</span><input id="agentSetupIntervalValue" type="number" min="1" max="' + (intervalParts.unit === 'hours' ? '24' : '60') + '" value="' + esc(intervalParts.value) + '" aria-label="Timer interval"><select id="agentSetupIntervalUnit" aria-label="Timer unit"><option value="minutes"' + (intervalParts.unit === 'minutes' ? ' selected' : '') + '>minutes</option><option value="hours"' + (intervalParts.unit === 'hours' ? ' selected' : '') + '>hours</option></select></div>'
-      : frequency === 'none' ? '' : '<div class="agent-setup-schedule-row">' + dayField +
-      '<label class="agent-setup-field"><span>Time</span><input id="agentSetupTime" type="time" value="' + esc(automation.time || '') + '"></label></div>';
-    var automationPromptField = frequency === 'none' ? '' :
-      '<label class="agent-setup-field"><span>Task prompt</span><textarea id="agentSetupAutomationPrompt" rows="3" maxlength="1000" placeholder="What should this automation do each time it runs?">' + esc(automation.prompt || '') + '</textarea></label>';
+    var automationRequest = String(draft.automationRequest || '').trim();
+    var automationField = automationRequest
+      ? '<label class="agent-setup-field agent-setup-automation-handoff"><span>Automation</span>' +
+        '<span class="agent-setup-automation-choice"><input id="agentSetupAutomationWanted" type="checkbox"' + (draft.automationWanted !== false ? ' checked' : '') + '>' +
+        '<span>After setup, ask ' + esc(draft.name || 'the bot') + ' to propose this automation with its steps: “' + esc(automationRequest) + '”. You confirm it in the bot’s chat.</span></span></label>'
+      : '';
     return '<div class="chat-msg-row is-direct agent-setup-review-row"><span class="chat-msg-mark agent' + (view.markClass ? ' ' + view.markClass : '') + '">' + (view.avatarHtml || agentAvatarHtml('New Bot', AGENT_SETUP_ROOM_ID, 28)) + '</span>' +
       '<div class="chat-msg-body"><div class="chat-msg-head"><span class="chat-msg-name">' + esc(view.name || draft.name || 'New Bot') + '</span><span class="chat-msg-tag">' + esc(view.tag || 'Bot') + '</span><span class="chat-msg-time">just now</span></div>' +
       '<div class="agent-setup-card">' +
         '<div class="agent-setup-card-intro">' + esc(view.intro || 'Here’s what I inferred. Edit anything before activating me.') + '</div>' +
         '<label class="agent-setup-field"><span>Name</span><input id="agentSetupName" type="text" maxlength="40" value="' + esc(draft.name || '') + '"></label>' +
         '<label class="agent-setup-field"><span>Role</span><textarea id="agentSetupRole" rows="3" maxlength="500">' + esc(draft.role || '') + '</textarea></label>' +
-        '<label class="agent-setup-field"><span>Want me to run an automation?</span><select id="agentSetupFrequency">' +
-          option('none', 'No automation') + option('interval', 'Repeating timer') +
-          option('daily', 'Every day') + option('weekly', 'Every week') + option('monthly', 'Every month') + '</select></label>' +
-        scheduleFields +
-        automationPromptField +
         '<label class="agent-setup-field"><span>Output</span><textarea id="agentSetupOutput" rows="3" maxlength="300">' + esc(draft.output || '') + '</textarea></label>' +
+        automationField +
         '<div class="agent-setup-confirm-copy">' + esc(view.confirmCopy || 'Do you want me to activate this bot?') + '</div>' +
         '<div class="agent-setup-safety">' + (flow.creation || busy ? 'Your creation request is being tracked. Retrying will recover the same bot.' : 'Nothing is created or scheduled until you confirm.') + '</div>' +
         (flow.error ? '<div class="agent-setup-error" role="alert">' + esc(flow.error) + '</div>' : '') +
@@ -8454,26 +8420,11 @@
     flow = flow || agentSetup;
     if(!flow.draft) return;
     var name = el('#agentSetupName'), role = el('#agentSetupRole'), output = el('#agentSetupOutput');
-    var frequency = el('#agentSetupFrequency'), day = el('#agentSetupDay'), time = el('#agentSetupTime');
-    var intervalValue = el('#agentSetupIntervalValue'), intervalUnit = el('#agentSetupIntervalUnit');
-    var automationPrompt = el('#agentSetupAutomationPrompt');
-    var cadence = frequency ? frequency.value : 'none';
+    var automationWanted = el('#agentSetupAutomationWanted');
     flow.draft.name = name ? name.value.trim() : flow.draft.name;
     flow.draft.role = role ? role.value.trim() : flow.draft.role;
     flow.draft.output = output ? output.value.trim() : flow.draft.output;
-    flow.draft.automation = {
-      enabled: cadence !== 'none',
-      frequency: cadence,
-      day: day ? String(day.value || '') : '',
-      time: time ? String(time.value || '') : '',
-      prompt: automationPrompt ? automationPrompt.value.trim() : ''
-    };
-    if(cadence === 'interval'){
-      flow.draft.automation.intervalMinutes = normalizedAutomationIntervalMinutes(
-        intervalValue ? intervalValue.value : 5,
-        intervalUnit ? intervalUnit.value : 'minutes'
-      );
-    }
+    if(automationWanted) flow.draft.automationWanted = !!automationWanted.checked;
   }
 
   function wireAgentSetupReview(thread, flow, actions){
@@ -8482,18 +8433,6 @@
     if(flow.creation || flow.phase === 'activating'){
       thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea, .agent-setup-card select').forEach(function(field){ field.disabled = true; });
     }
-    var frequency = el('#agentSetupFrequency', thread);
-    if(frequency) frequency.addEventListener('change', function(){
-      captureAgentSetupDraft(flow);
-      if(flow.draft.automation.enabled && flow.draft.automation.frequency === 'weekly' && !flow.draft.automation.day) flow.draft.automation.day = 'Monday';
-      if(flow.draft.automation.enabled && flow.draft.automation.frequency === 'monthly' && !flow.draft.automation.day) flow.draft.automation.day = '1';
-      renderChatThread();
-    });
-    var intervalUnit = el('#agentSetupIntervalUnit', thread);
-    if(intervalUnit) intervalUnit.addEventListener('change', function(){
-      var input = el('#agentSetupIntervalValue', thread);
-      if(input) input.max = intervalUnit.value === 'hours' ? '24' : '60';
-    });
     var activate = el('#agentSetupActivate', thread);
     if(activate) activate.addEventListener('click', actions.activate);
     var later = el('#agentSetupLater', thread);
@@ -8672,25 +8611,15 @@
   // user must fix is missing.
   function agentSetupCreatePayload(flow, intent){
     if(flow.creation) return {payload: flow.creation.payload};
-    try {
-      captureAgentSetupDraft(flow);
-    } catch(error) {
-      return {error: error && error.message ? error.message : 'Check the automation timer.'};
-    }
+    captureAgentSetupDraft(flow);
     var draft = flow.draft;
     if(!draft.name || !draft.role || !draft.output) return {error: 'Name, role, and output are required.'};
-    if(draft.automation && draft.automation.enabled && !String(draft.automation.prompt || '').trim()){
-      return {error: 'Add the task prompt this automation should run.'};
-    }
     var payload = {
       name: draft.name,
       role: draft.role,
       output: draft.output,
       instructions: 'Role: ' + draft.role + '\n\nDesired output: ' + draft.output,
-      automations: draft.automation && draft.automation.enabled ? [Object.assign(
-        {id:'automation-1', name:draft.name + ' automation'},
-        normalizedAgentSetupAutomation(draft.automation)
-      )] : [],
+      automations: [],
       model: selectedConnectedBotModel(),
       status: 'running',
       departments: guessDepartmentsFor(draft.role + ' ' + draft.output),
@@ -8781,8 +8710,9 @@
       agentSetup.liveRoomId = conversation.id;
       agentSetup.phase = 'idle';
       adoptCreatedBot(created, conversation);
-      chatRoomState(conversation.id).localWelcome = buildAgentSetupWelcomeMessage(conversation.id, created, draft);
+      if(!agentSetupAutomationRequest(draft)) chatRoomState(conversation.id).localWelcome = buildAgentSetupWelcomeMessage(conversation.id, created, draft);
       loadChatRoom(conversation.id, 'agent', created.name);
+      handOffAgentSetupAutomation(conversation.id, draft);
     }).catch(function(err){
       if(agentSetup.requestId !== attempt || agentSetup.phase !== 'activating') return;
       finishAgentSetupFailure(attempt, 'activating', agentSetup.requestTimedOut || !!(err && err.name === 'AbortError'), 'The bot could not be activated: ' + (err && err.message ? err.message : 'please try again.'));
@@ -11393,7 +11323,8 @@
       flow.conversation = result.conversation;
       flow.phase = 'created';
       adoptCreatedBot(result.created, result.conversation);
-      chatRoomState(result.conversation.id).localWelcome = buildAgentSetupWelcomeMessage(result.conversation.id, result.created, flow.draft);
+      flow.automationHandedOff = handOffAgentSetupAutomation(result.conversation.id, flow.draft);
+      if(!flow.automationHandedOff) chatRoomState(result.conversation.id).localWelcome = buildAgentSetupWelcomeMessage(result.conversation.id, result.created, flow.draft);
       renderMiaBotDraftRoom(roomId);
     }).catch(function(error){
       if(stale()) return;
@@ -11445,7 +11376,8 @@
         hideLater: true
       });
     } else if(flow.phase === 'created' && flow.created){
-      html += miaBotDraftMessageHtml('**' + (flow.created.name || 'Your bot') + '** is ready. It has its own chat, and you can ask me to change it any time.', false);
+      html += miaBotDraftMessageHtml('**' + (flow.created.name || 'Your bot') + '** is ready. It has its own chat, and you can ask me to change it any time.' +
+        (flow.automationHandedOff ? ' I asked it to propose the automation you wanted; confirm the steps in its chat.' : ''), false);
       html += '<div class="agent-setup-actions mia-bot-draft-open"><button type="button" class="agent-setup-activate" data-mia-bot-open>Open ' + esc(flow.created.name || 'bot') + '’s chat</button></div>';
     }
     return html;
