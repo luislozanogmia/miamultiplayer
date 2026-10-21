@@ -9,6 +9,10 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+### Fixed
+- Use a white conversation header in light mode, including the browser side pane,
+  while preserving the dark-mode background.
+
 ## [0.2.19] — 2026-10-19
 
 ### Added
