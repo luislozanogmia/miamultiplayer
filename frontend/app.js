@@ -8806,6 +8806,7 @@
     }
     var state = chatRoomState(roomId);
     updateChatSuggestions(roomId);
+    if(chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)) syncMiaBotSetupRequest(roomId, state);
     var botDraftFlow = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel) ? state.botDraft : null;
     if(!state.messages.length && !state.thinking && !botDraftFlow){
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
@@ -11113,9 +11114,9 @@
       && (boundRoomId || chatWs.activeRoomId) === miaOnboardingChat.conversationId){
       return sendMiaOnboardingAnswer(text);
     }
-    // Building a bot is a native Mia workflow, not an open-ended Hermes task.
-    // Mia asks for a purpose before drafting a generic request. Once the card
-    // appears, its fields are editable; a new message closes the draft.
+    // Every message goes to Mia; her model decides when to open the bot
+    // setup card (see syncMiaBotSetupRequest). While the card is drafting or
+    // creating, wait; an unsubmitted card closes when the user moves on.
     var sendRoomId = boundRoomId || chatWs.activeRoomId;
     if(!threadRootId && !preparedAttachment && chatWs.activeKind === 'agent'
       && isMiaOrchestrator(chatWs.activeLabel, 'gateway')){
@@ -11123,59 +11124,17 @@
       if(draftFlow && (miaBotDraftBusy(draftFlow) || draftFlow.creation && draftFlow.phase === 'review')){
         return Promise.resolve({status: 409, data: {botSetup: true, message:'Finish the current bot creation first.'}});
       }
-      if(draftFlow && draftFlow.phase === 'clarifying'){
-        continueMiaBotDraft(sendRoomId, text);
-        return Promise.resolve({status: 200, data: {botSetup: true}});
-      }
-      if(draftFlow && draftFlow.phase === 'review'){
-        cancelMiaBotDraft(sendRoomId);
-      }
-      if(isBotCreationIntent(text)){
-        startMiaBotDraft(sendRoomId, text);
-        return Promise.resolve({status: 200, data: {botSetup: true}});
-      }
-      if(draftFlow && !miaBotDraftBusy(draftFlow)) chatRoomState(sendRoomId).botDraft = null;
+      if(draftFlow && draftFlow.phase === 'review') cancelMiaBotDraft(sendRoomId);
+      else if(draftFlow) chatRoomState(sendRoomId).botDraft = null;
     }
     return sendNativeConversationEvent(text, threadRootId, preparedAttachment, sendRoomId);
   }
 
-  function isBotCreationIntent(value){
-    var text = String(value || '').trim();
-    if(!text) return false;
-    // Questions about bots ("how do I create a bot?") are ordinary chat.
-    if(/^(?:(?:hey|hi|hello|mia)[,!\s]+)*(?:how|what|why|where|when|which|is|are|does|do\s+i|should)\b/i.test(text)) return false;
-    // Up to three describing words: "create a research bot", "make me a
-    // daily news bot". Words like "to"/"my" mean the bot already exists
-    // ("add a skill to my bot"), which is an edit, not a new bot.
-    var describing = '(?:(?!(?:to|for|in|on|of|my|our|your|the|this|that|its|his|her|their)\\b)[A-Za-z][\\w-]*\\s+){0,3}';
-    return new RegExp('\\b(?:create|build|make|add|set\\s*up|spin\\s*up)\\s+(?:(?:me|us)\\s+)?(?:(?:a|an|new|another)\\s+)?' + describing + 'bot\\b', 'i').test(text)
-      || /\bget\s+(?:(?:me|us)\s+)?(?:a|an|new)\s+bot\b/i.test(text)
-      || new RegExp('\\b(?:i\\s+(?:want|need)|we\\s+(?:want|need))\\s+(?:a|an|new|another)\\s+' + describing + 'bot\\b', 'i').test(text);
-  }
-
-  function botCreationIntentNeedsDetails(value){
-    var text = String(value || '').trim().replace(/^(?:(?:hi|hey|hello|mia)[,!\s]+)+/i, '').replace(/[?.!\s]+$/, '');
-    return /^(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:create|build|make|set\s+up|get)\s+(?:(?:me|us)\s+)?(?:(?:a|an|new|another)\s+)?bot(?:\s+for\s+(?:me|us))?$/i.test(text)
-      || /^(?:i|we)\s+(?:want|need|would\s+like)\s+(?:a|an|new|another)\s+bot$/i.test(text);
-  }
-
-  function recentBotPurpose(roomId){
-    var messages = chatRoomState(roomId).messages || [];
-    var recentHuman = messages.filter(function(message){
-      return message && !message.deleted && !message.threadRoot && isHumanSender(message.sender) && String(message.body || '').trim();
-    }).slice(-1)[0];
-    if(!recentHuman || !recentHuman.ts || Date.now() - Number(recentHuman.ts) > 10 * 60 * 1000) return '';
-    var purpose = String(recentHuman.body || '').trim();
-    // Only reuse an explicit description of what "it" (the bot) should do.
-    // A nearby unrelated message must not silently become bot instructions.
-    if(!/^(?:i(?:['’]d| would) like (?:it|the bot|the agent) to|i (?:want|need) (?:it|the bot|the agent) to|(?:it|the bot|the agent) (?:should|needs? to|will)|(?:have|make) (?:it|the bot|the agent)\b)/i.test(purpose)) return '';
-    return purpose.slice(0, 1800);
-  }
-
   /* ============ CHAT: building a bot from Mia's chat ============
-     Vague requests first ask what the bot should do. Once Mia has a purpose,
-     /api/bots/interpret produces an editable review card in this chat.
-     A new message dismisses an unsubmitted card; only Accept creates a bot. */
+     Mia's model decides when the user wants a bot: her reply then carries a
+     pending metadata.botSetupRequest. /api/bots/interpret turns it into an
+     editable review card in this chat. A new message dismisses an
+     unsubmitted card; only Accept creates a bot. */
   function miaBotDraftBusy(flow){
     return !!flow && (flow.phase === 'interpreting' || flow.phase === 'activating');
   }
@@ -11194,56 +11153,53 @@
     if(chatWs.activeRoomId === roomId) renderChatThread();
   }
 
-  function startMiaBotDraft(roomId, text){
-    var state = chatRoomState(roomId);
-    clearMiaBotDraftRequest(state.botDraft, true);
-    var needsDetails = botCreationIntentNeedsDetails(text);
-    var priorPurpose = needsDetails ? recentBotPurpose(roomId) : '';
+  // Opens the card for the newest pending request Mia made in this chat,
+  // once per request per session. Accepting or dismissing answers it on the
+  // server, so it does not come back after a reload.
+  var startedMiaBotSetupRequests = {};
+  function pendingMiaBotSetupMessage(state){
+    for(var i = state.messages.length - 1; i >= 0; i--){
+      var event = state.messages[i] && state.messages[i].nativeEvent;
+      var request = event && event.metadata && event.metadata.botSetupRequest;
+      if(request) return request.status === 'pending' ? state.messages[i] : null;
+    }
+    return null;
+  }
+
+  function syncMiaBotSetupRequest(roomId, state){
+    if(state.botDraft) return;
+    var message = pendingMiaBotSetupMessage(state);
+    if(!message || startedMiaBotSetupRequests[message.nativeEvent.id]) return;
+    var request = message.nativeEvent.metadata.botSetupRequest;
+    var requester = String(request.requestedBy || '').toLowerCase();
+    if(requester && currentUser && requester !== String(currentUser).toLowerCase()) return;
+    startedMiaBotSetupRequests[message.nativeEvent.id] = true;
     state.botDraft = {
-      intent: priorPurpose ? ('Create a bot for me. It should: ' + priorPurpose).slice(0, 2000)
-        : needsDetails ? '' : String(text || '').trim().slice(0, 2000),
-      turns: [{human: true, text: String(text || '').trim()}],
-      draft: null, phase: needsDetails && !priorPurpose ? 'clarifying' : 'interpreting', revised: false, error: '',
+      intent: String(request.request || '').slice(0, 2000),
+      sourceEventId: message.nativeEvent.id,
+      turns: [], draft: null, phase: 'interpreting', error: '',
       created: null, conversation: null, requestId: 0, controller: null, timer: null
     };
-    if(needsDetails && !priorPurpose){
-      state.botDraft.turns.push({human: false, text: 'Sure. What should the bot do, and what result should it give you? If it should run automatically, tell me when.'});
-      renderMiaBotDraftRoom(roomId);
-      return;
-    }
-    if(priorPurpose) state.botDraft.turns.push({human: false, text: 'I’ll use the details you just gave me and prepare a draft for you to review.'});
-    requestMiaBotDraft(roomId, state.botDraft, '');
+    // Start after this render finishes; the request re-renders the room.
+    setTimeout(function(){
+      if(chatRoomState(roomId).botDraft === state.botDraft) requestMiaBotDraft(roomId, state.botDraft);
+    }, 0);
   }
 
-  function continueMiaBotDraft(roomId, text){
-    var flow = chatRoomState(roomId).botDraft;
-    if(!flow || flow.phase !== 'clarifying') return;
-    var details = String(text || '').trim();
-    if(/^(?:never\s*mind|cancel|stop|forget\s*it)$/i.test(details)){
-      cancelMiaBotDraft(roomId);
-      return;
-    }
-    flow.turns.push({human: true, text: details});
-    if(!details || /^(?:yes|yeah|yep|sure|okay|ok)$/i.test(details) || botCreationIntentNeedsDetails(details)){
-      flow.turns.push({human: false, text: 'What specific task should the bot handle, and what should it produce for you?'});
-      renderMiaBotDraftRoom(roomId);
-      return;
-    }
-    flow.intent = details.slice(0, 2000);
-    requestMiaBotDraft(roomId, flow, '');
+  function answerMiaBotSetupRequest(roomId, flow, decision, botId){
+    if(!flow || !flow.sourceEventId) return;
+    var eventId = flow.sourceEventId;
+    var state = chatRoomState(roomId);
+    state.messages.forEach(function(message){
+      var event = message && message.nativeEvent;
+      if(event && event.id === eventId && event.metadata && event.metadata.botSetupRequest){
+        event.metadata.botSetupRequest = Object.assign({}, event.metadata.botSetupRequest, {status: decision});
+      }
+    });
+    api('/api/mia/bot-setup-requests/' + encodeURIComponent(eventId), {method:'POST', body: Object.assign({decision: decision}, botId ? {botId: botId} : {})}).catch(function(){});
   }
 
-  function reviseMiaBotDraft(roomId, text){
-    var flow = chatRoomState(roomId).botDraft;
-    if(!flow || flow.phase !== 'review' || flow.creation) return;
-    // Keep anything typed into the card before asking for the change.
-    try { captureAgentSetupDraft(flow); } catch(error) {}
-    flow.turns.push({human: true, text: String(text || '').trim()});
-    requestMiaBotDraft(roomId, flow, String(text || '').trim());
-  }
-
-  function requestMiaBotDraft(roomId, flow, change){
-    var revising = !!(change && flow.draft);
+  function requestMiaBotDraft(roomId, flow){
     flow.phase = 'interpreting';
     flow.error = '';
     var attempt = ++flow.requestId;
@@ -11253,27 +11209,18 @@
     function fail(message){
       clearMiaBotDraftRequest(flow, true);
       flow.requestId += 1;
-      if(revising){
-        flow.phase = 'review';
-        flow.error = message;
-      } else {
-        flow.phase = 'failed';
-        flow.turns.push({human: false, text: message});
-      }
+      flow.phase = 'failed';
+      flow.turns.push({human: false, text: message});
       renderMiaBotDraftRoom(roomId);
     }
     flow.timer = setTimeout(function(){
       if(stale()) return;
-      fail(revising ? 'That took too long, so I kept the last version. Try again.' : 'That took too long. Nothing was created. Tell me again what the bot should do.');
+      fail('That took too long. Nothing was created. Tell me again what the bot should do.');
     }, AGENT_SETUP_TIMEOUT_MS);
     renderMiaBotDraftRoom(roomId);
     var modelSelection = chatModelSelectionMetadata();
     var body = {intent: flow.intent};
     if(modelSelection) body.modelSelection = modelSelection;
-    if(revising){
-      body.change = change;
-      body.currentDraft = flow.draft;
-    }
     api('/api/bots/interpret', Object.assign({method:'POST', body:body}, controller ? {signal:controller.signal} : {})).then(function(res){
       if(stale()) return;
       if(res.status !== 200 || !res.data || !res.data.draft){
@@ -11281,13 +11228,12 @@
       }
       clearMiaBotDraftRequest(flow, false);
       flow.draft = res.data.draft;
-      flow.revised = revising;
       flow.phase = 'review';
       renderMiaBotDraftRoom(roomId);
     }).catch(function(error){
       if(stale()) return;
       var reason = error && error.name !== 'AbortError' && error.message && error.message !== 'proposal unavailable' ? ' ' + error.message : '';
-      fail(revising ? 'I couldn’t apply that change, so I kept the last version.' + reason : 'I couldn’t draft that bot.' + reason + ' Tell me again what it should do.');
+      fail('I couldn’t draft that bot.' + reason + ' Tell me again what it should do.');
     });
   }
 
@@ -11323,6 +11269,7 @@
       flow.created = result.created;
       flow.conversation = result.conversation;
       flow.phase = 'created';
+      answerMiaBotSetupRequest(roomId, flow, 'accepted', result.created && result.created.id);
       adoptCreatedBot(result.created, result.conversation);
       flow.automationHandedOff = handOffAgentSetupAutomation(result.conversation.id, flow.draft);
       if(!flow.automationHandedOff) chatRoomState(result.conversation.id).localWelcome = buildAgentSetupWelcomeMessage(result.conversation.id, result.created, flow.draft);
@@ -11339,6 +11286,7 @@
     if(!flow) return;
     if(flow.phase === 'activating' || flow.creation) return;
     clearMiaBotDraftRequest(flow, true);
+    if(flow.phase !== 'created') answerMiaBotSetupRequest(roomId, flow, 'dismissed');
     state.botDraft = null;
     renderMiaBotDraftRoom(roomId);
   }

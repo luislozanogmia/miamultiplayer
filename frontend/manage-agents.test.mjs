@@ -572,38 +572,24 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.doesNotMatch(source, /openCinema\('chat'\)/);
 });
 
-test('Mia keeps bot creation in her own chat before any Hermes dispatch', async () => {
+test('no keyword rule starts bot creation; every message reaches Mia', async () => {
   const source = await readFile(appUrl, 'utf8');
-
-  assert.match(source, /function isBotCreationIntent\(value\)/);
-  assert.match(source, /chatWs\.activeKind === 'agent'[\s\S]*isMiaOrchestrator\(chatWs\.activeLabel, 'gateway'\)[\s\S]*isBotCreationIntent\(text\)/);
-  // Mia drafts the bot in her chat; a new message closes an unsubmitted card.
-  assert.match(source, /draftFlow\.phase === 'review'\)\{\s*cancelMiaBotDraft\(sendRoomId\);/);
-  assert.match(source, /isBotCreationIntent\(text\)\)\{\s*startMiaBotDraft\(sendRoomId, text\);[\s\S]*botSetup: true/);
+  for (const name of ['isBotCreationIntent', 'botCreationIntentNeedsDetails', 'recentBotPurpose', 'startMiaBotDraft', 'continueMiaBotDraft']) {
+    assert.doesNotMatch(source, new RegExp(`function ${name}\\(`), name);
+  }
   const routeStart = source.indexOf("if(!threadRootId && !preparedAttachment && chatWs.activeKind === 'agent'");
   const routeEnd = source.indexOf('return sendNativeConversationEvent(', routeStart);
-  assert.ok(routeStart >= 0 && routeEnd > routeStart, 'bot drafting precedes Hermes dispatch');
-  assert.doesNotMatch(source.slice(routeStart, routeEnd), /startAgentSetupChat\(\)/);
-});
-
-test('bot creation intent catches requests, not questions or edits', async () => {
-  const source = await readFile(appUrl, 'utf8');
-  const fn = /  function isBotCreationIntent\(value\)\{[\s\S]*?\n  \}\n/.exec(source)[0];
-  const isBotCreationIntent = new Function(`${fn}; return isBotCreationIntent;`)();
-  for (const text of ['create a bot', 'Create a bot that tracks AI news', 'make me a daily news bot',
-    'can you create a research bot?', 'I want a newsletter bot', 'Mia, set up a bot to watch my inbox']) {
-    assert.equal(isBotCreationIntent(text), true, text);
-  }
-  for (const text of ['how do I create a bot?', 'add a new skill to my bot', 'add a schedule to the news bot',
-    'edit the linkedin bot', 'create a report about bots']) {
-    assert.equal(isBotCreationIntent(text), false, text);
-  }
+  assert.ok(routeStart >= 0 && routeEnd > routeStart);
+  const route = source.slice(routeStart, routeEnd);
+  assert.doesNotMatch(route, /\.test\(text\)/, 'the send path does not match words in the message');
+  assert.match(route, /draftFlow\.phase === 'review'\) cancelMiaBotDraft\(sendRoomId\);/);
+  assert.match(source, /isMiaOrchestrator\(chatWs\.activeLabel\)\) syncMiaBotSetupRequest\(roomId, state\);/);
 });
 
 test('Mia\'s chat clarifies, drafts, and creates a bot with the shared review card', async () => {
   const source = await readFile(appUrl, 'utf8');
-  assert.match(source, /function startMiaBotDraft\(roomId, text\)[\s\S]*botCreationIntentNeedsDetails\(text\)/);
-  assert.match(source, /function continueMiaBotDraft\(roomId, text\)[\s\S]*requestMiaBotDraft\(roomId, flow, ''\)/);
+  assert.match(source, /function syncMiaBotSetupRequest\(roomId, state\)[\s\S]*requestMiaBotDraft\(roomId, state\.botDraft\)/);
+  assert.match(source, /flow\.phase = 'created';\s*answerMiaBotSetupRequest\(roomId, flow, 'accepted'/);
   assert.match(source, /Review the draft\. Edit any field, then accept it\./);
   assert.match(source, /confirmLabel: 'Accept',[\s\S]*hideLater: true/);
   // The same card and create path as the New Bot setup chat.
