@@ -63,6 +63,40 @@ _MAX_CELLS = 3000
 _MAX_OUTPUT = 1024 * 1024
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
+_BROKER = {}
+
+
+def _load_broker_bootstrap(stream=None) -> None:
+    """Consume the gateway's private first frame before the MCP handshake."""
+    if _BROKER:
+        raise RuntimeError("Google broker is already initialized")
+    if stream is None:
+        # Do not prefetch the following MCP initialize frame into Python's
+        # buffered stdin: the MCP SDK takes over the underlying descriptor.
+        raw = b""
+        while len(raw) <= 4096 and not raw.endswith(b"\n"):
+            byte = os.read(0, 1)
+            if not byte:
+                break
+            raw += byte
+    else:
+        raw = stream.readline(4097)
+    if not raw or len(raw) > 4096:
+        raise RuntimeError("Google broker initialization failed")
+    try:
+        frame = json.loads(raw)
+        values = frame["params"]
+        if frame.get("jsonrpc") != "2.0" or frame.get("method") != "mia/broker/bootstrap":
+            raise ValueError()
+        url, token = values["url"], values["token"]
+        if not isinstance(url, str) or not re.fullmatch(r"http://127\.0\.0\.1:\d+", url):
+            raise ValueError()
+        if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("Google broker initialization failed") from None
+    _BROKER.update(url=url, token=token)
+
 
 def _identifier(value: str, label: str) -> str:
     text = str(value or "").strip()
@@ -158,8 +192,8 @@ def _gws(operation: tuple[str, ...], *, params: dict[str, Any] | None = None, bo
 
 
 def _broker_run(args: list[str], cwd: str = "") -> dict[str, Any]:
-    broker_url = str(os.environ.get("MIA_GOOGLE_BROKER_URL") or "").strip()
-    broker_token = str(os.environ.get("MIA_GOOGLE_BROKER_TOKEN") or "").strip()
+    broker_url = _BROKER.get("url", "")
+    broker_token = _BROKER.get("token", "")
     if not re.fullmatch(r"http://127\.0\.0\.1:\d+", broker_url) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", broker_token):
         raise RuntimeError("Google connection runtime is unavailable")
     payload = json.dumps({"args": args, **({"cwd": cwd} if cwd else {})}, separators=(",", ":")).encode()
@@ -512,4 +546,5 @@ if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "--describe":
         _describe()
     else:
+        _load_broker_bootstrap()
         _serve()

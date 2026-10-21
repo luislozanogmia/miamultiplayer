@@ -15,6 +15,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require('./process-secrets');
 
 const DEFAULT_PORT = 9121;
 const CONNECT_TIMEOUT_MS = 30000;
@@ -67,6 +68,26 @@ function probePort(port, timeoutMs = PORT_PROBE_TIMEOUT_MS) {
     socket.once('connect', () => finish(true));
     socket.once('error', () => finish(false));
     socket.once('close', () => finish(false));
+  });
+}
+
+// Windows can reserve a port without opening a listener (WSAEACCES). A
+// connect probe alone cannot detect that. Ask the OS to bind before starting
+// our internal gateway; explicit endpoints and the desktop ports stay pinned.
+function bindableGatewayPort(preferred, createServer = () => net.createServer()) {
+  const bind = port => new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      const selected = server.address().port;
+      server.close(error => error ? reject(error) : resolve(selected));
+    });
+  });
+  return bind(preferred).catch(error => {
+    if (!['EACCES', 'EADDRINUSE'].includes(error.code)) throw error;
+    // Port zero asks the OS for an available port outside reserved ranges.
+    // Close the probe before Python binds; this is not a held reservation.
+    return bind(0);
   });
 }
 
@@ -195,6 +216,8 @@ class HermesGatewayClient {
     WebSocketImpl = globalThis.WebSocket,
     spawnImpl = spawn,
     probePortImpl = probePort,
+    selectPortImpl = bindableGatewayPort,
+    platform = process.platform,
     fetchImpl = globalThis.fetch,
     tokenFile = process.env.MIAOS_HERMES_GATEWAY_TOKEN_FILE || '',
     now = () => Date.now(),
@@ -203,6 +226,7 @@ class HermesGatewayClient {
     stopExternalGatewayImpl = stopExternalHermesGateway,
     beforeSpawn = null,
     waitForGatewayExitImpl = waitForRecordedGatewayExit,
+    secretEnv = null,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
     this.binary = String(binary || '').trim();
@@ -222,6 +246,8 @@ class HermesGatewayClient {
     this.configuredUrl = requestedUrl ? loopbackGatewayUrl(requestedUrl) : '';
     this.configuredToken = String(token || '').trim();
     this.port = numericPort(port);
+    this.selectPortImpl = selectPortImpl;
+    this.selectAutomaticPort = ['win32', 'darwin', 'linux'].includes(platform) && !requestedUrl && (port === undefined || port === null || String(port).trim() === '');
     this.WebSocketImpl = WebSocketImpl;
     this.spawnImpl = spawnImpl;
     this.probePortImpl = probePortImpl;
@@ -233,6 +259,7 @@ class HermesGatewayClient {
     this.stopExternalGatewayImpl = stopExternalGatewayImpl;
     this.beforeSpawn = typeof beforeSpawn === 'function' ? beforeSpawn : null;
     this.waitForGatewayExitImpl = waitForGatewayExitImpl;
+    this.secretEnv = secretEnv && typeof secretEnv === 'object' ? { ...secretEnv } : {};
     this.toolProgressMode = String(this.env.HERMES_TUI_TOOL_PROGRESS || '').trim().toLowerCase() === 'verbose'
       ? 'verbose'
       : 'all';
@@ -260,6 +287,7 @@ class HermesGatewayClient {
     // pinned one and rejects a model that does support fast mode.
     this.appliedSelections = new Map();
     this.child = null;
+    this.externalGateway = false;
     this.shutdownRequested = false;
   }
 
@@ -283,6 +311,7 @@ class HermesGatewayClient {
             'set MIAOS_HERMES_GATEWAY_TOKEN to connect to it'
           );
         }
+        this.externalGateway = !this.child || this.child.exitCode !== null || this.child.signalCode !== null;
         return;
       }
 
@@ -299,18 +328,26 @@ class HermesGatewayClient {
       if (typeof this.stopExternalGatewayImpl === 'function') {
         await this.stopExternalGatewayImpl(this.launch, this.env);
       }
+      if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
       // Stores are changed only once no Hermes is running for this home, so
       // no live process can write its cached copy back over them. A reused,
       // already-listening gateway never reaches this point, and an old one
       // still draining after the stop skips the cleanup for this launch.
       if (this.beforeSpawn) {
-        if (await this.waitForGatewayExitImpl(this.env)) {
+        const exited = await this.waitForGatewayExitImpl(this.env);
+        if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
+        if (exited) {
           await this.beforeSpawn();
         } else {
           console.warn('[hermes-auth] previous Hermes gateway may still be running; skipped profile key cleanup');
         }
       }
+      if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
 
+      if (this.selectAutomaticPort) {
+        this.port = await this.selectPortImpl(this.port);
+        if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
+      }
       const gatewayEnv = { ...this.env };
       gatewayEnv.HERMES_DASHBOARD_SESSION_TOKEN = this.gatewayToken;
       // Toolsets are resolved by the profile attached to each session. Mia uses
@@ -319,6 +356,7 @@ class HermesGatewayClient {
       // security postures and is therefore intentionally not set here.
       gatewayEnv.HERMES_TUI_MAX_TURNS = String(this.maxTurns);
       gatewayEnv.MIAOS_EXTERNAL_CHAT = '1';
+      if (Object.keys(this.secretEnv).length) gatewayEnv[PROCESS_SECRETS_MARKER] = '1';
       // The desktop server owns both native chat sessions and cron ticks.
       // Running the scheduler inside this process prevents a second launchd
       // Hermes gateway from drifting onto different credentials/configuration.
@@ -336,13 +374,15 @@ class HermesGatewayClient {
           // model switches). HERMES_HOME survives reinstalls.
           cwd: gatewayEnv.HERMES_HOME || os.homedir(),
           detached: false,
-          stdio: 'ignore',
+          stdio: Object.keys(this.secretEnv).length ? ['pipe', 'ignore', 'ignore'] : 'ignore',
         }
       );
+      if (Object.keys(this.secretEnv).length) sendProcessSecrets(child, this.secretEnv);
 
       // Mia owns only the local runtime it starts. Keep the child attached
       // so backend shutdown can terminate it; an already-listening external
       // runtime never reaches this branch and is therefore never adopted.
+      this.externalGateway = false;
       this.child = child || null;
       if (child && typeof child.once === 'function') {
         const release = () => {
@@ -1119,22 +1159,44 @@ class HermesGatewayClient {
   // client can start a new one instead of probing a port the dying process
   // still holds. Resolves false when no owned gateway was running (an external
   // gateway is never adopted, so it is never restarted either).
-  async stopOwnedGateway(timeoutMs = 10000) {
-    const child = this.child;
-    this.child = null;
-    this.failConnection(new Error('Hermes gateway restarting'));
-    this.sessions.clear();
-    if (!child || child.exitCode !== null || child.signalCode !== null || typeof child.kill !== 'function') return false;
-    const exited = new Promise((resolve) => {
-      if (typeof child.once === 'function') child.once('exit', () => resolve(true));
-    });
-    try { child.kill('SIGTERM'); } catch (_) { return false; }
-    const timer = new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs).unref());
-    const clean = await Promise.race([exited, timer]);
-    if (!clean) {
-      try { child.kill('SIGKILL'); } catch (_) { /* already gone */ }
-      await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(false), 2000).unref())]);
+  async isListening() {
+    return this.probePortImpl(this.port, PORT_PROBE_TIMEOUT_MS);
+  }
+
+  async waitForListenerExit(timeoutMs = 2000) {
+    const deadline = Date.now() + timeoutMs;
+    while (await this.isListening()) {
+      if (Date.now() >= deadline) return false;
+      await new Promise(resolve => setTimeout(resolve, 25));
     }
+    return true;
+  }
+
+  async stopOwnedGateway(timeoutMs = 10000) {
+    // Terminal even when startup has not reached process creation yet.
+    this.shutdownRequested = true;
+    const starting = this.gatewayReadyPromise;
+    this.failConnection(new Error('Hermes gateway restarting'));
+    // A pending external-stop or cleanup must finish before credentials can
+    // change. Cancellation guards prevent that startup from spawning afterward.
+    if (starting) await starting.catch(() => {});
+    const child = this.child;
+    this.sessions.clear();
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
+      this.child = null;
+      return false;
+    }
+    if (typeof child.kill !== 'function') throw new Error('Owned agent gateway could not be stopped');
+    const exited = new Promise(resolve => child.once('exit', () => resolve(true)));
+    try { child.kill('SIGTERM'); } catch (_) { throw new Error('Owned agent gateway could not be stopped'); }
+    const wait = ms => new Promise(resolve => setTimeout(() => resolve(false), ms).unref());
+    let clean = await Promise.race([exited, wait(timeoutMs)]);
+    if (!clean) {
+      try { child.kill('SIGKILL'); } catch (_) { throw new Error('Owned agent gateway could not be stopped'); }
+      clean = await Promise.race([exited, wait(2000)]);
+    }
+    if (!clean) throw new Error('Owned agent gateway did not exit; connection changes were not applied');
+    this.child = null;
     return true;
   }
 
@@ -1150,6 +1212,7 @@ class HermesGatewayClient {
 }
 
 module.exports = {
+  bindableGatewayPort,
   waitForRecordedGatewayExit,
   HermesGatewayClient,
   DEFAULT_PORT,

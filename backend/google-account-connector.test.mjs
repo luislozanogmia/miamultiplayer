@@ -88,7 +88,8 @@ test('status invokes gws auth status and never infers connected from exit zero a
 
 test('brokered connector never launches raw gws and clears credentials through the broker', async () => {
   const calls = [];
-  const env = { MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321', MIA_GOOGLE_BROKER_TOKEN: 't'.repeat(43) };
+  const env = { MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321',
+    MIA_GOOGLE_BROKER_RUN_TOKEN: 'r'.repeat(43), MIA_GOOGLE_BROKER_ADMIN_TOKEN: 'a'.repeat(43) };
   const fetchImpl = async (url, options) => {
     calls.push({ url, options });
     return { ok: true, json: async () => ({ code: 0, stdout: JSON.stringify({
@@ -103,8 +104,10 @@ test('brokered connector never launches raw gws and clears credentials through t
   assert.equal(rawLaunches, 0);
   assert.equal(calls[0].url, `${env.MIA_GOOGLE_BROKER_URL}/run`);
   assert.deepEqual(JSON.parse(calls[0].options.body).args, ['auth', 'status']);
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${env.MIA_GOOGLE_BROKER_RUN_TOKEN}`);
   assert.equal((await connector.disconnect()).state, 'not_connected');
   assert.equal(calls[1].url, `${env.MIA_GOOGLE_BROKER_URL}/logout`);
+  assert.equal(calls[1].options.headers.Authorization, `Bearer ${env.MIA_GOOGLE_BROKER_ADMIN_TOKEN}`);
 });
 
 test('revoked tokens and unknown grants cannot masquerade as connected', async () => {
@@ -384,4 +387,24 @@ test('server registers only the Hermes-owned Google Account lifecycle routes', a
   assert.doesNotMatch(source, /app\.get\('\/api\/connections\/google\/callback'/);
   assert.doesNotMatch(source, /app\.post\('\/api\/connections\/google\/:service\/test'/);
   assert.doesNotMatch(source, /app\.delete\('\/api\/connections\/google\/(?:workspace|gmail)'/);
+});
+
+// Keep permission requests aligned with the supported desktop tools.
+test('Google connection needs only five supported scopes and refuses Contacts operations', async () => {
+  const scopes = ['openid', 'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/drive.file'];
+  assert.deepEqual(googleAccount.GWS_OAUTH_SCOPES, scopes);
+  let operations = 0;
+  const connector = googleAccount.createGoogleAccountConnector({
+    runtime: { available: true, gwsBin: '/fixture/gws' },
+    runProcess: async (_file, args) => {
+      if (args[0] !== 'auth') operations += 1;
+      return { code: 0, stdout: JSON.stringify({ token_valid: true, scopes }) };
+    },
+  });
+  assert.equal((await connector.status()).state, 'connected');
+  await assert.rejects(connector.runOperation('contacts.list', []));
+  assert.equal(operations, 0);
 });

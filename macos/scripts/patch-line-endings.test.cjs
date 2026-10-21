@@ -18,13 +18,19 @@ test("Windows autocrlf checkout preserves runtime patch bytes", () => {
     run(["init", "--quiet"]);
     run(["config", "core.autocrlf", "true"]);
     fs.copyFileSync(path.join(root, ".gitattributes"), path.join(fixture, ".gitattributes"));
-    const patch = fs.readFileSync(path.join(root, "scripts/hermes-noninteractive.patch"));
-    fs.writeFileSync(path.join(fixture, "runtime.patch"), patch);
-    run(["add", ".gitattributes", "runtime.patch"]);
-    fs.unlinkSync(path.join(fixture, "runtime.patch"));
-    run(["checkout-index", "--force", "--", "runtime.patch"]);
-    assert.deepEqual(fs.readFileSync(path.join(fixture, "runtime.patch")), patch);
-    assert.ok(!fs.readFileSync(path.join(fixture, "runtime.patch"), "utf8").includes("\r"));
+    const names = ["hermes-noninteractive.patch", "hermes-process-secrets.patch"];
+    for (const name of names) {
+      const patch = fs.readFileSync(path.join(root, "scripts", name));
+      fs.writeFileSync(path.join(fixture, name), patch);
+    }
+    run(["add", ".gitattributes", ...names]);
+    for (const name of names) fs.unlinkSync(path.join(fixture, name));
+    run(["checkout-index", "--force", "--", ...names]);
+    for (const name of names) {
+      const patch = fs.readFileSync(path.join(root, "scripts", name));
+      assert.deepEqual(fs.readFileSync(path.join(fixture, name)), patch);
+      assert.ok(!fs.readFileSync(path.join(fixture, name), "utf8").includes("\r"));
+    }
   } finally {
     fs.rmSync(fixture, { recursive: true, force: true });
   }

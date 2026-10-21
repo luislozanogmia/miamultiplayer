@@ -6,7 +6,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { HermesGatewayClient, waitForRecordedGatewayExit } = require('./hermes-gateway-client.js');
+const { HermesGatewayClient, waitForRecordedGatewayExit, bindableGatewayPort } = require('./hermes-gateway-client.js');
 
 test('a fresh session waits for constructor normalization before pinning and submitting its selected model', async () => {
   const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
@@ -498,6 +498,40 @@ test('an argv launch vector spawns the interpreter with its prefix arguments', a
   client.close();
 });
 
+test('connected-app credentials reach Hermes through stdin and stay out of its launch environment', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-secret-pipe-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  let spawnRecord;
+  let payload = '';
+  const stdin = { on() {}, end(value) { payload = value; } };
+  const client = new HermesGatewayClient({
+    binary: process.execPath,
+    WebSocketImpl: class FakeWebSocket {},
+    env: {},
+    secretEnv: {
+      MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321',
+      MIA_GOOGLE_BROKER_RUN_TOKEN: 'r'.repeat(43),
+    },
+    tokenFile: path.join(directory, 'gateway.token'),
+    probePortImpl: async () => false,
+    stopExternalGatewayImpl: async () => {},
+    spawnImpl: (binary, args, options) => {
+      spawnRecord = { binary, args, options };
+      return { stdin, once() {}, kill() {} };
+    },
+  });
+  await client.ensureGateway();
+  assert.equal(spawnRecord.options.stdio[0], 'pipe');
+  assert.equal(spawnRecord.options.env.MIAOS_PROCESS_SECRETS_STDIN, '1');
+  assert.equal(spawnRecord.options.env.MIA_GOOGLE_BROKER_RUN_TOKEN, undefined);
+  assert.equal(spawnRecord.options.env.MIA_GOOGLE_BROKER_URL, undefined);
+  assert.deepEqual(JSON.parse(payload), {
+    MIA_GOOGLE_BROKER_URL: 'http://127.0.0.1:54321',
+    MIA_GOOGLE_BROKER_RUN_TOKEN: 'r'.repeat(43),
+  });
+  client.close();
+});
+
 test('reuses an already-running local gateway instead of spawning a second one', async () => {
   let spawnCalls = 0;
   let cleanupCalls = 0;
@@ -676,6 +710,34 @@ test('stopOwnedGateway terminates the gateway this client started and waits for 
   assert.equal(client.sessions.size, 0);
   client.close();
 });
+
+for (const stage of ['external stop', 'previous exit', 'credential cleanup']) {
+  test(`stopping during ${stage} prevents a late gateway spawn`, async () => {
+    let release;
+    let entered;
+    const paused = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const pause = async () => { entered(); await gate; };
+    let spawns = 0;
+    const client = new HermesGatewayClient({
+      binary: '/fixture/hermes', token: 'fixture-token', WebSocketImpl: class {}, env: {},
+      probePortImpl: async () => false,
+      stopExternalGatewayImpl: stage === 'external stop' ? pause : async () => {},
+      waitForGatewayExitImpl: stage === 'previous exit' ? async () => { await pause(); return true; } : async () => true,
+      beforeSpawn: stage === 'credential cleanup' ? pause : async () => {},
+      spawnImpl: () => { spawns++; return null; },
+    });
+    const starting = client.ensureGateway();
+    await paused;
+    const rejected = assert.rejects(starting, /closed|stopp/i);
+    const stopping = client.stopOwnedGateway();
+    release();
+    await stopping;
+    await rejected;
+    assert.equal(spawns, 0, 'a stopped client must never launch an untracked gateway');
+    await assert.rejects(client.ensureGateway(), /closed|stopp/i);
+  });
+}
 
 // A scriptable gateway for slash-command tests: `handlers[method]` answers a
 // request; `socket.push(type, payload)` sends an unsolicited session event.
@@ -1019,4 +1081,130 @@ test('an unreadable gateway record is treated as a possibly running gateway', as
     fs.rmSync(path.join(home, name));
   }
   assert.equal(await wait(), true);
+});
+
+test('reconnecting to an owned listener does not reclassify it as external', async () => {
+  const { EventEmitter } = await import('node:events');
+  let listening = false;
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+  child.kill = () => { listening = false; child.exitCode = 0; child.emit('exit', 0); };
+  const client = new HermesGatewayClient({
+    binary: '/fixture/hermes', token: 'fixture-token', WebSocketImpl: class {}, env: {},
+    probePortImpl: async () => listening, stopExternalGatewayImpl: async () => {},
+    spawnImpl: () => { listening = true; return child; },
+  });
+  await client.ensureGateway();
+  await client.ensureGateway();
+  assert.equal(client.child, child);
+  assert.equal(client.externalGateway, false);
+  assert.equal(await client.stopOwnedGateway(), true);
+});
+
+test('failure to signal an owned gateway retains ownership and reports failure', async () => {
+  const { EventEmitter } = await import('node:events');
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+  child.kill = () => { throw new Error('fixture permission denied'); };
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
+  client.child = child;
+  await assert.rejects(client.stopOwnedGateway(), /could not be stopped/);
+  assert.equal(client.child, child);
+});
+
+test('a gateway that never acknowledges exit cannot report successful shutdown', async () => {
+  const { EventEmitter } = await import('node:events');
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+  child.kill = () => true;
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
+  client.child = child;
+  const keepAlive = setInterval(() => {}, 50);
+  try {
+    await assert.rejects(client.stopOwnedGateway(1), /did not exit/);
+    assert.equal(client.child, child);
+  } finally { clearInterval(keepAlive); }
+});
+
+
+for (const platform of ['win32', 'darwin', 'linux']) {
+  test(`${platform} owned gateway automatically selects a bindable port`, async () => {
+    let selected = false;
+    let args;
+    const client = new HermesGatewayClient({
+      binary: '/fixture/hermes', token: 'fixture-token', WebSocketImpl: class {}, env: {}, platform,
+      probePortImpl: async () => false, stopExternalGatewayImpl: async () => {},
+      selectPortImpl: async preferred => { assert.equal(preferred, 9121); selected = true; return 49191; },
+      spawnImpl: (_command, argv) => { args = argv; return null; },
+    });
+    await client.ensureGateway();
+    assert.equal(selected, true);
+    assert.equal(args[args.indexOf('--port') + 1], '49191');
+    assert.match(client.endpoint(), /127\.0\.0\.1:49191/);
+    client.close();
+  });
+
+  test(`${platform} explicit gateway ports and endpoints stay pinned`, async () => {
+    for (const options of [{ port: 9219 }, { url: 'ws://127.0.0.1:9220/api/ws' }]) {
+      const client = new HermesGatewayClient({
+        binary: '/fixture/hermes', token: 'fixture-token', WebSocketImpl: class {}, env: {}, platform, ...options,
+        probePortImpl: async () => false, stopExternalGatewayImpl: async () => {},
+        selectPortImpl: async () => assert.fail('explicit ports/endpoints must stay pinned'),
+        spawnImpl: () => null,
+      });
+      await client.ensureGateway();
+      assert.match(client.endpoint(), new RegExp(`:${options.port || 9220}/`));
+      client.close();
+    }
+  });
+}
+
+test('shutdown during Windows port selection prevents a late child launch', async () => {
+  let select;
+  let selecting;
+  const started = new Promise(resolve => { selecting = resolve; });
+  const client = new HermesGatewayClient({
+    binary: '/fixture/hermes', token: 'fixture-token', WebSocketImpl: class {}, env: {}, platform: 'win32',
+    probePortImpl: async () => false, stopExternalGatewayImpl: async () => {},
+    selectPortImpl: () => { selecting(); return new Promise(resolve => { select = resolve; }); },
+    spawnImpl: () => assert.fail('closed client cannot launch a child'),
+  });
+  const launching = client.ensureGateway();
+  await Promise.race([started, launching]);
+  assert.equal(typeof select, 'function');
+  client.close();
+  select(49191);
+  await assert.rejects(launching, /closed/);
+});
+
+
+test('bind selection recovers from Windows exclusions and occupied ports only', async () => {
+  const { EventEmitter } = await import('node:events');
+  for (const code of ['EACCES', 'EADDRINUSE', 'EINVAL']) {
+    const attempts = [];
+    const choose = bindableGatewayPort(9121, () => {
+      const server = new EventEmitter();
+      server.listen = (options, ready) => {
+        attempts.push(options);
+        queueMicrotask(() => options.port === 9121
+          ? server.emit('error', Object.assign(new Error('fixture bind denied'), { code })) : ready());
+      };
+      server.address = () => ({ port: 49191 });
+      server.close = callback => callback();
+      return server;
+    });
+    if (code === 'EINVAL') await assert.rejects(choose, { code });
+    else assert.equal(await choose, 49191);
+    assert.deepEqual(attempts.map(x => x.port), code === 'EINVAL' ? [9121] : [9121, 0]);
+    assert.ok(attempts.every(x => x.host === '127.0.0.1' && x.exclusive));
+  }
+});
+
+test('OS allocated internal gateway port is released for the gateway to bind', async () => {
+  const net = await import('node:net');
+  const port = await bindableGatewayPort(0);
+  assert.ok(port > 0 && port < 65536);
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, resolve);
+  });
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 });
