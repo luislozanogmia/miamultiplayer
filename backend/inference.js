@@ -686,8 +686,10 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
 
 function buildScheduledBotPrompt(bot, automation, options = {}) {
   const automationPrompt = String(automation && automation.prompt || '').trim();
-  if (!automationPrompt) return null;
+  const steps = automationSteps(automation);
+  if (!automationPrompt && !steps.length) return null;
   const automationName = String(automation && automation.name || 'Automation').trim();
+  const automationId = String(automation && automation.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
   const sections = [
     ...botIdentitySections(bot, {
       userDisplayName: options.userDisplayName,
@@ -712,8 +714,28 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     ].join('\n'),
     MIAOS_BOT_WEB_POLICY,
     `Automation:\nName: ${automationName}\nSchedule: ${botAutomationSchedule(automation)}`,
-    `Task:\n${automationPrompt}`,
-  ].join('\n\n');
+    automationPrompt ? `Task:\n${automationPrompt}` : '',
+    // Steps run one at a time, in order, so a long task can't silently skip
+    // an instruction, and a failure names the step where it happened.
+    steps.length ? [
+      'Steps:',
+      'Do these steps one at a time, in order. Finish each step before starting the next. If a step cannot be done, stop and say which step failed and why.',
+      ...steps.map((step, index) => `${index + 1}. ${step}`),
+    ].join('\n') : '',
+    // The user watches a live checklist built from these reports; run from
+    // the working folder the run starts in.
+    steps.length && automationId ? [
+      'Progress reports:',
+      `After finishing each step, report it from your working folder before starting the next: mia-run step ${automationId} <step number> done "<one line on what you did>"`,
+      `If a step fails or you skip it, report that instead: mia-run step ${automationId} <step number> failed "<why>" (or skipped).`,
+      `If you need the user to decide something, sign in, or provide something, stop and escalate: mia-run escalate ${automationId} <step number> "<what you need from the user>". Then say the same in your reply and do not continue past that step.`,
+    ].join('\n') : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+function automationSteps(automation) {
+  const steps = automation && Array.isArray(automation.steps) ? automation.steps : [];
+  return steps.map((step) => String(step || '').trim().replace(/\s+/g, ' ')).filter(Boolean);
 }
 
 function buildBotContext(agent, transcript, message, platformContext, senderLabel, globalInstructions) {
@@ -753,7 +775,7 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
       '- Once the requested result is sufficient and every look-up the user asked for is done, stop. Do not keep exploring tools, implementations, or adjacent improvements that the user did not request.',
       '- Your automation list below is authoritative. Do not inspect local files, databases, logs, or configuration to rediscover it.',
       '- Resolve references such as “it,” “that automation,” or “run it now” from this list when one choice is clear; ask one short question only when genuinely ambiguous.',
-      '- When asked to run an automation now, perform its saved task now. Do not create or change a schedule unless the user explicitly asks.',
+      '- To create, change, or run one of your automations, use the automation action described in the turn message. If this turn has none, say the user can do it from your own chat or the Automations page. Never create or change a schedule unless the user explicitly asks.',
       `- Reply in persona and sign [${name}].`,
     ].join('\n'),
     `Your automations:\n${automationLines.join('\n')}`,

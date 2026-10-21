@@ -70,6 +70,7 @@ const UTC_OFFSET_MIN = parseInt(process.env.MIA_AUTOMATION_UTC_OFFSET_MIN || '36
 // jobs or with a same-named agent's job: "Mia <agent-id> · <agent name>".
 const JOB_PREFIX = 'Mia ';
 const MAX_BOT_AUTOMATIONS = 10;
+const MAX_AUTOMATION_STEPS = 20;
 
 const WEEKDAY_TO_CRON = {
   sunday: 0,
@@ -570,6 +571,22 @@ function resolveOwnedAutomationJob(bot, automation, registry, existingJob, allow
   return job;
 }
 
+// Run an automation that is already on, once, now. Hermes's own run command
+// also switches a paused job on, so a paused automation is refused rather
+// than silently re-enabled. -> { status: 'started'|'off'|'missing', jobId }
+async function runBotAutomationNow(bot, automationId) {
+  const automation = botAutomations(bot).find((item) => item.id === automationId);
+  if (!automation) return { status: 'missing' };
+  if (automation.enabled !== true) return { status: 'off' };
+  // The lookup stamps job ids onto the bot it is given; keep the caller's copy unchanged.
+  const lookup = migrateBotAutomations(JSON.parse(JSON.stringify(bot)));
+  const job = resolveOwnedAutomationJob(lookup, automation, readHermesJobs(), null, false);
+  if (!job) return { status: 'missing' };
+  if (jobIsPaused(job)) return { status: 'off' };
+  await runHermes(['run', job.id]);
+  return { status: 'started', jobId: job.id };
+}
+
 function schedulerUtcOffsetMinutes() {
   return new Promise((resolve, reject) => {
     const source = 'import sys; sys.path.insert(0, sys.argv[1]); from hermes_time import now; print(int(-now().utcoffset().total_seconds() / 60))';
@@ -988,6 +1005,121 @@ function listActiveBotCronRuns(conn) {
   }
 }
 
+// Step checklists: during a scheduled run the bot reports each step with
+// `mia-run` (miaos-run-cli.py), which appends JSON lines to
+// .mia-runs/<automation-id>.jsonl in the bot's package folder, the run's
+// working directory. Reports count toward the automation's latest run when
+// they were written after it started.
+const RUN_REPORTS_DIR = '.mia-runs';
+const RUN_REPORTS_MAX_BYTES = 128 * 1024;
+const RUN_REPORT_STATES = new Set(['done', 'failed', 'skipped', 'escalated']);
+
+function readRunReports(directory, automationId) {
+  const id = cleanAutomationId(automationId);
+  if (!directory || !id) return [];
+  const folder = path.join(directory, RUN_REPORTS_DIR);
+  const file = path.join(folder, `${id}.jsonl`);
+  try {
+    const folderStat = fs.lstatSync(folder);
+    if (folderStat.isSymbolicLink() || !folderStat.isDirectory()) return [];
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) return [];
+    let text;
+    if (stat.size > RUN_REPORTS_MAX_BYTES) {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buffer = Buffer.alloc(RUN_REPORTS_MAX_BYTES);
+        fs.readSync(fd, buffer, 0, RUN_REPORTS_MAX_BYTES, stat.size - RUN_REPORTS_MAX_BYTES);
+        text = buffer.toString('utf8').split('\n').slice(1).join('\n');
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      text = fs.readFileSync(file, 'utf8');
+    }
+    return text.split('\n').map((line) => {
+      try { return JSON.parse(line); } catch (_error) { return null; }
+    }).filter((entry) => entry && Number.isFinite(entry.ts) && Number.isInteger(entry.step) && RUN_REPORT_STATES.has(entry.state));
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('automation run reports unreadable:', error.message);
+    return [];
+  }
+}
+
+// automationChecklist(steps, reports, run) -> each step's latest reported
+// state for the run, plus an open escalation. A finished run's unreported
+// steps read "unreported" so a silent skip is visible.
+function automationChecklist(steps, reports, run) {
+  const startedMs = hermesTimestampMs(run && run.startedAt);
+  const finished = !!run && ['completed', 'failed', 'unknown'].includes(run.status);
+  const latest = new Map();
+  for (const report of reports || []) {
+    if (Number.isFinite(startedMs) && report.ts * 1000 < startedMs - 5000) continue;
+    if (report.step < 1 || report.step > steps.length) continue;
+    const previous = latest.get(report.step);
+    if (!previous || report.ts >= previous.ts) latest.set(report.step, report);
+  }
+  const items = steps.map((text, index) => {
+    const report = latest.get(index + 1);
+    const state = report ? report.state : (finished ? 'unreported' : 'pending');
+    return { n: index + 1, text, state, note: report ? String(report.note || '').slice(0, 300) : '' };
+  });
+  const escalated = items.filter((item) => item.state === 'escalated').pop() || null;
+  return {
+    runId: run ? run.executionId : null,
+    runStatus: run ? run.status : null,
+    startedAt: run ? run.startedAt : null,
+    finishedAt: run ? run.finishedAt || null : null,
+    steps: items,
+    done: items.filter((item) => item.state === 'done' || item.state === 'skipped').length,
+    total: items.length,
+    escalation: escalated ? { step: escalated.n, text: escalated.text, note: escalated.note } : null,
+  };
+}
+
+// The latest run of every automation that has steps, with its checklist.
+function listAutomationChecklists(conn) {
+  if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
+  const Database = require('better-sqlite3');
+  const executions = new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true });
+  try {
+    if (!hasSqliteTable(executions, 'executions')) return [];
+    const latest = executions.prepare(
+      `SELECT id AS executionId, status,
+              coalesce(started_at, claimed_at) AS startedAt, finished_at AS finishedAt
+         FROM executions
+        WHERE job_id = ?
+        ORDER BY claimed_at DESC, id DESC LIMIT 1`
+    );
+    const results = [];
+    for (const bot of db.loadAll(conn, 'bots')) {
+      migrateBotAutomations(bot);
+      for (const automation of bot.automations) {
+        const steps = Array.isArray(automation.steps) ? automation.steps.map((step) => String(step || '').trim()).filter(Boolean) : [];
+        const jobId = bot.hermesCronJobIds && bot.hermesCronJobIds[automation.id];
+        if (!steps.length || !jobId) continue;
+        const run = latest.get(jobId);
+        if (!run) continue;
+        let directory = null;
+        try {
+          BOT_PACKAGE_STORE.hydrate(bot);
+          directory = BOT_PACKAGE_STORE.findDirectory(bot.id);
+        } catch (_error) {
+          directory = null;
+        }
+        results.push({
+          bot,
+          automationId: automation.id,
+          ...automationChecklist(steps, readRunReports(directory, automation.id), run),
+        });
+      }
+    }
+    return results;
+  } finally {
+    executions.close();
+  }
+}
+
 module.exports = {
   automationToCronExpr,
   isValidAutomationTime,
@@ -996,16 +1128,21 @@ module.exports = {
   jobOwnedByBot,
   jobOwnedByAutomation,
   jobPromptFor,
+  MAX_AUTOMATION_STEPS,
   botAutomations,
   migrateBotAutomations,
   mergeBotCronSyncState,
   MAX_BOT_AUTOMATIONS,
   syncBotAutomation,
   pauseBotCron,
+  runBotAutomationNow,
   removeBotCron,
   reconcileBotCrons,
   listUndeliveredBotCronResults,
   listActiveBotCronRuns,
+  listAutomationChecklists,
+  automationChecklist,
+  readRunReports,
   artifactWorkspaceForBot,
   botPackageDirectoryFor,
   listSessionArtifacts,

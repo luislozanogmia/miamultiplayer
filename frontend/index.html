@@ -598,6 +598,33 @@
   </div>
 </div>
 
+<!-- Automations surface: every bot's automations in the center, the chat at
+     the right, laid out like the browser. -->
+<div class="automations-overlay" id="automationsOverlay" hidden aria-hidden="true">
+  <section class="automations-window" aria-label="Automations">
+    <!-- Same frame as the browser: a gray top row (room for the Mac window
+         buttons, drags the window) with one tab, over a white toolbar. -->
+    <div class="automations-tabs-row">
+      <div class="automations-tab" role="heading" aria-level="1">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>
+        <span>Automations</span>
+      </div>
+      <button type="button" class="local-browser-btn automations-bar-btn" id="automationsCloseBtn" title="Close automations" aria-label="Close automations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+    </div>
+    <header class="automations-bar">
+      <button type="button" class="local-browser-btn automations-bar-btn" id="automationsSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M9.5 4.5v15"></path></svg>
+      </button>
+      <span class="automations-summary" id="automationsSummary"></span>
+      <div class="automations-group-toggle" id="automationsGroupToggle" role="group" aria-label="Group automations">
+        <button type="button" data-automations-group="status" title="Group by status" aria-label="Group by status" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg></button>
+        <button type="button" data-automations-group="bot" title="Group by bot" aria-label="Group by bot" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"></path><path d="M15.5 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c2 .8 3.2 2.5 3.5 5.2"></path></svg></button>
+      </div>
+    </header>
+    <div class="automations-body" id="automationsBody"></div>
+  </section>
+</div>
+
 <!-- Local browser surface. -->
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
@@ -1150,6 +1177,8 @@
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
     <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
+    <script src="automations-board.js?v=20261019-automations-1"></script>
+    <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
     <script src="native-browser.js?v=20261019-omnibox-1"></script>
     <script src="app.js?v=20261019-omnibox-1"></script>
 </body>

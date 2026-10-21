@@ -128,3 +128,17 @@ test('the token-budget tracker is fed from the same shared postHermesProgress, a
   assert.ok(helperStart >= 0);
   assert.match(helper, /type !== 'message\.delta' && type !== 'thinking\.delta' && type !== 'reasoning\.delta'/);
 });
+
+test('progress notes never show a bot\'s automation block', async () => {
+  const source = await readFile(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('const postHermesProgressText = (hermesEventType, rawText) => {');
+  const end = source.indexOf('\n  };', start);
+  const poster = source.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(poster, /const text = botAutomationActions\.stripAutomationBlocks\(rawText\);/);
+  assert.match(poster, /content: \{ text \}/);
+  const flushStart = source.indexOf('const flushPendingReasoningSummary = (replyText) => {');
+  const flush = source.slice(flushStart, source.indexOf('\n  };', flushStart));
+  assert.match(flush, /stripAutomationBlocks\(pendingReasoningSummary\)/);
+  assert.match(flush, /stripAutomationBlocks\(redactHermesChatDetail\(replyText\)\)/);
+});

@@ -221,7 +221,15 @@ test('automation panel renders durable bot schedules separately from running wor
     (...args) => { navigations.push(args); },
     (type) => type === 'bot' ? 'agent' : type,
   );
-  assert.equal(helpers.automationScheduleText({enabled:true, frequency:'interval', intervalMinutes:5}), 'Paused · add a prompt');
+  assert.equal(helpers.automationScheduleText({enabled:true, frequency:'interval', intervalMinutes:5}), 'Paused · add steps or a prompt');
+  assert.equal(helpers.automationScheduleText({enabled:true, frequency:'interval', intervalMinutes:5, steps:['Check the inbox']}), 'Every 5 minutes', 'steps alone are a task');
+  const stepBot = {id:'bot-steps', automations:[{id:'digest', name:'Digest', enabled:true, frequency:'daily', time:'09:00', utcOffsetMinutes:360, prompt:'Old prompt.'}]};
+  const saveSteps = (values) => helpers.normalizedAutomationEditorPayload(stepBot, 'digest', {name:'Digest', enabled:true, frequency:'daily', time:'09:00', prompt:'', ...values}).automations[0];
+  assert.deepEqual(saveSteps({steps:' Search the web \n\nPost here '}).steps, ['Search the web', 'Post here'], 'one step per line, blanks dropped');
+  assert.equal(saveSteps({steps:'Search'}).prompt, undefined, 'steps alone can run an automation');
+  assert.equal(saveSteps({steps:'', prompt:'Run.'}).steps, undefined, 'clearing the steps removes them');
+  assert.throws(() => saveSteps({steps:''}), /Add the steps or the task prompt/);
+  assert.throws(() => saveSteps({steps:Array.from({length:21}, (_, i) => 'Step ' + i).join('\n')}), /up to 20 steps/);
   assert.equal(helpers.automationScheduleText({enabled:true, frequency:'interval', intervalMinutes:5, prompt:'Run the task.'}), 'Every 5 minutes');
   assert.equal(helpers.automationScheduleText({enabled:false, frequency:'daily', time:'08:30', prompt:'Run the task.'}), 'Paused · Every day at 08:30');
   assert.deepEqual(helpers.automationBotsForPanel(true, null).map((entry) => entry.bot.id + '/' + entry.automation.id), ['bot-1/research-1', 'bot-2/reminder-1', 'bot-3/off-1']);
@@ -555,6 +563,7 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.match(source, /id="agentSetupIntervalUnit"/);
   assert.match(source, /id="agentSetupAutomationPrompt"/);
   assert.match(source, /Add the task prompt this automation should run\./);
+  assert.match(source, /Add the steps or the task prompt this automation should run\./);
   assert.match(source, /normalized\.intervalMinutes = Number\(source\.intervalMinutes \|\| 1\)/);
   assert.match(source, /agentAvatarHtml\('New Bot', AGENT_SETUP_ROOM_ID, 28\)/);
   assert.match(source, /status: 'running'/);
@@ -616,7 +625,7 @@ test('bot profile shows its automation collection and opens one item independent
   assert.match(source, /id="styledAgentAddAutomation"/);
   assert.match(source, /data-bot-id="' \+ esc\(record\.id\) \+ '" data-automation-id=/);
   assert.match(source, /openAutomationDetail\(botId, automationId\)/);
-  assert.match(source, /Paused until you add a task prompt and turn Active on\./);
+  assert.match(source, /Paused until you add steps or a prompt and turn Active on\./);
   assert.match(source, /function openAutomationDetail\(botId, automationId, createNew\)\{[\s\S]*?chatInfo\.mode = 'automation-detail'[\s\S]*?chatInfo\.automationBotId = String\(bot\.id\)/);
   assert.match(source, /chatInfo\.mode === 'automation-detail'[\s\S]*?renderAutomationDetailPane\(pane, automationBot, automationSelection\.automation/);
   assert.match(styles, /styled-agent-edit-automation\{/);
