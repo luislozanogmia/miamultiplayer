@@ -108,3 +108,19 @@ test('displayUrl drops the scheme, www., trailing slash and fragment', () => {
   assert.equal(omnibox.displayUrl('https://www.linkedin.com/feed/?a=1#top'), 'linkedin.com/feed?a=1');
   assert.equal(omnibox.displayUrl('http://localhost:3000/'), 'localhost:3000');
 });
+
+test('explicit HTTP or HTTPS survives completion and the first Enter destination', () => {
+  for (const [visited, typed] of [
+    ['http://example.com/', 'https://exa'],
+    ['http://example.com/', 'https://example.com'],
+    ['http://example.com/', 'https://www.exa'],
+    ['http://example.com/path', 'https://example.com/pa'],
+    ['https://example.com/', 'http://exa'],
+  ]) {
+    const result = omnibox.suggest([{url: visited, count: 3, lastVisit: NOW}], typed, {now: NOW});
+    assert.ok(result.completion);
+    const visible = typed + result.completion.remainder;
+    assert.equal(result.completion.url, new URL(visible).href);
+    assert.equal(result.rows[0].url, new URL(visible).href, 'Enter must open the address shown in the field');
+  }
+});

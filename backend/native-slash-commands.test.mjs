@@ -704,7 +704,7 @@ async function googleIdentityFixture(t, { clerk = false } = {}) {
       const args = JSON.parse(body).args || [];
       calls.push(args);
       const payload = args[0] === 'auth'
-        ? { token_valid: true, scopes: ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/contacts.readonly'] }
+        ? { token_valid: true, scopes: ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/gmail.modify', 'https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/drive.file'] }
         : args[2] === 'getProfile' ? { emailAddress: email } : { files: [] };
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ code: 0, stdout: JSON.stringify(payload), stderr: '' }));
@@ -714,7 +714,7 @@ async function googleIdentityFixture(t, { clerk = false } = {}) {
   t.after(() => broker.close());
   const f = await disconnectedProviderFixture(t, {
     extraEnv: { HERMES_GWS_BIN: '/usr/bin/false', HERMES_PYTHON: '/usr/bin/python3', MIAOS_CLERK_AUTH: clerk ? '1' : '0',
-      MIA_GOOGLE_BROKER_URL: `http://127.0.0.1:${broker.address().port}`, MIA_GOOGLE_BROKER_TOKEN: 'g'.repeat(43) },
+      MIA_GOOGLE_BROKER_URL: `http://127.0.0.1:${broker.address().port}`, MIA_GOOGLE_BROKER_RUN_TOKEN: 'g'.repeat(43) },
     configure(data) {
       const database = store.openDb(data.dbPath, data.dataDir, { botPackageDir: data.packages });
       const identity = clerk ? ['clerk', 'https://fixture-issuer.example', 'fixture-subject-a'] : ['user', ALICE];

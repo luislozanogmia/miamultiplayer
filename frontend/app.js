@@ -1389,13 +1389,26 @@
     return realProfileName(profile && profile.displayName);
   }
 
+  function managedRouterRuntimeReady(data){
+    return !!(data && (data.provisioned || data.credentialSaved) && data.runtimeReady !== false && !data.error);
+  }
+
+  function managedRouterConnectionError(data){
+    if(!data || managedRouterRuntimeReady(data)) return '';
+    if(data.error) return String(data.error);
+    return (data.provisioned || data.credentialSaved) && data.runtimeReady === false
+      ? String(data.label || 'Mia Router') + ' connection is unavailable. Try again.'
+      : '';
+  }
+
   function renderHarnessConnectionInventory(connections, runtimes, routerStatus){
     var wrap = el('#settingsHarnessConnections');
     var connected = [];
-    var routerError = routerStatus && !routerStatus.provisioned && routerStatus.error;
+    var routerError = managedRouterConnectionError(routerStatus);
     if(connections && connections['openai-codex'] === true) connected.push({label:'ChatGPT subscription'});
     if(connections && connections['xai-oauth'] === true) connected.push({label:'Grok subscription'});
     harnessApiProviderCatalog.forEach(function(provider){
+      if(routerError && (provider.id === 'openrouter' || provider.id === 'managed-router')) return;
       if(connections && connections[provider.id] === true){
         connected.push({label:provider.label + ' API key'});
       }
@@ -1827,7 +1840,7 @@
   function applyManagedRouterStatus(data){
     var bannerLabel = el('#miaRouterBannerLabel');
     if(bannerLabel && data && data.label) bannerLabel.textContent = data.label;
-    managedRouterStatusError = data && !data.provisioned && data.error ? String(data.error) : '';
+    managedRouterStatusError = managedRouterConnectionError(data);
     var note = el('[data-managed-router-error]');
     if(note){ note.textContent = managedRouterStatusError; note.hidden = !managedRouterStatusError; }
     var banner = el('#miaRouterBanner');
@@ -1868,7 +1881,10 @@
       }
       managedRouterAvailable = !!(routerRes.data && routerRes.data.available);
       applyManagedRouterStatus(routerRes.data);
-      if(routerRes.data && routerRes.data.provisioned) harnessConnectionState['openrouter'] = true;
+      if(routerRes.data && (routerRes.data.provisioned || routerRes.data.credentialSaved || managedRouterConnectionError(routerRes.data))){
+        harnessConnectionState['openrouter'] = managedRouterRuntimeReady(routerRes.data);
+        if(!harnessConnectionState['openrouter']) harnessConnectionState['managed-router'] = false;
+      }
       var managedRouterCard = el('[data-harness-provider="managed-router"]');
       if(managedRouterCard) managedRouterCard.closest('.styled-onboarding-provider-row').hidden = !managedRouterAvailable;
       // The card's display name is deployment branding served by the backend.
@@ -2347,7 +2363,9 @@
       var lines = [
         '--- Technical report (no credentials or conversation text) ---',
         'Mia ' + (version || 'unknown version') + ' on ' + navigator.platform,
-        'Router: ' + (data.provisioned ? 'connected' : (data.errorCode || 'not connected'))
+        'Router: ' + (managedRouterRuntimeReady(data) ? 'connected'
+          : (((data.provisioned || data.credentialSaved) ? 'credential saved; ' : '')
+            + (data.errorCode || ((data.provisioned || data.credentialSaved) && data.runtimeReady === false ? 'runtime unavailable' : 'not connected'))))
       ];
       var trail = Array.isArray(data.diagnostics) ? data.diagnostics.slice(-12) : [];
       return lines.concat(trail).join('\n');
@@ -6137,6 +6155,7 @@
   var localBrowserSuggestIndex = -1;
   var localBrowserSuggestTyped = '';
   var localBrowserSuggestCompletion = null;
+  var localBrowserSuggestGeneration = 0;
   var LOCAL_BROWSER_SUGGEST_GLOBE = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.4 2.4 3.5 5.2 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.2-3.5-8.5s1.1-6.1 3.5-8.5Z"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_SEARCH = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m15 15 5 5"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_REMOVE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"></path></svg>';
@@ -6158,7 +6177,8 @@
       return !/^https:\/\/www\.google\.com\/search\?/.test(target);
     } catch(_error) { return false; }
   }
-  function closeLocalBrowserSuggest(){
+  function closeLocalBrowserSuggest(keepCover){
+    localBrowserSuggestGeneration += 1;
     var box = el('#localBrowserUrlSuggest');
     if(box){ box.hidden = true; box.innerHTML = ''; }
     var input = el('#localBrowserUrl');
@@ -6166,7 +6186,7 @@
     localBrowserSuggestItems = [];
     localBrowserSuggestIndex = -1;
     localBrowserSuggestCompletion = null;
-    if(window.miaNativeBrowser && window.miaNativeBrowser.coverForSuggestions) window.miaNativeBrowser.coverForSuggestions(false);
+    if(!keepCover && window.miaNativeBrowser && window.miaNativeBrowser.coverForSuggestions) window.miaNativeBrowser.coverForSuggestions(false);
   }
   function updateLocalBrowserSuggestHighlight(){
     var box = el('#localBrowserUrlSuggest');
@@ -6226,9 +6246,10 @@
   }
   // Recomputes suggestions for what was typed and, unless the user is
   // deleting, fills in the rest of the best address and selects it.
-  function refreshLocalBrowserSuggest(input, history, complete){
-    var caretAtEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
-    localBrowserSuggestTyped = input.value;
+  function refreshLocalBrowserSuggest(input, history, complete, edit){
+    edit = edit || { value: input.value, start: input.selectionStart, end: input.selectionEnd };
+    var caretAtEnd = edit.start === edit.value.length && edit.end === edit.value.length;
+    localBrowserSuggestTyped = edit.value;
     var result = window.MiaBrowserOmnibox.suggest(history, localBrowserSuggestTyped, {
       complete: complete && caretAtEnd,
       looksLikeUrl: localBrowserLooksLikeUrl,
@@ -6239,6 +6260,24 @@
       input.setSelectionRange(localBrowserSuggestTyped.length, input.value.length);
     }
     renderLocalBrowserSuggest(result);
+  }
+  function queueLocalBrowserSuggest(input, complete){
+    // Freeze the actual edit before history IPC resolves. An inline completion
+    // is a render result, never a new user edit for another pending response.
+    var edit = { value: input.value, start: input.selectionStart, end: input.selectionEnd };
+    // Drop stale rows immediately, retaining the current page cover while
+    // replacement suggestions load. Closing/reopening it can capture a still
+    // while the native page view has not yet been restored.
+    closeLocalBrowserSuggest(true);
+    var generation = localBrowserSuggestGeneration;
+    return loadLocalBrowserHistory().then(function(history){
+      if(generation !== localBrowserSuggestGeneration) return;
+      if(document.activeElement !== input || input.value !== edit.value || input.selectionStart !== edit.start || input.selectionEnd !== edit.end){
+        closeLocalBrowserSuggest();
+        return;
+      }
+      refreshLocalBrowserSuggest(input, history, complete, edit);
+    });
   }
   function chooseLocalBrowserSuggest(item, input){
     if(!item) return;
@@ -6257,10 +6296,13 @@
     var item = localBrowserSuggestItems[index];
     if(!item || item.kind !== 'history' || typeof window.miaDesktop.browser.historyRemove !== 'function') return;
     var hadCompletion = !!localBrowserSuggestCompletion;
+    var generation = ++localBrowserSuggestGeneration;
+    var value = input.value;
+    var typed = hadCompletion ? localBrowserSuggestTyped : value;
     Promise.resolve(window.miaDesktop.browser.historyRemove(item.url, LOCAL_BROWSER_HISTORY_LIMIT)).then(function(res){
       localBrowserHistoryCache = (res && Array.isArray(res.history)) ? res.history : [];
-      if(document.activeElement !== input) return;
-      if(localBrowserSuggestCompletion) input.value = localBrowserSuggestTyped;
+      if(generation !== localBrowserSuggestGeneration || document.activeElement !== input || input.value !== value) return;
+      if(hadCompletion){ input.value = typed; input.setSelectionRange(typed.length, typed.length); }
       // Removing a row keeps the address filled in, as long as some other
       // page still completes it.
       refreshLocalBrowserSuggest(input, localBrowserHistoryCache, hadCompletion);
@@ -6314,6 +6356,7 @@
     }
     if(form) form.addEventListener('submit', function(event){
       event.preventDefault();
+      closeLocalBrowserSuggest();
       localBrowserNavigate(input ? input.value : '');
     });
     var suggestBox = el('#localBrowserUrlSuggest');
@@ -6324,20 +6367,22 @@
       });
       input.addEventListener('input', function(event){
         var deleting = !!(event && event.inputType && /^delete/.test(event.inputType));
-        loadLocalBrowserHistory().then(function(history){
-          if(document.activeElement !== input) return;
-          refreshLocalBrowserSuggest(input, history, !deleting);
-        });
+        queueLocalBrowserSuggest(input, !deleting);
       });
-      // First Escape takes back the filled-in completion and keeps editing,
-      // like Chrome. Captured so it runs before native-browser.js, whose
+      // First Escape takes back the filled-in completion and keeps editing.
+      // Captured so it runs before native-browser.js, whose
       // Escape restores the page address and leaves the bar.
       input.addEventListener('keydown', function(event){
+        if(event.key === 'Escape'){
+          localBrowserSuggestGeneration += 1;
+          if(!localBrowserSuggestCompletion || input.value === localBrowserSuggestTyped) closeLocalBrowserSuggest();
+        }
         if(event.key !== 'Escape' || !localBrowserSuggestCompletion || input.value === localBrowserSuggestTyped) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         input.value = localBrowserSuggestTyped;
-        loadLocalBrowserHistory().then(function(history){ refreshLocalBrowserSuggest(input, history, false); });
+        input.setSelectionRange(input.value.length, input.value.length);
+        queueLocalBrowserSuggest(input, false);
       }, true);
       input.addEventListener('keydown', function(event){
         if(!localBrowserSuggestItems.length) return;
@@ -6356,15 +6401,19 @@
         } else if(event.key === 'Escape'){
           closeLocalBrowserSuggest();
         } else if((event.key === 'Delete' || event.key === 'Backspace') && event.shiftKey && localBrowserSuggestIndex >= 0){
-          // Shift+Delete removes the highlighted history entry, as in Chrome.
+          // Shift+Delete removes the highlighted history entry.
           if(localBrowserSuggestItems[localBrowserSuggestIndex].kind !== 'history') return;
           event.preventDefault();
           removeLocalBrowserSuggest(localBrowserSuggestIndex, input);
         }
       });
       input.addEventListener('blur', function(){
-        // Deferred so a suggestion's mousedown/click can still register.
-        setTimeout(function(){ if(document.activeElement !== input) closeLocalBrowserSuggest(); }, 150);
+        var generation = ++localBrowserSuggestGeneration;
+        // Deferred so a suggestion's mousedown/click can still register. A
+        // refocus with no new edit must not leave a retained cover stranded.
+        setTimeout(function(){
+          if(document.activeElement !== input || generation === localBrowserSuggestGeneration) closeLocalBrowserSuggest();
+        }, 150);
       });
       if(suggestBox) suggestBox.addEventListener('mousedown', function(event){
         var row = event.target.closest('.local-browser-suggest-item');

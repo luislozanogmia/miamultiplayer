@@ -129,6 +129,7 @@ function findEngineeringRoot() {
 const ENGINEERING_ROOT = findEngineeringRoot();
 const BACKEND_ROOT = path.join(ENGINEERING_ROOT, "backend");
 const BACKEND_ENTRYPOINT = path.join(BACKEND_ROOT, "server.js");
+const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require(path.join(BACKEND_ROOT, "process-secrets.js"));
 const { resolveClerkConfig } = require(path.join(BACKEND_ROOT, "clerk-config.js"));
 const requireBackendDependency = createRequire(BACKEND_ENTRYPOINT);
 const dotenv = requireBackendDependency("dotenv");
@@ -600,11 +601,11 @@ async function preparePackagedRuntime() {
   process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(userData, "google-workspace");
   // Windows packaged builds cannot spawn the .cmd Hermes shim from Node
   // (CVE-2024-27980), so the backend receives the launcher as an argv
-  // vector (interpreter + script) plus the venv coordinates the .cmd
-  // shim used to export per invocation.
+  // vector (venv interpreter + script). The venv processes dependency .pth
+  // files, including the Windows DLL paths needed by the MCP transport.
   if (process.platform === "win32") {
     process.env.MIAOS_HERMES_ARGV_JSON = JSON.stringify([
-      pythonExecutable,
+      process.env.HERMES_PYTHON,
       path.join(hermesInstall, "hermes"),
     ]);
     process.env.PYTHONPATH = path.join(venvRoot, "Lib", "site-packages");
@@ -878,11 +879,7 @@ async function startLocalBackend(exactPort = null) {
       || (app.isPackaged ? path.join(dataDirectory, "workspace-artifacts") : path.join(BACKEND_ROOT, "workspace-artifacts")),
     MIAOS_ATTACHMENT_DIR: process.env.MIAOS_ATTACHMENT_DIR
       || (app.isPackaged ? path.join(dataDirectory, "conversation-attachments") : path.join(BACKEND_ROOT, "conversation-attachments")),
-    MIA_GOOGLE_AUTH_OPEN_SECRET: googleAuthOpenSecret,
-    ...(googleWorkspaceBroker ? {
-      MIA_GOOGLE_BROKER_URL: googleWorkspaceBroker.url,
-      MIA_GOOGLE_BROKER_TOKEN: googleWorkspaceBroker.token,
-    } : {}),
+    [PROCESS_SECRETS_MARKER]: "1",
     HERMES_HOME: hermesHome,
     MIAOS_WORKSPACE_DIR: workspaceDir,
     MIAOS_HERMES_GUARD_BIN: path.join(BACKEND_ROOT, "miaos-hermes-bin"),
@@ -948,6 +945,14 @@ async function startLocalBackend(exactPort = null) {
       ? `${packagedRuntime.runtimeBin}${path.delimiter}${String(process.env.PATH || "")}`
       : process.env.PATH,
   });
+  // These values are delivered below through the anonymous stdin pipe. Drop
+  // any inherited copies so they can never appear in the backend's launch
+  // environment (including a developer shell that happened to define them).
+  delete childEnvironment.MIA_GOOGLE_AUTH_OPEN_SECRET;
+  delete childEnvironment.MIA_GOOGLE_BROKER_URL;
+  delete childEnvironment.MIA_GOOGLE_BROKER_TOKEN;
+  delete childEnvironment.MIA_GOOGLE_BROKER_RUN_TOKEN;
+  delete childEnvironment.MIA_GOOGLE_BROKER_ADMIN_TOKEN;
 
   // A normal client install cannot depend on Homebrew or a system Node. The
   // packaged Electron executable is also a Node runtime when this flag is set;
@@ -967,7 +972,15 @@ async function startLocalBackend(exactPort = null) {
     // Packaged apps do not persist backend stdout/stderr, which may include
     // user content or provider diagnostics. Local development keeps the
     // owner-only, redacted live log used by the Development menu.
-    stdio: app.isPackaged ? "ignore" : ["ignore", "pipe", "pipe"],
+    stdio: app.isPackaged ? ["pipe", "ignore", "ignore"] : ["pipe", "pipe", "pipe"],
+  });
+  sendProcessSecrets(child, {
+    MIA_GOOGLE_AUTH_OPEN_SECRET: googleAuthOpenSecret,
+    ...(googleWorkspaceBroker ? {
+      MIA_GOOGLE_BROKER_URL: googleWorkspaceBroker.url,
+      MIA_GOOGLE_BROKER_RUN_TOKEN: googleWorkspaceBroker.runToken,
+      MIA_GOOGLE_BROKER_ADMIN_TOKEN: googleWorkspaceBroker.adminToken,
+    } : {}),
   });
   backendProcess = child;
   backendProcessUrl = url;

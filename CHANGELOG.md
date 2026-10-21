@@ -9,6 +9,47 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.19] — 2026-10-19
+
+### Added
+- Let bots work in separate browser tab groups while the user and Mia keep
+  their own conversations; show bot activity and return to a bot's tabs.
+- Complete addresses from local browsing history, with matching suggestions,
+  site icons and keyboard navigation.
+
+### Changed
+- Open Your bots from a left-pane icon at the start of the address row;
+  remove the separate pink mote from the tab strip.
+- Present the Downloads panel over a still of the current page.
+
+### Fixed
+- Start the Windows, macOS and Linux agent connection on an available local
+  port when the default port is reserved by the operating system.
+- Serialize provider connection saves and agent restarts; preserve saved keys
+  on a failed startup and report when the connection is not ready.
+- Enforce Mia-or-bot browser tab assignments for explicit targets and queued
+  actions; keep a tab with its controller until pending page operations settle,
+  including operations that outlast an API timeout.
+- Restore the packaged Windows Python interpreter so connected tools can load
+  their native dependencies.
+- Keep Google broker credentials out of agent-readable profile files and
+  process launch environments; separate tool execution from connection management.
+- Run connected Google operations inside the desktop broker without temporary
+  OAuth credential files; discard stale results after account changes.
+- Preserve explicitly typed HTTPS when completing an address from history.
+- Discard dismissed or outdated page captures, and preserve typed text when
+  delayed history responses arrive or Escape removes a completion.
+- Keep later chat choices selected when a previous browser chat opens late.
+- Reject unresolved browser actors, confirm potentially unsafe downloads,
+  and wait for runtime cancellation acknowledgement before releasing a tab.
+- Expose Google tools directly to Mia and bots on each connected chat turn;
+  refresh account/grant capabilities after connection changes and prevent
+  resumed or steered turns from inheriting an older connection.
+- Request only the five supported Google scopes; remove unused Contacts access.
+
+### Notes
+- Windows packages remain unsigned; macOS packages must be signed and notarized.
+
 ## [0.2.18] — 2026-10-16
 
 ### Added

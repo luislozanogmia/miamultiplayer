@@ -47,6 +47,7 @@ test('local HTTP onboarding stores one greeting, persists the preferred name, an
   const child = spawn(process.execPath, ['server.js'], {
     cwd: path.dirname(new URL(import.meta.url).pathname),
     env: { ...process.env, PORT: String(port), MIAOS_BIND_HOST: '127.0.0.1',
+      GOOGLE_REDIRECT_URI: origin + '/api/connections/google/callback',
       DB_PATH: path.join(root, 'mia.db'), DATA_DIR: root, MIAOS_ENV_FILE: path.join(root, 'missing.env'),
       HERMES_HOME: path.join(root, 'hermes'), MIAOS_WORKSPACE_DIR: path.join(root, 'workspace'),
       MIAOS_NO_AUTH: '1', MIAOS_LOCAL_PROFILE: '1', MIAOS_CLERK_AUTH: '0',

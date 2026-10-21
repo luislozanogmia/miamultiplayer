@@ -1,5 +1,13 @@
 'use strict';
 
+const { loadProcessSecretsFromStdin } = require('./process-secrets');
+loadProcessSecretsFromStdin([
+  'MIA_GOOGLE_BROKER_URL',
+  'MIA_GOOGLE_BROKER_RUN_TOKEN',
+  'MIA_GOOGLE_BROKER_ADMIN_TOKEN',
+  'MIA_GOOGLE_AUTH_OPEN_SECRET',
+]);
+
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -28,7 +36,8 @@ process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = String(process.env.MIAOS_AUTOMATION_
   || path.join(RUNTIME_DIR, 'bot-artifacts');
 const { EFFECTIVE_RELEASE_PROFILE, MIAOS_AGENT_SEARCH_ONLY } = require('./release-profile');
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
-const { provisionHermesRuntimeProfiles } = require('./hermes-bot-profile');
+const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
+const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const { safeBrowserContext } = require('./browser-context');
 // Only terminal-free search releases receive the hosted-search credential.
 // Full local agents can execute commands and must not share that secret scope.
@@ -77,6 +86,7 @@ const {
   deleteHermesGatewaySessions,
   restartHermesGatewayRuntime,
   stopHermesGatewayRuntime,
+  withStoppedHermesGateway,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
@@ -84,6 +94,7 @@ const {
   hermesTokenBudgetFromOptions,
   hermesCharBudgetFromTokens,
 } = require('./inference');
+const { createCredentialOperationCoordinator } = require('./credential-operation-coordinator');
 const {
   listHermesCredentialProviders,
   readProviderRootCredentials,
@@ -3256,6 +3267,7 @@ const MANAGED_ROUTER_TIMEOUT_MS = 15000;
 // In-memory set of emails that have already been provisioned in this backend
 // lifetime. Avoids redundant mint calls on every Clerk token refresh.
 const managedRouterProvisionedEmails = new Set();
+const credentialOperations = createCredentialOperationCoordinator();
 
 // The latest provisioning failure per account, kept as a reason the UI can
 // show. Mia Router's own response text never leaves this process.
@@ -3268,6 +3280,7 @@ const MANAGED_ROUTER_ERROR_MESSAGES = {
   sign_in_required: `Sign in to Mia again to connect ${MANAGED_ROUTER_LABEL}.`,
   replaced_elsewhere: managedRouterKeyMessage(MANAGED_ROUTER_LABEL),
   install_failed: `Mia got a ${MANAGED_ROUTER_LABEL} key but couldn't save it. Try again.`,
+  runtime_unavailable: `Your ${MANAGED_ROUTER_LABEL} key is saved, but Mia couldn't start its connection. Try again; your key does not need replacing.`,
 };
 
 // Content-free provisioning trail for support reports: timestamps, step names,
@@ -3348,7 +3361,6 @@ function freshManagedRouterToken(email) {
 
 async function provisionManagedRouterKey(email, clerkToken) {
   if (!MANAGED_ROUTER_URL || !clerkToken) return null;
-  if (managedRouterProvisionedEmails.has(email)) return null;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MANAGED_ROUTER_TIMEOUT_MS);
@@ -3408,20 +3420,39 @@ async function openRouterKeyIsLive(key) {
 // be down while auth stores change: a running gateway flushes its in-memory
 // pool on shutdown, resurrecting exactly the dead keys being removed.
 async function installManagedRouterKey(key) {
-  try { await stopHermesGatewayRuntime(); } catch (_) { /* not running */ }
-  try {
+  return withStoppedHermesGateway(async () => {
     // Fail before changing the root key if a managed profile cannot be
     // cleaned; otherwise its old key would keep shadowing the new one.
     requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER));
     requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER));
     await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
-  } finally {
-    try { await startHermesGatewayRuntime(); } catch (_) { /* best effort */ }
-  }
+  });
 }
 
-async function autoProvisionManagedRouter(email, clerkToken, { force = false } = {}) {
-  if (managedRouterProvisionedEmails.has(email)) return;
+function completeManagedRouterProvisioning(email, runtime) {
+  managedRouterProvisionedEmails.add(email);
+  clearManagedRouterError(email);
+  hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
+  hermesDisconnectedProviders.delete('managed-router');
+  if (!runtime.runtimeReady) {
+    const code = String(runtime.runtimeError?.code || 'unavailable');
+    recordManagedRouterDiagnostic('gateway_start_failed', /^[A-Z][A-Z0-9_]{1,39}$/.test(code) ? code : 'unavailable');
+    setManagedRouterError(email, 'runtime_unavailable');
+    return { ok: false, credentialSaved: true, runtimeReady: false, code: 'runtime_unavailable' };
+  }
+  return { ok: true, credentialSaved: true, runtimeReady: true };
+}
+
+function autoProvisionManagedRouter(email, clerkToken, options = {}) {
+  // A concurrent force request shares this attempt rather than rotating the
+  // same account twice. A force request after settlement can rotate normally.
+  return credentialOperations.provision(email, () => autoProvisionManagedRouterOnce(email, clerkToken, options));
+}
+
+async function autoProvisionManagedRouterOnce(email, clerkToken, { force = false } = {}) {
+  if (!force && managedRouterProvisionedEmails.has(email) && !managedRouterError(email)) {
+    return { ok: true, credentialSaved: true, runtimeReady: true };
+  }
   let replacedElsewhere = false;
   try {
     // A mint rotates the user's key server-side (the endpoint cannot re-read
@@ -3438,15 +3469,21 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
       if (live) {
         // Prune to exactly the live key when dead siblings are in any pool —
         // auxiliary clients pick pool entries blindly and 401 on dead ones.
+        let runtime;
         if (stored.length > 1) {
-          await installManagedRouterKey(live);
+          runtime = await installManagedRouterKey(live);
           console.log('[managed-router] pruned dead credentials for', email);
+        } else {
+          // A valid credential is not a reason to mint again when only the
+          // local gateway failed. Retry its connection without changing keys.
+          try {
+            await startHermesGatewayRuntime();
+            runtime = { runtimeReady: true };
+          } catch (runtimeError) {
+            runtime = { runtimeReady: false, runtimeError };
+          }
         }
-        managedRouterProvisionedEmails.add(email);
-        clearManagedRouterError(email);
-        hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
-        hermesDisconnectedProviders.delete('managed-router');
-        return;
+        return completeManagedRouterProvisioning(email, runtime);
       }
       if (stored.length) {
         recordManagedRouterDiagnostic('stored_key_dead', `count ${stored.length}`);
@@ -3462,26 +3499,32 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
     const token = clerkToken || freshManagedRouterToken(email);
     if (!token) {
       setManagedRouterError(email, replacedElsewhere ? 'replaced_elsewhere' : 'sign_in_required');
-      return;
+      return { ok: false, credentialSaved: false, runtimeReady: false };
     }
     const key = await provisionManagedRouterKey(email, token);
-    if (!key) return;
+    if (!key) return { ok: false, credentialSaved: false, runtimeReady: false };
+    // A successful mint replaces the remote credential. Only the successful
+    // local save below can mark this newly minted credential ready again.
+    managedRouterProvisionedEmails.delete(email);
+    let runtime;
     try {
-      await installManagedRouterKey(key);
-      recordManagedRouterDiagnostic('install_ok');
+      runtime = await installManagedRouterKey(key);
+      recordManagedRouterDiagnostic('credential_saved');
     } catch (error) {
       recordManagedRouterDiagnostic('install_error', (error && (error.cliDetail || error.message)) || 'unknown');
       setManagedRouterError(email, 'install_failed');
-      return;
+      return { ok: false, credentialSaved: false, runtimeReady: false };
     }
-    managedRouterProvisionedEmails.add(email);
-    clearManagedRouterError(email);
     managedRouterClerkTokens.delete(email);
-    hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
-    hermesDisconnectedProviders.delete('managed-router');
-    console.log('[managed-router] auto-provisioned and connected for', email);
+    const result = completeManagedRouterProvisioning(email, runtime);
+    if (result.ok) {
+      recordManagedRouterDiagnostic('install_ok');
+      console.log('[managed-router] auto-provisioned and connected for', email);
+    }
+    return result;
   } catch (_error) {
     setManagedRouterError(email, 'unavailable');
+    return { ok: false, credentialSaved: false, runtimeReady: false };
   }
 }
 
@@ -4423,6 +4466,9 @@ app.post('/api/settings/harness/connected', requireAuth, async (req, res) => {
   if (hermesDisconnectedProviders.has(provider) || harnessProviderDisconnectedForUser(settings, owner, provider)) {
     return notConnected();
   }
+  if (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterError(routerEmail)?.code === 'runtime_unavailable') {
+    return notConnected();
+  }
   const connected = provider === CLAUDE_SUBSCRIPTION_PROVIDER
     ? (await runClaudeSubscriptionStatus()).loggedIn
     : (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterProvisionedEmails.has(routerEmail))
@@ -4459,9 +4505,10 @@ app.get('/api/settings/harness/providers', requireAuth, (req, res) => {
 app.get('/api/settings/managed-router/status', requireAuth, (req, res) => {
   const email = managedRouterAccountEmail(req.userEmail);
   const provisioned = managedRouterProvisionedEmails.has(email);
-  const error = provisioned ? null : managedRouterError(email);
+  const error = managedRouterError(email);
   return res.status(200).json({
     provisioned,
+    runtimeReady: provisioned && !error,
     available: Boolean(MANAGED_ROUTER_URL),
     label: MANAGED_ROUTER_LABEL,
     error: error && error.message,
@@ -4477,19 +4524,24 @@ app.post('/api/settings/managed-router/provision', requireGlobalSettingsAdmin, a
   if (!MANAGED_ROUTER_URL) {
     return res.status(503).json({ error: `${MANAGED_ROUTER_LABEL} is not configured on this installation` });
   }
-  if (!freshManagedRouterToken(email)) {
+  const retryRuntime = managedRouterError(email)?.code === 'runtime_unavailable';
+  if (!retryRuntime && !freshManagedRouterToken(email)) {
     // Provisioning authenticates with the user's own Clerk token; without a
     // fresh one the mint endpoint would reject us anyway.
     return res.status(409).json({ error: 'Sign in again to re-provision (the Clerk session token has expired)' });
   }
   try {
-    managedRouterProvisionedEmails.delete(email);
-    await autoProvisionManagedRouter(email, null, { force: true });
-    if (!managedRouterProvisionedEmails.has(email)) {
+    // A runtime-only failure retries the saved credential instead of rotating
+    // a usable key. Concurrent normal/force calls share the active attempt.
+    const force = !retryRuntime;
+    const result = await autoProvisionManagedRouter(email, null, { force });
+    if (!result?.ok) {
       const error = managedRouterError(email);
       return res.status(502).json({
         error: (error && error.message) || MANAGED_ROUTER_ERROR_MESSAGES.unavailable,
         code: (error && error.code) || 'unavailable',
+        credentialSaved: result?.credentialSaved === true,
+        runtimeReady: false,
       });
     }
     return res.status(200).json({ ok: true, provisioned: true });
@@ -4658,19 +4710,22 @@ app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req
   }
   disconnectHermesAuth(req.userEmail, provider);
   try {
-    // Validate before Hermes persists the submitted key so malformed or
-    // externally linked profiles cannot leave a partial re-key behind.
-    requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
-    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
-    await runHermesApiKeyAdd(provider, apiKey);
-    // Re-keying must actually take effect: drop any stale copy of this
-    // provider from the per-profile pools (the root store just written is
-    // authoritative) and bounce the Mia-owned gateway so no live session
-    // stays pinned to the credential it was built with.
-    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider));
-    await restartHermesGatewayRuntime();
+    const runtime = await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
+      // Share the same maintenance boundary as managed-router provisioning:
+      // no gateway or second provider writer may race these store updates.
+      requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
+      requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
+      await runHermesApiKeyAdd(provider, apiKey);
+      requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider));
+    }));
     hermesDisconnectedProviders.delete(provider);
     setHarnessProviderConnected(req.userEmail, provider, true);
+    if (!runtime.runtimeReady) {
+      return res.status(502).json({
+        error: 'Your API credential is saved, but Mia could not start its connection. Try again; the credential does not need replacing.',
+        code: 'runtime_unavailable', provider, credentialSaved: true, runtimeReady: false,
+      });
+    }
     return res.status(200).json({ ok: true, provider, state: 'connected' });
   } catch (error) {
     return res.status(502).json({ error: error.message || 'Could not add API credential' });
@@ -4901,9 +4956,11 @@ function googleWorkspaceStatusHandler(req, res) {
 async function googleWorkspaceAgentContextForOwner(ownerEmail, message) {
   const connector = googleAccountOwnerBinding.connectorFor(ownerEmail);
   if (!connector) {
-    return { text: 'Google Workspace connector (authoritative server state): NOT CONNECTED for this user. Ask them to connect it from Plugins.', connectionRevision: '' };
+    return { text: 'Google Workspace connector (authoritative server state): NOT CONNECTED for this user. Ask them to connect it from Plugins.', connectionRevision: '', status: { connected: false, state: 'not_connected' }, ownerAuthorized: false };
   }
-  const status = await connector.status();
+  let status;
+  try { status = await connector.status(); }
+  catch (_) { status = { connected: false, state: 'connection_error' }; }
   const result = await googleWorkspaceContext.buildGoogleWorkspaceAgentContext({
     // The authenticated event owner is resolved by native authorization
     // before this function is called. Google OAuth and resource operations are
@@ -4912,7 +4969,27 @@ async function googleWorkspaceAgentContextForOwner(ownerEmail, message) {
     ownerEmail,
     message,
   });
-  return { text: result.text, connectionRevision: status.connected ? status.connectionRevision : '' };
+  return { text: result.text, connectionRevision: status.connected ? status.connectionRevision : '', status, ownerAuthorized: true };
+}
+
+// Each agent receives the entire current snapshot even when unchanged. This
+// bounded cache only adds a change notice; losing it on restart cannot hide an
+// app or preserve access. Owner/agent isolation matters in shared rooms.
+const connectedAppsTurnRevisions = new Map();
+function connectedAppsForTurn(workspaceConnection, ownerEmail, conversation, agent, remember = true) {
+  const key = JSON.stringify([String(ownerEmail || '').trim().toLowerCase(), conversation.companyId, conversation.id, agent.id]);
+  const snapshot = buildConnectedAppsTurn({
+    ownerEmail, status: workspaceConnection.status,
+    ownerAuthorized: workspaceConnection.ownerAuthorized,
+    toolsConfigured: googleWorkspaceToolsConfigured(),
+    previousRevision: connectedAppsTurnRevisions.get(key),
+  });
+  if (remember) {
+    connectedAppsTurnRevisions.delete(key);
+    connectedAppsTurnRevisions.set(key, snapshot.revision);
+    if (connectedAppsTurnRevisions.size > 2000) connectedAppsTurnRevisions.delete(connectedAppsTurnRevisions.keys().next().value);
+  }
+  return snapshot;
 }
 
 // Legacy route intentionally unregistered.
@@ -6988,14 +7065,23 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   // runs as its own dispatch once that turn ends.
   if (nativeSlashCommand(trigger)) return false;
   if (cancelNativeDispatchForInactiveUser(dispatch, trigger)) return true;
+  // A message sent while Mia is working can be steered into its existing
+  // turn. Refresh at this entry point too; a changed capability set must
+  // instead run as a new dispatch/session once the current work settles.
+  const conversation = nativeConversationRepository.getConversation({ companyId: dispatch.companyId, id: dispatch.conversationId });
+  if (!conversation) return false;
+  const workspaceConnection = await googleWorkspaceAgentContextForOwner(trigger.senderId, '');
+  const inventory = connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: GATEWAY_AGENT_ID }, false);
+  if (inventory.revision !== activeGateway.capabilityRevision) return false;
   let result;
   try {
-    result = await steerHermesGatewaySession(activeGateway.sessionId, message);
+    result = await steerHermesGatewaySession(activeGateway.sessionId, inventory.note + '\n\nUser: ' + message);
   } catch (_) {
     return false;
   }
   if (cancelNativeDispatchForInactiveUser(dispatch, trigger)) return true;
   if (!result || result.status !== 'queued') return false;
+  connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: GATEWAY_AGENT_ID });
   const claimToken = `native-steer-${crypto.randomUUID()}`;
   const claimed = nativeConversationRepository.claimDispatch({
     companyId: dispatch.companyId,
@@ -7121,20 +7207,17 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const googleWorkspaceWriteKinds = googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs);
   const googleWorkspaceWriteRequested = googleWorkspaceSheetWriteRequested || googleWorkspaceDocsWriteRequested;
   const workspaceConnection = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
-  const workspaceContext = workspaceConnection.text;
-  const googleWorkspaceConnected = /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''));
+  const connectionInventory = connectedAppsForTurn(workspaceConnection, senderLabel, conversation, agent);
+  const workspaceContext = [workspaceConnection.text, connectionInventory.note].filter(Boolean).join('\n\n');
+  const googleWorkspaceConnected = workspaceConnection.ownerAuthorized === true && workspaceConnection.status.connected === true;
   const safeGoogleRefs = googleWorkspaceConnected
     ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs)
     : [];
-  const googleToolRequested = safeGoogleRefs.length > 0
-    || /\b(?:google\s+(?:drive|docs?|sheets?|slides?|calendar)|gmail|inbox|email|calendar event|spreadsheet|presentation)\b/i.test(message);
-  const googleProfileAuthorized = googleWorkspaceConnected && googleToolRequested
-    && googleAccountOwnerBinding.connectorFor(senderLabel);
+  const googleProfileAuthorized = connectionInventory.googleToolsEnabled;
   const googleGatewayProfile = googleProfileAuthorized
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     : MIAOS_AGENT_HERMES_PROFILE;
-  const googleGatewaySessionKey = googleProfileAuthorized
-    ? googleGatewayProfile + ':' + workspaceConnection.connectionRevision : googleGatewayProfile;
+  const googleGatewaySessionKey = googleGatewayProfile + ':' + connectionInventory.revision;
   const googleBotProfile = googleProfileAuthorized
     ? MIAOS_BOT_GOOGLE_HERMES_PROFILE
     : MIAOS_BOT_HERMES_PROFILE;
@@ -7310,7 +7393,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleWorkspaceWriteAuthorized && googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
       globalInstructions.agent
     ), nativeBrowserContextNote(trigger, {
-      ghostCli: googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+      ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly,
     })].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
     const ownsPrivateAgentConversation = conversation.type === 'agent'
@@ -7340,7 +7423,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
-        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId };
+        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision };
         nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
         if (ownsPrivateAgentConversation) {
           nativeGatewaySessionConversations.set(String(session.sessionId), {
@@ -7399,7 +7482,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // session once; what changes per turn (platform state, Google write
     // instructions) travels with each message instead.
     const systemPrompt = buildHermesTaskPrompt(agent, [], '', senderLabel, '', [], false, globalInstructions.bot);
-    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + (googleProfileAuthorized ? '\nGoogle connection: ' + workspaceConnection.connectionRevision : ''));
+    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + '\nConnection capabilities: ' + connectionInventory.revision);
     const googleActionInstruction = googleWorkspaceWriteAuthorized
       && /authoritative server state\): CONNECTED/.test(String(platformContext || ''))
       ? googleWorkspaceActions.googleWorkspaceActionInstruction(
@@ -7412,8 +7495,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleActionInstruction,
       slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName() }),
       nativePromptLine(trigger) || message,
-      nativeBrowserContextNote(trigger, { ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
-      botBrowserTabsNote({ ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
+      nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
     ].filter(Boolean).join('\n\n');
     const botRunArgs = {
       storedSessionId: conversation.metadata && conversation.metadata.hermesGatewayProfile === sessionKey
@@ -7479,8 +7562,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     );
     const replyPrompt = [
       nativePromptLine(trigger) || message,
-      nativeBrowserContextNote(trigger, { ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
-      botBrowserTabsNote({ ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
+      nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
     ].filter(Boolean).join('\n\n');
     inferenceResult = await scheduleInference(replyPrompt, 'reply', {
       ...inferenceOptions,
