@@ -558,13 +558,13 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.match(source, /var modelSelection = chatModelSelectionMetadata\(\);[\s\S]*?intent: agentSetup\.intent,[\s\S]*?modelSelection:modelSelection/);
   assert.match(source, /Nothing is created or scheduled until you confirm\./);
   assert.match(source, /Yes, activate bot/);
-  assert.match(source, /option\('interval', 'Repeating timer'\)/);
-  assert.match(source, /id="agentSetupIntervalValue"/);
-  assert.match(source, /id="agentSetupIntervalUnit"/);
-  assert.match(source, /id="agentSetupAutomationPrompt"/);
-  assert.match(source, /Add the task prompt this automation should run\./);
+  // Setup creates only the bot. A schedule request is handed to the new bot,
+  // which proposes the automation with steps through its own card.
+  assert.doesNotMatch(source, /id="agentSetupFrequency"|id="agentSetupAutomationPrompt"/);
+  assert.match(source, /id="agentSetupAutomationWanted"/);
+  assert.match(source, /automations: \[\],/);
+  assert.match(source, /function handOffAgentSetupAutomation\(conversationId, draft\)\{[\s\S]*?api\(nativeConversationPath\(conversationId, '\/events'\)[\s\S]*?'Set up an automation for this request: ' \+ request[\s\S]*?clientIdempotencyKey: 'bot-setup-automation-' \+ conversationId/);
   assert.match(source, /Add the steps or the task prompt this automation should run\./);
-  assert.match(source, /normalized\.intervalMinutes = Number\(source\.intervalMinutes \|\| 1\)/);
   assert.match(source, /agentAvatarHtml\('New Bot', AGENT_SETUP_ROOM_ID, 28\)/);
   assert.match(source, /status: 'running'/);
   assert.match(source, /createdBotRecords\.push\(created\);[\s\S]*?syncChatBotRecords\(createdBotRecords\);[\s\S]*?applyNativeConversationList/);
@@ -866,10 +866,11 @@ test('creating a bot from the tools menu does not close browser mode, but every 
 test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {
   const source = await readFile(appUrl, 'utf8');
   assert.match(source, /function buildAgentSetupWelcomeMessage\(roomId, created, draft\)\{[\s\S]*body: agentSetupWelcomeBody\(created, draft\)/);
-  assert.match(source, /function agentSetupWelcomeBody\(created, draft\)[\s\S]*Want me to run ' \+ task \+ ' now, or is there something related you.d like first\?/);
+  assert.match(source, /function agentSetupWelcomeBody\(created, draft\)[\s\S]*What should I work on first\?/);
   // Wired in after the bot's native room is created, before loadChatRoom
-  // consumes state.localWelcome for that room's first render.
-  assert.match(source, /chatRoomState\(conversation\.id\)\.localWelcome = buildAgentSetupWelcomeMessage\(conversation\.id, created, draft\);\s*loadChatRoom\(conversation\.id, 'agent', created\.name\);/);
+  // consumes state.localWelcome for that room's first render. A bot that is
+  // handed an automation request answers that instead of the local greeting.
+  assert.match(source, /if\(!agentSetupAutomationRequest\(draft\)\) chatRoomState\(conversation\.id\)\.localWelcome = buildAgentSetupWelcomeMessage\(conversation\.id, created, draft\);\s*loadChatRoom\(conversation\.id, 'agent', created\.name\);\s*handOffAgentSetupAutomation\(conversation\.id, draft\);/);
 });
 
 test('URL bar autocomplete degrades to nothing when the desktop shell has no history bridge', async () => {
