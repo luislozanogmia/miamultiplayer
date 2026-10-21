@@ -7,8 +7,14 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const omnibox = require('./browser-omnibox.js');
 const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
-const logic = source.slice(source.indexOf('  var LOCAL_BROWSER_HISTORY_LIMIT ='), source.indexOf('  function browserSidebarOwnsClick('));
-const wiring = source.slice(source.indexOf('  (function wireLocalBrowser(){'), source.indexOf("    if(back) back.addEventListener('click'")) + '\n  })();';
+// Each end marker is searched after its start marker: the same lines can
+// appear elsewhere in app.js (the Automations page has its own back button).
+function between(start, end) {
+  const from = source.indexOf(start);
+  return source.slice(from, source.indexOf(end, from));
+}
+const logic = between('  var LOCAL_BROWSER_HISTORY_LIMIT =', '  function browserSidebarOwnsClick(');
+const wiring = between('  (function wireLocalBrowser(){', "    if(back) back.addEventListener('click'") + '\n  })();';
 const history = [{ url: 'https://linkedin.com/', title: 'LinkedIn', count: 3, lastVisit: Date.now() }];
 
 function element() {
