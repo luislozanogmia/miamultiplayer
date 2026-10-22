@@ -30,6 +30,7 @@ process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = String(process.env.MIAOS_AUTOMATION_
 const { EFFECTIVE_RELEASE_PROFILE, MIAOS_AGENT_SEARCH_ONLY } = require('./release-profile');
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
 const { provisionHermesRuntimeProfiles } = require('./hermes-bot-profile');
+const { reasoningRepeatsReply } = require('./reasoning-summary');
 const { safeBrowserContext } = require('./browser-context');
 // Only terminal-free search releases receive the hosted-search credential.
 // Full local agents can execute commands and must not share that secret scope.
@@ -7148,18 +7149,16 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     postHermesProgressText(kind === 'Thinking' ? 'thinking.delta' : 'reasoning.delta', `${kind}\n${text}`);
   });
   const trackBudget = budgetTracker ? budgetTrackingOnEvent(budgetTracker) : null;
-  // Some providers (the Claude subscription route) report the final answer
-  // again as a completed reasoning block, which showed the reply twice. Hold
+  // Some providers report the final answer again as a completed reasoning
+  // block (whole, or as a cut-off preview), which showed the reply twice. Hold
   // the reasoning summary until the next event and drop it when it only
   // repeats the reply.
   let pendingReasoningSummary = '';
-  const sameReplyText = (a, b) => String(a || '').replace(/\s+/g, ' ').trim()
-    === String(b || '').replace(/\s+/g, ' ').trim();
   const flushPendingReasoningSummary = (replyText) => {
     const text = pendingReasoningSummary;
     pendingReasoningSummary = '';
     if (!text) return;
-    if (replyText && sameReplyText(text.replace(/^Reasoning summary\n/, ''), redactHermesChatDetail(replyText))) return;
+    if (replyText && reasoningRepeatsReply(text.replace(/^Reasoning summary\n/, ''), redactHermesChatDetail(replyText))) return;
     for (const chunk of splitHermesDebugText(text)) postHermesProgressText('reasoning.available', chunk);
   };
   const flushHermesProgress = (replyText) => {

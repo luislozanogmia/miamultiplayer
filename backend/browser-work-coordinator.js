@@ -288,12 +288,28 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
         const unmetExpiredApproval = saved.approvals.some(approval => approval.workerId === workerId && approval.workEpoch === epoch && approval.workerEpoch === workerEpoch
           && approval.status === 'expired' && !attemptOperations.some(operation => operation.approvalId === approval.id && operation.status === 'done'));
         const verified = evidence.length > 0 && !uncertain && !unmetExpiredApproval;
+        // The person's own rejection is not a failure, but the bot did not do
+        // everything it was asked: record the count so no surface calls it done.
+        const declined = saved.approvals.filter(approval => approval.workerId === workerId && approval.workEpoch === epoch && approval.workerEpoch === workerEpoch && approval.status === 'rejected').length;
+        if (verified && declined) target.declinedActions = declined;
         target.status = verified ? 'done' : 'failed'; target.storedSessionId = result.storedSessionId;
         if (!verified) target.error = uncertain ? 'Browser outcome is uncertain; review effects before continuing.' : unmetExpiredApproval ? 'Approval expired before execution; worker task remains incomplete.' : 'Worker returned without successful assigned-tab read, vacuum or screenshot evidence.';
-        saved.results[workerId] = { text: result.text.slice(0, OUTPUT_TEXT_LIMIT), truncated: result.text.length > OUTPUT_TEXT_LIMIT, visibleCharacters: result.text.length, workerId, goal: worker.goal, workEpoch: epoch, workerEpoch, status: verified ? 'complete' : 'incomplete', incomplete: !verified, sourceEvent: saved.results[workerId]?.sourceEvent || 'hermes.return', ...(saved.results[workerId]?.runtimeStatus ? { runtimeStatus: saved.results[workerId].runtimeStatus } : {}), verified, browserEvidence: evidence.map(operation => ({ operationId: operation.id, method: operation.operation.method, documentGeneration: operation.documentGeneration })), at: now(), model: worker.model, provider: worker.provider, storedSessionId: result.storedSessionId };
+        saved.results[workerId] = { text: result.text.slice(0, OUTPUT_TEXT_LIMIT), truncated: result.text.length > OUTPUT_TEXT_LIMIT, visibleCharacters: result.text.length, workerId, goal: worker.goal, workEpoch: epoch, workerEpoch, status: verified ? 'complete' : 'incomplete', incomplete: !verified, ...(verified && declined ? { declinedActions: declined } : {}), sourceEvent: saved.results[workerId]?.sourceEvent || 'hermes.return', ...(saved.results[workerId]?.runtimeStatus ? { runtimeStatus: saved.results[workerId].runtimeStatus } : {}), verified, browserEvidence: evidence.map(operation => ({ operationId: operation.id, method: operation.operation.method, documentGeneration: operation.documentGeneration })), at: now(), model: worker.model, provider: worker.provider, storedSessionId: result.storedSessionId };
       });
     } catch (error) {
-      if (current()) update(workId, saved => { const target = saved.workers.find(item => item.id === workerId); target.status = 'failed'; target.error = 'Worker execution failed; inspect runtime diagnostics.'; });
+      // The group is still the person's but the assigned tab left it: the tab
+      // was closed under the bot. That ends the work; it is not a bot failure.
+      let tabClosed = false;
+      try { tabClosed = !!(await authorizeGroup(work.ownerId, work.groupId)) && !(await authorizeGroup(work.ownerId, work.groupId, worker.tabId)); } catch (_) { /* unknown stays a failure */ }
+      if (current()) update(workId, saved => {
+        const target = saved.workers.find(item => item.id === workerId);
+        if (!tabClosed) { target.status = 'failed'; target.error = 'Worker execution failed; inspect runtime diagnostics.'; return; }
+        target.status = 'cancelled'; target.stopReason = 'tab_closed'; target.error = 'The assigned tab was closed.';
+        const output = saved.results[workerId];
+        if (output) { output.status = 'stopped'; output.incomplete = true; output.verified = false; output.stoppedAt = now(); }
+        for (const approval of saved.approvals) if (approval.workerId === workerId && approval.status === 'pending') approval.status = 'revoked';
+      });
+      if (tabClosed) for (const approval of store.get(workId).approvals) if (approval.workerId === workerId && approval.status === 'revoked' && waiters.has(approval.id)) { waiters.get(approval.id).reject(failure('approval revoked', 409)); waiters.delete(approval.id); }
     } finally { aborts.delete(key); sessions.delete(key); }
   }
   async function drive(ownerId, workId) {
@@ -310,7 +326,12 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     }
     let work = await get(ownerId, workId);
     if (work.epoch !== epoch || terminal.has(work.status)) return work;
-    if (work.workers.some(worker => worker.status !== 'done')) return update(workId, saved => { saved.status = saved.workers.some(worker => ['waiting_for_user', 'needs_approval'].includes(worker.status)) ? 'waiting_for_user' : 'failed'; });
+    if (work.workers.some(worker => worker.status !== 'done')) return update(workId, saved => {
+      // Unfinished work is failed only when a bot failed. When every unfinished
+      // bot was stopped by the person or lost its tab, the task was stopped.
+      const statuses = saved.workers.map(worker => worker.status);
+      saved.status = statuses.some(status => ['waiting_for_user', 'needs_approval'].includes(status)) ? 'waiting_for_user' : !statuses.includes('failed') && statuses.includes('cancelled') ? 'cancelled' : 'failed';
+    });
     work = update(workId, saved => { saved.status = 'working'; });
     const controller = new AbortController(); const key = `${workId}:mia`; aborts.set(key, controller);
     const synthesisEpoch = work.synthesisEpoch || 0;
@@ -367,7 +388,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       for (const worker of work.workers.filter(worker => !workerId || worker.id === workerId)) {
         worker.epoch++;
         if (!terminal.has(worker.status)) {
-          worker.status = 'cancelled';
+          worker.status = 'cancelled'; worker.stopReason = 'stopped';
           const output = work.results[worker.id];
           if (output) { output.status = 'stopped'; output.incomplete = true; output.verified = false; output.stoppedAt = now(); }
         }
@@ -566,7 +587,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       }
       for (const worker of saved.workers) if (reset.has(worker.id)) {
         archiveAttempts(worker, saved.results[worker.id], now());
-        worker.status = 'queued'; worker.epoch++; delete worker.storedSessionId; delete worker.error; delete worker.lastEvent; delete saved.results[worker.id];
+        worker.status = 'queued'; worker.epoch++; delete worker.storedSessionId; delete worker.error; delete worker.lastEvent; delete worker.stopReason; delete worker.declinedActions; delete saved.results[worker.id];
       }
     });
   }
@@ -583,7 +604,9 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
   async function exportReusable(ownerId, workId, workerId) {
     const work = await get(ownerId, workId);
     const steps = work.operations.filter(operation => operation.workerId === workerId);
-    if (!steps.length || steps.some(step => step.status !== 'done') || work.workers.find(worker => worker.id === workerId)?.status !== 'done') throw failure('completed execution proof required', 409);
+    const source = work.workers.find(worker => worker.id === workerId);
+    // Steps saved after a rejected action would silently leave that action out.
+    if (!steps.length || steps.some(step => step.status !== 'done') || source?.status !== 'done' || source.declinedActions) throw failure('completed execution proof required', 409);
     const operations = steps.map(step => clone(step.operation));
     for (const operation of operations) {
       if (!reusableOperation(operation)) throw failure('reusable work requires stable selector-based steps; ephemeral snapshots and scripts cannot be replayed', 409);
