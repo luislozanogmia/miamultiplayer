@@ -2890,8 +2890,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "groupMenu") showGroupMenu(command.groupId);
       if (command.action === "groupOverflowMenu") showGroupOverflowMenu(command.groupIds);
       if (command.action === "groupNewTab" && groups.has(command.groupId)) {
-        const last = groupTabs(command.groupId).at(-1);
-        newTab(undefined, { after: last ? last.id : undefined, groupId: command.groupId });
+        // The group's blank tab is reused, so they never pile up behind +N.
+        const members = groupTabs(command.groupId);
+        const blank = members.find(item => !item.url);
+        if (blank) { activateTab(blank.id); layout(); persistTabs(); }
+        else newTab(undefined, { after: members.at(-1)?.id, groupId: command.groupId });
       }
       if (command.action === "groupBotMenu") showGroupBotMenu(command.groupId, command.bots, command.miaIcon, command.busy);
       if (command.action === "groupAssignBot") { assignGroupBot(command.groupId, command.bot); persistTabs(); }
