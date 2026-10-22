@@ -521,8 +521,8 @@
   }
   // The "+N" list drops down under the bot's tab and draws the bot's other
   // tabs the way the strip draws tabs (page icon, title, working dot, close),
-  // stacked, so nothing about it reads differently from a tab. Like the
-  // Downloads menu it sits over a still of the page while it is open.
+  // stacked under "New tab for this bot". Like the Downloads menu it sits
+  // over a still of the page while it is open.
   var tabsList = document.createElement('div');
   tabsList.className = 'native-browser-bot-tabs-list';
   tabsList.setAttribute('role', 'menu');
@@ -570,6 +570,13 @@
     if (key === lastTabsList) return;
     lastTabsList = key;
     tabsList.replaceChildren();
+    // New tab sits on top, so it never ends up below a long list.
+    var add = document.createElement('button');
+    add.type = 'button'; add.setAttribute('role', 'menuitem');
+    add.className = 'native-browser-bot-tabs-new';
+    add.textContent = '+  New tab for this bot';
+    add.onclick = function () { var id = g.id; setTabsList(null); command('groupNewTab', { groupId: id }); };
+    tabsList.append(add);
     info.others.forEach(function (id) {
       var t = byId[id];
       var row = document.createElement('div');
@@ -600,12 +607,6 @@
       row.append(button, close);
       tabsList.append(row);
     });
-    var add = document.createElement('button');
-    add.type = 'button'; add.setAttribute('role', 'menuitem');
-    add.className = 'native-browser-bot-tabs-new';
-    add.textContent = '+  New tab for this bot';
-    add.onclick = function () { var id = g.id; setTabsList(null); command('groupNewTab', { groupId: id }); };
-    tabsList.append(add);
   }
   // A click anywhere else, or Escape, closes the list.
   document.addEventListener('mousedown', function (event) {

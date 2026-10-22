@@ -2907,7 +2907,7 @@
   .native-browser-bot-tabs-row .native-browser-tab-close{flex:none;width:20px;height:20px;margin-right:6px;border:0;border-radius:50%;background:transparent;color:#5f6368;font-size:15px;line-height:20px;cursor:pointer;opacity:0;}
   .native-browser-bot-tabs-row:hover .native-browser-tab-close,.native-browser-bot-tabs-row .native-browser-tab-close:focus-visible{opacity:1;}
   .native-browser-bot-tabs-row .native-browser-tab-close:hover{background:#0000001a;}
-  .native-browser-bot-tabs-new{height:32px;margin-top:2px;padding:0 10px;border:0;border-top:1px solid #0000000f;border-radius:0 0 8px 8px;background:transparent;font:inherit;color:var(--tab-group-color,#474747);text-align:left;cursor:pointer;}
+  .native-browser-bot-tabs-new{height:32px;flex:none;margin-bottom:2px;padding:0 10px;border:0;border-bottom:1px solid #0000000f;border-radius:8px 8px 0 0;background:transparent;font:inherit;color:var(--tab-group-color,#474747);text-align:left;cursor:pointer;}
   .native-browser-bot-tabs-new:hover{background:color-mix(in srgb,var(--tab-group-color,#474747) 10%,transparent);}
   /* Many tabs shrink to their icon instead of scrolling the
      strip; narrow inactive tabs drop the close button to make room. */
