@@ -41,6 +41,8 @@ test('Hermes subprocess environment is a strict allowlist', () => {
     XAI_BASE_URL: 'https://xai.example/v1',
     HERMES_HOME: '/safe/hermes',
     GH_CONFIG_DIR: '/safe/miaos/isolated-github',
+    GOOGLE_WORKSPACE_CLI_CONFIG_DIR: '/safe/miaos/current-google-profile',
+    GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: 'file',
     MIAOS_WORKSPACE_DIR: '/safe/miaos/workspace',
     MIAOS_HERMES_GUARD_BIN: '/safe/miaos/guard-from-parent',
     HERMES_STATE_DB: '/safe/hermes/state.db',
@@ -63,6 +65,8 @@ test('Hermes subprocess environment is a strict allowlist', () => {
     MIAOS_ENCRYPTION_KEY: 'encryption-secret',
     GOOGLE_CLIENT_SECRET: 'google-secret',
     GOOGLE_TOKEN_ENCRYPTION_KEY: 'google-encryption-secret',
+    GOOGLE_WORKSPACE_CLI_TOKEN: 'must-not-use-ambient-google-token',
+    GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE: '/must-not-use/previous-google-credential',
     MIAOS_ENV_FILE: '/private/backend/.env',
     UNRELATED_INHERITED_SECRET: 'must-not-inherit',
     ANTHROPIC_API_KEY: 'must-not-fall-back-to-paid-api',
@@ -94,6 +98,7 @@ test('Hermes subprocess environment is a strict allowlist', () => {
       'PYTHONPYCACHEPREFIX',
       'CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND', 'CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR',
       'GH_CONFIG_DIR',
+      'GOOGLE_WORKSPACE_CLI_CONFIG_DIR', 'GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND',
       'MIAOS_WORKSPACE_DIR', 'MIAOS_HERMES_GUARD_BIN',
       'HERMES_HOME', 'HERMES_STATE_DB', 'HERMES_CRON_JOBS_FILE',
       'HERMES_CRON_EXECUTIONS_DB', 'MIAOS_AUTOMATION_ARTIFACT_DIR',
@@ -128,18 +133,22 @@ test('Hermes process environment never receives hosted-search credentials', () =
   }
 });
 
-test('provider API-key setup uses the documented --api-key flag with discarded stdio', () => {
+test('provider API-key setup uses the documented --api-key flag without echoing the key', () => {
   // The key travels on Hermes' public CLI contract (--api-key). Feeding the
   // hidden prompt over a stdin pipe hung on Windows, where Python getpass
-  // reads the console rather than stdin. All stdio is discarded so the key
-  // can never echo back through Mia's logs or API responses.
+  // reads the console rather than stdin. stdin and stdout stay discarded;
+  // stderr is kept only as a bounded tail with every occurrence of the key
+  // scrubbed before it can reach any log or API response, because a failed
+  // save (e.g. a Windows cold start killed mid-write) was undiagnosable with
+  // all output discarded.
   const source = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
   const start = source.indexOf('function runHermesApiKeyAdd');
   const end = source.indexOf('\nfunction runHermesAuthStatus', start);
   const implementation = source.slice(start, end);
   assert.ok(start >= 0 && end > start);
   assert.match(implementation, /'--api-key', apiKey/);
-  assert.match(implementation, /stdio:\s*\['ignore', 'ignore', 'ignore'\]/);
+  assert.match(implementation, /stdio:\s*\['ignore', 'ignore', 'pipe'\]/);
+  assert.match(implementation, /split\(apiKey\)\.join\('\[key\]'\)/);
   assert.match(implementation, /env:\s*hermesCredentialProcessEnv\(\)/);
   assert.doesNotMatch(implementation, /child\.stdin/);
 });
@@ -173,7 +182,8 @@ test('subscription model selections stay inside the provider allowlist', () => {
     fast: false,
   });
   assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5[1m]', false), true);
-  assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5', false), false);
+  assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5', false), true);
+  assert.deepEqual(inference.normalizeHermesModelSelection('claude-subscription-directsdk-experimental', 'claude-opus-5', false), { model: 'claude-opus-5-5[1m]', fast: false });
   assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', null, false), {
     model: 'gpt-5.6-luna',
     fast: false,
@@ -211,6 +221,29 @@ test('subscription model selections stay inside the provider allowlist', () => {
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200 }), 200);
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 201 }), 200);
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200, botWorker: true }), inference.MIAOS_BOT_MAX_TURNS);
+});
+
+test('Claude picker offers current models and migrates saved retired choices', () => {
+  const provider = 'claude-subscription-directsdk-experimental';
+  const choices = inference.HERMES_SUBSCRIPTION_MODEL_OPTIONS[provider];
+  assert.ok(choices.some(row => row.label === 'Sonnet 5.5' && row.model === 'claude-sonnet-5-5[1m]'));
+  assert.ok(choices.some(row => row.label === 'Haiku 5.5' && row.model === 'claude-haiku-5-5'));
+  assert.deepEqual(inference.normalizeHermesModelSelection(provider, 'haiku', false), {
+    model: 'claude-haiku-5-5', fast: false,
+  });
+  for (const model of ['claude-sonnet-5-5[1m]', 'claude-haiku-5-5', 'claude-opus-5-5[1m]']) {
+    assert.equal(inference.isAllowedHermesModel(provider, model, false), true, model);
+    assert.deepEqual(inference.normalizeHermesModelSelection(provider, model, false), { model, fast: false });
+  }
+  assert.deepEqual(inference.normalizeHermesModelSelection(provider, 'opus', false), { model: 'claude-opus-5-5[1m]', fast: false });
+  assert.ok(choices.some(row => row.label === 'Opus 5.5' && row.model === 'claude-opus-5-5[1m]'));
+  assert.ok(choices.every(row => !['Haiku 4.5', 'Opus 5', 'Opus 4.8'].includes(row.label)));
+  for (const model of ['claude-haiku-4-5-20251001', 'claude-opus-5[1m]', 'claude-opus-4-8[1m]']) {
+    const next = model.includes('haiku') ? 'claude-haiku-5-5' : 'claude-opus-5-5[1m]';
+    assert.deepEqual(inference.normalizeHermesModelSelection(provider, model, false), { model: next, fast: false });
+  }
+  assert.equal(inference.isAllowedHermesModel(provider, 'claude-haiku-4-5-20251001[1m]', false), false);
+  assert.equal(inference.isAllowedHermesModel('openai-codex', 'claude-haiku-5-5', false), false);
 });
 
 test('the output token budget defaults safely, clamps a request, and converts to a char budget', () => {
@@ -369,6 +402,8 @@ test('full-mode bot workers get a compact local-browser boundary without the ful
   assert.match(policy, /Do not inspect Mia's source code, databases, logs/);
   assert.doesNotMatch(policy, /miaos-bot create/);
   assert.doesNotMatch(policy, /# Mia browser/);
+  assert.match(policy, /ghost-cli call ghost_tab_list/, 'bots know how to list their own browser tabs');
+  assert.match(policy, /not Google Sheets tabs/);
 });
 
 test('bot context keeps durable instructions while Hermes owns structured conversation context', () => {
@@ -398,7 +433,10 @@ test('bot context keeps durable instructions while Hermes owns structured conver
   assert.doesNotMatch(prompt, /Luis: run it now/);
   assert.match(prompt, /latest explicit user instruction overrides older scope/);
   assert.match(prompt, /says “full stop,” or says not to overengineer/);
-  assert.match(prompt, /Once the requested result is sufficient, stop/);
+  assert.match(prompt, /Once the requested result is sufficient and every look-up the user asked for is done, stop/);
+  const rules = prompt.slice(prompt.indexOf('Operating rules:'));
+  assert.match(rules, /^Operating rules:\n- Look facts up before answering\./, 'the look-it-up rule leads the operating rules');
+  assert.match(prompt, /If you answer from memory, say so\./);
 });
 
 test('scheduled bot prompt states bot, Mia, owner, scope, and exact automation task', () => {
@@ -421,6 +459,24 @@ test('scheduled bot prompt states bot, Mia, owner, scope, and exact automation t
   assert.match(prompt, /Keep responses, reasoning, and tool use concise and tight/);
   assert.match(prompt, /Automation:\nName: My news briefing\nSchedule: daily at 09:00/);
   assert.match(prompt, /Task:\nCreate today’s concise news briefing about architecture in Mexico\.$/);
+});
+
+test('scheduled bot prompt runs saved steps one at a time, in order', () => {
+  const bot = { name: 'News briefing', instructions: 'Research news.' };
+  const base = { name: 'My news briefing', enabled: true, frequency: 'daily', time: '09:00' };
+  const prompt = inference.buildScheduledBotPrompt(bot, {
+    ...base,
+    prompt: 'Today’s AI news.',
+    steps: ['Search the web for today’s AI news', '  Pick the 5 that matter most  ', '', 'Post the briefing here'],
+  });
+  assert.match(prompt, /Task:\nToday’s AI news\.\n\nSteps:\nDo these steps one at a time, in order\./);
+  assert.match(prompt, /If a step cannot be done, stop and say which step failed and why\.\n1\. Search the web for today’s AI news\n2\. Pick the 5 that matter most\n3\. Post the briefing here$/);
+  const stepsOnly = inference.buildScheduledBotPrompt(bot, { ...base, steps: ['Only step'] });
+  assert.doesNotMatch(stepsOnly, /Task:/);
+  assert.match(stepsOnly, /\n1\. Only step$/);
+  assert.doesNotMatch(prompt, /report_step/, 'an automation without an id cannot report progress');
+  assert.equal(inference.buildScheduledBotPrompt(bot, { ...base, steps: [' '] }), null, 'no prompt and no real steps means no job');
+  assert.doesNotMatch(inference.buildScheduledBotPrompt(bot, { ...base, prompt: 'Run.' }), /Steps:/, 'automations without steps are unchanged');
 });
 
 test('bot replies use a restricted session in the existing Hermes runtime', async () => {

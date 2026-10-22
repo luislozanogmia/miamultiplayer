@@ -152,3 +152,35 @@ test('the adjacent Multiplayer Test switcher label remains short without changin
   assert.match(html, /data-tools-action="connected-apps"[\s\S]*?<span class="chat-new-menu-label">Connected apps<\/span>/);
   assert.doesNotMatch(html, /data-tools-action="connected-apps"[^>]*aria-disabled="true"/);
 });
+
+test('connected Google card shows only the verified current email and escapes it', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const start = source.indexOf('    function googleAccountPanel(entry, panelId){');
+  const end = source.indexOf('\n    }\n', start) + 6;
+  const context = {
+    googleAccountStatus: { state: 'connected', connected: true, googleEmail: 'google-b@example.com' },
+    googleAccountPanelOpen: false, googleAccountFeedback: '', GOOGLE_ACCOUNT_ID: 'skill-google-workspace',
+    googleAccountStatusLabel: () => 'Connected', connectorIcon: () => '',
+    esc: value => String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),
+  };
+  vm.createContext(context); vm.runInContext(source.slice(start, end), context);
+  assert.match(context.googleAccountPanel({}, 'fixture-panel'), /google-b@example.com/);
+  context.googleAccountStatus.googleEmail = '<img src=x onerror=alert(1)>@example.com';
+  assert.doesNotMatch(context.googleAccountPanel({}, 'fixture-panel'), /<img/);
+  context.googleAccountStatus.state = 'not_connected';
+  assert.doesNotMatch(context.googleAccountPanel({}, 'fixture-panel'), /onerror|google-b@example.com/);
+});
+
+test('replacing Google identity clears stale room file selections even when both statuses are connected', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const start = source.indexOf('    function setGoogleAccountStatus(data, feedback, preservePending){');
+  const end = source.indexOf('\n    }\n', start) + 6;
+  const context = {
+    googleAccountStatus: { state: 'connected', connected: true, googleEmail: 'google-a@example.com', connectionRevision: 'a' },
+    googleDriveDrafts: { room: [{ id: 'file-authorized-by-a' }] }, googleAccountPollTimer: null,
+    el: () => null, renderConnectors() {}, renderGoogleDriveAttachments() {},
+  };
+  vm.createContext(context); vm.runInContext(source.slice(start, end), context);
+  context.setGoogleAccountStatus({ state: 'connected', connected: true, googleEmail: 'google-b@example.com', connectionRevision: 'b' });
+  assert.deepEqual(Object.keys(context.googleDriveDrafts), []);
+});

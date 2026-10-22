@@ -1,0 +1,159 @@
+# Mia 0.2.19 release candidate
+
+## Source scope
+
+The candidate builds on browser PR #50 through b6cd3d6 (including 17c2ae1),
+with explicit-address preservation, screenshot lifecycle and delayed-history
+fixes. It also includes PR #49's unused Contacts permission removal and the
+per-turn Google connection/tool refresh requested for Mia and bots. `macos/package.json` is authoritative and the lockfile agrees.
+
+The first browser owner fix wave ends at ec254b2; Google tool visibility is
+94bd43f, address suggestions c97781e, and the address-row bots control b6cd3d6.
+Resolved actor identity, independent bot tab ownership, preserved chat choice,
+and positively acknowledged cancellation remain release criteria.
+
+## Acceptance and release gates
+
+1. Verify the combined frontend, backend, native browser, runtime cancellation
+   and packaging contracts. Regression tests must fail the relevant baseline.
+2. In the actual desktop app, verify no pink strip mote, the address-row Your
+   bots drawer, selecting another chat/tab while the previous one opens, and
+   current-page popup images during typing, dismissal, reopening and navigation.
+   Explicit HTTPS plus HTTP history must keep HTTPS on Enter. Escape must restore
+   the latest genuine edit after cold/out-of-order history responses.
+3. Verify real Mia and bot replies, separate bots using distinct browser groups,
+   denied actor lookup, and successful/failed cancellation/takeover. Fixtures
+   prove local contracts, not installed/native acceptance.
+4. Review and merge the complete intended source; freeze the exact main SHA.
+   No release build from a dirty or unmerged source tree.
+5. Preflight native Mac/Windows and supported Linux runtimes, disk, pinned
+   runtime provenance and signing/notarization inputs. Build all three fresh
+   distributions. Preserve installed profiles and existing files.
+6. Test installed candidates; arrange the independent Daybreak source/package
+   review for the frozen SHA. Report blocked gates rather than assuming a pass.
+7. Stage and verify complete draft assets, feeds, stable aliases and checksums.
+   Publication is a separate owner approval. After publication, verify public
+   stable downloads and installed OTA delivery on Mac and Windows.
+
+This document records the required train, not completed native acceptance,
+merge, build, upload, publication or OTA verification.
+
+## Security follow-up candidate
+
+The post-merge audit found that bot commands could target Mia-controlled tabs
+and that Google broker credentials were serialized into profiles readable by
+agents with terminal access. The follow-up assigns every tab to Mia or one bot,
+rejects cross-controller access, and rechecks ownership after queued or delayed
+work. An ungrouped tab belongs to Mia; it is not a separate human-owned class.
+
+The connected-app adapter needs a broker credential; the model does not.
+Desktop-to-backend, backend-to-gateway and gateway-to-adapter handoffs use
+anonymous pipes. The gateway and adapter keep the run credential in memory;
+profile configuration and launch environments contain no broker credential.
+Connection management has a separate admin credential unavailable to the
+gateway. A synthetic native-runtime smoke gate exercises the pinned Hermes
+MCP transport, initialization and a bounded tool call without a real account.
+
+The later broker repair also removes the Google CLI's temporary plaintext OAuth
+credential files. Existing allowlisted operations now use fixed Google HTTPS
+endpoints inside the desktop process. Refresh/access credentials remain in
+memory, with durable credentials protected by platform storage. Account changes
+invalidate cached access and pending responses; already accepted remote writes
+cannot be undone by disconnecting. This is not an operating-system sandbox
+against a deliberately trusted same-user terminal or process-memory inspection.
+
+Rebuild every platform from the new reviewed, merged source. Earlier 0.2.19
+artifacts built from b29137d are superseded and cannot satisfy the final gates.
+
+Source follow-up verification on 2026-10-19: 566 backend checks passed with three
+optional checks skipped; 276 desktop/packaging checks passed with two optional
+checks skipped. The backend suite used an inert Google callback URL to avoid
+colliding with the existing local preview's port. Independent source challenge
+found and resolved the MCP child environment leak, a reserved-ID collision,
+queued ownership changes and delayed vacuum access.
+
+The synthetic adapter handshake and bounded tool invocation passed on native
+Linux, Windows and macOS interpreters. Linux additionally exercised the actual
+patched `MCPServerTask._run_stdio` and verified that a sibling could not find
+the fixture token in child startup environment or arguments. This is runtime
+preflight; new packaged-app acceptance and Daybreak package review remain
+required on the final merged candidate.
+
+## Candidate source verification (2026-10-19)
+
+- Frontend: 319 automated tests passed, including explicit HTTPS, delayed
+  history/keyboard restoration and screenshot lifecycle regressions. The new
+  regression cases fail their earlier source baselines.
+- Backend: 562 passed, 3 optional fixture tests skipped. Packaging contracts:
+  34 passed, 2 platform/runtime-dependent tests skipped.
+- Desktop source tests: 219 passed after correcting a pre-existing startup
+  assertion that expected a single-line conditional. Startup application code
+  was unchanged by that test correction.
+- Native Linux dev candidate using the existing QA profile/keyring in place:
+  real Mia and bot responses rendered; no pink mote in the strip; address-row
+  bots drawer opened; HTTP-history completion preserved HTTPS on Enter;
+  Escape restored actual typing; reopened suggestions showed the current
+  page after switching sites. The original installed app was quit normally;
+  no authentication or Electron sandbox override was used.
+- Manual testing exposed a blank-background capture during repeated suggestion
+  replacement. The final fix retains the current cover until replacement
+  suggestions are ready, with a regression and native recheck.
+- Independent source review found no remaining blocker in the autocomplete
+  changes. Source checks do not establish installed candidate, concurrent
+  multi-bot/takeover acceptance, native Mac/Windows acceptance or OTA delivery.
+
+![Native address after Enter preserves HTTPS](screenshots/browser-0.2.19-https.png)
+![Reopened suggestions cover the current page](screenshots/browser-0.2.19-suggestions.png)
+
+## Connection changes included in the train
+
+Every dispatched Mia/bot turn receives the authorized owner's current Google
+connection/account/access and configured tool catalog. Connection, grant,
+account, access or runtime changes alter the capability revision, invalidating
+older resume bindings. A busy turn is steered only under the same revision;
+otherwise the new message waits for a fresh dispatch. The current snapshot is
+still supplied when unchanged; the bounded revision cache is informational.
+
+The Google MCP server keeps the short `google` name and directly exposed tool
+catalog. Full Google profiles retain the normal guarded terminal/browser
+integration. This does not change the deliberately trusted full default Hermes
+CLI toolset into a connector-only sandbox. Snapshot data excludes credentials,
+raw provider responses and message contents. Tool configuration is not proof
+of a registered tool or a successful external action.
+
+The requested grant is openid, userinfo.email, gmail.modify, calendar.events
+and drive.file. Removing Contacts does not revoke an older Google grant;
+existing users may still have an earlier permission until they revoke it.
+
+Source review and unit coverage include connection replacement/disconnect,
+owner isolation, non-English follow-ups, resume invalidation and busy steering.
+A final native connected-account turn remains required after this integration;
+no new claim of a completed OAuth replacement or external Google action follows
+from the fixture tests alone.
+
+## Remaining source repairs after PR51
+
+PR50 and PR51 are merged. The next source candidate includes these additional
+repairs before the final platform rebuilds:
+
+- The Windows package restores the pinned CPython generic venv interpreter and
+  uses it for Hermes, allowing dependency path initialization and native MCP
+  imports. Native isolated runtime imports and the actual patched Hermes MCP
+  transport passed; final NSIS installation remains a separate gate.
+- Controller and group membership changes are rejected while underlying page
+  scripts or loads remain pending, including after the public API times out.
+  Stop acknowledgement alone cannot transfer a tab still executing page work.
+  Bot file opening checks group availability before allocating a background tab.
+  This does not claim cancellation of detached page timers or registered callbacks.
+- The Google broker maps the existing bounded tool protocol to 26 fixed REST
+  operations. Redirects are refused, media and responses are bounded, provider
+  diagnostics are not forwarded, and writes are never automatically replayed.
+  A trusted token-info request supplies scope details when refresh omits them.
+  Overlapping account saves are serialized before dispatch can read credentials.
+
+Source checks and synthetic transport evidence do not establish final installed
+acceptance, signing/notarization, public assets, or OTA. Earlier b29137d and
+e33c966 artifacts are preserved candidate evidence, not publishable final builds.
+Merge the reviewed complete candidate before freezing a new release SHA and
+rebuilding all three platforms. Independent source/package release review and
+installed connected-account testing remain required.

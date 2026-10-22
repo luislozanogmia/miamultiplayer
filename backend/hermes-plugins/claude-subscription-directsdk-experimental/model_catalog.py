@@ -1,10 +1,8 @@
 """Pinned native routes with Mia's bounded advertised context policy."""
 CONTEXT_WINDOWS = {
     'claude-sonnet-5-5': 250_000,
-    'claude-haiku-4-5-20251001': 200_000,
+    'claude-haiku-5-5': 250_000,
     'claude-opus-5-5': 250_000,
-    'claude-opus-5': 250_000,
-    'claude-opus-4-8': 250_000,
     'claude-fable-5-1': 250_000,
 }
 LONG_CONTEXT_ROUTES = frozenset(model for model in CONTEXT_WINDOWS if 'haiku' not in model)
@@ -12,9 +10,12 @@ ALIASES = {
     'sonnet': 'claude-sonnet-5-5',
     # Retired by Mia; saved Sonnet 5 choices run on 5.5.
     'claude-sonnet-5': 'claude-sonnet-5-5',
-    'haiku': 'claude-haiku-4-5-20251001',
-    'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
-    'opus': 'claude-opus-5',
+    'haiku': 'claude-haiku-5-5',
+    'claude-haiku-4-5': 'claude-haiku-5-5',
+    'claude-haiku-4-5-20251001': 'claude-haiku-5-5',
+    'opus': 'claude-opus-5-5',
+    'claude-opus-5': 'claude-opus-5-5',
+    'claude-opus-4-8': 'claude-opus-5-5',
     'fable': 'claude-fable-5-1',
 }
 
@@ -27,11 +28,8 @@ def native_model(model):
     # lower number above is Mia's advertised budgeting cap, not an SDK route.
     if canonical in LONG_CONTEXT_ROUTES:
         return canonical + '[1m]'
-    if window == 200_000:
-        if model.endswith('[1m]'):
-            raise ValueError('Haiku 4.5 does not support a 1M context window')
-        return canonical
-    return model
+    # Haiku 5.5 uses its plain ID: Claude Code provides 1M by default.
+    return canonical if window is not None else model
 
 
 MODEL_METADATA = {

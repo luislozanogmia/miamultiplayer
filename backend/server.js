@@ -3,6 +3,14 @@
 // Capture private desktop capabilities before any child runtime is configured.
 const browserWorkDesktopConfig = Object.freeze({ url: process.env.MIA_BROWSER_WORK_URL, token: process.env.MIA_BROWSER_WORK_TOKEN, key: process.env.MIA_BROWSER_WORK_KEY });
 for (const name of ['MIA_BROWSER_WORK_URL', 'MIA_BROWSER_WORK_TOKEN', 'MIA_BROWSER_WORK_KEY']) delete process.env[name];
+const { loadProcessSecretsFromStdin } = require('./process-secrets');
+loadProcessSecretsFromStdin([
+  'MIA_GOOGLE_BROKER_URL',
+  'MIA_GOOGLE_BROKER_RUN_TOKEN',
+  'MIA_GOOGLE_BROKER_ADMIN_TOKEN',
+  'MIA_GOOGLE_AUTH_OPEN_SECRET',
+]);
+
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -13,6 +21,8 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'mia-os.db');
 const RUNTIME_DIR = path.resolve(
   process.env.MIAOS_RUNTIME_DIR || path.dirname(path.resolve(DB_PATH))
 );
+process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = String(process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR || '').trim()
+  || path.join(RUNTIME_DIR, 'google-workspace');
 process.env.HERMES_HOME = String(process.env.HERMES_HOME || '').trim()
   || path.join(RUNTIME_DIR, 'hermes');
 process.env.MIAOS_HERMES_GATEWAY_TOKEN_FILE = String(process.env.MIAOS_HERMES_GATEWAY_TOKEN_FILE || '').trim()
@@ -29,7 +39,10 @@ process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = String(process.env.MIAOS_AUTOMATION_
   || path.join(RUNTIME_DIR, 'bot-artifacts');
 const { EFFECTIVE_RELEASE_PROFILE, MIAOS_AGENT_SEARCH_ONLY } = require('./release-profile');
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
-const { provisionHermesRuntimeProfiles } = require('./hermes-bot-profile');
+const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
+const { buildConnectedAppsTurn } = require('./connected-apps-turn');
+const browserSuggestions = require('./browser-suggestions');
+const nextStep = require('./next-step');
 const { reasoningRepeatsReply } = require('./reasoning-summary');
 const { safeBrowserContext } = require('./browser-context');
 // Only terminal-free search releases receive the hosted-search credential.
@@ -57,6 +70,7 @@ const {
   runInferenceViaHermesGateway,
   runSlashCommandViaHermesGateway,
   readHermesGatewaySessionControl,
+  cancelHermesGatewayTurn,
   setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
@@ -79,6 +93,7 @@ const {
   deleteHermesGatewaySessions,
   restartHermesGatewayRuntime,
   stopHermesGatewayRuntime,
+  withStoppedHermesGateway,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
@@ -86,6 +101,7 @@ const {
   hermesTokenBudgetFromOptions,
   hermesCharBudgetFromTokens,
 } = require('./inference');
+const { createCredentialOperationCoordinator } = require('./credential-operation-coordinator');
 const {
   listHermesCredentialProviders,
   readProviderRootCredentials,
@@ -116,23 +132,14 @@ const {
 const googleWorkspace = require('./google-gmail');
 const googleWorkspaceContext = require('./google-workspace-context');
 const googleWorkspaceActions = require('./google-workspace-actions');
+const botAutomationActions = require('./bot-automation-actions');
 const { createGoogleAccountConnector, createOwnerBoundGoogleAccount } = require('./google-account-connector');
 const { stripTaskOpeningNotice, humanTaskStatus, shouldPostTaskStatus } = require('./background-status');
 const { providerWaitStatus } = require('./provider-wait-status');
-const {
-  buildAgentRevisionPrompt,
-  buildAgentSetupPrompt,
-  fallbackAgentDraft,
-  normalizeAgentDraft,
-  normalizeAgentRevision,
-} = require('./agent-setup');
+const { buildAgentSetupPrompt, normalizeAgentDraft } = require('./agent-setup');
+const miaBotSetupActions = require('./mia-bot-setup-actions');
 const { INSTANCE_NAME, INSTANCE_TEAM_DESCRIPTION, INSTANCE_DOMAINS, INSTANCE_PASSWORD } = require('./instance');
 const cronSync = require('./cron-sync');
-const {
-  cancelBotAutomationFromChat,
-  managerAutomationRequestFromChat,
-  scheduleBotAutomationFromChat,
-} = require('./bot-automation-chat');
 const {
   createConversationRepository,
   USER_CANCELLED_DISPATCH_ERROR,
@@ -368,7 +375,23 @@ function googleAccountBindingRevoked(ownerEmail) {
   }
 }
 
-const googleAccountConnector = createGoogleAccountConnector();
+const GOOGLE_ACCOUNT_BINDING_META_KEY = 'google.account.binding';
+function googleConnectionOwnerIdentity() {
+  const linked = clerkAccountProfile();
+  const identity = linked ? ['clerk', linked.issuer, linked.subject] : ['user', googleAccountOwnerEmail];
+  return crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+}
+const googleAccountConnector = createGoogleAccountConnector({
+  binding: {
+    currentOwner: googleConnectionOwnerIdentity,
+    read: () => { try { return JSON.parse(db.getMeta(conn, GOOGLE_ACCOUNT_BINDING_META_KEY) || '{}'); } catch (_) { return {}; } },
+    write: (value) => db.setMeta(conn, GOOGLE_ACCOUNT_BINDING_META_KEY, JSON.stringify(value)),
+  },
+  onConnectionChanged: () => {
+    bumpVersion();
+    return closeHermesGatewaySessions();
+  },
+});
 const googleAccountOwnerEmail = String(
   process.env.MIAOS_GOOGLE_ACCOUNT_OWNER || MIAOS_SINGLE_USER_EMAIL || DEFAULT_OWNER || ''
 ).trim().toLowerCase();
@@ -609,9 +632,12 @@ const nativeConversationDispatch = {
     }
     return result;
   },
-  cancelRunning(dispatch) {
+  async cancelRunning(dispatch) {
     const controller = dispatch && nativeDispatchAbortControllers.get(dispatch.id);
-    if (controller && !controller.signal.aborted) controller.abort();
+    if (controller && !controller.signal.aborted) {
+      await cancelHermesGatewayTurn(controller.signal);
+      controller.abort();
+    }
   },
 };
 
@@ -3243,6 +3269,7 @@ const MANAGED_ROUTER_TIMEOUT_MS = 15000;
 // In-memory set of emails that have already been provisioned in this backend
 // lifetime. Avoids redundant mint calls on every Clerk token refresh.
 const managedRouterProvisionedEmails = new Set();
+const credentialOperations = createCredentialOperationCoordinator();
 
 // The latest provisioning failure per account, kept as a reason the UI can
 // show. Mia Router's own response text never leaves this process.
@@ -3255,7 +3282,22 @@ const MANAGED_ROUTER_ERROR_MESSAGES = {
   sign_in_required: `Sign in to Mia again to connect ${MANAGED_ROUTER_LABEL}.`,
   replaced_elsewhere: managedRouterKeyMessage(MANAGED_ROUTER_LABEL),
   install_failed: `Mia got a ${MANAGED_ROUTER_LABEL} key but couldn't save it. Try again.`,
+  runtime_unavailable: `Your ${MANAGED_ROUTER_LABEL} key is saved, but Mia couldn't start its connection. Try again; your key does not need replacing.`,
 };
+
+// Content-free provisioning trail for support reports: timestamps, step names,
+// HTTP statuses, exit codes and sanitized CLI error text only — never key
+// material, account emails, or conversation content. Bounded, in-memory, and
+// served with the managed-router status so the Settings feedback report can
+// carry it. This exists because packaged apps intentionally persist no backend
+// log: without it a failed key save on a user's machine is undiagnosable.
+const MANAGED_ROUTER_DIAG_LIMIT = 50;
+const managedRouterDiagnostics = [];
+function recordManagedRouterDiagnostic(step, detail) {
+  const text = detail ? ` ${String(detail).replace(/\s+/g, ' ').trim().slice(0, 300)}` : '';
+  managedRouterDiagnostics.push(`${new Date().toISOString()} ${step}${text}`);
+  if (managedRouterDiagnostics.length > MANAGED_ROUTER_DIAG_LIMIT) managedRouterDiagnostics.shift();
+}
 
 function managedRouterErrorCodeForStatus(status) {
   if (status === 401) return 'session_rejected';
@@ -3273,6 +3315,7 @@ function setManagedRouterError(email, code) {
   if (code === 'replaced_elsewhere') managedRouterReplacedEmails.add(email);
   code = managedRouterErrorCode(code, managedRouterReplacedEmails.has(email));
   managedRouterProvisionErrors.set(email, { code, message: MANAGED_ROUTER_ERROR_MESSAGES[code] });
+  recordManagedRouterDiagnostic('provision_failed', code);
   console.warn('[managed-router] provisioning failed for', email, code);
 }
 
@@ -3320,7 +3363,6 @@ function freshManagedRouterToken(email) {
 
 async function provisionManagedRouterKey(email, clerkToken) {
   if (!MANAGED_ROUTER_URL || !clerkToken) return null;
-  if (managedRouterProvisionedEmails.has(email)) return null;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MANAGED_ROUTER_TIMEOUT_MS);
@@ -3336,12 +3378,15 @@ async function provisionManagedRouterKey(email, clerkToken) {
     });
     const result = await response.json().catch(() => null);
     if (!response.ok || !result?.key) {
+      recordManagedRouterDiagnostic('mint_failed', `http ${response.status}`);
       setManagedRouterError(email, response.ok ? 'unavailable' : managedRouterErrorCodeForStatus(response.status));
       return null;
     }
+    recordManagedRouterDiagnostic('mint_ok');
     console.log('[managed-router] provisioned key for', email);
     return result.key;
-  } catch (_error) {
+  } catch (error) {
+    recordManagedRouterDiagnostic('mint_unreachable', error && error.name);
     setManagedRouterError(email, 'unavailable');
     return null;
   } finally {
@@ -3377,20 +3422,39 @@ async function openRouterKeyIsLive(key) {
 // be down while auth stores change: a running gateway flushes its in-memory
 // pool on shutdown, resurrecting exactly the dead keys being removed.
 async function installManagedRouterKey(key) {
-  try { await stopHermesGatewayRuntime(); } catch (_) { /* not running */ }
-  try {
+  return withStoppedHermesGateway(async () => {
     // Fail before changing the root key if a managed profile cannot be
     // cleaned; otherwise its old key would keep shadowing the new one.
     requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER));
     requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, MANAGED_ROUTER_HERMES_PROVIDER));
     await runHermesApiKeyAdd(MANAGED_ROUTER_HERMES_PROVIDER, key);
-  } finally {
-    try { await startHermesGatewayRuntime(); } catch (_) { /* best effort */ }
-  }
+  });
 }
 
-async function autoProvisionManagedRouter(email, clerkToken, { force = false } = {}) {
-  if (managedRouterProvisionedEmails.has(email)) return;
+function completeManagedRouterProvisioning(email, runtime) {
+  managedRouterProvisionedEmails.add(email);
+  clearManagedRouterError(email);
+  hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
+  hermesDisconnectedProviders.delete('managed-router');
+  if (!runtime.runtimeReady) {
+    const code = String(runtime.runtimeError?.code || 'unavailable');
+    recordManagedRouterDiagnostic('gateway_start_failed', /^[A-Z][A-Z0-9_]{1,39}$/.test(code) ? code : 'unavailable');
+    setManagedRouterError(email, 'runtime_unavailable');
+    return { ok: false, credentialSaved: true, runtimeReady: false, code: 'runtime_unavailable' };
+  }
+  return { ok: true, credentialSaved: true, runtimeReady: true };
+}
+
+function autoProvisionManagedRouter(email, clerkToken, options = {}) {
+  // A concurrent force request shares this attempt rather than rotating the
+  // same account twice. A force request after settlement can rotate normally.
+  return credentialOperations.provision(email, () => autoProvisionManagedRouterOnce(email, clerkToken, options));
+}
+
+async function autoProvisionManagedRouterOnce(email, clerkToken, { force = false } = {}) {
+  if (!force && managedRouterProvisionedEmails.has(email) && !managedRouterError(email)) {
+    return { ok: true, credentialSaved: true, runtimeReady: true };
+  }
   let replacedElsewhere = false;
   try {
     // A mint rotates the user's key server-side (the endpoint cannot re-read
@@ -3407,17 +3471,28 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
       if (live) {
         // Prune to exactly the live key when dead siblings are in any pool —
         // auxiliary clients pick pool entries blindly and 401 on dead ones.
+        let runtime;
         if (stored.length > 1) {
-          await installManagedRouterKey(live);
+          runtime = await installManagedRouterKey(live);
           console.log('[managed-router] pruned dead credentials for', email);
+        } else {
+          // A valid credential is not a reason to mint again when only the
+          // local gateway failed. Retry its connection without changing keys.
+          try {
+            await startHermesGatewayRuntime();
+            runtime = { runtimeReady: true };
+          } catch (runtimeError) {
+            runtime = { runtimeReady: false, runtimeError };
+          }
         }
-        managedRouterProvisionedEmails.add(email);
-        clearManagedRouterError(email);
-        hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
-        hermesDisconnectedProviders.delete('managed-router');
-        return;
+        return completeManagedRouterProvisioning(email, runtime);
       }
-      if (stored.length) console.log('[managed-router] stored key is dead for', email, '- re-provisioning');
+      if (stored.length) {
+        recordManagedRouterDiagnostic('stored_key_dead', `count ${stored.length}`);
+        console.log('[managed-router] stored key is dead for', email, '- re-provisioning');
+      } else {
+        recordManagedRouterDiagnostic('no_stored_key');
+      }
       // A key that existed and died was almost always replaced by a sign-in
       // on another computer: one live key per user.
       replacedElsewhere = stored.length > 0;
@@ -3426,24 +3501,32 @@ async function autoProvisionManagedRouter(email, clerkToken, { force = false } =
     const token = clerkToken || freshManagedRouterToken(email);
     if (!token) {
       setManagedRouterError(email, replacedElsewhere ? 'replaced_elsewhere' : 'sign_in_required');
-      return;
+      return { ok: false, credentialSaved: false, runtimeReady: false };
     }
     const key = await provisionManagedRouterKey(email, token);
-    if (!key) return;
+    if (!key) return { ok: false, credentialSaved: false, runtimeReady: false };
+    // A successful mint replaces the remote credential. Only the successful
+    // local save below can mark this newly minted credential ready again.
+    managedRouterProvisionedEmails.delete(email);
+    let runtime;
     try {
-      await installManagedRouterKey(key);
-    } catch (_error) {
+      runtime = await installManagedRouterKey(key);
+      recordManagedRouterDiagnostic('credential_saved');
+    } catch (error) {
+      recordManagedRouterDiagnostic('install_error', (error && (error.cliDetail || error.message)) || 'unknown');
       setManagedRouterError(email, 'install_failed');
-      return;
+      return { ok: false, credentialSaved: false, runtimeReady: false };
     }
-    managedRouterProvisionedEmails.add(email);
-    clearManagedRouterError(email);
     managedRouterClerkTokens.delete(email);
-    hermesDisconnectedProviders.delete(MANAGED_ROUTER_HERMES_PROVIDER);
-    hermesDisconnectedProviders.delete('managed-router');
-    console.log('[managed-router] auto-provisioned and connected for', email);
+    const result = completeManagedRouterProvisioning(email, runtime);
+    if (result.ok) {
+      recordManagedRouterDiagnostic('install_ok');
+      console.log('[managed-router] auto-provisioned and connected for', email);
+    }
+    return result;
   } catch (_error) {
     setManagedRouterError(email, 'unavailable');
+    return { ok: false, credentialSaved: false, runtimeReady: false };
   }
 }
 
@@ -3474,7 +3557,11 @@ let nativeChatModelProviders = {};
 // completes for it.
 const hermesDisconnectedProviders = new Set();
 const HERMES_LOGOUT_TIMEOUT_MS = 15 * 1000;
-const HERMES_API_KEY_TIMEOUT_MS = 15 * 1000;
+// Key saves run the Hermes CLI, which on Windows is a cold Python start that
+// antivirus scanning can stretch well past 15s. Killing the CLI mid-write
+// loses the key and loops Mia Router provisioning forever, so give the write
+// a generous ceiling: it is one local file transaction after interpreter boot.
+const HERMES_API_KEY_TIMEOUT_MS = 60 * 1000;
 const HERMES_STATUS_TIMEOUT_MS = 10 * 1000;
 const HERMES_STATUS_CONCURRENCY = 4;
 
@@ -3894,28 +3981,46 @@ function runHermesApiKeyAdd(provider, apiKey) {
       else resolve();
     };
     let child;
+    // The thrown message stays generic (it can reach API responses); the
+    // sanitized failure detail rides on error.cliDetail for the bounded
+    // managed-router diagnostic trail only.
+    const fail = (message, detail) => {
+      const error = new Error(message);
+      if (detail) error.cliDetail = detail;
+      finish(error);
+    };
     try {
       // Pass the key through Hermes' documented --api-key flag. Feeding the
       // hidden prompt over a stdin pipe is not part of the CLI contract and
       // hangs on Windows, where Python getpass reads the console rather than
       // stdin. The argv value is visible only to same-user processes for the
-      // seconds the command runs; stdout/stderr stay discarded so the key
-      // never reaches Mia's logs or API responses.
+      // seconds the command runs; stdout stays discarded and stderr is kept
+      // only as a bounded, key-scrubbed tail so a failed save is diagnosable
+      // without the key ever reaching Mia's logs or API responses.
+      // Supplying the optional label also keeps the command noninteractive:
+      // Windows can report a console stdin and otherwise prompt for a label
+      // after receiving the key, failing before it is saved.
       child = spawnHermesCli([
-        'auth', 'add', provider, '--type', 'api-key', '--api-key', apiKey,
+        'auth', 'add', provider, '--type', 'api-key', '--label', 'Mia', '--api-key', apiKey,
       ], {
         cwd: process.cwd(),
         env: hermesCredentialProcessEnv(),
-        stdio: ['ignore', 'ignore', 'ignore'],
+        stdio: ['ignore', 'ignore', 'pipe'],
       });
-      child.once('error', () => finish(new Error('Could not add API credential')));
-      child.once('close', (code) => {
+      let stderrTail = '';
+      if (child.stderr) {
+        child.stderr.on('data', (chunk) => {
+          stderrTail = (stderrTail + String(chunk)).split(apiKey).join('[key]').slice(-2048);
+        });
+      }
+      child.once('error', (error) => fail('Could not add API credential', `spawn ${error.code || error.message}`));
+      child.once('close', (code, signal) => {
         if (code === 0) finish();
-        else finish(new Error('Could not add API credential'));
+        else fail('Could not add API credential', `exit ${code === null ? `signal ${signal}` : code}: ${stderrTail.trim().slice(-400) || 'no stderr'}`);
       });
       timeout = setTimeout(() => {
         try { child.kill('SIGTERM'); } catch (_) { /* process may already be gone */ }
-        finish(new Error('API credential setup timed out'));
+        fail('API credential setup timed out', `timeout after ${HERMES_API_KEY_TIMEOUT_MS}ms`);
       }, HERMES_API_KEY_TIMEOUT_MS);
       timeout.unref();
     } catch (_) {
@@ -4094,7 +4199,6 @@ function chatModelStatusProviderId(id) {
 // per turn, so connecting a second provider (for example Mia Router after
 // Claude) never hides the first one.
 function chatModelProviderIdsForUser(providers, settings, email, preference) {
-  if (!preference || !preference.onboardingComplete) return [];
   const owner = String(email || '').trim().toLowerCase();
   const connected = new Set(harnessConnectedProvidersForUser(settings, owner));
   if (managedRouterProvisionedEmails.has(managedRouterAccountEmail(owner))) connected.add(MANAGED_ROUTER_HERMES_PROVIDER);
@@ -4138,27 +4242,47 @@ function visibleChatModelProvidersForUser(providers, email) {
   return visible;
 }
 
-function inferenceOptionsForUser(email, baseOptions) {
+async function inferenceOptionsForUser(email, baseOptions) {
   const options = Object.assign({}, baseOptions || {});
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const preference = harnessPreferenceForUser(settings, email);
-  const provider = harnessCliProviderForUser(email);
+  // baseOptions may carry a per-turn selection already validated against the
+  // user's connected inventory. It takes precedence over a disconnected default.
+  const explicitSelection = Boolean(options.provider && options.model);
+  const provider = explicitSelection ? options.provider : harnessCliProviderForUser(email);
+  const preferredProvider = preference.provider === 'openai-api' ? preference.apiProvider : preference.provider;
+  const statusProvider = chatModelStatusProviderId(provider || preferredProvider);
+  if (hermesDisconnectedProviders.has(statusProvider)
+    || harnessProviderDisconnectedForUser(settings, email, statusProvider)) {
+    throw new Error(`no usable credentials: ${statusProvider} was disconnected for this user`);
+  }
   if (provider) options.provider = provider;
-  if (provider && preference.model) {
+  if (!explicitSelection && provider && preference.model) {
     options.model = preference.model;
     if (preference.fast) options.fast = true;
   } else if (provider && !options.model) {
-    // A provider without a model is never applied downstream (the gateway
-    // client only pins provider alongside an explicit model), which would
-    // silently hand the turn to whatever the Hermes profile defaults to.
-    // Resolve the user's first visible model instead — for a managed router
-    // that is the allowlisted model.
-    // Several providers can be visible; only the preferred one (under
-    // either of its Hermes ids) may supply the default model.
-    const visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
-    const entry = visible[provider] || chatModelProviderIdsForPreference(preference)
+    // A provider-only request cannot replace a remembered profile model.
+    // Hydrate its visible inventory before deciding whether a concrete pin
+    // is available, including for helpers that run outside a chat turn.
+    let visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
+    const entryForProvider = () => visible[provider] || chatModelProviderIdsForPreference(preference)
       .map((id) => visible[id]).find(Boolean);
+    if (!entryForProvider()) {
+      try {
+        rememberNativeChatModelInventory(await getHermesGatewayModelOptions({ refresh: true }));
+        visible = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
+      } catch (_) { /* the post-disconnect guard below must not allow a default fallback */ }
+    }
+    const entry = entryForProvider();
     if (entry && entry.models.length) options.model = entry.models[0];
+  }
+  const owner = String(email || '').trim().toLowerCase();
+  const disconnected = settings.harnessDisconnectedByUser && settings.harnessDisconnectedByUser[owner];
+  if ((hermesDisconnectedProviders.size || (Array.isArray(disconnected) && disconnected.length))
+    && (!options.provider || !options.model)) {
+    // The shared profile can still remember a provider this user revoked.
+    // Preserve that profile and the external login, but never inherit it.
+    throw new Error('no usable credentials: choose a connected model before running inference');
   }
   return Object.keys(options).length ? options : undefined;
 }
@@ -4344,6 +4468,9 @@ app.post('/api/settings/harness/connected', requireAuth, async (req, res) => {
   if (hermesDisconnectedProviders.has(provider) || harnessProviderDisconnectedForUser(settings, owner, provider)) {
     return notConnected();
   }
+  if (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterError(routerEmail)?.code === 'runtime_unavailable') {
+    return notConnected();
+  }
   const connected = provider === CLAUDE_SUBSCRIPTION_PROVIDER
     ? (await runClaudeSubscriptionStatus()).loggedIn
     : (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterProvisionedEmails.has(routerEmail))
@@ -4380,13 +4507,17 @@ app.get('/api/settings/harness/providers', requireAuth, (req, res) => {
 app.get('/api/settings/managed-router/status', requireAuth, (req, res) => {
   const email = managedRouterAccountEmail(req.userEmail);
   const provisioned = managedRouterProvisionedEmails.has(email);
-  const error = provisioned ? null : managedRouterError(email);
+  const error = managedRouterError(email);
   return res.status(200).json({
     provisioned,
+    runtimeReady: provisioned && !error,
     available: Boolean(MANAGED_ROUTER_URL),
     label: MANAGED_ROUTER_LABEL,
     error: error && error.message,
     errorCode: error && error.code,
+    // Content-free provisioning trail (step names, statuses, exit codes) for
+    // the Settings feedback report. See recordManagedRouterDiagnostic.
+    diagnostics: managedRouterDiagnostics.slice(-30),
   });
 });
 
@@ -4395,19 +4526,24 @@ app.post('/api/settings/managed-router/provision', requireGlobalSettingsAdmin, a
   if (!MANAGED_ROUTER_URL) {
     return res.status(503).json({ error: `${MANAGED_ROUTER_LABEL} is not configured on this installation` });
   }
-  if (!freshManagedRouterToken(email)) {
+  const retryRuntime = managedRouterError(email)?.code === 'runtime_unavailable';
+  if (!retryRuntime && !freshManagedRouterToken(email)) {
     // Provisioning authenticates with the user's own Clerk token; without a
     // fresh one the mint endpoint would reject us anyway.
     return res.status(409).json({ error: 'Sign in again to re-provision (the Clerk session token has expired)' });
   }
   try {
-    managedRouterProvisionedEmails.delete(email);
-    await autoProvisionManagedRouter(email, null, { force: true });
-    if (!managedRouterProvisionedEmails.has(email)) {
+    // A runtime-only failure retries the saved credential instead of rotating
+    // a usable key. Concurrent normal/force calls share the active attempt.
+    const force = !retryRuntime;
+    const result = await autoProvisionManagedRouter(email, null, { force });
+    if (!result?.ok) {
       const error = managedRouterError(email);
       return res.status(502).json({
         error: (error && error.message) || MANAGED_ROUTER_ERROR_MESSAGES.unavailable,
         code: (error && error.code) || 'unavailable',
+        credentialSaved: result?.credentialSaved === true,
+        runtimeReady: false,
       });
     }
     return res.status(200).json({ ok: true, provisioned: true });
@@ -4576,19 +4712,22 @@ app.post('/api/settings/harness/api-key', requireGlobalSettingsAdmin, async (req
   }
   disconnectHermesAuth(req.userEmail, provider);
   try {
-    // Validate before Hermes persists the submitted key so malformed or
-    // externally linked profiles cannot leave a partial re-key behind.
-    requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
-    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
-    await runHermesApiKeyAdd(provider, apiKey);
-    // Re-keying must actually take effect: drop any stale copy of this
-    // provider from the per-profile pools (the root store just written is
-    // authoritative) and bounce the Mia-owned gateway so no live session
-    // stays pinned to the credential it was built with.
-    requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider));
-    await restartHermesGatewayRuntime();
+    const runtime = await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
+      // Share the same maintenance boundary as managed-router provisioning:
+      // no gateway or second provider writer may race these store updates.
+      requireCredentialCleanup(removeProviderRootCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
+      requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider, { validateOnly: true }));
+      await runHermesApiKeyAdd(provider, apiKey);
+      requireCredentialCleanup(removeProviderProfileCredentials(process.env.HERMES_HOME, provider));
+    }));
     hermesDisconnectedProviders.delete(provider);
     setHarnessProviderConnected(req.userEmail, provider, true);
+    if (!runtime.runtimeReady) {
+      return res.status(502).json({
+        error: 'Your API credential is saved, but Mia could not start its connection. Try again; the credential does not need replacing.',
+        code: 'runtime_unavailable', provider, credentialSaved: true, runtimeReady: false,
+      });
+    }
     return res.status(200).json({ ok: true, provider, state: 'connected' });
   } catch (error) {
     return res.status(502).json({ error: error.message || 'Could not add API credential' });
@@ -4819,17 +4958,40 @@ function googleWorkspaceStatusHandler(req, res) {
 async function googleWorkspaceAgentContextForOwner(ownerEmail, message) {
   const connector = googleAccountOwnerBinding.connectorFor(ownerEmail);
   if (!connector) {
-    return 'Google Workspace connector (authoritative server state): NOT CONNECTED for this user. Ask them to connect it from Plugins.';
+    return { text: 'Google Workspace connector (authoritative server state): NOT CONNECTED for this user. Ask them to connect it from Plugins.', connectionRevision: '', status: { connected: false, state: 'not_connected' }, ownerAuthorized: false };
   }
+  let status;
+  try { status = await connector.status(); }
+  catch (_) { status = { connected: false, state: 'connection_error' }; }
   const result = await googleWorkspaceContext.buildGoogleWorkspaceAgentContext({
     // The authenticated event owner is resolved by native authorization
     // before this function is called. Google OAuth and resource operations are
     // owned by Hermes; no Mia refresh-token row is consulted here.
-    connector,
+    connector: Object.assign({}, connector, { status: async () => status }),
     ownerEmail,
     message,
   });
-  return result.text;
+  return { text: result.text, connectionRevision: status.connected ? status.connectionRevision : '', status, ownerAuthorized: true };
+}
+
+// Each agent receives the entire current snapshot even when unchanged. This
+// bounded cache only adds a change notice; losing it on restart cannot hide an
+// app or preserve access. Owner/agent isolation matters in shared rooms.
+const connectedAppsTurnRevisions = new Map();
+function connectedAppsForTurn(workspaceConnection, ownerEmail, conversation, agent, remember = true) {
+  const key = JSON.stringify([String(ownerEmail || '').trim().toLowerCase(), conversation.companyId, conversation.id, agent.id]);
+  const snapshot = buildConnectedAppsTurn({
+    ownerEmail, status: workspaceConnection.status,
+    ownerAuthorized: workspaceConnection.ownerAuthorized,
+    toolsConfigured: googleWorkspaceToolsConfigured(),
+    previousRevision: connectedAppsTurnRevisions.get(key),
+  });
+  if (remember) {
+    connectedAppsTurnRevisions.delete(key);
+    connectedAppsTurnRevisions.set(key, snapshot.revision);
+    if (connectedAppsTurnRevisions.size > 2000) connectedAppsTurnRevisions.delete(connectedAppsTurnRevisions.keys().next().value);
+  }
+  return snapshot;
 }
 
 // Legacy route intentionally unregistered.
@@ -5094,7 +5256,7 @@ app.get('/api/bots/examples', requireAuth, async (req, res) => {
     const reply = await scheduleInference(
       prompt,
       'suggestion',
-      inferenceOptionsForUser(req.userEmail)
+      await inferenceOptionsForUser(req.userEmail)
     );
     const examples = String(reply || '')
       .replace(/\r\n/g, '\n')
@@ -5106,6 +5268,32 @@ app.get('/api/bots/examples', requireAuth, async (req, res) => {
     res.status(200).json({ examples });
   } catch (err) {
     res.status(200).json({ examples: [] });
+  }
+});
+
+// "Mia suggests" on the browser's blank tab: the next step each bot proposed
+// at the end of its latest reply. No model runs here, so it costs nothing.
+app.get('/api/browser/suggestions', requireAuth, (req, res) => {
+  const owner = String(req.userEmail || '').toLowerCase();
+  const workspaceId = workspaceIdFromRequest(req);
+  try {
+    const bots = db
+      .loadAll(conn, 'bots')
+      .filter((bot) => workspaceIdForRecord(bot) === workspaceId && (workspaceId === DEFAULT_WORKSPACE_ID || sameOwner(bot, owner)));
+    const replies = browserSuggestions.latestBotReplies({
+      bots,
+      conversationsFor: (bot) => nativeBotConversations(bot),
+      eventsFor: (conversation) => nativeConversationRepository.listEvents({
+        companyId: conversation.companyId,
+        conversationId: conversation.id,
+        latest: true,
+        limit: 20,
+        includeDeleted: false,
+      }).events,
+    });
+    res.status(200).json({ suggestions: browserSuggestions.browserSuggestions(replies) });
+  } catch (err) {
+    res.status(200).json({ suggestions: [] });
   }
 });
 
@@ -5169,31 +5357,21 @@ app.post('/api/bots/interpret', requireAuth, async (req, res) => {
       message: userFacingModelDispatchError(error),
     });
   }
-  // Mia's chat revises a draft in place: `currentDraft` is the proposal the
-  // user is reviewing (with any hand edits) and `change` is what they asked
-  // Mia to change about it.
-  const body = req.body || {};
-  const change = String(body.change || '').trim().slice(0, 2000);
-  const currentDraft = change && body.currentDraft && typeof body.currentDraft === 'object' && !Array.isArray(body.currentDraft)
-    ? body.currentDraft : null;
-  let draft = currentDraft
-    ? normalizeAgentRevision('', intent, currentDraft, change)
-    : fallbackAgentDraft(intent);
+  // The model reads the request; when it can't, the user tries again.
+  // There is no keyword-built stand-in draft.
+  let draft = null;
   try {
     const reply = await scheduleInference(
-      currentDraft ? buildAgentRevisionPrompt(intent, currentDraft, change) : buildAgentSetupPrompt(intent),
+      buildAgentSetupPrompt(intent),
       'suggestion',
-      chatModelSelectionInferenceOptions(
-        inferenceOptionsForUser(req.userEmail),
-        modelSelection
-      )
+      await inferenceOptionsForUser(req.userEmail, chatModelSelectionInferenceOptions(null, modelSelection))
     );
-    draft = currentDraft
-      ? normalizeAgentRevision(reply, intent, currentDraft, change)
-      : normalizeAgentDraft(reply, intent);
+    draft = normalizeAgentDraft(reply);
   } catch (err) {
-    // Naming/setup inference is UX assistance, not an availability boundary.
-    // A deterministic proposal still lets the user edit and confirm safely.
+    draft = null;
+  }
+  if (!draft) {
+    return res.status(502).json({ error: 'draft_unavailable', message: 'The model didn’t return a bot draft. Try again.' });
   }
   res.status(200).json({ draft });
 });
@@ -5223,7 +5401,17 @@ app.get('/api/automations/active', requireAuth, (req, res) => {
         startedAt: run.startedAt,
       };
     });
-  res.status(200).json({ runs: visible });
+  // Each automation's latest step checklist, from the bot's `report_step`
+  // reports. Optional: a failure here never hides the live runs.
+  let checklists = [];
+  try {
+    checklists = cronSync.listAutomationChecklists(conn)
+      .filter((item) => item && item.bot && botVisibleInWorkspace(item.bot, req))
+      .map(({ bot, ...item }) => ({ botId: bot.id, ...item }));
+  } catch (error) {
+    console.error('automation checklist scan failed', error.message);
+  }
+  res.status(200).json({ runs: visible, checklists });
 });
 
 // Bot Store: read-only catalog of predefined bots the user can install with
@@ -5426,6 +5614,10 @@ registerResource({
         return 'automation.intervalMinutes must be 1-60 minutes or a whole number of hours up to 24';
       }
       if (automation.day !== undefined && typeof automation.day !== 'string') return 'automation.day must be a string';
+      if (automation.steps !== undefined && (!Array.isArray(automation.steps) || automation.steps.length > cronSync.MAX_AUTOMATION_STEPS
+        || automation.steps.some((step) => typeof step !== 'string' || !step.trim() || step.length > 500))) {
+        return `automation.steps must be up to ${cronSync.MAX_AUTOMATION_STEPS} non-empty steps of up to 500 characters`;
+      }
       if (automation.time !== undefined && automation.time !== '' && !cronSync.isValidAutomationTime(automation.time)) {
         return 'automation.time must use HH:MM in 24-hour time';
       }
@@ -5466,6 +5658,119 @@ app.get('/api/agents/gateway', requireAuth, (req, res) => {
   return res.status(200).json({ agent });
 });
 
+// The user's answer to a bot's automation card (see nativeBotAutomationAction).
+// accept saves the card's final values through the same validation and
+// scheduler sync as any automation edit; dismiss only records the answer.
+app.post('/api/bots/:id/automation-proposals/:eventId', requireAuth, async (req, res) => {
+  const bot = db.loadOne(conn, 'bots', req.params.id);
+  if (!bot || !botVisibleInWorkspace(bot, req)) return res.status(404).json({ error: 'not_found' });
+  if (!sameOwner(bot, req.userEmail) && !isAdmin(req.userEmail)) {
+    return res.status(403).json({ error: 'forbidden', message: 'Only the bot owner or a workspace admin can change its automations.' });
+  }
+  const decision = String((req.body || {}).decision || '');
+  if (decision !== 'accept' && decision !== 'dismiss') return res.status(400).json({ error: 'decision must be accept or dismiss' });
+  const companyId = nativeCompanyId(workspaceIdForRecord(bot), ownerOf(bot));
+  const event = nativeConversationRepository.getEvent({ companyId, id: req.params.eventId, includeDeleted: false });
+  const conversationIds = new Set(nativeBotConversations(bot).map((conversation) => conversation.id));
+  const proposal = event && event.metadata && event.metadata.automationProposal;
+  if (!event || event.senderId !== bot.id || !conversationIds.has(event.conversationId)
+    || !proposal || proposal.botId !== bot.id) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  if (proposal.status !== 'pending') return res.status(409).json({ error: 'already_answered', proposal });
+  const answer = (fields) => nativeConversationRepository.updateEvent({
+    companyId,
+    id: event.id,
+    metadata: { ...event.metadata, automationProposal: { ...proposal, ...fields, answeredAt: new Date().toISOString() } },
+    editedAt: event.editedAt || event.createdAt,
+  });
+  if (decision === 'dismiss') {
+    const updated = answer({ status: 'dismissed' });
+    bumpVersion();
+    return res.status(200).json({ event: updated });
+  }
+  // The card's edits are checked against schema v1 and the bot's current
+  // automations, exactly as if the bot had sent them.
+  const fields = (req.body || {}).automation !== undefined ? req.body.automation : proposal.automation;
+  const checked = botAutomationActions.normalizeAutomationAction({
+    schemaVersion: botAutomationActions.SCHEMA_VERSION,
+    action: proposal.action,
+    ...(proposal.automationId ? { automationId: proposal.automationId } : {}),
+    automation: fields,
+  }, bot);
+  if (checked.error) return res.status(400).json({ error: 'invalid_automation', message: checked.error });
+  const existing = proposal.automationId
+    ? (bot.automations || []).find((automation) => automation.id === proposal.automationId)
+    : null;
+  const record = botAutomationActions.automationRecordFromProposal(checked.proposal.automation, existing, {
+    conversationId: event.conversationId,
+    companyId,
+  });
+  const now = new Date().toISOString();
+  const updatedBot = {
+    ...bot,
+    automations: existing
+      ? bot.automations.map((automation) => (automation.id === existing.id ? record : automation))
+      : [...(bot.automations || []), record],
+    updatedAt: now,
+    timeline: [
+      ...(Array.isArray(bot.timeline) ? bot.timeline : []),
+      { ts: now, event: `automation ${existing ? 'updated' : 'created'} from chat: ${record.name}` },
+    ],
+  };
+  cronSync.migrateBotAutomations(updatedBot);
+  db.saveOne(conn, 'bots', updatedBot.id, updatedBot);
+  if (updatedBot.status !== 'draft') {
+    try {
+      const started = JSON.parse(JSON.stringify(updatedBot));
+      const synced = (await syncBotAutomationWithInstructions(updatedBot)) || updatedBot;
+      const current = db.loadOne(conn, 'bots', updatedBot.id);
+      if (current) db.saveOne(conn, 'bots', updatedBot.id, cronSync.mergeBotCronSyncState(current, synced, started));
+    } catch (err) {
+      console.error('cron-sync: failed to sync automation from chat for', updatedBot.id, err.message);
+    }
+  }
+  const savedBot = db.loadOne(conn, 'bots', updatedBot.id) || updatedBot;
+  // The card says whether a job exists: drafts are never scheduled, and a
+  // failed sync is retried at boot.
+  const schedule = updatedBot.status === 'draft' ? 'draft'
+    : (savedBot.hermesCronJobIds && savedBot.hermesCronJobIds[record.id]) ? 'scheduled' : 'pending';
+  const updated = answer({ status: 'accepted', automationId: record.id, automation: checked.proposal.automation, schedule });
+  bumpVersion();
+  return res.status(200).json({ event: updated, bot: savedBot });
+});
+
+// Mia's bot setup card answers her <MIA_BOT_SETUP> request: accepted once
+// the user creates the bot from the card, dismissed when they close it.
+// Only the person who asked, in their own Mia chat, can answer it.
+app.post('/api/mia/bot-setup-requests/:eventId', requireAuth, (req, res) => {
+  const owner = String(req.userEmail || '').toLowerCase();
+  const companyId = nativeCompanyId(workspaceIdFromRequest(req), owner);
+  const decision = String((req.body || {}).decision || '');
+  if (decision !== 'accepted' && decision !== 'dismissed') return res.status(400).json({ error: 'decision must be accepted or dismissed' });
+  const event = nativeConversationRepository.getEvent({ companyId, id: req.params.eventId, includeDeleted: false });
+  const request = event && event.metadata && event.metadata.botSetupRequest;
+  const conversation = event && nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
+  if (!request || !conversation || conversation.type !== 'agent'
+    || String(conversation.createdBy || '').toLowerCase() !== owner
+    || String(request.requestedBy || '').toLowerCase() !== owner) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  if (request.status !== 'pending') return res.status(409).json({ error: 'already_answered', request });
+  const botId = decision === 'accepted' ? String((req.body || {}).botId || '').slice(0, 120) : '';
+  const updated = nativeConversationRepository.updateEvent({
+    companyId,
+    id: event.id,
+    metadata: {
+      ...event.metadata,
+      botSetupRequest: { ...request, status: decision, ...(botId ? { botId } : {}), answeredAt: new Date().toISOString() },
+    },
+    editedAt: event.editedAt || event.createdAt,
+  });
+  bumpVersion();
+  return res.status(200).json({ event: updated });
+});
+
 app.post('/api/bots/:id/departments', requireAuth, async (req, res) => {
   const existing = db.loadOne(conn, 'bots', req.params.id);
   if (!existing || !botMutableInWorkspace(existing, req)) return res.status(404).json({ error: 'not_found' });
@@ -5501,7 +5806,7 @@ app.post('/api/bots/suggest-name', requireAuth, async (req, res) => {
     const reply = await scheduleInference(
       prompt,
       'suggestion',
-      inferenceOptionsForUser(req.userEmail)
+      await inferenceOptionsForUser(req.userEmail)
     );
     const name = String(reply || '')
       .split(/\r?\n/)[0]
@@ -5940,48 +6245,6 @@ function nativeDispatchActor(dispatch, conversation, trigger) {
   });
 }
 
-function nativeBotCreationRequest(message) {
-  const text = String(message || '').trim();
-  // Questions about the product ("how do I create a bot?") are answered by
-  // Mia, never turned into a creation side effect.
-  if (/^(?:how|what|why|where|when|which|is|are|does|do i|should)\b/i.test(text.replace(/^(?:hey|hi|hello|mia)[,!\s]+/i, ''))) return null;
-  // Explicitly named forms: "create/make/build/add/set up a (new) bot/agent
-  // named/called X [that/who/to Y]".
-  const named = /\b(?:create|make|build|add|set\s*up|spin\s*up)\s+(?:an?\s+)?(?:new\s+)?(?:bot|agent)\s+(?:named|called)\s+["']?([^"'\n]+?)["']?(?:\s+(?:that|who|to)\s+(.+?))?[.!?]?\s*$/i.exec(text);
-  if (named) {
-    return {
-      name: named[1].trim(),
-      role: (named[2] || '').trim() || 'Help with the work described in the request.',
-    };
-  }
-  // Descriptive form with no explicit name: "can we create a newsletter
-  // agent?", "make a research bot that tracks AI papers". The words between
-  // the verb and bot/agent name the bot; a trailing that/who/to clause is
-  // its role.
-  const descriptive = /\b(?:create|make|build|add|set\s*up|spin\s*up)\s+(?:an?\s+)?(?:new\s+)?((?:[A-Za-z][\w-]*\s+){0,4}?)(?:bot|agent)\b\s*(.*)$/i.exec(text);
-  if (!descriptive) return null;
-  const modifier = String(descriptive[1] || '').replace(/\b(?:new|another|little|simple|quick)\b/gi, ' ').replace(/\s+/g, ' ').trim();
-  const clause = /^(?:that|who|to)\s+(.+?)[.!?]?\s*$/i.exec(String(descriptive[2] || '').trim());
-  if (!modifier && !clause) return null;
-  const name = modifier
-    ? modifier.split(/\s+/).slice(0, 3).map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ')
-    : null;
-  const role = clause
-    ? clause[1].trim()
-    : `Help with ${modifier.toLowerCase()} work.`;
-  if (!name) {
-    // "create a bot that tracks AI news" — name it from the role's leading words.
-    const roleWords = role.replace(/[^\w\s-]/g, ' ').split(/\s+/).filter((word) =>
-      word && !/^(?:the|a|an|my|our|and|for|with|that|who|to)$/i.test(word)).slice(0, 2);
-    if (!roleWords.length) return null;
-    return {
-      name: roleWords.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' '),
-      role,
-    };
-  }
-  return { name, role };
-}
-
 function nativeReplyParentEventId(trigger) {
   // A normal chat event is already a root message. Only preserve an existing
   // parent when the user explicitly replied from an open thread; automatic Mia
@@ -6075,49 +6338,6 @@ async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, 
   }));
 }
 
-async function createNativeBotFromMiaRequest(companyId, ownerEmail, message, model, modelProvider) {
-  const request = nativeBotCreationRequest(message);
-  if (!request || !request.name || !request.role) return null;
-  if (!model) throw new Error('Choose a connected model before asking Mia to create a bot');
-  if (!modelProvider) throw new Error('Choose a connected model provider before asking Mia to create a bot');
-  const owner = String(ownerEmail || '').trim().toLowerCase();
-  const name = request.name.slice(0, 40);
-  const role = request.role.slice(0, 500);
-  let bot = db.loadAll(conn, 'bots').find((candidate) =>
-    recordBelongsToCompany(candidate, NATIVE_COMPANY_ID, companyId)
-      && String(candidate.name || '').trim().toLowerCase() === name.toLowerCase()
-  );
-  if (!bot) {
-    const existingBots = db.loadAll(conn, 'bots');
-    if (existingBots.length >= MAX_BOTS) throw new Error(`This Mia installation supports up to ${MAX_BOTS} bots.`);
-    const now = new Date().toISOString();
-    bot = {
-      id: `bot-${crypto.randomUUID()}`,
-      name,
-      role,
-      output: 'A clear one-sentence answer to the user’s question.',
-      instructions: `Role: ${role}\n\nDesired output: A clear one-sentence answer to the user’s question.`,
-      model,
-      modelProvider,
-      status: 'running',
-      replyAlways: false,
-      departments: [],
-      owner,
-      workspaceId: companyId === NATIVE_COMPANY_ID ? DEFAULT_WORKSPACE_ID : 'solo',
-      createdAt: now,
-      updatedAt: now,
-      timeline: [{ ts: now, event: 'bot created by Mia in native channel' }],
-    };
-    db.insertOne(conn, 'bots', bot.id, bot);
-    bumpVersion();
-  }
-  const conversation = nativeConversationRepository.listConversations({ companyId, limit: 1000 }).find((candidate) => {
-    const metadata = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
-    return candidate.type === 'bot' && metadata.botId === bot.id;
-  }) || await ensureNativeBotConversation(bot);
-  return { bot, conversation };
-}
-
 // Native dispatches are already durable: the dispatch row is claimed before
 // this function runs and completed only after the final agent event is saved.
 // Keep the prompt builder explicit so the same authenticated-owner Google
@@ -6191,6 +6411,14 @@ function nativeBrowserContextNote(trigger, { ghostCli = true } = {}) {
     `URL: ${url}`,
     ghostCli ? 'Vacuum it via ghost-cli for more information if needed.' : '',
   ].filter(Boolean).join('\n');
+}
+
+// Bot sessions keep the system prompt they started with, so the tab-list
+// pointer rides on every bot turn instead.
+function botBrowserTabsNote({ ghostCli = true } = {}) {
+  if (!ghostCli) return '';
+  return 'Your Mia browser tabs (not Google Sheets tabs) are in your own tab group. Before answering about them, list them with: ghost-cli call ghost_tab_list --arguments \'{"instance_id":"miaos"}\'. ' +
+    'Reuse those tabs: load a page with ghost_navigate (in your current tab, or pass the tab_id of your tab already on that site), and open a new tab with ghost_tab_open only when you need two pages at once.';
 }
 
 function buildHermesGatewayTurnMessage(message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite, globalInstructions) {
@@ -6279,6 +6507,27 @@ function nativeBotSessionKey(profile, systemPrompt) {
 // /goal keeps working after a turn ends; those turns arrive with no dispatch
 // waiting, and this map is how they find their chat.
 const nativeGatewaySessionConversations = new Map();
+
+// The desktop browser asks which bot a live Hermes session belongs to, so a
+// page a bot opens lands in that bot's tab group. Mia is an explicit verified
+// identity; unknown sessions and inaccessible conversations never become Mia.
+app.get('/api/browser/actor', requireAuth, (req, res) => {
+  const sessionId = String(req.query.session || '').trim();
+  const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
+  if (!target) return res.status(200).json({ actor: null });
+  try {
+    nativeConversationService.getConversation({
+      companyId: target.companyId,
+      conversationId: target.conversationId,
+      principal: { principalId: String(req.userEmail || '').trim().toLowerCase(), principalType: 'user' },
+    });
+  } catch (_) {
+    return res.status(200).json({ actor: null });
+  }
+  return res.status(200).json({ actor: target.botId
+    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot') }
+    : { kind: 'mia' } });
+});
 // Per-session chain so a verdict that waits on the goal snapshot still posts
 // before the continuation turn that follows it.
 const nativeHermesSessionEventChains = new Map();
@@ -6566,6 +6815,86 @@ function deletionGuardedGoogleConnector(connector, dispatch, trigger, signal) {
   };
 }
 
+function localTimezoneName() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+// Reads a bot's <MIA_AUTOMATION> block. create/update become a pending card
+// the user reviews (see /api/bots/:id/automation-proposals); run_now starts
+// an automation that is already on. -> { text, fallbackText, metadata }
+// Action blocks are read by Mia, never shown: a bot's <MIA_AUTOMATION> and
+// Mia's own <MIA_BOT_SETUP>.
+function stripAgentActionBlocks(text) {
+  return miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text));
+}
+
+// Reads Mia's <MIA_BOT_SETUP> block in her own chat: it becomes a pending
+// request the app shows as the bot setup card. -> { text, fallbackText, metadata }
+function nativeMiaBotSetupRequest(replyText, senderLabel) {
+  const extracted = miaBotSetupActions.extractBotSetupRequest(replyText);
+  if (!extracted.request && !extracted.error) return { text: extracted.text, metadata: null };
+  if (extracted.error) {
+    return {
+      text: extracted.text,
+      fallbackText: 'I tried to open the bot setup but the details were incomplete. Tell me again what the bot should do.',
+      metadata: { botSetupError: String(extracted.error).slice(0, 200) },
+    };
+  }
+  return {
+    text: extracted.text,
+    fallbackText: 'Here’s a draft of the bot for you to review.',
+    metadata: {
+      botSetupRequest: {
+        id: `bot-setup-${crypto.randomUUID()}`,
+        request: extracted.request.request,
+        requestedBy: senderLabel,
+        status: 'pending',
+      },
+    },
+  };
+}
+
+async function nativeBotAutomationAction(agent, replyText, trigger) {
+  const extracted = botAutomationActions.extractAutomationAction(replyText);
+  if (!extracted.action && !extracted.error) return { text: extracted.text, metadata: null };
+  const failed = (reason) => ({
+    text: extracted.text,
+    fallbackText: 'I tried to set up that automation but the details were incomplete. Tell me what to change and I’ll try again.',
+    metadata: { automationActionError: String(reason).slice(0, 200) },
+  });
+  if (extracted.error) return failed(extracted.error);
+  const normalized = botAutomationActions.normalizeAutomationAction(extracted.action, agent);
+  if (normalized.error) return failed(normalized.error);
+  const proposal = normalized.proposal;
+  if (proposal.action !== 'run_now') {
+    return {
+      text: extracted.text,
+      fallbackText: proposal.action === 'create' ? 'Here’s the automation I’d set up.' : 'Here’s the change I’d make.',
+      metadata: { automationProposal: { ...proposal, id: `proposal-${crypto.randomUUID()}`, botId: agent.id, status: 'pending' } },
+    };
+  }
+  const run = { automationId: proposal.automationId, name: proposal.name };
+  if (!sameOwner(agent, trigger.senderId) && !isAdmin(trigger.senderId)) {
+    return { text: extracted.text, fallbackText: `Only my owner or a workspace admin can run ${proposal.name}.`, metadata: { automationRun: { ...run, status: 'denied' } } };
+  }
+  try {
+    const result = await cronSync.runBotAutomationNow(agent, proposal.automationId);
+    const fallback = result.status === 'started'
+      ? `Running ${proposal.name} now. I’ll post the result here.`
+      : result.status === 'off'
+        ? `${proposal.name} is off. Turn it on in Automations to run it.`
+        : `I couldn’t find the scheduled job for ${proposal.name}. Open it in Automations and save it again.`;
+    return { text: extracted.text, fallbackText: fallback, metadata: { automationRun: { ...run, status: result.status } } };
+  } catch (error) {
+    console.error('automation run_now failed for', agent.id, error.message);
+    return { text: extracted.text, fallbackText: `I couldn’t start ${proposal.name}. Try again in a moment.`, metadata: { automationRun: { ...run, status: 'failed' } } };
+  }
+}
+
 async function applyNativeGoogleWorkspaceAction({
   ownerEmail,
   rawResult,
@@ -6736,14 +7065,23 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   // runs as its own dispatch once that turn ends.
   if (nativeSlashCommand(trigger)) return false;
   if (cancelNativeDispatchForInactiveUser(dispatch, trigger)) return true;
+  // A message sent while Mia is working can be steered into its existing
+  // turn. Refresh at this entry point too; a changed capability set must
+  // instead run as a new dispatch/session once the current work settles.
+  const conversation = nativeConversationRepository.getConversation({ companyId: dispatch.companyId, id: dispatch.conversationId });
+  if (!conversation) return false;
+  const workspaceConnection = await googleWorkspaceAgentContextForOwner(trigger.senderId, '');
+  const inventory = connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: GATEWAY_AGENT_ID }, false);
+  if (inventory.revision !== activeGateway.capabilityRevision) return false;
   let result;
   try {
-    result = await steerHermesGatewaySession(activeGateway.sessionId, message);
+    result = await steerHermesGatewaySession(activeGateway.sessionId, inventory.note + '\n\nUser: ' + message);
   } catch (_) {
     return false;
   }
   if (cancelNativeDispatchForInactiveUser(dispatch, trigger)) return true;
   if (!result || result.status !== 'queued') return false;
+  connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: GATEWAY_AGENT_ID });
   const claimToken = `native-steer-${crypto.randomUUID()}`;
   const claimed = nativeConversationRepository.claimDispatch({
     companyId: dispatch.companyId,
@@ -6785,29 +7123,19 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   if (!trigger || trigger.senderType !== 'user') return;
   throwIfNativeDispatchUserInactive(dispatch, trigger);
   const isGatewayAgent = dispatch.targetType === 'gateway';
-  const triggerMessage = nativeEventText(trigger);
-  const message = !isGatewayAgent
-    && dispatch.metadata
-    && dispatch.metadata.kind === 'mia-automation-handoff'
-    && typeof dispatch.metadata.automationTask === 'string'
-    ? dispatch.metadata.automationTask
-    : triggerMessage;
+  const message = nativeEventText(trigger);
   const rawChatModelSelection = trigger.metadata && trigger.metadata.chatModelSelection;
-  // After Disconnect the resumed gateway session would still answer with the
-  // agent it built from the removed key. Refuse before touching the gateway
-  // when the user's provider was disconnected here, so "no model" in the
-  // composer means no model answers. (Inventory emptiness is not the signal:
-  // a rate-limited provider also disappears from it and must still dispatch
-  // so the user gets the usage-limit reply.)
-  const dispatchProvider = isGatewayAgent ? harnessCliProviderForUser(trigger.senderId) : null;
-  if (dispatchProvider && hermesDisconnectedProviders.has(dispatchProvider)) {
-    throw new Error(`no usable credentials: ${dispatchProvider} was disconnected for this user`);
-  }
   const chatModelSelection = await chatModelSelectionForUser(
     rawChatModelSelection,
     trigger.senderId
   );
   if (!message) return;
+  // Resolve both Mia and bot selections before any gateway/session work. A
+  // null default after disconnect must not become an unpinned Hermes turn.
+  const userOptions = await inferenceOptionsForUser(
+    trigger.senderId,
+    chatModelSelectionInferenceOptions(null, chatModelSelection)
+  );
   const parentEventId = nativeReplyParentEventId(trigger);
   const agent = nativeDispatchActor(dispatch, conversation, trigger);
   const globalInstructions = currentInstructionSettings(isGatewayAgent ? trigger.senderId : ownerOf(agent));
@@ -6841,208 +7169,6 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   });
   throwIfNativeDispatchStopped(signal);
   throwIfNativeDispatchUserInactive(dispatch, trigger);
-  // A slash command goes to Hermes as-is; it is never an automation request.
-  if (!isGatewayAgent && !slashCommand) {
-    throwIfNativeDispatchUserInactive(dispatch, trigger);
-    let cancelled;
-    try {
-      cancelled = await cancelBotAutomationFromChat({
-        bot: agent,
-        message,
-      }, {
-        canSchedule: (record) => sameOwner(record, trigger.senderId) || isAdmin(trigger.senderId),
-        syncBotAutomation: syncBotAutomationWithInstructions,
-        saveBot: (record) => {
-          throwIfNativeDispatchUserInactive(dispatch, trigger);
-          return db.saveOne(conn, 'bots', record.id, record);
-        },
-      });
-    } catch (error) {
-      return createNativeDispatchEvent(dispatch, trigger, {
-        companyId: dispatch.companyId,
-        conversationId: dispatch.conversationId,
-        principal: {
-          companyId: dispatch.companyId,
-          principalId: dispatch.targetId,
-          principalType: 'bot',
-        },
-        type: 'bot_message',
-        content: { text: `I couldn’t cancel that automation: ${String(error && error.message || 'the scheduler is unavailable')}. No schedule was changed.` },
-        parentEventId,
-        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-        metadata: { runtime: 'hermes', dispatchId: dispatch.id, automation: 'cancel-failed', agentName: agent.name },
-      });
-    }
-    if (cancelled) {
-      throwIfNativeDispatchUserInactive(dispatch, trigger);
-      bumpVersion();
-      return createNativeDispatchEvent(dispatch, trigger, {
-        companyId: dispatch.companyId,
-        conversationId: dispatch.conversationId,
-        principal: {
-          companyId: dispatch.companyId,
-          principalId: dispatch.targetId,
-          principalType: 'bot',
-        },
-        type: 'bot_message',
-        content: { text: cancelled.confirmation },
-        parentEventId,
-        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-        metadata: {
-          runtime: 'hermes',
-          dispatchId: dispatch.id,
-          automation: 'cancelled',
-          cronJobId: cancelled.bot && cancelled.bot.hermesCronJobIds && cancelled.bot.hermesCronJobIds[cancelled.automation.id],
-          agentName: agent.name,
-        },
-      });
-    }
-    throwIfNativeDispatchUserInactive(dispatch, trigger);
-    let scheduled;
-    try {
-      scheduled = await scheduleBotAutomationFromChat({
-        bot: agent,
-        message,
-        conversationId: conversation.id,
-        companyId: conversation.companyId,
-      }, {
-        canSchedule: (record) => sameOwner(record, trigger.senderId) || isAdmin(trigger.senderId),
-        syncBotAutomation: syncBotAutomationWithInstructions,
-        saveBot: (record) => {
-          throwIfNativeDispatchUserInactive(dispatch, trigger);
-          return db.saveOne(conn, 'bots', record.id, record);
-        },
-      });
-      throwIfNativeDispatchUserInactive(dispatch, trigger);
-    } catch (error) {
-      return createNativeDispatchEvent(dispatch, trigger, {
-        companyId: dispatch.companyId,
-        conversationId: dispatch.conversationId,
-        principal: {
-          companyId: dispatch.companyId,
-          principalId: dispatch.targetId,
-          principalType: 'bot',
-        },
-        type: 'bot_message',
-        content: { text: `I couldn’t create that automation: ${String(error && error.message || 'the scheduler is unavailable')}. No schedule was saved.` },
-        parentEventId,
-        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-        metadata: { runtime: 'hermes', dispatchId: dispatch.id, automation: 'failed', agentName: agent.name },
-      });
-    }
-    if (scheduled) {
-      throwIfNativeDispatchUserInactive(dispatch, trigger);
-      bumpVersion();
-      return createNativeDispatchEvent(dispatch, trigger, {
-        companyId: dispatch.companyId,
-        conversationId: dispatch.conversationId,
-        principal: {
-          companyId: dispatch.companyId,
-          principalId: dispatch.targetId,
-          principalType: 'bot',
-        },
-        type: 'bot_message',
-        content: { text: scheduled.confirmation },
-        parentEventId,
-        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-        metadata: {
-          runtime: 'hermes',
-          dispatchId: dispatch.id,
-          automation: 'created',
-          cronJobId: scheduled.bot.hermesCronJobIds && scheduled.bot.hermesCronJobIds[scheduled.automation.id],
-          agentName: agent.name,
-        },
-      });
-    }
-  }
-  if (dispatch.targetType === 'gateway' && !slashCommand) {
-    throwIfNativeDispatchUserInactive(dispatch, trigger);
-    const created = await createNativeBotFromMiaRequest(
-      dispatch.companyId,
-      trigger.senderId,
-      message,
-      chatModelSelection && chatModelSelection.model,
-      chatModelSelection && chatModelSelection.provider
-    );
-    throwIfNativeDispatchUserInactive(dispatch, trigger);
-    if (created) {
-      return createNativeDispatchReplyEvent(dispatch, trigger, {
-        type: 'agent_message',
-        content: { text: `Created ${created.bot.name}. The bot is ready in its native chat.` },
-        parentEventId,
-        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-        metadata: { runtime: 'hermes', dispatchId: dispatch.id, action: 'create-native-bot', botId: created.bot.id, agentName: 'Mia' },
-      });
-    }
-    const automationRequest = managerAutomationRequestFromChat(
-      message,
-      db.loadAll(conn, 'bots').filter((bot) =>
-        recordBelongsToCompany(bot, NATIVE_COMPANY_ID, conversation.companyId)
-      )
-    );
-    if (automationRequest) {
-      if (!sameOwner(automationRequest.bot, trigger.senderId) && !isAdmin(trigger.senderId)) {
-        return createNativeDispatchReplyEvent(dispatch, trigger, {
-          type: 'agent_message',
-          content: { text: `I can’t change ${automationRequest.bot.name}’s automation because only its owner or a workspace admin can do that.` },
-          parentEventId,
-          clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-          metadata: { runtime: 'hermes', dispatchId: dispatch.id, action: 'schedule-bot-automation-denied', botId: automationRequest.bot.id, agentName: 'Mia' },
-        });
-      }
-      throwIfNativeDispatchUserInactive(dispatch, trigger);
-      const botConversation = await ensureNativeBotConversation(automationRequest.bot);
-      if (!botConversation) throw new Error(`bot conversation unavailable for ${automationRequest.bot.id}`);
-      throwIfNativeDispatchUserInactive(dispatch, trigger);
-      const miaResult = await createNativeDispatchReplyEvent(dispatch, trigger, {
-        type: 'agent_message',
-        content: {
-          text: `I asked ${automationRequest.bot.name} to create and own this ${automationRequest.summary} automation.`,
-        },
-        parentEventId,
-        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
-        metadata: {
-          runtime: 'hermes',
-          action: 'schedule-bot-automation',
-          botId: automationRequest.bot.id,
-          agentName: 'Mia',
-        },
-      });
-      createNativeDispatchEvent(dispatch, trigger, {
-        companyId: botConversation.companyId,
-        conversationId: botConversation.id,
-        principal: {
-          companyId: botConversation.companyId,
-          principalId: trigger.senderId,
-          principalType: 'user',
-        },
-        type: 'message',
-        content: { text: automationRequest.task },
-        clientIdempotencyKey: `native-mia-automation-handoff-${dispatch.id}-${automationRequest.bot.id}`,
-        metadata: {
-          delegatedBy: 'gateway',
-          sourceConversationId: conversation.id,
-          sourceEventId: trigger.id,
-        },
-        routing: {
-          oneToOneAgent: {
-            id: automationRequest.bot.id,
-            name: automationRequest.bot.name || automationRequest.bot.id,
-            manager: false,
-            principalType: 'bot',
-          },
-          metadata: {
-            runtime: 'hermes',
-            kind: 'mia-automation-handoff',
-            sourceEventId: miaResult.event.id,
-            botName: automationRequest.bot.name || automationRequest.bot.id,
-            automationTask: automationRequest.task,
-          },
-        },
-      });
-      return miaResult;
-    }
-  }
   const historyEvents = allNativeConversationEvents({
     companyId: dispatch.companyId,
     conversationId: dispatch.conversationId,
@@ -7060,18 +7186,18 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const googleWorkspaceDocsWriteRequested = googleWorkspaceActions.explicitDocsWriteRequested(message, googleResourceRefs);
   const googleWorkspaceWriteKinds = googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs);
   const googleWorkspaceWriteRequested = googleWorkspaceSheetWriteRequested || googleWorkspaceDocsWriteRequested;
-  const workspaceContext = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
-  const googleWorkspaceConnected = /authoritative server state\): CONNECTED/.test(String(workspaceContext || ''));
+  const workspaceConnection = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
+  const connectionInventory = connectedAppsForTurn(workspaceConnection, senderLabel, conversation, agent);
+  const workspaceContext = [workspaceConnection.text, connectionInventory.note].filter(Boolean).join('\n\n');
+  const googleWorkspaceConnected = workspaceConnection.ownerAuthorized === true && workspaceConnection.status.connected === true;
   const safeGoogleRefs = googleWorkspaceConnected
     ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs)
     : [];
-  const googleToolRequested = safeGoogleRefs.length > 0
-    || /\b(?:google\s+(?:drive|docs?|sheets?|slides?|calendar)|gmail|inbox|email|calendar event|spreadsheet|presentation)\b/i.test(message);
-  const googleProfileAuthorized = googleWorkspaceConnected && googleToolRequested
-    && googleAccountOwnerBinding.connectorFor(senderLabel);
+  const googleProfileAuthorized = connectionInventory.googleToolsEnabled;
   const googleGatewayProfile = googleProfileAuthorized
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     : MIAOS_AGENT_HERMES_PROFILE;
+  const googleGatewaySessionKey = googleGatewayProfile + ':' + connectionInventory.revision;
   const googleBotProfile = googleProfileAuthorized
     ? MIAOS_BOT_GOOGLE_HERMES_PROFILE
     : MIAOS_BOT_HERMES_PROFILE;
@@ -7080,16 +7206,6 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     && googleWorkspaceConnected;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
-  // Without an explicit model the gateway session would fall back to profile
-  // defaults, so hydrate the inventory when the composer sent no selection
-  // and the cache cannot resolve one (e.g. right after a gateway restart).
-  let userOptions = inferenceOptionsForUser(trigger.senderId);
-  if (!chatModelSelection && userOptions && userOptions.provider && !userOptions.model) {
-    try {
-      rememberNativeChatModelInventory(await getHermesGatewayModelOptions({ refresh: true }));
-      userOptions = inferenceOptionsForUser(trigger.senderId);
-    } catch (_) { /* inventory unavailable; dispatch surfaces the real error */ }
-  }
   const inferenceOptions = {
     ...userOptions,
     ...(chatModelSelection ? {
@@ -7118,6 +7234,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   let rawReply;
   let inferenceResult;
   let validatedArtifacts = [];
+  // Set for a normal turn in Mia's own chat, the only place her bot setup
+  // block opens the setup card.
+  let ownsMiaChat = false;
   // Shared verbose-diagnostics progress poster. Both dispatch flavors route
   // gateway events through the same Hermes gateway client (client.run()'s
   // onEvent), so both need the same coalescing/posting wiring — this used to
@@ -7126,7 +7245,11 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   // dropped thinking.delta/reasoning.delta even with verbose chatOutput on.
   let hermesProgressSequence = Promise.resolve();
   let hermesProgressIndex = 0;
-  const postHermesProgressText = (hermesEventType, text) => {
+  const postHermesProgressText = (hermesEventType, rawText) => {
+    // Progress notes can echo the reply. Its automation block is read by Mia,
+    // and its closing "Next:" line becomes the hint, so neither is shown.
+    const text = nextStep.splitNextStep(stripAgentActionBlocks(rawText)).text;
+    if (!text) return;
     const sequence = ++hermesProgressIndex;
     hermesProgressSequence = hermesProgressSequence.then(() => createNativeDispatchReplyEvent(dispatch, trigger, {
       type: replyEventType,
@@ -7155,10 +7278,11 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   // repeats the reply.
   let pendingReasoningSummary = '';
   const flushPendingReasoningSummary = (replyText) => {
-    const text = pendingReasoningSummary;
+    const text = stripAgentActionBlocks(pendingReasoningSummary);
     pendingReasoningSummary = '';
     if (!text) return;
-    if (replyText && reasoningRepeatsReply(text.replace(/^Reasoning summary\n/, ''), redactHermesChatDetail(replyText))) return;
+    if (replyText && reasoningRepeatsReply(text.replace(/^Reasoning summary\n/, ''),
+      stripAgentActionBlocks(redactHermesChatDetail(replyText)))) return;
     for (const chunk of splitHermesDebugText(text)) postHermesProgressText('reasoning.available', chunk);
   };
   const flushHermesProgress = (replyText) => {
@@ -7242,6 +7366,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   };
   if (dispatch.targetType === 'gateway') {
     const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel, globalInstructions.agent);
+    const ownsPrivateAgentConversation = conversation.type === 'agent'
+      && String(conversation.createdBy || '').toLowerCase() === senderLabel;
     const gatewayMessage = [buildHermesGatewayTurnMessage(
       message,
       senderLabel,
@@ -7250,11 +7376,14 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleWorkspaceWriteAuthorized && googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
       globalInstructions.agent
     ), nativeBrowserContextNote(trigger, {
-      ghostCli: googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
-    })].filter(Boolean).join('\n\n');
+      ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly,
+    }),
+    // Only Mia's own chat shows the bot setup card.
+    ownsPrivateAgentConversation && !slashCommand ? miaBotSetupActions.botSetupInstruction() : '',
+    slashCommand ? '' : nextStep.nextStepInstruction(),
+    ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
-    const ownsPrivateAgentConversation = conversation.type === 'agent'
-      && String(conversation.createdBy || '').toLowerCase() === senderLabel;
+    ownsMiaChat = ownsPrivateAgentConversation && !slashCommand;
     if (slashCommand && !ownsPrivateAgentConversation) {
       return createNativeDispatchReplyEvent(dispatch, trigger, {
         type: replyEventType,
@@ -7270,7 +7399,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     const gatewayRunArgs = {
       storedSessionId: ownsPrivateAgentConversation && conversation.metadata
         && (conversation.metadata.hermesGatewayProfile
-          ? conversation.metadata.hermesGatewayProfile === googleGatewayProfile
+          ? conversation.metadata.hermesGatewayProfile === googleGatewaySessionKey
           : googleGatewayProfile === MIAOS_AGENT_HERMES_PROFILE)
         ? conversation.metadata.hermesGatewaySessionId
         : null,
@@ -7280,14 +7409,14 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
-        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId };
+        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision };
         nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
         if (ownsPrivateAgentConversation) {
           nativeGatewaySessionConversations.set(String(session.sessionId), {
             companyId: conversation.companyId,
             conversationId: conversation.id,
           });
-          persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, googleGatewayProfile);
+          persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, googleGatewaySessionKey);
         }
       },
       signal,
@@ -7328,7 +7457,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         conversation,
         trigger.id,
         gatewayResult.storedSessionId,
-        googleGatewayProfile
+        googleGatewaySessionKey
       );
       if (gatewayResult.storedSessionId && !sessionOwner) return;
     }
@@ -7339,7 +7468,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // session once; what changes per turn (platform state, Google write
     // instructions) travels with each message instead.
     const systemPrompt = buildHermesTaskPrompt(agent, [], '', senderLabel, '', [], false, globalInstructions.bot);
-    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt);
+    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + '\nConnection capabilities: ' + connectionInventory.revision);
     const googleActionInstruction = googleWorkspaceWriteAuthorized
       && /authoritative server state\): CONNECTED/.test(String(platformContext || ''))
       ? googleWorkspaceActions.googleWorkspaceActionInstruction(
@@ -7350,8 +7479,11 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     const turnMessage = [
       platformContext ? `Current Mia platform state for this turn (authoritative):\n${String(platformContext).trim()}` : '',
       googleActionInstruction,
+      slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName() }),
       nativePromptLine(trigger) || message,
-      nativeBrowserContextNote(trigger, { ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
+      nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      slashCommand ? '' : nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     const botRunArgs = {
       storedSessionId: conversation.metadata && conversation.metadata.hermesGatewayProfile === sessionKey
@@ -7417,7 +7549,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     );
     const replyPrompt = [
       nativePromptLine(trigger) || message,
-      nativeBrowserContextNote(trigger, { ghostCli: googleBotProfile !== MIAOS_BOT_GOOGLE_HERMES_PROFILE }),
+      nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     inferenceResult = await scheduleInference(replyPrompt, 'reply', {
       ...inferenceOptions,
@@ -7463,10 +7597,23 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   });
   if (!stillLive) return;
   throwIfNativeDispatchUserInactive(dispatch, trigger);
-  const safeReply = sanitizeChatReply(actionReply)
+  // Only the bot's own chat may act on its automations; anywhere else the
+  // block is dropped unread.
+  // Mia's block only counts in her own chat.
+  const automationAction = privateBotChat
+    ? await nativeBotAutomationAction(agent, miaBotSetupActions.stripBotSetupBlocks(actionReply), trigger)
+    : ownsMiaChat
+      ? nativeMiaBotSetupRequest(botAutomationActions.stripAutomationBlocks(actionReply), senderLabel)
+      : { text: stripAgentActionBlocks(actionReply), metadata: null };
+  // The closing "Next:" line becomes the reply's suggested next step.
+  const replyParts = nextStep.splitNextStep(sanitizeChatReply(automationAction.text || automationAction.fallbackText || '')
     .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, '')
     .replace(new RegExp(`\\s*${escapedSignature}\\s*$`, 'i'), '')
+    .trim());
+  const safeReply = replyParts.text
+    .replace(new RegExp(`\\s*${escapedSignature}\\s*$`, 'i'), '')
     .trim();
+  const nextStepMetadata = replyParts.nextStep ? { nextStep: replyParts.nextStep } : {};
   if (!safeReply && validatedArtifacts.length === 0) throw new Error('native agent produced no user-facing reply');
   if (validatedArtifacts.length > 0) {
     let lastResult = null;
@@ -7502,6 +7649,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
           agentName: agent.name,
           artifact: true,
           artifactSource: 'interactive',
+          ...(index === validatedArtifacts.length - 1 ? nextStepMetadata : {}),
         },
       });
       for (const attachment of attachments) {
@@ -7527,6 +7675,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       runtime: 'hermes',
       dispatchId: dispatch.id,
       agentName: agent.name,
+      ...(automationAction.metadata || {}),
+      ...nextStepMetadata,
       ...(slashCommand ? { slashCommand: slashCommand.name } : {}),
       ...(inferenceResult && inferenceResult.goal !== undefined ? { goal: inferenceResult.goal } : {}),
     },
@@ -7724,7 +7874,7 @@ app.post('/api/chat/suggestions', requireAuth, async (req, res) => {
     const reply = await scheduleInference(
       prompt,
       'suggestion',
-      inferenceOptionsForUser(req.userEmail)
+      await inferenceOptionsForUser(req.userEmail)
     );
     const suggestions = String(reply || '')
       .replace(/\r\n/g, '\n')

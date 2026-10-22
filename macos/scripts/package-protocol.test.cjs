@@ -47,11 +47,19 @@ test("Linux desktop package consumes the custom scheme entry and forwards its UR
   assert.match(linuxSource, /\$\{linuxAppExecLine\(\)\}/);
 });
 
-test("Windows remains a portable zip whose packaged executable owns runtime registration", () => {
+test("Windows ships an installer and portable zip with packaged auth protocol registration", () => {
   assert.match(windowsSource, /platform: "win32"/);
   assert.match(windowsSource, /return `Mia-\$\{version\}-win-x64\.zip`/);
   assert.match(windowsSource, /path\.join\(DIST_ROOT, windowsArtifactName\(\)\)/);
-  assert.match(windowsSource, /portable zip, not an installer/);
-  assert.match(windowsSource, /app\.setAsDefaultProtocolClient/);
+  assert.match(windowsSource, /await buildWindowsInstaller\(packagedRoot, DIST_ROOT/);
+  const { windowsInstallerConfig } = require("./windows-installer.cjs");
+  const config = windowsInstallerConfig("fixture-dist");
+  assert.deepEqual(config.win.target, ["nsis"]);
+  assert.equal(config.nsis.artifactName, "Mia-Setup-${version}-${arch}.exe");
+  const { registerAuthProtocol } = require("../src/clerk-desktop-ipc.cjs");
+  const registrations = [];
+  const app = { isPackaged: true, setAsDefaultProtocolClient: (...args) => { registrations.push(args); return true; } };
+  assert.equal(registerAuthProtocol(app, "win32"), true);
+  assert.deepEqual(registrations, [["miamultiplayer"]]);
   assert.doesNotMatch(windowsSource, /reg(?:\.exe)?["']?\s*,?\s*\[.*(?:http|https)/i);
 });

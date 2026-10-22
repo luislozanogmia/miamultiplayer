@@ -49,3 +49,62 @@ test("a returned arbitrary URL is never opened", async () => {
   await assert.rejects(flow.startGoogle(), /unsupported/);
   assert.equal(opened, false);
 });
+
+function linuxFlow(overrides = {}) {
+  const notifications = []; let counter = 0; let cancellations = 0;
+  const flow = createClerkDesktopFlow({
+    client: {
+      startGoogle: async () => ({ url: "https://accounts.google.com/o/oauth2/auth" }),
+      completeGoogle: async () => ({ status: "active" }),
+      cancel: async () => { cancellations++; },
+    },
+    openExternal: async () => {}, browserFallback: true,
+    randomState: () => (++counter).toString(16).padStart(64, "0"),
+    notify: state => notifications.push(state), ...overrides,
+  });
+  return { flow, notifications, get cancellations() { return cancellations; } };
+}
+
+test("Linux opener failure publishes a safe error and a usable manual callback challenge", async () => {
+  const h = linuxFlow({ openExternal: async () => { throw new Error("PRIVATE-OPENER-DETAIL"); } });
+  const result = await h.flow.startGoogle();
+  assert.equal(result.status, "error");
+  assert.equal(h.flow.status().status, "error");
+  assert.match(result.authorizationUrl, /^https:\/\/accounts\.google\.com\//);
+  assert.match(result.error, /email/);
+  assert.doesNotMatch(JSON.stringify(h.notifications), /PRIVATE-OPENER-DETAIL/);
+  const firstState = "1".padStart(64, "0");
+  assert.equal(await h.flow.acceptCallback(callback.replace(state, firstState)), true);
+  assert.equal(h.flow.status(), null);
+});
+
+test("Linux waiting exposes a link, and retry replaces the old challenge", async () => {
+  const h = linuxFlow();
+  assert.equal((await h.flow.startGoogle()).status, "waiting");
+  assert.ok(h.flow.status().authorizationUrl);
+  await h.flow.startGoogle();
+  assert.equal(h.cancellations, 1);
+  assert.equal(await h.flow.acceptCallback(callback.replace(state, "1".padStart(64, "0"))), false);
+  assert.equal(await h.flow.acceptCallback(callback.replace(state, "2".padStart(64, "0"))), true);
+});
+
+test("Linux manual link is removed on cancellation and expiry", async () => {
+  let clock = 0;
+  const h = linuxFlow({ now: () => clock });
+  await h.flow.startGoogle(); await h.flow.cancel();
+  assert.equal(h.flow.status(), null);
+  await h.flow.startGoogle(); clock = FLOW_TTL_MS;
+  assert.deepEqual(h.flow.status(), { status: "expired" });
+  assert.equal(await h.flow.acceptCallback(callback.replace(state, "2".padStart(64, "0"))), false);
+});
+
+test("cancelling during a slow opener cannot republish an obsolete link", async () => {
+  let release;
+  const h = linuxFlow({ openExternal: () => new Promise(resolve => { release = resolve; }) });
+  const starting = h.flow.startGoogle();
+  await new Promise(resolve => setImmediate(resolve));
+  await h.flow.cancel(); release();
+  assert.deepEqual(await starting, { status: "cancelled" });
+  assert.equal(h.flow.status(), null);
+  assert.deepEqual(h.notifications.map(s => s.status), ["cancelled"]);
+});

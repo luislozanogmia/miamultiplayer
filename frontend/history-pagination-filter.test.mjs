@@ -88,7 +88,7 @@ function loadRoomContext({ state, api }) {
     Promise, Date, Number, activeWorkspaceKey: 'solo', AGENT_SETUP_ROOM_ID: '__setup__',
     chatRoster: {},
     chatWs: { native: false, nativeSocketConversationId: null, activeRoomId: null, configured: true, byRoom: { 'room-a': state } },
-    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {},
+    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {}, swapChatDraft() {},
     chatModelPicker: null, saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     chatRoomState(roomId) { return context.chatWs.byRoom[roomId]; }, api,
     nativeEventsUrl() { return '/events'; },
@@ -203,7 +203,7 @@ test('native browser visibility owner occludes and restores the live view withou
   const commands = [];
   const classes = new Set();
   const context = {
-    scheduled: false, open: true, lastLayout: '', downloadsOpen: false,
+    scheduled: false, open: true, lastLayout: '', downloadsOpen: false, suggestCovered: false,
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
     overlay: { hidden: false },
@@ -218,9 +218,16 @@ test('native browser visibility owner occludes and restores the live view withou
   context.downloadsOpen = true;
   context.lastLayout = '';
   context.layout();
-  assert.equal(commands.at(-1).visible, false, 'the Downloads view covers the page');
-  assert.equal(commands.at(-1).panelOpen, true, 'the browser stays open behind the Downloads view');
+  assert.equal(commands.at(-1).visible, false, 'the Downloads menu floats over a still of the page');
+  assert.equal(commands.at(-1).menu, true, 'a menu hide keeps the page playing');
+  assert.equal(commands.at(-1).panelOpen, true, 'the browser stays open behind the Downloads menu');
   context.downloadsOpen = false;
+  context.suggestCovered = true;
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, false, 'address-bar suggestions also float over a still of the page');
+  assert.equal(commands.at(-1).menu, true);
+  context.suggestCovered = false;
   classes.add('native-browser-occluded-conversation');
   context.lastLayout = '';
   context.layout();
@@ -258,7 +265,7 @@ test('temporary drawer backdrops dismiss safely while docked panes remain non-mo
   assert.equal(ownsClick(menuItem, null, null, contains(menuItem)), true, 'portaled menu clicks stay inside');
   assert.equal(ownsClick(toggleIcon, null, contains(toggleIcon), null), true, 'toggle controls its own close');
   assert.equal(ownsClick(outsideChat, contains(inside), contains(toggleIcon), contains(menuItem)), false, 'chat and toolbar clicks dismiss');
-  assert.match(source, /document\.addEventListener\('click', function\(event\)\{[\s\S]*browser-sidebar-open[\s\S]*browserSidebarOwnsClick\(event\.target, drawer, sidebar, portaledMenu\)[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*event\.stopImmediatePropagation\(\);[\s\S]*setBrowserSidebarOpen\(false\);[\s\S]*\}, true\)/);
+  assert.match(source, /document\.addEventListener\('click', function\(event\)\{[\s\S]*browser-sidebar-open[\s\S]*browserSidebarOwnsClick\(event\.target, drawer, toggles, portaledMenu\)[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*event\.stopImmediatePropagation\(\);[\s\S]*setBrowserSidebarOpen\(false\);[\s\S]*\}, true\)/);
   assert.match(source, /if\(overlay\) overlay\.addEventListener\('click', function\(event\)\{[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*closeDmCompose\(\)/);
   assert.match(source, /el\('#settingsOverlay'\)\.addEventListener\('click', closeSettingsDrawer\)/);
   assert.match(source, /el\('#harnessOnboardingOverlay'\)\.addEventListener\('click'/);

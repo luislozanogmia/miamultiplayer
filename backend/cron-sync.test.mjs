@@ -309,7 +309,7 @@ test('a stale Hermes job id is replaced by a newly created job', async () => {
   const restrictions = readPythonCommands();
   assert.equal(restrictions.length, 1);
   assert.equal(restrictions[0][2], 'replacement-id');
-  assert.deepEqual(JSON.parse(restrictions[0][3]), ['web', 'todo', 'clarify', 'artifacts']);
+  assert.deepEqual(JSON.parse(restrictions[0][3]), ['web', 'todo', 'clarify', 'artifacts', 'mia_run_report']);
   assert.equal(restrictions[0][4], cronSync.botPackageDirectoryFor(agent));
   assert.equal(restrictions[0][5], cronSync.artifactWorkspaceForBot(agent));
   assert.equal(fs.statSync(restrictions[0][5]).mode & 0o777, 0o700);
@@ -1054,4 +1054,66 @@ test('legacy migration keeps a dangling symlink at the destination and the old f
   assert.equal(cronSync.artifactWorkspaceForBot({ id: botId, name: 'Dangling' }), workspace);
   assert.equal(fs.lstatSync(path.join(workspace, 'report.txt')).isSymbolicLink(), true);
   assert.equal(fs.readFileSync(path.join(legacy, 'report.txt'), 'utf8'), 'old report');
+});
+
+function stepBot(steps) {
+  const bot = {
+    id: 'bot-steps', name: 'Steps Bot', instructions: 'Does steps.',
+    model: 'deepseek-v4-pro', modelProvider: 'deepseek',
+    automations: [{ id: 'roundup', name: 'Roundup', enabled: true, frequency: 'daily', time: '09:00', prompt: 'Run it.', steps }],
+    hermesCronJobIds: {},
+  };
+  ensureBotPackage(bot);
+  return bot;
+}
+
+test('a new job for an automation with steps stores its step-report context, the report tool, and enables the plugin', async () => {
+  resetCommands();
+  setJobs([]);
+  const bot = stepBot(['Search', 'Pick', 'Post']);
+
+  await cronSync.syncBotAutomation(bot);
+
+  const restriction = readPythonCommands()[0];
+  assert.deepEqual(JSON.parse(restriction[3]), ['web', 'todo', 'clarify', 'artifacts', 'mia_run_report']);
+  assert.deepEqual(JSON.parse(restriction[6]), { automationId: 'roundup', steps: 3 });
+  // The first job with steps also installs and enables the tool where jobs run.
+  assert.ok(readCommands().some((args) => args.join(' ') === 'plugins enable mia-run-report'));
+  const installed = path.join(hermesHome, 'plugins', 'mia-run-report');
+  assert.ok(fs.existsSync(path.join(installed, 'plugin.yaml')));
+  assert.match(fs.readFileSync(path.join(installed, '__init__.py'), 'utf8'), /report_step/);
+});
+
+test('an automation without steps stores no step-report context', async () => {
+  resetCommands();
+  setJobs([]);
+  const bot = stepBot([]);
+
+  await cronSync.syncBotAutomation(bot);
+
+  assert.equal(JSON.parse(readPythonCommands()[0][6]), null);
+});
+
+test('an existing job without the step-report context is edited to get it', async () => {
+  resetCommands();
+  const bot = stepBot(['Search', 'Post']);
+  const automation = bot.automations[0];
+  const directory = cronSync.botPackageDirectoryFor(bot);
+  bot.hermesCronJobIds.roundup = 'owned-job';
+  const base = {
+    id: 'owned-job', name: cronSync.jobNameFor(bot, automation), enabled: true,
+    schedule: { expr: cronSync.automationToCronExpr(automation, 360) },
+    prompt: cronSync.jobPromptFor(bot, automation), deliver: 'local',
+    model: bot.model, provider: bot.modelProvider,
+    enabled_toolsets: cronSync.BOT_TOOLSETS, workdir: directory,
+    artifact_workspace: cronSync.artifactWorkspaceForBot(bot),
+  };
+  setJobs([base]);
+  await cronSync.syncBotAutomation(bot);
+  assert.equal(readCommands().filter((args) => args[2] === 'edit').length, 1, 'missing context means the job is out of date');
+
+  resetCommands();
+  setJobs([{ ...base, mia_run_report: { automationId: 'roundup', steps: 2 } }]);
+  await cronSync.syncBotAutomation(bot);
+  assert.equal(readCommands().filter((args) => args[2] === 'edit').length, 0, 'current context means nothing to edit');
 });

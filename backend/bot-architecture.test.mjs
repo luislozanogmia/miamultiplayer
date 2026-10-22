@@ -21,7 +21,9 @@ test('bot creation uses collision-resistant ids, insert-only persistence, and a 
   assert.match(source, /idGenerator: \(\) => `bot-\$\{crypto\.randomUUID\(\)\}`/);
   assert.match(source, /maxRecords: MAX_BOTS/);
   assert.match(source, /db\.insertOne\(conn, cfg\.table, record\.id, record\)/);
-  assert.match(source, /db\.insertOne\(conn, 'bots', bot\.id, bot\)/);
+  // Every bot goes through that one insert-only path; Mia's chat no longer
+  // creates bots directly from message text.
+  assert.doesNotMatch(source, /db\.insertOne\(conn, 'bots'/);
 });
 
 test('insert-only document creation never overwrites an existing bot', (t) => {

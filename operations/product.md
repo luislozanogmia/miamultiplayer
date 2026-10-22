@@ -12,6 +12,15 @@ The Mia app browser is the shared working surface: websites are the canvas. Late
 
 Implementation and acceptance are tracked in [browser-multiplayer-mvp.md](browser-multiplayer-mvp.md). This section records approved scope, not completed behavior.
 
+## Linux browser sign-in — 0.2.17 review candidate
+
+Installed Linux builds use the packaged desktop identity for Google browser
+handoff. While a Google attempt is pending, users can copy its short-lived
+sign-in link, retry Google, use email, or cancel. A missing or stalled browser
+opener produces a visible recovery message. A new attempt invalidates the old
+link; cancellation and expiry clear it. macOS and Windows retain their current
+browser handoff. This candidate is not a published release.
+
 ## Bot creation in Mia chat — review candidate
 
 Ask Mia to build a bot. If the request is vague, Mia uses a recent, explicit
@@ -26,6 +35,16 @@ page and are not a durable draft history.
 The visible catalog name is **Bot Marketplace**. This change does not relax
 instruction-file approvals or establish per-bot filesystem isolation; that
 permissions work remains separate.
+
+## Claude subscription models — 0.2.17 review candidate
+
+Sonnet 5.5 remains available. Haiku 5.5 joins the Claude model choices; the
+`haiku` alias and saved Haiku 4.5 choices select it. Opus 5.5 replaces
+Opus 5 and 4.8 in the picker; their saved choices migrate to 5.5.
+The signed-in Claude account's live discovery still determines access.
+Mia advertises a bounded 250K context budget for Haiku 5.5's long-context
+route, consistent with the other offered Claude models. Live account inference remains a
+candidate acceptance gate.
 
 ## Inference routing
 

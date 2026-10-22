@@ -52,7 +52,7 @@ test('Claude onboarding uses an existing CLI or asks before native installation'
   assert.match(preload, /claudeCode:\s*\{[\s\S]*?status:[\s\S]*?install:/);
   assert.match(main, /miaos-claude-code-status/);
   assert.match(main, /miaos-claude-code-install[\s\S]*?showMessageBox/);
-  assert.match(source, /needsClaudeCode \? 'Install Claude Code' : 'Connect'/);
+  assert.match(source, /updateClaudeCode \? 'Update Claude Code' : 'Install Claude Code'/);
   assert.match(source, /if\(!claudeStatus \|\| !claudeStatus\.available\)/);
   assert.match(source, /claudeCode\.install\(\)/);
 });

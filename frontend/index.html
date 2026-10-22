@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=20260822-1" />
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
-<link rel="stylesheet" href="styles.css?v=20260920-conversation-drawer-1" />
+<link rel="stylesheet" href="styles.css?v=20261021-next-step-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -599,46 +599,59 @@
   </div>
 </div>
 
+<!-- Automations surface: every bot's automations in the center, the chat at
+     the right, laid out like the browser. -->
+<div class="automations-overlay" id="automationsOverlay" hidden aria-hidden="true">
+  <section class="automations-window" aria-label="Automations">
+    <!-- Same frame as the browser: a gray top row (room for the Mac window
+         buttons, drags the window) with one tab, over a white toolbar. -->
+    <div class="automations-tabs-row">
+      <div class="automations-tab" role="heading" aria-level="1">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>
+        <span>Automations</span>
+      </div>
+      <button type="button" class="local-browser-btn automations-bar-btn" id="automationsCloseBtn" title="Close automations" aria-label="Close automations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+    </div>
+    <header class="automations-bar">
+      <button type="button" class="local-browser-btn automations-bar-btn" id="automationsSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M9.5 4.5v15"></path></svg>
+      </button>
+      <span class="automations-summary" id="automationsSummary"></span>
+      <div class="automations-add-wrap">
+        <button type="button" class="local-browser-btn automations-bar-btn" id="automationsAddBtn" title="New automation" aria-label="New automation" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
+        <div class="automations-add-menu" id="automationsAddMenu" role="menu" aria-label="Choose a bot for the new automation" hidden></div>
+      </div>
+      <div class="automations-group-toggle" id="automationsGroupToggle" role="group" aria-label="Group automations">
+        <button type="button" data-automations-group="status" title="Group by status" aria-label="Group by status" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg></button>
+        <button type="button" data-automations-group="bot" title="Group by bot" aria-label="Group by bot" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"></path><path d="M15.5 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c2 .8 3.2 2.5 3.5 5.2"></path></svg></button>
+      </div>
+    </header>
+    <div class="automations-body" id="automationsBody"></div>
+  </section>
+</div>
+
 <!-- Local browser surface. -->
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
     <div class="native-browser-tabs-row" id="localBrowserTabsRow">
-      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
-        <img class="local-browser-mote" src="assets/mote/mote.svg" alt="" draggable="false" />
-      </button>
-      <button type="button" class="local-browser-btn local-browser-close-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser">&times;</button>
+      <button type="button" class="local-browser-btn local-browser-close-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
     </div>
-    <div class="browser-group-bar" aria-label="Tab groups">
-      <div id="browserGroupList" class="browser-group-list" role="group" aria-label="Browser groups"></div>
-      <details class="browser-group-tools"><summary>Groups</summary><div>
-        <label>New group <input id="browserGroupNewName" maxlength="80" placeholder="Research" /></label><button type="button" id="browserGroupAdd">Add</button>
-        <label>Selected group <input id="browserGroupName" maxlength="80" /></label><button type="button" id="browserGroupRename">Rename</button><button type="button" id="browserGroupEarlier">Move earlier</button><button type="button" id="browserGroupRemove">Remove empty group</button>
-        <label>Move selected tab to <select id="browserMoveTabGroup"></select></label><button type="button" id="browserMoveTab">Move tab</button>
-      </div></details>
-    </div>
-    <details id="browserWorkPanel" class="browser-work-panel"><summary>Browser work · Mia and your bots</summary>
-      <div class="browser-work-content">
-        <button type="button" id="browserWorkStopGroup">Stop all work in this group</button>
-        <p id="browserWorkError" role="alert" hidden></p>
-        <section id="browserWorkProposal" class="browser-work-proposal" aria-label="Suggestion from Mia" hidden></section>
-        <form id="browserWorkCreate"><label>Goal for Mia <input id="browserWorkGoal" required maxlength="8000" placeholder="Compare these sites and combine the findings" /></label>
-          <button type="button" id="browserWorkAssignments">Choose bots for tabs</button><div id="browserWorkCandidates"></div>
-          <button type="submit" id="browserWorkStart">Ask Mia to plan and start</button>
-        </form>
-        <p id="browserWorkEmpty">Browser work is unavailable in this build.</p><div id="browserWorkList"></div>
-      </div>
-    </details>
     <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off">
       <span class="local-browser-dot" id="localBrowserDot" aria-hidden="true" title="Connected"></span>
       <span class="local-browser-status" id="localBrowserStatus" hidden></span>
-      <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled>&lsaquo;</button>
-      <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled>&rsaquo;</button>
-      <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled>&#8635;</button>
-      <div class="local-browser-search-engine" id="localBrowserSearchEngine" role="group" aria-label="Search engine">
-        <button type="button" class="local-browser-search-engine-btn" data-search-engine="google" aria-label="Search with Google" title="Search with Google" aria-pressed="true"><img src="assets/connectors/google-g.svg" alt="" /></button>
-        <button type="button" class="local-browser-search-engine-btn" data-search-engine="x" aria-label="Search with X" title="Search with X" aria-pressed="false"><img src="assets/icons/x-logo.svg" alt="" /></button>
-      </div>
+      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M9.5 4.5v15"></path></svg>
+      </button>
+      <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m0 0 6-6m-6 6 6 6"></path></svg></button>
+      <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m0 0-6-6m6 6-6 6"></path></svg></button>
+      <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"></path></svg></button>
       <div class="local-browser-url-wrap">
+        <div class="local-browser-search-engine" id="localBrowserSearchEngine" role="group" aria-label="Search engine">
+          <button type="button" class="local-browser-search-engine-btn" data-search-engine="google" aria-label="Search with Google" title="Search with Google" aria-pressed="true"><img src="assets/connectors/google-g.svg" alt="" /></button>
+          <button type="button" class="local-browser-search-engine-btn" data-search-engine="x" aria-label="Search with X" title="Search with X" aria-pressed="false"><img src="assets/icons/x-logo.svg" alt="" /></button>
+        </div>
         <input type="text" id="localBrowserUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search or enter a web address" aria-label="Web address" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="localBrowserUrlSuggest" />
         <div class="local-browser-suggest" id="localBrowserUrlSuggest" role="listbox" hidden></div>
       </div>
@@ -646,24 +659,38 @@
       <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
       </button>
+      <button type="button" class="local-browser-btn local-browser-mia-toggle" id="localBrowserMiaToggle" title="Hide Mia" aria-label="Hide Mia" aria-pressed="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M14.5 4.5v15"></path></svg>
+      </button>
       <button type="button" class="local-browser-share-btn" id="localBrowserShareBtn" title="Share — coming soon" aria-label="Share — coming soon" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
       </button>
     </form>
     <div class="local-browser-screen" id="localBrowserScreen">
-      <section class="local-browser-downloads" id="localBrowserDownloads" aria-label="Downloads" hidden>
+      <img class="local-browser-snapshot" id="localBrowserSnapshot" alt="" aria-hidden="true" hidden />
+      <section class="local-browser-downloads" id="localBrowserDownloads" role="dialog" aria-label="Downloads" hidden>
         <header class="local-browser-downloads-head">
           <h2>Downloads</h2>
-          <button type="button" class="local-browser-downloads-clear" id="localBrowserDownloadsClear">Clear list</button>
-          <button type="button" class="local-browser-btn" id="localBrowserDownloadsClose" title="Close downloads" aria-label="Close downloads">&times;</button>
+          <button type="button" class="local-browser-downloads-clear" id="localBrowserDownloadsClear" title="Clears the list. Your files stay where they are.">Clear all</button>
+          <button type="button" class="local-browser-downloads-icon-btn" id="localBrowserDownloadsClose" title="Close downloads" aria-label="Close downloads">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+          </button>
         </header>
-        <p class="local-browser-downloads-note">Clearing the list keeps your files.</p>
-        <ul class="local-browser-downloads-list" id="localBrowserDownloadsList"></ul>
+        <label class="local-browser-downloads-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+          <input type="search" id="localBrowserDownloadsSearch" placeholder="Search downloads" aria-label="Search downloads" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="local-browser-downloads-list" id="localBrowserDownloadsList"></div>
         <p class="local-browser-downloads-empty" id="localBrowserDownloadsEmpty">Files you download in Mia's browser appear here.</p>
       </section>
       <div class="local-browser-empty" id="localBrowserEmpty">
-        <span class="local-browser-empty-title">Open a web page</span>
-        <span>Enter a web address above to browse beside Mia.</span>
+        <div class="local-browser-home" id="localBrowserHome">
+          <span class="local-browser-home-logo" id="localBrowserHomeLogo" aria-hidden="true"></span>
+          <h1 class="local-browser-home-title"><span>Mia</span> Browser</h1>
+          <section class="local-browser-suggest-next" id="localBrowserSuggestNext" aria-label="Mia suggests" hidden>
+            <div class="local-browser-suggest-next-list" id="localBrowserSuggestNextList"></div>
+          </section>
+        </div>
       </div>
       <div class="local-browser-blocked" id="localBrowserBlocked" hidden>
         <span class="local-browser-empty-title" id="localBrowserBlockedTitle">This page could not be loaded</span>
@@ -671,7 +698,7 @@
         <a id="localBrowserBlockedLink" href="#" target="_blank" rel="noopener" hidden>Open in a browser tab</a>
       </div>
     </div>
-    <footer class="local-browser-foot">Local browser · Mia is available on the right</footer>
+    <footer class="local-browser-foot" hidden>Local browser · Mia is available on the right</footer>
   </section>
 </div>
 
@@ -831,6 +858,10 @@
           <div><div class="styled-settings-row-label">Send feedback</div><div class="styled-settings-row-desc">Found a bug or want a feature? This opens an email to the Mia team in your mail app</div></div>
         </div>
         <textarea class="styled-settings-field styled-settings-feedback-text" id="settingsFeedbackText" placeholder="What happened, or what would you like Mia to do?" maxlength="1500"></textarea>
+        <label class="styled-settings-row-desc" for="settingsFeedbackReport" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="settingsFeedbackReport" checked>
+          Attach a technical report. Version, platform and connection steps only; no credentials or conversation text.
+        </label>
         <div class="styled-settings-row styled-settings-row-actions">
           <span class="styled-settings-form-note" id="settingsFeedbackSent">Opened in your mail app</span>
           <button class="styled-settings-pill-btn" id="settingsFeedbackSend">Send feedback</button>
@@ -1158,7 +1189,10 @@
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
     <script src="browser-work.js"></script>
-    <script src="native-browser.js?v=20260908-native-theme-1"></script>
-    <script src="app.js?v=20260920-conversation-drawer-1"></script>
+    <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
+    <script src="automations-board.js?v=20261019-automations-1"></script>
+    <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
+    <script src="native-browser.js?v=20261019-omnibox-1"></script>
+    <script src="app.js?v=20261021-next-step-1"></script>
 </body>
 </html>

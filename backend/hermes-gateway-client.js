@@ -15,10 +15,12 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require('./process-secrets');
 
 const DEFAULT_PORT = 9121;
 const CONNECT_TIMEOUT_MS = 30000;
 const REQUEST_TIMEOUT_MS = 600000;
+const INTERRUPT_TIMEOUT_MS = 10000;
 const MODEL_OPTIONS_TIMEOUT_MS = 30000;
 const MODEL_OPTIONS_ATTEMPTS = 10;
 const RETRY_DELAY_MS = 250;
@@ -66,6 +68,26 @@ function probePort(port, timeoutMs = PORT_PROBE_TIMEOUT_MS) {
     socket.once('connect', () => finish(true));
     socket.once('error', () => finish(false));
     socket.once('close', () => finish(false));
+  });
+}
+
+// Windows can reserve a port without opening a listener (WSAEACCES). A
+// connect probe alone cannot detect that. Ask the OS to bind before starting
+// our internal gateway; explicit endpoints and the desktop ports stay pinned.
+function bindableGatewayPort(preferred, createServer = () => net.createServer()) {
+  const bind = port => new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      const selected = server.address().port;
+      server.close(error => error ? reject(error) : resolve(selected));
+    });
+  });
+  return bind(preferred).catch(error => {
+    if (!['EACCES', 'EADDRINUSE'].includes(error.code)) throw error;
+    // Port zero asks the OS for an available port outside reserved ranges.
+    // Close the probe before Python binds; this is not a held reservation.
+    return bind(0);
   });
 }
 
@@ -194,6 +216,8 @@ class HermesGatewayClient {
     WebSocketImpl = globalThis.WebSocket,
     spawnImpl = spawn,
     probePortImpl = probePort,
+    selectPortImpl = bindableGatewayPort,
+    platform = process.platform,
     fetchImpl = globalThis.fetch,
     tokenFile = process.env.MIAOS_HERMES_GATEWAY_TOKEN_FILE || '',
     now = () => Date.now(),
@@ -202,6 +226,7 @@ class HermesGatewayClient {
     stopExternalGatewayImpl = stopExternalHermesGateway,
     beforeSpawn = null,
     waitForGatewayExitImpl = waitForRecordedGatewayExit,
+    secretEnv = null,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
     this.binary = String(binary || '').trim();
@@ -221,6 +246,8 @@ class HermesGatewayClient {
     this.configuredUrl = requestedUrl ? loopbackGatewayUrl(requestedUrl) : '';
     this.configuredToken = String(token || '').trim();
     this.port = numericPort(port);
+    this.selectPortImpl = selectPortImpl;
+    this.selectAutomaticPort = ['win32', 'darwin', 'linux'].includes(platform) && !requestedUrl && (port === undefined || port === null || String(port).trim() === '');
     this.WebSocketImpl = WebSocketImpl;
     this.spawnImpl = spawnImpl;
     this.probePortImpl = probePortImpl;
@@ -232,6 +259,7 @@ class HermesGatewayClient {
     this.stopExternalGatewayImpl = stopExternalGatewayImpl;
     this.beforeSpawn = typeof beforeSpawn === 'function' ? beforeSpawn : null;
     this.waitForGatewayExitImpl = waitForGatewayExitImpl;
+    this.secretEnv = secretEnv && typeof secretEnv === 'object' ? { ...secretEnv } : {};
     this.toolProgressMode = String(this.env.HERMES_TUI_TOOL_PROGRESS || '').trim().toLowerCase() === 'verbose'
       ? 'verbose'
       : 'all';
@@ -243,6 +271,8 @@ class HermesGatewayClient {
     this.pending = new Map();
     this.turns = new Map();
     this.interruptObservers = new Map();
+    this.operations = new Set();
+    this.cancellations = new WeakMap();
     // sessionId -> reply text of a turn Hermes started on its own (a /goal
     // continuation). No run() is waiting for it, so it is reported through
     // onSessionEvent instead of being dropped.
@@ -258,6 +288,7 @@ class HermesGatewayClient {
     // pinned one and rejects a model that does support fast mode.
     this.appliedSelections = new Map();
     this.child = null;
+    this.externalGateway = false;
     this.shutdownRequested = false;
   }
 
@@ -281,6 +312,7 @@ class HermesGatewayClient {
             'set MIAOS_HERMES_GATEWAY_TOKEN to connect to it'
           );
         }
+        this.externalGateway = !this.child || this.child.exitCode !== null || this.child.signalCode !== null;
         return;
       }
 
@@ -297,18 +329,26 @@ class HermesGatewayClient {
       if (typeof this.stopExternalGatewayImpl === 'function') {
         await this.stopExternalGatewayImpl(this.launch, this.env);
       }
+      if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
       // Stores are changed only once no Hermes is running for this home, so
       // no live process can write its cached copy back over them. A reused,
       // already-listening gateway never reaches this point, and an old one
       // still draining after the stop skips the cleanup for this launch.
       if (this.beforeSpawn) {
-        if (await this.waitForGatewayExitImpl(this.env)) {
+        const exited = await this.waitForGatewayExitImpl(this.env);
+        if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
+        if (exited) {
           await this.beforeSpawn();
         } else {
           console.warn('[hermes-auth] previous Hermes gateway may still be running; skipped profile key cleanup');
         }
       }
+      if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
 
+      if (this.selectAutomaticPort) {
+        this.port = await this.selectPortImpl(this.port);
+        if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
+      }
       const gatewayEnv = { ...this.env };
       gatewayEnv.HERMES_DASHBOARD_SESSION_TOKEN = this.gatewayToken;
       // Toolsets are resolved by the profile attached to each session. Mia uses
@@ -317,6 +357,7 @@ class HermesGatewayClient {
       // security postures and is therefore intentionally not set here.
       gatewayEnv.HERMES_TUI_MAX_TURNS = String(this.maxTurns);
       gatewayEnv.MIAOS_EXTERNAL_CHAT = '1';
+      if (Object.keys(this.secretEnv).length) gatewayEnv[PROCESS_SECRETS_MARKER] = '1';
       // The desktop server owns both native chat sessions and cron ticks.
       // Running the scheduler inside this process prevents a second launchd
       // Hermes gateway from drifting onto different credentials/configuration.
@@ -334,13 +375,15 @@ class HermesGatewayClient {
           // model switches). HERMES_HOME survives reinstalls.
           cwd: gatewayEnv.HERMES_HOME || os.homedir(),
           detached: false,
-          stdio: 'ignore',
+          stdio: Object.keys(this.secretEnv).length ? ['pipe', 'ignore', 'ignore'] : 'ignore',
         }
       );
+      if (Object.keys(this.secretEnv).length) sendProcessSecrets(child, this.secretEnv);
 
       // Mia owns only the local runtime it starts. Keep the child attached
       // so backend shutdown can terminate it; an already-listening external
       // runtime never reaches this branch and is therefore never adopted.
+      this.externalGateway = false;
       this.child = child || null;
       if (child && typeof child.once === 'function') {
         const release = () => {
@@ -475,8 +518,9 @@ class HermesGatewayClient {
     return this.readyPromise;
   }
 
-  async request(method, params = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  async request(method, params = {}, timeoutMs = REQUEST_TIMEOUT_MS, signal = null) {
     await this.connect();
+    if (signal && signal.aborted) throw turnAbortError();
     const socket = this.socket;
     if (!socket || socket.readyState !== 1) throw new Error('Hermes gateway is not connected');
     const id = String(this.nextRequestId++);
@@ -905,7 +949,7 @@ class HermesGatewayClient {
     return deleted;
   }
 
-  interrupt(sessionId, { onEvidence } = {}) {
+  interrupt(sessionId, { onEvidence, signal = null, timeoutMs = INTERRUPT_TIMEOUT_MS } = {}) {
     sessionId = String(sessionId || '');
     let observation = this.interruptObservers.get(sessionId);
     if (!observation) {
@@ -921,10 +965,17 @@ class HermesGatewayClient {
       this.interruptObservers.set(sessionId, observation);
       // Bounded metadata-only observation; never retain a terminal message body.
       observation.timer = setTimeout(() => observation.finish(), 30000); observation.timer.unref?.();
-      observation.promise = this.request('session.interrupt', { session_id: sessionId }, 10000).then(result => {
+    }
+    // A failed Stop can be retried: send a fresh request, keep observing.
+    if (!observation.promise || observation.requestFailed || observation.requestSignal?.aborted) {
+      observation.requestFailed = false;
+      observation.requestSignal = signal;
+      observation.promise = this.request('session.interrupt', { session_id: sessionId }, timeoutMs, signal).then(result => {
+        if (result?.status !== 'interrupted') observation.requestFailed = true;
         observation.emit({ type: 'receipt', status: result?.status === 'interrupted' ? 'acknowledged' : result?.status === 'not_interrupted' ? 'not_interrupted' : 'failed' });
         return result;
       }, error => {
+        observation.requestFailed = true;
         observation.emit({ type: 'receipt', status: error?.code === 'GATEWAY_REQUEST_TIMEOUT' ? 'timed_out' : 'failed' });
         throw error;
       });
@@ -943,6 +994,66 @@ class HermesGatewayClient {
     });
   }
 
+  startOperation(signal) {
+    if (signal && signal.aborted) throw turnAbortError();
+    const operation = { signal, sessionId: null, submitted: false, cancelPending: null, cancelAccepted: false };
+    this.operations.add(operation);
+    return operation;
+  }
+
+  assertOperationActive(operation) {
+    if (operation.cancelAccepted || operation.signal?.aborted) throw turnAbortError();
+  }
+
+  async operationResult(operation, promise) {
+    // Do not publish a reply/failure or start the next phase while Stop is
+    // waiting for runtime acknowledgement. Failed cancellation leaves the
+    // original operation running (or allows its actual completion through).
+    const outcome = await Promise.resolve(promise).then(value => ({ value }), error => ({ error }));
+    if (operation.cancelPending) await operation.cancelPending.catch(() => {});
+    this.assertOperationActive(operation);
+    if (outcome.error) throw outcome.error;
+    return outcome.value;
+  }
+
+  async cancelTurn(signal, { timeoutMs = INTERRUPT_TIMEOUT_MS } = {}) {
+    if (!signal) throw new Error('Runtime cancellation requires a dispatch signal');
+    const existing = this.cancellations.get(signal);
+    if (existing) return existing;
+    const operations = [...this.operations].filter(operation => operation.signal === signal);
+    const sessions = [...new Set(operations.filter(operation => operation.submitted).map(operation => operation.sessionId).filter(Boolean))];
+    let timer;
+    // Separate from the dispatch signal: a failed Stop must leave the turn
+    // running, but an unsent interrupt must not escape after its deadline.
+    const interruptController = new AbortController();
+    const attempt = Promise.resolve().then(async () => {
+      try {
+        await Promise.race([
+          Promise.all(sessions.map(async sessionId => {
+            const result = await this.interrupt(sessionId, { signal: interruptController.signal, timeoutMs });
+            if (!result || result.status !== 'interrupted') throw new Error('Runtime interrupt was not acknowledged');
+          })),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Runtime interrupt timed out; try stopping again')), timeoutMs); }),
+        ]);
+        for (const operation of operations) operation.cancelAccepted = true;
+        return { status: 'interrupted' };
+      } finally {
+        clearTimeout(timer);
+        interruptController.abort();
+      }
+    });
+    this.cancellations.set(signal, attempt);
+    for (const operation of operations) operation.cancelPending = attempt;
+    try { return await attempt; }
+    catch (error) {
+      // An active operation remains reachable for retry. Do not abort or
+      // mark it stopped because an interrupt failed; an independent turn
+      // completion/transport failure may still settle the original work.
+      if (this.cancellations.get(signal) === attempt) this.cancellations.delete(signal);
+      throw error;
+    }
+  }
+
   async run({
     storedSessionId,
     seedMessages,
@@ -954,31 +1065,38 @@ class HermesGatewayClient {
     onSession = null,
     signal = null,
   }) {
-    const session = await this.createOrResumeSession({ storedSessionId, seedMessages, title, options });
-    if (typeof onSession === 'function') onSession(session);
-    if (signal && signal.aborted) {
-      await this.interrupt(session.sessionId).catch(() => {});
-      throw turnAbortError();
+    const operation = this.startOperation(signal);
+    try {
+      const session = await this.operationResult(operation, this.createOrResumeSession({ storedSessionId, seedMessages, title, options }));
+      operation.sessionId = session.sessionId;
+      if (typeof onSession === 'function') onSession(session);
+      this.assertOperationActive(operation);
+      for (const imagePath of Array.isArray(imagePaths) ? imagePaths : []) {
+        await this.operationResult(operation, this.request('image.attach', {
+          session_id: session.sessionId,
+          path: String(imagePath || ''),
+        }, REQUEST_TIMEOUT_MS, signal));
+      }
+      const completed = await this.submitTurn(session, message, { onEvent, signal, operation });
+      return {
+        text: completed.text,
+        storedSessionId: session.storedSessionId,
+        ...(Array.isArray(completed.artifacts) ? { artifacts: completed.artifacts } : {}),
+      };
+    } finally {
+      this.operations.delete(operation);
     }
-    for (const imagePath of Array.isArray(imagePaths) ? imagePaths : []) {
-      await this.request('image.attach', {
-        session_id: session.sessionId,
-        path: String(imagePath || ''),
-      });
-    }
-    const completed = await this.submitTurn(session, message, { onEvent, signal });
-    return {
-      text: completed.text,
-      storedSessionId: session.storedSessionId,
-      ...(Array.isArray(completed.artifacts) ? { artifacts: completed.artifacts } : {}),
-    };
   }
 
   // One prompt.submit on an open session, resolved by its message.complete.
-  async submitTurn(session, message, { onEvent = null, signal = null } = {}) {
+  async submitTurn(session, message, { onEvent = null, signal = null, operation = null } = {}) {
     const existing = this.turns.get(session.sessionId);
     if (existing) throw new Error('Hermes gateway session already has a running turn');
     this.interruptObservers.get(session.sessionId)?.finish();
+    const ownsOperation = !operation;
+    operation = operation || this.startOperation(signal);
+    this.assertOperationActive(operation);
+    operation.sessionId = session.sessionId;
     let turn = null;
     const result = new Promise((resolve, reject) => {
       turn = {
@@ -995,15 +1113,17 @@ class HermesGatewayClient {
     let rejectAbort = null;
     const aborted = new Promise((resolve, reject) => { rejectAbort = reject; });
     const onAbort = () => {
-      this.interrupt(session.sessionId).catch(() => {});
+      if (!operation.cancelAccepted) this.interrupt(session.sessionId).catch(() => {});
       rejectAbort(turnAbortError());
     };
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
     try {
-      const submitted = this.request('prompt.submit', { session_id: session.sessionId, text: String(message || '') });
-      const accepted = await (signal ? Promise.race([submitted, aborted]) : submitted);
+      this.assertOperationActive(operation);
+      operation.submitted = true;
+      const submitted = this.request('prompt.submit', { session_id: session.sessionId, text: String(message || '') }, REQUEST_TIMEOUT_MS, signal);
+      const accepted = await this.operationResult(operation, signal ? Promise.race([submitted, aborted]) : submitted);
       this.settlePendingTurn(session.sessionId, turn, accepted && accepted.status);
-      return await (signal ? Promise.race([result, aborted]) : result);
+      return await this.operationResult(operation, signal ? Promise.race([result, aborted]) : result);
     } catch (error) {
       if (this.turns.get(session.sessionId) === turn) this.turns.delete(session.sessionId);
       // Events held for a turn that never started belong to the goal turn.
@@ -1013,6 +1133,7 @@ class HermesGatewayClient {
       throw error;
     } finally {
       if (signal) signal.removeEventListener('abort', onAbort);
+      if (ownsOperation) this.operations.delete(operation);
     }
   }
 
@@ -1032,41 +1153,48 @@ class HermesGatewayClient {
     onNotice = null,
     signal = null,
   }) {
-    const session = await this.createOrResumeSession({ storedSessionId, seedMessages, title, options });
-    if (typeof onSession === 'function') onSession(session);
-    if (signal && signal.aborted) throw turnAbortError();
-    let dispatched;
+    const operation = this.startOperation(signal);
     try {
-      dispatched = await this.request('command.dispatch', {
-        session_id: session.sessionId,
-        name: String(name || ''),
-        arg: String(arg || ''),
-      });
-    } catch (error) {
-      // Hermes' own refusal ("session busy", "no active goal", bad
-      // arguments) is the answer to show; transport failures still throw.
-      if (error && error.gatewayError) {
-        const detail = String(error.gatewayError.message || error.message || '').trim();
-        return { text: detail || `/${name} failed`, storedSessionId: session.storedSessionId, sessionId: session.sessionId, commandError: true };
+      const session = await this.operationResult(operation, this.createOrResumeSession({ storedSessionId, seedMessages, title, options }));
+      operation.sessionId = session.sessionId;
+      if (typeof onSession === 'function') onSession(session);
+      this.assertOperationActive(operation);
+      let dispatched;
+      try {
+        operation.submitted = true;
+        dispatched = await this.operationResult(operation, this.request('command.dispatch', {
+          session_id: session.sessionId,
+          name: String(name || ''),
+          arg: String(arg || ''),
+        }, REQUEST_TIMEOUT_MS, signal));
+      } catch (error) {
+        // Hermes' own refusal ("session busy", "no active goal", bad
+        // arguments) is the answer to show; transport failures still throw.
+        if (error && error.gatewayError) {
+          const detail = String(error.gatewayError.message || error.message || '').trim();
+          return { text: detail || `/${name} failed`, storedSessionId: session.storedSessionId, sessionId: session.sessionId, commandError: true };
+        }
+        throw error;
       }
-      throw error;
-    }
-    const result = dispatched && typeof dispatched === 'object' ? dispatched : {};
-    if (result.type === 'send' && result.message) {
-      if (result.notice && typeof onNotice === 'function') await onNotice(String(result.notice));
-      const completed = await this.submitTurn(session, result.message, { onEvent, signal });
+      const result = dispatched && typeof dispatched === 'object' ? dispatched : {};
+      if (result.type === 'send' && result.message) {
+        if (result.notice && typeof onNotice === 'function') await this.operationResult(operation, onNotice(String(result.notice)));
+        const completed = await this.submitTurn(session, result.message, { onEvent, signal, operation });
+        return {
+          text: completed.text,
+          storedSessionId: session.storedSessionId,
+          sessionId: session.sessionId,
+          ...(Array.isArray(completed.artifacts) ? { artifacts: completed.artifacts } : {}),
+        };
+      }
       return {
-        text: completed.text,
+        text: String(result.output || result.notice || '').trim() || `/${name} done.`,
         storedSessionId: session.storedSessionId,
         sessionId: session.sessionId,
-        ...(Array.isArray(completed.artifacts) ? { artifacts: completed.artifacts } : {}),
       };
+    } finally {
+      this.operations.delete(operation);
     }
-    return {
-      text: String(result.output || result.notice || '').trim() || `/${name} done.`,
-      storedSessionId: session.storedSessionId,
-      sessionId: session.sessionId,
-    };
   }
 
   // Frontend-safe goal/loop state of a live session (null goal = none).
@@ -1079,22 +1207,44 @@ class HermesGatewayClient {
   // client can start a new one instead of probing a port the dying process
   // still holds. Resolves false when no owned gateway was running (an external
   // gateway is never adopted, so it is never restarted either).
-  async stopOwnedGateway(timeoutMs = 10000) {
-    const child = this.child;
-    this.child = null;
-    this.failConnection(new Error('Hermes gateway restarting'));
-    this.sessions.clear();
-    if (!child || child.exitCode !== null || child.signalCode !== null || typeof child.kill !== 'function') return false;
-    const exited = new Promise((resolve) => {
-      if (typeof child.once === 'function') child.once('exit', () => resolve(true));
-    });
-    try { child.kill('SIGTERM'); } catch (_) { return false; }
-    const timer = new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs).unref());
-    const clean = await Promise.race([exited, timer]);
-    if (!clean) {
-      try { child.kill('SIGKILL'); } catch (_) { /* already gone */ }
-      await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(false), 2000).unref())]);
+  async isListening() {
+    return this.probePortImpl(this.port, PORT_PROBE_TIMEOUT_MS);
+  }
+
+  async waitForListenerExit(timeoutMs = 2000) {
+    const deadline = Date.now() + timeoutMs;
+    while (await this.isListening()) {
+      if (Date.now() >= deadline) return false;
+      await new Promise(resolve => setTimeout(resolve, 25));
     }
+    return true;
+  }
+
+  async stopOwnedGateway(timeoutMs = 10000) {
+    // Terminal even when startup has not reached process creation yet.
+    this.shutdownRequested = true;
+    const starting = this.gatewayReadyPromise;
+    this.failConnection(new Error('Hermes gateway restarting'));
+    // A pending external-stop or cleanup must finish before credentials can
+    // change. Cancellation guards prevent that startup from spawning afterward.
+    if (starting) await starting.catch(() => {});
+    const child = this.child;
+    this.sessions.clear();
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
+      this.child = null;
+      return false;
+    }
+    if (typeof child.kill !== 'function') throw new Error('Owned agent gateway could not be stopped');
+    const exited = new Promise(resolve => child.once('exit', () => resolve(true)));
+    try { child.kill('SIGTERM'); } catch (_) { throw new Error('Owned agent gateway could not be stopped'); }
+    const wait = ms => new Promise(resolve => setTimeout(() => resolve(false), ms).unref());
+    let clean = await Promise.race([exited, wait(timeoutMs)]);
+    if (!clean) {
+      try { child.kill('SIGKILL'); } catch (_) { throw new Error('Owned agent gateway could not be stopped'); }
+      clean = await Promise.race([exited, wait(2000)]);
+    }
+    if (!clean) throw new Error('Owned agent gateway did not exit; connection changes were not applied');
+    this.child = null;
     return true;
   }
 
@@ -1111,6 +1261,7 @@ class HermesGatewayClient {
 }
 
 module.exports = {
+  bindableGatewayPort,
   waitForRecordedGatewayExit,
   HermesGatewayClient,
   DEFAULT_PORT,
