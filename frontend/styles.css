@@ -598,6 +598,8 @@
   .app-prompt-input{display:block;width:100%;min-height:112px;resize:vertical;box-sizing:border-box;border:1px solid var(--rule-strong);border-radius:10px;background:#FFFFFF;color:var(--ink);font:inherit;font-size:14px;line-height:1.5;padding:10px 12px;outline:none;}
   .app-prompt-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-tint);}
   .app-prompt-note{font-size:12.5px;line-height:1.45;color:var(--muted);margin-top:10px;}
+  .app-prompt-link{background:none;border:0;padding:0;font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer;}
+  .app-prompt-report{margin:10px 0 0;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;border:1px solid var(--rule);border-radius:10px;background:#F7F6F3;color:var(--ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px 12px;user-select:text;}
   .app-prompt-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
   .app-prompt-actions .btn{height:36px;border-radius:10px;}
   .btn.app-prompt-submit{background:var(--ink);border-color:var(--ink);color:#FFFFFF;}

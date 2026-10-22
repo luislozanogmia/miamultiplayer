@@ -5782,20 +5782,150 @@
     });
   }
 
-  function prepareBetaFeedback(){
-    return appPrompt('', {
-      title: 'Tell us what happened',
-      message: 'Describe the confusing step, unexpected result, or missing feature. Please leave out passwords and private conversation content.',
-      inputLabel: 'Beta feedback',
-      note: 'Mia will copy your note with a safe support summary so you can paste it into your beta feedback channel.',
-      submitLabel: 'Copy feedback'
-    }).then(function(result){
-      if(!result || !result.ok || !String(result.text || '').trim()) return false;
-      return buildAppDevSupportSummary().then(function(summary){
-        var feedback = ['Mia beta feedback', '', String(result.text).trim(), '', summary].join('\n');
-        return copySidebarText(feedback, 'Feedback copied — paste it into your beta channel');
+  // Anonymized facts for the feedback report. Only the allow-listed fields in
+  // feedback-report.js ever reach the report; this just gathers raw inputs.
+  function gatherFeedbackFacts(){
+    var version = '';
+    try { version = (window.miaDesktop && window.miaDesktop.version && window.miaDesktop.version()) || ''; } catch(_e){}
+    var hints = navigator.userAgentData && navigator.userAgentData.getHighEntropyValues
+      ? navigator.userAgentData.getHighEntropyValues(['architecture', 'platformVersion']).catch(function(){ return {}; })
+      : Promise.resolve({});
+    return Promise.all([
+      hints,
+      api('/api/dev/diagnostics').catch(function(){ return {status: 0}; }),
+      api('/api/settings/managed-router/status').catch(function(){ return {data: {}}; })
+    ]).then(function(results){
+      var hint = results[0] || {};
+      var isDev = results[1].status >= 200 && results[1].status < 300;
+      var router = results[2] && results[2].data || {};
+      var selection = chatModelPicker.selection || {};
+      var browser = window.miaNativeBrowser && window.miaNativeBrowser.counts ? window.miaNativeBrowser.counts() : {};
+      return {
+        version: version,
+        platform: navigator.platform || '',
+        osVersion: hint.platformVersion || '',
+        arch: hint.architecture || '',
+        installType: isDev ? 'dev (local preview)' : (window.miaDesktop ? 'packaged' : 'browser'),
+        workspaceMode: appCollaborationMode,
+        provider: selection.provider || '',
+        modelFamily: selection.family || '',
+        counts: {bots: (chatWs.botRecords || []).length, tabs: browser.tabs, groups: browser.groups},
+        errors: router.errorCode ? [router.errorCode] : [],
+        tzOffsetMinutes: new Date().getTimezoneOffset(),
+        now: new Date().toISOString()
+      };
+    });
+  }
+
+  // "Tell us what happened": the note plus an anonymized report. The preview
+  // renders the exact string Send hands to the user's mail app.
+  function openFeedbackDialog(){
+    return new Promise(function(resolve){
+      var previousFocus = document.activeElement;
+      var overlay = document.createElement('div');
+      overlay.className = 'app-prompt-overlay open';
+      overlay.setAttribute('role', 'presentation');
+      var card = document.createElement('div');
+      card.className = 'app-prompt-card';
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-modal', 'true');
+      var title = document.createElement('h2');
+      title.className = 'app-prompt-title';
+      title.textContent = 'Tell us what happened';
+      var message = document.createElement('p');
+      message.className = 'app-prompt-msg';
+      message.textContent = 'Describe the confusing step, unexpected result, or missing feature. Please leave out passwords and private conversation content.';
+      var input = document.createElement('textarea');
+      input.className = 'app-prompt-input';
+      input.setAttribute('aria-label', 'Beta feedback');
+      var note = document.createElement('p');
+      note.className = 'app-prompt-note';
+      note.append('Mia will share anonymized data from your setup so we can get more information. ');
+      var toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'app-prompt-link';
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.textContent = 'See what is included in the report';
+      note.appendChild(toggle);
+      var preview = document.createElement('pre');
+      preview.className = 'app-prompt-report';
+      preview.hidden = true;
+      preview.textContent = 'Gathering report…';
+      var status = document.createElement('p');
+      status.className = 'app-prompt-note';
+      status.setAttribute('role', 'status');
+      status.hidden = true;
+      var actions = document.createElement('div');
+      actions.className = 'app-prompt-actions';
+      var cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'btn';
+      cancel.textContent = 'Cancel';
+      var copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'btn';
+      copy.textContent = 'Copy instead';
+      copy.hidden = true;
+      var submit = document.createElement('button');
+      submit.type = 'button';
+      submit.className = 'btn app-prompt-submit';
+      submit.textContent = 'Send';
+      submit.disabled = true;
+      actions.append(cancel, copy, submit);
+      card.append(title, message, input, note, preview, status, actions);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      var report = '';
+      var version = '';
+      var sent = false;
+      function composed(){ return MiaFeedbackReport.composeFeedback(input.value, report); }
+      function refresh(){ if(report) preview.textContent = composed(); }
+      function close(){
+        document.removeEventListener('keydown', onKeydown);
+        overlay.remove();
+        if(previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+        resolve(sent);
+      }
+      function onKeydown(event){ if(event.key === 'Escape'){ event.preventDefault(); close(); } }
+      gatherFeedbackFacts().catch(function(){ return {}; }).then(function(facts){
+        report = MiaFeedbackReport.buildReport(facts);
+        version = facts.version || '';
+        submit.disabled = false;
+        refresh();
       });
-    }).catch(function(){
+      toggle.addEventListener('click', function(){
+        preview.hidden = !preview.hidden;
+        toggle.setAttribute('aria-expanded', preview.hidden ? 'false' : 'true');
+        toggle.textContent = preview.hidden ? 'See what is included in the report' : 'Hide the report';
+      });
+      input.addEventListener('input', refresh);
+      cancel.addEventListener('click', close);
+      overlay.addEventListener('click', function(event){ if(event.target === overlay) close(); });
+      copy.addEventListener('click', function(){
+        copySidebarText(composed(), 'Feedback copied — email it to ' + MiaFeedbackReport.FEEDBACK_EMAIL);
+      });
+      submit.addEventListener('click', function(){
+        if(sent){ close(); return; }
+        if(!input.value.trim()){ input.focus(); return; }
+        // The user's own mail app composes the message; Mia holds no mail
+        // credentials. The Electron shell only opens this exact address.
+        window.open(MiaFeedbackReport.buildMailto(version, composed()));
+        sent = true;
+        input.readOnly = true;
+        status.hidden = false;
+        status.textContent = 'Your mail app should open with this message ready. Review it and press send there. If nothing opened, copy the message and email it to ' + MiaFeedbackReport.FEEDBACK_EMAIL + '.';
+        copy.hidden = false;
+        cancel.hidden = true;
+        submit.textContent = 'Done';
+      });
+      document.addEventListener('keydown', onKeydown);
+      input.focus();
+    });
+  }
+
+  function prepareBetaFeedback(){
+    return openFeedbackDialog().catch(function(){
       showBenchToast('Could not prepare feedback');
       return false;
     });

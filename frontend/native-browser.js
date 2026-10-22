@@ -1155,6 +1155,8 @@
     if (event.key === 'Escape') { input.value = selected() && selected().url || ''; input.blur(); }
   });
   window.miaNativeBrowser = {
+    // Counts only (feedback report); never URLs or titles.
+    counts: function () { return { tabs: (state.tabs || []).length, groups: (state.groups || []).length }; },
     render: function (visible) {
       var opening = visible && !open;
       open = visible;
