@@ -291,6 +291,19 @@ test('HTTP bot create/read/edit enforces revisions and rename preserves direct f
   const initial = (await (await request(`/api/bots/${created.id}`)).json()).bot;
   assert.match(initial.instructionsRevision, /^[a-f0-9]{64}$/);
 
+  const draftAutomation = { id: 'steps-check', name: 'Steps check', enabled: false, frequency: 'daily', time: '09:00', prompt: 'Run.' };
+  for (const steps of ['one step', [''], ['x'.repeat(501)], Array.from({ length: 21 }, (_, i) => `Step ${i}`), [3]]) {
+    const rejected = await request(`/api/bots/${created.id}`, {
+      method: 'PUT', body: JSON.stringify({ name: created.name, model: created.model, automations: [{ ...draftAutomation, steps }] }),
+    });
+    assert.equal(rejected.status, 400, `steps ${JSON.stringify(steps).slice(0, 40)} are rejected`);
+  }
+  const withSteps = await request(`/api/bots/${created.id}`, {
+    method: 'PUT', body: JSON.stringify({ name: created.name, model: created.model, automations: [{ ...draftAutomation, steps: ['Search', 'Summarize'] }] }),
+  });
+  assert.equal(withSteps.status, 200);
+  assert.deepEqual((await withSteps.json()).bot.automations[0].steps, ['Search', 'Summarize']);
+
   const directory = fs.readdirSync(fixture.packages).filter((name) => name.endsWith(`--${created.id}`))[0];
   const agentsPath = path.join(fixture.packages, directory, 'AGENTS.md');
   fs.writeFileSync(agentsPath, '# Direct HTTP fixture edit\n');

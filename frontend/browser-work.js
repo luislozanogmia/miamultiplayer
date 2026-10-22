@@ -7,7 +7,7 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
   var browserState = { tabs: [] }, works = [], host, bridge, transport, loaded = false;
-  var requestGeneration = 0, timer, pending = new Set(), shownApprovals = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', lastGroupRender = '', mutationError = '', refreshFailed = false;
+  var requestGeneration = 0, timer, pending = new Set(), shownApprovals = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', mutationError = '', refreshFailed = false;
   var labels = { idle: 'Idle', queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', needs_approval: 'Needs approval', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
   var approvalDenialLabels = { STALE_SNAPSHOT: 'Page target is stale.', ELEMENT_NOT_FOUND: 'Page element is unavailable.', TAB_NAVIGATED: 'Page changed.', ACTOR_REVOKED: 'Bot access was revoked.', TAB_NOT_OWNED: 'Tab ownership changed.', TAB_CLOSED: 'Tab closed.', TAB_CRASHED: 'Tab became unavailable.', APPROVAL_REQUIRED: 'A current approval is required.', APPROVAL_TARGET_CHANGED: 'Approval target changed.', CANCELLED: 'Request cancelled.', WORKER_SESSION_REVOKED: 'Bot session was revoked.' };
   // Labels say what happened, not just the stored state: a task the person
@@ -131,35 +131,6 @@
       }
     });
   }
-  function renderGroups() {
-    if (!host) return;
-    var signature = JSON.stringify([browserState.groups, browserState.selectedGroupId, browserState.activeId]);
-    if (signature === lastGroupRender) return; lastGroupRender = signature;
-    var list = document.getElementById('browserGroupList'); list.replaceChildren();
-    (browserState.groups || []).forEach(function (group, index) {
-      var cell = node('div', 'browser-group-cell');
-      var select = button(group.name, function () { groupCommand('group-select', { groupId: group.id }); });
-      select.setAttribute('aria-pressed', String(group.id === browserState.selectedGroupId));
-      cell.append(select);
-      cell.draggable = true;
-      cell.addEventListener('dragstart', function (e) { e.dataTransfer.setData('application/x-mia-group', group.id); });
-      cell.addEventListener('dragover', function (e) { if (e.dataTransfer.types.includes('application/x-mia-group')) e.preventDefault(); });
-      cell.addEventListener('drop', function (e) {
-        var id = e.dataTransfer.getData('application/x-mia-group'); if (!id) return; e.preventDefault();
-        var order = browserState.groups.map(function (g) { return g.id; });
-        if (!order.includes(id)) return;
-        order.splice(order.indexOf(id), 1); order.splice(index, 0, id); groupCommand('group-reorder', { groupIds: order });
-      });
-      list.append(cell);
-    });
-    var selected = (browserState.groups || []).find(function (g) { return g.id === browserState.selectedGroupId; });
-    var rename = document.getElementById('browserGroupName');
-    if (document.activeElement !== rename) rename.value = selected ? selected.name : '';
-    var move = document.getElementById('browserMoveTabGroup'); var movingTo = move.value; var focusedMove = document.activeElement === move; move.replaceChildren();
-    (browserState.groups || []).forEach(function (g) { var option = node('option', '', g.name); option.value = g.id; option.selected = g.id === (focusedMove ? movingTo : browserState.selectedGroupId); move.append(option); });
-    document.getElementById('browserMoveTab').disabled = !browserState.activeId;
-    var up = document.getElementById('browserGroupEarlier'); up.disabled = !selected || browserState.groups[0].id === selected.id;
-  }
   var lastProposalRender = '', appliedProposalId = null;
   // Mia names bots the way the person does. Match the stable id first, then a
   // unique name; an ambiguous or unknown name is never guessed.
@@ -195,7 +166,8 @@
   async function applyProposal(proposal) {
     if (pending.has('proposal')) return; pending.add('proposal'); renderProposal(); error('');
     try {
-      if (browserState.selectedGroupId !== proposal.groupId) await groupCommand('group-select', { groupId: proposal.groupId });
+      var proposalGroup = (browserState.groups || []).find(function (g) { return g.id === proposal.groupId; });
+      if (browserState.selectedGroupId !== proposal.groupId && proposalGroup && proposalGroup.tabIds.length) await groupCommand('select', { id: proposalGroup.tabIds[0] });
       if (browserState.selectedGroupId !== proposal.groupId) throw new Error('Mia’s suggested group is no longer available.');
       await chooseBots();
       // chooseBots reports its own failure (no connected model, bots unavailable).
@@ -353,7 +325,7 @@
     var changedGroup = browserState.selectedGroupId !== state.selectedGroupId;
     browserState = state; if (!host) return;
     if (changedGroup) { requestGeneration++; works = []; loaded = false; mutationError = ''; error(''); document.getElementById('browserWorkCandidates').replaceChildren(); refresh(); }
-    renderGroups(); renderWorks(); renderProposal();
+    renderWorks(); renderProposal();
   }
   async function chooseBots(selectedReusable) {
     var box = document.getElementById('browserWorkCandidates'); box.replaceChildren(); error('');
@@ -425,13 +397,6 @@
     var stopGroup = document.getElementById('browserWorkStopGroup');
     if (stopGroup) { stopGroup.disabled = !transport || !transport.stopGroup; stopGroup.onclick = function () { var groupId = browserState.selectedGroupId; if (!groupId) return; stopGroup.disabled = true; mutate('stop-group:' + groupId, function () { return transport.stopGroup(groupId); }).finally(function () { stopGroup.disabled = false; }); }; }
     bridge.onState(updateBrowserState);
-    document.getElementById('browserGroupAdd').onclick = function () {
-      groupCommand('group-create', { name: document.getElementById('browserGroupNewName').value });
-    };
-    document.getElementById('browserGroupRename').onclick = function () { groupCommand('group-rename', { groupId: browserState.selectedGroupId, name: document.getElementById('browserGroupName').value }); };
-    document.getElementById('browserGroupRemove').onclick = function () { groupCommand('group-remove', { groupId: browserState.selectedGroupId }); };
-    document.getElementById('browserMoveTab').onclick = function () { groupCommand('group-move-tab', { id: browserState.activeId, groupId: document.getElementById('browserMoveTabGroup').value }); };
-    document.getElementById('browserGroupEarlier').onclick = function () { var order = browserState.groups.map(function (g) { return g.id; }); var i = order.indexOf(browserState.selectedGroupId); if (i > 0) { var id = order.splice(i, 1)[0]; order.splice(i - 1, 0, id); groupCommand('group-reorder', { groupIds: order }); } };
     new MutationObserver(function () { if (!document.getElementById('localBrowserOverlay').hidden) refresh(); }).observe(document.getElementById('localBrowserOverlay'), { attributes: true, attributeFilter: ['hidden'] });
     bridge.command({ action: 'state' }).then(updateBrowserState).catch(function () { error('Browser unavailable.'); });
     if (timer) clearInterval(timer); timer = setInterval(refresh, 2000); refresh();

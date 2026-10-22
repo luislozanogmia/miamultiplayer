@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { externalChatEnabled } = require('./chat-security');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
+const { HermesRuntimeController } = require('./hermes-runtime-controller');
 const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
 const { normalizedGatewayUrl } = require('./hermes-web-search-config');
 const {
@@ -137,8 +138,9 @@ function setHermesDiagnostics({ verboseHermes, traceCommands } = {}) {
   if (typeof traceCommands === 'boolean') hermesDiagnostics.traceCommands = traceCommands;
   hermesDiagnostics.updatedAt = new Date().toISOString();
   if (!hermesDiagnostics.traceCommands) hermesDiagnostics.events = [];
-  if (hermesGatewayClient && typeof hermesGatewayClient.setToolProgressMode === 'function') {
-    void hermesGatewayClient.setToolProgressMode(hermesDiagnostics.verboseHermes ? 'verbose' : 'all');
+  const client = hermesGatewayRuntime.current;
+  if (client && typeof client.setToolProgressMode === 'function') {
+    void client.setToolProgressMode(hermesDiagnostics.verboseHermes ? 'verbose' : 'all');
   }
   return getHermesDiagnostics();
 }
@@ -201,8 +203,24 @@ invoke capabilities beyond your tools.
 
 const MIAOS_BOT_BROWSER_NUDGE = `
 When the user asks to OPEN, show, or visit a page for them, drive the Mia
-browser per the browser module instructions instead of answering with a bare
-link. For research, navigate and read sources through that same browser.
+browser instead of answering with a bare link. For research, navigate and
+read sources through that same browser: open a page in your own tab with
+ghost-cli call ghost_tab_open --arguments '{"instance_id":"miaos","url":"https://..."}'
+then read it with ghost_read, passing the tab_id it returned. When the user
+asks you to open or read specific pages, do it; never answer from memory
+instead.
+Mia's browser keeps your pages in your own tab group. When asked about your
+browser tabs, list them instead of guessing:
+ghost-cli call ghost_tab_list --arguments '{"instance_id":"miaos"}'
+It returns only your tabs, each with its tab_id, title, URL, group name, and
+whether it is in front. Pass a tab_id to other ghost-cli commands to act on
+that tab. Browser tabs are not Google Sheets tabs.
+Downloads go straight to the user's Downloads folder. Before saying a download
+finished, check it:
+ghost-cli call ghost_downloads --arguments '{"instance_id":"miaos","wait_ms":30000}'
+Report only entries with state "completed" and a path, and give the path. If
+safety is "review" or "blocked", tell the user the safety_reason and never
+open or run the file.
 `.trim();
 
 const MIAOS_BOT_COMPACT_TOOL_POLICY = `
@@ -305,10 +323,8 @@ const VISION_MODEL = /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(process.env.MIAOS_VISI
 const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
   'claude-subscription-directsdk-experimental': Object.freeze([
     Object.freeze({ id: 'sonnet', model: 'claude-sonnet-5-5[1m]', label: 'Sonnet 5.5', fast: false }),
-    Object.freeze({ id: 'haiku', model: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', fast: false }),
-    Object.freeze({ id: 'claude-opus-5-5[1m]', model: 'claude-opus-5-5[1m]', label: 'Opus 5.5', fast: false }),
-    Object.freeze({ id: 'opus', model: 'claude-opus-5[1m]', label: 'Opus 5', fast: false }),
-    Object.freeze({ id: 'claude-opus-4-8[1m]', model: 'claude-opus-4-8[1m]', label: 'Opus 4.8', fast: false }),
+    Object.freeze({ id: 'haiku', model: 'claude-haiku-5-5', label: 'Haiku 5.5', fast: false }),
+    Object.freeze({ id: 'opus', model: 'claude-opus-5-5[1m]', label: 'Opus 5.5', fast: false }),
     Object.freeze({ id: 'fable', model: 'claude-fable-5-1[1m]', label: 'Fable 5.1', fast: false }),
   ]),
   'openai-codex': Object.freeze([
@@ -336,8 +352,8 @@ const MANAGED_ROUTER_HERMES_PROVIDER = 'openrouter';
 
 const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
   'claude-subscription-directsdk-experimental': Object.freeze([
-    'claude-sonnet-5-5[1m]', 'claude-haiku-4-5-20251001', 'claude-opus-5-5[1m]',
-    'claude-opus-5[1m]', 'claude-opus-4-8[1m]', 'claude-fable-5-1[1m]',
+    'claude-sonnet-5-5[1m]', 'claude-haiku-5-5', 'claude-opus-5-5[1m]',
+    'claude-fable-5-1[1m]',
   ]),
   'openai-codex': Object.freeze([
     'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
@@ -450,6 +466,10 @@ const HERMES_ENV_ALLOWLIST = Object.freeze([
   // execs; without it the adapter falls back to whichever python3 PATH finds.
   'HERMES_HOME', 'HERMES_PYTHON', 'HERMES_STATE_DB', 'HERMES_CRON_JOBS_FILE',
   'HERMES_CRON_EXECUTIONS_DB', 'MIAOS_AUTOMATION_ARTIFACT_DIR',
+  // Ordinary gws calls must use Mia's profile, never a previous ambient login.
+  // Broker-backed installs keep durable credentials in safeStorage; raw gws
+  // has no credential there and Google work uses the brokered connected tools.
+  'GOOGLE_WORKSPACE_CLI_CONFIG_DIR', 'GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND',
   // Ghost CLI receives only filesystem coordinates for the app-owned local
   // bridge. It reads the owner-only token itself and never receives it here.
   'GHOST_CLI_HOME', 'GHOST_IN_APP_BROWSER_SOCKET', 'GHOST_IN_APP_BROWSER_TOKEN_FILE',
@@ -478,7 +498,8 @@ function hermesProcessEnv() {
   return env;
 }
 
-let hermesGatewayClient = null;
+let hermesGatewaySessionEventHandler = null;
+const hermesGatewayRuntime = new HermesRuntimeController(createHermesGatewayClient);
 
 // A profile pool can shadow an updated root key. Clear Mia-managed copies
 // only while no gateway is running, so cached state cannot write them back.
@@ -495,28 +516,37 @@ function removeStaleProfileCredentials() {
   }
 }
 
+function createHermesGatewayClient() {
+  const client = new HermesGatewayClient({
+    binary: HERMES_BIN,
+    launch: hermesGatewayLaunch(),
+    env: {
+      ...hermesProcessEnv(),
+      ...(hermesDiagnostics.verboseHermes ? { HERMES_TUI_TOOL_PROGRESS: 'verbose' } : {}),
+    },
+    toolsets: MIAOS_HERMES_TOOLSETS,
+    maxTurns: MIAOS_AGENT_MAX_TURNS,
+    onEvent: recordHermesGatewayEvent,
+    beforeSpawn: removeStaleProfileCredentials,
+    secretEnv: process.env.MIA_GOOGLE_BROKER_URL && process.env.MIA_GOOGLE_BROKER_RUN_TOKEN ? {
+      MIA_GOOGLE_BROKER_URL: process.env.MIA_GOOGLE_BROKER_URL,
+      MIA_GOOGLE_BROKER_RUN_TOKEN: process.env.MIA_GOOGLE_BROKER_RUN_TOKEN,
+      MIA_GOOGLE_MCP_SERVER: path.join(__dirname, 'mia-google-workspace-mcp.py'),
+      MIA_GOOGLE_MCP_PYTHON: process.env.HERMES_PYTHON,
+    } : null,
+  });
+  if (hermesGatewaySessionEventHandler) client.setSessionEventHandler(hermesGatewaySessionEventHandler);
+  return client;
+}
+
 function getHermesGatewayClient() {
-  if (!hermesGatewayClient) {
-    hermesGatewayClient = new HermesGatewayClient({
-      binary: HERMES_BIN,
-      launch: hermesGatewayLaunch(),
-      env: {
-        ...hermesProcessEnv(),
-        ...(hermesDiagnostics.verboseHermes ? { HERMES_TUI_TOOL_PROGRESS: 'verbose' } : {}),
-      },
-      toolsets: MIAOS_HERMES_TOOLSETS,
-      maxTurns: MIAOS_AGENT_MAX_TURNS,
-      onEvent: recordHermesGatewayEvent,
-      beforeSpawn: removeStaleProfileCredentials,
-    });
-  }
-  return hermesGatewayClient;
+  return hermesGatewayRuntime.get();
 }
 
 // Close every live gateway session this backend opened. Used by provider
 // disconnect and clean slate; never spawns a gateway just to close nothing.
 async function closeHermesGatewaySessions() {
-  const client = hermesGatewayClient;
+  const client = hermesGatewayRuntime.current;
   if (!client) return 0;
   return client.closeLiveSessions();
 }
@@ -527,39 +557,29 @@ async function closeHermesGatewaySessions() {
 async function deleteHermesGatewaySessions(storedSessionIds) {
   const ids = (storedSessionIds || []).filter(Boolean);
   if (!ids.length) return 0;
-  const client = getHermesGatewayClient();
+  const client = await getHermesGatewayClient();
   await client.closeLiveSessions();
   return client.deleteStoredSessions(ids);
 }
 
 // Bounce the gateway Mia started so its in-memory credential pool and live
 // agents are gone after a clean slate. An external gateway is left alone.
-async function restartHermesGatewayRuntime() {
-  const client = hermesGatewayClient;
-  if (!client) return false;
-  const stopped = await client.stopOwnedGateway();
-  if (!stopped) return false;
-  hermesGatewayClient = null;
-  await getHermesGatewayClient().connect();
-  return true;
+function restartHermesGatewayRuntime() {
+  return hermesGatewayRuntime.restart();
 }
 
-// Stop the gateway Mia owns and forget the client, so on-disk Hermes state
-// can be replaced underneath it before startHermesGatewayRuntime() brings a
-// fresh one up. Resolves false when no owned gateway was running.
-async function stopHermesGatewayRuntime() {
-  const client = hermesGatewayClient;
-  if (!client) return false;
-  hermesGatewayClient = null;
-  return client.stopOwnedGateway();
+function stopHermesGatewayRuntime() {
+  return hermesGatewayRuntime.stop();
+}
+
+// The callback writes credentials only. Readers stay behind the same barrier
+// through both the write and the subsequent gateway readiness check.
+function withStoppedHermesGateway(operation) {
+  return hermesGatewayRuntime.withStopped(operation);
 }
 
 function closeHermesGatewayRuntime() {
-  const client = hermesGatewayClient;
-  hermesGatewayClient = null;
-  if (!client) return false;
-  client.close();
-  return true;
+  return hermesGatewayRuntime.close();
 }
 
 process.once('exit', closeHermesGatewayRuntime);
@@ -668,8 +688,10 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
 
 function buildScheduledBotPrompt(bot, automation, options = {}) {
   const automationPrompt = String(automation && automation.prompt || '').trim();
-  if (!automationPrompt) return null;
+  const steps = automationSteps(automation);
+  if (!automationPrompt && !steps.length) return null;
   const automationName = String(automation && automation.name || 'Automation').trim();
+  const automationId = String(automation && automation.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
   const sections = [
     ...botIdentitySections(bot, {
       userDisplayName: options.userDisplayName,
@@ -684,6 +706,7 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     'Capabilities:\nAnswer in chat and use the tools made available to research the web and create bounded artifacts needed for this automation.',
     [
       'Operating rules:',
+      '- Look facts up before answering. If the user names a page, site, or source, or the answer depends on facts that change (numbers, dates, prices, news, what a page says), get it with your tools first. If you answer from memory, say so.',
       '- Complete the task and return the concrete result in this thread.',
       '- Keep responses, reasoning, and tool use concise and tight unless the task clearly requires more depth.',
       '- Do not inspect Mia’s source code, databases, logs, or configuration to rediscover your identity or assignments.',
@@ -693,8 +716,26 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     ].join('\n'),
     MIAOS_BOT_WEB_POLICY,
     `Automation:\nName: ${automationName}\nSchedule: ${botAutomationSchedule(automation)}`,
-    `Task:\n${automationPrompt}`,
-  ].join('\n\n');
+    automationPrompt ? `Task:\n${automationPrompt}` : '',
+    // Steps run one at a time, in order, so a long task can't silently skip
+    // an instruction, and a failure names the step where it happened.
+    steps.length ? [
+      'Steps:',
+      'Do these steps one at a time, in order. Finish each step before starting the next. If a step cannot be done, stop and say which step failed and why.',
+      ...steps.map((step, index) => `${index + 1}. ${step}`),
+    ].join('\n') : '',
+    // The user watches a live checklist built from these reports.
+    steps.length && automationId ? [
+      'Progress reports:',
+      'Use the report_step tool (step number, state, one-line note) as you go: state "working" when you start a step, "done", "failed" or "skipped" when you finish it.',
+      'If you need the user to decide something, sign in, or provide something, call report_step with state "needs_you" and what you need, say the same in your reply, and do not continue past that step.',
+    ].join('\n') : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+function automationSteps(automation) {
+  const steps = automation && Array.isArray(automation.steps) ? automation.steps : [];
+  return steps.map((step) => String(step || '').trim().replace(/\s+/g, ' ')).filter(Boolean);
 }
 
 function buildBotContext(agent, transcript, message, platformContext, senderLabel, globalInstructions) {
@@ -727,13 +768,14 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
     'Capabilities: answer in chat and use the tools made available to research the web, work with files, use connected apps, and discuss or manage only your own automations.',
     [
       'Operating rules:',
+      '- Look facts up before answering. If the user names a page, site, or source, or the answer depends on facts that change (numbers, dates, prices, news, what a page says), get it with your tools first. If you answer from memory, say so.',
       '- Complete the user’s task and return the concrete result in this thread.',
       '- Keep responses, reasoning, and tool use concise and tight unless the task clearly requires more depth.',
       '- The latest explicit user instruction overrides older scope. If the user says to stop, says “full stop,” or says not to overengineer, stop further tool use and respond briefly with the current result.',
-      '- Once the requested result is sufficient, stop. Do not keep exploring tools, implementations, or adjacent improvements that the user did not request.',
+      '- Once the requested result is sufficient and every look-up the user asked for is done, stop. Do not keep exploring tools, implementations, or adjacent improvements that the user did not request.',
       '- Your automation list below is authoritative. Do not inspect local files, databases, logs, or configuration to rediscover it.',
       '- Resolve references such as “it,” “that automation,” or “run it now” from this list when one choice is clear; ask one short question only when genuinely ambiguous.',
-      '- When asked to run an automation now, perform its saved task now. Do not create or change a schedule unless the user explicitly asks.',
+      '- To create, change, or run one of your automations, use the automation action described in the turn message. If this turn has none, say the user can do it from your own chat or the Automations page. Never create or change a schedule unless the user explicitly asks.',
       `- Reply in persona and sign [${name}].`,
     ].join('\n'),
     `Your automations:\n${automationLines.join('\n')}`,
@@ -781,8 +823,9 @@ function rememberTurnModel(gatewayOptions, requested) {
 async function runStandaloneInferenceViaHermesGateway(
   prompt,
   options = {},
-  client = options.gatewayClient || getHermesGatewayClient()
+  client = null
 ) {
+  client = client || options.gatewayClient || await getHermesGatewayClient();
   const imagePaths = imagePathsFromOptions(options);
   const result = await client.run({
     storedSessionId: null,
@@ -831,7 +874,8 @@ async function runInferenceViaHermesGateway({
   onEvent,
   onSession,
   signal,
-}, client = getHermesGatewayClient()) {
+}, client = null) {
+  client = client || await getHermesGatewayClient();
   const result = await client.run({
     storedSessionId,
     seedMessages,
@@ -862,7 +906,8 @@ async function runSlashCommandViaHermesGateway({
   onSession,
   onNotice,
   signal,
-}, client = getHermesGatewayClient()) {
+}, client = null) {
+  client = client || await getHermesGatewayClient();
   return client.runCommand({
     storedSessionId,
     seedMessages,
@@ -877,35 +922,44 @@ async function runSlashCommandViaHermesGateway({
   });
 }
 
-async function readHermesGatewaySessionControl(sessionId, client = getHermesGatewayClient()) {
+// Stop shares the exact client and AbortSignal used by Mia, bot and standalone turns.
+async function cancelHermesGatewayTurn(signal, client = null) {
+  client = client || await getHermesGatewayClient();
+  return client.cancelTurn(signal);
+}
+
+async function readHermesGatewaySessionControl(sessionId, client = null) {
+  client = client || await getHermesGatewayClient();
   return client.readSessionControl(sessionId);
 }
 
 // Turns and goal verdicts Hermes produces on its own (see
 // HermesGatewayClient.handleUnsolicitedEvent).
-function setHermesGatewaySessionEventHandler(handler, client = getHermesGatewayClient()) {
-  client.setSessionEventHandler(handler);
+function setHermesGatewaySessionEventHandler(handler, client = null) {
+  if (client) return client.setSessionEventHandler(handler);
+  hermesGatewaySessionEventHandler = handler;
+  hermesGatewayRuntime.current?.setSessionEventHandler(handler);
 }
 
 async function runBotInferenceViaHermesGateway(
   prompt,
   options = {},
-  client = options.gatewayClient || getHermesGatewayClient()
+  client = null
 ) {
   return runStandaloneInferenceViaHermesGateway(prompt, { ...options, botWorker: true }, client);
 }
 
-async function steerHermesGatewaySession(sessionId, text, client = getHermesGatewayClient()) {
+async function steerHermesGatewaySession(sessionId, text, client = null) {
+  client = client || await getHermesGatewayClient();
   return client.steer(sessionId, text);
 }
 
 async function getHermesGatewayModelOptions(options) {
-  return getHermesGatewayClient().modelOptions({ ...options, profile: MIAOS_AGENT_HERMES_PROFILE });
+  return (await getHermesGatewayClient()).modelOptions({ ...options, profile: MIAOS_AGENT_HERMES_PROFILE });
 }
 
 async function startHermesGatewayRuntime() {
-  await getHermesGatewayClient().connect();
-  return true;
+  return hermesGatewayRuntime.start();
 }
 
 module.exports = {
@@ -921,10 +975,12 @@ module.exports = {
   runSlashCommandViaHermesGateway,
   persistentSessionOptions,
   readHermesGatewaySessionControl,
+  cancelHermesGatewayTurn,
   setHermesGatewaySessionEventHandler,
   steerHermesGatewaySession,
   getHermesGatewayModelOptions,
   startHermesGatewayRuntime,
+  withStoppedHermesGateway,
   removeStaleProfileCredentials,
   closeHermesGatewayRuntime,
   closeHermesGatewaySessions,

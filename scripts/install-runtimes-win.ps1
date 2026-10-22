@@ -268,6 +268,9 @@ try {
     $null = Invoke-Native "git apply hermes-mia-browser-worker-scheduler.patch" {
         & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-mia-browser-worker-scheduler.patch")
     }
+    $null = Invoke-Native "git apply hermes-process-secrets.patch" {
+        & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-process-secrets.patch")
+    }
 } finally {
     Pop-Location
 }

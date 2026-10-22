@@ -358,6 +358,14 @@ test("bare macOS dev launches prefer Mia's bundled Hermes and preserve explicit 
   assert.notEqual(main.developmentHermesBinary({}, () => true, 'linux'), bundled);
 });
 
+test("dev mode refuses to start without its own Hermes home and Python", () => {
+  const main = loadMain();
+  assert.equal(main.devModeRuntimeProblem({}, ""), "", "installed and plain launches are unaffected");
+  assert.match(main.devModeRuntimeProblem({}, "/dev-root"), /HERMES_HOME and HERMES_PYTHON.*dev_mode\.sh/);
+  assert.match(main.devModeRuntimeProblem({ HERMES_HOME: "/h" }, "/dev-root"), /missing HERMES_PYTHON\./);
+  assert.equal(main.devModeRuntimeProblem({ HERMES_HOME: "/h", HERMES_PYTHON: "/p" }, "/dev-root"), "");
+});
+
 test("Claude CLI discovery skips an unreadable PATH entry", () => {
   const main = loadMain();
   const originalPath = process.env.PATH;
@@ -388,6 +396,7 @@ test("packaged runtime resolves platform layout through shared helpers", () => {
   assert.match(source, /const ghostLauncher = runtimeLauncherPath\(runtimeBin, "ghost-cli"\)/);
   assert.match(source, /const gwsLauncher = nativeRuntimeBinaryPath\(runtimeBin, "gws"\)/);
   assert.match(source, /process\.env\.HERMES_PYTHON = venvPythonPath\(venvRoot\)/);
+  assert.match(source, /process\.env\.MIAOS_HERMES_ARGV_JSON = JSON\.stringify\(\[\s*process\.env\.HERMES_PYTHON,/);
   assert.match(source, /venvPythonPath\(path\.join\(hermesHome, "hermes-agent", "venv"\)\)/);
   // The Unix shell launchers are regenerated only where they exist; Windows
   // venvs keep their shipped Scripts\python.exe redirector.
@@ -587,7 +596,7 @@ test("packaged desktop disables developer menus and backend output capture", () 
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   assert.match(source, /if \(!app\.isPackaged\) viewItems\.unshift\(\{ role: "toggleDevTools" \}\)/);
   assert.match(source, /if \(!app\.isPackaged\) template\.splice\(5, 0, createDevelopmentMenu\(\)\)/);
-  assert.match(source, /stdio: app\.isPackaged \? "ignore"/);
+  assert.match(source, /stdio: app\.isPackaged \? \["pipe", "ignore", "ignore"\]/);
 });
 
 test("Development server actions share one in-flight operation", async () => {

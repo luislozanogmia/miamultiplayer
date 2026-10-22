@@ -3,7 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
-const { startNativeGoogleLogin, hasNativeGoogleClient } = require('./google-native-login');
+const crypto = require('crypto');
+const { startNativeGoogleLogin, hasNativeGoogleClient, googleConfigDir } = require('./google-native-login');
 
 const CONNECTOR_ID = 'skill-google-workspace';
 const CONNECTOR_NAME = 'Google Account';
@@ -25,7 +26,6 @@ const GWS_OAUTH_SCOPES = Object.freeze([
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/drive.file',
-  'https://www.googleapis.com/auth/contacts.readonly',
 ]);
 
 // Exact Discovery-method prefixes. No raw gws command is accepted from the
@@ -44,7 +44,6 @@ const ALLOWED_GWS_COMMANDS = Object.freeze({
   'drive.files.get': Object.freeze(['drive', 'files', 'get']),
   'drive.files.create': Object.freeze(['drive', 'files', 'create']),
   'drive.permissions.create': Object.freeze(['drive', 'permissions', 'create']),
-  'contacts.list': Object.freeze(['people', 'people', 'connections', 'list']),
   'sheets.spreadsheets.get': Object.freeze(['sheets', 'spreadsheets', 'get']),
   'sheets.spreadsheets.create': Object.freeze(['sheets', 'spreadsheets', 'create']),
   'sheets.values.get': Object.freeze(['sheets', 'spreadsheets', 'values', 'get']),
@@ -91,6 +90,7 @@ function processEnvironment(env = process.env) {
     PATH: String(env.PATH || ''),
     HOME: String(env.HOME || ''),
     NO_COLOR: '1',
+    GOOGLE_WORKSPACE_CLI_CONFIG_DIR: googleConfigDir(env),
   };
   for (const key of [
     'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR',
@@ -133,7 +133,7 @@ function defaultProcessRunner(file, args, options = {}) {
 
 async function runBroker(env, args, cwd, fetchImpl = fetch) {
   const base = String(env.MIA_GOOGLE_BROKER_URL || '').trim();
-  const token = String(env.MIA_GOOGLE_BROKER_TOKEN || '');
+  const token = String(env.MIA_GOOGLE_BROKER_RUN_TOKEN || '');
   if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base) || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
   try {
     const response = await fetchImpl(`${base}/run`, { method: 'POST', redirect: 'error', headers: {
@@ -339,9 +339,25 @@ function createGoogleAccountConnector(options = {}) {
   const startLogin = options.startLogin || (() => startNativeGoogleLogin({ env, scopes: GWS_OAUTH_SCOPES, fetchImpl }));
   let activeLogin = null;
   let pendingStart = null;
+  let pendingStartOwner = null;
+  let activeLoginOwner = null;
   let activePicker = null;
   let pendingPicker = null;
   let loginGeneration = 0;
+  const binding = options.binding;
+  const currentOwner = () => binding ? String(binding.currentOwner() || '') : '';
+  const readBinding = () => binding ? binding.read() || {} : {};
+  function changeBinding(value) {
+    if (binding) binding.write(value);
+    if (typeof options.onConnectionChanged === 'function') {
+      Promise.resolve(options.onConnectionChanged()).catch(() => {});
+    }
+  }
+  function invalidateBinding() {
+    if (binding) changeBinding({ owner: '', revision: crypto.randomUUID() });
+  }
+  function pendingStatus() { return publicStatus('awaiting_approval'); }
+
 
   function terminateLogin(login) {
     if (login && login.child && typeof login.child.kill === 'function') {
@@ -352,6 +368,7 @@ function createGoogleAccountConnector(options = {}) {
   function cancelActiveLogin() {
     const login = activeLogin;
     activeLogin = null;
+    activeLoginOwner = null;
     terminateLogin(login);
   }
 
@@ -368,17 +385,43 @@ function createGoogleAccountConnector(options = {}) {
 
   async function status() {
     if (!runtime.available) return publicStatus('unavailable');
+    if (activeLogin || pendingStart) return pendingStatus();
+    const generation = loginGeneration;
+    const owner = currentOwner();
+    const grant = readBinding();
+    // An inherited process credential has no proof that this Mia identity
+    // authorized it. Reconnect establishes that binding; never guess an owner.
     const result = await runGws(['auth', 'status']);
+    if (generation !== loginGeneration || owner !== currentOwner()) return pendingStatus();
     const payload = parseJson(result.stdout);
     if (result.code === 0 && authPayloadConnected(payload)) {
-      return publicStatus(authPayloadHasRequiredScopes(payload) ? 'connected' : 'needs_reconnect');
+      if (!authPayloadHasRequiredScopes(payload)) return publicStatus('needs_reconnect');
+      if (!binding) return publicStatus('connected');
+      if (!owner || grant.owner !== owner) return publicStatus('needs_reconnect');
+      // auth status proves the grant, while Gmail's current-profile endpoint
+      // proves which account that same grant actually operates on.
+      const profileResult = await runGws(['gmail', 'users', 'getProfile', '--params', '{"userId":"me"}']);
+      if (generation !== loginGeneration || owner !== currentOwner()) return pendingStatus();
+      const profile = parseJson(profileResult.stdout);
+      const googleEmail = String(profile && profile.emailAddress || '').trim().toLowerCase();
+      if (profileResult.code !== 0 || googleEmail.length > 254 || !/^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(googleEmail)) {
+        return publicStatus('connection_error');
+      }
+      let current = readBinding();
+      if (current.owner !== owner) return publicStatus('needs_reconnect');
+      if (current.googleEmail !== googleEmail || !current.revision) {
+        current = { owner, googleEmail, revision: current.googleEmail ? crypto.randomUUID() : (current.revision || crypto.randomUUID()) };
+        changeBinding(current);
+      }
+      return { ...publicStatus('connected'), googleEmail, connectionRevision: current.revision };
     }
     if (result.timedOut || (result.code !== 0 && result.code !== 2)) return publicStatus('connection_error');
     return publicStatus(authPayloadConfigured(payload) || hasNativeGoogleClient(env) ? 'not_connected' : 'setup_required');
   }
 
   function start() {
-    if (pendingStart) return pendingStart;
+    if (pendingStart && (!binding || pendingStartOwner === currentOwner())) return pendingStart;
+    pendingStartOwner = currentOwner();
     const attempt = startAttempt();
     pendingStart = attempt;
     const clear = () => { if (pendingStart === attempt) pendingStart = null; };
@@ -388,6 +431,7 @@ function createGoogleAccountConnector(options = {}) {
 
   async function startAttempt() {
     if (!runtime.available) return { ...publicStatus('unavailable'), authorizationUrl: null };
+    if (activeLogin && binding && activeLoginOwner !== currentOwner()) cancelActiveLogin();
     if (activeLogin && activeLogin.authorizationUrl) {
       return { ...publicStatus('awaiting_approval'), authorizationUrl: activeLogin.authorizationUrl,
         authorizationProof: activeLogin.authorizationProof || null };
@@ -397,6 +441,8 @@ function createGoogleAccountConnector(options = {}) {
     // new login can write credentials; old callbacks must not verify against
     // the replacement account.
     loginGeneration += 1;
+    invalidateBinding();
+    const loginOwner = currentOwner();
     pendingPicker = null;
     terminateLogin(activePicker);
     activePicker = null;
@@ -418,8 +464,15 @@ function createGoogleAccountConnector(options = {}) {
       return { ...publicStatus(login && login.timedOut ? 'connection_error' : 'setup_required'), authorizationUrl: null };
     }
     activeLogin = login.child ? login : null;
+    activeLoginOwner = loginOwner;
     if (login.child && typeof login.child.once === 'function') {
-      login.child.once('exit', () => { if (activeLogin === login) activeLogin = null; });
+      login.child.once('exit', () => {
+        if (activeLogin === login) { activeLogin = null; activeLoginOwner = null; }
+        if (binding && login.child.result && login.child.result.state === 'connected'
+          && requestedGeneration === loginGeneration && loginOwner && loginOwner === currentOwner()) {
+          changeBinding({ owner: loginOwner, revision: crypto.randomUUID() });
+        }
+      });
     }
     return { ...publicStatus('awaiting_approval'), authorizationUrl: login.authorizationUrl,
       authorizationProof: login.authorizationProof || null };
@@ -430,6 +483,7 @@ function createGoogleAccountConnector(options = {}) {
   }
 
   function pickerStatus() {
+    if (activePicker && binding && activePicker.owner !== currentOwner()) { terminateLogin(activePicker); activePicker = null; }
     return activePicker && activePicker.child ? activePicker.child.result : { state: 'idle' };
   }
 
@@ -447,12 +501,13 @@ function createGoogleAccountConnector(options = {}) {
     if (pickerStatus().state === 'pending') return { state: 'pending', authorizationUrl: activePicker.authorizationUrl,
       authorizationProof: activePicker.authorizationProof || null };
     const generation = loginGeneration;
-    if (!(await status()).connected || generation !== loginGeneration) return { state: 'not_connected' };
+    const owner = currentOwner();
+    if (!(await status()).connected || generation !== loginGeneration || owner !== currentOwner()) return { state: 'not_connected' };
     const picker = await (options.startPicker || startNativeGoogleLogin)({ env, filePicker: true,
       onPicked: async ids => {
         const files = [];
         for (const id of ids) {
-          if (generation !== loginGeneration) throw new Error('connection changed');
+          if (generation !== loginGeneration || owner !== currentOwner()) throw new Error('connection changed');
           const result = await runGws(['drive', 'files', 'get', '--params', JSON.stringify({
             fileId: id, supportsAllDrives: true, fields: 'id,name,mimeType,trashed,capabilities(canEdit)',
           })]);
@@ -460,19 +515,20 @@ function createGoogleAccountConnector(options = {}) {
           if (result.code !== 0 || !file || file.id !== id || file.trashed !== false) throw new Error('file access unavailable');
           files.push({ id, name: String(file.name || '').slice(0, 512), canEdit: file.capabilities?.canEdit === true });
         }
-        if (generation !== loginGeneration) throw new Error('connection changed');
+        if (generation !== loginGeneration || owner !== currentOwner()) throw new Error('connection changed');
         return files;
       },
     });
-    if (generation !== loginGeneration) { terminateLogin(picker); return { state: 'cancelled' }; }
+    if (generation !== loginGeneration || owner !== currentOwner()) { terminateLogin(picker); return { state: 'cancelled' }; }
     if (!picker.ok) return { state: 'failed' };
-    activePicker = picker;
+    activePicker = Object.assign({}, picker, { owner });
     return { state: 'pending', authorizationUrl: picker.authorizationUrl,
       authorizationProof: picker.authorizationProof || null };
   }
 
   async function disconnect() {
     loginGeneration += 1;
+    invalidateBinding();
     pendingStart = null;
     pendingPicker = null;
     terminateLogin(activePicker);
@@ -480,10 +536,11 @@ function createGoogleAccountConnector(options = {}) {
     // A pending browser login can otherwise finish after account deletion and
     // repopulate the process-scoped profile with the deleted user's token.
     cancelActiveLogin();
-    if (env.MIA_GOOGLE_BROKER_URL && env.MIA_GOOGLE_BROKER_TOKEN) {
+    const adminToken = env.MIA_GOOGLE_BROKER_ADMIN_TOKEN;
+    if (env.MIA_GOOGLE_BROKER_URL && adminToken) {
       try {
         const response = await fetchImpl(`${env.MIA_GOOGLE_BROKER_URL}/logout`, { method: 'POST', redirect: 'error', headers: {
-          Authorization: `Bearer ${env.MIA_GOOGLE_BROKER_TOKEN}`, 'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json',
         }, body: '{}' });
         return response.ok ? publicStatus('not_connected') : publicStatus('connection_error');
       } catch (_) { return publicStatus('connection_error'); }
@@ -501,7 +558,13 @@ function createGoogleAccountConnector(options = {}) {
       throw error;
     }
     const argv = assertAllowedGwsOperation(operation, args);
+    const generation = loginGeneration;
+    const owner = currentOwner();
+    const connection = binding ? await status() : null;
+    if (binding && !connection.connected) throw new Error('google_account_not_connected');
     const result = await runGws(argv);
+    if (binding && (generation !== loginGeneration || owner !== currentOwner()
+      || readBinding().revision !== connection.connectionRevision)) throw new Error('google_connection_changed');
     if (result.code !== 0) {
       const error = new Error('google_operation_failed');
       error.code = 'google_operation_failed';
@@ -518,12 +581,13 @@ function createGoogleAccountConnector(options = {}) {
 
   async function recentFiles() {
     const generation = loginGeneration;
+    const owner = currentOwner();
     if (!(await status()).connected) return { state: 'not_connected', files: [] };
     const result = await runGws(['drive', 'files', 'list', '--params', JSON.stringify({
       q: 'trashed = false', pageSize: 100, orderBy: 'modifiedTime desc',
       fields: 'files(id,name,mimeType,isAppAuthorized,capabilities(canEdit))',
     })]);
-    if (generation !== loginGeneration) return { state: 'not_connected', files: [] };
+    if (generation !== loginGeneration || owner !== currentOwner()) return { state: 'not_connected', files: [] };
     const payload = parseJson(result.stdout);
     if (result.code !== 0 || !Array.isArray(payload?.files)) throw new Error('file_list_unavailable');
     return { state: 'connected', files: payload.files.filter(file =>

@@ -47,6 +47,7 @@ test('local HTTP onboarding stores one greeting, persists the preferred name, an
   const child = spawn(process.execPath, ['server.js'], {
     cwd: path.dirname(new URL(import.meta.url).pathname),
     env: { ...process.env, PORT: String(port), MIAOS_BIND_HOST: '127.0.0.1',
+      GOOGLE_REDIRECT_URI: origin + '/api/connections/google/callback',
       DB_PATH: path.join(root, 'mia.db'), DATA_DIR: root, MIAOS_ENV_FILE: path.join(root, 'missing.env'),
       HERMES_HOME: path.join(root, 'hermes'), MIAOS_WORKSPACE_DIR: path.join(root, 'workspace'),
       MIAOS_NO_AUTH: '1', MIAOS_LOCAL_PROFILE: '1', MIAOS_CLERK_AUTH: '0',
@@ -117,6 +118,8 @@ test('news briefing validates user choices and creates one explicit research tas
   assert.match(result.prompt, /Science & health/);
   assert.match(result.prompt, /source links/);
   assert.match(result.prompt, /do not invent news/);
+  assert.equal(result.steps.length, 5, 'the briefing has steps for the Automations checklist');
+  assert.match(result.steps[0], /Science & health/);
   for(const invalid of [{topics:[]}, {time:'25:00'}, {schedule:'hourly'}, {utcOffsetMinutes:9999}, {schedule:'weekly',day:'nonsense'}]){
     assert.throws(() => newsBriefing({...input,...invalid}));
   }

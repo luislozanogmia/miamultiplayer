@@ -7,6 +7,8 @@ const os = require("node:os");
 const path = require("node:path");
 const {
   pruneWindowsPythonRuntime,
+  restoreWindowsVenvInterpreter,
+  writeWindowsLaunchers,
   requiredPinnedDirectory,
   requiredWindowsPythonRuntime,
   windowsArtifactName,
@@ -153,7 +155,7 @@ test("Windows python pruning drops build state and scrubs the build root", () =>
   }
 });
 
-test("Windows Hermes staging strips venv launchers and loads dependencies from site-packages", () => {
+test("Windows Hermes staging replaces generated launchers with the pinned venv interpreter", () => {
   // The venv's Scripts\ tree replaces bin\ on Windows: its python copies are
   // removed before symlink normalization and the remaining launchers embed
   // the build machine's venv path, so the whole directory is pruned.
@@ -162,7 +164,7 @@ test("Windows Hermes staging strips venv launchers and loads dependencies from s
   assert.match(SOURCE, /path\.join\(root, "venv", "Scripts"\)/);
   assert.match(SOURCE, /parents\[3\]/);
   assert.match(SOURCE, /venv\\\\Lib\\\\site-packages/);
-  assert.match(SOURCE, /python\\\\python\.exe/);
+  assert.match(SOURCE, /restoreWindowsVenvInterpreter\(stagedHermes, pythonRuntime\)/);
   assert.match(SOURCE, /PYTHONDONTWRITEBYTECODE=1/);
   assert.match(SOURCE, /requiredPinnedDirectory\("HERMES_BUNDLE_DIR"/);
   assert.match(SOURCE, /requiredPinnedDirectory\("GHOST_BUNDLE_DIR"/);
@@ -174,4 +176,22 @@ test("Windows Hermes staging strips venv launchers and loads dependencies from s
   assert.match(SOURCE, /assertNoPrivateBuildPaths\(packagedRoot/);
   assert.match(SOURCE, /assertNoPrivateContent\(packagedRoot\)/);
   assert.match(SOURCE, /providerCredentials: "none"/);
+});
+
+test("Windows packaged gateway and MCP use a relocatable venv interpreter", () => {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mia-venv-interpreter-"));
+  const hermes = path.join(temporaryRoot, "hermes");
+  const python = path.join(temporaryRoot, "python");
+  const redirector = path.join(python, "Lib", "venv", "scripts", "nt", "python.exe");
+  fs.mkdirSync(path.dirname(redirector), { recursive: true });
+  fs.writeFileSync(redirector, "pinned generic interpreter fixture");
+  restoreWindowsVenvInterpreter(hermes, python);
+  const installed = path.join(hermes, "venv", "Scripts", "python.exe");
+  assert.deepEqual(fs.readFileSync(installed), fs.readFileSync(redirector));
+  writeWindowsLaunchers(temporaryRoot);
+  for (const name of ["hermes", "ghost-cli"]) {
+    const launcher = fs.readFileSync(path.join(temporaryRoot, "bin", `${name}.cmd`), "utf8");
+    assert.ok(launcher.includes('"%HERMES_HOME%\\hermes-agent\\venv\\Scripts\\python.exe"'));
+    assert.ok(!launcher.includes('"%runtime_root%\\python\\python.exe"'));
+  }
 });

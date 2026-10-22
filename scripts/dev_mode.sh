@@ -15,7 +15,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-data_root="${MIA_DEV_DATA_ROOT:-$HOME/.miaos}"
+# Dev mode is its own Mia: its own sign-in-free profile, database and Hermes
+# data (keys, sessions), so it never touches the installed Mia's. It only
+# borrows the installed Hermes and Ghost programs from the runtime root.
+data_root="${MIA_DEV_DATA_ROOT:-$HOME/.miaos-dev}"
+runtime_root="${MIA_DEV_RUNTIME_ROOT:-$HOME/.miaos}"
 
 read_json_field() {
   local file="$1" field="$2"
@@ -56,7 +60,7 @@ choose_data_root() {
       local other_checkout
       other_checkout="$(read_json_field "$marker" devCheckout)"
       if [[ -z "$other_checkout" || "$other_checkout" == "$repo_root" ]]; then
-        return
+        return 0
       fi
       if prompt_choice "We detected another Mia dev mode (checkout: $other_checkout) using $data_root."; then
         return
@@ -68,7 +72,7 @@ choose_data_root() {
         return
       fi
     else
-      return
+      return 0
     fi
     read -r -p "New data root path: " data_root
     data_root="${data_root/#\~/$HOME}"
@@ -83,10 +87,10 @@ choose_data_root
 mkdir -p "$data_root"
 
 # Dev mode reuses an already-provisioned runtime; it never downloads one.
-if [[ ! -x "$data_root/hermes/hermes-agent/hermes" ]]; then
-  echo "No Mia runtime is provisioned at $data_root." >&2
+if [[ ! -x "$runtime_root/hermes/hermes-agent/hermes" ]]; then
+  echo "No Mia runtime is provisioned at $runtime_root." >&2
   echo "Run scripts/install-local-mac.sh first (it provisions \$HOME/.miaos), or point" >&2
-  echo "MIA_DEV_DATA_ROOT at a data root that already contains hermes/ and ghost-cli/." >&2
+  echo "MIA_DEV_RUNTIME_ROOT at a data root that already contains hermes/ and ghost-cli/." >&2
   exit 1
 fi
 
@@ -116,6 +120,10 @@ if [[ ! -d "$repo_root/macos/node_modules" ]]; then
 fi
 
 export MIA_DEV_DATA_ROOT="$data_root"
+export MIA_DEV_RUNTIME_ROOT="$runtime_root"
+# Dev mode opens straight into Mia as the local user, with no sign-in.
+# Export MIAOS_DESKTOP_NO_AUTH=0 to test the sign-in flow.
+export MIAOS_DESKTOP_NO_AUTH="${MIAOS_DESKTOP_NO_AUTH:-1}"
 # Dev runs use Mia's test Clerk instance (production is the built-in
 # default). Export MIAOS_CLERK_INSTANCE=production to exercise production.
 export MIAOS_CLERK_INSTANCE="${MIAOS_CLERK_INSTANCE:-test}"

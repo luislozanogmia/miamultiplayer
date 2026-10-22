@@ -1,6 +1,6 @@
 {
   "name": "mia-multiplayer-macos",
-  "version": "0.2.15",
+  "version": "0.2.19",
   "private": true,
   "productName": "Mia",
   "author": "Mia Multiplayer Contributors",
@@ -44,5 +44,6 @@
   },
   "allowScripts": {
     "electron": true
-  }
+  },
+  "desktopName": "miaos.desktop"
 }

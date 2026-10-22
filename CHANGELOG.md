@@ -9,6 +9,104 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.19] — 2026-10-19
+
+### Added
+- Let bots work in separate browser tab groups while the user and Mia keep
+  their own conversations; show bot activity and return to a bot's tabs.
+- Complete addresses from local browsing history, with matching suggestions,
+  site icons and keyboard navigation.
+
+### Changed
+- Open Your bots from a left-pane icon at the start of the address row;
+  remove the separate pink mote from the tab strip.
+- Present the Downloads panel over a still of the current page.
+
+### Fixed
+- Start the Windows, macOS and Linux agent connection on an available local
+  port when the default port is reserved by the operating system.
+- Serialize provider connection saves and agent restarts; preserve saved keys
+  on a failed startup and report when the connection is not ready.
+- Enforce Mia-or-bot browser tab assignments for explicit targets and queued
+  actions; keep a tab with its controller until pending page operations settle,
+  including operations that outlast an API timeout.
+- Restore the packaged Windows Python interpreter so connected tools can load
+  their native dependencies.
+- Keep Google broker credentials out of agent-readable profile files and
+  process launch environments; separate tool execution from connection management.
+- Run connected Google operations inside the desktop broker without temporary
+  OAuth credential files; discard stale results after account changes.
+- Preserve explicitly typed HTTPS when completing an address from history.
+- Discard dismissed or outdated page captures, and preserve typed text when
+  delayed history responses arrive or Escape removes a completion.
+- Keep later chat choices selected when a previous browser chat opens late.
+- Reject unresolved browser actors, confirm potentially unsafe downloads,
+  and wait for runtime cancellation acknowledgement before releasing a tab.
+- Expose Google tools directly to Mia and bots on each connected chat turn;
+  refresh account/grant capabilities after connection changes and prevent
+  resumed or steered turns from inheriting an older connection.
+- Request only the five supported Google scopes; remove unused Contacts access.
+
+### Notes
+- Windows packages remain unsigned; macOS packages must be signed and notarized.
+
+## [0.2.18] — 2026-10-16
+
+### Added
+- Let users hide/show Mia beside the browser and resize its pane; remember
+  pane visibility and width on the device.
+- Show the connected Google account email in Connected apps.
+
+### Changed
+- Polish browser tabs and toolbar, simplify displayed addresses, and keep
+  the idle status footer hidden. Align native macOS window controls with
+  the app's top row.
+- Let the message composer grow with the draft up to a third of the window.
+- Keep model selection in chat instead of the bot profile editor.
+
+### Fixed
+- Bind Google connections to the current Mia identity. Reconnecting a different
+  Google account refreshes Mia/bot session bindings and clears stale Drive
+  selections; existing unverified connections require one explicit reconnect.
+- Keep agent Google commands on Mia's app-scoped configuration instead of
+  accidentally using a previous global Google account.
+- Prevent later Mia/bot requests and setup helpers from inheriting a saved
+  Claude profile after disconnect. Explicit reconnect and other connected
+  providers remain available; independently scheduled work is unchanged.
+- Check Claude Code compatibility when Mia starts; maintain older native
+  installations, verify the resulting version, preserve newer versions, and
+  offer an in-app retry when setup fails. Missing installations retain consent.
+
+## [0.2.17] — 2026-10-15
+
+### Fixed
+- Register Linux browser sign-in with the installed desktop identity, so a
+  freshly installed Mia can open Google and receive its callback.
+- Detect a missing Linux browser opener and bound stalled handoffs; keep
+  Google retry, email sign-in, and cancellation available while waiting.
+
+### Added
+- Add Haiku 5.5 to Claude subscription model choices alongside Sonnet 5.5,
+  replacing Haiku 4.5. Keep Opus 5.5 and retire Opus 5/4.8; saved retired
+  selections migrate to their 5.5 successors.
+- Offer a short-lived, copyable Google sign-in link on Linux when the browser
+  cannot open, and while waiting for browser sign-in to finish.
+
+## [0.2.16] — 2026-10-13
+
+### Fixed
+- Save Mia Router keys noninteractively by supplying the credential label,
+  avoiding an invisible optional-label prompt on Windows.
+- Give Mia Router key saves a 60-second ceiling so slow cold starts on
+  Windows (antivirus scanning, first run) no longer lose the freshly minted
+  key and loop provisioning forever.
+
+### Added
+- Record a content-free Mia Router provisioning trail (step names, statuses,
+  exit codes — never keys or conversation text) and let Send feedback attach
+  it as an optional technical report, so connection failures on a user's
+  machine are diagnosable from one email.
+
 ## [0.2.15] — 2026-10-03
 
 ### Added

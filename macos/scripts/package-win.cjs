@@ -146,10 +146,10 @@ function pruneWindowsHermesBundle(root, originalRoot) {
     const file = path.join(root, relative);
     fs.writeFileSync(file, fs.readFileSync(file, "utf8").split(parts.join("")).join(replacement));
   }
-  // Mia invokes the bundled python.exe directly with PYTHONPATH pointed at the
-  // venv's site-packages. Every venv\Scripts\ launcher (python.exe copies,
-  // console-script .exe stubs, activate scripts) embeds the build machine's
-  // absolute venv path in its trailer, so none of them ship.
+  // The venv interpreter processes dependency .pth files, including native
+  // Windows DLL paths. Generated console-script and activation launchers
+  // embed the build machine's path; replace the interpreter separately with
+  // the pinned CPython standard library's generic venv redirector.
   fs.rmSync(path.join(root, "venv", "Scripts"), { recursive: true, force: true });
   const pyvenv = path.join(root, "venv", "pyvenv.cfg");
   if (fs.existsSync(pyvenv)) {
@@ -214,6 +214,16 @@ function pruneWindowsPythonRuntime(root, originalRoot) {
   visit(root);
 }
 
+function restoreWindowsVenvInterpreter(hermesRoot, pythonRoot) {
+  const source = path.join(pythonRoot, "Lib", "venv", "scripts", "nt", "python.exe");
+  const destination = path.join(hermesRoot, "venv", "Scripts", "python.exe");
+  if (!fs.statSync(source, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error("Pinned CPython venv interpreter is missing");
+  }
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(source, destination);
+}
+
 function writeWindowsLaunchers(runtimeRoot) {
   writeExecutable(path.join(runtimeRoot, "bin", "hermes.cmd"), [
     "@echo off",
@@ -228,7 +238,7 @@ function writeWindowsLaunchers(runtimeRoot) {
     "set \"PYTHONNOUSERSITE=1\"",
     "set \"PYTHONDONTWRITEBYTECODE=1\"",
     "set \"PYTHONPATH=%HERMES_HOME%\\hermes-agent\\venv\\Lib\\site-packages\"",
-    "\"%runtime_root%\\python\\python.exe\" \"%HERMES_HOME%\\hermes-agent\\hermes\" %*",
+    "\"%HERMES_HOME%\\hermes-agent\\venv\\Scripts\\python.exe\" \"%HERMES_HOME%\\hermes-agent\\hermes\" %*",
     "",
   ].join("\r\n"));
   writeExecutable(path.join(runtimeRoot, "bin", "ghost-cli.cmd"), [
@@ -248,7 +258,7 @@ function writeWindowsLaunchers(runtimeRoot) {
     "if not exist \"%PYTHONPYCACHEPREFIX%\" mkdir \"%PYTHONPYCACHEPREFIX%\"",
     "set \"PYTHONDONTWRITEBYTECODE=1\"",
     "set \"PYTHONPATH=%HERMES_HOME%\\hermes-agent\\venv\\Lib\\site-packages\"",
-    "\"%runtime_root%\\python\\python.exe\" \"%resources_root%\\backend\\miaos-ghost-cli.py\" %*",
+    "\"%HERMES_HOME%\\hermes-agent\\venv\\Scripts\\python.exe\" \"%resources_root%\\backend\\miaos-ghost-cli.py\" %*",
     "",
   ].join("\r\n"));
   writeExecutable(path.join(runtimeRoot, "bin", "python3.cmd"), [
@@ -294,6 +304,7 @@ function stageWindowsBundledRuntime(temporaryRoot) {
     removeBeforeNormalize: ["venv/Scripts/python.exe", "venv/Scripts/pythonw.exe", "venv/Scripts/python3.exe"],
   });
   pruneWindowsHermesBundle(stagedHermes, hermesBundle);
+  restoreWindowsVenvInterpreter(stagedHermes, pythonRuntime);
   const stagedGhost = path.join(runtimeRoot, "ghost-cli");
   copyPortableRuntime(ghostBundle, stagedGhost);
   pruneGhostBundle(stagedGhost);
@@ -450,6 +461,8 @@ module.exports = {
   buildWindowsPackage,
   pruneWindowsHermesBundle,
   pruneWindowsPythonRuntime,
+  restoreWindowsVenvInterpreter,
+  writeWindowsLaunchers,
   requiredPinnedDirectory,
   requiredWindowsPythonRuntime,
   signWindowsApp,
