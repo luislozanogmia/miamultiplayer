@@ -258,12 +258,15 @@ test('a bot group shows one tab: yours, else the one its bot works in or worked 
   const start = browser.indexOf('  var botLastTab = {};');
   vm.runInContext(browser.slice(start, browser.indexOf('  function botTabsButton(', start)), ctx);
   const groups = { g1: { id: 'g1', botId: 'bot-a' }, g2: { id: 'g2', botId: null } };
-  const tabs = [{ id: 1, groupId: 'g1' }, { id: 2, groupId: 'g1' }, { id: 3, groupId: 'g1' }, { id: 4, groupId: 'g2' }, { id: 5, groupId: 'g2' }, { id: 6 }];
+  const tabs = [{ id: 1, groupId: 'g1', url: 'https://a.example/' }, { id: 2, groupId: 'g1', url: 'https://b.example/' }, { id: 3, groupId: 'g1', url: 'https://c.example/' }, { id: 4, groupId: 'g2' }, { id: 5, groupId: 'g2' }, { id: 6 }];
   const fronts = (activeId, working) => { ctx.state = { activeId, tabs }; return JSON.parse(JSON.stringify(ctx.botGroupFronts(groups, working))); };
   assert.deepEqual(fronts(6, {}), { g1: { id: 1, others: [2, 3] } }, 'idle and never worked: its first tab; Mia groups are untouched');
   assert.deepEqual(fronts(6, { 3: { botId: 'bot-a' } }), { g1: { id: 3, others: [1, 2] } }, 'the tab the bot is working in');
   assert.deepEqual(fronts(6, {}), { g1: { id: 3, others: [1, 2] } }, 'after it stops, the tab it worked in last');
   assert.deepEqual(fronts(2, { 3: { botId: 'bot-a' } }), { g1: { id: 2, others: [1, 3] } }, 'the tab you are looking at wins');
+  tabs.unshift({ id: 7, groupId: 'g1', url: '' });
+  assert.deepEqual(fronts(2, {}), { g1: { id: 2, others: [1, 3] } }, 'a blank tab is not listed or counted: New tab for this bot covers it');
+  assert.deepEqual(fronts(7, {}), { g1: { id: 7, others: [1, 2, 3] } }, 'unless you are looking at it');
 });
 
 test('a bot group counts as one tab when the strip decides what to fold', () => {

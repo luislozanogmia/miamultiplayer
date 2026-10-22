@@ -2238,13 +2238,16 @@ test("pressing the mouse in the front tab a bot is working on asks to take over"
   assert.equal(asks().length, 1, "tabs behind, and the person's own tab, never ask");
 });
 
-test("a new tab for a bot opens at the end of that bot's group", () => {
+test("a new tab for a bot opens at the end of that bot's group", async () => {
   const h = harness();
   const first = h.command("new").activeId;
   h.command("groupCreate", { id: first });
   const groupId = h.command("state").groups[0].id;
   const second = h.command("new").activeId;
   h.command("move", { id: second, index: 1, groupId });
+  // Real pages, so the group has no blank tab to reuse yet.
+  for (const id of [first, second]) { h.command("select", { id }); h.command("navigate", { value: `https://${id}.example/` }); }
+  await new Promise(resolve => setImmediate(resolve));
   const loose = h.command("new").activeId;
   h.command("groupNewTab", { groupId });
   const state = h.command("state");
@@ -2255,5 +2258,10 @@ test("a new tab for a bot opens at the end of that bot's group", () => {
   const count = state.tabs.length;
   h.command("groupNewTab", { groupId: "not-a-group" });
   assert.equal(h.command("state").tabs.length, count, "no tab for an unknown group");
+  h.command("select", { id: loose });
+  h.command("groupNewTab", { groupId });
+  const again = h.command("state");
+  assert.equal(again.tabs.length, count, "the group's blank tab is reused, not a second one");
+  assert.equal(again.activeId, added.id);
   h.window.emit("closed");
 });

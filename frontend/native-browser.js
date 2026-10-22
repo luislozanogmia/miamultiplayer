@@ -475,7 +475,9 @@
       if (busy.length) botLastTab[id] = busy[busy.length - 1].id;
       var pick = list.filter(function (t) { return t.id === state.activeId; })[0] || busy[busy.length - 1]
         || list.filter(function (t) { return t.id === botLastTab[id]; })[0] || list[0];
-      front[id] = { id: pick.id, others: list.filter(function (t) { return t !== pick; }).map(function (t) { return t.id; }) };
+      // A blank tab stays out of the list and its count: "New tab for this
+      // bot" already stands for it, and reopens it.
+      front[id] = { id: pick.id, others: list.filter(function (t) { return t !== pick && t.url; }).map(function (t) { return t.id; }) };
     });
     Object.keys(botLastTab).forEach(function (id) { if (!members[id]) delete botLastTab[id]; });
     return front;
