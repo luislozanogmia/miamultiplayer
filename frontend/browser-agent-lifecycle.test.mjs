@@ -313,7 +313,7 @@ test('the +N list draws the bot\'s other tabs as tabs and acts on them', async (
   assert.ok(rows[0].all().some(n => n.className === 'native-browser-tab-icon'), 'the page icon shows like on a tab');
   assert.match(rows[1].className, /bot-working/);
   assert.ok(rows[1].all().some(n => /native-browser-tab-working/.test(n.className)), 'the working dot shows');
-  assert.equal(list.children.at(-1).className, 'native-browser-bot-tabs-new');
+  assert.equal(list.children[0].className, 'native-browser-bot-tabs-new', 'new tab sits on top');
   rows[1].children[1].onclick({ stopPropagation() {} });
   assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['close', { id: 3 }]);
   rows[0].children[0].onclick();
@@ -321,7 +321,7 @@ test('the +N list draws the bot\'s other tabs as tabs and acts on them', async (
   assert.equal(list.hidden, true, 'picking a tab closes the list');
   ctx.setTabsList('g1');
   await new Promise(resolve => setImmediate(resolve));
-  list.children.at(-1).onclick();
+  list.children[0].onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['groupNewTab', { groupId: 'g1' }]);
   ctx.setTabsList('g1');
   await new Promise(resolve => setImmediate(resolve));
