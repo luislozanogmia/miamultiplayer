@@ -1655,6 +1655,20 @@ test("closing a grouped tab lands on the next tab in the same group", () => {
   h.window.emit("closed");
 });
 
+test("closing the last tab counts a last-tab close and keeps one blank tab", () => {
+  const h = harness();
+  h.command("new"); h.command("new");
+  const start = h.command("state");
+  const before = start.lastTabCloses;
+  for (const tab of start.tabs.slice(1)) h.command("close", { id: tab.id });
+  assert.equal(h.command("state").lastTabCloses, before, "closing other tabs does not count");
+  const after = h.command("close", { id: h.command("state").tabs[0].id });
+  assert.equal(after.lastTabCloses, before + 1);
+  assert.equal(after.tabs.length, 1, "a blank tab replaces it");
+  assert.equal(after.tabs[0].url, "");
+  h.window.emit("closed");
+});
+
 test("bot tab groups: switching away from a working bot asks, then stops it", async () => {
   const h = harness();
   const a = h.command("new").activeId; h.command("navigate", { value: "https://example.com" });

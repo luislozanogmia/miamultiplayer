@@ -746,7 +746,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   const active = () => tabs.get(activeId);
-  const state = () => ({ activeId, download, downloads: downloadList(), groups: groupList(), tabs: [...tabs.values()].map(tab => ({
+  // Counts the times the user closed the last tab; the app leaves browser
+  // mode when it goes up. A blank tab still replaces the closed one.
+  let lastTabCloses = 0;
+  const state = () => ({ activeId, lastTabCloses, download, downloads: downloadList(), groups: groupList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
     active: tab.id === activeId,
@@ -1645,7 +1648,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (key === "l") focusLocation();
     else if (key === "f") { window.webContents.focus(); window.webContents.send("miaos-browser-find"); }
     else if (key === "t") { newTab(); focusLocation(); }
-    else if (key === "w") closeTab(activeId);
+    else if (key === "w") closeTab(activeId, { byUser: true });
     else if (key === "r") active()?.view.webContents.reload();
     else if (active()) {
       const wc = active().view.webContents;
@@ -2133,7 +2136,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       { label: "Close Group", click: menuAction(() => closeTabs(groupTabs(groupId).map(tab => tab.id))) },
     ]).popup({ window });
   }
-  function closeTab(id) {
+  function closeTab(id, { byUser = false } = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
     if (fullscreenId === id) exitPageFullscreen();
@@ -2156,7 +2159,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       activeId = null;
       if (next) activateTab(next.id);
     }
-    if (!tabs.size) newTab();
+    if (!tabs.size) {
+      newTab();
+      if (byUser) lastTabCloses += 1;
+    }
     layout(); persistTabs(); publish();
   }
   async function clearData() {
@@ -2346,7 +2352,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         activateTab(command.id); layout(); persistTabs();
         focusTabWebContents(tabs.get(command.id));
       }
-      if (command.action === "close") closeTab(command.id);
+      if (command.action === "close") closeTab(command.id, { byUser: true });
       if (command.action === "move") {
         const moved = tabs.get(command.id);
         const nextGroup = command.groupId === null || groups.has(command.groupId) ? command.groupId : moved?.groupId;
