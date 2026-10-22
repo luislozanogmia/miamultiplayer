@@ -6412,7 +6412,8 @@ function nativeBrowserContextNote(trigger, { ghostCli = true } = {}) {
 // pointer rides on every bot turn instead.
 function botBrowserTabsNote({ ghostCli = true } = {}) {
   if (!ghostCli) return '';
-  return 'Your Mia browser tabs (not Google Sheets tabs) are in your own tab group. Before answering about them, list them with: ghost-cli call ghost_tab_list --arguments \'{"instance_id":"miaos"}\'';
+  return 'Your Mia browser tabs (not Google Sheets tabs) are in your own tab group. Before answering about them, list them with: ghost-cli call ghost_tab_list --arguments \'{"instance_id":"miaos"}\'. ' +
+    'Reuse those tabs: load a page with ghost_navigate (in your current tab, or pass the tab_id of your tab already on that site), and open a new tab with ghost_tab_open only when you need two pages at once.';
 }
 
 function buildHermesGatewayTurnMessage(message, senderLabel, workspaceContext, googleResourceRefs, allowGoogleWorkspaceWrite, globalInstructions) {

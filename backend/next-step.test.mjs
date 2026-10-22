@@ -19,6 +19,11 @@ test('takes the closing Next: line off the reply', () => {
     nextStep: 'Summarize the HN thread',
   });
   assert.deepEqual(splitNextStep('Done.\nNext step: Track the price'), { text: 'Done.', nextStep: 'Track the price' });
+  assert.deepEqual(splitNextStep('Listo.\n\n[Mia] Next: Imprime las tarjetas y recórtalas por la línea'), {
+    text: 'Listo.',
+    nextStep: 'Imprime las tarjetas y recórtalas por la línea',
+  });
+  assert.deepEqual(splitNextStep('Done.\nNext: Track the price [Weather]'), { text: 'Done.', nextStep: 'Track the price' });
 });
 
 test('leaves replies without a closing Next: line alone', () => {
