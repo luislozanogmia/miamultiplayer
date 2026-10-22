@@ -2963,6 +2963,9 @@
   @keyframes native-browser-bot-blink{to{visibility:hidden;}}
   .local-browser-take-over{appearance:none;border:0;border-radius:999px;padding:4px 11px;background:#1a1a19;color:#fff;font:inherit;font-weight:600;cursor:pointer;}
   .local-browser-take-over:hover{background:#000;}
+  .local-browser-follow{appearance:none;border:1px solid #c9c9c6;border-radius:999px;padding:3px 10px;background:#fff;color:#1a1a19;font:inherit;font-weight:600;cursor:pointer;}
+  .local-browser-follow:hover{background:#f2f2f0;}
+  .local-browser-follow[aria-pressed="true"]{border-color:#1a1a19;}
   @media (prefers-reduced-motion: reduce){.local-browser-bot-control::before{animation:none;}}
   .native-browser-group-owner{appearance:none;flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;margin:0;padding:0;border:0;border-radius:50%;background:transparent;cursor:pointer;}
   .native-browser-group-owner img{width:26px;height:27px;display:block;object-fit:contain;}

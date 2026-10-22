@@ -2872,7 +2872,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "navigate") navigate(tab, command.value);
       if (command.action === "select" && tabs.has(command.id)) {
         activateTab(command.id); layout(); persistTabs();
-        focusTabWebContents(tabs.get(command.id));
+        // Following a bot moves the page in front, not the keyboard.
+        if (!command.follow) focusTabWebContents(tabs.get(command.id));
       }
       if (command.action === "close") closeTabByPerson(command.id);
       if (command.action === "move") {

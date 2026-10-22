@@ -181,7 +181,16 @@
   var botControlLabel = document.createElement('span');
   var takeOver = document.createElement('button');
   takeOver.type = 'button'; takeOver.className = 'local-browser-take-over'; takeOver.textContent = 'Take over';
-  botControl.append(botControlLabel, takeOver);
+  // Follow keeps the page the bot works on in front, so you watch it move
+  // from tab to tab; Unfollow leaves you where you are.
+  var followButton = document.createElement('button');
+  followButton.type = 'button'; followButton.className = 'local-browser-follow';
+  followButton.onclick = function () {
+    var botId = botControl.getAttribute('data-bot-id');
+    if (followingBot()) follow = null; else if (botId) startFollow(botId);
+    render(state);
+  };
+  botControl.append(botControlLabel, followButton, takeOver);
   var urlWrap = overlay.querySelector('.local-browser-url-wrap');
   if (urlWrap) urlWrap.after(botControl);
   takeOver.onclick = function () {
@@ -203,6 +212,29 @@
       takeOver.textContent = 'Take over';
     });
   };
+  var follow = null;
+  function followingBot() { return follow ? follow.botId : null; }
+  function startFollow(botId) { follow = { botId: botId, tabId: state.activeId, pending: null }; }
+  // Runs on every render: moves to the bot's newest page, and stops when you
+  // pick another tab yourself or the bot's reply ends.
+  function syncFollow() {
+    if (!follow) return;
+    var agents = window.miaBrowserAgents;
+    if (!agents || !agents.isRunning || !agents.isRunning(follow.botId)) { follow = null; return; }
+    if (follow.pending !== null) {
+      if (state.activeId !== follow.pending) return;
+      follow.tabId = follow.pending; follow.pending = null;
+    }
+    if (state.activeId !== follow.tabId) { follow = null; return; }
+    var latest = null;
+    state.tabs.forEach(function (t) {
+      if (!t.botActivity || t.botActivity.botId !== follow.botId) return;
+      if (!latest || (t.botWorkAt ? t.botWorkAt.at : 0) > (latest.botWorkAt ? latest.botWorkAt.at : 0)) latest = t;
+    });
+    if (!latest || latest.id === follow.tabId) return;
+    follow.pending = latest.id;
+    command('select', { id: latest.id, follow: true });
+  }
   // A tab stays marked from a bot's first command until that bot's reply
   // ends, so the marks don't blink off while it thinks between steps.
   var botHolds = {};
@@ -253,6 +285,11 @@
     var name = document.createElement('strong');
     name.textContent = activity.name || 'A bot';
     botControlLabel.replaceChildren(name, document.createTextNode(' has control'));
+    var following = followingBot() === activity.botId;
+    followButton.textContent = following ? 'Unfollow' : 'Follow';
+    followButton.setAttribute('aria-pressed', following ? 'true' : 'false');
+    followButton.title = following ? 'Stay on this page when ' + (activity.name || 'the bot') + ' moves on'
+      : 'Show the page ' + (activity.name || 'the bot') + ' works on as it moves between tabs';
   }
   function layout() {
     if (scheduled) return;
@@ -324,6 +361,7 @@
     var working = {};
     state.tabs.forEach(function (t) { var w = botWorking(t); if (w) working[t.id] = w; });
     Object.keys(botHolds).forEach(function (id) { if (!state.tabs.some(function (t) { return String(t.id) === id; })) delete botHolds[id]; });
+    syncFollow();
     renderBotControl(tab);
     refreshBotHolds();
     syncGlowHolds(working);

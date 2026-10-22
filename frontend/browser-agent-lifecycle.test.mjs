@@ -332,3 +332,41 @@ test('the +N list draws the bot\'s other tabs as tabs and acts on them', async (
   listeners.keydown({ key: 'Escape' });
   assert.equal(list.hidden, true, 'Escape closes it');
 });
+
+// Follow keeps the page the bot is working on in front: when the bot moves to
+// another tab the browser moves with it. Picking a tab yourself, or the bot
+// finishing, stops following.
+test('following a bot moves the browser to the tab it works in next', () => {
+  const sent = [];
+  let running = true;
+  const ctx = {
+    window: { miaBrowserAgents: { isRunning: () => running } },
+    command: (action, payload) => { sent.push([action, payload]); return Promise.resolve(); },
+    state: null,
+  };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  var follow = null;');
+  assert.ok(start > 0);
+  vm.runInContext(browser.slice(start, browser.indexOf('\n  }\n', browser.indexOf('  function syncFollow(', start)) + 4), ctx);
+  const tab = (id, botId, at) => ({ id, botActivity: botId ? { botId } : null, botWorkAt: botId ? { botId, at } : null });
+  ctx.state = { activeId: 1, tabs: [tab(1, 'bot-a', 5), tab(2, null)] };
+  ctx.startFollow('bot-a');
+  ctx.syncFollow();
+  assert.equal(sent.length, 0, 'already on the bot\'s page');
+  ctx.state = { activeId: 1, tabs: [tab(1, null), tab(2, 'bot-a', 9), tab(3, 'bot-b', 12)] };
+  ctx.syncFollow();
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [['select', { id: 2, follow: true }]], 'moves to the bot\'s newest page, never another bot\'s');
+  ctx.syncFollow();
+  assert.equal(sent.length, 1, 'waits for the switch instead of asking twice');
+  ctx.state = { activeId: 2, tabs: [tab(1, null), tab(2, 'bot-a', 9)] };
+  ctx.syncFollow();
+  assert.equal(ctx.followingBot(), 'bot-a');
+  ctx.state = { activeId: 1, tabs: [tab(1, null), tab(2, 'bot-a', 9)] };
+  ctx.syncFollow();
+  assert.equal(ctx.followingBot(), null, 'picking another tab yourself stops following');
+  ctx.state = { activeId: 2, tabs: [tab(1, null), tab(2, 'bot-a', 9)] };
+  ctx.startFollow('bot-a');
+  running = false;
+  ctx.syncFollow();
+  assert.equal(ctx.followingBot(), null, 'it ends when the bot is done');
+});
