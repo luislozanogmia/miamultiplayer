@@ -79,6 +79,17 @@ const PACKAGED_RUNTIME_ROOT = app.isPackaged ? path.join(process.resourcesPath, 
 const PACKAGED_HERMES_BIN = PACKAGED_RUNTIME_ROOT
   ? runtimeLauncherPath(path.join(PACKAGED_RUNTIME_ROOT, "bin"), "hermes")
   : "";
+// A dev launch keeps its own data root, so the Hermes it talks to must be
+// named explicitly. Without that, the defaults below would point Hermes at
+// an empty data folder and whatever python3 is first on PATH, and Mia would
+// silently lose its model keys. -> problem message, or "" when it is fine.
+function devModeRuntimeProblem(env = process.env, devDataRoot = DEV_DATA_ROOT) {
+  if (!devDataRoot) return "";
+  const missing = ["HERMES_HOME", "HERMES_PYTHON"].filter(name => !String(env[name] || "").trim());
+  if (!missing.length) return "";
+  return `Dev mode is missing ${missing.join(" and ")}. Start it with scripts/dev_mode.sh.`;
+}
+
 function developmentHermesBinary(env = process.env, exists = fs.existsSync, platform = process.platform) {
   const explicit = env.MIAOS_HERMES_BIN || env.HERMES_BIN;
   if (explicit) return String(explicit).trim();
@@ -845,6 +856,9 @@ async function startLocalBackend(exactPort = null) {
   if (!fs.existsSync(BACKEND_ENTRYPOINT)) {
     throw new Error(`Mia backend entrypoint is missing: ${BACKEND_ENTRYPOINT}`);
   }
+
+  const devProblem = devModeRuntimeProblem();
+  if (devProblem) throw new Error(devProblem);
 
   const packagedRuntime = await preparePackagedRuntime();
   const port = await selectLocalBackendPort(exactPort);
@@ -2584,6 +2598,7 @@ app.on("window-all-closed", () => {
 });
 
 module.exports = {
+  devModeRuntimeProblem,
   developmentHermesBinary,
   completeClaudeAuthCallback,
   createDevelopmentMenu,
