@@ -24,18 +24,20 @@ test('takes each bot\'s newest real reply, newest bot first', () => {
   ]);
 });
 
-test('prompt names each bot and asks for three imperatives', () => {
-  const prompt = suggestionsPrompt([{ botName: 'Browser-use', text: 'Python 3.15.1 is out' }]);
+test('prompt numbers each bot\'s reply and asks for three tagged imperatives', () => {
+  const prompt = suggestionsPrompt([{ botName: 'Browser-use', text: 'Python 3.15.1 is out' }, { botName: 'Weather', text: 'Rain at 4pm' }]);
   assert.match(prompt, /exactly 3/);
-  assert.match(prompt, /\[Browser-use\] Python 3\.15\.1 is out/);
+  assert.match(prompt, /\[1\] Browser-use: Python 3\.15\.1 is out/);
+  assert.match(prompt, /\[2\] Weather: Rain at 4pm/);
 });
 
-test('cleans numbering, bullets, quotes and periods; keeps three', () => {
-  assert.deepEqual(parseSuggestions('1. Compare Python 3.15 with 3.14.\n- "Track tomorrow\'s Monterrey weather"\n\n* Summarize the mitmproxy story\nFourth one'), [
-    'Compare Python 3.15 with 3.14',
-    'Track tomorrow\'s Monterrey weather',
-    'Summarize the mitmproxy story',
+test('reads which reply each suggestion builds on; cleans numbering, bullets, quotes and periods; keeps three', () => {
+  assert.deepEqual(parseSuggestions('[2] Compare Python 3.15 with 3.14.\n- [1] "Track tomorrow\'s Monterrey weather"\n\n* Summarize the mitmproxy story\n[9] Out of range tag\nFourth one', 2), [
+    { text: 'Compare Python 3.15 with 3.14', source: 1 },
+    { text: 'Track tomorrow\'s Monterrey weather', source: 0 },
+    { text: 'Summarize the mitmproxy story', source: null },
   ]);
+  assert.deepEqual(parseSuggestions('[9] Out of range tag', 2), [{ text: 'Out of range tag', source: null }]);
   assert.deepEqual(parseSuggestions(''), []);
 });
 

@@ -5588,21 +5588,62 @@
     }, 3500);
   }
 
-  // "Mia suggests" on the blank tab: three next things to ask, built from the
-  // bots' latest replies. Clicking one puts it in Mia's composer to edit and send.
+  // The blank tab: the Mia dot logo, "Mia Browser", and "Mia suggests" cards,
+  // three next things to ask built from the bots' latest replies, each credited
+  // to the bot it builds on. Clicking one puts it in Mia's composer to edit and send.
+  var BROWSER_HOME_GO = '<svg class="local-browser-suggest-next-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>';
+  // A diamond of dots; each dot's delay grows with its distance from the
+  // center, so the logo fills in from the middle out.
+  function browserHomeLogoSvg(){
+    var dots = '';
+    [1, 3, 5, 7, 9, 7, 5, 3, 1].forEach(function(width, row){
+      for(var i = 0; i < width; i++){
+        var offset = i - (width - 1) / 2;
+        var delay = (Math.abs(row - 4) + Math.abs(offset)) * 0.05;
+        dots += '<circle cx="' + (48 + offset * 10) + '" cy="' + (8 + row * 10) + '" r="2.6" fill="currentColor" style="animation-delay:' + delay + 's"/>';
+      }
+    });
+    return '<svg viewBox="0 0 96 96">' + dots + '</svg>';
+  }
+  // Re-inserting the logo and title restarts their opening animation.
+  function replayBrowserHome(){
+    var logo = el('#localBrowserHomeLogo');
+    if(logo) logo.innerHTML = browserHomeLogoSvg();
+    var title = document.querySelector('.local-browser-home-title');
+    if(title && title.parentNode) title.parentNode.replaceChild(title.cloneNode(true), title);
+  }
+  function browserSuggestNextCardHtml(item){
+    var bot = item.botId ? browserBotRecord(item.botId) : null;
+    var name = String((bot && bot.name) || item.botName || '');
+    var color = name ? (normalizeAgentAvatarColor(bot && bot.avatarColor) || agentAvatarColorFor(name, item.botId)) : '';
+    // Bots with no saved color get the palette hue their mote is drawn in.
+    var textColor = color || (name ? 'hsl(' + MOTE_COLOR_PALETTE[moteColorSlotFor(name)] + ' 60% 42%)' : '');
+    var at = item.at ? Date.parse(item.at) : NaN;
+    var who = name
+      ? '<span class="local-browser-suggest-next-who">' +
+          '<span class="local-browser-suggest-next-mote">' + agentAvatarHtml(name, item.botId, 22, 'static', color) + '</span>' +
+          '<span class="local-browser-suggest-next-name">' + esc(name) + '</span>' +
+          (isNaN(at) ? '' : '<span class="local-browser-suggest-next-time">· ' + esc(chatRelTime(at)) + '</span>') +
+        '</span>'
+      : '';
+    return '<button type="button" class="local-browser-suggest-next-item"' + (textColor ? ' style="--bot:' + esc(textColor) + '"' : '') +
+      ' data-browser-suggest-next="' + esc(item.text) + '" title="' + esc(item.text) + '">' +
+      who + '<span class="local-browser-suggest-next-text">' + esc(item.text) + '</span>' + BROWSER_HOME_GO + '</button>';
+  }
   var browserSuggestNextRequest = 0;
   function loadBrowserSuggestNext(){
     var wrap = el('#localBrowserSuggestNext');
     var list = el('#localBrowserSuggestNextList');
     if(!wrap || !list) return;
     var request = ++browserSuggestNextRequest;
+    wrap.hidden = true;
     api('/api/browser/suggestions').then(function(result){
       if(request !== browserSuggestNextRequest) return;
       var data = result && result.data;
-      var suggestions = (data && Array.isArray(data.suggestions) ? data.suggestions : []).slice(0, 3);
-      list.innerHTML = suggestions.map(function(text){
-        return '<button type="button" class="local-browser-suggest-next-item" data-browser-suggest-next="' + esc(text) + '" title="' + esc(text) + '"><span>' + esc(text) + '</span></button>';
-      }).join('');
+      var suggestions = (data && Array.isArray(data.suggestions) ? data.suggestions : [])
+        .filter(function(item){ return item && typeof item.text === 'string' && item.text; })
+        .slice(0, 3);
+      list.innerHTML = suggestions.map(browserSuggestNextCardHtml).join('');
       wrap.hidden = !suggestions.length;
     }).catch(function(){
       if(request === browserSuggestNextRequest) wrap.hidden = true;
@@ -5630,10 +5671,15 @@
   function syncBrowserSuggestNext(){
     var empty = el('#localBrowserEmpty');
     var shown = !!empty && !empty.hidden && localBrowserState.open;
-    if(shown && !browserSuggestNextShown) loadBrowserSuggestNext();
+    if(shown && !browserSuggestNextShown){
+      replayBrowserHome();
+      loadBrowserSuggestNext();
+    }
     browserSuggestNextShown = shown;
   }
   (function(){
+    var logo = el('#localBrowserHomeLogo');
+    if(logo) logo.innerHTML = browserHomeLogoSvg();
     var empty = el('#localBrowserEmpty');
     if(empty && typeof MutationObserver !== 'undefined'){
       new MutationObserver(syncBrowserSuggestNext).observe(empty, {attributes:true, attributeFilter:['hidden']});
