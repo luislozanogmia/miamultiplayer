@@ -318,7 +318,7 @@
     refreshBotHolds();
     syncGlowHolds(working);
     var crowd = crowdedStrip(groups, working);
-    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
+    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
     // Redrawing mid-drag or mid-rename would drop what the user is doing;
     // catch up once it ends.
     if (signature !== lastTabs && draggingTabId === null && editingGroupId === null) {
