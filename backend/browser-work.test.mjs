@@ -1391,3 +1391,71 @@ test('approval reporting keeps ordinary read and historical grants separate from
   assert.match(message, /Do not turn a worker's limited UI visibility into a proven card-visibility claim/);
   assert.match(message, /For current completed ordinary read-only operations marked consequential:false, no approval card is expected/);
 });
+
+test('a rejected action leaves the bot partly done and its steps unsavable', async t => {
+  const f = fixture(t);
+  f.browser.validate = async (_binding, operation) => ({ documentGeneration: 1, url: 'https://example.test/', requiresApproval: operation.method === 'click' });
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    await assert.rejects(f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'click', params: { selector: '#go' } }), /rejected/);
+    return { text: 'Read the page; the click was rejected.', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const running = f.coordinator.start('owner', work.id);
+  await until(() => f.store.get(work.id).approvals.length);
+  await f.coordinator.decideApproval('owner', work.id, f.store.get(work.id).approvals[0].id, false);
+  const finished = await running;
+  assert.equal(finished.status, 'done'); assert.equal(finished.workers[0].status, 'done');
+  assert.equal(finished.workers[0].declinedActions, 1); assert.equal(finished.results.first.declinedActions, 1);
+  await assert.rejects(f.coordinator.exportReusable('owner', work.id, 'first'), /completed execution proof required/);
+  const clean = fixture(t); const whole = await clean.coordinator.start('owner', (await clean.coordinator.create('owner', clean.input)).id);
+  assert.ok(whole.workers.every(worker => worker.declinedActions === undefined), 'work without a rejection carries no partial marker');
+});
+
+test('stopping one bot ends the task as stopped, while a bot failure still fails it', async t => {
+  const f = fixture(t); let release;
+  const independent = f.input.workers.map(worker => ({ ...worker, needs: [] }));
+  f.hermes.worker = async args => {
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    if (args.worker.id === 'second') await new Promise(resolve => { release = resolve; });
+    return { text: 'read', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: independent });
+  const running = f.coordinator.start('owner', work.id); await until(() => release && f.store.get(work.id).workers[0].status === 'done');
+  await f.coordinator.stop('owner', work.id, 'second'); release();
+  const stopped = await running;
+  assert.equal(stopped.status, 'cancelled'); assert.equal(stopped.synthesis, undefined);
+  assert.deepEqual(stopped.workers.map(worker => [worker.status, worker.stopReason]), [['done', undefined], ['cancelled', 'stopped']]);
+  const recovered = await f.coordinator.recover('owner', work.id, ['second']);
+  assert.equal(recovered.workers[1].stopReason, undefined);
+
+  const g = fixture(t); let hold;
+  g.hermes.worker = async args => {
+    if (args.worker.id === 'first') throw new Error('runtime fault');
+    await new Promise(resolve => { hold = resolve; }); return { text: 'late', storedSessionId: 'worker' };
+  };
+  const mixed = await g.coordinator.create('owner', { ...g.input, workers: independent });
+  const mixedRun = g.coordinator.start('owner', mixed.id); await until(() => hold);
+  await g.coordinator.stop('owner', mixed.id, 'second'); hold();
+  assert.equal((await mixedRun).status, 'failed', 'a failed bot is not relabelled by a later stop');
+});
+
+test('a tab closed under a working bot stops that bot instead of failing it', async t => {
+  const tabs = new Set([1, 2]);
+  const f = fixture(t, { authorizeGroup: async (owner, group, tab) => owner === 'owner' && group === 'group' && (tab === undefined || tabs.has(tab)) });
+  f.hermes.worker = async args => {
+    args.onEvent('message.delta', { text: 'Half an answer' });
+    await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
+    tabs.delete(args.worker.tabId);
+    await assert.rejects(f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} }), /tab access revoked/);
+    return { text: 'The tab went away.', storedSessionId: 'worker' };
+  };
+  const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
+  const closed = await f.coordinator.start('owner', work.id);
+  assert.equal(closed.status, 'cancelled'); assert.equal(closed.workers[0].status, 'cancelled'); assert.equal(closed.workers[0].stopReason, 'tab_closed');
+  assert.equal(closed.results.first.text, 'Half an answer'); assert.equal(closed.results.first.status, 'stopped'); assert.equal(closed.results.first.verified, false);
+
+  const h = fixture(t); h.hermes.worker = async () => { throw new Error('runtime fault'); };
+  const failed = await h.coordinator.start('owner', (await h.coordinator.create('owner', { ...h.input, workers: [h.input.workers[0]] })).id);
+  assert.equal(failed.workers[0].status, 'failed', 'a fault with the tab still open stays a failure'); assert.equal(failed.workers[0].stopReason, undefined);
+});

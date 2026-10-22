@@ -1171,3 +1171,30 @@ test("click navigation while waiting discards original document target", async (
   assert.equal(result.clicked, true); assert.equal(result.target, null);
   assert.equal(wc.scripts.some(script => script.includes("__miaActionTargets?.get")), false, "never retarget new document");
 });
+
+test("closing a tab a bot is working in asks the person first", async () => {
+  const h = harness(); const settle = () => new Promise(resolve => setImmediate(resolve));
+  const worker = await h.controller.protocol("tab_open", { url: "https://example.com/worker", wait: "none" });
+  const human = await h.controller.protocol("tab_open", { url: "https://example.com/human", wait: "none" });
+  h.controller.actors.bind({ actorId: "a", botId: "a", botName: "Scout", tabId: worker.tab_id, groupId: "default", ownerId: "owner", taskId: "task" });
+  const open = () => h.command("state").tabs.map(tab => tab.id);
+  const before = h.dialogCalls.length;
+
+  h.dialogResponse.value = 1;
+  h.command("close", { id: worker.tab_id }); h.command("close", { id: worker.tab_id }); await settle();
+  assert.equal(h.dialogCalls.length, before + 1, "one prompt per tab, however often close is pressed");
+  assert.match(h.dialogCalls.at(-1)[1].message, /^Scout is working in this tab\.$/);
+  assert.equal(h.dialogCalls.at(-1)[1].cancelId, 1); assert.equal(h.dialogCalls.at(-1)[1].defaultId, 1);
+  assert.ok(open().includes(worker.tab_id), "keeping the tab leaves it open");
+  assert.equal(h.command("state").ownership.length, 1, "and leaves the bot assigned");
+
+  h.command("close", { id: human.tab_id }); await settle();
+  assert.equal(h.dialogCalls.length, before + 1, "a tab no bot is using closes without a prompt");
+  assert.ok(!open().includes(human.tab_id));
+
+  h.dialogResponse.value = 0;
+  h.command("close", { id: worker.tab_id }); await settle();
+  assert.equal(h.dialogCalls.length, before + 2);
+  assert.ok(!open().includes(worker.tab_id), "confirming closes the tab");
+  assert.equal(h.command("state").ownership.length, 0, "and releases the bot");
+});

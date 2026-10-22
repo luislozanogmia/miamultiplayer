@@ -1574,7 +1574,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (key === "l") focusLocation();
     else if (key === "f") { window.webContents.focus(); window.webContents.send("miaos-browser-find"); }
     else if (key === "t") { newTab(); focusLocation(); }
-    else if (key === "w") closeTab(activeId);
+    else if (key === "w") closeTabByPerson(activeId);
     else if (key === "r") active()?.view.webContents.reload();
     else if (active()) {
       const wc = active().view.webContents;
@@ -1836,6 +1836,27 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!tabs.size) newTab();
     layout(); persistTabs(); publish();
   }
+  // Closing a tab ends the work of the bot assigned to it, so a person who
+  // closes one is asked first. Bots and internal cleanup call closeTab directly.
+  const closePrompts = new Set();
+  function closeTabByPerson(id) {
+    const working = actorRuntime.list().find(binding => binding.tabId === id);
+    if (!working) return closeTab(id);
+    if (closePrompts.has(id)) return;
+    closePrompts.add(id);
+    const name = String(working.botName || "").trim().slice(0, 80) || "A bot";
+    dialog.showMessageBox(window, {
+      type: "warning",
+      title: "Close tab",
+      message: `${name} is working in this tab.`,
+      detail: "Closing the tab stops that bot. What it has found so far is kept.",
+      buttons: ["Close tab", "Keep tab open"],
+      defaultId: 1,
+      cancelId: 1,
+    }).then((result) => {
+      if (result.response === 0 && tabs.has(id) && !disposed) closeTab(id);
+    }).catch((error) => log(`close tab prompt failed: ${error.message}`)).finally(() => closePrompts.delete(id));
+  }
   async function clearData() {
     actorRuntime.dispose();
     await profile.clearStorageData();
@@ -1971,7 +1992,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         activateTab(command.id); layout(); persistTabs();
         focusTabWebContents(tabs.get(command.id));
       }
-      if (command.action === "close") closeTab(command.id);
+      if (command.action === "close") closeTabByPerson(command.id);
       if (command.action === "move" && moveTab(command.id, command.index)) persistTabs();
       if (command.action === "back" && tab.view.webContents.navigationHistory.canGoBack()) tab.view.webContents.navigationHistory.goBack();
       if (command.action === "forward" && tab.view.webContents.navigationHistory.canGoForward()) tab.view.webContents.navigationHistory.goForward();
