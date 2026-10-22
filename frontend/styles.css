@@ -2897,6 +2897,18 @@
   .native-browser-tab button.native-browser-bot-tabs{flex:none;height:18px;margin-right:4px;padding:0 6px;border:1px solid var(--tab-group-color,#474747);border-radius:9px;font-size:11px;line-height:16px;color:var(--tab-group-color,#474747);background:transparent;cursor:pointer;}
   .native-browser-tab button.native-browser-bot-tabs:hover{background:color-mix(in srgb,var(--tab-group-color,#474747) 12%,transparent);}
   .native-browser-tab button.native-browser-bot-tabs.working::after{content:"";display:inline-block;width:5px;height:5px;margin-left:4px;border-radius:50%;background:currentColor;vertical-align:1px;}
+  /* The +N list: the bot's other tabs, drawn like tabs and stacked. */
+  .native-browser-bot-tabs-list{position:fixed;z-index:30;width:260px;overflow-y:auto;padding:4px;display:flex;flex-direction:column;gap:2px;background:#fff;border:1px solid color-mix(in srgb,var(--tab-group-color,#474747) 45%,transparent);border-top:2px solid var(--tab-group-color,#474747);border-radius:0 0 12px 12px;box-shadow:0 12px 28px -8px rgba(0,0,0,.22),0 2px 6px rgba(0,0,0,.06);transform-origin:top left;animation:local-browser-menu-in .14s ease-out;font:13px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;color:#1f1f1f;}
+  @media (prefers-reduced-motion:reduce){.native-browser-bot-tabs-list{animation:none;}}
+  .native-browser-bot-tabs-list[hidden]{display:none;}
+  .native-browser-bot-tabs-row{display:flex;align-items:center;height:34px;border-radius:10px;}
+  .native-browser-bot-tabs-row:hover{background:#0000000d;}
+  .native-browser-bot-tabs-row button[role="menuitem"]{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0 6px 0 10px;border:0;background:transparent;font:inherit;color:inherit;text-align:left;cursor:pointer;}
+  .native-browser-bot-tabs-row .native-browser-tab-close{flex:none;width:20px;height:20px;margin-right:6px;border:0;border-radius:50%;background:transparent;color:#5f6368;font-size:15px;line-height:20px;cursor:pointer;opacity:0;}
+  .native-browser-bot-tabs-row:hover .native-browser-tab-close,.native-browser-bot-tabs-row .native-browser-tab-close:focus-visible{opacity:1;}
+  .native-browser-bot-tabs-row .native-browser-tab-close:hover{background:#0000001a;}
+  .native-browser-bot-tabs-new{height:32px;margin-top:2px;padding:0 10px;border:0;border-top:1px solid #0000000f;border-radius:0 0 8px 8px;background:transparent;font:inherit;color:var(--tab-group-color,#474747);text-align:left;cursor:pointer;}
+  .native-browser-bot-tabs-new:hover{background:color-mix(in srgb,var(--tab-group-color,#474747) 10%,transparent);}
   /* Many tabs shrink to their icon instead of scrolling the
      strip; narrow inactive tabs drop the close button to make room. */
   @container (max-width:72px){

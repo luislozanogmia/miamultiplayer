@@ -2575,30 +2575,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       })),
     ]).popup({ window });
   }
-  // A bot's group shows one tab in the strip; "+N" lists the others in tab
-  // order, numbered as they stand in the group, with the ones the bot is
-  // working in marked. Picking one brings it to the front.
-  function showGroupTabsMenu(groupId, shownId, workingIds) {
-    const group = groups.get(groupId);
-    if (!group) return;
-    const working = new Set((Array.isArray(workingIds) ? workingIds : []).slice(0, 500).map(Number));
-    const members = groupTabs(groupId);
-    const items = [];
-    members.forEach((tab, index) => {
-      if (tab.id === shownId) return;
-      const title = String(tab.title || tab.url || "New Tab").slice(0, 80);
-      items.push({
-        label: `${index + 1}   ${title}${working.has(tab.id) ? "   \u25cf working" : ""}`,
-        click: menuAction(() => { if (tabs.has(tab.id)) activateTab(tab.id); }),
-      });
-    });
-    if (!items.length) return;
-    items.push({ type: "separator" }, {
-      label: "New Tab for This Bot",
-      click: menuAction(() => { const last = members.at(-1); newTab(undefined, { after: last ? last.id : undefined, groupId }); }),
-    });
-    Menu.buildFromTemplate(items).popup({ window });
-  }
   // The » menu lists groups the crowded strip had no room for; picking one
   // brings its last tab to the front, which opens the group again.
   function showGroupOverflowMenu(groupIds) {
@@ -2894,7 +2870,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "tabMenu") showTabMenu(command.id);
       if (command.action === "groupMenu") showGroupMenu(command.groupId);
       if (command.action === "groupOverflowMenu") showGroupOverflowMenu(command.groupIds);
-      if (command.action === "groupTabsMenu") showGroupTabsMenu(command.groupId, command.shownId, command.working);
+      if (command.action === "groupNewTab" && groups.has(command.groupId)) {
+        const last = groupTabs(command.groupId).at(-1);
+        newTab(undefined, { after: last ? last.id : undefined, groupId: command.groupId });
+      }
       if (command.action === "groupBotMenu") showGroupBotMenu(command.groupId, command.bots, command.miaIcon, command.busy);
       if (command.action === "groupAssignBot") { assignGroupBot(command.groupId, command.bot); persistTabs(); }
       if (command.action === "groupCreate" && tabs.has(command.id)) {

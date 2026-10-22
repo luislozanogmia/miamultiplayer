@@ -2207,30 +2207,22 @@ test("pressing the mouse in the front tab a bot is working on asks to take over"
   assert.equal(asks().length, 1, "tabs behind, and the person's own tab, never ask");
 });
 
-test("a bot group's +N list shows its other tabs in order, marks the working one, and adds a tab", () => {
+test("a new tab for a bot opens at the end of that bot's group", () => {
   const h = harness();
   const first = h.command("new").activeId;
   h.command("groupCreate", { id: first });
   const groupId = h.command("state").groups[0].id;
   const second = h.command("new").activeId;
-  const third = h.command("new").activeId;
   h.command("move", { id: second, index: 1, groupId });
-  h.command("move", { id: third, index: 2, groupId });
-  h.command("groupTabsMenu", { groupId, shownId: second, working: [third] });
-  const menu = h.menuTemplates.at(-1);
-  const labels = plain(menu.map(item => item.label || item.type));
-  assert.equal(labels.length, 4);
-  assert.match(labels[0], /^1 /);
-  assert.match(labels[1], /^3 .*● working$/);
-  assert.deepEqual(labels.slice(2), ["separator", "New Tab for This Bot"]);
-  menu[0].click();
-  assert.equal(h.command("state").activeId, first);
-  menu[3].click();
+  const loose = h.command("new").activeId;
+  h.command("groupNewTab", { groupId });
   const state = h.command("state");
   const added = state.tabs.find(tab => tab.id === state.activeId);
   assert.equal(added.groupId, groupId, "the new tab joins the bot's group");
-  assert.equal(state.tabs.filter(tab => tab.groupId === groupId).length, 4);
-  h.command("groupTabsMenu", { groupId: "not-a-group", shownId: first, working: [] });
-  assert.equal(h.menuTemplates.at(-1), menu, "no menu for an unknown group");
+  assert.deepEqual(plain(state.tabs.map(tab => tab.id).slice(0, 3)), [first, second, added.id]);
+  assert.equal(state.tabs.at(-1).id, loose);
+  const count = state.tabs.length;
+  h.command("groupNewTab", { groupId: "not-a-group" });
+  assert.equal(h.command("state").tabs.length, count, "no tab for an unknown group");
   h.window.emit("closed");
 });

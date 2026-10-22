@@ -251,7 +251,7 @@
       scheduled = false;
       var rect = screen.getBoundingClientRect();
       // Native views sit above HTML; hide them while the sidebar drawer covers it.
-      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered &&
+      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen &&
         !document.body.classList.contains('browser-sidebar-open') &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation');
@@ -259,7 +259,7 @@
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view
       // steps aside without pausing what it plays.
-      if (downloadsOpen || suggestCovered) payload.menu = true;
+      if (downloadsOpen || suggestCovered || tabsListOpen) payload.menu = true;
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
@@ -427,6 +427,7 @@
       editGroup(editId);
     }
     if (window.MiaBrowserWork) window.MiaBrowserWork.decorateTabs(strip, state);
+    renderTabsList(groups, front, working);
     layout();
   }
   // A group opens with the bot that works in it, then the name chip. The
@@ -479,9 +480,11 @@
     if (busy) more.classList.add('working');
     more.title = front.others.length + ' more tab' + (front.others.length === 1 ? '' : 's') + ' in this group';
     more.setAttribute('aria-label', 'Show ' + more.title);
+    more.setAttribute('aria-haspopup', 'true');
+    more.setAttribute('aria-expanded', String(tabsListGroupId === g.id));
     more.onclick = function (event) {
       event.stopPropagation();
-      command('groupTabsMenu', { groupId: g.id, shownId: front.id, working: Object.keys(working).map(Number) });
+      setTabsList(tabsListGroupId === g.id ? null : g.id);
     };
     return more;
   }
@@ -516,6 +519,102 @@
     });
     return { folded: folded, hidden: hidden };
   }
+  // The "+N" list drops down under the bot's tab and draws the bot's other
+  // tabs the way the strip draws tabs (page icon, title, working dot, close),
+  // stacked, so nothing about it reads differently from a tab. Like the
+  // Downloads menu it sits over a still of the page while it is open.
+  var tabsList = document.createElement('div');
+  tabsList.className = 'native-browser-bot-tabs-list';
+  tabsList.setAttribute('role', 'menu');
+  tabsList.hidden = true;
+  overlay.append(tabsList);
+  var lastTabsList = '';
+  function setTabsList(groupId) {
+    var token = ++tabsListToken;
+    tabsListGroupId = groupId;
+    tabsListRequested = !!groupId;
+    lastTabs = '';
+    if (!groupId) {
+      tabsListOpen = false;
+      tabsList.hidden = true;
+      lastTabsList = '';
+      if (state) render(state);
+      hideStill();
+      return;
+    }
+    if (state) render(state);
+    showStill().then(function (ready) {
+      if (token !== tabsListToken) return;
+      if (!ready) { if (tabsListRequested) setTabsList(groupId); return; }
+      tabsListOpen = true;
+      lastTabsList = '';
+      if (state) render(state);
+    });
+  }
+  function renderTabsList(groups, front, working) {
+    var g = tabsListGroupId && groups[tabsListGroupId];
+    var info = g && front[g.id];
+    if (tabsListGroupId && (!info || !info.others.length)) { setTabsList(null); return; }
+    if (!tabsListOpen || !info) return;
+    var byId = {};
+    state.tabs.forEach(function (t) { byId[t.id] = t; });
+    var anchor = strip.querySelector('[data-tab-id="' + info.id + '"]');
+    var screenRect = screen.getBoundingClientRect();
+    var anchorRect = anchor ? anchor.getBoundingClientRect() : { left: screenRect.left + 8, bottom: screenRect.top };
+    tabsList.style.left = Math.round(Math.max(screenRect.left + 8, Math.min(anchorRect.left, screenRect.right - 268))) + 'px';
+    tabsList.style.top = Math.round(anchorRect.bottom) + 'px';
+    tabsList.style.maxHeight = Math.max(120, Math.round(screenRect.bottom - anchorRect.bottom - 12)) + 'px';
+    paintGroup(tabsList, g);
+    var key = JSON.stringify([g.id, info.others.map(function (id) { var t = byId[id]; return [id, t.title, t.favicon, !!working[id]]; })]);
+    tabsList.hidden = false;
+    if (key === lastTabsList) return;
+    lastTabsList = key;
+    tabsList.replaceChildren();
+    info.others.forEach(function (id) {
+      var t = byId[id];
+      var row = document.createElement('div');
+      row.className = 'native-browser-bot-tabs-row' + (working[id] ? ' bot-working' : '');
+      var button = document.createElement('button');
+      button.type = 'button'; button.setAttribute('role', 'menuitem');
+      button.title = t.title || 'New tab';
+      if (t.favicon) {
+        var icon = document.createElement('img');
+        icon.className = 'native-browser-tab-icon'; icon.src = t.favicon; icon.alt = '';
+        icon.onerror = function () { icon.remove(); };
+        button.append(icon);
+      }
+      var label = document.createElement('span');
+      label.className = 'native-browser-tab-label'; label.textContent = t.title || 'New tab';
+      button.append(label);
+      if (working[id]) {
+        var dotEl = document.createElement('span');
+        dotEl.className = 'chat-task-dot native-browser-tab-working';
+        dotEl.title = (working[id].name || 'A bot') + ' is working here';
+        button.append(dotEl);
+      }
+      button.onclick = function () { setTabsList(null); command('select', { id: id }); };
+      var close = document.createElement('button');
+      close.type = 'button'; close.textContent = '×'; close.className = 'native-browser-tab-close';
+      close.setAttribute('aria-label', 'Close tab ' + (t.title || 'New tab'));
+      close.onclick = function (event) { event.stopPropagation(); command('close', { id: id }); };
+      row.append(button, close);
+      tabsList.append(row);
+    });
+    var add = document.createElement('button');
+    add.type = 'button'; add.setAttribute('role', 'menuitem');
+    add.className = 'native-browser-bot-tabs-new';
+    add.textContent = '+  New tab for this bot';
+    add.onclick = function () { var id = g.id; setTabsList(null); command('groupNewTab', { groupId: id }); };
+    tabsList.append(add);
+  }
+  // A click anywhere else, or Escape, closes the list.
+  document.addEventListener('mousedown', function (event) {
+    if (!tabsListGroupId || tabsList.contains(event.target) || (event.target.closest && event.target.closest('.native-browser-bot-tabs'))) return;
+    setTabsList(null);
+  }, true);
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && tabsListGroupId) setTabsList(null);
+  });
   // A group's label sits before its tabs. Click collapses or expands it;
   // right-click opens the group menu; dropping a tab on it joins the group.
   function groupChip(g, index, folded) {
@@ -811,6 +910,10 @@
   var stillPending = null;
   var suggestRequested = false;
   var downloadsRequested = false;
+  var tabsListRequested = false;
+  var tabsListOpen = false;
+  var tabsListToken = 0;
+  var tabsListGroupId = null;
   function stillPageKey() {
     var tab = selected();
     return JSON.stringify([open, overlay.hidden, tab && tab.id, tab && tab.url,
@@ -832,15 +935,15 @@
   function showStill() {
     clearTimeout(snapshotTimer);
     syncStillPage();
-    if (!snapshot.hidden && (suggestCovered || downloadsOpen)) return Promise.resolve(true);
-    if (!suggestCovered && !downloadsOpen) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
+    if (!snapshot.hidden && (suggestCovered || downloadsOpen || tabsListOpen)) return Promise.resolve(true);
+    if (!suggestCovered && !downloadsOpen && !tabsListOpen) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
     if (stillPending) return stillPending;
     if (!pageShowing()) return Promise.resolve(true);
     var generation = stillGeneration;
     var key = stillPage;
     function current() {
       return generation === stillGeneration && key === stillPageKey() &&
-        (suggestRequested || downloadsRequested);
+        (suggestRequested || downloadsRequested || tabsListRequested);
     }
     var pending = command('snapshot').then(function (result) {
       if (!current()) return false;
@@ -861,7 +964,7 @@
     return pending;
   }
   function hideStill() {
-    if (downloadsRequested || suggestRequested) return;
+    if (downloadsRequested || suggestRequested || tabsListRequested) return;
     // Invalidate capture/decode immediately, even before either menu has
     // committed its cover. Keep only an already visible still for the
     // native view's short return transition; a reopen always captures anew.

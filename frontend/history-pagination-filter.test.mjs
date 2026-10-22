@@ -203,7 +203,7 @@ test('native browser visibility owner occludes and restores the live view withou
   const commands = [];
   const classes = new Set();
   const context = {
-    scheduled: false, open: true, lastLayout: '', downloadsOpen: false, suggestCovered: false,
+    scheduled: false, open: true, lastLayout: '', downloadsOpen: false, suggestCovered: false, tabsListOpen: false,
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
     overlay: { hidden: false },

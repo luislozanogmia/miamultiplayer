@@ -270,3 +270,61 @@ test('a bot group counts as one tab when the strip decides what to fold', () => 
   assert.match(browser, /if \(g\) counts\[g\.id\] = g\.botId \? 1 : \(counts\[g\.id\] \|\| 0\) \+ 1; else ungrouped \+= 1;/);
   assert.match(browser, /if \(tabGroup && front\[tabGroup\.id\] && front\[tabGroup\.id\]\.id !== t\.id\) return;/);
 });
+
+// "+N" drops the bot's other tabs down under its tab, drawn like tabs:
+// page icon, title, working dot and close, then "New tab for this bot".
+test('the +N list draws the bot\'s other tabs as tabs and acts on them', async () => {
+  class El {
+    constructor(tag) { this.tagName = tag; this.children = []; this.style = { setProperty() {}, removeProperty() {} }; this.attrs = {}; this.hidden = false; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren() { this.children = []; }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getBoundingClientRect() { return { left: 0, top: 0, right: 900, bottom: 700, width: 900, height: 700 }; }
+    contains() { return false; }
+    querySelector() { return null; }
+    remove() {}
+    all() { return [this, ...this.children.flatMap(c => c.all ? c.all() : [])]; }
+  }
+  const sent = [];
+  const listeners = {};
+  const ctx = {
+    document: { createElement: tag => new El(tag), addEventListener: (type, fn) => { listeners[type] = fn; } },
+    screen: new El('div'), overlay: new El('div'), strip: new El('div'),
+    paintGroup() {}, command: (action, payload) => { sent.push([action, payload]); return Promise.resolve(); },
+    render() { ctx.renderTabsList(ctx.groups, ctx.front, ctx.working); },
+    showStill: () => Promise.resolve(true), hideStill() {},
+    state: { activeId: 1, tabs: [{ id: 1, title: 'Shown', groupId: 'g1' }, { id: 2, title: 'Flights', favicon: 'data:,', groupId: 'g1' }, { id: 3, title: 'Hotels', groupId: 'g1' }] },
+    lastTabs: '', tabsListGroupId: null, tabsListRequested: false, tabsListOpen: false, tabsListToken: 0,
+    groups: { g1: { id: 'g1', botId: 'bot-a' } }, front: { g1: { id: 1, others: [2, 3] } }, working: { 3: { name: 'Scout' } },
+  };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  var tabsList = document.createElement');
+  const end = browser.indexOf("    if (event.key === 'Escape' && tabsListGroupId) setTabsList(null);\n  });\n", start);
+  assert.ok(start > 0 && end > start);
+  vm.runInContext(browser.slice(start, end) + "    if (event.key === 'Escape' && tabsListGroupId) setTabsList(null);\n  });\n", ctx);
+  ctx.setTabsList('g1');
+  await new Promise(resolve => setImmediate(resolve));
+  const list = ctx.tabsList;
+  assert.equal(list.hidden, false);
+  const rows = list.children.filter(c => c.className.startsWith('native-browser-bot-tabs-row'));
+  assert.equal(rows.length, 2);
+  const labels = rows.map(r => r.all().find(n => n.className === 'native-browser-tab-label').textContent);
+  assert.deepEqual(labels, ['Flights', 'Hotels']);
+  assert.ok(rows[0].all().some(n => n.className === 'native-browser-tab-icon'), 'the page icon shows like on a tab');
+  assert.match(rows[1].className, /bot-working/);
+  assert.ok(rows[1].all().some(n => /native-browser-tab-working/.test(n.className)), 'the working dot shows');
+  assert.equal(list.children.at(-1).className, 'native-browser-bot-tabs-new');
+  rows[1].children[1].onclick({ stopPropagation() {} });
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['close', { id: 3 }]);
+  rows[0].children[0].onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['select', { id: 2 }]);
+  assert.equal(list.hidden, true, 'picking a tab closes the list');
+  ctx.setTabsList('g1');
+  await new Promise(resolve => setImmediate(resolve));
+  list.children.at(-1).onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['groupNewTab', { groupId: 'g1' }]);
+  ctx.setTabsList('g1');
+  await new Promise(resolve => setImmediate(resolve));
+  listeners.keydown({ key: 'Escape' });
+  assert.equal(list.hidden, true, 'Escape closes it');
+});
