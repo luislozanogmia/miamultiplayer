@@ -2238,6 +2238,20 @@ test("pressing the mouse in the front tab a bot is working on asks to take over"
   assert.equal(asks().length, 1, "tabs behind, and the person's own tab, never ask");
 });
 
+test("following a bot switches tabs without taking the keyboard from the chat", () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  const focused = h.views[0].webContents.focusCalls || 0;
+  h.command("select", { id: first, follow: true });
+  assert.equal(h.command("state").activeId, first);
+  assert.equal(h.views[0].webContents.focusCalls || 0, focused, "a follow switch leaves focus where it was");
+  h.command("select", { id: second });
+  h.command("select", { id: first });
+  assert.equal(h.views[0].webContents.focusCalls, focused + 1, "picking a tab yourself still focuses it");
+  h.window.emit("closed");
+});
+
 test("a new tab for a bot opens at the end of that bot's group", async () => {
   const h = harness();
   const first = h.command("new").activeId;
