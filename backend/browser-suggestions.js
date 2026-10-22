@@ -44,20 +44,35 @@ function eventText(event) {
   return text.trim();
 }
 
+// Replies are numbered so each suggestion can name the reply (and so the
+// bot) it builds on; the blank tab shows that bot on the card.
 function suggestionsPrompt(replies) {
-  return 'These are the latest replies from the user\'s bots. Suggest exactly 3 short next things ' +
-    'the user could ask Mia to do, each building on one of the replies. Write each in the user\'s ' +
-    'own voice as an imperative, 12 words or fewer, no trailing period, one per line, no numbering, ' +
-    'no quotes, no preamble.\n\n' +
-    replies.map((reply) => `[${reply.botName}] ${reply.text}`).join('\n\n');
+  return 'These are the latest replies from the user\'s bots, numbered. Suggest exactly 3 short next ' +
+    'things the user could ask Mia to do, each building on one of the replies. Write each in the ' +
+    'user\'s own voice as an imperative, 12 words or fewer, no trailing period, one per line. Start ' +
+    'each line with the bracketed number of the reply it builds on, like "[2] Compare the two ' +
+    'releases". No other numbering, no quotes, no preamble.\n\n' +
+    replies.map((reply, index) => `[${index + 1}] ${reply.botName}: ${reply.text}`).join('\n\n');
 }
 
-function parseSuggestions(reply) {
+// -> [{text, source}], source being the index into replies, or null when the
+// model did not say which reply a line builds on.
+function parseSuggestions(reply, replyCount = Infinity) {
   return String(reply || '')
     .replace(/\r\n/g, '\n')
     .split('\n')
-    .map((line) => line.trim().replace(/^(?:[-*•]|\d+[.)])\s*/, '').replace(/^["']+|["'.]+$/g, '').trim())
-    .filter((line) => line && line.length <= MAX_SUGGESTION_CHARS)
+    .map((line) => {
+      let rest = line.trim().replace(/^(?:[-*•]|\d+[.)])\s*/, '');
+      let source = null;
+      const tag = rest.match(/^\[(\d+)\]\s*/);
+      if (tag) {
+        const index = Number(tag[1]) - 1;
+        if (index >= 0 && index < replyCount) source = index;
+        rest = rest.slice(tag[0].length);
+      }
+      return { text: rest.replace(/^["']+|["'.]+$/g, '').trim(), source };
+    })
+    .filter((item) => item.text && item.text.length <= MAX_SUGGESTION_CHARS)
     .slice(0, 3);
 }
 

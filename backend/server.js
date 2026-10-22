@@ -5269,7 +5269,7 @@ app.get('/api/bots/examples', requireAuth, async (req, res) => {
 // from the latest replies the user's bots sent. Cached per set of replies, so
 // a new blank tab only runs inference after a bot says something new. Like the
 // other suggestion routes, failures just mean nothing is shown.
-const browserSuggestionsCache = new Map(); // `${owner}:${workspace}:${eventIds}` -> string[]
+const browserSuggestionsCache = new Map(); // `${owner}:${workspace}:${eventIds}` -> [{text, botId, botName, at}]
 app.get('/api/browser/suggestions', requireAuth, async (req, res) => {
   const owner = String(req.userEmail || '').toLowerCase();
   const workspaceId = workspaceIdFromRequest(req);
@@ -5292,12 +5292,30 @@ app.get('/api/browser/suggestions', requireAuth, async (req, res) => {
     const cacheKey = browserSuggestions.suggestionsCacheKey(owner, workspaceId, replies);
     const cached = browserSuggestionsCache.get(cacheKey);
     if (cached) return res.status(200).json({ suggestions: cached });
+    // Only ever on Mia Router, whatever model the user picked for chat: this
+    // runs on every blank tab and must not spend the user's own subscription.
+    // Without Mia Router the blank tab simply shows no suggestions.
+    const routerModel = MANAGED_ROUTER_MODEL_ALLOWLIST ? Array.from(MANAGED_ROUTER_MODEL_ALLOWLIST)[0] : '';
+    // Provisioned this backend lifetime, or still connected from before a
+    // restart (the provisioned set is in memory only).
+    const routerVisible = () => {
+      const entry = visibleChatModelProvidersForUser(nativeChatModelProviders, owner)[MANAGED_ROUTER_HERMES_PROVIDER];
+      return Boolean(entry && entry.models.some((model) => String(model).toLowerCase() === routerModel));
+    };
+    if (!MANAGED_ROUTER_URL || !routerModel
+      || !(managedRouterProvisionedEmails.has(managedRouterAccountEmail(owner)) || routerVisible())) {
+      return res.status(200).json({ suggestions: [] });
+    }
+    const routerSelection = { provider: MANAGED_ROUTER_HERMES_PROVIDER, model: routerModel };
     const reply = await scheduleInference(
       browserSuggestions.suggestionsPrompt(replies),
       'suggestion',
-      await inferenceOptionsForUser(req.userEmail)
+      await inferenceOptionsForUser(req.userEmail, routerSelection)
     );
-    const suggestions = browserSuggestions.parseSuggestions(reply);
+    const suggestions = browserSuggestions.parseSuggestions(reply, replies.length).map((item) => {
+      const source = item.source === null ? null : replies[item.source];
+      return { text: item.text, botId: source ? source.botId : null, botName: source ? source.botName : null, at: source ? source.at : null };
+    });
     if (suggestions.length) {
       if (browserSuggestionsCache.size > 200) browserSuggestionsCache.clear();
       browserSuggestionsCache.set(cacheKey, suggestions);
