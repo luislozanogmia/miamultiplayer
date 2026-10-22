@@ -1884,6 +1884,37 @@ test("the » menu brings a group the strip had no room for back to the front", (
   h.window.emit("closed");
 });
 
+test("right-clicking Back or Forward lists that way's pages, nearest first, like Chrome", () => {
+  const h = harness();
+  h.command("new");
+  const went = [];
+  const entries = [
+    { title: "Home", url: "https://a.example/" },
+    { title: "", url: "https://b.example/list" },
+    { title: "Results", url: "https://c.example/" },
+    { title: "Details", url: "https://d.example/" },
+    { title: "Checkout", url: "https://e.example/" },
+  ];
+  h.views[0].webContents.navigationHistory = {
+    canGoBack: () => true, canGoForward: () => true,
+    getAllEntries: () => entries, getActiveIndex: () => 2, goToIndex: index => went.push(index),
+  };
+  h.command("historyMenu", { direction: "back", x: 10.6, y: 40 });
+  let menu = h.menuTemplates.at(-1);
+  assert.deepEqual(plain(menu.map(item => item.label)), ["https://b.example/list", "Home"], "untitled pages show their address");
+  menu[1].click();
+  h.command("historyMenu", { direction: "forward" });
+  menu = h.menuTemplates.at(-1);
+  assert.deepEqual(plain(menu.map(item => item.label)), ["Details", "Checkout"]);
+  menu[0].click();
+  assert.deepEqual(went, [0, 3]);
+  const shown = h.menuTemplates.length;
+  h.views[0].webContents.navigationHistory.getActiveIndex = () => 0;
+  h.command("historyMenu", { direction: "back" });
+  assert.equal(h.menuTemplates.length, shown, "nothing behind the first page, so no menu");
+  h.window.emit("closed");
+});
+
 test("closing a grouped tab lands on the next tab in the same group", () => {
   const h = harness();
   const mine = h.command("new").activeId;

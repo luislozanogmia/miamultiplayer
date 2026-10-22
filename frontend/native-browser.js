@@ -38,6 +38,16 @@
   more.type = 'button'; more.className = 'native-browser-groups-more'; more.hidden = true;
   more.textContent = '\u00bb';
   more.onclick = function () { command('groupOverflowMenu', { groupIds: (more.groupIds || []).slice() }); };
+  // Right-click on Back or Forward lists the pages that way, under the button.
+  [['localBrowserBackBtn', 'back'], ['localBrowserForwardBtn', 'forward']].forEach(function (pair) {
+    var button = document.getElementById(pair[0]);
+    if (!button) return;
+    button.addEventListener('contextmenu', function (event) {
+      event.preventDefault();
+      var rect = button.getBoundingClientRect();
+      command('historyMenu', { direction: pair[1], x: rect.left, y: rect.bottom + 4 });
+    });
+  });
   strip.after(more);
   var findBar = document.createElement('div');
   findBar.className = 'native-browser-find'; findBar.hidden = true;
