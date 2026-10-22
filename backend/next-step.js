@@ -15,7 +15,8 @@ function nextStepInstruction() {
     'line from your reply and offers it to the user as a suggestion, so do not mention it.';
 }
 
-const NEXT_STEP_LINE = /^\s*(?:[*_]{1,2})?next(?:\s+step)?(?:[*_]{1,2})?\s*:\s*(?:[*_]{1,2})?\s*(.*?)\s*$/i;
+// Mia and bots sometimes sign the line, as in "[Mia] Next: ...".
+const NEXT_STEP_LINE = /^\s*(?:\[[^\]\n]{1,120}\]\s*)?(?:[*_]{1,2})?next(?:\s+step)?(?:[*_]{1,2})?\s*:\s*(?:[*_]{1,2})?\s*(.*?)\s*$/i;
 
 // -> {text, nextStep}: the reply without its closing "Next:" line, and that
 // line's suggestion, or null when the reply does not end with a usable one.
@@ -29,6 +30,7 @@ function splitNextStep(reply) {
   if (!match) return { text, nextStep: null };
   const rest = lines.slice(0, last).join('\n').trim();
   const nextStep = match[1]
+    .replace(/\s*\[[^\]\n]{1,120}\]\s*$/, '')
     .replace(/^[*_"'“]+|[*_"'”.]+$/g, '')
     .trim();
   // Only the line itself goes; a reply that is nothing but the line keeps it.

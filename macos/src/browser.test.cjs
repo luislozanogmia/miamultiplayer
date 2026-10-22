@@ -1232,6 +1232,15 @@ test("bot tab groups: a bot's pages land in its own group, never Mia's tab", asy
   assert.equal(state.tabs.find(t => t.id === patTab.tab_id).groupId, patGroup.id);
   assert.equal(state.groups.length, 2);
   assert.ok(resolved.every(id => !id.includes("actor")), "only the session id reaches the lookup");
+
+  // Asking again for a page the bot already has open returns that tab.
+  const tabCount = h.command("state").tabs.length;
+  const again = await h.controller.protocol("tab_open", { url: "example.com/", actor_session: "s-scout", wait: "none" });
+  assert.equal(again.tab_id, scoutTab.tab_id);
+  assert.equal(again.reused, true);
+  assert.equal(h.command("state").tabs.length, tabCount, "no duplicate tab");
+  // Another bot's tab on that page is not reused.
+  assert.notEqual(again.tab_id, patTab.tab_id);
 });
 
 test("bot downloads save straight to Downloads, get checked, and are reported only once on disk", async () => {

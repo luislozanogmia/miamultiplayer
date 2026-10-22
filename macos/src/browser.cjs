@@ -1115,6 +1115,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return tab;
   }
 
+  // Same page: same address, ignoring a trailing slash and the #fragment.
+  function botTabAtAddress(actor, value) {
+    let target;
+    try { target = normalizeTarget(value); } catch (_) { return null; }
+    const key = address => String(address || "").replace(/#.*$/, "").replace(/\/+$/, "");
+    return [...tabs.values()]
+      .filter(tab => botOwnsTab(actor, tab) && key(tab.url) === key(target))
+      .sort((a, b) => (b.botUsedAt || 0) - (a.botUsedAt || 0))[0] || null;
+  }
+
   function protocolTabResult(tab) {
     return {
       tab_id: tab.id,
@@ -1419,6 +1429,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       };
     }
     if (method === "tab_open") {
+      // A bot asking for a page it already has open gets that tab back
+      // instead of a duplicate.
+      const existing = actor && params.url ? botTabAtAddress(actor, params.url) : null;
+      if (existing) {
+        existing.botUsedAt = ++botUseCounter;
+        touch(existing);
+        return { ...protocolTabResult(existing), reused: true };
+      }
       // A bot's new tab opens behind, so it never takes the tab in front.
       if (actor) requireGroupIdle(botGroup(actor.botId)?.id);
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();

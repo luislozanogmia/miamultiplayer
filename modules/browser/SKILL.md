@@ -43,12 +43,17 @@ tabs in your own tab groups, with each tab's group name and whether it is the
 one in front. Pass a `tab_id` from that list to act on a specific tab. You can
 only switch to or close your own tabs.
 
-You can work in several tabs in one task, for example comparing two sites or
-running a routine that checks a few pages. Open each page with
-`ghost_tab_open`, keep the `tab_id` each call returns, and pass that `tab_id`
-to every later command for that page. Your tabs open behind the user's tab
-and stay in your own group, so you never need `ghost_tab_switch` just to work
-in one.
+Reuse the tabs you already have. To load a page, call `ghost_navigate` with
+its `url`: it loads it in your current tab, or in the tab whose `tab_id` you
+pass, and opens a tab only when you have none. If one of your tabs (from
+`ghost_tab_list`) is already on the same site, pass its `tab_id` to
+`ghost_navigate` instead of opening another tab.
+
+Open an extra tab with `ghost_tab_open` only when you need two pages at the
+same time, for example comparing two sites or a routine that checks a few
+pages side by side. Keep the `tab_id` each call returns and pass it to every
+later command for that page. Your tabs open behind the user's tab and stay in
+your own group, so you never need `ghost_tab_switch` just to work in one.
 
 Use `ghost_read` for page content and `ghost_vacuum` for numbered interactive
 elements. Re-vacuum after navigation or any action that materially changes the
