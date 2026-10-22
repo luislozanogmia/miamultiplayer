@@ -711,6 +711,24 @@
   }
   // The group's owner leads its chip: the bot's mote, or Mia's
   // mark while Mia handles it. Click to choose the bot.
+  // Hovering the bot shows its name in a label under it. The label sits in
+  // the overlay because the tab strip clips anything that leaves it.
+  var nameTip = document.createElement('div');
+  nameTip.className = 'native-browser-name-tip'; nameTip.hidden = true;
+  nameTip.setAttribute('aria-hidden', 'true');
+  overlay.append(nameTip);
+  function showNameOnHover(el, name) {
+    el.addEventListener('mouseenter', function () {
+      var rect = el.getBoundingClientRect();
+      nameTip.textContent = name;
+      nameTip.style.left = Math.round(rect.left + rect.width / 2) + 'px';
+      nameTip.style.top = Math.round(rect.bottom + 4) + 'px';
+      nameTip.hidden = false;
+    });
+    var hide = function () { nameTip.hidden = true; };
+    el.addEventListener('mouseleave', hide);
+    el.addEventListener('mousedown', hide);
+  }
   function groupOwner(g) {
     var agents = window.miaBrowserAgents;
     var owner = document.createElement('button');
@@ -722,8 +740,8 @@
     var mote = settingUp ? agents.setupMoteHtml() : agents && g.botId ? agents.moteHtml(g.botId) : '';
     if (mote) owner.innerHTML = mote;
     else { owner.classList.add('mia'); owner.innerHTML = '<img src="assets/favicon.svg" alt="">'; }
-    owner.title = name ? name + ' works in this group. Click to change.' : 'Mia works in this group. Click to choose a bot.';
-    owner.setAttribute('aria-label', owner.title);
+    owner.setAttribute('aria-label', name ? name + ' works in this group. Click to change.' : 'Mia works in this group. Click to choose a bot.');
+    showNameOnHover(owner, name || 'Mia');
     owner.onclick = function (event) {
       event.stopPropagation();
       chooseGroupBot(g);
