@@ -38,6 +38,7 @@ const { EFFECTIVE_RELEASE_PROFILE, MIAOS_AGENT_SEARCH_ONLY } = require('./releas
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
 const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
+const browserSuggestions = require('./browser-suggestions');
 const { safeBrowserContext } = require('./browser-context');
 // Only terminal-free search releases receive the hosted-search credential.
 // Full local agents can execute commands and must not share that secret scope.
@@ -5261,6 +5262,49 @@ app.get('/api/bots/examples', requireAuth, async (req, res) => {
     res.status(200).json({ examples });
   } catch (err) {
     res.status(200).json({ examples: [] });
+  }
+});
+
+// "Mia suggests" on the browser's blank tab: three next things to do, built
+// from the latest replies the user's bots sent. Cached per set of replies, so
+// a new blank tab only runs inference after a bot says something new. Like the
+// other suggestion routes, failures just mean nothing is shown.
+const browserSuggestionsCache = new Map(); // `${owner}:${workspace}:${eventIds}` -> string[]
+app.get('/api/browser/suggestions', requireAuth, async (req, res) => {
+  const owner = String(req.userEmail || '').toLowerCase();
+  const workspaceId = workspaceIdFromRequest(req);
+  try {
+    const bots = db
+      .loadAll(conn, 'bots')
+      .filter((bot) => workspaceIdForRecord(bot) === workspaceId && (workspaceId === DEFAULT_WORKSPACE_ID || sameOwner(bot, owner)));
+    const replies = browserSuggestions.latestBotReplies({
+      bots,
+      conversationsFor: (bot) => nativeBotConversations(bot),
+      eventsFor: (conversation) => nativeConversationRepository.listEvents({
+        companyId: conversation.companyId,
+        conversationId: conversation.id,
+        latest: true,
+        limit: 20,
+        includeDeleted: false,
+      }).events,
+    });
+    if (!replies.length) return res.status(200).json({ suggestions: [] });
+    const cacheKey = browserSuggestions.suggestionsCacheKey(owner, workspaceId, replies);
+    const cached = browserSuggestionsCache.get(cacheKey);
+    if (cached) return res.status(200).json({ suggestions: cached });
+    const reply = await scheduleInference(
+      browserSuggestions.suggestionsPrompt(replies),
+      'suggestion',
+      await inferenceOptionsForUser(req.userEmail)
+    );
+    const suggestions = browserSuggestions.parseSuggestions(reply);
+    if (suggestions.length) {
+      if (browserSuggestionsCache.size > 200) browserSuggestionsCache.clear();
+      browserSuggestionsCache.set(cacheKey, suggestions);
+    }
+    res.status(200).json({ suggestions });
+  } catch (err) {
+    res.status(200).json({ suggestions: [] });
   }
 });
 

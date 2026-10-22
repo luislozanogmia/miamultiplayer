@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=20260822-1" />
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261019-omnibox-1" />
+<link rel="stylesheet" href="styles.css?v=20261021-suggest-next-3" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
      never flashes while app.js is loading. app.js still reapplies the class
@@ -679,6 +679,10 @@
       <div class="local-browser-empty" id="localBrowserEmpty">
         <span class="local-browser-empty-title">Open a web page</span>
         <span>Enter a web address above to browse beside Mia.</span>
+        <section class="local-browser-suggest-next" id="localBrowserSuggestNext" aria-label="Mia suggests" hidden>
+          <h2>Mia suggests</h2>
+          <div class="local-browser-suggest-next-list" id="localBrowserSuggestNextList"></div>
+        </section>
       </div>
       <div class="local-browser-blocked" id="localBrowserBlocked" hidden>
         <span class="local-browser-empty-title" id="localBrowserBlockedTitle">This page could not be loaded</span>
@@ -1180,6 +1184,6 @@
     <script src="automations-board.js?v=20261019-automations-1"></script>
     <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
     <script src="native-browser.js?v=20261019-omnibox-1"></script>
-    <script src="app.js?v=20261019-omnibox-1"></script>
+    <script src="app.js?v=20261021-suggest-next-3"></script>
 </body>
 </html>
