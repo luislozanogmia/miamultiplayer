@@ -2900,10 +2900,13 @@
   /* The +N list: the bot's other tabs, drawn like tabs and stacked. */
   .native-browser-bot-tabs-list{position:fixed;z-index:30;box-sizing:border-box;background:#fff;border:2px solid var(--tab-group-color,#474747);border-top:0;border-radius:0 0 10px 10px;box-shadow:0 14px 24px -14px rgba(0,0,0,.28);transform-origin:top center;animation:native-browser-bot-tabs-open .16s ease-out;font:13px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;color:#1f1f1f;}
   /* The tab's feet, mirrored: they leave the tab line and curve down into
-     the sides, so the list hangs off the tab like the tab's reflection. */
-  .native-browser-bot-tabs-list::before,.native-browser-bot-tabs-list::after{content:"";position:absolute;top:0;width:12px;height:12px;pointer-events:none;}
-  .native-browser-bot-tabs-list::before{left:-12px;background:radial-gradient(circle at 0 100%,transparent 10px,var(--tab-group-color,#474747) 10px,var(--tab-group-color,#474747) 12px,#fff 12px);}
-  .native-browser-bot-tabs-list::after{right:-12px;background:radial-gradient(circle at 100% 100%,transparent 10px,var(--tab-group-color,#474747) 10px,var(--tab-group-color,#474747) 12px,#fff 12px);}
+     the sides, so the list hangs off the tab like the tab's reflection.
+     They are rounded borders like the tab's own feet, so both curves are
+     smoothed the same; the white shadow fills the corner the curve cuts
+     off, clipped to the foot so it never paints over the tab above. */
+  .native-browser-bot-tabs-list::before,.native-browser-bot-tabs-list::after{content:"";position:absolute;top:0;width:12px;height:12px;box-sizing:border-box;border:0 solid var(--tab-group-color,#474747);clip-path:inset(0);pointer-events:none;}
+  .native-browser-bot-tabs-list::before{left:-12px;border-width:2px 2px 0 0;border-top-right-radius:12px;box-shadow:8px -8px 0 8px #fff;}
+  .native-browser-bot-tabs-list::after{right:-12px;border-width:2px 0 0 2px;border-top-left-radius:12px;box-shadow:-8px -8px 0 8px #fff;}
   .native-browser-bot-tabs-rows{overflow-y:auto;padding:6px 6px 8px;display:flex;flex-direction:column;gap:2px;border-radius:0 0 8px 8px;}
   @keyframes native-browser-bot-tabs-open{from{opacity:0;transform:scaleY(.92);}to{opacity:1;transform:none;}}
   @media (prefers-reduced-motion:reduce){.native-browser-bot-tabs-list{animation:none;}}
