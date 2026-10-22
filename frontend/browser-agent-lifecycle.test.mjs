@@ -241,3 +241,11 @@ test('groups are drawn in their owner color: Mia black, bots their own, New Bot 
   agents.setupPending = () => false;
   assert.equal(h.ctx.setupGroupPending({ id: 'g2', botId: null }), false, 'back to Mia once setup is no longer pending');
 });
+
+// The strip only redraws when its signature changes. The new group is drawn
+// (as Mia's) before "+ New bot" setup starts, so the setup state must be part
+// of the signature or the group stays Mia's until something else changes.
+test('the tab strip redraws when a group starts or stops waiting for its new bot', () => {
+  const line = browser.slice(browser.indexOf('var signature = JSON.stringify('), browser.indexOf('\n', browser.indexOf('var signature = JSON.stringify(')));
+  assert.match(line, /setupGroupPending\(groups\[setupGroupId\]\) \? setupGroupId : null/);
+});
