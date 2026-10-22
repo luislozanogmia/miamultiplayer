@@ -5588,6 +5588,58 @@
     }, 3500);
   }
 
+  // "Mia suggests" on the blank tab: three next things to ask, built from the
+  // bots' latest replies. Clicking one puts it in Mia's composer to edit and send.
+  var browserSuggestNextRequest = 0;
+  function loadBrowserSuggestNext(){
+    var wrap = el('#localBrowserSuggestNext');
+    var list = el('#localBrowserSuggestNextList');
+    if(!wrap || !list) return;
+    var request = ++browserSuggestNextRequest;
+    api('/api/browser/suggestions').then(function(result){
+      if(request !== browserSuggestNextRequest) return;
+      var data = result && result.data;
+      var suggestions = (data && Array.isArray(data.suggestions) ? data.suggestions : []).slice(0, 3);
+      list.innerHTML = suggestions.map(function(text){
+        return '<button type="button" class="local-browser-suggest-next-item" data-browser-suggest-next="' + esc(text) + '" title="' + esc(text) + '"><span>' + esc(text) + '</span></button>';
+      }).join('');
+      wrap.hidden = !suggestions.length;
+    }).catch(function(){
+      if(request === browserSuggestNextRequest) wrap.hidden = true;
+    });
+  }
+  function askMiaFromBrowserSuggestion(text){
+    var opened = chatWs.gatewayAgent ? navigateToAgentChat(chatWs.gatewayAgent, true) : null;
+    Promise.resolve(opened).then(function(){
+      var input = el('#ccInput');
+      if(!input) return;
+      input.value = text;
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
+  document.addEventListener('click', function(event){
+    var button = event.target && event.target.closest ? event.target.closest('[data-browser-suggest-next]') : null;
+    if(button) askMiaFromBrowserSuggestion(button.getAttribute('data-browser-suggest-next'));
+  });
+  // Refresh whenever the blank tab comes into view, however the browser got
+  // there (opened, restored at startup, last page closed). The server caches
+  // by the bots' latest replies, so this only costs inference after new ones.
+  var browserSuggestNextShown = false;
+  function syncBrowserSuggestNext(){
+    var empty = el('#localBrowserEmpty');
+    var shown = !!empty && !empty.hidden && localBrowserState.open;
+    if(shown && !browserSuggestNextShown) loadBrowserSuggestNext();
+    browserSuggestNextShown = shown;
+  }
+  (function(){
+    var empty = el('#localBrowserEmpty');
+    if(empty && typeof MutationObserver !== 'undefined'){
+      new MutationObserver(syncBrowserSuggestNext).observe(empty, {attributes:true, attributeFilter:['hidden']});
+    }
+  })();
+
   function renderAppDevDiagnostics(){
     var verbose = el('#appDevHermesVerbose');
     var status = el('#appDevStatus');
@@ -5726,7 +5778,7 @@
     overlay.hidden = !localBrowserState.open;
     overlay.setAttribute('aria-hidden', localBrowserState.open ? 'false' : 'true');
     overlay.classList.toggle('open', localBrowserState.open);
-    if(window.miaNativeBrowser){ window.miaNativeBrowser.render(localBrowserState.open); return; }
+    if(window.miaNativeBrowser){ window.miaNativeBrowser.render(localBrowserState.open); syncBrowserSuggestNext(); return; }
     if(empty) empty.hidden = true;
     if(blocked) blocked.hidden = false;
     var blockedTitle = el('#localBrowserBlockedTitle');
