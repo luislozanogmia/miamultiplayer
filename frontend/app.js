@@ -5979,6 +5979,74 @@
     return isNaN(date.getTime()) ? '' : date.toLocaleString([], {dateStyle:'medium', timeStyle:'short'});
   }
 
+  // The automation editor lists steps as numbered rows, like the
+  // Automations page: five to start, and a new row appears once the last one
+  // is filled. Enter moves to the next row; a pasted list fills one row per line.
+  var AUTOMATION_STEP_EXAMPLES = ['Search the web for today\'s AI news', 'Pick the 5 that matter most', 'Post the briefing here'];
+  var AUTOMATION_STEP_MAX = 20;
+  function automationStepRowHtml(n, value, placeholder){
+    return '<li class="cip-automation-step"><span class="cip-automation-step-n">' + n + '</span>' +
+      '<input type="text" maxlength="500" aria-label="Step ' + n + '" value="' + esc(value || '') + '"' + (placeholder ? ' placeholder="' + esc(placeholder) + '"' : '') + '></li>';
+  }
+  function automationStepRowsHtml(steps){
+    var list = steps.map(function(step){ return String(step || '').trim(); }).filter(Boolean);
+    var count = Math.min(AUTOMATION_STEP_MAX, Math.max(5, list.length + 1));
+    var html = '';
+    for(var i = 0; i < count; i++) html += automationStepRowHtml(i + 1, list[i], list.length ? '' : AUTOMATION_STEP_EXAMPLES[i]);
+    return html;
+  }
+  function automationStepRowValues(list){
+    return els('input', list).map(function(input){ return input.value.trim(); }).filter(Boolean);
+  }
+  function wireAutomationStepRows(list){
+    if(!list) return;
+    function inputs(){ return els('input', list); }
+    function addRow(){
+      var count = inputs().length;
+      if(count >= AUTOMATION_STEP_MAX) return null;
+      list.insertAdjacentHTML('beforeend', automationStepRowHtml(count + 1, '', ''));
+      return inputs()[count];
+    }
+    function renumber(){
+      els('.cip-automation-step', list).forEach(function(row, index){
+        el('.cip-automation-step-n', row).textContent = index + 1;
+        el('input', row).setAttribute('aria-label', 'Step ' + (index + 1));
+      });
+    }
+    list.addEventListener('input', function(){
+      var all = inputs();
+      if(all[all.length - 1].value.trim()) addRow();
+    });
+    list.addEventListener('paste', function(event){
+      var text = event.clipboardData && event.clipboardData.getData('text') || '';
+      var lines = text.split(/\r?\n/).map(function(line){ return line.trim(); }).filter(Boolean);
+      if(lines.length < 2) return;
+      event.preventDefault();
+      var index = inputs().indexOf(event.target);
+      lines.forEach(function(line, offset){
+        var input = inputs()[index + offset] || addRow();
+        if(input) input.value = line;
+      });
+      var all = inputs();
+      if(all[all.length - 1].value.trim()) addRow();
+    });
+    list.addEventListener('keydown', function(event){
+      var all = inputs();
+      var index = all.indexOf(event.target);
+      if(index < 0) return;
+      if(event.key === 'Enter'){
+        event.preventDefault();
+        var next = all[index + 1] || addRow();
+        if(next) next.focus();
+      } else if(event.key === 'Backspace' && !event.target.value && index > 0){
+        event.preventDefault();
+        var previous = all[index - 1];
+        if(all.length > 5) { event.target.parentNode.remove(); renumber(); }
+        previous.focus();
+      }
+    });
+  }
+
   function automationsDetailHtml(row, automation, bot){
     var side = row.status === 'running' ? '<span class="automations-live" aria-hidden="true"></span>Running now'
       : row.status === 'needs' ? row.detail : row.status === 'paused' ? 'Paused' : '';
@@ -9911,12 +9979,13 @@
         '<label class="cip-field" data-frequency-control="monthly"><span class="cip-field-label">Day of month</span><input type="number" id="automationEditMonthDay" min="1" max="31" value="' + esc(automation.day || 1) + '"></label>' +
         '<label class="cip-field" data-frequency-control="time"><span class="cip-field-label">Time' + (Number.isInteger(automation.utcOffsetMinutes) ? ' · ' + newsTimeZoneLabel(automation.utcOffsetMinutes) : '') + '</span><input type="time" id="automationEditTime" value="' + esc(automation.time || '09:00') + '"></label>' +
         '<label class="cip-field"><span class="cip-field-label">Model</span><select id="automationEditModel">' + modelOptions + '</select></label>' +
-        '<label class="cip-field"><span class="cip-field-label">Steps · one per line, done in order</span><textarea id="automationEditSteps" rows="6" placeholder="Search the web for today\'s AI news&#10;Pick the 5 that matter most&#10;Post the briefing here">' + esc((Array.isArray(automation.steps) ? automation.steps : []).join('\n')) + '</textarea></label>' +
+        '<div class="cip-field"><span class="cip-field-label">Steps · done in order</span><ol class="cip-automation-steps" id="automationEditSteps">' + automationStepRowsHtml(Array.isArray(automation.steps) ? automation.steps : []) + '</ol></div>' +
         '<label class="cip-field"><span class="cip-field-label">Prompt</span><textarea id="automationEditPrompt" rows="6">' + esc(automation.prompt || '') + '</textarea></label>' +
         '<div class="cip-automation-form-error" id="automationDetailError" role="alert"></div>' +
         '<div class="cip-editor-actions">' + (!isNew ? '<button type="button" class="styled-btn-secondary danger" id="automationDetailDelete">Delete</button>' : '') + '<button type="button" class="styled-btn-secondary" id="automationDetailCancel">Cancel</button><button type="submit" class="styled-btn-primary" id="automationDetailSave">' + (isNew ? 'Add automation' : 'Save') + '</button></div>' +
       '</form>' + metadata + '</div>';
     var form = el('#automationDetailForm', pane);
+    wireAutomationStepRows(el('#automationEditSteps', pane));
     var enabledInput = el('#automationEditEnabled', pane);
     var frequencyInput = el('#automationEditFrequency', pane);
     function updateScheduleControls(){
@@ -9952,7 +10021,7 @@
           time: el('#automationEditTime', pane).value,
           model: el('#automationEditModel', pane).value,
           prompt: el('#automationEditPrompt', pane).value,
-          steps: el('#automationEditSteps', pane).value
+          steps: automationStepRowValues(el('#automationEditSteps', pane)).join('\n')
         });
       } catch(error) {
         errorNode.textContent = error.message || 'Check the automation fields.';

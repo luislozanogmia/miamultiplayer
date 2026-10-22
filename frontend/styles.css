@@ -3126,6 +3126,11 @@
   body.styled-skin .agent-setup-field select:focus{border-color:var(--sand-text-primary);box-shadow:0 0 0 1px var(--sand-text-primary);}
   body.styled-skin .agent-setup-schedule-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,.65fr);gap:12px;}
   body.styled-skin .agent-setup-timer-row,
+  .cip-automation-steps{list-style:none;margin:0;padding:0;border:1px solid var(--sand-border-default);border-radius:10px;background:var(--sand-bg-base);overflow:hidden;}
+  .cip-automation-step{display:grid;grid-template-columns:32px minmax(0,1fr);align-items:center;border-top:1px solid var(--sand-border-subtle);}
+  .cip-automation-step:first-child{border-top:0;}
+  .cip-automation-step-n{font-size:12px;color:var(--sand-text-tertiary);text-align:right;}
+  .cip-field .cip-automation-step input[type="text"]{border:0;border-radius:0;background:transparent;padding:9px 12px 9px 10px;}
   .cip-automation-timer{display:grid;grid-template-columns:auto minmax(72px,.45fr) minmax(110px,.7fr);align-items:center;gap:8px;}
   body.styled-skin .agent-setup-timer-prefix,
   .cip-automation-timer>span{font-size:13px;color:var(--sand-text-secondary);text-transform:none;letter-spacing:0;}
