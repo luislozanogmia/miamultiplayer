@@ -429,7 +429,7 @@ test('styled routing keeps the full Agent Bench as a direct fallback', async () 
   assert.match(source, /var STYLED_ROUTES = \['chat', 'agent-admin', 'integrations'\]/);
   assert.match(source, /var ROUTES = \['chat','agent-admin','integrations'\]/);
   assert.match(source, /id:'gemini', label:'Google AI Studio'/);
-  assert.match(source, /action === 'web-browser'\) openWebBrowserTool\(\)/);
+  assert.match(source, /action === 'web-browser'\) openWebBrowserTool\(\{forActiveBot:true\}\)/);
   assert.match(source, /location\.hash = '#\/agent-admin'/);
   assert.match(source, /classList\.toggle\('styled-agent-admin-view', routeHash === 'agent-admin'\)/);
   assert.match(source, /location\.hash = '#\/chat'/);

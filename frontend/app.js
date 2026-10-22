@@ -5792,9 +5792,41 @@
     renderChatHeaderBar();
     renderLocalBrowser();
     browserFollowKey = '';
-    followBrowserTab(null);
+    // From a bot's chat, the browser opens on that bot's tabs instead of
+    // following whatever tab was active (often Mia's) back to Mia.
+    var botId = options && options.forActiveBot ? activeChatBotId() : null;
+    if(botId) openBrowserForBot(botId);
+    else followBrowserTab(null);
     startLocalBrowserPromptRotation();
     if(options && options.restoring) showBenchToast('Browser restored where you left off. Playback is paused.');
+  }
+
+  function activeChatBotId(){
+    var owner = activeConversationOwner();
+    return owner && owner.indexOf('bot:') === 0 ? owner.slice(4) : null;
+  }
+
+  // Selects the bot's most recent tab, or opens a new tab in a new group
+  // assigned to the bot when it has none yet.
+  function openBrowserForBot(botId){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!browser || !browser.command){ followBrowserTab(null); return; }
+    var bot = browserBotRecord(botId);
+    browser.command({ action: 'state' }).then(function(state){
+      var tab = botBrowserTab(state, botId);
+      if(tab) return browser.command({ action: 'select', id: tab.id });
+      return browser.command({ action: 'new' }).then(function(created){
+        var id = created && created.activeId;
+        if(!id) return created;
+        return browser.command({ action: 'groupCreate', id: id, name: bot && bot.name || '' }).then(function(grouped){
+          var newTab = (grouped && grouped.tabs || []).filter(function(t){ return t.id === id; })[0];
+          if(!newTab || !newTab.groupId) return grouped;
+          return browser.command({ action: 'groupAssignBot', groupId: newTab.groupId, bot: { botId: botId, name: bot && bot.name || '' } });
+        });
+      });
+    }).then(function(state){
+      if(state && !state.error) followBrowserTab(state);
+    }).catch(function(){ followBrowserTab(null); });
   }
 
   // Automations page: every bot's automations in the center with the chat
@@ -12830,7 +12862,7 @@
     else if(action === 'bot-store') openBotStorePane();
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsPage();
-    else if(action === 'web-browser') openWebBrowserTool();
+    else if(action === 'web-browser') openWebBrowserTool({forActiveBot:true});
   }
 
   /* The header has one action menu; every item delegates to its existing
