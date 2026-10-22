@@ -2577,6 +2577,25 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   // The » menu lists groups the crowded strip had no room for; picking one
   // brings its last tab to the front, which opens the group again.
+  // Right-click on Back or Forward lists the pages that way, nearest first,
+  // like Chrome; picking one jumps straight there. It opens under the button.
+  function showHistoryMenu(tab, { direction, x, y }) {
+    const history = tab.view.webContents.navigationHistory;
+    const entries = history.getAllEntries();
+    const current = history.getActiveIndex();
+    const step = direction === "forward" ? 1 : -1;
+    const items = [];
+    for (let index = current + step; index >= 0 && index < entries.length && items.length < 15; index += step) {
+      const entry = entries[index];
+      items.push({
+        label: String(entry.title || entry.url || "Untitled").slice(0, 80),
+        click: menuAction(() => { if (tabs.get(tab.id) === tab) history.goToIndex(index); }),
+      });
+    }
+    if (!items.length) return;
+    const at = Number.isFinite(x) && Number.isFinite(y) ? { x: Math.round(x), y: Math.round(y) } : {};
+    Menu.buildFromTemplate(items).popup({ window, ...at });
+  }
   function showGroupOverflowMenu(groupIds) {
     const list = (Array.isArray(groupIds) ? groupIds : []).slice(0, 200).filter(id => groups.has(id));
     if (!list.length) return;
@@ -2888,6 +2907,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         normalizeGroups(); persistTabs();
       }
       if (command.action === "groupClose") closeTabs(groupTabs(command.groupId).map(item => item.id));
+      if (command.action === "historyMenu") showHistoryMenu(tab, command);
       if (command.action === "back" && tab.view.webContents.navigationHistory.canGoBack()) tab.view.webContents.navigationHistory.goBack();
       if (command.action === "forward" && tab.view.webContents.navigationHistory.canGoForward()) tab.view.webContents.navigationHistory.goForward();
       if (command.action === "reload") { tab.error = ""; layout(); tab.view.webContents.reload(); }
