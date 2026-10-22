@@ -2841,21 +2841,22 @@
   .local-browser-suggest-next{width:100%;}
   .local-browser-suggest-next[hidden]{display:none;}
   .local-browser-suggest-next-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;width:100%;}
-  .local-browser-suggest-next-item{--bot:#888;position:relative;display:block;min-width:0;padding:12px 12px 14px;border:1px solid var(--sand-border-subtle);border-radius:14px;background:#fff;color:var(--sand-text-primary);font:inherit;text-align:left;cursor:pointer;opacity:0;transform:translateY(6px);animation:browserHomeIn .5s cubic-bezier(.2,.8,.2,1) forwards;transition:border-color .2s,background .2s,transform .2s;}
+  .local-browser-suggest-next-item{--bot:#888;position:relative;display:block;min-width:0;padding:12px 12px 14px;border:1px solid var(--bot);border-radius:14px;background:color-mix(in srgb,var(--bot) 6%,#fff);color:var(--sand-text-primary);font:inherit;text-align:left;cursor:pointer;opacity:0;transform:translateY(6px);animation:browserHomeIn .5s cubic-bezier(.2,.8,.2,1) forwards;transition:border-color .2s,background .2s,transform .2s;}
   .local-browser-suggest-next-item:nth-child(1){animation-delay:.65s;}
   .local-browser-suggest-next-item:nth-child(2){animation-delay:.73s;}
   .local-browser-suggest-next-item:nth-child(3){animation-delay:.81s;}
-  .local-browser-suggest-next-item:hover,.local-browser-suggest-next-item:focus-visible{border-color:var(--bot);background:color-mix(in srgb,var(--bot) 6%,#fff);transform:translateY(-2px);outline:none;}
+  .local-browser-suggest-next-item:focus-visible{outline:2px solid color-mix(in srgb,var(--bot) 35%,transparent);outline-offset:2px;}
   .local-browser-suggest-next-who{display:flex;align-items:center;gap:7px;min-width:0;margin-bottom:8px;white-space:nowrap;}
   .local-browser-suggest-next-mote{display:inline-flex;flex:none;width:22px;height:22px;overflow:hidden;}
   .local-browser-suggest-next-mote img{display:block;width:100%;height:100%;object-fit:contain;}
   .local-browser-suggest-next-name{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;font-weight:500;color:var(--bot);}
   .local-browser-suggest-next-time{flex:none;font-size:11px;color:var(--sand-text-secondary);}
-  .local-browser-suggest-next-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:38px;font-size:13px;line-height:1.45;transition:padding .2s;}
-  .local-browser-suggest-next-go{position:absolute;right:10px;bottom:10px;width:14px;height:14px;color:var(--bot);opacity:0;transform:translateX(-4px);transition:.2s;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
-  .local-browser-suggest-next-item:hover .local-browser-suggest-next-go,.local-browser-suggest-next-item:focus-visible .local-browser-suggest-next-go{opacity:1;transform:none;}
-  .local-browser-suggest-next-item:hover .local-browser-suggest-next-text{padding-right:14px;}
-  @media (prefers-reduced-motion:reduce){.local-browser-home-logo circle,.local-browser-home-title,.local-browser-suggest-next-item{animation:none;opacity:1;transform:none;}}
+  .local-browser-suggest-next-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:38px;padding-right:14px;font-size:13px;line-height:1.45;}
+  .local-browser-suggest-next-go{position:absolute;right:10px;bottom:10px;width:14px;height:14px;color:var(--bot);fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+  /* Hovering only nudges the arrow: it flies off up-right and comes back in. */
+  .local-browser-suggest-next-item:hover .local-browser-suggest-next-go,.local-browser-suggest-next-item:focus-visible .local-browser-suggest-next-go{animation:browserSuggestGo .6s cubic-bezier(.4,0,.2,1);}
+  @keyframes browserSuggestGo{0%{transform:none;opacity:1}45%{transform:translate(6px,-6px);opacity:0}46%{transform:translate(-5px,5px);opacity:0}100%{transform:none;opacity:1}}
+  @media (prefers-reduced-motion:reduce){.local-browser-home-logo circle,.local-browser-home-title,.local-browser-suggest-next-item,.local-browser-suggest-next-item .local-browser-suggest-next-go{animation:none;opacity:1;transform:none;}}
   @media (max-width:640px){.local-browser-suggest-next-list{grid-template-columns:minmax(0,1fr);}}
   .local-browser-foot{height:32px;min-height:32px;display:flex;align-items:center;padding:0 14px;border-top:1px solid var(--sand-border-subtle);background:#f7f7f5;color:var(--sand-text-secondary);font-size:10px;}
   /* Browser frame: a gray tab strip whose active tab merges into

@@ -139,3 +139,14 @@ test('the new-tab button follows the last tab and stays in reach when tabs overf
   assert.match(js, /strip\.clientWidth \|\| 0\) - \(add\.offsetWidth/, 'crowding leaves room for +');
   assert.match(css, /\.native-browser-tabs-row \.native-browser-new-tab\{[^}]*position:sticky;right:0;/);
 });
+
+test('suggestion cards always show their bot-colored frame; hover only animates the arrow', async () => {
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const card = css.match(/\.local-browser-suggest-next-item\{[^}]*\}/)[0];
+  assert.match(card, /border:1px solid var\(--bot\)/);
+  assert.match(card, /background:color-mix\(in srgb,var\(--bot\) 6%,#fff\)/);
+  assert.doesNotMatch(css, /\.local-browser-suggest-next-item:hover\{/, 'the card itself does not change on hover');
+  const arrow = css.match(/\.local-browser-suggest-next-go\{[^}]*\}/)[0];
+  assert.doesNotMatch(arrow, /opacity:0/, 'the arrow is always visible');
+  assert.match(css, /\.local-browser-suggest-next-item:hover \.local-browser-suggest-next-go[^{]*\{animation:browserSuggestGo/);
+});
