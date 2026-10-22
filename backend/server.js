@@ -39,6 +39,7 @@ const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config')
 const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const browserSuggestions = require('./browser-suggestions');
+const nextStep = require('./next-step');
 const { safeBrowserContext } = require('./browser-context');
 // Only terminal-free search releases receive the hosted-search credential.
 // Full local agents can execute commands and must not share that secret scope.
@@ -5265,12 +5266,9 @@ app.get('/api/bots/examples', requireAuth, async (req, res) => {
   }
 });
 
-// "Mia suggests" on the browser's blank tab: three next things to do, built
-// from the latest replies the user's bots sent. Cached per set of replies, so
-// a new blank tab only runs inference after a bot says something new. Like the
-// other suggestion routes, failures just mean nothing is shown.
-const browserSuggestionsCache = new Map(); // `${owner}:${workspace}:${eventIds}` -> [{text, botId, botName, at}]
-app.get('/api/browser/suggestions', requireAuth, async (req, res) => {
+// "Mia suggests" on the browser's blank tab: the next step each bot proposed
+// at the end of its latest reply. No model runs here, so it costs nothing.
+app.get('/api/browser/suggestions', requireAuth, (req, res) => {
   const owner = String(req.userEmail || '').toLowerCase();
   const workspaceId = workspaceIdFromRequest(req);
   try {
@@ -5288,39 +5286,7 @@ app.get('/api/browser/suggestions', requireAuth, async (req, res) => {
         includeDeleted: false,
       }).events,
     });
-    if (!replies.length) return res.status(200).json({ suggestions: [] });
-    const cacheKey = browserSuggestions.suggestionsCacheKey(owner, workspaceId, replies);
-    const cached = browserSuggestionsCache.get(cacheKey);
-    if (cached) return res.status(200).json({ suggestions: cached });
-    // Only ever on Mia Router, whatever model the user picked for chat: this
-    // runs on every blank tab and must not spend the user's own subscription.
-    // Without Mia Router the blank tab simply shows no suggestions.
-    const routerModel = MANAGED_ROUTER_MODEL_ALLOWLIST ? Array.from(MANAGED_ROUTER_MODEL_ALLOWLIST)[0] : '';
-    // Provisioned this backend lifetime, or still connected from before a
-    // restart (the provisioned set is in memory only).
-    const routerVisible = () => {
-      const entry = visibleChatModelProvidersForUser(nativeChatModelProviders, owner)[MANAGED_ROUTER_HERMES_PROVIDER];
-      return Boolean(entry && entry.models.some((model) => String(model).toLowerCase() === routerModel));
-    };
-    if (!MANAGED_ROUTER_URL || !routerModel
-      || !(managedRouterProvisionedEmails.has(managedRouterAccountEmail(owner)) || routerVisible())) {
-      return res.status(200).json({ suggestions: [] });
-    }
-    const routerSelection = { provider: MANAGED_ROUTER_HERMES_PROVIDER, model: routerModel };
-    const reply = await scheduleInference(
-      browserSuggestions.suggestionsPrompt(replies),
-      'suggestion',
-      await inferenceOptionsForUser(req.userEmail, routerSelection)
-    );
-    const suggestions = browserSuggestions.parseSuggestions(reply, replies.length).map((item) => {
-      const source = item.source === null ? null : replies[item.source];
-      return { text: item.text, botId: source ? source.botId : null, botName: source ? source.botName : null, at: source ? source.at : null };
-    });
-    if (suggestions.length) {
-      if (browserSuggestionsCache.size > 200) browserSuggestionsCache.clear();
-      browserSuggestionsCache.set(cacheKey, suggestions);
-    }
-    res.status(200).json({ suggestions });
+    res.status(200).json({ suggestions: browserSuggestions.browserSuggestions(replies) });
   } catch (err) {
     res.status(200).json({ suggestions: [] });
   }
@@ -7274,9 +7240,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   let hermesProgressSequence = Promise.resolve();
   let hermesProgressIndex = 0;
   const postHermesProgressText = (hermesEventType, rawText) => {
-    // Progress notes can echo the reply, and the reply's automation block is
-    // read by Mia, never shown.
-    const text = stripAgentActionBlocks(rawText);
+    // Progress notes can echo the reply. Its automation block is read by Mia,
+    // and its closing "Next:" line becomes the hint, so neither is shown.
+    const text = nextStep.splitNextStep(stripAgentActionBlocks(rawText)).text;
     if (!text) return;
     const sequence = ++hermesProgressIndex;
     hermesProgressSequence = hermesProgressSequence.then(() => createNativeDispatchReplyEvent(dispatch, trigger, {
@@ -7410,6 +7376,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     }),
     // Only Mia's own chat shows the bot setup card.
     ownsPrivateAgentConversation && !slashCommand ? miaBotSetupActions.botSetupInstruction() : '',
+    slashCommand ? '' : nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
     ownsMiaChat = ownsPrivateAgentConversation && !slashCommand;
@@ -7512,6 +7479,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       nativePromptLine(trigger) || message,
       nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
       botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      slashCommand ? '' : nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     const botRunArgs = {
       storedSessionId: conversation.metadata && conversation.metadata.hermesGatewayProfile === sessionKey
@@ -7579,6 +7547,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       nativePromptLine(trigger) || message,
       nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
       botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     inferenceResult = await scheduleInference(replyPrompt, 'reply', {
       ...inferenceOptions,
@@ -7632,10 +7601,15 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     : ownsMiaChat
       ? nativeMiaBotSetupRequest(botAutomationActions.stripAutomationBlocks(actionReply), senderLabel)
       : { text: stripAgentActionBlocks(actionReply), metadata: null };
-  const safeReply = sanitizeChatReply(automationAction.text || automationAction.fallbackText || '')
+  // The closing "Next:" line becomes the reply's suggested next step.
+  const replyParts = nextStep.splitNextStep(sanitizeChatReply(automationAction.text || automationAction.fallbackText || '')
     .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, '')
     .replace(new RegExp(`\\s*${escapedSignature}\\s*$`, 'i'), '')
+    .trim());
+  const safeReply = replyParts.text
+    .replace(new RegExp(`\\s*${escapedSignature}\\s*$`, 'i'), '')
     .trim();
+  const nextStepMetadata = replyParts.nextStep ? { nextStep: replyParts.nextStep } : {};
   if (!safeReply && validatedArtifacts.length === 0) throw new Error('native agent produced no user-facing reply');
   if (validatedArtifacts.length > 0) {
     let lastResult = null;
@@ -7671,6 +7645,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
           agentName: agent.name,
           artifact: true,
           artifactSource: 'interactive',
+          ...(index === validatedArtifacts.length - 1 ? nextStepMetadata : {}),
         },
       });
       for (const attachment of attachments) {
@@ -7697,6 +7672,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       dispatchId: dispatch.id,
       agentName: agent.name,
       ...(automationAction.metadata || {}),
+      ...nextStepMetadata,
       ...(slashCommand ? { slashCommand: slashCommand.name } : {}),
       ...(inferenceResult && inferenceResult.goal !== undefined ? { goal: inferenceResult.goal } : {}),
     },

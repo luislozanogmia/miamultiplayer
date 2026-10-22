@@ -135,7 +135,7 @@ test('progress notes never show a bot\'s automation block', async () => {
   const end = source.indexOf('\n  };', start);
   const poster = source.slice(start, end);
   assert.ok(start >= 0 && end > start);
-  assert.match(poster, /const text = stripAgentActionBlocks\(rawText\);/);
+  assert.match(poster, /const text = nextStep\.splitNextStep\(stripAgentActionBlocks\(rawText\)\)\.text;/);
   assert.match(poster, /content: \{ text \}/);
   const flushStart = source.indexOf('const flushPendingReasoningSummary = (replyText) => {');
   const flush = source.slice(flushStart, source.indexOf('\n  };', flushStart));

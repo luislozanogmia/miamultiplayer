@@ -10665,9 +10665,26 @@
   function agentSuggestionsEnabled(){
     return localStorage.getItem(LS_AGENT_SUGGESTIONS) !== 'off';
   }
+  // The next step Mia or the bot proposed at the end of its latest reply, while
+  // that reply is still the newest message in the chat.
+  function chatReplyNextStep(roomId){
+    if(!roomId) return '';
+    var messages = chatRoomState(roomId).messages;
+    for(var i = messages.length - 1; i >= 0; i--){
+      var message = messages[i];
+      if(!message || message.system || message.pending || message.nativeProgress || message.deleted) continue;
+      var event = message.nativeEvent;
+      if(!event || (event.senderType !== 'agent' && event.senderType !== 'bot')) return '';
+      var step = event.metadata && typeof event.metadata.nextStep === 'string' ? event.metadata.nextStep.trim() : '';
+      return step;
+    }
+    return '';
+  }
   function chatInlineSuggestionText(){
-    if(localBrowserState.open) return LOCAL_BROWSER_PROMPTS[localBrowserPromptIndex] || LOCAL_BROWSER_PROMPTS[0];
     var roomId = chatWs.activeRoomId;
+    var nextStep = chatReplyNextStep(roomId);
+    if(nextStep) return nextStep;
+    if(localBrowserState.open) return LOCAL_BROWSER_PROMPTS[localBrowserPromptIndex] || LOCAL_BROWSER_PROMPTS[0];
     if(miaOnboardingChat && miaOnboardingChat.phase === 'name' && miaOnboardingChat.conversationId === roomId){
       return miaOnboardingChat.suggestedName ? 'Confirm your name, or tell Mia what to call you' : 'Call me…';
     }
