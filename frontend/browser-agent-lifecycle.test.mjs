@@ -370,3 +370,26 @@ test('following a bot moves the browser to the tab it works in next', () => {
   ctx.syncFollow();
   assert.equal(ctx.followingBot(), null, 'it ends when the bot is done');
 });
+
+// Hovering a group's bot shows its name in a label under it. The label lives
+// outside the tab strip, which would clip it.
+test('hovering a group\'s bot shows its name under it', () => {
+  const handlers = {};
+  const tip = { hidden: true, textContent: '', style: {} };
+  const owner = { getBoundingClientRect: () => ({ left: 100, width: 28, bottom: 40 }), addEventListener: (type, fn) => { handlers[type] = fn; } };
+  const ctx = { nameTip: tip };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  function showNameOnHover(');
+  assert.ok(start > 0);
+  vm.runInContext(browser.slice(start, browser.indexOf('\n  }\n', start) + 4), ctx);
+  ctx.showNameOnHover(owner, 'Web Research Agent');
+  handlers.mouseenter();
+  assert.equal(tip.hidden, false);
+  assert.equal(tip.textContent, 'Web Research Agent');
+  assert.equal(tip.style.left, '114px', 'centered under the bot');
+  assert.equal(tip.style.top, '44px');
+  handlers.mouseleave();
+  assert.equal(tip.hidden, true);
+  handlers.mouseenter(); handlers.mousedown();
+  assert.equal(tip.hidden, true, 'a click hides it so it never covers the bot menu');
+});
