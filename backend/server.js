@@ -2833,7 +2833,7 @@ function registerResource(cfg) {
         } else {
           record = Object.assign({}, body, { id });
         }
-        if (cfg.beforeSave) cfg.beforeSave(record, req);
+        if (cfg.beforeSave) cfg.beforeSave(record, req, existing || []);
         return record;
       };
 
@@ -5457,6 +5457,23 @@ app.get('/api/bots/catalog/:id', requireAuth, (req, res) => {
 });
 
 // Registered after fixed multi-segment /api/bots routes so :id cannot shadow them.
+// A new bot keeps the color it is given here: the first four bots in a
+// workspace are blue, red, yellow and green, and every bot after that gets a
+// random color.
+const FIRST_BOT_COLORS = ['#3478d4', '#e5484d', '#f2c230', '#3fa34d'];
+function newBotColor(bots, random = Math.random) {
+  const taken = new Set(bots.map((bot) => normalizeAgentAvatarColor(bot.avatarColor)));
+  const next = FIRST_BOT_COLORS.find((color) => !taken.has(color));
+  if (bots.length < FIRST_BOT_COLORS.length && next) return next;
+  const hue = Math.floor(random() * 360), s = 0.72, l = 0.52;
+  const channel = (n) => {
+    const k = (n + hue / 30) % 12;
+    const value = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(value * 255).toString(16).padStart(2, '0');
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+}
+
 registerResource({
   path: 'bots',
   table: 'bots',
@@ -5491,12 +5508,13 @@ registerResource({
   accessCheck: (record, req) => botVisibleInWorkspace(record, req),
   writeAccessCheck: (record, req) => botMutableInWorkspace(record, req),
   protectedFields: SERVER_OWNED_AGENT_FIELDS,
-  beforeSave: (record, req) => {
+  beforeSave: (record, req, existing) => {
     // POST bodies can't smuggle these either — stamp/strip regardless of input.
     stripServerOwnedAgentFields(record);
     if (record.avatarColor !== undefined) record.avatarColor = normalizeAgentAvatarColor(record.avatarColor);
     record.owner = String(req.userEmail || '').toLowerCase();
     record.workspaceId = workspaceIdFromRequest(req);
+    if (!record.avatarColor) record.avatarColor = newBotColor(existing.filter((bot) => botVisibleInWorkspace(bot, req)));
     record.modelProvider = harnessCliProviderForUser(req.userEmail);
     cronSync.migrateBotAutomations(record);
   },
