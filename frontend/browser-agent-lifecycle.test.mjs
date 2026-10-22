@@ -249,3 +249,24 @@ test('the tab strip redraws when a group starts or stops waiting for its new bot
   const line = browser.slice(browser.indexOf('var signature = JSON.stringify('), browser.indexOf('\n', browser.indexOf('var signature = JSON.stringify(')));
   assert.match(line, /setupGroupPending\(groups\[setupGroupId\]\) \? setupGroupId : null/);
 });
+
+// A bot's group takes one slot in the strip: the tab you are looking at, else
+// the one the bot is working in, else the one it worked in last.
+test('a bot group shows one tab: yours, else the one its bot works in or worked in last', () => {
+  const ctx = { state: null };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  var botLastTab = {};');
+  vm.runInContext(browser.slice(start, browser.indexOf('  function botTabsButton(', start)), ctx);
+  const groups = { g1: { id: 'g1', botId: 'bot-a' }, g2: { id: 'g2', botId: null } };
+  const tabs = [{ id: 1, groupId: 'g1' }, { id: 2, groupId: 'g1' }, { id: 3, groupId: 'g1' }, { id: 4, groupId: 'g2' }, { id: 5, groupId: 'g2' }, { id: 6 }];
+  const fronts = (activeId, working) => { ctx.state = { activeId, tabs }; return JSON.parse(JSON.stringify(ctx.botGroupFronts(groups, working))); };
+  assert.deepEqual(fronts(6, {}), { g1: { id: 1, others: [2, 3] } }, 'idle and never worked: its first tab; Mia groups are untouched');
+  assert.deepEqual(fronts(6, { 3: { botId: 'bot-a' } }), { g1: { id: 3, others: [1, 2] } }, 'the tab the bot is working in');
+  assert.deepEqual(fronts(6, {}), { g1: { id: 3, others: [1, 2] } }, 'after it stops, the tab it worked in last');
+  assert.deepEqual(fronts(2, { 3: { botId: 'bot-a' } }), { g1: { id: 2, others: [1, 3] } }, 'the tab you are looking at wins');
+});
+
+test('a bot group counts as one tab when the strip decides what to fold', () => {
+  assert.match(browser, /if \(g\) counts\[g\.id\] = g\.botId \? 1 : \(counts\[g\.id\] \|\| 0\) \+ 1; else ungrouped \+= 1;/);
+  assert.match(browser, /if \(tabGroup && front\[tabGroup\.id\] && front\[tabGroup\.id\]\.id !== t\.id\) return;/);
+});
