@@ -317,8 +317,9 @@
     renderBotControl(tab);
     refreshBotHolds();
     syncGlowHolds(working);
+    var front = botGroupFronts(groups, working);
     var crowd = crowdedStrip(groups, working);
-    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
+    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, front, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
     // Redrawing mid-drag or mid-rename would drop what the user is doing;
     // catch up once it ends.
     if (signature !== lastTabs && draggingTabId === null && editingGroupId === null) {
@@ -332,6 +333,7 @@
         if (tabGroup && t.groupId !== previousGroupId) strip.append(groupHead(tabGroup, index, folded));
         previousGroupId = t.groupId || null;
         if (tabGroup && (tabGroup.collapsed || folded)) return;
+        if (tabGroup && front[tabGroup.id] && front[tabGroup.id].id !== t.id) return;
         var group = document.createElement('div');
         group.setAttribute('data-tab-id', t.id);
         group.className = 'native-browser-tab' + (t.id === state.activeId ? ' active' : '') + (tabGroup ? ' in-group' : '') + (working[t.id] ? ' bot-working' : '');
@@ -401,7 +403,9 @@
         close.type = 'button'; close.textContent = '\u00d7'; close.className = 'native-browser-tab-close';
         close.setAttribute('aria-label', 'Close tab ' + button.textContent);
         close.onclick = function () { command('close', { id: t.id }); };
-        group.append(button, close); strip.append(group);
+        group.append(button);
+        if (tabGroup && front[tabGroup.id] && front[tabGroup.id].others.length) group.append(botTabsButton(tabGroup, front[tabGroup.id], working));
+        group.append(close); strip.append(group);
       });
       strip.append(add);
       more.groupIds = crowd.hidden;
@@ -442,6 +446,45 @@
   var TAB_MIN_WIDTH = 96, GROUP_HEAD_WIDTH = 118;
   var groupUsedAt = {};
   var scrolledToWork = {};
+  // A bot's group shows one tab in the strip: the one you are looking at,
+  // else the one the bot is working in, else the one it worked in last. Its
+  // other tabs are a click away in the "+N" list, so a bot that opens ten
+  // pages for one task still takes one slot.
+  var botLastTab = {};
+  function botGroupFronts(groups, working) {
+    var members = {};
+    state.tabs.forEach(function (t) {
+      var g = groups[t.groupId];
+      if (g && g.botId) (members[g.id] = members[g.id] || []).push(t);
+    });
+    var front = {};
+    Object.keys(members).forEach(function (id) {
+      var list = members[id];
+      var busy = list.filter(function (t) { return working[t.id]; });
+      if (busy.length) botLastTab[id] = busy[busy.length - 1].id;
+      var pick = list.filter(function (t) { return t.id === state.activeId; })[0] || busy[busy.length - 1]
+        || list.filter(function (t) { return t.id === botLastTab[id]; })[0] || list[0];
+      front[id] = { id: pick.id, others: list.filter(function (t) { return t !== pick; }).map(function (t) { return t.id; }) };
+    });
+    Object.keys(botLastTab).forEach(function (id) { if (!members[id]) delete botLastTab[id]; });
+    return front;
+  }
+  function botTabsButton(g, front, working) {
+    var more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'native-browser-bot-tabs';
+    paintGroup(more, g);
+    more.textContent = '+' + front.others.length;
+    var busy = front.others.some(function (id) { return working[id]; });
+    if (busy) more.classList.add('working');
+    more.title = front.others.length + ' more tab' + (front.others.length === 1 ? '' : 's') + ' in this group';
+    more.setAttribute('aria-label', 'Show ' + more.title);
+    more.onclick = function (event) {
+      event.stopPropagation();
+      command('groupTabsMenu', { groupId: g.id, shownId: front.id, working: Object.keys(working).map(Number) });
+    };
+    return more;
+  }
   function crowdedStrip(groups, working) {
     var now = Date.now();
     var active = state.tabs.filter(function (t) { return t.id === state.activeId; })[0];
@@ -449,7 +492,10 @@
     if (active && active.groupId) { busy[active.groupId] = true; groupUsedAt[active.groupId] = now; }
     state.tabs.forEach(function (t) { if (working[t.id] && t.groupId) { busy[t.groupId] = true; groupUsedAt[t.groupId] = now; } });
     var counts = {}, ungrouped = 0;
-    state.tabs.forEach(function (t) { if (groups[t.groupId]) counts[t.groupId] = (counts[t.groupId] || 0) + 1; else ungrouped += 1; });
+    state.tabs.forEach(function (t) {
+      var g = groups[t.groupId];
+      if (g) counts[g.id] = g.botId ? 1 : (counts[g.id] || 0) + 1; else ungrouped += 1;
+    });
     var ids = Object.keys(counts);
     ids.forEach(function (id) { if (!groupUsedAt[id]) groupUsedAt[id] = 0; });
     var oldestFirst = ids.slice().sort(function (a, b) { return groupUsedAt[a] - groupUsedAt[b]; });

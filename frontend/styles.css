@@ -2893,6 +2893,10 @@
   .native-browser-tab button.native-browser-tab-close{width:20px;height:20px;padding:0;margin-right:8px;border-radius:50%;font-size:15px;line-height:20px;color:#474747;opacity:0;}
   .native-browser-tab.active button.native-browser-tab-close,.native-browser-tab:hover button.native-browser-tab-close{opacity:1;}
   .native-browser-tab button.native-browser-tab-close:hover{background:#0000001a;border-radius:50%;}
+  /* "+N" on a bot's one tab opens the list of its other tabs. */
+  .native-browser-tab button.native-browser-bot-tabs{flex:none;height:18px;margin-right:4px;padding:0 6px;border:1px solid var(--tab-group-color,#474747);border-radius:9px;font-size:11px;line-height:16px;color:var(--tab-group-color,#474747);background:transparent;cursor:pointer;}
+  .native-browser-tab button.native-browser-bot-tabs:hover{background:color-mix(in srgb,var(--tab-group-color,#474747) 12%,transparent);}
+  .native-browser-tab button.native-browser-bot-tabs.working::after{content:"";display:inline-block;width:5px;height:5px;margin-left:4px;border-radius:50%;background:currentColor;vertical-align:1px;}
   /* Many tabs shrink to their icon instead of scrolling the
      strip; narrow inactive tabs drop the close button to make room. */
   @container (max-width:72px){
