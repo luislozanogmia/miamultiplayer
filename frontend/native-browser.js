@@ -569,7 +569,9 @@
     var width = Math.max(180, Math.round(anchorRect.width || 220));
     tabsList.style.width = width + 'px';
     tabsList.style.left = Math.round(Math.max(screenRect.left + 12, Math.min(anchorRect.left, screenRect.right - width - 12))) + 'px';
-    tabsList.style.top = Math.round(anchorRect.bottom) + 'px';
+    // Up 2px, onto the group's line, so the list's feet curve down from the
+    // same line the tab's feet curve up from.
+    tabsList.style.top = Math.round(anchorRect.bottom - 2) + 'px';
     tabsRows.style.maxHeight = Math.max(120, Math.round(screenRect.bottom - anchorRect.bottom - 12)) + 'px';
     paintGroup(tabsList, g);
     var key = JSON.stringify([g.id, info.others.map(function (id) { var t = byId[id]; return [id, t.title, t.favicon, !!working[id]]; })]);
