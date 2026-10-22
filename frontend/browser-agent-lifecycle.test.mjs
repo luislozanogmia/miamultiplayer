@@ -305,15 +305,16 @@ test('the +N list draws the bot\'s other tabs as tabs and acts on them', async (
   ctx.setTabsList('g1');
   await new Promise(resolve => setImmediate(resolve));
   const list = ctx.tabsList;
+  const rowsBox = ctx.tabsRows;
   assert.equal(list.hidden, false);
-  const rows = list.children.filter(c => c.className.startsWith('native-browser-bot-tabs-row'));
+  const rows = rowsBox.children.filter(c => c.className.startsWith('native-browser-bot-tabs-row'));
   assert.equal(rows.length, 2);
   const labels = rows.map(r => r.all().find(n => n.className === 'native-browser-tab-label').textContent);
   assert.deepEqual(labels, ['Flights', 'Hotels']);
   assert.ok(rows[0].all().some(n => n.className === 'native-browser-tab-icon'), 'the page icon shows like on a tab');
   assert.match(rows[1].className, /bot-working/);
   assert.ok(rows[1].all().some(n => /native-browser-tab-working/.test(n.className)), 'the working dot shows');
-  assert.equal(list.children[0].className, 'native-browser-bot-tabs-new', 'new tab sits on top');
+  assert.equal(rowsBox.children[0].className, 'native-browser-bot-tabs-new', 'new tab sits on top');
   rows[1].children[1].onclick({ stopPropagation() {} });
   assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['close', { id: 3 }]);
   rows[0].children[0].onclick();
@@ -321,7 +322,7 @@ test('the +N list draws the bot\'s other tabs as tabs and acts on them', async (
   assert.equal(list.hidden, true, 'picking a tab closes the list');
   ctx.setTabsList('g1');
   await new Promise(resolve => setImmediate(resolve));
-  list.children[0].onclick();
+  rowsBox.children[0].onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['groupNewTab', { groupId: 'g1' }]);
   ctx.setTabsList('g1');
   await new Promise(resolve => setImmediate(resolve));
