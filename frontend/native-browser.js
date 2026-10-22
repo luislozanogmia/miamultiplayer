@@ -521,12 +521,17 @@
   }
   // The "+N" list drops down under the bot's tab and draws the bot's other
   // tabs the way the strip draws tabs (page icon, title, working dot, close),
-  // stacked under "New tab for this bot". Like the Downloads menu it sits
-  // over a still of the page while it is open.
+  // stacked under "New tab for this bot". It is the tab's shape mirrored
+  // below the tab line, the same width with its feet curving down, so the
+  // two read as one folder opened. Like the Downloads menu it sits over a
+  // still of the page while it is open.
   var tabsList = document.createElement('div');
   tabsList.className = 'native-browser-bot-tabs-list';
-  tabsList.setAttribute('role', 'menu');
   tabsList.hidden = true;
+  var tabsRows = document.createElement('div');
+  tabsRows.className = 'native-browser-bot-tabs-rows';
+  tabsRows.setAttribute('role', 'menu');
+  tabsList.append(tabsRows);
   overlay.append(tabsList);
   var lastTabsList = '';
   function setTabsList(groupId) {
@@ -561,22 +566,24 @@
     var anchor = strip.querySelector('[data-tab-id="' + info.id + '"]');
     var screenRect = screen.getBoundingClientRect();
     var anchorRect = anchor ? anchor.getBoundingClientRect() : { left: screenRect.left + 8, bottom: screenRect.top };
-    tabsList.style.left = Math.round(Math.max(screenRect.left + 8, Math.min(anchorRect.left, screenRect.right - 268))) + 'px';
+    var width = Math.max(180, Math.round(anchorRect.width || 220));
+    tabsList.style.width = width + 'px';
+    tabsList.style.left = Math.round(Math.max(screenRect.left + 12, Math.min(anchorRect.left, screenRect.right - width - 12))) + 'px';
     tabsList.style.top = Math.round(anchorRect.bottom) + 'px';
-    tabsList.style.maxHeight = Math.max(120, Math.round(screenRect.bottom - anchorRect.bottom - 12)) + 'px';
+    tabsRows.style.maxHeight = Math.max(120, Math.round(screenRect.bottom - anchorRect.bottom - 12)) + 'px';
     paintGroup(tabsList, g);
     var key = JSON.stringify([g.id, info.others.map(function (id) { var t = byId[id]; return [id, t.title, t.favicon, !!working[id]]; })]);
     tabsList.hidden = false;
     if (key === lastTabsList) return;
     lastTabsList = key;
-    tabsList.replaceChildren();
+    tabsRows.replaceChildren();
     // New tab sits on top, so it never ends up below a long list.
     var add = document.createElement('button');
     add.type = 'button'; add.setAttribute('role', 'menuitem');
     add.className = 'native-browser-bot-tabs-new';
     add.textContent = '+  New tab for this bot';
     add.onclick = function () { var id = g.id; setTabsList(null); command('groupNewTab', { groupId: id }); };
-    tabsList.append(add);
+    tabsRows.append(add);
     info.others.forEach(function (id) {
       var t = byId[id];
       var row = document.createElement('div');
@@ -605,7 +612,7 @@
       close.setAttribute('aria-label', 'Close tab ' + (t.title || 'New tab'));
       close.onclick = function (event) { event.stopPropagation(); command('close', { id: id }); };
       row.append(button, close);
-      tabsList.append(row);
+      tabsRows.append(row);
     });
   }
   // A click anywhere else, or Escape, closes the list.
