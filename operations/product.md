@@ -182,6 +182,38 @@ candidate acceptance gate.
 
 ## Roadmap — P3 (future, not scheduled)
 
+- **Mia runs the whole app: copilot and driver.** Mia can do anything a human
+  can do in Mia, except specific approvals we decide she cannot handle. That
+  means she manages the app "in the backend": bots, tab groups and tabs,
+  automations, and settings. Two modes:
+  - *Mia as copilot* — today's right panel. The person drives; Mia helps.
+  - *Mia as driver* — an immersive mode. The person talks or writes to Mia,
+    and Mia operates the whole app: she creates and directs bots, runs and
+    changes automations, and works across every tab and group at once.
+
+  Building blocks, agreed 2026-10-22:
+  - *Multi-bot automations.* A browser work plan that went well becomes a
+    scheduled automation through a "Make this an automation" suggestion after
+    the run (or by asking Mia in chat). Example: every weekday at 8am the
+    Research bot reads the news, the Finance bot checks the sheet, and Mia
+    writes one summary. Mia orchestrates these for now; "horizontal" bots that
+    own an end-to-end process come later.
+  - *Mia handles "needs you" first.* When a bot gets stuck, Mia fixes what she
+    can (stale page, retry, a detail she already knows). Only real decisions
+    and approvals reach the person, with her explanation attached.
+  - *Mia is the companion when no group is selected.* A selected group's bot
+    manages that group; with no group selected, Mia manages all tabs and all
+    bots and hands multi-step tasks to bots. If the same kind of one-off
+    request comes up three times, she suggests a bot and automation for it.
+    This likely needs a stronger model for Mia (e.g. DeepSeek Pro on the Mia
+    Router or equivalent).
+  - *Mia sees and manages every bot's automations from chat* ("what's running,
+    what failed this week, pause Finance's job"). Every change still goes
+    through the person.
+  - *Mia is the second brain.* When one bot works out a reliable way to do
+    something, Mia keeps it and hands it to whichever bot needs it next. Bots
+    still never talk to each other directly.
+
 - **Deprecate and remove Agent Bench.** Agent Bench is a legacy MiaOS surface,
   not part of Mia Multiplayer's product direction. Remove its route, modal,
   department controls and `guessDepartmentsFor` heuristics after confirming
