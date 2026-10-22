@@ -1208,7 +1208,8 @@ function createConversationRepository(db) {
     const conversationId = requiredString(id, 'id');
     const existing = ensureConversation(normalizedCompanyId, conversationId);
     const now = timestamp(restartedAt, 'restartedAt');
-    const metadata = existing.metadata && typeof existing.metadata === 'object' ? { ...existing.metadata } : {};
+    // ensureConversation returns the raw row, so metadata is still JSON text.
+    const metadata = { ...fromJson(existing.metadata, 'conversation.metadata') };
     delete metadata.hermesGatewaySessionId;
     delete metadata.hermesGatewayProfile;
     metadata.historyResetAt = now;
