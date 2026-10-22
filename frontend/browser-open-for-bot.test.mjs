@@ -26,7 +26,7 @@ function fakeBrowser(initial) {
       calls.push(command);
       if (command.action === 'new') {
         const id = nextTab++;
-        state.tabs.push({ id, groupId: null });
+        state.tabs.push({ id, groupId: null, url: '' });
         state.activeId = id;
       }
       if (command.action === 'select') state.activeId = command.id;
@@ -74,8 +74,17 @@ test('opening the browser from a bot chat selects that bot\'s tab', async () => 
   assert.equal(followed.at(-1).activeId, 2, 'the chat follows the bot tab, not Mia\'s');
 });
 
+test('a blank tab nobody owns becomes the bot\'s tab instead of opening another', async () => {
+  const browser = fakeBrowser({ activeId: 1, tabs: [{ id: 1, groupId: null, url: '' }], groups: [] });
+  await openFor(browser);
+  assert.deepEqual(browser.calls.map((c) => c.action), ['state', 'select', 'groupCreate', 'groupAssignBot']);
+  assert.equal(browser.state.tabs.length, 1, 'no extra tab');
+  const group = browser.state.groups.find((g) => g.id === browser.state.tabs[0].groupId);
+  assert.equal(group.botId, 'bot-1');
+});
+
 test('a bot with no tabs gets a new tab in its own group', async () => {
-  const browser = fakeBrowser({ activeId: 1, tabs: [{ id: 1, groupId: null }], groups: [] });
+  const browser = fakeBrowser({ activeId: 1, tabs: [{ id: 1, groupId: null, url: 'https://en.wikipedia.org/' }], groups: [] });
   const { followed } = await openFor(browser);
   assert.deepEqual(browser.calls.map((c) => c.action), ['state', 'new', 'groupCreate', 'groupAssignBot']);
   const tab = browser.state.tabs.find((t) => t.id === browser.state.activeId);
@@ -90,4 +99,19 @@ test('the browser button passes the active bot, other entry points do not', asyn
   const source = await readFile(appUrl, 'utf8');
   assert.match(source, /action === 'web-browser'\) openWebBrowserTool\(\{forActiveBot:true\}\)/);
   assert.match(source, /var botId = options && options\.forActiveBot \? activeChatBotId\(\) : null;/);
+});
+
+test('closing the last tab leaves browser mode once, not on the first state', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  let closes = 0;
+  const context = {
+    localBrowserState: { open: true },
+    closeLocalBrowser() { closes += 1; },
+  };
+  vm.createContext(context);
+  vm.runInContext(slice(source, '  var seenLastTabCloses = null;', '\n  if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.command)'), context);
+  assert.equal(context.leaveBrowserAfterLastTab({ lastTabCloses: 3 }), false, 'the first state only sets the baseline');
+  assert.equal(context.leaveBrowserAfterLastTab({ lastTabCloses: 3 }), false);
+  assert.equal(context.leaveBrowserAfterLastTab({ lastTabCloses: 4 }), true);
+  assert.equal(closes, 1);
 });

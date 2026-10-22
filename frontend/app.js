@@ -5815,8 +5815,14 @@
     browser.command({ action: 'state' }).then(function(state){
       var tab = botBrowserTab(state, botId);
       if(tab) return browser.command({ action: 'select', id: tab.id });
-      return browser.command({ action: 'new' }).then(function(created){
-        var id = created && created.activeId;
+      // An empty tab nobody owns (the browser always keeps one) becomes the
+      // bot's tab instead of sitting beside a second one.
+      var blank = (state && state.tabs || []).filter(function(t){ return !t.groupId && !t.url; })[0];
+      var ready = blank
+        ? browser.command({ action: 'select', id: blank.id })
+        : browser.command({ action: 'new' });
+      return ready.then(function(created){
+        var id = blank ? blank.id : created && created.activeId;
         if(!id) return created;
         return browser.command({ action: 'groupCreate', id: id, name: bot && bot.name || '' }).then(function(grouped){
           var newTab = (grouped && grouped.tabs || []).filter(function(t){ return t.id === id; })[0];
@@ -6080,8 +6086,26 @@
       if(browserFollowKey === key && activeConversationOwner() === owner) localBrowserState.roomId = chatWs.activeRoomId;
     });
   }
+  // Closing the last tab returns to the chat, the way closing the browser does.
+  var seenLastTabCloses = null;
+  function leaveBrowserAfterLastTab(browserState){
+    var count = browserState && Number(browserState.lastTabCloses);
+    if(!Number.isFinite(count)) return false;
+    var closed = seenLastTabCloses !== null && count > seenLastTabCloses;
+    seenLastTabCloses = count;
+    if(closed && localBrowserState.open) closeLocalBrowser();
+    return closed;
+  }
+  if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.command){
+    Promise.resolve(window.miaDesktop.browser.command({ action: 'state' })).then(function(initial){
+      if(seenLastTabCloses === null && initial && Number.isFinite(Number(initial.lastTabCloses))) seenLastTabCloses = Number(initial.lastTabCloses);
+    }).catch(function(){});
+  }
   if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onState){
-    window.miaDesktop.browser.onState(followBrowserTab);
+    window.miaDesktop.browser.onState(function(browserState){
+      if(leaveBrowserAfterLastTab(browserState)) return;
+      followBrowserTab(browserState);
+    });
   }
   window.addEventListener('mia-bots-changed', function(){ followBrowserTab(null); });
   // The tab strip (native-browser.js) draws each group's owner with these.
