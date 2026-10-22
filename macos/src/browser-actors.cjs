@@ -65,7 +65,7 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
     if (!Object.hasOwn(params, "actor_id")) return execute();
     const binding = bindings.get(params.actor_id);
     const tab = validate(params, binding);
-    if (["tab_switch", "tab_open", "file_open", "status", "tab_list"].includes(method)) throw fail("FORBIDDEN_FOR_ACTOR", "Worker operations stay in their assigned tab.");
+    if (["tab_switch", "tab_open", "file_open", "status", "tab_list", "work_propose"].includes(method) || method.startsWith("group_")) throw fail("FORBIDDEN_FOR_ACTOR", "Worker operations stay in their assigned tab.");
     if (method === "key") throw fail("UNTARGETED_KEY_FORBIDDEN", "Workers use targeted fill; native keys can steal human focus.");
     const executeChecked = async () => {
       const current = validate(params, binding);

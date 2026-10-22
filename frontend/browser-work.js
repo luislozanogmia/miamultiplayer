@@ -7,7 +7,7 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
   var browserState = { tabs: [] }, works = [], host, bridge, transport, loaded = false;
-  var requestGeneration = 0, timer, pending = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', lastGroupRender = '', mutationError = '';
+  var requestGeneration = 0, timer, pending = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', lastGroupRender = '', mutationError = '', refreshFailed = false;
   var labels = { idle: 'Idle', queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', needs_approval: 'Needs approval', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
   var approvalDenialLabels = { STALE_SNAPSHOT: 'Page target is stale.', ELEMENT_NOT_FOUND: 'Page element is unavailable.', TAB_NAVIGATED: 'Page changed.', ACTOR_REVOKED: 'Bot access was revoked.', TAB_NOT_OWNED: 'Tab ownership changed.', TAB_CLOSED: 'Tab closed.', TAB_CRASHED: 'Tab became unavailable.', APPROVAL_REQUIRED: 'A current approval is required.', APPROVAL_TARGET_CHANGED: 'Approval target changed.', CANCELLED: 'Request cancelled.', WORKER_SESSION_REVOKED: 'Bot session was revoked.' };
   function visibleTabs(state) {
@@ -137,14 +137,69 @@
     document.getElementById('browserMoveTab').disabled = !browserState.activeId;
     var up = document.getElementById('browserGroupEarlier'); up.disabled = !selected || browserState.groups[0].id === selected.id;
   }
+  var lastProposalRender = '', appliedProposalId = null;
+  // Mia names bots the way the person does. Match the stable id first, then a
+  // unique name; an ambiguous or unknown name is never guessed.
+  function proposalBot(bots, wanted) {
+    var list = Array.isArray(bots) ? bots : [], key = String(wanted || '').trim().toLowerCase();
+    if (!key) return null;
+    var byId = list.filter(function (bot) { return String(bot.id || '').toLowerCase() === key; });
+    if (byId.length === 1) return byId[0];
+    var byName = list.filter(function (bot) { return String(bot.name || '').trim().toLowerCase() === key; });
+    return byName.length === 1 ? byName[0] : null;
+  }
+  function clearProposal(id) { return bridge.command({ action: 'work-proposal-clear', id: id }).then(function (next) { if (next && next.tabs) updateBrowserState(next); }).catch(function () {}); }
+  // Mia's suggestion is shown for review only. Applying it fills this form;
+  // the person still chooses models and presses the start button themselves.
+  function renderProposal() {
+    var box = document.getElementById('browserWorkProposal'); if (!host || !box) return;
+    var proposal = browserState.workProposal || null;
+    var signature = JSON.stringify([proposal, browserState.selectedGroupId, (browserState.tabs || []).map(function (t) { return [t.id, t.title]; }), pending.has('proposal')]);
+    if (signature === lastProposalRender) return; lastProposalRender = signature;
+    box.replaceChildren(); box.hidden = !proposal; if (!proposal) return;
+    var group = (browserState.groups || []).find(function (g) { return g.id === proposal.groupId; });
+    box.append(node('strong', '', 'Mia suggests'), node('p', '', proposal.goal));
+    box.append(node('small', '', 'Group · ' + (group ? group.name : 'no longer available')));
+    proposal.assignments.forEach(function (item) {
+      var tab = (browserState.tabs || []).find(function (t) { return t.id === item.tabId; });
+      box.append(node('p', 'browser-work-proposal-row', item.bot + ' → Tab ' + item.tabId + ' · ' + (tab ? tab.title || 'New tab' : 'closed')));
+    });
+    var review = button('Review suggestion', function () { applyProposal(proposal); }, !group || pending.has('proposal'));
+    var dismiss = button('Dismiss', function () { appliedProposalId = null; error(''); clearProposal(proposal.id); });
+    box.append(review, dismiss);
+    if (host.open === false) host.open = true;
+  }
+  async function applyProposal(proposal) {
+    if (pending.has('proposal')) return; pending.add('proposal'); renderProposal(); error('');
+    try {
+      if (browserState.selectedGroupId !== proposal.groupId) await groupCommand('group-select', { groupId: proposal.groupId });
+      if (browserState.selectedGroupId !== proposal.groupId) throw new Error('Mia’s suggested group is no longer available.');
+      await chooseBots();
+      // chooseBots reports its own failure (no connected model, bots unavailable).
+      if (!document.querySelector('.browser-work-candidate')) return;
+      var bots = await getBots(), missing = [];
+      proposal.assignments.forEach(function (item) {
+        var row = Array.from(document.querySelectorAll('.browser-work-candidate')).find(function (r) { return Number(r.getAttribute('data-tab-id')) === item.tabId; });
+        var bot = proposalBot(bots, item.bot);
+        if (!row || !bot) { missing.push(row ? item.bot : 'Tab ' + item.tabId); return; }
+        var select = row.querySelector('select'); select.value = bot.id;
+        select.dispatchEvent(new Event('change'));
+      });
+      document.getElementById('browserWorkGoal').value = proposal.goal;
+      appliedProposalId = proposal.id;
+      if (missing.length) error('Mia suggested ' + missing.join(', ') + ', which is not available. Choose a bot for that tab or dismiss the suggestion.');
+    } catch (e) { error(e.message || 'Could not apply Mia’s suggestion.'); }
+    finally { pending.delete('proposal'); renderProposal(); }
+  }
   async function refresh() {
     if (!transport || !host || document.getElementById('localBrowserOverlay').hidden) return;
     var generation = ++requestGeneration;
     try {
       var records = await transport.list(browserState.selectedGroupId);
       if (generation !== requestGeneration) return;
-      works = Array.isArray(records) ? records : []; loaded = true; error(mutationError); renderWorks();
-    } catch (e) { if (generation === requestGeneration) { error(e.message || 'Browser work unavailable.'); } }
+      // A poll only replaces an error it owns; form and suggestion messages stay until the person acts.
+      works = Array.isArray(records) ? records : []; loaded = true; if (mutationError || refreshFailed) error(mutationError); refreshFailed = false; renderWorks();
+    } catch (e) { if (generation === requestGeneration) { refreshFailed = true; error(e.message || 'Browser work unavailable.'); } }
   }
   async function mutate(key, callback) {
     if (pending.has(key)) return; pending.add(key); renderWorks(); mutationError = ''; error('');
@@ -264,8 +319,8 @@
     if (!state || !Array.isArray(state.tabs)) return;
     var changedGroup = browserState.selectedGroupId !== state.selectedGroupId;
     browserState = state; if (!host) return;
-    if (changedGroup) { requestGeneration++; works = []; loaded = false; mutationError = ''; document.getElementById('browserWorkCandidates').replaceChildren(); refresh(); }
-    renderGroups(); renderWorks();
+    if (changedGroup) { requestGeneration++; works = []; loaded = false; mutationError = ''; error(''); document.getElementById('browserWorkCandidates').replaceChildren(); refresh(); }
+    renderGroups(); renderWorks(); renderProposal();
   }
   async function chooseBots(selectedReusable) {
     var box = document.getElementById('browserWorkCandidates'); box.replaceChildren(); error('');
@@ -324,7 +379,7 @@
     if (!selected || candidates.some(function (c) { return !selected.tabIds.includes(c.tabId); })) { error('Tabs changed. Choose bots again.'); return; }
     var goal = document.getElementById('browserWorkGoal').value.trim(); if (!goal) return;
     pending.add('start'); var start = document.getElementById('browserWorkStart'); start.disabled = true; mutationError = ''; error('');
-    try { await transport.plan({ groupId: selected.id, goal: goal, personalSelection: { provider: chosenPersonal.provider, model: chosenPersonal.model }, context: { groupName: selected.name, tabs: visibleTabs(browserState).map(function (t) { return { id: t.id, title: t.title, origin: pageOrigin(t.url) }; }) }, candidates: candidates }); await refresh(); }
+    try { await transport.plan({ groupId: selected.id, goal: goal, personalSelection: { provider: chosenPersonal.provider, model: chosenPersonal.model }, context: { groupName: selected.name, tabs: visibleTabs(browserState).map(function (t) { return { id: t.id, title: t.title, origin: pageOrigin(t.url) }; }) }, candidates: candidates }); if (appliedProposalId) { var handled = appliedProposalId; appliedProposalId = null; clearProposal(handled); } await refresh(); }
     catch (e) { error(e.message || 'Mia could not start browser work.'); }
     finally { pending.delete('start'); start.disabled = false; }
   }
@@ -348,5 +403,5 @@
     bridge.command({ action: 'state' }).then(updateBrowserState).catch(function () { error('Browser unavailable.'); });
     if (timer) clearInterval(timer); timer = setInterval(refresh, 2000); refresh();
   }
-  return { selectedConnectedModel: selectedConnectedModel, taskRecoveryState: taskRecoveryState, preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
+  return { proposalBot: proposalBot, selectedConnectedModel: selectedConnectedModel, taskRecoveryState: taskRecoveryState, preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
 });

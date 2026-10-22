@@ -17,6 +17,12 @@ test("actor binding rejects missing/mismatched tabs and expected URL", async () 
     await assert.rejects(runtime.run("read", p, () => assert.fail()), { code });
   }
 });
+test("worker bots cannot arrange groups or suggest assignments", async () => {
+  const { runtime } = fixture();
+  for (const method of ["group_list", "group_create", "group_rename", "group_move_tab", "group_remove", "work_propose"]) {
+    await assert.rejects(runtime.run(method, params(), () => assert.fail(`${method} ran`)), { code: "FORBIDDEN_FOR_ACTOR" });
+  }
+});
 test("tabs progress concurrently but same-tab mutation waits for previous settlement", async () => {
   const { runtime } = fixture();
   let release; const blocked = new Promise(resolve => { release = resolve; }); const order = [];
