@@ -101,6 +101,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const tabs = new Map();
   const shellContents = window.webContents;
   let groups = null;
+  let workProposal = null;
   const actorCapability = Symbol("trusted-browser-actor");
   const actorRuntime = createActorRuntime({
     getTab: id => tabs.get(id),
@@ -644,7 +645,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   const active = () => tabs.get(activeId);
-  const state = () => ({ ...(groups ? groups.reconcile([...tabs.keys()], activeId) : {}), actors: actorRuntime.list(), ownership: actorRuntime.list(), activeId, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ ...(groups ? groups.reconcile([...tabs.keys()], activeId) : {}), actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     active: tab.id === activeId,
     loading: tab.view.webContents.isLoading(), timing: tab.timing,
@@ -1281,6 +1282,70 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     })()`;
     void queuePresence(tab, generation, script);
   }
+  // Mia's personal agent arranges groups and suggests bot assignments through
+  // the bridge it already browses with. A suggestion only prefills the
+  // person's browser-work form: starting work and every approval stay theirs.
+  function protocolGroupList() {
+    const snapshot = groups.reconcile([...tabs.keys()], activeId);
+    const owners = actorRuntime.list();
+    return {
+      selected_group_id: snapshot.selectedGroupId,
+      groups: snapshot.groups.map(group => ({
+        group_id: group.id, name: group.name, selected: group.id === snapshot.selectedGroupId,
+        tabs: group.tabIds.map(id => tabs.get(id)).filter(Boolean).map(tab => {
+          const owner = owners.find(item => item.tabId === tab.id);
+          return { ...protocolTabResult(tab), active: tab.id === activeId,
+            ...(owner ? { bot: { name: owner.botName || owner.botId, status: owner.status || "assigned" } } : {}) };
+        }),
+      })),
+    };
+  }
+  function protocolGroupCommand(method, params) {
+    if (method === "group_list") return protocolGroupList();
+    const invalid = message => protocolError("INVALID_PARAMS", message);
+    const groupOf = id => {
+      const group = groups.snapshot().groups.find(item => item.id === id);
+      if (!group) throw protocolError("GROUP_NOT_FOUND", "Browser group was not found. Call group_list for current groups.");
+      return group;
+    };
+    if (method === "work_propose") {
+      const group = groupOf(params.group_id);
+      const goal = typeof params.goal === "string" ? params.goal.trim() : "";
+      if (!goal || goal.length > 8000) throw invalid("goal must contain 1–8000 characters.");
+      if (!Array.isArray(params.assignments) || !params.assignments.length || params.assignments.length > 16) throw invalid("assignments must list 1–16 tabs.");
+      const assignments = params.assignments.map(item => {
+        const tabId = Number(item && item.tab_id);
+        const bot = typeof (item && item.bot) === "string" ? item.bot.trim() : "";
+        if (!group.tabIds.includes(tabId)) throw invalid(`Tab ${item && item.tab_id} is not in group "${group.name}".`);
+        if (!bot || bot.length > 120) throw invalid("Each assignment names one bot.");
+        return { tabId, bot };
+      });
+      if (new Set(assignments.map(item => item.tabId)).size !== assignments.length) throw invalid("Assign each tab once.");
+      if (new Set(assignments.map(item => item.bot.toLowerCase())).size !== assignments.length) throw invalid("Each bot can own one tab.");
+      workProposal = { id: randomUUID(), groupId: group.id, goal, assignments, createdAt: Date.now() };
+      publish();
+      return { proposed: true, proposal_id: workProposal.id, group_id: group.id,
+        next: "Shown to the person in the Browser work panel. Work starts only after they confirm it there." };
+    }
+    try {
+      let created;
+      if (method === "group_create") created = groups.create(params.name);
+      else if (method === "group_rename") { groupOf(params.group_id); groups.rename(params.group_id, params.name); }
+      else if (method === "group_move_tab") {
+        const tabId = Number(params.tab_id);
+        if (!tabs.has(tabId)) throw protocolError("TAB_NOT_FOUND", `Tab ${params.tab_id} does not exist.`);
+        groupOf(params.group_id);
+        if (actorRuntime.list().some(item => item.tabId === tabId)) throw protocolError("TAB_OWNED", "A bot is working in this tab. Move it after that work ends.");
+        moveGroupTab(tabId, params.group_id, params.index);
+        activeId = groups.selectGroup(groups.snapshot().selectedGroupId);
+      } else if (method === "group_remove") { groupOf(params.group_id); activateTab(groups.remove(params.group_id)); }
+      else throw protocolError("UNKNOWN_METHOD", `Unknown browser method: ${method}`);
+      layout(); persistTabs(); publish();
+      return { ...(created ? { group_id: created } : {}), ...protocolGroupList() };
+    } catch (error) {
+      throw error.code ? error : invalid(error.message || "Browser group request failed.");
+    }
+  }
   async function protocolCommand(method, params = {}) {
     if (params && Object.hasOwn(params, "actor_id") && params[actorCapability] !== true) throw protocolError("TRUSTED_ACTOR_REQUIRED", "Actor identity must come from trusted coordinator dispatch.");
     if (params && !Object.hasOwn(params, "actor_id") && ["navigate", "vacuum", "click", "fill", "eval", "key", "back", "forward", "reload", "stop", "scroll", "tab_close"].includes(method) && tabs.size) {
@@ -1339,6 +1404,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       await waitForProtocolPage(tab, params.wait || "load", params.signal);
       return protocolTabResult(tab);
     }
+
+    if (method.startsWith("group_") || method === "work_propose") return protocolGroupCommand(method, params);
 
     const supportedTabMethod = [
       "navigate", "read", "vacuum", "click", "fill", "eval", "key",
@@ -1881,6 +1948,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         // Removes finished entries from the list; files stay where they are.
         downloadEntries = downloadEntries.filter(entry => entry.state === "progressing");
         persistDownloads(); publish();
+        return state();
+      }
+      if (command.action === "work-proposal-clear") {
+        if (workProposal && (!command.id || command.id === workProposal.id)) { workProposal = null; publish(); }
         return state();
       }
       if (command.action.startsWith("group-")) {

@@ -987,6 +987,45 @@ test("numbered snapshots are isolated, replaced snapshots and navigation fail cl
   await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
 });
 
+test("Mia's bridge lists and arranges groups and suggests bot assignments without starting work", async () => {
+  const h = harness();
+  const first = (await h.controller.protocol("tab_open", { url: "example.com" })).tab_id;
+  const second = (await h.controller.protocol("tab_open", { url: "example.org" })).tab_id;
+  const listed = await h.controller.protocol("group_list", {});
+  assert.equal(listed.groups.length, 1);
+  assert.deepEqual(listed.groups[0].tabs.map(tab => tab.tab_id), [first, second]);
+  assert.equal(listed.selected_group_id, listed.groups[0].group_id);
+
+  const created = await h.controller.protocol("group_create", { name: "Research" });
+  assert.equal(created.groups.find(group => group.group_id === created.group_id).name, "Research");
+  const active = h.command("state").activeId;
+  const other = active === first ? second : first;
+  const moved = await h.controller.protocol("group_move_tab", { tab_id: other, group_id: created.group_id });
+  assert.deepEqual(moved.groups.find(group => group.group_id === created.group_id).tabs.map(tab => tab.tab_id), [other]);
+  // The person's selected group and tab are not taken over by the move.
+  assert.equal(moved.selected_group_id, listed.selected_group_id);
+  assert.equal(h.command("state").activeId, active);
+  const renamed = await h.controller.protocol("group_rename", { group_id: created.group_id, name: "Sources" });
+  assert.equal(renamed.groups.find(group => group.group_id === created.group_id).name, "Sources");
+  await assert.rejects(h.controller.protocol("group_remove", { group_id: created.group_id }), { code: "INVALID_PARAMS" });
+  await assert.rejects(h.controller.protocol("group_rename", { group_id: "missing", name: "x" }), { code: "GROUP_NOT_FOUND" });
+  await assert.rejects(h.controller.protocol("group_create", { name: "" }), { code: "INVALID_PARAMS" });
+
+  const assignments = [{ tab_id: other, bot: "Scout" }];
+  await assert.rejects(h.controller.protocol("work_propose", { group_id: created.group_id, goal: "Compare", assignments: [{ tab_id: active, bot: "Scout" }] }), { code: "INVALID_PARAMS" });
+  await assert.rejects(h.controller.protocol("work_propose", { group_id: created.group_id, goal: "", assignments }), { code: "INVALID_PARAMS" });
+  await assert.rejects(h.controller.protocol("work_propose", { group_id: created.group_id, goal: "Compare", assignments: [] }), { code: "INVALID_PARAMS" });
+  assert.equal(h.command("state").workProposal, null);
+  const proposed = await h.controller.protocol("work_propose", { group_id: created.group_id, goal: " Compare ", assignments });
+  assert.equal(proposed.proposed, true);
+  const pending = h.command("state").workProposal;
+  assert.equal(JSON.stringify([pending.groupId, pending.goal, pending.assignments]), JSON.stringify([created.group_id, "Compare", [{ tabId: other, bot: "Scout" }]]));
+  // A suggestion binds no bot: ownership appears only once the person starts work.
+  assert.equal(h.command("state").ownership.length, 0);
+  h.command("work-proposal-clear", { id: "another" }); assert.equal(h.command("state").workProposal.id, pending.id);
+  h.command("work-proposal-clear", { id: pending.id }); assert.equal(h.command("state").workProposal, null);
+});
+
 test("groups survive restart including an empty selected group", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mia-groups-")); const statePath = path.join(root, "browser.json");
   try {
