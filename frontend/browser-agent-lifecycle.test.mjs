@@ -149,3 +149,247 @@ test('a rejected toolbar cancellation remains retryable and visibly reports fail
   assert.ok(h.ctx.botHolds[1]); assert.equal(h.ctx.botReleasedAt.a, undefined);
   assert.equal(h.ctx.takeOver.disabled, false); assert.match(h.ctx.botControlLabel.textContent, /Could not stop/);
 });
+
+// Clicking into the page a bot is working on is the same as pressing Take over.
+function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a' } = {}) {
+  let handler = null, takeOvers = 0;
+  const ctx = {
+    state: { activeId, tabs: [{ id: 1 }, { id: 2 }], groups: [] },
+    window: { miaBrowserAgents: {} },
+    botControl: { hidden: controlHidden, getAttribute: () => botId },
+    takeOver: { onclick() { takeOvers++; } },
+    bridge: { onGroupBot(callback) { handler = callback; } },
+    chooseGroupBot() {},
+  };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  if (bridge.onGroupBot) bridge.onGroupBot(function (payload) {');
+  assert.ok(start >= 0);
+  vm.runInContext('function selected() { return state.tabs.find(function (tab) { return tab.id === state.activeId; }); }\n'
+    + browser.slice(start, browser.indexOf('\n  });', start) + 6), ctx);
+  return { click: tabId => handler({ action: 'page-click', tabId }), takeOvers: () => takeOvers };
+}
+
+test('a click inside the page a bot is working on takes it over', () => {
+  const h = pageClickHarness(); h.click(1);
+  assert.equal(h.takeOvers(), 1);
+});
+
+test('a page click takes nothing over when no bot has control of that tab', () => {
+  const idle = pageClickHarness({ controlHidden: true }); idle.click(1);
+  assert.equal(idle.takeOvers(), 0, 'no bot working');
+  const mia = pageClickHarness({ botId: null }); mia.click(1);
+  assert.equal(mia.takeOvers(), 0, 'Mia working, no bot to stop');
+  const other = pageClickHarness(); other.click(2);
+  assert.equal(other.takeOvers(), 0, 'a click from a tab no longer in front');
+});
+
+test('+ New bot makes a new tab and group, starts bot setup, and gives the new bot that group', async () => {
+  let handler = null, onCreated = null; const sent = [];
+  const ctx = {
+    Promise, state: { activeId: 1, tabs: [{ id: 1 }], groups: [] },
+    window: { miaBrowserAgents: { startBotSetup(callback) { onCreated = callback; } } },
+    botControl: { hidden: true, getAttribute: () => null }, takeOver: { onclick() {} },
+    bridge: { onGroupBot(callback) { handler = callback; } }, chooseGroupBot() {},
+    command(action, extra) {
+      sent.push([action, extra]);
+      if (action === 'new') return Promise.resolve({ activeId: 7, tabs: [{ id: 1 }, { id: 7 }] });
+      if (action === 'groupCreate') return Promise.resolve({ tabs: [{ id: 1 }, { id: 7, groupId: 'g3' }] });
+      return Promise.resolve({});
+    },
+  };
+  vm.createContext(ctx);
+  const fn = browser.indexOf('  function newBotGroup() {');
+  const start = browser.indexOf('  if (bridge.onGroupBot) bridge.onGroupBot(function (payload) {');
+  assert.ok(fn >= 0 && start >= 0);
+  vm.runInContext('function selected() { return null; } function render() {}\nvar setupGroupId = null;\n' + browser.slice(fn, browser.indexOf('\n  }\n', fn) + 4)
+    + browser.slice(start, browser.indexOf('\n  });', start) + 6), ctx);
+  handler({ action: 'new-bot' }); await flush();
+  assert.deepEqual(sent.map(item => item[0]), ['new', 'groupCreate']);
+  assert.equal(sent[1][1].id, 7, 'the group is made around the new tab');
+  assert.equal(typeof onCreated, 'function', 'bot setup started');
+  assert.equal(ctx.setupGroupId, 'g3', 'the group shows New Bot while setup runs');
+  onCreated({ botId: 'bot-new', name: 'Fare Watcher' });
+  assert.equal(ctx.setupGroupId, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['groupAssignBot', { groupId: 'g3', bot: { botId: 'bot-new', name: 'Fare Watcher' } }]);
+});
+
+// A group takes its owner's color: Mia black, a bot its own color, and New Bot
+// while "+ New bot" setup runs for that group.
+function paintHarness(agents, setupGroupId = null) {
+  const ctx = { window: { miaBrowserAgents: agents } };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  function setupGroupPending(g) {');
+  const end = browser.indexOf('  // "+ New bot" in a group', start);
+  vm.runInContext('var setupGroupId = ' + JSON.stringify(setupGroupId) + ';\n' + browser.slice(start, end), ctx);
+  const node = () => { const props = {}, attrs = {}; return { attrs, props, setAttribute(k, v) { attrs[k] = v; },
+    style: { setProperty(k, v) { props[k] = v; }, removeProperty(k) { delete props[k]; } } }; };
+  return { ctx, node };
+}
+
+test('groups are drawn in their owner color: Mia black, bots their own, New Bot during setup', () => {
+  const agents = { groupColor: id => id === 'bot-a' ? 'hsl(337, 72%, 52%)' : '', setupPending: () => true, setupColor: () => 'hsl(12, 72%, 52%)' };
+  const h = paintHarness(agents, 'g2');
+  const mia = h.node(); mia.style.setProperty('--tab-group-color', 'red');
+  h.ctx.paintGroup(mia, { id: 'g1', color: 'yellow', botId: null });
+  assert.equal(mia.attrs['data-group-color'], 'mia', 'Mia groups use the black swatch');
+  assert.equal(mia.props['--tab-group-color'], undefined, 'no leftover bot color');
+  const bot = h.node(); h.ctx.paintGroup(bot, { id: 'g3', color: 'yellow', botId: 'bot-a' });
+  assert.equal(bot.props['--tab-group-color'], 'hsl(337, 72%, 52%)', 'a bot group uses the bot color, not its stored yellow');
+  const setup = h.node(); h.ctx.paintGroup(setup, { id: 'g2', color: 'yellow', botId: null });
+  assert.equal(setup.props['--tab-group-color'], 'hsl(12, 72%, 52%)', 'New Bot color while set up');
+  assert.equal(h.ctx.setupGroupPending({ id: 'g2', botId: null }), true);
+  agents.setupPending = () => false;
+  assert.equal(h.ctx.setupGroupPending({ id: 'g2', botId: null }), false, 'back to Mia once setup is no longer pending');
+});
+
+// The strip only redraws when its signature changes. The new group is drawn
+// (as Mia's) before "+ New bot" setup starts, so the setup state must be part
+// of the signature or the group stays Mia's until something else changes.
+test('the tab strip redraws when a group starts or stops waiting for its new bot', () => {
+  const line = browser.slice(browser.indexOf('var signature = JSON.stringify('), browser.indexOf('\n', browser.indexOf('var signature = JSON.stringify(')));
+  assert.match(line, /setupGroupPending\(groups\[setupGroupId\]\) \? setupGroupId : null/);
+});
+
+// A bot's group takes one slot in the strip: the tab you are looking at, else
+// the one the bot is working in, else the one it worked in last.
+test('a bot group shows one tab: yours, else the one its bot works in or worked in last', () => {
+  const ctx = { state: null };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  var botLastTab = {};');
+  vm.runInContext(browser.slice(start, browser.indexOf('  function botTabsButton(', start)), ctx);
+  const groups = { g1: { id: 'g1', botId: 'bot-a' }, g2: { id: 'g2', botId: null } };
+  const tabs = [{ id: 1, groupId: 'g1', url: 'https://a.example/' }, { id: 2, groupId: 'g1', url: 'https://b.example/' }, { id: 3, groupId: 'g1', url: 'https://c.example/' }, { id: 4, groupId: 'g2' }, { id: 5, groupId: 'g2' }, { id: 6 }];
+  const fronts = (activeId, working) => { ctx.state = { activeId, tabs }; return JSON.parse(JSON.stringify(ctx.botGroupFronts(groups, working))); };
+  assert.deepEqual(fronts(6, {}), { g1: { id: 1, others: [2, 3] } }, 'idle and never worked: its first tab; Mia groups are untouched');
+  assert.deepEqual(fronts(6, { 3: { botId: 'bot-a' } }), { g1: { id: 3, others: [1, 2] } }, 'the tab the bot is working in');
+  assert.deepEqual(fronts(6, {}), { g1: { id: 3, others: [1, 2] } }, 'after it stops, the tab it worked in last');
+  assert.deepEqual(fronts(2, { 3: { botId: 'bot-a' } }), { g1: { id: 2, others: [1, 3] } }, 'the tab you are looking at wins');
+  tabs.unshift({ id: 7, groupId: 'g1', url: '' });
+  assert.deepEqual(fronts(2, {}), { g1: { id: 2, others: [1, 3] } }, 'a blank tab is not listed or counted: New tab for this bot covers it');
+  assert.deepEqual(fronts(7, {}), { g1: { id: 7, others: [1, 2, 3] } }, 'unless you are looking at it');
+});
+
+test('a bot group counts as one tab when the strip decides what to fold', () => {
+  assert.match(browser, /if \(g\) counts\[g\.id\] = g\.botId \? 1 : \(counts\[g\.id\] \|\| 0\) \+ 1; else ungrouped \+= 1;/);
+  assert.match(browser, /if \(tabGroup && front\[tabGroup\.id\] && front\[tabGroup\.id\]\.id !== t\.id\) return;/);
+});
+
+// "+N" drops the bot's other tabs down under its tab, drawn like tabs:
+// page icon, title, working dot and close, then "New tab for this bot".
+test('the +N list draws the bot\'s other tabs as tabs and acts on them', async () => {
+  class El {
+    constructor(tag) { this.tagName = tag; this.children = []; this.style = { setProperty() {}, removeProperty() {} }; this.attrs = {}; this.hidden = false; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren() { this.children = []; }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getBoundingClientRect() { return { left: 0, top: 0, right: 900, bottom: 700, width: 900, height: 700 }; }
+    contains() { return false; }
+    querySelector() { return null; }
+    remove() {}
+    all() { return [this, ...this.children.flatMap(c => c.all ? c.all() : [])]; }
+  }
+  const sent = [];
+  const listeners = {};
+  const ctx = {
+    document: { createElement: tag => new El(tag), addEventListener: (type, fn) => { listeners[type] = fn; } },
+    screen: new El('div'), overlay: new El('div'), strip: new El('div'),
+    paintGroup() {}, command: (action, payload) => { sent.push([action, payload]); return Promise.resolve(); },
+    render() { ctx.renderTabsList(ctx.groups, ctx.front, ctx.working); },
+    showStill: () => Promise.resolve(true), hideStill() {},
+    state: { activeId: 1, tabs: [{ id: 1, title: 'Shown', groupId: 'g1' }, { id: 2, title: 'Flights', favicon: 'data:,', groupId: 'g1' }, { id: 3, title: 'Hotels', groupId: 'g1' }] },
+    lastTabs: '', tabsListGroupId: null, tabsListRequested: false, tabsListOpen: false, tabsListToken: 0,
+    groups: { g1: { id: 'g1', botId: 'bot-a' } }, front: { g1: { id: 1, others: [2, 3] } }, working: { 3: { name: 'Scout' } },
+  };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  var tabsList = document.createElement');
+  const end = browser.indexOf("    if (event.key === 'Escape' && tabsListGroupId) setTabsList(null);\n  });\n", start);
+  assert.ok(start > 0 && end > start);
+  vm.runInContext(browser.slice(start, end) + "    if (event.key === 'Escape' && tabsListGroupId) setTabsList(null);\n  });\n", ctx);
+  ctx.setTabsList('g1');
+  await new Promise(resolve => setImmediate(resolve));
+  const list = ctx.tabsList;
+  const rowsBox = ctx.tabsRows;
+  assert.equal(list.hidden, false);
+  const rows = rowsBox.children.filter(c => c.className.startsWith('native-browser-bot-tabs-row'));
+  assert.equal(rows.length, 2);
+  const labels = rows.map(r => r.all().find(n => n.className === 'native-browser-tab-label').textContent);
+  assert.deepEqual(labels, ['Flights', 'Hotels']);
+  assert.ok(rows[0].all().some(n => n.className === 'native-browser-tab-icon'), 'the page icon shows like on a tab');
+  assert.match(rows[1].className, /bot-working/);
+  assert.ok(rows[1].all().some(n => /native-browser-tab-working/.test(n.className)), 'the working dot shows');
+  assert.equal(rowsBox.children[0].className, 'native-browser-bot-tabs-new', 'new tab sits on top');
+  rows[1].children[1].onclick({ stopPropagation() {} });
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['close', { id: 3 }]);
+  rows[0].children[0].onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['select', { id: 2 }]);
+  assert.equal(list.hidden, true, 'picking a tab closes the list');
+  ctx.setTabsList('g1');
+  await new Promise(resolve => setImmediate(resolve));
+  rowsBox.children[0].onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['groupNewTab', { groupId: 'g1' }]);
+  ctx.setTabsList('g1');
+  await new Promise(resolve => setImmediate(resolve));
+  listeners.keydown({ key: 'Escape' });
+  assert.equal(list.hidden, true, 'Escape closes it');
+});
+
+// Follow keeps the page the bot is working on in front: when the bot moves to
+// another tab the browser moves with it. Picking a tab yourself, or the bot
+// finishing, stops following.
+test('following a bot moves the browser to the tab it works in next', () => {
+  const sent = [];
+  let running = true;
+  const ctx = {
+    window: { miaBrowserAgents: { isRunning: () => running } },
+    command: (action, payload) => { sent.push([action, payload]); return Promise.resolve(); },
+    state: null,
+  };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  var follow = null;');
+  assert.ok(start > 0);
+  vm.runInContext(browser.slice(start, browser.indexOf('\n  }\n', browser.indexOf('  function syncFollow(', start)) + 4), ctx);
+  const tab = (id, botId, at) => ({ id, botActivity: botId ? { botId } : null, botWorkAt: botId ? { botId, at } : null });
+  ctx.state = { activeId: 1, tabs: [tab(1, 'bot-a', 5), tab(2, null)] };
+  ctx.startFollow('bot-a');
+  ctx.syncFollow();
+  assert.equal(sent.length, 0, 'already on the bot\'s page');
+  ctx.state = { activeId: 1, tabs: [tab(1, null), tab(2, 'bot-a', 9), tab(3, 'bot-b', 12)] };
+  ctx.syncFollow();
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [['select', { id: 2, follow: true }]], 'moves to the bot\'s newest page, never another bot\'s');
+  ctx.syncFollow();
+  assert.equal(sent.length, 1, 'waits for the switch instead of asking twice');
+  ctx.state = { activeId: 2, tabs: [tab(1, null), tab(2, 'bot-a', 9)] };
+  ctx.syncFollow();
+  assert.equal(ctx.followingBot(), 'bot-a');
+  ctx.state = { activeId: 1, tabs: [tab(1, null), tab(2, 'bot-a', 9)] };
+  ctx.syncFollow();
+  assert.equal(ctx.followingBot(), null, 'picking another tab yourself stops following');
+  ctx.state = { activeId: 2, tabs: [tab(1, null), tab(2, 'bot-a', 9)] };
+  ctx.startFollow('bot-a');
+  running = false;
+  ctx.syncFollow();
+  assert.equal(ctx.followingBot(), null, 'it ends when the bot is done');
+});
+
+// Hovering a group's bot shows its name in a label under it. The label lives
+// outside the tab strip, which would clip it.
+test('hovering a group\'s bot shows its name under it', () => {
+  const handlers = {};
+  const tip = { hidden: true, textContent: '', style: {} };
+  const owner = { getBoundingClientRect: () => ({ left: 100, width: 28, bottom: 40 }), addEventListener: (type, fn) => { handlers[type] = fn; } };
+  const ctx = { nameTip: tip };
+  vm.createContext(ctx);
+  const start = browser.indexOf('  function showNameOnHover(');
+  assert.ok(start > 0);
+  vm.runInContext(browser.slice(start, browser.indexOf('\n  }\n', start) + 4), ctx);
+  ctx.showNameOnHover(owner, 'Web Research Agent');
+  handlers.mouseenter();
+  assert.equal(tip.hidden, false);
+  assert.equal(tip.textContent, 'Web Research Agent');
+  assert.equal(tip.style.left, '114px', 'centered under the bot');
+  assert.equal(tip.style.top, '44px');
+  handlers.mouseleave();
+  assert.equal(tip.hidden, true);
+  handlers.mouseenter(); handlers.mousedown();
+  assert.equal(tip.hidden, true, 'a click hides it so it never covers the bot menu');
+});

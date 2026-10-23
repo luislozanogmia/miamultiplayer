@@ -221,7 +221,15 @@ test('automation panel renders durable bot schedules separately from running wor
     (...args) => { navigations.push(args); },
     (type) => type === 'bot' ? 'agent' : type,
   );
-  assert.equal(helpers.automationScheduleText({enabled:true, frequency:'interval', intervalMinutes:5}), 'Paused · add a prompt');
+  assert.equal(helpers.automationScheduleText({enabled:true, frequency:'interval', intervalMinutes:5}), 'Paused · add steps or a prompt');
+  assert.equal(helpers.automationScheduleText({enabled:true, frequency:'interval', intervalMinutes:5, steps:['Check the inbox']}), 'Every 5 minutes', 'steps alone are a task');
+  const stepBot = {id:'bot-steps', automations:[{id:'digest', name:'Digest', enabled:true, frequency:'daily', time:'09:00', utcOffsetMinutes:360, prompt:'Old prompt.'}]};
+  const saveSteps = (values) => helpers.normalizedAutomationEditorPayload(stepBot, 'digest', {name:'Digest', enabled:true, frequency:'daily', time:'09:00', prompt:'', ...values}).automations[0];
+  assert.deepEqual(saveSteps({steps:' Search the web \n\nPost here '}).steps, ['Search the web', 'Post here'], 'one step per line, blanks dropped');
+  assert.equal(saveSteps({steps:'Search'}).prompt, undefined, 'steps alone can run an automation');
+  assert.equal(saveSteps({steps:'', prompt:'Run.'}).steps, undefined, 'clearing the steps removes them');
+  assert.throws(() => saveSteps({steps:''}), /Add the steps or the task prompt/);
+  assert.throws(() => saveSteps({steps:Array.from({length:21}, (_, i) => 'Step ' + i).join('\n')}), /up to 20 steps/);
   assert.equal(helpers.automationScheduleText({enabled:true, frequency:'interval', intervalMinutes:5, prompt:'Run the task.'}), 'Every 5 minutes');
   assert.equal(helpers.automationScheduleText({enabled:false, frequency:'daily', time:'08:30', prompt:'Run the task.'}), 'Paused · Every day at 08:30');
   assert.deepEqual(helpers.automationBotsForPanel(true, null).map((entry) => entry.bot.id + '/' + entry.automation.id), ['bot-1/research-1', 'bot-2/reminder-1', 'bot-3/off-1']);
@@ -398,7 +406,7 @@ test('account menu removes trial and help placeholders while preserving supporte
   assert.match(styles, /\.chat-acct-menu-item \.cami svg\{[^}]*width:20px;height:20px;[^}]*stroke-width:2;/);
   assert.doesNotMatch(styles, /\.chat-acct-menu-item \.cami img|#chatAcct(?:Admin|Setup|Settings|About|Logout) \.cami img/);
   assert.match(source, /showBenchToast\(item\.getAttribute\('data-chat-acct-toast'\)\)/);
-  assert.match(source, /function prepareBetaFeedback\(\)[\s\S]*copySidebarText\(feedback, 'Feedback copied/);
+  assert.match(source, /function prepareBetaFeedback\(\)[\s\S]*openFeedbackDialog\(\)/);
   assert.match(source, /feedback\.addEventListener\('click'[\s\S]*prepareBetaFeedback\(\)/);
 });
 
@@ -421,7 +429,7 @@ test('styled routing keeps the full Agent Bench as a direct fallback', async () 
   assert.match(source, /var STYLED_ROUTES = \['chat', 'agent-admin', 'integrations'\]/);
   assert.match(source, /var ROUTES = \['chat','agent-admin','integrations'\]/);
   assert.match(source, /id:'gemini', label:'Google AI Studio'/);
-  assert.match(source, /action === 'web-browser'\) openWebBrowserTool\(\)/);
+  assert.match(source, /action === 'web-browser'\) openWebBrowserTool\(\{forActiveBot:true\}\)/);
   assert.match(source, /location\.hash = '#\/agent-admin'/);
   assert.match(source, /classList\.toggle\('styled-agent-admin-view', routeHash === 'agent-admin'\)/);
   assert.match(source, /location\.hash = '#\/chat'/);
@@ -550,12 +558,13 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.match(source, /var modelSelection = chatModelSelectionMetadata\(\);[\s\S]*?intent: agentSetup\.intent,[\s\S]*?modelSelection:modelSelection/);
   assert.match(source, /Nothing is created or scheduled until you confirm\./);
   assert.match(source, /Yes, activate bot/);
-  assert.match(source, /option\('interval', 'Repeating timer'\)/);
-  assert.match(source, /id="agentSetupIntervalValue"/);
-  assert.match(source, /id="agentSetupIntervalUnit"/);
-  assert.match(source, /id="agentSetupAutomationPrompt"/);
-  assert.match(source, /Add the task prompt this automation should run\./);
-  assert.match(source, /normalized\.intervalMinutes = Number\(source\.intervalMinutes \|\| 1\)/);
+  // Setup creates only the bot. A schedule request is handed to the new bot,
+  // which proposes the automation with steps through its own card.
+  assert.doesNotMatch(source, /id="agentSetupFrequency"|id="agentSetupAutomationPrompt"/);
+  assert.match(source, /id="agentSetupAutomationWanted"/);
+  assert.match(source, /automations: \[\],/);
+  assert.match(source, /function handOffAgentSetupAutomation\(conversationId, draft\)\{[\s\S]*?api\(nativeConversationPath\(conversationId, '\/events'\)[\s\S]*?'Set up an automation for this request: ' \+ request[\s\S]*?clientIdempotencyKey: 'bot-setup-automation-' \+ conversationId/);
+  assert.match(source, /Add the steps or the task prompt this automation should run\./);
   assert.match(source, /agentAvatarHtml\('New Bot', AGENT_SETUP_ROOM_ID, 28\)/);
   assert.match(source, /status: 'running'/);
   assert.match(source, /createdBotRecords\.push\(created\);[\s\S]*?syncChatBotRecords\(createdBotRecords\);[\s\S]*?applyNativeConversationList/);
@@ -563,38 +572,24 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.doesNotMatch(source, /openCinema\('chat'\)/);
 });
 
-test('Mia keeps bot creation in her own chat before any Hermes dispatch', async () => {
+test('no keyword rule starts bot creation; every message reaches Mia', async () => {
   const source = await readFile(appUrl, 'utf8');
-
-  assert.match(source, /function isBotCreationIntent\(value\)/);
-  assert.match(source, /chatWs\.activeKind === 'agent'[\s\S]*isMiaOrchestrator\(chatWs\.activeLabel, 'gateway'\)[\s\S]*isBotCreationIntent\(text\)/);
-  // Mia drafts the bot in her chat; a new message closes an unsubmitted card.
-  assert.match(source, /draftFlow\.phase === 'review'\)\{\s*cancelMiaBotDraft\(sendRoomId\);/);
-  assert.match(source, /isBotCreationIntent\(text\)\)\{\s*startMiaBotDraft\(sendRoomId, text\);[\s\S]*botSetup: true/);
+  for (const name of ['isBotCreationIntent', 'botCreationIntentNeedsDetails', 'recentBotPurpose', 'startMiaBotDraft', 'continueMiaBotDraft']) {
+    assert.doesNotMatch(source, new RegExp(`function ${name}\\(`), name);
+  }
   const routeStart = source.indexOf("if(!threadRootId && !preparedAttachment && chatWs.activeKind === 'agent'");
   const routeEnd = source.indexOf('return sendNativeConversationEvent(', routeStart);
-  assert.ok(routeStart >= 0 && routeEnd > routeStart, 'bot drafting precedes Hermes dispatch');
-  assert.doesNotMatch(source.slice(routeStart, routeEnd), /startAgentSetupChat\(\)/);
-});
-
-test('bot creation intent catches requests, not questions or edits', async () => {
-  const source = await readFile(appUrl, 'utf8');
-  const fn = /  function isBotCreationIntent\(value\)\{[\s\S]*?\n  \}\n/.exec(source)[0];
-  const isBotCreationIntent = new Function(`${fn}; return isBotCreationIntent;`)();
-  for (const text of ['create a bot', 'Create a bot that tracks AI news', 'make me a daily news bot',
-    'can you create a research bot?', 'I want a newsletter bot', 'Mia, set up a bot to watch my inbox']) {
-    assert.equal(isBotCreationIntent(text), true, text);
-  }
-  for (const text of ['how do I create a bot?', 'add a new skill to my bot', 'add a schedule to the news bot',
-    'edit the linkedin bot', 'create a report about bots']) {
-    assert.equal(isBotCreationIntent(text), false, text);
-  }
+  assert.ok(routeStart >= 0 && routeEnd > routeStart);
+  const route = source.slice(routeStart, routeEnd);
+  assert.doesNotMatch(route, /\.test\(text\)/, 'the send path does not match words in the message');
+  assert.match(route, /draftFlow\.phase === 'review'\) cancelMiaBotDraft\(sendRoomId\);/);
+  assert.match(source, /isMiaOrchestrator\(chatWs\.activeLabel\)\) syncMiaBotSetupRequest\(roomId, state\);/);
 });
 
 test('Mia\'s chat clarifies, drafts, and creates a bot with the shared review card', async () => {
   const source = await readFile(appUrl, 'utf8');
-  assert.match(source, /function startMiaBotDraft\(roomId, text\)[\s\S]*botCreationIntentNeedsDetails\(text\)/);
-  assert.match(source, /function continueMiaBotDraft\(roomId, text\)[\s\S]*requestMiaBotDraft\(roomId, flow, ''\)/);
+  assert.match(source, /function syncMiaBotSetupRequest\(roomId, state\)[\s\S]*requestMiaBotDraft\(roomId, state\.botDraft\)/);
+  assert.match(source, /flow\.phase = 'created';\s*answerMiaBotSetupRequest\(roomId, flow, 'accepted'/);
   assert.match(source, /Review the draft\. Edit any field, then accept it\./);
   assert.match(source, /confirmLabel: 'Accept',[\s\S]*hideLater: true/);
   // The same card and create path as the New Bot setup chat.
@@ -616,7 +611,7 @@ test('bot profile shows its automation collection and opens one item independent
   assert.match(source, /id="styledAgentAddAutomation"/);
   assert.match(source, /data-bot-id="' \+ esc\(record\.id\) \+ '" data-automation-id=/);
   assert.match(source, /openAutomationDetail\(botId, automationId\)/);
-  assert.match(source, /Paused until you add a task prompt and turn Active on\./);
+  assert.match(source, /Paused until you add steps or a prompt and turn Active on\./);
   assert.match(source, /function openAutomationDetail\(botId, automationId, createNew\)\{[\s\S]*?chatInfo\.mode = 'automation-detail'[\s\S]*?chatInfo\.automationBotId = String\(bot\.id\)/);
   assert.match(source, /chatInfo\.mode === 'automation-detail'[\s\S]*?renderAutomationDetailPane\(pane, automationBot, automationSelection\.automation/);
   assert.match(styles, /styled-agent-edit-automation\{/);
@@ -857,10 +852,11 @@ test('creating a bot from the tools menu does not close browser mode, but every 
 test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {
   const source = await readFile(appUrl, 'utf8');
   assert.match(source, /function buildAgentSetupWelcomeMessage\(roomId, created, draft\)\{[\s\S]*body: agentSetupWelcomeBody\(created, draft\)/);
-  assert.match(source, /function agentSetupWelcomeBody\(created, draft\)[\s\S]*Want me to run ' \+ task \+ ' now, or is there something related you.d like first\?/);
+  assert.match(source, /function agentSetupWelcomeBody\(created, draft\)[\s\S]*What should I work on first\?/);
   // Wired in after the bot's native room is created, before loadChatRoom
-  // consumes state.localWelcome for that room's first render.
-  assert.match(source, /chatRoomState\(conversation\.id\)\.localWelcome = buildAgentSetupWelcomeMessage\(conversation\.id, created, draft\);\s*loadChatRoom\(conversation\.id, 'agent', created\.name\);/);
+  // consumes state.localWelcome for that room's first render. A bot that is
+  // handed an automation request answers that instead of the local greeting.
+  assert.match(source, /if\(!agentSetupAutomationRequest\(draft\)\) chatRoomState\(conversation\.id\)\.localWelcome = buildAgentSetupWelcomeMessage\(conversation\.id, created, draft\);\s*loadChatRoom\(conversation\.id, 'agent', created\.name\);\s*handOffAgentSetupAutomation\(conversation\.id, draft\);/);
 });
 
 test('URL bar autocomplete degrades to nothing when the desktop shell has no history bridge', async () => {

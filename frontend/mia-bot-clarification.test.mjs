@@ -12,92 +12,71 @@ function load(context, name) {
   vm.runInContext(source.slice(start, end < 0 ? undefined : end), context);
 }
 
-test('a generic bot request asks for purpose before drafting', () => {
-  const state = { botDraft: null };
-  let draftRequests = 0;
+function miaMessage(id, request) {
+  return { sender: 'mia', nativeEvent: { id, metadata: request ? { botSetupRequest: request } : {} } };
+}
+
+function setupContext(state, overrides = {}) {
+  const started = [];
   const context = vm.createContext({
     chatRoomState: () => state,
-    clearMiaBotDraftRequest: () => {},
-    renderMiaBotDraftRoom: () => {},
-    requestMiaBotDraft: () => { draftRequests += 1; },
+    currentUser: 'user@example.com',
+    setTimeout: (fn) => fn(),
+    requestMiaBotDraft: (roomId, flow) => { started.push(flow.intent); },
+    ...overrides,
   });
-  load(context, 'botCreationIntentNeedsDetails');
-  load(context, 'recentBotPurpose');
-  load(context, 'startMiaBotDraft');
-  load(context, 'continueMiaBotDraft');
+  load(context, 'pendingMiaBotSetupMessage');
+  load(context, 'syncMiaBotSetupRequest');
+  vm.runInContext('var startedMiaBotSetupRequests = {};', context);
+  return { context, started };
+}
 
-  context.startMiaBotDraft('mia-room', 'can you build a bot for me?');
-  assert.equal(state.botDraft.phase, 'clarifying');
-  assert.equal(draftRequests, 0);
-  assert.match(state.botDraft.turns.at(-1).text, /what should (?:it|the bot) do/i);
+test('the setup card opens only from a pending request Mia\'s model made', () => {
+  const state = { botDraft: null, messages: [
+    { sender: 'user@example.com', body: 'create a research bot', nativeEvent: { id: 'e1', metadata: {} } },
+    miaMessage('e2', null),
+  ] };
+  const { context, started } = setupContext(state);
+  context.syncMiaBotSetupRequest('mia-room', state);
+  assert.equal(state.botDraft, null, 'words in the user message never open the card');
+  assert.deepEqual(started, []);
 
-  context.continueMiaBotDraft('mia-room', 'Research AI news and give me a daily summary.');
-  assert.equal(draftRequests, 1);
-  assert.match(state.botDraft.intent, /research AI news/i);
-});
-
-test('a specific bot request goes directly to the draft', () => {
-  const state = { botDraft: null };
-  let draftRequests = 0;
-  const context = vm.createContext({
-    chatRoomState: () => state,
-    clearMiaBotDraftRequest: () => {},
-    requestMiaBotDraft: () => { draftRequests += 1; },
-  });
-  load(context, 'botCreationIntentNeedsDetails');
-  load(context, 'recentBotPurpose');
-  load(context, 'startMiaBotDraft');
-
-  context.startMiaBotDraft('mia-room', 'Build a bot that researches AI news and summarizes it daily.');
+  state.messages.push(miaMessage('e3', { request: 'A bot that researches AI news daily at 9', requestedBy: 'user@example.com', status: 'pending' }));
+  context.syncMiaBotSetupRequest('mia-room', state);
+  assert.equal(state.botDraft.sourceEventId, 'e3');
   assert.equal(state.botDraft.phase, 'interpreting');
-  assert.equal(draftRequests, 1);
+  assert.deepEqual(started, ['A bot that researches AI news daily at 9']);
 });
 
-test('a generic request uses recent bot-purpose context instead of asking again', () => {
-  const state = { botDraft: null, messages: [{
-    sender: 'user@example.com',
-    body: "I'd like it to do AI news for me every day at 9am",
-    ts: Date.now() - 60_000,
-  }] };
-  let draftRequests = 0;
-  const context = vm.createContext({
-    chatRoomState: () => state,
-    isHumanSender: () => true,
-    clearMiaBotDraftRequest: () => {},
-    renderMiaBotDraftRoom: () => {},
-    requestMiaBotDraft: () => { draftRequests += 1; },
-  });
-  load(context, 'botCreationIntentNeedsDetails');
-  load(context, 'recentBotPurpose');
-  load(context, 'startMiaBotDraft');
-
-  context.startMiaBotDraft('mia-room', 'can you build a bot for me?');
-  assert.equal(draftRequests, 1);
-  assert.equal(state.botDraft.phase, 'interpreting');
-  assert.match(state.botDraft.intent, /AI news.*every day at 9am/i);
-});
-
-test('old or unrelated messages do not become a bot purpose', () => {
-  for (const message of [
-    { sender: 'user@example.com', body: 'What time is it?', ts: Date.now() - 60_000 },
-    { sender: 'user@example.com', body: "I'd like it to summarize the news", ts: Date.now() - 30 * 60_000 },
+test('an answered, stale, or someone else\'s request does not reopen the card', () => {
+  for (const request of [
+    { request: 'x', requestedBy: 'user@example.com', status: 'accepted' },
+    { request: 'x', requestedBy: 'user@example.com', status: 'dismissed' },
+    { request: 'x', requestedBy: 'other@example.com', status: 'pending' },
   ]) {
-    const state = { botDraft: null, messages: [message] };
-    let draftRequests = 0;
-    const context = vm.createContext({
-      chatRoomState: () => state,
-      isHumanSender: () => true,
-      clearMiaBotDraftRequest: () => {},
-      renderMiaBotDraftRoom: () => {},
-      requestMiaBotDraft: () => { draftRequests += 1; },
-    });
-    load(context, 'botCreationIntentNeedsDetails');
-    load(context, 'recentBotPurpose');
-    load(context, 'startMiaBotDraft');
-    context.startMiaBotDraft('mia-room', 'can you build a bot for me?');
-    assert.equal(draftRequests, 0);
-    assert.equal(state.botDraft.phase, 'clarifying');
+    const state = { botDraft: null, messages: [miaMessage('e1', request)] };
+    const { context, started } = setupContext(state);
+    context.syncMiaBotSetupRequest('mia-room', state);
+    assert.equal(state.botDraft, null, JSON.stringify(request));
+    assert.deepEqual(started, []);
   }
+  // A newer Mia reply without a request supersedes an older pending one.
+  const state = { botDraft: null, messages: [
+    miaMessage('e1', { request: 'x', requestedBy: 'user@example.com', status: 'pending' }),
+    miaMessage('e2', { request: 'y', requestedBy: 'user@example.com', status: 'dismissed' }),
+  ] };
+  const { context } = setupContext(state);
+  context.syncMiaBotSetupRequest('mia-room', state);
+  assert.equal(state.botDraft, null);
+});
+
+test('a request opens the card once per session', () => {
+  const state = { botDraft: null, messages: [miaMessage('e1', { request: 'x', requestedBy: 'user@example.com', status: 'pending' })] };
+  const { context, started } = setupContext(state);
+  context.syncMiaBotSetupRequest('mia-room', state);
+  state.botDraft = null;
+  context.syncMiaBotSetupRequest('mia-room', state);
+  assert.equal(started.length, 1);
 });
 
 test('Mia review card offers one Accept action and no cancel button', () => {
@@ -127,7 +106,6 @@ test('a new message closes an unsubmitted Mia draft and continues normal chat', 
     miaOnboardingChat: null,
     miaBotDraftBusy: () => false,
     cancelMiaBotDraft: () => { state.botDraft = null; },
-    isBotCreationIntent: () => false,
     composerHermesCommand: () => null,
     sendNativeConversationEvent: text => { delivered = text; return Promise.resolve({ status: 201 }); },
   });
@@ -138,18 +116,21 @@ test('a new message closes an unsubmitted Mia draft and continues normal chat', 
   assert.equal(result.status, 201);
 });
 
-test('cancellation clears only an unsubmitted draft', () => {
-  const state = { botDraft: { phase: 'review', draft: { name: 'Scout' } } };
+test('cancellation clears only an unsubmitted draft and dismisses Mia\'s request', () => {
+  const state = { botDraft: { phase: 'review', draft: { name: 'Scout' }, sourceEventId: 'e1' } };
   let renderCount = 0;
+  const answered = [];
   const context = vm.createContext({
     chatRoomState: () => state,
     clearMiaBotDraftRequest: () => {},
     renderMiaBotDraftRoom: () => { renderCount += 1; },
+    answerMiaBotSetupRequest: (roomId, flow, decision) => { answered.push([flow.sourceEventId, decision]); },
   });
   load(context, 'cancelMiaBotDraft');
   context.cancelMiaBotDraft('mia-room');
   assert.equal(state.botDraft, null);
   assert.equal(renderCount, 1);
+  assert.deepEqual(answered, [['e1', 'dismissed']]);
 
   state.botDraft = { phase: 'review', creation: { requestId: 'submitted' } };
   context.cancelMiaBotDraft('mia-room');

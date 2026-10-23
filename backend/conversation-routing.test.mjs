@@ -77,3 +77,28 @@ test('native handoff trigger resolves Mia mentions against the worker roster', (
   );
   assert.deepEqual(result.map((agent) => agent.id), ['agent-21', 'agent-15']);
 });
+
+test('overlapping mentions select the longest name while preserving later explicit mentions',()=>{
+  const short={id:'short',name:'Helper'}, long={id:'long',name:'Helper 2'};
+  assert.deepEqual(resolveMentionedBots('@Helper 2 answer',[short,long]),[long]);
+  assert.deepEqual(resolveMentionedBots('@Helper 2 then @Helper answer',[short,long]),[long,short]);
+  assert.deepEqual(resolveMentionedBots('@Helper then @Helper 2 answer',[short,long]),[short,long]);
+  assert.deepEqual(resolveMentionedBots('@Helper @Helper answer',[short,long]),[short]);
+});
+
+test('a bot named for a reserved human audience cannot intercept its mention',()=>{
+  const result=resolveConversationRouting({body:'@all_users hello',participants:[{id:'bad',name:'all_users'}]});
+  assert.equal(result.mode,'none');
+  assert.deepEqual(resolveMentionedBots('@all_bots hi',[{id:'bad',name:'all_bots'}]),[]);
+});
+
+test('control tags share longest-match parsing with bot names and require mention boundaries',()=>{
+  for(const name of ['All-Hands','All Hands','all_users helper']) {
+    const named={id:'named',name}, other={id:'other',name:'Other'};
+    const result=resolveConversationRouting({body:'@'+name+' answer',participants:[other,named]});
+    assert.deepEqual(result.repliers,[named]);
+    assert.equal(result.mode,'direct');
+  }
+  assert.equal(resolveConversationRouting({body:'email@all.test',participants:[sourcing]}).mode,'none');
+  assert.equal(resolveConversationRouting({body:'@all_bots hello',participants:[sourcing]}).mode,'coordinate');
+});

@@ -358,6 +358,14 @@ test("bare macOS dev launches prefer Mia's bundled Hermes and preserve explicit 
   assert.notEqual(main.developmentHermesBinary({}, () => true, 'linux'), bundled);
 });
 
+test("dev mode refuses to start without its own Hermes home and Python", () => {
+  const main = loadMain();
+  assert.equal(main.devModeRuntimeProblem({}, ""), "", "installed and plain launches are unaffected");
+  assert.match(main.devModeRuntimeProblem({}, "/dev-root"), /HERMES_HOME and HERMES_PYTHON.*dev_mode\.sh/);
+  assert.match(main.devModeRuntimeProblem({ HERMES_HOME: "/h" }, "/dev-root"), /missing HERMES_PYTHON\./);
+  assert.equal(main.devModeRuntimeProblem({ HERMES_HOME: "/h", HERMES_PYTHON: "/p" }, "/dev-root"), "");
+});
+
 test("Claude CLI discovery skips an unreadable PATH entry", () => {
   const main = loadMain();
   const originalPath = process.env.PATH;
@@ -986,4 +994,13 @@ test("chat attachments open in the in-app browser through a trusted, exact-URL I
   assert.match(handler, /nativeBrowser\.prepareAttachment\(target, mainWindow\.webContents\.session\)/);
   assert.doesNotMatch(handler, /syncArtifactSessionCookies|session\.fromPartition\(BROWSER_PARTITION/);
   assert.doesNotMatch(handler, /openExternal|file:|pathToFileURL/);
+});
+
+ test("main window keeps shared chat and owner bot polling active in background", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const creation = source.slice(source.indexOf("function createWindow()"), source.indexOf("mainWindow = window;"));
+  assert.match(creation, /backgroundThrottling: false/);
+  assert.match(creation, /contextIsolation: true/);
+  assert.match(creation, /nodeIntegration: false/);
+  assert.match(creation, /sandbox: true/);
 });

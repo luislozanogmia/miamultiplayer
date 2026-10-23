@@ -10,6 +10,8 @@ const SENSITIVE_PARAM_NAME = /(^|[_.-])(code|key|state|sid|sig|pass|pwd|otp|nonc
 const JWT_LIKE = /^eyJ[\w-]+\.[\w-]+\./;
 // A long unbroken run of token characters is a credential, not a search term.
 const OPAQUE_VALUE = /^[A-Za-z0-9_\-+/=.~%]{40,}$/;
+const CREDENTIAL_PATH = /^(?:reset(?:[-_]?password)?|password[-_]?reset|recover|recovery|verify(?:[-_]?(?:email|account))?|verification|invite|invitation|magic(?:[-_]?(?:link|login))?|unsubscribe|activate|activation|confirm|confirmation|login|sign[-_]?in|auth|oauth|sso|token)$/i;
+const AUTH_ROUTE_WORD = /^(?:accept|callback|complete|finish|email|password|reset|verify|login|logout|signin|signout|sign-in|sign-out|auth|oauth|authorize|authorization|sso|local|new|create)$/i;
 
 function sensitiveParam(name, value) {
   return SENSITIVE_PARAM_NAME.test(String(name || ''))
@@ -17,8 +19,48 @@ function sensitiveParam(name, value) {
     || OPAQUE_VALUE.test(String(value || ''));
 }
 
+// These identifiers locate resources; they are not Google sign-in tokens or
+// GitHub credentials. Match exact hosts and route positions, not substrings.
+function publicResourceIdentifier(host, parts, index) {
+  if (host === 'docs.google.com' && /^(document|spreadsheets|presentation|drawings|forms)$/.test(parts[0])) {
+    const d = parts[1] === 'u' && /^\d+$/.test(parts[2]) ? 3 : 1;
+    const id = d + (parts[d + 1] === 'e' ? 2 : 1);
+    return parts[d] === 'd' && index === id && /^[A-Za-z0-9_-]+$/.test(parts[index]);
+  }
+  if (host === 'drive.google.com') {
+    if (parts[0] === 'file' && parts[1] === 'd' && index === 2) return /^[A-Za-z0-9_-]+$/.test(parts[index]);
+    const folder = parts[1] === 'u' && /^\d+$/.test(parts[2]) ? 3 : 1;
+    if (parts[0] === 'drive' && parts[folder] === 'folders' && index === folder + 1) return /^[A-Za-z0-9_-]+$/.test(parts[index]);
+  }
+  return host === 'github.com' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(parts[index]) && (
+    (index === 3 && /^(commit|tree|blob)$/.test(parts[2])) ||
+    (index === 5 && parts[2] === 'pull' && /^\d+$/.test(parts[3]) && parts[4] === 'commits')
+  );
+}
+
+function credentialBearingPath(parsed) {
+  let decoded = parsed.pathname;
+  for (let depth = 0; depth < 2; depth += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch (_) {
+      // Do not forward a malformed encoding that cannot be inspected safely.
+      return true;
+    }
+  }
+  const parts = decoded.split('/').filter(Boolean);
+  return parts.some((value, index) =>
+    JWT_LIKE.test(value) ||
+    (OPAQUE_VALUE.test(value) && !publicResourceIdentifier(parsed.hostname, parts, index)) ||
+    (CREDENTIAL_PATH.test(value) && parts.slice(index + 1).some(part => !AUTH_ROUTE_WORD.test(part)))
+  );
+}
+
 // An http(s) address with credentials, fragment and secret-looking query
-// parameters removed, or '' when there is no usable address.
+// parameters removed, or '' when there is no usable address. Credential-like
+// paths become origin-only (plus safe query), not a partially guessed route.
 function safeBrowserPageUrl(raw) {
   let parsed;
   try {
@@ -33,8 +75,9 @@ function safeBrowserPageUrl(raw) {
   for (const [name, value] of [...parsed.searchParams]) {
     if (sensitiveParam(name, value)) parsed.searchParams.delete(name);
   }
-  const url = parsed.href;
-  return url.length > MAX_URL_LENGTH ? '' : url;
+  if (parsed.href.length > MAX_URL_LENGTH) return '';
+  if (credentialBearingPath(parsed)) parsed.pathname = '/';
+  return parsed.href;
 }
 
 // The browserContext a message may carry, cleaned; null when unusable.

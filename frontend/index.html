@@ -10,7 +10,8 @@
 <link rel="manifest" href="manifest.webmanifest?v=20260822-1" />
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261019-omnibox-1" />
+<link rel="stylesheet" href="styles.css?v=20261021-next-step-1" />
+<link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
      never flashes while app.js is loading. app.js still reapplies the class
@@ -598,6 +599,39 @@
   </div>
 </div>
 
+<!-- Automations surface: every bot's automations in the center, the chat at
+     the right, laid out like the browser. -->
+<div class="automations-overlay" id="automationsOverlay" hidden aria-hidden="true">
+  <section class="automations-window" aria-label="Automations">
+    <!-- Same frame as the browser: a gray top row (room for the Mac window
+         buttons, drags the window) with one tab, over a white toolbar. -->
+    <div class="automations-tabs-row">
+      <div class="automations-tab" role="heading" aria-level="1">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>
+        <span>Automations</span>
+      </div>
+      <button type="button" class="local-browser-btn automations-bar-btn" id="automationsCloseBtn" title="Close automations" aria-label="Close automations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+    </div>
+    <header class="automations-bar">
+      <button type="button" class="local-browser-btn automations-bar-btn" id="automationsSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M9.5 4.5v15"></path></svg>
+      </button>
+      <span class="automations-summary" id="automationsSummary"></span>
+      <div class="automations-add-wrap">
+        <button type="button" class="local-browser-btn automations-bar-btn" id="automationsAddBtn" title="New automation" aria-label="New automation" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
+        <div class="automations-add-menu" id="automationsAddMenu" role="menu" aria-label="Choose a bot for the new automation" hidden></div>
+      </div>
+      <div class="automations-group-toggle" id="automationsGroupToggle" role="group" aria-label="Group automations">
+        <button type="button" data-automations-group="status" title="Group by status" aria-label="Group by status" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg></button>
+        <button type="button" data-automations-group="bot" title="Group by bot" aria-label="Group by bot" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"></path><path d="M15.5 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c2 .8 3.2 2.5 3.5 5.2"></path></svg></button>
+      </div>
+    </header>
+    <div class="automations-body" id="automationsBody"></div>
+  </section>
+</div>
+
 <!-- Local browser surface. -->
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
@@ -650,8 +684,13 @@
         <p class="local-browser-downloads-empty" id="localBrowserDownloadsEmpty">Files you download in Mia's browser appear here.</p>
       </section>
       <div class="local-browser-empty" id="localBrowserEmpty">
-        <span class="local-browser-empty-title">Open a web page</span>
-        <span>Enter a web address above to browse beside Mia.</span>
+        <div class="local-browser-home" id="localBrowserHome">
+          <span class="local-browser-home-logo" id="localBrowserHomeLogo" aria-hidden="true"></span>
+          <h1 class="local-browser-home-title"><span>Mia</span> Browser</h1>
+          <section class="local-browser-suggest-next" id="localBrowserSuggestNext" aria-label="Mia suggests" hidden>
+            <div class="local-browser-suggest-next-list" id="localBrowserSuggestNextList"></div>
+          </section>
+        </div>
       </div>
       <div class="local-browser-blocked" id="localBrowserBlocked" hidden>
         <span class="local-browser-empty-title" id="localBrowserBlockedTitle">This page could not be loaded</span>
@@ -749,8 +788,20 @@
     <button class="styled-settings-nav-item" data-pane="model"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h6M12 8v2.5M14.5 8v1.8"/></svg>Access</button>
     <button class="styled-settings-nav-item" data-pane="security"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l5 2v4.2c0 3-2.2 5.3-5 6.2-2.8-.9-5-3.2-5-6.2V3.8l5-2z"/><path d="M5.8 8l1.5 1.5L10.3 6.5"/></svg>Security</button>
     <button class="styled-settings-nav-item" data-pane="backups"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v8.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8M2.8 8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2"/></svg>Backups</button>
+    <button class="styled-settings-nav-item" data-pane="teams">Teams</button>
   </nav>
   <div class="styled-settings-content" id="settingsContent">
+    <section class="styled-settings-pane" data-pane="teams" id="hubTeamsPane">
+      <h1 class="styled-settings-h1">Teams</h1>
+      <p>Request a team, invite people, and manage your memberships.</p>
+      <button type="button" class="styled-settings-pill-btn" id="hubRefresh">Refresh</button>
+      <p id="hubStatus" role="status" aria-live="polite"></p>
+      <form id="hubRequestForm" class="styled-settings-card" style="padding:16px;display:flex;gap:12px;flex-wrap:wrap">
+        <label>Team name <input id="hubTeamName" class="styled-settings-field" required maxlength="120" autocomplete="off"></label>
+        <button class="styled-settings-pill-btn" type="submit">Request team</button>
+      </form>
+      <div id="hubRequests"></div><div id="hubTeams"></div><div id="hubApprovals"></div>
+    </section>
 
     <section class="styled-settings-pane active" data-pane="general">
       <h1 class="styled-settings-h1">General</h1>
@@ -1145,12 +1196,19 @@
 
 <script src="assets/mia-mark.js"></script>
 <script src="chat-security.js"></script>
+<script src="feedback-report.js?v=20261022-feedback-1"></script>
 <script src="hermes-connectors.js?v=20260904-google-g"></script>
 <script src="chat-scroll.js?v=20260921-scroll-follow-1"></script>
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
+    <script src="browser-work.js"></script>
     <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
+    <script src="automations-board.js?v=20261019-automations-1"></script>
+    <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
     <script src="native-browser.js?v=20261019-omnibox-1"></script>
-    <script src="app.js?v=20261019-omnibox-1"></script>
+    <script src="hub-bot-manager.js"></script>
+    <script src="hub-chat.js"></script>
+    <script src="app.js?v=20261021-next-step-1"></script>
+    <script src="hub-teams.js"></script>
 </body>
 </html>

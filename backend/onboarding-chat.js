@@ -49,6 +49,14 @@ function newsBriefing(input) {
     ...(input.schedule === 'weekdays' ? {weekdaysOnly: true} : {}),
     ...(input.schedule === 'weekly' ? {day: input.day} : {}),
     time: input.time, utcOffsetMinutes: input.utcOffsetMinutes,
+    // Steps drive the Automations checklist, like automations a bot proposes.
+    steps: [
+      'Search the web for current news about: ' + topics.join('; '),
+      'Pick the stories that matter most, from reliable sources',
+      'Write a short summary of each and why it matters',
+      'Add the source link and publication date for each story',
+      'Post the briefing here',
+    ],
     prompt: 'Create today’s concise news briefing about: ' + topics.join('; ') + '. Search the web for current reporting. Include source links and publication dates, distinguish facts from opinion, and explain why each story matters. If reliable current sources are unavailable, say so; do not invent news. Return the briefing here. Do not create or change schedules.',
   };
 }

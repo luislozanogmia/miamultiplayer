@@ -9,6 +9,12 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+### Fixed
+- Remove credential-bearing URL paths from automatically attached browser
+  context, including reset/invitation links, encoded tokens and JWT-like
+  segments, while preserving ordinary Google file identifiers and GitHub
+  commit references.
+
 ## [0.2.19] — 2026-10-19
 
 ### Added

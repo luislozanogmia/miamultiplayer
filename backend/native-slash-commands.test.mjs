@@ -639,8 +639,8 @@ test('provider disconnect blocks outside-turn suggestion inference instead of fa
   const suggestions = await f.call('/api/chat/suggestions', { transcript: ['Synthetic notes'] });
   assert.deepEqual((await suggestions.json()).suggestions, []);
   const draft = await f.call('/api/bots/interpret', { intent: 'Summarize synthetic notes' });
-  assert.equal(draft.status, 200, 'the deterministic draft remains available');
-  assert.ok((await draft.json()).draft);
+  assert.equal(draft.status, 502, 'no keyword-built draft stands in for the model');
+  assert.equal((await draft.json()).error, 'draft_unavailable');
   assert.equal(f.runtimeCalls().length, before, 'outside-turn helpers never send unpinned work');
 });
 
