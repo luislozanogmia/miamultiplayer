@@ -995,3 +995,12 @@ test("chat attachments open in the in-app browser through a trusted, exact-URL I
   assert.doesNotMatch(handler, /syncArtifactSessionCookies|session\.fromPartition\(BROWSER_PARTITION/);
   assert.doesNotMatch(handler, /openExternal|file:|pathToFileURL/);
 });
+
+ test("main window keeps shared chat and owner bot polling active in background", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const creation = source.slice(source.indexOf("function createWindow()"), source.indexOf("mainWindow = window;"));
+  assert.match(creation, /backgroundThrottling: false/);
+  assert.match(creation, /contextIsolation: true/);
+  assert.match(creation, /nodeIntegration: false/);
+  assert.match(creation, /sandbox: true/);
+});

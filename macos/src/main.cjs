@@ -225,6 +225,7 @@ let miaAutoUpdater = null;
 let nativeAuthProtocolReady = false;
 const desktopAuth = createDesktopAuth({
   ipcMain,
+  log: desktopLog,
   getWindow: () => mainWindow,
   getBackendUrl: () => backendUrl,
   getClient: () => {
@@ -1970,6 +1971,8 @@ function createWindow() {
     // window buttons inline with the top row of the app.
     ...(process.platform === "darwin" ? { titleBarStyle: "hidden", trafficLightPosition: { x: 14, y: 14 } } : {}),
     webPreferences: {
+      // Shared chat and owner bot dispatch must keep polling while Mia is covered or minimized.
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.cjs"),
@@ -1998,10 +2001,10 @@ function createWindow() {
   const windowArtifactView = artifactView;
   window.on("resize", layoutArtifactPanel);
   window.webContents.on("did-finish-load", () => {
-    console.log(`[miaos-desktop] loaded ${window.webContents.getURL()}`);
+    desktopLog(`loaded ${window.webContents.getURL()}`);
   });
   window.webContents.on("did-fail-load", (_event, errorCode, description, validatedURL) => {
-    console.error(`[miaos-desktop] failed ${errorCode} ${description} ${validatedURL}`);
+    desktopLog(`failed ${errorCode} ${description} ${validatedURL}`);
   });
   // Opt-in diagnostics for disposable QA profiles. Do not persist ordinary
   // renderer console output because chat content and provider errors can carry
