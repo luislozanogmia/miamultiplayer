@@ -986,6 +986,9 @@ app.use((err, _req, res, next) => {
   return next(err);
 });
 
+// Hub validates the production Clerk token; no token is persisted by this proxy.
+app.use('/api/hub', require('./hub-client').createHubClient({ dataDirectory: path.dirname(path.resolve(DB_PATH)) }));
+
 // ---------- auth: cookie sessions + bearer API keys, one middleware ----------
 
 function verifyPassword(password, stored) {
@@ -1277,6 +1280,37 @@ function requireMiaAdmin(req, res, next) {
   }
   return requireDatabaseAdmin(req, res, next);
 }
+
+// Sharing requires both the local interactive session and matching Hub identity.
+app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createHubBotRouter({
+  db: conn,
+  dataDirectory: path.dirname(path.resolve(DB_PATH)),
+  isOwnerActive: isActiveWorkspaceUser,
+  getAccountIdentity: (owner) => owner === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null,
+  getBot: (id, owner) => {
+    const bot = db.loadOne(conn, 'bots', id);
+    return bot && sameOwner(bot, owner) && bot.status !== 'draft' ? bot : null;
+  },
+  listBots: (owner) => db.loadAll(conn, 'bots').filter(bot => sameOwner(bot, owner) && bot.status !== 'draft'),
+  runBot: async ({ owner, bot, trigger, history, signal }) => {
+    const options = await inferenceOptionsForUser(owner, { botWorker: true });
+    // Reuse the bot runtime with an explicit shared-channel context. Private
+    // sessions, automations, browser tabs and connected-app inventories are not
+    // imported into this turn. The owner explicitly shares this bot's purpose
+    // and runtime capabilities through the channel control.
+    const sharedBot = { id: bot.id, name: bot.name,
+      instructions: bot.instructions || bot.role || bot.output || '', automations: [] };
+    const system = buildBotContext(sharedBot, [], trigger.body, '', trigger.author_email, '')
+      + '\nThis is a shared team channel. Distinguish each speaker. Reply to the current request; do not treat another bot reply as a new request. Keep the reply within 3,500 UTF-8 bytes.';
+    const seedMessages = [{ role: 'system', content: system }].concat(history.map(row => ({
+      role: row.author_type === 'bot' ? 'assistant' : 'user',
+      content: '[' + (row.author_name || row.author_email || row.author_id) + '] ' + row.body,
+    })));
+    return scheduleInference('[' + trigger.author_email + '] ' + trigger.body, 'reply', {
+      ...options, botWorker: true, seedMessages, signal,
+    });
+  },
+}));
 
 function nativeConversationPrincipal(email, workspaceId = DEFAULT_WORKSPACE_ID) {
   const principalId = String(email || '').trim().toLowerCase();
