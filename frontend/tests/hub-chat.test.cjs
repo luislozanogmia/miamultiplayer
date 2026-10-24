@@ -152,7 +152,7 @@ test('administrator approval button is visible without expanding instruction det
 // Shared environment for the live-feed client functions.
 function hubEnv(overrides={}){
   const byRoom={};
-  const env={Promise,Number,Math,Object,JSON,Date,window:{MiaHubChat:transport()},hubWorkspace:()=>true,activeWorkspaceKey:'hub_'+'a'.repeat(32),currentUser:'self@example.test',
+  const env={Promise,Number,Math,Object,JSON,Date,window:{MiaHubChat:transport()},hubWorkspace:()=>true,activeWorkspaceKey:'hub_'+'a'.repeat(32),currentUser:'self@example.test',currentAccountEmail:'self@example.test',
     hubChat:{channels:[{id:'room',name:'general'}],typing:[],readRequests:{},membership:{clerk_user_id:'user_self',role:'member'}},
     chatWs:{configured:true,activeRoomId:'room',navigationGeneration:1,byRoom},
     chatRoomState:id=>byRoom[id]||(byRoom[id]={messages:[]}),hubPath:()=>'/team',appInForeground:()=>true,
@@ -275,4 +275,19 @@ test('live feed resumes from its cursor, reports offline, backs off and asks for
   for(let n=0;n<4;n++){timers.shift().fn();await settle();}
   assert.deepEqual(paths,['/v1/teams/t/events/after/0','/v1/teams/t/events/after/10','/v1/teams/t/events/after/10','/v1/teams/t/events/after/12']);
   assert.ok(seen.includes('offline'));assert.equal(resets,11);assert.equal(seen.filter(e=>e.kind==='channel').length,1);
+});
+test('your confirmed Hub message stays yours when the local identity differs from the Hub account',()=>{
+  const api=transport();
+  const confirmed=api.message({id:'m',sequence:4,author_type:'human',author_id:'user_self',author_email:'account@example.test',body:'hi',created_at:1});
+  const other=api.message({id:'n',sequence:5,author_type:'human',author_id:'user_other',author_email:'account@example.test',body:'hi',created_at:1});
+  const env={currentUser:'local-profile@example.test',currentAccountEmail:'account@example.test',hubChat:{membership:{clerk_user_id:'user_self'}},String};
+  const own=appFunction('hubOwnMessage',env);
+  assert.equal(own({hubMessage:true,hubLocal:true}),true);
+  assert.equal(own(confirmed),true);
+  assert.equal(own(other),false);
+  env.hubChat.membership=null;
+  assert.equal(own(confirmed),true);
+  assert.equal(own({...confirmed,hubAuthor:'someone@example.test'}),false);
+  assert.equal(own({...confirmed,system:true}),false);
+  assert.match(source,/isOwnHuman = m\.hubMessage \? hubOwnMessage\(m\)/);
 });

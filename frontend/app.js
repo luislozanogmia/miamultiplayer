@@ -4511,7 +4511,16 @@
   }
   function hubChannel(roomId){ return hubChat.channels.filter(function(channel){return channel.id===roomId;})[0] || null; }
   function hubSequence(messageId){ var match=/^hub-sequence-([1-9][0-9]{0,14})$/.exec(String(messageId||'')); return match ? Number(match[1]) : null; }
-  function hubOwnMessage(m){ return !!(m && m.hubAuthor && String(m.hubAuthor).toLowerCase()===String(currentUser||'').toLowerCase()); }
+  // The Hub stamps rows with the Clerk member, not the local Mia identity in
+  // currentUser, so match the member id first and the account email second.
+  function hubOwnMessage(m){
+    if(!m || !m.hubMessage || m.system) return false;
+    if(m.hubLocal) return true;
+    var subject=hubChat.membership && hubChat.membership.clerk_user_id;
+    if(subject && m.hubAuthorId) return m.hubAuthorId===subject;
+    var author=String(m.hubAuthor||'').toLowerCase();
+    return !!author && (author===String(currentAccountEmail||'').toLowerCase() || author===String(currentUser||'').toLowerCase());
+  }
   function insertHubMention(name){
     var input=el('#ccInput');if(!input)return;
     input.value+=(input.value && !/\s$/.test(input.value)?' ':'')+'@'+name+' ';
@@ -9151,7 +9160,7 @@
       // same as always.
       var humanParsed = m.hubAuthor ? {agent:m.hubAuthor,text:m.body} : parseSignedHumanBody(m.body);
       var senderEmail = humanParsed.agent;
-      isOwnHuman = !senderEmail || senderEmail.toLowerCase() === (currentUser || '').toLowerCase();
+      isOwnHuman = m.hubMessage ? hubOwnMessage(m) : !senderEmail || senderEmail.toLowerCase() === (currentUser || '').toLowerCase();
       mark = humanAvatarInitialsHtml(isOwnHuman ? currentUser : senderEmail);
       name = isOwnHuman ? 'You' : displayNameForEmail(senderEmail);
       tag = '';
