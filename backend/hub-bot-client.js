@@ -16,7 +16,7 @@ async function requestHub(origin,token,method,path,body,fetcher=fetch) {
 }
 function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getAccountIdentity,runBot,checkIntervalMs=15000,fetcher=fetch}) {
   const journal=createHubBotJournal(db);
-  const inFlight=new Map(), freshTokens=new Map();
+  const inFlight=new Map(), freshTokens=new Map(), selections=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
   const runKey=(s,id)=>scopeKey(s)+':'+id;
   const base=s=>`/v1/teams/${s.teamId}/channels/${s.channelId}`;
@@ -78,7 +78,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
       await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
       if(!localIdentityValid(s) || controller.signal.aborted) throw new Error('owner_changed');
       const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions};
-      const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),signal:controller.signal});
+      const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null});
       if(controller.signal.aborted) throw new Error('cancelled');
       const text=typeof reply==='string'?reply:reply && reply.text;
       journal.saveReply(s,run.job_id,text);
@@ -91,7 +91,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
     const key=runKey(s,run.job_id);
     if(inFlight.has(key) || inFlight.size>=2) return;
     const task=Promise.resolve().then(()=>execute(s,run,token)).catch(()=>{}).finally(()=>{
-      inFlight.delete(key);
+      inFlight.delete(key);selections.delete(key);
       if(![...inFlight.keys()].some(key=>key.startsWith(scopeKey(s)+':'))) freshTokens.delete(scopeKey(s));
     });
     inFlight.set(key,task);
@@ -137,7 +137,12 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
         const ownRequest=job.requester_id===scope.subject;
         if(!/^[a-f0-9]{32}$/.test(job.id||'') || !allowed.has(job.bot_id) || (!ownRequest && job.id!==approvedJobId)) continue;
         const run=journal.prepare(scope,job);
-        if(run.state==='prepared') launch(scope,run,token);
+        if(run.state!=='prepared') continue;
+        const selection=input.modelSelection;
+        if(ownRequest && selection && typeof selection==='object' && !inFlight.has(runKey(scope,job.id)))
+          selections.set(runKey(scope,job.id),{provider:String(selection.provider||''),model:String(selection.model||''),
+            reasoningEffort:selection.reasoningEffort,speed:selection.speed,fast:selection.fast===true});
+        launch(scope,run,token);
       }
       if(![...inFlight.keys()].some(k=>k.startsWith(key+':'))) freshTokens.delete(key);
       return {running:[...inFlight.keys()].filter(k=>k.startsWith(key+':')).length, pending};

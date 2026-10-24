@@ -1292,8 +1292,12 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
     return bot && sameOwner(bot, owner) && bot.status !== 'draft' ? bot : null;
   },
   listBots: (owner) => db.loadAll(conn, 'bots').filter(bot => sameOwner(bot, owner) && bot.status !== 'draft'),
-  runBot: async ({ owner, bot, trigger, history, signal }) => {
-    const options = await inferenceOptionsForUser(owner, { botWorker: true });
+  runBot: async ({ owner, bot, trigger, history, signal, modelSelection }) => {
+    // The requester's composer model choice applies to the runs they start,
+    // validated against their own connected inventory exactly like Solo.
+    const selection = await chatModelSelectionForUser(modelSelection, owner);
+    const options = await inferenceOptionsForUser(owner,
+      { ...chatModelSelectionInferenceOptions(null, selection), botWorker: true });
     // Reuse the bot runtime with an explicit shared-channel context. Private
     // sessions, automations, browser tabs and connected-app inventories are not
     // imported into this turn. The owner explicitly shares this bot's purpose
@@ -1301,7 +1305,7 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
     const sharedBot = { id: bot.id, name: bot.name,
       instructions: bot.instructions || bot.role || bot.output || '', automations: [] };
     const system = buildBotContext(sharedBot, [], trigger.body, '', trigger.author_email, '')
-      + '\nThis is a shared team channel. Distinguish each speaker. Reply to the current request; do not treat another bot reply as a new request. Keep the reply within 3,500 UTF-8 bytes.';
+      + '\nThis is a shared team channel. Distinguish each speaker. Reply to the current request; do not treat another bot reply as a new request. Keep the reply within 15,000 UTF-8 bytes.';
     const seedMessages = [{ role: 'system', content: system }].concat(history.map(row => ({
       role: row.author_type === 'bot' ? 'assistant' : 'user',
       content: '[' + (row.author_name || row.author_email || row.author_id) + '] ' + row.body,
