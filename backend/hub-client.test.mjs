@@ -31,3 +31,15 @@ test('public endpoint does not authorize unsigned calls',async()=>{
  await proxy({url:'/v1/me',method:'GET',headers:{}},response);
  assert.equal(response.code,401);assert.equal(forwarded,false);
 });
+
+test('only image routes carry large bodies and only the team feed waits longer', () => {
+  const { hubRouteLimits } = require('./hub-client');
+  const team = 'a'.repeat(32), channel = 'b'.repeat(32), file = 'c'.repeat(32);
+  assert.equal(hubRouteLimits('POST', `/v1/teams/${team}/channels/${channel}/files`).request, 12 * 1024 * 1024);
+  assert.equal(hubRouteLimits('GET', `/v1/teams/${team}/channels/${channel}/files/${file}`).response, 12 * 1024 * 1024);
+  assert.equal(hubRouteLimits('POST', `/v1/teams/${team}/channels/${channel}/messages`).request, 40000);
+  assert.equal(hubRouteLimits('POST', `/v1/teams/${team}/channels`).request, 8192);
+  assert.equal(hubRouteLimits('GET', `/v1/teams/${team}/channels/${channel}/messages/before/0`).response, 131072);
+  assert.equal(hubRouteLimits('GET', `/v1/teams/${team}/events/after/12`).timeout, 30000);
+  assert.equal(hubRouteLimits('GET', `/v1/teams/${team}/events/after/01`).timeout, 15000);
+});

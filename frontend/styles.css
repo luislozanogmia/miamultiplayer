@@ -1008,6 +1008,7 @@
   .chat-msg-row.is-you .chat-msg-text a{color:var(--sand-text-on-primary);}
   .chat-msg-text a:hover{opacity:.85;}
   .chat-msg-retry-row{display:flex;margin-top:6px;}
+  .chat-msg-retry-row .chat-msg-failed{align-self:center;margin-right:8px;font-size:12px;line-height:16px;color:var(--sand-text-danger,#b42318);}
   .chat-msg-retry{appearance:none;-webkit-appearance:none;border:1px solid var(--sand-border-default);border-radius:999px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font-family:var(--styled-sans);font-size:12px;line-height:16px;font-weight:500;padding:5px 12px;cursor:pointer;transition:background .14s ease,border-color .14s ease,color .14s ease;}
   .chat-msg-retry:hover:not(:disabled){background:var(--sand-fill-secondary);border-color:var(--sand-border-focus);}
   .chat-msg-retry:focus-visible{outline:2px solid var(--sand-border-focus);outline-offset:2px;}

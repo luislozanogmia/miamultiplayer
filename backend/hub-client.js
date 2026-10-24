@@ -19,6 +19,24 @@ function hubEndpoint(dataDirectory) {
   }
   return url.origin;
 }
+// Per-route bounds mirror the Hub's own: only image upload/download may carry
+// large bodies, and only the team change feed is held open by the Hub.
+const HUB_UPLOAD = /^\/v1\/teams\/[a-f0-9]{32}\/channels\/[a-f0-9]{32}\/files$/;
+const HUB_DOWNLOAD = /^\/v1\/teams\/[a-f0-9]{32}\/channels\/[a-f0-9]{32}\/files\/[a-f0-9]{32}$/;
+const HUB_FEED = /^\/v1\/teams\/[a-f0-9]{32}\/events\/after\/(?:0|[1-9][0-9]{0,14})$/;
+const HUB_MESSAGE = /^\/v1\/teams\/[a-f0-9]{32}\/channels\/[a-f0-9]{32}\/messages$/;
+function hubRouteLimits(method, route) {
+  return {
+    request: method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000 : 8192,
+    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : 131072,
+    timeout: method === 'GET' && HUB_FEED.test(route) ? 30000 : HUB_UPLOAD.test(route) || HUB_DOWNLOAD.test(route) ? 30000 : 15000,
+  };
+}
+// Decision (review item 18): unlike /api/hub-bots, this proxy does not require
+// the local Mia session. It listens on loopback only, passes the API request
+// boundary (Host/Origin), forwards only to the configured Hub, and every call
+// needs a real production Clerk token the Hub verifies, so a caller gains no
+// access it lacks without the proxy. Revisit if a security review flags it.
 function createHubClient({ dataDirectory, fetcher = fetch }) {
   return async (req, res) => {
     const route = req.url;
@@ -33,17 +51,18 @@ function createHubClient({ dataDirectory, fetcher = fetch }) {
     try {
       const origin = hubEndpoint(dataDirectory);
       if (!origin) return res.status(503).json({ error: 'hub_not_configured' });
+      const limits = hubRouteLimits(req.method, route);
       const body = req.method === 'GET' ? undefined : JSON.stringify(req.body || {});
-      if (body && Buffer.byteLength(body) > 8192) return res.status(413).json({ error: 'body_too_large' });
+      if (body && Buffer.byteLength(body) > limits.request) return res.status(413).json({ error: 'body_too_large' });
       const response = await fetcher(origin + route, { method: req.method, redirect: 'error',
-        headers: { authorization, 'content-type': 'application/json' }, body, signal: AbortSignal.timeout(15000) });
+        headers: { authorization, 'content-type': 'application/json' }, body, signal: AbortSignal.timeout(limits.timeout) });
       let length = 0; const chunks = [];
       for await (const chunk of response.body) {
-        length += chunk.length; if (length > 131072) throw new Error('Response exceeds limit'); chunks.push(Buffer.from(chunk));
+        length += chunk.length; if (length > limits.response) throw new Error('Response exceeds limit'); chunks.push(Buffer.from(chunk));
       }
       const result = JSON.parse(Buffer.concat(chunks));
       return res.status(response.status).json(result);
     } catch { return res.status(503).json({ error: 'hub_unavailable' }); }
   };
 }
-module.exports = { createHubClient, hubEndpoint };
+module.exports = { createHubClient, hubEndpoint, hubRouteLimits };

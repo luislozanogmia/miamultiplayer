@@ -4503,12 +4503,15 @@
 
   // Hub rooms use the same timeline and composer but a separate authenticated
   // transport. Never feed a Hub room into the local agent/conversation APIs.
-  var hubChat = {channels:[], error:'', sendError:null, busy:false, sending:false, retry:null, teamsAt:0, teamsPromise:null};
+  var hubChat = {channels:[], error:'', busy:false, teamsAt:0, teamsPromise:null, feed:null, feedStatus:'connecting', typing:[], membership:null, typingSentAt:0, readRequests:{}};
   function hubPath(){ return '/v1/teams/' + activeWorkspaceKey.slice(4); }
   function hubCall(method, path, body){
     if(!window.MiaHubChat) return Promise.reject(new Error('Hub chat is not loaded. Restart Mia.'));
     return window.MiaHubChat.call(method, path, body);
   }
+  function hubChannel(roomId){ return hubChat.channels.filter(function(channel){return channel.id===roomId;})[0] || null; }
+  function hubSequence(messageId){ var match=/^hub-sequence-([1-9][0-9]{0,14})$/.exec(String(messageId||'')); return match ? Number(match[1]) : null; }
+  function hubOwnMessage(m){ return !!(m && m.hubAuthor && String(m.hubAuthor).toLowerCase()===String(currentUser||'').toLowerCase()); }
   function insertHubMention(name){
     var input=el('#ccInput');if(!input)return;
     input.value+=(input.value && !/\s$/.test(input.value)?' ':'')+'@'+name+' ';
@@ -4521,15 +4524,23 @@
     input.focus();input.setSelectionRange(input.value.length,input.value.length);
     openMentionPopover(mentionTriggerAt(input));
   }
-  function pollHubBots(roomId){
+  // The requester's own Mia runs their bot requests right away, on their own
+  // computer and subscription, exactly as Solo does. `immediate` skips the
+  // background throttle; a request arriving mid-poll runs once more after it.
+  function pollHubBots(roomId,immediate){
     if(!hubWorkspace() || !roomId || chatWs.configured===false)return Promise.resolve();
     var state=chatRoomState(roomId),workspace=activeWorkspaceKey;
-    if(!state.hubBots || !state.hubBots.length || state.hubExecutionRequest || Date.now()-Number(state.hubExecutionAt||0)<15000)return Promise.resolve();
+    if(state.hubExecutionRequest){ if(immediate) state.hubExecutionAgain=true; return state.hubExecutionRequest; }
+    if(!immediate && Date.now()-Number(state.hubExecutionAt||0)<15000)return Promise.resolve();
     state.hubExecutionAt=Date.now();
-    state.hubExecutionRequest=window.MiaHubChat.localCall('POST','/poll',{teamId:workspace.slice(4),channelId:roomId})
-      .then(function(result){state.hubPendingRuns=result.pending||[];renderChatHeaderBar();})
+    var selection=chatModelSelectionMetadata();
+    state.hubExecutionRequest=window.MiaHubChat.localCall('POST','/poll',Object.assign({teamId:workspace.slice(4),channelId:roomId},selection?{modelSelection:selection}:{}))
+      .then(function(result){state.hubPendingRuns=result.pending||[];if(chatWs.activeRoomId===roomId)renderChatHeaderBar();})
       .catch(function(){/* Own requests authorize local execution; handoffs await local acceptance. */})
-      .finally(function(){state.hubExecutionRequest=null;});
+      .finally(function(){
+        state.hubExecutionRequest=null;
+        if(state.hubExecutionAgain && workspace===activeWorkspaceKey){state.hubExecutionAgain=false;pollHubBots(roomId,true);}
+      });
     return state.hubExecutionRequest;
   }
   function refreshHubBotState(roomId,force){
@@ -4556,12 +4567,14 @@
     }).catch(function(){/* Human transport reports its own access/connectivity state. */}).finally(function(){state.hubBotRequest=null;});
     return state.hubBotRequest;
   }
+  function stopHubFeed(){ if(hubChat.feed){hubChat.feed.stop();hubChat.feed=null;} }
   function hubFeedback(error){
     hubChat.error = error && error.message || '';
     if(error && (error.status === 403 || error.status === 404)){
-      // Revocation invalidates cached content and its incremental cursor.
+      // Revocation invalidates cached content and its history cursor.
       // A later invitation must rebuild history from the authorized beginning.
       chatWs.navigationGeneration=Number(chatWs.navigationGeneration||0)+1;
+      stopHubFeed();
       Object.keys(chatWs.byRoom).forEach(function(key){
         var state=chatWs.byRoom[key];
         state.messages=[];state.lastSequence=0;state.lastTs=0;
@@ -4580,6 +4593,9 @@
     hubChat.teamsAt=Date.now();
     hubChat.teamsPromise=hubCall('GET','/v1/me').then(function(result){
       var menu=el('#workspaceSwitcherMenu');
+      (result.teams||[]).forEach(function(team){
+        if('hub_'+team.teamId===activeWorkspaceKey) hubChat.membership=team.membership || null;
+      });
       if(!menu) return;
       els('[data-hub-team]',menu).forEach(function(node){node.remove();});
       (result.teams||[]).filter(function(team){return team.membership && /^[a-f0-9]{32}$/.test(team.teamId);}).forEach(function(team){
@@ -4626,15 +4642,24 @@
   function renderHubStatus(){
     var footer=el('#chatSyncFooter');
     if(!footer)return;
-    var failed=hubChat.sendError && hubChat.sendError.roomId===chatWs.activeRoomId;
+    var typing=hubChat.typing.filter(function(entry){return entry.channel_id===chatWs.activeRoomId;}).map(function(entry){return displayNameForEmail(entry.email);});
+    var offline=hubChat.feedStatus==='offline';
     footer.style.display='block';
     footer.setAttribute('role','status');
     footer.setAttribute('aria-live','polite');
-    footer.textContent=failed ? hubChat.sendError.message : (hubChat.sending ? 'Sending…' : (hubChat.error || 'Connected to shared team'));
-    footer.classList.toggle('chat-sync-fail',!!failed || chatWs.configured===false);
+    footer.textContent=hubChat.error || (offline ? 'Reconnecting to the shared team…'
+      : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to shared team');
+    footer.classList.toggle('chat-sync-fail',offline || !!hubChat.error || chatWs.configured===false);
+  }
+  function hubRoomPreview(roomId){
+    var state=chatWs.byRoom[roomId];
+    var last=state && (state.messages||[]).filter(function(m){return !m.system && !m.threadRoot && (m.body || m.hubFile);}).slice(-1)[0];
+    if(!last) return '';
+    if(!last.body && last.hubFile) return 'Image';
+    return excerpt(markdownPreviewText(String(last.body||'')).replace(/\s+/g,' ').trim(),58);
   }
   function renderHubSidebar(){
-    var pinned=el('#chatPinned'), all=el('#chatAllConversations'), footer=el('#chatSyncFooter');
+    var pinned=el('#chatPinned'), all=el('#chatAllConversations');
     if(pinned)pinned.innerHTML='';
     if(el('#chatPinnedCount'))el('#chatPinnedCount').textContent='0';
     if(el('#chatAllCount'))el('#chatAllCount').textContent=String(hubChat.channels.length);
@@ -4643,56 +4668,254 @@
     all.innerHTML='';
     hubChat.channels.forEach(function(channel){
       var button=document.createElement('button'); button.type='button';
+      var state=chatWs.byRoom[channel.id];
+      var live=hubChat.typing.some(function(entry){return entry.channel_id===channel.id;}) || !!(state && state.thinking);
+      var unread=channel.id!==chatWs.activeRoomId && Number(channel.unread||0)>0;
       button.className='chat-recent-row'+(chatWs.activeRoomId===channel.id?' active':'');
-      button.textContent='# '+channel.name;
+      button.innerHTML='<span class="row-text"><span class="row-line1"><span class="row-label">'+esc('# '+channel.name)+'</span>'
+        +renderChatActivityIndicator(live,unread)
+        +'</span><span class="row-preview">'+esc(hubRoomPreview(channel.id))+'</span></span>';
       button.addEventListener('click',function(){loadChatRoom(channel.id,'group',channel.name);}); all.appendChild(button);
     });
     var create=document.createElement('button'); create.type='button'; create.className='chat-recent-row';create.textContent='+ New shared channel';
     create.addEventListener('click',openNewChannelFlow);all.appendChild(create);
-    var refresh=document.createElement('button');refresh.type='button';refresh.className='chat-recent-row';refresh.textContent='Refresh channels';
-    refresh.addEventListener('click',function(){refreshHubChannels().then(function(){hubChat.error='';renderChatSidebar();}).catch(hubFeedback);});all.appendChild(refresh);
   }
-  function pollHubRoom(){
-    var roomId=chatWs.activeRoomId;
-    if(!roomId || hubChat.busy || !hubWorkspace() || !hubChat.channels.some(function(channel){return channel.id===roomId;}))return Promise.resolve();
-    var workspace=activeWorkspaceKey, generation=chatWs.navigationGeneration;
+  function hubLatestSequence(state){
+    var confirmed=(state.messages||[]).filter(function(m){return !m.hubLocal && m.nativeEvent;});
+    return confirmed.length ? confirmed[confirmed.length-1].nativeEvent.sequence : 0;
+  }
+  function applyHubRows(roomId,rows){
     var state=chatRoomState(roomId);
-    hubChat.busy=true;
-    return hubCall('GET',hubPath()+'/channels/'+roomId+'/messages/after/'+Number(state.lastSequence||0)).then(function(result){
+    state.messages=window.MiaHubChat.merge(state.messages,rows);
+    state.lastSequence=Math.max(Number(state.lastSequence||0),hubLatestSequence(state));
+    state.lastTs=state.messages.length?state.messages[state.messages.length-1].ts:0;
+  }
+  // Reading the open channel moves this member's Hub read marker, so unread
+  // state matches on every computer they use.
+  function markHubRead(roomId){
+    var channel=hubChannel(roomId), state=chatWs.byRoom[roomId];
+    if(!channel || !state || roomId!==chatWs.activeRoomId || !appInForeground() || hubChat.readRequests[roomId])return;
+    var sequence=hubLatestSequence(state);
+    channel.unread=0;
+    if(!sequence || sequence<=Number(channel.last_read||0))return;
+    channel.last_read=sequence;
+    hubChat.readRequests[roomId]=hubCall('POST',hubPath()+'/channels/'+roomId+'/read',{sequence:sequence})
+      .catch(function(){channel.last_read=0;}).finally(function(){delete hubChat.readRequests[roomId];});
+  }
+  // Loads the newest page of a channel. Older pages load on upward scroll.
+  function loadHubRoom(){
+    var roomId=chatWs.activeRoomId;
+    if(!roomId || !hubWorkspace() || !hubChannel(roomId))return Promise.resolve();
+    var workspace=activeWorkspaceKey, generation=chatWs.navigationGeneration, state=chatRoomState(roomId);
+    if(state.hubLoading)return state.hubLoading;
+    state.hubLoading=hubCall('GET',hubPath()+'/channels/'+roomId+'/messages/before/0').then(function(result){
       if(workspace!==activeWorkspaceKey || generation!==chatWs.navigationGeneration || roomId!==chatWs.activeRoomId)return;
-      var known={};state.messages.forEach(function(m){known[m.id]=true;});
-      (result.messages||[]).forEach(function(row){
-        var message=window.MiaHubChat.message(row);
-        if(!known[message.id]){state.messages.push(message);known[message.id]=true;}
-        state.lastSequence=Math.max(Number(state.lastSequence||0),row.sequence);
-      });
-      state.messages.sort(function(a,b){return a.nativeEvent.sequence-b.nativeEvent.sequence;});
-      state.historyInitialized=true;state.historyComplete=true;state.historyCursor=null;
-      state.lastTs=state.messages.length?state.messages[state.messages.length-1].ts:0;
-      hubChat.error=result.hasMore?'Loading earlier shared messages…':'';
-      chatWs.configured=true;
+      if(!state.historyInitialized){
+        // Replacing drops stale rows from before a reset; unsent copies stay.
+        state.messages=state.messages.filter(function(m){return m.hubLocal;});
+        state.historyCursor=result.hasMore ? result.before : null;
+      }
+      applyHubRows(roomId,result.messages||[]);
+      state.historyInitialized=true;state.historyComplete=!state.historyCursor;
+      hubChat.error='';chatWs.configured=true;
+      markHubRead(roomId);
       renderChatSidebar();renderChatThread();renderDeptAgentSelector();
     }).catch(function(error){ if(workspace===activeWorkspaceKey && generation===chatWs.navigationGeneration)hubFeedback(error); })
-      .finally(function(){hubChat.busy=false;});
+      .finally(function(){state.hubLoading=null;});
+    return state.hubLoading;
   }
-  function sendHubMessage(text,attachment,thread,roomId){
-    if(attachment || thread) {hubFeedback(new Error('Shared channels support plain text messages.'));return Promise.resolve({status:400});}
-    try{window.MiaHubChat.validateText(text);}catch(error){hubFeedback(error);return Promise.resolve({status:400});}
-    if(hubChat.sending || !roomId || chatWs.configured===false)return Promise.resolve({status:409});
+  function loadOlderHubMessages(roomId){
+    var state=roomId && chatWs.byRoom[roomId];
+    if(!state || chatWs.activeRoomId!==roomId || state.historyLoading || !state.historyCursor)return Promise.resolve();
+    var workspace=activeWorkspaceKey, generation=chatWs.navigationGeneration, cursor=state.historyCursor;
+    state.historyLoading=true;renderChatThread();
+    return hubCall('GET',hubPath()+'/channels/'+roomId+'/messages/before/'+cursor).then(function(result){
+      if(workspace!==activeWorkspaceKey || generation!==chatWs.navigationGeneration || roomId!==chatWs.activeRoomId)return;
+      applyHubRows(roomId,result.messages||[]);
+      state.historyCursor=result.hasMore && result.before<cursor ? result.before : null;
+      state.historyComplete=!state.historyCursor;
+    }).catch(function(){/* Keep the cursor so a later upward scroll retries. */}).then(function(){
+      state.historyLoading=false;
+      if(chatWs.activeRoomId===roomId)renderChatThread();
+    });
+  }
+  function hubRoomThinking(roomId){
+    var active=Object.keys(hubChat.dispatches||{}).map(function(id){return hubChat.dispatches[id];}).filter(function(job){
+      return job.channel_id===roomId && (job.state==='pending' || job.state==='claimed');
+    });
+    var state=chatRoomState(roomId);
+    if(active.length){
+      state.thinkingAgentName=active.length>1?'Bots':active[0].bot_name || 'Bot';
+      if(!state.thinking)startChatThinking(roomId);
+    } else if(state.thinking) stopChatThinking(roomId);
+  }
+  function trackHubDispatch(job){
+    if(!job || !job.id)return;
+    hubChat.dispatches=hubChat.dispatches||{};
+    if(['pending','claimed'].indexOf(job.state)>=0)hubChat.dispatches[job.id]=job;
+    else delete hubChat.dispatches[job.id];
+    if(job.channel_id)hubRoomThinking(job.channel_id);
+  }
+  function applyHubEvents(events){
+    var subject=hubChat.membership && hubChat.membership.clerk_user_id, refreshChannels=false, render={};
+    events.forEach(function(event){
+      var roomId=event.channel_id, channel=hubChannel(roomId), state=roomId && chatWs.byRoom[roomId];
+      if(event.kind==='message' && event.message){
+        var row=event.message;
+        if(!channel){refreshChannels=true;return;}
+        channel.latest_sequence=Math.max(Number(channel.latest_sequence||0),row.sequence);
+        if(state && state.historyInitialized){applyHubRows(roomId,[row]);render[roomId]=true;}
+        var fromOther=row.author_type!=='system' && row.author_id!==subject;
+        if(!fromOther)return;
+        if(roomId===chatWs.activeRoomId && appInForeground()){markHubRead(roomId);return;}
+        channel.unread=Number(channel.unread||0)+1;
+        notifyDesktopChatMessage(roomId,window.MiaHubChat.message(row));
+      } else if(event.kind==='message_updated' && event.message){
+        if(state && state.historyInitialized){applyHubRows(roomId,[event.message]);render[roomId]=true;}
+        if(event.message.deleted)refreshChannels=true;
+      } else if(event.kind==='dispatch' && event.dispatch){
+        var job=Object.assign({channel_id:roomId},event.dispatch);
+        trackHubDispatch(job);
+        // A bot request by this member starts on this computer right away.
+        if(job.state==='pending' && subject && job.executor_id===subject && job.requester_id===subject)pollHubBots(roomId,true);
+      } else if(event.kind==='read'){
+        if(channel){channel.last_read=Math.max(Number(channel.last_read||0),Number(event.last_read||0));
+          if(channel.last_read>=Number(channel.latest_sequence||0))channel.unread=0;else refreshChannels=true;}
+      } else if(event.kind==='bots'){
+        if(roomId===chatWs.activeRoomId)refreshHubBotState(roomId,true);
+        else if(state)state.hubBotsAt=0;
+      } else if(event.kind==='members'){
+        Object.keys(chatWs.byRoom).forEach(function(key){chatWs.byRoom[key].hubDirectoryAt=0;});
+        if(chatWs.activeRoomId)refreshHubBotState(chatWs.activeRoomId,true);
+      } else if(event.kind==='channel') refreshChannels=true;
+    });
+    if(refreshChannels)refreshHubChannels().catch(function(){});
+    renderChatSidebar();
+    if(render[chatWs.activeRoomId])renderChatThread();
+  }
+  function startHubFeed(){
+    stopHubFeed();
+    if(!hubWorkspace() || !window.MiaHubChat)return;
     var workspace=activeWorkspaceKey;
-    var retry=hubChat.retry;
-    if(!retry || retry.roomId!==roomId || retry.text!==text)retry={roomId:roomId,text:text,id:window.MiaHubChat.id()};
-    hubChat.retry=retry;hubChat.sendError=null;hubChat.sending=true;renderHubStatus();
-    return hubCall('POST',hubPath()+'/channels/'+roomId+'/messages',{id:retry.id,text:text}).then(function(){
-      hubChat.retry=null;
-      if(workspace===activeWorkspaceKey){
-        hubChat.error='Message sent';renderChatSidebar();
-        chatRoomState(roomId).hubExecutionAt=0;
-        pollHubBots(roomId);
+    hubChat.feed=window.MiaHubChat.feed({teamId:workspace.slice(4),call:hubCall,
+      onEvents:function(events){ if(workspace===activeWorkspaceKey)applyHubEvents(events); },
+      onReset:function(lost){
+        if(workspace!==activeWorkspaceKey)return;
+        // Anything missed while offline is reloaded from the authoritative history.
+        Object.keys(chatWs.byRoom).forEach(function(key){chatWs.byRoom[key].historyInitialized=false;});
+        refreshHubChannels().then(function(){ if(chatWs.activeRoomId)return loadHubRoom(); }).catch(function(){});
+        if(lost && chatWs.activeRoomId)pollHubBots(chatWs.activeRoomId,true);
+      },
+      onTyping:function(typing){
+        if(workspace!==activeWorkspaceKey)return;
+        var changed=JSON.stringify(typing)!==JSON.stringify(hubChat.typing);
+        hubChat.typing=typing; if(changed)renderChatSidebar();
+      },
+      onStatus:function(status,error){
+        if(workspace!==activeWorkspaceKey)return;
+        var changed=hubChat.feedStatus!==status; hubChat.feedStatus=status;
+        if(status==='offline' && error && (error.status===403 || error.status===404)){
+          // Confirm revocation through an ordinary request before clearing history.
+          refreshHubChannels().catch(hubFeedback);
+        }
+        if(changed)renderHubStatus();
+      }});
+  }
+  function sendHubTyping(){
+    if(!hubWorkspace() || !chatWs.activeRoomId || !hubChannel(chatWs.activeRoomId) || Date.now()-hubChat.typingSentAt<4000)return;
+    hubChat.typingSentAt=Date.now();
+    hubCall('POST',hubPath()+'/channels/'+chatWs.activeRoomId+'/typing',{}).catch(function(){});
+  }
+  // A send appears in the timeline immediately; delivery runs behind it and a
+  // failure marks that message with a retry instead of losing the text.
+  function sendHubMessage(text,prepared,threadRootId,roomId){
+    var upload=prepared && prepared.hubUpload;
+    try{window.MiaHubChat.validateText(text,!!upload);}catch(error){showBenchToast(error.message);return Promise.resolve({status:400});}
+    if(!roomId || chatWs.configured===false || !hubChannel(roomId))return Promise.resolve({status:409});
+    var threadRoot=threadRootId ? hubSequence(threadRootId) : null;
+    if(threadRootId && !threadRoot){showBenchToast('That thread is no longer available.');return Promise.resolve({status:400});}
+    var id=window.MiaHubChat.id();
+    var local={id:'hub-local-'+id,hubLocal:true,hubMessage:true,hubMessageId:id,sender:currentUser,hubAuthor:currentUser,body:String(text||''),
+      ts:Date.now(),threadRoot:threadRootId||null,pending:true,attachments:[],hubUpload:upload||null,nativeEvent:{sequence:Number.MAX_SAFE_INTEGER}};
+    var state=chatRoomState(roomId);
+    state.messages.push(local);state.followLatest=true;
+    renderChatSidebar();if(chatWs.activeRoomId===roomId)renderChatThread();
+    // The composer clears at once; a failed delivery stays in the timeline.
+    deliverHubMessage(roomId,local);
+    return Promise.resolve({status:201});
+  }
+  function deliverHubMessage(roomId,local){
+    var workspace=activeWorkspaceKey, state=chatRoomState(roomId);
+    local.pending=true;local.hubFailed=false;local.hubError='';
+    var threadRoot=local.threadRoot ? hubSequence(local.threadRoot) : null;
+    var attachment=local.hubAttachmentId ? Promise.resolve(local.hubAttachmentId) : local.hubUpload
+      ? hubCall('POST',hubPath()+'/channels/'+roomId+'/files',{filename:local.hubUpload.filename,mimeType:local.hubUpload.mimeType,contentBase64:local.hubUpload.contentBase64})
+        .then(function(result){local.hubAttachmentId=result.file.id;return result.file.id;})
+      : Promise.resolve(null);
+    return attachment.then(function(attachmentId){
+      var body={id:local.hubMessageId,text:local.body};
+      if(threadRoot)body.threadRoot=threadRoot;
+      if(attachmentId)body.attachmentId=attachmentId;
+      return hubCall('POST',hubPath()+'/channels/'+roomId+'/messages',body);
+    }).then(function(result){
+      if(workspace!==activeWorkspaceKey)return {status:201};
+      local.pending=false;
+      if(state.messages.indexOf(local)>=0){
+        // The live feed normally replaces this copy; confirm it in place if not.
+        local.hubLocal=false;local.id='hub-sequence-'+result.sequence;local.nativeEvent={sequence:result.sequence};
+        if(local.hubUpload && local.hubAttachmentId)local.hubFile={id:local.hubAttachmentId,filename:local.hubUpload.filename,mimeType:local.hubUpload.mimeType,channelId:roomId};
+        state.messages=window.MiaHubChat.merge(state.messages,[]);
       }
+      (result.dispatches||[]).forEach(function(job){trackHubDispatch({id:job.id,channel_id:roomId,bot_name:job.bot_name,state:'pending'});});
+      if(result.dispatches && result.dispatches.length)pollHubBots(roomId,true);
+      renderChatSidebar();if(chatWs.activeRoomId===roomId)renderChatThread();
       return {status:201};
-    }).catch(function(error){if(workspace===activeWorkspaceKey){hubChat.sendError={roomId:roomId,message:'Message not sent. Your draft is kept. '+(error.message || 'Please retry.')};hubFeedback(error);}return {status:500};})
-      .finally(function(){hubChat.sending=false;renderHubStatus();});
+    }).catch(function(error){
+      if(workspace!==activeWorkspaceKey)return {status:500};
+      local.pending=false;local.hubFailed=true;local.hubError=error && error.message || 'Please retry.';
+      showBenchToast('Message not delivered. '+local.hubError);
+      if(!appInForeground())showDesktopNotification(roomId,'Message not delivered',local.body || 'Image');
+      renderChatSidebar();if(chatWs.activeRoomId===roomId)renderChatThread();
+      return {status:500};
+    });
+  }
+  // Coming back to Mia counts as reading the open channel, as in Solo.
+  window.addEventListener('focus',function(){ if(hubWorkspace() && chatWs.activeRoomId){markHubRead(chatWs.activeRoomId);renderChatSidebar();} });
+  document.addEventListener('click',function(event){
+    var button=event.target.closest('[data-hub-retry]');
+    if(!button || !hubWorkspace())return;
+    var roomId=chatWs.activeRoomId, state=roomId && chatRoomState(roomId);
+    var local=state && state.messages.filter(function(m){return m.id===button.getAttribute('data-hub-retry') && m.hubFailed;})[0];
+    if(local){deliverHubMessage(roomId,local);renderChatThread();}
+  });
+  function hubMessageDeletable(m){
+    if(!m || m.system || m.pending || m.deleted)return false;
+    if(m.hubLocal)return !!m.hubFailed;
+    if(hubChat.membership && hubChat.membership.role==='admin')return true;
+    return hubOwnMessage(m);
+  }
+  function deleteHubMessage(roomId,eventId){
+    var state=chatRoomState(roomId);
+    var message=state.messages.filter(function(m){return m.id===eventId;})[0];
+    if(!message || !hubMessageDeletable(message))return Promise.resolve();
+    if(message.hubLocal){state.messages=state.messages.filter(function(m){return m!==message;});renderChatThread();return Promise.resolve();}
+    return hubCall('DELETE',hubPath()+'/channels/'+roomId+'/messages/'+hubSequence(eventId)).then(function(){
+      message.deleted=true;message.body='Message deleted';message.hubFile=null;
+      if(chatWs.activeRoomId===roomId)renderChatThread();renderChatSidebar();
+    }).catch(function(error){showBenchToast(error.message || 'Could not delete this message.');});
+  }
+  // Images stay on this computer until the message is delivered, so the
+  // timeline shows them at once and a retry can resend the same bytes.
+  function prepareHubAttachment(file){
+    return fileAsBase64(file).then(function(contentBase64){
+      return {hubUpload:{filename:file.name || 'image',mimeType:String(file.type || '').toLowerCase(),contentBase64:contentBase64,previewUrl:URL.createObjectURL(file)}};
+    });
+  }
+  function hubAttachmentsFor(m){
+    if(m.hubUpload)return [{id:m.id,filename:m.hubUpload.filename,mimeType:m.hubUpload.mimeType,url:m.hubUpload.previewUrl,previewUrl:m.hubUpload.previewUrl,hubImage:true}];
+    if(!m.hubFile)return [];
+    var url=window.MiaHubChat.fileUrl(activeWorkspaceKey.slice(4),m.hubFile,function(){ if(hubWorkspace())renderChatThread(); });
+    return [{id:m.hubFile.id,filename:m.hubFile.filename,mimeType:m.hubFile.mimeType,url:url || '',previewUrl:url || '',hubImage:true,loading:!url}];
   }
   function createHubChannel(){
     var input=el('#channelNameInput'), name=input && input.value.trim();
@@ -4847,7 +5070,7 @@
     return !!NATIVE_RASTER_PREVIEW_MIMES[String(mimeType || '').toLowerCase()];
   }
   function chatMessageHasAttachments(message){
-    return !!(message && Array.isArray(message.attachments) && message.attachments.length);
+    return !!(message && (message.hubFile || message.hubUpload || (Array.isArray(message.attachments) && message.attachments.length)));
   }
 
   function nativeConversationToRoom(conversation){
@@ -5489,7 +5712,6 @@
   }
 
   function stageChatAttachment(file){
-    if(hubWorkspace()){showBenchToast('Shared channels support text messages.');return false;}
     if(!file) return false;
     var allowed = ['image/png','image/jpeg','image/gif','image/webp'];
     if(allowed.indexOf(String(file.type || '').toLowerCase()) === -1){
@@ -5524,6 +5746,7 @@
   }
 
   function prepareChatAttachment(file, roomId){
+    if(hubWorkspace()) return prepareHubAttachment(file);
     return fileAsBase64(file).then(function(dataBase64){
       return api(nativeConversationPath(roomId, '/attachments'), {method:'POST', body:{
         filename: file.name || 'image',
@@ -7806,7 +8029,7 @@
   }
 
   function setLocalChatTypingActivity(active){
-    if(hubWorkspace()) return;
+    if(hubWorkspace()){ if(active) sendHubTyping(); return; }
     if(localChatTyping.timer){
       clearTimeout(localChatTyping.timer);
       localChatTyping.timer = null;
@@ -8748,6 +8971,11 @@
     return senderEmail.toLowerCase() === (currentUser || '').toLowerCase();
   }
 
+  function hubEditablePrompt(roomId, eventId){
+    var message = roomId && (chatRoomState(roomId).messages || []).filter(function(m){ return m.id === eventId; })[0];
+    return message && !message.hubLocal && !message.deleted && hubOwnMessage(message) ? String(message.body || '').trim() : null;
+  }
+
   function editableChatPromptForEvent(roomId, eventId){
     var state = roomId && chatRoomState(roomId);
     var message = state && (state.messages || []).filter(function(m){ return m.id === eventId; })[0];
@@ -8903,14 +9131,14 @@
       return '<div class="chat-msg-system' + (systemAvatar ? ' with-avatar' : '') + '">' + avatarHtml + '<p>' + esc(m.body) + '</p></div>';
     }
     var media = m.media && m.media.url ? m.media : null;
-    var attachments = Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (media ? [media] : []);
+    var attachments = m.hubMessage ? hubAttachmentsFor(m) : Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (media ? [media] : []);
     var hasMedia = attachments.length > 0;
     var isHuman = isHumanSender(m.sender);
     if(!isHuman && isSupersededNativeProgressMessage(m)) return '';
     var isOwnHuman = false;
     var botBody = isHuman || m.hubMessage ? m.body : displayBotBody(m.body);
     if(!isHuman && !botBody && !hasMedia) return '';
-    var timeText = m.pending ? 'sending&hellip;' : esc(chatRelTime(m.ts));
+    var timeText = m.pending ? 'sending&hellip;' : m.hubFailed ? 'not delivered' : esc(chatRelTime(m.ts));
     var mark, name, tag, text;
     if(isHuman){
       // Every human send shares one server-side app identity, so
@@ -8957,9 +9185,9 @@
       : '<span class="chat-msg-mark' + (isHuman ? '' : ' agent') + (!isHuman && isMiaOrchestrator(name, name === 'Mia' ? 'gateway' : null) ? ' mia-mark-host' : '') + '">' + (isHuman ? mark : agentAvatarHtml(name, name === 'Mia' ? 'gateway' : null, 28, null, null, true)) + '</span>';
     // Message actions use the shared context menu, which reads the row's
     // existing permission attributes instead of recomputing them on click.
-    var showThreadAction = !hubWorkspace() && !opts.inThread && !m.pending;
-    var showDeleteAction = !hubWorkspace() && chatMsgDeletable(m);
-    var showEditAction = !hubWorkspace() && chatMsgEditable(m);
+    var showThreadAction = !opts.inThread && !m.pending && !(m.hubMessage && (m.hubLocal || m.deleted));
+    var showDeleteAction = m.hubMessage ? hubMessageDeletable(m) : chatMsgDeletable(m);
+    var showEditAction = m.hubMessage ? !m.hubLocal && !m.deleted && hubOwnMessage(m) && !!String(m.body||'').trim() : chatMsgEditable(m);
     var isPreReasoning = !m.hubAuthor && !!text && isPreReasoningNotice(text);
     var compactBrowserMessage = !!text && document.body.classList.contains('browser-collab-mode');
     var isLongMessage = !m.hubAuthor && !!text && (compactBrowserMessage || chatMessageWordCount(text) > CHAT_MESSAGE_PREVIEW_WORDS);
@@ -8980,7 +9208,9 @@
     var directRoom = isDirectChatRoom();
     var messageClass = liveProgress ? ' chat-msg-thinking' : (isPreReasoning ? ' chat-pre-reasoning' : (isLongMessage ? ' chat-expandable-message' : ''));
     var retryAttempted = !!chatRetryAttempts[m.id];
-    var retryHtml = opts.inThread && !isHuman && !m.pending && chatRetryableFailure(text)
+    var retryHtml = m.hubFailed
+      ? '<div class="chat-msg-retry-row"><span class="chat-msg-failed" role="alert">' + esc(m.hubError || 'Not delivered.') + '</span><button type="button" class="chat-msg-retry" data-hub-retry="' + esc(m.id) + '">Retry</button></div>'
+      : opts.inThread && !isHuman && !m.pending && chatRetryableFailure(text)
       ? '<div class="chat-msg-retry-row"><button type="button" class="chat-msg-retry" data-chat-retry data-retry-event-id="' + esc(m.id) + '"' +
           (retryAttempted ? ' disabled' : '') + '>' + (retryAttempted ? 'Retried' : 'Retry') + '</button></div>'
       : '';
@@ -9675,7 +9905,6 @@
   // before), matching the panel's single explicit close (X / Esc). Closes
   // the tasks panel first — only one of the two docked panels is ever open.
   function openChatThread(rootId){
-    if(hubWorkspace()) return;
     var roomId = chatWs.activeRoomId;
     if(!roomId || !rootId) return;
     closeChatTasksPanel();
@@ -9748,11 +9977,11 @@
   // chatMsgDeletable) so this only ever fires from a button that was
   // already shown, but the server is still the actual source of truth.
   function handleDeleteChatMessage(eventId){
-    if(hubWorkspace()) return;
     var roomId = chatWs.activeRoomId;
     if(!roomId || !eventId) return;
     appConfirm('Delete this message?').then(function(ok){
       if(!ok) return;
+      if(hubWorkspace()) return deleteHubMessage(roomId, eventId);
       api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId)), {method:'DELETE'}).then(function(res){
         if(res.status !== 200) return;
         if(res.data && res.data.event) applyNativeEvent(res.data.event);
@@ -9764,9 +9993,8 @@
   // a new root message so Mia/the team see it at the end of the conversation;
   // no stored event is rewritten and no automatic redo is triggered.
   function handleEditChatMessage(eventId){
-    if(hubWorkspace()) return;
     var roomId = chatWs.activeRoomId;
-    var original = editableChatPromptForEvent(roomId, eventId);
+    var original = hubWorkspace() ? hubEditablePrompt(roomId, eventId) : editableChatPromptForEvent(roomId, eventId);
     if(!roomId || !original) return;
     appPrompt(original).then(function(result){
       if(!result || !result.ok || !result.text.trim()) return;
@@ -11511,7 +11739,13 @@
     if(chatWs.attentionTimer) clearInterval(chatWs.attentionTimer);
     chatWs.pollTimer = null;
     chatWs.attentionTimer = null;
-    if(hubWorkspace()){chatWs.pollTimer=setInterval(function(){pollHubRoom();refreshHubBotState(chatWs.activeRoomId,false);pollHubBots(chatWs.activeRoomId);},4000);return;}
+    if(hubWorkspace()){
+      // The live feed delivers messages, unread, typing and bot changes. The
+      // slow timer only backs up bot runs whose feed event was missed.
+      if(!hubChat.feed)startHubFeed();
+      chatWs.pollTimer=setInterval(function(){refreshHubBotState(chatWs.activeRoomId,false);pollHubBots(chatWs.activeRoomId);},60000);
+      syncDesktopNotificationControl();askForDesktopNotificationsOnce();return;
+    }
     syncDesktopNotificationControl();
     askForDesktopNotificationsOnce();
   }
@@ -11523,7 +11757,7 @@
   }
 
   function loadOlderChatMessages(roomId){
-    if(hubWorkspace()) return Promise.resolve();
+    if(hubWorkspace()) return loadOlderHubMessages(roomId);
     var state = roomId && chatWs.byRoom[roomId];
     if(!state || chatWs.activeRoomId !== roomId || state.historyLoading || state.historyComplete || !state.historyCursor) return Promise.resolve();
     var requestedWorkspace = activeWorkspaceKey;
@@ -11627,7 +11861,7 @@
     renderChatSidebar();
     refreshChatMain();
     if(chatWs.configured === false) return;
-    if(hubWorkspace()) return pollHubRoom();
+    if(hubWorkspace()) return Promise.all([loadHubRoom(),refreshHubBotState(roomId,true)]);
     loadMentionRoster(roomId); // also feeds the header's roster chips
     loadActiveNativeDispatches(roomId);
     var state = chatRoomState(roomId);
@@ -14775,14 +15009,6 @@
     function submit(){
       if(!chatWs.activeRoomId) return;
       var text = input.value.trim();
-      if(hubWorkspace()){
-        var sharedRoom=chatWs.activeRoomId;
-        if(!text || hubChat.sending)return;
-        sendHubMessage(text,null,null,sharedRoom).then(function(result){
-          if(result.status===201 && sharedRoom===chatWs.activeRoomId && input.value.trim()===text){input.value='';syncDraftState();}
-        });
-        return;
-      }
       var draftText = text;
       var driveFiles = stagedGoogleDriveFiles().slice();
       var driveRoomId = chatWs.activeRoomId;
