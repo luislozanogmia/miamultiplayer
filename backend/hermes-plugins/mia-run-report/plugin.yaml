@@ -1,0 +1,5 @@
+name: mia-run-report
+version: "0.1.0"
+description: "Mia: lets a bot report which step of its automation it is on. Only works during a scheduled automation run."
+author: "Mia"
+license: MIT

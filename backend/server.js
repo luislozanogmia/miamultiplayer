@@ -8259,7 +8259,7 @@ async function initializeBrowserWork() {
   let coordinator;
   const workerBroker = await createBrowserWorkWorkerBroker({ executeOperation: (...args) => coordinator.executeOperation(...args) });
   browserWorkWorkerBroker = workerBroker;
-  const client = getHermesGatewayClient();
+  const client = await getHermesGatewayClient();
   if (client.readyPromise || client.gatewayReadyPromise || client.configuredUrl) { await workerBroker.stop(); throw new Error('Browser worker capability requires this app-owned fresh gateway'); }
   // The pinned gateway strips GATEWAY_RELAY_*_TOKEN from every model-directed
   // subprocess. Its in-process worker plugin is the only capability consumer.

@@ -21,6 +21,10 @@ test('actual server mounts browser-work authentication before its API fallback',
   await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   const port = socket.address().port;
   await new Promise(resolve => socket.close(resolve));
+  const gatewaySocket = net.createServer();
+  await new Promise(resolve => gatewaySocket.listen(0, '127.0.0.1', resolve));
+  const gatewayPort = gatewaySocket.address().port;
+  await new Promise(resolve => gatewaySocket.close(resolve));
   const child = spawn(process.execPath, [process.env.MIA_TEST_SERVER_ENTRY || path.join(import.meta.dirname, 'server.js')], {
     cwd: import.meta.dirname,
     env: { PATH: process.env.PATH, HOME: root, LANG: 'C.UTF-8', PORT: String(port),
@@ -28,7 +32,7 @@ test('actual server mounts browser-work authentication before its API fallback',
       MIAOS_LOCAL_PROFILE: '1', MIAOS_NO_AUTH: '0', MIAOS_CLERK_INSTANCE: 'test',
       DB_PATH: path.join(root, 'mia.db'), MIAOS_RUNTIME_DIR: root,
       MIAOS_WORKSPACE_DIR: path.join(root, 'workspace'), HERMES_HOME: path.join(root, 'hermes'),
-      MIAOS_HERMES_GATEWAY_PORT: String(port),
+      MIAOS_HERMES_GATEWAY_PORT: String(gatewayPort),
       MIA_BROWSER_WORK_URL: broker.url, MIA_BROWSER_WORK_TOKEN: broker.token,
       MIA_BROWSER_WORK_KEY: Buffer.alloc(32, 7).toString('base64'),
     }, stdio: ['ignore', 'ignore', 'pipe'],
