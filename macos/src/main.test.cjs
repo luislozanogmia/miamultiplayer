@@ -358,6 +358,14 @@ test("bare macOS dev launches prefer Mia's bundled Hermes and preserve explicit 
   assert.notEqual(main.developmentHermesBinary({}, () => true, 'linux'), bundled);
 });
 
+test("dev mode refuses to start without its own Hermes home and Python", () => {
+  const main = loadMain();
+  assert.equal(main.devModeRuntimeProblem({}, ""), "", "installed and plain launches are unaffected");
+  assert.match(main.devModeRuntimeProblem({}, "/dev-root"), /HERMES_HOME and HERMES_PYTHON.*dev_mode\.sh/);
+  assert.match(main.devModeRuntimeProblem({ HERMES_HOME: "/h" }, "/dev-root"), /missing HERMES_PYTHON\./);
+  assert.equal(main.devModeRuntimeProblem({ HERMES_HOME: "/h", HERMES_PYTHON: "/p" }, "/dev-root"), "");
+});
+
 test("Claude CLI discovery skips an unreadable PATH entry", () => {
   const main = loadMain();
   const originalPath = process.env.PATH;

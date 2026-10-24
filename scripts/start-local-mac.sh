@@ -14,14 +14,18 @@ mia_data_root="${MIA_DEV_DATA_ROOT:-$user_home/Library/Application Support/Mia}"
 # bridge) under <data root>/desktop instead of sharing the installed bundle's
 # profile. Export it even when the caller relied on the default.
 export MIA_DEV_DATA_ROOT="$mia_data_root"
+# The Hermes and Ghost programs can come from another, already installed data
+# root (dev_mode.sh points this at the installed Mia), while Hermes' own data
+# (keys, sessions, profiles) always stays under this data root.
+runtime_root="${MIA_DEV_RUNTIME_ROOT:-$mia_data_root}"
 hermes_home="$mia_data_root/hermes"
-hermes_install="$hermes_home/hermes-agent"
+hermes_install="$runtime_root/hermes/hermes-agent"
 hermes_bin="$hermes_install/hermes"
 hermes_python="$hermes_install/venv/bin/python"
 # install-local-mac.sh provisions Ghost at <data root>/ghost-cli; older dev
 # setups used <data root>/runtime/ghost-cli. Accept either.
-ghost_home="$mia_data_root/ghost-cli"
-[[ -d "$ghost_home" ]] || ghost_home="$mia_data_root/runtime/ghost-cli"
+ghost_home="$runtime_root/ghost-cli"
+[[ -d "$ghost_home" ]] || ghost_home="$runtime_root/runtime/ghost-cli"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This launcher is for macOS local testing." >&2
@@ -70,7 +74,9 @@ fi
 # Make the source launcher use its own venv. This is the critical distinction
 # from venv/bin/hermes, whose generated entrypoint cannot resolve hermes_cli in
 # the bundled source layout.
+mkdir -p "$hermes_home"
 export HERMES_HOME="$hermes_home"
+export HERMES_AGENT_ROOT="$hermes_install"
 export HERMES_BIN="$hermes_bin"
 export MIAOS_HERMES_BIN="$hermes_bin"
 export HERMES_PYTHON="$hermes_python"

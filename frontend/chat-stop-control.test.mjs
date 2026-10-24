@@ -21,7 +21,7 @@ test('an active turn keeps Stop when idle, restores Send for steering text, and 
   assert.match(app, /var showStop = !!task && !hasDraft/);
   assert.match(app, /button\.setAttribute\('data-stop-task-id', showStop \? task\.id : ''\)/);
   assert.match(app, /if\(thinkingAgentName && !activeDispatchAtSend\) startChatThinking\(roomId\)/);
-  assert.match(server, /steerHermesGatewaySession\(activeGateway\.sessionId, message\)/);
+  assert.match(server, /steerHermesGatewaySession\(activeGateway\.sessionId, inventory\.note \+ '\\n\\nUser: ' \+ message\)/, 'a steer carries the current connected-apps note ahead of the user message');
   assert.match(app, /liveProgress[\s\S]*chat-thinking-shimmer/);
   assert.match(styles, /@keyframes chatThinkingSweep/);
   const thinking = app.slice(app.indexOf('function startChatThinking(roomId)'), app.indexOf('function startChatPolling()'));

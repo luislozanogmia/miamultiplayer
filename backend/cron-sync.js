@@ -40,7 +40,9 @@ const {
 const HERMES_HOME = requiredConfiguredPath('HERMES_HOME', process.env.HERMES_HOME);
 const HERMES_BIN = String(process.env.HERMES_BIN || '').trim();
 const HERMES_PYTHON = String(process.env.HERMES_PYTHON || '').trim();
-const BOT_TOOLSETS = Object.freeze(['web', 'todo', 'clarify', 'artifacts']);
+// mia_run_report is the toolset of the mia-run-report plugin (report_step).
+const BOT_TOOLSETS = Object.freeze(['web', 'todo', 'clarify', 'artifacts', 'mia_run_report']);
+const RUN_REPORT_PLUGIN = 'mia-run-report';
 const ARTIFACT_ROOT = requiredConfiguredPath(
   'MIAOS_AUTOMATION_ARTIFACT_DIR',
   process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
@@ -70,6 +72,7 @@ const UTC_OFFSET_MIN = parseInt(process.env.MIA_AUTOMATION_UTC_OFFSET_MIN || '36
 // jobs or with a same-named agent's job: "Mia <agent-id> · <agent name>".
 const JOB_PREFIX = 'Mia ';
 const MAX_BOT_AUTOMATIONS = 10;
+const MAX_AUTOMATION_STEPS = 20;
 
 const WEEKDAY_TO_CRON = {
   sunday: 0,
@@ -86,11 +89,15 @@ function isValidAutomationTime(value) {
 }
 
 function runHermes(args) {
+  return runHermesCommand(['cron', '--accept-hooks', ...args]);
+}
+
+function runHermesCommand(args) {
   return new Promise((resolve, reject) => {
     const launch = configuredHermesLaunch(HERMES_BIN);
     execFile(
       launch.command,
-      [...launch.prefixArgs, 'cron', '--accept-hooks', ...args],
+      [...launch.prefixArgs, ...args],
       { timeout: 90000, maxBuffer: 4 * 1024 * 1024, env: hermesProcessEnv() },
       (err, stdout, stderr) => {
         if (err) return reject(new Error(String(stderr || stdout || err.message || '').trim().slice(0, 1000)));
@@ -272,16 +279,48 @@ function botPackageDirectoryFor(bot) {
   return directory;
 }
 
-function restrictHermesJob(jobId, bot, workdir) {
+// The step-reporting context Mia stores on the Hermes job. The model never
+// sees or supplies it: the report_step tool reads it from the job record, so
+// a bot can only report into its own automation and its own folder.
+function runReportContextFor(automation) {
+  const id = cleanAutomationId(automation && automation.id);
+  const steps = Array.isArray(automation && automation.steps)
+    ? automation.steps.map((step) => String(step || '').trim()).filter(Boolean).length
+    : 0;
+  return id && steps ? { automationId: id, steps: Math.min(steps, MAX_AUTOMATION_STEPS) } : null;
+}
+
+let runReportPluginReady = null;
+
+// Installs the bundled report_step plugin into the Hermes home that runs the
+// scheduled jobs and enables it there. Once per process; a failure is
+// retried on the next sync and never blocks the schedule itself.
+function ensureRunReportPlugin() {
+  if (!runReportPluginReady) {
+    runReportPluginReady = (async () => {
+      const { provisionBundledPlugin } = require('./hermes-bot-profile');
+      provisionBundledPlugin(HERMES_HOME, RUN_REPORT_PLUGIN);
+      await runHermesCommand(['plugins', 'enable', RUN_REPORT_PLUGIN]);
+    })().catch((error) => {
+      runReportPluginReady = null;
+      console.error('step reporting plugin unavailable:', error.message);
+    });
+  }
+  return runReportPluginReady;
+}
+
+async function restrictHermesJob(jobId, bot, workdir, automation) {
   const artifactWorkspace = artifactWorkspaceForBot(bot);
+  const runReport = runReportContextFor(automation);
+  if (runReport) await ensureRunReportPlugin();
   const source = [
     'import json,sys',
     'from cron.jobs import update_job',
-    'job=update_job(sys.argv[1], {"enabled_toolsets": json.loads(sys.argv[2]), "workdir": sys.argv[3], "artifact_workspace": sys.argv[4]})',
+    'job=update_job(sys.argv[1], {"enabled_toolsets": json.loads(sys.argv[2]), "workdir": sys.argv[3], "artifact_workspace": sys.argv[4], "mia_run_report": json.loads(sys.argv[5])})',
     'raise SystemExit(0 if job else 2)',
   ].join(';');
   return new Promise((resolve, reject) => {
-    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(BOT_TOOLSETS), workdir, artifactWorkspace], {
+    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(BOT_TOOLSETS), workdir, artifactWorkspace, JSON.stringify(runReport)], {
       timeout: 30000,
       maxBuffer: 1024 * 1024,
       cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
@@ -487,7 +526,7 @@ function hermesTimestampMs(value) {
   return Date.parse(String(value));
 }
 
-function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider) {
+function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReport = null) {
   if (!job) return true;
   const sched = (job.schedule && job.schedule.expr) || job.schedule_display || '';
   return (
@@ -499,7 +538,8 @@ function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspa
     String(job.provider || '') !== provider ||
     JSON.stringify(job.enabled_toolsets || []) !== JSON.stringify(BOT_TOOLSETS) ||
     String(job.workdir || '') !== workdir ||
-    String(job.artifact_workspace || '') !== artifactWorkspace
+    String(job.artifact_workspace || '') !== artifactWorkspace ||
+    JSON.stringify(job.mia_run_report || null) !== JSON.stringify(runReport)
   );
 }
 
@@ -570,6 +610,22 @@ function resolveOwnedAutomationJob(bot, automation, registry, existingJob, allow
   return job;
 }
 
+// Run an automation that is already on, once, now. Hermes's own run command
+// also switches a paused job on, so a paused automation is refused rather
+// than silently re-enabled. -> { status: 'started'|'off'|'missing', jobId }
+async function runBotAutomationNow(bot, automationId) {
+  const automation = botAutomations(bot).find((item) => item.id === automationId);
+  if (!automation) return { status: 'missing' };
+  if (automation.enabled !== true) return { status: 'off' };
+  // The lookup stamps job ids onto the bot it is given; keep the caller's copy unchanged.
+  const lookup = migrateBotAutomations(JSON.parse(JSON.stringify(bot)));
+  const job = resolveOwnedAutomationJob(lookup, automation, readHermesJobs(), null, false);
+  if (!job) return { status: 'missing' };
+  if (jobIsPaused(job)) return { status: 'off' };
+  await runHermes(['run', job.id]);
+  return { status: 'started', jobId: job.id };
+}
+
 function schedulerUtcOffsetMinutes() {
   return new Promise((resolve, reject) => {
     const source = 'import sys; sys.path.insert(0, sys.argv[1]); from hermes_time import now; print(int(-now().utcoffset().total_seconds() / 60))';
@@ -616,7 +672,7 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
   const { model, provider } = jobModelFor(bot, automation);
 
   if (job) {
-    if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider)) {
+    if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReportContextFor(automation))) {
       await runHermes([
         'edit',
         job.id,
@@ -635,7 +691,7 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
         '--provider',
         provider,
       ]);
-      await restrictHermesJob(job.id, bot, workdir);
+      await restrictHermesJob(job.id, bot, workdir, automation);
     }
     // Editing a paused job does not activate it. Resume independently so a
     // changed schedule cannot remain paused after the user re-enables it.
@@ -654,7 +710,7 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
   const m = String(out).match(/Created job:\s*([\w-]+)/i);
   if (m) {
     bot.hermesCronJobIds[automation.id] = m[1];
-    await restrictHermesJob(m[1], bot, workdir);
+    await restrictHermesJob(m[1], bot, workdir, automation);
   }
 }
 
@@ -988,6 +1044,132 @@ function listActiveBotCronRuns(conn) {
   }
 }
 
+// Step checklists: during a scheduled run the bot reports each step with the
+// `report_step` tool (hermes-plugins/mia-run-report), which appends JSON lines
+// to .mia-runs/<automation-id>.jsonl in the bot's package folder, the run's
+// working directory. Reports count toward the automation's latest run when
+// they were written after it started.
+const RUN_REPORTS_DIR = '.mia-runs';
+const RUN_REPORTS_MAX_BYTES = 128 * 1024;
+// 'escalated' is the legacy spelling of 'needs_you'.
+const RUN_REPORT_STATES = new Set(['working', 'done', 'failed', 'skipped', 'needs_you', 'escalated']);
+
+function readRunReports(directory, automationId) {
+  const id = cleanAutomationId(automationId);
+  if (!directory || !id) return [];
+  const folder = path.join(directory, RUN_REPORTS_DIR);
+  const file = path.join(folder, `${id}.jsonl`);
+  try {
+    const folderStat = fs.lstatSync(folder);
+    if (folderStat.isSymbolicLink() || !folderStat.isDirectory()) return [];
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) return [];
+    let text;
+    if (stat.size > RUN_REPORTS_MAX_BYTES) {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buffer = Buffer.alloc(RUN_REPORTS_MAX_BYTES);
+        fs.readSync(fd, buffer, 0, RUN_REPORTS_MAX_BYTES, stat.size - RUN_REPORTS_MAX_BYTES);
+        text = buffer.toString('utf8').split('\n').slice(1).join('\n');
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      text = fs.readFileSync(file, 'utf8');
+    }
+    return text.split('\n').map((line) => {
+      try { return JSON.parse(line); } catch (_error) { return null; }
+    }).filter((entry) => entry && Number.isFinite(entry.ts) && Number.isInteger(entry.step) && RUN_REPORT_STATES.has(entry.state));
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('automation run reports unreadable:', error.message);
+    return [];
+  }
+}
+
+// automationChecklist(steps, reports, run) -> each step's latest reported
+// state for the run, the step the bot is on now, and an open "needs you".
+// Steps run one at a time: the current step is the most recent `working`
+// report whose step has not been finished since. A finished run's unreported
+// steps read "unreported" so a silent skip is visible.
+function automationChecklist(steps, reports, run) {
+  const startedMs = hermesTimestampMs(run && run.startedAt);
+  const finished = !!run && ['completed', 'failed', 'unknown'].includes(run.status);
+  const latest = new Map();
+  let working = null;
+  for (const report of reports || []) {
+    if (Number.isFinite(startedMs) && report.ts * 1000 < startedMs - 5000) continue;
+    if (report.step < 1 || report.step > steps.length) continue;
+    const state = report.state === 'escalated' ? 'needs_you' : report.state;
+    const entry = { ...report, state };
+    const previous = latest.get(entry.step);
+    if (!previous || entry.ts >= previous.ts) latest.set(entry.step, entry);
+    if (state === 'working' && (!working || entry.ts >= working.ts)) working = entry;
+  }
+  const items = steps.map((text, index) => {
+    const report = latest.get(index + 1);
+    const state = report ? report.state : (finished ? 'unreported' : 'pending');
+    return { n: index + 1, text, state, note: report ? String(report.note || '').slice(0, 300) : '' };
+  });
+  const current = working && latest.get(working.step) === working && !finished
+    ? { step: working.step, text: steps[working.step - 1], note: String(working.note || '').slice(0, 300) }
+    : null;
+  const needsYou = items.filter((item) => item.state === 'needs_you').pop() || null;
+  return {
+    runId: run ? run.executionId : null,
+    runStatus: run ? run.status : null,
+    startedAt: run ? run.startedAt : null,
+    finishedAt: run ? run.finishedAt || null : null,
+    steps: items,
+    current,
+    done: items.filter((item) => item.state === 'done' || item.state === 'skipped').length,
+    total: items.length,
+    escalation: needsYou ? { step: needsYou.n, text: needsYou.text, note: needsYou.note } : null,
+  };
+}
+
+// The latest run of every automation that has steps, with its checklist.
+function listAutomationChecklists(conn) {
+  if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
+  const Database = require('better-sqlite3');
+  const executions = new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true });
+  try {
+    if (!hasSqliteTable(executions, 'executions')) return [];
+    const latest = executions.prepare(
+      `SELECT id AS executionId, status,
+              coalesce(started_at, claimed_at) AS startedAt, finished_at AS finishedAt
+         FROM executions
+        WHERE job_id = ?
+        ORDER BY claimed_at DESC, id DESC LIMIT 1`
+    );
+    const results = [];
+    for (const bot of db.loadAll(conn, 'bots')) {
+      migrateBotAutomations(bot);
+      for (const automation of bot.automations) {
+        const steps = Array.isArray(automation.steps) ? automation.steps.map((step) => String(step || '').trim()).filter(Boolean) : [];
+        const jobId = bot.hermesCronJobIds && bot.hermesCronJobIds[automation.id];
+        if (!steps.length || !jobId) continue;
+        const run = latest.get(jobId);
+        if (!run) continue;
+        let directory = null;
+        try {
+          BOT_PACKAGE_STORE.hydrate(bot);
+          directory = BOT_PACKAGE_STORE.findDirectory(bot.id);
+        } catch (_error) {
+          directory = null;
+        }
+        results.push({
+          bot,
+          automationId: automation.id,
+          ...automationChecklist(steps, readRunReports(directory, automation.id), run),
+        });
+      }
+    }
+    return results;
+  } finally {
+    executions.close();
+  }
+}
+
 module.exports = {
   automationToCronExpr,
   isValidAutomationTime,
@@ -996,16 +1178,21 @@ module.exports = {
   jobOwnedByBot,
   jobOwnedByAutomation,
   jobPromptFor,
+  MAX_AUTOMATION_STEPS,
   botAutomations,
   migrateBotAutomations,
   mergeBotCronSyncState,
   MAX_BOT_AUTOMATIONS,
   syncBotAutomation,
   pauseBotCron,
+  runBotAutomationNow,
   removeBotCron,
   reconcileBotCrons,
   listUndeliveredBotCronResults,
   listActiveBotCronRuns,
+  listAutomationChecklists,
+  automationChecklist,
+  readRunReports,
   artifactWorkspaceForBot,
   botPackageDirectoryFor,
   listSessionArtifacts,
