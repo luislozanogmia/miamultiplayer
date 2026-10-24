@@ -927,6 +927,7 @@
   .mote-avatar-img[role="button"]:focus-visible{outline:2px solid var(--sand-border-focus);border-radius:50%;}
   .bench-detail-mark .mote-avatar-img{width:34px;height:34px;object-fit:contain;}
   .chat-msg-row.is-you .chat-msg-mark{display:none;}
+  .chat-msg-row.is-you .chat-msg-mark-time{display:none;}
   .chat-msg-mark-time{flex:0 0 auto;width:32px;text-align:center;font-family:var(--styled-sans);font-size:9px;color:var(--sand-text-disabled);padding-top:4px;}
   .chat-msg-body{flex:1;min-width:0;max-width:100%;display:flex;flex-direction:column;gap:4px;}
   .chat-msg-row.is-you .chat-msg-body{align-items:flex-end;}

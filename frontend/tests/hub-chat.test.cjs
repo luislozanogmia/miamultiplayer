@@ -291,3 +291,7 @@ test('your confirmed Hub message stays yours when the local identity differs fro
   assert.equal(own({...confirmed,system:true}),false);
   assert.match(source,/isOwnHuman = m\.hubMessage \? hubOwnMessage\(m\)/);
 });
+test('consecutive messages of yours stay flush right without a side time column',()=>{
+  const css=fs.readFileSync(path.join(__dirname,'../styles.css'),'utf8');
+  assert.match(css,/\.chat-msg-row\.is-you \.chat-msg-mark-time\{display:none;\}/);
+});
