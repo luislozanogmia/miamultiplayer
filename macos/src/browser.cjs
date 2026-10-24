@@ -8,7 +8,13 @@ const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, 
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 
+const { createActorRuntime } = require("./browser-actors.cjs");
+const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
+const { randomUUID } = require("node:crypto");
+
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
+// Longer fill values are inserted in one go rather than key by key.
+const MAX_TYPED_CHARS = 200;
 const MAX_PROTOCOL_SELECTOR = 2000;
 const MAX_PROTOCOL_ELEMENTS = 500;
 const PROTOCOL_SCRIPT_TIMEOUT_MS = 10000;
@@ -35,11 +41,11 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Math.trunc(number)));
 }
 
-async function executeProtocolScript(webContents, script, onSettled) {
+async function executeProtocolScript(webContents, script, isolated = false, onSettled) {
   let timer;
   try {
     return await Promise.race([
-      trackBrowserOperation(webContents, webContents.executeJavaScript(script, true), onSettled),
+      trackBrowserOperation(webContents, isolated ? webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: script }], false) : webContents.executeJavaScript(script, false), onSettled),
       new Promise((_, reject) => {
         timer = setTimeout(() => {
           const error = new Error(`Page script timed out after ${PROTOCOL_SCRIPT_TIMEOUT_MS}ms.`);
@@ -126,6 +132,22 @@ function normalizeGroupRecord(item) {
 function createBrowser(window, trustedOrigin, log, options = {}) {
   const tabs = new Map();
   const shellContents = window.webContents;
+  let workProposal = null;
+  const actorCapability = Symbol("trusted-browser-actor");
+  const actorRuntime = createActorRuntime({
+    getTab: id => tabs.get(id),
+    ownsGroup: (groupId, tabId) => groups.has(groupId) && tabs.get(tabId)?.groupId === groupId,
+    isHumanViewing: id => visible && activeId === id && (typeof window.isFocused !== "function" || window.isFocused()),
+    emit: event => {
+      const actorTab = tabs.get(event.tabId);
+      if (actorTab && event.type === "operation-start") actorTab.actorOperationCount = (actorTab.actorOperationCount || 0) + 1;
+      if (actorTab && event.type === "operation-settled") actorTab.actorOperationCount = Math.max(0, (actorTab.actorOperationCount || 0) - 1);
+      updateActorPresence(event);
+      publish();
+      if (!shellContents.isDestroyed()) shellContents.send("miaos-browser-actor-event", event);
+      if (typeof options.onActorEvent === "function") options.onActorEvent(event);
+    },
+  });
   const statePath = typeof options.statePath === "string" && options.statePath.trim()
     ? path.resolve(options.statePath)
     : "";
@@ -746,7 +768,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   const active = () => tabs.get(activeId);
-  const state = () => ({ activeId, download, downloads: downloadList(), groups: groupList(), tabs: [...tabs.values()].map(tab => ({
+  // Counts the times the user closed the last tab; the app leaves browser
+  // mode when it goes up. A blank tab still replaces the closed one.
+  let lastTabCloses = 0;
+  const state = () => ({ groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
     active: tab.id === activeId,
@@ -765,12 +790,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Mia's own browser work is shown the same way as a bot's, under her name.
   const MIA_WORKER = { botId: "mia", name: "Mia" };
   // While Mia or a bot drives a tab, its page carries an edge glow that fades
-  // inward, like the glow around a screen under computer use: gold for Mia,
-  // the bot's own color for a bot. It is a click-through stylesheet layer,
-  // added when a command starts on the page and removed when the work ends.
-  function botGlowCss(hue) {
-    const [h, s, l] = hue === null ? [41, 76, 60] : [hue, 78, 58];
-    const tone = alpha => `hsla(${h},${s}%,${l}%,${alpha})`;
+  // inward, like the glow around a screen under computer use. It is always
+  // Mia gold (#C9962B), whoever is working. It is a click-through stylesheet
+  // layer, added when a command starts on the page and removed when the work ends.
+  function botGlowCss() {
+    const tone = alpha => `rgba(201,150,43,${alpha})`;
     return `html::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:2147483647;
     box-shadow:inset 0 0 18px 4px ${tone(.7)},inset 0 0 60px 12px ${tone(.22)};
     animation:mia-bot-glow 2.4s ease-in-out infinite;}
@@ -790,7 +814,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const wc = tab.view.webContents;
     if (wc.isDestroyed()) return;
     const wanted = glowWanted(tab);
-    const css = wanted ? botGlowCss(wanted.by === MIA_WORKER.botId ? null : (botHues.has(wanted.by) ? botHues.get(wanted.by) : 41)) : null;
+    const css = wanted ? botGlowCss() : null;
     if (tab.botGlowPending || css === (tab.botGlowCss || null)) return;
     if (tab.botGlowKey) {
       Promise.resolve(wc.removeInsertedCSS(tab.botGlowKey)).catch(() => {});
@@ -875,7 +899,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const area = { x, y, width: Math.max(0, Math.min(width - x, Math.round(bounds.width * scale))),
       height: Math.max(0, Math.min(height - y, Math.round(bounds.height * scale))) };
     for (const tab of tabs.values()) {
-      tab.view.setBounds(area);
+      if (area.width > 0 && area.height > 0) tab.captureBounds = area;
+      tab.view.setBounds(area.width > 0 && area.height > 0 ? area : (tab.captureBounds || { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) }));
       tab.view.setVisible(visible && tab.id === activeId && !!tab.url && !tab.error && area.width > 0 && area.height > 0);
     }
   }
@@ -1021,8 +1046,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     syncBotGlow(tab);
     publish();
   }
-  function protocolScript(tab, script) {
-    return executeProtocolScript(tab.view.webContents, script, () => browserWorkSettled(tab));
+  function protocolScript(tab, script, isolated = false) {
+    return executeProtocolScript(tab.view.webContents, script, isolated, () => browserWorkSettled(tab));
   }
   function requireGroupIdle(groupId) {
     if (groupId && groupTabs(groupId).some(browserWorkPending)) {
@@ -1112,6 +1137,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return tab;
   }
 
+  // Same page: same address, ignoring a trailing slash and the #fragment.
+  function botTabAtAddress(actor, value) {
+    let target;
+    try { target = normalizeTarget(value); } catch (_) { return null; }
+    const key = address => String(address || "").replace(/#.*$/, "").replace(/\/+$/, "");
+    return [...tabs.values()]
+      .filter(tab => botOwnsTab(actor, tab) && key(tab.url) === key(target))
+      .sort((a, b) => (b.botUsedAt || 0) - (a.botUsedAt || 0))[0] || null;
+  }
+
   function protocolTabResult(tab) {
     return {
       tab_id: tab.id,
@@ -1121,15 +1156,48 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     };
   }
 
-  async function waitForProtocolPage(tab, wait = "load") {
+  async function waitForProtocolPage(tab, wait = "load", signal) {
     if (wait === "none") return;
     const deadline = Date.now() + 30000;
     while (tab.view.webContents.isLoading() && Date.now() < deadline) {
+      if (signal?.aborted) throw protocolError("CANCELLED", "Page wait was cancelled.");
+      if (tab.view.webContents.isDestroyed()) throw protocolError("TAB_CLOSED", "Tab closed during page wait.");
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     if (wait === "networkidle") await new Promise(resolve => setTimeout(resolve, 500));
   }
 
+  async function captureHiddenPage(tab) {
+    // capturePage() checks for a copyable surface before it requests frames in
+    // Electron 44.2. Cold restored hidden views have never produced that surface.
+    // Page.captureScreenshot forces a frame on this exact WebContents without
+    // showing its native view, selecting a tab or changing page visibility.
+    const previous = tab.capturePending || Promise.resolve();
+    const pending = previous.catch(() => {}).then(async () => {
+      const wc = tab.view.webContents;
+      if (tabs.get(tab.id) !== tab || wc.isDestroyed()) throw protocolError("TAB_CLOSED", "Assigned tab closed before capture.");
+      if (!wc.debugger || wc.debugger.isAttached()) throw protocolError("CAPTURE_BUSY", "Assigned page capture transport is already in use.");
+      let timer, attached = false;
+      try {
+        wc.debugger.attach("1.3"); attached = true;
+        const result = await Promise.race([
+          wc.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(protocolError("BROWSER_TIMEOUT", "Assigned page capture timed out.")), PROTOCOL_SCRIPT_TIMEOUT_MS); }),
+        ]);
+        if (!result || typeof result.data !== "string" || result.data.length > 24 * 1024 * 1024) throw protocolError("CAPTURE_UNAVAILABLE", "Assigned page returned invalid capture pixels.");
+        return nativeImage.createFromBuffer(Buffer.from(result.data, "base64"));
+      } catch (error) {
+        if (["TAB_CLOSED", "CAPTURE_BUSY", "CAPTURE_UNAVAILABLE", "BROWSER_TIMEOUT"].includes(error.code)) throw error;
+        throw protocolError("CAPTURE_UNAVAILABLE", "Assigned page could not render capture pixels.");
+      } finally {
+        clearTimeout(timer);
+        // Never detach a debugger that was attached by another owner.
+        if (attached && !wc.isDestroyed() && wc.debugger.isAttached()) wc.debugger.detach();
+      }
+    });
+    tab.capturePending = pending;
+    try { return await pending; } finally { if (tab.capturePending === pending) tab.capturePending = null; }
+  }
   function protocolText(value, maximum = MAX_PROTOCOL_PAGE_TEXT) {
     const text = String(value || "");
     return text.length > maximum ? text.slice(0, maximum) : text;
@@ -1153,6 +1221,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     })()`;
     let result;
     try {
+      if (params.actor_id) {
+        const previousSnapshot = tab.snapshots.get(params.actor_id);
+        // A bound reread retires its own numbered-element proof immediately.
+        // Failed reads stay fail-closed; observer reads leave every actor intact.
+        tab.snapshots.delete(params.actor_id);
+        if (previousSnapshot) await executeProtocolScript(tab.view.webContents, `(() => {
+          const store = globalThis.__miaBrowserSnapshots;
+          const actorId = ${JSON.stringify(params.actor_id)};
+          if (store?.get(actorId)?.id === ${JSON.stringify(previousSnapshot.id)}) store.delete(actorId);
+        })()`, true); // Do not erase a newer concurrently completed vacuum.
+      }
       result = await protocolScript(tab, script);
     } catch (error) {
       throw protocolError("BROWSER_ERROR", error.message);
@@ -1160,6 +1239,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (result && result.error) throw protocolError("INVALID_PARAMS", result.error);
     const text = protocolText(result && result.text);
     return {
+      tab_id: tab.id, document_generation: tab.sequence,
       url: tab.url,
       title: tab.title || tab.url || "New tab",
       text,
@@ -1169,6 +1249,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   async function protocolVacuum(tab, params) {
+    const generation = tab.sequence;
+    const snapshotId = randomUUID();
+    const actorId = params.actor_id || "legacy";
+
     const selector = params.selector === undefined ? null : String(params.selector).trim();
     if (selector && selector.length > MAX_PROTOCOL_SELECTOR) {
       throw protocolError("INVALID_PARAMS", "selector is too long.");
@@ -1225,6 +1309,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         el.getAttribute('aria-label') || el.getAttribute('title') ||
         el.innerText || el.value || el.getAttribute('placeholder') || roleFor(el)
       ).replace(/\\s+/g, ' ').trim().slice(0, 120);
+      const store = globalThis.__miaBrowserSnapshots ||= new Map();
+      const fingerprint = el => JSON.stringify([el.localName, el.getAttribute('role'), el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('href'), el.getAttribute('type'), el.innerText, el.value]);
+      store.set(${JSON.stringify(actorId)}, { id: ${JSON.stringify(snapshotId)}, nodes, fingerprint, fingerprints: nodes.map(fingerprint) });
       return { elements: nodes.map((el, index) => ({
         number: index + 1,
         role: roleFor(el),
@@ -1236,13 +1323,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     })()`;
     let result;
     try {
-      result = await protocolScript(tab, script);
+      result = await protocolScript(tab, script, true);
     } catch (error) {
       throw protocolError("BROWSER_ERROR", error.message);
     }
     if (result && result.error) throw protocolError("INVALID_PARAMS", result.error);
     const elements = Array.isArray(result && result.elements) ? result.elements : [];
-    tab.vacuumElements = elements;
+    if (tab.sequence !== generation) throw protocolError("TAB_NAVIGATED", "Document changed while taking snapshot.");
+    tab.snapshots.set(actorId, { id: snapshotId, generation, url: tab.url, elements });
+    if (!params.actor_id) tab.vacuumElements = elements;
     const shown = elements.slice(0, limit);
     const lines = [`Page: ${tab.title || tab.url || "New tab"}`, `URL: ${tab.url}`];
     if (shown.length) {
@@ -1259,6 +1348,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       title: tab.title || tab.url || "New tab",
       text: lines.join("\\n"),
       elements,
+      snapshot_id: snapshotId,
+      document_generation: generation,
       element_count: elements.length,
       total_count: elements.length,
       has_more: elements.length > shown.length,
@@ -1271,11 +1362,31 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (hasChoice === hasSelector) {
       throw protocolError("INVALID_PARAMS", "Provide exactly one of choice or selector.");
     }
-    if (hasSelector) return { selector: params.selector.trim(), number: null, name: params.selector.trim() };
+    if (hasSelector && !Object.hasOwn(params, "snapshot_id")) return { selector: params.selector.trim(), number: null, name: params.selector.trim() };
     const choice = Number(params.choice);
-    const element = tab.vacuumElements.find(candidate => candidate.number === choice);
+    const snapshot = tab.snapshots.get(params.actor_id || "legacy");
+    if (!snapshot || snapshot.generation !== tab.sequence || snapshot.url !== tab.url || ((params.actor_id || Object.hasOwn(params, "snapshot_id")) && snapshot.id !== params.snapshot_id)) {
+      throw protocolError("STALE_SNAPSHOT", "Take a fresh snapshot for this actor and tab.");
+    }
+    if (hasSelector) return { selector: params.selector.trim(), number: null, name: params.selector.trim(), snapshotId: snapshot.id };
+    const element = snapshot.elements.find(candidate => candidate.number === choice);
     if (!element) throw protocolError("ELEMENT_NOT_FOUND", `Element [${params.choice}] is not available. Vacuum the page first.`);
-    return element;
+    return { ...element, snapshotId: snapshot.id };
+  }
+
+  // Explicit snapshot IDs are target preconditions even for selector actions.
+  // Resolve/check in the isolated world both when approving and dispatching.
+  function protocolTargetScript(element, actorId) {
+    return `
+      const snapshot = globalThis.__miaBrowserSnapshots?.get(${JSON.stringify(actorId || "legacy")});
+      const numbered = ${element.number !== null};
+      const scoped = ${element.snapshotId !== undefined};
+      if (scoped && (!snapshot || snapshot.id !== ${JSON.stringify(element.snapshotId)})) return { error: 'Snapshot was replaced.', code: 'STALE_SNAPSHOT' };
+      const el = numbered ? snapshot.nodes[${Number(element.number) - 1}] : document.querySelector(${JSON.stringify(element.selector)});
+      const snapshotIndex = scoped ? (numbered ? ${Number(element.number) - 1} : snapshot.nodes.indexOf(el)) : -1;
+      if (scoped && (!el?.isConnected || snapshotIndex < 0 || (numbered && document.querySelector(${JSON.stringify(element.selector)}) !== el))) return { error: 'Snapshot target was replaced.', code: 'STALE_SNAPSHOT' };
+      if (scoped && snapshot.fingerprint(el) !== snapshot.fingerprints[snapshotIndex]) return { error: 'Snapshot target changed.', code: 'STALE_SNAPSHOT' };
+    `;
   }
 
   async function protocolElementAction(tab, params, action) {
@@ -1286,16 +1397,41 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (action === "fill" && typeof params.value !== "string") {
       throw protocolError("INVALID_PARAMS", "value is required for fill.");
     }
+    const generation = tab.sequence;
+    const targetKey = randomUUID();
     const value = action === "fill" ? params.value.slice(0, MAX_PROTOCOL_PAGE_TEXT) : "";
     const script = `(() => {
-      const el = document.querySelector(${JSON.stringify(element.selector)});
+      ${protocolTargetScript(element, params.actor_id)}
+      if (el && (el.disabled || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden')) return { error: 'Target is unavailable.', code: 'ELEMENT_NOT_FOUND' };
+      const approvalId = ${JSON.stringify(params.approval_id || null)};
+      if (approvalId) {
+        const store = globalThis.__miaApprovedTargets;
+        const approved = store?.get(approvalId);
+        store?.delete(approvalId);
+        if (!approved || approved.el !== el || !el?.isConnected || approved.fingerprint(el) !== approved.value) return { error: 'Approval target changed.', code: 'APPROVAL_TARGET_CHANGED' };
+      }
       if (!el) return { error: 'Element is no longer present. Vacuum the page again.' };
+      (globalThis.__miaActionTargets ||= new Map()).set(${JSON.stringify(targetKey)}, el);
+      const currentTarget = () => {
+        if (!el.isConnected || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden') return null;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+      };
       const text = String(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().slice(0, 200);
       if (${JSON.stringify(action)} === 'click') {
         el.click();
-        return { clicked: true, tag: el.localName, text };
+        return { clicked: true, tag: el.localName, text, target: currentTarget() };
       }
       const nextValue = ${JSON.stringify(value)};
+      // Text boxes are typed into for real (see typeIntoFocused): search
+      // widgets such as airport pickers ignore a value set by script.
+      const typable = el.isContentEditable || el instanceof HTMLTextAreaElement
+        || (el instanceof HTMLInputElement && ['', 'text', 'search', 'email', 'url', 'tel', 'password', 'number'].includes(el.type));
+      if (typable && !el.readOnly) {
+        el.focus({ preventScroll: true });
+        if (el.isContentEditable) getSelection().selectAllChildren(el); else el.select();
+        if (document.activeElement === el) return { typing: true, tag: el.localName };
+      }
       const prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
         : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
           : HTMLInputElement.prototype;
@@ -1303,17 +1439,67 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (setter) setter.call(el, nextValue); else el.value = nextValue;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      return { filled: true, tag: el.localName, value: String(el.value || nextValue).slice(0, 100000) };
+      return { filled: true, target: currentTarget(), tag: el.localName, value: String(el.value || nextValue).slice(0, 100000) };
     })()`;
     let result;
     try {
-      result = await protocolScript(tab, script);
-    } catch (error) {
-      throw protocolError("BROWSER_ERROR", error.message);
+      try { result = await protocolScript(tab, script, true); }
+      catch (error) { throw protocolError("BROWSER_ERROR", error.message); }
+      if (result && result.error) throw protocolError(result.code || "ELEMENT_NOT_FOUND", result.error);
+      if (result && result.typing) result = await typeIntoTarget(tab, targetKey, value, result.tag);
+      await waitForProtocolPage(tab, params.wait || "load", params.signal);
+      if (result) {
+        result.target = null;
+        if (tab.sequence === generation && !tab.view.webContents.isDestroyed()) {
+          const target = await executeProtocolScript(tab.view.webContents, `(() => {
+            const el = globalThis.__miaActionTargets?.get(${JSON.stringify(targetKey)});
+            if (!el?.isConnected || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden') return null;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+          })()`, true);
+          if (tab.sequence === generation) result.target = target;
+        }
+      }
+      return result || {};
+    } finally {
+      if (!tab.view.webContents.isDestroyed()) await executeProtocolScript(tab.view.webContents, `globalThis.__miaActionTargets?.delete(${JSON.stringify(targetKey)});`, true).catch(() => {});
     }
-    if (result && result.error) throw protocolError("ELEMENT_NOT_FOUND", result.error);
-    await waitForProtocolPage(tab, params.wait || "load");
-    return result || {};
+  }
+
+  // Types into the element fill just focused with real key presses and text
+  // input, the way a person does, so frameworks see trusted events. The keys
+  // go to this tab's page only; the tab in front keeps the person's focus. A
+  // box that still disagrees afterwards gets the value set directly.
+  async function typeIntoTarget(tab, targetKey, value, tag) {
+    const wc = tab.view.webContents;
+    const chars = [...value];
+    if (!chars.length) {
+      wc.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+      wc.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+    } else if (chars.length > MAX_TYPED_CHARS) {
+      await wc.insertText(value);
+    } else {
+      for (const ch of chars) {
+        const keyCode = /^[a-z0-9]$/i.test(ch) ? ch.toUpperCase() : ch === " " ? "Space" : null;
+        const modifiers = /^[A-Z]$/.test(ch) ? ["shift"] : [];
+        if (keyCode) wc.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+        await wc.insertText(ch);
+        if (keyCode) wc.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+      }
+    }
+    const typed = await executeProtocolScript(wc, `(() => {
+      const el = globalThis.__miaActionTargets?.get(${JSON.stringify(targetKey)});
+      if (!el?.isConnected) return null;
+      const current = () => el.isContentEditable ? el.innerText.replace(/\n$/, '') : el.value;
+      if (current() === ${JSON.stringify(value)}) return { typed: true, value: current() };
+      if (el.isContentEditable) el.textContent = ${JSON.stringify(value)};
+      else Object.getOwnPropertyDescriptor(el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(value)});
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { typed: false, value: current() };
+    })()`, true);
+    if (!typed) throw protocolError("ELEMENT_NOT_FOUND", "Element is no longer present. Vacuum the page again.");
+    return { filled: true, typed: typed.typed, tag, value: String(typed.value || "").slice(0, MAX_PROTOCOL_PAGE_TEXT) };
   }
 
   async function protocolWait(tab, params, assertAccess = () => {}) {
@@ -1325,6 +1511,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
       const deadline = Date.now() + timeout;
       while (Date.now() <= deadline) {
+        if (params.signal?.aborted) throw protocolError("CANCELLED", "Element wait was cancelled.");
+        if (tab.view.webContents.isDestroyed()) throw protocolError("TAB_CLOSED", "Tab closed during element wait.");
         assertAccess();
         let present = false;
         try {
@@ -1343,11 +1531,224 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return { waited_ms: timeout };
   }
 
+  async function approveActorOperation(request) {
+    const approval = actorRuntime.approve(request);
+    const tab = protocolTab(request.params.tab_id);
+    if (["click", "fill"].includes(request.method)) {
+      try {
+        const element = protocolElement(tab, request.params);
+        const result = await executeProtocolScript(tab.view.webContents, `(() => {
+          ${protocolTargetScript(element, request.params.actor_id)}
+          if (!el?.isConnected) return false;
+          const fingerprint = el => JSON.stringify([el.localName,el.getAttribute('role'),el.getAttribute('aria-label'),el.getAttribute('href'),el.innerText,el.value]);
+          const store = globalThis.__miaApprovedTargets ||= new Map();
+          store.set(${JSON.stringify(approval.approval_id)}, { el, fingerprint, value: fingerprint(el) });
+          return true;
+        })()`, true);
+        if (result?.error) throw protocolError(result.code, result.error);
+        if (!result) throw protocolError("ELEMENT_NOT_FOUND", "Approval target is unavailable.");
+      } catch (error) { actorRuntime.reject(approval.approval_id); throw error; }
+    }
+    return approval;
+  }
+  const publicActors = { bind: binding => bindActorWithDiagnostics(actorRuntime.bind, binding, options.onActorEvent), revoke: actorRuntime.revoke, approve: approveActorOperation, reject: actorRuntime.reject, list: actorRuntime.list };
+  function actorOperation(binding, operation, context = {}) {
+    if (!binding || !operation || typeof operation.method !== "string") throw protocolError("INVALID_PARAMS", "Binding and browser operation are required.");
+    binding = { ...binding, taskId: binding.taskId || binding.workId };
+    const bound = actorRuntime.list().find(item => item.actorId === binding.actorId);
+    if (!bound || ["ownerId", "taskId", "tabId", "botId", "groupId"].some(key => bound[key] !== binding[key])) throw protocolError("ACTOR_REVOKED", "Trusted binding is no longer current.");
+    const supplied = operation.params || {};
+    if ((supplied.actor_id !== undefined && supplied.actor_id !== bound.actorId) || (supplied.tab_id !== undefined && supplied.tab_id !== bound.tabId)) throw protocolError("TAB_NOT_OWNED", "Operation identity disagrees with assignment.");
+    const params = { ...JSON.parse(JSON.stringify(supplied)), actor_id: bound.actorId, tab_id: bound.tabId };
+    if (context.approval) params.approval_id = typeof context.approval === "string" ? context.approval : context.approval.approval_id;
+    if (context.signal) params.signal = context.signal;
+    params[actorCapability] = true;
+    return { method: operation.method, params };
+  }
+  function validateActorOperation(binding, operation) {
+    const call = actorOperation(binding, operation);
+    const info = actorRuntime.inspect(call.method, call.params);
+    return { ...info, documentGeneration: info.document_generation, requiresApproval: info.needs_approval };
+  }
+  async function executeActorOperation(binding, operation, context) {
+    const call = actorOperation(binding, operation, context);
+    const result = await protocolCommand(call.method, call.params);
+    await tabs.get(call.params.tab_id)?.presencePending;
+    return result;
+  }
+  // Native views cover the shell DOM. Presence therefore lives in the assigned
+  // page, is noninteractive, and is driven only by real runtime events.
+  function queuePresence(tab, generation, script) {
+    const pending = (tab.presencePending || Promise.resolve()).catch(() => {}).then(async () => {
+      if (tabs.get(tab.id) !== tab || tab.sequence !== generation || tab.view.webContents.isDestroyed()) return;
+      tab.presenceStylePromise ||= tab.view.webContents.insertCSS('[data-mia-presence-label]::after{content:var(--mia-presence-label);}', { cssOrigin: 'user' });
+      await tab.presenceStylePromise;
+      if (tab.sequence !== generation || tab.view.webContents.isDestroyed()) return;
+      await executeProtocolScript(tab.view.webContents, script, true);
+    }).catch(() => {});
+    tab.presencePending = pending;
+    return pending;
+  }
+  function initializePresenceDocument(tab) {
+    const generation = tab.sequence;
+    return queuePresence(tab, generation, `globalThis.__miaPresenceGeneration = ${generation}; for (const marker of globalThis.__miaActorMarkers?.values() || []) marker.querySelector('i')?.remove();`);
+  }
+  function clearPresenceTargets(tab) {
+    const generation = tab.sequence;
+    return queuePresence(tab, generation, `if (globalThis.__miaPresenceGeneration === ${generation}) for (const marker of globalThis.__miaActorMarkers?.values() || []) marker.querySelector('i')?.remove();`);
+  }
+  function updateActorPresence(event) {
+    if (event.type === "operation-settled") return;
+    const tab = tabs.get(event.tabId);
+    if (!tab || tab.view.webContents.isDestroyed()) return;
+    const generation = event.type === "target" ? event.generation : tab.sequence;
+    if (generation !== tab.sequence) return;
+    const actor = actorRuntime.list().find(item => item.actorId === event.actorId);
+    const color = value => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#b79bff";
+    const actorColor = color(actor?.color), ownerColor = color(actor?.ownerColor);
+    const script = `(() => {
+      if (globalThis.__miaPresenceGeneration !== ${generation}) return;
+      const id = ${JSON.stringify(event.actorId)};
+      const markers = globalThis.__miaActorMarkers ||= new Map();
+      let marker = markers.get(id);
+      if (${JSON.stringify(event.type)} === 'cancelled') { marker?.remove(); markers.delete(id); return; }
+      if (!document.body) return;
+      if (!globalThis.__miaPresenceCleanup) {
+        const clear = () => { for (const m of markers.values()) m.querySelector('i')?.remove(); };
+        const owned = node => [...markers.values()].some(m => m === node || m.contains(node));
+        const observer = new MutationObserver(records => {
+          if (records.some(r => !owned(r.target) && !(r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every(owned)))) clear();
+        });
+        observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+        document.addEventListener('load', clear, true);
+        document.addEventListener('animationstart', clear, true);
+        document.addEventListener('transitionrun', clear, true);
+        document.fonts?.addEventListener('loadingdone', clear);
+        document.addEventListener('scroll', clear, true);
+        window.addEventListener('scroll', clear, true);
+        window.addEventListener('resize', clear);
+        window.addEventListener('popstate', clear);
+        window.addEventListener('hashchange', clear);
+        globalThis.__miaPresenceCleanup = true;
+      }
+      if (!marker) {
+        marker = document.createElement('div'); marker.setAttribute('data-mia-presence', '');
+        marker.style.cssText = 'position:fixed;inset:3px;border:2px solid ' + ${JSON.stringify(ownerColor)} + ';border-radius:6px;pointer-events:none;z-index:2147483646;';
+        const label = document.createElement('span'); label.setAttribute('data-mia-presence-label', '');
+        label.style.cssText = 'position:absolute;right:4px;top:4px;background:#34234d;color:white;font:11px system-ui;padding:3px 6px;border-radius:8px;';
+        const mote = document.createElement('b');
+        mote.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:' + ${JSON.stringify(actorColor)} + ';box-shadow:0 0 0 2px ' + ${JSON.stringify(ownerColor)};
+        label.append(mote); marker.append(label); markers.set(id, marker); document.body.append(marker);
+      }
+      if (${JSON.stringify(event.type)} === 'operation-error' || (${JSON.stringify(event.type)} === 'operation-start' && ${JSON.stringify(["click", "fill", "navigate", "back", "forward", "reload", "stop", "scroll", "eval", "key", "tab_close"].includes(event.method))})) marker.querySelector('i')?.remove();
+      if (${JSON.stringify(event.type)} === 'target') {
+        marker.querySelector('i')?.remove();
+        const rect = ${JSON.stringify(event.target || null)};
+        if (!rect || ![rect.x,rect.y,rect.width,rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return;
+        const target = document.createElement('i'); marker.append(target);
+        target.style.cssText = 'position:fixed;border:2px solid #b79bff;background:#b79bff22;border-radius:4px;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;';
+        return;
+      }
+      marker.firstChild.style.setProperty('--mia-presence-label', JSON.stringify(${JSON.stringify(String(actor?.botName || actor?.name || event.actorId).slice(0, 128))} + ' · ' + ${JSON.stringify(event.type === "operation-start" ? "working" : event.type === "operation-error" ? "failed" : event.type === "operation-done" ? "idle" : "assigned")}));
+    })()`;
+    void queuePresence(tab, generation, script);
+  }
+  // Mia's personal agent arranges groups and suggests bot assignments through
+  // the bridge it already browses with. A suggestion only prefills the
+  // person's browser-work form: starting work and every approval stay theirs.
+  function protocolGroupList() {
+    const owners = actorRuntime.list();
+    const selected = tabs.get(activeId)?.groupId || null;
+    const tabEntry = tab => {
+      const owner = owners.find(item => item.tabId === tab.id);
+      const group = groups.get(tab.groupId);
+      const bot = owner ? { name: owner.botName || owner.botId, status: owner.status || "assigned" }
+        : group?.botId ? { bot_id: group.botId, status: "group" } : null;
+      return { ...protocolTabResult(tab), active: tab.id === activeId, ...(bot ? { bot } : {}) };
+    };
+    return {
+      selected_group_id: selected,
+      groups: groupList().map(group => ({
+        group_id: group.id, name: group.name, selected: group.id === selected,
+        ...(group.botId ? { bot_id: group.botId } : {}),
+        tabs: groupTabs(group.id).map(tabEntry),
+      })),
+      ungrouped_tabs: [...tabs.values()].filter(tab => !tab.groupId).map(tabEntry),
+    };
+  }
+  function protocolGroupCommand(method, params) {
+    if (method === "group_list") return protocolGroupList();
+    const invalid = message => protocolError("INVALID_PARAMS", message);
+    const groupOf = id => {
+      const group = groups.get(id);
+      if (!group) throw protocolError("GROUP_NOT_FOUND", "Browser group was not found. Call group_list for current groups.");
+      return group;
+    };
+    const tabOf = id => {
+      const tab = tabs.get(Number(id));
+      if (!tab) throw protocolError("TAB_NOT_FOUND", `Tab ${id} does not exist.`);
+      if (actorRuntime.list().some(item => item.tabId === tab.id)) throw protocolError("TAB_OWNED", "A bot is working in this tab. Move it after that work ends.");
+      return tab;
+    };
+    const nameOf = value => {
+      const name = typeof value === "string" ? value.trim() : "";
+      if (!name || name.length > 80) throw invalid("Group names must contain 1–80 characters.");
+      return name;
+    };
+    if (method === "work_propose") {
+      const group = groupOf(params.group_id);
+      const members = groupTabs(group.id).map(tab => tab.id);
+      const goal = typeof params.goal === "string" ? params.goal.trim() : "";
+      if (!goal || goal.length > 8000) throw invalid("goal must contain 1–8000 characters.");
+      if (!Array.isArray(params.assignments) || !params.assignments.length || params.assignments.length > 16) throw invalid("assignments must list 1–16 tabs.");
+      const assignments = params.assignments.map(item => {
+        const tabId = Number(item && item.tab_id);
+        const bot = typeof (item && item.bot) === "string" ? item.bot.trim() : "";
+        if (!members.includes(tabId)) throw invalid(`Tab ${item && item.tab_id} is not in group "${group.name}".`);
+        if (!bot || bot.length > 120) throw invalid("Each assignment names one bot.");
+        return { tabId, bot };
+      });
+      if (new Set(assignments.map(item => item.tabId)).size !== assignments.length) throw invalid("Assign each tab once.");
+      if (new Set(assignments.map(item => item.bot.toLowerCase())).size !== assignments.length) throw invalid("Each bot can own one tab.");
+      workProposal = { id: randomUUID(), groupId: group.id, goal, assignments, createdAt: Date.now() };
+      publish();
+      return { proposed: true, proposal_id: workProposal.id, group_id: group.id,
+        next: "Shown to the person in the Browser work panel. Work starts only after they confirm it there." };
+    }
+    let created = null;
+    if (method === "group_create") {
+      const name = nameOf(params.name);
+      const tab = tabOf(params.tab_id);
+      const group = createGroup(tab.id);
+      if (!group) throw protocolError("BROWSER_ERROR", "Could not create the group.");
+      updateGroup(group.id, { name });
+      created = group.id;
+    } else if (method === "group_rename") updateGroup(groupOf(params.group_id).id, { name: nameOf(params.name) });
+    else if (method === "group_move_tab") {
+      const tab = tabOf(params.tab_id);
+      if (params.group_id === null || params.group_id === undefined || params.group_id === "") removeTabFromGroup(tab.id);
+      else addTabToGroup(tab.id, groupOf(params.group_id).id);
+    } else if (method === "group_remove") { ungroup(groupOf(params.group_id).id); normalizeGroups(); }
+    else throw protocolError("UNKNOWN_METHOD", `Unknown browser method: ${method}`);
+    layout(); persistTabs(); publish();
+    return { ...(created ? { group_id: created } : {}), ...protocolGroupList() };
+  }
   async function protocolCommand(method, params = {}) {
+    if (params && Object.hasOwn(params, "actor_id") && params[actorCapability] !== true) throw protocolError("TRUSTED_ACTOR_REQUIRED", "Actor identity must come from trusted coordinator dispatch.");
+    // A bot session (actor_session) resolves its own tab; never default it to the person's.
+    if (params && !Object.hasOwn(params, "actor_id") && !params.actor_session && ["navigate", "vacuum", "click", "fill", "eval", "key", "back", "forward", "reload", "stop", "scroll", "tab_close"].includes(method) && tabs.size) {
+      const tab = protocolTab(params.tab_id);
+      return actorRuntime.serialize(tab.id, () => executeProtocolCommand(method, { ...params, tab_id: tab.id }));
+    }
+    return actorRuntime.run(method, params, () => executeProtocolCommand(method, params));
+  }
+  async function executeProtocolCommand(method, params = {}) {
     if (!params || typeof params !== "object" || Array.isArray(params)) {
       throw protocolError("INVALID_PARAMS", "params must be an object.");
     }
-    const actor = await protocolActor(params.actor_session);
+    // Coordinator-dispatched browser work arrives already verified and bound
+    // to one tab (actorRuntime); Ghost calls prove their bot session here.
+    const actor = params[actorCapability] === true ? null : await protocolActor(params.actor_session);
     const touched = new Set();
     // As a command starts on a page, the tab shows who is working there
     // (Mia or a bot): the glow, the working dot and Take over.
@@ -1416,13 +1817,21 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       };
     }
     if (method === "tab_open") {
+      // A bot asking for a page it already has open gets that tab back
+      // instead of a duplicate.
+      const existing = actor && params.url ? botTabAtAddress(actor, params.url) : null;
+      if (existing) {
+        existing.botUsedAt = ++botUseCounter;
+        touch(existing);
+        return { ...protocolTabResult(existing), reused: true };
+      }
       // A bot's new tab opens behind, so it never takes the tab in front.
       if (actor) requireGroupIdle(botGroup(actor.botId)?.id);
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
       touch(tab);
       if (params.url) navigate(tab, params.url);
-      await waitForProtocolPage(tab, params.wait || "load");
+      await waitForProtocolPage(tab, params.wait || "load", params.signal);
       return protocolTabResult(tab);
     }
     if (method === "tab_switch") {
@@ -1478,9 +1887,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       // A Ghost command is an app-owned browser entry point, so surface the
       // native browser panel even when the user was still in chat.
       openBrowserSurface();
-      await waitForProtocolPage(tab, params.wait || "load");
+      await waitForProtocolPage(tab, params.wait || "load", params.signal);
       return protocolTabResult(tab);
     }
+
+    if (method.startsWith("group_") || method === "work_propose") return protocolGroupCommand(method, params);
 
     const supportedTabMethod = [
       "navigate", "read", "vacuum", "click", "fill", "eval", "key",
@@ -1491,16 +1902,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     let tab;
     if (actor) {
       tab = botProtocolTab(actor, method, params.tab_id);
-      touch(tab);
     } else {
       if (!tabs.size) newTab();
-      tab = protocolTab(method === "navigate" ? params.tab_id : undefined);
-      touch(tab);
+      tab = protocolTab(params.tab_id);
     }
+    touch(tab);
     if (method === "navigate") {
       if (!params.url) throw protocolError("INVALID_PARAMS", "url is required.");
       navigate(tab, params.url);
-      await waitForProtocolPage(tab, params.wait || "none");
+      await waitForProtocolPage(tab, params.wait || "none", params.signal);
       return protocolTabResult(tab);
     }
     if (method === "read") {
@@ -1511,7 +1921,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (method === "vacuum") {
       if (params.url) {
         navigate(tab, params.url);
-        await waitForProtocolPage(tab, params.wait || "load");
+        await waitForProtocolPage(tab, params.wait || "load", params.signal);
       }
       if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
       return protocolVacuum(tab, params);
@@ -1584,12 +1994,32 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return protocolTabResult(tab);
     }
     if (method === "screenshot") {
-      const image = await borrowFront(actor, tab, () => tab.view.webContents.capturePage());
+      if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
+      const generation = tab.sequence;
+      const wc = tab.view.webContents;
+      if (wc.isLoading()) throw protocolError("CAPTURE_NOT_READY", "Page is still loading.");
+      // Both capture paths target this exact WebContents; never select/show
+      // the tab or capture the containing BrowserWindow.
+      let image;
+      // Viz may not have allocated a surface immediately after first layout.
+      // Retry only this tab, without showing it or changing human selection.
+      if (!visible || activeId !== tab.id) image = await captureHiddenPage(tab);
+      else for (let attempt = 0; attempt < 4; attempt++) {
+        if (wc.isDestroyed()) throw protocolError("TAB_CLOSED", "Assigned tab closed during capture.");
+        if (tab.sequence !== generation) throw protocolError("TAB_NAVIGATED", "Document changed during capture.");
+        try { image = await wc.capturePage(undefined, { stayHidden: true, stayAwake: true }); break; }
+        catch (_) {
+          if (attempt === 3) throw protocolError("CAPTURE_UNAVAILABLE", "Assigned hidden page has no capturable display surface.");
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      if (tab.sequence !== generation) throw protocolError("TAB_NAVIGATED", "Document changed during capture.");
+      if (image.isEmpty && image.isEmpty()) throw protocolError("CAPTURE_UNAVAILABLE", "Hidden page capture returned no pixels.");
       const format = String(params.format || "png").toLowerCase() === "jpeg" ? "jpeg" : "png";
       const quality = boundedInteger(params.quality, 80, 1, 100);
       const data = format === "jpeg" ? image.toJPEG(quality) : image.toPNG();
       if (data.length > 16 * 1024 * 1024) throw protocolError("RESPONSE_TOO_LARGE", "Screenshot exceeds 16 MB.");
-      return { data_url: `data:image/${format};base64,${data.toString("base64")}`, width: image.getSize().width, height: image.getSize().height };
+      return { tab_id: tab.id, document_generation: generation, url: tab.url, data_url: `data:image/${format};base64,${data.toString("base64")}`, width: image.getSize().width, height: image.getSize().height };
     }
     if (method === "scroll") {
       const direction = String(params.direction || "down").toLowerCase();
@@ -1645,7 +2075,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (key === "l") focusLocation();
     else if (key === "f") { window.webContents.focus(); window.webContents.send("miaos-browser-find"); }
     else if (key === "t") { newTab(); focusLocation(); }
-    else if (key === "w") closeTab(activeId);
+    else if (key === "w") closeTabByPerson(activeId);
     else if (key === "r") active()?.view.webContents.reload();
     else if (active()) {
       const wc = active().view.webContents;
@@ -1661,6 +2091,18 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     } else if (key === "escape") active()?.view.webContents.stop();
   }
   // Tabs keep the Map's insertion order; reordering rebuilds it.
+  // The group is busy while its worker clicks, so the popup joins it
+  // directly rather than through the idle-checked group moves.
+  function openWorkerPopup(opener, url) {
+    const popup = newTab(url, { activate: false, groupId: null });
+    if (groups.has(opener.groupId)) popup.groupId = opener.groupId;
+    const order = [...tabs.keys()].filter(id => id !== popup.id);
+    moveTab(popup.id, order.indexOf(opener.id) + 1);
+    popup.botUsedAt = ++botUseCounter;
+    opener.workerPopups = [...(opener.workerPopups || []), popup.id].slice(-20);
+    normalizeGroups(); layout(); persistTabs(); publish();
+    return popup;
+  }
   function moveTab(id, index) {
     const tab = tabs.get(id);
     if (!tab) return false;
@@ -1690,7 +2132,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const tab = {
       id, view, url: "", title: typeof options.title === "string" && options.title.trim()
         ? options.title.slice(0, 500) : "New tab", error: "", favicon: null, faviconPending: false,
-      faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [],
+      faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [], snapshots: new Map(), crashed: false,
       media: options.media || null,
       // A tab opened from a grouped tab (a link, New Tab to the Right,
       // Duplicate) joins its opener's group.
@@ -1709,6 +2151,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     view.setBackgroundColor(darkTheme ? "#0B0A09" : "#ffffff");
     const wc = view.webContents;
     wc.on("before-input-event", shortcut);
+    // Clicking into a page a bot is working on takes it over, the same as
+    // pressing Take over, so the person and the bot never type on one page.
+    // Bots never send mouse events, so this is always the person.
+    wc.on("before-mouse-event", (_event, mouse) => {
+      if (mouse.type !== "mouseDown" || tab.id !== activeId) return;
+      if (heldByRenderer.has(tab.id) || (tab.botWork || 0) > 0 || tab.actorOperationCount > 0) {
+        groupBotEvent({ action: "page-click", tabId: tab.id });
+      }
+    });
     // A navigation drops inserted styles; put the bot glow back if needed.
     wc.on("dom-ready", () => { tab.botGlowKey = null; tab.botGlowCss = null; syncBotGlow(tab); });
     // Pages focus themselves as they load (search boxes, editors). Only the
@@ -1724,6 +2175,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       });
     });
     wc.setWindowOpenHandler(({ url, disposition }) => {
+      // A page a bot or Mia is driving may hand off through a popup (a flight
+      // site's "Continue to book" opens the airline). It never becomes a
+      // window or takes the front. A worker bound to this one tab follows it
+      // here, like a link (its click was already approved); a bot working
+      // across its own tabs gets it as a tab behind, in the same group.
+      if (tab.actorOperationCount > 0) {
+        try { navigate(tab, url); } catch (_) { /* Non-web targets stay blocked. */ }
+        return { action: "deny" };
+      }
+      if ((tab.botWork || 0) > 0) {
+        try { openWorkerPopup(tab, url); } catch (_) { /* Non-web targets stay blocked. */ }
+        return { action: "deny" };
+      }
       // GIS popup mode returns credentials to window.opener. Turning this into
       // a new tab destroys that relationship and strands the Google chooser.
       // Only the OAuth/GIS endpoints need the real popup: a plain Google
@@ -1789,8 +2253,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("will-navigate", guard);
     wc.on("will-redirect", guard);
     wc.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame) clearPresenceTargets(tab);
       if (mainFrame && !inPlace) {
         tab.sequence++;
+        tab.snapshots.clear();
+        tab.vacuumElements = [];
+        tab.crashed = false;
         tab.faviconRequest++;
         tab.faviconPending = false;
         tab.timing = null;
@@ -1802,7 +2270,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     });
     wc.on("did-start-loading", publish);
     wc.on("did-stop-loading", () => { collectTiming(tab); publish(); });
-    wc.on("dom-ready", () => collectTiming(tab));
+    wc.on("dom-ready", () => {
+      tab.presenceStylePromise = null; collectTiming(tab);
+      // Presence lives only in pages with bound browser work.
+      const bound = actorRuntime.list().filter(actor => actor.tabId === tab.id);
+      if (!bound.length) return;
+      initializePresenceDocument(tab);
+      for (const actor of bound) updateActorPresence({ type: "bound", ...actor });
+    });
     wc.on("did-finish-load", () => setImmediate(() => {
       collectTiming(tab, true);
       restoreMediaState(tab);
@@ -1839,6 +2314,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("did-navigate-in-page", (event, url, mainFrame) => {
       if (mainFrame) {
         tab.sequence++;
+        initializePresenceDocument(tab);
+        tab.snapshots.clear();
+        tab.vacuumElements = [];
+        tab.crashed = false;
         tab.timing = null;
         tab.documentTimingValid = false; // Document timings do not measure SPA route changes.
       }
@@ -1851,6 +2330,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("enter-html-full-screen", () => enterPageFullscreen(tab));
     wc.on("leave-html-full-screen", () => leavePageFullscreen(tab));
     wc.on("render-process-gone", () => {
+      tab.crashed = true; tab.sequence++; tab.snapshots.clear();
       tab.error = "This tab stopped responding. Reload to try again."; layout(); publish();
     });
     wc.on("context-menu", (_event, params) => {
@@ -2085,6 +2565,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     Menu.buildFromTemplate([
       { label: "Mia", type: "checkbox", checked: !group.botId, icon: menuIcon(miaIcon),
         click: () => { switchGroupBot(groupId, null, working); } },
+      // Starts a new group in a new tab and the "create a bot" chat; the bot
+      // takes that group once it is created.
+      { label: "+ New bot", click: () => groupBotEvent({ action: "new-bot" }) },
       ...(list.length ? [{ type: "separator" }] : []),
       ...list.map(bot => ({
         label: bot.name.slice(0, 80), type: "checkbox", checked: group.botId === bot.botId, icon: menuIcon(bot.icon),
@@ -2094,6 +2577,25 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   // The » menu lists groups the crowded strip had no room for; picking one
   // brings its last tab to the front, which opens the group again.
+  // Right-click on Back or Forward lists the pages that way, nearest first,
+  // like Chrome; picking one jumps straight there. It opens under the button.
+  function showHistoryMenu(tab, { direction, x, y }) {
+    const history = tab.view.webContents.navigationHistory;
+    const entries = history.getAllEntries();
+    const current = history.getActiveIndex();
+    const step = direction === "forward" ? 1 : -1;
+    const items = [];
+    for (let index = current + step; index >= 0 && index < entries.length && items.length < 15; index += step) {
+      const entry = entries[index];
+      items.push({
+        label: String(entry.title || entry.url || "Untitled").slice(0, 80),
+        click: menuAction(() => { if (tabs.get(tab.id) === tab) history.goToIndex(index); }),
+      });
+    }
+    if (!items.length) return;
+    const at = Number.isFinite(x) && Number.isFinite(y) ? { x: Math.round(x), y: Math.round(y) } : {};
+    Menu.buildFromTemplate(items).popup({ window, ...at });
+  }
   function showGroupOverflowMenu(groupIds) {
     const list = (Array.isArray(groupIds) ? groupIds : []).slice(0, 200).filter(id => groups.has(id));
     if (!list.length) return;
@@ -2117,10 +2619,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     Menu.buildFromTemplate([
       { label: "Rename Group…", click: () => editGroupName(groupId) },
       { label: "Change Bot…", click: () => groupBotEvent({ action: "choose", groupId }) },
-      { label: "Color", submenu: GROUP_COLORS.map(color => ({
-        label: color[0].toUpperCase() + color.slice(1), type: "radio", checked: group.color === color,
-        click: menuAction(() => updateGroup(groupId, { color })),
-      })) },
       { type: "separator" },
       { label: "New Tab in Group", click: menuAction(() => {
         const last = groupTabs(groupId).at(-1);
@@ -2133,10 +2631,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       { label: "Close Group", click: menuAction(() => closeTabs(groupTabs(groupId).map(tab => tab.id))) },
     ]).popup({ window });
   }
-  function closeTab(id) {
+  function closeTab(id, { byUser = false } = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
     if (fullscreenId === id) exitPageFullscreen();
+    actorRuntime.closeTab(id);
     // Closing the active tab lands on its neighbor, staying inside its group
     // when the group has other tabs, so a bot's work stays in view.
     const order = [...tabs.keys()];
@@ -2156,10 +2655,35 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       activeId = null;
       if (next) activateTab(next.id);
     }
-    if (!tabs.size) newTab();
+    if (!tabs.size) {
+      newTab();
+      if (byUser) lastTabCloses += 1;
+    }
     layout(); persistTabs(); publish();
   }
+  // Closing a tab ends the work of the bot assigned to it, so a person who
+  // closes one is asked first. Bots and internal cleanup call closeTab directly.
+  const closePrompts = new Set();
+  function closeTabByPerson(id) {
+    const working = actorRuntime.list().find(binding => binding.tabId === id);
+    if (!working) return closeTab(id, { byUser: true });
+    if (closePrompts.has(id)) return;
+    closePrompts.add(id);
+    const name = String(working.botName || "").trim().slice(0, 80) || "A bot";
+    dialog.showMessageBox(window, {
+      type: "warning",
+      title: "Close tab",
+      message: `${name} is working in this tab.`,
+      detail: "Closing the tab stops that bot. What it has found so far is kept.",
+      buttons: ["Close tab", "Keep tab open"],
+      defaultId: 1,
+      cancelId: 1,
+    }).then((result) => {
+      if (result.response === 0 && tabs.has(id) && !disposed) closeTab(id, { byUser: true });
+    }).catch((error) => log(`close tab prompt failed: ${error.message}`)).finally(() => closePrompts.delete(id));
+  }
   async function clearData() {
+    actorRuntime.dispose();
     await profile.clearStorageData();
     await profile.clearCache();
     for (const tab of [...tabs.values()]) {
@@ -2339,14 +2863,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         persistDownloads(); publish();
         return state();
       }
-      if (!tabs.size) newTab();
+      if (command.action === "work-proposal-clear") {
+        if (workProposal && (!command.id || command.id === workProposal.id)) { workProposal = null; publish(); }
+        return state();
+      }
+      if (!tabs.size || !active()) newTab();
       const tab = active();
       if (command.action === "navigate") navigate(tab, command.value);
       if (command.action === "select" && tabs.has(command.id)) {
         activateTab(command.id); layout(); persistTabs();
-        focusTabWebContents(tabs.get(command.id));
+        // Following a bot moves the page in front, not the keyboard.
+        if (!command.follow) focusTabWebContents(tabs.get(command.id));
       }
-      if (command.action === "close") closeTab(command.id);
+      if (command.action === "close") closeTabByPerson(command.id);
       if (command.action === "move") {
         const moved = tabs.get(command.id);
         const nextGroup = command.groupId === null || groups.has(command.groupId) ? command.groupId : moved?.groupId;
@@ -2361,6 +2890,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "tabMenu") showTabMenu(command.id);
       if (command.action === "groupMenu") showGroupMenu(command.groupId);
       if (command.action === "groupOverflowMenu") showGroupOverflowMenu(command.groupIds);
+      if (command.action === "groupNewTab" && groups.has(command.groupId)) {
+        // The group's blank tab is reused, so they never pile up behind +N.
+        const members = groupTabs(command.groupId);
+        const blank = members.find(item => !item.url);
+        if (blank) { activateTab(blank.id); layout(); persistTabs(); }
+        else newTab(undefined, { after: members.at(-1)?.id, groupId: command.groupId });
+      }
       if (command.action === "groupBotMenu") showGroupBotMenu(command.groupId, command.bots, command.miaIcon, command.busy);
       if (command.action === "groupAssignBot") { assignGroupBot(command.groupId, command.bot); persistTabs(); }
       if (command.action === "groupCreate" && tabs.has(command.id)) {
@@ -2375,6 +2911,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         normalizeGroups(); persistTabs();
       }
       if (command.action === "groupClose") closeTabs(groupTabs(command.groupId).map(item => item.id));
+      if (command.action === "historyMenu") showHistoryMenu(tab, command);
       if (command.action === "back" && tab.view.webContents.navigationHistory.canGoBack()) tab.view.webContents.navigationHistory.goBack();
       if (command.action === "forward" && tab.view.webContents.navigationHistory.canGoForward()) tab.view.webContents.navigationHistory.goForward();
       if (command.action === "reload") { tab.error = ""; layout(); tab.view.webContents.reload(); }
@@ -2412,6 +2949,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   window.once("closed", () => {
     persistTabs();
     disposed = true;
+    actorRuntime.dispose();
     if (!shellContents.isDestroyed()) shellContents.removeListener("zoom-changed", requestLayout);
     window.removeListener("resize", requestLayout);
     window.removeListener("leave-full-screen", leaveWindowFullscreen);
@@ -2440,7 +2978,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     publish();
   }
   return {
+    state,
+    work: { execute: executeActorOperation, validate: validateActorOperation, actors: publicActors },
+    execute: executeActorOperation, validate: validateActorOperation,
     shortcut: runShortcut, protocol: protocolCommand, persist: persistTabs,
+    actors: publicActors,
     prepareToClose: captureMediaState, clearData,
     prepareAttachment: attachmentAccess.prepare,
     clearLegacyAttachmentCookie: attachmentAccess.removeLegacyBrowserCookie,

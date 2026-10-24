@@ -137,6 +137,8 @@ async function startServerOnce({
   }
 
   const port = await freePort();
+  let gatewayPort = await freePort();
+  while (gatewayPort === port) gatewayPort = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   const logs = [];
   const nodeModulesFix = nodePathFix();
@@ -147,6 +149,7 @@ async function startServerOnce({
       ...process.env,
       ...(nodeModulesFix ? { NODE_PATH: nodeModulesFix } : {}),
       PORT: String(port),
+      MIAOS_HERMES_GATEWAY_PORT: String(gatewayPort),
       GOOGLE_REDIRECT_URI: `${origin}/api/connections/google/callback`,
       DB_PATH: dbPath,
       DATA_DIR: '',

@@ -1083,6 +1083,111 @@ test('an unreadable gateway record is treated as a possibly running gateway', as
   assert.equal(await wait(), true);
 });
 
+
+test('interrupt observations separate sanitized RPC receipt from matching terminal interruption', async t => {
+  for (const outcome of ['acknowledged', 'failed', 'timed_out']) await t.test(outcome, async () => {
+    const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+    const events = [], turn = { mode: 'own', sessionId: 'live', onEvent() {}, resolve() {}, reject() {}, text: '' };
+    client.turns.set('live', turn);
+    client.request = async (method, params) => {
+      assert.equal(method, 'session.interrupt'); assert.deepEqual(params, { session_id: 'live' });
+      if (outcome !== 'acknowledged') throw Object.assign(new Error('hidden native detail'), { code: outcome === 'timed_out' ? 'GATEWAY_REQUEST_TIMEOUT' : 5019 });
+      return { status: 'interrupted', turn_isolation: true, secret: 'hidden receipt' };
+    };
+    const result = client.interrupt('live', { onEvidence: evidence => events.push(evidence) });
+    if (outcome === 'acknowledged') await result; else await assert.rejects(result);
+    assert.equal(events[0]?.status, outcome); assert.ok(!JSON.stringify(events).includes('hidden'));
+    client.turns.delete('live');
+    client.routeSessionEvent('other', 'message.complete', { status: 'interrupted', text: 'hidden other text' });
+    assert.equal(events.length, 1);
+    client.routeSessionEvent('live', 'message.complete', { status: 'interrupted', text: 'hidden terminal text', reasoning: 'hidden reasoning' });
+    assert.equal(events[1]?.type, 'terminal'); assert.equal(events[1]?.status, 'interrupted');
+    assert.ok(!JSON.stringify(events).includes('hidden')); client.close();
+  });
+});
+
+
+test('interrupt real RPC deadline records timeout without waiting for a provider or leaking details', async t => {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+  t.after(() => client.close());
+  const events = [], requests = [];
+  client.connect = async () => {};
+  client.socket = { readyState: 1, send: raw => requests.push(JSON.parse(raw)), close() {} };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = client.interrupt('live', { onEvidence: evidence => events.push(evidence) });
+  const rejected = assert.rejects(pending, { code: 'GATEWAY_REQUEST_TIMEOUT' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests.map(r => r.params), [{ session_id: 'live' }]);
+  t.mock.timers.tick(9999); assert.deepEqual(events, []);
+  t.mock.timers.tick(1); await rejected;
+  assert.deepEqual(events, [{ type: 'receipt', status: 'timed_out' }]);
+  assert.equal(client.pending.size, 0); t.mock.timers.reset();
+});
+
+test('aborted turn and explicit Stop share a receipt and only its own terminal event', async t => {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+  t.after(() => client.close());
+  const events = []; let interrupts = 0;
+  client.request = async method => { if (method === 'session.interrupt') { interrupts++; return { status: 'interrupted' }; } return { status: 'streaming' }; };
+  const controller = new AbortController();
+  const running = client.submitTurn({ sessionId: 'live' }, 'synthetic prompt', { signal: controller.signal });
+  const rejected = assert.rejects(running, { name: 'AbortError' });
+  await new Promise(resolve => setImmediate(resolve)); controller.abort();
+  await client.interrupt('live', { onEvidence: evidence => events.push(evidence) }); await rejected;
+  assert.equal(interrupts, 1); assert.deepEqual(events, [{ type: 'receipt', status: 'acknowledged' }]);
+  client.routeSessionEvent('live', 'message.start', { text: 'hidden next turn' });
+  client.routeSessionEvent('live', 'message.complete', { status: 'interrupted', text: 'hidden unrelated turn' });
+  assert.equal(events.length, 1, 'a later started turn cannot attest the stopped turn');
+  assert.equal(client.interruptObservers.size, 0);
+});
+
+test('interrupt nonacceptance and malformed receipts never attest interruption', async t => {
+  for (const result of [{ status: 'not_interrupted' }, { status: 'unknown', text: 'hidden' }, undefined]) {
+    const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+    const events = []; client.request = async () => result;
+    await client.interrupt('live', { onEvidence: evidence => events.push(evidence) });
+    assert.equal(events[0].status, result?.status === 'not_interrupted' ? 'not_interrupted' : 'failed');
+    client.routeSessionEvent('live', 'message.complete', { status: 'interrupted', text: 'hidden' });
+    assert.equal(events.length, 1, 'no captured owned turn means no terminal attestation'); client.close();
+  }
+});
+
+test('interrupt terminal observers retire on disconnect, new owned turn and the bounded deadline', async t => {
+  for (const boundary of ['disconnect', 'new turn', 'deadline']) await t.test(boundary, async st => {
+    const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+    st.after(() => client.close());
+    client.turns.set('live', { mode: 'own', sessionId: 'live', resolve() {}, reject() {} });
+    const events = []; let calls = 0;
+    client.request = async () => { calls++; return { status: 'interrupted' }; };
+    if (boundary === 'deadline') st.mock.timers.enable({ apis: ['setTimeout'] });
+    const first = client.interrupt('live', { onEvidence: event => events.push(event) });
+    const duplicate = client.interrupt('live');
+    await first; await duplicate; assert.equal(calls, 1);
+    client.turns.delete('live');
+    if (boundary === 'disconnect') client.failConnection(new Error('hidden disconnect details'));
+    else if (boundary === 'new turn') client.turns.set('live', { mode: 'own', sessionId: 'live', resolve() {}, reject() {} });
+    else { st.mock.timers.tick(30000); st.mock.timers.reset(); }
+    client.routeSessionEvent('live', 'message.complete', { status: 'interrupted', text: 'hidden late body' });
+    assert.deepEqual(events, [{ type: 'receipt', status: 'acknowledged' }]);
+    assert.equal(client.interruptObservers.size, 0);
+  });
+});
+
+test('interrupt never upgrades captured pending or unsolicited turns into terminal eligibility', async t => {
+  for (const mode of ['pending', 'after-unsolicited']) await t.test(mode, async st => {
+    const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+    st.after(() => client.close());
+    const turn = { mode, goalStarted: true, held: [], sessionId: 'live', text: '', resolve() {}, reject() {} };
+    const events = []; client.turns.set('live', turn); client.request = async () => ({ status: 'interrupted' });
+    await client.interrupt('live', { onEvidence: event => events.push(event) });
+    if (mode === 'pending') client.settlePendingTurn('live', turn, 'streaming');
+    else client.routeSessionEvent('live', 'message.complete', { status: 'complete', text: 'earlier unrelated turn' });
+    client.routeSessionEvent('live', 'message.start', {});
+    client.routeSessionEvent('live', 'message.complete', { status: 'interrupted', text: 'later owned turn' });
+    assert.deepEqual(events, [{ type: 'receipt', status: 'acknowledged' }]);
+  });
+});
+
 test('reconnecting to an owned listener does not reclassify it as external', async () => {
   const { EventEmitter } = await import('node:events');
   let listening = false;
@@ -1207,4 +1312,22 @@ test('OS allocated internal gateway port is released for the gateway to bind', a
     server.listen({ host: '127.0.0.1', port, exclusive: true }, resolve);
   });
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+});
+
+test('a failed Stop can be retried while the interrupt observation stays open', async () => {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9121/api/ws', WebSocketImpl: class {}, env: {} });
+  client.turns.set('live', { mode: 'own', sessionId: 'live', onEvent() {}, resolve() {}, reject() {}, text: '' });
+  const calls = [], events = [];
+  client.request = async (method, params, timeoutMs, signal) => {
+    calls.push({ timeoutMs, signal });
+    if (calls.length === 1) throw Object.assign(new Error('timeout'), { code: 'GATEWAY_REQUEST_TIMEOUT' });
+    return { status: 'interrupted' };
+  };
+  const signal = new AbortController().signal;
+  await assert.rejects(client.interrupt('live', { onEvidence: evidence => events.push(evidence), timeoutMs: 500, signal }));
+  assert.deepEqual(await client.interrupt('live'), { status: 'interrupted' });
+  assert.equal(calls.length, 2, 'the retry sends a fresh request');
+  assert.equal(calls[0].timeoutMs, 500); assert.equal(calls[0].signal, signal);
+  assert.deepEqual(events.map(e => e.status), ['timed_out', 'acknowledged'], 'one observation records both receipts');
+  client.close();
 });

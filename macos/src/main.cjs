@@ -23,8 +23,12 @@ const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
+const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
+const { createBrowserWorkBroker } = require("./browser-work-broker.cjs");
+const { loadBrowserWorkKey } = require("./browser-work-key.cjs");
+const { createBrowserWorkDispatch } = require("./browser-work-dispatch.cjs");
 const { resolveMiaFolder } = require("./mia-folder.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
@@ -79,6 +83,17 @@ const PACKAGED_RUNTIME_ROOT = app.isPackaged ? path.join(process.resourcesPath, 
 const PACKAGED_HERMES_BIN = PACKAGED_RUNTIME_ROOT
   ? runtimeLauncherPath(path.join(PACKAGED_RUNTIME_ROOT, "bin"), "hermes")
   : "";
+// A dev launch keeps its own data root, so the Hermes it talks to must be
+// named explicitly. Without that, the defaults below would point Hermes at
+// an empty data folder and whatever python3 is first on PATH, and Mia would
+// silently lose its model keys. -> problem message, or "" when it is fine.
+function devModeRuntimeProblem(env = process.env, devDataRoot = DEV_DATA_ROOT) {
+  if (!devDataRoot) return "";
+  const missing = ["HERMES_HOME", "HERMES_PYTHON"].filter(name => !String(env[name] || "").trim());
+  if (!missing.length) return "";
+  return `Dev mode is missing ${missing.join(" and ")}. Start it with scripts/dev_mode.sh.`;
+}
+
 function developmentHermesBinary(env = process.env, exists = fs.existsSync, platform = process.platform) {
   const explicit = env.MIAOS_HERMES_BIN || env.HERMES_BIN;
   if (explicit) return String(explicit).trim();
@@ -186,6 +201,8 @@ if (!hasSingleInstanceLock) app.quit();
 
 let mainWindow = null;
 let nativeBrowser = null;
+let browserWorkBroker = null;
+let browserWorkKey = null;
 let backendProcess = null;
 let backendProcessUrl = null;
 let backendUrl = null;
@@ -846,6 +863,9 @@ async function startLocalBackend(exactPort = null) {
     throw new Error(`Mia backend entrypoint is missing: ${BACKEND_ENTRYPOINT}`);
   }
 
+  const devProblem = devModeRuntimeProblem();
+  if (devProblem) throw new Error(devProblem);
+
   const packagedRuntime = await preparePackagedRuntime();
   const port = await selectLocalBackendPort(exactPort);
   const dataDirectory = app.getPath("userData");
@@ -858,6 +878,14 @@ async function startLocalBackend(exactPort = null) {
       });
     }
   }
+  if (!browserWorkBroker) {
+    try {
+      browserWorkKey = await loadBrowserWorkKey({ directory: dataDirectory, safeStorage });
+      browserWorkBroker = await createBrowserWorkBroker({ dispatch: createBrowserWorkDispatch(() => nativeBrowser) });
+    } catch (_) {
+      desktopLog("Browser collaboration unavailable: secure desktop storage is required.");
+    }
+  }
   const databasePath = backendDatabasePath();
   const hermesHome = path.resolve(process.env.HERMES_HOME || path.join(dataDirectory, "hermes"));
   const workspaceDir = miaosWorkspacePath();
@@ -866,6 +894,7 @@ async function startLocalBackend(exactPort = null) {
   const claudeCodeCommand = discoverClaudeCodeCommand({ home: app.getPath("home") });
   const childEnvironment = Object.assign({}, process.env, {
     PORT: String(port),
+    ...(browserWorkBroker ? { MIA_BROWSER_WORK_URL: browserWorkBroker.url, MIA_BROWSER_WORK_TOKEN: browserWorkBroker.token, MIA_BROWSER_WORK_KEY: browserWorkKey.toString("base64") } : {}),
     // The desktop backend is private to this device. Never request LAN/public
     // firewall access just because Clerk authentication is enabled.
     MIAOS_BIND_HOST: "127.0.0.1",
@@ -1956,6 +1985,10 @@ function createWindow() {
     {
       statePath: path.join(app.getPath("userData"), "miaos-browser-state.json"),
       workspaceRoot: miaosWorkspacePath(),
+      onActorEvent: createActorDiagnostics({
+        enabled: !app.isPackaged && process.env.MIAOS_LOCAL_PROFILE === "1" && process.env.MIAOS_BROWSER_ACTOR_DIAGNOSTICS === "1",
+        log: desktopLog,
+      }),
       resolveActor: sessionId => resolveBrowserActor(window, sessionId),
     },
   );
@@ -2562,6 +2595,7 @@ app.on("before-quit", () => {
   isQuitting = true;
   if (autoUpdateCheckTimer) clearInterval(autoUpdateCheckTimer);
   nativeBrowser?.persist?.();
+  browserWorkBroker?.stop().catch(() => {});
   ghostBridge?.stop().catch(error => desktopLog(`Ghost browser bridge stop failed: ${error.message}`));
   googleWorkspaceBroker?.close().catch(error => desktopLog(`Google credential broker stop failed: ${error.message}`));
   stopBackendForQuit();
@@ -2584,6 +2618,7 @@ app.on("window-all-closed", () => {
 });
 
 module.exports = {
+  devModeRuntimeProblem,
   developmentHermesBinary,
   completeClaudeAuthCallback,
   createDevelopmentMenu,

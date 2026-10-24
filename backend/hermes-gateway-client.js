@@ -270,6 +270,7 @@ class HermesGatewayClient {
     this.nextRequestId = 1;
     this.pending = new Map();
     this.turns = new Map();
+    this.interruptObservers = new Map();
     this.operations = new Set();
     this.cancellations = new WeakMap();
     // sessionId -> reply text of a turn Hermes started on its own (a /goal
@@ -400,6 +401,7 @@ class HermesGatewayClient {
   }
 
   failConnection(error) {
+    for (const observation of this.interruptObservers.values()) observation.finish();
     const socket = this.socket;
     this.socket = null;
     this.readyPromise = null;
@@ -526,7 +528,9 @@ class HermesGatewayClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`${method}: timed out after ${timeoutMs}ms`));
+        const error = new Error(`${method}: timed out after ${timeoutMs}ms`);
+        if (method === 'session.interrupt') error.code = 'GATEWAY_REQUEST_TIMEOUT';
+        reject(error);
       }, timeoutMs);
       this.pending.set(id, {
         resolve: (response) => {
@@ -549,6 +553,15 @@ class HermesGatewayClient {
   // prompt.submit answers, because Hermes can start a goal turn between our
   // send and its reply, and that turn's answer is not ours.
   routeSessionEvent(sessionId, type, payload) {
+    let observation = this.interruptObservers.get(sessionId);
+    if (observation && (type === 'message.start' || (type === 'message.complete' && payload?.status !== 'interrupted'))) { observation.finish(); observation = null; }
+    if (observation && type === 'message.complete' && payload?.status === 'interrupted') {
+      const current = this.turns.get(sessionId);
+      if (observation.eligible && (!current || current === observation.turn)) {
+        observation.emit({ type: 'terminal', status: 'interrupted' });
+      }
+      observation.finish();
+    }
     const turn = this.turns.get(sessionId);
     if (turn && turn.mode === 'pending') {
       turn.held.push([type, payload]);
@@ -936,8 +949,42 @@ class HermesGatewayClient {
     return deleted;
   }
 
-  async interrupt(sessionId, { signal = null, timeoutMs = INTERRUPT_TIMEOUT_MS } = {}) {
-    return this.request('session.interrupt', { session_id: String(sessionId || '') }, timeoutMs, signal);
+  interrupt(sessionId, { onEvidence, signal = null, timeoutMs = INTERRUPT_TIMEOUT_MS } = {}) {
+    sessionId = String(sessionId || '');
+    let observation = this.interruptObservers.get(sessionId);
+    if (!observation) {
+      const callbacks = new Set(), history = [];
+      const turn = this.turns.get(sessionId);
+      observation = { turn, eligible: turn?.mode === 'own', callbacks, history,
+        emit: evidence => {
+          history.push(evidence);
+          for (const callback of callbacks) { try { callback({ ...evidence }); } catch (_) {} }
+        },
+        finish: () => { clearTimeout(observation.timer); if (this.interruptObservers.get(sessionId) === observation) this.interruptObservers.delete(sessionId); },
+      };
+      this.interruptObservers.set(sessionId, observation);
+      // Bounded metadata-only observation; never retain a terminal message body.
+      observation.timer = setTimeout(() => observation.finish(), 30000); observation.timer.unref?.();
+    }
+    // A failed Stop can be retried: send a fresh request, keep observing.
+    if (!observation.promise || observation.requestFailed || observation.requestSignal?.aborted) {
+      observation.requestFailed = false;
+      observation.requestSignal = signal;
+      observation.promise = this.request('session.interrupt', { session_id: sessionId }, timeoutMs, signal).then(result => {
+        if (result?.status !== 'interrupted') observation.requestFailed = true;
+        observation.emit({ type: 'receipt', status: result?.status === 'interrupted' ? 'acknowledged' : result?.status === 'not_interrupted' ? 'not_interrupted' : 'failed' });
+        return result;
+      }, error => {
+        observation.requestFailed = true;
+        observation.emit({ type: 'receipt', status: error?.code === 'GATEWAY_REQUEST_TIMEOUT' ? 'timed_out' : 'failed' });
+        throw error;
+      });
+    }
+    if (typeof onEvidence === 'function') {
+      observation.callbacks.add(onEvidence);
+      for (const evidence of observation.history) { try { onEvidence({ ...evidence }); } catch (_) {} }
+    }
+    return observation.promise;
   }
 
   async steer(sessionId, text) {
@@ -1045,6 +1092,7 @@ class HermesGatewayClient {
   async submitTurn(session, message, { onEvent = null, signal = null, operation = null } = {}) {
     const existing = this.turns.get(session.sessionId);
     if (existing) throw new Error('Hermes gateway session already has a running turn');
+    this.interruptObservers.get(session.sessionId)?.finish();
     const ownsOperation = !operation;
     operation = operation || this.startOperation(signal);
     this.assertOperationActive(operation);
@@ -1201,6 +1249,7 @@ class HermesGatewayClient {
   }
 
   close() {
+    for (const observation of this.interruptObservers.values()) observation.finish();
     this.shutdownRequested = true;
     this.failConnection(new Error('Hermes gateway client closed'));
     const child = this.child;

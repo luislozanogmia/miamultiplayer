@@ -1,0 +1,125 @@
+{
+  "base": "0eb6c0ba7cfa8f49788355468c04a1d33968d0c7",
+  "environment": "mia-dev-aws Linux Ubuntu22.04 glibc2.35 Node22.22.3",
+  "checks": [
+    {
+      "command": "node --test macos/src/browser.test.cjs macos/src/mia-ghost-bridge.test.cjs",
+      "result": "40 passed, 0 failed",
+      "evidenceClass": "mocked",
+      "scope": "Existing browser/bridge suite, no multiplayer acceptance claim"
+    },
+    {
+      "command": "macos/node_modules/electron/dist/electron operations/browser-multiplayer/runtime-baseline.cjs",
+      "result": "explicitWorkerReadReturnedHuman=true; unknownActorScrollDenied=false; humanActiveAfterRead=true",
+      "evidenceClass": "local",
+      "scope": "Actual browser owner + Chromium; no Mia frontend or Hermes"
+    }
+  ],
+  "criteria": [
+    {
+      "id": 1,
+      "criterion": "Named groups persist names, order, active group and selected tab through restart; legacy tab state still loads.",
+      "status": "failing",
+      "evidenceClass": "static",
+      "evidence": "Static baseline has no browser-work coordinator/groups/actor/approval API; existing browser protocol is active-tab based."
+    },
+    {
+      "id": 2,
+      "criterion": "User's Mia retains overall goal/group context/dependencies/results and is not represented as a worker bot.",
+      "status": "failing",
+      "evidenceClass": "static",
+      "evidence": "Static baseline has no browser-work coordinator/groups/actor/approval API; existing browser protocol is active-tab based."
+    },
+    {
+      "id": 3,
+      "criterion": "One bot owns one explicit tab and bounded task; mismatched tab/actor requests are denied.",
+      "status": "failing",
+      "evidenceClass": "local",
+      "evidence": "Actual pinned Electron owner accepted unknown actor scroll; explicit background-tab read returned human page."
+    },
+    {
+      "id": 4,
+      "criterion": "Worker model configuration reaches actual Hermes execution without silently replacing requested model.",
+      "status": "blocked",
+      "evidenceClass": "static",
+      "evidence": "Production authenticated execution and actual UI not yet established."
+    },
+    {
+      "id": 5,
+      "criterion": "Mia delegates dependent tasks and synthesizes actual stored worker results through Hermes.",
+      "status": "failing",
+      "evidenceClass": "static",
+      "evidence": "Static baseline has no browser-work coordinator/groups/actor/approval API; existing browser protocol is active-tab based."
+    },
+    {
+      "id": 6,
+      "criterion": "Separate tabs progress concurrently; same-tab mutations serialize and cancellation releases queue.",
+      "status": "unknown",
+      "evidenceClass": "static",
+      "evidence": "No baseline runtime acceptance performed."
+    },
+    {
+      "id": 7,
+      "criterion": "Background read/click/fill/scroll/navigation operate on assigned tab without selecting human tab.",
+      "status": "failing",
+      "evidenceClass": "local",
+      "evidence": "Actual pinned Electron owner accepted unknown actor scroll; explicit background-tab read returned human page."
+    },
+    {
+      "id": 8,
+      "criterion": "Human typing/view remains intact; disruptive shared-tab operations require current approval.",
+      "status": "unknown",
+      "evidenceClass": "static",
+      "evidence": "No baseline runtime acceptance performed."
+    },
+    {
+      "id": 9,
+      "criterion": "Element snapshots isolated by actor/tab/document; replaced or stale snapshots fail closed.",
+      "status": "failing",
+      "evidenceClass": "static",
+      "evidence": "Static baseline has no browser-work coordinator/groups/actor/approval API; existing browser protocol is active-tab based."
+    },
+    {
+      "id": 10,
+      "criterion": "Hidden Electron tab screenshots are current and correct, never screenshots of active human tab.",
+      "status": "unknown",
+      "evidenceClass": "static",
+      "evidence": "No baseline runtime acceptance performed."
+    },
+    {
+      "id": 11,
+      "criterion": "Real execution renders status, bot motes, ownership rings and target region without fabricated progress.",
+      "status": "failing",
+      "evidenceClass": "static",
+      "evidence": "Static baseline has no browser-work coordinator/groups/actor/approval API; existing browser protocol is active-tab based."
+    },
+    {
+      "id": 12,
+      "criterion": "Approval reject prevents execution; accept revalidates tab/target/identity/revocation before dispatch.",
+      "status": "failing",
+      "evidenceClass": "static",
+      "evidence": "Static baseline has no browser-work coordinator/groups/actor/approval API; existing browser protocol is active-tab based."
+    },
+    {
+      "id": 13,
+      "criterion": "Stop cancels matching worker/group, preserves partial results, no stale post-stop reply or uncertain-write restart replay.",
+      "status": "unknown",
+      "evidenceClass": "static",
+      "evidence": "No baseline runtime acceptance performed."
+    },
+    {
+      "id": 14,
+      "criterion": "Outputs are durable and group/owner authorized; validated reusable work preserves proof and uncertain-write holds.",
+      "status": "failing",
+      "evidenceClass": "static",
+      "evidence": "Static baseline has no browser-work coordinator/groups/actor/approval API; existing browser protocol is active-tab based."
+    },
+    {
+      "id": 15,
+      "criterion": "Actual Linux Mia UI: one human plus personal Mia coordinates two real bots across three tabs, combines results, preserves focus/groups through close/restart.",
+      "status": "blocked",
+      "evidenceClass": "static",
+      "evidence": "Production authenticated execution and actual UI not yet established."
+    }
+  ]
+}

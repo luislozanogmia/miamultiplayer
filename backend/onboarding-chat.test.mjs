@@ -118,6 +118,8 @@ test('news briefing validates user choices and creates one explicit research tas
   assert.match(result.prompt, /Science & health/);
   assert.match(result.prompt, /source links/);
   assert.match(result.prompt, /do not invent news/);
+  assert.equal(result.steps.length, 5, 'the briefing has steps for the Automations checklist');
+  assert.match(result.steps[0], /Science & health/);
   for(const invalid of [{topics:[]}, {time:'25:00'}, {schedule:'hourly'}, {utcOffsetMinutes:9999}, {schedule:'weekly',day:'nonsense'}]){
     assert.throws(() => newsBriefing({...input,...invalid}));
   }

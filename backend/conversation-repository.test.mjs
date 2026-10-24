@@ -474,3 +474,19 @@ test('canonical Mia merge preserves history and related native records while ret
     senderId: 'alice@example.com', senderType: 'user', content: { text: 'After merge' },
   }).event.sequence, 4);
 });
+
+test('restarting a conversation keeps its metadata and drops only the model session', () => {
+  const { repository } = fixture();
+  const conversation = createConversation(repository, {
+    type: 'bot',
+    name: 'Browser-use',
+    metadata: { botId: 'bot-1', workspaceId: 'solo', hermesGatewaySessionId: 'session-1', hermesGatewayProfile: 'worker' },
+  });
+  repository.restartConversation({ companyId: 'company-a', id: conversation.id, restartedAt: '2026-09-03T07:00:00.000Z' });
+  const restarted = repository.getConversation({ companyId: 'company-a', id: conversation.id });
+  assert.deepEqual(restarted.metadata, {
+    botId: 'bot-1',
+    workspaceId: 'solo',
+    historyResetAt: '2026-09-03T07:00:00.000Z',
+  });
+});

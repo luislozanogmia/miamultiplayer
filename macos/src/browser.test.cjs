@@ -11,6 +11,12 @@ const { EventEmitter } = require("node:events");
 const knownActor = sessions => async id => id === "s-mia" ? { kind: "mia" }
   : sessions[id] ? { kind: "bot", ...sessions[id] } : null;
 
+// Coordinator browser work runs only in a real tab group.
+function groupFor(h, tabId) {
+  h.command("groupCreate", { id: tabId, name: "Work" });
+  return h.command("state").groups.find(group => group.tabIds.includes(tabId)).id;
+}
+
 // Exercise the actual native-browser owner with an Electron boundary double.
 // This proves command authorization/lifecycle, not live Chromium rendering.
 function harness(options = {}) {
@@ -56,6 +62,7 @@ function harness(options = {}) {
       this.sent = [];
       this.navigationHistory = { canGoBack: () => false, canGoForward: () => false };
     }
+    insertCSS(css) { this.styles = [...(this.styles || []), css]; return Promise.resolve("style-key"); }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
     getURL() { return this.shownUrl || ""; }
     isLoading() { return false; }
@@ -79,6 +86,8 @@ function harness(options = {}) {
       if (script.includes('document.querySelector("video")') && script.includes("return { currentTime")) {
         return Promise.resolve(options.mediaCapture || null);
       }
+      if (script.includes("__miaApprovedTargets") && script.includes("return true;")) return Promise.resolve(true);
+      if (script.includes("__miaActionTargets?.get")) return Promise.resolve({ x: 10, y: 20, width: 100, height: 30 });
       if (script.includes("const nodes =")) {
         return Promise.resolve({
           elements: [
@@ -102,6 +111,7 @@ function harness(options = {}) {
       if (script.includes("document.title")) return Promise.resolve("evaluated");
       return Promise.resolve({});
     }
+    executeJavaScriptInIsolatedWorld(_world, scripts) { return this.executeJavaScript(scripts[0].code); }
     setWindowOpenHandler(callback) { this.popup = callback; }
     getZoomFactor() { return options.shellZoomFactor || 1; }
     send(channel, payload) { this.sent.push({ channel, payload }); }
@@ -126,10 +136,13 @@ function harness(options = {}) {
     ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
     Menu: { buildFromTemplate: template => { menuTemplates.push(template); return { popup() {} }; } },
     nativeTheme: { themeSource: "light" },
-    nativeImage: { createEmpty: () => {
-      const reps = [];
-      return { reps, addRepresentation: rep => reps.push(rep), isEmpty: () => !reps.length };
-    } },
+    nativeImage: {
+      createFromBuffer: data => ({ toPNG: () => data, toJPEG: () => data, isEmpty: () => !data.length, getSize: () => ({ width: 800, height: 600 }) }),
+      createEmpty: () => {
+        const reps = [];
+        return { reps, addRepresentation: rep => reps.push(rep), isEmpty: () => !reps.length };
+      },
+    },
     dialog: { showMessageBox: (...args) => { dialogCalls.push(args); return Promise.resolve({ response: dialogResponse.value }); } },
     systemPreferences: { askForMediaAccess: async () => true },
     shell: { showItemInFolder: target => { shown.push(target); }, openPath: target => { opened.push(target); return Promise.resolve(""); } },
@@ -1061,6 +1074,223 @@ test("page fullscreen keeps a window that was already fullscreen, and ends when 
   assert.equal(h.views[0].visible, false);
 });
 
+test("trusted actor execution targets its tab without human selection or focus", async () => {
+  const h = harness();
+  const first = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/human", wait: "none" });
+  const binding = { actorId: "bot", botId: "bot", tabId: first.tab_id, groupId: groupFor(h, first.tab_id), ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const before = h.views.map(view => view.webContents.focusCalls || 0);
+  await assert.rejects(h.controller.protocol("read", { actor_id: "bot", tab_id: first.tab_id }), { code: "TRUSTED_ACTOR_REQUIRED" });
+  const result = await h.controller.execute(binding, { method: "read", params: {} });
+  assert.equal(result.tab_id, first.tab_id);
+  const fill = { method: "fill", params: { selector: "input", value: "hello", wait: "none" } };
+  const fillApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: fill.method, params: { ...fill.params, actor_id: binding.actorId, tab_id: binding.tabId } });
+  await h.controller.execute(binding, fill, { approval: fillApproval.approval_id });
+  await h.controller.execute(binding, { method: "scroll", params: {} });
+  const navigate = { method: "navigate", params: { url: "https://example.com/next", wait: "none" } };
+  const navigateApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: navigate.method, params: { ...navigate.params, actor_id: binding.actorId, tab_id: binding.tabId } });
+  await h.controller.execute(binding, navigate, { approval: navigateApproval.approval_id });
+  assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), before);
+  assert.equal(h.command("state").activeId, 2);
+  await assert.rejects(h.controller.execute(binding, { method: "read", params: { tab_id: 2 } }), { code: "TAB_NOT_OWNED" });
+  await assert.rejects(h.controller.execute(binding, { method: "key", params: { text: "steal" } }), { code: "UNTARGETED_KEY_FORBIDDEN" });
+});
+
+test("numbered snapshots are isolated, replaced snapshots and navigation fail closed", async () => {
+  const h = harness(); const tab = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/", wait: "none" });
+  const binding = { actorId: "a", botId: "a", tabId: tab.tab_id, groupId: groupFor(h, tab.tab_id), ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const otherTab = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/other", wait: "none" });
+  h.command("groupAdd", { id: otherTab.tab_id, groupId: binding.groupId });
+  const second = { ...binding, actorId: "b", botId: "b", tabId: otherTab.tab_id }; h.controller.actors.bind(second);
+  const snapshot = await h.controller.execute(binding, { method: "vacuum", params: {} });
+  await h.controller.execute(second, { method: "vacuum", params: {} });
+  const op = { method: "fill", params: { choice: 2, snapshot_id: snapshot.snapshot_id, value: "hello", wait: "none" } };
+  const approval = await h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
+  await h.controller.execute(binding, op, { approval: approval.approval_id });
+  await h.controller.execute(binding, { method: "vacuum", params: {} });
+  const approve = () => h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
+  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+  const current = await h.controller.execute(binding, { method: "vacuum", params: {} });
+  h.views[0].webContents.emit("did-start-navigation", {}, "https://example.com/", false, true);
+  op.params.snapshot_id = current.snapshot_id;
+  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+});
+
+test("Mia's bridge lists and arranges groups and suggests bot assignments without starting work", async () => {
+  const h = harness();
+  const samePlain = (actual, expected) => assert.deepEqual(plain(actual), plain(expected));
+  const mia = params => ({ actor_session: "s-mia", ...params });
+  const first = (await h.controller.protocol("tab_open", mia({ url: "example.com" }))).tab_id;
+  const second = (await h.controller.protocol("tab_open", mia({ url: "example.org" }))).tab_id;
+  await new Promise(resolve => setTimeout(resolve, 2600)); // Mia's work on the tabs settles.
+  const listed = await h.controller.protocol("group_list", mia({}));
+  assert.equal(listed.groups.length, 0);
+  samePlain(listed.ungrouped_tabs.map(tab => tab.tab_id), [first, second]);
+  assert.equal(listed.selected_group_id, null);
+
+  // A group starts from a tab, as in the tab strip.
+  await assert.rejects(h.controller.protocol("group_create", mia({ name: "Research" })), { code: "TAB_NOT_FOUND" });
+  await assert.rejects(h.controller.protocol("group_create", mia({ name: "", tab_id: first })), { code: "INVALID_PARAMS" });
+  const active = h.command("state").activeId;
+  const other = active === first ? second : first;
+  const created = await h.controller.protocol("group_create", mia({ name: "Research", tab_id: other }));
+  const group = () => h.command("state").groups.find(item => item.id === created.group_id);
+  assert.equal(group().name, "Research");
+  samePlain(created.groups.find(item => item.group_id === created.group_id).tabs.map(tab => tab.tab_id), [other]);
+  // The person's tab in front is not taken over.
+  assert.equal(h.command("state").activeId, active);
+  const moved = await h.controller.protocol("group_move_tab", mia({ tab_id: active, group_id: created.group_id }));
+  samePlain(moved.groups[0].tabs.map(tab => tab.tab_id).sort(), [first, second].sort());
+  await h.controller.protocol("group_move_tab", mia({ tab_id: active, group_id: null }));
+  samePlain(group().tabIds, [other]);
+  const renamed = await h.controller.protocol("group_rename", mia({ group_id: created.group_id, name: "Sources" }));
+  assert.equal(renamed.groups[0].name, "Sources");
+  await assert.rejects(h.controller.protocol("group_rename", mia({ group_id: "missing", name: "x" })), { code: "GROUP_NOT_FOUND" });
+
+  const assignments = [{ tab_id: other, bot: "Scout" }];
+  await assert.rejects(h.controller.protocol("work_propose", mia({ group_id: created.group_id, goal: "Compare", assignments: [{ tab_id: active, bot: "Scout" }] })), { code: "INVALID_PARAMS" });
+  await assert.rejects(h.controller.protocol("work_propose", mia({ group_id: created.group_id, goal: "", assignments })), { code: "INVALID_PARAMS" });
+  await assert.rejects(h.controller.protocol("work_propose", mia({ group_id: created.group_id, goal: "Compare", assignments: [] })), { code: "INVALID_PARAMS" });
+  assert.equal(h.command("state").workProposal, null);
+  const proposed = await h.controller.protocol("work_propose", mia({ group_id: created.group_id, goal: " Compare ", assignments }));
+  assert.equal(proposed.proposed, true);
+  const pending = h.command("state").workProposal;
+  assert.equal(JSON.stringify([pending.groupId, pending.goal, pending.assignments]), JSON.stringify([created.group_id, "Compare", [{ tabId: other, bot: "Scout" }]]));
+  // A suggestion binds no bot: ownership appears only once the person starts work.
+  assert.equal(h.command("state").ownership.length, 0);
+  h.command("work-proposal-clear", { id: "another" }); assert.equal(h.command("state").workProposal.id, pending.id);
+  h.command("work-proposal-clear", { id: pending.id }); assert.equal(h.command("state").workProposal, null);
+
+  // Removing a group keeps its tabs open, ungrouped.
+  const removed = await h.controller.protocol("group_remove", mia({ group_id: created.group_id }));
+  assert.equal(removed.groups.length, 0);
+  assert.equal(removed.ungrouped_tabs.length, 2);
+});
+
+test("hidden screenshot forces assigned page frames and rejects navigation without changing selection", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/human", wait: "none" });
+  const binding = { actorId: "a", botId: "a", tabId: worker.tab_id, groupId: groupFor(h, worker.tab_id), ownerId: "owner", taskId: "task" }; h.controller.actors.bind(binding);
+  const wc = h.views[0].webContents; const calls = []; let attached = false;
+  wc.debugger = {
+    isAttached: () => attached,
+    attach: version => { attached = true; calls.push({ attach: version }); },
+    detach: () => { attached = false; calls.push({ detach: true }); },
+    sendCommand: async (method, params) => { calls.push({ method, params }); return { data: Buffer.from("worker-pixels").toString("base64") }; },
+  };
+  for (const view of h.views) view.webContents.capturePage = () => assert.fail("hidden capture used a native surface");
+  const focus = h.views.map(view => view.webContents.focusCalls || 0);
+  const result = await h.controller.execute(binding, { method: "screenshot", params: {} });
+  assert.equal(result.tab_id, worker.tab_id); assert.equal(result.data_url, "data:image/png;base64," + Buffer.from("worker-pixels").toString("base64"));
+  assert.equal(calls[0].attach, "1.3"); assert.equal(calls[1].method, "Page.captureScreenshot");
+  assert.equal(calls[1].params.fromSurface, true); assert.equal(calls[1].params.captureBeyondViewport, false);
+  assert.equal(calls[2].detach, true); assert.equal(attached, false); assert.equal(h.controller.state().activeId, 2);
+  assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), focus);
+  wc.debugger.sendCommand = async () => { wc.emit("did-start-navigation", {}, "https://example.com/changed", false, true); return { data: Buffer.from("stale").toString("base64") }; };
+  await assert.rejects(h.controller.execute(binding, { method: "screenshot", params: {} }), { code: "TAB_NAVIGATED" });
+  assert.equal(attached, false);
+});
+
+test("hidden capture preserves another debugger owner and releases failed transport", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/human", wait: "none" });
+  const wc = h.views[0].webContents; let attached = true; let attachCalls = 0; let detachCalls = 0;
+  wc.debugger = { isAttached: () => attached, attach: () => { attachCalls++; attached = true; }, detach: () => { detachCalls++; attached = false; }, sendCommand: async () => { throw new Error("private transport detail"); } };
+  await assert.rejects(h.controller.protocol("screenshot", { actor_session: "s-mia", tab_id: worker.tab_id }), { code: "CAPTURE_BUSY" });
+  assert.equal(attachCalls, 0); assert.equal(detachCalls, 0); assert.equal(attached, true);
+  attached = false;
+  await assert.rejects(h.controller.protocol("screenshot", { actor_session: "s-mia", tab_id: worker.tab_id }), { code: "CAPTURE_UNAVAILABLE", message: "Assigned page could not render capture pixels." });
+  assert.equal(attachCalls, 1); assert.equal(detachCalls, 1); assert.equal(attached, false);
+});
+
+test("overlapping hidden captures serialize their debugger attachments and return fresh frames", async () => {
+  const h = harness(); const worker = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/worker", wait: "none" });
+  await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/human", wait: "none" });
+  const wc = h.views[0].webContents; let attached = false; let frame = 0; let release; let started;
+  const firstStarted = new Promise(resolve => { started = resolve; });
+  wc.debugger = { isAttached: () => attached, attach: () => { assert.equal(attached, false); attached = true; }, detach: () => { attached = false; }, sendCommand: async () => {
+    const current = ++frame;
+    if (current === 1) { started(); await new Promise(resolve => { release = resolve; }); }
+    return { data: Buffer.from("frame-" + current).toString("base64") };
+  } };
+  const first = h.controller.protocol("screenshot", { actor_session: "s-mia", tab_id: worker.tab_id }); await firstStarted;
+  const second = h.controller.protocol("screenshot", { actor_session: "s-mia", tab_id: worker.tab_id });
+  assert.equal(frame, 1); release();
+  const results = await Promise.all([first, second]);
+  assert.equal(frame, 2); assert.equal(attached, false);
+  assert.equal(results[0].data_url, "data:image/png;base64," + Buffer.from("frame-1").toString("base64"));
+  assert.equal(results[1].data_url, "data:image/png;base64," + Buffer.from("frame-2").toString("base64"));
+  assert.equal(h.controller.state().activeId, 2);
+});
+
+test("presence queues reject stale document events and install only one label stylesheet", async () => {
+  const h = harness(); const page = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/worker", wait: "none" });
+  await new Promise(resolve => setTimeout(resolve, 2600)); // Mia's glow lingers; the tab is idle after it.
+  const groupId = groupFor(h, page.tab_id);
+  const wc = h.views[0].webContents; let release;
+  wc.insertCSS = css => { wc.styles = [...(wc.styles || []), css]; return new Promise(resolve => { release = resolve; }); };
+  wc.emit("dom-ready");
+  const binding = { actorId: "presence-a", botId: "presence-b", tabId: page.tab_id, groupId, ownerId: "owner", taskId: "task" }; h.controller.actors.bind(binding);
+  await new Promise(setImmediate);
+  wc.emit("did-start-navigation", {}, "https://example.com/new", false, true);
+  release("old-style"); await new Promise(setImmediate);
+  assert.equal(wc.scripts.some(script => script.includes("data-mia-presence")), false, "old document must not receive delayed marker");
+  wc.insertCSS = async css => { wc.styles.push(css); return "new-style"; };
+  wc.emit("dom-ready"); await new Promise(setImmediate);
+  const marker = wc.scripts.find(script => script.includes("data-mia-presence"));
+  assert.ok(marker.includes("__miaPresenceGeneration !== 1"));
+  assert.ok(marker.includes("--mia-presence-label")); assert.equal(marker.includes("createTextNode"), false);
+  assert.equal(wc.styles.length, 2);
+  h.controller.actors.revoke(binding.actorId); await new Promise(setImmediate);
+  assert.equal(wc.styles.length, 2, "status/revoke reuse current document stylesheet");
+});
+
+
+test("click navigation while waiting discards original document target", async () => {
+  const h = harness(); const page = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/worker", wait: "none" });
+  const wc = h.views[0].webContents; const original = wc.executeJavaScript.bind(wc);
+  wc.executeJavaScript = script => {
+    if (script.includes("const currentTarget")) {
+      wc.isLoading = () => true;
+      setTimeout(() => { wc.emit("did-start-navigation", {}, "https://example.com/new", false, true); wc.isLoading = () => false; }, 10);
+      return Promise.resolve({ clicked: true, target: { x: 1, y: 2, width: 3, height: 4 } });
+    }
+    return original(script);
+  };
+  const result = await h.controller.protocol("click", { actor_session: "s-mia", tab_id: page.tab_id, selector: "a", wait: "load" });
+  assert.equal(result.clicked, true); assert.equal(result.target, null);
+  assert.equal(wc.scripts.some(script => script.includes("__miaActionTargets?.get")), false, "never retarget new document");
+});
+
+test("closing a tab a bot is working in asks the person first", async () => {
+  const h = harness(); const settle = () => new Promise(resolve => setImmediate(resolve));
+  const worker = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/worker", wait: "none" });
+  const human = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.com/human", wait: "none" });
+  h.controller.actors.bind({ actorId: "a", botId: "a", botName: "Scout", tabId: worker.tab_id, groupId: groupFor(h, worker.tab_id), ownerId: "owner", taskId: "task" });
+  const open = () => h.command("state").tabs.map(tab => tab.id);
+  const before = h.dialogCalls.length;
+
+  h.dialogResponse.value = 1;
+  h.command("close", { id: worker.tab_id }); h.command("close", { id: worker.tab_id }); await settle();
+  assert.equal(h.dialogCalls.length, before + 1, "one prompt per tab, however often close is pressed");
+  assert.match(h.dialogCalls.at(-1)[1].message, /^Scout is working in this tab\.$/);
+  assert.equal(h.dialogCalls.at(-1)[1].cancelId, 1); assert.equal(h.dialogCalls.at(-1)[1].defaultId, 1);
+  assert.ok(open().includes(worker.tab_id), "keeping the tab leaves it open");
+  assert.equal(h.command("state").ownership.length, 1, "and leaves the bot assigned");
+
+  h.command("close", { id: human.tab_id }); await settle();
+  assert.equal(h.dialogCalls.length, before + 1, "a tab no bot is using closes without a prompt");
+  assert.ok(!open().includes(human.tab_id));
+
+  h.dialogResponse.value = 0;
+  h.command("close", { id: worker.tab_id }); await settle();
+  assert.equal(h.dialogCalls.length, before + 2);
+  assert.ok(!open().includes(worker.tab_id), "confirming closes the tab");
+  assert.equal(h.command("state").ownership.length, 0, "and releases the bot");
+});
+
 // State crosses from the VM realm; compare it as plain JSON.
 const plain = value => JSON.parse(JSON.stringify(value));
 
@@ -1176,7 +1406,7 @@ test("tab groups survive a restart; version 2 state still loads", async () => {
 
     const restored = harness({ statePath });
     let state = restored.command("state");
-    assert.deepEqual(plain(state.groups), [{ id: groupId, name: "Testing group", color: "green", collapsed: true, botId: null }]);
+    assert.deepEqual(plain(state.groups).map(({ tabIds, ...group }) => group), [{ id: groupId, name: "Testing group", color: "green", collapsed: true, botId: null }]);
     assert.equal(state.tabs.find(t => t.id === b).groupId, groupId);
     assert.notEqual(state.activeId, b, "a collapsed group's tab does not reopen in front");
     await new Promise(setImmediate);
@@ -1232,6 +1462,15 @@ test("bot tab groups: a bot's pages land in its own group, never Mia's tab", asy
   assert.equal(state.tabs.find(t => t.id === patTab.tab_id).groupId, patGroup.id);
   assert.equal(state.groups.length, 2);
   assert.ok(resolved.every(id => !id.includes("actor")), "only the session id reaches the lookup");
+
+  // Asking again for a page the bot already has open returns that tab.
+  const tabCount = h.command("state").tabs.length;
+  const again = await h.controller.protocol("tab_open", { url: "example.com/", actor_session: "s-scout", wait: "none" });
+  assert.equal(again.tab_id, scoutTab.tab_id);
+  assert.equal(again.reused, true);
+  assert.equal(h.command("state").tabs.length, tabCount, "no duplicate tab");
+  // Another bot's tab on that page is not reused.
+  assert.notEqual(again.tab_id, patTab.tab_id);
 });
 
 test("bot downloads save straight to Downloads, get checked, and are reported only once on disk", async () => {
@@ -1355,7 +1594,13 @@ test("queued bot screenshots keep their controller until all captures settle", a
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   let captures = 0;
-  page.capturePage = async () => { captures++; await gate; return { isEmpty: () => false, toJPEG: () => Buffer.from("jpg"), toPNG: () => Buffer.from("png"), getSize: () => ({ width: 1, height: 1 }) }; };
+  // A bot's tab stays behind the person's; it is captured without coming to the front.
+  let attached = false;
+  page.debugger = {
+    isAttached: () => attached, attach: () => { attached = true; }, detach: () => { attached = false; },
+    sendCommand: async () => { captures++; await gate; return { data: Buffer.from("png").toString("base64") }; },
+  };
+  const front = h.command("state").activeId;
   const first = h.controller.protocol("screenshot", { actor_session: "s-a" });
   while (!captures) await new Promise(resolve => setImmediate(resolve));
   const second = h.controller.protocol("screenshot", { actor_session: "s-a" });
@@ -1366,6 +1611,7 @@ test("queued bot screenshots keep their controller until all captures settle", a
   await first;
   await second;
   assert.equal(captures, 2);
+  assert.equal(h.command("state").activeId, front, "the person's tab stays in front");
   h.command("groupAssignBot", { groupId, bot: null });
   await assert.rejects(h.controller.protocol("screenshot", { tab_id: opened.tab_id, actor_session: "s-a" }), /not one of your tabs/);
 });
@@ -1572,7 +1818,7 @@ test("bot tab groups: the golden glow stays through a reply and comes back after
   assert.ok(!userPage.insertedCSS, "Mia's tab is never lit as bot work");
 });
 
-test("bot tab groups: the glow is gold for Mia and the bot's own color for a bot", async () => {
+test("bot tab groups: the glow is Mia gold for Mia and for every bot", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
   const h = harness({ resolveActor: knownActor(sessions) });
   h.command("new");
@@ -1581,14 +1827,15 @@ test("bot tab groups: the glow is gold for Mia and the bot's own color for a bot
   const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
   const botPage = h.views[h.views.length - 1].webContents;
   await flush();
-  assert.match(botPage.lastCSS, /hsla\(200,/);
+  assert.match(botPage.lastCSS, /rgba\(201,150,43,/, "a bot's page glows Mia gold, not the bot's own color");
+  assert.doesNotMatch(botPage.lastCSS, /hsla\(200,/);
   assert.doesNotMatch(botPage.lastCSS, /0 0 0 2px/, "no solid frame line, only the glow");
 
   // Mia's command lights the page in front with gold the moment it starts.
   const userPage = h.views.find(v => v.webContents !== botPage).webContents;
   await h.controller.protocol("read", { actor_session: "s-mia" });
   await flush();
-  assert.match(userPage.lastCSS, /hsla\(41,/);
+  assert.match(userPage.lastCSS, /rgba\(201,150,43,/);
   assert.ok(opened.tab_id);
 });
 
@@ -1637,6 +1884,37 @@ test("the » menu brings a group the strip had no room for back to the front", (
   h.window.emit("closed");
 });
 
+test("right-clicking Back or Forward lists that way's pages, nearest first, like Chrome", () => {
+  const h = harness();
+  h.command("new");
+  const went = [];
+  const entries = [
+    { title: "Home", url: "https://a.example/" },
+    { title: "", url: "https://b.example/list" },
+    { title: "Results", url: "https://c.example/" },
+    { title: "Details", url: "https://d.example/" },
+    { title: "Checkout", url: "https://e.example/" },
+  ];
+  h.views[0].webContents.navigationHistory = {
+    canGoBack: () => true, canGoForward: () => true,
+    getAllEntries: () => entries, getActiveIndex: () => 2, goToIndex: index => went.push(index),
+  };
+  h.command("historyMenu", { direction: "back", x: 10.6, y: 40 });
+  let menu = h.menuTemplates.at(-1);
+  assert.deepEqual(plain(menu.map(item => item.label)), ["https://b.example/list", "Home"], "untitled pages show their address");
+  menu[1].click();
+  h.command("historyMenu", { direction: "forward" });
+  menu = h.menuTemplates.at(-1);
+  assert.deepEqual(plain(menu.map(item => item.label)), ["Details", "Checkout"]);
+  menu[0].click();
+  assert.deepEqual(went, [0, 3]);
+  const shown = h.menuTemplates.length;
+  h.views[0].webContents.navigationHistory.getActiveIndex = () => 0;
+  h.command("historyMenu", { direction: "back" });
+  assert.equal(h.menuTemplates.length, shown, "nothing behind the first page, so no menu");
+  h.window.emit("closed");
+});
+
 test("closing a grouped tab lands on the next tab in the same group", () => {
   const h = harness();
   const mine = h.command("new").activeId;
@@ -1652,6 +1930,20 @@ test("closing a grouped tab lands on the next tab in the same group", () => {
   h.command("close", { id: second });
   assert.equal(h.command("state").activeId, after, "an emptied group hands off to its right-hand neighbor");
   assert.ok(mine);
+  h.window.emit("closed");
+});
+
+test("closing the last tab counts a last-tab close and keeps one blank tab", () => {
+  const h = harness();
+  h.command("new"); h.command("new");
+  const start = h.command("state");
+  const before = start.lastTabCloses;
+  for (const tab of start.tabs.slice(1)) h.command("close", { id: tab.id });
+  assert.equal(h.command("state").lastTabCloses, before, "closing other tabs does not count");
+  const after = h.command("close", { id: h.command("state").tabs[0].id });
+  assert.equal(after.lastTabCloses, before + 1);
+  assert.equal(after.tabs.length, 1, "a blank tab replaces it");
+  assert.equal(after.tabs[0].url, "");
   h.window.emit("closed");
 });
 
@@ -1723,7 +2015,10 @@ test("bot tab groups: the owner menu assigns a bot and survives a restart", asyn
     assert.equal(menu.find(item => item.label === "Scout").icon.reps[0].dataURL, png);
     assert.equal(menu.find(item => item.label === "Pat").icon, undefined, "only PNG data URLs become icons");
     assert.deepEqual(plain(menu.filter(item => item.label).map(item => [item.label, item.checked])),
-      [["Mia", true], ["Scout", false], ["Pat", false]]);
+      [["Mia", true], ["+ New bot", null], ["Scout", false], ["Pat", false]]);
+    menu.find(item => item.label === "+ New bot").click();
+    assert.deepEqual(plain(first.window.webContents.sent.filter(item => item.channel === "miaos-browser-group-bot").at(-1).payload),
+      { action: "new-bot" }, "+ New bot asks the app to start bot setup in a new group");
     menu.find(item => item.label === "Scout").click();
     await new Promise(setImmediate);
     let state = first.command("state");
@@ -1817,5 +2112,170 @@ test("Stop and Switch never evaluates the stop API in a foreign renderer", async
   h.window.webContents.mainFrame.url = "http://127.0.0.1:4870/#/chat";
   assert.equal(h.command("state").groups[0].botId, "bot-a");
   assert.equal(h.stopResult.calls.length, 0);
+  h.window.emit("closed");
+});
+
+// A page reports the box it focused as typable; fill then types with real key
+// presses (Viva's airport picker ignored a value set by script).
+function typingPage(page, finalValue) {
+  const original = page.executeJavaScript.bind(page);
+  page.typed = [];
+  page.insertText = text => { page.typed.push(text); return Promise.resolve(); };
+  page.executeJavaScript = script => {
+    if (script.includes('if ("fill"')) { page.scripts.push(script); return Promise.resolve({ typing: true, tag: "input" }); }
+    if (script.includes("current() ===")) return Promise.resolve(finalValue(script));
+    return original(script);
+  };
+}
+
+test("fill types into text boxes with real key presses, without taking focus", async () => {
+  const h = harness({ resolveActor: knownActor({ "s-a": { botId: "bot-a", name: "Scout" } }) });
+  h.command("new");
+  await h.controller.protocol("tab_open", { url: "viva.example", actor_session: "s-a", wait: "none" });
+  await h.controller.protocol("vacuum", { actor_session: "s-a", wait: "none" });
+  const page = h.views.at(-1).webContents;
+  typingPage(page, () => ({ typed: true, value: "Au s" }));
+  const focusBefore = h.views.map(view => view.webContents.focusCalls || 0);
+  const filled = await h.controller.protocol("fill", { actor_session: "s-a", choice: 2, value: "Au s", wait: "none" });
+  assert.deepEqual({ ...filled }, { filled: true, typed: true, tag: "input", value: "Au s", target: { x: 10, y: 20, width: 100, height: 30 } });
+  assert.match(page.scripts.find(script => script.includes('if ("fill"')), /el\.focus\(\{ preventScroll: true \}\)/, "the box is focused inside its own page");
+  assert.deepEqual(page.typed, ["A", "u", " ", "s"], "one character at a time");
+  assert.deepEqual(page.inputEvents.map(event => `${event.type}:${event.keyCode}`),
+    ["keyDown:A", "keyUp:A", "keyDown:U", "keyUp:U", "keyDown:Space", "keyUp:Space", "keyDown:S", "keyUp:S"]);
+  assert.deepEqual([...page.inputEvents[0].modifiers], ["shift"]);
+  assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), focusBefore, "no tab or app focus is taken");
+
+  page.inputEvents = []; page.typed = [];
+  await h.controller.protocol("fill", { actor_session: "s-a", choice: 2, value: "", wait: "none" });
+  assert.deepEqual(page.inputEvents.map(event => event.keyCode), ["Backspace", "Backspace"], "an empty value deletes the selection");
+  assert.deepEqual(page.typed, []);
+});
+
+test("fill sets the value directly when typing does not take", async () => {
+  const h = harness({ resolveActor: knownActor({ "s-a": { botId: "bot-a", name: "Scout" } }) });
+  h.command("new");
+  await h.controller.protocol("tab_open", { url: "masked.example", actor_session: "s-a", wait: "none" });
+  await h.controller.protocol("vacuum", { actor_session: "s-a", wait: "none" });
+  const page = h.views.at(-1).webContents;
+  let readback;
+  typingPage(page, script => { readback = script; return { typed: false, value: "12/26" }; });
+  const filled = await h.controller.protocol("fill", { actor_session: "s-a", choice: 2, value: "1226", wait: "none" });
+  assert.equal(filled.typed, false);
+  assert.equal(filled.value, "12/26", "the box's real value is reported");
+  assert.match(readback, /dispatchEvent\(new Event\('input'/);
+  await assert.rejects(
+    (typingPage(page, () => null), h.controller.protocol("fill", { actor_session: "s-a", choice: 2, value: "x", wait: "none" })),
+    { code: "ELEMENT_NOT_FOUND" });
+});
+
+test("a popup from a bot's click opens behind, in the bot's group", async () => {
+  const h = harness({ resolveActor: knownActor({ "s-a": { botId: "bot-a", name: "Scout" } }) });
+  h.command("new");
+  const human = h.command("state").activeId;
+  const opened = await h.controller.protocol("tab_open", { url: "flights.example", actor_session: "s-a", wait: "none" });
+  await h.controller.protocol("vacuum", { actor_session: "s-a", wait: "none" });
+  const page = h.views.at(-1).webContents;
+  const original = page.executeJavaScript.bind(page);
+  page.executeJavaScript = script => {
+    if (script.includes('if ("click"')) page.popup({ url: "https://airline.example/book", disposition: "foreground-tab" });
+    return original(script);
+  };
+  await h.controller.protocol("click", { actor_session: "s-a", choice: 1, wait: "none" });
+  const state = h.command("state");
+  assert.equal(state.tabs.length, 3);
+  assert.equal(state.activeId, human, "the person's tab stays in front");
+  const popup = state.tabs.find(tab => tab.id !== human && tab.id !== opened.tab_id);
+  assert.equal(popup.url, "https://airline.example/book");
+  assert.equal(popup.groupId, state.tabs.find(tab => tab.id === opened.tab_id).groupId, "it joins the bot's group");
+  const ids = state.tabs.map(tab => tab.id);
+  assert.equal(ids.indexOf(popup.id), ids.indexOf(opened.tab_id) + 1, "right after the page that opened it");
+  page.popup({ url: "file:///tmp/private" });
+  assert.equal(h.command("state").tabs.length, 3, "after the click, popups are ordinary tabs again");
+  const list = await h.controller.protocol("tab_list", { actor_session: "s-a" });
+  assert.ok(JSON.stringify(list).includes(String(popup.id)), "the bot can find and use it");
+});
+
+test("a popup from a bound worker's approved click follows in its own tab", async () => {
+  const h = harness();
+  const first = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://flights.example/", wait: "none" });
+  const binding = { actorId: "bot", botId: "bot", tabId: first.tab_id, groupId: groupFor(h, first.tab_id), ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const page = h.views[0].webContents;
+  const original = page.executeJavaScript.bind(page);
+  let popupResult;
+  page.executeJavaScript = script => {
+    if (script.includes('if ("click"')) popupResult = page.popup({ url: "https://airline.example/book" });
+    return original(script);
+  };
+  const click = { method: "click", params: { selector: "button", wait: "none" } };
+  const approval = await h.controller.actors.approve({ actorId: "bot", ownerId: "owner", method: click.method, params: { ...click.params, actor_id: "bot", tab_id: first.tab_id } });
+  await h.controller.execute(binding, click, { approval: approval.approval_id });
+  assert.equal(popupResult.action, "deny", "no window opens");
+  assert.equal(h.command("state").tabs.length, 1, "no tab outside the worker's");
+  assert.equal(page.loads.at(-1), "https://airline.example/book");
+});
+
+test("pressing the mouse in the front tab a bot is working on asks to take over", async () => {
+  const h = harness({ resolveActor: knownActor({ "s-a": { botId: "bot-a", name: "Scout" } }) });
+  h.command("new");
+  const human = h.command("state").activeId;
+  const opened = await h.controller.protocol("tab_open", { url: "flights.example", actor_session: "s-a", wait: "none" });
+  const page = h.views.at(-1).webContents;
+  const humanPage = h.views[0].webContents;
+  const asks = () => h.window.webContents.sent.filter(item => item.channel === "miaos-browser-group-bot" && item.payload.action === "page-click");
+  h.command("select", { id: opened.tab_id });
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 5, y: 5 });
+  assert.equal(asks().length, 0, "no bot is working there now");
+  h.command("botHeld", { ids: [opened.tab_id] });
+  page.emit("before-mouse-event", {}, { type: "mouseMove", x: 6, y: 6 });
+  page.emit("before-mouse-event", {}, { type: "mouseUp", x: 6, y: 6 });
+  assert.equal(asks().length, 0, "moving the mouse over the page is not a click");
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 5, y: 5 });
+  assert.deepEqual(asks().map(item => ({ ...item.payload })), [{ action: "page-click", tabId: opened.tab_id }]);
+  h.command("select", { id: human });
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 5, y: 5 });
+  humanPage.emit("before-mouse-event", {}, { type: "mouseDown", x: 5, y: 5 });
+  assert.equal(asks().length, 1, "tabs behind, and the person's own tab, never ask");
+});
+
+test("following a bot switches tabs without taking the keyboard from the chat", () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  const focused = h.views[0].webContents.focusCalls || 0;
+  h.command("select", { id: first, follow: true });
+  assert.equal(h.command("state").activeId, first);
+  assert.equal(h.views[0].webContents.focusCalls || 0, focused, "a follow switch leaves focus where it was");
+  h.command("select", { id: second });
+  h.command("select", { id: first });
+  assert.equal(h.views[0].webContents.focusCalls, focused + 1, "picking a tab yourself still focuses it");
+  h.window.emit("closed");
+});
+
+test("a new tab for a bot opens at the end of that bot's group", async () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  h.command("groupCreate", { id: first });
+  const groupId = h.command("state").groups[0].id;
+  const second = h.command("new").activeId;
+  h.command("move", { id: second, index: 1, groupId });
+  // Real pages, so the group has no blank tab to reuse yet.
+  for (const id of [first, second]) { h.command("select", { id }); h.command("navigate", { value: `https://${id}.example/` }); }
+  await new Promise(resolve => setImmediate(resolve));
+  const loose = h.command("new").activeId;
+  h.command("groupNewTab", { groupId });
+  const state = h.command("state");
+  const added = state.tabs.find(tab => tab.id === state.activeId);
+  assert.equal(added.groupId, groupId, "the new tab joins the bot's group");
+  assert.deepEqual(plain(state.tabs.map(tab => tab.id).slice(0, 3)), [first, second, added.id]);
+  assert.equal(state.tabs.at(-1).id, loose);
+  const count = state.tabs.length;
+  h.command("groupNewTab", { groupId: "not-a-group" });
+  assert.equal(h.command("state").tabs.length, count, "no tab for an unknown group");
+  h.command("select", { id: loose });
+  h.command("groupNewTab", { groupId });
+  const again = h.command("state");
+  assert.equal(again.tabs.length, count, "the group's blank tab is reused, not a second one");
+  assert.equal(again.activeId, added.id);
   h.window.emit("closed");
 });

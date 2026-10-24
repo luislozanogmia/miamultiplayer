@@ -24,22 +24,31 @@
   // close button at the far right — like a browser profile button.
   if (tabsRow) tabsRow.insertBefore(strip, document.getElementById('localBrowserCloseBtn'));
   else overlay.querySelector('.local-browser-toolbar').before(strip);
-  // New-tab button sits beside the close-browser button, so the two line up
-  // above the downloads and Mia buttons in the toolbar below.
+  // New-tab button follows the last tab, like Chrome, and sticks to the
+  // strip's edge once the tabs overflow so it is always in reach.
   var add = document.createElement('button');
   add.type = 'button'; add.className = 'native-browser-new-tab';
   add.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
   add.title = 'New tab'; add.setAttribute('aria-label', 'New browser tab');
   add.onclick = function () { command('new').then(focusLocation); };
-  if (tabsRow) tabsRow.insertBefore(add, document.getElementById('localBrowserCloseBtn'));
-  else strip.after(add);
+  strip.append(add);
   // » lists the groups a crowded strip had no room for. It sits outside the
   // scrolling strip so it is always in reach.
   var more = document.createElement('button');
   more.type = 'button'; more.className = 'native-browser-groups-more'; more.hidden = true;
   more.textContent = '\u00bb';
   more.onclick = function () { command('groupOverflowMenu', { groupIds: (more.groupIds || []).slice() }); };
-  add.before(more);
+  // Right-click on Back or Forward lists the pages that way, under the button.
+  [['localBrowserBackBtn', 'back'], ['localBrowserForwardBtn', 'forward']].forEach(function (pair) {
+    var button = document.getElementById(pair[0]);
+    if (!button) return;
+    button.addEventListener('contextmenu', function (event) {
+      event.preventDefault();
+      var rect = button.getBoundingClientRect();
+      command('historyMenu', { direction: pair[1], x: rect.left, y: rect.bottom + 4 });
+    });
+  });
+  strip.after(more);
   var findBar = document.createElement('div');
   findBar.className = 'native-browser-find'; findBar.hidden = true;
   var findInput = document.createElement('input');
@@ -172,7 +181,16 @@
   var botControlLabel = document.createElement('span');
   var takeOver = document.createElement('button');
   takeOver.type = 'button'; takeOver.className = 'local-browser-take-over'; takeOver.textContent = 'Take over';
-  botControl.append(botControlLabel, takeOver);
+  // Follow keeps the page the bot works on in front, so you watch it move
+  // from tab to tab; Unfollow leaves you where you are.
+  var followButton = document.createElement('button');
+  followButton.type = 'button'; followButton.className = 'local-browser-follow';
+  followButton.onclick = function () {
+    var botId = botControl.getAttribute('data-bot-id');
+    if (followingBot()) follow = null; else if (botId) startFollow(botId);
+    render(state);
+  };
+  botControl.append(botControlLabel, followButton, takeOver);
   var urlWrap = overlay.querySelector('.local-browser-url-wrap');
   if (urlWrap) urlWrap.after(botControl);
   takeOver.onclick = function () {
@@ -194,6 +212,29 @@
       takeOver.textContent = 'Take over';
     });
   };
+  var follow = null;
+  function followingBot() { return follow ? follow.botId : null; }
+  function startFollow(botId) { follow = { botId: botId, tabId: state.activeId, pending: null }; }
+  // Runs on every render: moves to the bot's newest page, and stops when you
+  // pick another tab yourself or the bot's reply ends.
+  function syncFollow() {
+    if (!follow) return;
+    var agents = window.miaBrowserAgents;
+    if (!agents || !agents.isRunning || !agents.isRunning(follow.botId)) { follow = null; return; }
+    if (follow.pending !== null) {
+      if (state.activeId !== follow.pending) return;
+      follow.tabId = follow.pending; follow.pending = null;
+    }
+    if (state.activeId !== follow.tabId) { follow = null; return; }
+    var latest = null;
+    state.tabs.forEach(function (t) {
+      if (!t.botActivity || t.botActivity.botId !== follow.botId) return;
+      if (!latest || (t.botWorkAt ? t.botWorkAt.at : 0) > (latest.botWorkAt ? latest.botWorkAt.at : 0)) latest = t;
+    });
+    if (!latest || latest.id === follow.tabId) return;
+    follow.pending = latest.id;
+    command('select', { id: latest.id, follow: true });
+  }
   // A tab stays marked from a bot's first command until that bot's reply
   // ends, so the marks don't blink off while it thinks between steps.
   var botHolds = {};
@@ -244,6 +285,11 @@
     var name = document.createElement('strong');
     name.textContent = activity.name || 'A bot';
     botControlLabel.replaceChildren(name, document.createTextNode(' has control'));
+    var following = followingBot() === activity.botId;
+    followButton.textContent = following ? 'Unfollow' : 'Follow';
+    followButton.setAttribute('aria-pressed', following ? 'true' : 'false');
+    followButton.title = following ? 'Stay on this page when ' + (activity.name || 'the bot') + ' moves on'
+      : 'Show the page ' + (activity.name || 'the bot') + ' works on as it moves between tabs';
   }
   function layout() {
     if (scheduled) return;
@@ -252,7 +298,7 @@
       scheduled = false;
       var rect = screen.getBoundingClientRect();
       // Native views sit above HTML; hide them while the sidebar drawer covers it.
-      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered &&
+      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen &&
         !document.body.classList.contains('browser-sidebar-open') &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation');
@@ -260,7 +306,7 @@
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view
       // steps aside without pausing what it plays.
-      if (downloadsOpen || suggestCovered) payload.menu = true;
+      if (downloadsOpen || suggestCovered || tabsListOpen) payload.menu = true;
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
@@ -306,6 +352,7 @@
     foot.textContent = parts.join(' \u00b7 ');
     foot.hidden = !parts.length;
     renderDownloads();
+    if (window.MiaBrowserWork) window.MiaBrowserWork.updateBrowserState(state);
     var groups = {};
     (state.groups || []).forEach(function (g) { groups[g.id] = g; });
     var owners = (state.groups || []).map(function (g) {
@@ -314,11 +361,13 @@
     var working = {};
     state.tabs.forEach(function (t) { var w = botWorking(t); if (w) working[t.id] = w; });
     Object.keys(botHolds).forEach(function (id) { if (!state.tabs.some(function (t) { return String(t.id) === id; })) delete botHolds[id]; });
+    syncFollow();
     renderBotControl(tab);
     refreshBotHolds();
     syncGlowHolds(working);
+    var front = botGroupFronts(groups, working);
     var crowd = crowdedStrip(groups, working);
-    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
+    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, front, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
     // Redrawing mid-drag or mid-rename would drop what the user is doing;
     // catch up once it ends.
     if (signature !== lastTabs && draggingTabId === null && editingGroupId === null) {
@@ -332,11 +381,12 @@
         if (tabGroup && t.groupId !== previousGroupId) strip.append(groupHead(tabGroup, index, folded));
         previousGroupId = t.groupId || null;
         if (tabGroup && (tabGroup.collapsed || folded)) return;
+        if (tabGroup && front[tabGroup.id] && front[tabGroup.id].id !== t.id) return;
         var group = document.createElement('div');
         group.setAttribute('data-tab-id', t.id);
         group.className = 'native-browser-tab' + (t.id === state.activeId ? ' active' : '') + (tabGroup ? ' in-group' : '') + (working[t.id] ? ' bot-working' : '');
         if (tabGroup) {
-          group.setAttribute('data-group-color', tabGroup.color);
+          paintGroup(group, tabGroup);
           // The active tab in a group is outlined in the group color, so the
           // group's line visibly runs around it.
           if (t.id === state.activeId) {
@@ -350,6 +400,7 @@
           command('tabMenu', { id: t.id });
         });
         // Drag a tab onto another to put it in that tab's place.
+        group.setAttribute('data-tab-id', String(t.id));
         group.draggable = true;
         group.addEventListener('dragstart', function (event) {
           draggingTabId = t.id;
@@ -400,8 +451,11 @@
         close.type = 'button'; close.textContent = '\u00d7'; close.className = 'native-browser-tab-close';
         close.setAttribute('aria-label', 'Close tab ' + button.textContent);
         close.onclick = function () { command('close', { id: t.id }); };
-        group.append(button, close); strip.append(group);
+        group.append(button);
+        if (tabGroup && front[tabGroup.id] && front[tabGroup.id].others.length) group.append(botTabsButton(tabGroup, front[tabGroup.id], working));
+        group.append(close); strip.append(group);
       });
+      strip.append(add);
       more.groupIds = crowd.hidden;
       more.hidden = !crowd.hidden.length;
       more.title = crowd.hidden.length + ' more group' + (crowd.hidden.length === 1 ? '' : 's');
@@ -420,6 +474,8 @@
       pendingEditGroupId = null;
       editGroup(editId);
     }
+    if (window.MiaBrowserWork) window.MiaBrowserWork.decorateTabs(strip, state);
+    renderTabsList(groups, front, working);
     layout();
   }
   // A group opens with the bot that works in it, then the name chip. The
@@ -427,7 +483,7 @@
   function groupHead(g, index, folded) {
     var head = document.createElement('span');
     head.className = 'native-browser-group-head' + (g.name ? '' : ' unnamed') + (g.collapsed || folded ? ' collapsed' : '');
-    head.setAttribute('data-group-color', g.color);
+    paintGroup(head, g);
     head.append(groupOwner(g), groupChip(g, index, folded));
     return head;
   }
@@ -439,6 +495,49 @@
   var TAB_MIN_WIDTH = 96, GROUP_HEAD_WIDTH = 118;
   var groupUsedAt = {};
   var scrolledToWork = {};
+  // A bot's group shows one tab in the strip: the one you are looking at,
+  // else the one the bot is working in, else the one it worked in last. Its
+  // other tabs are a click away in the "+N" list, so a bot that opens ten
+  // pages for one task still takes one slot.
+  var botLastTab = {};
+  function botGroupFronts(groups, working) {
+    var members = {};
+    state.tabs.forEach(function (t) {
+      var g = groups[t.groupId];
+      if (g && g.botId) (members[g.id] = members[g.id] || []).push(t);
+    });
+    var front = {};
+    Object.keys(members).forEach(function (id) {
+      var list = members[id];
+      var busy = list.filter(function (t) { return working[t.id]; });
+      if (busy.length) botLastTab[id] = busy[busy.length - 1].id;
+      var pick = list.filter(function (t) { return t.id === state.activeId; })[0] || busy[busy.length - 1]
+        || list.filter(function (t) { return t.id === botLastTab[id]; })[0] || list[0];
+      // A blank tab stays out of the list and its count: "New tab for this
+      // bot" already stands for it, and reopens it.
+      front[id] = { id: pick.id, others: list.filter(function (t) { return t !== pick && t.url; }).map(function (t) { return t.id; }) };
+    });
+    Object.keys(botLastTab).forEach(function (id) { if (!members[id]) delete botLastTab[id]; });
+    return front;
+  }
+  function botTabsButton(g, front, working) {
+    var more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'native-browser-bot-tabs';
+    paintGroup(more, g);
+    more.textContent = '+' + front.others.length;
+    var busy = front.others.some(function (id) { return working[id]; });
+    if (busy) more.classList.add('working');
+    more.title = front.others.length + ' more tab' + (front.others.length === 1 ? '' : 's') + ' in this group';
+    more.setAttribute('aria-label', 'Show ' + more.title);
+    more.setAttribute('aria-haspopup', 'true');
+    more.setAttribute('aria-expanded', String(tabsListGroupId === g.id));
+    more.onclick = function (event) {
+      event.stopPropagation();
+      setTabsList(tabsListGroupId === g.id ? null : g.id);
+    };
+    return more;
+  }
   function crowdedStrip(groups, working) {
     var now = Date.now();
     var active = state.tabs.filter(function (t) { return t.id === state.activeId; })[0];
@@ -446,11 +545,14 @@
     if (active && active.groupId) { busy[active.groupId] = true; groupUsedAt[active.groupId] = now; }
     state.tabs.forEach(function (t) { if (working[t.id] && t.groupId) { busy[t.groupId] = true; groupUsedAt[t.groupId] = now; } });
     var counts = {}, ungrouped = 0;
-    state.tabs.forEach(function (t) { if (groups[t.groupId]) counts[t.groupId] = (counts[t.groupId] || 0) + 1; else ungrouped += 1; });
+    state.tabs.forEach(function (t) {
+      var g = groups[t.groupId];
+      if (g) counts[g.id] = g.botId ? 1 : (counts[g.id] || 0) + 1; else ungrouped += 1;
+    });
     var ids = Object.keys(counts);
     ids.forEach(function (id) { if (!groupUsedAt[id]) groupUsedAt[id] = 0; });
     var oldestFirst = ids.slice().sort(function (a, b) { return groupUsedAt[a] - groupUsedAt[b]; });
-    var width = strip.clientWidth || 0;
+    var width = Math.max(0, (strip.clientWidth || 0) - (add.offsetWidth || 0));
     var folded = [], hidden = [];
     if (!width) return { folded: folded, hidden: hidden };
     var shown = function (id) { return groups[id].collapsed || folded.indexOf(id) >= 0 ? 0 : counts[id]; };
@@ -467,13 +569,119 @@
     });
     return { folded: folded, hidden: hidden };
   }
+  // The "+N" list drops down under the bot's tab and draws the bot's other
+  // tabs the way the strip draws tabs (page icon, title, working dot, close),
+  // stacked under "New tab for this bot". It is the tab's shape mirrored
+  // below the tab line, the same width with its feet curving down, so the
+  // two read as one folder opened. Like the Downloads menu it sits over a
+  // still of the page while it is open.
+  var tabsList = document.createElement('div');
+  tabsList.className = 'native-browser-bot-tabs-list';
+  tabsList.hidden = true;
+  var tabsRows = document.createElement('div');
+  tabsRows.className = 'native-browser-bot-tabs-rows';
+  tabsRows.setAttribute('role', 'menu');
+  tabsList.append(tabsRows);
+  overlay.append(tabsList);
+  var lastTabsList = '';
+  function setTabsList(groupId) {
+    var token = ++tabsListToken;
+    tabsListGroupId = groupId;
+    tabsListRequested = !!groupId;
+    lastTabs = '';
+    if (!groupId) {
+      tabsListOpen = false;
+      tabsList.hidden = true;
+      lastTabsList = '';
+      if (state) render(state);
+      hideStill();
+      return;
+    }
+    if (state) render(state);
+    showStill().then(function (ready) {
+      if (token !== tabsListToken) return;
+      if (!ready) { if (tabsListRequested) setTabsList(groupId); return; }
+      tabsListOpen = true;
+      lastTabsList = '';
+      if (state) render(state);
+    });
+  }
+  function renderTabsList(groups, front, working) {
+    var g = tabsListGroupId && groups[tabsListGroupId];
+    var info = g && front[g.id];
+    if (tabsListGroupId && (!info || !info.others.length)) { setTabsList(null); return; }
+    if (!tabsListOpen || !info) return;
+    var byId = {};
+    state.tabs.forEach(function (t) { byId[t.id] = t; });
+    var anchor = strip.querySelector('[data-tab-id="' + info.id + '"]');
+    var screenRect = screen.getBoundingClientRect();
+    var anchorRect = anchor ? anchor.getBoundingClientRect() : { left: screenRect.left + 8, bottom: screenRect.top };
+    var width = Math.max(180, Math.round(anchorRect.width || 220));
+    tabsList.style.width = width + 'px';
+    tabsList.style.left = Math.round(Math.max(screenRect.left + 12, Math.min(anchorRect.left, screenRect.right - width - 12))) + 'px';
+    // Up 2px, onto the group's line, so the list's feet curve down from the
+    // same line the tab's feet curve up from.
+    tabsList.style.top = Math.round(anchorRect.bottom - 2) + 'px';
+    tabsRows.style.maxHeight = Math.max(120, Math.round(screenRect.bottom - anchorRect.bottom - 12)) + 'px';
+    paintGroup(tabsList, g);
+    var key = JSON.stringify([g.id, info.others.map(function (id) { var t = byId[id]; return [id, t.title, t.favicon, !!working[id]]; })]);
+    tabsList.hidden = false;
+    if (key === lastTabsList) return;
+    lastTabsList = key;
+    tabsRows.replaceChildren();
+    // New tab sits on top, so it never ends up below a long list.
+    var add = document.createElement('button');
+    add.type = 'button'; add.setAttribute('role', 'menuitem');
+    add.className = 'native-browser-bot-tabs-new';
+    add.textContent = '+  New tab for this bot';
+    add.onclick = function () { var id = g.id; setTabsList(null); command('groupNewTab', { groupId: id }); };
+    tabsRows.append(add);
+    info.others.forEach(function (id) {
+      var t = byId[id];
+      var row = document.createElement('div');
+      row.className = 'native-browser-bot-tabs-row' + (working[id] ? ' bot-working' : '');
+      var button = document.createElement('button');
+      button.type = 'button'; button.setAttribute('role', 'menuitem');
+      button.title = t.title || 'New tab';
+      if (t.favicon) {
+        var icon = document.createElement('img');
+        icon.className = 'native-browser-tab-icon'; icon.src = t.favicon; icon.alt = '';
+        icon.onerror = function () { icon.remove(); };
+        button.append(icon);
+      }
+      var label = document.createElement('span');
+      label.className = 'native-browser-tab-label'; label.textContent = t.title || 'New tab';
+      button.append(label);
+      if (working[id]) {
+        var dotEl = document.createElement('span');
+        dotEl.className = 'chat-task-dot native-browser-tab-working';
+        dotEl.title = (working[id].name || 'A bot') + ' is working here';
+        button.append(dotEl);
+      }
+      button.onclick = function () { setTabsList(null); command('select', { id: id }); };
+      var close = document.createElement('button');
+      close.type = 'button'; close.textContent = '×'; close.className = 'native-browser-tab-close';
+      close.setAttribute('aria-label', 'Close tab ' + (t.title || 'New tab'));
+      close.onclick = function (event) { event.stopPropagation(); command('close', { id: id }); };
+      row.append(button, close);
+      tabsRows.append(row);
+    });
+  }
+  // A click anywhere else, or Escape, closes the list.
+  document.addEventListener('mousedown', function (event) {
+    if (!tabsListGroupId || tabsList.contains(event.target) || (event.target.closest && event.target.closest('.native-browser-bot-tabs'))) return;
+    setTabsList(null);
+  }, true);
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && tabsListGroupId) setTabsList(null);
+  });
   // A group's label sits before its tabs. Click collapses or expands it;
   // right-click opens the group menu; dropping a tab on it joins the group.
   function groupChip(g, index, folded) {
     var chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'native-browser-group' + (g.name ? '' : ' unnamed') + (g.collapsed || folded ? ' collapsed' : '');
-    chip.setAttribute('data-group-color', g.color);
+    paintGroup(chip, g);
     chip.setAttribute('data-group-id', g.id);
     chip.setAttribute('aria-expanded', String(!g.collapsed));
     chip.title = (g.name || 'Unnamed group') + (g.collapsed ? ' (collapsed)' : folded ? ' (folded to make room)' : '');
@@ -503,23 +711,78 @@
   }
   // The group's owner leads its chip: the bot's mote, or Mia's
   // mark while Mia handles it. Click to choose the bot.
+  // Hovering the bot shows its name in a label under it. The label sits in
+  // the overlay because the tab strip clips anything that leaves it.
+  var nameTip = document.createElement('div');
+  nameTip.className = 'native-browser-name-tip'; nameTip.hidden = true;
+  nameTip.setAttribute('aria-hidden', 'true');
+  overlay.append(nameTip);
+  function showNameOnHover(el, name) {
+    el.addEventListener('mouseenter', function () {
+      var rect = el.getBoundingClientRect();
+      nameTip.textContent = name;
+      nameTip.style.left = Math.round(rect.left + rect.width / 2) + 'px';
+      nameTip.style.top = Math.round(rect.bottom + 4) + 'px';
+      nameTip.hidden = false;
+    });
+    var hide = function () { nameTip.hidden = true; };
+    el.addEventListener('mouseleave', hide);
+    el.addEventListener('mousedown', hide);
+  }
   function groupOwner(g) {
     var agents = window.miaBrowserAgents;
     var owner = document.createElement('button');
     owner.type = 'button';
     owner.className = 'native-browser-group-owner';
-    owner.setAttribute('data-group-color', g.color);
-    var name = agents && g.botId ? agents.name(g.botId) : '';
-    var mote = agents && g.botId ? agents.moteHtml(g.botId) : '';
+    paintGroup(owner, g);
+    var settingUp = setupGroupPending(g);
+    var name = settingUp ? 'New Bot' : agents && g.botId ? agents.name(g.botId) : '';
+    var mote = settingUp ? agents.setupMoteHtml() : agents && g.botId ? agents.moteHtml(g.botId) : '';
     if (mote) owner.innerHTML = mote;
     else { owner.classList.add('mia'); owner.innerHTML = '<img src="assets/favicon.svg" alt="">'; }
-    owner.title = name ? name + ' works in this group. Click to change.' : 'Mia works in this group. Click to choose a bot.';
-    owner.setAttribute('aria-label', owner.title);
+    owner.setAttribute('aria-label', name ? name + ' works in this group. Click to change.' : 'Mia works in this group. Click to choose a bot.');
+    showNameOnHover(owner, name || 'Mia');
     owner.onclick = function (event) {
       event.stopPropagation();
       chooseGroupBot(g);
     };
     return owner;
+  }
+  // A group is drawn in its owner's color: the bot's own color, the New Bot
+  // pink while "+ New bot" setup runs, and black while Mia handles it.
+  var setupGroupId = null;
+  function setupGroupPending(g) {
+    var agents = window.miaBrowserAgents;
+    return Boolean(g && g.id === setupGroupId && !g.botId && agents && agents.setupPending && agents.setupPending());
+  }
+  function paintGroup(node, g) {
+    var agents = window.miaBrowserAgents;
+    var color = setupGroupPending(g) ? agents.setupColor()
+      : g.botId && agents && agents.groupColor ? agents.groupColor(g.botId) : '';
+    node.setAttribute('data-group-color', color ? g.color : 'mia');
+    if (color) node.style.setProperty('--tab-group-color', color);
+    else node.style.removeProperty('--tab-group-color');
+  }
+  // "+ New bot" in a group's bot menu: a new tab in a new group, then the
+  // "create a bot" chat, and the bot it creates takes that group.
+  function newBotGroup() {
+    var agents = window.miaBrowserAgents;
+    if (!agents || !agents.startBotSetup) return;
+    return command('new').then(function (next) {
+      var tabId = next && next.activeId;
+      if (!tabId) return;
+      return command('groupCreate', { id: tabId, name: '' }).then(function (after) {
+        var tab = after && (after.tabs || []).find(function (item) { return item.id === tabId; });
+        var groupId = tab && tab.groupId;
+        if (!groupId) return;
+        setupGroupId = groupId;
+        agents.startBotSetup(function (bot) {
+          setupGroupId = null;
+          command('groupAssignBot', { groupId: groupId, bot: bot });
+        });
+        render(state);
+      });
+    });
   }
   function chooseGroupBot(g) {
     var agents = window.miaBrowserAgents;
@@ -540,7 +803,7 @@
     field.value = g.name; field.maxLength = 80;
     field.placeholder = 'Name this group';
     field.setAttribute('aria-label', 'Group name');
-    field.setAttribute('data-group-color', g.color);
+    paintGroup(field, g);
     var done = false;
     function finish(save) {
       if (done) return;
@@ -725,6 +988,10 @@
   var stillPending = null;
   var suggestRequested = false;
   var downloadsRequested = false;
+  var tabsListRequested = false;
+  var tabsListOpen = false;
+  var tabsListToken = 0;
+  var tabsListGroupId = null;
   function stillPageKey() {
     var tab = selected();
     return JSON.stringify([open, overlay.hidden, tab && tab.id, tab && tab.url,
@@ -746,15 +1013,15 @@
   function showStill() {
     clearTimeout(snapshotTimer);
     syncStillPage();
-    if (!snapshot.hidden && (suggestCovered || downloadsOpen)) return Promise.resolve(true);
-    if (!suggestCovered && !downloadsOpen) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
+    if (!snapshot.hidden && (suggestCovered || downloadsOpen || tabsListOpen)) return Promise.resolve(true);
+    if (!suggestCovered && !downloadsOpen && !tabsListOpen) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
     if (stillPending) return stillPending;
     if (!pageShowing()) return Promise.resolve(true);
     var generation = stillGeneration;
     var key = stillPage;
     function current() {
       return generation === stillGeneration && key === stillPageKey() &&
-        (suggestRequested || downloadsRequested);
+        (suggestRequested || downloadsRequested || tabsListRequested);
     }
     var pending = command('snapshot').then(function (result) {
       if (!current()) return false;
@@ -775,7 +1042,7 @@
     return pending;
   }
   function hideStill() {
-    if (downloadsRequested || suggestRequested) return;
+    if (downloadsRequested || suggestRequested || tabsListRequested) return;
     // Invalidate capture/decode immediately, even before either menu has
     // committed its cover. Keep only an already visible still for the
     // native view's short return transition; a reopen always captures anew.
@@ -861,6 +1128,12 @@
     var agents = window.miaBrowserAgents;
     if (!payload) return;
     if (payload.action === 'stop' && agents && agents.stopQuietly) agents.stopQuietly(payload.botId);
+    if (payload.action === 'new-bot') newBotGroup();
+    // The person clicked into the page a bot is working on: take it over.
+    if (payload.action === 'page-click') {
+      var tab = selected();
+      if (tab && tab.id === payload.tabId && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick();
+    }
     if (payload.action === 'choose') {
       var g = (state.groups || []).find(function (item) { return item.id === payload.groupId; });
       if (g) chooseGroupBot(g);
