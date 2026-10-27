@@ -179,6 +179,17 @@ function createNativeClerkClient(options = {}) {
   let googleSignInId = null;
   let emailSignInId = null;
   const usedNonces = new Set();
+  // Clerk session tokens last about a minute. Reusing one until shortly
+  // before it expires saves two Clerk round trips on every Hub request.
+  let sessionToken = null;
+  const TOKEN_REUSE_MARGIN_MS = 15_000;
+  function forgetSessionToken() { sessionToken = null; }
+  function tokenExpiry(jwt) {
+    try {
+      const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+      return Number.isFinite(claims.exp) ? claims.exp * 1000 : null;
+    } catch (_) { return null; }
+  }
 
   async function storageCall(method, value) {
     try {
@@ -314,6 +325,7 @@ function createNativeClerkClient(options = {}) {
   }
 
   async function startGoogle({ redirectUrl } = {}) {
+    forgetSessionToken();
     const safeRedirect = googleRedirect(redirectUrl);
     return exclusive(async context => {
       await ensureClient(context);
@@ -331,6 +343,7 @@ function createNativeClerkClient(options = {}) {
   }
 
   async function completeGoogle({ nonce } = {}) {
+    forgetSessionToken();
     const rotatingNonce = String(nonce || '');
     if (!validClerkNonce(rotatingNonce)) throw safeError('INVALID_CALLBACK');
     return exclusive(async context => {
@@ -363,6 +376,7 @@ function createNativeClerkClient(options = {}) {
   }
 
   async function startEmail(email) {
+    forgetSessionToken();
     const identifier = String(email || '').trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier) || identifier.length > 254) {
       throw safeError('INVALID_EMAIL');
@@ -395,6 +409,7 @@ function createNativeClerkClient(options = {}) {
   }
 
   async function verifyEmail(code) {
+    forgetSessionToken();
     const verificationCode = String(code || '').trim();
     if (!/^\d{4,10}$/.test(verificationCode)) throw safeError('INVALID_CODE');
     return exclusive(async context => {
@@ -417,7 +432,9 @@ function createNativeClerkClient(options = {}) {
   }
 
   async function getSessionToken() {
+    if (sessionToken && !activeOperation && sessionToken.expiresAt - now() > TOKEN_REUSE_MARGIN_MS) return sessionToken.jwt;
     return exclusive(async context => {
+      forgetSessionToken();
       const current = publicStatus(await refreshClient(context), now);
       if (current.status !== 'active') return null;
       const sessionId = assertId(current.sessionId, 'session');
@@ -426,11 +443,15 @@ function createNativeClerkClient(options = {}) {
         method: 'POST',
       });
       const jwt = payload && (payload.jwt || (payload.response && payload.response.jwt));
-      return typeof jwt === 'string' && jwt.split('.').length === 3 ? jwt : (() => { throw safeError('INVALID_SERVER_RESPONSE'); })();
+      if (typeof jwt !== 'string' || jwt.split('.').length !== 3) throw safeError('INVALID_SERVER_RESPONSE');
+      const expiresAt = tokenExpiry(jwt);
+      if (expiresAt && context.epoch === operationEpoch) sessionToken = { jwt, expiresAt };
+      return jwt;
     });
   }
 
   async function signOut() {
+    forgetSessionToken();
     return exclusive(async context => {
       let failure = null;
       try {
@@ -458,6 +479,7 @@ function createNativeClerkClient(options = {}) {
   }
 
   function cancel() {
+    forgetSessionToken();
     operationEpoch += 1;
     if (activeOperation) activeOperation.controller.abort();
     activeOperation = null;

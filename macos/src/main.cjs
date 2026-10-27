@@ -182,7 +182,27 @@ function desktopClerkEnvironment() {
     || (app.isPackaged ? path.join(app.getPath("userData"), ".env.local") : path.join(BACKEND_ROOT, ".env.local"));
   let fileEnvironment = {};
   try { fileEnvironment = dotenv.parse(fs.readFileSync(envFile, "utf8")); } catch (_) { /* optional file */ }
-  return { ...fileEnvironment, ...process.env };
+  return {
+    ...fileEnvironment,
+    ...process.env,
+    // A signed installation always requires Clerk, even if an old local
+    // development setting remains in its user-data environment file.
+    ...(app.isPackaged ? { MIAOS_NO_AUTH: "0", MIAOS_CLERK_AUTH: "1" } : {}),
+  };
+}
+
+function desktopAuthEnvironment(packaged, environment = process.env) {
+  if (packaged) return {
+    MIAOS_DESKTOP_PACKAGED: "1",
+    MIAOS_NO_AUTH: "0",
+    MIAOS_CLERK_AUTH: "1",
+  };
+  return {
+    MIAOS_DESKTOP_PACKAGED: "0",
+    MIAOS_NO_AUTH: environment.MIAOS_DESKTOP_NO_AUTH
+      || (/^(0|false)$/i.test(environment.MIAOS_CLERK_AUTH || "") ? "1" : "0"),
+    ...(environment.MIAOS_CLERK_AUTH ? { MIAOS_CLERK_AUTH: environment.MIAOS_CLERK_AUTH } : {}),
+  };
 }
 
 // Set this before Electron creates its native application menu so development
@@ -225,6 +245,7 @@ let miaAutoUpdater = null;
 let nativeAuthProtocolReady = false;
 const desktopAuth = createDesktopAuth({
   ipcMain,
+  log: desktopLog,
   getWindow: () => mainWindow,
   getBackendUrl: () => backendUrl,
   getClient: () => {
@@ -358,7 +379,11 @@ function redactLogValue(value) {
   return String(value ?? "")
     .split(os.homedir()).join("$HOME")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]")
-    .replace(/([?&](?:token|key|secret|password)=)[^&\s]+/gi, "$1[REDACTED]")
+    // Addresses may carry reset codes in paths, nested queries or fragments.
+    // Logs do not need a page address, so omit the whole address.
+    .replace(/\bhttps?:\/\/[^\s<>"']+/gi, "[REDACTED_URL]")
+    .replace(/\bhttps?%3a%2f%2f[^\s<>"']+/gi, "[REDACTED_URL]")
+    .replace(/([?&](?:code|state|sid|sig|nonce|ticket|auth|token|key|secret|password|credential)=)[^&\s]+/gi, "$1[REDACTED]")
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]")
     .replace(/\b((?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]");
 }
@@ -382,7 +407,7 @@ function runtimeLogPath(name) {
 
 function isAllowedRendererStateKey(key) {
   const normalized = String(key || "");
-  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || /^miaChatActive:[^\r\n]{1,500}$/.test(normalized);
+  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || normalized === "miaTabsMixed" || /^miaChatActive:[^\r\n]{1,500}$/.test(normalized);
 }
 
 function readRendererState() {
@@ -941,15 +966,9 @@ async function startLocalBackend(exactPort = null) {
     ...(claudeCodeCommand
       ? { CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claudeCodeCommand }
       : {}),
-    // Clerk sign-in is on by default: the backend carries Mia's instance as
-    // its built-in configuration, so the desktop app boots into the hosted
-    // ecosystem unless the person opts out (MIAOS_DESKTOP_NO_AUTH=1 or
-    // MIAOS_CLERK_AUTH=0). Clerk vars are forwarded only when set so
-    // empty-string defaults don't shadow dotenv values.
-    MIAOS_NO_AUTH: process.env.MIAOS_DESKTOP_NO_AUTH
-      || (/^(0|false)$/i.test(process.env.MIAOS_CLERK_AUTH || "") ? "1" : "0"),
+    // Only a source checkout can opt into the local no-auth preview.
+    ...desktopAuthEnvironment(app.isPackaged),
     MIAOS_LOCAL_PROFILE: process.env.MIAOS_LOCAL_PROFILE || "1",
-    ...(process.env.MIAOS_CLERK_AUTH ? { MIAOS_CLERK_AUTH: process.env.MIAOS_CLERK_AUTH } : {}),
     ...(process.env.CLERK_PUBLISHABLE_KEY ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY } : {}),
     ...(process.env.CLERK_JWT_KEY ? { CLERK_JWT_KEY: process.env.CLERK_JWT_KEY } : {}),
     ...(process.env.CLERK_ISSUER ? { CLERK_ISSUER: process.env.CLERK_ISSUER } : {}),
@@ -1298,7 +1317,10 @@ function isClerkGoogleOAuthUrl(value) {
   }
 }
 
-const SYSTEM_BROWSER_AUTH_PROVIDERS = new Set(["openai-codex", "xai-oauth"]);
+// Every subscription sign-in runs in the default browser, where passkeys and
+// saved logins work and a stuck page can't hang Mia. Claude then shows a
+// one-time code that the user pastes back into Mia.
+const SYSTEM_BROWSER_AUTH_PROVIDERS = new Set(["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"]);
 
 function harnessAuthRedirectProvider(value, expectedBackendUrl = backendUrl) {
   try {
@@ -1784,8 +1806,7 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
     if (harnessAuthProvider && mayLoadAuthBootstrap
       && harnessAuthRedirectProvider(url, expectedBackendUrl) === harnessAuthProvider) return;
     if (SYSTEM_BROWSER_AUTH_PROVIDERS.has(harnessAuthProvider) && isBoundHarnessAuthNavigation(url)) {
-      // Device-code sign-in only needs the code Mia shows, so hand the page to
-      // the user's own browser, where passkeys and saved logins work.
+      // Hand the page to the user's own browser; Mia finishes from the code.
       event.preventDefault();
       shell.openExternal(url);
       try { window.close(); } catch (_) { /* already closed */ }
@@ -1871,7 +1892,14 @@ function createDevelopmentMenu(actions = {}) {
 }
 
 function createApplicationMenuTemplate() {
-  const viewItems = [{ role: "togglefullscreen" }];
+  const viewItems = [
+    {
+      label: "Reload Mia",
+      accelerator: "CommandOrControl+R",
+      click: () => developmentRefreshUi().catch(error => desktopLog(`UI refresh failed: ${error.message}`)),
+    },
+    { role: "togglefullscreen" },
+  ];
   if (!app.isPackaged) viewItems.unshift({ role: "toggleDevTools" });
   // The application-name menu (role "appMenu") exists only on macOS and
   // throws when built elsewhere; Windows and Linux get their quit affordance
@@ -1905,7 +1933,8 @@ function installBrowserMenu() {
     ["Focus Address", "CommandOrControl+L", "l"],
     ["New Tab", "CommandOrControl+T", "t"],
     ["Close Tab", "CommandOrControl+W", "w"],
-    ["Reload Page", "CommandOrControl+R", "r"],
+    // Cmd+R belongs to Mia (View > Reload Mia); the page gets the hard reload.
+    ["Hard Reload Page", "CommandOrControl+Shift+R", "r"],
     ["Find in Page", "CommandOrControl+F", "f"],
     ["Zoom In", "CommandOrControl+Plus", "+"],
     ["Zoom Out", "CommandOrControl+-", "-"],
@@ -1917,8 +1946,9 @@ function installBrowserMenu() {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       // Browser menu actions must never fall through to shell/window actions.
       // Focus Address and New Tab can also serve as browser entry points when
-      // the browser surface is currently closed.
-      if (["l", "t"].includes(key) && !mainWindow.webContents.isDestroyed()) {
+      // the browser surface is currently closed; in the chat view New Tab and
+      // Close Tab act on the chat tabs instead.
+      if (["l", "t", "w"].includes(key) && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("miaos-browser-open", key);
       }
     },
@@ -1968,8 +1998,10 @@ function createWindow() {
     icon: fs.existsSync(windowIconPath) ? windowIconPath : undefined,
     // On macOS, hide the title bar and keep the
     // window buttons inline with the top row of the app.
-    ...(process.platform === "darwin" ? { titleBarStyle: "hidden", trafficLightPosition: { x: 14, y: 14 } } : {}),
+    ...(process.platform === "darwin" ? { titleBarStyle: "hidden", trafficLightPosition: { x: 11, y: 14 } } : {}),
     webPreferences: {
+      // Shared chat and owner bot dispatch must keep polling while Mia is covered or minimized.
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.cjs"),
@@ -1998,10 +2030,10 @@ function createWindow() {
   const windowArtifactView = artifactView;
   window.on("resize", layoutArtifactPanel);
   window.webContents.on("did-finish-load", () => {
-    console.log(`[miaos-desktop] loaded ${window.webContents.getURL()}`);
+    desktopLog("main window loaded");
   });
-  window.webContents.on("did-fail-load", (_event, errorCode, description, validatedURL) => {
-    console.error(`[miaos-desktop] failed ${errorCode} ${description} ${validatedURL}`);
+  window.webContents.on("did-fail-load", (_event, errorCode) => {
+    desktopLog(`main window load failed ${errorCode}`);
   });
   // Opt-in diagnostics for disposable QA profiles. Do not persist ordinary
   // renderer console output because chat content and provider errors can carry
@@ -2618,6 +2650,8 @@ app.on("window-all-closed", () => {
 });
 
 module.exports = {
+  desktopAuthEnvironment,
+  redactLogValue,
   devModeRuntimeProblem,
   developmentHermesBinary,
   completeClaudeAuthCallback,

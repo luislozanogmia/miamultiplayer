@@ -32,6 +32,7 @@ function harness({ roomId = 'mia', kind = 'agent', messages = [] } = {}) {
   let freshRequests = 0;
   const chip = { hidden: true, innerHTML: '' };
   const context = vm.createContext({
+    hubWorkspace: () => false,
     Object,
     Promise,
     chatWs: { activeRoomId: roomId, activeKind: kind, activeLabel: 'Mia', configured: true, nativeConversations: conversations },
@@ -132,5 +133,6 @@ test('the goal chip follows the newest goal snapshot in the chat', () => {
 test('the chip sits above the composer and the send path forwards command metadata', () => {
   assert.match(html, /id="ccGoalChip"[^>]*hidden[\s\S]*id="chatMentionPopover"/);
   const send = source.slice(source.indexOf('  function sendNativeConversationEvent('), source.indexOf('  function sendActiveRoomMessage('));
-  assert.match(send, /Object\.assign\(\{\}, chatModelMetadata \? \{chatModelSelection: chatModelMetadata\} : \{\}, browserPage \? \{browserContext: browserPage\} : \{\}, extraMetadata \|\| \{\}\)/);
+  assert.match(send, /Object\.assign\(\{\}, chatModelMetadata \? \{chatModelSelection: chatModelMetadata\} : \{\}, browserPage \? \{browserContext: browserPage\} : \{\}, send\.extraMetadata \|\| \{\}\)/);
+  assert.match(send, /soloSend: \{threadRootId: threadRootId \|\| null, preparedAttachment: preparedAttachment \|\| null, extraMetadata: extraMetadata \|\| null\}/);
 });

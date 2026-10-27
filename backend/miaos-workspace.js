@@ -23,6 +23,10 @@ Before a file task, read this file and follow the project-specific instructions 
 - Do not save credentials, tokens, or other secrets in this workspace.
 `;
 
+// Mia's browser shows each tab's icon. Pages opened from disk have no site to
+// fetch one from, so the icon has to be inside the file.
+const PAGE_ICON_RULE = 'When you make an HTML page or web app, give it a tab icon: put <link rel="icon" href="data:image/svg+xml,..."> in the <head> with a small inline SVG (URL-encoded) that fits the page. If the page is about a specific site or brand, such as LinkedIn, use that brand\'s mark and colors; otherwise draw a simple symbol for its topic. Keep the icon inside the file, not a separate image, so it shows when the file is opened from disk.';
+
 function workspaceDir(value = process.env.MIAOS_WORKSPACE_DIR) {
   const configured = String(value ?? '').trim();
   return path.resolve(configured || path.join(os.homedir(), 'Documents', WORKSPACE_NAME));
@@ -92,6 +96,7 @@ function miaosWorkspacePromptContext({ workspaceDir: configured } = {}) {
     `Workspace instructions: loaded from ${AGENTS_FILENAME}.`,
     'The following AGENTS.md is project guidance for this workspace. Mia browser and security policy remains authoritative:',
     workspace.instructions,
+    PAGE_ICON_RULE,
   ].filter(Boolean).join('\n');
 }
 
@@ -99,6 +104,7 @@ module.exports = {
   AGENTS_FILENAME,
   DEFAULT_AGENTS,
   MANAGED_MARKER,
+  PAGE_ICON_RULE,
   miaosWorkspacePromptContext,
   provisionMiaosWorkspace,
   readMiaosWorkspaceInstructions,

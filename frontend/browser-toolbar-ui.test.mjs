@@ -6,10 +6,10 @@ import vm from 'node:vm';
 test('browser tabs shrink to fit before the strip has to scroll', async () => {
   const source = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
 
-  const tab = source.match(/\.native-browser-tab\{position:relative;[^}]*\}/)?.[0] || '';
+  const tab = source.match(/\.mia-tab\{position:relative;[^}]*\}/)?.[0] || '';
   assert.match(tab, /min-width:32px;/);
   assert.match(tab, /container-type:inline-size;/);
-  assert.match(source, /@container \(max-width:72px\)\{[^@]*\.native-browser-tab-label\{display:none;\}/);
+  assert.match(source, /@container \(max-width:72px\)\{[^@]*\.mia-tab-label\{display:none;\}/);
   // Only when even icon-wide tabs don't fit does the strip scroll, and
   // then without a visible scrollbar taking vertical space.
   assert.match(source, /\.native-browser-tabs\{[^}]*overflow-x:auto;/);
@@ -51,22 +51,22 @@ test('a tab group opens with its bot, then its name chip, and one line runs from
   assert.match(js, /head\.append\(groupOwner\(g\), groupChip\(g, index, folded\)\)/, 'the bot leads, the name follows');
   assert.match(css, /\.native-browser-group-head\{[^}]*box-shadow:inset 0 -2px 0 var\(--tab-group-color\);/, 'the line starts under the bot');
   assert.match(css, /\.native-browser-group-owner\{[^}]*background:transparent;/, 'no circle behind the bot');
-  assert.match(css, /\.native-browser-tab\.in-group\{box-shadow:inset 0 -2px 0 var\(--tab-group-color\);\}/);
-  assert.match(js, /ring\.className = 'native-browser-tab-group-ring'/);
-  assert.match(css, /\.native-browser-tab-group-ring\{[^}]*border:2px solid var\(--tab-group-color\);border-bottom:0;/);
-  assert.match(css, /\.native-browser-tab-group-ring::before\{left:-12px;[^}]*border-bottom-right-radius:12px;\}/, 'the outline curves into the line');
-  assert.match(css, /\.native-browser-tab-group-ring::after\{right:-12px;[^}]*border-bottom-left-radius:12px;\}/);
-  assert.match(css, /\.native-browser-tab\+\.native-browser-group-head::before\{/, 'a divider before a group');
-  assert.match(css, /\.native-browser-tab\.active\+\.native-browser-group-head\{margin-left:18px;\}/, 'space between the active tab and a group');
-  assert.match(css, /\.native-browser-tab\.active\{z-index:1;/, 'a hovered neighbor never covers the active tab\'s curved feet');
+  assert.match(css, /\.mia-tab\.in-group\{box-shadow:inset 0 -2px 0 var\(--tab-group-color\);\}/);
+  assert.match(js, /ring\.className = 'mia-tab-group-ring'/);
+  assert.match(css, /\.mia-tab-group-ring\{[^}]*border:2px solid var\(--tab-group-color\);border-bottom:0;/);
+  assert.match(css, /\.mia-tab-group-ring::before\{left:-12px;[^}]*border-bottom-right-radius:12px;\}/, 'the outline curves into the line');
+  assert.match(css, /\.mia-tab-group-ring::after\{right:-12px;[^}]*border-bottom-left-radius:12px;\}/);
+  assert.match(css, /\.mia-tab\+\.native-browser-group-head::before\{/, 'a divider before a group');
+  assert.match(css, /\.mia-tab\.active\+\.native-browser-group-head\{margin-left:18px;\}/, 'space between the active tab and a group');
+  assert.match(css, /\.mia-tab\.active\{z-index:1;/, 'a hovered neighbor never covers the active tab\'s curved feet');
 });
 
 test('hovering a tab shows a neutral floating pill, not a white wash', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
 
-  assert.match(css, /\.native-browser-tab:not\(\.active\):hover::after\{[^}]*inset:4px 2px;[^}]*background:rgba\(0,0,0,\.06\);/);
-  assert.match(css, /\.native-browser-tab\{position:relative;isolation:isolate;/, 'the pill stays inside the tab, under its title');
-  assert.doesNotMatch(css, /\.native-browser-tab:not\(\.active\):hover\{background:#ffffff73;\}/, 'white over the cool strip read as lavender');
+  assert.match(css, /\.mia-tab:not\(\.active\):hover::after\{[^}]*inset:4px 2px;[^}]*background:rgba\(0,0,0,\.06\);/);
+  assert.match(css, /\.mia-tab\{position:relative;isolation:isolate;/, 'the pill stays inside the tab, under its title');
+  assert.doesNotMatch(css, /\.mia-tab:not\(\.active\):hover\{background:#ffffff73;\}/, 'white over the cool strip read as lavender');
 });
 
 // Runs the strip's fold planner on its own, with a strip of a given width.
@@ -123,21 +123,31 @@ test('"Show this bot\'s tabs" picks the tab the bot is working in, else the one 
   state.tabs[0].botActivity = { botId: 'bot-a' };
   assert.equal(context.botBrowserTab(state, 'bot-a').id, 1, 'a tab it is working in right now wins');
   assert.equal(context.botBrowserTab(state, 'bot-c'), null);
-  assert.match(js, /id="chatShowBotTabsBtn"/);
+  assert.match(js, /item\('chatShowBotTabsBtn'/);
 });
 
 test('a crowded strip never squeezes the active tab past its icon and close button', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.native-browser-tab\.active\{flex-shrink:0;min-width:64px;\}/);
+  assert.match(css, /\.mia-tab\.active\{flex-shrink:1;min-width:64px;\}/);
+});
+
+test('a narrow pane shrinks the active tab and group heads last, but still shrinks them', async () => {
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(css, /\.mia-tab\.active\{flex-shrink:0/);
+  assert.match(css, /\.native-browser-group-head\{flex:0 1 auto;min-width:36px;/);
+  assert.match(css, /\.mia-tab\{position:relative;isolation:isolate;flex:0 5 220px;/, 'other tabs give way first');
+  // Shrink weights under 1 only take back part of the overflow when they are
+  // all that is left, which pushed the active tab past the pane's edge.
+  assert.doesNotMatch(css, /flex(-shrink)?:(0 )?\.\d/, 'no shrink weight below 1');
 });
 
 test('the new-tab button follows the last tab and stays in reach when tabs overflow', async () => {
   const js = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
-  assert.match(js, /group\.append\(close\); strip\.append\(group\);\n\s*\}\);\n\s*strip\.append\(add\);/, 'redraws re-attach + after the last tab');
+  assert.match(js, /strip\.append\(group\);\n\s*\}\);\n\s*strip\.append\(add\);/, 'redraws re-attach + after the last tab');
   assert.doesNotMatch(js, /tabsRow\.insertBefore\(add/, '+ is not pinned beside the close button');
-  assert.match(js, /strip\.clientWidth \|\| 0\) - \(add\.offsetWidth/, 'crowding leaves room for +');
-  assert.match(css, /\.native-browser-tabs-row \.native-browser-new-tab\{[^}]*position:sticky;right:0;/);
+  assert.match(js, /strip\.clientWidth - \(add\.offsetWidth \|\| 0\)/, 'crowding leaves room for +');
+  assert.match(css, /\.native-browser-tabs \.native-browser-new-tab\{[^}]*position:sticky;right:0;/);
 });
 
 test('suggestion cards always show their bot-colored frame; hover only animates the arrow', async () => {

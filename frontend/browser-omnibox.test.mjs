@@ -124,3 +124,42 @@ test('explicit HTTP or HTTPS survives completion and the first Enter destination
     assert.equal(result.rows[0].url, new URL(visible).href, 'Enter must open the address shown in the field');
   }
 });
+
+test('everywhere search groups results and leads with what you are doing', () => {
+  const sources = {
+    browser: [{ kind: 'url', display: 'linkedin.com/in/example-person', go: true }, { kind: 'search', query: 'lin' }],
+    people: [{ kind: 'human', id: 'lina@example.com', name: 'Lina', sub: 'lina@example.com' }, { kind: 'agent', id: 'b1', name: 'Sales', sub: 'Bot' }],
+    chats: [{ roomId: 'r1', name: 'LinkedIn outreach' }, { roomId: 'r2', name: 'general' }],
+    automations: [{ botId: 'b1', automationId: 'a1', name: 'Morning briefing', botName: 'Sales', steps: ['Open LinkedIn', 'Summarize'] }],
+  };
+  const keys = groups => groups.map(group => group.key);
+  assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: null })), ['browser', 'chat', 'automations'], 'mixed tabs: browser, chat, automation');
+  assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: 'chat' })), ['chat', 'browser', 'automations']);
+  assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: 'automations' })), ['automations', 'browser', 'chat']);
+  const chat = omnibox.everywhere('lin', sources, { view: 'chat' })[0];
+  assert.deepEqual(chat.parts.map(part => part.label), ['People', 'Chat history']);
+  assert.equal(chat.parts[0].rows[0].target.name, 'Lina');
+  assert.equal(chat.parts[1].rows[0].target.roomId, 'r1');
+  const automation = omnibox.everywhere('linkedin', sources, { view: 'automations' })[0];
+  assert.deepEqual(automation.parts.map(part => part.label), ['Steps'], 'a step matches even when the name does not');
+  assert.equal(automation.parts[0].rows[0].number, 1);
+  assert.deepEqual(keys(omnibox.everywhere('zzz', { browser: [] }, { view: 'chat' })), [], 'empty groups are left out');
+});
+
+test('the open chat answers first with its own matching messages', () => {
+  const long = 'Earlier we talked about lunch plans and the weekly sync, then decided the LinkedIn post goes out Friday';
+  const sources = {
+    browser: [],
+    people: [{ kind: 'human', id: 'lina@example.com', name: 'Lina', sub: 'lina@example.com' }],
+    chats: [],
+    current: { name: 'general', messages: [{ id: 'm2', text: long, author: 'Lina' }, { id: 'm1', text: 'nothing here', author: 'You' }] },
+  };
+  const chat = omnibox.everywhere('linkedin', sources, { view: 'chat' })[0];
+  assert.equal(chat.parts[0].label, 'In general');
+  assert.equal(chat.parts[0].rows.length, 1, 'only matching messages');
+  const row = chat.parts[0].rows[0];
+  assert.equal(row.kind, 'message');
+  assert.equal(row.target.id, 'm2');
+  assert.ok(row.text.startsWith('…') && row.text.includes('LinkedIn'), 'a long message is cut to show the match');
+  assert.deepEqual(omnibox.everywhere('lina', { ...sources, current: null }, { view: 'chat' })[0].parts.map(part => part.label), ['People'], 'no open chat, no part');
+});

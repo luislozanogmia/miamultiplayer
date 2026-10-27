@@ -57,11 +57,54 @@
   var WORKSPACE_STORAGE_KEY = 'miaosActiveWorkspace';
   var storedWorkspaceKey = '';
   try { storedWorkspaceKey = localStorage.getItem(WORKSPACE_STORAGE_KEY) || ''; } catch(_workspaceStorageError) {}
+  // Shared teams come from the Hub, which can take seconds to answer. The
+  // last list is kept so the switcher shows every team right away.
+  var HUB_TEAMS_STORAGE_KEY = 'miaHubTeams';
+  function cachedHubTeams(){
+    try {
+      var teams = JSON.parse(localStorage.getItem(HUB_TEAMS_STORAGE_KEY) || '[]');
+      return Array.isArray(teams) ? teams.filter(function(team){ return team && /^[a-f0-9]{32}$/.test(team.teamId) && typeof team.name === 'string'; }) : [];
+    } catch(_hubTeamsStorageError) { return []; }
+  }
+  cachedHubTeams().forEach(function(team){ WORKSPACE_OPTIONS['hub_' + team.teamId] = {mode:'multiplayer', label:team.name}; });
+  if(/^hub_[a-f0-9]{32}$/.test(storedWorkspaceKey) && !WORKSPACE_OPTIONS[storedWorkspaceKey]) WORKSPACE_OPTIONS[storedWorkspaceKey] = {mode:'multiplayer', label:'Shared team'};
   var activeWorkspaceKey = WORKSPACE_OPTIONS[storedWorkspaceKey] ? storedWorkspaceKey : 'solo';
+  // Switching workspaces reloads the page, so nothing still in flight from
+  // the old workspace can repaint the new one. The handoff hides that
+  // reload: assets/workspace-handoff.js paints the shell from the first
+  // frame, the sidebar list and chat show placeholder bars until their live
+  // data arrives and then fade in, and the signed-in session is reused
+  // instead of going through sign-in again. Unsent text is saved on every
+  // reload (see pagehide).
+  var WORKSPACE_HANDOFF_KEY = 'miaWorkspaceHandoff';
+  var bootWorkspaceKey = activeWorkspaceKey;
+  var sidebarPlaceholderShown = false;
+  var workspaceHandoff = (function(){
+    try {
+      var handoff = JSON.parse(sessionStorage.getItem(WORKSPACE_HANDOFF_KEY) || 'null');
+      sessionStorage.removeItem(WORKSPACE_HANDOFF_KEY);
+      if(handoff && handoff.to === activeWorkspaceKey && Date.now() - Number(handoff.at || 0) < 30000) return handoff;
+    } catch(_workspaceHandoffError) {}
+    return null;
+  })();
+  if(!workspaceHandoff) document.documentElement.classList.remove('workspace-handoff');
+  function endWorkspaceHandoff(){
+    workspaceHandoff = null;
+    document.documentElement.classList.remove('workspace-handoff');
+  }
+  function chatDraftsStorageKey(key){ return 'miaChatDrafts:' + String(currentUser || '').toLowerCase() + ':' + key; }
+  function hubWorkspace(){ return /^hub_[a-f0-9]{32}$/.test(activeWorkspaceKey); }
   var appCollaborationMode = WORKSPACE_OPTIONS[activeWorkspaceKey].mode;
   function workspaceLabel(){
     var workspace = WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS.solo;
     return workspace.label;
+  }
+  // A team's tile in the workspace rail shows its initials.
+  function workspaceCode(label){
+    var words = String(label || '').replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+    if(!words.length) return 'MI';
+    var code = words.length > 1 ? words[0].charAt(0) + words[1].charAt(0) : words[0].slice(0, 2);
+    return code.toUpperCase();
   }
   function renderWorkspaceSwitcher(){
     var companyName = el('#miaCompanyName');
@@ -73,17 +116,101 @@
       option.setAttribute('aria-current', active ? 'true' : 'false');
     });
   }
-  function activateWorkspace(key){
+  function activateWorkspace(key, options){
     var workspace = WORKSPACE_OPTIONS[key];
     if(!workspace) return false;
+    options = options || {};
+    var crossesHubBoundary = key !== activeWorkspaceKey && (options.reload || hubWorkspace() || /^hub_[a-f0-9]{32}$/.test(key));
     activeWorkspaceKey = key;
     appCollaborationMode = workspace.mode;
     clearSoloHumanDirectoryState();
     try { localStorage.setItem(WORKSPACE_STORAGE_KEY, key); } catch(_workspaceStorageError) {}
+    if(crossesHubBoundary){
+      // Invalidate pending callbacks before reloading either direction.
+      if(chatWs){chatWs.navigationGeneration=Number(chatWs.navigationGeneration||0)+1;stopChatPolling();}
+      if(!options.quiet) setAppLoading(true);
+      location.reload();
+      return true;
+    }
     refreshAppName();
-    renderSidebarPins();
     return true;
   }
+  // The switcher's path: hand off to the reloaded page instead of showing
+  // the loading screen.
+  function switchWorkspace(key){
+    if(!WORKSPACE_OPTIONS[key] || key === activeWorkspaceKey) return false;
+    var go = function(){
+      try { sessionStorage.setItem(WORKSPACE_HANDOFF_KEY, JSON.stringify({to:key, at:Date.now()})); } catch(_workspaceHandoffError) {}
+      return activateWorkspace(key, {reload:true, quiet:true});
+    };
+    // Each workspace has its own browser tabs; the browser swaps them first,
+    // and stays put while a bot is still working in a page.
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!browser || typeof browser.command !== 'function') return go();
+    Promise.resolve(browser.command({action:'workspace', key:key})).then(function(result){
+      if(result && result.error){ showToast(result.error); return; }
+      go();
+    }, go);
+    return true;
+  }
+  // While the new workspace's list loads, the sidebar shows placeholder bars
+  // in place of its sections; renderChatSidebar() swaps in the live list.
+  function showSidebarPlaceholder(){
+    var scroll = el('.chat-sidebar-scroll');
+    if(!workspaceHandoff || !scroll) return;
+    scroll.classList.add('workspace-loading');
+    sidebarPlaceholderShown = true;
+  }
+  function releaseSidebarPlaceholder(){
+    sidebarPlaceholderShown = false;
+    var scroll = el('.chat-sidebar-scroll');
+    if(!scroll) return;
+    scroll.classList.remove('workspace-loading');
+    revealLoaded(scroll);
+  }
+  // Loaded content comes into focus from a soft blur instead of popping in.
+  function revealLoaded(node){
+    node.classList.remove('mia-reveal');
+    void node.offsetWidth;
+    node.classList.add('mia-reveal');
+    setTimeout(function(){ node.classList.remove('mia-reveal'); }, 600);
+  }
+  function chatThreadPlaceholderHtml(){
+    var rows = [[38, 72, 54], [30, 64], [44, 80, 46], [34, 58]];
+    return '<div class="chat-thread-placeholder" aria-hidden="true">' + rows.map(function(row){
+      return '<div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines">'
+        + row.map(function(width){ return '<span class="mia-placeholder" style="width:' + width + '%"></span>'; }).join('') + '</span></div>';
+    }).join('') + '</div>';
+  }
+  function showChatThreadPlaceholder(thread){
+    thread.removeAttribute('data-chat-scroll-room');
+    thread.innerHTML = chatThreadPlaceholderHtml();
+    thread.setAttribute('data-placeholder', '');
+    syncChatJumpLatest(null, null);
+  }
+  // Runs on every reload, including workspace switches and Cmd+R. It saves
+  // under the workspace this page booted in, since a switch has already
+  // changed activeWorkspaceKey by the time the page hides.
+  function saveWorkspaceStateForReload(){
+    if(!currentUser || typeof chatWs === 'undefined' || !chatWs) return;
+    try {
+      var input = el('#ccInput');
+      if(input && chatWs.activeRoomId){
+        if(input.value) chatTextDrafts[chatWs.activeRoomId] = input.value;
+        else delete chatTextDrafts[chatWs.activeRoomId];
+      }
+      sessionStorage.setItem(chatDraftsStorageKey(bootWorkspaceKey), JSON.stringify(chatTextDrafts));
+    } catch(_saveWorkspaceStateError) {}
+  }
+  function restoreChatTextDrafts(){
+    try {
+      var saved = JSON.parse(sessionStorage.getItem(chatDraftsStorageKey(activeWorkspaceKey)) || '{}');
+      Object.keys(saved || {}).forEach(function(roomId){
+        if(typeof saved[roomId] === 'string' && saved[roomId] && !chatTextDrafts[roomId]) chatTextDrafts[roomId] = saved[roomId];
+      });
+    } catch(_restoreDraftsError) {}
+  }
+  window.addEventListener('pagehide', saveWorkspaceStateForReload);
   function appNameLabel(){
     return (INSTANCE.name || 'Mia') + ' - ' + (appCollaborationMode === 'multiplayer' ? 'Multiplayer' : 'Solo');
   }
@@ -194,6 +321,7 @@
 
   /* ============ STATE ============ */
   var currentUser = null;
+  var authGeneration = 0;
   var currentAccountEmail = null;
   var currentUserLocalProfile = false;
   // From GET /api/me — gates the channel-settings "Reset channel" action.
@@ -289,7 +417,9 @@
       var message = document.createElement('p');
       message.className = 'app-prompt-msg';
       message.textContent = String(options.message || 'Update the text, then continue.');
-      var input = document.createElement('textarea');
+      // Names (such as a channel's) take one line; Enter submits them.
+      var input = document.createElement(options.singleLine ? 'input' : 'textarea');
+      if(options.singleLine){ input.type = 'text'; input.maxLength = Number(options.maxLength || 80); }
       input.className = 'app-prompt-input';
       input.value = String(initialText || '');
       input.setAttribute('aria-label', String(options.inputLabel || 'Text'));
@@ -325,6 +455,9 @@
         if(event.key === 'Escape'){
           event.preventDefault();
           finish({ok:false, text:''});
+        } else if(options.singleLine && event.key === 'Enter' && event.target === input && !event.isComposing){
+          event.preventDefault();
+          finish({ok:true, text:input.value});
         }
       }
       cancel.addEventListener('click', function(){ finish({ok:false, text:''}); });
@@ -411,6 +544,7 @@
     return initials + '<img class="human-avatar-image" src="' + esc(src) + '" alt="" aria-hidden="true" onerror="this.style.display=\'none\'" />';
   }
   function api(path, opts){
+    var requestAuthGeneration=authGeneration;
     opts = opts || {};
     opts.credentials = 'include';
     opts.headers = Object.assign({'Accept':'application/json', 'X-MiaOS-Workspace':activeWorkspaceKey}, opts.headers || {});
@@ -436,8 +570,13 @@
           }
         }
         if(r.status === 401){
-          if(!STYLED_SKIP_AUTH && !currentUserLocalProfile) hideApp();
-          throw new Error('unauthorized');
+          // Provider authentication and the local Mia session are independent.
+          // Only an authoritative session rejection may remove the workspace.
+          if(requestAuthGeneration!==authGeneration || STYLED_SKIP_AUTH || currentUserLocalProfile) throw new Error('unauthorized');
+          if(path === '/api/me'){hideApp();throw new Error('unauthorized');}
+          return fetch('/api/me',{credentials:'include',signal:AbortSignal.timeout(5000),headers:{'Accept':'application/json','X-MiaOS-Workspace':activeWorkspaceKey}})
+            .then(function(session){if(requestAuthGeneration===authGeneration && session.status === 401)hideApp();},function(){/* A connection failure is not a sign-out. */})
+            .then(function(){throw new Error('unauthorized');});
         }
         return {status: r.status, data: data, raw: raw};
       });
@@ -523,6 +662,18 @@
   }
 
   function showClerkSignIn(){
+    var nativeAuth=AUTH_CONFIG && desktopClerkAuth();
+    if(!nativeAuth)return showResolvedClerkSignIn();
+    // Keep the credential wall covered until the saved native session has
+    // resolved. Workspace/provider reloads are not interactive sign-ins.
+    setAppLoading(true);
+    return nativeAuth.status().then(window.MiaClerkDesktop.unwrap).then(function(state){
+      if(state && state.status==='active')return finishClerkLogin().then(function(restored){if(!restored)return showResolvedClerkSignIn();});
+      return showResolvedClerkSignIn();
+    },function(){return showResolvedClerkSignIn();});
+  }
+  function showResolvedClerkSignIn(){
+    endWorkspaceHandoff();
     if(!AUTH_CONFIG) return hideApp();
     var form = el('#loginForm');
     var mount = el('#clerkSignIn');
@@ -597,13 +748,19 @@
 
   function syncAdminMenuItem(){
     var adminItem = el('#chatAcctAdmin');
-    if(adminItem) adminItem.hidden = !isAdmin || activeWorkspaceKey === 'solo';
+    // In a shared team the Hub role decides, not the local Mia account.
+    var allowed = hubWorkspace() ? !!(hubChat.membership && hubChat.membership.role === 'admin') : isAdmin && activeWorkspaceKey !== 'solo';
+    if(adminItem) adminItem.hidden = !allowed;
   }
 
   function showApp(email, accountEmail){
-    setAppLoading(true);
+    authGeneration++;
+    // A workspace switch keeps showing the shell; live data fills in.
+    setAppLoading(!workspaceHandoff);
+    endWorkspaceHandoff();
     currentUser = email;
     currentAccountEmail = accountEmail || email;
+    restoreChatTextDrafts();
     refreshAppName();
     loadChatPinned();
     loadChatAttention();
@@ -721,6 +878,8 @@
   });
 
   function hideApp(){
+    authGeneration++;
+    endWorkspaceHandoff();
     currentUser = null;
     currentAccountEmail = null;
     currentUserLocalProfile = false;
@@ -744,6 +903,8 @@
     signalDesktopReady();
   }
 
+  renderWorkspaceSwitcher();
+  showSidebarPlaceholder();
   loadInstanceConfig().then(function(){
     if(STYLED_SKIP_AUTH){
     // Let the rest of this IIFE finish declaring the app state before the
@@ -767,7 +928,9 @@
     } else {
       // Refresh the native Clerk session before trusting a persisted local
       // app cookie. Client JWTs stay in the main process/OS credential store.
-      if(AUTH_CONFIG && desktopClerkAuth()) return showClerkSignIn();
+      // A workspace switch was signed in a moment ago, so its local session
+      // is reused; a rejected session still falls back to sign-in.
+      if(AUTH_CONFIG && desktopClerkAuth() && !workspaceHandoff) return showClerkSignIn();
       api('/api/me').then(function(res){
         if(res.status === 200 && res.data && res.data.email){
           currentUserLocalProfile = res.data.localProfile === true;
@@ -775,7 +938,8 @@
           isAdmin = !!res.data.isAdmin;
           showApp(res.data.email, res.data.accountEmail);
         }
-        else { hideApp(); }
+        else if(AUTH_CONFIG && desktopClerkAuth()) showClerkSignIn();
+        else hideApp();
       }).catch(function(error){ console.error('Mia startup failed', error); showClerkSignIn(); });
     }
   });
@@ -1536,6 +1700,7 @@
       }
       currentUserLocalProfile = res.data.localProfile === true;
       mergeUserProfile(res.data.email, {displayName: res.data.displayName, initials: res.data.initials});
+      sendHubDisplayName(cachedHubTeams());
       nameInput.value = res.data.displayName || '';
       initialsInput.value = res.data.initials || '';
       el('#avatarBtn').innerHTML = humanAvatarInitialsHtml(currentUser);
@@ -1682,7 +1847,7 @@
         ? 'Preparing sign-in…'
         : (auth.state === 'waiting'
           ? (auth.provider === 'claude-subscription-directsdk-experimental'
-            ? 'Finish in the sign-in window. Mia will connect automatically.'
+            ? 'Finish signing in to Claude in your browser, then paste the code it shows here.'
             : 'Finish in the sign-in window and enter the code shown below.')
           : (auth.state === 'completing'
             ? 'Verifying sign-in…'
@@ -1700,7 +1865,7 @@
       if(code) code.textContent = auth.userCode || '';
     }
     var claudeWaiting = auth.provider === 'claude-subscription-directsdk-experimental' && ['waiting', 'completing'].indexOf(auth.state) !== -1;
-    if(completion) completion.hidden = !claudeWaiting;
+    if(completion){ completion.hidden = !claudeWaiting; if(claudeWaiting) completion.open = true; }
     if(completionInput){
       completionInput.disabled = auth.state === 'completing';
       if(!claudeWaiting) completionInput.value = '';
@@ -2705,7 +2870,7 @@
   }
   function agentAvatarHtml(name, agentId, size, markMode, colorOverride, profileInteractive){
     if(isMiaOrchestrator(name, agentId)){
-      var miaMode = markMode === 'sidebar' ? 'sidebar' : markMode === 'activity' ? 'activity' : 'static';
+      var miaMode = markMode === 'activity' ? 'activity' : 'static';
       return miaAvatarHtml(size || 28, 'mia-avatar-mark--' + miaMode, miaMode);
     }
     var variant = moteVariantFor(name);
@@ -4471,6 +4636,1053 @@
   var localChatTyping = {roomId: null, active: false, timer: null};
   var chatSearchDirectory = {humans: [], agents: [], loaded: false, loading: false, request: null};
 
+  // Hub rooms use the same timeline and composer but a separate authenticated
+  // transport. Never feed a Hub room into the local agent/conversation APIs.
+  var hubChat = {channels:[], error:'', busy:false, teamsAt:0, teamsPromise:null, feed:null, feedStatus:'connecting', typing:[], membership:null, typingSentAt:0, readRequests:{}};
+  function hubPath(){ return '/v1/teams/' + activeWorkspaceKey.slice(4); }
+  function hubCall(method, path, body){
+    if(!window.MiaHubChat) return Promise.reject(new Error('Hub chat is not loaded. Restart Mia.'));
+    return window.MiaHubChat.call(method, path, body);
+  }
+  function hubChannel(roomId){ return hubChat.channels.filter(function(channel){return channel.id===roomId;})[0] || null; }
+  function hubSequence(messageId){ var match=/^hub-sequence-([1-9][0-9]{0,14})$/.exec(String(messageId||'')); return match ? Number(match[1]) : null; }
+  // The Hub stamps rows with the Clerk member, not the local Mia identity in
+  // currentUser, so match the member id first and the account email second.
+  function hubOwnMessage(m){
+    if(!m || !m.hubMessage || m.system) return false;
+    if(m.hubLocal) return true;
+    var subject=hubChat.membership && hubChat.membership.clerk_user_id;
+    if(subject && m.hubAuthorId) return m.hubAuthorId===subject;
+    var author=String(m.hubAuthor||'').toLowerCase();
+    return !!author && (author===String(currentAccountEmail||'').toLowerCase() || author===String(currentUser||'').toLowerCase());
+  }
+  function insertHubMention(name){
+    var input=el('#ccInput');if(!input)return;
+    input.value+=(input.value && !/\s$/.test(input.value)?' ':'')+'@'+name+' ';
+    input.focus();input.dispatchEvent(new Event('input',{bubbles:true}));
+  }
+  function openHubBotPicker(event){
+    if(event && event.stopPropagation)event.stopPropagation();
+    var input=el('#ccInput');if(!input)return;
+    input.value+=(input.value && !/\s$/.test(input.value)?' ':'')+'@';
+    input.focus();input.setSelectionRange(input.value.length,input.value.length);
+    openMentionPopover(mentionTriggerAt(input));
+  }
+  // The requester's own Mia runs their bot requests right away, on their own
+  // computer and subscription, exactly as Solo does. `immediate` skips the
+  // background throttle; a request arriving mid-poll runs once more after it.
+  function pollHubBots(roomId,immediate){
+    if(!hubWorkspace() || !roomId || chatWs.configured===false)return Promise.resolve();
+    var state=chatRoomState(roomId),workspace=activeWorkspaceKey;
+    if(state.hubExecutionRequest){ if(immediate) state.hubExecutionAgain=true; return state.hubExecutionRequest; }
+    if(!immediate && Date.now()-Number(state.hubExecutionAt||0)<15000)return Promise.resolve();
+    state.hubExecutionAt=Date.now();
+    var selection=chatModelSelectionMetadata();
+    state.hubExecutionRequest=window.MiaHubChat.localCall('POST','/poll',Object.assign({teamId:workspace.slice(4),channelId:roomId},selection?{modelSelection:selection}:{}))
+      .then(function(result){state.hubPendingRuns=result.pending||[];if(chatWs.activeRoomId===roomId)renderChatHeaderBar();})
+      .catch(function(){/* Own requests authorize local execution; handoffs await local acceptance. */})
+      .finally(function(){
+        state.hubExecutionRequest=null;
+        if(state.hubExecutionAgain && workspace===activeWorkspaceKey){state.hubExecutionAgain=false;pollHubBots(roomId,true);}
+      });
+    return state.hubExecutionRequest;
+  }
+  function refreshHubBotState(roomId,force){
+    if(!hubWorkspace() || !roomId || chatWs.configured===false)return Promise.resolve();
+    var state=chatRoomState(roomId),workspace=activeWorkspaceKey,generation=chatWs.navigationGeneration;
+    if(state.hubBotRequest)return state.hubBotRequest;
+    if(!force && Date.now()-Number(state.hubBotsAt||0)<4000)return Promise.resolve();
+    state.hubBotsAt=Date.now();
+    var refreshDirectory=force || !state.hubDirectoryAt || Date.now()-state.hubDirectoryAt>=60000;
+    state.hubBotRequest=Promise.all([
+      hubCall('GET',hubPath()+'/channels/'+roomId+'/bots'),
+      // The channel's own members; a Hub without per-channel membership
+      // answers 404 here, and then every team member is in every channel.
+      refreshDirectory ? hubCall('GET',hubPath()+'/channels/'+roomId+'/members').catch(function(error){
+        if(error && error.status===404)return hubCall('GET',hubPath()+'/members');throw error;
+      }) : Promise.resolve({members:state.hubMembers||[]}),
+      refreshDirectory ? window.MiaHubChat.localCall('GET','/available').catch(function(){return {bots:[]};}) : Promise.resolve({bots:state.hubAvailableBots||[]})
+    ]).then(function(results){
+      if(workspace!==activeWorkspaceKey || roomId!==chatWs.activeRoomId || generation!==chatWs.navigationGeneration || chatWs.configured===false)return;
+      var previousAdmissions=JSON.stringify((state.hubBots||[]).map(function(b){return b.admission;}));
+      state.hubBots=results[0].bots||[];
+      if(refreshDirectory){state.hubMembers=results[1].members||[];state.hubAvailableBots=results[2].bots||[];state.hubDirectoryAt=Date.now();}
+      var names={};state.hubBots.forEach(function(bot){names[bot.name.toLowerCase()]=true;});
+      state.mentionRoster={humans:(results[1].members||[]).map(function(member){return {email:member.email,inChat:true};}),
+        agents:state.hubBots.filter(function(bot){return !!bot.published;}).map(function(bot){return {id:bot.id,name:bot.name,principalType:'bot',inChat:true};}),
+        privateAgents:[],notInChatAgents:(results[2].bots||[]).filter(function(bot){return !names[bot.name.toLowerCase()];}),loading:false};
+      renderChatHeaderBar();if(previousAdmissions!==JSON.stringify(state.hubBots.map(function(b){return b.admission;})))renderChatThread();if(chatMention.open)renderMentionPopover();
+      if(chatInfo.open && chatInfo.mode==='agents')renderChatInfoPane();
+    }).catch(function(){/* Human transport reports its own access/connectivity state. */}).finally(function(){state.hubBotRequest=null;});
+    return state.hubBotRequest;
+  }
+  function stopHubFeed(){ if(hubChat.feed){hubChat.feed.stop();hubChat.feed=null;} }
+  function hubFeedback(error){
+    hubChat.error = error && error.message || '';
+    if(error && (error.status === 403 || error.status === 404)){
+      // Revocation invalidates cached content and its history cursor.
+      // A later invitation must rebuild history from the authorized beginning.
+      chatWs.navigationGeneration=Number(chatWs.navigationGeneration||0)+1;
+      stopHubFeed();
+      Object.keys(chatWs.byRoom).forEach(function(key){
+        var state=chatWs.byRoom[key];
+        state.messages=[];state.lastSequence=0;state.lastTs=0;
+        state.hubBots=[];state.mentionRoster=null;state.hubBotsAt=0;
+        state.hubDirectoryAt=0;state.hubMembers=[];state.hubAvailableBots=[];
+        state.historyInitialized=false;state.historyComplete=false;state.historyCursor=null;
+      });
+      chatWs.configured=false;
+      // A refusal can also mean you were removed from the team; /v1/me says which.
+      if(hubWorkspace()) loadHubTeams(true);
+    }
+    renderChatSidebar();
+    if(hubWorkspace()) refreshChatMain();
+  }
+  function loadHubTeams(force){
+    if(hubChat.teamsPromise) return hubChat.teamsPromise;
+    if(!force && Date.now()-hubChat.teamsAt<60000) return Promise.resolve();
+    hubChat.teamsAt=Date.now();
+    hubChat.teamsPromise=hubCall('GET','/v1/me').then(function(result){
+      (result.teams||[]).forEach(function(team){
+        if('hub_'+team.teamId===activeWorkspaceKey) hubChat.membership=team.membership || null;
+      });
+      syncAdminMenuItem();
+      // A team you're invited to shows too, dimmed, as in Slack: opening it
+      // joins it. Only joined teams are remembered for the next launch.
+      var teams=(result.teams||[]).filter(function(team){return (team.membership || team.invite) && /^[a-f0-9]{32}$/.test(team.teamId);})
+        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Shared team'),invited:!team.membership};});
+      noteHubRemovals(teams);
+      sendHubDisplayName(teams.filter(function(team){return !team.invited;}));
+      try { localStorage.setItem(HUB_TEAMS_STORAGE_KEY, JSON.stringify(teams.filter(function(team){return !team.invited;}))); } catch(_hubTeamsStorageError) {}
+      renderHubTeamOptions(teams);
+    }).catch(function(error){ hubChat.teamsAt=0; if(hubWorkspace()) hubFeedback(error); }).finally(function(){hubChat.teamsPromise=null;});
+    return hubChat.teamsPromise;
+  }
+  function renderHubTeamOptions(teams){
+    var rail=el('#workspaceSwitcherMenu'), add=el('#workspaceRailAdd');
+    if(!rail) return;
+    els('[data-hub-team]',rail).forEach(function(node){node.remove();});
+    teams.forEach(function(team){
+      var key='hub_'+team.teamId;
+      WORKSPACE_OPTIONS[key]={mode:'multiplayer',label:team.name};
+      var button=document.createElement('button');
+      var label=team.invited ? team.name+' · invited, open to join' : team.name;
+      button.type='button'; button.className='workspace-rail-tile'+(team.invited ? ' invited' : '');
+      button.setAttribute('data-hub-team',team.teamId); button.setAttribute('data-workspace-key',key); button.setAttribute('aria-label',label);
+      button.innerHTML='<span class="workspace-rail-mark" aria-hidden="true">'+esc(workspaceCode(team.name))+'</span><strong class="workspace-rail-name">'+esc(label)+'</strong>';
+      button.addEventListener('click',function(){
+        if(!team.invited){ if(key!==activeWorkspaceKey) switchWorkspace(key); return; }
+        if(button.disabled) return;
+        button.disabled=true;
+        hubCall('POST','/v1/invites/'+team.teamId+'/accept',{})
+          .then(function(){ return loadHubTeams(true); })
+          // A team still on screen from before you were removed has its live
+          // updates switched off, and switching to it is a no-op, so reload.
+          .then(function(){ if(key===activeWorkspaceKey){ location.reload(); return; } switchWorkspace(key); })
+          .catch(function(error){ showBenchToast(hubActionError(error,'Couldn\'t join '+team.name+'. Try again.')); loadHubTeams(true); })
+          .finally(function(){ button.disabled=false; });
+      });
+      rail.insertBefore(button,add);
+    });
+    renderWorkspaceSwitcher();
+  }
+  // Your Settings display name is how teammates see you, so each team you
+  // are in gets it. Sent once per team per name; a failed send retries on the
+  // next launch.
+  var HUB_NAME_STORAGE_KEY = 'miaHubDisplayNameSent', hubNameTried = {};
+  function sendHubDisplayName(teams){
+    var name = currentRealProfileName();
+    if(!name) return;
+    var sent = {};
+    try { sent = JSON.parse(localStorage.getItem(HUB_NAME_STORAGE_KEY) || '{}') || {}; } catch(_hubNameStorageError) {}
+    teams.forEach(function(team){
+      var tried = team.teamId + '\n' + name;
+      if(sent[team.teamId] === name || hubNameTried[tried]) return;
+      hubNameTried[tried] = true;
+      hubCall('PATCH', '/v1/teams/' + team.teamId + '/members/me', {display_name: name}).then(function(){
+        try {
+          var latest = JSON.parse(localStorage.getItem(HUB_NAME_STORAGE_KEY) || '{}') || {};
+          latest[team.teamId] = name;
+          localStorage.setItem(HUB_NAME_STORAGE_KEY, JSON.stringify(latest));
+        } catch(_hubNameStorageError) {}
+      }).catch(function(){});
+    });
+  }
+  // Removed from a team: it locks (if open) behind a notice you must
+  // acknowledge, then leaves the rail. Pending notices survive a restart, and
+  // a team removed while Mia was closed is noticed on the next team check.
+  var HUB_REMOVED_STORAGE_KEY = 'miaHubTeamsRemoved';
+  function pendingHubRemovals(){
+    try {
+      var teams = JSON.parse(localStorage.getItem(HUB_REMOVED_STORAGE_KEY) || '[]');
+      return Array.isArray(teams) ? teams.filter(function(team){ return team && /^[a-f0-9]{32}$/.test(team.teamId) && typeof team.name === 'string'; }) : [];
+    } catch(_hubRemovedStorageError) { return []; }
+  }
+  function savePendingHubRemovals(teams){
+    try { localStorage.setItem(HUB_REMOVED_STORAGE_KEY, JSON.stringify(teams)); } catch(_hubRemovedStorageError) {}
+  }
+  function noteHubRemovals(teams){
+    var member={};
+    teams.forEach(function(team){ if(!team.invited) member[team.teamId]=true; });
+    var before=cachedHubTeams();
+    var active=/^hub_([a-f0-9]{32})$/.exec(activeWorkspaceKey);
+    if(active && !before.some(function(team){return team.teamId===active[1];}))
+      before.push({teamId:active[1],name:(WORKSPACE_OPTIONS[activeWorkspaceKey]||{}).label||'Shared team'});
+    var pending=pendingHubRemovals();
+    before.forEach(function(team){
+      if(member[team.teamId] || pending.some(function(item){return item.teamId===team.teamId;}))return;
+      pending.push({teamId:team.teamId,name:team.name});
+    });
+    // Rejoined before acknowledging: nothing to tell.
+    pending=pending.filter(function(team){return !member[team.teamId];});
+    savePendingHubRemovals(pending);
+    showHubRemovalNotice();
+  }
+  function showHubRemovalNotice(){
+    var team=pendingHubRemovals()[0];
+    if(!team || el('.hub-removed-overlay'))return;
+    var key='hub_'+team.teamId, open=key===activeWorkspaceKey;
+    if(open){ stopHubFeed(); stopChatPolling(); }
+    // The native browser view sits above HTML; close it so the notice shows.
+    closeLocalBrowser();
+    var overlay=document.createElement('div');
+    overlay.className='hub-removed-overlay'+(open?' locked':'');
+    overlay.innerHTML='<div class="app-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="hubRemovedTitle" aria-describedby="hubRemovedText">'
+      +'<div class="hub-removed-title" id="hubRemovedTitle">Your access to '+esc(team.name)+' has ended</div>'
+      +'<div class="app-confirm-msg" id="hubRemovedText">You were removed from this workspace by a team admin. Your existing chats, bots, and pages remain with the team.</div>'
+      +'<div class="app-confirm-actions"><button type="button" class="styled-btn-primary">Back to Mia</button></div></div>';
+    document.body.appendChild(overlay);
+    var button=el('button',overlay);
+    button.addEventListener('click',function(){
+      savePendingHubRemovals(pendingHubRemovals().filter(function(item){return item.teamId!==team.teamId;}));
+      delete WORKSPACE_OPTIONS[key];
+      if(open)return activateWorkspace('solo',{reload:true});
+      overlay.remove();
+      renderWorkspaceSwitcher();
+      showHubRemovalNotice();
+    });
+    button.focus();
+  }
+  // Leaving a team yourself (Settings > Teams) drops it quietly, with no notice.
+  window.addEventListener('mia-hub-team-left', function(event){
+    var teamId=String((event.detail||{}).teamId||''), key='hub_'+teamId;
+    try { localStorage.setItem(HUB_TEAMS_STORAGE_KEY, JSON.stringify(cachedHubTeams().filter(function(team){return team.teamId!==teamId;}))); } catch(_hubTeamsStorageError) {}
+    delete WORKSPACE_OPTIONS[key];
+    if(key===activeWorkspaceKey)return activateWorkspace('solo',{reload:true});
+    renderWorkspaceSwitcher();
+  });
+  renderHubTeamOptions(cachedHubTeams());
+  // After startup: the notice closes the browser, whose state is set up later.
+  setTimeout(showHubRemovalNotice, 0);
+  // A new invite shows up when Mia opens and whenever you come back to it.
+  setTimeout(function(){ loadHubTeams(true); }, 1500);
+  window.addEventListener('focus', function(){ loadHubTeams(false); });
+  // Direct messages (two people) and groups (invite-only, 3 to 25 people)
+  // are private conversations listed under Direct messages. A DM's stored
+  // name is an internal key, so it is always shown as the other person's
+  // name; a group without its own name shows its members' names.
+  function hubPrivateConversation(channel){ return !!channel && (channel.kind==='dm' || channel.kind==='group'); }
+  // Teammates' emails are remembered per team, from the member list and from
+  // their messages, so a conversation keeps their name after they leave.
+  var HUB_PEOPLE_STORAGE_KEY = 'miaHubPeople';
+  function hubKnownPeople(){
+    try {
+      var all=JSON.parse(localStorage.getItem(HUB_PEOPLE_STORAGE_KEY) || '{}');
+      var people=all && all[activeWorkspaceKey];
+      return people && typeof people==='object' ? people : {};
+    } catch(_hubPeopleStorageError) { return {}; }
+  }
+  function hubRememberPeople(pairs){
+    var people=hubKnownPeople(), changed=false;
+    pairs.forEach(function(pair){
+      if(pair && pair.id && typeof pair.email==='string' && pair.email && people[pair.id]!==pair.email){ people[pair.id]=pair.email; changed=true; }
+    });
+    if(!changed)return;
+    try {
+      var all=JSON.parse(localStorage.getItem(HUB_PEOPLE_STORAGE_KEY) || '{}');
+      if(!all || typeof all!=='object')all={};
+      all[activeWorkspaceKey]=people;
+      localStorage.setItem(HUB_PEOPLE_STORAGE_KEY, JSON.stringify(all));
+    } catch(_hubPeopleStorageError) {}
+  }
+  function hubMember(id){ return (hubChat.members||[]).filter(function(item){return item.clerk_user_id===id;})[0] || null; }
+  function hubPersonEmail(id){ var member=hubMember(id); return member ? member.email : hubKnownPeople()[id] || ''; }
+  // The Hub drops a removed person from the DM too, so who a DM is with is
+  // remembered ('dm:<channel>') for when they are gone.
+  function hubOtherMemberIds(channel){
+    var me=hubChat.membership && hubChat.membership.clerk_user_id;
+    var others=(channel && channel.member_ids || []).filter(function(id){return id!==me;});
+    if(channel && channel.kind==='dm' && !others.length && hubKnownPeople()['dm:'+channel.id])others=[hubKnownPeople()['dm:'+channel.id]];
+    return others;
+  }
+  function hubRememberDmPartners(channels){
+    var me=hubChat.membership && hubChat.membership.clerk_user_id;
+    hubRememberPeople(channels.filter(function(channel){return channel && channel.kind==='dm';}).map(function(channel){
+      return {id:'dm:'+channel.id,email:(channel.member_ids||[]).filter(function(id){return id!==me;})[0]};
+    }));
+  }
+  // A direct message with someone no longer in the team stays readable but
+  // can't be sent to. Only judged once the member list has loaded.
+  function hubDmWithFormerMember(channel){
+    if(!channel || channel.kind!=='dm' || !(hubChat.members||[]).length)return false;
+    var others=hubOtherMemberIds(channel);
+    return !others.length || !hubMember(others[0]);
+  }
+  function hubChannelTitle(channel){
+    if(!channel)return '';
+    if(!hubPrivateConversation(channel))return channel.name;
+    var names=hubOtherMemberIds(channel).map(function(id){
+      var email=hubPersonEmail(id);
+      return email ? displayNameForEmail(email) : '';
+    }).filter(Boolean);
+    if(channel.kind==='group')return channel.name && channel.name!=='Group' ? channel.name : names.join(', ') || 'Group';
+    return names[0] || 'Former teammate';
+  }
+  // Team rows use the same 40px mark column as solo rows: a # tile for a
+  // channel, the teammate's avatar for a direct message, initials for a group.
+  function hubChannelMark(channel){
+    if(!hubPrivateConversation(channel))return '<span class="chat-row-mark channel" aria-hidden="true">#</span>';
+    var others=hubOtherMemberIds(channel).map(hubPersonEmail).filter(Boolean);
+    if(channel.kind==='dm' && others.length===1)return '<span class="chat-row-mark tile human" aria-hidden="true">'+humanAvatarContent(others[0])+'</span>';
+    return '<span class="chat-row-mark tile human" aria-hidden="true">'+esc(benchMark(hubChannelTitle(channel)))+'</span>';
+  }
+  function hubChannelLabel(channel){ return !channel ? '' : hubPrivateConversation(channel) ? hubChannelTitle(channel) : '# '+channel.name; }
+  function hubRoom(channel){ var title=hubChannelTitle(channel); return {id:channel.id,roomId:channel.id,conversationId:channel.id,kind:'group',roomType:'group',name:title,roomName:title,members:[]}; }
+  function openHubChannel(channel){ if(channel)return loadChatRoom(channel.id,'group',hubChannelTitle(channel)); }
+  function refreshHubChannels(){
+    var workspace=activeWorkspaceKey;
+    return Promise.all([hubCall('GET',hubPath()+'/channels'),hubCall('GET',hubPath()+'/members').catch(function(){return {members:hubChat.members||[]};}),
+      hubCall('GET',hubPath()+'/channel-invites').catch(function(){return {invites:[]};})]).then(function(results){
+      if(workspace!==activeWorkspaceKey)return;
+      hubChat.channels=results[0].channels||[];
+      hubChat.members=results[1].members||[];
+      hubRememberPeople(hubChat.members.map(function(member){return {id:member.clerk_user_id,email:member.email};}));
+      hubChat.members.forEach(function(member){ mergeUserProfile(member.email, {displayName: member.display_name}); });
+      hubRememberDmPartners(hubChat.channels);
+      hubChat.invites=results[2].invites||[];
+      chatWs.rooms={home:null,departments:[],dms:hubChat.channels.map(hubRoom)};
+      chatWs.configured=true; chatWs.native=false;
+      // Leaving, archiving or losing access removes the open channel; move to
+      // the first remaining one instead of showing a channel you can't use.
+      // Local views such as the New Bot setup chat are not Hub channels.
+      if(chatWs.activeRoomId && chatWs.activeKind==='group' && !hubChannel(chatWs.activeRoomId)){
+        var next=hubChat.channels.filter(function(channel){return !hubPrivateConversation(channel);})[0] || hubChat.channels[0];
+        chatWs.activeRoomId=null;chatWs.activeKind=null;chatWs.activeLabel='';
+        if(next)openHubChannel(next);else refreshChatMain();
+      }
+      renderChatSidebar();
+    });
+  }
+  // The Admin Center's "+ New bot" leaves {teamId, channelId} for this team;
+  // it is read once and only for a channel this team still has.
+  var NEW_TEAM_BOT_KEY = 'miaNewTeamBot';
+  function takeNewTeamBotRequest(workspaceKey, channels, now){
+    var raw = null;
+    try { raw = sessionStorage.getItem(NEW_TEAM_BOT_KEY); sessionStorage.removeItem(NEW_TEAM_BOT_KEY); } catch(_newBotStorageError) { return null; }
+    var request = null;
+    try { request = JSON.parse(raw || 'null'); } catch(_newBotParseError) { return null; }
+    if(!request || 'hub_' + request.teamId !== workspaceKey || !(now - Number(request.at) < 10 * 60 * 1000)) return null;
+    var channel = (channels || []).filter(function(c){ return c.id === request.channelId && c.kind !== 'dm'; })[0];
+    return channel ? {teamId: request.teamId, channelId: channel.id, label: hubChannelTitle(channel)} : null;
+  }
+  function startTeamBotSetup(target){
+    startAgentSetupChat();
+    agentSetup.teamTarget = target;
+    showBenchToast('Describe the bot for ' + target.label + '. It joins the channel when you activate it.');
+  }
+  // The one way a bot joins a shared channel, whether it already existed or
+  // was just created: it is shared into the channel and, when you are a team
+  // admin, published right away. Anyone else's bot waits for an admin.
+  // -> Promise<true when published>
+  function shareBotToHubChannel(teamId, channelId, localBotId, mode){
+    return window.MiaHubChat.localCall('POST', '/share', {teamId: teamId, channelId: channelId, localBotId: String(localBotId), mode: mode}).then(function(result){
+      var version = result && result.proposal && result.proposal.version, bot = result && result.bot;
+      if(!(hubChat.membership && hubChat.membership.role === 'admin') || !version || !bot) return false;
+      return hubCall('POST', hubPath() + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ return true; });
+    });
+  }
+  function hubBotJoinedMessage(name, label, published){
+    return published ? name + ' joined ' + label + '. Mention @' + name + ' to use it.'
+      : name + ' was added to ' + label + '. A team admin must approve it in Bot versions & runs before it can reply.';
+  }
+  function addCreatedBotToTeam(created, conversation, target){
+    var name = String(created.name || 'Bot');
+    if(activeWorkspaceKey !== 'hub_' + target.teamId){ loadChatRoom(conversation.id, 'agent', created.name); return; }
+    return shareBotToHubChannel(target.teamId, target.channelId, created.id, 'linked').then(function(published){
+      var channel = hubChannel(target.channelId);
+      if(channel) openHubChannel(channel);
+      refreshHubBotState(target.channelId, true);
+      showBenchToast(hubBotJoinedMessage(name, target.label, published));
+    }).catch(function(error){
+      showBenchToast(name + ' was created, but it could not join ' + target.label + ': ' + (error && error.message || 'try Add bot in the channel.'));
+      loadChatRoom(conversation.id, 'agent', created.name);
+    });
+  }
+  function initHubChat(){
+    // Local startup callbacks may already have selected Mia. A Hub selection
+    // is valid only after this team's authoritative channel list is loaded.
+    // After a reload, reopen the channel this team last had open.
+    var previousRoomId=chatWs.activeRoomId || storedActiveChatLocation();
+    // Startup can run twice; a New Bot setup chat opened by the first run stays.
+    var keepSetup=chatWs.activeKind==='agent-setup';
+    chatWs.navigationGeneration=Number(chatWs.navigationGeneration||0)+1;
+    chatWs.activeRoomId=null;chatWs.activeKind=null;chatWs.activeLabel='';
+    chatWs.nativeConversations=[];
+    chatWs.native=false; chatWs.allAgents=[]; chatWs.humans=[];
+    return loadHubTeams(false).then(refreshHubChannels).then(function(){
+      hubChat.error='';hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
+      var room=hubChat.channels.filter(function(c){return c.id===previousRoomId;})[0] || hubChat.channels.filter(function(c){return !hubPrivateConversation(c);})[0] || hubChat.channels[0];
+      startChatPolling();
+      var newBot=takeNewTeamBotRequest(activeWorkspaceKey,hubChat.channels,Date.now());
+      if(newBot) return startTeamBotSetup(newBot);
+      if(keepSetup || chatWs.activeKind==='agent-setup'){
+        chatWs.activeRoomId=AGENT_SETUP_ROOM_ID;chatWs.activeKind='agent-setup';chatWs.activeLabel='New Bot';
+        renderChatSidebar();return refreshChatMain();
+      }
+      if(room) return openHubChannel(room);
+      refreshChatMain();
+    }).catch(retryHubChat);
+  }
+  // When the Hub can't be reached as a team opens, nothing is running yet
+  // to notice it come back (the feed starts after the first load), so
+  // opening is tried again: 5s, 10s, 20s... at most once a minute, and
+  // right away when the computer is back online.
+  function hubUnreachable(error){
+    return !!error && (!error.status || error.status>=500 || ['hub_unavailable','service_unavailable','lifecycle_unavailable'].indexOf(error.code)>=0);
+  }
+  function retryHubChat(error){
+    hubFeedback(error);
+    clearTimeout(hubChat.retryTimer);
+    if(!hubUnreachable(error) || !hubWorkspace())return;
+    var workspace=activeWorkspaceKey;
+    hubChat.retryWait=Math.min(60000,(hubChat.retryWait||2500)*2);
+    hubChat.retryTimer=setTimeout(function(){
+      hubChat.retryTimer=null;
+      if(workspace===activeWorkspaceKey && hubWorkspace())initHubChat();
+    },hubChat.retryWait);
+  }
+  window.addEventListener('online',function(){
+    if(!hubChat.retryTimer || !hubWorkspace())return;
+    clearTimeout(hubChat.retryTimer);hubChat.retryTimer=null;initHubChat();
+  });
+  function renderHubStatus(){
+    var footer=el('#chatSyncFooter');
+    if(!footer)return;
+    var typing=hubChat.typing.filter(function(entry){return entry.channel_id===chatWs.activeRoomId;}).map(function(entry){return displayNameForEmail(entry.email);});
+    var offline=hubChat.feedStatus==='offline';
+    footer.style.display='block';
+    footer.setAttribute('role','status');
+    footer.setAttribute('aria-live','polite');
+    footer.textContent=hubChat.error || (offline ? 'Reconnecting to the shared team…'
+      : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to shared team');
+    footer.classList.toggle('chat-sync-fail',offline || !!hubChat.error || chatWs.configured===false);
+  }
+  function hubRoomPreview(roomId){
+    var state=chatWs.byRoom[roomId];
+    var last=state && (state.messages||[]).filter(function(m){return !m.system && !m.threadRoot && (m.body || m.hubFile);}).slice(-1)[0];
+    if(!last) return '';
+    if(!last.body && last.hubFile) return 'Image';
+    var drive=googleDriveMessageDisplay(last.body);
+    if(!drive.text.trim() && drive.files.length) return 'Google Drive file';
+    return excerpt(markdownPreviewText(drive.text).replace(/\s+/g,' ').trim(),58);
+  }
+  function renderHubSidebar(){
+    var pinned=el('#chatPinned'), all=el('#chatAllConversations');
+    var pinnedChannels=hubChat.channels.filter(function(channel){return !!channel.pinned;});
+    var channels=hubChat.channels.filter(function(channel){return !channel.pinned && !hubPrivateConversation(channel);});
+    var dms=hubChat.channels.filter(function(channel){return !channel.pinned && hubPrivateConversation(channel);});
+    if(el('#chatAllCount'))el('#chatAllCount').textContent=String(hubChat.channels.length-pinnedChannels.length);
+    renderHubStatus();
+    function row(channel){
+      var button=document.createElement('button'); button.type='button';
+      var state=chatWs.byRoom[channel.id];
+      var live=hubChat.typing.some(function(entry){return entry.channel_id===channel.id;}) || !!(state && state.thinking);
+      var unread=channel.id!==chatWs.activeRoomId && Number(channel.unread||0)>0;
+      button.className='chat-recent-row hub-channel-row'+(chatWs.activeRoomId===channel.id?' active':'');
+      button.setAttribute('data-hub-channel-id',channel.id);
+      var preview=hubRoomPreview(channel.id);
+      var previewHtml=preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
+      button.innerHTML=hubChannelMark(channel)+'<span class="row-text"><span class="row-line1"><span class="row-label">'+esc(hubChannelTitle(channel))+'</span>'
+        +renderChatActivityIndicator(live,unread)
+        +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+hubChannelLabel(channel))+'" title="Options">&#8943;</span>'
+        +'</span><span class="row-preview'+(preview?'':' empty')+'">'+previewHtml+'</span></span>';
+      button.addEventListener('click',function(event){
+        var more=event.target.closest('.hub-channel-more');
+        if(more){event.stopPropagation();var box=more.getBoundingClientRect();openHubChannelMenu(channel,box.left,box.bottom+4);return;}
+        openHubChannel(channel);
+      });
+      button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();openHubChannelMenu(channel,event.clientX,event.clientY);});
+      return button;
+    }
+    // Each section has its own header: a chevron to fold it and a + for
+    // the one thing you add there.
+    function section(key,title,addLabel,onAdd){
+      var expanded=hubSidebarSections[key]!==false;
+      var wrap=document.createElement('div'); wrap.className='hub-sidebar-section'+(expanded?'':' is-collapsed'); wrap.setAttribute('data-hub-section',key);
+      var head=document.createElement('div'); head.className='chat-recents-head hub-section-head';
+      head.innerHTML='<button type="button" class="chat-section-toggle" aria-expanded="'+expanded+'" aria-label="'+esc((expanded?'Collapse ':'Expand ')+title)+'" title="'+esc((expanded?'Collapse ':'Expand ')+title)+'"><span class="chat-section-chevron" aria-hidden="true"></span></button>'
+        +'<span class="chat-recents-title">'+esc(title)+'</span>'
+        +'<button type="button" class="chat-dm-add-btn hub-section-add" title="'+esc(addLabel)+'" aria-label="'+esc(addLabel)+'">+</button>';
+      el('.chat-section-toggle',head).addEventListener('click',function(){
+        hubSidebarSections[key]=!expanded;
+        try { localStorage.setItem('miaHubSidebarSections',JSON.stringify(hubSidebarSections)); } catch(_sectionStorageError) {}
+        renderHubSidebar();
+      });
+      el('.hub-section-add',head).addEventListener('click',function(event){event.stopPropagation();onAdd(event.currentTarget);});
+      var list=document.createElement('div'); list.className='hub-section-rows';
+      wrap.appendChild(head); wrap.appendChild(list);
+      return {node:wrap,list:list};
+    }
+    if(pinned){
+      pinned.innerHTML='';
+      if(pinnedChannels.length)pinnedChannels.forEach(function(channel){pinned.appendChild(row(channel));});
+      else pinned.innerHTML='<div class="chat-sidebar-empty chat-pinned-empty">No pinned channels yet</div>';
+    }
+    if(!all)return;
+    all.innerHTML='';
+    (hubChat.invites||[]).forEach(function(invite){all.appendChild(hubInviteRow(invite));});
+    all.parentElement.classList.add('hub-sections');
+    var channelSection=section('channels','Channels','Add a channel',openHubChannelAddMenu);
+    channels.forEach(function(channel){channelSection.list.appendChild(row(channel));});
+    all.appendChild(channelSection.node);
+    var dmSection=section('dms','Direct messages','New direct message',openHubDirectMessagePicker);
+    dms.forEach(function(channel){dmSection.list.appendChild(row(channel));});
+    all.appendChild(dmSection.node);
+  }
+  var hubSidebarSections={};
+  try { hubSidebarSections=JSON.parse(localStorage.getItem('miaHubSidebarSections')||'{}')||{}; } catch(_sectionStorageError) {}
+  // The Channels + offers both ways in: start a channel, or find one.
+  function openHubChannelAddMenu(anchor){
+    openSidebarAddMenu(anchor,[['New channel',openNewChannelFlow],['Browse channels',openHubBrowseChannels]]);
+  }
+  // A section's + menu: each item is [label, run].
+  function openSidebarAddMenu(anchor,items){
+    closeHubChannelMenu();
+    var menu=document.createElement('div');
+    menu.className='chat-ctx-menu chat-sidebar-ctx-menu hub-channel-menu'; menu.setAttribute('role','menu');
+    menu.innerHTML=items.map(function(item,index){return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item" data-sidebar-add="'+index+'">'+esc(item[0])+'</button>';}).join('');
+    document.body.appendChild(menu); hubChannelMenu=menu;
+    var box=anchor.getBoundingClientRect();
+    menu.style.left=Math.max(8,Math.min(box.left,window.innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.top=Math.max(8,Math.min(box.bottom+4,window.innerHeight-menu.offsetHeight-8))+'px';
+    menu.addEventListener('click',function(event){
+      var button=event.target.closest('[data-sidebar-add]');
+      if(!button)return;
+      closeHubChannelMenu();
+      items[Number(button.getAttribute('data-sidebar-add'))][1]();
+    });
+    setTimeout(function(){
+      document.addEventListener('click',function dismiss(event){ if(hubChannelMenu && !hubChannelMenu.contains(event.target)){closeHubChannelMenu();} if(!hubChannelMenu)document.removeEventListener('click',dismiss); });
+    },0);
+  }
+  // A pending invitation to a private channel or group. Its messages stay
+  // hidden until you join; declining just removes it.
+  function hubInviteRow(invite){
+    var box=document.createElement('div'); box.className='hub-invite-row';
+    var inviter=(hubChat.members||[]).filter(function(member){return member.clerk_user_id===invite.invited_by;})[0];
+    var name=invite.kind==='group' ? (invite.name && invite.name!=='Group' ? invite.name : 'a group') : '#'+invite.name;
+    box.innerHTML='<span class="hub-invite-text">'+esc((inviter ? displayNameForEmail(inviter.email) : 'A teammate')+' invited you to '+name)+'</span>'
+      +'<span class="hub-invite-actions"><button type="button" class="btn hub-invite-join">Join</button><button type="button" class="btn hub-invite-decline">Decline</button></span>';
+    var base=hubPath()+'/channels/'+invite.channel_id;
+    el('.hub-invite-join',box).addEventListener('click',function(event){
+      event.currentTarget.disabled=true;
+      hubCall('POST',base+'/join').then(refreshHubChannels).then(function(){openHubChannel(hubChannel(invite.channel_id));})
+        .catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t join. Try again.'));renderChatSidebar();});
+    });
+    el('.hub-invite-decline',box).addEventListener('click',function(event){
+      event.currentTarget.disabled=true;
+      hubCall('DELETE',base+'/invites/me').then(refreshHubChannels).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t decline. Try again.'));renderChatSidebar();});
+    });
+    return box;
+  }
+  function hubActionError(error,fallback){
+    var code=error && error.code;
+    return {channel_name_taken:'Another channel already has that name.',cannot_leave_dm:'You can\'t leave a direct message.',
+      channel_archived:'This channel is archived.',invalid_channel:'Use a name of up to 80 characters.'}[code]
+      || (error && error.status===404 ? 'You don\'t have access to do that.' : fallback);
+  }
+  // Team channel actions follow the Hub's permissions: anyone can pin or
+  // leave a channel, admins and the creator can invite people and rename
+  // it, and only admins can archive it. Groups can be pinned, left and
+  // invited to; direct messages can only be pinned.
+  var hubChannelMenu=null;
+  function closeHubChannelMenu(){ if(hubChannelMenu){hubChannelMenu.remove();hubChannelMenu=null;} }
+  function hubChannelActions(channel){
+    var me=hubChat.membership || {}, admin=me.role==='admin', regular=!hubPrivateConversation(channel), manager=admin || channel.created_by===me.clerk_user_id;
+    var actions=[{id:'pin',label:channel.pinned?'Unpin':'Pin to top'}];
+    if(channel.kind!=='dm' && manager)actions.push({id:'invite',label:'Invite people…'});
+    if(regular && manager)actions.push({id:'rename',label:'Rename…'});
+    if(channel.kind!=='dm')actions.push({id:'leave',label:regular?'Leave channel':'Leave group'});
+    if(regular && admin)actions.push({id:'archive',label:'Archive channel…',danger:true});
+    return actions;
+  }
+  function openHubChannelMenu(channel,x,y){
+    closeHubChannelMenu();
+    var menu=document.createElement('div');
+    menu.className='chat-ctx-menu chat-sidebar-ctx-menu hub-channel-menu'; menu.setAttribute('role','menu');
+    menu.innerHTML=hubChannelActions(channel).map(function(item){
+      return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item'+(item.danger?' chat-sidebar-ctx-item-danger':'')+'" data-hub-channel-action="'+item.id+'">'+esc(item.label)+'</button>';
+    }).join('');
+    document.body.appendChild(menu); hubChannelMenu=menu;
+    menu.style.left=Math.max(8,Math.min(x,window.innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.top=Math.max(8,Math.min(y,window.innerHeight-menu.offsetHeight-8))+'px';
+    menu.addEventListener('click',function(event){
+      var button=event.target.closest('[data-hub-channel-action]');
+      if(!button)return;
+      closeHubChannelMenu(); runHubChannelAction(channel,button.getAttribute('data-hub-channel-action'));
+    });
+    document.addEventListener('scroll',closeHubChannelMenu,{capture:true,once:true});
+    setTimeout(function(){
+      document.addEventListener('click',function dismiss(event){ if(hubChannelMenu && !hubChannelMenu.contains(event.target)){closeHubChannelMenu();} if(!hubChannelMenu)document.removeEventListener('click',dismiss); });
+    },0);
+  }
+  function runHubChannelAction(channel,id){
+    var base=hubPath()+'/channels/'+channel.id, name=hubPrivateConversation(channel) ? hubChannelTitle(channel) : '#'+channel.name;
+    if(id==='invite')return openHubInvitePeople(channel);
+    if(id==='pin'){
+      var pinned=!channel.pinned; channel.pinned=pinned; renderChatSidebar();
+      return hubCall(pinned?'PUT':'DELETE',base+'/pin').catch(function(error){
+        channel.pinned=!pinned; renderChatSidebar(); showBenchToast(hubActionError(error,'Couldn\'t update the pin. Try again.'));
+      });
+    }
+    if(id==='rename')return appPrompt(channel.name,{title:'Rename '+name,message:'Everyone in the team sees the new name.',inputLabel:'Channel name',submitLabel:'Rename',singleLine:true}).then(function(result){
+      var value=result.ok ? result.text.replace(/\s+/g,' ').trim() : '';
+      if(!value || value===channel.name)return;
+      return hubCall('PATCH',base,{name:value}).then(refreshHubChannels).then(function(){
+        if(chatWs.activeRoomId===channel.id)openHubChannel(hubChannel(channel.id));
+      }).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t rename the channel. Try again.'));});
+    });
+    if(id==='leave')return appConfirm('Leave '+name+'? It leaves your list and stops alerting you. '+(channel.kind==='channel' && channel.visibility!=='private' ? 'You can rejoin from Browse channels.' : 'You\'ll need a new invitation to come back.'),'Leave').then(function(ok){
+      if(ok)return hubCall('POST',base+'/leave').then(refreshHubChannels).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t leave the channel. Try again.'));});
+    });
+    if(id==='archive')return appConfirm('Archive '+name+' for everyone? It leaves everyone\'s list and its bots stop running there. Its history is kept, and an admin can restore it from Browse channels.','Archive').then(function(ok){
+      if(ok)return hubCall('POST',base+'/archive').then(refreshHubChannels).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t archive the channel. Try again.'));});
+    });
+  }
+  // A small searchable list dialog for Browse channels and the direct
+  // message picker. Each row has one action; rows reload after it runs.
+  function openHubListDialog(options){
+    var overlay=document.createElement('div'); overlay.className='app-prompt-overlay open hub-list-overlay'; overlay.setAttribute('role','presentation');
+    overlay.innerHTML='<div class="app-prompt-card hub-list-card" role="dialog" aria-modal="true" aria-label="'+esc(options.title)+'">'
+      +'<h2 class="app-prompt-title">'+esc(options.title)+'</h2><p class="app-prompt-msg">'+esc(options.message)+'</p>'
+      +'<input type="text" class="hub-list-filter" autocomplete="off" placeholder="'+esc(options.placeholder)+'" aria-label="'+esc(options.placeholder)+'">'
+      +'<div class="hub-list-rows" role="list"><div class="hub-list-empty">Loading…</div></div>'
+      +'<div class="app-prompt-actions"><button type="button" class="btn hub-list-close">Close</button>'
+      +(options.primary?'<button type="button" class="btn app-prompt-submit hub-list-primary"></button>':'')+'</div></div>';
+    document.body.appendChild(overlay);
+    var filter=el('.hub-list-filter',overlay), list=el('.hub-list-rows',overlay), primary=el('.hub-list-primary',overlay), rows=[], primaryBusy=false;
+    // An optional footer action (for example "Start group") reads its label
+    // and enabled state from the caller after every change.
+    function renderPrimary(){
+      if(!primary)return;
+      var state=options.primary();
+      primary.textContent=state.label;
+      primary.disabled=primaryBusy || !!state.disabled;
+    }
+    function close(){ document.removeEventListener('keydown',onKey); overlay.remove(); }
+    function onKey(event){ if(event.key==='Escape'){event.preventDefault();close();} }
+    function render(){
+      var q=filter.value.trim().toLowerCase();
+      var visible=rows.filter(function(item){return !q || (item.label+' '+(item.detail||'')).toLowerCase().indexOf(q)>=0;});
+      list.innerHTML=visible.length ? visible.map(function(item,index){
+        return '<div class="hub-list-row" role="listitem"><span class="hub-list-copy"><span class="hub-list-label">'+esc(item.label)+'</span>'
+          +(item.detail?'<span class="hub-list-detail">'+esc(item.detail)+'</span>':'')+'</span>'
+          +(item.actionLabel?'<button type="button" class="btn hub-list-action" data-hub-list-row="'+rows.indexOf(item)+'">'+esc(item.actionLabel)+'</button>':'')+'</div>';
+      }).join('') : '<div class="hub-list-empty">'+esc(rows.length ? 'No matches' : options.empty)+'</div>';
+      renderPrimary();
+    }
+    function load(){
+      return Promise.resolve(options.load()).then(function(result){rows=result||[];render();})
+        .catch(function(error){list.innerHTML='<div class="hub-list-empty">'+esc(hubActionError(error,'Couldn\'t load this list. Try again.'))+'</div>';});
+    }
+    list.addEventListener('click',function(event){
+      var button=event.target.closest('[data-hub-list-row]');
+      if(!button)return;
+      var item=rows[Number(button.getAttribute('data-hub-list-row'))];
+      button.disabled=true;
+      Promise.resolve(item.run()).then(function(outcome){ if(outcome==='close')close(); else return load(); })
+        .catch(function(error){button.disabled=false;showBenchToast(hubActionError(error,'That didn\'t work. Try again.'));});
+    });
+    filter.addEventListener('input',render);
+    if(primary)primary.addEventListener('click',function(){
+      primaryBusy=true;renderPrimary();
+      Promise.resolve(options.primary().run()).then(function(outcome){ if(outcome==='close')close(); })
+        .catch(function(error){showBenchToast(hubActionError(error,'That didn\'t work. Try again.'));})
+        .finally(function(){primaryBusy=false;renderPrimary();});
+    });
+    el('.hub-list-close',overlay).addEventListener('click',close);
+    overlay.addEventListener('click',function(event){if(event.target===overlay)close();});
+    document.addEventListener('keydown',onKey);
+    renderPrimary(); filter.focus(); load();
+  }
+  function openHubBrowseChannels(){
+    var admin=(hubChat.membership||{}).role==='admin';
+    openHubListDialog({title:'Browse channels',message:'Every channel in '+workspaceLabel()+'. Join one to see its messages.',
+      placeholder:'Search channels',empty:'No channels yet.',load:function(){
+        return hubCall('GET',hubPath()+'/channels/browse').then(function(result){
+          return (result.channels||[]).map(function(channel){
+            var count=(channel.visibility==='private'?'Private · ':'')+Number(channel.member_count||0)+(Number(channel.member_count)===1?' member':' members');
+            if(channel.archived_at)return {label:'# '+channel.name,detail:'Archived · '+count,actionLabel:admin?'Restore':'',run:function(){
+              return hubCall('POST',hubPath()+'/channels/'+channel.id+'/restore').then(refreshHubChannels);
+            }};
+            if(channel.joined)return {label:'# '+channel.name,detail:count+' · joined',actionLabel:'Open',run:function(){openHubChannel(hubChannel(channel.id));return 'close';}};
+            return {label:'# '+channel.name,detail:count,actionLabel:'Join',run:function(){
+              return hubCall('POST',hubPath()+'/channels/'+channel.id+'/join').then(refreshHubChannels).then(function(){openHubChannel(hubChannel(channel.id));return 'close';});
+            }};
+          });
+        });
+      }});
+  }
+  // Inviting adds a pending invitation; the person sees the channel and its
+  // history only after they join.
+  function openHubInvitePeople(channel){
+    var invited={};
+    openHubListDialog({title:'Invite people to '+(hubPrivateConversation(channel) ? hubChannelTitle(channel) : '#'+channel.name),message:'They\'ll see an invitation in their sidebar and can join or decline.',
+      placeholder:'Type a teammate\'s name',empty:'Everyone in the team is already here.',load:function(){
+        return hubCall('GET',hubPath()+'/members').then(function(result){
+          hubChat.members=result.members||[];
+          var present=(hubChannel(channel.id)||channel).member_ids||[];
+          return hubChat.members.filter(function(member){return present.indexOf(member.clerk_user_id)<0;}).map(function(member){
+            return {label:displayNameForEmail(member.email),detail:member.email+(invited[member.clerk_user_id]?' · Invited':''),actionLabel:invited[member.clerk_user_id]?'':'Invite',run:function(){
+              return hubCall('POST',hubPath()+'/channels/'+channel.id+'/invites',{member:member.clerk_user_id}).then(function(){invited[member.clerk_user_id]=true;});
+            }};
+          });
+        });
+      }});
+  }
+  function openHubDirectMessagePicker(){
+    var me=(hubChat.membership||{}).clerk_user_id;
+    openHubListDialog({title:'New direct message',message:'Only the two of you can see it. You can @mention your own bots there.',
+      placeholder:'Type a teammate\'s name',empty:'Invite a teammate first.',
+      primary:function(){return {label:'New group…',run:function(){openHubGroupPicker();return 'close';}};},load:function(){
+        return hubCall('GET',hubPath()+'/members').then(function(result){
+          hubChat.members=result.members||[];
+          return hubChat.members.filter(function(member){return member.clerk_user_id!==me;}).map(function(member){
+            return {label:displayNameForEmail(member.email),detail:member.email+' · '+(member.role==='admin'?'Admin':'Member'),actionLabel:'Message',run:function(){
+              return openHubDirectMessage(member).then(function(){return 'close';});
+            }};
+          });
+        });
+      }});
+  }
+  // Opens your DM with a teammate, starting it if there isn't one yet. The
+  // New direct message dialog and search both come here.
+  function openHubDirectMessage(member){
+    var existing=hubChat.channels.filter(function(channel){return channel.kind==='dm' && (channel.member_ids||[]).indexOf(member.clerk_user_id)>=0;})[0];
+    if(existing){openHubChannel(existing);return Promise.resolve();}
+    return hubCall('POST',hubPath()+'/dms',{id:window.MiaHubChat.id(),member:member.clerk_user_id}).then(function(result){
+      return refreshHubChannels().then(function(){openHubChannel(hubChannel(result.channel.id));});
+    });
+  }
+  // A group is a private conversation for three or more people. Everyone
+  // picked joins at once, so there is no invitation step.
+  function openHubGroupPicker(){
+    var me=(hubChat.membership||{}).clerk_user_id, picked=[], available=null;
+    openHubListDialog({title:'New group',message:'Pick two or more teammates. Only the group can see its messages.',
+      placeholder:'Type a teammate\'s name',empty:'Invite at least two teammates to the team first.',
+      primary:function(){
+        var label=available!==null && available<2 ? 'Needs 2+ teammates' : picked.length<2 ? 'Pick at least 2 people' : 'Start group ('+(picked.length+1)+' people)';
+        return {label:label,disabled:picked.length<2,run:function(){
+          return hubCall('POST',hubPath()+'/groups',{id:window.MiaHubChat.id(),member_ids:picked.slice()}).then(function(result){
+            return refreshHubChannels().then(function(){openHubChannel(hubChannel(result.channel.id) || result.channel);return 'close';});
+          });
+        }};
+      },load:function(){
+        return hubCall('GET',hubPath()+'/members').then(function(result){
+          hubChat.members=result.members||[];
+          var teammates=hubChat.members.filter(function(member){return member.clerk_user_id!==me;});
+          available=teammates.length;
+          return teammates.map(function(member){
+            var chosen=picked.indexOf(member.clerk_user_id)>=0;
+            return {label:displayNameForEmail(member.email),detail:member.email+(chosen?' · Added':''),actionLabel:chosen?'Remove':'Add',run:function(){
+              picked=chosen?picked.filter(function(id){return id!==member.clerk_user_id;}):picked.concat(member.clerk_user_id);
+            }};
+          });
+        });
+      }});
+  }
+  function hubLatestSequence(state){
+    var confirmed=(state.messages||[]).filter(function(m){return !m.hubLocal && m.nativeEvent;});
+    return confirmed.length ? confirmed[confirmed.length-1].nativeEvent.sequence : 0;
+  }
+  function applyHubRows(roomId,rows){
+    var state=chatRoomState(roomId);
+    state.messages=window.MiaHubChat.merge(state.messages,rows);
+    var people=rows.filter(function(row){return row && row.author_type!=='bot' && row.author_type!=='system';});
+    hubRememberPeople(people.map(function(row){return {id:row.author_id,email:row.author_email};}));
+    // A message keeps its author's name, so it also names someone since
+    // removed. Current members are named by the member list (newest name).
+    people.forEach(function(row){ if(!hubMember(row.author_id)) mergeUserProfile(row.author_email, {displayName: row.author_name}); });
+    // In a DM, whoever else wrote is the other person.
+    var me=hubChat.membership && hubChat.membership.clerk_user_id, channel=hubChannel(roomId);
+    var partner=people.filter(function(row){return row.author_id && row.author_id!==me;})[0];
+    if(channel && channel.kind==='dm' && partner && !hubKnownPeople()['dm:'+roomId]){
+      hubRememberPeople([{id:'dm:'+roomId,email:partner.author_id}]);
+      if(roomId===chatWs.activeRoomId)chatWs.activeLabel=hubChannelTitle(channel);
+      renderChatSidebar(); renderDeptAgentSelector(); renderChatTabs();
+    }
+    state.lastSequence=Math.max(Number(state.lastSequence||0),hubLatestSequence(state));
+    state.lastTs=state.messages.length?state.messages[state.messages.length-1].ts:0;
+  }
+  // Reading the open channel moves this member's Hub read marker, so unread
+  // state matches on every computer they use.
+  function markHubRead(roomId){
+    var channel=hubChannel(roomId), state=chatWs.byRoom[roomId];
+    if(!channel || !state || roomId!==chatWs.activeRoomId || !appInForeground() || hubChat.readRequests[roomId])return;
+    var sequence=hubLatestSequence(state);
+    channel.unread=0;
+    if(!sequence || sequence<=Number(channel.last_read||0))return;
+    channel.last_read=sequence;
+    hubChat.readRequests[roomId]=hubCall('POST',hubPath()+'/channels/'+roomId+'/read',{sequence:sequence})
+      .catch(function(){channel.last_read=0;}).finally(function(){delete hubChat.readRequests[roomId];});
+  }
+  // Loads the newest page of a channel. Older pages load on upward scroll.
+  function loadHubRoom(){
+    var roomId=chatWs.activeRoomId;
+    if(!roomId || !hubWorkspace() || !hubChannel(roomId))return Promise.resolve();
+    var workspace=activeWorkspaceKey, generation=chatWs.navigationGeneration, state=chatRoomState(roomId);
+    if(state.hubLoading)return state.hubLoading;
+    state.hubLoading=hubCall('GET',hubPath()+'/channels/'+roomId+'/messages/before/0').then(function(result){
+      if(workspace!==activeWorkspaceKey || generation!==chatWs.navigationGeneration || roomId!==chatWs.activeRoomId)return;
+      if(!state.historyInitialized){
+        // Replacing drops stale rows from before a reset; unsent copies stay.
+        state.messages=state.messages.filter(function(m){return m.hubLocal;});
+        state.historyCursor=result.hasMore ? result.before : null;
+      }
+      applyHubRows(roomId,result.messages||[]);
+      state.historyInitialized=true;state.historyComplete=!state.historyCursor;
+      hubChat.error='';chatWs.configured=true;
+      markHubRead(roomId);
+      renderChatSidebar();renderChatThread();renderDeptAgentSelector();
+    }).catch(function(error){ if(workspace===activeWorkspaceKey && generation===chatWs.navigationGeneration)hubFeedback(error); })
+      .finally(function(){state.hubLoading=null;});
+    return state.hubLoading;
+  }
+  function loadOlderHubMessages(roomId){
+    var state=roomId && chatWs.byRoom[roomId];
+    if(!state || chatWs.activeRoomId!==roomId || state.historyLoading || !state.historyCursor)return Promise.resolve();
+    var workspace=activeWorkspaceKey, generation=chatWs.navigationGeneration, cursor=state.historyCursor;
+    state.historyLoading=true;renderChatThread();
+    return hubCall('GET',hubPath()+'/channels/'+roomId+'/messages/before/'+cursor).then(function(result){
+      if(workspace!==activeWorkspaceKey || generation!==chatWs.navigationGeneration || roomId!==chatWs.activeRoomId)return;
+      applyHubRows(roomId,result.messages||[]);
+      state.historyCursor=result.hasMore && result.before<cursor ? result.before : null;
+      state.historyComplete=!state.historyCursor;
+    }).catch(function(){/* Keep the cursor so a later upward scroll retries. */}).then(function(){
+      state.historyLoading=false;
+      if(chatWs.activeRoomId===roomId)renderChatThread();
+    });
+  }
+  function hubRoomThinking(roomId){
+    var active=Object.keys(hubChat.dispatches||{}).map(function(id){return hubChat.dispatches[id];}).filter(function(job){
+      return job.channel_id===roomId && (job.state==='pending' || job.state==='claimed');
+    });
+    var state=chatRoomState(roomId);
+    if(active.length){
+      state.thinkingAgentName=active.length>1?'Bots':active[0].bot_name || 'Bot';
+      if(!state.thinking)startChatThinking(roomId);
+    } else if(state.thinking) stopChatThinking(roomId);
+  }
+  function trackHubDispatch(job){
+    if(!job || !job.id)return;
+    hubChat.dispatches=hubChat.dispatches||{};
+    if(['pending','claimed'].indexOf(job.state)>=0)hubChat.dispatches[job.id]=job;
+    else delete hubChat.dispatches[job.id];
+    if(job.channel_id)hubRoomThinking(job.channel_id);
+  }
+  function applyHubEvents(events){
+    var subject=hubChat.membership && hubChat.membership.clerk_user_id, refreshChannels=false, refreshTeams=false, render={};
+    events.forEach(function(event){
+      var roomId=event.channel_id, channel=hubChannel(roomId), state=roomId && chatWs.byRoom[roomId];
+      if(event.kind==='message' && event.message){
+        var row=event.message;
+        if(!channel){refreshChannels=true;return;}
+        channel.latest_sequence=Math.max(Number(channel.latest_sequence||0),row.sequence);
+        if(state && state.historyInitialized){applyHubRows(roomId,[row]);render[roomId]=true;}
+        var fromOther=row.author_type!=='system' && row.author_id!==subject;
+        if(!fromOther)return;
+        if(roomId===chatWs.activeRoomId && appInForeground()){markHubRead(roomId);return;}
+        channel.unread=Number(channel.unread||0)+1;
+        notifyDesktopChatMessage(roomId,window.MiaHubChat.message(row));
+      } else if(event.kind==='message_updated' && event.message){
+        if(state && state.historyInitialized){applyHubRows(roomId,[event.message]);render[roomId]=true;}
+        if(event.message.deleted)refreshChannels=true;
+      } else if(event.kind==='dispatch' && event.dispatch){
+        var job=Object.assign({channel_id:roomId},event.dispatch);
+        trackHubDispatch(job);
+        // A bot request by this member starts on this computer right away.
+        if(job.state==='pending' && subject && job.executor_id===subject && job.requester_id===subject)pollHubBots(roomId,true);
+      } else if(event.kind==='read'){
+        if(channel){channel.last_read=Math.max(Number(channel.last_read||0),Number(event.last_read||0));
+          if(channel.last_read>=Number(channel.latest_sequence||0))channel.unread=0;else refreshChannels=true;}
+      } else if(event.kind==='bots'){
+        if(roomId===chatWs.activeRoomId)refreshHubBotState(roomId,true);
+        else if(state)state.hubBotsAt=0;
+      } else if(event.kind==='members'){
+        Object.keys(chatWs.byRoom).forEach(function(key){chatWs.byRoom[key].hubDirectoryAt=0;});
+        if(chatWs.activeRoomId)refreshHubBotState(chatWs.activeRoomId,true);
+        refreshTeams=true;
+      } else if(event.kind==='team'){
+        refreshTeams=true;
+      } else if(['channel','channel_invite','channels_changed'].indexOf(event.kind)>=0) refreshChannels=true;
+    });
+    if(refreshChannels)refreshHubChannels().catch(function(){});
+    // A role change or team rename shows up in open apps right away.
+    if(refreshTeams)loadHubTeams(true);
+    renderChatSidebar();
+    if(render[chatWs.activeRoomId])renderChatThread();
+  }
+  var HUB_TYPING_MS=6500;
+  function startHubFeed(){
+    stopHubFeed();
+    if(!hubWorkspace() || !window.MiaHubChat)return;
+    var workspace=activeWorkspaceKey;
+    hubChat.feed=window.MiaHubChat.feed({teamId:workspace.slice(4),call:hubCall,
+      onEvents:function(events){ if(workspace===activeWorkspaceKey)applyHubEvents(events); },
+      onReset:function(lost){
+        if(workspace!==activeWorkspaceKey)return;
+        // Anything missed while offline is reloaded from the authoritative history.
+        Object.keys(chatWs.byRoom).forEach(function(key){chatWs.byRoom[key].historyInitialized=false;});
+        refreshHubChannels().then(function(){ if(chatWs.activeRoomId)return loadHubRoom(); }).catch(function(){});
+        if(lost && chatWs.activeRoomId)pollHubBots(chatWs.activeRoomId,true);
+      },
+      onTyping:function(typing){
+        if(workspace!==activeWorkspaceKey)return;
+        var changed=JSON.stringify(typing)!==JSON.stringify(hubChat.typing);
+        hubChat.typing=typing; if(changed)renderChatSidebar();
+        // The Hub drops typing after 6 seconds but only says so on its next
+        // feed response, which a quiet channel may not send for ~20 seconds.
+        clearTimeout(hubChat.typingTimer);
+        if(typing.length)hubChat.typingTimer=setTimeout(function(){
+          if(workspace!==activeWorkspaceKey || !hubChat.typing.length)return;
+          hubChat.typing=[];renderChatSidebar();
+        },HUB_TYPING_MS);
+      },
+      onStatus:function(status,error){
+        if(workspace!==activeWorkspaceKey)return;
+        var changed=hubChat.feedStatus!==status; hubChat.feedStatus=status;
+        if(status==='offline' && error && (error.status===403 || error.status===404)){
+          // Confirm revocation through an ordinary request before clearing history.
+          refreshHubChannels().catch(hubFeedback);
+        }
+        if(changed)renderHubStatus();
+      }});
+  }
+  function sendHubTyping(){
+    if(!hubWorkspace() || !chatWs.activeRoomId || !hubChannel(chatWs.activeRoomId) || Date.now()-hubChat.typingSentAt<4000)return;
+    hubChat.typingSentAt=Date.now();
+    hubCall('POST',hubPath()+'/channels/'+chatWs.activeRoomId+'/typing',{}).catch(function(){});
+  }
+  // A send appears in the timeline immediately; delivery runs behind it and a
+  // failure marks that message with a retry instead of losing the text.
+  function sendHubMessage(text,prepared,threadRootId,roomId){
+    var upload=prepared && prepared.hubUpload;
+    try{window.MiaHubChat.validateText(text,!!upload);}catch(error){showBenchToast(error.message);return Promise.resolve({status:400});}
+    if(!roomId || chatWs.configured===false || !hubChannel(roomId))return Promise.resolve({status:409});
+    var threadRoot=threadRootId ? hubSequence(threadRootId) : null;
+    if(threadRootId && !threadRoot){showBenchToast('That thread is no longer available.');return Promise.resolve({status:400});}
+    var id=window.MiaHubChat.id();
+    var local={id:'hub-local-'+id,hubLocal:true,hubMessage:true,hubMessageId:id,sender:currentUser,hubAuthor:currentUser,body:String(text||''),
+      ts:Date.now(),threadRoot:threadRootId||null,pending:true,attachments:[],hubUpload:upload||null,nativeEvent:{sequence:Number.MAX_SAFE_INTEGER}};
+    var state=chatRoomState(roomId);
+    state.messages.push(local);state.followLatest=true;
+    renderChatSidebar();if(chatWs.activeRoomId===roomId)renderChatThread();
+    // The composer clears at once; a failed delivery stays in the timeline.
+    deliverHubMessage(roomId,local);
+    return Promise.resolve({status:201});
+  }
+  function deliverHubMessage(roomId,local){
+    var workspace=activeWorkspaceKey, state=chatRoomState(roomId);
+    local.pending=true;local.sendFailed=false;local.sendError='';
+    var threadRoot=local.threadRoot ? hubSequence(local.threadRoot) : null;
+    var attachment=local.hubAttachmentId ? Promise.resolve(local.hubAttachmentId) : local.hubUpload
+      ? hubCall('POST',hubPath()+'/channels/'+roomId+'/files',{filename:local.hubUpload.filename,mimeType:local.hubUpload.mimeType,contentBase64:local.hubUpload.contentBase64})
+        .then(function(result){local.hubAttachmentId=result.file.id;return result.file.id;})
+      : Promise.resolve(null);
+    return attachment.then(function(attachmentId){
+      var body={id:local.hubMessageId,text:local.body};
+      if(threadRoot)body.threadRoot=threadRoot;
+      if(attachmentId)body.attachmentId=attachmentId;
+      return hubCall('POST',hubPath()+'/channels/'+roomId+'/messages',body);
+    }).then(function(result){
+      if(workspace!==activeWorkspaceKey)return {status:201};
+      local.pending=false;
+      if(state.messages.indexOf(local)>=0){
+        // The live feed normally replaces this copy; confirm it in place if not.
+        local.hubLocal=false;local.id='hub-sequence-'+result.sequence;local.nativeEvent={sequence:result.sequence};
+        if(local.hubUpload && local.hubAttachmentId)local.hubFile={id:local.hubAttachmentId,filename:local.hubUpload.filename,mimeType:local.hubUpload.mimeType,channelId:roomId};
+        state.messages=window.MiaHubChat.merge(state.messages,[]);
+      }
+      (result.dispatches||[]).forEach(function(job){trackHubDispatch({id:job.id,channel_id:roomId,bot_name:job.bot_name,state:'pending'});});
+      if(result.dispatches && result.dispatches.length)pollHubBots(roomId,true);
+      renderChatSidebar();if(chatWs.activeRoomId===roomId)renderChatThread();
+      return {status:201};
+    }).catch(function(error){
+      if(workspace!==activeWorkspaceKey)return {status:500};
+      local.pending=false;local.sendFailed=true;
+      local.sendError=navigator.onLine===false ? 'Not delivered. You are offline.' : error && error.message || 'Please retry.';
+      showBenchToast('Message not delivered. '+local.sendError);
+      if(!appInForeground())showDesktopNotification(roomId,'Message not delivered',local.body || 'Image');
+      renderChatSidebar();if(chatWs.activeRoomId===roomId)renderChatThread();
+      return {status:500};
+    });
+  }
+  // Coming back to Mia counts as reading the open channel, as in Solo.
+  window.addEventListener('focus',function(){ if(hubWorkspace() && chatWs.activeRoomId){markHubRead(chatWs.activeRoomId);renderChatSidebar();} });
+  document.addEventListener('click',function(event){
+    var button=event.target.closest('[data-send-retry]');
+    if(!button)return;
+    var roomId=chatWs.activeRoomId, state=roomId && chatRoomState(roomId);
+    var local=state && state.messages.filter(function(m){return m.id===button.getAttribute('data-send-retry') && m.sendFailed;})[0];
+    if(!local)return;
+    if(local.hubMessage)deliverHubMessage(roomId,local);
+    else if(local.soloSend)deliverNativeMessage(roomId,local);
+    renderChatThread();
+  });
+  function hubMessageDeletable(m){
+    if(!m || m.system || m.pending || m.deleted)return false;
+    if(m.hubLocal)return !!m.sendFailed;
+    if(hubChat.membership && hubChat.membership.role==='admin')return true;
+    return hubOwnMessage(m);
+  }
+  function deleteHubMessage(roomId,eventId){
+    var state=chatRoomState(roomId);
+    var message=state.messages.filter(function(m){return m.id===eventId;})[0];
+    if(!message || !hubMessageDeletable(message))return Promise.resolve();
+    if(message.hubLocal){state.messages=state.messages.filter(function(m){return m!==message;});renderChatThread();return Promise.resolve();}
+    return hubCall('DELETE',hubPath()+'/channels/'+roomId+'/messages/'+hubSequence(eventId)).then(function(){
+      message.deleted=true;message.body='Message deleted';message.hubFile=null;
+      if(chatWs.activeRoomId===roomId)renderChatThread();renderChatSidebar();
+    }).catch(function(error){showBenchToast(error.message || 'Could not delete this message.');});
+  }
+  // Images stay on this computer until the message is delivered, so the
+  // timeline shows them at once and a retry can resend the same bytes.
+  function prepareHubAttachment(file){
+    return fileAsBase64(file).then(function(contentBase64){
+      return {hubUpload:{filename:file.name || 'image',mimeType:String(file.type || '').toLowerCase(),contentBase64:contentBase64,previewUrl:URL.createObjectURL(file)}};
+    });
+  }
+  function hubAttachmentsFor(m){
+    if(m.hubUpload)return [{id:m.id,filename:m.hubUpload.filename,mimeType:m.hubUpload.mimeType,url:m.hubUpload.previewUrl,previewUrl:m.hubUpload.previewUrl,hubImage:true}];
+    if(!m.hubFile)return [];
+    var url=window.MiaHubChat.fileUrl(activeWorkspaceKey.slice(4),m.hubFile,function(){ if(hubWorkspace())renderChatThread(); });
+    return [{id:m.hubFile.id,filename:m.hubFile.filename,mimeType:m.hubFile.mimeType,url:url || '',previewUrl:url || '',hubImage:true,loading:!url}];
+  }
+  function createHubChannel(){
+    var input=el('#channelNameInput'), name=input && input.value.trim();
+    if(!name || channelNameCompose.busy)return;
+    channelNameCompose.busy=true;
+    var create=el('#channelNameCreate');
+    if(create){create.disabled=true;create.textContent='Creating…';}
+    var privateBox=el('#channelPrivateInput'), visibility=privateBox && privateBox.checked ? 'private' : 'open';
+    hubCall('POST',hubPath()+'/channels',{id:window.MiaHubChat.id(),name:name,visibility:visibility}).then(function(result){
+      return refreshHubChannels().then(function(){closeChannelNameFlow();openHubChannel(hubChannel(result.channel.id) || result.channel);});
+    }).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t create the channel. Try again.'));}).finally(function(){
+      channelNameCompose.busy=false;
+      if(create){create.disabled=false;create.textContent='Create channel';}
+    });
+  }
+
   function activeChatLocationStorageKey(){
     return 'miaChatActive:' + String(currentUser || 'preview').toLowerCase() + ':' + activeWorkspaceKey;
   }
@@ -4520,6 +5732,7 @@
   }
 
   function restoreActiveChatLocation(){
+    if(hubWorkspace())return false;
     if(chatWs.activeRoomId) return false;
     var roomId = storedActiveChatLocation();
     var conversation = preferredStartupConversation(chatWs.nativeConversations, roomId, activeWorkspaceKey);
@@ -4614,7 +5827,7 @@
     return !!NATIVE_RASTER_PREVIEW_MIMES[String(mimeType || '').toLowerCase()];
   }
   function chatMessageHasAttachments(message){
-    return !!(message && Array.isArray(message.attachments) && message.attachments.length);
+    return !!(message && (message.hubFile || message.hubUpload || (Array.isArray(message.attachments) && message.attachments.length)));
   }
 
   function nativeConversationToRoom(conversation){
@@ -4855,6 +6068,7 @@
   }
 
   function connectNativeChatSocket(conversationId){
+    if(hubWorkspace()) return;
     closeNativeChatSocket();
     if(!conversationId || typeof WebSocket !== 'function') return;
     var state = chatRoomState(conversationId);
@@ -4913,6 +6127,7 @@
     });
   }
   function connectNativeWatchSocket(){
+    if(hubWorkspace()) return;
     if(chatWs.watchReconnectTimer){
       clearTimeout(chatWs.watchReconnectTimer);
       chatWs.watchReconnectTimer = null;
@@ -4984,6 +6199,8 @@
   }
 
   function applyNativeConversationList(conversations){
+    if(hubWorkspace()) return;
+    var listWorkspace = conversations && conversations.workspaceKey;
     setMiaServiceUnavailable(false);
     // An archived bot's chat is kept on the server (read-only) but is not a
     // live conversation; it comes back to the sidebar when the bot is restored.
@@ -4993,6 +6210,12 @@
     var rooms = conversations.map(nativeConversationToRoom);
     chatWs.native = true;
     chatWs.nativeConversations = conversations || [];
+    if(listWorkspace && listWorkspace === activeWorkspaceKey && !pruneChatTabs(chatWs.nativeConversations)){
+      // The chat on screen is another workspace's: leave it for this one's.
+      chatWs.activeRoomId = null;
+      var nextTab = readChatTabs()[0];
+      if(nextTab) setTimeout(function(){ if(!chatWs.activeRoomId) loadChatRoom(nextTab.roomId, nextTab.kind, nextTab.label); }, 0);
+    }
     chatWs.configured = true;
     chatWs.rooms.home = rooms.filter(function(room){ return room.kind === 'home'; })[0] || null;
     chatWs.rooms.departments = rooms.filter(function(room){ return room.kind === 'department'; });
@@ -5068,13 +6291,19 @@
   }
 
   function loadNativeConversations(requestOptions){
+    if(hubWorkspace()) return Promise.resolve([]);
+    var workspaceKey = activeWorkspaceKey;
     return api('/api/conversations?limit=200', requestOptions || {}).then(function(res){
       if(res.status !== 200) throw new Error(res.data && res.data.error || 'Native conversations unavailable.');
       var conversations = (res.data && res.data.conversations) || [];
       // A workspace is a scope, not a conversation. Keep the real agent chat
       // available when this scope has no rooms yet, but never synthesize a
       // workspace/home room just to give the center column something to show.
-      return ensureNativeMiaConversation(conversations, requestOptions);
+      return Promise.resolve(ensureNativeMiaConversation(conversations, requestOptions)).then(function(list){
+        // Remembers which workspace this list is, for pruneChatTabs.
+        if(Array.isArray(list)) list.workspaceKey = workspaceKey;
+        return list;
+      });
     });
   }
   var AGENT_SETUP_ROOM_ID = '__bot_setup__';
@@ -5094,9 +6323,9 @@
   var chatPinnedKeys = {};
   var chatPinnedMigrationInFlight = false;
   var chatAttentionRooms = {};
-  var chatSidebarSections = {pinned: true, all: true};
+  var chatSidebarSections = {pinned: true, all: true, bots: true};
   var chatTaskStopPending = {};
-  var chatAttachment = {file: null, previewUrl: null, busy: false, error: ''};
+  var chatAttachment = {file: null, app: null, previewUrl: null, busy: false, error: ''};
   var googleDriveDrafts = {};
 
   function stagedGoogleDriveFiles(){ return googleDriveDrafts[chatWs.activeRoomId] || []; }
@@ -5222,9 +6451,74 @@
     });
   })();
 
+  // The (+) menu: upload a file from this computer, or pick an artifact.
+  var composerArtifacts = {items: [], query: '', loading: false, error: ''};
+  var composerAttachmentStaged = function(){};
+  function setComposerPlusMenu(view){
+    var menu = el('#ccPlusMenu'), picker = el('#ccArtifactsMenu'), plus = el('#ccPlusBtn');
+    if(menu) menu.hidden = view !== 'menu';
+    if(picker) picker.hidden = view !== 'artifacts';
+    if(plus) plus.setAttribute('aria-expanded', view ? 'true' : 'false');
+    if(view === 'artifacts'){
+      composerArtifacts.query = '';
+      var search = el('#ccArtifactsSearch');
+      if(search){ search.value = ''; search.focus(); }
+      composerArtifacts.loading = true; composerArtifacts.error = '';
+      renderComposerArtifacts();
+      api('/api/artifacts').then(function(res){
+        composerArtifacts.loading = false;
+        if(res.status !== 200) composerArtifacts.error = 'Your artifacts could not be loaded. Try again.';
+        else composerArtifacts.items = Array.isArray(res.data.artifacts) ? res.data.artifacts : [];
+        renderComposerArtifacts();
+      }).catch(function(){ composerArtifacts.loading = false; composerArtifacts.error = 'Your artifacts could not be loaded. Try again.'; renderComposerArtifacts(); });
+    }
+  }
+  function renderComposerArtifacts(){
+    var list = el('#ccArtifactsList'), status = el('#ccArtifactsStatus');
+    if(!list || !status || !window.MiaArtifactsPage) return;
+    var shown = composerArtifacts.items.filter(function(item){ return window.MiaArtifactsPage.matches(item, 'all', composerArtifacts.query); });
+    status.textContent = composerArtifacts.loading && !composerArtifacts.items.length ? 'Loading\u2026'
+      : composerArtifacts.error || (!composerArtifacts.items.length ? 'Nothing here yet. Pages, PDFs, images and apps you or your bots make show up here.'
+      : (!shown.length ? 'Nothing matches.' : ''));
+    list.innerHTML = shown.map(function(item){
+      var meta = item.kind === 'app' ? appLinkHost(item.url) : (item.from ? item.from : 'You') + ' \u00b7 ' + window.MiaArtifactsPage.when(item.modifiedAt);
+      return '<button type="button" data-composer-artifact="' + esc(item.id) + '"><em>' + esc(item.kind === 'app' ? 'App' : item.type || '') + '</em>' +
+        '<span>' + esc(item.name) + '</span><small>' + esc(meta) + '</small></button>';
+    }).join('');
+  }
+  function wireComposerPlusMenu(fileInput, staged){
+    var menu = el('#ccPlusMenu'), picker = el('#ccArtifactsMenu');
+    if(!menu || !picker) return;
+    menu.addEventListener('click', function(e){
+      var choice = e.target.closest('[data-plus-choice]');
+      if(!choice) return;
+      e.stopPropagation();
+      if(choice.getAttribute('data-plus-choice') === 'upload'){ setComposerPlusMenu(null); fileInput.click(); }
+      else setComposerPlusMenu('artifacts');
+    });
+    picker.addEventListener('click', function(e){
+      e.stopPropagation();
+      if(e.target.closest('#ccArtifactsClose')){ setComposerPlusMenu(null); return; }
+      var row = e.target.closest('[data-composer-artifact]');
+      if(!row) return;
+      var item = composerArtifacts.items.filter(function(entry){ return entry.id === row.getAttribute('data-composer-artifact'); })[0];
+      setComposerPlusMenu(null);
+      stageArtifact(item).then(function(){ staged(); var input = el('#ccInput'); if(input) input.focus(); });
+    });
+    var search = el('#ccArtifactsSearch');
+    if(search) search.addEventListener('input', function(){ composerArtifacts.query = search.value; renderComposerArtifacts(); });
+    document.addEventListener('click', function(e){
+      if(!menu.hidden && !menu.contains(e.target)) setComposerPlusMenu(null);
+      if(!picker.hidden && !picker.contains(e.target)) setComposerPlusMenu(null);
+    });
+    document.addEventListener('keydown', function(e){
+      if(e.key === 'Escape' && (!menu.hidden || !picker.hidden)) setComposerPlusMenu(null);
+    });
+  }
+
   function clearChatAttachment(){
     if(chatAttachment.previewUrl) URL.revokeObjectURL(chatAttachment.previewUrl);
-    chatAttachment = {file: null, previewUrl: null, busy: false, error: ''};
+    chatAttachment = {file: null, app: null, previewUrl: null, busy: false, error: ''};
     var picker = el('#ccFileInput');
     if(picker) picker.value = '';
     renderChatAttachment();
@@ -5234,51 +6528,87 @@
     renderGoogleDriveAttachments();
     var strip = el('#ccAttachStrip');
     if(!strip) return;
-    if(!chatAttachment.file){
-      strip.innerHTML = '';
-      strip.style.display = 'none';
+    var file = chatAttachment.file, app = chatAttachment.app;
+    if(!file && !app){
+      strip.innerHTML = chatAttachment.error ? '<div class="cc-attach-error" role="alert">' + esc(chatAttachment.error) + '</div>' : '';
+      strip.style.display = chatAttachment.error ? '' : 'none';
       return;
     }
-    var file = chatAttachment.file;
     var preview = chatAttachment.previewUrl
       ? '<img class="cc-attach-thumb" src="' + esc(chatAttachment.previewUrl) + '" alt="" />'
-      : '<span class="cc-attach-icon" aria-hidden="true">&#128247;</span>';
+      : '<span class="cc-attach-icon" aria-hidden="true">' + (app ? '&#128279;' : '&#128196;') + '</span>';
+    var label = app ? app.name + ' \u00b7 ' + appLinkHost(app.url) : (file.name || 'file') + ' \u00b7 ' + humanFileSize(file.size);
     strip.style.display = '';
-    strip.innerHTML = '<div class="cc-attach-chip">' + preview +
-      '<span class="cc-attach-name">' + esc(file.name || 'image') + ' &middot; ' + esc(humanFileSize(file.size)) + '</span>' +
+    strip.innerHTML = (app && app.local ? '<div class="cc-attach-note" role="note"><strong>Local app sharing</strong>' +
+        '<span>You\u2019re sharing a local app. Changes aren\u2019t synced between you and your team yet.</span>' +
+        '<span>Shared editing is coming soon.</span></div>' : '') +
+      '<div class="cc-attach-chip">' + preview +
+      '<span class="cc-attach-name">' + esc(label) + '</span>' +
       (chatAttachment.busy ? '<span class="cc-attach-state">Uploading&hellip;</span>' : '') +
       '<button type="button" class="cc-attach-remove" aria-label="Remove attachment"' + (chatAttachment.busy ? ' disabled' : '') + '>&times;</button></div>' +
       (chatAttachment.error ? '<div class="cc-attach-error" role="alert">' + esc(chatAttachment.error) + '</div>' : '');
   }
 
+  // Images and PDFs go everywhere. Web pages attach only in Solo: a team's
+  // Hub refuses HTML, since teammates' apps would run it.
+  var CHAT_ATTACHMENT_TYPES = ['image/png','image/jpeg','image/gif','image/webp','application/pdf'];
+  var CHAT_PAGE_TYPES = ['text/html','image/svg+xml'];
+  function chatAttachmentProblem(file){
+    var type = String(file.type || '').toLowerCase();
+    var team = hubWorkspace();
+    if(CHAT_PAGE_TYPES.indexOf(type) !== -1 && team) return 'Web pages can\u2019t be sent to a team yet. Save it as a PDF or image to share it.';
+    if(CHAT_ATTACHMENT_TYPES.indexOf(type) === -1 && (team || CHAT_PAGE_TYPES.indexOf(type) === -1)) return 'Choose an image (PNG, JPEG, GIF, WebP) or a PDF.';
+    var limit = team ? 8 : 25;
+    if(file.size > limit * 1024 * 1024) return 'Files must be ' + limit + ' MB or smaller.';
+    return '';
+  }
   function stageChatAttachment(file){
     if(!file) return false;
-    var allowed = ['image/png','image/jpeg','image/gif','image/webp'];
-    if(allowed.indexOf(String(file.type || '').toLowerCase()) === -1){
-      chatAttachment.error = 'Choose a PNG, JPEG, GIF, or WebP image.';
-      renderChatAttachment();
-      return false;
-    }
-    if(file.size > 8 * 1024 * 1024){
-      chatAttachment.error = 'Images must be 8 MB or smaller.';
+    var problem = chatAttachmentProblem(file);
+    if(problem){
+      chatAttachment.error = problem;
       renderChatAttachment();
       return false;
     }
     clearChatAttachment();
     chatAttachment.file = file;
-    chatAttachment.previewUrl = URL.createObjectURL(file);
+    if(/^image\/(png|jpeg|gif|webp)$/.test(String(file.type || '').toLowerCase())) chatAttachment.previewUrl = URL.createObjectURL(file);
     renderChatAttachment();
     return true;
+  }
+  function stageChatAppLink(app){
+    clearChatAttachment();
+    chatAttachment.app = {name: String(app.name || appLinkHost(app.url)), url: String(app.url), local: !!app.local};
+    renderChatAttachment();
+  }
+  function appLinkHost(url){
+    try { return new URL(url).host; } catch(_){ return String(url || ''); }
+  }
+  // Stages an artifact in the composer: files attach their bytes, live apps
+  // their address. Shared by the (+) menu and the Artifacts page.
+  function stageArtifact(item){
+    if(!item) return Promise.resolve(false);
+    if(item.kind === 'app'){ stageChatAppLink(item); return Promise.resolve(true); }
+    return api('/api/artifacts/file?id=' + encodeURIComponent(item.id)).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.file) throw new Error(res.data && res.data.message || 'That artifact could not be attached.');
+      var binary = atob(res.data.file.contentBase64), bytes = new Uint8Array(binary.length);
+      for(var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return stageChatAttachment(new File([bytes], res.data.file.filename, {type: res.data.file.mimeType || ''}));
+    }).catch(function(error){
+      chatAttachment.error = error && error.message || 'That artifact could not be attached.';
+      renderChatAttachment();
+      return false;
+    });
   }
 
   function fileAsBase64(file){
     return new Promise(function(resolve, reject){
       var reader = new FileReader();
-      reader.onerror = function(){ reject(new Error('Could not read this image.')); };
+      reader.onerror = function(){ reject(new Error('Could not read this file.')); };
       reader.onload = function(){
         var value = String(reader.result || '');
         var comma = value.indexOf(',');
-        if(comma < 0) return reject(new Error('Could not read this image.'));
+        if(comma < 0) return reject(new Error('Could not read this file.'));
         resolve(value.slice(comma + 1));
       };
       reader.readAsDataURL(file);
@@ -5286,6 +6616,7 @@
   }
 
   function prepareChatAttachment(file, roomId){
+    if(hubWorkspace()) return prepareHubAttachment(file);
     return fileAsBase64(file).then(function(dataBase64){
       return api(nativeConversationPath(roomId, '/attachments'), {method:'POST', body:{
         filename: file.name || 'image',
@@ -5376,13 +6707,13 @@
   }
 
   function setChatSidebarSection(section, expanded){
-    var wrap = section === 'pinned' ? el('#chatPinned') : el('#chatAllConversations');
+    var wrap = el({pinned: '#chatPinned', all: '#chatAllConversations', bots: '#chatBots'}[section]);
     var toggle = el('[data-chat-section-toggle="' + section + '"]');
     if(!wrap) return;
     var group = wrap.parentElement;
     if(group) group.classList.toggle('is-collapsed', !expanded);
     if(toggle){
-      var label = section === 'pinned' ? 'Pinned' : 'All conversations';
+      var label = {pinned: 'Pinned', all: 'All conversations', bots: 'Bots'}[section];
       toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
       toggle.setAttribute('aria-label', (expanded ? 'Collapse ' : 'Expand ') + label);
       toggle.setAttribute('title', (expanded ? 'Collapse ' : 'Expand ') + label);
@@ -5559,6 +6890,8 @@
   function localBrowserNormalizeUrl(value, searchEngine){
     var input = String(value || '').trim();
     if(!input) throw new Error('Enter an address or search.');
+    // Local files go to the browser as typed; it opens only files in the Mia folder.
+    if(/^file:\/\//i.test(input) || input.charAt(0) === '/') return input;
     var explicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input);
     var localAddress = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(input);
     var domainAddress = /^[\w.-]+\.\w+(?::\d+)?(?:[/?#]|$)/i.test(input);
@@ -5782,20 +7115,150 @@
     });
   }
 
-  function prepareBetaFeedback(){
-    return appPrompt('', {
-      title: 'Tell us what happened',
-      message: 'Describe the confusing step, unexpected result, or missing feature. Please leave out passwords and private conversation content.',
-      inputLabel: 'Beta feedback',
-      note: 'Mia will copy your note with a safe support summary so you can paste it into your beta feedback channel.',
-      submitLabel: 'Copy feedback'
-    }).then(function(result){
-      if(!result || !result.ok || !String(result.text || '').trim()) return false;
-      return buildAppDevSupportSummary().then(function(summary){
-        var feedback = ['Mia beta feedback', '', String(result.text).trim(), '', summary].join('\n');
-        return copySidebarText(feedback, 'Feedback copied — paste it into your beta channel');
+  // Anonymized facts for the feedback report. Only the allow-listed fields in
+  // feedback-report.js ever reach the report; this just gathers raw inputs.
+  function gatherFeedbackFacts(){
+    var version = '';
+    try { version = (window.miaDesktop && window.miaDesktop.version && window.miaDesktop.version()) || ''; } catch(_e){}
+    var hints = navigator.userAgentData && navigator.userAgentData.getHighEntropyValues
+      ? navigator.userAgentData.getHighEntropyValues(['architecture', 'platformVersion']).catch(function(){ return {}; })
+      : Promise.resolve({});
+    return Promise.all([
+      hints,
+      api('/api/dev/diagnostics').catch(function(){ return {status: 0}; }),
+      api('/api/settings/managed-router/status').catch(function(){ return {data: {}}; })
+    ]).then(function(results){
+      var hint = results[0] || {};
+      var isDev = results[1].status >= 200 && results[1].status < 300;
+      var router = results[2] && results[2].data || {};
+      var selection = chatModelPicker.selection || {};
+      var browser = window.miaNativeBrowser && window.miaNativeBrowser.counts ? window.miaNativeBrowser.counts() : {};
+      return {
+        version: version,
+        platform: navigator.platform || '',
+        osVersion: hint.platformVersion || '',
+        arch: hint.architecture || '',
+        installType: isDev ? 'dev (local preview)' : (window.miaDesktop ? 'packaged' : 'browser'),
+        workspaceMode: appCollaborationMode,
+        provider: selection.provider || '',
+        modelFamily: selection.family || '',
+        counts: {bots: (chatWs.botRecords || []).length, tabs: browser.tabs, groups: browser.groups},
+        errors: router.errorCode ? [router.errorCode] : [],
+        tzOffsetMinutes: new Date().getTimezoneOffset(),
+        now: new Date().toISOString()
+      };
+    });
+  }
+
+  // "Tell us what happened": the note plus an anonymized report. The preview
+  // renders the exact string Send hands to the user's mail app.
+  function openFeedbackDialog(){
+    return new Promise(function(resolve){
+      var previousFocus = document.activeElement;
+      var overlay = document.createElement('div');
+      overlay.className = 'app-prompt-overlay open';
+      overlay.setAttribute('role', 'presentation');
+      var card = document.createElement('div');
+      card.className = 'app-prompt-card';
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-modal', 'true');
+      var title = document.createElement('h2');
+      title.className = 'app-prompt-title';
+      title.textContent = 'Tell us what happened';
+      var message = document.createElement('p');
+      message.className = 'app-prompt-msg';
+      message.textContent = 'Describe the confusing step, unexpected result, or missing feature. Please leave out passwords and private conversation content.';
+      var input = document.createElement('textarea');
+      input.className = 'app-prompt-input';
+      input.setAttribute('aria-label', 'Beta feedback');
+      var note = document.createElement('p');
+      note.className = 'app-prompt-note';
+      note.append('Mia will share anonymized data from your setup so we can get more information. ');
+      var toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'app-prompt-link';
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.textContent = 'See what is included in the report';
+      note.appendChild(toggle);
+      var preview = document.createElement('pre');
+      preview.className = 'app-prompt-report';
+      preview.hidden = true;
+      preview.textContent = 'Gathering report…';
+      var status = document.createElement('p');
+      status.className = 'app-prompt-note';
+      status.setAttribute('role', 'status');
+      status.hidden = true;
+      var actions = document.createElement('div');
+      actions.className = 'app-prompt-actions';
+      var cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'btn';
+      cancel.textContent = 'Cancel';
+      var copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'btn';
+      copy.textContent = 'Copy instead';
+      copy.hidden = true;
+      var submit = document.createElement('button');
+      submit.type = 'button';
+      submit.className = 'btn app-prompt-submit';
+      submit.textContent = 'Send';
+      submit.disabled = true;
+      actions.append(cancel, copy, submit);
+      card.append(title, message, input, note, preview, status, actions);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      var report = '';
+      var version = '';
+      var sent = false;
+      function composed(){ return MiaFeedbackReport.composeFeedback(input.value, report); }
+      function refresh(){ if(report) preview.textContent = composed(); }
+      function close(){
+        document.removeEventListener('keydown', onKeydown);
+        overlay.remove();
+        if(previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+        resolve(sent);
+      }
+      function onKeydown(event){ if(event.key === 'Escape'){ event.preventDefault(); close(); } }
+      gatherFeedbackFacts().catch(function(){ return {}; }).then(function(facts){
+        report = MiaFeedbackReport.buildReport(facts);
+        version = facts.version || '';
+        submit.disabled = false;
+        refresh();
       });
-    }).catch(function(){
+      toggle.addEventListener('click', function(){
+        preview.hidden = !preview.hidden;
+        toggle.setAttribute('aria-expanded', preview.hidden ? 'false' : 'true');
+        toggle.textContent = preview.hidden ? 'See what is included in the report' : 'Hide the report';
+      });
+      input.addEventListener('input', refresh);
+      cancel.addEventListener('click', close);
+      overlay.addEventListener('click', function(event){ if(event.target === overlay) close(); });
+      copy.addEventListener('click', function(){
+        copySidebarText(composed(), 'Feedback copied — email it to ' + MiaFeedbackReport.FEEDBACK_EMAIL);
+      });
+      submit.addEventListener('click', function(){
+        if(sent){ close(); return; }
+        if(!input.value.trim()){ input.focus(); return; }
+        // The user's own mail app composes the message; Mia holds no mail
+        // credentials. The Electron shell only opens this exact address.
+        window.open(MiaFeedbackReport.buildMailto(version, composed()));
+        sent = true;
+        input.readOnly = true;
+        status.hidden = false;
+        status.textContent = 'Your mail app should open with this message ready. Review it and press send there. If nothing opened, copy the message and email it to ' + MiaFeedbackReport.FEEDBACK_EMAIL + '.';
+        copy.hidden = false;
+        cancel.hidden = true;
+        submit.textContent = 'Done';
+      });
+      document.addEventListener('keydown', onKeydown);
+      input.focus();
+    });
+  }
+
+  function prepareBetaFeedback(){
+    return openFeedbackDialog().catch(function(){
       showBenchToast('Could not prepare feedback');
       return false;
     });
@@ -5865,19 +7328,21 @@
     } catch(_browserDesktopStateError) {}
     try { localStorage.removeItem(LOCAL_BROWSER_OPEN_STATE_KEY); } catch(_browserStorageError) {}
     document.body.classList.remove('browser-collab-mode', 'browser-sidebar-open');
+    applyLeftPane();
     renderLocalBrowser();
     syncInlineChatSuggestion();
   }
 
   function openWebBrowserTool(options){
     closeAutomationsPage();
+    closeArtifactsPage();
     localBrowserState.open = true;
     try {
       if(window.miaDesktop && window.miaDesktop.state) window.miaDesktop.state.set(LOCAL_BROWSER_OPEN_STATE_KEY, '1');
     } catch(_browserDesktopStateError) {}
     try { localStorage.setItem(LOCAL_BROWSER_OPEN_STATE_KEY, '1'); } catch(_browserStorageError) {}
     document.body.classList.add('browser-collab-mode');
-    document.body.classList.remove('browser-sidebar-open');
+    setBrowserSidebarOpen(browserSidebarWanted());
     closeChatThread();
     closeChatTasksPanel();
     chatInfo.mode = 'automations';
@@ -5943,7 +7408,7 @@
   // on the right, the same layout as the browser. Rows open a step page and
   // switch the chat to the bot that owns the automation.
   var AUTOMATIONS_GROUP_KEY = 'mia.automations.group';
-  var automationsPage = {open:false, botId:null, automationId:null, group:'status'};
+  var automationsPage = {open:false, botId:null, automationId:null, group:'status', tabs:[], boardClosed:false};
   try { if(localStorage.getItem(AUTOMATIONS_GROUP_KEY) === 'bot') automationsPage.group = 'bot'; } catch(_automationsGroupError) {}
 
   function automationsBoardRows(){
@@ -6076,8 +7541,7 @@
     }
     var delivery = bot && bot.hermesCronDeliveries && bot.hermesCronDeliveries[automation.id];
     var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
-    return '<button type="button" class="automations-back" id="automationsBack">← All automations</button>' +
-      '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
+    return '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
       '<div class="automations-detail-sub">' + esc([row.schedule, row.botName].filter(Boolean).join(' · ')) + '</div></div>' +
       '<span class="automations-row-side">' + side + '</span></div>' + body + last +
       '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">' + (row.steps.length ? 'Edit' : 'Add steps') + '</button></div>';
@@ -6089,8 +7553,9 @@
     overlay.hidden = !automationsPage.open;
     overlay.setAttribute('aria-hidden', automationsPage.open ? 'false' : 'true');
     overlay.classList.toggle('open', automationsPage.open);
-    if(!automationsPage.open) return;
     var rows = automationsBoardRows();
+    // Closed, its tabs still show in the mixed strip, so a closed tab leaves it.
+    if(!automationsPage.open){ renderAutomationsTabs(rows); return; }
     var summary = el('#automationsSummary');
     if(summary) summary.textContent = window.MiaAutomationsBoard ? window.MiaAutomationsBoard.summary(rows) : '';
     els('[data-automations-group]', overlay).forEach(function(button){
@@ -6102,6 +7567,7 @@
     })[0] : null;
     var found = row && automationRecordById(row.botId, row.automationId);
     if(automationsPage.automationId && !found){ automationsPage.botId = null; automationsPage.automationId = null; }
+    renderAutomationsTabs(rows);
     if(toggle) toggle.hidden = !!found;
     var body = el('#automationsBody');
     if(!body) return;
@@ -6113,15 +7579,96 @@
         openAutomationsDetail(button.getAttribute('data-automations-bot'), button.getAttribute('data-automations-id'));
       });
     });
-    var back = el('#automationsBack', body);
-    if(back) back.addEventListener('click', function(){
-      automationsPage.botId = null;
-      automationsPage.automationId = null;
-      if(chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
-      renderAutomationsPage();
-    });
     var edit = el('#automationsEdit', body);
     if(edit && found) edit.addEventListener('click', function(){ openAutomationDetail(found.bot.id, found.automation.id); });
+  }
+
+  // Automations tabs: the board is the first tab; each automation opened
+  // from it gets a tab.
+  var AUTOMATIONS_BOARD_TAB = 'board';
+  function automationsTabId(botId, automationId){ return String(botId) + '|' + String(automationId); }
+  var AUTOMATIONS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>';
+  function automationsTabById(id){
+    return automationsPage.tabs.filter(function(tab){ return automationsTabId(tab.botId, tab.automationId) === id; })[0] || null;
+  }
+  // Automations tabs live in the browser's tab strip (native-browser.js),
+  // which sits in the Automations row while the page shows.
+  var automationsStripTabs = null;
+  function renderAutomationsTabs(rows){
+    // An automation that was deleted takes its tab with it.
+    automationsPage.tabs = automationsPage.tabs.filter(function(tab){ return !!automationRecordById(tab.botId, tab.automationId); });
+    var activeId = !automationsPage.open ? null : automationsPage.automationId ? automationsTabId(automationsPage.botId, automationsPage.automationId) : AUTOMATIONS_BOARD_TAB;
+    // The board's tab closes like any other; the Automations button opens it again.
+    var board = automationsPage.boardClosed ? [] : [{id:AUTOMATIONS_BOARD_TAB, label:'Automations', iconHtml:AUTOMATIONS_ICON, active:activeId === AUTOMATIONS_BOARD_TAB}];
+    automationsStripTabs = board
+      .concat(automationsPage.tabs.map(function(tab){
+        var id = automationsTabId(tab.botId, tab.automationId);
+        var row = rows.filter(function(item){ return item.botId === tab.botId && item.automationId === tab.automationId; })[0];
+        var name = row ? row.name : (automationRecordById(tab.botId, tab.automationId).automation.name || 'Automation');
+        return {id:id, label:name, title:row ? row.botName + ' \u00b7 ' + name : name, active:id === activeId,
+          iconHtml:row ? agentAvatarHtml(row.botName, row.botId, 18, 'static', row.color) : AUTOMATIONS_ICON};
+      }));
+    window.MiaTabStrip.mix.notify('automations', JSON.stringify(automationsStripTabs));
+  }
+  function moveAutomationsTab(id, targetId){
+    var tabs = automationsPage.tabs;
+    var from = tabs.findIndex(function(tab){ return automationsTabId(tab.botId, tab.automationId) === id; });
+    var to = tabs.findIndex(function(tab){ return automationsTabId(tab.botId, tab.automationId) === targetId; });
+    if(targetId === AUTOMATIONS_BOARD_TAB) to = 0;
+    if(from < 0 || to < 0 || from === to) return;
+    tabs.splice(to, 0, tabs.splice(from, 1)[0]);
+    renderAutomationsPage();
+  }
+  // Mixed tabs: the board and each open automation, shown in the other strips.
+  window.MiaTabStrip.mix.register('automations', {
+    tabs: function(){
+      if(automationsStripTabs) return automationsStripTabs;
+      return (automationsPage.boardClosed ? [] : [{id:AUTOMATIONS_BOARD_TAB, label:'Automations', iconHtml:AUTOMATIONS_ICON}]).concat(automationsPage.tabs.map(function(tab){
+        var record = automationRecordById(tab.botId, tab.automationId);
+        return {id:automationsTabId(tab.botId, tab.automationId), label:record && record.automation.name || 'Automation', iconHtml:AUTOMATIONS_ICON};
+      }));
+    },
+    // The board is the page itself, not an opened automation.
+    count: function(){ return automationsPage.tabs.length; },
+    close: closeAutomationsTab,
+    move: moveAutomationsTab,
+    show: function(){ if(!automationsPage.open) runToolsAction('automations'); },
+    select: function(id){
+      if(id === AUTOMATIONS_BOARD_TAB) showAutomationsBoard();
+      else { var tab = automationsTabById(id); if(tab) openAutomationsDetail(tab.botId, tab.automationId); }
+    },
+    render: function(){ if(automationsPage.open) renderAutomationsTabs(automationsBoardRows()); },
+  });
+  function showAutomationsBoard(){
+    automationsPage.boardClosed = false;
+    automationsPage.botId = null;
+    automationsPage.automationId = null;
+    if(chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
+    renderAutomationsPage();
+  }
+  // Closing the tab you are on shows the tab to its left, as in a browser;
+  // with no Automations tab left, the page closes.
+  function closeAutomationsTab(id){
+    if(id === AUTOMATIONS_BOARD_TAB){
+      automationsPage.boardClosed = true;
+      // Closed from another view's strip, it just leaves the strip.
+      if(!automationsPage.open || automationsPage.automationId){ renderAutomationsPage(); return; }
+      var first = automationsPage.tabs[0];
+      if(first) openAutomationsDetail(first.botId, first.automationId);
+      else closeAutomationsPage();
+      return;
+    }
+    var index = automationsPage.tabs.findIndex(function(tab){ return automationsTabId(tab.botId, tab.automationId) === id; });
+    if(index < 0) return;
+    automationsPage.tabs.splice(index, 1);
+    if(automationsPage.automationId && automationsTabId(automationsPage.botId, automationsPage.automationId) === id){
+      var left = automationsPage.tabs[index - 1] || (automationsPage.boardClosed ? automationsPage.tabs[index] : null);
+      if(left) openAutomationsDetail(left.botId, left.automationId);
+      else if(automationsPage.boardClosed) closeAutomationsPage();
+      else showAutomationsBoard();
+      return;
+    }
+    renderAutomationsPage();
   }
 
   // The chat follows the automation: its live run's conversation, else the
@@ -6146,6 +7693,7 @@
   function openAutomationsDetail(botId, automationId){
     automationsPage.botId = String(botId);
     automationsPage.automationId = String(automationId);
+    if(!automationsTabById(automationsTabId(botId, automationId))) automationsPage.tabs.push({botId:String(botId), automationId:String(automationId)});
     showAutomationsChat(botId, automationId);
     renderAutomationsPage();
     var body = el('#automationsBody');
@@ -6154,11 +7702,13 @@
 
   function openAutomationsPage(){
     closeLocalBrowser();
+    closeArtifactsPage();
     automationsPage.open = true;
+    automationsPage.boardClosed = false;
     automationsPage.botId = null;
     automationsPage.automationId = null;
     document.body.classList.add('browser-collab-mode', 'automations-mode');
-    document.body.classList.remove('browser-sidebar-open');
+    setBrowserSidebarOpen(browserSidebarWanted());
     closeChatThread();
     closeChatTasksPanel();
     chatInfo.mode = 'automations';
@@ -6177,10 +7727,173 @@
     automationsPage.automationId = null;
     document.body.classList.remove('automations-mode', 'browser-sidebar-open');
     if(!localBrowserState.open) document.body.classList.remove('browser-collab-mode');
+    applyLeftPane();
     renderAutomationsPage();
     renderChatInfoPane();
     renderChatHeaderBar();
   }
+
+  // Artifacts page: pages, documents and live apps you or your bots made,
+  // laid out like Automations. Each one opens in its own browser tab.
+  var artifactsPage = {open:false, items:[], filter:'all', query:'', loading:false, error:''};
+
+  function openArtifactsPage(){
+    closeLocalBrowser();
+    closeAutomationsPage();
+    artifactsPage.open = true;
+    document.body.classList.add('browser-collab-mode', 'artifacts-mode');
+    setBrowserSidebarOpen(browserSidebarWanted());
+    closeChatThread();
+    closeChatTasksPanel();
+    chatInfo.mode = 'automations';
+    chatInfo.open = false;
+    if(!chatWs.activeRoomId && chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
+    renderChatInfoPane();
+    renderChatHeaderBar();
+    renderArtifactsPage();
+    loadArtifacts();
+  }
+
+  function closeArtifactsPage(){
+    if(!artifactsPage.open) return;
+    artifactsPage.open = false;
+    setArtifactsAddOpen(false);
+    document.body.classList.remove('artifacts-mode', 'browser-sidebar-open');
+    if(!localBrowserState.open) document.body.classList.remove('browser-collab-mode');
+    applyLeftPane();
+    renderArtifactsPage();
+    renderChatInfoPane();
+    renderChatHeaderBar();
+  }
+
+  function loadArtifacts(){
+    artifactsPage.loading = true;
+    artifactsPage.error = '';
+    renderArtifactsPage();
+    api('/api/artifacts').then(function(res){
+      artifactsPage.loading = false;
+      if(res.status !== 200) artifactsPage.error = 'Your artifacts could not be loaded. Try again.';
+      else artifactsPage.items = Array.isArray(res.data.artifacts) ? res.data.artifacts : [];
+      renderArtifactsPage();
+    }).catch(function(){
+      artifactsPage.loading = false;
+      artifactsPage.error = 'Your artifacts could not be loaded. Try again.';
+      renderArtifactsPage();
+    });
+  }
+
+  function renderArtifactsPage(){
+    var overlay = el('#artifactsOverlay');
+    if(!overlay) return;
+    overlay.hidden = !artifactsPage.open;
+    overlay.setAttribute('aria-hidden', artifactsPage.open ? 'false' : 'true');
+    overlay.classList.toggle('open', artifactsPage.open);
+    if(!artifactsPage.open || !window.MiaArtifactsPage) return;
+    var chips = el('#artifactsChips');
+    if(chips) chips.innerHTML = window.MiaArtifactsPage.chipsHtml(artifactsPage.items, artifactsPage.filter, esc);
+    var body = el('#artifactsBody');
+    if(body) body.innerHTML = window.MiaArtifactsPage.bodyHtml(artifactsPage, esc);
+  }
+
+  // Files open from the Mia folder (the browser previews nothing outside
+  // it); live apps open by address.
+  function openArtifact(id){
+    var item = artifactsPage.items.filter(function(entry){ return entry.id === id; })[0];
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!item) return;
+    if(!browser || !browser.command){ showBenchToast('Artifacts open in the Mia desktop app.'); return; }
+    var target = item.kind === 'app' ? item.url : item.path;
+    closeArtifactsPage();
+    openWebBrowserTool();
+    browser.command({action: 'new'}).then(function(){
+      return browser.command({action: 'navigate', value: target});
+    }).then(function(state){
+      if(state && state.error) showBenchToast(state.error);
+      followBrowserTab(state && !state.error ? state : null);
+    }).catch(function(error){
+      showBenchToast(error && error.message ? error.message : 'That artifact could not be opened.');
+    });
+  }
+
+  // Sharing puts the artifact in the chat composer, the same as picking it
+  // from (+) > Artifacts, so the person chooses the chat and adds a note.
+  function shareArtifact(id){
+    var item = artifactsPage.items.filter(function(entry){ return entry.id === id; })[0];
+    if(!item) return;
+    closeArtifactsPage();
+    stageArtifact(item).then(function(staged){
+      composerAttachmentStaged();
+      if(!staged) return;
+      var input = el('#ccInput');
+      if(input) input.focus();
+      showBenchToast(chatWs.activeRoomId ? 'Added to your message in ' + (chatWs.activeLabel || 'this chat') + '. Switch chats to send it elsewhere.' : 'Added to your message. Open a chat to send it.');
+    });
+  }
+
+  // A live app is a saved link, so × just forgets it. A file is moved to the
+  // Trash after the person confirms, so it can still be restored.
+  function removeArtifact(id){
+    var item = artifactsPage.items.filter(function(entry){ return entry.id === id; })[0];
+    if(!item) return;
+    if(item.kind === 'app'){
+      api('/api/artifacts/links/' + encodeURIComponent(id), {method: 'DELETE'}).then(loadArtifacts, loadArtifacts);
+      return;
+    }
+    if(!window.confirm('Move "' + item.name + '" to the Trash?')) return;
+    api('/api/artifacts/file?id=' + encodeURIComponent(id), {method: 'DELETE'}).then(function(){
+      showBenchToast('"' + item.name + '" moved to the Trash.');
+      loadArtifacts();
+    }, function(error){
+      showBenchToast(error && error.message ? error.message : 'That file could not be moved to the Trash.');
+      loadArtifacts();
+    });
+  }
+
+  function setArtifactsAddOpen(open){
+    var form = el('#artifactsAddForm');
+    if(!form) return;
+    form.hidden = !open;
+    var error = el('#artifactsAddError');
+    if(error) error.textContent = '';
+    if(open){ var url = el('#artifactsAddUrl'); if(url) url.focus(); }
+    else form.reset();
+  }
+
+  (function wireArtifactsPage(){
+    var overlay = el('#artifactsOverlay');
+    if(!overlay) return;
+    var close = el('#artifactsCloseBtn');
+    if(close) close.addEventListener('click', closeArtifactsPage);
+    var search = el('#artifactsSearch');
+    if(search) search.addEventListener('input', function(){ artifactsPage.query = search.value; renderArtifactsPage(); });
+    overlay.addEventListener('click', function(e){
+      var filter = e.target.closest('[data-artifacts-filter]');
+      if(filter){ artifactsPage.filter = filter.getAttribute('data-artifacts-filter'); renderArtifactsPage(); return; }
+      if(e.target.closest('[data-artifacts-add]')){ setArtifactsAddOpen(true); return; }
+      var share = e.target.closest('[data-artifact-share]');
+      if(share){ shareArtifact(share.getAttribute('data-artifact-share')); return; }
+      var remove = e.target.closest('[data-artifact-remove]');
+      if(remove){ removeArtifact(remove.getAttribute('data-artifact-remove')); return; }
+      var open = e.target.closest('[data-artifact-open]');
+      if(open) openArtifact(open.getAttribute('data-artifact-open'));
+    });
+    var cancel = el('#artifactsAddCancel');
+    if(cancel) cancel.addEventListener('click', function(){ setArtifactsAddOpen(false); });
+    var form = el('#artifactsAddForm');
+    if(form) form.addEventListener('submit', function(e){
+      e.preventDefault();
+      var url = el('#artifactsAddUrl').value.trim();
+      var name = el('#artifactsAddName').value.trim();
+      var error = el('#artifactsAddError');
+      if(!url){ error.textContent = 'Enter an address, like http://localhost:3000.'; return; }
+      if(!/^[a-z][a-z\d+.-]*:\/\//i.test(url)) url = (/^(localhost|127\.0\.0\.1)(:|\/|$)/i.test(url) ? 'http://' : 'https://') + url;
+      api('/api/artifacts/links', {method: 'POST', body: {url: url, name: name}}).then(function(res){
+        if(res.status !== 201){ error.textContent = res.data && res.data.message || 'That app could not be added.'; return; }
+        setArtifactsAddOpen(false);
+        loadArtifacts();
+      }).catch(function(){ error.textContent = 'That app could not be added.'; });
+    });
+  })();
 
   (function wireAutomationsPage(){
     var overlay = el('#automationsOverlay');
@@ -6305,6 +8018,8 @@
     return closed;
   }
   if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.command){
+    // The browser opens Solo's tabs at launch; show this workspace's.
+    Promise.resolve(window.miaDesktop.browser.command({ action: 'workspace', key: activeWorkspaceKey })).catch(function(){});
     Promise.resolve(window.miaDesktop.browser.command({ action: 'state' })).then(function(initial){
       if(seenLastTabCloses === null && initial && Number.isFinite(Number(initial.lastTabCloses))) seenLastTabCloses = Number(initial.lastTabCloses);
     }).catch(function(){});
@@ -6484,9 +8199,25 @@
       return piece.match ? '<strong>' + esc(piece.text) + '</strong>' : esc(piece.text);
     }).join('');
   }
+  var LOCAL_BROWSER_SUGGEST_CHAT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_AUTOMATION = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_STEP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"></path></svg>';
   function localBrowserSuggestRow(item, i, query){
     var icon, line;
-    if(item.kind === 'search'){
+    if(item.kind === 'person' || item.kind === 'chat' || item.kind === 'automation' || item.kind === 'step' || item.kind === 'message'){
+      var target = item.target || {};
+      icon = '<span class="local-browser-suggest-icon">' + (item.kind === 'person'
+        ? (target.kind === 'human' ? '<span class="local-browser-suggest-avatar">' + humanAvatarContent(target.id) + '</span>' : agentAvatarHtml(target.name, target.id, 18, null, null, false))
+        : item.kind === 'chat' || item.kind === 'message' ? LOCAL_BROWSER_SUGGEST_CHAT
+        : item.kind === 'automation' ? LOCAL_BROWSER_SUGGEST_AUTOMATION : LOCAL_BROWSER_SUGGEST_STEP) + '</span>';
+      var title = item.kind === 'step' || item.kind === 'message' ? item.text : target.name;
+      var hint = item.kind === 'person' ? target.sub
+        : item.kind === 'message' ? target.author
+        : item.kind === 'automation' ? target.botName
+        : item.kind === 'step' ? 'Step ' + item.number + ' of ' + target.name : target.sub || '';
+      line = '<span class="local-browser-suggest-title">' + localBrowserSuggestMarkup(title || '', query) + '</span>' +
+        (hint ? '<span class="local-browser-suggest-sep"> – </span><span class="local-browser-suggest-hint">' + esc(hint) + '</span>' : '');
+    } else if(item.kind === 'search'){
       icon = '<span class="local-browser-suggest-icon">' + LOCAL_BROWSER_SUGGEST_SEARCH + '</span>';
       line = '<span class="local-browser-suggest-title">' + esc(item.query) + '</span>' +
         '<span class="local-browser-suggest-sep"> – </span>' +
@@ -6517,7 +8248,9 @@
       return;
     }
     box.innerHTML = localBrowserSuggestItems.map(function(item, i){
-      return localBrowserSuggestRow(item, i, localBrowserSuggestTyped);
+      return (item.groupTitle ? '<div class="local-browser-suggest-group" role="presentation">' + esc(item.groupTitle) + '</div>' : '') +
+        (item.partLabel ? '<div class="local-browser-suggest-part" role="presentation">' + esc(item.partLabel) + '</div>' : '') +
+        localBrowserSuggestRow(item, i, localBrowserSuggestTyped);
     }).join('');
     box.hidden = false;
     if(input) input.setAttribute('aria-expanded', 'true');
@@ -6530,16 +8263,92 @@
     edit = edit || { value: input.value, start: input.selectionStart, end: input.selectionEnd };
     var caretAtEnd = edit.start === edit.value.length && edit.end === edit.value.length;
     localBrowserSuggestTyped = edit.value;
+    var view = localBrowserSuggestView();
+    // Only fill in an address when the browser's group leads.
     var result = window.MiaBrowserOmnibox.suggest(history, localBrowserSuggestTyped, {
-      complete: complete && caretAtEnd,
+      complete: complete && caretAtEnd && (view === null || view === 'browser'),
       looksLikeUrl: localBrowserLooksLikeUrl,
     });
+    result = {completion: result.completion, rows: localBrowserEverywhereRows(result.rows, view)};
     localBrowserSuggestCompletion = result.completion && result.completion.remainder ? result.completion : null;
     if(localBrowserSuggestCompletion){
       input.value = localBrowserSuggestTyped + localBrowserSuggestCompletion.remainder;
       input.setSelectionRange(localBrowserSuggestTyped.length, input.value.length);
     }
     renderLocalBrowserSuggest(result);
+  }
+  // What you are doing decides which group leads: the view showing now,
+  // with tabs mixed or not.
+  function localBrowserSuggestView(){
+    var classes = document.body.classList;
+    return classes.contains('automations-mode') ? 'automations' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+  }
+  function localBrowserEverywhereSources(browserRows){
+    var directory = chatSearchDirectorySnapshot();
+    var people = directory.humans.map(function(user){
+      var email = String(user && user.email || '');
+      return {kind:'human', id:email, name:displayNameForEmail(email), sub:email};
+    }).concat(directory.agents.map(function(agent){
+      var record = chatSearchAgentRecord(agent) || agent;
+      var id = String(record.id || agent.id || '');
+      return {kind:'agent', id:id, name:String(record.name || agent.name || id || 'Bot'), sub:id === 'gateway' ? 'Agent' : 'Bot'};
+    }));
+    var rooms = hubWorkspace() ? (chatWs.rooms.dms || []) : (chatWs.nativeConversations || []).map(nativeConversationToRoom);
+    // A bot's main chat is its People row; history keeps the rest, dated
+    // so same-named conversations can be told apart.
+    var mainRooms = {};
+    directory.agents.forEach(function(agent){
+      var record = chatSearchAgentRecord(agent) || agent;
+      if(record.roomId) mainRooms[record.roomId] = true;
+    });
+    var chats = rooms.filter(function(room){ return !mainRooms[room.roomId]; }).map(function(room){
+      var name = room.kind === 'department' ? (room.department || room.name)
+        : (room.kind === 'dm' || (room.kind === 'group' && !hubWorkspace())) ? dmLabel(room) : room.name;
+      var created = Date.parse(room.createdAt || '');
+      return {roomId:room.roomId, kind:room.kind, name:String(name || 'Conversation'),
+        sub:created ? new Date(created).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : ''};
+    });
+    var automations = automationsBoardRows().map(function(row){
+      return {botId:row.botId, automationId:row.automationId, name:row.name, botName:row.botName, steps:row.steps || []};
+    });
+    return {browser:browserRows, people:people, chats:chats, automations:automations, current:localBrowserCurrentChat()};
+  }
+  // The open chat's messages, newest first, for "In <chat>" results.
+  function localBrowserCurrentChat(){
+    if(localBrowserSuggestView() !== 'chat' || !chatWs.activeRoomId) return null;
+    var state = chatWs.byRoom[chatWs.activeRoomId];
+    var messages = (state && state.messages || []).filter(function(m){ return m && m.id && !m.system && !m.deleted; }).map(function(m){
+      var signed = m.hubAuthor ? {agent:m.hubAuthor, text:m.body} : parseSignedHumanBody(m.body);
+      var email = signed.agent || '';
+      var author = m.nativeAgentName || (email ? (email.toLowerCase() === String(currentUser || '').toLowerCase() ? 'You' : displayNameForEmail(email)) : '');
+      return {id:String(m.id), text:String(email ? signed.text : m.body || ''), author:author};
+    }).reverse();
+    return {roomId:chatWs.activeRoomId, name:chatWs.activeLabel || 'this chat', messages:messages};
+  }
+  // Scrolls the open chat to a message and briefly marks it.
+  function revealChatMessage(id){
+    var row = Array.prototype.filter.call(document.querySelectorAll('#chatThread [data-event-id]'), function(node){ return node.getAttribute('data-event-id') === id; })[0];
+    if(!row) return;
+    row.scrollIntoView({block:'center', behavior:'smooth'});
+    row.classList.remove('chat-msg-found');
+    void row.offsetWidth;
+    row.classList.add('chat-msg-found');
+  }
+  // Flattens the groups into one list; the first row of each group and
+  // part carries its heading.
+  function localBrowserEverywhereRows(browserRows, view){
+    var rows = [];
+    window.MiaBrowserOmnibox.everywhere(localBrowserSuggestTyped, localBrowserEverywhereSources(browserRows), {view:view}).forEach(function(group){
+      group.parts.forEach(function(part, p){
+        part.rows.forEach(function(row, r){
+          rows.push(Object.assign({}, row, {
+            groupTitle: p === 0 && r === 0 ? group.title : '',
+            partLabel: r === 0 && part.label ? part.label : ''
+          }));
+        });
+      });
+    });
+    return rows;
   }
   function queueLocalBrowserSuggest(input, complete){
     // Freeze the actual edit before history IPC resolves. An inline completion
@@ -6561,6 +8370,37 @@
   }
   function chooseLocalBrowserSuggest(item, input){
     if(!item) return;
+    if(item.kind === 'message'){
+      if(input) input.value = '';
+      closeLocalBrowserSuggest();
+      if(input) input.blur();
+      revealChatMessage(item.target.id);
+      return;
+    }
+    if(item.kind === 'person' || item.kind === 'chat'){
+      var target = item.target;
+      if(input) input.value = '';
+      closeLocalBrowserSuggest();
+      if(input) input.blur();
+      closeBrowserSidebarDrawer();
+      closeLocalBrowser();
+      closeAutomationsPage();
+      if(item.kind === 'chat') loadChatRoom(target.roomId, target.kind, target.name);
+      else if(target.kind === 'human') openHumanDirectMessage(target.id, false);
+      else {
+        var agent = chatSearchDirectorySnapshot().agents.filter(function(candidate){ return String(candidate.id || '') === target.id; })[0];
+        if(agent) navigateToAgentChat(chatSearchAgentRecord(agent), true);
+      }
+      return;
+    }
+    if(item.kind === 'automation' || item.kind === 'step'){
+      if(input) input.value = '';
+      closeLocalBrowserSuggest();
+      if(input) input.blur();
+      openAutomationsPage();
+      openAutomationsDetail(item.target.botId, item.target.automationId);
+      return;
+    }
     var target = item.kind === 'search' ? item.query : (item.url || item.value);
     if(input) input.value = item.kind === 'search' ? item.query : (item.url || item.value);
     closeLocalBrowserSuggest();
@@ -6589,14 +8429,6 @@
     }).catch(function(){});
   }
 
-  function browserSidebarOwnsClick(target, drawer, toggle, portaledMenu){
-    return !!target && !!(
-      (drawer && drawer.contains(target)) ||
-      (toggle && toggle.contains(target)) ||
-      (portaledMenu && portaledMenu.contains(target))
-    );
-  }
-
   (function wireLocalBrowser(){
     var form = el('#localBrowserForm');
     var input = el('#localBrowserUrl');
@@ -6613,8 +8445,8 @@
       });
     }
     if(searchEnginePicker){
-      try { localBrowserSearchEngine = localStorage.getItem(LOCAL_BROWSER_SEARCH_ENGINE_KEY) === 'x' ? 'x' : 'google'; }
-      catch(_browserSearchReadError){ localBrowserSearchEngine = 'google'; }
+      // Searching on X is off for now: the bar always searches Google.
+      localBrowserSearchEngine = 'google';
       renderLocalBrowserSearchEngine();
       searchEnginePicker.addEventListener('click', function(event){
         var button = event.target.closest('[data-search-engine]');
@@ -6628,6 +8460,14 @@
     }
     if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onOpen){
       window.miaDesktop.browser.onOpen(function(action){
+        // In the chat view, Cmd/Ctrl+T opens a new chat and Cmd/Ctrl+W closes
+        // the current chat tab, the same keys the browser uses for its tabs.
+        if(chatViewShowing() && (action === 't' || action === 'w')){
+          if(action === 't') runToolsAction('new-chat');
+          else closeChatTab(chatWs.activeRoomId);
+          return;
+        }
+        if(action === 'w') return;
         openWebBrowserTool();
         window.setTimeout(function(){
           if(window.miaNativeBrowser && window.miaNativeBrowser.menuAction) window.miaNativeBrowser.menuAction(action);
@@ -6640,8 +8480,9 @@
       localBrowserNavigate(input ? input.value : '');
     });
     var suggestBox = el('#localBrowserUrlSuggest');
-    if(input && localBrowserHistorySupported()){
+    if(input && window.MiaBrowserOmnibox){
       input.addEventListener('focus', function(){
+        if(!chatSearchDirectory.loaded) loadChatSearchDirectory();
         // History changes as you browse, so each visit to the bar reloads it.
         loadLocalBrowserHistory(true);
       });
@@ -6714,47 +8555,20 @@
       if(window.miaNativeBrowser) window.miaNativeBrowser.action('reload');
     });
     if(close) close.addEventListener('click', closeLocalBrowser);
-    var sidebarClose = el('#chatSidebarDrawerClose');
     // The browser toolbar and the Automations page each have a "Your bots"
-    // icon; both open the same drawer.
-    var sidebarToggles = [sidebar, el('#automationsSidebarBtn')].filter(Boolean);
-    function setBrowserSidebarOpen(open){
-      document.body.classList.toggle('browser-sidebar-open', open);
-      sidebarToggles.forEach(function(toggle){
-        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-        toggle.setAttribute('aria-label', open ? 'Close your bots' : 'Open your bots');
-        toggle.setAttribute('title', 'Your bots');
-      });
-    }
-    sidebarToggles.forEach(function(toggle){
+    // icon; both open the same docked panel.
+    // In the chat, the same button folds the sidebar out of the layout.
+    [sidebar, el('#automationsSidebarBtn')].filter(Boolean).forEach(function(toggle){
       toggle.addEventListener('click', function(){
-        setBrowserSidebarOpen(!document.body.classList.contains('browser-sidebar-open'));
+        var collab = document.body.classList.contains('browser-collab-mode');
+        var open = collab ? !document.body.classList.contains('browser-sidebar-open') : !browserSidebarWanted();
+        try { localStorage.setItem(BROWSER_SIDEBAR_CLOSED_KEY, open ? '0' : '1'); } catch(_sidebarStorageError) {}
+        if(collab) setBrowserSidebarOpen(open);
+        applyLeftPane();
       });
     });
-    if(sidebarClose) sidebarClose.addEventListener('click', function(){
-      setBrowserSidebarOpen(false);
-    });
-    document.addEventListener('click', function(event){
-      if(!document.body.classList.contains('browser-sidebar-open')) return;
-      var drawer = el('.chat-sidebar');
-      var portaledMenu = el('#chatSidebarCtxMenu');
-      var toggles = {contains:function(target){ return sidebarToggles.some(function(toggle){ return toggle.contains(target); }); }};
-      if(browserSidebarOwnsClick(event.target, drawer, toggles, portaledMenu)) return;
-      // Capture and consume the click before any underlying chat, toolbar, or
-      // restored native browser surface can act on it.
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setBrowserSidebarOpen(false);
-    }, true);
-    // Picking a chat keeps the drawer open, so you can flick between bots;
-    // the chat opens beside it. The button, Esc, or a click outside (which
-    // is swallowed, never landing on a tab) closes it.
-    document.addEventListener('keydown', function(event){
-      if(event.key !== 'Escape' || !document.body.classList.contains('browser-sidebar-open')) return;
-      if(event.target && event.target.closest && event.target.closest('input, textarea, [contenteditable="true"]')) return;
-      setBrowserSidebarOpen(false);
-    });
+    // The panel is docked, not modal: it stays open while you use the page
+    // or the chat, and only its own button closes it.
     renderLocalBrowser();
   })();
 
@@ -6990,13 +8804,6 @@
       developer.setAttribute('aria-expanded', developerOpen ? 'true' : 'false');
       developer.setAttribute('aria-label', developerOpen ? 'Close developer menu' : 'Open developer menu');
     }
-    var tools = el('#chatSidebarToolsBtn');
-    var toolsMenu = el('#chatToolsMenu');
-    if(!tools) return;
-    var toolsOpen = !!(toolsMenu && toolsMenu.classList.contains('open'));
-    tools.classList.toggle('active', toolsOpen);
-    tools.setAttribute('aria-expanded', toolsOpen ? 'true' : 'false');
-    tools.setAttribute('aria-label', toolsOpen ? 'Close tools menu' : 'Open tools menu');
   }
 
   // Active tasks belonging to one agent — drives the sidebar dots, the
@@ -7438,6 +9245,7 @@
   }
 
   function setLocalChatTypingActivity(active){
+    if(hubWorkspace()){ if(active) sendHubTyping(); return; }
     if(localChatTyping.timer){
       clearTimeout(localChatTyping.timer);
       localChatTyping.timer = null;
@@ -7698,6 +9506,14 @@
   }
   function notifyDesktopChatMessage(roomId, message){
     if((roomId === chatWs.activeRoomId && appInForeground()) || !desktopNotificationsEnabled()) return;
+    if(message && message.hubMessage){
+      var channel = hubChannel(roomId);
+      var sender = message.nativeAgentName || displayNameForEmail(message.hubAuthor || '') || 'Someone';
+      var drive = googleDriveMessageDisplay(message.body);
+      var body = drive.text.trim() || (drive.files.length ? 'Shared a Google Drive file' : message.hubFile ? 'Sent an image' : '');
+      showDesktopNotification(roomId, sender + (channel && !hubPrivateConversation(channel) && channel.name ? ' in #' + channel.name : ''), excerpt(body.replace(/\s+/g, ' '), 120) || 'New message');
+      return;
+    }
     var parsed = message && isHumanSender(message.sender)
       ? parseSignedHumanBody(message.body)
       : parseSignedBody(message && message.body);
@@ -7763,6 +9579,7 @@
     return localparts;
   }
   function isHumanSender(sender){
+    if(hubWorkspace()) return String(sender||'').indexOf('hub-bot:')!==0;
     var identity = String(sender || '').toLowerCase();
     var local = identity.split('@')[0];
     var known = chatKnownHumanLocalparts();
@@ -8350,7 +10167,7 @@
   // identity exactly the way chatMsgHtml's isHuman branch does, or a run of
   // messages could group under the wrong name.
   function chatHumanSenderKey(m){
-    var email = parseSignedHumanBody(m.body).agent;
+    var email = m.hubAuthor || parseSignedHumanBody(m.body).agent;
     if(!email || email.toLowerCase() === (currentUser || '').toLowerCase()) return 'me';
     return email.toLowerCase();
   }
@@ -8360,6 +10177,7 @@
   // authorization rule exactly (see stripHumanSignedBody there), so a button
   // never offers a delete the server would then 403 on.
   function chatMsgDeletable(m){
+    if(m.sendFailed) return true; // an undelivered copy exists only here
     if(m.system || m.pending) return false;
     if(isAdmin) return true; // admins can delete anyone's messages (server enforces the same rule)
     if(!isHumanSender(m.sender)) return true;
@@ -8372,10 +10190,15 @@
   // prompt belonging to the signed-in user may be re-sent. The original
   // event is not changed; the edit action creates a new root prompt.
   function chatMsgEditable(m){
-    if(m.system || m.pending || !isHumanSender(m.sender)) return false;
+    if(m.system || m.pending || m.sendFailed || !isHumanSender(m.sender)) return false;
     var senderEmail = parseSignedHumanBody(m.body).agent;
     if(!senderEmail) return true;
     return senderEmail.toLowerCase() === (currentUser || '').toLowerCase();
+  }
+
+  function hubEditablePrompt(roomId, eventId){
+    var message = roomId && (chatRoomState(roomId).messages || []).filter(function(m){ return m.id === eventId; })[0];
+    return message && !message.hubLocal && !message.deleted && hubOwnMessage(message) ? String(message.body || '').trim() : null;
   }
 
   function editableChatPromptForEvent(roomId, eventId){
@@ -8436,7 +10259,9 @@
     var previewUrl = esc(media.previewUrl || ((media.url || '').indexOf('?') === -1 ? (media.url + '?preview=true') : (media.url + '&preview=true')));
     var mediaName = esc(media.filename || 'Attachment');
     var mediaType = String(media.mimeType || '').toLowerCase();
-    var canPreview = !!(media.canPreview || nativeAttachmentCanPreview(mediaType));
+    // Team files are held as blob URLs that only the image viewer can show,
+    // so a team PDF offers Download instead of a preview.
+    var canPreview = !!(media.canPreview || nativeAttachmentCanPreview(mediaType)) && !(/^blob:/.test(media.url || '') && !nativeAttachmentIsRaster(mediaType));
     var previewButton = canPreview
       ? '<button type="button" class="chat-artifact-preview" data-chat-artifact-preview data-preview-url="' + previewUrl + '">Preview</button>'
       : '';
@@ -8470,6 +10295,33 @@
     });
   }
 
+  // Shared-team images are held in this page as blob URLs, which the shell
+  // cannot open, so they preview in an overlay instead of Mia's browser.
+  function openChatImageViewer(url, card){
+    var nameNode = card && card.querySelector('.chat-artifact-name');
+    var overlay = document.createElement('div');
+    overlay.className = 'chat-image-viewer';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', nameNode ? nameNode.textContent : 'Image');
+    var image = document.createElement('img');
+    image.src = url;
+    image.alt = nameNode ? nameNode.textContent : '';
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'chat-image-viewer-close';
+    close.setAttribute('aria-label', 'Close image');
+    close.textContent = '\u00d7';
+    overlay.append(image, close);
+    function dismiss(){ overlay.remove(); document.removeEventListener('keydown', onKey, true); }
+    function onKey(event){ if(event.key === 'Escape'){ event.stopPropagation(); dismiss(); } }
+    overlay.addEventListener('click', function(event){ if(event.target !== image) dismiss(); });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(overlay);
+    close.focus();
+    return overlay;
+  }
+
   function wireChatArtifactPreviews(container){
     if(!container || container.getAttribute('data-artifact-preview-wired') === '1') return;
     container.setAttribute('data-artifact-preview-wired', '1');
@@ -8479,6 +10331,7 @@
       event.preventDefault();
       var url = button.getAttribute('data-preview-url');
       if(!url) return;
+      if(/^blob:/.test(url)){ openChatImageViewer(url, button.closest('.chat-artifact-card')); return; }
       var desktopBrowser = window.miaDesktop && window.miaDesktop.browser;
       if(desktopBrowser && typeof desktopBrowser.prepareAttachment === 'function' && window.miaNativeBrowser){
         openAttachmentInMiaBrowser(url);
@@ -8502,9 +10355,27 @@
   // only Delete applies (no thread-on-thread). opts.footerHtml: extra markup
   // (thread pill / thread box) appended inside the body column, below the
   // text — only ever passed for main-timeline rows.
+  document.addEventListener('click',function(event){
+    var button=event.target.closest('[data-hub-admission-action]');
+    if(!button || !hubWorkspace())return;
+    var roomId=chatWs.activeRoomId,workspace=activeWorkspaceKey;
+    window.MiaHubBots.decide({teamId:workspace.slice(4),channelId:roomId,
+      refresh:function(){if(activeWorkspaceKey===workspace && chatWs.activeRoomId===roomId)return refreshHubBotState(roomId,true);}},
+      button.getAttribute('data-bot-id'),Number(button.getAttribute('data-version')),button.getAttribute('data-hub-admission-action'),button);
+  });
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
     if(m.system){
+      if(m.hubBotRequest && hubWorkspace()){
+        var request=m.hubBotRequest;
+        var roster=chatRoomState(chatWs.activeRoomId).hubBots;
+        if(Array.isArray(roster)){
+          var current=roster.find(function(bot){return bot.id===request.id;});
+          if(current && current.admission)request=current.admission;
+          else if(!current)return '<div class="chat-msg-system"><p>Bot sharing request removed.</p></div>';
+        }
+        return window.MiaHubBots.admissionHtml(request,displayNameForEmail(request.requester_email));
+      }
       var systemAvatar = '';
       if(m.member && m.member.kind === 'agent'){
         systemAvatar = agentAvatarHtml(m.member.label, m.member.id, 24, null, null, false);
@@ -8515,14 +10386,16 @@
       return '<div class="chat-msg-system' + (systemAvatar ? ' with-avatar' : '') + '">' + avatarHtml + '<p>' + esc(m.body) + '</p></div>';
     }
     var media = m.media && m.media.url ? m.media : null;
-    var attachments = Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (media ? [media] : []);
+    var attachments = m.hubMessage ? hubAttachmentsFor(m) : Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (media ? [media] : []);
     var hasMedia = attachments.length > 0;
     var isHuman = isHumanSender(m.sender);
     if(!isHuman && isSupersededNativeProgressMessage(m)) return '';
     var isOwnHuman = false;
-    var botBody = isHuman ? m.body : displayBotBody(m.body);
+    // Teammates' own shared-channel messages are shown as written; bot replies
+    // there get the same display cleaning as Solo.
+    var botBody = isHuman || (m.hubMessage && m.hubAuthor) ? m.body : displayBotBody(m.body);
     if(!isHuman && !botBody && !hasMedia) return '';
-    var timeText = m.pending ? 'sending&hellip;' : esc(chatRelTime(m.ts));
+    var timeText = m.pending ? 'sending&hellip;' : m.sendFailed ? 'not delivered' : esc(chatRelTime(m.ts));
     var mark, name, tag, text;
     if(isHuman){
       // Every human send shares one server-side app identity, so
@@ -8533,9 +10406,9 @@
       // shapes identically; an untagged message (a single-human room, or an
       // older message from before this existed) just falls back to "You",
       // same as always.
-      var humanParsed = parseSignedHumanBody(m.body);
+      var humanParsed = m.hubAuthor ? {agent:m.hubAuthor,text:m.body} : parseSignedHumanBody(m.body);
       var senderEmail = humanParsed.agent;
-      isOwnHuman = !senderEmail || senderEmail.toLowerCase() === (currentUser || '').toLowerCase();
+      isOwnHuman = m.hubMessage ? hubOwnMessage(m) : !senderEmail || senderEmail.toLowerCase() === (currentUser || '').toLowerCase();
       mark = humanAvatarInitialsHtml(isOwnHuman ? currentUser : senderEmail);
       name = isOwnHuman ? 'You' : displayNameForEmail(senderEmail);
       tag = '';
@@ -8554,7 +10427,7 @@
       // now; the gateway's own unsigned replies simply don't match
       // parseSignedBody's regex and pass through untouched.
       var signed = chatWs.activeKind === 'department' || chatWs.activeKind === 'dm' || chatWs.activeKind === 'agent' || chatWs.activeKind === 'home';
-      var parsed = signed ? parseSignedBody(botBody) : {agent: null, text: botBody};
+      var parsed = signed && !m.hubMessage ? parseSignedBody(botBody) : {agent: null, text: botBody};
       name = m.nativeAgentName || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
       mark = esc(benchMark(name));
       tag = agentTagFor(name);
@@ -8565,17 +10438,20 @@
     if(!text && !hasMedia && !driveDisplay.files.length) return '';
     var visuallyGrouped = grouped && isHuman;
     var markCol = visuallyGrouped
-      ? '<span class="chat-msg-mark-time">' + timeText + '</span>'
+      // The group header already shows the time; follow-ups only show a send status.
+      ? '<span class="chat-msg-mark-time">' + (m.pending || m.sendFailed ? timeText : '') + '</span>'
       : '<span class="chat-msg-mark' + (isHuman ? '' : ' agent') + (!isHuman && isMiaOrchestrator(name, name === 'Mia' ? 'gateway' : null) ? ' mia-mark-host' : '') + '">' + (isHuman ? mark : agentAvatarHtml(name, name === 'Mia' ? 'gateway' : null, 28, null, null, true)) + '</span>';
     // Message actions use the shared context menu, which reads the row's
     // existing permission attributes instead of recomputing them on click.
-    var showThreadAction = !opts.inThread && !m.pending;
-    var showDeleteAction = chatMsgDeletable(m);
-    var showEditAction = chatMsgEditable(m);
-    var isPreReasoning = !!text && isPreReasoningNotice(text);
+    var showThreadAction = !opts.inThread && !m.pending && !m.sendFailed && !(m.hubMessage && (m.hubLocal || m.deleted));
+    var showDeleteAction = m.hubMessage ? hubMessageDeletable(m) : chatMsgDeletable(m);
+    var showEditAction = m.hubMessage ? !m.hubLocal && !m.deleted && hubOwnMessage(m) && !!String(m.body||'').trim() : chatMsgEditable(m);
+    var isPreReasoning = !m.hubAuthor && !!text && isPreReasoningNotice(text);
     var compactBrowserMessage = !!text && document.body.classList.contains('browser-collab-mode');
     var isLongMessage = !!text && (compactBrowserMessage || chatMessageWordCount(text) > CHAT_MESSAGE_PREVIEW_WORDS);
     var liveProgress = !isHuman && isLatestLiveProgressMessage(m);
+    // Shared-channel text renders exactly like Solo: mdLite escapes all HTML
+    // and only turns markdown into formatting, so teammates' text is safe.
     var messageHtml = text ? (liveProgress
       ? '<span class="chat-thinking-shimmer">' + esc(text) + '</span>'
       : (isPreReasoning ? chatPreReasoningHtml(text, compactBrowserMessage) : (isLongMessage ? chatExpandableMessageHtml(text, false, compactBrowserMessage) : mdLite(text)))) : '';
@@ -8592,13 +10468,15 @@
     var directRoom = isDirectChatRoom();
     var messageClass = liveProgress ? ' chat-msg-thinking' : (isPreReasoning ? ' chat-pre-reasoning' : (isLongMessage ? ' chat-expandable-message' : ''));
     var retryAttempted = !!chatRetryAttempts[m.id];
-    var retryHtml = opts.inThread && !isHuman && !m.pending && chatRetryableFailure(text)
+    var retryHtml = m.sendFailed
+      ? '<div class="chat-msg-retry-row"><span class="chat-msg-failed" role="alert">' + esc(m.sendError || 'Not delivered.') + '</span><button type="button" class="chat-msg-retry" data-send-retry="' + esc(m.id) + '">Retry</button></div>'
+      : opts.inThread && !isHuman && !m.pending && chatRetryableFailure(text)
       ? '<div class="chat-msg-retry-row"><button type="button" class="chat-msg-retry" data-chat-retry data-retry-event-id="' + esc(m.id) + '"' +
           (retryAttempted ? ' disabled' : '') + '>' + (retryAttempted ? 'Retried' : 'Retry') + '</button></div>'
       : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + chatMsgExtras(m) + (opts.footerHtml || '') + '</div></div>';
+      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (opts.footerHtml || '') + '</div></div>';
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed
@@ -9009,14 +10887,16 @@
     createBotFromSetupPayload(prepared.payload, controller ? {signal:controller.signal} : {}, agentSetup).then(function(result){
       if(agentSetup.requestId !== attempt || agentSetup.phase !== 'activating') return;
       var created = result.created, conversation = result.conversation;
-      var onCreated = agentSetup.onCreated;
+      var onCreated = agentSetup.onCreated, teamTarget = agentSetup.teamTarget;
       agentSetup.onCreated = null;
+      agentSetup.teamTarget = null;
       clearAgentSetupRequest(false);
       agentSetup.created = created;
       agentSetup.liveRoomId = conversation.id;
       agentSetup.phase = 'idle';
       adoptCreatedBot(created, conversation);
       if(onCreated) try { onCreated({botId:String(created.id), name:String(created.name || '')}); } catch(_){}
+      if(teamTarget) return addCreatedBotToTeam(created, conversation, teamTarget);
       if(!agentSetupAutomationRequest(draft)) chatRoomState(conversation.id).localWelcome = buildAgentSetupWelcomeMessage(conversation.id, created, draft);
       loadChatRoom(conversation.id, 'agent', created.name);
       handOffAgentSetupAutomation(conversation.id, draft);
@@ -9091,6 +10971,12 @@
     renderGoalChip();
     renderChatActivityPanel();
     captureRenderedChatScroll(thread);
+    // Whatever replaces the placeholder bars fades in once this render ends.
+    if(thread.hasAttribute('data-placeholder')){
+      thread.removeAttribute('data-placeholder');
+      Promise.resolve().then(function(){ if(!thread.hasAttribute('data-placeholder')) revealLoaded(thread); });
+    }
+    if(chatWs.configured === null && sidebarPlaceholderShown) return showChatThreadPlaceholder(thread);
     if(chatWs.activeKind === 'agent-setup'){
       thread.removeAttribute('data-chat-scroll-room');
       syncChatJumpLatest(null, null);
@@ -9099,7 +10985,7 @@
     }
     if(chatWs.configured === false){
       thread.removeAttribute('data-chat-scroll-room');
-      thread.innerHTML = '<div class="no-data">Native chat unavailable</div>';
+      thread.innerHTML = '<div class="no-data">'+esc(hubWorkspace() ? (hubChat.error || 'Shared chat unavailable') : 'Native chat unavailable')+'</div>';
       syncChatJumpLatest(null, null);
       return;
     }
@@ -9114,6 +11000,7 @@
     updateChatSuggestions(roomId);
     if(chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)) syncMiaBotSetupRequest(roomId, state);
     var botDraftFlow = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel) ? state.botDraft : null;
+    if(hubWorkspace() && !state.historyInitialized && !state.messages.length && !state.thinking) return showChatThreadPlaceholder(thread);
     if(!state.messages.length && !state.thinking && !botDraftFlow){
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
         ? esc(miaEmptyGreeting(currentRealProfileName()))
@@ -9363,6 +11250,13 @@
     if(!roomId || !eventId) return;
     appConfirm('Delete this message?').then(function(ok){
       if(!ok) return;
+      if(hubWorkspace()) return deleteHubMessage(roomId, eventId);
+      var state = chatRoomState(roomId);
+      if(state.messages.some(function(m){ return m.id === eventId && m.sendFailed; })){
+        state.messages = state.messages.filter(function(m){ return m.id !== eventId; });
+        renderChatSidebar(); renderChatThread();
+        return;
+      }
       api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId)), {method:'DELETE'}).then(function(res){
         if(res.status !== 200) return;
         if(res.data && res.data.event) applyNativeEvent(res.data.event);
@@ -9375,9 +11269,9 @@
   // no stored event is rewritten and no automatic redo is triggered.
   function handleEditChatMessage(eventId){
     var roomId = chatWs.activeRoomId;
-    var original = editableChatPromptForEvent(roomId, eventId);
+    var original = hubWorkspace() ? hubEditablePrompt(roomId, eventId) : editableChatPromptForEvent(roomId, eventId);
     if(!roomId || !original) return;
-    appPrompt(original).then(function(result){
+    appPrompt(original, {title: 'Edit and resend', message: 'Your edited text is sent as a new message. The original stays.', submitLabel: 'Send'}).then(function(result){
       if(!result || !result.ok || !result.text.trim()) return;
       if(chatWs.activeRoomId !== roomId) return;
       sendActiveRoomMessage(result.text.trim());
@@ -9536,8 +11430,9 @@
     return count + (count === 1 ? ' user' : ' users');
   }
 
+  // Solo has only you and your own agents, so the roster says nothing new.
   function renderChatRosterChips(data){
-    if(!data) return '';
+    if(!data || activeWorkspaceKey === 'solo') return '';
     var html = '';
     if(data.peopleUnavailable){
       html += '<span class="ch-roster-chip ch-roster-unavailable" title="Human membership unavailable" aria-label="Human membership unavailable">' +
@@ -9824,7 +11719,95 @@
     });
   }
 
+  // A team channel lists what the Hub knows about the open channel: its
+  // people with their roles, its bots with owner and approval state, and your
+  // own bots that are not in it yet. Solo's local agent and archive stay out.
+  function renderHubPeoplePane(pane){
+    var roomId = chatWs.activeRoomId, state = roomId ? chatRoomState(roomId) : {};
+    var me = hubChat.membership || {}, isTeamAdmin = me.role === 'admin';
+    var members = state.hubMembers || [], bots = state.hubBots || [];
+    var inChannel = {}; bots.forEach(function(bot){ inChannel[String(bot.name || '').toLowerCase()] = true; });
+    var available = (state.hubAvailableBots || []).filter(function(bot){ return !inChannel[String(bot.name || '').toLowerCase()]; });
+    function ownerName(ownerId){
+      if(ownerId && ownerId === me.clerk_user_id) return 'you';
+      var owner = members.filter(function(member){ return member.clerk_user_id === ownerId; })[0];
+      return owner ? displayNameForEmail(owner.email) : 'a former member';
+    }
+    function section(label, count, rows, action){
+      return '<section class="manage-agent-section"><div class="manage-agent-section-head"><span>' + esc(label) + '</span><span class="manage-agent-section-tools"><span>' + count + '</span>' + (action || '') + '</span></div>' +
+        (rows.length ? '<div class="manage-agent-list">' + rows.join('') + '</div>' : '') + '</section>';
+    }
+    var people = members.slice().sort(function(a, b){ return (b.clerk_user_id === me.clerk_user_id) - (a.clerk_user_id === me.clerk_user_id); }).map(function(member){
+      var email = String(member.email || '').toLowerCase(), you = member.clerk_user_id === me.clerk_user_id;
+      return '<div class="manage-agent-row manage-human-row hub-people-row"><span class="manage-agent-avatar">' + humanAvatarInitialsHtml(email) + '</span>' +
+        '<span class="manage-agent-copy"><span class="manage-agent-name">' + esc(displayNameForEmail(email)) + (you ? ' (you)' : '') + '</span>' +
+        '<span class="manage-agent-description">' + esc(email) + '</span></span><span class="hub-people-role">' + (member.role === 'admin' ? 'Admin' : 'Member') + '</span></div>';
+    });
+    var botRows = bots.map(function(bot){
+      var rejected = bot.admission && bot.admission.status === 'rejected';
+      var status = bot.published ? 'live' : rejected ? 'rejected' : 'waiting for approval';
+      var canRemove = isTeamAdmin || bot.owner_id === me.clerk_user_id;
+      return '<div class="manage-agent-row hub-bot-row"><button type="button" class="manage-agent-open" data-hub-panel-mention="' + esc(bot.id) + '">' +
+        '<span class="manage-agent-avatar">' + agentAvatarHtml(bot.name, bot.id, 38, null, null, false) + '</span>' +
+        '<span class="manage-agent-copy"><span class="manage-agent-name">' + esc(bot.name) + '</span>' +
+        '<span class="manage-agent-description' + (bot.published ? '' : ' hub-bot-pending') + '">by ' + esc(ownerName(bot.owner_id)) + ' · ' + status + '</span></span></button>' +
+        (!bot.published && !rejected && isTeamAdmin ? '<button type="button" class="manage-agent-section-link" data-hub-panel-review>Review</button>' : '') +
+        (canRemove ? '<button type="button" class="manage-agent-section-link" data-hub-panel-remove="' + esc(bot.id) + '" aria-label="Remove ' + esc(bot.name) + ' from this channel">Remove</button>' : '') + '</div>';
+    });
+    var availableRows = available.map(function(bot){
+      return '<div class="manage-agent-row hub-bot-row"><span class="manage-agent-copy"><span class="manage-agent-name">' + esc(bot.name) + '</span></span>' +
+        '<button type="button" class="manage-agent-section-link" data-hub-panel-add="' + esc(bot.id) + '">Add</button></div>';
+    });
+    var channel = hubChannel(roomId);
+    pane.setAttribute('aria-label', 'People and bots');
+    pane.classList.remove('plugins-open', 'bot-store-open');
+    pane.classList.add('open', 'agents-open');
+    pane.innerHTML = '<div class="cip-pane-head manage-agents-pane-head"><span class="cip-pane-title">People and bots</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="manageAgentsPaneClose" aria-label="Close People and bots" title="Close People and bots"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
+      '<div class="manage-agents-body">' +
+      (channel ? '<div class="hub-people-context">' + esc(workspaceLabel()) + ' · ' + esc(channel.kind === 'dm' ? 'Direct message' : channel.kind === 'group' ? hubChannelTitle(channel) : '#' + channel.name) + '</div>' : '<div class="hub-people-context">Open a channel to see its people and bots.</div>') +
+      (channel ? section('People in this channel', members.length, people, isTeamAdmin ? '<button type="button" class="manage-agent-section-link" id="hubPanelInvite">Invite people</button>' : '') +
+        section('Bots in this channel', bots.length, botRows) +
+        (availableRows.length ? section('Your bots not in this channel', available.length, availableRows) : '') : '') + '</div>';
+    var close = el('#manageAgentsPaneClose', pane);
+    if(close) close.addEventListener('click', closeManageAgentsPane);
+    var invite = el('#hubPanelInvite', pane);
+    // Invitations, like every team membership change, live in the Admin Center.
+    if(invite) invite.addEventListener('click', function(){ location.href = '/admin?workspace=' + encodeURIComponent(activeWorkspaceKey) + '#/invites'; });
+    els('[data-hub-panel-mention]', pane).forEach(function(button){
+      button.addEventListener('click', function(){
+        var bot = bots.filter(function(item){ return item.id === button.getAttribute('data-hub-panel-mention'); })[0];
+        if(bot) insertHubMention(bot.name);
+      });
+    });
+    els('[data-hub-panel-review]', pane).forEach(function(button){
+      button.addEventListener('click', function(){ window.MiaHubBots.open({teamId:activeWorkspaceKey.slice(4), channelId:roomId, refresh:function(){ return refreshHubBotState(roomId, true); }}); });
+    });
+    els('[data-hub-panel-remove]', pane).forEach(function(button){
+      button.addEventListener('click', function(){
+        button.disabled = true;
+        hubCall('DELETE', hubPath() + '/channels/' + roomId + '/bots/' + button.getAttribute('data-hub-panel-remove'))
+          .then(function(){ return refreshHubBotState(roomId, true); })
+          .catch(function(){ button.disabled = false; showBenchToast('Couldn\'t remove this bot. Try again.'); });
+      });
+    });
+    // Adding reuses the composer's add-bot confirmation, which asks whether
+    // the channel gets a linked copy or an independent fork.
+    els('[data-hub-panel-add]', pane).forEach(function(button){
+      button.addEventListener('click', function(){
+        var bot = available.filter(function(item){ return String(item.id) === button.getAttribute('data-hub-panel-add'); })[0];
+        var input = el('#ccInput');
+        if(!bot || !input) return;
+        input.value += (input.value && !/\s$/.test(input.value) ? ' ' : '') + '@';
+        input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+        openMentionPopover(mentionTriggerAt(input));
+        selectMentionEntry({kind:'agent', key:'agent:' + bot.id, label:bot.name, id:bot.id, inChat:false});
+      });
+    });
+  }
+
   function renderManageAgentsPane(pane){
+    if(hubWorkspace()) return renderHubPeoplePane(pane);
     var groups = {agent: [], bots: []};
     manageAgentList().forEach(function(agent){
       if(agent.id === 'gateway') groups.agent.push(agent);
@@ -9924,6 +11907,10 @@
     if(!STYLED_SKIN) return;
     prepareChatUtilityPane('agents');
     renderChatInfoPane();
+    if(hubWorkspace()){
+      if(chatWs.activeRoomId) refreshHubBotState(chatWs.activeRoomId, true);
+      return;
+    }
     Promise.all([loadAgents(), appCollaborationMode === 'multiplayer' ? loadChatHumans() : Promise.resolve(chatWs.humans)]).then(function(results){
       syncChatBotRecords(results[0]);
       if(chatInfo.mode === 'agents') renderChatInfoPane();
@@ -10415,7 +12402,7 @@
         '</div></div>';
     }
     return '<div class="cmp-section-label">' + (isChat ? 'CONVERSATION' : 'CHANNEL') + '</div>' +
-      '<button type="button" class="channel-menu-item" id="channelMenuResetItem" role="menuitem">' + (isChat ? 'Restart conversation' : 'Reset channel') + '</button>';
+      '<button type="button" class="channel-menu-item conv-more-item" id="channelMenuResetItem" role="menuitem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg><span>' + (isChat ? 'Restart conversation' : 'Reset channel') + '</span></button>';
   }
 
   function clearChatRoomStateAfterRestart(roomId){
@@ -10508,15 +12495,166 @@
     if(!channelMenu.open) return;
     var header = el('#channelHeader');
     if(header && header.contains(e.target)) return;
+    if(e.target.closest && e.target.closest('#chatTabsRow .mia-tab.active button[role="tab"]')) return;
     closeChannelMenu();
   });
   document.addEventListener('keydown', function(e){
     if(e.key === 'Escape' && channelMenu.open) closeChannelMenu();
   });
 
+  // Chat tabs: every chat you open gets a tab beside the others, like the
+  // browser and Automations, so switching back is one click. Closing a tab
+  // keeps the chat; the open tabs are remembered per workspace.
+  function chatTabsStorageKey(){
+    return 'miaChatTabs:' + String(currentUser || 'preview').toLowerCase() + ':' + activeWorkspaceKey;
+  }
+  function readChatTabs(){
+    try {
+      var tabs = JSON.parse(localStorage.getItem(chatTabsStorageKey()) || '[]');
+      return Array.isArray(tabs) ? tabs.filter(function(tab){ return tab && tab.roomId; }) : [];
+    } catch(_chatTabsReadError) { return []; }
+  }
+  function writeChatTabs(tabs){
+    try { localStorage.setItem(chatTabsStorageKey(), JSON.stringify(tabs.slice(0, 20))); } catch(_chatTabsWriteError) {}
+  }
+  function openChatTab(roomId, kind, label){
+    if(!roomId) return;
+    var tabs = readChatTabs();
+    // An agent has one chat per workspace: when its conversation id changes
+    // (a restart or onboarding), its old tab becomes this one in place.
+    var sameAgent = function(item){ return kind === 'agent' && item.kind === 'agent' && label && item.label === label; };
+    var at = tabs.findIndex(function(item){ return item.roomId === roomId || sameAgent(item); });
+    tabs = tabs.filter(function(item, index){ return index === at || !(item.roomId === roomId || sameAgent(item)); });
+    var tab = at >= 0 ? tabs.find(function(item){ return item.roomId === roomId || sameAgent(item); }) : null;
+    if(tab){ tab.roomId = roomId; tab.kind = kind; if(label) tab.label = label; }
+    else tabs.push({roomId:roomId, kind:kind, label:label || ''});
+    writeChatTabs(tabs);
+  }
+  // Drops tabs for this workspace's conversations that are no longer in its
+  // list, such as another workspace's chat saved here before; sending there
+  // was refused as not a member.
+  function pruneChatTabs(conversations){
+    var known = {};
+    (conversations || []).forEach(function(conversation){ if(conversation && conversation.id) known[conversation.id] = true; });
+    var tabs = readChatTabs();
+    var kept = tabs.filter(function(tab){ return !/^conv_/.test(tab.roomId) || known[tab.roomId]; });
+    if(kept.length !== tabs.length) writeChatTabs(kept);
+    return !/^conv_/.test(chatWs.activeRoomId || '') || !!known[chatWs.activeRoomId];
+  }
+  function closeChatTab(roomId){
+    var tabs = readChatTabs();
+    var index = tabs.findIndex(function(item){ return item.roomId === roomId; });
+    if(index < 0 || tabs.length < 2) return;
+    tabs.splice(index, 1);
+    writeChatTabs(tabs);
+    if(chatWs.activeRoomId === roomId){
+      var next = tabs[Math.min(index, tabs.length - 1)];
+      loadChatRoom(next.roomId, next.kind, next.label);
+    } else {
+      renderChatTabs();
+    }
+  }
+  // A tab shows the same mark as the chat's sidebar row (Mia, the bot's
+  // avatar, a channel or a group), remembered so it survives a sidebar redraw.
+  var chatTabMarks = {};
+  function chatTabMarkHtml(tab){
+    var roomId = tab.roomId;
+    var sidebar = el('.chat-sidebar');
+    var rows = sidebar ? sidebar.querySelectorAll('[data-chat-room-id],[data-hub-channel-id]') : [];
+    for(var i = 0; i < rows.length; i += 1){
+      var id = rows[i].getAttribute('data-chat-room-id') || rows[i].getAttribute('data-hub-channel-id');
+      var mark = id === roomId && rows[i].querySelector('.chat-row-mark');
+      if(mark){ chatTabMarks[roomId] = mark.outerHTML; break; }
+    }
+    if(chatTabMarks[roomId]) return chatTabMarks[roomId];
+    // No sidebar row for this room yet: draw the mark from its kind, as the
+    // chat header does.
+    var label = tab.label || '';
+    if(tab.kind === 'agent') return '<span class="chat-row-mark tile">' + agentAvatarHtml(label, label === 'Mia' ? 'gateway' : null, 40, null, null, true) + '</span>';
+    if(tab.kind === 'home' || tab.kind === 'department') return '<span class="chat-row-mark channel">' + esc(benchMark(label || 'Multiplayer Test')) + '</span>';
+    if(tab.kind === 'group' && hubWorkspace()) return '<span class="chat-row-mark channel">#</span>';
+    return '<span class="chat-row-mark tile">' + esc(benchMark(label || 'Chat')) + '</span>';
+  }
+  // With tabs showing, the chat's menu drops from its tab.
+  function chatViewShowing(){
+    var classes = document.body.classList;
+    return !classes.contains('automations-mode') && !classes.contains('artifacts-mode') && !classes.contains('browser-collab-mode');
+  }
+  // Chat tabs live in the browser's tab strip (native-browser.js), which
+  // sits in the chat's row while the chat shows. A lone tab can't be
+  // closed: there is always a chat open.
+  function chatStripTabs(){
+    var tabs = chatWs.activeRoomId ? readChatTabs() : [];
+    return tabs.map(function(tab){
+      var active = tab.roomId === chatWs.activeRoomId;
+      return { id: tab.roomId, label: (active && chatWs.activeLabel) || tab.label || 'Chat', active: active, closable: tabs.length > 1, iconHtml: chatTabMarkHtml(tab) };
+    });
+  }
+  function renderChatTabs(){
+    var row = el('#chatTabsRow');
+    if(!row) return;
+    // Solo and Multiplayer Test switch without a reload, so the chat on
+    // screen can still be the old workspace's: only its own workspace gets its tab.
+    if(chatWs.activeRoomId && chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID && (!chatWs.activeRoomWorkspace || chatWs.activeRoomWorkspace === activeWorkspaceKey)) openChatTab(chatWs.activeRoomId, chatWs.activeKind, chatWs.activeLabel);
+    var tabs = chatStripTabs();
+    var mix = window.MiaTabStrip.mix;
+    row.hidden = !tabs.length && !mix.on();
+    mix.notify('chat', JSON.stringify(tabs));
+  }
+  // Mixed tabs (tab-strip.js): the chat's tabs, shown in the other strips.
+  window.MiaTabStrip.mix.register('chat', {
+    tabs: chatStripTabs,
+    show: function(){ closeBrowserSidebarDrawer(); closeLocalBrowser(); closeAutomationsPage(); applyLeftPane(); },
+    select: function(roomId){
+      var tab = readChatTabs().find(function(item){ return item.roomId === roomId; });
+      if(tab && roomId !== chatWs.activeRoomId) loadChatRoom(tab.roomId, tab.kind, tab.label);
+    },
+    // The active tab carries the chat's name, so it opens the chat's menu.
+    reselect: function(){
+      var titleBtn = el('#channelTitleBtn');
+      if(titleBtn) titleBtn.click();
+    },
+    close: closeChatTab,
+    move: moveChatTab,
+    newTab: function(){ runToolsAction('new-chat'); },
+    render: function(){ renderChatTabs(); },
+  });
+  // Drag a tab onto another to put it in that tab's place.
+  function moveChatTab(roomId, targetRoomId){
+    var tabs = readChatTabs();
+    var from = tabs.findIndex(function(item){ return item.roomId === roomId; });
+    var to = tabs.findIndex(function(item){ return item.roomId === targetRoomId; });
+    if(from < 0 || to < 0 || from === to) return;
+    tabs.splice(to, 0, tabs.splice(from, 1)[0]);
+    writeChatTabs(tabs);
+    renderChatTabs();
+  }
+
   function renderChatHeaderBar(){
+    renderChatTabs();
     var header = el('#channelHeader');
     if(!header) return;
+    if(hubWorkspace()){
+      header.style.display=chatWs.activeRoomId?'flex':'none';
+      var bots=chatWs.activeRoomId && chatRoomState(chatWs.activeRoomId).hubBots || [];
+      // The bot count opens People and bots, the one list of this channel's
+      // bots with the actions you are allowed to take.
+      header.innerHTML='<div class="ch-left"><button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to channels">‹</button><span class="channel-header-title">'+esc(chatWs.activeLabel||'')+'</span></div><div class="ch-right"><button type="button" class="ch-roster-chip" id="hubBotsToggle">'+bots.filter(function(bot){return !!bot.published;}).length+' bots</button><button type="button" class="ch-roster-chip" id="hubAddBot">Add bot</button><button type="button" class="ch-roster-chip" id="hubManageBots">Bot versions & runs</button>'+
+        '<button type="button" class="ch-icon-btn conv-more-btn" id="hubChannelMoreBtn" title="More" aria-label="More" aria-haspopup="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg></button></div>';
+      el('#hubBotsToggle',header).addEventListener('click',openManageAgentsPane);
+      el('#hubAddBot',header).addEventListener('click',openHubBotPicker);
+      // The same channel menu as right-clicking it in the sidebar, under the dots.
+      el('#hubChannelMoreBtn',header).addEventListener('click',function(event){
+        event.stopPropagation();
+        var channel=hubChannel(chatWs.activeRoomId), rect=event.currentTarget.getBoundingClientRect();
+        if(!channel)return;
+        if(hubChannelMenu){closeHubChannelMenu();return;}
+        openHubChannelMenu(channel,rect.right-200,rect.bottom+4);
+      });
+      el('#hubManageBots',header).addEventListener('click',function(){window.MiaHubBots.open({teamId:activeWorkspaceKey.slice(4),channelId:chatWs.activeRoomId,refresh:function(){return refreshHubBotState(chatWs.activeRoomId,true);}});});
+      if(el('#chatMobileBack'))el('#chatMobileBack').addEventListener('click',closeMobileChatRoom);
+      return;
+    }
     if(!chatWs.activeRoomId){ resetChannelMenuState(); syncSidebarToolButtons(); header.style.display = 'none'; header.innerHTML = ''; if(chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins') chatInfo.open = false; renderChatInfoPane(); return; }
     header.style.display = 'flex';
     if(chatInfo.mode === 'plugins' && pluginPaneRoomId !== chatWs.activeRoomId){
@@ -10564,7 +12702,7 @@
     if(STYLED_SKIN){
       var mobileBackBtn = '<button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to chats">' +
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg></button>';
-      header.innerHTML = '<div class="ch-left">' + mobileBackBtn + '<div class="ch-title-row">' + titleButtonHtml + menuHtml + '</div></div>' +
+      header.innerHTML = '<div class="ch-left">' + mobileBackBtn + '<div class="ch-title-row">' + titleButtonHtml + '</div></div>' +
         '<div class="ch-right">' + rosterChips + conversationActions + rosterOverlay + '</div>';
       var mobileBack = el('#chatMobileBack', header);
       if(mobileBack) mobileBack.addEventListener('click', closeMobileChatRoom);
@@ -10716,6 +12854,11 @@
       openSettingsDrawer('general');
       return;
     }
+    if(hubWorkspace()){
+      var member = (hubChat.members || []).filter(function(candidate){ return String(candidate.email || '').toLowerCase() === target; })[0];
+      if(member) openHubDirectMessage(member).catch(hubFeedback);
+      return;
+    }
     var existing = directHumanDmFor(email);
     if(fromRoster) rememberChatBack('dm', existing && existing.roomId || null);
     else clearChatBack();
@@ -10738,6 +12881,20 @@
   }
 
   function renderDeptAgentSelector(){
+    if(hubWorkspace()){
+      setComposerBoundState(!!chatWs.activeRoomId && chatWs.configured!==false);
+      // Attach, Google Drive and the model menu work the same as in Solo. A
+      // Drive file is shared as a link chip; each teammate opens it with their
+      // own Google access. Shared bots run without Google tools, so they do not
+      // read it on anyone's behalf. Dictation is not offered here yet.
+      ['#ccMicBtn'].forEach(function(selector){var node=el(selector);if(node){node.disabled=true;node.style.display='none';}});
+      ['#ccPlusBtn','#ccModelBtn','#ccDriveBtn'].forEach(function(selector){var node=el(selector);if(node){node.disabled=false;node.style.display='';}});
+      var openChannel=hubChannel(chatWs.activeRoomId);
+      var input=el('#ccInput');if(input)input.placeholder=hubPrivateConversation(openChannel) ? 'Message '+hubChannelTitle(openChannel) : 'Message this shared channel';
+      setComposerBlocked(hubDmWithFormerMember(openChannel) ? 'This account has been deactivated.' : '');
+      return;
+    }
+    setComposerBlocked('');
     var wrap = el('#chatDeptAgents');
     if(wrap){ wrap.style.display = 'none'; wrap.innerHTML = ''; }
     if(!chatWs.activeRoomId){
@@ -10776,6 +12933,15 @@
     updateComposerPlaceholder(null, null);
   }
 
+  // A conversation you can read but not send to swaps the message box for a
+  // short notice, the way a chat app shows a deactivated account.
+  function setComposerBlocked(message){
+    var composer=el('.chat-composer'), notice=el('#ccBlocked');
+    if(!composer || !notice)return;
+    composer.hidden=!!message;
+    notice.hidden=!message;
+    notice.textContent=message || '';
+  }
   function setComposerBoundState(bound){
     var input = el('#ccInput');
     var send = el('#ccSend');
@@ -10906,7 +13072,9 @@
       miaOnboardingChat = res.data;
       // A bot-owned browser tab in front keeps that bot's chat in the panel.
       var followingBot = String(browserFollowKey || '').indexOf('|bot:') !== -1;
-      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1 && !followingBot){
+      // Onboarding is Solo's chat; opening it in another workspace refused
+      // every send there as FORBIDDEN.
+      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1 && !followingBot && activeWorkspaceKey === 'solo'){
         loadChatRoom(res.data.conversationId, 'agent', 'Mia');
       } else if(chatWs.activeRoomId === res.data.conversationId){
         renderChatThread();
@@ -10972,7 +13140,7 @@
     var input = el('#ccInput');
     if(!suggestion || !input) return;
     var mentionOpen = typeof chatMention !== 'undefined' && chatMention.open;
-    var show = chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
+    var show = !hubWorkspace() && chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
     var text = suggestion.querySelector('span');
     if(text) text.textContent = chatInlineSuggestionText();
     suggestion.hidden = !show;
@@ -11101,6 +13269,13 @@
     if(chatWs.attentionTimer) clearInterval(chatWs.attentionTimer);
     chatWs.pollTimer = null;
     chatWs.attentionTimer = null;
+    if(hubWorkspace()){
+      // The live feed delivers messages, unread, typing and bot changes. The
+      // slow timer only backs up bot runs whose feed event was missed.
+      if(!hubChat.feed)startHubFeed();
+      chatWs.pollTimer=setInterval(function(){refreshHubBotState(chatWs.activeRoomId,false);pollHubBots(chatWs.activeRoomId);},60000);
+      syncDesktopNotificationControl();askForDesktopNotificationsOnce();return;
+    }
     syncDesktopNotificationControl();
     askForDesktopNotificationsOnce();
   }
@@ -11112,6 +13287,7 @@
   }
 
   function loadOlderChatMessages(roomId){
+    if(hubWorkspace()) return loadOlderHubMessages(roomId);
     var state = roomId && chatWs.byRoom[roomId];
     if(!state || chatWs.activeRoomId !== roomId || state.historyLoading || state.historyComplete || !state.historyCursor) return Promise.resolve();
     var requestedWorkspace = activeWorkspaceKey;
@@ -11199,6 +13375,9 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
   function loadChatRoom(roomId, kind, label){
+    if(hubWorkspace() && (kind!=='group' || !hubChat.channels.some(function(channel){return channel.id===roomId;})))return Promise.resolve();
+    // A saved tab's name can be stale (a DM partner learned later); the Hub's is current.
+    if(hubWorkspace())label=hubChannelTitle(hubChannel(roomId));
     chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     setLocalChatTypingActivity(false);
     closeMentionPopover();
@@ -11207,6 +13386,7 @@
     if(chatWs.native && chatWs.nativeSocketConversationId !== roomId) closeNativeChatSocket();
     swapChatDraft(chatWs.activeRoomId, roomId);
     chatWs.activeRoomId = roomId;
+    chatWs.activeRoomWorkspace = activeWorkspaceKey;
     chatWs.activeKind = kind;
     chatWs.activeLabel = label;
     if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
@@ -11214,6 +13394,7 @@
     renderChatSidebar();
     refreshChatMain();
     if(chatWs.configured === false) return;
+    if(hubWorkspace()) return Promise.all([loadHubRoom(),refreshHubBotState(roomId,true)]);
     loadMentionRoster(roomId); // also feeds the header's roster chips
     loadActiveNativeDispatches(roomId);
     var state = chatRoomState(roomId);
@@ -11273,6 +13454,7 @@
   }
 
   function selectAgentRoom(agent, canNavigate){
+    if(hubWorkspace())return Promise.resolve();
     var generation = chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     function current(){ return chatWs.navigationGeneration === generation && (!canNavigate || canNavigate()); }
     if(!current()) return;
@@ -11355,25 +13537,35 @@
   // block below.
   function sendNativeConversationEvent(text, threadRootId, preparedAttachment, roomId, extraMetadata){
     var state = chatRoomState(roomId);
-    var activeDispatchAtSend = activeRoomTask();
-    var thinkingAgentName = nativeThinkingAgentName(roomId, text, threadRootId);
-    state.thinkingAgentName = thinkingAgentName;
-    var clientIdempotencyKey = 'native-ui-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-    var content = {text: String(text || '')};
-    if(preparedAttachment && preparedAttachment.attachment){
-      content.attachments = [preparedAttachment.attachment];
-    }
-    var pendingId = 'pending-' + Date.now();
     var pendingMsg = {
-      id: pendingId,
+      id: 'pending-' + Date.now(),
       sender: chatSenderLabel(),
       body: String(text || ''),
       ts: Date.now(),
       pending: true,
-      clientIdempotencyKey: clientIdempotencyKey
+      clientIdempotencyKey: 'native-ui-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+      soloSend: {threadRootId: threadRootId || null, preparedAttachment: preparedAttachment || null, extraMetadata: extraMetadata || null}
     };
     if(threadRootId) pendingMsg.threadRoot = threadRootId;
     state.messages.push(pendingMsg);
+    return deliverNativeMessage(roomId, pendingMsg);
+  }
+
+  // Sends (or resends) a Solo message. A failure keeps the message in the
+  // timeline with Retry, as shared channels do; a retry reuses the same
+  // idempotency key so the server never records it twice.
+  function deliverNativeMessage(roomId, pendingMsg){
+    var state = chatRoomState(roomId);
+    var send = pendingMsg.soloSend, text = pendingMsg.body;
+    var threadRootId = send.threadRootId, preparedAttachment = send.preparedAttachment;
+    pendingMsg.pending = true; pendingMsg.sendFailed = false; pendingMsg.sendError = '';
+    var activeDispatchAtSend = activeRoomTask();
+    var thinkingAgentName = nativeThinkingAgentName(roomId, text, threadRootId);
+    state.thinkingAgentName = thinkingAgentName;
+    var content = {text: text};
+    if(preparedAttachment && preparedAttachment.attachment){
+      content.attachments = [preparedAttachment.attachment];
+    }
     // A running dispatch already owns the animated progress row. A steering
     // message stays sendable, but must not create a second thinking bubble.
     if(thinkingAgentName && !activeDispatchAtSend) startChatThinking(roomId);
@@ -11381,23 +13573,28 @@
     if(chatWs.activeRoomId === roomId) renderChatThread();
     var chatModelMetadata = chatModelSelectionMetadata();
     var browserPage = window.miaNativeBrowser && window.miaNativeBrowser.currentPage ? window.miaNativeBrowser.currentPage() : null;
-    var metadata = Object.assign({}, chatModelMetadata ? {chatModelSelection: chatModelMetadata} : {}, browserPage ? {browserContext: browserPage} : {}, extraMetadata || {});
+    var metadata = Object.assign({}, chatModelMetadata ? {chatModelSelection: chatModelMetadata} : {}, browserPage ? {browserContext: browserPage} : {}, send.extraMetadata || {});
+    function failed(res){
+      stopChatThinking(roomId);
+      pendingMsg.pending = false; pendingMsg.sendFailed = true;
+      pendingMsg.sendError = navigator.onLine === false ? 'Not delivered. You are offline.'
+        : res.status === 0 ? 'Not delivered. Mia isn’t responding right now.'
+        : 'Not delivered. ' + (res.data && res.data.error || 'Please retry.');
+      res.undelivered = true; // the timeline now holds the message and its Retry
+      renderChatSidebar();
+      if(chatWs.activeRoomId === roomId) renderChatThread();
+      return res;
+    }
     return api(nativeConversationPath(roomId, '/events'), {method:'POST', body:{
       type: preparedAttachment ? 'image' : 'message',
       content: content,
       parentEventId: threadRootId || null,
-      clientIdempotencyKey: clientIdempotencyKey,
+      clientIdempotencyKey: pendingMsg.clientIdempotencyKey,
       ...(Object.keys(metadata).length ? {metadata: metadata} : {})
     }}).then(function(res){
-      if(res.status !== 201 && res.status !== 200){
-        stopChatThinking(roomId);
-        state.messages = state.messages.filter(function(message){ return message.id !== pendingId; });
-        renderChatSidebar();
-        if(chatWs.activeRoomId === roomId) renderChatThread();
-        return res;
-      }
+      if(res.status !== 201 && res.status !== 200) return failed(res);
+      state.messages = state.messages.filter(function(message){ return message !== pendingMsg; });
       if(res.data && res.data.event) applyNativeEvent(res.data.event);
-      else state.messages = state.messages.filter(function(message){ return message.id !== pendingId; });
       if(!activeDispatchAtSend && res.data && res.data.dispatch && Array.isArray(res.data.dispatch.dispatches)){
         setRoomNativeDispatches(roomId, res.data.dispatch.dispatches);
         renderComposerTaskControl();
@@ -11405,21 +13602,19 @@
       renderChatSidebar();
       if(chatWs.activeRoomId === roomId) renderChatThread();
       return res;
-    }).catch(function(err){
-      stopChatThinking(roomId);
-      state.messages = state.messages.filter(function(message){ return message.id !== pendingId; });
-      renderChatSidebar();
-      if(chatWs.activeRoomId === roomId) renderChatThread();
-      return {status: 0, data: {error: err && err.message || 'Message send failed.'}};
+    }).catch(function(){
+      return failed({status: 0, data: {}});
     });
   }
 
   function sendActiveRoomMessage(text, threadRootId, preparedAttachment, boundRoomId){
-    if((!text && !preparedAttachment) || !(boundRoomId || chatWs.activeRoomId)) return;
-    if(chatWs.activeKind === 'agent-setup'){
-      submitAgentSetupIntent(text);
+    // The New Bot setup chat is local, even while a shared team is open.
+    if(chatWs.activeKind === 'agent-setup' && (!boundRoomId || boundRoomId === AGENT_SETUP_ROOM_ID)){
+      if(text) submitAgentSetupIntent(text);
       return;
     }
+    if(hubWorkspace()) return sendHubMessage(text,preparedAttachment,threadRootId,boundRoomId||chatWs.activeRoomId);
+    if((!text && !preparedAttachment) || !(boundRoomId || chatWs.activeRoomId)) return;
     if(chatWs.configured === false) return;
     if(!threadRootId && !preparedAttachment && /^\/clear$/i.test(String(text || '').trim())){
       if(!composerSlashCommands().length){
@@ -11698,6 +13893,7 @@
   }
 
   function loadMentionRoster(roomId){
+    if(hubWorkspace()) return refreshHubBotState(roomId,false);
     var state = chatRoomState(roomId);
     if(state.mentionRoster || chatWs.configured === false) return;
     var requestedWorkspaceKey = activeWorkspaceKey;
@@ -11762,7 +13958,7 @@
 
   // Finds an unclosed "@query" token ending at the caret — "unclosed" meaning
   // preceded by start-of-string or whitespace and containing no whitespace
-  // of its own, so "email@x.com" or "a @ b" don't trigger the popover.
+  // of its own, so "emaia@example.com" or "a @ b" don't trigger the popover.
   function mentionTriggerAt(input){
     var caret = input.selectionStart == null ? input.value.length : input.selectionStart;
     var before = input.value.slice(0, caret);
@@ -11875,6 +14071,13 @@
         '<button type="button" class="cmp-confirm-btn cmp-confirm-cancel" data-mention-confirm="cancel">Cancel</button>' +
       '</div>' +
     '</div>';
+    if(hubWorkspace()){
+      var disclosure=el('.cmp-confirm-text',pop);
+      if(disclosure)disclosure.textContent='Share '+entry.label+'’s instructions? An administrator approves the shared version once. Asking this bot runs it on your computer using your own subscriptions and tools.';
+      var mode=document.createElement('select');mode.id='hubShareMode';mode.setAttribute('aria-label','Sharing behavior');
+      mode.innerHTML='<option value="">Choose linked or fork</option><option value="linked">Linked — propose solo updates for approval</option><option value="fork">Independent fork — no solo synchronization</option>';
+      mode.value=chatMention.shareMode||'';mode.addEventListener('change',function(){chatMention.shareMode=mode.value;});pop.querySelector('.cmp-confirm-text').after(mode);
+    }
     var addBtn = el('[data-mention-confirm="add"]', pop);
     var cancelBtn = el('[data-mention-confirm="cancel"]', pop);
     if(addBtn) addBtn.addEventListener('mousedown', function(e){ e.preventDefault(); if(!chatMention.confirmBusy) confirmMentionAdd(); });
@@ -11891,8 +14094,19 @@
     var entry = chatMention.confirmEntry;
     if(!entry) return;
     var roomId = chatWs.activeRoomId;
+    if(hubWorkspace() && !['linked','fork'].includes(chatMention.shareMode)){showBenchToast('Choose linked or independent fork.');return;}
     chatMention.confirmBusy = true;
     renderMentionPopover();
+    if(hubWorkspace()){
+      if(entry.kind!=='agent'){cancelMentionConfirm();return;}
+      var workspace=activeWorkspaceKey,generation=chatWs.navigationGeneration;
+      function currentHubShare(){return workspace===activeWorkspaceKey && roomId===chatWs.activeRoomId && generation===chatWs.navigationGeneration && chatWs.configured!==false;}
+      shareBotToHubChannel(workspace.slice(4),roomId,entry.id,chatMention.shareMode).then(function(published){
+        if(!currentHubShare())return;
+        return refreshHubBotState(roomId,true).then(function(){if(!currentHubShare())return;insertMentionText(Object.assign({},entry,{inChat:true}));closeMentionPopover();showBenchToast(hubBotJoinedMessage(entry.label,chatWs.activeLabel||'this channel',published));});
+      }).catch(function(error){if(currentHubShare()){showBenchToast(error.message);cancelMentionConfirm();}}).finally(function(){if(currentHubShare())chatMention.confirmBusy=false;});
+      return;
+    }
     var isMia = entry.kind === 'agent' && entry.id === 'gateway';
     var req = api(nativeConversationPath(roomId, '/members'), {method: 'POST', body: {
       principalId: entry.kind === 'agent' ? entry.id : entry.label,
@@ -12164,12 +14378,13 @@
     // DM's roster is fixed at creation time, so that
     // same reasoning applies to a NOT IN CHAT *human* there too, unlike
     // home/department/agent rooms where a human can still be invited.
-    if(chatWs.activeKind === 'dm' || chatWs.activeKind === 'group' || (entry.kind === 'agent' && chatWs.activeKind !== 'department')){
+    if(!hubWorkspace() && (chatWs.activeKind === 'dm' || chatWs.activeKind === 'group' || (entry.kind === 'agent' && chatWs.activeKind !== 'department'))){
       insertMentionText(entry);
       closeMentionPopover();
       return;
     }
     chatMention.confirmEntry = entry;
+    chatMention.shareMode = "";
     chatMention.confirmBusy = false;
     renderMentionPopover();
   }
@@ -12303,9 +14518,17 @@
   }
 
   function renderChatSidebar(){
+    // Keep the placeholder bars until the live list has answered.
+    if(sidebarPlaceholderShown){
+      if(chatWs.configured === null) return;
+      releaseSidebarPlaceholder();
+    }
+    var botsGroup = el('#chatBotsGroup');
+    if(botsGroup) botsGroup.hidden = hubWorkspace();
+    if(hubWorkspace()) return renderHubSidebar();
     var pinnedWrap = el('#chatPinned');
+    var botsWrap = el('#chatBots');
     var allWrap = el('#chatAllConversations');
-    var pinnedCountEl = el('#chatPinnedCount');
     var allCountEl = el('#chatAllCount');
     var syncDot = el('#chatSyncDot');
     var syncFooter = el('#chatSyncFooter');
@@ -12314,6 +14537,8 @@
 
     if(syncDot) syncDot.classList.toggle('offline', chatWs.configured === false);
     if(syncFooter){
+      syncFooter.style.display='';
+      syncFooter.removeAttribute('role');syncFooter.removeAttribute('aria-live');
       syncFooter.textContent = chatWs.configured === false ? 'Chat Failure' : (chatWs.configured === true ? 'Chat Online' : 'Connecting…');
       syncFooter.classList.toggle('chat-sync-fail', chatWs.configured === false);
     }
@@ -12345,10 +14570,15 @@
       var text = parsed && parsed.text ? parsed.text : body;
       return excerpt(markdownPreviewText(text).replace(/\s+/g, ' ').trim(), 58);
     }
+    // Every row keeps a second line so titles sit on one line across the
+    // sidebar. A room known to be empty says so; one still loading stays blank.
     function sidebarRowText(name, roomId, hasActivity){
       var indicator = renderChatActivityIndicator(hasActivity, chatNeedsAttention(roomId));
+      var preview = roomPreview(roomId);
+      var state = roomId && chatWs.byRoom[roomId];
+      var previewHtml = preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
       return '<span class="row-text"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
-        '</span><span class="row-preview">' + esc(roomPreview(roomId)) + '</span></span>';
+        '</span><span class="row-preview' + (preview ? '' : ' empty') + '">' + previewHtml + '</span></span>';
     }
 
     // Official channels are represented by their own square initials mark,
@@ -12488,9 +14718,13 @@
     var hiddenEntries = allDmEntries.filter(function(e){ return hiddenSet[e.hideKey]; });
     var pinnedEntries = visibleEntries.filter(function(e){ return isChatPinned(e.pinKey); });
     var allEntries = visibleEntries.filter(function(e){ return !isChatPinned(e.pinKey); });
+    // Bots have their own section; Mia stays with the conversations.
+    function isBotEntry(e){ return e.kind === 'agent' && !(e.agent && e.agent.id === 'gateway'); }
+    var botEntries = allEntries.filter(isBotEntry);
+    allEntries = allEntries.filter(function(e){ return !isBotEntry(e); });
 
-    pinnedCountEl && (pinnedCountEl.textContent = pinnedEntries.length || '');
     allCountEl && (allCountEl.textContent = allEntries.length || '');
+    if(el('#chatBotsCount')) el('#chatBotsCount').textContent = botEntries.length || '';
     function conversationRowHtml(e){
       var active = e.kind === 'home'
         ? chatWs.activeKind === 'home'
@@ -12513,7 +14747,7 @@
         ? '<span class="chat-row-mark channel" title="Official channel">' + esc(benchMark(e.name || 'Multiplayer Test')) + '</span>'
         : e.kind === 'human'
         ? '<span class="chat-row-mark tile human">' + humanAvatarContent(e.email) + '</span>'
-        : '<span class="chat-row-mark tile">' + (e.kind === 'agent' ? agentAvatarHtml(e.name, e.agent && e.agent.id, 40, isMiaOrchestrator(e.name, e.agent && e.agent.id) ? 'sidebar' : null, null, true) : esc(benchMark(e.name))) + '</span>';
+        : '<span class="chat-row-mark tile">' + (e.kind === 'agent' ? agentAvatarHtml(e.name, e.agent && e.agent.id, 40, null, null, true) : esc(benchMark(e.name))) + '</span>';
       var hide = e.hideKey && !isChatPinned(e.pinKey) ? '<span class="chat-row-hide" data-hide-key="' + esc(e.hideKey) + '" title="Hide from sidebar (the chat and its history are kept)">&times;</span>' : '';
       return '<button type="button" class="chat-recent-row' + (active ? ' active' : '') + '" ' + attr + titleAttr + '>' + mark +
         sidebarRowText(e.name, e.roomId, hasActivity) +
@@ -12535,9 +14769,10 @@
         }).join('');
       }
     }
+    if(botsWrap) botsWrap.innerHTML = botEntries.length ? botEntries.map(conversationRowHtml).join('') : '<div class="chat-sidebar-empty">No bots yet</div>';
     allWrap.innerHTML = dmRowsHtml + hiddenHtml;
     renderChatStarterBots();
-    [pinnedWrap, allWrap].forEach(function(wrap){
+    [pinnedWrap, allWrap, botsWrap].filter(Boolean).forEach(function(wrap){
       var homeRow = el('.chat-recent-row[data-chat-kind="home"]', wrap);
       if(homeRow) homeRow.addEventListener('click', function(){ clearChatBack(); clearChatActive(); homeRow.classList.add('active'); selectHomeRoom(); });
       els('.chat-recent-row[data-dept]', wrap).forEach(function(row){
@@ -12577,7 +14812,7 @@
         });
       });
     });
-    els('.chat-row-hide', allWrap).forEach(function(x){
+    els('.chat-row-hide', allWrap).concat(botsWrap ? els('.chat-row-hide', botsWrap) : []).forEach(function(x){
       x.addEventListener('click', function(ev){
         ev.stopPropagation();
         hideChatEntry(x.getAttribute('data-hide-key'));
@@ -12698,8 +14933,11 @@
 
 
   function chatSearchDirectorySnapshot(){
-    var humans = humanDirectoryUsersForWorkspace(activeWorkspaceKey,
-      chatSearchDirectory.loaded ? chatSearchDirectory.humans : (chatWs.humans || []));
+    // In a team, the people are its members; the local directory is Solo's.
+    var me = String(currentUser || '').toLowerCase(), myId = (hubChat.membership || {}).clerk_user_id;
+    var humans = hubWorkspace()
+      ? (hubChat.members || []).filter(function(member){ return member.email && member.clerk_user_id !== myId && String(member.email).toLowerCase() !== me; }).map(function(member){ return {email:member.email}; })
+      : humanDirectoryUsersForWorkspace(activeWorkspaceKey, chatSearchDirectory.loaded ? chatSearchDirectory.humans : (chatWs.humans || []));
     var agents = chatSearchDirectory.loaded ? chatSearchDirectory.agents : (chatWs.allAgents || []);
     agents = agents.slice();
     if(chatWs.gatewayAgent && !agents.some(function(agent){ return agent.id === 'gateway'; })){
@@ -12810,7 +15048,8 @@
     var q = input ? input.value.trim().toLowerCase() : '';
     [
       {wrap: el('#chatPinned'), head: el('#chatPinned') && el('#chatPinned').previousElementSibling},
-      {wrap: el('#chatAllConversations'), head: el('#chatAllConversations') && el('#chatAllConversations').previousElementSibling}
+      {wrap: el('#chatAllConversations'), head: el('#chatAllConversations') && el('#chatAllConversations').previousElementSibling},
+      {wrap: el('#chatBots'), head: el('#chatBots') && el('#chatBots').previousElementSibling}
     ].forEach(function(group){
       if(!group.wrap) return;
       var rows = els('.chat-recent-row', group.wrap);
@@ -12844,6 +15083,7 @@
   }
 
   function initChatWorkspace(){
+    if(hubWorkspace()) return initHubChat();
     return Promise.all([
       loadNativeConversations(),
       loadAgents(),
@@ -12925,6 +15165,7 @@
   // happen (here, or the next time the user navigates), it's reading live data,
   // not a stale closure copy.
   function fetchLiveSharedData(){
+    if(hubWorkspace()) return Promise.resolve();
     return Promise.all([loadAgents(), loadChatHumans(), fetchDepartmentsSilently()]).then(function(results){
       var apiAgents = results[0];
       benchAgents = apiAgents.map(apiAgentToBench);
@@ -12967,6 +15208,7 @@
   }
 
   function pollLiveState(){
+    if(hubWorkspace()) return;
     // Cron sessions begin and end outside Mia, so they do not bump the app's
     // state version. Poll their narrow status endpoint on every live tick.
     loadActiveAutomationRuns();
@@ -13011,6 +15253,7 @@
     if(drawer) drawer.classList.remove('open');
   }
   function createNamedChannel(){
+    if(hubWorkspace()) return createHubChannel();
     var input = el('#channelNameInput');
     var name = input ? input.value.trim() : '';
     if(!name || channelNameCompose.busy) return;
@@ -13026,10 +15269,10 @@
     // cannot leave behind a phantom sidebar row or an unrelated department.
     selectDepartmentRoom({department:name}, name).then(function(){
       closeChannelNameFlow();
-      if(create){ create.disabled = false; create.textContent = 'Create'; }
+      if(create){ create.disabled = false; create.textContent = 'Create channel'; }
     }).catch(function(){
       channelNameCompose.busy = false;
-      if(create){ create.disabled = false; create.textContent = 'Create'; }
+      if(create){ create.disabled = false; create.textContent = 'Create channel'; }
       showBenchToast('Channel was not created');
     });
   }
@@ -13039,6 +15282,14 @@
     var overlay = el('#channelNameOverlay'), drawer = el('#channelNameDrawer'), input = el('#channelNameInput');
     if(overlay) overlay.classList.add('open');
     if(drawer) drawer.classList.add('open');
+    // A team channel starts with only its creator; teammates join from
+    // Browse channels or by invitation.
+    var team = hubWorkspace(), intro = el('#channelNameIntro'), hint = el('#channelNameHint');
+    if(intro) intro.textContent = team ? 'Start a channel in this team. You\'re its first member.' : 'Start an official conversation for everyone in this space.';
+    if(hint) hint.textContent = team ? 'Teammates can find it in Browse channels, or you can invite them. Shared bots can be added here.' : 'Official channels are shared team conversations. Shared bots can be added here.';
+    var privateRow = el('#channelPrivateRow'), privateBox = el('#channelPrivateInput');
+    if(privateRow) privateRow.hidden = !team;
+    if(privateBox) privateBox.checked = false;
     if(input){ input.value = ''; setTimeout(function(){ input.focus(); }, 0); }
   }
 
@@ -13055,79 +15306,57 @@
     loadHarnessSettings(false).then(function(settings){ openHarnessOnboarding(settings); });
   }
 
-  /* Tools can be pinned into the sidebar header as icon-only shortcuts.
-     Pins are a per-workspace convenience, so they live in localStorage. */
-  var SIDEBAR_PIN_LIMIT = 4;
-  var SIDEBAR_PIN_DEFAULTS = ['web-browser'];
-  function sidebarPinStorageKey(){ return 'miaSidebarToolPins:' + activeWorkspaceKey; }
-  function sidebarPinMenuItem(action){
-    var menu = el('#chatToolsMenu');
-    return menu ? menu.querySelector('[data-tools-action="' + action + '"]') : null;
+  // "Your bots" starts open in the browser and on the Automations page.
+  // Only its own button closes it, and that choice is remembered.
+  var BROWSER_SIDEBAR_CLOSED_KEY = 'mia.browserSidebarClosed';
+  function browserSidebarWanted(){
+    try { return localStorage.getItem('mia.browserSidebarClosed') !== '1'; } catch(_sidebarStorageError) { return true; }
   }
-  function sidebarPinnable(item){
-    return !!item && item.getAttribute('aria-disabled') !== 'true';
-  }
-  function loadSidebarPins(){
-    try {
-      var raw = localStorage.getItem(sidebarPinStorageKey());
-      if(raw){
-        var list = JSON.parse(raw);
-        if(Array.isArray(list)) return list.filter(function(action){ return sidebarPinnable(sidebarPinMenuItem(action)); });
-      }
-    } catch(_pinStorageError) {}
-    return SIDEBAR_PIN_DEFAULTS.slice();
-  }
-  function saveSidebarPins(pins){
-    try { localStorage.setItem(sidebarPinStorageKey(), JSON.stringify(pins)); } catch(_pinStorageError) {}
-  }
-  function toggleSidebarPin(action){
-    var pins = loadSidebarPins();
-    var index = pins.indexOf(action);
-    if(index >= 0) pins.splice(index, 1);
-    else {
-      if(pins.length >= SIDEBAR_PIN_LIMIT) pins.shift();
-      pins.push(action);
-    }
-    saveSidebarPins(pins);
-    renderSidebarPins();
-  }
-  function renderSidebarPins(){
-    var host = el('#chatSidebarPins');
-    if(!host) return;
-    var pins = loadSidebarPins();
-    host.innerHTML = '';
-    pins.slice(0, SIDEBAR_PIN_LIMIT).forEach(function(action){
-      var item = sidebarPinMenuItem(action);
-      if(!sidebarPinnable(item)) return;
-      var icon = item.querySelector('.chat-new-menu-icon');
-      var label = item.querySelector('.chat-new-menu-label');
-      var name = label ? label.textContent.trim() : action;
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chat-sidebar-tool-btn chat-sidebar-pin-btn';
-      btn.title = name;
-      btn.setAttribute('aria-label', name);
-      /* Clone the menu's canonical Lucide SVG instead of maintaining a
-         second set of custom paths with different optical bounds. */
-      if(icon) btn.innerHTML = icon.innerHTML;
-      btn.addEventListener('click', function(e){
-        e.stopPropagation();
-        var menu = el('#chatToolsMenu');
-        if(menu) menu.classList.remove('open');
-        syncSidebarToolButtons();
-        runToolsAction(action);
-      });
-      host.appendChild(btn);
-    });
-    els('[data-tools-pin]').forEach(function(pin){
-      var owner = pin.closest('[data-tools-action]');
-      var pinned = !!owner && pins.indexOf(owner.getAttribute('data-tools-action')) >= 0;
-      pin.classList.toggle('pinned', pinned);
-      pin.setAttribute('aria-pressed', pinned ? 'true' : 'false');
-      pin.setAttribute('aria-label', pinned ? 'Unpin from sidebar' : 'Pin to sidebar');
-      pin.title = pinned ? 'Unpin from sidebar' : 'Pin to sidebar';
+  function setBrowserSidebarOpen(open){
+    document.body.classList.toggle('browser-sidebar-open', open);
+    els('#localBrowserSidebarBtn, #automationsSidebarBtn').forEach(function(toggle){
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.setAttribute('aria-label', open ? 'Close your bots' : 'Open your bots');
+      toggle.setAttribute('title', 'Your bots');
     });
   }
+  // Outside the browser and Automations, the sidebar is a column of the
+  // chat layout; closing it there leaves the conversation the whole width.
+  function applyLeftPane(){
+    var closed = !browserSidebarWanted();
+    document.body.classList.toggle('left-pane-closed', closed);
+    if(document.body.classList.contains('browser-collab-mode')) return;
+    els('#localBrowserSidebarBtn, #automationsSidebarBtn').forEach(function(toggle){
+      toggle.setAttribute('aria-expanded', closed ? 'false' : 'true');
+      toggle.setAttribute('aria-label', closed ? 'Open your bots' : 'Close your bots');
+    });
+  }
+  // The count bubble on the pane button: how many conversations in the
+  // sidebar have unread messages, shown while the sidebar is out of sight.
+  function renderLeftPaneCount(){
+    var count = els('.chat-sidebar .chat-activity-dot.is-unread').length;
+    els('#localBrowserSidebarBtn, #automationsSidebarBtn').forEach(function(toggle){
+      var bubble = toggle.querySelector('.pane-count');
+      if(!count){ if(bubble) bubble.remove(); return; }
+      if(!bubble){ bubble = document.createElement('span'); bubble.className = 'pane-count'; bubble.setAttribute('aria-hidden', 'true'); toggle.append(bubble); }
+      bubble.textContent = count > 99 ? '99+' : String(count);
+    });
+  }
+  window.miaChatRightPane = {
+    toggle: function(){ toggleChatInfoPane(); return !!chatInfo.open; },
+    open: function(){ return !!chatInfo.open; }
+  };
+  applyLeftPane();
+  (function watchSidebarUnread(){
+    var scroll = el('.chat-sidebar-scroll');
+    if(!scroll || typeof MutationObserver !== 'function') return;
+    var queued = false;
+    new MutationObserver(function(){
+      if(queued) return;
+      queued = true;
+      requestAnimationFrame(function(){ queued = false; renderLeftPaneCount(); });
+    }).observe(scroll, {childList:true, subtree:true, attributes:true, attributeFilter:['class']});
+  })();
   function closeBrowserSidebarDrawer(){
     if(!document.body.classList.contains('browser-sidebar-open')) return;
     document.body.classList.remove('browser-sidebar-open');
@@ -13137,16 +15366,17 @@
     });
   }
   function runToolsAction(action){
-    // A tool action is a destination choice: collapse the browser-mode
-    // sidebar drawer so the destination (browser page or side pane) is
-    // immediately visible instead of staying covered by the drawer.
-    closeBrowserSidebarDrawer();
+    // Views (Automations, Artifacts, Browser) are the same in Solo and a
+    // team; only creating chats and bots differs.
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'web-browser';
+    if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
     // layout back — closing the browser here would kill browser mode for no
     // reason. Every other tools-menu action still needs the full layout.
     if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store') closeLocalBrowser();
     if(automationsPage.open && action !== 'automations' && action !== 'new-bot' && action !== 'bot-store') closeAutomationsPage();
+    if(artifactsPage.open && action !== 'artifacts' && action !== 'new-bot' && action !== 'bot-store') closeArtifactsPage();
     if(action === 'new-chat') openDmCompose();
     else if(action === 'new-bot') startAgentSetupChat();
     else if(action === 'new-agent') openHarnessAgentSetup();
@@ -13154,56 +15384,72 @@
     else if(action === 'bot-store') openBotStorePane();
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsPage();
+    else if(action === 'artifacts') openArtifactsPage();
     else if(action === 'web-browser') openWebBrowserTool({forActiveBot:true});
   }
 
-  /* The header has one action menu; every item delegates to its existing
-     owning flow so creation and connector handlers remain single-sourced. */
+  /* Rail tiles, view buttons, New chat and section + buttons name their
+     action with data-tools-action; each delegates to its existing owning
+     flow so creation and connector handlers remain single-sourced. */
   (function(){
-    var toolsBtn = el('#chatSidebarToolsBtn');
-    var menu = el('#chatToolsMenu');
-    if(!toolsBtn || !menu) return;
-    function closeMenu(){ menu.classList.remove('open'); syncSidebarToolButtons(); }
-    els('[data-tools-action]', menu).forEach(function(item){
-      if(!sidebarPinnable(item)) return;
-      var pin = document.createElement('span');
-      pin.className = 'chat-tools-pin';
-      pin.setAttribute('data-tools-pin', '');
-      pin.setAttribute('role', 'button');
-      pin.setAttribute('tabindex', '0');
-      pin.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"></path><path d="M12 14v6"></path></svg>';
-      pin.addEventListener('click', function(e){
-        e.stopPropagation();
-        toggleSidebarPin(item.getAttribute('data-tools-action'));
-      });
-      pin.addEventListener('keydown', function(e){
-        if(e.key !== 'Enter' && e.key !== ' ') return;
-        e.preventDefault();
-        e.stopPropagation();
-        toggleSidebarPin(item.getAttribute('data-tools-action'));
-      });
-      item.appendChild(pin);
-    });
-    renderSidebarPins();
-    toolsBtn.addEventListener('click', function(e){
-      e.stopPropagation();
-      var developerMenu = el('#chatDeveloperMenu');
-      if(developerMenu) developerMenu.classList.remove('open');
-      menu.classList.toggle('open');
-      syncSidebarToolButtons();
-    });
-    document.addEventListener('click', function(e){
-      if(menu.classList.contains('open') && !menu.contains(e.target) && e.target !== toolsBtn) closeMenu();
-    });
-    menu.addEventListener('click', function(e){
+    var sidebar = el('.chat-sidebar');
+    if(!sidebar) return;
+    sidebar.addEventListener('click', function(e){
       var item = e.target.closest('[data-tools-action]');
-      if(!item) return;
-      var action = item.getAttribute('data-tools-action');
-      closeMenu();
-      if(item.getAttribute('aria-disabled') === 'true') return;
-      runToolsAction(action);
+      if(!item || !sidebar.contains(item) || item.getAttribute('aria-disabled') === 'true') return;
+      if(item.hasAttribute('data-sidebar-view') && item.classList.contains('active')) return;
+      runToolsAction(item.getAttribute('data-tools-action'));
     });
-    document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && menu.classList.contains('open')) closeMenu(); });
+    var chat = el('[data-sidebar-view="chat"]');
+    if(chat) chat.addEventListener('click', function(){
+      closeBrowserSidebarDrawer();
+      closeLocalBrowser();
+      closeAutomationsPage();
+      closeArtifactsPage();
+    });
+    // Mix on shows every view's tabs in one strip; off keeps them apart.
+    var mixBtn = el('#sidebarMixBtn');
+    var mix = window.MiaTabStrip.mix;
+    function syncMix(){
+      mixBtn.setAttribute('aria-pressed', mix.on() ? 'true' : 'false');
+      mixBtn.title = mix.on() ? 'Separate tabs' : 'Mix all tabs';
+      mixBtn.setAttribute('aria-label', mixBtn.title);
+    }
+    if(mixBtn){
+      mixBtn.addEventListener('click', function(){ mix.set(!mix.on()); syncMix(); syncSidebarViews(); });
+      syncMix();
+    }
+    // Opened from a tab, the browser shows that tab, not the active bot's.
+    mix.register('browser', {show: function(){ if(!localBrowserState.open) openWebBrowserTool(); }});
+    // The body's mode classes already say which view is showing.
+    new MutationObserver(syncSidebarViews).observe(document.body, {attributes: true, attributeFilter: ['class']});
+    syncSidebarViews();
+  })();
+  // The selected view shows its name; the others show only their icon.
+  // With Mix on the strip holds every view, so none is selected: Mix is.
+  function syncSidebarViews(){
+    var body = document.body;
+    var view = window.MiaTabStrip.mix.on() ? null : body.classList.contains('automations-mode') ? 'automations' : body.classList.contains('artifacts-mode') ? 'artifacts' : body.classList.contains('browser-collab-mode') ? 'browser' : 'chat';
+    els('[data-sidebar-view]').forEach(function(button){
+      var on = button.getAttribute('data-sidebar-view') === view;
+      button.classList.toggle('active', on);
+      button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  // Notifications collect what needs you across workspaces; until that
+  // feed exists the panel says there is nothing waiting.
+  (function(){
+    var button = el('#railNotificationsBtn'), panel = el('#railNotificationsPanel');
+    if(!button || !panel) return;
+    function setOpen(open){
+      panel.hidden = !open;
+      button.classList.toggle('open', open);
+      button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    button.addEventListener('click', function(e){ e.stopPropagation(); setOpen(panel.hidden); });
+    document.addEventListener('click', function(e){ if(!panel.hidden && !panel.contains(e.target) && !button.contains(e.target)) setOpen(false); });
+    document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && !panel.hidden) setOpen(false); });
   })();
 
   (function(){
@@ -13223,8 +15469,6 @@
       function closeMenu(){ menu.classList.remove('open'); syncSidebarToolButtons(); }
       button.addEventListener('click', function(event){
         event.stopPropagation();
-        var toolsMenu = el('#chatToolsMenu');
-        if(toolsMenu) toolsMenu.classList.remove('open');
         menu.classList.toggle('open');
         syncSidebarToolButtons();
       });
@@ -13244,42 +15488,27 @@
     syncDeveloperModeUI();
   })();
 
+  // The workspace rail lists Solo first, then every team. Clicking a tile
+  // switches workspace; + opens Settings > Teams to request a new team.
   (function(){
-    var toggle = el('#workspaceSwitcherToggle');
-    var menu = el('#workspaceSwitcherMenu');
-    if(!toggle || !menu) return;
-    function closeMenu(){
-      menu.classList.remove('open');
-      toggle.setAttribute('aria-expanded', 'false');
-    }
-    toggle.addEventListener('click', function(event){
-      event.stopPropagation();
-      var open = !menu.classList.contains('open');
-      menu.classList.toggle('open', open);
-      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
-    els('[data-workspace-key]').forEach(function(option){
+    var rail = el('#workspaceSwitcherMenu');
+    if(!rail) return;
+    els('[data-workspace-key]:not([data-hub-team])', rail).forEach(function(option){
       option.addEventListener('click', function(){
         var key = option.getAttribute('data-workspace-key');
-        var workspace = WORKSPACE_OPTIONS[key];
-        if(!workspace) return;
-        if(key === activeWorkspaceKey){ closeMenu(); return; }
-        activateWorkspace(key);
-        closeMenu();
-        setAppLoading(true);
+        if(!WORKSPACE_OPTIONS[key] || key === activeWorkspaceKey) return;
         // A workspace owns several independent module caches (native rooms,
         // bots, departments, pinned state, sockets). Reloading from the new
         // persisted scope is the smallest atomic switch: no response started
         // in the previous workspace can repaint into the next one.
-        location.reload();
+        switchWorkspace(key);
       });
     });
-    document.addEventListener('click', function(event){
-      if(menu.classList.contains('open') && !menu.contains(event.target) && event.target !== toggle) closeMenu();
-    });
-    document.addEventListener('keydown', function(event){
-      if(event.key === 'Escape' && menu.classList.contains('open')) closeMenu();
-    });
+    var add = el('#workspaceRailAdd');
+    if(add) add.addEventListener('click', function(){ openSettingsDrawer('teams'); });
+    // Teams load from the last saved list; pointing at the rail checks the
+    // Hub for new ones, as opening the old switcher menu did.
+    rail.addEventListener('pointerenter', function(){ loadHubTeams(false); });
     renderWorkspaceSwitcher();
   })();
 
@@ -13321,8 +15550,8 @@
     if(admin) admin.addEventListener('click', function(){
       if(menu) menu.classList.remove('open');
       if(account) account.setAttribute('aria-expanded', 'false');
-      if(activeWorkspaceKey !== 'multiplayer_test') return;
-      location.href = '/admin?workspace=multiplayer_test';
+      if(activeWorkspaceKey !== 'multiplayer_test' && !hubWorkspace()) return;
+      location.href = '/admin?workspace=' + encodeURIComponent(activeWorkspaceKey);
     });
     var manageAgentsBack = el('#styledAgentAdminBack');
     if(manageAgentsBack) manageAgentsBack.addEventListener('click', function(){
@@ -13865,12 +16094,22 @@
     // Canonical Lucide v0.545.0 geometry. Keep this set together so these
     // adjacent actions share one optical grid instead of drifting as custom
     // paths are edited independently.
-    return '<div class="conversation-header-actions" role="group" aria-label="Conversation actions">' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShareConversation" title="Copy conversation ID" aria-label="Copy conversation ID"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v13"></path><path d="m16 6-4-4-4 4"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path></svg></button>' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn' + (pinned ? ' active' : '') + '" id="chatBookmarkConversation" title="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-label="' + (pinned ? 'Remove bookmark' : 'Bookmark conversation') + '" aria-pressed="' + (pinned ? 'true' : 'false') + '"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg></button>' +
-      (activeBotTabsAvailable(activeConversation) ? '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatShowBotTabsBtn" title="Show this bot\'s tabs" aria-label="Show this bot\'s tabs in the browser"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg></button>' : '') +
-      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatHistoryBtn" title="History" aria-label="Open conversation history"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></button>' +
-      '<button type="button" class="ch-icon-btn conversation-action-btn" id="chatNewConversationBtn" title="' + esc(freshTitle) + '" aria-label="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '') + '><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button>' +
+    // One "More" button, like Chrome's menu: the conversation's actions
+    // and its restart or reset, drawn with the bar's own line icons.
+    function item(id, label, icon, extra){
+      return '<button type="button" class="conv-more-item" id="' + id + '" role="menuitem"' + (extra || '') + '><svg viewBox="0 0 24 24" aria-hidden="true">' + icon + '</svg><span>' + esc(label) + '</span></button>';
+    }
+    var menu = channelMenu.open
+      ? item('chatShareConversation', 'Copy conversation ID', '<rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>') +
+        item('chatBookmarkConversation', pinned ? 'Remove bookmark' : 'Bookmark conversation', '<path d="M18 20l-6-4-6 4V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1z"></path>', ' aria-pressed="' + (pinned ? 'true' : 'false') + '"') +
+        (activeBotTabsAvailable(activeConversation) ? item('chatShowBotTabsBtn', 'Show this bot\'s tabs', '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 9h18M9 5v4"></path>') : '') +
+        item('chatHistoryBtn', 'History', '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l3 2"></path>') +
+        item('chatNewConversationBtn', 'New conversation', '<path d="M12 5v14M5 12h14"></path>', ' title="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '')) +
+        (channelMenuKind() ? '<div class="conv-more-sep" role="separator"></div>' + renderChannelMenuHtml() : '')
+      : '';
+    return '<div class="conversation-header-actions conv-more" role="group" aria-label="Conversation actions">' +
+      '<button type="button" class="ch-icon-btn conv-more-btn" id="chatMoreBtn" title="More" aria-label="More" aria-haspopup="menu" aria-controls="channelMenu" aria-expanded="' + (channelMenu.open ? 'true' : 'false') + '"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg></button>' +
+      '<div class="channel-menu conv-more-menu' + (channelMenu.open ? ' open' : '') + '" id="channelMenu" role="menu">' + menu + '</div>' +
     '</div>';
   }
 
@@ -13945,6 +16184,17 @@
   }
 
   function wireConversationHeaderActions(header){
+    var more = el('#chatMoreBtn', header);
+    if(more) more.addEventListener('click', function(e){
+      e.stopPropagation();
+      if(channelMenu.open) resetChannelMenuState();
+      else { channelMenu.open = true; channelMenu.roomId = chatWs.activeRoomId; channelMenu.confirming = false; channelMenu.busy = false; }
+      renderChatHeaderBar();
+    });
+    // Picking an action closes the menu, as in Chrome.
+    els('.conv-more-item', header).forEach(function(item){
+      item.addEventListener('click', function(){ setTimeout(closeChannelMenu); });
+    });
     var showTabs = el('#chatShowBotTabsBtn', header);
     if(showTabs) showTabs.addEventListener('click', showActiveBotTabs);
     var share = el('#chatShareConversation', header);
@@ -14082,6 +16332,7 @@
   }
 
   function openDmCompose(){
+    if(hubWorkspace()){openNewChannelFlow();return;}
     dmCompose.selected = {};
     dmCompose.query = '';
     dmCompose.busy = false;
@@ -14292,9 +16543,13 @@
     var pop = el('#chatDmAddPopover');
     var input = el('#chatDmAddInput');
     if(!btn || !pop) return;
+    // New channel lives here outside teams, where channels share this list.
+    // Solo has nobody to message, so its + goes straight to a channel.
     btn.addEventListener('click', function(e){
       e.stopPropagation();
-      if(chatDmAdd.open) closeChatDmAddPopover(); else openChatDmAddPopover();
+      if(chatDmAdd.open){ closeChatDmAddPopover(); return; }
+      if(appCollaborationMode !== 'multiplayer'){ openNewChannelFlow(); return; }
+      openSidebarAddMenu(btn, [['New direct message', openChatDmAddPopover], ['New channel', openNewChannelFlow]]);
     });
     if(input){
       input.addEventListener('input', function(){
@@ -14332,6 +16587,9 @@
       var driveRoomId = chatWs.activeRoomId;
       text += googleDriveMessageContext(driveFiles);
       var file = chatAttachment.file;
+      // A shared live app travels as its address in the message text.
+      var app = chatAttachment.app;
+      if(app) text = (text ? text + '\n\n' : '') + app.name + ': ' + app.url;
       if((!text && !file) || chatAttachment.busy) return;
       setLocalChatTypingActivity(false);
       function reallySend(){
@@ -14340,8 +16598,9 @@
           input.value = '';
           syncDraftState();
           Promise.resolve(sendActiveRoomMessage(text, null, null, driveRoomId)).then(function(result){
-            if(result && (result.status===200 || result.status===201)){
+            if(result && (result.status===200 || result.status===201 || result.undelivered)){
               googleDriveDrafts[driveRoomId]=(googleDriveDrafts[driveRoomId]||[]).filter(function(item){return !driveFiles.some(function(sent){return sent.id===item.id;});});
+              if(app && chatAttachment.app === app) clearChatAttachment();
               renderGoogleDriveAttachments();syncDraftState();
             }
           }).catch(function(){ /* Keep Drive references staged for a retry. */ });
@@ -14360,7 +16619,7 @@
         prepareChatAttachment(file, roomId, null).then(function(prepared){
           if(input.value.trim() === draftText) input.value = '';
           return sendActiveRoomMessage(text, null, prepared, roomId).then(function(result){
-            if(result && (result.status === 200 || result.status === 201)){
+            if(result && (result.status === 200 || result.status === 201 || result.undelivered)){
               googleDriveDrafts[driveRoomId]=(googleDriveDrafts[driveRoomId]||[]).filter(function(item){return !driveFiles.some(function(sent){return sent.id===item.id;});});
               clearChatAttachment();
             } else {
@@ -14388,7 +16647,7 @@
     // a real draft — mirrors the mock's sendStyle/hint being keyed off
     // state.draft.trim(), not a permanent enabled state.
     function syncDraftState(){
-      var hasDraft = !!input.value.trim() || !!chatAttachment.file || stagedGoogleDriveFiles().length>0;
+      var hasDraft = !!input.value.trim() || !!chatAttachment.file || !!chatAttachment.app || stagedGoogleDriveFiles().length>0;
       var task = activeRoomTask();
       var stopping = !!(task && (task.status === 'stopping' || chatTaskStopPending[task.id]));
       sendBtn.classList.toggle('has-draft', hasDraft);
@@ -14399,13 +16658,16 @@
       setLocalChatTypingActivity(!!input.value.trim() && document.activeElement === input);
     }
     if(plusBtn && fileInput){
-      plusBtn.addEventListener('click', function(){
-        if(chatWs.activeRoomId && !chatAttachment.busy) fileInput.click();
+      plusBtn.addEventListener('click', function(e){
+        e.stopPropagation();
+        if(chatWs.activeRoomId && !chatAttachment.busy) setComposerPlusMenu(el('#ccPlusMenu').hidden ? 'menu' : null);
       });
       fileInput.addEventListener('change', function(){
         if(stageChatAttachment(fileInput.files && fileInput.files[0])) syncDraftState();
       });
+      wireComposerPlusMenu(fileInput, syncDraftState);
     }
+    composerAttachmentStaged = syncDraftState;
     if(attachStrip){
       attachStrip.addEventListener('click', function(e){
         if(e.target.closest('.cc-attach-remove') && !chatAttachment.busy){
@@ -14490,14 +16752,6 @@
       var profileName = target.getAttribute('data-agent-profile-name');
       var agent = resolveAgent(profileRef, profileName);
       agentEditFocusReturn = target;
-      // Opening the editor from the browser's "Your bots" drawer is a
-      // destination choice like picking a chat, so tuck the drawer away —
-      // otherwise it sits on top of the browser next to the editor it just
-      // opened, covering the page for no reason.
-      if(document.body.classList.contains('browser-sidebar-open')){
-        document.body.classList.remove('browser-sidebar-open');
-        els('#localBrowserSidebarBtn, #automationsSidebarBtn').forEach(function(sidebarBtn){ sidebarBtn.setAttribute('aria-expanded', 'false'); sidebarBtn.setAttribute('aria-label', 'Open your bots'); });
-      }
       if(agent){
         closeChatThread();
         closeChatTasksPanel();
@@ -14729,7 +16983,9 @@
         e.preventDefault();
         var startX = e.clientX;
         var sidebar = handle.parentElement;
-        var startW = sidebar.getBoundingClientRect().width;
+        // The width variable covers the list only; the workspace rail is added on top.
+        var rail = el('#workspaceSwitcherMenu');
+        var startW = sidebar.getBoundingClientRect().width - (rail ? rail.getBoundingClientRect().width : 0);
         var width = startW;
         document.body.classList.add('chat-sidebar-resizing');
         if(handle.setPointerCapture) handle.setPointerCapture(e.pointerId);
@@ -14754,16 +17010,123 @@
     if(e.key === 'Escape'){ closeChatThread(); closeChatTasksPanel(); if(chatCtxMenuClose) chatCtxMenuClose(); if(chatSidebarCtxMenuClose) chatSidebarCtxMenuClose(); }
   });
 
-  /* ============ CHAT: mic dictation (interactive-mock, Claude.ai-style composer) ============ */
+  /* ============ CHAT: mic dictation (local whisper.cpp; audio never leaves this Mac) ============ */
   (function(){
     var micBtn = el('#ccMicBtn');
     var pill = el('#ccRecordingPill');
-    if(!micBtn) return;
-    var recording = false;
+    var pillText = el('#ccRecordingText');
+    var D = window.MiaDictation;
+    if(!micBtn || !D) return;
+    var state = 'idle'; // idle | starting | recording | transcribing
+    var recorder = null, stream = null, chunks = [], hideTimer = null;
+
+    function show(message, opts){
+      opts = opts || {};
+      clearTimeout(hideTimer);
+      if(pillText) pillText.textContent = message;
+      if(pill){
+        pill.classList.add('visible');
+        pill.classList.toggle('notice', !!opts.notice);
+      }
+      if(opts.autoHide) hideTimer = setTimeout(hide, opts.autoHide);
+    }
+    function hide(){ if(pill) pill.classList.remove('visible'); }
+    function setState(next){
+      state = next;
+      micBtn.classList.toggle('recording', next === 'recording');
+      micBtn.disabled = next === 'transcribing' || next === 'starting';
+    }
+    function speechFetch(path, opts){
+      opts = opts || {};
+      opts.credentials = 'include';
+      opts.headers = Object.assign({'X-MiaOS-Workspace':activeWorkspaceKey}, opts.headers || {});
+      return fetch(path, opts).then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(data){ return {status:r.status, data:data}; });
+      });
+    }
+    function releaseMic(){
+      if(stream){ stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; }
+      recorder = null;
+    }
+    function fail(message){
+      releaseMic(); setState('idle');
+      show(message, {notice:true, autoHide:7000});
+    }
+
+    // Engine/model gate. The model download only ever starts from this
+    // explicit confirmation, and goes to the user's Mia data folder.
+    function ensureReady(){
+      return speechFetch('/api/speech/status').then(function(res){
+        var s = res.data || {};
+        if(!s.binaryReady){
+          throw new Error('Dictation needs whisper.cpp. In Terminal run: ' + (s.installHint || 'brew install whisper-cpp'));
+        }
+        if(s.modelReady) return true;
+        if(!window.confirm('Dictation runs on this Mac with the whisper.cpp "' + s.model + '" speech model (about 142 MB).\n\nDownload it once from huggingface.co into your Mia data folder? Your audio is never uploaded anywhere.')){
+          return false;
+        }
+        show('Downloading speech model… (one time, about 142 MB)');
+        return speechFetch('/api/speech/model', {method:'POST'}).then(function(done){
+          if(done.status !== 200) throw new Error((done.data && done.data.message) || 'Model download failed.');
+          return true;
+        });
+      });
+    }
+
+    function start(){
+      setState('starting');
+      ensureReady().then(function(ok){
+        if(!ok){ setState('idle'); hide(); return; }
+        return navigator.mediaDevices.getUserMedia({audio:true}).then(function(media){
+          stream = media; chunks = [];
+          recorder = new MediaRecorder(media);
+          recorder.ondataavailable = function(ev){ if(ev.data && ev.data.size) chunks.push(ev.data); };
+          recorder.onstop = onRecorded;
+          recorder.start();
+          setState('recording');
+          show('Recording… click the mic again to stop');
+        });
+      }).catch(function(error){
+        var denied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
+        fail(denied ? 'Microphone access is blocked. Allow Mia in System Settings > Privacy & Security > Microphone.' : (error && error.message) || 'Could not start dictation.');
+      });
+    }
+
+    function onRecorded(){
+      var blob = new Blob(chunks, {type: (recorder && recorder.mimeType) || 'audio/webm'});
+      releaseMic();
+      setState('transcribing');
+      show('Transcribing…');
+      blob.arrayBuffer().then(function(bytes){
+        var ctx = new (window.AudioContext || window.webkitAudioContext)();
+        return ctx.decodeAudioData(bytes).then(function(audio){
+          ctx.close();
+          var channels = [];
+          for(var c = 0; c < audio.numberOfChannels; c++) channels.push(audio.getChannelData(c));
+          return D.toWav16k(channels, audio.sampleRate);
+        });
+      }).then(function(wav){
+        return speechFetch('/api/speech/transcribe', {method:'POST', headers:{'Content-Type':'audio/wav'}, body:wav});
+      }).then(function(res){
+        if(res.status !== 200) throw new Error((res.data && res.data.message) || 'Transcription failed.');
+        var text = String((res.data && res.data.text) || '').trim();
+        setState('idle');
+        if(!text){ show('No speech detected.', {notice:true, autoHide:3000}); return; }
+        var input = el('#ccInput');
+        if(input){
+          var next = D.insertText(input.value, input.selectionStart, input.selectionEnd, text);
+          input.value = next.value;
+          input.focus();
+          try { input.setSelectionRange(next.caret, next.caret); } catch(_){ /* not a text input */ }
+          input.dispatchEvent(new Event('input', {bubbles:true}));
+        }
+        hide();
+      }).catch(function(error){ fail((error && error.message) || 'Transcription failed.'); });
+    }
+
     micBtn.addEventListener('click', function(){
-      recording = !recording;
-      micBtn.classList.toggle('recording', recording);
-      if(pill) pill.classList.toggle('visible', recording);
+      if(state === 'recording'){ try { recorder.stop(); } catch(_){ fail('Recording stopped unexpectedly.'); } return; }
+      if(state === 'idle') start();
     });
   })();
 
@@ -15356,16 +17719,16 @@
   var TOUR_LS_KEY = 'miaosTourDone';
   var TOUR_STEPS = [
     {
-      target: '#workspaceSwitcherToggle',
+      target: '[data-workspace-key="solo"]',
       route: 'chat',
       title: 'Your private space',
       body: 'Solo is your private workspace. Conversations, bots, and provider access stay scoped to you.'
     },
     {
-      target: '#chatSidebarToolsBtn',
+      target: '.sidebar-new-chat',
       route: 'chat',
-      title: 'Create from Tools',
-      body: 'Open Tools to start a chat, create a bot, create a channel, or open the browser beside Mia.'
+      title: 'Start something new',
+      body: 'Start a chat here. Each section has its own + to add a bot or a channel, and the buttons above switch to Automations or the browser.'
     },
     {
       target: '#chatStarterBots',
@@ -15391,13 +17754,12 @@
       if(res.status !== 200) throw new Error('Could not load your automations.');
       syncChatBotRecords(res.data.bots || []);
       var botId = miaOnboardingChat.newsBotId, automationId = miaOnboardingChat.newsAutomationId;
-      if(!automationRecordById(botId, automationId)) throw new Error('This briefing was removed. You can manage your other automations from Tools.');
+      if(!automationRecordById(botId, automationId)) throw new Error('This briefing was removed. You can manage your other automations from Automations.');
       if(tour.active) tourTeardown();
       var row = '[data-bot-id="' + botId + '"][data-automation-id="' + automationId + '"]';
       tour.steps = [
-        {target:'#chatSidebarToolsBtn', title:'Your tools live here', body:'Open Tools to find your automations.', advanceOnClick:true},
-        {target:'[data-tools-action="automations"]', title:'Open Automations', body:'This opens your scheduled tasks in the right panel.', advanceOnClick:true, prepare:function(){el('#chatToolsMenu').classList.add('open'); syncSidebarToolButtons();}},
-        {target:row, title:'Your news briefing', body:'Here is the briefing you just created. Open it to see its schedule and controls.', advanceOnClick:true, prepare:function(){el('#chatToolsMenu').classList.remove('open'); localStorage.setItem('styledInfoPaneOpen','1'); prepareChatUtilityPane('automations'); renderChatInfoPane();}},
+        {target:'[data-sidebar-view="automations"]', title:'Open Automations', body:'This opens your scheduled tasks.', advanceOnClick:true},
+        {target:row, title:'Your news briefing', body:'Here is the briefing you just created. Open it to see its schedule and controls.', advanceOnClick:true, prepare:function(){localStorage.setItem('styledInfoPaneOpen','1'); prepareChatUtilityPane('automations'); renderChatInfoPane();}},
         {target:'.cip-editor-row-top', title:'Change or pause it anytime', body:'Change the schedule here. Turn Active off and save to pause your briefing.', prepare:function(){openAutomationDetail(botId, automationId);}},
         {target:'#automationDetailDelete', title:'You’re in control', body:'Delete removes this automation after confirmation. You don’t need to delete it now—your briefing is ready.'}
       ];

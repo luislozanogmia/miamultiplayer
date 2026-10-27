@@ -148,8 +148,8 @@ test('the adjacent Multiplayer Test switcher label remains short without changin
   assert.match(source, /'multiplayer_test': \{mode:'multiplayer', label:'Multiplayer Test', switcherLabel:'Multiplayer Test'\}/);
   assert.match(source, /companyName\.textContent = workspace\.switcherLabel \|\| workspace\.label/);
   assert.match(html, /id="miaCompanyName">Multiplayer Test<\/span>/);
-  assert.match(html, /data-workspace-key="multiplayer_test"[\s\S]*?<strong>Multiplayer Test<\/strong>/);
-  assert.match(html, /data-tools-action="connected-apps"[\s\S]*?<span class="chat-new-menu-label">Connected apps<\/span>/);
+  assert.match(html, /data-workspace-key="multiplayer_test"[\s\S]*?<strong class="workspace-rail-name">Multiplayer Test<\/strong>/);
+  assert.match(html, /data-tools-action="connected-apps"[\s\S]*?<strong class="workspace-rail-name">Connected apps<\/strong>/);
   assert.doesNotMatch(html, /data-tools-action="connected-apps"[^>]*aria-disabled="true"/);
 });
 

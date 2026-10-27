@@ -17,6 +17,7 @@ function navigationHarness() {
   const input = { value: '', dispatchEvent() {} };
   const a = { id: 'a', name: 'A' }, b = { id: 'b', name: 'B', roomId: 'room-b' };
   const ctx = {
+    hubWorkspace: () => false,
     Promise, Event: class {}, chatRoster: {}, chatModelPicker: null, AGENT_SETUP_ROOM_ID: '__setup__', activeWorkspaceKey: 'solo',
     chatWs: { activeRoomId: 'room-b', configured: true, nativeConversations: [{ id: 'room-b', type: 'bot', metadata: { botId: 'b' } }], allAgents: [a, b], botRecords: [a, b], botRecordsLoaded: true },
     localBrowserState: { open: true }, document: { body: { classList: { contains: () => true } } }, window: {},
@@ -154,6 +155,7 @@ test('a rejected toolbar cancellation remains retryable and visibly reports fail
 function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a' } = {}) {
   let handler = null, takeOvers = 0;
   const ctx = {
+    hubWorkspace: () => false,
     state: { activeId, tabs: [{ id: 1 }, { id: 2 }], groups: [] },
     window: { miaBrowserAgents: {} },
     botControl: { hidden: controlHidden, getAttribute: () => botId },
@@ -186,6 +188,7 @@ test('a page click takes nothing over when no bot has control of that tab', () =
 test('+ New bot makes a new tab and group, starts bot setup, and gives the new bot that group', async () => {
   let handler = null, onCreated = null; const sent = [];
   const ctx = {
+    hubWorkspace: () => false,
     Promise, state: { activeId: 1, tabs: [{ id: 1 }], groups: [] },
     window: { miaBrowserAgents: { startBotSetup(callback) { onCreated = callback; } } },
     botControl: { hidden: true, getAttribute: () => null }, takeOver: { onclick() {} },
@@ -291,13 +294,16 @@ test('the +N list draws the bot\'s other tabs as tabs and acts on them', async (
   const sent = [];
   const listeners = {};
   const ctx = {
+    hubWorkspace: () => false,
     document: { createElement: tag => new El(tag), addEventListener: (type, fn) => { listeners[type] = fn; } },
     screen: new El('div'), overlay: new El('div'), strip: new El('div'),
     paintGroup() {}, command: (action, payload) => { sent.push([action, payload]); return Promise.resolve(); },
+    tabTypeIcon: () => '<svg></svg>',
+    window: { MiaTabStrip: { icon: t => Object.assign(new El(t.iconUrl ? 'img' : 'span'), { className: 'mia-tab-icon', src: t.iconUrl, innerHTML: t.iconUrl ? '' : t.iconHtml }) } },
     render() { ctx.renderTabsList(ctx.groups, ctx.front, ctx.working); },
     showStill: () => Promise.resolve(true), hideStill() {},
     state: { activeId: 1, tabs: [{ id: 1, title: 'Shown', groupId: 'g1' }, { id: 2, title: 'Flights', favicon: 'data:,', groupId: 'g1' }, { id: 3, title: 'Hotels', groupId: 'g1' }] },
-    lastTabs: '', tabsListGroupId: null, tabsListRequested: false, tabsListOpen: false, tabsListToken: 0,
+    tabStrip: { reset() {}, dragging: () => null }, tabsListGroupId: null, tabsListRequested: false, tabsListOpen: false, tabsListToken: 0,
     groups: { g1: { id: 'g1', botId: 'bot-a' } }, front: { g1: { id: 1, others: [2, 3] } }, working: { 3: { name: 'Scout' } },
   };
   vm.createContext(ctx);
@@ -312,11 +318,12 @@ test('the +N list draws the bot\'s other tabs as tabs and acts on them', async (
   assert.equal(list.hidden, false);
   const rows = rowsBox.children.filter(c => c.className.startsWith('native-browser-bot-tabs-row'));
   assert.equal(rows.length, 2);
-  const labels = rows.map(r => r.all().find(n => n.className === 'native-browser-tab-label').textContent);
+  const labels = rows.map(r => r.all().find(n => n.className === 'mia-tab-label').textContent);
   assert.deepEqual(labels, ['Flights', 'Hotels']);
-  assert.ok(rows[0].all().some(n => n.className === 'native-browser-tab-icon'), 'the page icon shows like on a tab');
+  assert.ok(rows[0].all().some(n => n.className === 'mia-tab-icon'), 'the page icon shows like on a tab');
+  assert.ok(rows[1].all().some(n => n.className === 'mia-tab-icon' && n.tagName === 'span'), 'a page without its own icon shows its type mark');
   assert.match(rows[1].className, /bot-working/);
-  assert.ok(rows[1].all().some(n => /native-browser-tab-working/.test(n.className)), 'the working dot shows');
+  assert.ok(rows[1].all().some(n => /mia-tab-working/.test(n.className)), 'the working dot shows');
   assert.equal(rowsBox.children[0].className, 'native-browser-bot-tabs-new', 'new tab sits on top');
   rows[1].children[1].onclick({ stopPropagation() {} });
   assert.deepEqual(JSON.parse(JSON.stringify(sent.at(-1))), ['close', { id: 3 }]);
@@ -340,6 +347,7 @@ test('following a bot moves the browser to the tab it works in next', () => {
   const sent = [];
   let running = true;
   const ctx = {
+    hubWorkspace: () => false,
     window: { miaBrowserAgents: { isRunning: () => running } },
     command: (action, payload) => { sent.push([action, payload]); return Promise.resolve(); },
     state: null,
@@ -392,4 +400,19 @@ test('hovering a group\'s bot shows its name under it', () => {
   assert.equal(tip.hidden, true);
   handlers.mouseenter(); handlers.mousedown();
   assert.equal(tip.hidden, true, 'a click hides it so it never covers the bot menu');
+});
+
+test('a browser tab without its own icon shows what it is: building blocks for local pages and apps, a globe for the web', () => {
+  const source = browser;
+  const start = source.indexOf('  var BLOCKS_ICON');
+  const end = source.indexOf('  // Mixed tabs (tab-strip.js)', start);
+  const tabTypeIcon = new Function(source.slice(start, end) + '\nreturn tabTypeIcon;')();
+  const blocks = tabTypeIcon('file:///Users/me/Documents/mia/calculator.html');
+  const globe = tabTypeIcon('https://www.linkedin.com/feed/');
+  assert.notEqual(blocks, globe);
+  assert.equal(tabTypeIcon('http://localhost:8765/'), blocks);
+  assert.equal(tabTypeIcon('http://127.0.0.1:3000/app'), blocks);
+  assert.equal(tabTypeIcon('https://localhost.example.com/'), globe);
+  assert.equal(tabTypeIcon(''), globe);
+  assert.match(source, /iconUrl: t\.favicon, iconHtml: tabTypeIcon\(t\.url\)/);
 });

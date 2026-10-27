@@ -26,6 +26,25 @@ test("main-window trust uses exact parsed origins", () => {
   assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:48710/chat", "http://127.0.0.1:4871"), false);
 });
 
+test("packaged desktop always starts its backend with Clerk sign-in", () => {
+  const main = loadMain();
+  const hostile = { MIAOS_DESKTOP_NO_AUTH: '1', MIAOS_NO_AUTH: '1', MIAOS_CLERK_AUTH: '0' };
+  assert.deepEqual(main.desktopAuthEnvironment(true, hostile), {
+    MIAOS_DESKTOP_PACKAGED: '1', MIAOS_NO_AUTH: '0', MIAOS_CLERK_AUTH: '1',
+  });
+  assert.equal(main.desktopAuthEnvironment(false, hostile).MIAOS_NO_AUTH, '1');
+});
+
+test("persistent desktop logs omit complete and encoded credential URLs", () => {
+  const main = loadMain();
+  const logged = main.redactLogValue(
+    'failed https://example.test/reset/fixture-secret?code=fixture-code#fixture-state'
+      + ' and https%3A%2F%2Fexample.test%2Finvite%2Ffixture-secret',
+  );
+  assert.doesNotMatch(logged, /fixture-secret|fixture-code|fixture-state|example[.]test/);
+  assert.match(logged, /\[REDACTED_URL\]/);
+});
+
 test("test Clerk instance accepts only Clerk's exact shared Google OAuth callback", () => {
   const main = loadMain({ MIAOS_CLERK_INSTANCE: "test" });
   const valid = new URL("https://accounts.google.com/v3/signin/accountchooser");
@@ -97,98 +116,30 @@ test("legacy Clerk Google navigation is denied, never opened in an embedded popu
   assert.equal(main.__electron.BrowserWindow.instances.length, 0);
 });
 
-test("provider auth redirects preserve nested OAuth windows and their navigation guards", async () => {
+test("provider auth redirects open the local broker in a locked-down popup", () => {
   const { EventEmitter } = require("node:events");
   const main = loadMain();
   const contents = new EventEmitter();
   contents.session = { id: "main-session" };
   contents.setWindowOpenHandler = handler => { contents.popup = handler; };
-  const parent = { webContents: contents };
-  main.configureNavigation(parent, "http://localhost:4871");
-
+  main.configureNavigation({ webContents: contents }, "http://localhost:4871");
   const redirect = "http://localhost:4871/api/settings/harness/auth/redirect?provider=claude-subscription-directsdk-experimental";
   const decision = contents.popup({ url: redirect });
   assert.equal(decision.action, "allow");
+  assert.equal(decision.overrideBrowserWindowOptions.show, false, "the broker hands off before it would draw");
   assert.equal(decision.overrideBrowserWindowOptions.webPreferences.nodeIntegration, false);
   assert.equal(decision.overrideBrowserWindowOptions.webPreferences.sandbox, true);
   assert.equal(decision.overrideBrowserWindowOptions.webPreferences.session, contents.session);
-  assert.match(decision.overrideBrowserWindowOptions.webPreferences.preload, /google-oauth-preload\.cjs$/);
-
-  const childContents = new EventEmitter();
-  childContents.session = contents.session;
-  childContents.setWindowOpenHandler = handler => { childContents.popup = handler; };
-  const child = { webContents: childContents, loadedUrls: [], loadURL(url) { this.loadedUrls.push(url); } };
-  contents.emit("did-create-window", child, { url: redirect });
-  const navigate = (eventName, url) => {
-    let blocked = false;
-    const event = { url, preventDefault() { blocked = true; } };
-    if (eventName === "will-redirect") childContents.emit(eventName, event, url);
-    else childContents.emit(eventName, event);
-    return !blocked;
-  };
-  assert.equal(navigate("will-navigate", redirect), true, "initial local broker must load before its remote redirect");
-  assert.equal(navigate("will-navigate", "http://localhost:4871/"), false);
-  assert.equal(navigate("will-navigate", "https://platform.claude.com/oauth/code/callback?state=fixture&code=early"), false);
-  const authorization = new URL("https://claude.com/cai/oauth/authorize");
-  authorization.searchParams.set("code", "true");
-  authorization.searchParams.set("state", "fixture-state");
-  authorization.searchParams.set("redirect_uri", "https://platform.claude.com/oauth/code/callback");
-  assert.equal(navigate("will-navigate", authorization.toString()), true);
-  assert.equal(navigate("will-navigate", redirect), false, "remote auth cannot navigate back into the local broker");
-  assert.equal(navigate("will-navigate", "https://accounts.google.com/v3/signin/identifier"), true);
-  assert.equal(navigate("will-redirect", "https://platform.claude.com/oauth/code/callback?state=wrong&code=fixture"), false);
-  assert.equal(navigate("will-redirect", "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture"), true);
-  assert.equal(navigate("will-redirect", "http://127.0.0.1:54132/callback?state=fixture-state&code=fixture"), false);
-  assert.equal(navigate("will-navigate", "https://claude.com:444/cai/oauth/authorize"), false);
-  assert.equal(navigate("will-navigate", "https://claude.com.attacker.test/"), false);
-  assert.equal(navigate("will-redirect", "https://example.com/steal"), false);
-  assert.equal(navigate("will-navigate", "file:///tmp/private"), false);
-  assert.deepEqual(childContents.popup({ url: "https://example.com/escape" }), { action: "deny" });
-  const google = "https://accounts.google.com/o/oauth2/v2/auth";
-  const nestedDecision = childContents.popup({ url: google });
-  assert.equal(nestedDecision.action, "allow", "Google needs a real Window, not a denied popup followed by parent navigation");
-  assert.equal(nestedDecision.overrideBrowserWindowOptions.parent, child);
-  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.session, contents.session);
-  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.sandbox, true);
-  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.contextIsolation, true);
-  assert.equal(nestedDecision.overrideBrowserWindowOptions.webPreferences.nodeIntegration, false);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(child.loadedUrls, [], "Claude's opener page must survive the Google handoff");
-  const googleContents = new EventEmitter();
-  googleContents.session = contents.session;
-  googleContents.setWindowOpenHandler = handler => { googleContents.popup = handler; };
-  const googleWindow = { webContents: googleContents };
-  childContents.emit("did-create-window", googleWindow, { url: google });
-  const nestedNavigate = url => {
-    let blocked = false;
-    googleContents.emit("will-redirect", { preventDefault() { blocked = true; } }, url);
-    return !blocked;
-  };
-  assert.equal(nestedNavigate("https://claude.ai/api/auth/callback/google"), true);
-  assert.equal(nestedNavigate("https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture"), true);
-  for (const url of [
-    "https://platform.claude.com/oauth/code/callback?state=wrong&code=fixture",
-    "https://accounts.google.com.attacker.test/",
-    "https://accounts.google.com:444/",
-    "file:///tmp/private",
-    "http://localhost:4871/",
-  ]) {
-    assert.equal(nestedNavigate(url), false, url);
-    assert.deepEqual(googleContents.popup({ url }), { action: "deny" }, url);
-  }
-  let completed = 0;
-  let closed = false;
-  googleContents.session.fetch = async () => { completed += 1; return { status: 202 }; };
-  googleWindow.close = () => { closed = true; };
-  googleContents.emit("did-navigate", {}, "https://platform.claude.com/oauth/code/callback?state=fixture-state&code=fixture");
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(completed, 1, "the live navigation listener submits the code automatically");
-  assert.equal(closed, true, "accepted code closes the auth window");
 });
 
-test("ChatGPT and Grok sign-in pages open in the system browser, not the Mia popup", () => {
+test("Claude, ChatGPT and Grok sign-in pages open in the system browser, not the Mia popup", () => {
   const { EventEmitter } = require("node:events");
+  const claudeSignIn = new URL("https://claude.com/cai/oauth/authorize");
+  claudeSignIn.searchParams.set("code", "true");
+  claudeSignIn.searchParams.set("state", "fixture-state");
+  claudeSignIn.searchParams.set("redirect_uri", "https://platform.claude.com/oauth/code/callback");
   for (const [provider, signIn] of [
+    ["claude-subscription-directsdk-experimental", claudeSignIn.toString()],
     ["openai-codex", "https://auth.openai.com/codex/device"],
     ["xai-oauth", "https://accounts.x.ai/oauth2/device"],
   ]) {
@@ -906,7 +857,7 @@ test("browser menu never falls through to closing or reloading the Mia window", 
   const mainSource = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
   const preloadSource = fs.readFileSync(require.resolve("./preload.cjs"), "utf8");
 
-  assert.match(mainSource, /\["l", "t"\]\.includes\(key\)[\s\S]*?webContents\.send\("miaos-browser-open", key\)/);
+  assert.match(mainSource, /\["l", "t", "w"\]\.includes\(key\)[\s\S]*?webContents\.send\("miaos-browser-open", key\)/);
   assert.doesNotMatch(mainSource, /if \(key === "w"\) mainWindow\.close\(\)/);
   assert.doesNotMatch(mainSource, /if \(key === "r"\) mainWindow\.webContents\.reload\(\)/);
   assert.match(preloadSource, /onOpen:[\s\S]*?ipcRenderer\.on\("miaos-browser-open"/);
@@ -994,4 +945,23 @@ test("chat attachments open in the in-app browser through a trusted, exact-URL I
   assert.match(handler, /nativeBrowser\.prepareAttachment\(target, mainWindow\.webContents\.session\)/);
   assert.doesNotMatch(handler, /syncArtifactSessionCookies|session\.fromPartition\(BROWSER_PARTITION/);
   assert.doesNotMatch(handler, /openExternal|file:|pathToFileURL/);
+});
+
+ test("main window keeps shared chat and owner bot polling active in background", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const creation = source.slice(source.indexOf("function createWindow()"), source.indexOf("mainWindow = window;"));
+  assert.match(creation, /backgroundThrottling: false/);
+  assert.match(creation, /contextIsolation: true/);
+  assert.match(creation, /nodeIntegration: false/);
+  assert.match(creation, /sandbox: true/);
+});
+
+test("Cmd+R reloads Mia and Shift+Cmd+R hard-reloads the browser page", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const browserSource = fs.readFileSync(path.join(__dirname, "browser.cjs"), "utf8");
+  assert.match(source, /label: "Reload Mia",\s*accelerator: "CommandOrControl\+R",\s*click: \(\) => developmentRefreshUi\(\)/);
+  assert.match(source, /\["Hard Reload Page", "CommandOrControl\+Shift\+R", "r"\]/);
+  assert.doesNotMatch(source, /\["[^"]*", "CommandOrControl\+R", "r"\]/);
+  assert.match(browserSource, /if \(key === "r" && !input\.shift\) return;/);
+  assert.match(browserSource, /key === "r"\) active\(\)\?\.view\.webContents\.reloadIgnoringCache\(\)/);
 });

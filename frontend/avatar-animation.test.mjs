@@ -11,10 +11,8 @@ test('Mia and bot avatars use one bounded animation path', async () => {
 
   assert.match(markSource, /function staticSvg\(px\)/);
   assert.match(markSource, /if\(modeName === 'static'\)/);
-  assert.match(markSource, /if\(modeName === 'sidebar'\)[\s\S]*svg\(px, sidebarMode, 1\)[\s\S]*setTimeout\(pulseSidebar, 30000\)/);
   assert.match(markSource, /function destroy\(el\)/);
-  assert.match(source, /if\(isMiaOrchestrator\(name, agentId\)\)[\s\S]*markMode === 'sidebar' \? 'sidebar' : markMode === 'activity' \? 'activity' : 'static'/);
-  assert.match(source, /isMiaOrchestrator\(e\.name, e\.agent && e\.agent\.id\) \? 'sidebar' : null/);
+  assert.match(source, /if\(isMiaOrchestrator\(name, agentId\)\)[\s\S]*markMode === 'activity' \? 'activity' : 'static'/);
   assert.match(source, /thinkingIsMia \? 'activity' : null/);
   assert.match(source, /headerMiaIsWorking[\s\S]*roomHasModelResponseActivity\(chatWs\.activeRoomId\)/);
   assert.match(source, /headerMiaIsWorking \? 'activity' : null/);
@@ -29,6 +27,26 @@ test('Mia and bot avatars use one bounded animation path', async () => {
   assert.match(source, /data-mote-static-src/);
   assert.match(source, /data-mote-animated-src/);
   assert.match(source, /moteSrcFor\(name, true\)/);
+});
+
+test('Mia shows the app icon everywhere she is not working', async () => {
+  const [source, markSource, favicon] = await Promise.all([
+    readFile(new URL('./app.js', import.meta.url), 'utf8'),
+    readFile(new URL('./assets/mia-mark.js', import.meta.url), 'utf8'),
+    readFile(new URL('./assets/favicon.svg', import.meta.url), 'utf8'),
+  ]);
+  globalThis.window = {};
+  new Function(markSource)();
+  const el = { innerHTML: '' };
+  for (const px of [18, 28, 40, 132]) {
+    window.MiaMark.render(el, px, 'static');
+    const drawn = [...el.innerHTML.matchAll(/cx="(-?\d+)" cy="(-?\d+)" r="([\d.]+)"( class="gold")?/g)].map((m) => [m[1], m[2], m[3], !!m[4]].join()).sort();
+    const icon = [...favicon.matchAll(/cx="(-?\d+)" cy="(-?\d+)" r="([\d.]+)" fill="(#\w+)"/g)].map((m) => [m[1], m[2], m[3], m[4] === '#C9962B'].join()).sort();
+    assert.deepEqual(drawn, icon, 'size ' + px);
+  }
+  delete globalThis.window;
+  // The sidebar row (which the chat tab copies) no longer animates Mia.
+  assert.doesNotMatch(source, /\? 'sidebar' : null/);
 });
 
 test('detached Mia marks release their timers', async () => {
