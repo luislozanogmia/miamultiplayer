@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <script src="assets/workspace-handoff.js?v=20261024-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261026-invited-1" />
+<link rel="stylesheet" href="styles.css?v=20261027-shelf-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -686,6 +686,23 @@
   </section>
 </div>
 
+<!-- Outside the browser, the bar's button where Downloads sits opens this:
+     the chat's files, the latest automation runs, or recently opened artifacts. -->
+<section class="local-browser-downloads view-shelf" id="viewShelf" role="dialog" aria-labelledby="viewShelfTitle" hidden>
+  <header class="local-browser-downloads-head">
+    <h2 id="viewShelfTitle">Files</h2>
+    <button type="button" class="local-browser-downloads-icon-btn" id="viewShelfClose" title="Close" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+    </button>
+  </header>
+  <label class="local-browser-downloads-search">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+    <input type="search" id="viewShelfSearch" placeholder="Search files" aria-label="Search files" autocomplete="off" spellcheck="false" />
+  </label>
+  <div class="local-browser-downloads-list" id="viewShelfList"></div>
+  <p class="local-browser-downloads-empty" id="viewShelfEmpty"></p>
+</section>
+
 <!-- Local browser surface. -->
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
@@ -711,6 +728,9 @@
       <button type="submit" class="local-browser-go-btn">Go</button>
       <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
+      </button>
+      <button type="button" class="local-browser-btn view-shelf-btn" id="viewShelfBtn" title="Files in this chat" aria-label="Files in this chat" aria-expanded="false" aria-controls="viewShelf" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"></svg>
       </button>
       <button type="button" class="local-browser-btn local-browser-mia-toggle" id="localBrowserMiaToggle" title="Hide Mia" aria-label="Hide Mia" aria-pressed="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M14.5 4.5v15"></path></svg>
@@ -1263,12 +1283,13 @@
     <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
     <script src="automations-board.js?v=20261019-automations-1"></script>
     <script src="artifacts-page.js?v=20261026-artifacts-1"></script>
+    <script src="view-shelf.js?v=20261027-shelf-1"></script>
     <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
     <script src="tab-strip.js?v=20261026-count-2"></script>
-    <script src="native-browser.js?v=20261026-icon-1"></script>
+    <script src="native-browser.js?v=20261027-shelf-1"></script>
     <script src="hub-bot-manager.js"></script>
     <script src="hub-chat.js"></script>
-    <script src="app.js?v=20261026-artifacts-2"></script>
+    <script src="app.js?v=20261027-shelf-1"></script>
     <script src="hub-teams.js"></script>
 </body>
 </html>

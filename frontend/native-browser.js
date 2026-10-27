@@ -263,10 +263,13 @@
       else if (lead[0].parentNode !== bar) { var wrap = bar.querySelector('.local-browser-url-wrap'); wrap.before.apply(wrap, lead); }
       syncPageNav();
     }
-    // The pane toggle goes along, just before the chat buttons.
+    // The pane toggle goes along, just before the chat buttons, and the
+    // view's own list button (where Downloads sits) just before it.
     if (miaToggle && bar) {
       if (home !== viewTools) { if (miaToggle.parentNode !== home) home.append(miaToggle); }
       else if (miaToggle.nextSibling !== viewTools) viewTools.before(miaToggle);
+      var shelfBtn = document.getElementById('viewShelfBtn');
+      if (shelfBtn && shelfBtn.nextSibling !== miaToggle) miaToggle.before(shelfBtn);
     }
     var parked = chatActions && chatActions.parentNode && chatActions.parentNode !== header ? chatActions : null;
     if (view === 'chat') {

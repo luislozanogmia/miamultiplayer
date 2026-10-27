@@ -7840,6 +7840,7 @@
     if(!item) return;
     if(!browser || !browser.command){ showBenchToast('Artifacts open in the Mia desktop app.'); return; }
     var target = item.kind === 'app' ? item.url : item.path;
+    rememberRecentArtifact(item.id);
     closeArtifactsPage();
     openWebBrowserTool();
     browser.command({action: 'new'}).then(function(){
@@ -15567,6 +15568,130 @@
     return {owns:owns, sync:sync, record:record, go:go, reload:reload};
   })();
   window.miaAppNav = appNav;
+
+  // Where the browser has Downloads, every other view has its own list: the
+  // files in the open chat, the latest automation runs, or the artifacts you
+  // opened last. One button and one card; the view picks what they show.
+  var RECENT_ARTIFACTS_STORE = 'mia.recentArtifacts.v1';
+  function recentArtifactIds(){
+    try { var ids = JSON.parse(window.localStorage.getItem(RECENT_ARTIFACTS_STORE) || '[]'); return Array.isArray(ids) ? ids.map(String) : []; }
+    catch(error){ return []; }
+  }
+  function rememberRecentArtifact(id){
+    if(!window.MiaViewShelf) return;
+    try { window.localStorage.setItem(RECENT_ARTIFACTS_STORE, JSON.stringify(window.MiaViewShelf.rememberRecent(recentArtifactIds(), id))); }
+    catch(error){}
+  }
+  var viewShelf = (function(){
+    var open = false, rows = [], shownView = null;
+    function view(){
+      var classes = document.body.classList;
+      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+    }
+    function fileFrom(m){
+      if(m.hubMessage) return m.hubAuthor || '';
+      if(isHumanSender(m.sender)) return 'You';
+      return m.nativeAgentName || m.sender || '';
+    }
+    function collect(shown){
+      var shelf = window.MiaViewShelf;
+      if(shown === 'chat'){
+        var state = chatWs.activeRoomId ? chatRoomState(chatWs.activeRoomId) : null;
+        return shelf.chatFiles(state ? state.messages : [], function(m){
+          var media = m.media && m.media.url ? m.media : null;
+          return m.hubMessage ? hubAttachmentsFor(m) : Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (media ? [media] : []);
+        }, fileFrom);
+      }
+      if(shown === 'automations') return shelf.runHistory(chatWs.automationRuns, chatWs.botRecords, botAutomationList);
+      if(shown === 'artifacts') return shelf.recentArtifacts(recentArtifactIds(), artifactsPage.items);
+      return [];
+    }
+    function when(ms){ return window.MiaArtifactsPage ? window.MiaArtifactsPage.when(ms) : ''; }
+    function render(){
+      var list = el('#viewShelfList'), empty = el('#viewShelfEmpty'), search = el('#viewShelfSearch');
+      var conf = window.MiaViewShelf && window.MiaViewShelf.config(shownView);
+      if(!list || !empty || !conf) return;
+      var query = search ? search.value : '';
+      var shown = rows.filter(function(row){ return window.MiaViewShelf.matches(row, query); });
+      list.innerHTML = window.MiaViewShelf.rowsHtml(shown, esc, when);
+      list._shelfRows = shown;
+      empty.hidden = shown.length > 0;
+      empty.textContent = rows.length ? 'Nothing matches.' : conf.empty;
+    }
+    function setOpen(next){
+      var panel = el('#viewShelf'), btn = el('#viewShelfBtn'), search = el('#viewShelfSearch');
+      if(!panel || !btn) return;
+      open = !!next && !btn.hidden;
+      panel.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if(!open){ if(search) search.value = ''; return; }
+      shownView = view();
+      var conf = window.MiaViewShelf.config(shownView);
+      el('#viewShelfTitle').textContent = conf.title;
+      if(search){ search.placeholder = conf.search; search.setAttribute('aria-label', conf.search); }
+      var rect = btn.getBoundingClientRect();
+      panel.style.setProperty('--shelf-top', Math.round(rect.bottom + 6) + 'px');
+      panel.style.setProperty('--shelf-right', Math.max(8, Math.round(window.innerWidth - rect.right)) + 'px');
+      rows = collect(shownView);
+      render();
+      // Recently opened needs the artifacts list; it may still be loading.
+      if(shownView === 'artifacts' && !artifactsPage.items.length) api('/api/artifacts').then(function(res){
+        if(res.status === 200 && Array.isArray(res.data.artifacts) && !artifactsPage.items.length) artifactsPage.items = res.data.artifacts;
+        if(open && shownView === 'artifacts'){ rows = collect('artifacts'); render(); }
+      }).catch(function(){});
+      if(search) search.focus({preventScroll: true});
+    }
+    function sync(){
+      var btn = el('#viewShelfBtn');
+      if(!btn || !window.MiaViewShelf) return;
+      var shown = view(), conf = window.MiaViewShelf.config(shown);
+      btn.hidden = !conf;
+      if(open && shown !== shownView) setOpen(false);
+      if(!conf) return;
+      if(btn.getAttribute('data-shelf-view') !== shown){
+        btn.setAttribute('data-shelf-view', shown);
+        btn.querySelector('svg').innerHTML = conf.icon;
+        btn.title = conf.label;
+        btn.setAttribute('aria-label', conf.label);
+      }
+    }
+    function choose(row){
+      setOpen(false);
+      if(row.kind === 'artifact') openArtifact(row.id);
+      else if(row.kind === 'run') openAutomationsDetail(row.botId, row.automationId);
+      else if(row.kind === 'file'){
+        if(/^blob:/.test(row.previewUrl)) openChatImageViewer(row.previewUrl, null);
+        else if(row.canPreview && window.miaDesktop && window.miaDesktop.browser && typeof window.miaDesktop.browser.prepareAttachment === 'function' && window.miaNativeBrowser) openAttachmentInMiaBrowser(row.previewUrl);
+        else if(row.url){ var link = document.createElement('a'); link.href = row.url; link.download = row.name; document.body.append(link); link.click(); link.remove(); }
+      }
+    }
+    function wire(){
+      var btn = el('#viewShelfBtn'), panel = el('#viewShelf');
+      if(!btn || !panel) return;
+      btn.addEventListener('click', function(){ setOpen(!open); });
+      el('#viewShelfClose').addEventListener('click', function(){ setOpen(false); });
+      el('#viewShelfSearch').addEventListener('input', render);
+      el('#viewShelfList').addEventListener('click', function(event){
+        var target = event.target.closest('[data-shelf-row]');
+        var shown = el('#viewShelfList')._shelfRows || [];
+        if(target) choose(shown[Number(target.getAttribute('data-shelf-row'))]);
+      });
+      panel.addEventListener('keydown', function(event){
+        if(event.key !== 'Escape') return;
+        setOpen(false);
+        btn.focus({preventScroll: true});
+      });
+      // Like a menu: a click anywhere else closes it.
+      document.addEventListener('mousedown', function(event){
+        if(open && !panel.contains(event.target) && !btn.contains(event.target)) setOpen(false);
+      }, true);
+      new MutationObserver(sync).observe(document.body, {attributes: true, attributeFilter: ['class']});
+      sync();
+    }
+    return {wire:wire, sync:sync, setOpen:setOpen};
+  })();
+  viewShelf.wire();
+  window.miaViewShelf = viewShelf;
 
   // Notifications collect what needs you across workspaces; until that
   // feed exists the panel says there is nothing waiting.

@@ -3549,6 +3549,11 @@ body.browser-collab-mode .ch-icon-btn.conversation-action-btn svg,body.automatio
 /* Every view's bar has Back, Forward and Reload; downloads belong to the
    browser. */
 .local-browser-toolbar:not([data-view="browser"]) .local-browser-downloads-btn{display:none;}
+/* Outside the browser that spot holds the view's own list: the chat's files,
+   the latest runs, or recently opened artifacts. It opens like Downloads, as
+   a card under its button. */
+.view-shelf-btn[hidden],.local-browser-toolbar[data-view="browser"] .view-shelf-btn{display:none;}
+.local-browser-downloads.view-shelf{position:fixed;top:var(--shelf-top,56px);right:var(--shelf-right,8px);z-index:200;max-height:min(520px,calc(100vh - var(--shelf-top,56px) - 12px));}
 .local-browser-share-btn{display:none!important;}
 /* The Automations controls sit at the top of its page, under the bar. */
 .automations-overlay:not(.artifacts-overlay) .automations-bar{height:auto;padding:12px 24px 0;background:transparent;border-bottom:0;}
