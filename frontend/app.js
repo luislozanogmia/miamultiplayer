@@ -4712,20 +4712,36 @@
       refreshDirectory ? hubCall('GET',hubPath()+'/channels/'+roomId+'/members').catch(function(error){
         if(error && error.status===404)return hubCall('GET',hubPath()+'/members');throw error;
       }) : Promise.resolve({members:state.hubMembers||[]}),
-      refreshDirectory ? window.MiaHubChat.localCall('GET','/available').catch(function(){return {bots:[]};}) : Promise.resolve({bots:state.hubAvailableBots||[]})
+      refreshDirectory ? window.MiaHubChat.localCall('GET','/available').catch(function(){return {bots:[]};}) : Promise.resolve({bots:state.hubAvailableBots||[]}),
+      // Everyone in the team, so @ also offers teammates outside this channel.
+      refreshDirectory ? hubCall('GET',hubPath()+'/members').catch(function(){return {members:hubChat.members||[]};}) : Promise.resolve({members:hubChat.members||[]})
     ]).then(function(results){
       if(workspace!==activeWorkspaceKey || roomId!==chatWs.activeRoomId || generation!==chatWs.navigationGeneration || chatWs.configured===false)return;
       var previousAdmissions=JSON.stringify((state.hubBots||[]).map(function(b){return b.admission;}));
       state.hubBots=results[0].bots||[];
-      if(refreshDirectory){state.hubMembers=results[1].members||[];state.hubAvailableBots=results[2].bots||[];state.hubDirectoryAt=Date.now();}
+      if(refreshDirectory){state.hubMembers=results[1].members||[];state.hubAvailableBots=results[2].bots||[];state.hubDirectoryAt=Date.now();hubChat.members=results[3].members||hubChat.members||[];}
       var names={};state.hubBots.forEach(function(bot){names[bot.name.toLowerCase()]=true;});
-      state.mentionRoster={humans:(results[1].members||[]).map(function(member){return {email:member.email,inChat:true};}),
+      state.mentionRoster={humans:hubMentionHumans(results[1].members||[],results[3].members||[]),
         agents:state.hubBots.filter(function(bot){return !!bot.published;}).map(function(bot){return {id:bot.id,name:bot.name,principalType:'bot',inChat:true};}),
         privateAgents:[],notInChatAgents:(results[2].bots||[]).filter(function(bot){return !names[bot.name.toLowerCase()];}),loading:false};
       renderChatHeaderBar();if(previousAdmissions!==JSON.stringify(state.hubBots.map(function(b){return b.admission;})))renderChatThread();if(chatMention.open)renderMentionPopover();
       if(chatInfo.open && chatInfo.mode==='agents')renderChatInfoPane();
     }).catch(function(){/* Human transport reports its own access/connectivity state. */}).finally(function(){state.hubBotRequest=null;});
     return state.hubBotRequest;
+  }
+  // Channel members first, then the rest of the team as "not in chat".
+  function hubMentionHumans(channelMembers,teamMembers){
+    var present={};
+    function person(member,inChat){
+      if(member.display_name)mergeUserProfile(member.email,{displayName:member.display_name});
+      return {email:member.email,clerkUserId:member.clerk_user_id,displayName:member.display_name||'',inChat:inChat,membership:inChat?'active':'none'};
+    }
+    var humans=channelMembers.map(function(member){present[member.clerk_user_id]=true;return person(member,true);});
+    return humans.concat(teamMembers.filter(function(member){return member.email && !present[member.clerk_user_id];}).map(function(member){return person(member,false);}));
+  }
+  function hubCanInviteToChannel(roomId){
+    var channel=hubChannel(roomId), me=hubChat.membership||{};
+    return !!channel && channel.kind!=='dm' && (me.role==='admin' || channel.created_by===me.clerk_user_id);
   }
   function stopHubFeed(){ if(hubChat.feed){hubChat.feed.stop();hubChat.feed=null;} }
   function hubFeedback(error){
@@ -13984,7 +14000,7 @@
     var roster = chatRoomState(roomId).mentionRoster;
     if(!roster || roster.loading) return {privateAgents: [], inChat: [], notInChat: []};
     var q = chatMention.query.toLowerCase();
-    function human(u){ return {kind: 'human', key: 'human:' + u.email, label: u.email, searchUser: u, inChat: u.inChat}; }
+    function human(u){ return {kind: 'human', key: 'human:' + u.email, label: u.email, searchUser: u, inChat: u.inChat, clerkUserId: u.clerkUserId}; }
     function agent(a, inChat){ return {kind: 'agent', key: 'agent:' + a.id, label: a.name, id: a.id, department: a.department, inChat: inChat, privateAgent: a.privateAgent === true}; }
     // Group tags: '@all' = everyone, '@all_users' = humans, '@all_bots' =
     // agents. Inserted as the literal tag, never expanded into individual
@@ -14045,8 +14061,11 @@
       var highlighted = i === chatMention.highlight ? ' highlighted' : '';
       return '<button type="button" class="cmp-option' + highlighted + '" data-mention-ix="' + i + '"><span class="dm-avatar">' + avatar + '</span><span class="cmp-option-label">' + esc(entry.label) + '</span>' + kind + sub + '</button>';
     }
-    var html = '<div class="cmp-section-label">YOUR AGENT</div>';
-    html += lists.privateAgents.length ? lists.privateAgents.map(optionHtml).join('') : '<div class="cmp-empty">no matches</div>';
+    var html = '';
+    if(!hubWorkspace()){
+      html += '<div class="cmp-section-label">YOUR AGENT</div>';
+      html += lists.privateAgents.length ? lists.privateAgents.map(optionHtml).join('') : '<div class="cmp-empty">no matches</div>';
+    }
     html += '<div class="cmp-section-label">IN THIS CHAT</div>';
     html += lists.inChat.length ? lists.inChat.map(optionHtml).join('') : '<div class="cmp-empty">no matches</div>';
     html += '<div class="cmp-section-label">NOT IN CHAT</div>';
@@ -14082,7 +14101,9 @@
         '<button type="button" class="cmp-confirm-btn cmp-confirm-cancel" data-mention-confirm="cancel">Cancel</button>' +
       '</div>' +
     '</div>';
-    if(hubWorkspace()){
+    if(hubWorkspace() && entry.kind==='human'){
+      el('.cmp-confirm-text',pop).textContent='Invite '+entry.label+' to this channel? They\'ll see an invitation in their sidebar.';
+    } else if(hubWorkspace()){
       var disclosure=el('.cmp-confirm-text',pop);
       if(disclosure)disclosure.textContent='Share '+entry.label+'’s instructions? An administrator approves the shared version once. Asking this bot runs it on your computer using your own subscriptions and tools.';
       var mode=document.createElement('select');mode.id='hubShareMode';mode.setAttribute('aria-label','Sharing behavior');
@@ -14105,9 +14126,18 @@
     var entry = chatMention.confirmEntry;
     if(!entry) return;
     var roomId = chatWs.activeRoomId;
-    if(hubWorkspace() && !['linked','fork'].includes(chatMention.shareMode)){showBenchToast('Choose linked or independent fork.');return;}
+    if(hubWorkspace() && entry.kind==='agent' && !['linked','fork'].includes(chatMention.shareMode)){showBenchToast('Choose linked or independent fork.');return;}
     chatMention.confirmBusy = true;
     renderMentionPopover();
+    if(hubWorkspace() && entry.kind==='human'){
+      hubCall('POST',hubPath()+'/channels/'+roomId+'/invites',{member:entry.clerkUserId}).then(function(){
+        if(roomId!==chatWs.activeRoomId)return;
+        insertMentionText(entry);closeMentionPopover();
+        showBenchToast('Invited '+entry.label+'. They\'ll see it in their sidebar.');
+      }).catch(function(error){if(roomId===chatWs.activeRoomId){showBenchToast(hubActionError(error,'Couldn\'t invite '+entry.label+'.'));cancelMentionConfirm();}})
+        .finally(function(){chatMention.confirmBusy=false;});
+      return;
+    }
     if(hubWorkspace()){
       if(entry.kind!=='agent'){cancelMentionConfirm();return;}
       var workspace=activeWorkspaceKey,generation=chatWs.navigationGeneration;
@@ -14389,6 +14419,11 @@
     // DM's roster is fixed at creation time, so that
     // same reasoning applies to a NOT IN CHAT *human* there too, unlike
     // home/department/agent rooms where a human can still be invited.
+    if(hubWorkspace() && entry.kind === 'human' && !hubCanInviteToChannel(chatWs.activeRoomId)){
+      insertMentionText(entry);
+      closeMentionPopover();
+      return;
+    }
     if(!hubWorkspace() && (chatWs.activeKind === 'dm' || chatWs.activeKind === 'group' || (entry.kind === 'agent' && chatWs.activeKind !== 'department'))){
       insertMentionText(entry);
       closeMentionPopover();
