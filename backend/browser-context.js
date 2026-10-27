@@ -63,25 +63,19 @@ function credentialBearingPath(parsed) {
   );
 }
 
-// Redirect/continue parameters can contain another encoded address. Check
-// that address before retaining the outer parameter, including repeated URL
-// encoding and nested query values. Fail closed if decoding cannot be checked.
-function credentialBearingEmbeddedAddress(value, depth = 0) {
-  if (depth > 3) return true;
+// Redirect/continue parameters may carry encoded URLs that another site will
+// decode again. Omit the entire parameter when it embeds an address or a
+// credential-like query field; partially cleaning a nested URL is unsafe.
+function embeddedAddressOrCredentialQuery(value) {
   let decoded = String(value || '').trim();
-  for (let pass = 0; pass < 3; pass += 1) {
-    const address = /https?:\/\/|^\/\//i.exec(decoded);
-    const candidate = address ? decoded.slice(address.index) : decoded;
-    if (/^(?:https?:\/\/|\/)/i.test(candidate)) {
-      let parsed;
-      try { parsed = new URL(candidate, 'https://nested.invalid'); }
-      catch (_) { return true; }
-      if (parsed.username || parsed.password || parsed.hash || credentialBearingPath(parsed)) return true;
-      for (const [name, nestedValue] of parsed.searchParams) {
-        if (sensitiveParam(name, nestedValue)
-          || credentialBearingEmbeddedAddress(nestedValue, depth + 1)) return true;
+  for (let pass = 0; pass < 4; pass += 1) {
+    if (/https?:\/\/|^\/\//i.test(decoded)) return true;
+    if (/^\//.test(decoded)) return true;
+    const query = decoded.includes('?') ? decoded.slice(decoded.indexOf('?') + 1) : decoded;
+    if (query.includes('=')) {
+      for (const [name, nestedValue] of new URLSearchParams(query)) {
+        if (sensitiveParam(name, nestedValue)) return true;
       }
-      return false;
     }
     if (!decoded.includes('%')) return false;
     try {
@@ -90,8 +84,8 @@ function credentialBearingEmbeddedAddress(value, depth = 0) {
       decoded = next;
     } catch (_) { return true; }
   }
-  // Deeply encoded addresses cannot be established as safe.
-  return /%|https?:\/\/|^\//i.test(decoded);
+  // A deeply encoded value cannot be established as safe.
+  return decoded.includes('%');
 }
 
 // An http(s) address with credentials, fragment and secret-looking query
@@ -109,7 +103,7 @@ function safeBrowserPageUrl(raw) {
   parsed.password = '';
   parsed.hash = '';
   for (const [name, value] of [...parsed.searchParams]) {
-    if (sensitiveParam(name, value) || credentialBearingEmbeddedAddress(value)) {
+    if (sensitiveParam(name, value) || embeddedAddressOrCredentialQuery(value)) {
       parsed.searchParams.delete(name);
     }
   }
