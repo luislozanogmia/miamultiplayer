@@ -218,14 +218,27 @@
     if (view === 'browser' && was && was !== 'browser') {
       var tab = selected();
       showUrl(tab && tab.url || '');
-      document.getElementById('localBrowserBackBtn').disabled = !tab || !tab.canGoBack;
-      document.getElementById('localBrowserForwardBtn').disabled = !tab || !tab.canGoForward;
-      document.getElementById('localBrowserReloadBtn').disabled = !(tab && tab.url);
     }
-    if (view !== 'browser') {
-      ['localBrowserBackBtn', 'localBrowserForwardBtn', 'localBrowserReloadBtn'].forEach(function (id) { document.getElementById(id).disabled = true; });
-      if (document.activeElement !== input) { input.value = ''; input.classList.remove('is-display-url'); }
+    syncPageNav();
+    if (view !== 'browser' && document.activeElement !== input) { input.value = ''; input.classList.remove('is-display-url'); }
+  }
+  // Back, Forward and Reload act on the page in the browser; in every other
+  // view Mia's own history drives them (app.js).
+  function syncPageNav() {
+    var reload = document.getElementById('localBrowserReloadBtn');
+    if (window.miaAppNav && window.miaAppNav.owns()) {
+      if (RELOAD_ICON) reload.innerHTML = RELOAD_ICON;
+      window.miaAppNav.sync();
+      return;
     }
+    var tab = state ? selected() : null;
+    var url = tab && tab.url || '';
+    document.getElementById('localBrowserBackBtn').disabled = !tab || !tab.canGoBack;
+    document.getElementById('localBrowserForwardBtn').disabled = !tab || !tab.canGoForward;
+    reload.disabled = !url;
+    reload.innerHTML = tab && tab.loading ? STOP_ICON : RELOAD_ICON;
+    reload.title = tab && tab.loading ? 'Stop loading' : 'Reload';
+    reload.setAttribute('aria-label', reload.title);
   }
   // Every view keeps the chat's buttons in this bar, last, so its "more"
   // dots end the row. In the chat the whole header moves here; elsewhere the
@@ -241,12 +254,14 @@
       chatHeaderWatch.observe(header, { childList: true });
     }
     // Artifacts has its own bar in place of the address bar; the left pane
-    // button goes along to start it.
+    // button and Back, Forward and Reload go along to start it.
     var home = document.body.classList.contains('artifacts-mode') && document.querySelector('.artifacts-bar') || viewTools;
-    var sidebarBtn = document.getElementById('localBrowserSidebarBtn');
-    if (sidebarBtn && bar) {
-      if (home !== viewTools) { if (home.firstChild !== sidebarBtn) home.prepend(sidebarBtn); }
-      else if (sidebarBtn.parentNode !== bar) document.getElementById('localBrowserBackBtn').before(sidebarBtn);
+    var lead = ['localBrowserSidebarBtn', 'localBrowserBackBtn', 'localBrowserForwardBtn', 'localBrowserReloadBtn']
+      .map(function (id) { return document.getElementById(id); }).filter(Boolean);
+    if (lead.length && bar) {
+      if (home !== viewTools) { if (home.firstChild !== lead[0]) home.prepend.apply(home, lead); }
+      else if (lead[0].parentNode !== bar) { var wrap = bar.querySelector('.local-browser-url-wrap'); wrap.before.apply(wrap, lead); }
+      syncPageNav();
     }
     // The pane toggle goes along, just before the chat buttons.
     if (miaToggle && bar) {
@@ -477,14 +492,8 @@
     if (changedTab || document.activeElement !== input) showUrl(url);
     if (changedTab) { findBar.hidden = true; findResult.textContent = ''; }
     input.setAttribute('aria-invalid', tab && tab.error ? 'true' : 'false');
-    document.getElementById('localBrowserBackBtn').disabled = !tab || !tab.canGoBack;
-    document.getElementById('localBrowserForwardBtn').disabled = !tab || !tab.canGoForward;
-    var reload = document.getElementById('localBrowserReloadBtn');
-    reload.disabled = !url;
-    reload.innerHTML = tab && tab.loading ? STOP_ICON : RELOAD_ICON;
+    syncPageNav();
     overlay.setAttribute('data-loading', tab && tab.loading ? 'true' : 'false');
-    reload.title = tab && tab.loading ? 'Stop loading' : 'Reload';
-    reload.setAttribute('aria-label', reload.title);
     document.getElementById('localBrowserEmpty').hidden = !!url;
     var blocked = document.getElementById('localBrowserBlocked');
     blocked.hidden = !(tab && tab.error);

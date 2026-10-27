@@ -3546,9 +3546,9 @@ body.browser-collab-mode .ch-icon-btn.conversation-action-btn svg,body.automatio
 .artifacts-filter-row{display:flex;align-items:center;gap:10px;padding:12px 24px 0;flex:none;}
 .local-browser-view-tools > *{position:static;height:auto;min-height:0;margin:0;padding:0;border:0;background:transparent;box-shadow:none;}
 .local-browser-toolbar[data-view="chat"],.local-browser-toolbar[data-view="automations"]{flex:none;}
-/* Outside the browser the bar is only the pane buttons, the search and the
-   "more" dots; page navigation and downloads belong to the browser. */
-.local-browser-toolbar:not([data-view="browser"]) :is(#localBrowserBackBtn,#localBrowserForwardBtn,#localBrowserReloadBtn,.local-browser-downloads-btn){display:none;}
+/* Every view's bar has Back, Forward and Reload; downloads belong to the
+   browser. */
+.local-browser-toolbar:not([data-view="browser"]) .local-browser-downloads-btn{display:none;}
 .local-browser-share-btn{display:none!important;}
 /* The Automations controls sit at the top of its page, under the bar. */
 .automations-overlay:not(.artifacts-overlay) .automations-bar{height:auto;padding:12px 24px 0;background:transparent;border-bottom:0;}

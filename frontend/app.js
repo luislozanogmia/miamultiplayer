@@ -5723,6 +5723,8 @@
   }
 
   function saveActiveChatLocation(roomId){
+    // Each chat you open is also a step for Back and Forward.
+    if(roomId && window.miaAppNav) window.miaAppNav.record();
     var key = activeChatLocationStorageKey();
     try {
       if(window.miaDesktop && window.miaDesktop.state && typeof window.miaDesktop.state.set === 'function'){
@@ -8580,14 +8582,19 @@
         chooseLocalBrowserSuggest(localBrowserSuggestItems[Number(row.getAttribute('data-suggest-index'))], input);
       });
     }
+    // In the browser these act on the page; in every other view they step
+    // through the places you opened in Mia and reload what the view shows.
     if(back) back.addEventListener('click', function(){
-      if(window.miaNativeBrowser) window.miaNativeBrowser.action('back');
+      if(appNav.owns()) appNav.go(-1);
+      else if(window.miaNativeBrowser) window.miaNativeBrowser.action('back');
     });
     if(forward) forward.addEventListener('click', function(){
-      if(window.miaNativeBrowser) window.miaNativeBrowser.action('forward');
+      if(appNav.owns()) appNav.go(1);
+      else if(window.miaNativeBrowser) window.miaNativeBrowser.action('forward');
     });
     if(reload) reload.addEventListener('click', function(){
-      if(window.miaNativeBrowser) window.miaNativeBrowser.action('reload');
+      if(appNav.owns()) appNav.reload();
+      else if(window.miaNativeBrowser) window.miaNativeBrowser.action('reload');
     });
     if(close) close.addEventListener('click', closeLocalBrowser);
     // The browser toolbar and the Automations page each have a "Your bots"
@@ -15494,6 +15501,72 @@
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
   }
+
+  // Back, Forward and Reload work in every view. Outside the browser they
+  // step through the places you opened in Mia (a view, and the chat it
+  // showed) and reload what the view shows; in the browser they act on the
+  // page.
+  var appNav = (function(){
+    var places = [], at = -1;
+    function view(){
+      var classes = document.body.classList;
+      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+    }
+    function here(){
+      return {view:view(), workspace:activeWorkspaceKey, roomId:chatWs.activeRoomId || null, kind:chatWs.activeKind, label:chatWs.activeLabel};
+    }
+    // Only the chat view is about its conversation; the others keep the
+    // chat beside them as it changes.
+    function same(a, b){
+      return !!a && a.view === b.view && a.workspace === b.workspace && (a.view !== 'chat' || a.roomId === b.roomId);
+    }
+    function owns(){ return view() !== 'browser'; }
+    function sync(){
+      if(!owns()) return;
+      var back = el('#localBrowserBackBtn'), forward = el('#localBrowserForwardBtn'), reload = el('#localBrowserReloadBtn');
+      if(back) back.disabled = at <= 0;
+      if(forward) forward.disabled = at >= places.length - 1;
+      if(reload){ reload.disabled = false; reload.title = 'Reload'; reload.setAttribute('aria-label', 'Reload'); }
+    }
+    function record(){
+      var place = here();
+      if(same(places[at], place)) places[at] = place;
+      else {
+        places = places.slice(0, at + 1).concat([place]).slice(-50);
+        at = places.length - 1;
+      }
+      sync();
+    }
+    function go(step){
+      var place = places[at + step];
+      if(!place) return;
+      at += step;
+      if(place.view === 'automations') runToolsAction('automations');
+      else if(place.view === 'artifacts') runToolsAction('artifacts');
+      else if(place.view === 'browser'){ closeAutomationsPage(); closeArtifactsPage(); if(!localBrowserState.open) openWebBrowserTool(); }
+      else {
+        closeBrowserSidebarDrawer();
+        closeLocalBrowser();
+        closeAutomationsPage();
+        closeArtifactsPage();
+      }
+      // A chat from another workspace stays there.
+      if(place.roomId && place.workspace === activeWorkspaceKey && place.roomId !== chatWs.activeRoomId){
+        clearChatActive();
+        loadChatRoom(place.roomId, place.kind, place.label);
+      }
+      sync();
+    }
+    function reload(){
+      var shown = view();
+      if(shown === 'artifacts') loadArtifacts();
+      else if(shown === 'automations') Promise.all([loadAgents(), loadActiveAutomationRuns()]).then(renderAutomationsPage, renderAutomationsPage);
+      else if(chatWs.activeRoomId) loadChatRoom(chatWs.activeRoomId, chatWs.activeKind, chatWs.activeLabel);
+    }
+    new MutationObserver(record).observe(document.body, {attributes: true, attributeFilter: ['class']});
+    return {owns:owns, sync:sync, record:record, go:go, reload:reload};
+  })();
+  window.miaAppNav = appNav;
 
   // Notifications collect what needs you across workspaces; until that
   // feed exists the panel says there is nothing waiting.
