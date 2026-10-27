@@ -1863,6 +1863,7 @@
   .styled-settings-group-label{font-size:12px;color:var(--sand-text-secondary);margin-bottom:8px;}
   .styled-settings-card{background:var(--sand-fill-secondary-hover);border-radius:12px;margin-bottom:20px;overflow:hidden;}
   .styled-settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 16px;}
+  .styled-settings-row[hidden]{display:none;}
   .styled-settings-row + .styled-settings-row{border-top:1px solid #14141412;}
   .styled-settings-row-label{font-size:14px;color:var(--sand-text-primary);}
   .styled-settings-row-desc{font-size:12px;color:var(--sand-text-secondary);margin-top:2px;}

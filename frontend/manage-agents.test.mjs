@@ -964,3 +964,10 @@ test('the address bar hands local files to the browser instead of refusing them'
   assert.equal(normalize('example.com', 'google'), 'https://example.com/');
   assert.throws(() => normalize('javascript://x', 'google'), /Only web addresses/);
 });
+
+test('the Theme choice is hidden and everyone gets the light theme', async () => {
+  const [source, html, styles] = await Promise.all([readFile(appUrl, 'utf8'), readFile(htmlUrl, 'utf8'), readFile(stylesUrl, 'utf8')]);
+  assert.match(html, /<div class="styled-settings-row" id="settingsThemeRow" hidden>/);
+  assert.match(styles, /\.styled-settings-row\[hidden\]\{display:none;\}/, 'the row layout must not override hidden');
+  assert.match(source, /var THEME_CHOICE_AVAILABLE = false;\s*function developerModeEnabled\(\)\{\s*if\(!THEME_CHOICE_AVAILABLE\) return false;/);
+});

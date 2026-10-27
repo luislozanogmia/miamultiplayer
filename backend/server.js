@@ -3158,7 +3158,7 @@ const DEFAULT_SETTINGS = {
   lastBackup: null,
   // 'concise' (final reply only) or 'verbose' (working steps stream into the
   // transcript). Durable so the choice survives restarts and reinstalls.
-  chatOutput: 'verbose',
+  chatOutput: 'concise',
   // The harness owns OAuth/API credentials. Mia keeps only each user's
   // product preference and workspace mode in the existing settings document.
   harnessByUser: {},

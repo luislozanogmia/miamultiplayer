@@ -8676,7 +8676,11 @@
   var DEVELOPER_MODE_KEY = 'miaos.developerMode';
   var THEME_MODE_KEY = 'miaos.theme';
   var developerTransitionFallbackTimer = null;
+  // The Theme choice is hidden for now, so everyone gets the light theme. A
+  // saved "dark" is kept and returns if the choice comes back.
+  var THEME_CHOICE_AVAILABLE = false;
   function developerModeEnabled(){
+    if(!THEME_CHOICE_AVAILABLE) return false;
     // Theme replaced the Developer Mode toggle: dark IS the old developer
     // look. An existing "developerMode: on" migrates to dark on first read.
     try {
