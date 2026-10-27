@@ -46,6 +46,13 @@ const UPSTREAM_BUILD_PATH_EXCEPTIONS = [
   sha256,
   paths: ["C:\\Users\\runneradmin"],
 }));
+// The pinned upstream gws.exe also embeds the generic GitHub Actions runner
+// home. Exempt only these exact bytes; other files and paths still fail audit.
+UPSTREAM_BUILD_PATH_EXCEPTIONS.push({
+  path: "resources/runtime/bin/gws.exe",
+  sha256: "82ad48dd28564be969174aaef3e3f99816f959bf2519eeeb4ab77d84f9fa9c67",
+  paths: ["C:\\Users\\runneradmin"],
+});
 
 function windowsArtifactName(version = VERSION) {
   return `Mia-${version}-win-x64.zip`;
@@ -459,6 +466,7 @@ if (require.main === module) {
 
 module.exports = {
   buildWindowsPackage,
+  UPSTREAM_BUILD_PATH_EXCEPTIONS,
   pruneWindowsHermesBundle,
   pruneWindowsPythonRuntime,
   restoreWindowsVenvInterpreter,
