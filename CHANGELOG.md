@@ -9,7 +9,11 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
-## [0.2.20] — 2026-10-26
+## [0.2.21] — 2026-10-26
+
+Version 0.2.20 was used for unpublished previews. This is the first public
+release of the changes below, with a higher version so preview installs can
+receive an update.
 
 ### Added
 - Shared teams (alpha): channels, groups and DMs with teammates through the
@@ -30,6 +34,9 @@ automatically through the in-app updater.
   context, including reset/invitation links, encoded tokens and JWT-like
   segments, while preserving ordinary Google file identifiers and GitHub
   commit references.
+- Require sign-in in packaged builds even if development no-auth settings are
+  present; omit sensitive URLs from desktop logs and shared browser context;
+  bind pasted Claude sign-in codes to the active attempt.
 
 ## [0.2.19] — 2026-10-19
 
