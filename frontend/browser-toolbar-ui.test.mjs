@@ -160,3 +160,19 @@ test('suggestion cards always show their bot-colored frame; hover only animates 
   assert.doesNotMatch(arrow, /opacity:0/, 'the arrow is always visible');
   assert.match(css, /\.local-browser-suggest-next-item:hover \.local-browser-suggest-next-go[^{]*\{animation:browserSuggestGo/);
 });
+
+test('every view bar holds only the pane buttons, the search and the more dots', async () => {
+  const [css, html, nav] = await Promise.all(['styles.css', 'index.html', 'native-browser.js']
+    .map((name) => readFile(new URL('./' + name, import.meta.url), 'utf8')));
+  // Back, Forward, Reload and Downloads only show in the browser.
+  assert.match(css, /\.local-browser-toolbar:not\(\[data-view="browser"\]\) :is\(#localBrowserBackBtn,#localBrowserForwardBtn,#localBrowserReloadBtn,\.local-browser-downloads-btn\)\{display:none;\}/);
+  // The Automations controls stay in their page, so the right pane toggle
+  // sits right before the dots.
+  assert.match(nav, /var VIEW_TOOLS = \{ chat: '#channelHeader' \};/);
+  // Artifacts: filters and "+ Live app" sit under the bar, which gets the
+  // left pane button.
+  const bar = html.match(/<header class="automations-bar artifacts-bar">[\s\S]*?<\/header>/)[0];
+  assert.doesNotMatch(bar, /artifactsChips|artifactsAddBtn/);
+  assert.match(html, /<div class="artifacts-filter-row">\s*<div class="artifacts-chips" id="artifactsChips"/);
+  assert.match(nav, /if \(home !== viewTools\) \{ if \(home\.firstChild !== sidebarBtn\) home\.prepend\(sidebarBtn\); \}/);
+});

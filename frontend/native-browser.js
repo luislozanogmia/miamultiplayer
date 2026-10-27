@@ -182,18 +182,19 @@
     if (classes.contains('automations-mode')) return 'automations';
     return open || classes.contains('browser-collab-mode') ? 'browser' : 'chat';
   }
-  // The address bar goes with the tabs: under them in every view. The
-  // view's own buttons (the chat header's, the Automations bar) sit at its
-  // right end; Back, Forward and Reload only act in the browser.
+  // The address bar goes with the tabs: under them in every view. Every
+  // view's bar holds the same few things: the left pane button, the search,
+  // the right pane toggle and the chat's "more" dots. Back, Forward, Reload
+  // and Downloads only show in the browser; the Automations bar stays in
+  // its page.
   var bar = document.getElementById('localBrowserForm');
   var barHome = bar && bar.nextSibling;
   var viewTools = document.createElement('div');
   viewTools.className = 'local-browser-view-tools';
-  // The right pane's toggle comes first so the view's buttons, ending with
-  // its "more" dots, close the row.
+  // The right pane's toggle sits just before the "more" dots that end the row.
   if (bar) miaToggle && miaToggle.parentNode === bar ? miaToggle.after(viewTools) : bar.append(viewTools);
   var BAR_AFTER = { chat: '#chatTabsRow', automations: '.automations-tabs-row' };
-  var VIEW_TOOLS = { chat: '#channelHeader', automations: '.automations-bar' };
+  var VIEW_TOOLS = { chat: '#channelHeader' };
   var toolsHome = null;
   function dockBar(view) {
     if (!bar) return;
@@ -239,8 +240,14 @@
       chatHeaderWatch = new MutationObserver(function () { dockChatActions(bar.getAttribute('data-view') || docked); });
       chatHeaderWatch.observe(header, { childList: true });
     }
-    // Artifacts has its own bar in place of the address bar.
+    // Artifacts has its own bar in place of the address bar; the left pane
+    // button goes along to start it.
     var home = document.body.classList.contains('artifacts-mode') && document.querySelector('.artifacts-bar') || viewTools;
+    var sidebarBtn = document.getElementById('localBrowserSidebarBtn');
+    if (sidebarBtn && bar) {
+      if (home !== viewTools) { if (home.firstChild !== sidebarBtn) home.prepend(sidebarBtn); }
+      else if (sidebarBtn.parentNode !== bar) document.getElementById('localBrowserBackBtn').before(sidebarBtn);
+    }
     // The pane toggle goes along, just before the chat buttons.
     if (miaToggle && bar) {
       if (home !== viewTools) { if (miaToggle.parentNode !== home) home.append(miaToggle); }

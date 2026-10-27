@@ -3541,9 +3541,18 @@ body.browser-collab-mode .ch-icon-btn.conversation-action-btn svg,body.automatio
 .local-browser-view-tools{display:flex;align-items:center;gap:4px;flex:none;min-width:0;}
 .local-browser-view-tools:empty{display:none;}
 .local-browser-view-tools > .ch-right{position:relative;gap:4px;}
-.artifacts-bar > .ch-right{flex:none;position:relative;gap:4px;margin-left:4px;}
+.artifacts-bar > .ch-right{flex:none;position:relative;gap:4px;margin-left:-6px;}
+.artifacts-bar .artifacts-search{margin-right:auto;}
+.artifacts-filter-row{display:flex;align-items:center;gap:10px;padding:12px 24px 0;flex:none;}
 .local-browser-view-tools > *{position:static;height:auto;min-height:0;margin:0;padding:0;border:0;background:transparent;box-shadow:none;}
 .local-browser-toolbar[data-view="chat"],.local-browser-toolbar[data-view="automations"]{flex:none;}
+/* Outside the browser the bar is only the pane buttons, the search and the
+   "more" dots; page navigation and downloads belong to the browser. */
+.local-browser-toolbar:not([data-view="browser"]) :is(#localBrowserBackBtn,#localBrowserForwardBtn,#localBrowserReloadBtn,.local-browser-downloads-btn){display:none;}
+.local-browser-share-btn{display:none!important;}
+/* The Automations controls sit at the top of its page, under the bar. */
+.automations-overlay:not(.artifacts-overlay) .automations-bar{height:auto;padding:12px 24px 0;background:transparent;border-bottom:0;}
+.automations-bar #automationsSidebarBtn{display:none;}
 /* The left pane folds out of the chat layout too. */
 body:not(.browser-collab-mode).left-pane-closed .chat-layout{grid-template-columns:minmax(0,1fr)!important;}
 body:not(.browser-collab-mode).left-pane-closed .chat-layout > .chat-sidebar{display:none!important;}
