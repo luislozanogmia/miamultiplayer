@@ -27,6 +27,7 @@ test('older history advances through hidden pages, deduplicates, and stops only 
     4: { events: [{ id: 'm2', body: 'older', sender: 'bot' }, { id: 'm5', body: 'duplicate', sender: 'bot' }], nextBeforeSequence: null },
   };
   const context = {
+    hubWorkspace: () => false,
     Promise,
     activeWorkspaceKey: 'solo',
     chatWs: { activeRoomId: 'room-a', byRoom: { 'room-a': state } },
@@ -59,6 +60,7 @@ test('failed older page keeps its cursor and never enters an automatic retry loo
   let calls = 0;
   const scheduled = [];
   const context = {
+    hubWorkspace: () => false,
     Promise, activeWorkspaceKey: 'solo', chatWs: { activeRoomId: 'room-a', byRoom: { 'room-a': state } },
     api() {
       calls += 1;
@@ -85,6 +87,7 @@ function loadRoomContext({ state, api }) {
   const loadRoom = functionSlice('loadChatRoom', '\n\n  function selectHomeRoom');
   let socketConnections = 0;
   const context = {
+    hubWorkspace: () => false,
     Promise, Date, Number, activeWorkspaceKey: 'solo', AGENT_SETUP_ROOM_ID: '__setup__',
     chatRoster: {},
     chatWs: { native: false, nativeSocketConversationId: null, activeRoomId: null, configured: true, byRoom: { 'room-a': state } },
@@ -140,6 +143,7 @@ test('history filter defaults by stable identity, supports All, and resets acros
   const start = source.indexOf("  var conversationDrawer = {mode: 'history'");
   const end = source.indexOf('\n\n  function renderConversationHeaderActions', start);
   const context = {
+    hubWorkspace: () => false,
     activeWorkspaceKey: 'solo',
     chatWs: {
       activeRoomId: 'room-a',
@@ -203,6 +207,7 @@ test('native browser visibility owner occludes and restores the live view withou
   const commands = [];
   const classes = new Set();
   const context = {
+    hubWorkspace: () => false,
     scheduled: false, open: true, lastLayout: '', downloadsOpen: false, suggestCovered: false, tabsListOpen: false,
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
@@ -228,6 +233,11 @@ test('native browser visibility owner occludes and restores the live view withou
   assert.equal(commands.at(-1).visible, false, 'address-bar suggestions also float over a still of the page');
   assert.equal(commands.at(-1).menu, true);
   context.suggestCovered = false;
+  classes.add('browser-sidebar-open');
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, true, 'the docked "Your bots" panel narrows the page instead of covering it');
+  classes.delete('browser-sidebar-open');
   classes.add('native-browser-occluded-conversation');
   context.lastLayout = '';
   context.layout();
@@ -252,20 +262,9 @@ test('conversation drawer toggles native occlusion and row avatars retain bookma
 });
 
 test('temporary drawer backdrops dismiss safely while docked panes remain non-modal', () => {
-  const clickContext = {};
-  vm.createContext(clickContext);
-  vm.runInContext(functionSlice('browserSidebarOwnsClick', '\n\n  (function wireLocalBrowser'), clickContext);
-  const ownsClick = clickContext.browserSidebarOwnsClick;
-  const inside = {};
-  const menuItem = {};
-  const toggleIcon = {};
-  const outsideChat = {};
-  const contains = (wanted) => ({ contains(target) { return target === wanted; } });
-  assert.equal(ownsClick(inside, contains(inside), null, null), true, 'drawer clicks stay inside');
-  assert.equal(ownsClick(menuItem, null, null, contains(menuItem)), true, 'portaled menu clicks stay inside');
-  assert.equal(ownsClick(toggleIcon, null, contains(toggleIcon), null), true, 'toggle controls its own close');
-  assert.equal(ownsClick(outsideChat, contains(inside), contains(toggleIcon), contains(menuItem)), false, 'chat and toolbar clicks dismiss');
-  assert.match(source, /document\.addEventListener\('click', function\(event\)\{[\s\S]*browser-sidebar-open[\s\S]*browserSidebarOwnsClick\(event\.target, drawer, toggles, portaledMenu\)[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*event\.stopImmediatePropagation\(\);[\s\S]*setBrowserSidebarOpen\(false\);[\s\S]*\}, true\)/);
+  // "Your bots" is docked, so clicks on the page or chat never close it.
+  assert.doesNotMatch(source, /browserSidebarOwnsClick/);
+  assert.doesNotMatch(nativeBrowserSource, /browser-sidebar-open/, 'the page stays live beside the docked panel');
   assert.match(source, /if\(overlay\) overlay\.addEventListener\('click', function\(event\)\{[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*closeDmCompose\(\)/);
   assert.match(source, /el\('#settingsOverlay'\)\.addEventListener\('click', closeSettingsDrawer\)/);
   assert.match(source, /el\('#harnessOnboardingOverlay'\)\.addEventListener\('click'/);

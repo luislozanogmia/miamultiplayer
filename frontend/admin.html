@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Mia · Admin</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
-<link rel="stylesheet" href="admin.css?v=1" />
+<link rel="stylesheet" href="admin.css?v=2" />
 </head>
 <body>
 
+<p id="adminLoading" class="admin-loading" role="status">Loading…</p>
 <div id="adminBlocked" class="admin-blocked card" hidden>
   <h1 id="adminBlockedTitle">Not authorized</h1>
   <p id="adminBlockedMessage">You don't have admin access on this instance.</p>
@@ -31,7 +32,7 @@
       <button type="button" class="admin-nav-item" data-view="agents">Bot Roster</button>
       <button type="button" class="admin-nav-item" data-view="invites">Invites</button>
       <button type="button" class="admin-nav-item" data-view="activity">Activity</button>
-      <button type="button" class="admin-nav-item" data-view="backup">Backup</button>
+      <button type="button" class="admin-nav-item" data-view="backup" data-local-only>Backup</button>
     </div>
     <div class="admin-nav-foot">
       <a href="/">&larr; Back to Mia</a>
@@ -44,7 +45,10 @@
     <section class="admin-view" data-view="overview">
       <div class="admin-head">
         <h1>Overview</h1>
-        <div class="admin-updated" id="overviewUpdated"></div>
+        <div class="admin-head-actions">
+          <div class="admin-updated" id="overviewUpdated"></div>
+          <button type="button" class="btn" id="teamRenameBtn" data-team-only hidden>Rename team</button>
+        </div>
       </div>
       <div class="admin-tiles" id="overviewTiles"></div>
     </section>
@@ -55,7 +59,7 @@
         <h1>Users</h1>
         <div class="admin-head-actions">
           <button type="button" class="btn" id="usersInviteBtn">Invite</button>
-          <button type="button" class="btn primary" id="usersAddBtn">Add user</button>
+          <button type="button" class="btn primary" id="usersAddBtn" data-local-only>Add user</button>
         </div>
       </div>
       <div class="admin-users-tools">
@@ -65,7 +69,7 @@
         </label>
         <div class="admin-users-summary" id="usersResultSummary" aria-live="polite"></div>
       </div>
-      <div class="admin-users-toolbar" id="usersBulkToolbar" aria-label="Bulk user actions">
+      <div class="admin-users-toolbar" id="usersBulkToolbar" aria-label="Bulk user actions" data-local-only>
         <div class="admin-users-toolbar-meta">
           <div class="admin-users-selected-count" id="usersSelectionCount">No users selected</div>
           <div class="admin-users-selection-hint" id="usersSelectionHint">Select users to enable bulk actions.</div>
@@ -90,8 +94,9 @@
       <div class="admin-head">
         <div>
           <h1>Bot Roster</h1>
-          <div class="admin-head-sub">All executable bots across the workspace, including their human owner.</div>
+          <div class="admin-head-sub" id="agentsSub">All executable bots across the workspace, including their human owner.</div>
         </div>
+        <button type="button" class="btn primary" id="teamNewBotBtn" data-team-only hidden>+ New bot</button>
       </div>
       <div class="admin-users-tools admin-agents-tools">
         <label class="admin-search">
@@ -102,7 +107,7 @@
       </div>
       <div class="card admin-table-wrap">
         <table class="admin-table admin-agents-table">
-          <thead><tr><th>Owner</th><th>Bot / Agent</th><th>Type</th><th>Status</th><th>Model</th><th>Departments</th><th>Created</th><th>Updated</th></tr></thead>
+          <thead><tr><th>Owner</th><th>Bot / Agent</th><th>Type</th><th>Status</th><th>Model</th><th id="agentsGroupHead">Departments</th><th>Created</th><th>Updated</th></tr></thead>
           <tbody id="agentsBody"></tbody>
         </table>
       </div>
@@ -175,10 +180,10 @@
     <div id="inviteFormWrap">
       <form id="inviteForm">
         <div class="field"><label>Email</label><input class="input" type="email" name="email" required></div>
-        <div class="field"><label>Role</label>
+        <div class="field" data-local-only><label>Role</label>
           <select class="input" name="role"><option value="member">Member</option><option value="admin">Admin</option></select>
         </div>
-        <div class="field"><label>Expires in (hours)</label><input class="input" type="number" name="expiresInHours" value="72" min="1"></div>
+        <div class="field" data-local-only><label>Expires in (hours)</label><input class="input" type="number" name="expiresInHours" value="72" min="1"></div>
         <div class="admin-dialog-actions">
           <button type="button" class="btn" data-close-overlay="inviteOverlay">Cancel</button>
           <button type="submit" class="btn primary">Create invite</button>
@@ -186,12 +191,43 @@
       </form>
     </div>
     <div id="inviteResultWrap" hidden>
-      <div class="field-hint" style="margin-bottom:6px;">Share this link with the invitee:</div>
-      <div class="admin-link-box"><code id="inviteResultLink"></code><button type="button" class="btn small" id="inviteResultCopy">Copy</button></div>
+      <div class="field-hint" id="inviteResultHint" style="margin-bottom:6px;">Share this link with the invitee:</div>
+      <div class="admin-link-box" id="inviteResultBox"><code id="inviteResultLink"></code><button type="button" class="btn small" id="inviteResultCopy">Copy</button></div>
       <div class="admin-dialog-actions">
         <button type="button" class="btn primary" data-close-overlay="inviteOverlay">Done</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Rename team dialog (shared teams) -->
+<div class="admin-overlay" id="renameTeamOverlay" hidden>
+  <div class="admin-dialog card">
+    <h2>Rename team</h2>
+    <div class="admin-form-error" id="renameTeamError" hidden></div>
+    <form id="renameTeamForm">
+      <div class="field"><label>Team name</label><input class="input" type="text" name="name" maxlength="120" required autocomplete="off"></div>
+      <div class="admin-dialog-actions">
+        <button type="button" class="btn" data-close-overlay="renameTeamOverlay">Cancel</button>
+        <button type="submit" class="btn primary">Rename</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- New team bot dialog (shared teams) -->
+<div class="admin-overlay" id="newTeamBotOverlay" hidden>
+  <div class="admin-dialog card">
+    <h2>New bot for the team</h2>
+    <div class="field-hint">Mia opens the New Bot setup. When you activate the bot, it joins this channel, ready to use.</div>
+    <div class="admin-form-error" id="newTeamBotError" hidden></div>
+    <form id="newTeamBotForm">
+      <div class="field"><label for="newTeamBotChannel">Channel</label><select class="input" id="newTeamBotChannel" name="channel" required></select></div>
+      <div class="admin-dialog-actions">
+        <button type="button" class="btn" data-close-overlay="newTeamBotOverlay">Cancel</button>
+        <button type="submit" class="btn primary">Set up bot</button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -211,6 +247,8 @@
 <div id="adminToast" class="admin-toast"></div>
 
 <script src="assets/mia-mark.js"></script>
-<script src="admin.js?v=20260904-roster-1"></script>
+<script src="clerk-desktop-ui.js"></script>
+<script src="hub-chat.js"></script>
+<script src="admin.js?v=20261024-team-owner-1"></script>
 </body>
 </html>

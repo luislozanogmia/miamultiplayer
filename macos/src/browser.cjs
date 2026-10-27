@@ -148,9 +148,18 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (typeof options.onActorEvent === "function") options.onActorEvent(event);
     },
   });
-  const statePath = typeof options.statePath === "string" && options.statePath.trim()
+  // Each workspace keeps its own tabs and history. Solo uses the base file
+  // (which also holds tabs saved before workspaces had their own);
+  // another workspace uses a file named after it.
+  const baseStatePath = typeof options.statePath === "string" && options.statePath.trim()
     ? path.resolve(options.statePath)
     : "";
+  let workspaceKey = "solo";
+  let statePath = baseStatePath;
+  function workspaceStatePath(key) {
+    if (!baseStatePath || key === "solo") return baseStatePath;
+    return `${baseStatePath.replace(/\.json$/, "")}-ws-${key}.json`;
+  }
   // Chromium can fail a page load with the generic ERR_FAILED a moment before
   // it reports that the link was a download. Hold only that error this long so
   // a download can claim it without the error page flashing first.
@@ -203,6 +212,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!buffer.length || buffer.length > FAVICON_MAX_BYTES) return null;
     return `data:${type};base64,${buffer.toString("base64")}`;
   }
+  // A PDF has no page to declare an icon, so it gets a PDF mark.
+  const PDF_ICON = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M12 2h28l14 14v46H12z" fill="#e2e2e2"/><path d="M40 2v14h14" fill="#bdbdbd"/><rect x="4" y="30" width="44" height="22" rx="4" fill="#d93025"/><text x="26" y="47" font-family="Arial,sans-serif" font-size="15" font-weight="700" text-anchor="middle" fill="#fff">PDF</text></svg>');
+  function fileTypeIcon(url) {
+    try { return /\.pdf$/i.test(new URL(url).pathname) ? PDF_ICON : null; } catch (_) { return null; }
+  }
   async function refreshTabFavicon(tab, favicons = []) {
     const candidates = Array.isArray(favicons)
       ? favicons.filter(value => typeof value === "string" && value)
@@ -223,6 +237,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         const page = new URL(tab.url);
         if (["https:", "http:"].includes(page.protocol)) remote.push(new URL("/favicon.ico", page.origin).toString());
       } catch (_) { /* A tab without a committed web URL has no safe fallback. */ }
+    }
+    const typeIcon = fileTypeIcon(tab.url);
+    if (typeIcon) {
+      tab.faviconPending = false;
+      tab.favicon = typeIcon;
+      publish();
+      return;
     }
     tab.favicon = null;
     publish();
@@ -275,10 +296,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Site icons shown beside history suggestions, one per host. Small icons
   // only, so the history file stays a few hundred KB at most.
   const HISTORY_ICON_MAX_CHARS = 32 * 1024;
-  const historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
+  let historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
   let historyEntries = [];
   let historyIcons = new Map();
-  if (historyPath) {
+  function loadHistory() {
+    historyEntries = [];
+    historyIcons = new Map();
+    if (!historyPath) return;
     try {
       const saved = JSON.parse(fs.readFileSync(historyPath, "utf8"));
       if (saved && Array.isArray(saved.entries)) {
@@ -300,6 +324,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
     } catch (_) { /* First run or unreadable history: start empty. */ }
   }
+  loadHistory();
   function persistHistory() {
     if (!historyPath) return;
     const temporaryPath = `${historyPath}.${process.pid}.tmp`;
@@ -2076,7 +2101,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     else if (key === "f") { window.webContents.focus(); window.webContents.send("miaos-browser-find"); }
     else if (key === "t") { newTab(); focusLocation(); }
     else if (key === "w") closeTabByPerson(activeId);
-    else if (key === "r") active()?.view.webContents.reload();
+    else if (key === "r") active()?.view.webContents.reloadIgnoringCache();
     else if (active()) {
       const wc = active().view.webContents;
       wc.setZoomLevel(key === "0" ? 0 : Math.max(-4, Math.min(5, wc.getZoomLevel() + (key === "-" ? -0.5 : 0.5))));
@@ -2086,6 +2111,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function shortcut(event, input) {
     if (!panelOpen || input.type !== "keyDown") return;
     const key = input.key.toLowerCase();
+    // Plain Cmd+R reloads Mia through the app menu; Shift+Cmd+R hard-reloads the page.
+    if (key === "r" && !input.shift) return;
     if ((input.meta || input.control) && ["l", "t", "w", "r", "f", "+", "=", "-", "0"].includes(key)) {
       event.preventDefault(); runShortcut(key);
     } else if (key === "escape") active()?.view.webContents.stop();
@@ -2698,6 +2725,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     try { if (downloadsPath) fs.rmSync(downloadsPath, { force: true }); } catch (error) { log(`browser downloads cleanup failed: ${error.message}`); }
     try { if (statePath) fs.rmSync(statePath, { force: true }); } catch (error) { log(`browser state cleanup failed: ${error.message}`); }
     try { if (historyPath) fs.rmSync(historyPath, { force: true }); } catch (error) { log(`browser history cleanup failed: ${error.message}`); }
+    // Every workspace's saved tabs and history go too.
+    if (baseStatePath) {
+      const base = path.basename(baseStatePath).replace(/\.json$/, "");
+      const dir = path.dirname(baseStatePath);
+      try {
+        for (const name of fs.readdirSync(dir)) {
+          if (name === path.basename(baseStatePath) || name === `${base}-history.json` || name.startsWith(`${base}-ws-`)) fs.rmSync(path.join(dir, name), { force: true });
+        }
+      } catch (error) { log(`browser workspace cleanup failed: ${error.message}`); }
+    }
     newTab();
     return state();
   }
@@ -2812,6 +2849,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         for (const tab of tabs.values()) syncBotGlow(tab);
         return { ok: true };
       }
+      if (command.action === "workspace") return setWorkspace(command.key);
       if (command.action === "history") return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       if (command.action === "historyRemove") {
         if (typeof command.url === "string") removeVisit(command.url);
@@ -2869,7 +2907,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
       if (!tabs.size || !active()) newTab();
       const tab = active();
-      if (command.action === "navigate") navigate(tab, command.value);
+      if (command.action === "navigate") {
+        if (isLocalFileTarget(command.value)) openLocalFile(tab, command.value);
+        else navigate(tab, command.value);
+      }
       if (command.action === "select" && tabs.has(command.id)) {
         activateTab(command.id); layout(); persistTabs();
         // Following a bot moves the page in front, not the keyboard.
@@ -2958,6 +2999,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     for (const tab of tabs.values()) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     tabs.clear();
   });
+  function restoreSavedTabs() {
   const restored = persistedTabs();
   if (restored && restored.tabs.length) {
     restoring = true;
@@ -2976,6 +3018,40 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     layout();
     persistTabs();
     publish();
+  }
+  }
+  restoreSavedTabs();
+  // Switching workspace saves this one's tabs and history, closes its pages
+  // and opens the next one's, so a workspace never shows another's tabs and
+  // its bots only see its own pages. Website sign-ins (cookies) stay shared.
+  function setWorkspace(value) {
+    const key = String(value || "").trim().toLowerCase();
+    if (!/^[a-z0-9_-]{1,80}$/.test(key)) throw new Error("Unknown workspace.");
+    if (!baseStatePath || key === workspaceKey) return state();
+    if ([...tabs.values()].some(tab => (tab.botWork || 0) > 0)) {
+      throw protocolError("BROWSER_BUSY", "A bot is still working in the browser. Wait for it to finish before switching workspace.");
+    }
+    persistTabs();
+    persistHistory();
+    if (fullscreenId !== null) exitPageFullscreen();
+    for (const tab of [...tabs.values()]) {
+      actorRuntime.closeTab(tab.id);
+      tabs.delete(tab.id);
+      clearPendingLoadError(tab);
+      window.contentView.removeChildView(tab.view);
+      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+    }
+    groups.clear();
+    activeId = null;
+    workProposal = null;
+    workspaceKey = key;
+    statePath = workspaceStatePath(key);
+    historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
+    loadHistory();
+    restoreSavedTabs();
+    layout();
+    publish();
+    return state();
   }
   return {
     state,

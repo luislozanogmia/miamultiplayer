@@ -225,6 +225,7 @@ let miaAutoUpdater = null;
 let nativeAuthProtocolReady = false;
 const desktopAuth = createDesktopAuth({
   ipcMain,
+  log: desktopLog,
   getWindow: () => mainWindow,
   getBackendUrl: () => backendUrl,
   getClient: () => {
@@ -382,7 +383,7 @@ function runtimeLogPath(name) {
 
 function isAllowedRendererStateKey(key) {
   const normalized = String(key || "");
-  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || /^miaChatActive:[^\r\n]{1,500}$/.test(normalized);
+  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || normalized === "miaTabsMixed" || /^miaChatActive:[^\r\n]{1,500}$/.test(normalized);
 }
 
 function readRendererState() {
@@ -1298,7 +1299,10 @@ function isClerkGoogleOAuthUrl(value) {
   }
 }
 
-const SYSTEM_BROWSER_AUTH_PROVIDERS = new Set(["openai-codex", "xai-oauth"]);
+// Every subscription sign-in runs in the default browser, where passkeys and
+// saved logins work and a stuck page can't hang Mia. Claude then shows a
+// one-time code that the user pastes back into Mia.
+const SYSTEM_BROWSER_AUTH_PROVIDERS = new Set(["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"]);
 
 function harnessAuthRedirectProvider(value, expectedBackendUrl = backendUrl) {
   try {
@@ -1784,8 +1788,7 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
     if (harnessAuthProvider && mayLoadAuthBootstrap
       && harnessAuthRedirectProvider(url, expectedBackendUrl) === harnessAuthProvider) return;
     if (SYSTEM_BROWSER_AUTH_PROVIDERS.has(harnessAuthProvider) && isBoundHarnessAuthNavigation(url)) {
-      // Device-code sign-in only needs the code Mia shows, so hand the page to
-      // the user's own browser, where passkeys and saved logins work.
+      // Hand the page to the user's own browser; Mia finishes from the code.
       event.preventDefault();
       shell.openExternal(url);
       try { window.close(); } catch (_) { /* already closed */ }
@@ -1871,7 +1874,14 @@ function createDevelopmentMenu(actions = {}) {
 }
 
 function createApplicationMenuTemplate() {
-  const viewItems = [{ role: "togglefullscreen" }];
+  const viewItems = [
+    {
+      label: "Reload Mia",
+      accelerator: "CommandOrControl+R",
+      click: () => developmentRefreshUi().catch(error => desktopLog(`UI refresh failed: ${error.message}`)),
+    },
+    { role: "togglefullscreen" },
+  ];
   if (!app.isPackaged) viewItems.unshift({ role: "toggleDevTools" });
   // The application-name menu (role "appMenu") exists only on macOS and
   // throws when built elsewhere; Windows and Linux get their quit affordance
@@ -1905,7 +1915,8 @@ function installBrowserMenu() {
     ["Focus Address", "CommandOrControl+L", "l"],
     ["New Tab", "CommandOrControl+T", "t"],
     ["Close Tab", "CommandOrControl+W", "w"],
-    ["Reload Page", "CommandOrControl+R", "r"],
+    // Cmd+R belongs to Mia (View > Reload Mia); the page gets the hard reload.
+    ["Hard Reload Page", "CommandOrControl+Shift+R", "r"],
     ["Find in Page", "CommandOrControl+F", "f"],
     ["Zoom In", "CommandOrControl+Plus", "+"],
     ["Zoom Out", "CommandOrControl+-", "-"],
@@ -1917,8 +1928,9 @@ function installBrowserMenu() {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       // Browser menu actions must never fall through to shell/window actions.
       // Focus Address and New Tab can also serve as browser entry points when
-      // the browser surface is currently closed.
-      if (["l", "t"].includes(key) && !mainWindow.webContents.isDestroyed()) {
+      // the browser surface is currently closed; in the chat view New Tab and
+      // Close Tab act on the chat tabs instead.
+      if (["l", "t", "w"].includes(key) && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("miaos-browser-open", key);
       }
     },
@@ -1968,8 +1980,10 @@ function createWindow() {
     icon: fs.existsSync(windowIconPath) ? windowIconPath : undefined,
     // On macOS, hide the title bar and keep the
     // window buttons inline with the top row of the app.
-    ...(process.platform === "darwin" ? { titleBarStyle: "hidden", trafficLightPosition: { x: 14, y: 14 } } : {}),
+    ...(process.platform === "darwin" ? { titleBarStyle: "hidden", trafficLightPosition: { x: 11, y: 14 } } : {}),
     webPreferences: {
+      // Shared chat and owner bot dispatch must keep polling while Mia is covered or minimized.
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.cjs"),
@@ -1998,10 +2012,10 @@ function createWindow() {
   const windowArtifactView = artifactView;
   window.on("resize", layoutArtifactPanel);
   window.webContents.on("did-finish-load", () => {
-    console.log(`[miaos-desktop] loaded ${window.webContents.getURL()}`);
+    desktopLog(`loaded ${window.webContents.getURL()}`);
   });
   window.webContents.on("did-fail-load", (_event, errorCode, description, validatedURL) => {
-    console.error(`[miaos-desktop] failed ${errorCode} ${description} ${validatedURL}`);
+    desktopLog(`failed ${errorCode} ${description} ${validatedURL}`);
   });
   // Opt-in diagnostics for disposable QA profiles. Do not persist ordinary
   // renderer console output because chat content and provider errors can carry

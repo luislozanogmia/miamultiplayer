@@ -66,3 +66,39 @@ test("Linux fallback URL is recoverable only through the authorized local frame"
   await handler(event,"email","a@b.example");
   assert.equal((await handler(event,"status")).result.status,"signed_out");
 });
+
+function concurrentFixture(){
+ const f=fixture();let handler,release,statusCalls=0,tokenCalls=0;
+ const pending=new Promise(resolve=>{release=resolve;});
+ const client={status:async()=>{if(++statusCalls===1)await pending;return {status:'active'};},getSessionToken:async()=>{tokenCalls++;return 'synthetic-token';}};
+ createDesktopAuth({ipcMain:{handle(_channel,fn){handler=fn;}},getWindow:()=>f.window,getBackendUrl:()=>"http://localhost:4871",getClient:()=>client,openExternal:()=>{}});
+ return {...f,handler,release,tokenCalls:()=>tokenCalls};
+}
+test('overlapping restoration, token and status reads wait instead of failing busy',async()=>{
+ const f=concurrentFixture();const status=f.handler(f.event,'status');const token=f.handler(f.event,'token');const another=f.handler(f.event,'status');
+ assert.equal(f.tokenCalls(),0);f.release();
+ const results=await Promise.all([status,token,another]);assert.ok(results.every(r=>r.ok));assert.equal(results[1].result,'synthetic-token');assert.equal(f.tokenCalls(),1);
+});
+test('queued and in-flight reads recheck renderer authorization before exposing results',async()=>{
+ const f=concurrentFixture();const status=f.handler(f.event,'status');const token=f.handler(f.event,'token');
+ f.frame.url='https://untrusted.example';f.release();
+ for(const r of await Promise.all([status,token]))assert.deepEqual(r,{ok:false,error:'Not authorized.'});
+ assert.equal(f.tokenCalls(),0);
+});
+test('read waiting is bounded and interactive actions are never queued or replayed',async()=>{
+ const f=concurrentFixture();const active=f.handler(f.event,'status');const queued=Array.from({length:8},()=>f.handler(f.event,'token'));
+ assert.equal((await f.handler(f.event,'token')).ok,false);assert.equal((await f.handler(f.event,'signOut')).ok,false);
+ f.release();await active;assert.ok((await Promise.all(queued)).every(r=>r.ok));assert.equal(f.tokenCalls(),8);
+});
+
+test('auth failure returns its safe response even when launcher diagnostics have a broken pipe',async()=>{
+ const {window,event}=fixture();let handler;
+ const previous=console.warn;
+ console.warn=()=>{throw Object.assign(new Error('broken pipe'),{code:'EPIPE'});};
+ try {
+  createDesktopAuth({ipcMain:{handle(_channel,fn){handler=fn;}},getWindow:()=>window,getBackendUrl:()=> 'http://localhost:4871',getClient:()=>({status:async()=>{throw new Error('PRIVATE-AUTH-DETAIL');}}),openExternal:()=>{}});
+  const result=await handler(event,'status');
+  assert.equal(result.ok,false);
+  assert.doesNotMatch(result.error,/PRIVATE|broken pipe/);
+ } finally {console.warn=previous;}
+});

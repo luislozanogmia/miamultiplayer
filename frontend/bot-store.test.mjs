@@ -7,10 +7,11 @@ const appUrl = new URL('./app.js', import.meta.url);
 const stylesUrl = new URL('./styles.css', import.meta.url);
 const serverUrl = new URL('../backend/server.js', import.meta.url);
 
-test('tools menu exposes a Bot store entry point wired to its own pane', async () => {
+test('the rail exposes a Bot marketplace entry point wired to its own pane', async () => {
   const [html, source] = await Promise.all([readFile(htmlUrl, 'utf8'), readFile(appUrl, 'utf8')]);
-  assert.equal((html.match(/data-tools-action="bot-store"/g) || []).length, 1, 'bot-store tools item appears once');
-  assert.match(html, /data-tools-action="bot-store"[^>]*role="menuitem">[\s\S]*?Bot Marketplace/);
+  assert.equal((html.match(/data-tools-action="bot-store"/g) || []).length, 1, 'bot-store entry appears once');
+  const rail = html.slice(html.indexOf('id="workspaceSwitcherMenu"'), html.indexOf('</nav>', html.indexOf('id="workspaceSwitcherMenu"')));
+  assert.match(rail, /data-tools-action="bot-store" aria-label="Bot marketplace">[\s\S]*?<strong class="workspace-rail-name">Bot marketplace<\/strong>/);
   assert.match(source, /function runToolsAction\(action\)\{[\s\S]*?action === 'bot-store'\) openBotStorePane\(\)/);
   // Bot creation from the tools menu is exempted from closing browser mode;
   // Bot store joins that exemption so it stays reachable the same way.

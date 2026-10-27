@@ -29,6 +29,6 @@ test('a draft stays with the chat it was written in', () => {
 });
 
 test('loading a chat swaps the draft before switching rooms', () => {
-  const body = source.slice(source.indexOf('  function loadChatRoom('), source.indexOf('  function loadChatRoom(') + 600);
+  const body = source.slice(source.indexOf('  function loadChatRoom('), source.indexOf('  function loadChatRoom(') + 900);
   assert.ok(body.indexOf('swapChatDraft(chatWs.activeRoomId, roomId)') < body.indexOf('chatWs.activeRoomId = roomId'));
 });

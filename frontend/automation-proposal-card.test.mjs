@@ -7,7 +7,7 @@ const card = require('./automation-proposal-card.js');
 const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const automation = {
   name: 'Morning <digest>', goal: 'Top stories', output: 'A list',
-  schedule: { frequency: 'daily', time: '08:00', timezone: 'America/Monterrey' }, steps: ['Search', 'Post'],
+  schedule: { frequency: 'daily', time: '08:00', timezone: 'America/Mexico_City' }, steps: ['Search', 'Post'],
 };
 const message = (metadata) => ({ nativeEvent: { id: 'event-1', metadata } });
 
@@ -62,7 +62,7 @@ test('a weekdays-only daily schedule shows and reads back as Weekdays', () => {
 });
 
 test('readFields turns the card back into the schema shape', () => {
-  const values = { name: ' Digest ', goal: 'g', output: 'o', frequency: 'weekly', day: 'Friday', time: '09:15', timezone: 'America/Monterrey', steps: 'One\n\n Two \n' };
+  const values = { name: ' Digest ', goal: 'g', output: 'o', frequency: 'weekly', day: 'Friday', time: '09:15', timezone: 'America/Mexico_City', steps: 'One\n\n Two \n' };
   const fake = {
     querySelector: (selector) => {
       const name = selector.match(/data-field="([^"]+)"/)[1];
@@ -72,6 +72,6 @@ test('readFields turns the card back into the schema shape', () => {
   };
   assert.deepEqual(card.readFields(fake), {
     name: 'Digest', goal: 'g', output: 'o', steps: ['One', 'Two'],
-    schedule: { frequency: 'weekly', time: '09:15', timezone: 'America/Monterrey', day: 'Friday' },
+    schedule: { frequency: 'weekly', time: '09:15', timezone: 'America/Mexico_City', day: 'Friday' },
   });
 });

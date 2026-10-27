@@ -164,7 +164,7 @@ const {
   NATIVE_DISPATCH_TOKEN_BUDGET_CODE,
   createNativeDispatchTokenBudgetTracker,
 } = require('./native-dispatch-runtime');
-const { miaosWorkspacePromptContext, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
+const { miaosWorkspacePromptContext, PAGE_ICON_RULE, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
 const {
   DEFAULT_WORKSPACE_ID,
   departmentsMetaKey,
@@ -959,7 +959,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=()');
   if (req.path === '/api' || req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
   if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
   next();
@@ -985,6 +985,9 @@ app.use((err, _req, res, next) => {
   }
   return next(err);
 });
+
+// Hub validates the production Clerk token; no token is persisted by this proxy.
+app.use('/api/hub', require('./hub-client').createHubClient({ dataDirectory: path.dirname(path.resolve(DB_PATH)) }));
 
 // ---------- auth: cookie sessions + bearer API keys, one middleware ----------
 
@@ -1277,6 +1280,60 @@ function requireMiaAdmin(req, res, next) {
   }
   return requireDatabaseAdmin(req, res, next);
 }
+
+// Sharing requires both the local interactive session and matching Hub identity.
+app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createHubBotRouter({
+  db: conn,
+  dataDirectory: path.dirname(path.resolve(DB_PATH)),
+  isOwnerActive: isActiveWorkspaceUser,
+  getAccountIdentity: (owner) => owner === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null,
+  getBot: (id, owner) => {
+    const bot = db.loadOne(conn, 'bots', id);
+    return bot && sameOwner(bot, owner) && bot.status !== 'draft' ? bot : null;
+  },
+  listBots: (owner) => db.loadAll(conn, 'bots').filter(bot => sameOwner(bot, owner) && bot.status !== 'draft'),
+  runBot: async ({ owner, bot, trigger, history, channel, signal, modelSelection }) => {
+    // The requester's composer model choice applies to the runs they start,
+    // validated against their own connected inventory exactly like Solo.
+    const selection = await chatModelSelectionForUser(modelSelection, owner);
+    const userOptions = await inferenceOptionsForUser(owner, chatModelSelectionInferenceOptions(null, selection));
+    // The same bot turn as Solo with a narrower context: the requester's own
+    // Google connection, so the bot can read files people share, but no Solo
+    // workspace state, private sessions, automations, browser tabs or Google
+    // writes. The owner shares this bot's purpose through the channel control.
+    const sharedBot = { id: bot.id, name: bot.name,
+      instructions: bot.instructions || bot.role || bot.output || '', automations: [] };
+    const speaker = row => '[' + (row.author_name || row.author_email || row.author_id) + '] ' + row.body;
+    const workspace = await turnWorkspaceContext(owner, history.map(speaker), trigger.body,
+      { companyId: 'hub:' + channel.teamId, id: channel.channelId }, sharedBot);
+    const turn = await runBotReplyTurn({
+      agent: sharedBot,
+      senderLabel: trigger.author_email,
+      message: trigger.body,
+      promptLine: '[' + trigger.author_email + '] ' + trigger.body,
+      platformContext: [workspace.workspaceContext,
+        'This is a shared team channel. Distinguish each speaker. Reply to the current request; do not treat another bot reply as a new request. Keep the reply within 15,000 UTF-8 bytes.',
+      ].filter(Boolean).join('\n\n'),
+      googleRefs: workspace.safeGoogleRefs,
+      googleWriteAuthorized: false,
+      globalInstructions: '',
+      seedMessages: (systemPrompt) => [{ role: 'system', content: systemPrompt }].concat(history.map(row => ({
+        role: row.author_type === 'bot' ? 'assistant' : 'user',
+        content: speaker(row),
+      }))),
+      nextStepLine: false,
+      inferenceOptions: {
+        ...userOptions,
+        botWorker: true,
+        maxTurns: MIAOS_BOT_MAX_TURNS,
+        maxTokens: hermesTokenBudgetFromOptions(userOptions),
+        profile: workspace.connectionInventory.googleToolsEnabled ? MIAOS_BOT_GOOGLE_HERMES_PROFILE : MIAOS_BOT_HERMES_PROFILE,
+      },
+      signal,
+    });
+    return cleanBotReplyText(sharedBot.name, turn.rawReply).text;
+  },
+}));
 
 function nativeConversationPrincipal(email, workspaceId = DEFAULT_WORKSPACE_ID) {
   const principalId = String(email || '').trim().toLowerCase();
@@ -1644,6 +1701,66 @@ app.post('/api/dev/diagnostics', requireLocalDevelopment, (req, res) => {
     return res.status(400).json({ error: 'traceCommands must be boolean' });
   }
   return res.status(200).json({ diagnostics: setHermesDiagnostics(body) });
+});
+
+// Local dictation (whisper.cpp). Audio is posted to this loopback backend only.
+const speech = require('./speech');
+let speechModelDownload = null;
+app.get('/api/speech/status', requireAuth, (req, res) => {
+  res.json({ ...speech.speechStatus({ dataDir: DATA_DIR }), downloading: !!speechModelDownload });
+});
+app.post('/api/speech/model', requireAuth, (req, res) => {
+  if (!speechModelDownload) {
+    speechModelDownload = speech.downloadModel({ dataDir: DATA_DIR })
+      .finally(() => { speechModelDownload = null; });
+    speechModelDownload.catch(() => {});
+  }
+  speechModelDownload.then(
+    () => res.json(speech.speechStatus({ dataDir: DATA_DIR })),
+    (error) => res.status(502).json({ error: 'model_download_failed', message: error.message }),
+  );
+});
+app.post('/api/speech/transcribe', requireAuth, express.raw({ type: 'audio/wav', limit: speech.MAX_WAV_BYTES }), async (req, res) => {
+  try {
+    const text = await speech.transcribeWav(req.body, { dataDir: DATA_DIR });
+    res.json({ text });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.code || 'transcribe_failed', message: error.message });
+  }
+});
+
+// Artifacts: pages, documents and live apps, opened in Mia's browser.
+const artifacts = require('./artifacts');
+// Saved live apps sit next to the database, like the Hub client's data.
+const ARTIFACTS_DATA_DIR = path.dirname(path.resolve(DB_PATH));
+app.get('/api/artifacts', requireAuth, async (req, res) => {
+  res.json(await artifacts.listArtifacts({ workspaceDir: miaosWorkspaceDir(), dataDir: ARTIFACTS_DATA_DIR, workspaceId: workspaceIdFromRequest(req) }));
+});
+app.get('/api/artifacts/file', requireAuth, (req, res) => {
+  try {
+    res.json({ file: artifacts.readArtifactFile(miaosWorkspaceDir(), String(req.query.id || '')) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.code || 'read_failed', message: error.message });
+  }
+});
+app.post('/api/artifacts/links', requireAuth, express.json({ limit: '8kb' }), (req, res) => {
+  try {
+    res.status(201).json({ artifact: artifacts.addLink(ARTIFACTS_DATA_DIR, workspaceIdFromRequest(req), req.body || {}) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.code || 'add_failed', message: error.message });
+  }
+});
+app.delete('/api/artifacts/file', requireAuth, (req, res) => {
+  try {
+    artifacts.trashArtifactFile(miaosWorkspaceDir(), String(req.query.id || ''));
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.code || 'trash_failed', message: error.status ? error.message : 'The file could not be moved to the Trash.' });
+  }
+});
+app.delete('/api/artifacts/links/:id', requireAuth, (req, res) => {
+  if (!artifacts.removeLink(ARTIFACTS_DATA_DIR, workspaceIdFromRequest(req), req.params.id)) return res.status(404).json({ error: 'not_found' });
+  res.status(204).end();
 });
 
 app.post('/api/dev/clean-slate/confirmation', requireLocalDevelopment, requireAuth, (req, res) => {
@@ -7127,6 +7244,60 @@ function budgetTrackingOnEvent(budgetTracker) {
   };
 }
 
+// The requester's Google Workspace context for one turn. Solo chats and
+// shared team channel bot turns both resolve it here.
+async function turnWorkspaceContext(senderLabel, transcript, message, conversation, agent) {
+  const googleContextInput = googleWorkspaceContext.googleResourceContextInput(transcript, message);
+  const googleResourceRefs = googleWorkspaceContext.extractGoogleResourceRefs(googleContextInput);
+  const googleWorkspaceWriteRequested = googleWorkspaceActions.explicitSheetWriteRequested(message, googleResourceRefs)
+    || googleWorkspaceActions.explicitDocsWriteRequested(message, googleResourceRefs);
+  const googleWorkspaceWriteKinds = googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs);
+  const workspaceConnection = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
+  const connectionInventory = connectedAppsForTurn(workspaceConnection, senderLabel, conversation, agent);
+  const googleWorkspaceConnected = workspaceConnection.ownerAuthorized === true && workspaceConnection.status.connected === true;
+  return {
+    googleWorkspaceWriteKinds,
+    googleWorkspaceWriteRequested,
+    connectionInventory,
+    workspaceContext: [workspaceConnection.text, connectionInventory.note].filter(Boolean).join('\n\n'),
+    googleWorkspaceConnected,
+    safeGoogleRefs: googleWorkspaceConnected ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs) : [],
+  };
+}
+
+// One bot reply outside the bot's own chat: Solo group and direct chats, and
+// shared team channels. Both build the prompt and run the model here; a shared
+// channel passes a narrower context. -> { rawReply, artifacts }
+async function runBotReplyTurn({ agent, senderLabel, message, promptLine, platformContext, googleRefs, googleWriteAuthorized,
+  globalInstructions, seedMessages, notes = [], nextStepLine = true, inferenceOptions, signal, onEvent }) {
+  const systemPrompt = buildHermesTaskPrompt(agent, [], message, senderLabel, platformContext,
+    googleRefs, googleWriteAuthorized, globalInstructions);
+  const replyPrompt = [promptLine || message, ...notes, nextStepLine ? nextStep.nextStepInstruction() : '']
+    .filter(Boolean).join('\n\n');
+  const result = await scheduleInference(replyPrompt, 'reply', {
+    ...inferenceOptions,
+    seedMessages: seedMessages(systemPrompt),
+    signal,
+    onEvent,
+  });
+  return {
+    rawReply: typeof result === 'string' ? result : result && result.text,
+    artifacts: result && Array.isArray(result.artifacts) ? result.artifacts : [],
+  };
+}
+
+// What people see of a bot reply: action blocks and private reasoning are
+// removed, along with a leading "[Name]" or trailing bot signature. The closing
+// "Next:" line becomes the suggested next step. -> { text, nextStep }
+function cleanBotReplyText(agentName, text) {
+  const signature = new RegExp(`\\s*${`[${agentName}]`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
+  const parts = nextStep.splitNextStep(sanitizeChatReply(stripAgentActionBlocks(String(text || '')))
+    .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, '')
+    .replace(signature, '')
+    .trim());
+  return { text: parts.text.replace(signature, '').trim(), nextStep: parts.nextStep || '' };
+}
+
 async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) {
   throwIfNativeDispatchStopped(signal);
   const conversation = nativeConversationRepository.getConversation({
@@ -7198,19 +7369,14 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     .map(nativePromptLine)
     .filter(Boolean);
   const senderLabel = String(trigger.senderId || conversation.createdBy || '').trim().toLowerCase();
-  const googleContextInput = googleWorkspaceContext.googleResourceContextInput(transcript, message);
-  const googleResourceRefs = googleWorkspaceContext.extractGoogleResourceRefs(googleContextInput);
-  const googleWorkspaceSheetWriteRequested = googleWorkspaceActions.explicitSheetWriteRequested(message, googleResourceRefs);
-  const googleWorkspaceDocsWriteRequested = googleWorkspaceActions.explicitDocsWriteRequested(message, googleResourceRefs);
-  const googleWorkspaceWriteKinds = googleWorkspaceActions.googleWorkspaceWriteKinds(message, googleResourceRefs);
-  const googleWorkspaceWriteRequested = googleWorkspaceSheetWriteRequested || googleWorkspaceDocsWriteRequested;
-  const workspaceConnection = await googleWorkspaceAgentContextForOwner(senderLabel, googleContextInput);
-  const connectionInventory = connectedAppsForTurn(workspaceConnection, senderLabel, conversation, agent);
-  const workspaceContext = [workspaceConnection.text, connectionInventory.note].filter(Boolean).join('\n\n');
-  const googleWorkspaceConnected = workspaceConnection.ownerAuthorized === true && workspaceConnection.status.connected === true;
-  const safeGoogleRefs = googleWorkspaceConnected
-    ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs)
-    : [];
+  const {
+    googleWorkspaceWriteKinds,
+    googleWorkspaceWriteRequested,
+    connectionInventory,
+    workspaceContext,
+    googleWorkspaceConnected,
+    safeGoogleRefs,
+  } = await turnWorkspaceContext(senderLabel, transcript, message, conversation, agent);
   const googleProfileAuthorized = connectionInventory.googleToolsEnabled;
   const googleGatewayProfile = googleProfileAuthorized
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
@@ -7501,6 +7667,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       nativePromptLine(trigger) || message,
       nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
       botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+      EFFECTIVE_RELEASE_PROFILE.agentSearchOnly ? '' : PAGE_ICON_RULE,
       slashCommand ? '' : nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     const botRunArgs = {
@@ -7555,43 +7722,35 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       inferenceResult && Array.isArray(inferenceResult.artifacts) ? inferenceResult.artifacts : []
     );
   } else {
-    const systemPrompt = buildHermesTaskPrompt(
+    const turn = await runBotReplyTurn({
       agent,
-      [],
-      message,
       senderLabel,
+      message,
+      promptLine: nativePromptLine(trigger),
       platformContext,
-      safeGoogleRefs,
-      googleWorkspaceWriteAuthorized,
-      globalInstructions.bot
-    );
-    const replyPrompt = [
-      nativePromptLine(trigger) || message,
-      nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
-      botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
-      nextStep.nextStepInstruction(),
-    ].filter(Boolean).join('\n\n');
-    inferenceResult = await scheduleInference(replyPrompt, 'reply', {
-      ...inferenceOptions,
-      seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
+      googleRefs: safeGoogleRefs,
+      googleWriteAuthorized: googleWorkspaceWriteAuthorized,
+      globalInstructions: globalInstructions.bot,
+      seedMessages: (systemPrompt) => nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
+      notes: [
+        nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+        botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
+        EFFECTIVE_RELEASE_PROFILE.agentSearchOnly ? '' : PAGE_ICON_RULE,
+      ],
+      inferenceOptions,
       signal,
       onEvent: postHermesProgress,
     });
-    flushHermesProgress(typeof inferenceResult === 'string' ? inferenceResult : inferenceResult && inferenceResult.text);
+    flushHermesProgress(turn.rawReply);
     throwIfNativeDispatchStopped(signal);
     throwIfNativeDispatchUserInactive(dispatch, trigger);
     await hermesProgressSequence;
     throwIfNativeDispatchUserInactive(dispatch, trigger);
-    rawReply = typeof inferenceResult === 'string' ? inferenceResult : inferenceResult && inferenceResult.text;
-    validatedArtifacts = cronSync.validateBotArtifacts(
-      agent,
-      inferenceResult && Array.isArray(inferenceResult.artifacts) ? inferenceResult.artifacts : []
-    );
+    rawReply = turn.rawReply;
+    validatedArtifacts = cronSync.validateBotArtifacts(agent, turn.artifacts);
   }
   throwIfNativeDispatchStopped(signal);
   throwIfNativeDispatchUserInactive(dispatch, trigger);
-  const agentSignature = `[${agent.name}]`;
-  const escapedSignature = agentSignature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   throwIfNativeDispatchUserInactive(dispatch, trigger);
   const actionReply = await applyNativeGoogleWorkspaceAction({
     ownerEmail: senderLabel,
@@ -7623,14 +7782,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     : ownsMiaChat
       ? nativeMiaBotSetupRequest(botAutomationActions.stripAutomationBlocks(actionReply), senderLabel)
       : { text: stripAgentActionBlocks(actionReply), metadata: null };
-  // The closing "Next:" line becomes the reply's suggested next step.
-  const replyParts = nextStep.splitNextStep(sanitizeChatReply(automationAction.text || automationAction.fallbackText || '')
-    .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, '')
-    .replace(new RegExp(`\\s*${escapedSignature}\\s*$`, 'i'), '')
-    .trim());
-  const safeReply = replyParts.text
-    .replace(new RegExp(`\\s*${escapedSignature}\\s*$`, 'i'), '')
-    .trim();
+  const replyParts = cleanBotReplyText(agent.name, automationAction.text || automationAction.fallbackText || '');
+  const safeReply = replyParts.text;
   const nextStepMetadata = replyParts.nextStep ? { nextStep: replyParts.nextStep } : {};
   if (!safeReply && validatedArtifacts.length === 0) throw new Error('native agent produced no user-facing reply');
   if (validatedArtifacts.length > 0) {

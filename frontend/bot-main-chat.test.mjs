@@ -14,6 +14,7 @@ function fn(name){
 
 function harness(conversations){
   const context = {
+    hubWorkspace: () => false,
     chatWs: { rooms: { home: null, departments: [], dms: [] }, byRoom: {}, botRecords: [] },
     chatModelPicker: null,
     setMiaServiceUnavailable(){},

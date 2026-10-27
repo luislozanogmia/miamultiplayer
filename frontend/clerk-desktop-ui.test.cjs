@@ -44,7 +44,7 @@ test('native auth is wired before Clerk browser assets, and restarts refresh the
   const source=fs.readFileSync(path.join(__dirname,'app.js'),'utf8');
   const signIn=source.slice(source.indexOf('function showClerkSignIn()'),source.indexOf('function setAppLoading'));
   assert.ok(signIn.indexOf('window.MiaClerkDesktop.mount')<signIn.indexOf('ensureClerkLoaded()'));
-  assert.match(source,/if\(AUTH_CONFIG && desktopClerkAuth\(\)\) return showClerkSignIn\(\)/);
+  assert.match(source,/if\(AUTH_CONFIG && desktopClerkAuth\(\) && !workspaceHandoff\) return showClerkSignIn\(\)/);
   assert.match(source,/nativeAuth\.getSessionToken\(\)\.then\(window.MiaClerkDesktop.unwrap\)/);
   assert.match(fs.readFileSync(path.join(__dirname,'index.html'),'utf8'),/src="clerk-desktop-ui.js"/);
   assert.throws(()=>unwrap({ok:false,error:'Safe message'}),/Safe message/);

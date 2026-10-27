@@ -103,7 +103,15 @@ select.input{appearance:auto;}
 .admin-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:18px;padding-right:0;flex-wrap:wrap;}
 .admin-head h1{margin:0;font-size:16px;letter-spacing:-0.01em;font-weight:700;}
 .admin-head-sub{margin-top:3px;color:var(--muted);font-size:11.5px;}
-.admin-head-actions{display:flex;gap:8px;}
+.admin-head-actions{display:flex;gap:8px;align-items:center;}
+/* A shared team is managed by the Hub and Clerk, so local-only controls go. */
+body.admin-team [data-local-only]{display:none !important;}
+body.admin-team .admin-users-table .admin-select-col,body.admin-team .admin-users-table .admin-select-cell{display:none;}
+[data-team-only][hidden]{display:none;}
+/* The page frame stays hidden until boot decides local or team mode. */
+.admin-wrap[hidden]{display:none;}
+.admin-loading{margin:30vh auto 0;text-align:center;color:var(--muted);font-size:13.5px;}
+body:has(#adminWrap:not([hidden])) .admin-loading,body:has(#adminBlocked:not([hidden])) .admin-loading{display:none;}
 .admin-updated{font-family:var(--sans);font-size:11px;color:var(--muted);}
 .admin-visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
 
@@ -170,6 +178,7 @@ table.admin-table tr:hover td{background:var(--accent-soft);}
 .admin-dialog{width:100%;max-width:420px;background:var(--paper);border:0;border-radius:14px;padding:22px;box-shadow:0 20px 32px -5px #0000001a,0 8px 12px -6px #0000001a;max-height:88vh;overflow-y:auto;}
 .admin-dialog h2{margin:0 0 16px;font-size:16px;letter-spacing:-0.01em;font-weight:700;}
 .admin-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}
+.admin-link-box[hidden]{display:none;}
 .admin-link-box{display:flex;gap:6px;align-items:center;background:var(--paper-2);border:1px solid var(--rule);border-radius:9px;padding:8px 10px;margin:6px 0 14px;}
 .admin-link-box code{flex:1;font-family:var(--mono);font-size:11.5px;overflow-x:auto;white-space:nowrap;color:var(--ink-soft);}
 .admin-reset-links{display:flex;flex-direction:column;gap:8px;max-height:48vh;overflow-y:auto;margin-bottom:14px;}

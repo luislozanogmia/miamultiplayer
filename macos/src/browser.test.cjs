@@ -294,6 +294,19 @@ test("tab favicon skips unsupported candidates and falls back after load", async
   assert.equal(fallback.command("state").tabs[0].favicon, "data:image/png;base64,AQID");
 });
 
+test("a PDF tab gets a PDF icon instead of fetching one", async () => {
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const h = harness();
+  h.command("new");
+  h.views[0].webContents.emit("did-navigate", null, "https://example.com/files/report.PDF");
+  h.views[0].webContents.emit("did-finish-load");
+  await flush();
+  const icon = h.command("state").tabs[0].favicon;
+  assert.match(icon, /^data:image\/svg\+xml,/);
+  assert.match(decodeURIComponent(icon), />PDF<\/text>/);
+  assert.deepEqual(h.profile.fetched || [], [], "the PDF mark is built in, nothing is fetched");
+});
+
 test("image context menu offers Save image as through the native download lifecycle", () => {
   const h = harness();
   h.command("new");
@@ -349,6 +362,39 @@ test("browser tabs, URLs, and active tab survive a new browser owner", () => {
       { id: 1, url: "https://example.com/" },
       { id: 2, url: "https://www.youtube.com/" },
     ]));
+    restored.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("each workspace keeps its own tabs and history", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-workspace-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    const h = harness({ statePath });
+    h.command("new");
+    h.command("navigate", { value: "https://example.com" });
+    h.views.at(-1).webContents.emit("did-navigate", null, "https://example.com/");
+    const historyUrls = () => JSON.stringify(h.command("history").history.map(entry => entry.url));
+
+    const team = h.command("workspace", { key: "multiplayer_test" });
+    assert.equal(JSON.stringify(team.tabs), "[]", "another workspace's tabs are not shown");
+    h.command("new");
+    h.command("navigate", { value: "https://www.youtube.com" });
+    h.views.at(-1).webContents.emit("did-navigate", null, "https://www.youtube.com/");
+    assert.equal(historyUrls(), JSON.stringify(["https://www.youtube.com/"]), "history is the workspace's own");
+    assert.ok(fs.existsSync(path.join(directory, "browser-ws-multiplayer_test.json")));
+
+    const solo = h.command("workspace", { key: "solo" });
+    assert.equal(JSON.stringify(solo.tabs.map(tab => tab.url)), JSON.stringify(["https://example.com/"]));
+    assert.equal(historyUrls(), JSON.stringify(["https://example.com/"]));
+    assert.equal(JSON.stringify(h.command("workspace", { key: "multiplayer_test" }).tabs.map(tab => tab.url)), JSON.stringify(["https://www.youtube.com/"]));
+    assert.equal(h.command("workspace", { key: "../solo" }).error, "Unknown workspace.");
+
+    h.window.emit("closed");
+    const restored = harness({ statePath });
+    assert.equal(JSON.stringify(restored.command("state").tabs.map(tab => tab.url)), JSON.stringify(["https://example.com/"]), "Solo opens at launch");
     restored.window.emit("closed");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -647,6 +693,23 @@ test("Ghost can open only workspace files in the embedded browser", async () => 
       /not found|limited to the Mia workspace/,
     );
     assert.throws(() => h.normalizeLocalFileTarget(path.join(workspace, "..", "outside.html"), workspace));
+    h.window.emit("closed");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("navigating to a Mia folder file opens it as a local file, not a web address", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-nav-file-"));
+  try {
+    const htmlPath = path.join(workspace, "dinosaurios.html");
+    fs.writeFileSync(htmlPath, "<h1>Dinos</h1>");
+    const h = harness({ workspaceRoot: workspace });
+    h.command("new");
+    h.command("navigate", { value: htmlPath });
+    assert.match(h.views[0].webContents.loads.at(-1), /^file:\/\/.*dinosaurios\.html$/);
+    const outside = h.command("navigate", { value: path.join(workspace, "..", "outside.html") });
+    assert.match(outside.error, /not found|limited to the Mia workspace/);
     h.window.emit("closed");
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });

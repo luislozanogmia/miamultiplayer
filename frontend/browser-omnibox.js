@@ -228,5 +228,83 @@
     return pieces;
   }
 
-  return {MAX_ROWS:MAX_ROWS, displayUrl:displayUrl, dedupe:dedupe, suggest:suggest, highlight:highlight};
+  // How well a name answers the typing: 3 starts with it, 2 every word
+  // starts a word, 1 every word appears, 0 no match.
+  function textTier(text, query){
+    var lower = String(text || '').toLowerCase();
+    var whole = String(query || '').trim().toLowerCase();
+    if(!whole || !lower) return 0;
+    if(lower.indexOf(whole) === 0) return 3;
+    var words = terms(query);
+    if(words.every(function(word){ return wordStart(lower, word); })) return 2;
+    if(words.every(function(word){ return lower.indexOf(word) !== -1; })) return 1;
+    return 0;
+  }
+
+  function ranked(items, query, textOf, limit){
+    return (items || []).map(function(item){
+      return {item:item, tier:Math.max.apply(null, [].concat(textOf(item)).map(function(text){ return textTier(text, query); }))};
+    }).filter(function(entry){ return entry.tier > 0; })
+      .sort(function(a, b){ return b.tier - a.tier; })
+      .slice(0, limit)
+      .map(function(entry){ return entry.item; });
+  }
+
+  // The bar searches everywhere. Groups come back in order of what you are
+  // doing: the showing view's group first, then the rest in the mix order
+  // browser, chat, automation. Each group holds labelled parts of rows.
+  //   sources: {browser:[rows from suggest()], people:[{name, sub}],
+  //     chats:[{name}], automations:[{name, botName, steps:[text]}],
+  //     current:{name, messages:[{id, text, author}]} (the open chat, newest first)}
+  //   options.view: 'browser' | 'chat' | 'automations'; null with tabs mixed.
+  var GROUP_ORDER = ['browser', 'chat', 'automations'];
+  var PART_LIMIT = 4;
+  function everywhere(query, sources, options){
+    sources = sources || {};
+    var view = options && options.view;
+    var groups = {
+      browser: {key:'browser', title:'Browser', parts:[{label:'', rows:(sources.browser || []).slice(0, view && view !== 'browser' ? PART_LIMIT : MAX_ROWS)}]},
+      chat: {key:'chat', title:'Chat', parts:[
+        // The chat you have open answers first, from its own messages.
+        {label:sources.current ? 'In ' + sources.current.name : '', rows:messageRows(sources.current, query)},
+        {label:'People', rows:ranked(sources.people, query, function(person){ return [person.name, person.sub || '']; }, PART_LIMIT).map(function(person){ return {kind:'person', target:person}; })},
+        {label:'Chat history', rows:ranked(sources.chats, query, function(chat){ return chat.name; }, PART_LIMIT).map(function(chat){ return {kind:'chat', target:chat}; })}
+      ]},
+      automations: {key:'automations', title:'Automation', parts:[
+        {label:'Automations', rows:ranked(sources.automations, query, function(automation){ return [automation.name, automation.botName || '']; }, PART_LIMIT).map(function(automation){ return {kind:'automation', target:automation}; })},
+        {label:'Steps', rows:stepRows(sources.automations, query)}
+      ]}
+    };
+    var order = GROUP_ORDER.indexOf(view) === -1 ? GROUP_ORDER : [view].concat(GROUP_ORDER.filter(function(key){ return key !== view; }));
+    return order.map(function(key){
+      var group = groups[key];
+      group.parts = group.parts.filter(function(part){ return part.rows.length; });
+      return group;
+    }).filter(function(group){ return group.parts.length; });
+  }
+
+  // A long message is shown from just before the match, so the match is visible.
+  function messageRows(current, query){
+    if(!current) return [];
+    return ranked(current.messages, query, function(message){ return message.text; }, PART_LIMIT).map(function(message){
+      var text = String(message.text || '').replace(/\s+/g, ' ').trim();
+      var at = text.toLowerCase().indexOf((terms(query)[0] || '').toLowerCase());
+      if(at > 40) text = '…' + text.slice(at - 20);
+      return {kind:'message', target:message, text:text};
+    });
+  }
+
+  function stepRows(automations, query){
+    var steps = [];
+    (automations || []).forEach(function(automation){
+      (automation.steps || []).forEach(function(step, index){
+        steps.push({text:String(step || ''), number:index + 1, automation:automation});
+      });
+    });
+    return ranked(steps, query, function(step){ return step.text; }, PART_LIMIT).map(function(step){
+      return {kind:'step', target:step.automation, text:step.text, number:step.number};
+    });
+  }
+
+  return {MAX_ROWS:MAX_ROWS, displayUrl:displayUrl, dedupe:dedupe, suggest:suggest, highlight:highlight, everywhere:everywhere};
 });
