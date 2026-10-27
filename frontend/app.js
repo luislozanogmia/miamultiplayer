@@ -2087,7 +2087,6 @@
     var selectedProvider = harnessOnboardingState.provider === 'openai-api'
       ? selectedApiProvider
       : harnessOnboardingState.provider;
-    var selectedProviderConnected = harnessConnectionState[selectedProvider] === true || (isManagedRouter && harnessConnectionState['openrouter'] === true);
     var typedApiKey = harnessOnboardingState.provider === 'openai-api' && !!(apiKey && apiKey.value.trim());
     var apiReady = isManagedRouter || harnessOnboardingState.provider !== 'openai-api' || typedApiKey || harnessConnectionState[selectedApiProvider] === true;
     var busy = harnessConnectionValidationPending || !!harnessConnectionPending || harnessAuthSaveInProgress || harnessAuthAwaitingSave;
@@ -2102,7 +2101,7 @@
     }
     if(continueBtn){
       continueBtn.disabled = busy || !harnessOnboardingState.provider || !harnessOnboardingState.mode || !apiReady;
-      setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (needsClaudeCode ? (updateClaudeCode ? 'Update Claude Code' : 'Install Claude Code') : (selectedProviderConnected && !typedApiKey ? 'Start with Mia' : 'Connect')));
+      setHarnessActionLabel(continueBtn, busy ? 'Loading…' : (needsClaudeCode ? (updateClaudeCode ? 'Update Claude Code' : 'Install Claude Code') : 'Connect'));
     }
     els('[data-harness-provider]').forEach(function(choice){
       var choiceProvider = choice.getAttribute('data-harness-provider');

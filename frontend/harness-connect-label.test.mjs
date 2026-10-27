@@ -21,9 +21,9 @@ function render({ typedKey, stored }) {
   return button;
 }
 
-test('a stored API provider offers Start with Mia until a new key is typed', () => {
-  assert.equal(render({ typedKey: '', stored: true }).label, 'Start with Mia');
-  assert.equal(render({ typedKey: 'sk-new', stored: true }).label, 'Connect', 'a typed key is saved on click, so the button says Connect');
+test('the button says Connect whether or not the provider is already signed in', () => {
+  assert.equal(render({ typedKey: '', stored: true }).label, 'Connect', 'picking a signed-in provider switches Mia to it');
+  assert.equal(render({ typedKey: 'sk-new', stored: true }).label, 'Connect');
   assert.equal(render({ typedKey: 'sk-new', stored: false }).label, 'Connect');
   assert.equal(render({ typedKey: '', stored: false }).disabled, true, 'no key and nothing stored cannot continue');
 });
