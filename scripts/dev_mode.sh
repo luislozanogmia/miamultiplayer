@@ -127,4 +127,10 @@ export MIAOS_DESKTOP_NO_AUTH="${MIAOS_DESKTOP_NO_AUTH:-1}"
 # Dev runs use Mia's test Clerk instance (production is the built-in
 # default). Export MIAOS_CLERK_INSTANCE=production to exercise production.
 export MIAOS_CLERK_INSTANCE="${MIAOS_CLERK_INSTANCE:-test}"
+# Production sign-in only works on an origin allowed in Clerk. The installed
+# Mia owns http://localhost:4871; dev runs against production use 4881 so both
+# can be open at once. The backend listens on MIAOS_PORT + 1.
+if [[ "$MIAOS_CLERK_INSTANCE" == "production" ]]; then
+  export MIAOS_PORT="${MIAOS_PORT:-4880}"
+fi
 exec bash "$script_dir/start-local-mac.sh" "$@"
