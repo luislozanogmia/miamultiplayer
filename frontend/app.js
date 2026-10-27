@@ -2318,7 +2318,21 @@
       mode:harnessOnboardingState.mode
       }}).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.harness) throw new Error((res.data && res.data.error) || 'Could not save setup');
+      var firstSetup = !harnessSettingsCache.onboardingComplete;
       renderHarnessSettings(res.data.harness);
+      if(!firstSetup){
+        // Changing the connection later is a settings change, not a new
+        // session: keep the current workspace and chat, and refresh only the
+        // model selector.
+        harnessAuthAwaitingSave = false;
+        harnessAuthSaveInProgress = false;
+        renderHarnessAuth(null);
+        closeHarnessOnboarding();
+        if(chatModelPicker.useConfiguredConnection) chatModelPicker.useConfiguredConnection();
+        var connected = harnessSettingsCache.provider === 'openai-api' ? harnessSettingsCache.apiProvider : harnessSettingsCache.provider;
+        showBenchToast(harnessProviderDisplayName(connected) + ' is connected');
+        return;
+      }
       // The onboarding mode is the authoritative initial workspace. Reload
       // after persisting it so conversations, headers, sockets, and cached
       // active-room state are all requested in the same scope.
@@ -4420,6 +4434,7 @@
   // Minimal fixed-position toast — there's no shared toast helper elsewhere in
   // app.js yet, so this is it. Auto-dismisses; a second call replaces any toast
   // still showing rather than stacking.
+  function showToast(message){ showBenchToast(message); }
   function showBenchToast(message){
     var existing = document.getElementById('benchToast');
     if(existing) existing.remove();
@@ -17703,6 +17718,13 @@
       closeMenu();
       if(picker.loaded && picker.providers.length) hydrateSelection();
       render();
+    };
+    // A newly chosen connection becomes Mia's model; bots keep their own.
+    picker.useConfiguredConnection = function(){
+      try { localStorage.removeItem(chatModelSelectionCacheKey(activeWorkspaceKey, '')); } catch(error){}
+      picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
+      render();
+      return load({refresh:true});
     };
     picker.resetAndReload = function(){
       picker.loaded = false;
