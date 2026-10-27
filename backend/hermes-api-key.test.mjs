@@ -53,7 +53,7 @@ test('Router and manual API-key saves do not prompt for a credential label', asy
     assert.equal(args[1], 'add');
     assert.equal(args[args.indexOf('--type') + 1], 'api-key');
     assert.equal(args[args.indexOf('--api-key') + 1], 'fixture-credential');
-    assert.deepEqual(Array.from(options.stdio), ['ignore', 'ignore', 'pipe']);
+    assert.deepEqual(Array.from(options.stdio), ['ignore', 'ignore', 'ignore']);
     assert.deepEqual(options.env, { FIXTURE_ENV: 'isolated' });
   }
 });
@@ -62,8 +62,7 @@ test('a labeled credential save still rejects a CLI store failure', async () => 
   const { save } = credentialSaver({ exitCode: 1 });
   await assert.rejects(save('openrouter', 'fixture-credential'), (error) => {
     assert.equal(error.message, 'Could not add API credential');
-    assert.match(error.cliDetail, /Fixture store write failed/);
-    assert.doesNotMatch(error.cliDetail, /fixture-credential/);
+    assert.equal(error.cliDetail, undefined);
     return true;
   });
 });

@@ -81,7 +81,22 @@ test('technical report distinguishes saved credential from runtime availability'
   const report = await f.context.buildFeedbackTechnicalReport();
   assert.match(report, /Router: credential saved; runtime_unavailable/);
   assert.doesNotMatch(report, /Router: connected/);
-  assert.match(report, /gateway_start_failed ECONNREFUSED/);
+  assert.match(report, /gateway_start_failed/);
+  assert.doesNotMatch(report, /ECONNREFUSED/);
+});
+
+test('feedback discards private diagnostic details and unknown error codes', async () => {
+  const status = { ...failed, errorCode: 'private/path', diagnostics: [
+    '2026-10-27T00:00:00.000Z install_error /Users/example/private person@example.test https://example.test/reset?code=sample',
+    'gateway_start_failed ECONNREFUSED',
+    'unknown_step private-detail',
+  ] };
+  const report = await fixture(status).context.buildFeedbackTechnicalReport();
+  assert.match(report, /install_error/);
+  assert.match(report, /gateway_start_failed/);
+  for (const privateText of ['/Users/', 'person@', 'https://', 'ECONNREFUSED', 'private-detail', 'private/path']) {
+    assert.ok(!report.includes(privateText), `feedback leaked ${privateText}`);
+  }
 });
 
 test('a credential-save response without the provisioned alias still exposes runtime failure', async () => {
