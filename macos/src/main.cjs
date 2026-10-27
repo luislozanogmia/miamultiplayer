@@ -2242,7 +2242,7 @@ function notifyClaudeMaintenanceFailure(status) {
     type: "warning",
     title: "Claude update needs attention",
     message: "Mia couldn’t update Claude Code.",
-    detail: "Open Initial setup from your account menu and choose Update Claude Code to retry. You can continue using other connections.",
+    detail: "Open Models & Subscriptions from your account menu and choose Update Claude Code to retry. You can continue using other connections.",
     buttons: ["OK"],
     noLink: true,
   });
