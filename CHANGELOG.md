@@ -9,6 +9,28 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.20] — 2026-10-26
+
+### Added
+- Shared teams (alpha): channels, groups and DMs with teammates through the
+  Mia Hub, teammate search, and bots that run on their owner's machine.
+- Artifacts page: pages, documents and live apps in your Mia folder; share
+  any of them into a chat, or pick one from the chat's (+) menu.
+
+### Changed
+- Deleting a file from Artifacts moves it to the Trash.
+
+### Fixed
+- Use a white conversation header in light mode, including the browser side
+  pane, while keeping the dark-mode background.
+- Keep the connection dialog inside the window on macOS.
+- Open Claude sign-in in the default browser, so saved passwords and passkeys
+  work there; paste the code Claude shows to finish.
+- Remove credential-bearing URL paths from automatically attached browser
+  context, including reset/invitation links, encoded tokens and JWT-like
+  segments, while preserving ordinary Google file identifiers and GitHub
+  commit references.
+
 ## [0.2.19] — 2026-10-19
 
 ### Added

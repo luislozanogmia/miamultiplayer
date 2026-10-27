@@ -16,12 +16,31 @@ function mentionIndex(bodyLower, name) {
   return match ? match.index + match[1].length : -1;
 }
 
-function mentionedByName(bodyLower, list) {
-  return list
-    .map((participant) => ({ participant, at: mentionIndex(bodyLower, participant && participant.name) }))
-    .filter((item) => item.at !== -1)
-    .sort((left, right) => left.at - right.at)
-    .map((item) => item.participant);
+function mentionedByName(bodyLower, list, includeControlTags = false) {
+  const matches = [];
+  for (const participant of list) {
+    const name = String(participant && participant.name || '').trim().toLowerCase();
+    if (!name || (!includeControlTags && ['all', 'all_bots', 'all_users'].includes(name))) continue;
+    const pattern = new RegExp('(^|[^a-z0-9_])@' + escapeRe(name) + '(?![a-z0-9_-])', 'g');
+    for (const match of bodyLower.matchAll(pattern)) {
+      const at = match.index + match[1].length;
+      matches.push({ participant, at, end: at + name.length + 1 });
+    }
+  }
+  // A longer name owns its mention span. A separate later mention of the
+  // shorter name still counts, and repeated mentions invoke a bot only once.
+  matches.sort((left, right) => left.at - right.at || right.end - left.end);
+  let end = -1;
+  const seen = new Set(), result = [];
+  for (const match of matches) {
+    if (match.at < end) continue;
+    end = match.end;
+    if (!seen.has(match.participant.id)) {
+      seen.add(match.participant.id);
+      result.push(match.participant);
+    }
+  }
+  return result;
 }
 
 // Resolve a manager's explicit @-mentions against the agent roster. Native
@@ -49,10 +68,16 @@ function resolveConversationRouting(input) {
   const threadRootParticipantName = String((input && input.threadRootParticipantName) || '').trim().toLowerCase();
   const manager = participants.find((participant) => participant.manager) || null;
   const workers = participants.filter((participant) => !participant.manager);
-  const mentionsAll = /@all\b/.test(bodyLower);
-  const mentionsAllBots = mentionsAll || /@all_bots\b/.test(bodyLower);
-  const mentionsAllUsers = mentionsAll || /@all_users\b/.test(bodyLower);
-  const named = resolveMentionedBots(body, workers);
+  // Parse control tags and bot names together so a specific name such as
+  // "All Hands" or "All-Hands" cannot accidentally become a broadcast.
+  const controls = ['all', 'all_bots', 'all_users'].map((name) => ({ id: Symbol(name), name }));
+  const mentionableWorkers = workers.filter((worker) => !controls.some((control) =>
+    control.name === String(worker.name || '').trim().toLowerCase()));
+  const mentions = mentionedByName(bodyLower, [...mentionableWorkers, ...controls], true);
+  const mentionsAll = mentions.includes(controls[0]);
+  const mentionsAllBots = mentionsAll || mentions.includes(controls[1]);
+  const mentionsAllUsers = mentionsAll || mentions.includes(controls[2]);
+  const named = mentions.filter((participant) => !controls.includes(participant)).slice(0, MAX_COORDINATED);
   const managerMentioned = !!manager && (mentionIndex(bodyLower, manager.name) !== -1 || /(^|\s)@mia\b/.test(bodyLower));
 
   const none = (reason) => ({ repliers: [], mode: 'none', coordinating: [], reason });

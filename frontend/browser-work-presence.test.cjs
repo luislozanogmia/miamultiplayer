@@ -17,9 +17,9 @@ test('selected owned tabs retain their ring and mote while human styling stays i
     const css = ['styles.css', 'browser-work.css'].map(file => fs.readFileSync(path.join(__dirname, file), 'utf8')).join('\n');
     const source = fs.readFileSync(path.join(__dirname, 'browser-work.js'), 'utf8');
     const html = `<!doctype html><style>${css}</style>
-      <div id="strip"><div class="native-browser-tab active" data-tab-id="1"><button role="tab">Human</button></div>
-      <div class="native-browser-tab active" data-tab-id="2"><button role="tab">Alpha</button></div>
-      <div class="native-browser-tab" data-tab-id="3"><button role="tab">Beta</button></div></div>
+      <div id="strip"><div class="mia-tab active" data-tab-id="1"><button role="tab">Human</button></div>
+      <div class="mia-tab active" data-tab-id="2"><button role="tab">Alpha</button></div>
+      <div class="mia-tab" data-tab-id="3"><button role="tab">Beta</button></div></div>
       <script>${source.replace(/<\/script/gi, '<\\/script')}</script>
       <script>
       const strip=document.getElementById('strip');

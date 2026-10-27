@@ -16,7 +16,7 @@ const BOT = {
   id: 'bot-1',
   automations: [{
     id: 'automation-1', name: 'Weekly roundup', enabled: true, frequency: 'weekly', day: 'Monday', time: '08:30',
-    timezone: 'America/Monterrey', goal: 'AI news', output: 'A list', steps: ['Search', 'Write'],
+    timezone: 'America/Mexico_City', goal: 'AI news', output: 'A list', steps: ['Search', 'Write'],
   }],
 };
 const CREATE = {
@@ -24,7 +24,7 @@ const CREATE = {
   action: 'create',
   automation: {
     name: 'Morning digest', goal: 'Top stories',
-    schedule: { frequency: 'daily', time: '08:00', timezone: 'America/Monterrey' },
+    schedule: { frequency: 'daily', time: '08:00', timezone: 'America/Mexico_City' },
     steps: ['Search', 'Pick five', 'Post'], output: 'A list here',
   },
 };
@@ -102,7 +102,7 @@ test('a reviewed proposal becomes a stored record with its timezone offset', () 
 });
 
 test('the per-turn instructions list the bot\'s automations by id', () => {
-  const text = actions.automationActionInstruction(BOT, { timezone: 'America/Monterrey' });
+  const text = actions.automationActionInstruction(BOT, { timezone: 'America/Mexico_City' });
   assert.match(text, /id automation-1: Weekly roundup \(on, every Monday at 08:30/);
   assert.match(text, /nothing is scheduled until they confirm/);
 });

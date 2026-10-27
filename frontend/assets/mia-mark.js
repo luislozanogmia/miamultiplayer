@@ -8,6 +8,7 @@
      wide / wide-rev   same axis, 5s, wide front (a tide)
      horiz / horiz-rev left → right and back, 3.2s
      activity          D4 random pops and occasional wave passes while working
+     static            the still app icon
    Reference page with all takes: the external Mia logo reference folder. */
 (function(){
   var MODES = [
@@ -65,13 +66,13 @@
     });
     return s + '</svg>';
   }
+  // Mia's still icon is the app icon (assets/favicon.svg) at every size: the
+  // small diamond with its three gold dots down the diagonal.
   function staticSvg(px){
-    var cut = px >= 48 ? 4 : px >= 28 ? 3 : 2;
-    var unit = 24, grow = px >= 48 ? 1 : px >= 28 ? 1.15 : 1.3;
-    var S = 2 * cut * unit + (px >= 48 ? 40 : 24);
-    var s = '<svg class="mia-mark" viewBox="' + (-S/2) + ' ' + (-S/2) + ' ' + S + ' ' + S + '" width="' + px + '" height="' + px + '" aria-hidden="true">';
-    dots(cut).forEach(function(p){
-      s += '<circle cx="' + (p.x * unit) + '" cy="' + (p.y * unit) + '" r="' + (p.size * grow).toFixed(1) + '"/>';
+    var s = '<svg class="mia-mark" viewBox="-60 -60 120 120" width="' + px + '" height="' + px + '" aria-hidden="true">';
+    dots(2).forEach(function(p){
+      var gold = p.x === p.y && p.x >= -1 && p.x <= 1;
+      s += '<circle cx="' + (p.x * 24) + '" cy="' + (p.y * 24) + '" r="' + (gold ? 11.7 : 7.8) + '"' + (gold ? ' class="gold"' : '') + '/>';
     });
     return s + '</svg>';
   }
@@ -147,17 +148,6 @@
     if(modeName === 'activity'){
       el.innerHTML = activitySvg(px);
       runActivity(el);
-      return;
-    }
-    if(modeName === 'sidebar'){
-      // One Mia in the sidebar stays alive without repainting the GPU all day:
-      // play one complete wave, then remain still until the next 30-second turn.
-      function pulseSidebar(){
-        var sidebarMode = pick(null);
-        el.innerHTML = svg(px, sidebarMode, 1);
-        el._miaTimer = setTimeout(pulseSidebar, 30000);
-      }
-      pulseSidebar();
       return;
     }
     var mode = null;

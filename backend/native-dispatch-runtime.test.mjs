@@ -113,7 +113,30 @@ test('native bot dispatch loads every conversation page and delegates context ma
   assert.match(reply, /const historyEvents = allNativeConversationEvents\(/);
   assert.doesNotMatch(reply, /const history = nativeConversationRepository\.listEvents\(/);
   assert.match(reply, /seedMessages: nativeHermesGatewaySeedMessages\(systemPrompt, historyEvents, trigger\.id\)/);
-  assert.match(reply, /const replyPrompt = \[\s*nativePromptLine\(trigger\) \|\| message,\s*nativeBrowserContextNote\(trigger/);
-  assert.match(reply, /scheduleInference\(replyPrompt, 'reply'/);
+  // Group and direct chat bot replies run through the turn shared with team channels.
+  assert.match(reply, /seedMessages: \(systemPrompt\) => nativeHermesGatewaySeedMessages\(systemPrompt, historyEvents, trigger\.id\)/);
+  assert.match(reply, /runBotReplyTurn\(\{[\s\S]*promptLine: nativePromptLine\(trigger\)[\s\S]*notes: \[\s*nativeBrowserContextNote\(trigger/);
+  const turnStart = source.indexOf('async function runBotReplyTurn(');
+  const turn = source.slice(turnStart, source.indexOf('\nfunction cleanBotReplyText(', turnStart));
+  assert.match(turn, /const replyPrompt = \[promptLine \|\| message, \.\.\.notes/);
+  assert.match(turn, /scheduleInference\(replyPrompt, 'reply'/);
   assert.match(source, /event\.senderType === 'agent' \|\| event\.senderType === 'bot'[\s\S]{0,80}\? 'assistant'/);
+});
+
+// Shared team channel bots run the Solo bot turn: same prompt builder, the
+// requester's Google context, and the same reply cleaning before anything is
+// posted for teammates.
+test('shared channel bot runs reuse the Solo bot turn and reply cleaning', () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf("app.use('/api/hub-bots'");
+  const hub = source.slice(start, source.indexOf('\nfunction nativeConversationPrincipal(', start));
+  assert.match(hub, /await turnWorkspaceContext\(owner,/);
+  assert.match(hub, /await runBotReplyTurn\(\{/);
+  assert.match(hub, /googleWriteAuthorized: false/);
+  assert.match(hub, /return cleanBotReplyText\(sharedBot\.name, turn\.rawReply\)\.text/);
+  assert.doesNotMatch(hub, /scheduleInference\(|buildBotContext\(/);
+  const reply = source.slice(source.indexOf('async function runNativeConversationAgentReply('));
+  assert.match(reply, /const replyParts = cleanBotReplyText\(agent\.name,/);
+  const clean = source.slice(source.indexOf('function cleanBotReplyText('), source.indexOf('async function runNativeConversationAgentReply('));
+  assert.match(clean, /sanitizeChatReply\(stripAgentActionBlocks\(/);
 });

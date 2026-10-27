@@ -27,7 +27,7 @@ test('human DM alignment is based on the authenticated sender, not human kind', 
   assert.ok(start >= 0 && end > start, 'chatMsgHtml source block is available');
   const renderer = source.slice(start, end);
 
-  assert.match(renderer, /isOwnHuman\s*=\s*!senderEmail\s*\|\|\s*senderEmail\.toLowerCase\(\)\s*===\s*\(currentUser\s*\|\|\s*''\)\.toLowerCase\(\)/);
+  assert.match(renderer, /isOwnHuman\s*=\s*m\.hubMessage \? hubOwnMessage\(m\) : !senderEmail\s*\|\|\s*senderEmail\.toLowerCase\(\)\s*===\s*\(currentUser\s*\|\|\s*''\)\.toLowerCase\(\)/);
   assert.match(renderer, /\(isOwnHuman\s*\?\s*' is-you'\s*:\s*''\)/);
   assert.doesNotMatch(renderer, /\(isHuman\s*\?\s*' is-you'\s*:\s*''\)/);
 });
@@ -120,7 +120,7 @@ test('human identity parsing does not consume arbitrary bracketed message text',
   const rendererStart = source.indexOf('function chatMsgHtml(');
   const rendererEnd = source.indexOf('\n  function renderAgentSetupThread(', rendererStart);
   const renderer = source.slice(rendererStart, rendererEnd);
-  assert.match(renderer, /var humanParsed = parseSignedHumanBody\(m\.body\);/);
+  assert.match(renderer, /var humanParsed = m\.hubAuthor \? \{agent:m\.hubAuthor,text:m\.body\} : parseSignedHumanBody\(m\.body\);/);
 });
 
 test('styled direct chats keep sender names and avatars visible', async () => {
@@ -280,11 +280,22 @@ test('native artifact cards preserve every attachment, keep originals downloadab
   assert.match(source, /chatMessageHasAttachments\(m\)/);
 });
 
-test('composer stages one bounded image through the native attachment endpoint', async () => {
+test('composer stages one bounded file through the native attachment endpoint', async () => {
   const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   assert.match(source, /function prepareChatAttachment\(file, roomId\)/);
   assert.match(source, /nativeConversationPath\(roomId, '\/attachments'\)/);
   assert.match(source, /contentBase64: dataBase64/);
   assert.match(source, /content\.attachments = \[preparedAttachment\.attachment\]/);
-  assert.match(source, /file\.size > 8 \* 1024 \* 1024/);
+  assert.match(source, /file\.size > limit \* 1024 \* 1024/);
+});
+
+// A shared-channel bot reply is cleaned for display like a Solo bot reply;
+// only a teammate's own message is shown exactly as written.
+test('shared channel bot replies get the Solo display cleaning', async () => {
+  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function chatMsgHtml(');
+  const renderer = source.slice(start, source.indexOf('\n  function renderAgentSetupThread(', start));
+  assert.match(renderer, /var botBody = isHuman \|\| \(m\.hubMessage && m\.hubAuthor\) \? m\.body : displayBotBody\(m\.body\);/);
+  const security = (await import('./chat-security.js')).default;
+  assert.equal(security.sanitizeBotMessage('<think>private</think>The answer.'), 'The answer.');
 });

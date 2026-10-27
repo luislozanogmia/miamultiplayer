@@ -94,9 +94,13 @@ function resolveClerkConfig(env = process.env, defaults = builtInClerkInstance(e
   );
   const requested = String(env.MIAOS_CLERK_AUTH || '').trim();
   const noAuth = /^(1|true)$/i.test(String(env.MIAOS_NO_AUTH || ''));
+  const enabled = /^(1|true|)$/i.test(requested) && !noAuth;
+  if (String(env.MIAOS_DESKTOP_PACKAGED || '') === '1' && !enabled) {
+    throw new Error('packaged Mia requires Clerk sign-in');
+  }
 
   return Object.freeze({
-    enabled: /^(1|true|)$/i.test(requested) && !noAuth,
+    enabled,
     publishableKey,
     issuer,
     issuerOrigin: issuer,

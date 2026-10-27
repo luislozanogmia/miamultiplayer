@@ -7,8 +7,8 @@ const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 
 test('guided tour stays available but onboarding starts in chat', () => {
   const tour = source.slice(source.indexOf('var TOUR_STEPS = ['), source.indexOf('var tour = {', source.indexOf('var TOUR_STEPS = [')));
-  assert.match(tour, /#workspaceSwitcherToggle/);
-  assert.match(tour, /#chatSidebarToolsBtn/);
+  assert.match(tour, /\[data-workspace-key="solo"\]/);
+  assert.match(tour, /\.sidebar-new-chat/);
   assert.match(tour, /#chatStarterBots/);
   assert.match(tour, /#chatThread/);
   assert.doesNotMatch(tour, /three layers|Data|Agents, and/);

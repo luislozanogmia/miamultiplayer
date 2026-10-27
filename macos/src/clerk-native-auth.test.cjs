@@ -69,7 +69,7 @@ function make(options = {}) {
   return {
     secureStorage,
     mock,
-    auth: createNativeClerkClient({ issuer: ISSUER, storage: secureStorage, fetchImpl: mock.fetchImpl, timeoutMs: 500, now: () => 1000 }),
+    auth: createNativeClerkClient({ issuer: ISSUER, storage: secureStorage, fetchImpl: mock.fetchImpl, timeoutMs: 500, now: options.now || (() => 1000) }),
   };
 }
 
@@ -281,4 +281,45 @@ test('concurrent operations fail closed and cancel aborts the in-flight request'
   assert.deepEqual(auth.cancel(), { status: 'signed_out' });
   resolveFetch(response({ response: signedOutClient(), client: signedOutClient() }));
   await assert.rejects(pending, error => error.code === 'CANCELLED');
+});
+
+test('a session token is reused until shortly before it expires, then minted again', async () => {
+  const active = signedOutClient({ sessions: [{ object: 'session', id: 'sess_active', status: 'active', expire_at: 10_000_000 }], last_active_session_id: 'sess_active' });
+  let clock = 1000, minted = 0;
+  const { auth, mock } = make({
+    clientJwt: clientJwt(), now: () => clock,
+    routes: {
+      'GET /v1/client': () => response({ response: active, client: active }),
+      'POST /v1/client/sessions/sess_active/tokens': () => response({ jwt: jwt({ iss: ISSUER, sub: 'user_1', n: ++minted, exp: 61 }) }),
+    },
+  });
+  const first = await auth.getSessionToken();
+  assert.equal(await auth.getSessionToken(), first);
+  clock = 40_000;
+  assert.equal(await auth.getSessionToken(), first);
+  assert.equal(mock.calls.length, 2);
+  clock = 50_000;
+  const second = await auth.getSessionToken();
+  assert.notEqual(second, first);
+  assert.equal(mock.calls.length, 4);
+  auth.cancel();
+  assert.notEqual(await auth.getSessionToken(), second);
+  assert.equal(mock.calls.length, 6);
+});
+
+test('signing out forgets the reusable session token', async () => {
+  const active = signedOutClient({ sessions: [{ object: 'session', id: 'sess_active', status: 'active', expire_at: 10_000_000 }], last_active_session_id: 'sess_active' });
+  let signedIn = true;
+  const { auth } = make({
+    clientJwt: clientJwt(),
+    routes: {
+      'GET /v1/client': () => { const c = signedIn ? active : signedOutClient(); return response({ response: c, client: c }); },
+      'POST /v1/client/sessions/sess_active/tokens': () => response({ jwt: jwt({ iss: ISSUER, sub: 'user_1', exp: 61 }) }),
+      'POST /v1/client': () => response({ response: signedOutClient(), client: signedOutClient() }, { token: clientJwt() }),
+      'DELETE /v1/client/sessions': () => { signedIn = false; return response({ response: signedOutClient(), client: signedOutClient() }); },
+    },
+  });
+  assert.ok(await auth.getSessionToken());
+  assert.deepEqual(await auth.signOut(), { status: 'signed_out' });
+  assert.equal(await auth.getSessionToken(), null);
 });

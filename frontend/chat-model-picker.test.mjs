@@ -210,7 +210,7 @@ test('each bot keeps its own model choice; Mia and other rooms share one', async
 test('switching chats refreshes the picker to that chat\'s choice', async () => {
   const { readFile } = await import('node:fs/promises');
   const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  const load = source.slice(source.indexOf('  function loadChatRoom('), source.indexOf('  function loadChatRoom(') + 800);
+  const load = source.slice(source.indexOf('  function loadChatRoom('), source.indexOf('  function loadChatRoom(') + 1000);
   assert.match(load, /chatModelPicker\.showChatSelection\(\)/);
   const list = source.slice(source.indexOf('  function applyNativeConversationList('), source.indexOf('\n  function ', source.indexOf('  function applyNativeConversationList(') + 1));
   assert.match(list, /chatModelPicker\.showChatSelection\(\)/);

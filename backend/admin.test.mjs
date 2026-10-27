@@ -1160,12 +1160,20 @@ exit 8
     assert.equal(duplicate.status, 200, await duplicate.text());
     assert.equal((fs.readFileSync(invocationLog, 'utf8').match(/auth login --claudeai/g) || []).length, 1);
 
+    const incompletePaste = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
+      method: 'POST', headers, body: JSON.stringify({ provider, code: 'fixture-completion-code' }),
+    });
+    assert.equal(incompletePaste.status, 409);
+    const staleManualPaste = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
+      method: 'POST', headers, body: JSON.stringify({ provider, code: 'fixture-completion-code#old-state' }),
+    });
+    assert.equal(staleManualPaste.status, 409);
     const staleCompletion = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
       method: 'POST', headers, body: JSON.stringify({ provider, code: 'fixture-completion-code#old-state', state: 'old-state' }),
     });
     assert.equal(staleCompletion.status, 409);
     const complete = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
-      method: 'POST', headers, body: JSON.stringify({ provider, code: 'fixture-completion-code#test-state', state: 'test-state' }),
+      method: 'POST', headers, body: JSON.stringify({ provider, code: 'fixture-completion-code#test-state' }),
     });
     assert.equal(complete.status, 202, await complete.text());
 
@@ -1241,7 +1249,7 @@ exit 8
     });
     assert.equal(invalid.status, 400);
     const rejected = await fetch(`${server.origin}/api/settings/harness/auth/complete`, {
-      method: 'POST', headers, body: JSON.stringify({ provider, code: 'rejected-fixture-code' }),
+      method: 'POST', headers, body: JSON.stringify({ provider, code: 'rejected-fixture-code#cancel-fixture' }),
     });
     assert.equal(rejected.status, 202);
     let failed = null;
