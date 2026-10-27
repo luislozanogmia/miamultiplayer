@@ -60,7 +60,7 @@ function validTimezone(value) {
 }
 
 // Minutes to add to local time to get UTC, the same convention as
-// Date#getTimezoneOffset (Monterrey, UTC-6, is 360).
+// Date#getTimezoneOffset (Mexico City, UTC-6, is 360).
 function timezoneOffsetMinutes(timezone, at = new Date()) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone: timezone, hourCycle: 'h23',
@@ -111,7 +111,7 @@ function normalizeSchedule(input, complete) {
     schedule.intervalMinutes = minutes;
   }
   if (input.timezone !== undefined) {
-    if (!validTimezone(input.timezone)) return { error: 'schedule.timezone must be an IANA name such as America/Monterrey' };
+    if (!validTimezone(input.timezone)) return { error: 'schedule.timezone must be an IANA name such as America/Mexico_City' };
     schedule.timezone = input.timezone;
   }
   return { schedule };
@@ -281,7 +281,7 @@ function automationActionInstruction(bot, { timezone = '' } = {}) {
     'Automation actions (authoritative):',
     'You can create, change, or run your own automations. Only do it when the user asks for it in this message. Never infer a schedule from a word like "weekly" in an ordinary request.',
     'To act, end your reply with exactly one block, and say in one short sentence what the user will see:',
-    '<MIA_AUTOMATION>{"schemaVersion":1,"action":"create","automation":{"name":"Morning news digest","goal":"Five top AI stories from the last 24 hours, each with a source link","schedule":{"frequency":"daily","time":"08:00","timezone":"America/Monterrey"},"steps":["Search today\'s AI news","Pick the five that matter most","Write two sentences each","Post the list here"],"output":"A short list in this chat"}}</MIA_AUTOMATION>',
+    '<MIA_AUTOMATION>{"schemaVersion":1,"action":"create","automation":{"name":"Morning news digest","goal":"Five top AI stories from the last 24 hours, each with a source link","schedule":{"frequency":"daily","time":"08:00","timezone":"America/Mexico_City"},"steps":["Search today\'s AI news","Pick the five that matter most","Write two sentences each","Post the list here"],"output":"A short list in this chat"}}</MIA_AUTOMATION>',
     '- create: name, schedule and 1-20 steps are required; goal and output are optional. schedule.frequency is interval (with intervalMinutes), daily (time, optional weekdaysOnly), weekly (day as a weekday name, time) or monthly (day 1-31, time). Use 24-hour HH:MM and an IANA timezone.',
     '- update: {"schemaVersion":1,"action":"update","automationId":"<id>","automation":{...only the fields that change}}.',
     '- run_now: {"schemaVersion":1,"action":"run_now","automationId":"<id>"} runs a saved automation once now. When the user asks to run an automation, use run_now and do not do its work yourself in this reply.',

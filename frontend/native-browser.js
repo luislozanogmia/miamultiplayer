@@ -30,7 +30,14 @@
   add.type = 'button'; add.className = 'native-browser-new-tab';
   add.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
   add.title = 'New tab'; add.setAttribute('aria-label', 'New browser tab');
-  add.onclick = function () { command('new').then(focusLocation); };
+  // The new-tab button opens a tab in the view the strip is in; where that
+  // view has no new tab (Automations), it opens a browser tab.
+  add.onclick = function () {
+    var provider = window.MiaTabStrip.mix.provider(docked);
+    if (docked !== 'browser' && provider.newTab) { provider.newTab(); return; }
+    if (docked !== 'browser') window.MiaTabStrip.mix.open('browser');
+    command('new').then(focusLocation);
+  };
   strip.append(add);
   // » lists the groups a crowded strip had no room for. It sits outside the
   // scrolling strip so it is always in reach.
@@ -83,13 +90,26 @@
       document.body.style.removeProperty('--browser-mia-pane-width');
     }
     document.body.classList.toggle('browser-mia-collapsed', !!miaPane.collapsed);
-    if (miaToggle) {
+    if (miaToggle && !chatRightPane()) {
       var label = miaPane.collapsed ? 'Show Mia' : 'Hide Mia';
       miaToggle.title = label; miaToggle.setAttribute('aria-label', label);
       miaToggle.setAttribute('aria-pressed', String(!miaPane.collapsed));
     }
   }
-  if (miaToggle) miaToggle.onclick = function () { miaPane.collapsed = !miaPane.collapsed; applyMiaPane(); saveMiaPane(); };
+  // In the chat, the right pane is the conversation's details.
+  function chatRightPane() { return docked === 'chat' && window.miaChatRightPane; }
+  function syncRightToggle() {
+    var chat = chatRightPane();
+    if (!chat || !miaToggle) return applyMiaPane();
+    var open = chat.open();
+    miaToggle.title = open ? 'Hide details' : 'Show details';
+    miaToggle.setAttribute('aria-label', miaToggle.title);
+    miaToggle.setAttribute('aria-pressed', String(open));
+  }
+  if (miaToggle) miaToggle.onclick = function () {
+    if (chatRightPane()) { chatRightPane().toggle(); syncRightToggle(); return; }
+    miaPane.collapsed = !miaPane.collapsed; applyMiaPane(); saveMiaPane();
+  };
   var miaResize = document.createElement('div');
   miaResize.className = 'local-browser-mia-resize';
   miaResize.setAttribute('role', 'separator');
@@ -136,11 +156,141 @@
   var open = false;
   var scheduled = false;
   var lastLayout = '';
-  var lastTabs = '';
-  input.placeholder = 'Search or enter a web address';
-  input.setAttribute('aria-label', 'Search or web address');
-  var draggingTabId = null;
+  input.placeholder = 'Search everywhere: your computer, Mia app, web search or type web address';
+  input.setAttribute('aria-label', 'Search everywhere or type a web address');
+  // Drag a tab onto another to put it in that tab's place.
+  var tabStrip = window.MiaTabStrip.create(strip, {
+    view: 'browser',
+    // From the chat or Automations, a browser tab opens the browser at it.
+    select: function (id) {
+      if (docked !== 'browser') window.MiaTabStrip.mix.open('browser', id);
+      else command('select', { id: id });
+    },
+    close: function (id) { command('close', { id: id }); },
+    menu: function (id) { command('tabMenu', { id: id }); },
+    move: function (id, target) { command('move', { id: id, index: target.index, groupId: target.groupId }); },
+    dragEnd: function () { if (state) render(state); },
+  });
+  // There is one tab strip: the browser's. The chat and Automations show it
+  // too, holding their own tabs; mixed, it holds every view's tabs. It sits
+  // in the row of whichever view is showing.
+  var docked = 'browser';
+  var DOCKS = { chat: 'chatTabsRow', automations: 'automationsTabs' };
+  function showingView() {
+    // Automations also sets the browser's mode class, so it is checked first.
+    var classes = document.body.classList;
+    if (classes.contains('automations-mode')) return 'automations';
+    return open || classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+  }
+  // The address bar goes with the tabs: under them in every view. The
+  // view's own buttons (the chat header's, the Automations bar) sit at its
+  // right end; Back, Forward and Reload only act in the browser.
+  var bar = document.getElementById('localBrowserForm');
+  var barHome = bar && bar.nextSibling;
+  var viewTools = document.createElement('div');
+  viewTools.className = 'local-browser-view-tools';
+  // The right pane's toggle comes first so the view's buttons, ending with
+  // its "more" dots, close the row.
+  if (bar) miaToggle && miaToggle.parentNode === bar ? miaToggle.after(viewTools) : bar.append(viewTools);
+  var BAR_AFTER = { chat: '#chatTabsRow', automations: '.automations-tabs-row' };
+  var VIEW_TOOLS = { chat: '#channelHeader', automations: '.automations-bar' };
+  var toolsHome = null;
+  function dockBar(view) {
+    if (!bar) return;
+    var after = view === 'browser' ? null : document.querySelector(BAR_AFTER[view]);
+    if (after && after.nextSibling !== bar) after.after(bar);
+    if (!after && view === 'browser' && bar.nextSibling !== barHome) barHome.before(bar);
+    var tools = view === 'browser' ? null : document.querySelector(VIEW_TOOLS[view]);
+    if (toolsHome && toolsHome.node !== tools) {
+      toolsHome.next ? toolsHome.next.before(toolsHome.node) : toolsHome.parent.append(toolsHome.node);
+      toolsHome = null;
+    }
+    if (tools && !toolsHome) {
+      toolsHome = { node: tools, parent: tools.parentNode, next: tools.nextSibling };
+      viewTools.append(tools);
+    }
+    dockChatActions(view);
+    var was = bar.getAttribute('data-view');
+    bar.setAttribute('data-view', view);
+    if (was !== view) syncRightToggle();
+    // Back in the browser, the bar shows the page it holds again.
+    if (view === 'browser' && was && was !== 'browser') {
+      var tab = selected();
+      showUrl(tab && tab.url || '');
+      document.getElementById('localBrowserBackBtn').disabled = !tab || !tab.canGoBack;
+      document.getElementById('localBrowserForwardBtn').disabled = !tab || !tab.canGoForward;
+      document.getElementById('localBrowserReloadBtn').disabled = !(tab && tab.url);
+    }
+    if (view !== 'browser') {
+      ['localBrowserBackBtn', 'localBrowserForwardBtn', 'localBrowserReloadBtn'].forEach(function (id) { document.getElementById(id).disabled = true; });
+      if (document.activeElement !== input) { input.value = ''; input.classList.remove('is-display-url'); }
+    }
+  }
+  // Every view keeps the chat's buttons in this bar, last, so its "more"
+  // dots end the row. In the chat the whole header moves here; elsewhere the
+  // header stays over the conversation pane and only its buttons move. The
+  // header redraws itself, so its new buttons are moved again each time.
+  var chatActions = null;
+  var chatHeaderWatch = null;
+  function dockChatActions(view) {
+    var header = document.getElementById('channelHeader');
+    if (!header) return;
+    if (!chatHeaderWatch) {
+      chatHeaderWatch = new MutationObserver(function () { dockChatActions(bar.getAttribute('data-view') || docked); });
+      chatHeaderWatch.observe(header, { childList: true });
+    }
+    // Artifacts has its own bar in place of the address bar.
+    var home = document.body.classList.contains('artifacts-mode') && document.querySelector('.artifacts-bar') || viewTools;
+    // The pane toggle goes along, just before the chat buttons.
+    if (miaToggle && bar) {
+      if (home !== viewTools) { if (miaToggle.parentNode !== home) home.append(miaToggle); }
+      else if (miaToggle.nextSibling !== viewTools) viewTools.before(miaToggle);
+    }
+    var parked = chatActions && chatActions.parentNode && chatActions.parentNode !== header ? chatActions : null;
+    if (view === 'chat') {
+      if (parked) header.querySelector(':scope > .ch-right') ? parked.remove() : header.append(parked);
+      chatActions = null;
+      return;
+    }
+    var actions = header.querySelector(':scope > .ch-right');
+    if (!actions) actions = parked;
+    if (!actions) return;
+    if (parked && parked !== actions) parked.remove();
+    chatActions = actions;
+    if (actions.parentNode !== home || actions.nextSibling) home.append(actions);
+  }
+  function dock(view) {
+    var host = view === 'browser' ? tabsRow : document.getElementById(DOCKS[view]);
+    if (!host) { view = 'browser'; host = tabsRow; }
+    if (strip.parentNode !== host) {
+      if (view === 'browser' && host) host.insertBefore(strip, document.getElementById('localBrowserCloseBtn'));
+      else if (host) host.append(strip);
+      strip.after(more);
+      tabStrip.reset();
+    }
+    docked = view;
+    dockBar(view);
+  }
+  tabStrip.host = function () { return docked; };
+  new MutationObserver(function () {
+    if (showingView() !== docked && state) render(state);
+    else dockChatActions(bar && bar.getAttribute('data-view') || docked);
+  })
+    .observe(document.body, { attributes: true, attributeFilter: ['class'] });
   function els(selector) { return Array.prototype.slice.call(strip.querySelectorAll(selector)); }
+  // A page without its own icon shows what it is: building blocks for a
+  // page or app on this computer, a globe for the web.
+  var BLOCKS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="7" height="7" x="14" y="3" rx="1"></rect><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3"></path></svg>';
+  var GLOBE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>';
+  function tabTypeIcon(url) {
+    return /^(file:|https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$))/i.test(String(url || '')) ? BLOCKS_ICON : GLOBE_ICON;
+  }
+  // Mixed tabs (tab-strip.js): the browser's tabs, shown in the other strips.
+  window.MiaTabStrip.mix.register('browser', {
+    tabs: function () { return state.tabs.map(function (t) { return { id: t.id, label: t.title || 'New tab', iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url), groupId: t.groupId || null }; }); },
+    select: function (id) { command('select', { id: id }); },
+    render: function () { if (state) render(state); },
+  });
   function selected() { return state.tabs.find(function (tab) { return tab.id === state.activeId; }); }
   function developerModeEnabled() { return document.documentElement.getAttribute('data-theme') === 'developer'; }
   function closeFind() { findBar.hidden = true; command('find', { value: '' }); layout(); }
@@ -297,9 +447,9 @@
     requestAnimationFrame(function () {
       scheduled = false;
       var rect = screen.getBoundingClientRect();
-      // Native views sit above HTML; hide them while the sidebar drawer covers it.
+      // Native views sit above HTML; hide them while something covers the page.
+      // The docked "Your bots" panel doesn't: it narrows the screen instead.
       var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen &&
-        !document.body.classList.contains('browser-sidebar-open') &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation');
       var payload = { action: 'layout', visible: visible, panelOpen: open,
@@ -366,15 +516,39 @@
     refreshBotHolds();
     syncGlowHolds(working);
     var front = botGroupFronts(groups, working);
-    var crowd = crowdedStrip(groups, working);
-    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, front, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
-    // Redrawing mid-drag or mid-rename would drop what the user is doing;
-    // catch up once it ends.
-    if (signature !== lastTabs && draggingTabId === null && editingGroupId === null) {
-      lastTabs = signature;
-      strip.replaceChildren();
+    // Mixed tabs: the other views fold before any of the browser's groups,
+    // then the groups fold in what is left.
+    var mix = window.MiaTabStrip.mix;
+    mix.notify('browser', JSON.stringify(state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId]; })));
+    dock(showingView());
+    var here = docked === 'browser';
+    var hostTabs = here ? state.tabs : (mix.provider(docked).tabs ? mix.provider(docked).tabs() || [] : []);
+    add.hidden = !here && !mix.provider(docked).newTab && !mix.on();
+    var items = mix.arrange(docked, hostTabs, tabStrip.room((here ? stripNeeded(groups) : hostTabs.length * TAB_MIN_WIDTH) + (add.offsetWidth || 0)));
+    var byId = {};
+    state.tabs.forEach(function (t) { byId[t.id] = t; });
+    var reserved = items.reduce(function (sum, item) { return item.view === 'browser' ? sum : sum + (item.head ? MIX_HEAD_WIDTH : TAB_MIN_WIDTH); }, 0);
+    var crowd = crowdedStrip(groups, working, reserved);
+    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, front, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, tabTypeIcon(t.url), t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
+    // A redraw mid-rename would drop what the user is typing; catch up once
+    // it ends. The tab strip itself waits out a drag.
+    signature += JSON.stringify([docked, items.map(function (item) {
+      if (item.view === 'browser' && !item.head) return item.key;
+      return item.head ? [item.key, item.section.tabs.length] : [item.key, item.tab.label, item.tab.title, item.tab.active, item.tab.iconHtml, item.tab.iconUrl, item.tab.closable];
+    })]);
+    if (editingGroupId === null) tabStrip.redraw(signature, function () {
       var previousGroupId = null;
-      state.tabs.forEach(function (t, index) {
+      // Mixed, the other views' tabs sit among the browser's in the order
+      // they were opened; a group's tabs stay together.
+      items.forEach(function (item) {
+        if (item.head || item.view !== 'browser') {
+          previousGroupId = null;
+          if (item.head) strip.append.apply(strip, tabStrip.section(item.section));
+          else strip.append(tabStrip.foreign(item));
+          return;
+        }
+        var t = byId[item.tab.id], index = state.tabs.indexOf(t);
+        if (!t) return;
         var tabGroup = groups[t.groupId] || null;
         if (tabGroup && crowd.hidden.indexOf(tabGroup.id) >= 0) return;
         var folded = tabGroup && crowd.folded.indexOf(tabGroup.id) >= 0;
@@ -382,85 +556,37 @@
         previousGroupId = t.groupId || null;
         if (tabGroup && (tabGroup.collapsed || folded)) return;
         if (tabGroup && front[tabGroup.id] && front[tabGroup.id].id !== t.id) return;
-        var group = document.createElement('div');
-        group.setAttribute('data-tab-id', t.id);
-        group.className = 'native-browser-tab' + (t.id === state.activeId ? ' active' : '') + (tabGroup ? ' in-group' : '') + (working[t.id] ? ' bot-working' : '');
+        var group = tabStrip.tab({
+          id: t.id, label: t.title, active: here && t.id === state.activeId, iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url),
+          index: index, groupId: t.groupId || null,
+          className: (tabGroup ? 'in-group' : '') + (working[t.id] ? ' bot-working' : ''),
+        });
         if (tabGroup) {
           paintGroup(group, tabGroup);
           // The active tab in a group is outlined in the group color, so the
           // group's line visibly runs around it.
-          if (t.id === state.activeId) {
+          if (here && t.id === state.activeId) {
             var ring = document.createElement('span');
-            ring.className = 'native-browser-tab-group-ring';
-            group.append(ring);
+            ring.className = 'mia-tab-group-ring';
+            group.insertBefore(ring, group.firstChild);
           }
         }
-        group.addEventListener('contextmenu', function (event) {
-          event.preventDefault();
-          command('tabMenu', { id: t.id });
-        });
-        // Drag a tab onto another to put it in that tab's place.
-        group.setAttribute('data-tab-id', String(t.id));
-        group.draggable = true;
-        group.addEventListener('dragstart', function (event) {
-          draggingTabId = t.id;
-          event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData('text/plain', String(t.id));
-          group.classList.add('dragging');
-        });
-        group.addEventListener('dragend', function () {
-          draggingTabId = null;
-          if (state) render(state);
-          group.classList.remove('dragging');
-          els('.native-browser-tab.drop-target').forEach(function (node) { node.classList.remove('drop-target'); });
-        });
-        group.addEventListener('dragover', function (event) {
-          if (draggingTabId === null || draggingTabId === t.id) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = 'move';
-          group.classList.add('drop-target');
-        });
-        group.addEventListener('dragleave', function () { group.classList.remove('drop-target'); });
-        group.addEventListener('drop', function (event) {
-          event.preventDefault();
-          group.classList.remove('drop-target');
-          if (draggingTabId === null || draggingTabId === t.id) return;
-          command('move', { id: draggingTabId, index: index, groupId: t.groupId || null });
-        });
-        var button = document.createElement('button');
-        button.type = 'button'; button.title = t.title || 'New tab';
-        button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(t.id === state.activeId));
-        if (t.favicon) {
-          var icon = document.createElement('img');
-          icon.className = 'native-browser-tab-icon'; icon.src = t.favicon; icon.alt = '';
-          icon.onerror = function () { icon.remove(); };
-          button.append(icon);
-        }
-        var label = document.createElement('span');
-        label.className = 'native-browser-tab-label'; label.textContent = t.title || 'New tab';
-        button.append(label);
         // The same working dot the chat shows beside a busy bot.
         if (working[t.id]) {
           var dotEl = document.createElement('span');
-          dotEl.className = 'chat-task-dot native-browser-tab-working';
+          dotEl.className = 'chat-task-dot mia-tab-working';
           dotEl.title = (working[t.id].name || 'A bot') + ' is working here';
-          button.append(dotEl);
+          group.button.append(dotEl);
         }
-        button.onclick = function () { command('select', { id: t.id }); };
-        var close = document.createElement('button');
-        close.type = 'button'; close.textContent = '\u00d7'; close.className = 'native-browser-tab-close';
-        close.setAttribute('aria-label', 'Close tab ' + button.textContent);
-        close.onclick = function () { command('close', { id: t.id }); };
-        group.append(button);
-        if (tabGroup && front[tabGroup.id] && front[tabGroup.id].others.length) group.append(botTabsButton(tabGroup, front[tabGroup.id], working));
-        group.append(close); strip.append(group);
+        if (tabGroup && front[tabGroup.id] && front[tabGroup.id].others.length) group.insertBefore(botTabsButton(tabGroup, front[tabGroup.id], working), group.closeButton);
+        strip.append(group);
       });
       strip.append(add);
       more.groupIds = crowd.hidden;
       more.hidden = !crowd.hidden.length;
       more.title = crowd.hidden.length + ' more group' + (crowd.hidden.length === 1 ? '' : 's');
       more.setAttribute('aria-label', 'Show ' + more.title);
-    }
+    });
     // A bot that starts working in a tab off-screen brings it into view.
     Object.keys(working).forEach(function (id) {
       if (scrolledToWork[id]) return;
@@ -538,7 +664,19 @@
     };
     return more;
   }
-  function crowdedStrip(groups, working) {
+  var MIX_HEAD_WIDTH = 104;
+  // What the strip needs with every group open.
+  function stripNeeded(groups) {
+    var total = 0, seen = {};
+    state.tabs.forEach(function (t) {
+      var g = groups[t.groupId];
+      if (!g) { total += TAB_MIN_WIDTH; return; }
+      if (!seen[g.id]) { seen[g.id] = true; total += GROUP_HEAD_WIDTH + (g.collapsed ? 0 : g.botId ? TAB_MIN_WIDTH : 0); }
+      if (!g.collapsed && !g.botId) total += TAB_MIN_WIDTH;
+    });
+    return total;
+  }
+  function crowdedStrip(groups, working, reserved) {
     var now = Date.now();
     var active = state.tabs.filter(function (t) { return t.id === state.activeId; })[0];
     var busy = {};
@@ -552,9 +690,9 @@
     var ids = Object.keys(counts);
     ids.forEach(function (id) { if (!groupUsedAt[id]) groupUsedAt[id] = 0; });
     var oldestFirst = ids.slice().sort(function (a, b) { return groupUsedAt[a] - groupUsedAt[b]; });
-    var width = Math.max(0, (strip.clientWidth || 0) - (add.offsetWidth || 0));
     var folded = [], hidden = [];
-    if (!width) return { folded: folded, hidden: hidden };
+    if (!strip.clientWidth) return { folded: folded, hidden: hidden };
+    var width = Math.max(1, strip.clientWidth - (add.offsetWidth || 0) - (reserved || 0));
     var shown = function (id) { return groups[id].collapsed || folded.indexOf(id) >= 0 ? 0 : counts[id]; };
     var needed = function () {
       var total = ungrouped * TAB_MIN_WIDTH;
@@ -588,7 +726,7 @@
     var token = ++tabsListToken;
     tabsListGroupId = groupId;
     tabsListRequested = !!groupId;
-    lastTabs = '';
+    tabStrip.reset();
     if (!groupId) {
       tabsListOpen = false;
       tabsList.hidden = true;
@@ -624,7 +762,7 @@
     tabsList.style.top = Math.round(anchorRect.bottom - 2) + 'px';
     tabsRows.style.maxHeight = Math.max(120, Math.round(screenRect.bottom - anchorRect.bottom - 12)) + 'px';
     paintGroup(tabsList, g);
-    var key = JSON.stringify([g.id, info.others.map(function (id) { var t = byId[id]; return [id, t.title, t.favicon, !!working[id]]; })]);
+    var key = JSON.stringify([g.id, info.others.map(function (id) { var t = byId[id]; return [id, t.title, t.favicon, tabTypeIcon(t.url), !!working[id]]; })]);
     tabsList.hidden = false;
     if (key === lastTabsList) return;
     lastTabsList = key;
@@ -643,24 +781,20 @@
       var button = document.createElement('button');
       button.type = 'button'; button.setAttribute('role', 'menuitem');
       button.title = t.title || 'New tab';
-      if (t.favicon) {
-        var icon = document.createElement('img');
-        icon.className = 'native-browser-tab-icon'; icon.src = t.favicon; icon.alt = '';
-        icon.onerror = function () { icon.remove(); };
-        button.append(icon);
-      }
+      var icon = window.MiaTabStrip.icon({ iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url) });
+      if (icon) button.append(icon);
       var label = document.createElement('span');
-      label.className = 'native-browser-tab-label'; label.textContent = t.title || 'New tab';
+      label.className = 'mia-tab-label'; label.textContent = t.title || 'New tab';
       button.append(label);
       if (working[id]) {
         var dotEl = document.createElement('span');
-        dotEl.className = 'chat-task-dot native-browser-tab-working';
+        dotEl.className = 'chat-task-dot mia-tab-working';
         dotEl.title = (working[id].name || 'A bot') + ' is working here';
         button.append(dotEl);
       }
       button.onclick = function () { setTabsList(null); command('select', { id: id }); };
       var close = document.createElement('button');
-      close.type = 'button'; close.textContent = '×'; close.className = 'native-browser-tab-close';
+      close.type = 'button'; close.textContent = '×'; close.className = 'mia-tab-close';
       close.setAttribute('aria-label', 'Close tab ' + (t.title || 'New tab'));
       close.onclick = function (event) { event.stopPropagation(); command('close', { id: id }); };
       row.append(button, close);
@@ -697,7 +831,7 @@
       command('groupMenu', { groupId: g.id });
     });
     chip.addEventListener('dragover', function (event) {
-      if (draggingTabId === null) return;
+      if (tabStrip.dragging() === null) return;
       event.preventDefault();
       chip.classList.add('drop-target');
     });
@@ -705,7 +839,7 @@
     chip.addEventListener('drop', function (event) {
       event.preventDefault();
       chip.classList.remove('drop-target');
-      if (draggingTabId !== null) command('move', { id: draggingTabId, index: index, groupId: g.id });
+      if (tabStrip.dragging() !== null) command('move', { id: tabStrip.dragging(), index: index, groupId: g.id });
     });
     return chip;
   }
@@ -809,7 +943,7 @@
       if (done) return;
       done = true;
       editingGroupId = null;
-      lastTabs = '';
+      tabStrip.reset();
       if (save) command('groupUpdate', { groupId: groupId, name: field.value });
       else render(state);
     }
@@ -1155,6 +1289,8 @@
     if (event.key === 'Escape') { input.value = selected() && selected().url || ''; input.blur(); }
   });
   window.miaNativeBrowser = {
+    // Counts only (feedback report); never URLs or titles.
+    counts: function () { return { tabs: (state.tabs || []).length, groups: (state.groups || []).length }; },
     render: function (visible) {
       var opening = visible && !open;
       open = visible;
@@ -1177,7 +1313,17 @@
         if (!selected() || !selected().url) focusLocation();
       }
     },
-    navigate: function (value) { input.blur(); setDownloadsOpen(false); command('navigate', { value: value }); return true; },
+    // From the chat or Automations, the bar opens what you typed in a new
+    // browser tab rather than replacing the page you left there.
+    navigate: function (value) {
+      input.blur();
+      if (docked !== 'browser') {
+        window.MiaTabStrip.mix.open('browser');
+        command('new').then(function () { return command('navigate', { value: value }); });
+        return true;
+      }
+      setDownloadsOpen(false); command('navigate', { value: value }); return true;
+    },
     openTab: function (value) {
       input.blur();
       return command('new').then(function () { return command('navigate', { value: value }); });

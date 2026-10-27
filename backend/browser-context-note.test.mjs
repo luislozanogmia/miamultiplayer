@@ -65,3 +65,40 @@ test('cleaning keeps ordinary addresses and drops credential-shaped values', () 
   assert.deepEqual(safeBrowserContext({ url: 'https://u:p@x.test/#frag', title: ' A\n B ' }), { url: 'https://x.test/', title: 'A B' });
   assert.equal(safeBrowserContext({ url: 'javascript:alert(1)' }), null);
 });
+
+test('credential-bearing path segments are removed, including short auth tokens and encoded values', () => {
+  const opaque = 'A'.repeat(48);
+  const jwt = 'eyJ' + 'a'.repeat(12) + '.eyJ' + 'b'.repeat(12) + '.signature';
+  for (const path of ['/reset-password/short-token', '/invitation/accept/short-token',
+    '/magic-login/123456', '/unsubscribe/short-token', '/download/' + opaque,
+    '/' + opaque, '/page/' + jwt, '/page/' + encodeURIComponent(jwt.replaceAll('.', '%2E')),
+    '/password%252Dreset%252Fshort-token', '/reset-password/%broken']) {
+    assert.equal(safeBrowserPageUrl('https://example.test' + path + '?q=ordinary'),
+      'https://example.test/?q=ordinary', path);
+  }
+});
+
+test('public resource identifiers remain usable without allowing arbitrary opaque paths', () => {
+  const id = 'A'.repeat(48);
+  const sha = 'a'.repeat(40);
+  for (const url of ['https://docs.google.com/spreadsheets/d/' + id + '/edit',
+    'https://docs.google.com/document/u/0/d/' + id + '/edit',
+    'https://drive.google.com/file/d/' + id + '/view',
+    'https://drive.google.com/drive/u/0/folders/' + id,
+    'https://github.com/example/repo/commit/' + sha,
+    'https://github.com/example/repo/blob/' + sha + '/README.md',
+    'https://example.test/articles/ordinary-title', 'https://example.test/auth/callback']) {
+    assert.equal(safeBrowserPageUrl(url), url);
+  }
+  assert.equal(safeBrowserPageUrl('https://docs.google.com.example.test/spreadsheets/d/' + id + '/edit'),
+    'https://docs.google.com.example.test/');
+});
+
+test('path credentials do not reach message metadata or the model context note', () => {
+  const url = 'https://example.test/password-reset/short-token';
+  const metadata = safeBrowserContext({ url, title: 'Reset password' });
+  assert.equal(metadata.url, 'https://example.test/');
+  const text = note({ browserContext: { url, title: 'Reset password' } });
+  assert.match(text, /URL: https:\/\/example\.test\/$/m);
+  assert.equal(text.includes('short-token'), false);
+});

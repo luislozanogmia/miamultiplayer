@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
   DEFAULT_AGENTS,
+  PAGE_ICON_RULE,
   miaosWorkspacePromptContext,
   provisionMiaosWorkspace,
 } = require('./miaos-workspace');
@@ -44,4 +45,21 @@ test('workspace prompt includes the active AGENTS.md path and content', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('Mia is told to give every page it makes a tab icon inside the file', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-workspace-'));
+  try {
+    const context = miaosWorkspacePromptContext({ workspaceDir: root });
+    assert.ok(context.includes(PAGE_ICON_RULE));
+    assert.match(PAGE_ICON_RULE, /rel="icon"/);
+    assert.match(PAGE_ICON_RULE, /LinkedIn/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('bot turns carry the page icon rule too', () => {
+  const server = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  assert.equal((server.match(/agentSearchOnly \? '' : PAGE_ICON_RULE,/g) || []).length, 2);
 });

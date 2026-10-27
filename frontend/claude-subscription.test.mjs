@@ -102,3 +102,10 @@ test('Claude polling ignores stale responses after cancellation or switching', a
   assert.equal(calls.length, before, 'stale response cannot render, reopen, or save a switched flow');
   assert.match(source, /\['starting', 'waiting', 'completing'\]\.indexOf\(auth\.state\)/);
 });
+
+test('Claude sign-in finishes in the browser and asks for the code, with the paste box open', () => {
+  assert.match(source, /Finish signing in to Claude in your browser, then paste the code it shows here\./);
+  assert.doesNotMatch(source, /Mia will connect automatically/);
+  assert.match(source, /completion\.hidden = !claudeWaiting; if\(claudeWaiting\) completion\.open = true;/);
+  assert.match(html, /<summary>Code from Claude<\/summary>/);
+});

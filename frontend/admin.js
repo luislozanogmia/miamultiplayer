@@ -16,12 +16,26 @@
     return String(value == null ? '' : value).trim().toLowerCase();
   }
 
+  var HUB_TEAM_KEY = /^hub_[a-f0-9]{32}$/;
+
   function adminWorkspaceKey(search, storedWorkspaceKey){
     var query = String(search == null ? '' : search);
     var match = query.match(/(?:^|[?&])workspace=([^&]*)/);
     var requested = match ? decodeURIComponent(match[1]) : '';
-    if(requested === 'solo' || requested === 'multiplayer_test') return requested;
+    if(requested === 'solo' || requested === 'multiplayer_test' || HUB_TEAM_KEY.test(requested)) return requested;
+    if(HUB_TEAM_KEY.test(storedWorkspaceKey || '')) return storedWorkspaceKey;
     return storedWorkspaceKey === 'solo' ? 'solo' : 'multiplayer_test';
+  }
+
+  // A shared team's members, invites and log live on the Hub; the local
+  // Mia user list only backs Multiplayer Test.
+  function hubTeamId(workspaceKey){
+    return HUB_TEAM_KEY.test(workspaceKey || '') ? workspaceKey.slice(4) : null;
+  }
+
+  // Hub times are Unix seconds; the formatters here take milliseconds.
+  function hubTime(seconds){
+    return seconds ? Number(seconds) * 1000 : null;
   }
 
   function initialsFor(user){
@@ -161,6 +175,134 @@
     }).join('');
   }
 
+  function renderTeamOverviewTiles(data){
+    data = data || {};
+    var members = data.members || [];
+    var admins = members.filter(function(m){ return m.role === 'admin'; }).length;
+    var seats = data.seats || {};
+    var channels = data.channels || [];
+    var regular = channels.filter(function(c){ return c.kind !== 'dm' && c.kind !== 'group'; }).length;
+    return [
+      '<div class="card admin-tile"><div class="admin-tile-label">Team</div>' +
+        '<div class="admin-tile-val">' + esc(data.name || '—') + '</div>' +
+        '<div class="admin-tile-sub">Shared team</div></div>',
+      '<div class="card admin-tile"><div class="admin-tile-label">Members</div>' +
+        '<div class="admin-tile-val">' + esc(members.length) + '</div>' +
+        '<div class="admin-tile-sub">' + esc(admins) + ' admin' + (admins === 1 ? '' : 's') + '</div></div>',
+      '<div class="card admin-tile"><div class="admin-tile-label">Seats</div>' +
+        '<div class="admin-tile-val">' + esc(seats.used != null ? seats.used + ' of ' + seats.limit : '—') + '</div>' +
+        '<div class="admin-tile-sub">' + esc(seats.used != null ? (seats.used - members.length) + ' pending invite' + ((seats.used - members.length) === 1 ? '' : 's') : '') + '</div></div>',
+      '<div class="card admin-tile"><div class="admin-tile-label">Channels</div>' +
+        '<div class="admin-tile-val">' + esc(regular) + '</div>' +
+        '<div class="admin-tile-sub">' + esc(channels.length - regular) + ' direct messages and groups</div></div>'
+    ].join('');
+  }
+
+  function renderTeamUsersTable(members, options){
+    options = options || {};
+    var search = String(options.search == null ? '' : options.search).trim();
+    var admins = (members || []).filter(function(m){ return m.role === 'admin'; }).length;
+    var rows = filterAdminUsers((members || []).map(function(m){
+      return {id: m.clerk_user_id, email: m.email, role: m.role};
+    }), search);
+    if(!rows.length) return '<tr><td colspan="7" class="admin-empty">' + (search ? 'No users match your search.' : 'No members yet.') + '</td></tr>';
+    return rows.map(function(u){
+      var self = u.id === options.selfId;
+      var owner = !!options.ownerId && u.id === options.ownerId;
+      var lastAdmin = u.role === 'admin' && admins <= 1;
+      // The owner keeps their role and seat until they hand ownership to another admin.
+      var locked = owner ? ' disabled title="The owner must make another admin the owner first."'
+        : lastAdmin ? ' disabled title="A team must keep at least one admin."' : '';
+      var roleControl = u.role === 'admin'
+        ? '<button type="button" class="btn small" data-action="team-role" data-role="member" data-id="' + esc(u.id) + '" data-email="' + esc(u.email) + '"' +
+          locked + '>Set to member</button>'
+        : '<button type="button" class="btn small" data-action="team-role" data-role="admin" data-id="' + esc(u.id) + '" data-email="' + esc(u.email) + '">Make admin</button>';
+      var ownerControl = options.selfId && options.selfId === options.ownerId && !owner && u.role === 'admin'
+        ? '<button type="button" class="btn small" data-action="team-owner" data-id="' + esc(u.id) + '" data-email="' + esc(u.email) + '">Make owner</button>'
+        : '';
+      var removeControl = self
+        ? '<span class="admin-row-protected">You</span>'
+        : owner ? '<span class="admin-row-protected">Owner</span>'
+        : '<button type="button" class="btn small danger" data-action="team-remove" data-id="' + esc(u.id) + '" data-email="' + esc(u.email) + '"' +
+          locked + '>Remove</button>';
+      return '<tr data-email="' + esc(u.email) + '">' +
+        '<td class="admin-select-cell"></td>' +
+        '<td><div class="admin-cell-user">' +
+          '<div class="admin-avatar">' + esc(initialsFor(u)) + '</div>' +
+          '<div><div class="admin-cell-name">' + esc(u.email) + '</div>' +
+          '<div class="admin-cell-sub">' + (self ? 'You' : 'Teammate') + (owner ? ' · Owner' : '') + '</div></div>' +
+        '</div></td>' +
+        '<td>' + esc(owner ? 'Owner' : u.role === 'admin' ? 'Admin' : 'Member') + '</td>' +
+        '<td><span class="pill ok">Active</span></td>' +
+        '<td>—</td>' +
+        '<td class="admin-cell-sub">—</td>' +
+        '<td class="admin-row-control"><div class="admin-row-actions">' + roleControl + ownerControl + removeControl + '</div></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  var TEAM_BOT_STATUS = {accepted: 'Active', pending: 'Pending', rejected: 'Rejected'};
+
+  // Bots are added per channel, so the team roster is every bot in the
+  // channels the admin can see, labelled with where it lives.
+  function teamRosterAgents(channelBots){
+    var agents = [];
+    (channelBots || []).forEach(function(entry){
+      var channel = entry.channel || {};
+      var where = channel.kind === 'dm' ? 'Direct message' : channel.kind === 'group' ? 'Group' : '#' + (channel.name || 'channel');
+      (entry.bots || []).forEach(function(bot){
+        var admission = bot.admission || {};
+        var owner = admission.requester_email || '';
+        agents.push({id: bot.id, name: bot.name, owner: owner, ownerName: owner || 'Unknown member',
+          ownerDescription: 'Teammate', status: TEAM_BOT_STATUS[admission.status] || 'Unknown',
+          model: '—', departments: [where], createdAt: hubTime(bot.created_at)});
+      });
+    });
+    return agents;
+  }
+
+  var TEAM_AUDIT_LABELS = {
+    role_changed: 'Changed a role', owner_transferred: 'Transferred ownership', team_renamed: 'Renamed the team', invite_created: 'Invited',
+    invite_revoked: 'Revoked an invite', invite_accepted: 'Joined the team', invite_declined: 'Declined an invite',
+    member_removed: 'Removed a member', message_deleted: 'Deleted a message', file_uploaded: 'Uploaded an image',
+    bot_shared: 'Added a bot', bot_unshared: 'Removed a bot', bot_execution_handoff: 'Handed off a bot run',
+    bot_version_proposed: 'Proposed a bot change', bot_version_published: 'Approved a bot change',
+    bot_version_rejected: 'Rejected a bot change', bot_editor_added: 'Added a bot editor',
+    bot_editor_removed: 'Removed a bot editor', team_approved: 'Team approved'
+  };
+
+  function teamActivityEvents(events, members){
+    var emails = Object.create(null);
+    (members || []).forEach(function(m){ emails[m.clerk_user_id] = m.email; });
+    return (events || []).map(function(e){
+      var target = e.target ? (String(e.target).indexOf('@') !== -1 ? e.target : emails[e.target] || 'Former member') : '';
+      return {at: hubTime(e.at), actor: e.actor_email || emails[e.actor] || 'Former member',
+        action: TEAM_AUDIT_LABELS[e.event] || String(e.event || '').replace(/_/g, ' '), target: target, detail: ''};
+    });
+  }
+
+  // A team's Users count against its seat limit; pending invites hold seats too.
+  function teamUsersSummary(count, seats){
+    if(!seats || seats.limit == null) return count + ' user' + (count === 1 ? '' : 's');
+    var pending = Math.max(0, Number(seats.used || 0) - count);
+    return count + ' of ' + seats.limit + ' users' + (pending ? ' · ' + pending + ' invite' + (pending === 1 ? '' : 's') + ' pending' : '');
+  }
+
+  // Channels a new team bot can join: shared channels and groups, not DMs.
+  function newBotChannelOptions(channels){
+    return (channels || []).filter(function(channel){
+      return channel && /^[a-f0-9]{32}$/.test(channel.id || '') && channel.kind !== 'dm';
+    }).map(function(channel){
+      return {id: channel.id, label: channel.kind === 'group' ? 'Group: ' + String(channel.name || 'group') : '#' + String(channel.name || 'channel')};
+    }).sort(function(a, b){ return a.label.localeCompare(b.label); });
+  }
+
+  // Mia reads this once on return and opens the New Bot setup for that channel.
+  var NEW_TEAM_BOT_KEY = 'miaNewTeamBot';
+  function newTeamBotRequest(teamId, channelId, now){
+    return JSON.stringify({teamId: teamId, channelId: channelId, at: now});
+  }
+
   function isMiaAdminAgent(agent){
     return !!agent && (String(agent.type || '').toLowerCase() === 'mia' || normalizeEmail(agent.id) === 'gateway');
   }
@@ -267,11 +409,13 @@
     }).join('');
   }
 
-  function renderInvitesTable(invites){
+  function renderInvitesTable(invites, options){
     invites = invites || [];
+    options = options || {};
     if(!invites.length) return '<tr><td colspan="5" class="admin-empty">No pending invites.</td></tr>';
     return invites.map(function(inv){
-      var linkAction = inv.link
+      // Team invites have no link: the person sees them in Mia after signing in with that email.
+      var linkAction = options.team ? '' : inv.link
         ? '<button type="button" class="btn small" data-action="copy-invite" data-id="' + esc(inv.id) + '">Copy link</button>'
         : '<span class="admin-cell-sub">Link shown when created</span>';
       return '<tr data-id="' + esc(inv.id) + '">' +
@@ -318,6 +462,8 @@
       search: '',
       loading: false
     };
+    // Set when the Admin Center manages a shared team instead of the local list.
+    var team = null;
     function $(sel, root2){ return (root2 || doc).querySelector(sel); }
     function $all(sel, root2){ return Array.prototype.slice.call((root2 || doc).querySelectorAll(sel)); }
 
@@ -355,6 +501,13 @@
 
     var call = api;
 
+    function hub(method, path, body){
+      return win.MiaHubChat.call(method, '/v1/teams/' + team.id + path, body).catch(function(error){
+        toast(error.message, true);
+        throw error;
+      });
+    }
+
     /* ---- navigation ---- */
     function showView(name){
       $all('.admin-nav-item').forEach(function(btn){
@@ -380,6 +533,16 @@
     /* ---- overview ---- */
     var overviewTimer = null;
     function loadOverview(){
+      if(team){
+        Promise.all([hub('GET', '/members'), hub('GET', '/invites'), hub('GET', '/channels')]).then(function(results){
+          var tiles = $('#overviewTiles');
+          if(tiles) tiles.innerHTML = renderTeamOverviewTiles({name: team.name, members: results[0].members,
+            seats: results[1].seats, channels: results[2].channels});
+          var updated = $('#overviewUpdated');
+          if(updated) updated.textContent = 'Updated ' + new Date().toLocaleTimeString();
+        }).catch(function(){});
+        return;
+      }
       call('/api/admin/overview').then(function(overview){
         var tiles = $('#overviewTiles');
         if(tiles) tiles.innerHTML = renderOverviewTiles(overview);
@@ -391,8 +554,8 @@
     function startAutoRefresh(){
       if(overviewTimer) clearInterval(overviewTimer);
       overviewTimer = setInterval(function(){
-        if(currentViewFromHash() === 'overview') loadOverview();
-      }, 10000);
+        if(currentViewFromHash() === 'overview' && !doc.hidden) loadOverview();
+      }, team ? 30000 : 10000);
     }
 
     /* ---- users ---- */
@@ -438,6 +601,7 @@
         else if(String(usersState.search || '').trim()) resultEl.textContent = visible.length
           ? 'Showing ' + visible.length + ' of ' + usersState.items.length + ' users'
           : 'No matching users';
+        else if(team) resultEl.textContent = teamUsersSummary(usersState.items.length, usersState.seats);
         else resultEl.textContent = usersState.items.length + ' user' + (usersState.items.length === 1 ? '' : 's');
       }
       $all('[data-bulk-action]').forEach(function(btn){
@@ -456,6 +620,11 @@
 
     function renderUsers(){
       var body = $('#usersBody');
+      if(team){
+        if(body) body.innerHTML = renderTeamUsersTable(usersState.items, {search: usersState.search, selfId: team.selfId, ownerId: usersState.ownerId});
+        syncUsersControls();
+        return;
+      }
       if(body) body.innerHTML = renderUsersTable(usersState.items, {
         search: usersState.search,
         currentAdminEmail: usersState.currentAdminEmail,
@@ -466,6 +635,19 @@
     }
 
     function loadUsers(){
+      if(team){
+        var seats = hub('GET', '/invites').then(function(result){ return result.seats; }, function(){ return null; });
+        return Promise.all([hub('GET', '/members'), seats]).then(function(results){
+          var result = results[0];
+          usersState.seats = results[1];
+          usersState.ownerId = result.owner_id || null;
+          usersState.items = (result.members || []).map(function(m){
+            return {clerk_user_id: m.clerk_user_id, email: m.email, role: m.role};
+          });
+          renderUsers();
+          return usersState.items;
+        }, function(){ return []; });
+      }
       return call('/api/admin/users').then(function(users){
         usersState.items = filterAdminUsers(Array.isArray(users) ? users : []);
         var available = Object.create(null);
@@ -508,10 +690,21 @@
       syncAgentsControls();
     }
 
+    function loadTeamAgents(){
+      return hub('GET', '/channels').then(function(result){
+        var channels = result.channels || [];
+        return Promise.all(channels.map(function(channel){
+          return hub('GET', '/channels/' + channel.id + '/bots').then(function(bots){
+            return {channel: channel, bots: bots.bots || []};
+          }, function(){ return {channel: channel, bots: []}; });
+        }));
+      }).then(teamRosterAgents);
+    }
+
     function loadAgents(){
       agentsState.loading = true;
       renderAgents();
-      return call('/api/admin/agents').then(function(payload){
+      return (team ? loadTeamAgents() : call('/api/admin/agents')).then(function(payload){
         agentsState.items = Array.isArray(payload)
           ? payload
           : (payload && Array.isArray(payload.agents) ? payload.agents : []);
@@ -626,6 +819,33 @@
       });
     }
 
+    function teamUserAction(action, id, email, role){
+      if(action === 'team-role'){
+        var self = id === team.selfId;
+        if(self && role === 'member' && !win.confirm('Step down to member? You will lose access to the Admin Center.')) return Promise.resolve();
+        return hub('PATCH', '/members/' + encodeURIComponent(id), {role: role}).then(function(){
+          toast(role === 'admin' ? email + ' is now an admin' : email + ' is now a member');
+          if(self) { win.location.href = '/'; return; }
+          loadUsers();
+        }, function(){});
+      }
+      if(action === 'team-owner'){
+        if(!win.confirm('Make ' + email + ' the owner of ' + team.name + '? You stay an admin, but they can then change your role or remove you.')) return Promise.resolve();
+        return hub('POST', '/owner', {member: id}).then(function(){
+          toast(email + ' is now the owner');
+          loadUsers();
+        }, function(){});
+      }
+      if(action === 'team-remove'){
+        if(!win.confirm('Remove ' + email + ' from ' + team.name + '? They lose access to its channels right away.')) return Promise.resolve();
+        return hub('DELETE', '/members/' + encodeURIComponent(id), {}).then(function(){
+          toast(email + ' removed');
+          loadUsers();
+        }, function(){});
+      }
+      return Promise.resolve();
+    }
+
     function userAction(action, email){
       if(action === 'promote') return call('/api/admin/users/' + encodeURIComponent(email), {method: 'PATCH', body: {role: 'admin'}}).then(function(){ toast('Promoted to admin'); loadUsers(); });
       if(action === 'demote') return call('/api/admin/users/' + encodeURIComponent(email), {method: 'PATCH', body: {role: 'member'}}).then(function(){ toast('Set to member'); loadUsers(); });
@@ -651,6 +871,15 @@
 
     /* ---- invites ---- */
     function loadInvites(){
+      if(team){
+        hub('GET', '/invites').then(function(result){
+          var body = $('#invitesBody');
+          if(body) body.innerHTML = renderInvitesTable((result.invites || []).map(function(inv){
+            return {id: inv.email, email: inv.email, role: 'member', invitedBy: '', expiresAt: hubTime(inv.expires_at)};
+          }), {team: true});
+        }, function(){});
+        return;
+      }
       call('/api/admin/invites').then(function(invites){
         var body = $('#invitesBody');
         if(body) body.innerHTML = renderInvitesTable(invites);
@@ -658,6 +887,10 @@
     }
 
     function inviteAction(action, id){
+      if(team){
+        if(action !== 'revoke-invite') return;
+        return hub('DELETE', '/invites/' + encodeURIComponent(id), {}).then(function(){ toast('Invite revoked'); loadInvites(); }, function(){});
+      }
       if(action === 'revoke-invite') return call('/api/admin/invites/' + encodeURIComponent(id), {method: 'DELETE'}).then(function(){ toast('Invite revoked'); loadInvites(); });
       if(action === 'copy-invite'){
         call('/api/admin/invites').then(function(invites){
@@ -673,6 +906,13 @@
 
     /* ---- activity ---- */
     function loadActivity(){
+      if(team){
+        Promise.all([hub('GET', '/audit?limit=100'), hub('GET', '/members')]).then(function(results){
+          var body = $('#activityBody');
+          if(body) body.innerHTML = renderActivityRows(teamActivityEvents(results[0].events, results[1].members));
+        }, function(){});
+        return;
+      }
       call('/api/admin/events?limit=100').then(function(events){
         var body = $('#activityBody');
         if(body) body.innerHTML = renderActivityRows(events);
@@ -733,8 +973,14 @@
       var usersBody = $('#usersBody');
       if(usersBody) usersBody.addEventListener('click', function(ev){
         var btn = ev.target.closest && ev.target.closest('button[data-action]');
-        if(!btn) return;
-        userAction(btn.getAttribute('data-action'), btn.getAttribute('data-email'));
+        if(!btn || btn.disabled) return;
+        if(team){
+          // The Hub can take a few seconds; keep the button from being pressed twice.
+          btn.disabled = true;
+          teamUserAction(btn.getAttribute('data-action'), btn.getAttribute('data-id'), btn.getAttribute('data-email'), btn.getAttribute('data-role'))
+            .then(function(){ btn.disabled = false; });
+        }
+        else userAction(btn.getAttribute('data-action'), btn.getAttribute('data-email'));
       });
       if(usersBody) usersBody.addEventListener('change', function(ev){
         var checkbox = ev.target.closest && ev.target.closest('input.admin-user-select');
@@ -786,6 +1032,7 @@
         if(!btn) return;
         btn.addEventListener('click', function(){
           $('#inviteError').hidden = true;
+          if(inviteForm) inviteForm.reset();
           $('#inviteFormWrap').hidden = false;
           $('#inviteResultWrap').hidden = true;
           openOverlay('inviteOverlay');
@@ -796,6 +1043,20 @@
       if(inviteForm) inviteForm.addEventListener('submit', function(ev){
         ev.preventDefault();
         var fd = new FormData(inviteForm);
+        if(team){
+          var email = String(fd.get('email') || '').trim();
+          hub('POST', '/invites', {email: email}).then(function(){
+            $('#inviteResultHint').textContent = 'Invitation sent to ' + email + '. They will see it in Mia after signing in with that email. It expires in 7 days.';
+            $('#inviteResultBox').hidden = true;
+            $('#inviteFormWrap').hidden = true;
+            $('#inviteResultWrap').hidden = false;
+            loadInvites();
+          }, function(err){
+            var errEl = $('#inviteError');
+            if(errEl){ errEl.textContent = err.message; errEl.hidden = false; }
+          });
+          return;
+        }
         var body = {email: fd.get('email'), role: fd.get('role'), expiresInHours: Number(fd.get('expiresInHours')) || 72};
         call('/api/admin/invites', {method: 'POST', body: body}).then(function(res){
           $('#inviteResultLink').textContent = res.link || '';
@@ -818,13 +1079,119 @@
         if(btn) copyText(btn.getAttribute('data-reset-link') || '');
       });
 
+      var renameBtn = $('#teamRenameBtn');
+      var renameForm = $('#renameTeamForm');
+      if(renameBtn) renameBtn.addEventListener('click', function(){
+        $('#renameTeamError').hidden = true;
+        renameForm.elements.name.value = team ? team.name : '';
+        openOverlay('renameTeamOverlay');
+        renameForm.elements.name.focus();
+      });
+      if(renameForm) renameForm.addEventListener('submit', function(ev){
+        ev.preventDefault();
+        hub('PATCH', '/team', {name: renameForm.elements.name.value}).then(function(result){
+          setTeamName(result.name);
+          closeOverlay('renameTeamOverlay');
+          toast('Team renamed');
+          loadOverview();
+        }, function(err){
+          var errEl = $('#renameTeamError');
+          if(errEl){ errEl.textContent = err.message; errEl.hidden = false; }
+        });
+      });
+
+      var newBotBtn = $('#teamNewBotBtn');
+      var newBotForm = $('#newTeamBotForm');
+      if(newBotBtn) newBotBtn.addEventListener('click', function(){
+        $('#newTeamBotError').hidden = true;
+        if(newBotBtn.disabled) return;
+        newBotBtn.disabled = true;
+        toast('Loading channels…');
+        hub('GET', '/channels').finally(function(){ newBotBtn.disabled = false; }).then(function(result){
+          var options = newBotChannelOptions(result.channels);
+          var select = $('#newTeamBotChannel');
+          select.innerHTML = options.map(function(o){ return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join('');
+          if(!options.length){
+            toast('Create a channel first; a team bot lives in a channel.', true);
+            return;
+          }
+          openOverlay('newTeamBotOverlay');
+          select.focus();
+        }, function(){});
+      });
+      if(newBotForm) newBotForm.addEventListener('submit', function(ev){
+        ev.preventDefault();
+        var channelId = newBotForm.elements.channel.value;
+        if(!team || !/^[a-f0-9]{32}$/.test(channelId)) return;
+        try { win.sessionStorage.setItem(NEW_TEAM_BOT_KEY, newTeamBotRequest(team.id, channelId, Date.now())); }
+        catch(_newBotStorageError){
+          var errEl = $('#newTeamBotError');
+          if(errEl){ errEl.textContent = 'Mia could not start the setup. Reload and try again.'; errEl.hidden = false; }
+          return;
+        }
+        win.location.href = '/';
+      });
+
       win.addEventListener('hashchange', function(){ showView(currentViewFromHash()); });
+    }
+
+    function setTeamName(name){
+      team.name = name;
+      doc.title = 'Mia · ' + name + ' admin';
+      var brandName = $('#adminBrandName');
+      if(brandName) brandName.textContent = name;
+    }
+
+    function blocked(title, message){
+      var blockedTitle = $('#adminBlockedTitle');
+      var blockedMessage = $('#adminBlockedMessage');
+      if(blockedTitle && title) blockedTitle.textContent = title;
+      if(blockedMessage && message) blockedMessage.textContent = message;
+      $('#adminBlocked').hidden = false;
+    }
+
+    function bootTeam(teamId){
+      if(!win.MiaHubChat){
+        blocked('Admin Center is unavailable', 'The shared team connection did not load. Restart Mia and try again.');
+        return;
+      }
+      win.MiaHubChat.call('GET', '/v1/me').then(function(me){
+        var entry = (me.teams || []).filter(function(t){ return t.teamId === teamId; })[0];
+        if(!entry || !entry.membership || entry.membership.role !== 'admin'){
+          blocked('Not authorized', 'Only admins of this team can open the Admin Center.');
+          return;
+        }
+        team = {id: teamId, name: String(entry.name || 'Shared team'), selfId: entry.membership.clerk_user_id};
+        usersState.currentAdminEmail = normalizeEmail(entry.membership.email);
+        doc.body.classList.add('admin-team');
+        setTeamName(team.name);
+        var sub = doc.querySelector('.admin-brand-sub');
+        if(sub) sub.textContent = 'Team admin';
+        var renameBtn = $('#teamRenameBtn');
+        if(renameBtn) renameBtn.hidden = false;
+        var newBotBtn = $('#teamNewBotBtn');
+        if(newBotBtn) newBotBtn.hidden = false;
+        var groupHead = $('#agentsGroupHead');
+        if(groupHead) groupHead.textContent = 'Channel';
+        var agentsSub = $('#agentsSub');
+        if(agentsSub) agentsSub.textContent = 'Bots in the channels you are in, with the member who added each one.';
+        $('#adminWrap').hidden = false;
+        wire();
+        var view = currentViewFromHash();
+        showView(view === 'backup' ? 'overview' : view);
+        loadOverview();
+        startAutoRefresh();
+      }).catch(function(){
+        blocked('Cannot reach the team', 'The shared team service is unreachable. Check your connection and try again.');
+      });
     }
 
     function boot(){
       var storedWorkspaceKey = '';
       try { storedWorkspaceKey = win.localStorage.getItem('miaosActiveWorkspace') || ''; } catch(_workspaceStorageError) {}
       var workspaceKey = adminWorkspaceKey(win.location.search, storedWorkspaceKey);
+      var teamId = hubTeamId(workspaceKey);
+      if(teamId) return bootTeam(teamId);
       if(workspaceKey !== 'multiplayer_test'){
         var blockedTitle = $('#adminBlockedTitle');
         var blockedMessage = $('#adminBlockedMessage');
@@ -859,6 +1226,14 @@
   var exportsObj = {
     esc: esc,
     adminWorkspaceKey: adminWorkspaceKey,
+    hubTeamId: hubTeamId,
+    renderTeamOverviewTiles: renderTeamOverviewTiles,
+    renderTeamUsersTable: renderTeamUsersTable,
+    teamRosterAgents: teamRosterAgents,
+    teamUsersSummary: teamUsersSummary,
+    newBotChannelOptions: newBotChannelOptions,
+    newTeamBotRequest: newTeamBotRequest,
+    teamActivityEvents: teamActivityEvents,
     initialsFor: initialsFor,
     fmtDate: fmtDate,
     fmtUptime: fmtUptime,

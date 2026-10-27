@@ -86,7 +86,7 @@
       ? '<div class="agent-setup-schedule-row">' + frequency + '<input data-field="intervalMinutes" type="number" min="1" max="1440" value="' + esc(schedule.intervalMinutes || 60) + '" aria-label="Minutes between runs"></div>'
       : '<div class="agent-setup-schedule-row">' + frequency + day +
         '<input data-field="time" type="time" value="' + esc(schedule.time || '09:00') + '" aria-label="Time">' +
-        '<input data-field="timezone" type="text" value="' + esc(schedule.timezone || options.timezone || '') + '" aria-label="Time zone" placeholder="America/Monterrey"></div>';
+        '<input data-field="timezone" type="text" value="' + esc(schedule.timezone || options.timezone || '') + '" aria-label="Time zone" placeholder="America/Mexico_City"></div>';
     return '<div class="agent-setup-card automation-proposal-card" data-automation-proposal="' + esc(eventId) + '" data-frequency="' + esc(choice || '') + '">' +
       '<div class="agent-setup-card-intro">' + (isUpdate ? 'Here’s the change I’d make. Edit anything before saving.' : 'Here’s the automation I’d set up. Edit anything before turning it on.') + '</div>' +
       field('name', 'Name', '<input data-field="name" type="text" maxlength="80" value="' + esc(automation.name || '') + '">') +

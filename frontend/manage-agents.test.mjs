@@ -8,45 +8,43 @@ const stylesUrl = new URL('./styles.css', import.meta.url);
 const nativeBrowserUrl = new URL('./native-browser.js', import.meta.url);
 const serverUrl = new URL('../backend/server.js', import.meta.url);
 
-test('header keeps developer, people, and tools controls in the requested order', async () => {
+test('the header holds the views; managing bots sits on the Bots section', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const menuStart = html.indexOf('id="chatAcctMenu"');
   const toolbarStart = html.indexOf('class="chat-new-btn-wrap"');
-  const developerStart = html.indexOf('id="chatSidebarDeveloperBtn"', toolbarStart);
-  const manageStart = html.indexOf('id="chatSidebarManageAgentsBtn"', toolbarStart);
-  const toolsStart = html.indexOf('id="chatSidebarToolsBtn"', toolbarStart);
+  const viewsStart = html.indexOf('class="sidebar-views"', toolbarStart);
+  const botsStart = html.indexOf('id="chatBotsGroup"');
 
   assert.ok(menuStart >= 0, 'account menu is present');
-  assert.ok(developerStart > toolbarStart, 'developer toolbar control is present');
-  assert.ok(manageStart > toolbarStart, 'people/agents toolbar control is present');
-  assert.ok(developerStart < manageStart, 'developer control appears before people/agents');
-  assert.ok(manageStart < toolsStart, 'people/agents control appears before Tools');
+  assert.ok(html.indexOf('id="chatSidebarDeveloperBtn"', toolbarStart) > toolbarStart, 'developer toolbar control is present');
+  assert.deepEqual([...html.slice(viewsStart, html.indexOf('</div>', viewsStart)).matchAll(/data-sidebar-view="(\w+)"/g)].map((m) => m[1]), ['chat', 'automations', 'artifacts', 'browser']);
+  assert.ok(html.indexOf('id="chatSidebarManageAgentsBtn"') > botsStart, 'people/agents control is on the Bots section');
+  assert.doesNotMatch(html, /id="chatSidebarToolsBtn"|id="chatToolsMenu"|id="chatSidebarPins"/, 'the tools menu is gone');
   assert.equal(html.indexOf('id="chatAcctManageAgents"', menuStart), -1, 'Manage Agents was removed from the account menu');
-  assert.match(html, /id="chatSidebarManageAgentsBtn"[^>]+aria-label="Manage people, agents, and bots"/);
+  assert.match(html, /id="chatSidebarManageAgentsBtn"[^>]+aria-label="Manage agents and bots"/);
   assert.doesNotMatch(html, /id="chatNewBtn"|id="chatSidebarComputerBtn"/);
   assert.match(html, /id="styledAgentAdminBack"[^>]+aria-label="Back to conversations"/);
 });
 
-test('tools menu owns the existing creation and utility actions once', async () => {
+test('each creation and utility action has one control, all routed through runToolsAction', async () => {
   const [html, source] = await Promise.all([readFile(htmlUrl, 'utf8'), readFile(appUrl, 'utf8')]);
-  for (const action of ['new-chat', 'new-bot', 'new-agent', 'new-channel', 'bot-store', 'automations', 'connected-apps', 'web-browser']) {
+  for (const action of ['new-chat', 'new-bot', 'new-agent', 'bot-store', 'automations', 'artifacts', 'connected-apps', 'web-browser']) {
     assert.equal((html.match(new RegExp(`data-tools-action="${action}"`, 'g')) || []).length, 1, `${action} appears once`);
   }
-  assert.match(source, /menu\.addEventListener\('click'[\s\S]*action === 'new-chat'\) openDmCompose\(\)[\s\S]*action === 'new-bot'\) startAgentSetupChat\(\)[\s\S]*action === 'new-agent'\) openHarnessAgentSetup\(\)[\s\S]*action === 'new-channel'\) openNewChannelFlow\(\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
+  assert.match(html, /data-tools-action="new-agent" aria-disabled="true"/, 'New agent stays visible but unavailable');
+  assert.match(source, /function runToolsAction\(action\)\{[\s\S]*action === 'new-chat'\) openDmCompose\(\)[\s\S]*action === 'new-bot'\) startAgentSetupChat\(\)[\s\S]*action === 'new-agent'\) openHarnessAgentSetup\(\)[\s\S]*action === 'new-channel'\) openNewChannelFlow\(\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
+  assert.match(source, /\['New direct message', openChatDmAddPopover\], \['New channel', openNewChannelFlow\]/, 'outside teams New channel is on the conversations +');
   assert.match(source, /function openHarnessAgentSetup\(\)[\s\S]*loadHarnessSettings\(false\)[\s\S]*openHarnessOnboarding\(settings\)/);
 });
 
-test('tools menu uses one canonical Lucide icon system', async () => {
-  const [html, styles] = await Promise.all([readFile(htmlUrl, 'utf8'), readFile(stylesUrl, 'utf8')]);
-  const start = html.indexOf('id="chatToolsMenu"');
-  const end = html.indexOf('id="chatDeveloperMenu"', start);
-  assert.ok(start >= 0 && end > start, 'tools menu markup is present');
-  const menu = html.slice(start, end);
-
-  assert.equal((menu.match(/data-tools-action=/g) || []).length, 8, 'all eight tool actions remain');
-  assert.equal((menu.match(/data-icon-set="lucide"/g) || []).length, 8, 'every tool action uses Lucide');
-  assert.doesNotMatch(menu, /<img|data-mia-mark|chat-tools-menu-mia|stroke-width=/, 'legacy and one-off icon treatments are removed');
-  assert.match(styles, /\.chat-tools-menu \.chat-new-menu-icon svg\{[^}]*width:22px;[^}]*height:22px;[^}]*stroke-width:2;/);
+test('every action control uses one canonical Lucide icon system', async () => {
+  const html = await readFile(htmlUrl, 'utf8');
+  const controls = [...html.matchAll(/<button[^>]*data-tools-action="[^"]+"[\s\S]*?<\/button>/g)].map((m) => m[0]).filter((b) => !b.includes('chat-dm-add-btn'));
+  assert.equal(controls.length, 7, 'rail, view, New chat and New agent controls');
+  for (const control of controls) {
+    assert.match(control, /data-icon-set="lucide"/);
+    assert.doesNotMatch(control, /<img|data-mia-mark|stroke-width=/, 'legacy and one-off icon treatments are removed');
+  }
 });
 
 test('Web browser has one native Mia path with no iframe or localhost bridge fallback', async () => {
@@ -91,6 +89,9 @@ test('Web browser has one native Mia path with no iframe or localhost bridge fal
   assert.match(styles, /body\.browser-collab-mode \.local-browser-overlay\.open\{right:var\(--browser-mia-pane-width\);\}/);
   assert.match(styles, /body\.browser-collab-mode \.chat-app\{[^}]*position:fixed!important;[^}]*inset:0 0 0 auto;/);
   assert.match(styles, /body\.browser-collab-mode\.browser-sidebar-open \.chat-sidebar\{transform:translateX\(0\);\}/);
+  // Docked like the right pane: the browser and Automations make room for it.
+  assert.match(styles, /body\.browser-collab-mode\.browser-sidebar-open \.local-browser-overlay\.open,\s*body\.browser-collab-mode\.browser-sidebar-open \.automations-overlay\.open\{left:calc\(var\(--sand-sidebar-width\) \+ var\(--workspace-rail-width\)\);/);
+  assert.doesNotMatch(styles, /\.chat-sidebar\{[^}]*box-shadow:12px 0 30px/, 'no floating drawer shadow');
   // The "Your bots" drawer opens from a left-pane icon that mirrors the
   // right-pane Mia toggle at the start of the address row, not a mote.
   assert.doesNotMatch(html, /local-browser-mote/);
@@ -387,7 +388,7 @@ test('account menu removes trial and help placeholders while preserving supporte
     readFile(stylesUrl, 'utf8'),
   ]);
   const menuStart = html.indexOf('id="chatAcctMenu"');
-  const menuEnd = html.indexOf('</div>\n              <span class="csf-dot"', menuStart);
+  const menuEnd = html.indexOf('<div class="rail-notifications"', menuStart);
   assert.ok(menuStart >= 0 && menuEnd > menuStart, 'account menu is present');
   const menu = html.slice(menuStart, menuEnd);
 
@@ -406,7 +407,7 @@ test('account menu removes trial and help placeholders while preserving supporte
   assert.match(styles, /\.chat-acct-menu-item \.cami svg\{[^}]*width:20px;height:20px;[^}]*stroke-width:2;/);
   assert.doesNotMatch(styles, /\.chat-acct-menu-item \.cami img|#chatAcct(?:Admin|Setup|Settings|About|Logout) \.cami img/);
   assert.match(source, /showBenchToast\(item\.getAttribute\('data-chat-acct-toast'\)\)/);
-  assert.match(source, /function prepareBetaFeedback\(\)[\s\S]*copySidebarText\(feedback, 'Feedback copied/);
+  assert.match(source, /function prepareBetaFeedback\(\)[\s\S]*openFeedbackDialog\(\)/);
   assert.match(source, /feedback\.addEventListener\('click'[\s\S]*prepareBetaFeedback\(\)/);
 });
 
@@ -418,8 +419,8 @@ test('Admin Center is available only to Multiplayer Test admins from the account
   ]);
 
   assert.match(html, /<button type="button" class="chat-acct-menu-item" id="chatAcctAdmin" hidden role="menuitem">[\s\S]*?Admin Center/);
-  assert.match(source, /function syncAdminMenuItem\(\)[\s\S]*?adminItem\.hidden = !isAdmin \|\| activeWorkspaceKey === 'solo'/);
-  assert.match(source, /if\(activeWorkspaceKey !== 'multiplayer_test'\) return;[\s\S]*?location\.href = '\/admin\?workspace=multiplayer_test'/);
+  assert.match(source, /function syncAdminMenuItem\(\)[\s\S]*?hubWorkspace\(\) \? !!\(hubChat\.membership && hubChat\.membership\.role === 'admin'\) : isAdmin && activeWorkspaceKey !== 'solo'[\s\S]*?adminItem\.hidden = !allowed/);
+  assert.match(source, /if\(activeWorkspaceKey !== 'multiplayer_test' && !hubWorkspace\(\)\) return;[\s\S]*?location\.href = '\/admin\?workspace=' \+ encodeURIComponent\(activeWorkspaceKey\)/);
   assert.match(css, /\.chat-acct-menu-item\[hidden\]\{display:none;\}/);
 });
 
@@ -524,14 +525,16 @@ test('left workspace actions use the canonical Lucide icon grid', async () => {
 
   assert.match(html, /id="chatSidebarManageAgentsBtn"[\s\S]*?data-icon-set="lucide"[\s\S]*?<circle cx="10" cy="8" r="5"/);
   assert.match(html, /id="chatSidebarDeveloperBtn"[\s\S]*?hidden/);
-  assert.ok(html.indexOf('id="chatSidebarDeveloperBtn"') < html.indexOf('id="chatSidebarManageAgentsBtn"'));
-  assert.match(html, /id="chatSidebarToolsBtn"[\s\S]*?data-icon-set="lucide"[\s\S]*?<path d="M14\.7 6\.3a1 1 0 0 0 0 1\.4/);
-  assert.doesNotMatch(source, /SIDEBAR_PIN_ICONS|var glyph =/);
-  assert.match(source, /var icon = item\.querySelector\('\.chat-new-menu-icon'\)[\s\S]*if\(icon\) btn\.innerHTML = icon\.innerHTML/);
+  assert.doesNotMatch(source, /SIDEBAR_PIN_ICONS|var glyph =|renderSidebarPins/);
   assert.match(source, /chatInfo\.mode = 'automations'/);
   assert.doesNotMatch(html, /agent-manager-option-1\.png|computer-cloud\.png/);
   assert.match(styles, /\.chat-sidebar-tool-btn svg\{[^}]*width:20px;height:20px;[^}]*stroke-width:2;/);
-  assert.doesNotMatch(styles, /\.chat-sidebar-pin-btn (?:img|svg)/);
+  assert.match(styles, /\.sidebar-view-btn svg\{[^}]*width:16px;height:16px;[^}]*stroke-width:2;/);
+  // Every view is named while the names fit; a narrow sidebar names only the selected one.
+  assert.match(styles, /\.sidebar-views\{[^}]*container-type:inline-size;/);
+  assert.match(styles, /\.sidebar-view-btn\.active\{[^}]*background:var\(--sand-fill-accent-subtle\);color:var\(--sand-text-accent\);/);
+  assert.match(styles, /@container \(max-width: 250px\)\{[\s\S]*?\.sidebar-view-btn:not\(\.active\) \.sidebar-view-label\{display:none;\}/);
+  assert.doesNotMatch(styles, /^\s*\.sidebar-view-label\{display:none;\}/m, 'labels show by default');
 });
 
 test('theme migration owns the legacy developer mode and diagnostics stay available', async () => {
@@ -846,7 +849,7 @@ test('creating a bot from the tools menu does not close browser mode, but every 
   // Bot store joins new-bot in this exception: it renders into the same
   // side chat pane too, so opening it shouldn't kill browser mode either.
   assert.match(source, /function closeBrowserSidebarDrawer\(\)[\s\S]*classList\.remove\('browser-sidebar-open'\)/);
-  assert.match(source, /function runToolsAction\(action\)[\s\S]*closeBrowserSidebarDrawer\(\);[\s\S]*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
+  assert.match(source, /function runToolsAction\(action\)[\s\S]*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
 });
 
 test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {
@@ -870,7 +873,7 @@ test('URL bar autocomplete degrades to nothing when the desktop shell has no his
   assert.match(source, /function localBrowserHistorySupported\(\)\{\s*return !!\(window\.MiaBrowserOmnibox && window\.miaDesktop && window\.miaDesktop\.browser && typeof window\.miaDesktop\.browser\.history === 'function'\);/);
   assert.match(source, /function loadLocalBrowserHistory\(fresh\)\{\s*if\(!localBrowserHistorySupported\(\)\) return Promise\.resolve\(\[\]\);/);
   assert.match(source, /window\.miaDesktop\.browser\.history\(LOCAL_BROWSER_HISTORY_LIMIT\)/);
-  assert.match(source, /if\(input && localBrowserHistorySupported\(\)\)\{/);
+  assert.match(source, /if\(input && window\.MiaBrowserOmnibox\)\{/, 'the bar still searches chats and automations without history');
   assert.match(source, /event\.key === 'ArrowDown'/);
   assert.match(source, /event\.key === 'ArrowUp'/);
   assert.match(source, /event\.key === 'Enter'\)\{\s*if\(localBrowserSuggestIndex < 0\) return; \/\/ no selection: keep the normal submit behavior/);
@@ -881,17 +884,17 @@ test('URL bar autocomplete degrades to nothing when the desktop shell has no his
   assert.match(styles, /\.local-browser-suggest\{/);
 });
 
-test('browser address bar defaults plain text to Google and offers persistent X search', async () => {
+test('browser address bar searches Google only while X search is off', async () => {
   const [html, source] = await Promise.all([
     readFile(htmlUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
   ]);
-  assert.match(html, /id="localBrowserSearchEngine"[\s\S]*data-search-engine="google"[\s\S]*assets\/connectors\/google-g\.svg[\s\S]*data-search-engine="x"[\s\S]*assets\/icons\/x-logo\.svg/);
-  assert.match(source, /LOCAL_BROWSER_SEARCH_ENGINE_KEY = 'miaBrowserSearchEngine'/);
+  assert.match(html, /id="localBrowserSearchEngine"[\s\S]*data-search-engine="google"[\s\S]*assets\/connectors\/google-g\.svg/);
+  assert.doesNotMatch(html, /data-search-engine="x"/);
+  assert.match(html, /placeholder="Search everywhere: your computer, Mia app, web search or type web address"/);
   assert.match(source, /function localBrowserNormalizeUrl\(value, searchEngine\)/);
   assert.match(source, /https:\/\/www\.google\.com\/search\?q=/);
-  assert.match(source, /https:\/\/x\.com\/search\?q=/);
-  assert.match(source, /localStorage\.setItem\(LOCAL_BROWSER_SEARCH_ENGINE_KEY/);
+  assert.match(source, /localBrowserSearchEngine = 'google';/);
 });
 
 test('bots are archived with Restore, never permanently deleted from the UI', async () => {
@@ -935,4 +938,29 @@ test('Drive chips and attachment cards open in the embedded Mia browser on deskt
   const wire = source.slice(openEnd, source.indexOf('// opts.inThread:', openEnd));
   assert.match(wire, /prepareAttachment === 'function' && window\.miaNativeBrowser\)\{\s*openAttachmentInMiaBrowser\(url\)/);
   assert.match(wire, /Artifact previews are available in the Mia desktop app/);
+});
+
+test('"Your bots" starts open in the browser and Automations, and only its own button closes it', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const styles = await readFile(stylesUrl, 'utf8');
+  assert.match(source, /function browserSidebarWanted\(\)\{[\s\S]*localStorage\.getItem\('mia\.browserSidebarClosed'\) !== '1'/, 'open unless the user closed it');
+  assert.match(source, /function openWebBrowserTool\(options\)[\s\S]*?setBrowserSidebarOpen\(browserSidebarWanted\(\)\);/);
+  assert.match(source, /function openAutomationsPage\(\)\{[\s\S]*?setBrowserSidebarOpen\(browserSidebarWanted\(\)\);/);
+  assert.match(source, /try \{ localStorage\.setItem\(BROWSER_SIDEBAR_CLOSED_KEY, open \? '0' : '1'\); \} catch\(_sidebarStorageError\) \{\}\s*if\(collab\) setBrowserSidebarOpen\(open\);\s*applyLeftPane\(\);/, 'the icon remembers the choice, in every view');
+  assert.match(styles, /body:not\(\.browser-collab-mode\)\.left-pane-closed \.chat-layout > \.chat-sidebar\{display:none!important;\}/, 'in the chat the sidebar folds out of the layout');
+  assert.match(styles, /\.local-browser-view-tools #automationsSidebarBtn\{display:none;\}/, 'one left-pane button, not two');
+  assert.doesNotMatch(source.slice(source.indexOf('function runToolsAction(action)'), source.indexOf("if(action === 'new-chat') openDmCompose();")), /closeBrowserSidebarDrawer/, 'picking a tool keeps the docked panel open');
+  assert.match(styles, /\.native-browser-tabs-row,\.automations-tabs-row\{min-height:37px;padding-top:3px;\}/, 'the tab strips share a line with the window buttons and keep a 3px canvas edge');
+  assert.match(styles, /\.chat-tabs-row\{[^}]*height:37px;[^}]*padding-top:3px;/);
+});
+
+test('the address bar hands local files to the browser instead of refusing them', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const start = source.indexOf('function localBrowserNormalizeUrl(');
+  const end = source.indexOf('\n  }\n', start) + 4;
+  const normalize = new Function(source.slice(start, end) + '\nreturn localBrowserNormalizeUrl;')();
+  assert.equal(normalize('file:///Users/me/Documents/mia/calculator.html', 'google'), 'file:///Users/me/Documents/mia/calculator.html');
+  assert.equal(normalize('/Users/me/Documents/mia/dummy.pdf', 'google'), '/Users/me/Documents/mia/dummy.pdf');
+  assert.equal(normalize('example.com', 'google'), 'https://example.com/');
+  assert.throws(() => normalize('javascript://x', 'google'), /Only web addresses/);
 });

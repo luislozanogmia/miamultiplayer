@@ -22,10 +22,12 @@ function registerAuthProtocol(app, platform = process.platform, execPath = proce
   return false;
 }
 
-function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openExternal, browserFallback = false, canOpenGoogle = () => true }) {
+function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openExternal, browserFallback = false, canOpenGoogle = () => true, log = () => {} }) {
   let client;
   let flow;
   let busy = false;
+  let settled = Promise.resolve(), releaseOperation = () => {};
+  let waitingReads = 0;
   function notify(state) {
     const window = getWindow();
     if (window && !window.isDestroyed()) {
@@ -45,8 +47,16 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
     if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
     const actions = ["status", "google", "email", "verify", "token", "cancel", "signOut"];
     if (!actions.includes(action)) return { ok: false, error: "Unknown sign-in action." };
+    // Polls and message sends can request tokens while account restoration runs.
+    // Serialize bounded read requests; never replay interactive sign-in actions.
+    if (busy && (action === "status" || action === "token") && waitingReads < 8) {
+      waitingReads++;
+      try { while (busy) await settled; } finally { waitingReads--; }
+    }
     if (busy) return { ok: false, error: "Sign-in is busy. Please try again." };
+    if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
     busy = true;
+    settled = new Promise(resolve => { releaseOperation = resolve; });
     try {
       init();
       let result;
@@ -76,12 +86,15 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
       if (action === "token") result = await client.getSessionToken();
       if (action === "cancel") result = await flow.cancel();
       if (action === "signOut") { await flow.cancel(); result = await client.signOut(); }
+      if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
       return { ok: true, result };
     } catch (error) {
       // Exception messages and provider bodies can contain credentials. Never
       // pass those across IPC or put them in logs. Only the fixed error code
       // and HTTP status are logged, so failures stay diagnosable.
-      console.warn("[clerk-auth]", action, "failed:", error && error.code ? error.code : "UNEXPECTED", error && error.httpStatus ? error.httpStatus : "");
+      try {
+        log(`[clerk-auth] ${action} failed: ${error && error.code ? error.code : "UNEXPECTED"} ${error && error.httpStatus ? error.httpStatus : ""}`);
+      } catch (_) { /* Diagnostics must not interrupt account restoration. */ }
       const local = {
         protocol_unavailable: "Install this Mia build to enable browser sign-in. You can still sign in with an email code.",
         invalid_email: "Enter a valid email address.",
@@ -89,7 +102,7 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
       };
       const message = local[error.message] || "Sign-in could not be completed. Check your connection and system keyring, then try again.";
       return { ok: false, error: message };
-    } finally { busy = false; }
+    } finally { busy = false; releaseOperation(); }
   });
   return {
     async acceptCallback(url) { return flow ? flow.acceptCallback(url) : false; },

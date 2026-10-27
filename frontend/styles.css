@@ -14,6 +14,7 @@
   .chat-drive-file:focus-visible{outline:2px solid #4285f4;outline-offset:3px}
   :root{
     --paper:#FFFFFF;
+    --mia-canvas:#f4f5f5;
     --paper-2:#F2F0EC;
     --tint:#FAF9F7;
     --card:#FFFFFF;
@@ -62,9 +63,9 @@
        for the --paper/--ink/--accent tokens above, which the rest of the
        app shell uses these shared tokens. */
     --styled-sans:-apple-system, system-ui, "Segoe UI", sans-serif;
-    --sand-bg-base:#fcfcfc;
-    --sand-bg-subtle:#f7f7f7;
-    --sand-bg-elevated:#fcfcfc;
+    --sand-bg-base:#ffffff;
+    --sand-bg-subtle:#ffffff;
+    --sand-bg-elevated:#ffffff;
     --sand-bg-scrim:#14141480;
     --sand-text-primary:#141414;
     --sand-text-secondary:#14141499;
@@ -99,6 +100,7 @@
     --sand-font-weight-medium:500;
     --sand-font-weight-semibold:600;
     --sand-sidebar-width:20%;
+    --workspace-rail-width:76px;
     /* The info pane is 20% of the full shell when the sidebar is 20%:
        20 / (100 - 20) = 25% of the remaining chat app. */
     --sand-info-pane-width:max(320px,25%); /* 25% of the window, never narrower than a readable connector row */
@@ -141,6 +143,7 @@
     color-scheme:dark;
     --mia-dot:rgba(255,255,255,.78);
     --paper:#0B0A09;
+    --mia-canvas:#1a1815;
     --paper-2:#1D1A16;
     --tint:#14120F;
     --card:#14120F;
@@ -236,6 +239,33 @@
      resolution genuinely requires sign-in. */
   .app-loading-overlay{position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:var(--paper);color:var(--mid);font:500 14px/20px var(--sans);letter-spacing:.01em;transition:opacity .16s ease,visibility .16s ease;}
   .app-loading-overlay.hidden{opacity:0;visibility:hidden;pointer-events:none;}
+  /* Workspace switch: the shell shows at once and stays inert until the
+     session is confirmed; the last sidebar of the new workspace shows dimmed
+     until its live list arrives. */
+  html.workspace-handoff .app-loading-overlay,html.workspace-handoff .login-wall{display:none;}
+  html.workspace-handoff .app-shell{display:flex;pointer-events:none;}
+  /* Workspace switch: grey bars hold the sidebar list and the chat until
+     their data arrives, then the content comes into focus. */
+  .mia-placeholder{display:block;height:10px;border-radius:5px;background:linear-gradient(90deg,var(--sand-fill-secondary-hover) 0%,var(--sand-fill-secondary) 50%,var(--sand-fill-secondary-hover) 100%);background-size:200% 100%;animation:mia-placeholder-shimmer 1.4s ease-in-out infinite;}
+  @keyframes mia-placeholder-shimmer{from{background-position:100% 0;}to{background-position:-100% 0;}}
+  .sidebar-placeholder{display:none;padding:14px 16px;}
+  .sidebar-placeholder-group{display:flex;flex-direction:column;gap:12px;margin-bottom:28px;}
+  .sidebar-placeholder-group .mia-placeholder:first-child{height:8px;margin-bottom:4px;}
+  html.workspace-handoff .chat-sidebar-scroll > .sidebar-placeholder,.chat-sidebar-scroll.workspace-loading > .sidebar-placeholder{display:block;}
+  html.workspace-handoff .chat-sidebar-scroll > :not(.sidebar-placeholder),.chat-sidebar-scroll.workspace-loading > :not(.sidebar-placeholder){display:none;}
+  /* Filled in by app.js a moment later; hidden rather than shown with defaults. */
+  html.workspace-handoff #chatAcctName,html.workspace-handoff #chatAcctAvatar,html.workspace-handoff #chatSyncFooter,html.workspace-handoff #chatSyncDot,html.workspace-handoff #ccModelBtn{visibility:hidden;}
+  .chat-thread-placeholder{display:flex;flex-direction:column;justify-content:flex-end;gap:26px;min-height:100%;box-sizing:border-box;padding:24px 22px;}
+  .chat-placeholder-msg{display:flex;gap:12px;align-items:flex-start;}
+  .chat-placeholder-avatar{flex:0 0 32px;width:32px;height:32px;border-radius:50%;}
+  .chat-placeholder-lines{display:flex;flex-direction:column;gap:9px;flex:1;max-width:520px;padding-top:4px;}
+  .mia-reveal{animation:mia-reveal .45s ease-out;}
+  @keyframes mia-reveal{from{opacity:0;filter:blur(6px);}to{opacity:1;filter:blur(0);}}
+  @media (prefers-reduced-motion:reduce){
+    .mia-placeholder{animation:none;}
+    .mia-reveal{animation-duration:.15s;}
+    @keyframes mia-reveal{from{opacity:0;}to{opacity:1;}}
+  }
   .app-loading-avatar{display:block;width:42px;height:42px;object-fit:contain;}
   .developer-mode-transition{position:fixed;inset:0;z-index:12000;overflow:hidden;background:#FFFFFF;opacity:1;visibility:visible;pointer-events:all;}
   .developer-mode-transition[hidden]{display:none;}
@@ -422,6 +452,9 @@
   .drawer-overlay.open{display:block;}
   .drawer{position:fixed;top:0;right:0;height:100%;width:min(440px,92vw);background:var(--card);border-left:1px solid var(--rule);z-index:201;transform:translateX(100%);transition:transform .22s ease;display:flex;flex-direction:column;}
   .drawer.open{transform:translateX(0);box-shadow:-20px 0 50px rgba(17,17,17,.12);}
+  /* Open panels cover the top strip, a window-drag area on Mac; without
+     opting out, macOS takes clicks on their buttons as window drags. */
+  .drawer.open,.drawer-overlay.open,.styled-scrim.open,[aria-modal="true"].open{-webkit-app-region:no-drag;}
   .drawer-head{padding:22px 26px;border-bottom:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;}
   .drawer-head h2{font-family:var(--serif);font-size:19px;font-weight:700;margin:0;letter-spacing:-0.02em;}
   .drawer-close{appearance:none;border:none;background:none;font-size:20px;color:var(--faint);cursor:pointer;line-height:1;padding:4px;}
@@ -585,23 +618,41 @@
   .app-confirm-overlay{position:fixed;inset:0;background:rgba(17,17,17,.32);z-index:500;display:none;place-items:center;padding:24px;}
   .app-confirm-overlay.open{display:grid;animation:fadein .14s ease-out;}
   .app-confirm-card{background:#FFFFFF;border:1px solid var(--rule);border-radius:16px;box-shadow:0 24px 60px rgba(20,18,15,.22);padding:22px 22px 18px;width:100%;max-width:360px;}
+  .chat-msg-found > .chat-msg-body {animation:chat-msg-found 1.6s ease-out;border-radius:10px;}
+  @keyframes chat-msg-found{0%,40%{box-shadow:0 0 0 3px var(--mia-gold, #E4B43C);}100%{box-shadow:0 0 0 3px transparent;}}
+  .cc-blocked[hidden],.chat-composer[hidden],body.styled-skin .chat-composer[hidden]{display:none;}
+  .cc-blocked{min-height:96px;box-sizing:border-box;display:grid;place-items:center;padding:16px;border-radius:18px;background:var(--paper-2);color:var(--muted);font-size:14px;text-align:center;}
   .app-confirm-msg{font-size:14.5px;line-height:1.5;color:var(--ink);}
   .app-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
   .app-confirm-actions .btn{height:36px;border-radius:10px;}
+  /* Removed from a team: the notice blocks everything; if that team is open it
+     is also blurred, like the loading screen, until you acknowledge. */
+  .hub-removed-overlay{position:fixed;inset:0;z-index:10001;display:grid;place-items:center;padding:24px;background:rgba(17,17,17,.32);animation:fadein .14s ease-out;}
+  .hub-removed-overlay.locked{background:color-mix(in srgb,var(--paper) 55%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);}
+  .hub-removed-title{font-size:15.5px;font-weight:700;line-height:1.35;color:var(--ink);margin-bottom:6px;}
   .btn.app-confirm-danger{background:var(--danger);border-color:var(--danger);color:#FFFFFF;}
   .btn.app-confirm-danger:hover{background:#9A1B0C;border-color:#9A1B0C;}
   .app-prompt-overlay{position:fixed;inset:0;background:rgba(17,17,17,.32);z-index:500;display:none;place-items:center;padding:24px;}
   .app-prompt-overlay.open{display:grid;animation:fadein .14s ease-out;}
+  .chat-image-viewer{position:fixed;inset:0;background:rgba(17,17,17,.72);z-index:520;display:grid;place-items:center;padding:32px;animation:fadein .14s ease-out;}
+  .chat-image-viewer img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.35);}
+  .chat-image-viewer-close{position:absolute;top:16px;right:16px;width:36px;height:36px;border:0;border-radius:18px;background:rgba(255,255,255,.16);color:#fff;font-size:22px;line-height:1;cursor:pointer;}
+  .chat-image-viewer-close:hover{background:rgba(255,255,255,.28);}
   .app-prompt-card{background:#FFFFFF;border:1px solid var(--rule);border-radius:16px;box-shadow:0 24px 60px rgba(20,18,15,.22);padding:22px 22px 18px;width:100%;max-width:520px;}
   .app-prompt-title{font-size:16px;font-weight:600;line-height:1.35;color:var(--ink);margin:0 0 8px;}
   .app-prompt-msg{font-size:14px;line-height:1.5;color:var(--ink);margin:0 0 12px;}
   .app-prompt-input{display:block;width:100%;min-height:112px;resize:vertical;box-sizing:border-box;border:1px solid var(--rule-strong);border-radius:10px;background:#FFFFFF;color:var(--ink);font:inherit;font-size:14px;line-height:1.5;padding:10px 12px;outline:none;}
+  input.app-prompt-input{min-height:0;height:40px;resize:none;padding:0 12px;}
   .app-prompt-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-tint);}
   .app-prompt-note{font-size:12.5px;line-height:1.45;color:var(--muted);margin-top:10px;}
+  .app-prompt-link{background:none;border:0;padding:0;font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer;}
+  .app-prompt-report{margin:10px 0 0;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;border:1px solid var(--rule);border-radius:10px;background:#F7F6F3;color:var(--ink);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px 12px;user-select:text;}
   .app-prompt-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
   .app-prompt-actions .btn{height:36px;border-radius:10px;}
   .btn.app-prompt-submit{background:var(--ink);border-color:var(--ink);color:#FFFFFF;}
   .btn.app-prompt-submit:hover{background:#2B2926;border-color:#2B2926;}
+  .btn.app-prompt-submit:disabled{opacity:.45;cursor:default;}
+  .btn.app-prompt-submit:disabled:hover{background:var(--ink);border-color:var(--ink);}
 
   #benchEditStep{display:flex;flex-direction:column;gap:18px;}
   .bench-edit-snap-row{align-self:center;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;}
@@ -925,6 +976,7 @@
   .mote-avatar-img[role="button"]:focus-visible{outline:2px solid var(--sand-border-focus);border-radius:50%;}
   .bench-detail-mark .mote-avatar-img{width:34px;height:34px;object-fit:contain;}
   .chat-msg-row.is-you .chat-msg-mark{display:none;}
+  .chat-msg-row.is-you .chat-msg-mark-time{display:none;}
   .chat-msg-mark-time{flex:0 0 auto;width:32px;text-align:center;font-family:var(--styled-sans);font-size:9px;color:var(--sand-text-disabled);padding-top:4px;}
   .chat-msg-body{flex:1;min-width:0;max-width:100%;display:flex;flex-direction:column;gap:4px;}
   .chat-msg-row.is-you .chat-msg-body{align-items:flex-end;}
@@ -967,9 +1019,9 @@
   .chat-artifact-preview,.chat-artifact-download{font-family:var(--styled-sans);font-size:12px;line-height:16px;color:var(--sand-text-accent);text-decoration:none;cursor:pointer;}
   .chat-artifact-preview{appearance:none;-webkit-appearance:none;padding:0;border:0;background:transparent;}
   .chat-artifact-preview:hover,.chat-artifact-download:hover{text-decoration:underline;}
-  .chat-msg-row.is-you .chat-artifact-card{background:rgba(255,255,255,.18);color:#fff;border-color:rgba(255,255,255,.25);}
-  .chat-msg-row.is-you .chat-artifact-type{color:rgba(255,255,255,.72);}
-  .chat-msg-row.is-you .chat-artifact-preview,.chat-msg-row.is-you .chat-artifact-download{color:#fff;}
+  /* Cards sit beside the bubble on the page background, not inside it, so
+     your own cards keep the light card colors and only align right. */
+  .chat-msg-row.is-you .chat-artifact-card{margin-left:auto;}
   .chat-msg-file{min-width:0;max-width:100%;}
   .chat-msg-file a{display:inline-flex;align-items:center;gap:6px;max-width:min(100%,520px);padding:7px 10px;box-sizing:border-box;background:var(--sand-fill-bubble-agent,#f0f0f4);border:1px solid rgba(0,0,0,.08);border-radius:8px;font-size:13px;color:var(--sand-text-primary,#222);text-decoration:none;overflow-wrap:anywhere;word-break:normal;}
   .chat-msg-file a:hover{background:var(--sand-fill-bubble-user,#e8e8ee);}
@@ -1006,6 +1058,7 @@
   .chat-msg-row.is-you .chat-msg-text a{color:var(--sand-text-on-primary);}
   .chat-msg-text a:hover{opacity:.85;}
   .chat-msg-retry-row{display:flex;margin-top:6px;}
+  .chat-msg-retry-row .chat-msg-failed{align-self:center;margin-right:8px;font-size:12px;line-height:16px;color:var(--sand-text-danger,#b42318);}
   .chat-msg-retry{appearance:none;-webkit-appearance:none;border:1px solid var(--sand-border-default);border-radius:999px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font-family:var(--styled-sans);font-size:12px;line-height:16px;font-weight:500;padding:5px 12px;cursor:pointer;transition:background .14s ease,border-color .14s ease,color .14s ease;}
   .chat-msg-retry:hover:not(:disabled){background:var(--sand-fill-secondary);border-color:var(--sand-border-focus);}
   .chat-msg-retry:focus-visible{outline:2px solid var(--sand-border-focus);outline-offset:2px;}
@@ -1179,6 +1232,8 @@
   .cc-send:disabled{opacity:.45;cursor:default;}
   .cc-recording-pill{display:none;align-items:center;gap:8px;font-family:var(--styled-sans);font-size:11px;color:#c21d2e;background:#ff263c17;border:1px solid #ff263c2b;border-radius:999px;padding:6px 12px;margin:0 24px 10px;width:fit-content;}
   .cc-recording-pill.visible{display:flex;}
+  .cc-recording-pill.notice{color:var(--sand-text-secondary);background:var(--sand-fill-secondary);border-color:transparent;}
+  .cc-recording-pill.notice .cc-recording-dot{display:none;}
   .cc-recording-dot{width:7px;height:7px;border-radius:50%;background:#ff263c;animation:recPulse 1s ease-in-out infinite;}
   @keyframes recPulse{0%,100%{opacity:1;}50%{opacity:.25;}}
 
@@ -1186,9 +1241,77 @@
      20% of the shell by default, bg #f7f7f7, 1px right border. Rows: 54px tall, radius 10,
      padding 8, gap 8; a 40px avatar, 14/500 name + 12px secondary time,
      13px secondary one-line preview; selected bg #7777772b. */
-  .chat-layout{display:grid;grid-template-columns:var(--sand-sidebar-width) minmax(0,1fr);gap:0;flex:1;min-height:0;height:100%;width:100%;font-family:var(--styled-sans);background:var(--sand-bg-base);border:1px solid var(--sand-border-subtle);border-radius:14px;overflow:hidden;}
-  .chat-sidebar{width:auto;display:flex;flex-direction:column;min-height:0;background:var(--sand-bg-subtle);border-right:1px solid var(--sand-border-subtle);overflow:hidden;position:relative;}
-  .chat-sidebar-resize{display:none;position:absolute;z-index:20;top:0;right:0;bottom:0;width:10px;cursor:col-resize;touch-action:none;}
+  .chat-layout{display:grid;grid-template-columns:calc(var(--sand-sidebar-width) + var(--workspace-rail-width)) minmax(0,1fr);gap:0;flex:1;min-height:0;height:100%;width:100%;font-family:var(--styled-sans);background:var(--sand-bg-base);border:1px solid var(--sand-border-subtle);border-radius:14px;overflow:hidden;}
+  .chat-sidebar{width:auto;display:flex;flex-direction:column;min-height:0;background:var(--sand-bg-subtle);border-right:1px solid var(--sand-border-default);overflow:hidden;position:relative;}
+  /* Workspace rail: Solo, then every team, then +. It sits inside the
+     sidebar's left edge and starts below the macOS window buttons. */
+  .chat-sidebar{padding-left:var(--workspace-rail-width);box-sizing:border-box;}
+  .workspace-rail{position:absolute;top:0;bottom:0;left:0;width:var(--workspace-rail-width);box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0;background:var(--sand-bg-base);border-right:1px solid var(--sand-border-default);z-index:3;}
+  html.mac-inset-titlebar .workspace-rail{padding-top:44px;-webkit-app-region:drag;}
+  .workspace-rail-tile{appearance:none;position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;border:0;background:transparent;cursor:pointer;-webkit-app-region:no-drag;}
+  .workspace-rail-mark{display:flex;align-items:center;justify-content:center;width:36px;height:36px;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:9px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:700 12px/1 var(--styled-sans);letter-spacing:.02em;transition:border-color .12s ease,background .12s ease;}
+  .workspace-rail-mark svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+  .workspace-rail-tile:hover .workspace-rail-mark{background:var(--sand-fill-secondary);}
+    /* A team you're invited to but haven't opened yet: a glowing gold frame
+       says "this is new" until you open it and join. */
+  .workspace-rail-tile.invited .workspace-rail-mark{border-color:var(--mia-gold);box-shadow:0 0 0 1px var(--mia-gold),0 0 10px 1px color-mix(in srgb,var(--mia-gold) 55%,transparent);animation:workspace-invite-glow 1.8s ease-in-out infinite;}
+  @keyframes workspace-invite-glow{50%{box-shadow:0 0 0 1px var(--mia-gold-hi),0 0 16px 3px color-mix(in srgb,var(--mia-gold-hi) 70%,transparent);}}
+  @media (prefers-reduced-motion: reduce){.workspace-rail-tile.invited .workspace-rail-mark{animation:none;}}
+  .workspace-rail-tile.active .workspace-rail-mark{border-color:var(--sand-text-primary);box-shadow:inset 0 0 0 1px var(--sand-text-primary);}
+  .workspace-rail-tile.active::before{content:"";position:absolute;left:-16px;top:10px;width:4px;height:20px;border-radius:0 4px 4px 0;background:var(--sand-text-primary);}
+  .workspace-rail-add .workspace-rail-mark{border-style:dashed;background:transparent;color:var(--sand-text-secondary);font-size:18px;font-weight:400;}
+  .workspace-rail-sep{width:28px;flex:0 0 auto;border-top:1px solid var(--sand-border-subtle);}
+  .workspace-rail-name{position:absolute;left:calc(100% + 10px);top:50%;transform:translateY(-50%);padding:5px 9px;border-radius:7px;background:var(--sand-text-primary);color:var(--sand-bg-base);font:600 12px/16px var(--styled-sans);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .1s ease;z-index:60;}
+  .workspace-rail-tile:hover .workspace-rail-name,.workspace-rail-tile:focus-visible .workspace-rail-name{opacity:1;}
+  .workspace-rail-spacer{flex:1 1 auto;}
+  .workspace-rail-util .workspace-rail-mark{border-color:transparent;background:transparent;color:var(--sand-text-secondary);}
+  .workspace-rail-util:hover .workspace-rail-mark,.workspace-rail-util.open .workspace-rail-mark{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
+  .workspace-rail-account .workspace-rail-mark{width:32px;height:32px;border:0;border-radius:50%;overflow:hidden;}
+  .workspace-rail-account .workspace-rail-mark .human-avatar-initials{width:100%;height:100%;display:flex;align-items:center;justify-content:center;}
+  .workspace-rail-account[aria-expanded="true"] .workspace-rail-name,.workspace-rail-util.open .workspace-rail-name{opacity:0;}
+  .workspace-rail .chat-acct-menu{bottom:12px;left:calc(100% + 6px);}
+  /* The menu sits in the rail's window-drag area; opt out or macOS
+     takes its clicks as window drags. */
+  .workspace-rail .chat-acct-menu{-webkit-app-region:no-drag;}
+  .rail-notifications{position:absolute;bottom:12px;left:calc(100% + 6px);width:260px;box-sizing:border-box;padding:12px 14px;background:var(--sand-bg-elevated);border:1px solid var(--sand-border-default);border-radius:12px;box-shadow:var(--sand-shadow-popover);z-index:60;font-family:var(--styled-sans);-webkit-app-region:no-drag;}
+  .rail-notifications[hidden]{display:none;}
+  .rail-notifications-title{font-size:13px;font-weight:600;color:var(--sand-text-primary);margin-bottom:6px;}
+  .rail-notifications-empty{font-size:12px;line-height:17px;color:var(--sand-text-secondary);}
+  /* One bar for the three views. Every view is named while the names fit;
+     a narrower sidebar names only the selected one. */
+  .sidebar-views{display:flex;gap:2px;margin:0 12px 10px;padding:3px;flex:0 0 auto;border:1px solid var(--sand-border-subtle);border-radius:10px;background:var(--sand-bg-elevated);container-type:inline-size;}
+  .sidebar-view-btn{appearance:none;flex:1 1 auto;display:flex;align-items:center;justify-content:center;gap:5px;height:28px;min-width:32px;box-sizing:border-box;padding:0 6px;border:0;border-radius:7px;background:transparent;color:var(--sand-text-secondary);font:500 12px/1 var(--styled-sans);white-space:nowrap;cursor:pointer;}
+  .sidebar-view-btn svg{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+  .sidebar-view-btn{position:relative;}
+  .sidebar-view-count{position:absolute;top:-3px;right:-3px;min-width:14px;height:14px;box-sizing:border-box;padding:0 4px;border-radius:7px;background:var(--sand-text-secondary);color:var(--sand-bg-base);font:600 9px/14px var(--styled-sans);text-align:center;pointer-events:none;}
+  .sidebar-view-btn.active .sidebar-view-count{background:var(--sand-text-primary);}
+  .sidebar-view-btn:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
+  .sidebar-view-btn.active{background:var(--sand-fill-accent-subtle);color:var(--sand-text-accent);cursor:default;}
+  @container (max-width: 250px){
+    .sidebar-view-btn{flex:0 0 auto;}
+    .sidebar-view-btn.active{flex:1 1 auto;}
+    .sidebar-view-btn:not(.active) .sidebar-view-label{display:none;}
+  }
+  .sidebar-new-chat{appearance:none;display:flex;align-items:center;gap:8px;flex:0 0 auto;height:34px;margin:0 12px 10px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:9px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:500 13px/1 var(--styled-sans);cursor:pointer;text-align:left;}
+  .sidebar-new-chat svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+  .sidebar-new-chat:hover{background:var(--sand-fill-secondary);}
+  .chat-section-icon-btn{appearance:none;border:0;background:none;padding:0;width:18px;height:18px;border-radius:5px;color:var(--sand-text-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer;}
+  .chat-section-icon-btn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+  .chat-section-icon-btn:hover,.chat-section-icon-btn.active{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
+  /* Upcoming rows sit on the same grid as a bot row: a dashed 40px mark in
+     the avatar column, then a title and one muted line. */
+  .sidebar-upcoming-row{appearance:none;display:flex;align-items:center;gap:10px;width:100%;height:54px;margin:2px 0 0;padding:7px 8px;box-sizing:border-box;border:0;background:none;color:var(--sand-text-secondary);font-family:var(--styled-sans);text-align:left;cursor:default;}
+  .sidebar-upcoming-mark{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:40px;height:40px;box-sizing:border-box;border:1px dashed var(--sand-border-default);border-radius:10px;}
+  .sidebar-upcoming-row svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+  .sidebar-upcoming-row .row-text{display:flex;flex-direction:column;min-width:0;}
+  .sidebar-upcoming-row .row-label{font-size:14px;line-height:18px;font-weight:var(--sand-font-weight-medium);}
+  .sidebar-upcoming-row .row-preview{font-size:13px;line-height:17px;color:var(--sand-text-tertiary);}
+  .chat-recents-group.is-collapsed .sidebar-upcoming-row{display:none;}
+  .workspace-title{min-width:0;padding:5px 7px;}
+  .workspace-title .mia-company-name{display:block;overflow:hidden;text-overflow:ellipsis;}
+  .chat-sidebar-resize{display:none;position:absolute;z-index:20;top:0;right:-6px;bottom:0;width:10px;cursor:col-resize;touch-action:none;}
+  /* right:0 is the padding edge, inside the 1px border; -6px puts the
+     2px line over the border itself. */
   .chat-sidebar-resize::after{content:"";position:absolute;top:0;bottom:0;left:4px;width:2px;background:transparent;border-radius:2px;transition:background .14s ease;}
   .chat-sidebar-resize:hover::after,body.chat-sidebar-resizing .chat-sidebar-resize::after{background:var(--sand-fill-accent);}
   body.chat-sidebar-resizing{cursor:col-resize;user-select:none;}
@@ -1246,15 +1369,24 @@
   .chat-sidebar-scroll{flex:1;min-height:0;overflow:auto;padding:0 8px 12px;display:flex;flex-direction:column;gap:12px;}
   .chat-recents-group{display:flex;flex-direction:column;gap:1px;position:relative;}
   .chat-recents-group[hidden]{display:none;}
-  .chat-recents-head{display:flex;align-items:center;gap:8px;padding:6px 8px 4px;}
+  /* Section headers read like Codex: the title is row-sized and flush with
+     the row's left edge, the chevron follows it and shows on hover (or while
+     the section is folded), and the actions end on the right edge. */
+  .chat-recents-head{display:flex;align-items:center;gap:6px;padding:10px 8px 4px;}
+  .chat-recents-head > .chat-recents-title{order:0;}
+  .chat-recents-head > .chat-recents-count{order:1;}
+  .chat-recents-head > .chat-section-toggle{order:2;opacity:0;transition:opacity .12s ease;}
+  .chat-recents-head:hover > .chat-section-toggle,.chat-recents-head > .chat-section-toggle:focus-visible,.chat-recents-head > .chat-section-toggle[aria-expanded="false"]{opacity:1;}
+  .chat-recents-head > .chat-section-icon-btn,.chat-recents-head > .chat-dm-add-btn{order:3;margin-left:auto;}
+  .chat-recents-head > .chat-section-icon-btn + .chat-dm-add-btn{margin-left:-6px;}
   .chat-recents-head.filtered-empty{display:none;}
   .chat-section-toggle{appearance:none;border:0;background:transparent;color:var(--sand-text-secondary);width:18px;height:18px;padding:0;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:0 0 auto;}
   .chat-section-toggle:hover,.chat-section-toggle:focus-visible{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);outline:none;}
   .chat-section-chevron{width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg) translate(-1px,-1px);transition:transform .14s ease;}
   .chat-section-toggle[aria-expanded="false"] .chat-section-chevron{transform:rotate(-45deg) translate(-1px,-1px);}
   .chat-recents-group.is-collapsed > .chat-recents,.chat-recents-group.is-collapsed > .chat-dm-add-popover{display:none;}
-  .chat-recents-title{font-family:var(--styled-sans);font-size:11px;font-weight:500;letter-spacing:.02em;text-transform:none;color:var(--sand-text-secondary);}
-  .chat-recents-count{font-family:var(--styled-sans);font-size:11px;color:var(--sand-text-tertiary);margin-left:auto;}
+  .chat-recents-title{font-family:var(--styled-sans);font-size:14px;font-weight:500;line-height:18px;text-transform:none;color:var(--sand-text-secondary);}
+  .chat-recents-count{font-family:var(--styled-sans);font-size:13px;color:var(--sand-text-tertiary);}
   .chat-dm-add-btn{appearance:none;border:none;background:none;padding:0;width:18px;height:18px;border-radius:5px;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:13px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .12s ease,color .12s ease;}
   .chat-dm-add-btn:hover,.chat-dm-add-btn:focus-visible{background:var(--sand-fill-accent-subtle);color:var(--sand-text-accent);outline:none;}
   .chat-dm-add-popover{display:none;position:absolute;top:26px;right:8px;width:230px;max-height:260px;overflow-y:auto;background:var(--sand-bg-elevated);border:1px solid var(--sand-border-default);border-radius:12px;padding:6px;box-shadow:var(--sand-shadow-popover);z-index:140;}
@@ -1299,7 +1431,7 @@
   .chat-channel-members-unavailable{width:24px;height:24px;border:1px dashed var(--sand-border-default);border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--sand-text-tertiary);font:500 12px/1 var(--styled-sans);}
   .ch-roster-unavailable{cursor:default;color:var(--sand-text-tertiary);}
   .chat-row-mark.tile{width:40px;height:40px;border-radius:10px;background:var(--sand-supplementary5);color:#fff;font-family:var(--styled-sans);font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;overflow:hidden;}
-  .chat-row-mark.tile.human{position:relative;background:#eeeeee;color:var(--sand-text-secondary);font-size:12px;font-weight:500;}
+  .chat-row-mark.tile.human{position:relative;background:transparent;color:var(--sand-text-secondary);font-size:12px;font-weight:500;}
   .human-avatar-initials{position:relative;z-index:1;display:flex;align-items:center;justify-content:center;width:100%;height:100%;border-radius:50%;box-sizing:border-box;line-height:1;color:#fff;font-weight:600;}
   .human-avatar-initials.human-avatar-tone-0{background:var(--sand-fill-accent);}
   .human-avatar-initials.human-avatar-tone-1{background:var(--sand-fill-primary);}
@@ -1805,6 +1937,11 @@
   body.styled-skin #channelNameDrawer .styled-channel-field input::placeholder{color:var(--sand-text-tertiary);}
   body.styled-skin #channelNameDrawer .styled-channel-field input:focus{border-color:var(--sand-border-focus);box-shadow:0 0 0 3px var(--sand-fill-accent-subtle);}
   body.styled-skin #channelNameDrawer .styled-channel-field small{display:block;margin-top:8px;color:var(--sand-text-secondary);font:400 11px/16px var(--styled-sans);}
+  body.styled-skin #channelNameDrawer .styled-channel-private{display:flex;align-items:flex-start;gap:10px;margin:0;cursor:pointer;}
+  body.styled-skin #channelNameDrawer .styled-channel-private[hidden]{display:none;}
+  body.styled-skin #channelNameDrawer .styled-channel-private input{margin:2px 0 0;accent-color:var(--sand-text-primary);}
+  body.styled-skin #channelNameDrawer .styled-channel-private strong{display:block;color:var(--sand-text-primary);font:600 12px/17px var(--styled-sans);}
+  body.styled-skin #channelNameDrawer .styled-channel-private small{display:block;color:var(--sand-text-secondary);font:400 11px/16px var(--styled-sans);}
   body.styled-skin #channelNameDrawer .styled-channel-actions{align-items:center;justify-content:flex-end;min-height:68px;padding:14px 20px;border-top:1px solid var(--sand-border-subtle);background:var(--sand-bg-base);}
   body.styled-skin #channelNameDrawer .styled-channel-actions .btn{height:34px;border-radius:8px;padding:0 13px;font:500 12px/16px var(--styled-sans);cursor:pointer;}
   body.styled-skin #channelNameDrawer .styled-channel-cancel{border:1px solid var(--sand-border-default);background:var(--sand-bg-base);color:var(--sand-text-primary);}
@@ -2167,43 +2304,20 @@
   .mia-lockup-word{font-family:var(--styled-sans);font-weight:600;font-size:15px;letter-spacing:-.02em;color:var(--sand-text-primary);}
   .mia-company-lockup{display:none;align-items:center;flex:0 0 auto;}
   .mia-company-name{font-family:var(--styled-sans);font-weight:700;font-size:16px;letter-spacing:-.025em;color:var(--sand-text-primary);white-space:nowrap;}
-  .workspace-switcher-wrap{position:relative;min-width:0;}
-  .workspace-switcher{appearance:none;display:flex;align-items:center;gap:6px;max-width:100%;min-width:0;padding:5px 7px;border:0;border-radius:8px;background:transparent;color:var(--sand-text-primary);font-family:var(--styled-sans);cursor:pointer;}
-  .workspace-switcher:hover,.workspace-switcher[aria-expanded="true"]{background:var(--sand-fill-secondary);}
-  .workspace-switcher-copy{display:block;min-width:0;max-width:230px;overflow:hidden;}
-  .workspace-switcher .mia-company-name{display:block;overflow:hidden;text-overflow:ellipsis;}
-  .workspace-switcher-chevron{display:block;flex:0 0 auto;width:14px;height:14px;fill:none;stroke:var(--sand-text-secondary);stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;transition:transform .12s ease;}
-  .workspace-switcher[aria-expanded="true"] .workspace-switcher-chevron{transform:rotate(180deg);}
-  .workspace-switcher-menu{display:none;position:absolute;top:calc(100% + 5px);left:-4px;width:264px;max-width:calc(100vw - 24px);box-sizing:border-box;padding:7px;background:var(--sand-bg-elevated);border:1px solid var(--sand-border-default);border-radius:12px;box-shadow:var(--sand-shadow-popover);z-index:50;}
-  .workspace-switcher-menu.open{display:block;}
-  .workspace-switcher-label{padding:4px 9px 5px;color:var(--sand-text-secondary);font:600 10px/14px var(--styled-sans);letter-spacing:.08em;text-transform:uppercase;}
-  .workspace-switcher-shared-label{margin-top:4px;padding-top:8px;border-top:1px solid var(--sand-border-subtle);}
-  .workspace-switcher-option{appearance:none;display:flex;align-items:center;gap:9px;width:100%;min-width:0;padding:8px 9px;border:0;border-radius:8px;background:transparent;color:var(--sand-text-primary);text-align:left;cursor:pointer;font-family:var(--styled-sans);}
-  .workspace-switcher-option:hover,.workspace-switcher-option.active{background:var(--sand-fill-ghost-hover);}
-  .workspace-switcher-option.active{box-shadow:inset 2px 0 0 var(--sand-fill-accent);}
-  .workspace-switcher-option-mark{display:flex;align-items:center;justify-content:center;width:25px;height:25px;flex:0 0 25px;border-radius:7px;background:var(--sand-fill-secondary);color:var(--sand-text-secondary);font-size:11px;font-weight:700;line-height:1;}
-  .workspace-switcher-option[data-workspace-key="solo"] .workspace-switcher-option-mark{font-size:18px;font-weight:400;}
-  .workspace-switcher-option-copy{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;}
-  .workspace-switcher-option-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:17px;font-weight:600;}
-  .workspace-switcher-option-copy small{color:var(--sand-text-secondary);font-size:11px;line-height:14px;}
-  .workspace-switcher-check{flex:0 0 auto;color:var(--sand-fill-accent);font-size:14px;line-height:1;opacity:0;}
-  .workspace-switcher-option.active .workspace-switcher-check{opacity:1;}
   .mia-mark circle{fill:var(--mia-dot);transform-box:fill-box;transform-origin:center;}
+  .mia-mark circle.gold{fill:var(--mia-gold);}
   html[data-theme="developer"] .mia-mark{
     --mia-dot:rgba(255,255,255,.78);
   }
   html[data-theme="developer"] .mia-mark circle{
     fill:var(--mia-dot);
   }
+  html[data-theme="developer"] .mia-mark circle.gold{fill:var(--mia-gold);}
   body.styled-skin .mia-lockup{display:inline-flex;}
   body.styled-skin .mia-company-lockup{display:inline-flex;}
   body.styled-skin .chat-new-btn-wrap .mia-lockup{margin-right:auto;padding-left:4px;}
   body.styled-skin .chat-new-btn-wrap .mia-lockup-word{font-size:15px;}
   body.styled-skin .chat-new-btn-wrap .mia-company-lockup{margin-right:auto;padding-left:4px;}
-  @media (max-width:760px){
-    .workspace-switcher-copy{max-width:calc(100vw - 150px);}
-    .workspace-switcher-menu{left:0;width:250px;}
-  }
   body.styled-skin .login-mark-row{gap:0;}
   body.styled-skin .login-mark-row .mia-lockup-word{font-size:18px;}
   body.styled-skin .login-mark-row .topbar-mark,
@@ -2227,8 +2341,8 @@
   /* Windowed width contract: the two side rails keep their tracks; only the
      conversation column absorbs viewport reduction. This also prevents an
      open info/plugins pane from being pushed past the right edge. */
-  body.styled-skin .chat-layout{grid-template-columns:var(--sand-sidebar-width) minmax(0,1fr);min-width:0;height:100%;border:0;border-radius:0;}
-  body.styled-skin .chat-sidebar{min-width:0;background:var(--sand-bg-subtle);border-right:1px solid var(--sand-border-subtle);overflow:visible;}
+  body.styled-skin .chat-layout{grid-template-columns:calc(var(--sand-sidebar-width) + var(--workspace-rail-width)) minmax(0,1fr);min-width:0;height:100%;border:0;border-radius:0;}
+  body.styled-skin .chat-sidebar{min-width:0;background:var(--sand-bg-subtle);border-right:1px solid var(--sand-border-default);overflow:visible;}
   body.styled-skin .chat-sidebar-resize{display:block;}
   body.styled-skin .chat-new-btn-wrap{height:48px;padding:10px 12px 8px;display:flex;justify-content:flex-end;}
   body.styled-skin .chat-sidebar-tool-btn{appearance:none;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--sand-text-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer;}
@@ -2265,10 +2379,10 @@
   body.styled-skin .chat-recents-group{gap:2px;}
   body.styled-skin .chat-recents-group:first-child{order:1;margin-top:0;}
   body.styled-skin .chat-recents-group:nth-child(2){order:2;}
-  body.styled-skin .chat-recents-group:nth-child(2) .chat-dm-add-btn{display:none;}
-  body.styled-skin .chat-recents-head{padding:6px 8px 4px;}
-  body.styled-skin .chat-recents-title{font-size:11px;font-weight:400;line-height:16px;color:var(--sand-text-secondary);}
-  body.styled-skin .chat-recents-count{display:none;}
+  body.styled-skin #chatBotsGroup{order:3;}
+  body.styled-skin .chat-recents-head{padding:10px 8px 4px;}
+  body.styled-skin .chat-recents-title{font-size:14px;font-weight:500;line-height:18px;color:var(--sand-text-secondary);}
+  body.styled-skin .chat-recents-count{display:inline;font-size:13px;line-height:18px;}
   body.styled-skin .chat-recent-row{min-height:54px;height:54px;border-radius:11px;padding:7px 8px;gap:10px;}
   body.styled-skin .chat-recent-row.active{background:var(--sand-agent-selected-fill);}
   body.styled-skin .chat-row-members{width:50px;height:40px;flex-basis:50px;}
@@ -2279,6 +2393,7 @@
   body.styled-skin .chat-recent-row .row-line1{gap:6px;min-width:0;line-height:18px;}
   body.styled-skin .chat-recent-row .row-label{font-size:14px;line-height:18px;}
   body.styled-skin .chat-recent-row .row-preview{font-size:13px;line-height:17px;color:var(--sand-text-secondary);}
+  body.styled-skin .chat-recent-row .row-preview.empty{color:var(--sand-text-tertiary);}
   body.styled-skin .chat-dm-time{font-size:12px;color:var(--sand-text-secondary);}
   body.styled-skin .chat-activity-dot{margin-left:auto;}
   body.styled-skin .chat-sidebar-empty{font-size:12px;padding:8px 9px;color:var(--sand-text-secondary);}
@@ -2294,7 +2409,7 @@
   body.styled-skin .chat-app{min-width:0;min-height:0;overflow:hidden;background:var(--sand-bg-base);}
   body.styled-skin .chat-main-col{flex:1 1 auto;width:auto;min-width:0;min-height:0;overflow:hidden;background:var(--sand-bg-base);}
   body.styled-skin .chat-info-pane.open{flex:0 0 var(--sand-info-pane-width);width:var(--sand-info-pane-width);min-width:0;max-width:none;min-height:0;}
-  body.styled-skin .channel-header{height:52px;min-height:52px;padding:0 16px;border-bottom:1px solid var(--sand-border-subtle);}
+  body.styled-skin .channel-header{height:52px;min-height:52px;padding:0 16px;border-bottom:1px solid var(--sand-border-subtle);background:var(--paper);}
   body.styled-skin .ch-title-row{gap:8px;}
   body.styled-skin .ch-title-caret{display:none;}
   body.styled-skin .ch-mark.dm{width:24px;height:24px;border-radius:0;background:none;overflow:visible;}
@@ -2490,6 +2605,36 @@
   body.styled-skin .manage-agent-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 14px/18px var(--styled-sans);color:var(--sand-text-primary);}
   body.styled-skin .manage-agent-working-dot{width:6px;height:6px;flex:0 0 6px;}
   body.styled-skin .manage-agent-description{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 12px/16px var(--styled-sans);color:var(--sand-text-secondary);}
+  .hub-channel-more{display:none;flex:0 0 auto;margin-left:auto;width:18px;height:16px;line-height:14px;text-align:center;border-radius:5px;color:var(--sand-text-secondary);font-size:14px;}
+  .hub-channel-row:hover .hub-channel-more,.hub-channel-row.active .hub-channel-more{display:block;}
+  .hub-channel-more:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
+  /* Team sidebar: Channels and Direct messages each get their own header. */
+  .chat-recents-group.hub-sections > .chat-recents-head{display:none !important;}
+  .hub-sidebar-section{margin-top:6px;}
+  .hub-sidebar-section + .hub-sidebar-section{margin-top:12px;}
+  .hub-section-head .chat-recents-title{min-width:0;}
+  body.styled-skin .chat-recents-group .hub-section-head .hub-section-add{display:flex;}
+  .hub-sidebar-section.is-collapsed > .hub-section-rows{display:none;}
+  .hub-invite-row{display:flex;flex-direction:column;gap:6px;margin:2px 0 6px;padding:8px;border-radius:10px;background:var(--sand-fill-ghost-hover);font:400 13px/18px var(--styled-sans);color:var(--sand-text-primary);}
+  .hub-invite-actions{display:flex;gap:6px;}
+  .hub-invite-actions .btn{height:26px;border-radius:7px;padding:0 10px;font-size:12px;}
+  .hub-list-card{max-width:440px;}
+  .hub-list-filter{display:block;width:100%;box-sizing:border-box;border:1px solid var(--rule-strong);border-radius:10px;background:#FFFFFF;color:var(--ink);font:inherit;font-size:14px;padding:8px 12px;outline:none;}
+  .hub-list-filter:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-tint);}
+  .hub-list-rows{margin-top:10px;max-height:320px;overflow:auto;display:flex;flex-direction:column;}
+  .hub-list-row{display:flex;align-items:center;gap:10px;padding:8px 4px;border-top:1px solid var(--rule);}
+  .hub-list-row:first-child{border-top:0;}
+  .hub-list-copy{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .hub-list-label{font-size:14px;line-height:20px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .hub-list-detail{font-size:12px;line-height:16px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .btn.hub-list-action{height:30px;border-radius:8px;padding:0 12px;flex:0 0 auto;}
+  .hub-list-empty{padding:14px 4px;font-size:13px;color:var(--muted);}
+  body.styled-skin .hub-people-context{padding:0 4px 10px;font:400 12px/16px var(--styled-sans);color:var(--sand-text-secondary);}
+  body.styled-skin .hub-people-role{flex:0 0 auto;font:500 10px/14px var(--styled-sans);color:var(--sand-text-secondary);}
+  body.styled-skin .hub-bot-row{display:flex;align-items:center;gap:4px;}
+  body.styled-skin .hub-bot-row .manage-agent-open{flex:1;min-width:0;}
+  body.styled-skin .hub-bot-row > .manage-agent-copy{flex:1;min-width:0;padding:6px 4px;}
+  body.styled-skin .manage-agent-description.hub-bot-pending{color:var(--sand-warning-fg);}
   body.styled-skin .manage-agent-menu-wrap{position:relative;flex:0 0 28px;align-self:center;}
   body.styled-skin .manage-agent-more{appearance:none;width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--sand-text-secondary);font:20px/24px var(--styled-sans);cursor:pointer;display:flex;align-items:center;justify-content:center;}
   body.styled-skin .manage-agent-more:hover{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
@@ -2617,12 +2762,7 @@
   body.browser-collab-mode .automations-overlay.open{right:var(--browser-mia-pane-width);}
   .automations-window{position:absolute;inset:0;display:flex;flex-direction:column;min-width:0;}
   .automations-window{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;}
-  .automations-tabs-row{display:flex;align-items:flex-end;gap:8px;min-height:40px;padding:6px 0 0 16px;background:#dfe3e7;flex:none;}
-  .automations-tab{position:relative;display:flex;align-items:center;gap:8px;height:34px;margin-left:8px;padding:0 16px 0 12px;border-radius:10px 10px 0 0;background:#fff;color:#1f1f1f;font-size:12px;line-height:18px;}
-  .automations-tab::before,.automations-tab::after{content:"";position:absolute;bottom:0;width:10px;height:10px;pointer-events:none;}
-  .automations-tab::before{left:-10px;background:radial-gradient(circle at 0 0,transparent 10px,#fff 10.5px);}
-  .automations-tab::after{right:-10px;background:radial-gradient(circle at 100% 0,transparent 10px,#fff 10.5px);}
-  .automations-tab svg{width:16px;height:16px;fill:none;stroke:#474747;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+  .automations-tabs-row{display:flex;align-items:flex-end;gap:8px;min-height:52px;padding:18px 0 0 16px;background:#dfe3e7;flex:none;}
   .automations-tabs-row #automationsCloseBtn{align-self:center;margin:0 8px 0 auto;width:32px;height:32px;border-radius:50%;color:#474747;}
   .automations-tabs-row #automationsCloseBtn:hover{background:#0000000f;color:#1f1f1f;}
   .automations-bar{display:flex;align-items:center;gap:8px;height:42px;padding:4px 8px;background:#fff;border-bottom:1px solid #e3e3e3;flex:none;}
@@ -2630,7 +2770,7 @@
   .automations-bar .local-browser-btn{width:32px;height:32px;border-radius:50%;color:#474747;}
   .automations-bar .local-browser-btn:hover{background:#0000000f;color:#1f1f1f;}
   html.mac-inset-titlebar .automations-tabs-row{padding-left:76px;-webkit-app-region:drag;}
-  html.mac-inset-titlebar .automations-tabs-row button{-webkit-app-region:no-drag;}
+  html.mac-inset-titlebar .automations-tabs-row button,html.mac-inset-titlebar .automations-tabs-row .mia-tab{-webkit-app-region:no-drag;}
   .automations-bar-btn[aria-expanded="true"]{color:#0b57d0!important;}
   .automations-summary{flex:1;min-width:0;font-size:13px;color:var(--sand-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .automations-add-wrap{position:relative;flex:none;}
@@ -2663,8 +2803,6 @@
   .automations-live{display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:#1d9e75;vertical-align:1px;animation:automations-live 1.6s ease-in-out infinite;}
   @keyframes automations-live{50%{opacity:.35;}}
   .automations-empty{margin:60px auto;max-width:360px;text-align:center;font-size:14px;color:var(--sand-text-secondary);line-height:1.5;}
-  .automations-back{appearance:none;border:0;background:transparent;padding:4px 0;margin:10px 0 6px;font:13px var(--styled-sans);color:var(--sand-text-tertiary);cursor:pointer;}
-  .automations-back:hover{color:var(--sand-text-primary);}
   .automations-detail-head{display:flex;align-items:flex-start;gap:12px;margin:6px 0 14px;}
   .automations-detail-title{font-size:20px;font-weight:500;line-height:1.3;}
   .automations-detail-sub{margin-top:3px;font-size:13px;color:var(--sand-text-tertiary);}
@@ -2752,18 +2890,18 @@
   .native-browser-tabs-row{display:flex;align-items:center;background:#ededeb;flex:none;}
   .native-browser-tabs{display:flex;align-items:center;gap:4px;min-height:36px;padding:4px 8px;background:#ededeb;overflow-x:auto;flex:1;min-width:0;}
   .native-browser-tabs-row .local-browser-close-btn{flex:none;margin:0 6px 0 2px;}
-  .native-browser-tab{display:flex;flex:0 1 190px;min-width:100px;max-width:220px;border-radius:7px;background:#e1e1df;}
-  .native-browser-tab.active{background:#fff;box-shadow:0 1px 3px #0000000d;}
-  .native-browser-tab.dragging{opacity:.45;}
-  .native-browser-tab.drop-target{box-shadow:inset 2px 0 0 #7a7a76;}
-  .native-browser-tab button,.native-browser-new-tab{appearance:none;border:0;background:transparent;color:#30302e;padding:6px 9px;font:12px/18px var(--styled-sans);cursor:pointer;}
-  .native-browser-tab button[role="tab"]{display:flex;align-items:center;gap:6px;min-width:0;flex:1;text-align:left;}
-  .native-browser-tab-icon{width:14px;height:14px;flex:none;border-radius:3px;}
-  .native-browser-tab-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .native-browser-tab button.native-browser-tab-close{flex:none;padding:6px;width:27px;}
+  .mia-tab{display:flex;flex:0 1 190px;min-width:100px;max-width:220px;border-radius:7px;background:#e1e1df;}
+  .mia-tab.active{background:#fff;box-shadow:0 1px 3px #0000000d;}
+  .mia-tab.dragging{opacity:.45;}
+  .mia-tab.drop-target{box-shadow:inset 2px 0 0 #7a7a76;}
+  .mia-tab button,.native-browser-new-tab{appearance:none;border:0;background:transparent;color:#30302e;padding:6px 9px;font:12px/18px var(--styled-sans);cursor:pointer;}
+  .mia-tab button[role="tab"]{display:flex;align-items:center;gap:6px;min-width:0;flex:1;text-align:left;}
+  .mia-tab-icon{width:14px;height:14px;flex:none;border-radius:3px;}
+  .mia-tab-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .mia-tab button.mia-tab-close{flex:none;padding:6px;width:27px;}
   .native-browser-new-tab{flex:none;font-size:18px;border-radius:6px;}
-  .native-browser-tab button:hover,.native-browser-new-tab:hover{background:#0000000a;border-radius:6px;}
-  .native-browser-tab button:focus-visible,.native-browser-new-tab:focus-visible{outline:2px solid var(--sand-fill-accent);outline-offset:-2px;}
+  .mia-tab button:hover,.native-browser-new-tab:hover{background:#0000000a;border-radius:6px;}
+  .mia-tab button:focus-visible,.native-browser-new-tab:focus-visible{outline:2px solid var(--sand-fill-accent);outline-offset:-2px;}
   .native-browser-find{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-height:38px;padding:4px 12px;background:#f7f7f5;flex:none;border-bottom:1px solid #ddd;font-size:12px;}
   .native-browser-find[hidden]{display:none;}
   .native-browser-find input{min-width:0;width:210px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font:12px var(--styled-sans);}
@@ -2862,41 +3000,47 @@
   /* Browser frame: a gray tab strip whose active tab merges into
      a white toolbar, a pill-shaped address field, and minimal window controls. */
   .local-browser-overlay,.local-browser-window{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;}
-  .native-browser-tabs-row{background:#dfe3e7;padding-top:6px;align-items:flex-end;}
+  /* 52px, the height of the side panes' headers, so all three line up. */
+  .native-browser-tabs-row{min-height:52px;background:#dfe3e7;padding-top:18px;align-items:flex-end;}
   .native-browser-tabs{gap:0;min-height:34px;padding:0 8px;background:transparent;align-items:flex-end;overflow-y:hidden;scrollbar-width:none;}
   .native-browser-tabs::-webkit-scrollbar{display:none;}
   .native-browser-groups-more{appearance:none;flex:none;align-self:center;width:28px;height:24px;margin:0 2px;border:0;border-radius:6px;background:transparent;color:#3c4043;font:600 16px/24px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;cursor:pointer;}
   .native-browser-groups-more:hover{background:rgba(60,64,67,.12);}
   .native-browser-groups-more[hidden]{display:none;}
-  .native-browser-tab{position:relative;isolation:isolate;flex:0 1 220px;min-width:32px;container-type:inline-size;max-width:240px;height:34px;align-items:center;border-radius:10px 10px 0 0;background:transparent;box-shadow:none;}
+  .mia-tab{position:relative;isolation:isolate;flex:0 5 220px;min-width:32px;container-type:inline-size;max-width:240px;height:34px;align-items:center;border-radius:10px 10px 0 0;background:transparent;box-shadow:none;}
   /* Hover: a neutral pill floating inside the tab, so the whole tab lights
      evenly without touching the group line or the active tab's feet. The
      tab isolates its layers so the pill sits behind the title, not behind
      the whole strip. */
-  .native-browser-tab:not(.active):hover::after{content:"";position:absolute;inset:4px 2px;z-index:-1;border-radius:8px;background:rgba(0,0,0,.06);pointer-events:none;}
+  .mia-tab:not(.active):hover::after{content:"";position:absolute;inset:4px 2px;z-index:-1;border-radius:8px;background:rgba(0,0,0,.06);pointer-events:none;}
   /* Tabs contain their layout, which makes each one its own layer; lift the
      active tab so its curved feet (and a group outline's) stay on top of a
      hovered neighbor. */
-  .native-browser-tab.active{z-index:1;background:#fff;box-shadow:none;}
+  .mia-tab.active{z-index:1;background:#fff;box-shadow:none;}
   /* However crowded the strip, the active tab keeps room for its icon and
      close button, so neither spills past its outline. */
-  .native-browser-tab.active{flex-shrink:0;min-width:64px;}
-  .native-browser-tab.active::before,.native-browser-tab.active::after{content:"";position:absolute;bottom:0;width:10px;height:10px;pointer-events:none;}
-  .native-browser-tab.active::before{left:-10px;background:radial-gradient(circle at 0 0,transparent 10px,#fff 10.5px);}
-  .native-browser-tab.active::after{right:-10px;background:radial-gradient(circle at 100% 0,transparent 10px,#fff 10.5px);}
-  .native-browser-tab:not(.active):not(:hover)+.native-browser-tab:not(.active):not(:hover)::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:1px;background:#a8adb3;}
-  .native-browser-tab button,.native-browser-new-tab{color:#1f1f1f;font-family:inherit;font-size:12px;line-height:18px;}
-  .native-browser-tab button[role="tab"]{gap:8px;padding:6px 6px 6px 12px;}
-  .native-browser-tab:not(.active) button[role="tab"]{color:#474747;}
-  .native-browser-tab-icon{width:16px;height:16px;border-radius:2px;}
-  .native-browser-tab button:hover{background:transparent;}
-  .native-browser-tab button.native-browser-tab-close{width:20px;height:20px;padding:0;margin-right:8px;border-radius:50%;font-size:15px;line-height:20px;color:#474747;opacity:0;}
-  .native-browser-tab.active button.native-browser-tab-close,.native-browser-tab:hover button.native-browser-tab-close{opacity:1;}
-  .native-browser-tab button.native-browser-tab-close:hover{background:#0000001a;border-radius:50%;}
+  /* The active tab and group heads give way last, not never: a narrow
+     pane still fits the strip instead of pushing tabs past its edge. Other
+     tabs shrink five times as fast. The weights stay at 1 or more: when the
+     items left to shrink weigh less than 1 in total, the browser only takes
+     back that fraction of the overflow and the strip spills past its edge. */
+  .mia-tab.active{flex-shrink:1;min-width:64px;}
+  .mia-tab.active::before,.mia-tab.active::after{content:"";position:absolute;bottom:0;width:10px;height:10px;pointer-events:none;}
+  .mia-tab.active::before{left:-10px;background:radial-gradient(circle at 0 0,transparent 10px,#fff 10.5px);}
+  .mia-tab.active::after{right:-10px;background:radial-gradient(circle at 100% 0,transparent 10px,#fff 10.5px);}
+  .mia-tab:not(.active):not(:hover)+.mia-tab:not(.active):not(:hover)::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:1px;background:#a8adb3;}
+  .mia-tab button,.native-browser-new-tab{color:#1f1f1f;font-family:inherit;font-size:12px;line-height:18px;}
+  .mia-tab button[role="tab"]{gap:8px;padding:6px 6px 6px 12px;}
+  .mia-tab:not(.active) button[role="tab"]{color:#474747;}
+  .mia-tab-icon{width:16px;height:16px;border-radius:2px;}
+  .mia-tab button:hover{background:transparent;}
+  .mia-tab button.mia-tab-close{width:20px;height:20px;padding:0;margin-right:8px;border-radius:50%;font-size:15px;line-height:20px;color:#474747;opacity:0;}
+  .mia-tab.active button.mia-tab-close,.mia-tab:hover button.mia-tab-close{opacity:1;}
+  .mia-tab button.mia-tab-close:hover{background:#0000001a;border-radius:50%;}
   /* "+N" on a bot's one tab opens the list of its other tabs. */
-  .native-browser-tab button.native-browser-bot-tabs{flex:none;height:18px;margin-right:4px;padding:0 6px;border:1px solid var(--tab-group-color,#474747);border-radius:9px;font-size:11px;line-height:16px;color:var(--tab-group-color,#474747);background:transparent;cursor:pointer;}
-  .native-browser-tab button.native-browser-bot-tabs:hover{background:color-mix(in srgb,var(--tab-group-color,#474747) 12%,transparent);}
-  .native-browser-tab button.native-browser-bot-tabs.working::after{content:"";display:inline-block;width:5px;height:5px;margin-left:4px;border-radius:50%;background:currentColor;vertical-align:1px;}
+  .mia-tab button.native-browser-bot-tabs{flex:none;height:18px;margin-right:4px;padding:0 6px;border:1px solid var(--tab-group-color,#474747);border-radius:9px;font-size:11px;line-height:16px;color:var(--tab-group-color,#474747);background:transparent;cursor:pointer;}
+  .mia-tab button.native-browser-bot-tabs:hover{background:color-mix(in srgb,var(--tab-group-color,#474747) 12%,transparent);}
+  .mia-tab button.native-browser-bot-tabs.working::after{content:"";display:inline-block;width:5px;height:5px;margin-left:4px;border-radius:50%;background:currentColor;vertical-align:1px;}
   /* The +N list: the bot's other tabs, drawn like tabs and stacked. */
   .native-browser-bot-tabs-list{position:fixed;z-index:30;box-sizing:border-box;background:#fff;border:2px solid var(--tab-group-color,#474747);border-top:0;border-radius:0 0 10px 10px;box-shadow:0 14px 24px -14px rgba(0,0,0,.28);transform-origin:top center;animation:native-browser-bot-tabs-open .16s ease-out;font:13px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;color:#1f1f1f;}
   /* The tab's feet, mirrored: they leave the tab line and curve down into
@@ -2914,19 +3058,19 @@
   .native-browser-bot-tabs-row{display:flex;align-items:center;height:34px;border-radius:10px;}
   .native-browser-bot-tabs-row:hover{background:#0000000d;}
   .native-browser-bot-tabs-row button[role="menuitem"]{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0 6px 0 10px;border:0;background:transparent;font:inherit;color:inherit;text-align:left;cursor:pointer;}
-  .native-browser-bot-tabs-row .native-browser-tab-close{flex:none;width:20px;height:20px;margin-right:6px;border:0;border-radius:50%;background:transparent;color:#5f6368;font-size:15px;line-height:20px;cursor:pointer;opacity:0;}
-  .native-browser-bot-tabs-row:hover .native-browser-tab-close,.native-browser-bot-tabs-row .native-browser-tab-close:focus-visible{opacity:1;}
-  .native-browser-bot-tabs-row .native-browser-tab-close:hover{background:#0000001a;}
+  .native-browser-bot-tabs-row .mia-tab-close{flex:none;width:20px;height:20px;margin-right:6px;border:0;border-radius:50%;background:transparent;color:#5f6368;font-size:15px;line-height:20px;cursor:pointer;opacity:0;}
+  .native-browser-bot-tabs-row:hover .mia-tab-close,.native-browser-bot-tabs-row .mia-tab-close:focus-visible{opacity:1;}
+  .native-browser-bot-tabs-row .mia-tab-close:hover{background:#0000001a;}
   .native-browser-bot-tabs-new{height:32px;flex:none;margin-bottom:4px;padding:0 10px;border:1px dashed color-mix(in srgb,var(--tab-group-color,#474747) 55%,transparent);border-radius:8px;background:transparent;font:inherit;color:var(--tab-group-color,#474747);text-align:left;cursor:pointer;}
   .native-browser-bot-tabs-new:hover{background:color-mix(in srgb,var(--tab-group-color,#474747) 10%,transparent);}
   /* Many tabs shrink to their icon instead of scrolling the
      strip; narrow inactive tabs drop the close button to make room. */
   @container (max-width:72px){
-    .native-browser-tab button[role="tab"]{padding:6px 0;justify-content:center;}
-    .native-browser-tab.active button[role="tab"]{padding-left:10px;}
-    .native-browser-tab.active button.native-browser-tab-close{margin-right:6px;}
-    .native-browser-tab:not(.active) button.native-browser-tab-close{display:none;}
-    .native-browser-tab-label{display:none;}
+    .mia-tab button[role="tab"]{padding:6px 0;justify-content:center;}
+    .mia-tab.active button[role="tab"]{padding-left:10px;}
+    .mia-tab.active button.mia-tab-close{margin-right:6px;}
+    .mia-tab:not(.active) button.mia-tab-close{display:none;}
+    .mia-tab-label{display:none;}
   }
   .native-browser-new-tab{width:28px;height:28px;padding:0;margin:0 0 3px 4px;border-radius:50%;font-size:18px;line-height:28px;color:#474747;}
   .native-browser-new-tab:hover{background:#0000001a;border-radius:50%;}
@@ -2946,8 +3090,9 @@
   [data-group-color="mia"]{--tab-group-color:#000;}
   [data-theme="developer"] [data-group-color="mia"]{--tab-group-color:#e8e6e3;}
   [data-theme="developer"] [data-group-color="mia"].native-browser-group{color:#000;}
-  .native-browser-group-head{flex:none;align-self:flex-end;display:inline-flex;align-items:center;gap:4px;max-width:200px;height:34px;margin-left:8px;padding:0 6px 0 2px;box-shadow:inset 0 -2px 0 var(--tab-group-color);-webkit-app-region:no-drag;}
+  .native-browser-group-head{flex:0 1 auto;min-width:36px;align-self:flex-end;display:inline-flex;align-items:center;gap:4px;max-width:200px;height:34px;margin-left:8px;padding:0 6px 0 2px;box-shadow:inset 0 -2px 0 var(--tab-group-color);-webkit-app-region:no-drag;}
   .native-browser-group-head.collapsed{opacity:.85;}
+  .native-browser-group-head.icon-only .native-browser-group{display:none;}
   .native-browser-group-head:has(.drop-target) .native-browser-group{box-shadow:0 0 0 2px #fff,0 0 0 4px var(--tab-group-color);}
   .native-browser-group{appearance:none;flex:0 1 auto;min-width:0;height:22px;padding:0 9px;border:0;border-radius:6px;background:var(--tab-group-color);color:#fff;font:600 12px/22px -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
   .native-browser-group-head.unnamed .native-browser-group{width:12px;height:12px;padding:0;border-radius:50%;}
@@ -2955,7 +3100,7 @@
   .native-browser-group:focus-visible{outline:2px solid var(--tab-group-color);outline-offset:2px;}
   /* A bot driving a page: a working dot on its tab and the toolbar pill that
      offers Take over. The page's golden edge glow is added by main. */
-  .native-browser-tab-working{flex:none;margin-left:6px;}
+  .mia-tab-working{flex:none;margin-left:6px;}
   .local-browser-bot-control{flex:none;display:inline-flex;align-items:center;gap:8px;margin-left:8px;padding:3px 3px 3px 10px;border-radius:999px;background:transparent;box-shadow:none;font-size:12.5px;color:#3a3a38;white-space:nowrap;-webkit-app-region:no-drag;}
   .local-browser-bot-control[hidden]{display:none;}
   .local-browser-bot-control strong{font-weight:600;color:#1a1a19;}
@@ -2974,26 +3119,27 @@
   .native-browser-name-tip[hidden]{display:none;}
   .native-browser-group-owner:focus-visible{outline:2px solid var(--tab-group-color);outline-offset:1px;}
   .native-browser-group-name{flex:none;align-self:center;width:130px;height:22px;margin:0;padding:0 8px;border:2px solid var(--tab-group-color);border-radius:6px;background:#fff;color:#1f1f1f;font:12px/18px -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;outline:none;-webkit-app-region:no-drag;}
-  .native-browser-tab.in-group{box-shadow:inset 0 -2px 0 var(--tab-group-color);}
-  .native-browser-tab.in-group.active{box-shadow:none;}
+  .mia-tab.in-group{box-shadow:inset 0 -2px 0 var(--tab-group-color);}
+  .mia-tab.in-group.active{box-shadow:none;}
   /* The active tab's outline flares into the group line with the same
      curved feet as the tab itself, instead of meeting it at a corner. */
-  .native-browser-tab-group-ring{position:absolute;top:0;left:0;right:0;bottom:12px;z-index:1;border:2px solid var(--tab-group-color);border-bottom:0;border-radius:10px 10px 0 0;pointer-events:none;}
-  .native-browser-tab-group-ring::before,.native-browser-tab-group-ring::after{content:"";position:absolute;bottom:-12px;width:12px;height:12px;box-sizing:border-box;border:0 solid var(--tab-group-color);}
-  .native-browser-tab-group-ring::before{left:-12px;border-width:0 2px 2px 0;border-bottom-right-radius:12px;}
-  .native-browser-tab-group-ring::after{right:-12px;border-width:0 0 2px 2px;border-bottom-left-radius:12px;}
+  .mia-tab-group-ring{position:absolute;top:0;left:0;right:0;bottom:12px;z-index:1;border:2px solid var(--tab-group-color);border-bottom:0;border-radius:10px 10px 0 0;pointer-events:none;}
+  .mia-tab-group-ring::before,.mia-tab-group-ring::after{content:"";position:absolute;bottom:-12px;width:12px;height:12px;box-sizing:border-box;border:0 solid var(--tab-group-color);}
+  .mia-tab-group-ring::before{left:-12px;border-width:0 2px 2px 0;border-bottom-right-radius:12px;}
+  .mia-tab-group-ring::after{right:-12px;border-width:0 0 2px 2px;border-bottom-left-radius:12px;}
   /* A divider before every group, even right after the active tab. */
   .native-browser-group-head{position:relative;}
   /* After the active tab, clear its curved foot so the bot isn't touching it. */
-  .native-browser-tab.active+.native-browser-group-head{margin-left:18px;}
-  .native-browser-tab+.native-browser-group-head::before{content:"";position:absolute;left:-5px;top:9px;bottom:9px;width:1px;background:#a8adb3;}
+  .mia-tab.active+.native-browser-group-head{margin-left:18px;}
+  .mia-tab+.native-browser-group-head::before{content:"";position:absolute;left:-5px;top:9px;bottom:9px;width:1px;background:#a8adb3;}
   .native-browser-tabs-row .local-browser-btn{margin-bottom:3px;border-radius:50%;}
   /* Same size, icon weight, and right edge as the toolbar's downloads button
      below it, so the two line up in one column. */
   .native-browser-tabs-row .local-browser-close-btn{align-self:center;width:32px;height:32px;margin:0 8px 0 0;color:#474747;}
-  .native-browser-tabs-row .native-browser-new-tab{align-self:center;flex:none;position:sticky;right:0;display:grid;place-items:center;width:32px;height:32px;margin:0 0 0 4px;padding:0;background:#dfe3e7;-webkit-app-region:no-drag;}
-  .native-browser-tabs-row .native-browser-new-tab:hover{background:#cfd4d9;}
-  .native-browser-tabs-row .native-browser-new-tab svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;}
+  .native-browser-tabs .native-browser-new-tab{align-self:center;flex:none;position:sticky;right:0;display:grid;place-items:center;width:32px;height:32px;margin:0 0 0 4px;padding:0;background:#dfe3e7;-webkit-app-region:no-drag;}
+  .native-browser-tabs .native-browser-new-tab[hidden]{display:none;}
+  .native-browser-tabs .native-browser-new-tab:hover{background:#cfd4d9;}
+  .native-browser-tabs .native-browser-new-tab svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;}
   .native-browser-tabs-row .local-browser-close-btn:hover{background:#0000000f;color:#1f1f1f;}
   .native-browser-tabs-row .local-browser-close-btn svg{width:18px;height:18px;stroke-width:2;}
   .local-browser-toolbar{position:relative;height:42px;min-height:42px;gap:2px;padding:4px 8px;background:#fff;border-bottom:1px solid #e3e3e3;}
@@ -3020,12 +3166,11 @@
   /* Mac window without a title bar: the window buttons sit at the left of the
      top row, and empty space in that row drags the window. */
   html.mac-inset-titlebar .native-browser-tabs-row{padding-left:76px;-webkit-app-region:drag;}
-  html.mac-inset-titlebar .chat-new-btn-wrap{padding-left:84px;-webkit-app-region:drag;}
+  html.mac-inset-titlebar .chat-new-btn-wrap{padding-left:12px;-webkit-app-region:drag;}
   html.mac-inset-titlebar .channel-header{-webkit-app-region:drag;}
-  html.mac-inset-titlebar .native-browser-tabs-row button,html.mac-inset-titlebar .native-browser-tab,
+  html.mac-inset-titlebar .native-browser-tabs button,html.mac-inset-titlebar .native-browser-tabs-row button,html.mac-inset-titlebar .mia-tab,
   html.mac-inset-titlebar .chat-new-btn-wrap button,html.mac-inset-titlebar .chat-new-btn-wrap a,html.mac-inset-titlebar .chat-new-btn-wrap [role="menu"],
   html.mac-inset-titlebar .channel-header button,html.mac-inset-titlebar .channel-header a,html.mac-inset-titlebar .channel-header input{-webkit-app-region:no-drag;}
-  @media (max-width:1100px){html.mac-inset-titlebar .chat-new-btn-wrap{padding-left:12px;padding-top:40px;}}
   /* Mia's side pane in the browser can be hidden for a full-width browser, and
      its left edge drags to resize it (limits are enforced in native-browser.js). */
   .local-browser-mia-resize{display:none;}
@@ -3046,10 +3191,10 @@
   /* Web browser collaboration keeps the native Mia conversation fixed at
      the right. The normal
      sidebar is collapsed, then promoted to an overlay drawer on demand. */
-  body.browser-collab-mode{--browser-mia-pane-width:clamp(320px,32vw,440px);--chat-compact-preview-lines:3;--chat-compact-preview-line-height:20px;}
+  body.browser-collab-mode{--browser-mia-pane-width:calc(var(--sand-sidebar-width) + var(--workspace-rail-width));--chat-compact-preview-lines:3;--chat-compact-preview-line-height:20px;}
   body.browser-collab-mode .app-development-panel{left:auto;right:12px;width:min(360px,calc(var(--browser-mia-pane-width) - 24px));}
   body.browser-collab-mode .local-browser-overlay.open{right:var(--browser-mia-pane-width);}
-  body.browser-collab-mode .chat-app{position:fixed!important;z-index:121;inset:0 0 0 auto;width:var(--browser-mia-pane-width);display:flex!important;border-left:1px solid var(--sand-border-subtle);background:var(--sand-bg-base);}
+  body.browser-collab-mode .chat-app{position:fixed!important;z-index:121;inset:0 0 0 auto;width:var(--browser-mia-pane-width);display:flex!important;border-left:1px solid var(--sand-border-default);background:var(--sand-bg-base);}
   body.browser-collab-mode .chat-main-col{display:flex;flex:1 1 auto;min-width:0;}
   body.browser-collab-mode .chat-info-pane,
   body.browser-collab-mode .chat-thread-panel{display:none!important;}
@@ -3102,15 +3247,15 @@
   body.styled-skin.browser-collab-mode .chat-pre-reasoning-preview > :last-child{margin-bottom:0;}
   body.styled-skin.browser-collab-mode .chat-expandable-toggle[hidden],
   body.styled-skin.browser-collab-mode .chat-pre-reasoning-toggle[hidden]{display:none;}
-  body.browser-collab-mode .chat-sidebar{position:fixed!important;z-index:130;inset:0 auto 0 0;width:var(--sand-sidebar-width)!important;display:flex!important;transform:translateX(-102%);transition:transform .16s ease;box-shadow:12px 0 30px #0000002b;}
+  /* "Your bots" docks on the left like Mia's pane on the right: the page
+     narrows to make room instead of a drawer sliding over it. */
+  body.browser-collab-mode .chat-sidebar{position:fixed!important;z-index:130;inset:0 auto 0 0;width:calc(var(--sand-sidebar-width) + var(--workspace-rail-width))!important;display:flex!important;transform:translateX(-102%);}
   body.browser-collab-mode.browser-sidebar-open .chat-sidebar{transform:translateX(0);}
-  /* The drawer floats over the browser with no scrim, so it carries its own
-     close affordance; outside collab mode the sidebar is a fixed column and
-     the button stays hidden. */
-  .chat-sidebar-drawer-close{display:none;}
-  body.browser-collab-mode .chat-sidebar .chat-sidebar-drawer-close{display:grid;place-items:center;position:absolute;top:10px;right:8px;z-index:5;width:26px;height:26px;padding:0;border:0;border-radius:7px;background:transparent;color:var(--sand-text-secondary);font:17px/1 var(--styled-sans);cursor:pointer;}
-  body.browser-collab-mode .chat-sidebar .chat-sidebar-drawer-close:hover{background:#0000000a;color:var(--sand-text-primary);}
-  body.browser-collab-mode .chat-sidebar .chat-new-btn-wrap{padding-right:34px;}
+  body.browser-collab-mode.browser-sidebar-open .local-browser-overlay.open,
+  body.browser-collab-mode.browser-sidebar-open .automations-overlay.open{left:calc(var(--sand-sidebar-width) + var(--workspace-rail-width));border-left:1px solid var(--sand-border-default);}
+  /* The window buttons now sit over the docked rail, not the tabs. */
+  html.mac-inset-titlebar body.browser-sidebar-open .local-browser-overlay .native-browser-tabs-row,
+  html.mac-inset-titlebar body.browser-sidebar-open .automations-tabs-row{padding-left:16px;}
   body.styled-skin .cip-routines{padding:0 16px 18px;border-top:1px solid var(--sand-border-subtle);}
   body.styled-skin .chat-info-pane.computer-hidden .cip-routines{padding-top:18px;}
   body.styled-skin .chat-info-pane.computer-hidden .cip-routines-empty{flex:0 0 auto;justify-content:flex-start;padding-top:0;}
@@ -3132,9 +3277,9 @@
     /* Keep the routines pane readable in a narrow window. It overlays the
        center column at a stable 360px width instead of shrinking to the
        remaining flex space; only ultra-narrow viewports reduce it further. */
-    body.styled-skin .chat-info-pane:not(.plugins-open){position:absolute;inset:52px 0 0 auto;flex-basis:min(360px,calc(100vw - 24px));width:min(360px,calc(100vw - 24px));max-width:min(360px,calc(100vw - 24px));border-radius:14px 0 0 0;box-shadow:-10px 0 24px #0000001f;}
-    body.styled-skin .chat-info-pane.plugins-open{position:absolute;inset:52px 0 0 auto;flex-basis:min(360px,calc(100vw - 24px));width:min(360px,calc(100vw - 24px));max-width:min(360px,calc(100vw - 24px));z-index:60;border-radius:14px 0 0 0;box-shadow:-10px 0 24px #0000001f;}
-    body.styled-skin .chat-thread-panel:not([hidden]){position:absolute;inset:52px 0 0 auto;height:auto;flex-basis:min(360px,calc(100vw - 24px));width:min(360px,calc(100vw - 24px)) !important;max-width:min(360px,calc(100vw - 24px));z-index:60;border-radius:14px 0 0 0;box-shadow:-10px 0 24px #0000001f;}
+    body.styled-skin .chat-info-pane:not(.plugins-open){position:absolute;inset:37px 0 0 auto;flex-basis:min(360px,calc(100vw - 24px));width:min(360px,calc(100vw - 24px));max-width:min(360px,calc(100vw - 24px));border-radius:14px 0 0 0;box-shadow:-10px 0 24px #0000001f;}
+    body.styled-skin .chat-info-pane.plugins-open{position:absolute;inset:37px 0 0 auto;flex-basis:min(360px,calc(100vw - 24px));width:min(360px,calc(100vw - 24px));max-width:min(360px,calc(100vw - 24px));z-index:60;border-radius:14px 0 0 0;box-shadow:-10px 0 24px #0000001f;}
+    body.styled-skin .chat-thread-panel:not([hidden]){position:absolute;inset:37px 0 0 auto;height:auto;flex-basis:min(360px,calc(100vw - 24px));width:min(360px,calc(100vw - 24px)) !important;max-width:min(360px,calc(100vw - 24px));z-index:60;border-radius:14px 0 0 0;box-shadow:-10px 0 24px #0000001f;}
     body.styled-skin .chat-app{position:relative;}
   }
 
@@ -3194,7 +3339,7 @@
      64px rail is useful for the old Mia shell, but it hides the bot names and
      previews that make this chat surface usable. */
   @media (max-width:1100px){
-    body.styled-skin .chat-layout{grid-template-columns:var(--sand-sidebar-width) minmax(0,1fr) !important;}
+    body.styled-skin .chat-layout{grid-template-columns:calc(var(--sand-sidebar-width) + var(--workspace-rail-width)) minmax(0,1fr) !important;}
     body.styled-skin .chat-sidebar{width:auto;}
     body.styled-skin .chat-sidebar .chat-search-wrap,
     body.styled-skin .chat-sidebar .chat-sidebar-footer{display:block !important;}
@@ -3289,3 +3434,204 @@
 .cc-drive-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-drive-list small { margin-left: auto; white-space: nowrap; }
 #ccDriveMore { width: 100%; margin-top: 8px; padding: 9px; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; background: transparent; color: inherit; }
+
+/* Canvas shell: the workspace rail and the 37px top bar are one grey canvas,
+   and the panes sit on it as one white sheet with a rounded top-left corner.
+   Every pane's header is on the canvas, so their bottom edges form one line. */
+/* Above the panel's corner and edge lines so its hover names cover them. */
+body.styled-skin .workspace-rail{background:var(--mia-canvas);border-right:0;z-index:5;}
+body.styled-skin .chat-new-btn-wrap{height:37px;box-sizing:border-box;padding:3px 12px 0 8px;align-items:center;justify-content:flex-start;gap:6px;background:var(--mia-canvas);border-bottom:1px solid var(--sand-border-subtle);}
+body.styled-skin .chat-new-btn-wrap .mia-company-lockup{margin-right:0;}
+body.styled-skin .channel-header,
+.native-browser-tabs-row,.automations-tabs-row{background:var(--mia-canvas);}
+.native-browser-tabs-row,.automations-tabs-row{box-shadow:inset 0 -1px 0 var(--sand-border-subtle);}
+/* The tabs share a line with the window buttons and the sidebar title;
+   only a 3px strip of the outer canvas shows above them. */
+.native-browser-tabs-row,.automations-tabs-row{min-height:37px;padding-top:3px;}
+/* The pane headers on the canvas match: 37px with the same 3px top edge. */
+body.styled-skin .channel-header{height:37px;min-height:37px;box-sizing:border-box;padding-top:3px;}
+/* The border token is see-through in light mode, so the curve and left edge
+   sit on canvas to read as dark as the header line above them. */
+body.styled-skin .chat-sidebar::before{content:"";position:absolute;z-index:4;top:36px;left:var(--workspace-rail-width);width:13px;height:13px;pointer-events:none;background:radial-gradient(circle at 100% 100%,transparent 11.5px,var(--sand-border-subtle) 12px,var(--sand-border-subtle) 13px,transparent 13.5px),radial-gradient(circle at 100% 100%,transparent 11.5px,var(--mia-canvas) 12px);}
+body.styled-skin .chat-sidebar::after{content:"";position:absolute;z-index:3;top:49px;bottom:0;left:var(--workspace-rail-width);width:1px;background:linear-gradient(var(--sand-border-subtle),var(--sand-border-subtle)),var(--mia-canvas);pointer-events:none;}
+/* The three views as bare icons beside the workspace name; the selected
+   one gets a soft fill, and hover shows its name. */
+body.styled-skin .chat-new-btn-wrap .sidebar-views{margin:0;padding:0;gap:6px;border:0;background:transparent;}
+body.styled-skin .chat-new-btn-wrap .sidebar-view-btn{flex:0 0 auto;width:28px;height:28px;min-width:0;padding:0;}
+body.styled-skin .chat-new-btn-wrap .sidebar-view-label{display:none;}
+body.styled-skin .chat-new-btn-wrap .sidebar-view-btn.active{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
+/* Mixed tabs: each other view is a section in the strip, its head naming
+   the view; folded, the head counts the view's tabs and stands in for them,
+   as the browser's idle groups fold to their chip. */
+/* Like the active tab and group names, a section head gives way last,
+   down to its icon and count, so the strip still fits a narrow pane. */
+.mia-mix-head{appearance:none;flex:0 1 auto;min-width:44px;display:inline-flex;align-items:center;gap:5px;align-self:center;height:24px;max-width:104px;box-sizing:border-box;margin:0 4px 3px 8px;padding:0 8px;border:0;border-radius:7px;background:var(--sand-fill-secondary,#ececec);color:var(--sand-text-primary,#1f1f1f);font:500 12px/1 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;white-space:nowrap;cursor:pointer;-webkit-app-region:no-drag;}
+.mia-mix-head:hover{background:var(--sand-fill-ghost-hover,#e2e2e2);}
+.mia-mix-head svg{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+.mia-mix-head-label{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.mia-mix-head.icon-only .mia-mix-head-label{display:none;}
+.mia-mix-menu{--tab-group-color:var(--sand-text-secondary,#5f6368);border-top:2px solid var(--tab-group-color);border-radius:10px;z-index:1000;}
+.mia-mix-menu::before,.mia-mix-menu::after{display:none;}
+span.mia-tab-icon{display:inline-grid;place-items:center;}
+.mia-tab-icon>svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;opacity:.75;}
+.mia-mix-menu .mia-tab-icon{flex:none;width:16px;height:16px;display:inline-grid;place-items:center;}
+.mia-mix-menu .mia-tab-icon svg{width:16px;height:16px;}
+.mia-mix-menu .mia-tab-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mia-mix-head-count{flex:0 0 auto;min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;border-radius:8px;background:#fff;color:#474747;font-size:11px;line-height:16px;text-align:center;}
+/* Mix is on/off: pressed shows it on. */
+.sidebar-mix-btn[aria-pressed="true"],body.styled-skin .chat-new-btn-wrap .sidebar-mix-btn[aria-pressed="true"]{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
+/* The view icons sit at the right end of the top bar. */
+body.styled-skin .chat-new-btn-wrap .sidebar-views{margin-left:auto;container-type:normal;}
+/* Search and New chat share one row; the compose icon lines up under the
+   Browser icon above it. */
+body.styled-skin .chat-search-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:0 6px;padding-top:10px;}
+body.styled-skin .chat-search-wrap .chat-search-pill{flex:1 1 0;min-width:0;}
+body.styled-skin .chat-search-wrap .chat-search-results{flex:0 0 100%;}
+body.styled-skin .chat-search-wrap .sidebar-new-chat{flex:0 0 auto;justify-content:center;width:28px;height:28px;margin:0;padding:0;border:0;border-radius:7px;background:transparent;color:var(--sand-text-secondary);}
+body.styled-skin .chat-search-wrap .sidebar-new-chat:hover{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
+/* Browser and Automations end in a full-height divider, so the line between
+   them and the Mia pane runs up through the top bar too. */
+body.browser-collab-mode .automations-overlay.open,
+body.browser-collab-mode .local-browser-overlay.open{border-right:1px solid var(--sand-border-default);}
+/* With the sidebar open there are no traffic lights to clear, so the first
+   tab starts at the sheet edge. Automations' single tab is shaped and sized
+   like a browser tab. */
+html.mac-inset-titlebar body.browser-sidebar-open .local-browser-overlay .native-browser-tabs-row,
+html.mac-inset-titlebar body.browser-sidebar-open .automations-tabs-row{padding-left:0;}
+.automations-tabs-row{padding-left:0;}
+html.mac-inset-titlebar body:not(.browser-sidebar-open) .automations-tabs-row{padding-left:76px;}
+
+/* Chat tabs: the same grey row and tab shape as Automations and the browser.
+   The chat's own header sits under it as the white toolbar. */
+.chat-tabs-row{display:flex;align-items:flex-end;flex:none;height:37px;padding-top:3px;background:var(--mia-canvas);box-shadow:inset 0 -1px 0 var(--sand-border-subtle);}
+/* The chat and Automations rows hold the browser's own tab strip
+   (native-browser.js moves it into the row of the view showing). */
+.automations-tabs{display:flex;align-items:flex-end;flex:1;min-width:0;align-self:stretch;}
+/* Their tabs' icons are line icons and chat or bot marks, drawn in the
+   same 18px box; a chat or automation tab shown in the browser's strip
+   (.mix-foreign) gets the same box. The browser's own favicons keep the
+   browser's rules. */
+.chat-tabs-row .mia-tab-icon,.automations-tabs .mia-tab-icon,.mia-tab.mix-foreign .mia-tab-icon{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;overflow:hidden;}
+.chat-tabs-row .mia-tab-icon>svg,.automations-tabs .mia-tab-icon>svg,.mia-tab.mix-foreign .mia-tab-icon>svg{width:16px;height:16px;fill:none;stroke:#474747;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.chat-tabs-row .mia-tab-icon img,.automations-tabs .mia-tab-icon img,.mia-tab.mix-foreign .mia-tab-icon img,.chat-tabs-row .mia-tab-icon .mia-avatar-mark,.automations-tabs .mia-tab-icon .mia-avatar-mark,.mia-tab.mix-foreign .mia-tab-icon .mia-avatar-mark{width:18px !important;height:18px !important;}
+.chat-tabs-row .chat-row-mark,.automations-tabs .chat-row-mark,.mia-tab.mix-foreign .chat-row-mark{width:18px !important;height:18px !important;min-width:18px;flex:none;margin:0 !important;border-radius:5px;font-size:9px;line-height:18px;overflow:hidden;}
+.chat-tabs-row .chat-row-mark img,.automations-tabs .chat-row-mark img,.mia-tab.mix-foreign .chat-row-mark img,.chat-tabs-row .chat-row-mark svg,.automations-tabs .chat-row-mark svg,.mia-tab.mix-foreign .chat-row-mark svg,.chat-tabs-row .chat-row-mark canvas,.automations-tabs .chat-row-mark canvas,.mia-tab.mix-foreign .chat-row-mark canvas{width:18px !important;height:18px !important;}
+.chat-tabs-row .chat-row-mark *,.automations-tabs .chat-row-mark *,.mia-tab.mix-foreign .chat-row-mark *{max-width:18px;max-height:18px;}
+.chat-tabs-row[hidden]{display:none;}
+html.mac-inset-titlebar .chat-tabs-row{-webkit-app-region:drag;}
+/* Under the tabs, the chat header is the white toolbar. */
+body.styled-skin:not(.browser-collab-mode):not(.automations-mode) .chat-tabs-row:not([hidden])+.channel-header{background:var(--sand-bg-base);}
+/* The tab carries the chat's mark and name, so the toolbar under it keeps
+   only the chat's actions; its menu still opens under the active tab. */
+body.browser-collab-mode .chat-tabs-row,body.automations-mode .chat-tabs-row{display:none;}
+body:not(.browser-collab-mode):not(.automations-mode) .chat-tabs-row:not([hidden])+.channel-header .ch-title-btn,
+body:not(.browser-collab-mode):not(.automations-mode) .chat-tabs-row:not([hidden])+.channel-header .ch-title-row>.ch-mark,
+body:not(.browser-collab-mode):not(.automations-mode) .chat-tabs-row:not([hidden])+.channel-header .ch-title-row>.channel-header-title,
+body:not(.browser-collab-mode):not(.automations-mode) .chat-tabs-row:not([hidden])+.channel-header .ch-left>.channel-header-title{display:none;}
+body:not(.browser-collab-mode):not(.automations-mode) .chat-tabs-row:not([hidden])+.channel-header{height:40px;min-height:40px;padding-top:0;}
+/* The side chat pane is as wide as the left panel, so its header actions
+   are smaller to fit. */
+body.browser-collab-mode .channel-header .ch-right,body.automations-mode .channel-header .ch-right{gap:4px;}
+body.browser-collab-mode .ch-icon-btn.conversation-action-btn,body.automations-mode .ch-icon-btn.conversation-action-btn{width:24px;height:24px;border-radius:6px;}
+body.browser-collab-mode .ch-icon-btn.conversation-action-btn svg,body.automations-mode .ch-icon-btn.conversation-action-btn svg{width:16px;height:16px;}
+
+/* The address bar under the tabs in every view: the view's own header
+   buttons ride at its right end. */
+.local-browser-view-tools{display:flex;align-items:center;gap:4px;flex:none;min-width:0;}
+.local-browser-view-tools:empty{display:none;}
+.local-browser-view-tools > .ch-right{position:relative;gap:4px;}
+.artifacts-bar > .ch-right{flex:none;position:relative;gap:4px;margin-left:4px;}
+.local-browser-view-tools > *{position:static;height:auto;min-height:0;margin:0;padding:0;border:0;background:transparent;box-shadow:none;}
+.local-browser-toolbar[data-view="chat"],.local-browser-toolbar[data-view="automations"]{flex:none;}
+/* The left pane folds out of the chat layout too. */
+body:not(.browser-collab-mode).left-pane-closed .chat-layout{grid-template-columns:minmax(0,1fr)!important;}
+body:not(.browser-collab-mode).left-pane-closed .chat-layout > .chat-sidebar{display:none!important;}
+html.mac-inset-titlebar body:not(.browser-collab-mode).left-pane-closed #chatTabsRow{padding-left:76px;}
+/* One pane button a side: the Automations bar's own copy stays home. */
+.local-browser-view-tools #automationsSidebarBtn{display:none;}
+.local-browser-sidebar-btn{position:relative;}
+.local-browser-toolbar[data-view="chat"] .local-browser-sidebar-btn{display:inline-flex;}
+.pane-count{position:absolute;top:1px;right:-2px;min-width:15px;height:15px;padding:0 4px;box-sizing:border-box;border-radius:8px;background:#d93025;color:#fff;font:600 10px/15px var(--styled-sans);text-align:center;pointer-events:none;}
+body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-pane-closed) .pane-count{display:none;}
+/* In the address bar the chat's name stays in its tab and the sidebar;
+   its actions sit behind one More button that opens a Chrome-style menu. */
+.local-browser-view-tools .channel-header .ch-left{display:none!important;}
+.local-browser-view-tools .channel-header,.local-browser-view-tools .ch-right,.local-browser-view-tools .ch-roster-chip{background:transparent!important;}
+.conv-more{position:relative;display:flex;align-items:center;}
+.conv-more-btn{width:32px!important;height:32px!important;border-radius:50%!important;color:#474747!important;}
+.conv-more-btn:hover,.conv-more-btn[aria-expanded="true"]{background:#0000000f!important;color:#1f1f1f!important;}
+.conv-more-btn svg{width:18px;height:18px;fill:currentColor;stroke:none;}
+.conv-more-menu.channel-menu{top:calc(100% + 6px);left:auto;right:0;min-width:260px;padding:6px 0;background:#fff;border:0;border-radius:12px;box-shadow:0 2px 6px #0000001f,0 8px 24px #00000029;z-index:140;}
+.conv-more-item{appearance:none;white-space:nowrap;display:flex;align-items:center;gap:14px;width:100%;height:34px;padding:0 18px;border:0;background:transparent;color:#1f1f1f;font:14px/1 var(--styled-sans);text-align:left;cursor:pointer;-webkit-font-smoothing:auto;}
+.conv-more-item:hover:not(:disabled){background:#0000000d;}
+.conv-more-item:disabled{color:#1f1f1f61;cursor:default;}
+.conv-more-item svg{flex:none;width:18px;height:18px;fill:none;stroke:#474747;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+.conv-more-item:disabled svg{stroke:#47474761;}
+.conv-more-item[aria-pressed="true"] svg path{fill:#474747;}
+.conv-more-sep{height:1px;margin:6px 0;background:#e3e3e3;}
+.conv-more-menu .cmp-section-label{display:none;}
+.conv-more-menu .channel-menu-item{height:34px;padding:0 18px;border-radius:0;font-size:14px;color:#1f1f1f;}
+.conv-more-menu .channel-menu-item:hover{background:#0000000d;color:#1f1f1f;}
+.conv-more-menu .cmp-confirm{padding:8px 18px;}
+/* Sheets open below the Mac window buttons instead of under them. */
+@media (min-width:761px){
+  html.mac-inset-titlebar .styled-sheet:not(.styled-onboarding-sheet),html.mac-inset-titlebar #settingsDrawer.styled-sheet{top:44px;}
+  /* The connection dialog is centered by a translate, so a fixed top would
+     push its upper half off the window; center it in the space below. */
+  html.mac-inset-titlebar .styled-onboarding-sheet{top:calc(50% + 22px);max-height:calc(100vh - 76px);}
+}
+/* The address bar searches everywhere: results come in titled groups. */
+.local-browser-suggest-group{padding:10px 14px 4px;color:#1f1f1f;font:600 12px/1.3 var(--styled-sans);}
+.local-browser-suggest-group:first-child{padding-top:4px;}
+.local-browser-suggest-part{padding:4px 14px 2px;color:#5f6368;font:11px/1.3 var(--styled-sans);text-transform:uppercase;letter-spacing:.04em;}
+.local-browser-suggest-avatar{display:grid;place-items:center;width:16px;height:16px;border-radius:50%;overflow:hidden;font-size:9px;}
+.local-browser-suggest-icon .agent-avatar,.local-browser-suggest-icon [class*="avatar"]{max-width:16px;max-height:16px;}
+
+/* Artifacts: same frame as Automations, a list of rows in the body. */
+.artifacts-title{align-self:center;margin-left:12px;font-size:13px;font-weight:500;color:var(--sand-text-primary);}
+.artifacts-overlay #artifactsCloseBtn{align-self:center;margin:0 8px 0 auto;width:32px;height:32px;border-radius:50%;color:#474747;}
+.artifacts-overlay #artifactsCloseBtn:hover{background:#0000000f;color:#1f1f1f;}
+.artifacts-bar{gap:10px;padding:4px 12px;}
+.artifacts-search{width:180px;height:28px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:14px;background:var(--sand-bg-base);color:var(--sand-text-primary);font:inherit;font-size:13px;}
+.artifacts-chips{display:flex;gap:6px;margin-right:auto;}
+.artifacts-chip{height:26px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:13px;background:transparent;color:var(--sand-text-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;flex:none;}
+.artifacts-chip.on{background:var(--sand-text-primary);border-color:transparent;color:var(--sand-bg-base);}
+.artifacts-bar-text-btn{height:28px;padding:0 12px;border:1px solid var(--sand-border-default);border-radius:8px;background:transparent;color:var(--sand-text-primary);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;flex:none;}
+.artifacts-bar-text-btn:hover,.artifacts-chip:hover{background:var(--sand-fill-secondary);}
+.artifacts-bar-text-btn.primary{background:var(--sand-text-primary);color:var(--sand-bg-base);border-color:transparent;}
+.artifacts-add-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 24px;border-bottom:1px solid var(--sand-border-default);background:var(--sand-bg-subtle);}
+.artifacts-add-form[hidden]{display:none;}
+.artifacts-add-form input{height:30px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:8px;background:var(--sand-bg-base);color:var(--sand-text-primary);font:inherit;font-size:13px;}
+.artifacts-add-form #artifactsAddUrl{width:240px;}
+.artifacts-add-error{flex-basis:100%;font-size:12px;color:#b3261e;}
+.artifacts-add-error:empty{display:none;}
+.artifacts-body{max-width:760px;}
+.artifacts-section-title{margin:18px 0 4px;font-size:12px;color:var(--sand-text-tertiary,var(--sand-text-secondary));}
+.artifacts-row{display:flex;align-items:center;gap:2px;padding-right:6px;border-bottom:1px solid var(--sand-border-subtle);border-radius:8px;}
+.artifacts-row:hover{background:var(--sand-fill-secondary);}
+.artifacts-row-open{flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:10px 6px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;border-radius:8px;}
+.artifacts-thumb{flex:none;width:44px;height:34px;display:flex;align-items:center;justify-content:center;border:1px dashed var(--sand-border-default);border-radius:6px;background:var(--sand-bg-subtle);font-size:10px;color:var(--sand-text-secondary);}
+.artifacts-row-text{min-width:0;display:flex;flex-direction:column;gap:2px;}
+.artifacts-row-name{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.artifacts-row-meta{font-size:12px;color:var(--sand-text-secondary);}
+.artifacts-dot.on{color:#1e8e3e;}
+.artifacts-row-remove{flex:none;width:28px;height:28px;display:inline-flex;opacity:0;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:var(--sand-text-secondary);cursor:pointer;}
+.artifacts-row:hover .artifacts-row-remove,.artifacts-row-remove:focus-visible{opacity:1;}
+.artifacts-row-remove svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;}
+.artifacts-empty{padding:60px 20px;text-align:center;color:var(--sand-text-secondary);font-size:13px;}
+.artifacts-empty-title{font-size:15px;font-weight:500;color:var(--sand-text-primary);margin-bottom:4px;}
+.artifacts-empty-add{margin-top:14px;height:30px;padding:0 14px;border:1px solid var(--sand-border-default);border-radius:8px;background:transparent;color:var(--sand-text-primary);font:inherit;cursor:pointer;}
+
+/* Composer (+) menu and the Artifacts picker, which reuses the Drive menu's look. */
+.cc-plus-menu[hidden], .cc-artifacts-menu[hidden] { display: none !important; }
+.cc-plus-menu { position: absolute; bottom: calc(100% + 8px); left: 8px; z-index: 50; display: flex; flex-direction: column; min-width: 180px; padding: 6px; background: var(--panel, #fff); color: var(--text, #222); border: 1px solid #ddd; border-radius: 12px; box-shadow: 0 8px 28px #0002; font-size: 13px; }
+.cc-plus-menu button { text-align: left; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.cc-plus-menu button:hover, .cc-plus-menu button:focus-visible { background: #8881; }
+.cc-artifacts-menu input { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #ddd; border-radius: 8px; font: inherit; }
+.cc-artifacts-menu p:empty { display: none; }
+.cc-artifacts-menu .cc-drive-list em { flex: none; min-width: 38px; font-style: normal; font-size: 11px; color: var(--sand-text-secondary, #777); }
+.cc-attach-note { display: flex; flex-direction: column; gap: 2px; max-width: 100%; padding: 8px 10px; border-radius: 10px; background: var(--sand-fill-bubble-agent, #f0f0f4); font-size: 12px; color: var(--sand-text-secondary, #555); box-sizing: border-box; }
+.cc-attach-note strong { color: var(--sand-text-primary, #222); font-size: 13px; }
+.artifacts-row-share{flex:none;width:28px;height:28px;display:inline-flex;opacity:0;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:var(--sand-text-secondary);cursor:pointer;}
+.artifacts-row:hover .artifacts-row-share,.artifacts-row-share:focus-visible{opacity:1;}
+.artifacts-row-share svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}

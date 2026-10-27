@@ -10,7 +10,8 @@
 <link rel="manifest" href="manifest.webmanifest?v=20260822-1" />
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261021-next-step-1" />
+<script src="assets/workspace-handoff.js?v=20261024-1"></script>
+<link rel="stylesheet" href="styles.css?v=20261026-invited-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -359,77 +360,29 @@
       <section class="panel" id="panel-chat">
         <div class="chat-layout" data-shell>
           <aside class="chat-sidebar" data-rail>
-            <button type="button" class="chat-sidebar-drawer-close" id="chatSidebarDrawerClose" aria-label="Close panel" title="Close">&times;</button>
-            <div class="chat-new-btn-wrap">
-              <div class="mia-company-lockup workspace-switcher-wrap" id="miaLockup">
-                <button type="button" class="workspace-switcher" id="workspaceSwitcherToggle" aria-haspopup="menu" aria-expanded="false">
-                  <span class="workspace-switcher-copy"><span class="mia-company-name" id="miaCompanyName">Multiplayer Test</span></span>
-                  <svg class="workspace-switcher-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"></path></svg>
-                </button>
-                <div class="workspace-switcher-menu" id="workspaceSwitcherMenu" role="menu" aria-label="Switch workspace">
-                  <div class="workspace-switcher-label">Your spaces</div>
-                  <button type="button" class="workspace-switcher-option" data-workspace-key="solo" role="menuitem">
-                    <span class="workspace-switcher-option-mark">◌</span><span class="workspace-switcher-option-copy"><strong>Solo</strong><small>Private workspace</small></span><span class="workspace-switcher-check">✓</span>
-                  </button>
-                  <div class="workspace-switcher-label workspace-switcher-shared-label">Shared spaces</div>
-                  <button type="button" class="workspace-switcher-option" data-workspace-key="multiplayer_test" role="menuitem">
-                    <span class="workspace-switcher-option-mark">MT</span><span class="workspace-switcher-option-copy"><strong>Multiplayer Test</strong><small>Company workspace</small></span><span class="workspace-switcher-check">✓</span>
-                  </button>
-                </div>
-              </div>
-              <div class="chat-sidebar-pins" id="chatSidebarPins" role="group" aria-label="Pinned tools"></div>
-              <button type="button" class="chat-sidebar-tool-btn chat-sidebar-developer-btn" id="chatSidebarDeveloperBtn" aria-label="Open developer menu" title="Developer tools" aria-haspopup="menu" aria-expanded="false" hidden>&lt;/&gt;</button>
-              <button type="button" class="chat-sidebar-tool-btn chat-sidebar-agents-btn" id="chatSidebarManageAgentsBtn" aria-label="Manage people, agents, and bots" title="Manage people, agents, and bots"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 21a8 8 0 0 0-16 0"></path><circle cx="10" cy="8" r="5"></circle><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"></path></svg></button>
-              <button type="button" class="chat-sidebar-tool-btn chat-sidebar-tools-btn" id="chatSidebarToolsBtn" aria-label="Open tools menu" title="Tools" aria-haspopup="menu" aria-expanded="false"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"></path></svg></button>
-              <button type="button" class="chat-back-btn" id="chatBackBtn" aria-label="Go back" title="Go back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg><span data-rail-hide>Back</span></button>
-              <div class="chat-new-menu chat-tools-menu" id="chatToolsMenu" role="menu" aria-label="Tools">
-                <button type="button" class="chat-new-menu-item" data-tools-action="new-chat" role="menuitem"><span class="chat-new-menu-icon"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"></path><path d="M8 12h8"></path><path d="M12 8v8"></path></svg></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">New chat</span><span class="chat-new-menu-sub">Start a direct conversation</span></span></button>
-                <button type="button" class="chat-new-menu-item" data-tools-action="new-bot" role="menuitem">
-                  <span class="chat-new-menu-icon"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg></span>
-                  <span class="chat-new-menu-text"><span class="chat-new-menu-label">New Bot</span><span class="chat-new-menu-sub">Create a bot for your team</span></span>
-                </button>
-                <button type="button" class="chat-new-menu-item upcoming" data-tools-action="new-agent" role="menuitem" aria-disabled="true"><span class="chat-new-menu-icon"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">New Agent (upcoming)</span><span class="chat-new-menu-sub">Configure the agent harness</span></span></button>
-                <button type="button" class="chat-new-menu-item" data-tools-action="new-channel" role="menuitem">
-                  <span class="chat-new-menu-icon"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path><path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"></path></svg></span>
-                  <span class="chat-new-menu-text"><span class="chat-new-menu-label">New Channel</span><span class="chat-new-menu-sub">Create a shared team channel</span></span>
-                </button>
-                <button type="button" class="chat-new-menu-item" data-tools-action="bot-store" role="menuitem"><span class="chat-new-menu-icon"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 21v-5a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v5"></path><path d="M17.774 10.31a1.12 1.12 0 0 0-1.549 0 2.5 2.5 0 0 1-3.451 0 1.12 1.12 0 0 0-1.548 0 2.5 2.5 0 0 1-3.452 0 1.12 1.12 0 0 0-1.549 0 2.5 2.5 0 0 1-3.77-3.248l2.889-4.184A2 2 0 0 1 7 2h10a2 2 0 0 1 1.653.873l2.895 4.192a2.5 2.5 0 0 1-3.774 3.244"></path><path d="M4 10.95V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8.05"></path></svg></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Bot Marketplace</span><span class="chat-new-menu-sub">Install a predefined bot</span></span></button>
-                <div class="chat-tools-menu-separator" role="separator"></div>
-                <button type="button" class="chat-new-menu-item" data-tools-action="automations" role="menuitem"><span class="chat-new-menu-icon"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6h4"></path><circle cx="12" cy="12" r="10"></circle></svg></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Automations</span><span class="chat-new-menu-sub">View and manage scheduled tasks</span></span></button>
-                <button type="button" class="chat-new-menu-item" data-tools-action="connected-apps" role="menuitem"><span class="chat-new-menu-icon"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22v-5"></path><path d="M9 8V2"></path><path d="M15 8V2"></path><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"></path></svg></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Connected apps</span><span class="chat-new-menu-sub">Connect Google services</span></span></button>
-                <button type="button" class="chat-new-menu-item" data-tools-action="web-browser" role="menuitem"><span class="chat-new-menu-icon"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg></span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Web browser</span><span class="chat-new-menu-sub">Browse beside Mia</span></span></button>
-              </div>
-              <div class="chat-new-menu chat-developer-menu" id="chatDeveloperMenu" role="menu" aria-label="Developer tools">
-                <button type="button" class="chat-new-menu-item" data-developer-action="diagnostics" role="menuitem"><span class="chat-new-menu-icon chat-tools-menu-glyph" aria-hidden="true">&lt;/&gt;</span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Diagnostics</span><span class="chat-new-menu-sub">Show detailed local activity</span></span></button>
-              </div>
-            </div>
-            <div class="chat-search-wrap" data-rail-hide><div class="chat-search-pill"><span class="chat-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="10.8" cy="10.8" r="6.2"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg></span><input type="text" class="chat-search" id="chatSearch" placeholder="Search chats" autocomplete="off" aria-label="Search chats (Command or Control K)" aria-controls="chatSearchResults" aria-expanded="false" /></div><div class="chat-search-results" id="chatSearchResults" role="listbox" aria-label="People, agents, and bots"></div></div>
-            <div class="chat-sidebar-scroll">
-              <div class="chat-recents-group">
-                <div class="chat-recents-head" data-rail-hide><button type="button" class="chat-section-toggle" data-chat-section-toggle="pinned" aria-controls="chatPinned" aria-expanded="true" aria-label="Collapse Pinned" title="Collapse Pinned"><span class="chat-section-chevron" aria-hidden="true"></span></button><span class="chat-recents-title">Pinned</span><span class="chat-recents-count" id="chatPinnedCount"></span></div>
-                <div class="chat-recents" id="chatPinned"></div>
-              </div>
-              <div class="chat-recents-group">
-                <div class="chat-recents-head" data-rail-hide>
-                  <button type="button" class="chat-section-toggle" data-chat-section-toggle="all" aria-controls="chatAllConversations" aria-expanded="true" aria-label="Collapse All conversations" title="Collapse All conversations"><span class="chat-section-chevron" aria-hidden="true"></span></button>
-                  <span class="chat-recents-title">All conversations</span>
-                  <span class="chat-recents-count" id="chatAllCount"></span>
-                  <button type="button" class="chat-dm-add-btn" id="chatDmAddBtn" title="New direct message" aria-label="New direct message">+</button>
-                </div>
-                <div class="chat-dm-add-popover" id="chatDmAddPopover">
-                  <input type="text" class="chat-dm-add-input" id="chatDmAddInput" placeholder="Search people…" autocomplete="off" />
-                  <div class="chat-dm-add-list" id="chatDmAddList"></div>
-                </div>
-                <div class="chat-recents" id="chatAllConversations"></div>
-              </div>
-              <div class="chat-recents-group chat-starter-group" id="chatStarterBotsGroup">
-                <div class="chat-recents-head" data-rail-hide><span class="chat-recents-title">Starter bots</span></div>
-                <div class="chat-starter-bots" id="chatStarterBots" aria-label="Starter bot templates"></div>
-              </div>
-            </div>
-            <div class="chat-sidebar-footer" data-rail-hide>
-              <button type="button" class="chat-acct-row" id="chatAcctBtn" aria-haspopup="true" aria-expanded="false">
-                <span class="chat-acct-avatar" id="chatAcctAvatar">?</span><span class="chat-acct-name" id="chatAcctName">User</span>
+            <nav class="workspace-rail" id="workspaceSwitcherMenu" aria-label="Workspaces">
+              <button type="button" class="workspace-rail-tile" data-workspace-key="solo" aria-label="Solo">
+                <span class="workspace-rail-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"></circle><path d="M5 20a7 7 0 0 1 14 0"></path></svg></span><strong class="workspace-rail-name">Solo</strong>
+              </button>
+              <div class="workspace-rail-sep" role="separator"></div>
+              <button type="button" class="workspace-rail-tile" data-workspace-key="multiplayer_test" aria-label="Multiplayer Test">
+                <span class="workspace-rail-mark" aria-hidden="true">MT</span><strong class="workspace-rail-name">Multiplayer Test</strong>
+              </button>
+              <button type="button" class="workspace-rail-tile workspace-rail-add" id="workspaceRailAdd" aria-label="Add a workspace">
+                <span class="workspace-rail-mark" aria-hidden="true">+</span><strong class="workspace-rail-name">Add a workspace</strong>
+              </button>
+              <div class="workspace-rail-spacer"></div>
+              <button type="button" class="workspace-rail-tile workspace-rail-util" id="railNotificationsBtn" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false" aria-controls="railNotificationsPanel">
+                <span class="workspace-rail-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"></path><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"></path></svg></span><strong class="workspace-rail-name">Notifications</strong>
+              </button>
+              <button type="button" class="workspace-rail-tile workspace-rail-util" data-tools-action="bot-store" aria-label="Bot marketplace">
+                <span class="workspace-rail-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 21v-5a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v5"></path><path d="M17.774 10.31a1.12 1.12 0 0 0-1.549 0 2.5 2.5 0 0 1-3.451 0 1.12 1.12 0 0 0-1.548 0 2.5 2.5 0 0 1-3.452 0 1.12 1.12 0 0 0-1.549 0 2.5 2.5 0 0 1-3.77-3.248l2.889-4.184A2 2 0 0 1 7 2h10a2 2 0 0 1 1.653.873l2.895 4.192a2.5 2.5 0 0 1-3.774 3.244"></path><path d="M4 10.95V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8.05"></path></svg></span><strong class="workspace-rail-name">Bot marketplace</strong>
+              </button>
+              <button type="button" class="workspace-rail-tile workspace-rail-util" data-tools-action="connected-apps" aria-label="Connected apps">
+                <span class="workspace-rail-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22v-5"></path><path d="M9 8V2"></path><path d="M15 8V2"></path><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"></path></svg></span><strong class="workspace-rail-name">Connected apps</strong>
+              </button>
+              <button type="button" class="workspace-rail-tile workspace-rail-account" id="chatAcctBtn" aria-label="Your account" aria-haspopup="true" aria-expanded="false">
+                <span class="workspace-rail-mark chat-acct-avatar" id="chatAcctAvatar" aria-hidden="true">?</span><strong class="workspace-rail-name" id="chatAcctName">User</strong>
               </button>
               <div class="chat-acct-menu" id="chatAcctMenu" role="menu">
                 <button type="button" class="chat-acct-menu-item" id="chatAcctAdmin" hidden role="menuitem">
@@ -453,20 +406,86 @@
                 <div class="chat-acct-menu-sep"></div>
                 <button type="button" class="chat-acct-menu-item danger" id="chatAcctLogout" role="menuitem"><span class="cami" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24"><path d="m16 17 5-5-5-5"></path><path d="M21 12H9"></path><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path></svg></span><span>Log out</span></button>
               </div>
+              <div class="rail-notifications" id="railNotificationsPanel" role="dialog" aria-label="Notifications" hidden>
+                <div class="rail-notifications-title">Notifications</div>
+                <div class="rail-notifications-empty">You're all caught up. Requests that need you will show up here.</div>
+              </div>
+            </nav>
+            <div class="chat-new-btn-wrap">
+              <div class="mia-company-lockup workspace-title" id="miaLockup">
+                <span class="mia-company-name" id="miaCompanyName">Multiplayer Test</span>
+              </div>
+              <div class="sidebar-views" role="group" aria-label="Views" data-rail-hide>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="chat" aria-label="Chat" title="Chat"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path></svg><span class="sidebar-view-label">Chat</span></button>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="automations" data-tools-action="automations" aria-label="Automations" title="Automations"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6h4"></path><circle cx="12" cy="12" r="10"></circle></svg><span class="sidebar-view-label">Automations</span></button>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="artifacts" data-tools-action="artifacts" aria-label="Artifacts" title="Artifacts"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg><span class="sidebar-view-label">Artifacts</span></button>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="browser" data-tools-action="web-browser" aria-label="Browser" title="Browser"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg><span class="sidebar-view-label">Browser</span></button>
+                <!-- Mix: one strip with every chat, automation and browser tab. -->
+                <button type="button" class="sidebar-view-btn sidebar-mix-btn" id="sidebarMixBtn" aria-label="Mix all tabs" title="Mix all tabs" aria-pressed="false"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m18 14 4 4-4 4"></path><path d="m18 2 4 4-4 4"></path><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"></path><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"></path><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"></path></svg></button>
+              </div>
+              <script src="assets/workspace-rail-paint.js?v=20261025-1"></script>
+              <button type="button" class="chat-sidebar-tool-btn chat-sidebar-developer-btn" id="chatSidebarDeveloperBtn" aria-label="Open developer menu" title="Developer tools" aria-haspopup="menu" aria-expanded="false" hidden>&lt;/&gt;</button>
+
+              <div class="chat-new-menu chat-developer-menu" id="chatDeveloperMenu" role="menu" aria-label="Developer tools">
+                <button type="button" class="chat-new-menu-item" data-developer-action="diagnostics" role="menuitem"><span class="chat-new-menu-icon chat-tools-menu-glyph" aria-hidden="true">&lt;/&gt;</span><span class="chat-new-menu-text"><span class="chat-new-menu-label">Diagnostics</span><span class="chat-new-menu-sub">Show detailed local activity</span></span></button>
+              </div>
+            </div>
+            <div class="chat-search-wrap" data-rail-hide><div class="chat-search-pill"><span class="chat-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="10.8" cy="10.8" r="6.2"></circle><path d="m15.5 15.5 4.2 4.2"></path></svg></span><input type="text" class="chat-search" id="chatSearch" placeholder="Search chats" autocomplete="off" aria-label="Search chats (Command or Control K)" aria-controls="chatSearchResults" aria-expanded="false" /></div><button type="button" class="sidebar-new-chat" data-tools-action="new-chat" aria-label="New chat" title="New chat"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path></svg></button><div class="chat-search-results" id="chatSearchResults" role="listbox" aria-label="People, agents, and bots"></div></div>
+            <div class="chat-sidebar-scroll">
+              <div class="chat-recents-group">
+                <div class="chat-recents-head" data-rail-hide><button type="button" class="chat-section-toggle" data-chat-section-toggle="pinned" aria-controls="chatPinned" aria-expanded="true" aria-label="Collapse Pinned" title="Collapse Pinned"><span class="chat-section-chevron" aria-hidden="true"></span></button><span class="chat-recents-title">Pinned</span></div>
+                <div class="chat-recents" id="chatPinned"></div>
+              </div>
+              <div class="chat-recents-group">
+                <div class="chat-recents-head" data-rail-hide>
+                  <button type="button" class="chat-section-toggle" data-chat-section-toggle="all" aria-controls="chatAllConversations" aria-expanded="true" aria-label="Collapse All conversations" title="Collapse All conversations"><span class="chat-section-chevron" aria-hidden="true"></span></button>
+                  <span class="chat-recents-title">All conversations</span>
+                  <span class="chat-recents-count" id="chatAllCount"></span>
+                  <button type="button" class="chat-dm-add-btn" id="chatDmAddBtn" title="New conversation or channel" aria-label="New conversation or channel">+</button>
+                </div>
+                <div class="chat-dm-add-popover" id="chatDmAddPopover">
+                  <input type="text" class="chat-dm-add-input" id="chatDmAddInput" placeholder="Search people…" autocomplete="off" />
+                  <div class="chat-dm-add-list" id="chatDmAddList"></div>
+                </div>
+                <div class="chat-recents" id="chatAllConversations"></div>
+              </div>
+              <div class="chat-recents-group" id="chatBotsGroup">
+                <div class="chat-recents-head" data-rail-hide>
+                  <button type="button" class="chat-section-toggle" data-chat-section-toggle="bots" aria-controls="chatBots" aria-expanded="true" aria-label="Collapse Bots" title="Collapse Bots"><span class="chat-section-chevron" aria-hidden="true"></span></button>
+                  <span class="chat-recents-title">Bots</span>
+                  <span class="chat-recents-count" id="chatBotsCount"></span>
+                  <button type="button" class="chat-section-icon-btn" id="chatSidebarManageAgentsBtn" aria-label="Manage agents and bots" title="Manage agents and bots"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 21a8 8 0 0 0-16 0"></path><circle cx="10" cy="8" r="5"></circle><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"></path></svg></button>
+                  <button type="button" class="chat-dm-add-btn" data-tools-action="new-bot" title="New bot" aria-label="New bot">+</button>
+                </div>
+                <div class="chat-recents" id="chatBots"></div>
+                <button type="button" class="sidebar-upcoming-row" data-tools-action="new-agent" aria-disabled="true" title="Coming soon"><span class="sidebar-upcoming-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg></span><span class="row-text"><span class="row-label">New agent</span><span class="row-preview">Coming soon</span></span></button>
+              </div>
+              <div class="chat-recents-group chat-starter-group" id="chatStarterBotsGroup">
+                <div class="chat-recents-head" data-rail-hide><span class="chat-recents-title">Starter bots</span></div>
+                <div class="chat-starter-bots" id="chatStarterBots" aria-label="Starter bot templates"></div>
+              </div>
+              <div class="sidebar-placeholder" aria-hidden="true">
+                <div class="sidebar-placeholder-group"><span class="mia-placeholder" style="width:46%"></span><span class="mia-placeholder" style="width:72%"></span><span class="mia-placeholder" style="width:58%"></span></div>
+                <div class="sidebar-placeholder-group"><span class="mia-placeholder" style="width:38%"></span><span class="mia-placeholder" style="width:80%"></span><span class="mia-placeholder" style="width:66%"></span><span class="mia-placeholder" style="width:74%"></span></div>
+                <div class="sidebar-placeholder-group"><span class="mia-placeholder" style="width:42%"></span><span class="mia-placeholder" style="width:70%"></span><span class="mia-placeholder" style="width:60%"></span></div>
+              </div>
+            </div>
+            <div class="chat-sidebar-footer" data-rail-hide>
               <span class="csf-dot" id="chatSyncDot"></span><span id="chatSyncFooter">Connecting&hellip;</span>
             </div>
             <div class="chat-sidebar-resize" data-chat-sidebar-resize title="Drag to resize sidebar" aria-hidden="true"></div>
           </aside>
           <main class="chat-app">
             <div class="chat-main-col">
+              <div class="chat-tabs-row" id="chatTabsRow" hidden></div>
               <header class="channel-header" id="channelHeader" style="display:none;"></header>
-              <div class="chat-thread" id="chatThread"></div>
+              <div class="chat-thread" id="chatThread" data-placeholder><div class="chat-thread-placeholder" aria-hidden="true"><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:38%"></span><span class="mia-placeholder" style="width:72%"></span><span class="mia-placeholder" style="width:54%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:30%"></span><span class="mia-placeholder" style="width:64%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:44%"></span><span class="mia-placeholder" style="width:80%"></span><span class="mia-placeholder" style="width:46%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:34%"></span><span class="mia-placeholder" style="width:58%"></span></span></div></div></div>
               <button type="button" class="chat-jump-latest" id="chatJumpLatest" aria-label="Jump to latest message" title="Jump to latest message" aria-hidden="true" hidden>
                 <span class="chat-jump-latest-label" aria-hidden="true"></span>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
               </button>
               <div class="chat-presets" id="chatChips"></div>
-              <div class="cc-recording-pill" id="ccRecordingPill"><span class="cc-recording-dot"></span>Recording&hellip;</div>
+              <div class="cc-recording-pill" id="ccRecordingPill"><span class="cc-recording-dot"></span><span id="ccRecordingText">Recording&hellip;</span></div>
               <div class="chat-dept-agents" id="chatDeptAgents" style="display:none;"></div>
               <div class="cc-goal-chip" id="ccGoalChip" hidden></div>
               <div class="chat-mention-popover" id="chatMentionPopover"></div>
@@ -480,15 +499,26 @@
                   <div id="ccDriveList" class="cc-drive-list"></div>
                   <button type="button" id="ccDriveMore">Add files from Google Drive ↗</button>
                 </section>
+                <div id="ccPlusMenu" class="cc-plus-menu" role="menu" aria-label="Attach" hidden>
+                  <button type="button" role="menuitem" data-plus-choice="upload">Upload a file</button>
+                  <button type="button" role="menuitem" data-plus-choice="artifacts">Artifacts</button>
+                </div>
+                <section id="ccArtifactsMenu" class="cc-drive-menu cc-artifacts-menu" role="dialog" aria-label="Attach an artifact" hidden>
+                  <div class="cc-drive-head"><strong>Artifacts</strong><button type="button" id="ccArtifactsClose" aria-label="Close artifacts">×</button></div>
+                  <input id="ccArtifactsSearch" type="search" placeholder="Search pages, documents and apps" aria-label="Search artifacts" />
+                  <p id="ccArtifactsStatus" role="status"></p>
+                  <div id="ccArtifactsList" class="cc-drive-list"></div>
+                </section>
+                <div class="cc-blocked" id="ccBlocked" role="status" hidden></div>
                 <div class="chat-composer">
                   <div class="cc-input-row">
                     <div class="cc-inline-suggestion" id="ccInlineSuggestion" hidden aria-hidden="true"><em class="cc-inline-suggestion-tab">Tab</em><span>Can we create a newsletter bot?</span></div>
                     <textarea class="cc-input" id="ccInput" rows="1" placeholder="" autocomplete="off" data-form-type="other" data-lpignore="true" data-1p-ignore="true"></textarea>
                   </div>
                   <div class="cc-bottom-row">
-                    <button type="button" class="cc-plus-btn" id="ccPlusBtn" title="Attach" aria-label="Attach">+</button>
+                    <button type="button" class="cc-plus-btn" id="ccPlusBtn" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">+</button>
                     <button type="button" class="cc-plus-btn" id="ccDriveBtn" title="Attach from Google Drive" aria-label="Attach from Google Drive" aria-expanded="false" hidden><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="" /></button>
-                    <input type="file" id="ccFileInput" class="cc-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" />
+                    <input type="file" id="ccFileInput" class="cc-file-input" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.pdf" style="display:none" />
                     <!-- Reserved for the composer keyboard hint. -->
                     <span class="cc-hint" id="ccHint"></span>
                     <div class="cc-model-select" id="ccModelSelect">
@@ -550,7 +580,7 @@
             </aside>
             <aside class="chat-activity-panel" id="chatActivityPanel" aria-label="Agent activity" aria-live="polite" hidden></aside>
             <div class="chat-ctx-menu" id="chatCtxMenu" hidden>
-              <button type="button" class="chat-ctx-menu-item" id="chatCtxEdit">&#9998; Edit prompt</button>
+              <button type="button" class="chat-ctx-menu-item" id="chatCtxEdit">&#9998; Edit and resend</button>
               <button type="button" class="chat-ctx-menu-item" id="chatCtxThread">&#8618; Reply in thread</button>
               <button type="button" class="chat-ctx-menu-item chat-ctx-menu-item-delete" id="chatCtxDelete">&#10005; Delete</button>
             </div>
@@ -606,10 +636,8 @@
     <!-- Same frame as the browser: a gray top row (room for the Mac window
          buttons, drags the window) with one tab, over a white toolbar. -->
     <div class="automations-tabs-row">
-      <div class="automations-tab" role="heading" aria-level="1">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>
-        <span>Automations</span>
-      </div>
+      <!-- The board is the first tab; each automation opens in its own. -->
+      <div class="automations-tabs" id="automationsTabs"></div>
       <button type="button" class="local-browser-btn automations-bar-btn" id="automationsCloseBtn" title="Close automations" aria-label="Close automations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
     </div>
     <header class="automations-bar">
@@ -632,6 +660,30 @@
   </section>
 </div>
 
+<!-- Artifacts: pages, documents and live apps you or your bots made. Same
+     frame as Automations; each one opens in Mia's browser. -->
+<div class="automations-overlay artifacts-overlay" id="artifactsOverlay" hidden aria-hidden="true">
+  <section class="automations-window" aria-label="Artifacts">
+    <div class="automations-tabs-row">
+      <span class="artifacts-title">Artifacts</span>
+      <button type="button" class="local-browser-btn automations-bar-btn" id="artifactsCloseBtn" title="Close artifacts" aria-label="Close artifacts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+    </div>
+    <header class="automations-bar artifacts-bar">
+      <input type="search" class="artifacts-search" id="artifactsSearch" placeholder="Search" aria-label="Search artifacts">
+      <div class="artifacts-chips" id="artifactsChips" role="group" aria-label="Show"></div>
+      <button type="button" class="artifacts-bar-text-btn" id="artifactsAddBtn" data-artifacts-add>+ Live app</button>
+    </header>
+    <form class="artifacts-add-form" id="artifactsAddForm" hidden autocomplete="off">
+      <input type="text" id="artifactsAddUrl" placeholder="http://localhost:3000" aria-label="App address" required>
+      <input type="text" id="artifactsAddName" placeholder="Name (optional)" aria-label="App name" maxlength="120">
+      <button type="submit" class="artifacts-bar-text-btn primary">Add</button>
+      <button type="button" class="artifacts-bar-text-btn" id="artifactsAddCancel">Cancel</button>
+      <span class="artifacts-add-error" id="artifactsAddError" role="alert"></span>
+    </form>
+    <div class="automations-body artifacts-body" id="artifactsBody"></div>
+  </section>
+</div>
+
 <!-- Local browser surface. -->
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
@@ -650,9 +702,8 @@
       <div class="local-browser-url-wrap">
         <div class="local-browser-search-engine" id="localBrowserSearchEngine" role="group" aria-label="Search engine">
           <button type="button" class="local-browser-search-engine-btn" data-search-engine="google" aria-label="Search with Google" title="Search with Google" aria-pressed="true"><img src="assets/connectors/google-g.svg" alt="" /></button>
-          <button type="button" class="local-browser-search-engine-btn" data-search-engine="x" aria-label="Search with X" title="Search with X" aria-pressed="false"><img src="assets/icons/x-logo.svg" alt="" /></button>
         </div>
-        <input type="text" id="localBrowserUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search or enter a web address" aria-label="Web address" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="localBrowserUrlSuggest" />
+        <input type="text" id="localBrowserUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search everywhere: your computer, Mia app, web search or type web address" aria-label="Search everywhere" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="localBrowserUrlSuggest" />
         <div class="local-browser-suggest" id="localBrowserUrlSuggest" role="listbox" hidden></div>
       </div>
       <button type="submit" class="local-browser-go-btn">Go</button>
@@ -788,8 +839,20 @@
     <button class="styled-settings-nav-item" data-pane="model"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h6M12 8v2.5M14.5 8v1.8"/></svg>Access</button>
     <button class="styled-settings-nav-item" data-pane="security"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l5 2v4.2c0 3-2.2 5.3-5 6.2-2.8-.9-5-3.2-5-6.2V3.8l5-2z"/><path d="M5.8 8l1.5 1.5L10.3 6.5"/></svg>Security</button>
     <button class="styled-settings-nav-item" data-pane="backups"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v8.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8M2.8 8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2"/></svg>Backups</button>
+    <button class="styled-settings-nav-item" data-pane="teams">Teams</button>
   </nav>
   <div class="styled-settings-content" id="settingsContent">
+    <section class="styled-settings-pane" data-pane="teams" id="hubTeamsPane">
+      <h1 class="styled-settings-h1">Teams</h1>
+      <p>Request a team, invite people, and manage your memberships.</p>
+      <button type="button" class="styled-settings-pill-btn" id="hubRefresh">Refresh</button>
+      <p id="hubStatus" role="status" aria-live="polite"></p>
+      <form id="hubRequestForm" class="styled-settings-card" style="padding:16px;display:flex;gap:12px;flex-wrap:wrap">
+        <label>Team name <input id="hubTeamName" class="styled-settings-field" required maxlength="120" autocomplete="off"></label>
+        <button class="styled-settings-pill-btn" type="submit">Request team</button>
+      </form>
+      <div id="hubRequests"></div><div id="hubTeams"></div><div id="hubApprovals"></div>
+    </section>
 
     <section class="styled-settings-pane active" data-pane="general">
       <h1 class="styled-settings-h1">General</h1>
@@ -1101,7 +1164,7 @@
       <span>Code</span><code id="harnessAuthCode"></code>
     </div>
     <details id="harnessAuthCompletion" hidden style="flex:1 1 100%;min-width:0">
-      <summary>Enter code manually</summary>
+      <summary>Code from Claude</summary>
       <form class="styled-harness-auth-completion">
       <label for="harnessAuthCompletionCode">One-time code</label>
       <input id="harnessAuthCompletionCode" type="password" autocomplete="off" spellcheck="false" placeholder="Paste code from Claude">
@@ -1125,7 +1188,7 @@
     <div>
       <div class="styled-channel-kicker">Shared space</div>
       <h2 id="channelNameTitle">New channel</h2>
-      <p>Start an official conversation for everyone in this space.</p>
+      <p id="channelNameIntro">Start an official conversation for everyone in this space.</p>
     </div>
     <button class="drawer-close styled-channel-close" id="channelNameClose" aria-label="Close">&times;</button>
   </div>
@@ -1134,8 +1197,12 @@
     <div class="form-field styled-channel-field">
       <label for="channelNameInput">Channel name</label>
       <input type="text" id="channelNameInput" placeholder="e.g. product, launch, or friends" autocomplete="off" maxlength="80" />
-      <small>Official channels are shared team conversations. Shared bots can be added here.</small>
+      <small id="channelNameHint">Official channels are shared team conversations. Shared bots can be added here.</small>
     </div>
+    <label class="styled-channel-private" id="channelPrivateRow" hidden>
+      <input type="checkbox" id="channelPrivateInput" />
+      <span><strong>Private</strong><small>Only people you invite can find and join it.</small></span>
+    </label>
   </div>
   <div class="drawer-actions styled-channel-actions">
     <button class="btn styled-channel-cancel" id="channelNameCancel">Cancel</button>
@@ -1184,15 +1251,22 @@
 
 <script src="assets/mia-mark.js"></script>
 <script src="chat-security.js"></script>
+<script src="feedback-report.js?v=20261022-feedback-1"></script>
 <script src="hermes-connectors.js?v=20260904-google-g"></script>
 <script src="chat-scroll.js?v=20260921-scroll-follow-1"></script>
+<script src="dictation.js?v=20261026-dictation-1"></script>
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
     <script src="browser-work.js"></script>
     <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
     <script src="automations-board.js?v=20261019-automations-1"></script>
+    <script src="artifacts-page.js?v=20261026-artifacts-1"></script>
     <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
-    <script src="native-browser.js?v=20261019-omnibox-1"></script>
-    <script src="app.js?v=20261021-next-step-1"></script>
+    <script src="tab-strip.js?v=20261026-count-2"></script>
+    <script src="native-browser.js?v=20261026-icon-1"></script>
+    <script src="hub-bot-manager.js"></script>
+    <script src="hub-chat.js"></script>
+    <script src="app.js?v=20261026-artifacts-2"></script>
+    <script src="hub-teams.js"></script>
 </body>
 </html>

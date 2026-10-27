@@ -5,15 +5,14 @@ import test from 'node:test';
 const htmlUrl = new URL('./index.html', import.meta.url);
 const appUrl = new URL('./app.js', import.meta.url);
 
-test('styled Connected apps row uses the canonical Lucide plug icon', async () => {
+test('the rail Connected apps tile uses the canonical Lucide plug icon', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const start = html.indexOf('data-tools-action="connected-apps"');
   const end = html.indexOf('</button>', start);
   assert.ok(start >= 0 && end > start, 'Connected apps button is present');
   const row = html.slice(start, end);
   assert.match(row, /<svg data-icon-set="lucide"[^>]*>[\s\S]*M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z/);
-  assert.match(row, /<span class="chat-new-menu-label">Connected apps<\/span>/);
-  assert.match(row, /Connect Google services/);
+  assert.match(row, /<strong class="workspace-rail-name">Connected apps<\/strong>/);
   assert.doesNotMatch(row, /<img|connected-apps\.png/);
 });
 
@@ -27,7 +26,7 @@ test('Connected apps sidebar click opens the existing pane without a selected ro
   assert.doesNotMatch(opener, /!chatWs\.activeRoomId/);
   assert.match(opener, /prepareChatUtilityPane\('plugins'\)/);
   assert.match(source, /else if\(action === 'connected-apps'\) openPluginPane\(\)/);
-  assert.match(source, /var action = item\.getAttribute\('data-tools-action'\);[\s\S]*runToolsAction\(action\);/);
+  assert.match(source, /var item = e\.target\.closest\('\[data-tools-action\]'\);[\s\S]*runToolsAction\(item\.getAttribute\('data-tools-action'\)\);/);
   assert.match(source, /if\(chatInfo\.mode !== 'agents' && chatInfo\.mode !== 'plugins'\) chatInfo\.open = false/);
   assert.match(source, /!chatWs\.activeRoomId && chatInfo\.mode !== 'agents' && chatInfo\.mode !== 'plugins' && chatInfo\.mode !== 'agent-edit'/);
 });

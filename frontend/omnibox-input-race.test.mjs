@@ -13,7 +13,7 @@ function between(start, end) {
   const from = source.indexOf(start);
   return source.slice(from, source.indexOf(end, from));
 }
-const logic = between('  var LOCAL_BROWSER_HISTORY_LIMIT =', '  function browserSidebarOwnsClick(');
+const logic = between('  var LOCAL_BROWSER_HISTORY_LIMIT =', '  (function wireLocalBrowser(){');
 const wiring = between('  (function wireLocalBrowser(){', "    if(back) back.addEventListener('click'") + '\n  })();';
 const history = [{ url: 'https://linkedin.com/', title: 'LinkedIn', count: 3, lastVisit: Date.now() }];
 
@@ -41,7 +41,7 @@ function element() {
 function harness() {
   const input = element(), box = element(), form = element();
   const requests = [], timers = [], navigations = [], covers = [];
-  const document = { activeElement: input };
+  const document = { activeElement: input, body: { classList: { contains: name => name === 'browser-collab-mode' } } };
   const context = vm.createContext({
     document, Promise,
     window: { MiaBrowserOmnibox: omnibox, miaNativeBrowser: { coverForSuggestions: covered => covers.push(covered) }, miaDesktop: { browser: {
@@ -53,6 +53,9 @@ function harness() {
     localBrowserSearchEngine: 'google',
     localBrowserNormalizeUrl: value => value.includes('.') ? 'https://' + value : 'https://www.google.com/search?q=' + value,
     localBrowserNavigate: value => navigations.push(value),
+    // The bar also searches chats and automations; none exist here.
+    chatSearchDirectory: { loaded: true }, chatSearchDirectorySnapshot: () => ({ humans: [], agents: [] }),
+    hubWorkspace: () => false, chatWs: { rooms: { dms: [] }, nativeConversations: [] }, nativeConversationToRoom: room => room, automationsBoardRows: () => [],
   });
   vm.runInContext(logic + wiring, context);
   const type = (value, inputType = 'insertText') => {
