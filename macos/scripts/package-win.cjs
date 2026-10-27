@@ -53,6 +53,22 @@ UPSTREAM_BUILD_PATH_EXCEPTIONS.push({
   sha256: "82ad48dd28564be969174aaef3e3f99816f959bf2519eeeb4ab77d84f9fa9c67",
   paths: ["C:\\Users\\runneradmin"],
 });
+// These pinned upstream wheels contain the same generic runner home in native
+// code. Keep each exception bound to one file and its exact packaged bytes.
+UPSTREAM_BUILD_PATH_EXCEPTIONS.push(...[
+  ["winpty/winpty.cp311-win_amd64.pyd", "0bdbcda99f77f54ca1bb8fb10bbf9d78a721aac5f32ea95249254e19d3002298"],
+  ["watchfiles/_rust_notify.cp311-win_amd64.pyd", "f30105f654b7136b9eb8a9d6018268ce63f09e2ab4c6401d7ddba854e5d0ac7b"],
+  ["rpds/rpds.cp311-win_amd64.pyd", "b4863c2bdd944fb8c56b7cb0fbf7d90ed8dbc83004f20cd2e57a1b0fc177f03f"],
+  ["pydantic_core/_pydantic_core.cp311-win_amd64.pyd", "a0291ce64fc21ad1743626894f97c2e669bcac44226cd54897a661a1e5a147d0"],
+  ["nemo_relay/_native.pyd", "16c9f976e1a95594eb3a76aa3c6e2ab51c4702e608e7f630d299b0d42590b19a"],
+  ["jiter/jiter.cp311-win_amd64.pyd", "f05f5218d8feea6624ae9cbe7dc616c8c1563dd3a5b299b2d1a443f142b25e6d"],
+  ["cryptography/hazmat/bindings/_rust.pyd", "05fefb14b1cb1c90bcccce87e82d205f5f2396977bf911243972790ba2376849"],
+  ["anydoc/_anydoc.pyd", "d71a5efc7714f7f52dfce0108e1c61465a115565b12f125dad7f8267aad17f0c"],
+].map(([file, sha256]) => ({
+  path: `resources/runtime/hermes/venv/Lib/site-packages/${file}`,
+  sha256,
+  paths: ["C:\\Users\\runneradmin"],
+})));
 
 function windowsArtifactName(version = VERSION) {
   return `Mia-${version}-win-x64.zip`;
