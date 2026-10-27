@@ -3361,6 +3361,7 @@ function setHarnessProviderConnected(email, provider, connected) {
   if (connected) providers.add(id); else providers.delete(id);
   settings.harnessConnectedByUser[owner] = Array.from(providers);
   db.saveSingleton(conn, 'settings', settings);
+  noteHermesProviderStatus(id, connected);
 }
 
 // These are product-facing choices mapped to the provider names understood by
@@ -4175,18 +4176,54 @@ function hermesRuntimeAvailable() {
   });
 }
 
+// Each provider check is its own Hermes launch (about a second), and there
+// are dozens of providers, so a full check took 8-20 s and held the setup
+// dialog on "Loading…". Keep the last answers, return them at once, and
+// refresh stale ones in the background. Mia's own sign-ins, key saves and
+// disconnects update the cache directly (see setHarnessProviderConnected),
+// and disconnects still apply on every request through the overlay below.
+const HERMES_STATUS_FRESH_MS = 60 * 1000;
+const hermesStatusCache = new Map();
+let hermesStatusRefresh = null;
+
+async function probeHermesProviderStatus(provider) {
+  return provider === CLAUDE_SUBSCRIPTION_PROVIDER
+    ? (await runClaudeSubscriptionStatus()).loggedIn
+    : runHermesAuthStatus(provider);
+}
+
+function refreshHermesStatusCache(providers) {
+  if (hermesStatusRefresh) return hermesStatusRefresh;
+  hermesStatusRefresh = boundedMap(providers, HERMES_STATUS_CONCURRENCY, async (provider) => {
+    const startedAt = Date.now();
+    const connected = await probeHermesProviderStatus(provider);
+    // A sign-in that finished while this probe ran is newer; keep it.
+    if ((hermesStatusCache.get(provider)?.at || 0) <= startedAt) {
+      hermesStatusCache.set(provider, { connected, at: Date.now() });
+    }
+  }).finally(() => { hermesStatusRefresh = null; });
+  return hermesStatusRefresh;
+}
+
+function noteHermesProviderStatus(provider, connected) {
+  hermesStatusCache.set(provider, { connected: connected === true, at: Date.now() });
+}
+
 async function hermesConnectionStatuses(email) {
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   const providers = Array.from(HERMES_STATUS_PROVIDERS);
-  const values = await boundedMap(providers, HERMES_STATUS_CONCURRENCY, async (provider) => [
+  const now = Date.now();
+  if (providers.some((provider) => !hermesStatusCache.has(provider))) {
+    await refreshHermesStatusCache(providers);
+  } else if (providers.some((provider) => now - hermesStatusCache.get(provider).at >= HERMES_STATUS_FRESH_MS)) {
+    void refreshHermesStatusCache(providers).catch(() => {});
+  }
+  return Object.fromEntries(providers.map((provider) => [
     provider,
     hermesDisconnectedProviders.has(provider) || harnessProviderDisconnectedForUser(settings, email, provider)
       ? false
-      : (provider === CLAUDE_SUBSCRIPTION_PROVIDER
-        ? (await runClaudeSubscriptionStatus()).loggedIn
-        : await runHermesAuthStatus(provider)),
-  ]);
-  return Object.fromEntries(values);
+      : hermesStatusCache.get(provider)?.connected === true,
+  ]));
 }
 
 function rememberNativeChatModelInventory(payload) {
@@ -8475,6 +8512,9 @@ async function onBackendListening() {
   // diagnostics from it so verbose mode survives restarts and reinstalls.
   applyChatOutputSetting(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput);
   migrateWorkspaceOwnership();
+  // Check provider sign-ins once after startup settles, so the first setup
+  // or Access dialog opens with answers instead of waiting for them.
+  setTimeout(() => { void refreshHermesStatusCache(Array.from(HERMES_STATUS_PROVIDERS)).catch(() => {}); }, 5000).unref();
   // Reconcile managed-router credentials at boot: validates the stored key
   // and prunes dead siblings from the auth stores. This path never mints —
   // minting is authorized only by a fresh Clerk session token, which exists

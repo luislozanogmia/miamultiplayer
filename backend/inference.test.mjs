@@ -167,13 +167,51 @@ test('Hermes credential checks cannot borrow the ambient GitHub CLI login', () =
 
 test('provider status checks use bounded subprocess concurrency', () => {
   const source = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
-  const start = source.indexOf('async function hermesConnectionStatuses');
+  const start = source.indexOf('const HERMES_STATUS_FRESH_MS');
   const end = source.indexOf('\nfunction rememberNativeChatModelInventory', start);
   const implementation = source.slice(start, end);
   assert.ok(start >= 0 && end > start);
   assert.match(source, /const HERMES_STATUS_CONCURRENCY = 4/);
   assert.match(implementation, /boundedMap\(providers, HERMES_STATUS_CONCURRENCY/);
   assert.doesNotMatch(implementation, /Promise\.all\(providers\.map/);
+});
+
+test('provider status answers come from the cache at once and refresh in the background', async () => {
+  const source = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('const HERMES_STATUS_FRESH_MS');
+  const end = source.indexOf('\nfunction rememberNativeChatModelInventory', start);
+  const boundedStart = source.indexOf('async function boundedMap');
+  const bounded = source.slice(boundedStart, source.indexOf('\n}\n', boundedStart) + 3);
+  const probes = [];
+  let release = null;
+  const env = {
+    probes,
+    HERMES_STATUS_PROVIDERS: new Set(['claude', 'openai-codex', 'deepseek']),
+    HERMES_STATUS_CONCURRENCY: 4,
+    CLAUDE_SUBSCRIPTION_PROVIDER: 'claude',
+    hermesDisconnectedProviders: new Set(),
+    harnessProviderDisconnectedForUser: () => false,
+    db: { loadSingleton: () => ({}) }, conn: null, DEFAULT_SETTINGS: {},
+    runClaudeSubscriptionStatus: async () => { probes.push('claude'); return { loggedIn: true }; },
+    runHermesAuthStatus: (provider) => { probes.push(provider); return release ? release.then(() => provider === 'deepseek') : Promise.resolve(provider === 'deepseek'); },
+  };
+  const api = new Function('env', `with (env) { ${bounded}\n${source.slice(start, end)}\n return { hermesConnectionStatuses, noteHermesProviderStatus, hermesStatusCache }; }`)(env);
+  assert.deepEqual(await api.hermesConnectionStatuses('me@example.com'), { claude: true, 'openai-codex': false, deepseek: true });
+  assert.equal(probes.length, 3, 'the first call checks every provider once');
+  probes.length = 0;
+  assert.deepEqual(await api.hermesConnectionStatuses('me@example.com'), { claude: true, 'openai-codex': false, deepseek: true });
+  assert.equal(probes.length, 0, 'a fresh answer launches nothing');
+  api.noteHermesProviderStatus('openai-codex', true);
+  assert.equal((await api.hermesConnectionStatuses('me@example.com'))['openai-codex'], true, 'a Mia sign-in shows right away');
+  env.hermesDisconnectedProviders.add('deepseek');
+  assert.equal((await api.hermesConnectionStatuses('me@example.com')).deepseek, false, 'a disconnect shows right away');
+  env.hermesDisconnectedProviders.clear();
+  api.hermesStatusCache.forEach((entry) => { entry.at -= 120000; });
+  let unblock; release = new Promise((resolve) => { unblock = resolve; });
+  const stale = await api.hermesConnectionStatuses('me@example.com');
+  assert.equal(stale['openai-codex'], true, 'a stale answer is returned without waiting for the refresh');
+  unblock(); await new Promise((resolve) => setTimeout(resolve, 0)); await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(probes.length >= 2, 'the stale answers refresh in the background');
 });
 
 test('subscription model selections stay inside the provider allowlist', () => {
