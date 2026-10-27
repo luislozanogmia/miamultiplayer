@@ -27,10 +27,9 @@ test('feedback can attach a content-free technical report', async () => {
   // The backend trail is bounded and content-free by construction.
   assert.match(server, /const MANAGED_ROUTER_DIAG_LIMIT = 50;/);
   assert.match(server, /managedRouterDiagnostics\.slice\(-30\)/);
-  // The CLI stderr tail is key-scrubbed before it can reach any surface.
-  assert.match(server, /split\(apiKey\)\.join\('\[key\]'\)/);
-  // The thrown save error stays generic; detail rides only on cliDetail.
-  assert.match(server, /error\.cliDetail = detail;/);
+  // Credential-save subprocess output is never retained for feedback.
+  assert.match(server, /stdio: \['ignore', 'ignore', 'ignore'\]/);
+  assert.doesNotMatch(server, /error\.cliDetail = detail;/);
 });
 
 test('hermes key saves get a windows-safe timeout', async () => {
