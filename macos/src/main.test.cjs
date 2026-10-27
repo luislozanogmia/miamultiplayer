@@ -26,6 +26,25 @@ test("main-window trust uses exact parsed origins", () => {
   assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:48710/chat", "http://127.0.0.1:4871"), false);
 });
 
+test("packaged desktop always starts its backend with Clerk sign-in", () => {
+  const main = loadMain();
+  const hostile = { MIAOS_DESKTOP_NO_AUTH: '1', MIAOS_NO_AUTH: '1', MIAOS_CLERK_AUTH: '0' };
+  assert.deepEqual(main.desktopAuthEnvironment(true, hostile), {
+    MIAOS_DESKTOP_PACKAGED: '1', MIAOS_NO_AUTH: '0', MIAOS_CLERK_AUTH: '1',
+  });
+  assert.equal(main.desktopAuthEnvironment(false, hostile).MIAOS_NO_AUTH, '1');
+});
+
+test("persistent desktop logs omit complete and encoded credential URLs", () => {
+  const main = loadMain();
+  const logged = main.redactLogValue(
+    'failed https://example.test/reset/fixture-secret?code=fixture-code#fixture-state'
+      + ' and https%3A%2F%2Fexample.test%2Finvite%2Ffixture-secret',
+  );
+  assert.doesNotMatch(logged, /fixture-secret|fixture-code|fixture-state|example[.]test/);
+  assert.match(logged, /\[REDACTED_URL\]/);
+});
+
 test("test Clerk instance accepts only Clerk's exact shared Google OAuth callback", () => {
   const main = loadMain({ MIAOS_CLERK_INSTANCE: "test" });
   const valid = new URL("https://accounts.google.com/v3/signin/accountchooser");

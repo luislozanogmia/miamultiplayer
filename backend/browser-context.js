@@ -50,12 +50,48 @@ function credentialBearingPath(parsed) {
       return true;
     }
   }
+  // Some redirectors double-encode the question mark into the path. Treat
+  // credential query fields exposed by path decoding as credentials too.
+  for (const match of decoded.matchAll(/[?&]([^=&/]{1,64})=([^&#/]*)/g)) {
+    if (sensitiveParam(match[1], match[2])) return true;
+  }
   const parts = decoded.split('/').filter(Boolean);
   return parts.some((value, index) =>
     JWT_LIKE.test(value) ||
     (OPAQUE_VALUE.test(value) && !publicResourceIdentifier(parsed.hostname, parts, index)) ||
     (CREDENTIAL_PATH.test(value) && parts.slice(index + 1).some(part => !AUTH_ROUTE_WORD.test(part)))
   );
+}
+
+// Redirect/continue parameters can contain another encoded address. Check
+// that address before retaining the outer parameter, including repeated URL
+// encoding and nested query values. Fail closed if decoding cannot be checked.
+function credentialBearingEmbeddedAddress(value, depth = 0) {
+  if (depth > 3) return true;
+  let decoded = String(value || '').trim();
+  for (let pass = 0; pass < 3; pass += 1) {
+    const address = /https?:\/\/|^\/\//i.exec(decoded);
+    const candidate = address ? decoded.slice(address.index) : decoded;
+    if (/^(?:https?:\/\/|\/)/i.test(candidate)) {
+      let parsed;
+      try { parsed = new URL(candidate, 'https://nested.invalid'); }
+      catch (_) { return true; }
+      if (parsed.username || parsed.password || parsed.hash || credentialBearingPath(parsed)) return true;
+      for (const [name, nestedValue] of parsed.searchParams) {
+        if (sensitiveParam(name, nestedValue)
+          || credentialBearingEmbeddedAddress(nestedValue, depth + 1)) return true;
+      }
+      return false;
+    }
+    if (!decoded.includes('%')) return false;
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) return false;
+      decoded = next;
+    } catch (_) { return true; }
+  }
+  // Deeply encoded addresses cannot be established as safe.
+  return /%|https?:\/\/|^\//i.test(decoded);
 }
 
 // An http(s) address with credentials, fragment and secret-looking query
@@ -73,7 +109,9 @@ function safeBrowserPageUrl(raw) {
   parsed.password = '';
   parsed.hash = '';
   for (const [name, value] of [...parsed.searchParams]) {
-    if (sensitiveParam(name, value)) parsed.searchParams.delete(name);
+    if (sensitiveParam(name, value) || credentialBearingEmbeddedAddress(value)) {
+      parsed.searchParams.delete(name);
+    }
   }
   if (parsed.href.length > MAX_URL_LENGTH) return '';
   if (credentialBearingPath(parsed)) parsed.pathname = '/';

@@ -182,7 +182,27 @@ function desktopClerkEnvironment() {
     || (app.isPackaged ? path.join(app.getPath("userData"), ".env.local") : path.join(BACKEND_ROOT, ".env.local"));
   let fileEnvironment = {};
   try { fileEnvironment = dotenv.parse(fs.readFileSync(envFile, "utf8")); } catch (_) { /* optional file */ }
-  return { ...fileEnvironment, ...process.env };
+  return {
+    ...fileEnvironment,
+    ...process.env,
+    // A signed installation always requires Clerk, even if an old local
+    // development setting remains in its user-data environment file.
+    ...(app.isPackaged ? { MIAOS_NO_AUTH: "0", MIAOS_CLERK_AUTH: "1" } : {}),
+  };
+}
+
+function desktopAuthEnvironment(packaged, environment = process.env) {
+  if (packaged) return {
+    MIAOS_DESKTOP_PACKAGED: "1",
+    MIAOS_NO_AUTH: "0",
+    MIAOS_CLERK_AUTH: "1",
+  };
+  return {
+    MIAOS_DESKTOP_PACKAGED: "0",
+    MIAOS_NO_AUTH: environment.MIAOS_DESKTOP_NO_AUTH
+      || (/^(0|false)$/i.test(environment.MIAOS_CLERK_AUTH || "") ? "1" : "0"),
+    ...(environment.MIAOS_CLERK_AUTH ? { MIAOS_CLERK_AUTH: environment.MIAOS_CLERK_AUTH } : {}),
+  };
 }
 
 // Set this before Electron creates its native application menu so development
@@ -359,7 +379,11 @@ function redactLogValue(value) {
   return String(value ?? "")
     .split(os.homedir()).join("$HOME")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]")
-    .replace(/([?&](?:token|key|secret|password)=)[^&\s]+/gi, "$1[REDACTED]")
+    // Addresses may carry reset codes in paths, nested queries or fragments.
+    // Logs do not need a page address, so omit the whole address.
+    .replace(/\bhttps?:\/\/[^\s<>"']+/gi, "[REDACTED_URL]")
+    .replace(/\bhttps?%3a%2f%2f[^\s<>"']+/gi, "[REDACTED_URL]")
+    .replace(/([?&](?:code|state|sid|sig|nonce|ticket|auth|token|key|secret|password|credential)=)[^&\s]+/gi, "$1[REDACTED]")
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]")
     .replace(/\b((?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]");
 }
@@ -942,15 +966,9 @@ async function startLocalBackend(exactPort = null) {
     ...(claudeCodeCommand
       ? { CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND: claudeCodeCommand }
       : {}),
-    // Clerk sign-in is on by default: the backend carries Mia's instance as
-    // its built-in configuration, so the desktop app boots into the hosted
-    // ecosystem unless the person opts out (MIAOS_DESKTOP_NO_AUTH=1 or
-    // MIAOS_CLERK_AUTH=0). Clerk vars are forwarded only when set so
-    // empty-string defaults don't shadow dotenv values.
-    MIAOS_NO_AUTH: process.env.MIAOS_DESKTOP_NO_AUTH
-      || (/^(0|false)$/i.test(process.env.MIAOS_CLERK_AUTH || "") ? "1" : "0"),
+    // Only a source checkout can opt into the local no-auth preview.
+    ...desktopAuthEnvironment(app.isPackaged),
     MIAOS_LOCAL_PROFILE: process.env.MIAOS_LOCAL_PROFILE || "1",
-    ...(process.env.MIAOS_CLERK_AUTH ? { MIAOS_CLERK_AUTH: process.env.MIAOS_CLERK_AUTH } : {}),
     ...(process.env.CLERK_PUBLISHABLE_KEY ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY } : {}),
     ...(process.env.CLERK_JWT_KEY ? { CLERK_JWT_KEY: process.env.CLERK_JWT_KEY } : {}),
     ...(process.env.CLERK_ISSUER ? { CLERK_ISSUER: process.env.CLERK_ISSUER } : {}),
@@ -2012,10 +2030,10 @@ function createWindow() {
   const windowArtifactView = artifactView;
   window.on("resize", layoutArtifactPanel);
   window.webContents.on("did-finish-load", () => {
-    desktopLog(`loaded ${window.webContents.getURL()}`);
+    desktopLog("main window loaded");
   });
-  window.webContents.on("did-fail-load", (_event, errorCode, description, validatedURL) => {
-    desktopLog(`failed ${errorCode} ${description} ${validatedURL}`);
+  window.webContents.on("did-fail-load", (_event, errorCode) => {
+    desktopLog(`main window load failed ${errorCode}`);
   });
   // Opt-in diagnostics for disposable QA profiles. Do not persist ordinary
   // renderer console output because chat content and provider errors can carry
@@ -2632,6 +2650,8 @@ app.on("window-all-closed", () => {
 });
 
 module.exports = {
+  desktopAuthEnvironment,
+  redactLogValue,
   devModeRuntimeProblem,
   developmentHermesBinary,
   completeClaudeAuthCallback,

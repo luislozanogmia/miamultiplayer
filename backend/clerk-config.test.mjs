@@ -22,6 +22,21 @@ test('built-in Clerk instance defaults to production; the test switch selects de
   assert.throws(() => config.resolveClerkConfig({ MIAOS_CLERK_INSTANCE: 'staging' }), /must be "production" or "test"/);
 });
 
+test('packaged desktop configuration cannot disable sign-in', () => {
+  for (const overrides of [
+    { MIAOS_NO_AUTH: '1' },
+    { MIAOS_CLERK_AUTH: '0' },
+    { MIAOS_CLERK_AUTH: 'false' },
+  ]) {
+    assert.throws(() => config.resolveClerkConfig({
+      MIAOS_DESKTOP_PACKAGED: '1', ...overrides,
+    }), /packaged Mia requires Clerk sign-in/);
+  }
+  assert.equal(config.resolveClerkConfig({ MIAOS_DESKTOP_PACKAGED: '1' }).enabled, true);
+  assert.equal(config.resolveClerkConfig({ MIAOS_NO_AUTH: '1' }).enabled, false,
+    'the isolated source-checkout preview remains available');
+});
+
 test('a complete CLERK_* tuple overrides the built-in instance switch', () => {
   const resolved = config.resolveClerkConfig({
     MIAOS_CLERK_INSTANCE: 'test',

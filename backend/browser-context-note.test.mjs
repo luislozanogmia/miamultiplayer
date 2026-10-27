@@ -78,6 +78,22 @@ test('credential-bearing path segments are removed, including short auth tokens 
   }
 });
 
+test('credential-bearing URLs inside encoded redirect parameters never enter shared context', () => {
+  const nested = 'https://example.test/reset-password/short-token?code=fixture-code';
+  for (const value of [nested, encodeURIComponent(nested), '/reset-password/short-token?code=fixture-code',
+    'https://example.test/reset%3Fcode%3Dfixture-code', '/reset%3Fcode%3Dfixture-code']) {
+    const outer = new URL('https://example.test/article?q=ordinary');
+    outer.searchParams.set('continue', value);
+    assert.equal(safeBrowserPageUrl(outer.href), 'https://example.test/article?q=ordinary');
+    const context = safeBrowserContext({ url: outer.href, title: 'Article' });
+    assert.equal(context.url, 'https://example.test/article?q=ordinary');
+    assert.equal(note({ browserContext: { url: outer.href } }).includes('fixture-code'), false);
+  }
+  assert.equal(safeBrowserPageUrl('https://example.test/article?continue=' +
+    encodeURIComponent('https://example.test/articles/ordinary-title')),
+  'https://example.test/article?continue=https%3A%2F%2Fexample.test%2Farticles%2Fordinary-title');
+});
+
 test('public resource identifiers remain usable without allowing arbitrary opaque paths', () => {
   const id = 'A'.repeat(48);
   const sha = 'a'.repeat(40);

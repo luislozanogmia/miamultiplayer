@@ -12,11 +12,12 @@ test('workspace reload lifecycle logging survives a disconnected launcher consol
  assert.ok(start>0 && end>start);
  const callbacks={},logs=[];
  const brokenPipe=()=>{throw Object.assign(new Error('broken pipe'),{code:'EPIPE'});};
- const window={webContents:{on:(name,fn)=>callbacks[name]=fn,getURL:()=> 'http://localhost:4871/#/chat'}};
+ const window={webContents:{on:(name,fn)=>callbacks[name]=fn,getURL:()=> 'http://localhost:4871/reset?code=fixture-code'}};
  vm.runInNewContext(source.slice(start,end),{window,console:{log:brokenPipe,error:brokenPipe},desktopLog:message=>logs.push(message)});
  assert.doesNotThrow(()=>callbacks['did-finish-load']());
- assert.doesNotThrow(()=>callbacks['did-fail-load']({},-3,'aborted','http://localhost:4871/'));
+ assert.doesNotThrow(()=>callbacks['did-fail-load']({},-3,'fixture-description','http://localhost:4871/reset?code=fixture-code'));
  assert.equal(logs.length,2);
- assert.match(logs[0],/loaded http:\/\/localhost:4871/);
- assert.match(logs[1],/failed -3 aborted/);
+ assert.equal(logs[0],'main window loaded');
+ assert.equal(logs[1],'main window load failed -3');
+ assert.doesNotMatch(logs.join(' '),/fixture-code|fixture-description|reset/);
 });
