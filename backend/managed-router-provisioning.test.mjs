@@ -28,6 +28,18 @@ async function until(predicate) {
 function response() {
   return { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
 }
+test('managed-router diagnostic trail keeps fixed steps without CLI error details', () => {
+  const start = source.indexOf('const MANAGED_ROUTER_DIAG_LIMIT = 50;');
+  const end = source.indexOf('\nfunction managedRouterErrorCodeForStatus(', start);
+  assert.ok(start >= 0 && end > start);
+  const context = vm.createContext({ Date, Set });
+  vm.runInContext(source.slice(start, end), context);
+  vm.runInContext("recordManagedRouterDiagnostic('install_error', '/Users/example/private person@example.test https://example.test/reset?code=sample'); recordManagedRouterDiagnostic('unknown_step', 'private-detail')", context);
+  const trail = Array.from(vm.runInContext('managedRouterDiagnostics', context));
+  assert.equal(trail.length, 1);
+  assert.match(trail[0], / install_error$/);
+  assert.doesNotMatch(trail[0], /private|example|https?:|@/);
+});
 function fixture({ stored = [], runtimeFailure = false, mintGate = null } = {}) {
   const state = { pool: stored.slice(), mintCalls: 0, adds: [], starts: 0, runtimeFailure,
     hasToken: true, cleanupFailure: false, trace: [], maintenance: false };
