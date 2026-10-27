@@ -2,8 +2,13 @@ $ErrorActionPreference = 'Stop'
 $taskRoot = Join-Path $env:TEMP ('mia-nsis-review-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $taskRoot | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'windows-uninstaller-test.nsi'), (Join-Path $PSScriptRoot 'windows-uninstaller.nsh'), (Join-Path $PSScriptRoot 'windows-uninstaller-fixture.cjs') $taskRoot
-$compiler = Join-Path $env:LOCALAPPDATA 'electron-builder\Cache\nsis\nsis-3.0.4.1\makensis.exe'
-if (-not (Test-Path $compiler)) { throw 'Required pinned NSIS 3.0.4.1 compiler is missing' }
+$nsisCache = Join-Path $env:LOCALAPPDATA 'electron-builder\Cache\nsis-3.0.4.1'
+$compiler = Get-ChildItem -Path $nsisCache -Directory -ErrorAction SilentlyContinue |
+ Where-Object { $_.Name -match '^nsis-3\.0\.4\.1-[a-z0-9]{5}$' } |
+ ForEach-Object { Join-Path $_.FullName 'Bin\makensis.exe' } |
+ Where-Object { Test-Path $_ } |
+ Select-Object -First 1
+if (-not $compiler) { throw "Required pinned NSIS 3.0.4.1 compiler is missing from $nsisCache" }
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
