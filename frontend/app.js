@@ -2518,22 +2518,33 @@
   // credentials. The Electron shell only opens this exact mailto address.
   var FEEDBACK_EMAIL = 'hello@mia-labs.com';
   // The optional technical report is content-free by construction: app
-  // version, platform, and the managed-router provisioning trail (step names,
-  // statuses, exit codes — see the status endpoint). Never conversation text,
+  // version, platform, and fixed managed-router provisioning step names.
+  // Never include diagnostic detail or conversation text,
   // never key material. Kept short so mailto bodies survive every mail client.
   function buildFeedbackTechnicalReport(){
     return api('/api/settings/managed-router/status').then(function(result){
       var data = result && result.data || {};
       var version = '';
       try { version = (window.miaDesktop && window.miaDesktop.version && window.miaDesktop.version()) || ''; } catch(_e){}
+      if(!/^\d+\.\d+\.\d+$/.test(version)) version = '';
+      var platform = /^[A-Za-z0-9 _.-]{1,24}$/.test(navigator.platform) ? navigator.platform : 'unknown platform';
+      var allowedErrors = {session_rejected:1, not_authorized:1, limit_reached:1,
+        unavailable:1, runtime_unavailable:1, sign_in_required:1};
+      var errorCode = Object.prototype.hasOwnProperty.call(allowedErrors, data.errorCode) ? data.errorCode : '';
       var lines = [
         '--- Technical report (no credentials or conversation text) ---',
-        'Mia ' + (version || 'unknown version') + ' on ' + navigator.platform,
+        'Mia ' + (version || 'unknown version') + ' on ' + platform,
         'Router: ' + (managedRouterRuntimeReady(data) ? 'connected'
           : (((data.provisioned || data.credentialSaved) ? 'credential saved; ' : '')
-            + (data.errorCode || ((data.provisioned || data.credentialSaved) && data.runtimeReady === false ? 'runtime unavailable' : 'not connected'))))
+            + (errorCode || ((data.provisioned || data.credentialSaved) && data.runtimeReady === false ? 'runtime unavailable' : 'not connected'))))
       ];
-      var trail = Array.isArray(data.diagnostics) ? data.diagnostics.slice(-12) : [];
+      var allowedSteps = {provision_failed:1, mint_failed:1, mint_ok:1, mint_unreachable:1,
+        gateway_start_failed:1, stored_key_dead:1, no_stored_key:1,
+        credential_saved:1, install_error:1, install_ok:1};
+      var trail = (Array.isArray(data.diagnostics) ? data.diagnostics.slice(-12) : []).map(function(entry){
+        var match = /^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z )?([a-z_]+)(?:\s|$)/.exec(String(entry || ''));
+        return match && Object.prototype.hasOwnProperty.call(allowedSteps, match[1]) ? match[1] : '';
+      }).filter(Boolean);
       return lines.concat(trail).join('\n');
     }).catch(function(){ return ''; });
   }
