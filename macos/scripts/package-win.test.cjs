@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const {
+  UPSTREAM_BUILD_PATH_EXCEPTIONS,
   pruneWindowsPythonRuntime,
   restoreWindowsVenvInterpreter,
   writeWindowsLaunchers,
@@ -16,6 +17,18 @@ const {
 
 const VERSION = require(path.join(__dirname, "..", "package.json")).version;
 const SOURCE = fs.readFileSync(require.resolve("./package-win.cjs"), "utf8");
+
+test("pinned Google Workspace binary has only an exact runner-path audit exception", () => {
+  const release = fs.readFileSync(path.resolve(__dirname, "../../scripts/gws-release.env"), "utf8");
+  const pinnedHash = /GWS_WINDOWS_X64_SHA256="([a-f0-9]{64})"/.exec(release)?.[1];
+  assert.ok(pinnedHash);
+  const matches = UPSTREAM_BUILD_PATH_EXCEPTIONS.filter(
+    (item) => item.path === "resources/runtime/bin/gws.exe"
+  );
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].sha256, pinnedHash);
+  assert.deepEqual(matches[0].paths, ["C:\\Users\\runneradmin"]);
+});
 
 function withEnvironment(name, value, body) {
   const previous = process.env[name];

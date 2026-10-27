@@ -17,7 +17,8 @@ receive an update.
 
 ### Added
 - Shared teams (alpha): channels, groups and DMs with teammates through the
-  Mia Hub, teammate search, and bots that run on their owner's machine.
+  Mia Hub, teammate search, and shared bots that execute on the requesting or
+  approving participant's computer using that participant's credentials.
 - Artifacts page: pages, documents and live apps in your Mia folder; share
   any of them into a chat, or pick one from the chat's (+) menu.
 
