@@ -468,12 +468,6 @@
       input.select();
     });
   }
-  function firstNameFromEmail(email){
-    var local = (email || '').split('@')[0] || '';
-    var token = local.split(/[._]/)[0] || local;
-    if(!token) return 'Your';
-    return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
-  }
   function initialsFromEmail(email){
     var local = (email || '').split('@')[0] || '';
     var parts = local.split(/[._]/).filter(Boolean);
