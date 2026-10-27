@@ -30,6 +30,18 @@ test("pinned Google Workspace binary has only an exact runner-path audit excepti
   assert.deepEqual(matches[0].paths, ["C:\\Users\\runneradmin"]);
 });
 
+test("upstream wheel path exceptions stay limited to pinned native files and the runner prefix", () => {
+  const wheels = UPSTREAM_BUILD_PATH_EXCEPTIONS.filter(
+    (item) => item.path.startsWith("resources/runtime/hermes/venv/Lib/site-packages/")
+  );
+  assert.equal(wheels.length, 8);
+  for (const wheel of wheels) {
+    assert.match(wheel.path, /\.pyd$/);
+    assert.match(wheel.sha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(wheel.paths, ["C:\\Users\\runneradmin"]);
+  }
+});
+
 function withEnvironment(name, value, body) {
   const previous = process.env[name];
   if (value === undefined) delete process.env[name];
