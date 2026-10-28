@@ -80,8 +80,7 @@ test('in the address bar the right pane toggle comes before the view buttons, so
   assert.doesNotMatch(source, /miaToggle\.before\(viewTools\)/);
 });
 
-test('the Artifacts bar gets the pane toggle too, just before the chat buttons', async () => {
+test('in every view the pane toggle sits just before the chat buttons', async () => {
   const source = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
-  assert.match(source, /if \(home !== viewTools\) \{ if \(miaToggle\.parentNode !== home\) home\.append\(miaToggle\); \}/);
-  assert.match(source, /else if \(miaToggle\.nextSibling !== viewTools\) viewTools\.before\(miaToggle\);/);
+  assert.match(source, /if \(miaToggle\.nextSibling !== viewTools\) viewTools\.before\(miaToggle\);/);
 });

@@ -362,7 +362,7 @@ test('a shared channel still loading its history shows bars instead of "Loading 
   assert.equal((thread.innerHTML.match(/chat-placeholder-msg/g) || []).length, 4);
   assert.doesNotMatch(source, /Loading messages&hellip;/);
   const render = source.slice(source.indexOf('  function renderChatThread('), source.indexOf('    // Consecutive turns from the SAME human'));
-  assert.match(render, /if\(hubWorkspace\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);/);
+  assert.match(render, /if\(inHubRoom\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);/);
   assert.match(render, /if\(thread\.hasAttribute\('data-placeholder'\)\)\{\n\s+thread\.removeAttribute\('data-placeholder'\);\n\s+Promise\.resolve\(\)\.then\(function\(\)\{ if\(!thread\.hasAttribute\('data-placeholder'\)\) revealLoaded\(thread\); \}\);/);
 });
 

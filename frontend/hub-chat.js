@@ -168,7 +168,33 @@
     });
     return null;
   }
-  var api = {id:id, teamId:teamId, call:call, localCall:localCall, message:message, merge:merge, validateText:validateText, feed:feed, fileUrl:fileUrl};
+  // A team's bots, grouped by the channel they were shared to:
+  // [{channel, bots}]. One team-wide read where the Hub has it; an older
+  // Hub answers 404 and the bots are read channel by channel instead.
+  function teamBots(teamId){
+    var base='/v1/teams/'+teamId;
+    return call('GET',base+'/bots').then(function(result){
+      var byChannel={}, list=[];
+      (result.bots||[]).forEach(function(bot){
+        var entry=byChannel[bot.channel_id];
+        if(!entry){
+          entry=byChannel[bot.channel_id]={channel:{id:bot.channel_id,name:bot.channel_name,kind:bot.channel_kind,visibility:bot.channel_visibility},bots:[]};
+          list.push(entry);
+        }
+        entry.bots.push(bot);
+      });
+      return list;
+    },function(error){
+      if(!error || error.status!==404) throw error;
+      return call('GET',base+'/channels').then(function(result){
+        return Promise.all((result.channels||[]).map(function(channel){
+          return call('GET',base+'/channels/'+channel.id+'/bots').then(function(bots){return {channel:channel,bots:bots.bots||[]};},
+            function(){return {channel:channel,bots:[]};});
+        }));
+      });
+    });
+  }
+  var api = {id:id, teamId:teamId, call:call, localCall:localCall, message:message, merge:merge, validateText:validateText, feed:feed, fileUrl:fileUrl, teamBots:teamBots};
   root.MiaHubChat = api;
   if(typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

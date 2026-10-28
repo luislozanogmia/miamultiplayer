@@ -691,13 +691,9 @@
     }
 
     function loadTeamAgents(){
-      return hub('GET', '/channels').then(function(result){
-        var channels = result.channels || [];
-        return Promise.all(channels.map(function(channel){
-          return hub('GET', '/channels/' + channel.id + '/bots').then(function(bots){
-            return {channel: channel, bots: bots.bots || []};
-          }, function(){ return {channel: channel, bots: []}; });
-        }));
+      return win.MiaHubChat.teamBots(team.id).catch(function(error){
+        toast(error.message, true);
+        throw error;
       }).then(teamRosterAgents);
     }
 

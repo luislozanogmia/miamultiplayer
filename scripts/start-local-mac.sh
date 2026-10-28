@@ -15,7 +15,7 @@ mia_data_root="${MIA_DEV_DATA_ROOT:-$user_home/Library/Application Support/Mia}"
 # profile. Export it even when the caller relied on the default.
 export MIA_DEV_DATA_ROOT="$mia_data_root"
 # The Hermes and Ghost programs can come from another, already installed data
-# root (dev_mode.sh points this at the installed Mia), while Hermes' own data
+# root (dev_mode.sh points this at its own dev runtime), while Hermes' own data
 # (keys, sessions, profiles) always stays under this data root.
 runtime_root="${MIA_DEV_RUNTIME_ROOT:-$mia_data_root}"
 hermes_home="$mia_data_root/hermes"

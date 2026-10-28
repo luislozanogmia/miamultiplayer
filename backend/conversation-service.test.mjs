@@ -286,6 +286,35 @@ test('canonical bot recreation never adopts or merges fresh conversations', (t) 
   assert.deepEqual(canonicalBotConversationCandidates(afterReconciliation).map((row) => row.id), [replacement.id]);
 });
 
+test('a bot keeps one main chat in Solo and a separate main chat per team workspace', (t) => {
+  const { db, service } = fixture();
+  t.after(() => db.close());
+  const teamA = 'hub_' + 'a'.repeat(32), teamB = 'hub_' + 'b'.repeat(32);
+  const open = (metadata) => service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'bot', name: 'SuperBot', metadata: { botId: 'bot-9', ...metadata },
+  });
+  const solo = open({});
+  const inA = open({ teamWorkspace: teamA });
+  const inB = open({ teamWorkspace: teamB });
+  assert.equal(new Set([solo.id, inA.id, inB.id]).size, 3);
+  assert.equal(open({}).id, solo.id);
+  assert.equal(open({ teamWorkspace: teamA }).id, inA.id);
+  assert.equal(inA.metadata.teamWorkspace, teamA);
+  assert.deepEqual(canonicalBotConversationCandidates([solo, inA, inB]).map((row) => row.id), [solo.id]);
+
+  const fresh = service.createFreshBotConversation({ companyId: 'company-a', conversationId: inA.id, principal: owner() });
+  assert.equal(fresh.metadata.teamWorkspace, teamA);
+  assert.equal(fresh.metadata.conversationMode, 'fresh');
+  assert.equal(open({ teamWorkspace: teamA }).id, inA.id);
+
+  for (const teamWorkspace of ['hub_short', 'solo', 42]) {
+    assert.throws(() => open({ teamWorkspace }), /teamWorkspace must name a team workspace/);
+  }
+  assert.throws(() => service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'channel', name: 'x', metadata: { teamWorkspace: teamA },
+  }), /teamWorkspace must name a team workspace/);
+});
+
 test('Mia can start separate fresh conversations without losing or merging the canonical chat', (t) => {
   const { db, repository, service } = fixture();
   t.after(() => db.close());

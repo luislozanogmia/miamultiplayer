@@ -7,7 +7,7 @@ const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to
 
 test('images and PDFs attach everywhere; web pages only in Solo, since the team Hub refuses HTML', () => {
   const block = slice('  var CHAT_ATTACHMENT_TYPES', '  function stageChatAttachment(');
-  const env = { team: true, hubWorkspace: () => env.team };
+  const env = { team: true, hubWorkspace: () => env.team, inHubRoom: () => env.team };
   const problem = new Function('env', `with (env) { ${block}; return chatAttachmentProblem; }`)(env);
   const mb = 1024 * 1024;
   assert.equal(problem({ type: 'application/pdf', size: mb }), '');

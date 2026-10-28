@@ -16,10 +16,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 # Dev mode is its own Mia: its own sign-in-free profile, database and Hermes
-# data (keys, sessions), so it never touches the installed Mia's. It only
-# borrows the installed Hermes and Ghost programs from the runtime root.
+# data (keys, sessions), so it never touches the installed Mia's. Its Hermes
+# and Ghost programs are its own too, in the dev runtime.
 data_root="${MIA_DEV_DATA_ROOT:-$HOME/.miaos-dev}"
-runtime_root="${MIA_DEV_RUNTIME_ROOT:-$HOME/.miaos}"
+default_runtime_root="$HOME/.miaos-dev-runtime"
+runtime_root="${MIA_DEV_RUNTIME_ROOT:-$default_runtime_root}"
 
 read_json_field() {
   local file="$1" field="$2"
@@ -86,12 +87,17 @@ choose_data_root() {
 choose_data_root
 mkdir -p "$data_root"
 
-# Dev mode reuses an already-provisioned runtime; it never downloads one.
+# The first launch installs the dev runtime. A runtime root you chose is used
+# as it is.
 if [[ ! -x "$runtime_root/hermes/hermes-agent/hermes" ]]; then
-  echo "No Mia runtime is provisioned at $runtime_root." >&2
-  echo "Run scripts/install-local-mac.sh first (it provisions \$HOME/.miaos), or point" >&2
-  echo "MIA_DEV_RUNTIME_ROOT at a data root that already contains hermes/ and ghost-cli/." >&2
-  exit 1
+  if [[ "$runtime_root" != "$default_runtime_root" ]]; then
+    echo "No Mia runtime is provisioned at $runtime_root." >&2
+    echo "Run scripts/provision-dev-runtime.sh \"$runtime_root\" first, or unset MIA_DEV_RUNTIME_ROOT" >&2
+    echo "to use the dev runtime at $default_runtime_root." >&2
+    exit 1
+  fi
+  echo "Installing dev mode's own Hermes and Ghost into $runtime_root (first run only)…"
+  bash "$script_dir/provision-dev-runtime.sh" "$runtime_root"
 fi
 
 # Claim the root for this checkout so the next dev launch (from any checkout)
@@ -133,4 +139,8 @@ export MIAOS_CLERK_INSTANCE="${MIAOS_CLERK_INSTANCE:-test}"
 if [[ "$MIAOS_CLERK_INSTANCE" == "production" ]]; then
   export MIAOS_PORT="${MIAOS_PORT:-4880}"
 fi
+# The installed Mia's Hermes gateway uses port 9121. Dev mode starts its own
+# gateway (with its own Hermes home), so it takes another port; sharing one
+# left the installed app talking to dev's gateway, without its connections.
+export MIAOS_HERMES_GATEWAY_PORT="${MIAOS_HERMES_GATEWAY_PORT:-9131}"
 exec bash "$script_dir/start-local-mac.sh" "$@"

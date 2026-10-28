@@ -26,7 +26,7 @@ function fixture(t,localOwner=owner) {
       if(url.endsWith('/versions')) return new Response(JSON.stringify({proposal:{version:1}}));
       return new Response(JSON.stringify({bot:{...body,owner_id:'user_owner'}}));
     }});
-  return {client,requests,input:{teamId,channelId,localBotId:bot.id,mode:'linked'},setIdentity:value=>identity=value,setEmail:value=>memberEmail=value,setActive:value=>active=value,setFail:value=>fail=value};
+  return {client,requests,input:{teamId,channelId,localBotId:bot.id},setIdentity:value=>identity=value,setEmail:value=>memberEmail=value,setActive:value=>active=value,setFail:value=>fail=value};
 }
 
 test('sharing binds the same local and Hub account, publishes explicitly shared instructions without local identifiers, and retries one registration',async t=>{
@@ -41,6 +41,16 @@ test('sharing binds the same local and Hub account, publishes explicitly shared 
   assert.equal(JSON.stringify(first).includes('Private'),false);
   assert.equal(JSON.stringify(first).includes('local-private-id'),false);
   assert.deepEqual(f.client.available(owner),{bots:[{id:'local-private-id',name:'Helper'}]});
+});
+
+test('sharing always forks and sends only the instructions, even when asked for a linked copy',async t=>{
+  const f=fixture(t);
+  await f.client.share(owner,{...f.input,mode:'linked'},'fixture.token');
+  const version=f.requests.filter(r=>r.options.method==='POST' && r.url.endsWith('/versions')).map(r=>JSON.parse(r.options.body));
+  assert.equal(version.length,1);
+  assert.deepEqual(Object.keys(version[0]).sort(),['instructions','mode','source']);
+  assert.equal(version[0].mode,'fork');
+  assert.equal(typeof f.client.sync,'undefined');
 });
 
 test('different Hub identity, disabled account, unknown local bot and invalid scope fail closed',async t=>{

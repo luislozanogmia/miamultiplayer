@@ -55,7 +55,7 @@ function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,remov
       }
       throw new Error('Unexpected route');
     }});
-  return {client,input:{teamId,channelId,localBotId:'local',mode:'linked',jobId},received,runs:()=>runs,reply:()=>reply};
+  return {client,input:{teamId,channelId,localBotId:'local',jobId},received,runs:()=>runs,reply:()=>reply};
 }
 
 test('explicit approval executes once as approving participant for a handed-off request and retries delivery without inference',async t=>{

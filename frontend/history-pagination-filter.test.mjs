@@ -28,6 +28,8 @@ test('older history advances through hidden pages, deduplicates, and stops only 
   };
   const context = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Promise,
     activeWorkspaceKey: 'solo',
     chatWs: { activeRoomId: 'room-a', byRoom: { 'room-a': state } },
@@ -61,6 +63,8 @@ test('failed older page keeps its cursor and never enters an automatic retry loo
   const scheduled = [];
   const context = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Promise, activeWorkspaceKey: 'solo', chatWs: { activeRoomId: 'room-a', byRoom: { 'room-a': state } },
     api() {
       calls += 1;
@@ -88,6 +92,8 @@ function loadRoomContext({ state, api }) {
   let socketConnections = 0;
   const context = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Promise, Date, Number, activeWorkspaceKey: 'solo', AGENT_SETUP_ROOM_ID: '__setup__',
     chatRoster: {},
     chatWs: { native: false, nativeSocketConversationId: null, activeRoomId: null, configured: true, byRoom: { 'room-a': state } },
@@ -144,6 +150,8 @@ test('history filter defaults by stable identity, supports All, and resets acros
   const end = source.indexOf('\n\n  function renderConversationHeaderActions', start);
   const context = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     activeWorkspaceKey: 'solo',
     chatWs: {
       activeRoomId: 'room-a',
@@ -208,6 +216,8 @@ test('native browser visibility owner occludes and restores the live view withou
   const classes = new Set();
   const context = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     scheduled: false, open: true, lastLayout: '', downloadsOpen: false, suggestCovered: false, tabsListOpen: false,
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },

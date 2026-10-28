@@ -34,10 +34,10 @@ test('only an admin or the channel creator may invite from @; nobody can invite 
 
 test('picking a teammate outside the channel invites them through the Hub channel invite', () => {
   const select = slice('  function selectMentionEntry(', '  function chatMentionHandleKeydown(');
-  assert.match(select, /hubWorkspace\(\) && entry\.kind === 'human' && !hubCanInviteToChannel\(chatWs\.activeRoomId\)\)\{\s*insertMentionText\(entry\);/);
+  assert.match(select, /inHubRoom\(\) && entry\.kind === 'human' && !hubCanInviteToChannel\(chatWs\.activeRoomId\)\)\{\s*insertMentionText\(entry\);/);
   const confirm = slice('  function confirmMentionAdd(', '  function openMentionPopover(');
-  assert.match(confirm, /hubWorkspace\(\) && entry\.kind==='human'\)\{\s*hubCall\('POST',hubPath\(\)\+'\/channels\/'\+roomId\+'\/invites',\{member:entry\.clerkUserId\}\)/);
-  assert.match(confirm, /hubWorkspace\(\) && entry\.kind==='agent' && !\['linked','fork'\]/, 'the linked-or-fork choice is only for bots');
+  assert.match(confirm, /inHubRoom\(\) && entry\.kind==='human'\)\{\s*hubCall\('POST',hubPath\(\)\+'\/channels\/'\+roomId\+'\/invites',\{member:entry\.clerkUserId\}\)/);
+  assert.doesNotMatch(confirm, /'linked'/, 'sharing a bot always forks; there is no linked choice');
   const roster = slice('  function refreshHubBotState(', '  function hubMentionHumans(');
   assert.match(roster, /hubCall\('GET',hubPath\(\)\+'\/members'\)/, 'the whole team is fetched with the channel');
   assert.match(roster, /notInChatAgents:\(results\[2\]\.bots\|\|\[\]\)/, 'your own Solo bots stay offered to share');

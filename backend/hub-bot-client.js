@@ -166,16 +166,10 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
       if(!isOwnerActive(owner)) throw failure(403,'account_unavailable');
       return {bots:listBots(owner).map(bot=>({id:String(bot.id),name:bot.name}))};
     },
-    async sync(owner,input,token) {
-      const scope=await context(owner,input,token);
-      const binding=journal.bindings(scope).find(b=>b.registration_id===input.botId);
-      const bot=binding && getBot(binding.local_bot_id,scope.owner);
-      if (!bot) throw failure(404,'bot_not_found');
-      return requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
-        {instructions:bot.instructions || bot.role || bot.output || '',source:'solo'},fetcher);
-    },
+    // Sharing forks the bot: the team gets its own copy of the instructions
+    // only, no longer tied to the Solo bot. Skills, automations and memories
+    // stay in Solo.
     async share(owner,input,token) {
-      if (!['linked','fork'].includes(input.mode)) throw failure(400,'sharing_mode_required');
       const scope=await context(owner,input,token);
       const bot=getBot(String(input.localBotId||''),scope.owner);
       if(!bot) throw failure(404,'bot_not_found');
@@ -184,7 +178,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
         {id:binding.registration_id,name:binding.public_name},fetcher);
       if(!result.bot || result.bot.owner_id!==scope.subject || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
       const proposed=await requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
-        {mode:input.mode,instructions:bot.instructions || bot.role || bot.output || '',source:'manual'},fetcher);
+        {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual'},fetcher);
       return {bot:result.bot,proposal:proposed.proposal};
     },
   };
@@ -198,7 +192,6 @@ function createHubBotRouter(options) {
   router.get('/available',handle(req=>client.available(req.userEmail)));
   router.post('/poll',handle(req=>client.poll(req.userEmail,req.body,req.get('x-hub-token'))));
   router.post('/run',handle(req=>client.run(req.userEmail,req.body,req.get('x-hub-token'))));
-  router.post('/sync',handle(req=>client.sync(req.userEmail,req.body,req.get('x-hub-token'))));
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }

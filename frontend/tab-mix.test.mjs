@@ -43,7 +43,7 @@ test('there is one tab strip, the browser\'s, and it moves into the chat and Aut
   assert.match(html, /class="automations-tabs" id="automationsTabs"/);
   assert.doesNotMatch(html, /class="native-browser-tabs[^"]*" id="(chatTabsRow|automationsTabs)"/);
   assert.doesNotMatch(app, /MiaTabStrip\.create\(/);
-  assert.match(browser, /var DOCKS = \{ chat: 'chatTabsRow', automations: 'automationsTabs' \};/);
+  assert.match(browser, /var DOCKS = \{ chat: 'chatTabsRow', automations: 'automationsTabs', artifacts: 'artifactsTabs' \};/);
   assert.match(browser, /dock\(showingView\(\)\);/);
 });
 
@@ -132,7 +132,7 @@ test('each view button can show how many tabs that view has open', () => {
   mix.register('chat', { tabs: () => [{ id: 'a' }, { id: 'b' }] });
   mix.register('automations', { tabs: () => [{ id: 'x' }, { id: 'y' }, { id: 'z' }] });
   mix.register('browser', { tabs: () => { throw new Error('not ready'); } });
-  assert.deepEqual(mix.counts(), { chat: 2, automations: 3, browser: 0 });
+  assert.deepEqual(mix.counts(), { chat: 2, automations: 3, artifacts: 0, browser: 0 });
   mix.register('automations', { count: () => 2 });
   assert.equal(mix.counts().automations, 2, 'a view can leave its fixed page out of the count');
 });

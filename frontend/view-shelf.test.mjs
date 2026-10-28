@@ -78,3 +78,14 @@ test('the button sits where Downloads is, hides in the browser, and follows the 
   assert.match(nav, /shelfBtn\.nextSibling !== miaToggle\) miaToggle\.before\(shelfBtn\)/);
   assert.match(app, /rememberRecentArtifact\(item\.id\);\s*closeArtifactsPage\(\);/, 'opening an artifact records it');
 });
+
+test('Artifacts has a real tab in the browser strip, like the Automations board', async () => {
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const strip = await readFile(new URL('./tab-strip.js', import.meta.url), 'utf8');
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(html, /<div class="automations-tabs" id="artifactsTabs"><\/div>/, 'no plain-text title in the row');
+  assert.match(strip, /MIX_ORDER = \['chat', 'automations', 'artifacts', 'browser'\]/);
+  assert.match(strip, /\^\(chat\|automations\|artifacts\|browser\):/, 'its × goes to Artifacts, not the browser');
+  assert.match(app, /mix\.register\('artifacts', \{\s*tabs: artifactsStripTabs/);
+  assert.match(app, /label:'Artifacts', iconHtml:ARTIFACTS_ICON, active:artifactsPage\.open/);
+});

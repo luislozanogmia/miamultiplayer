@@ -33,6 +33,8 @@ function harness({ roomId = 'mia', kind = 'agent', messages = [] } = {}) {
   const chip = { hidden: true, innerHTML: '' };
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Object,
     Promise,
     chatWs: { activeRoomId: roomId, activeKind: kind, activeLabel: 'Mia', configured: true, nativeConversations: conversations },

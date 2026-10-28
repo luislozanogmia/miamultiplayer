@@ -94,6 +94,15 @@
   }
   function chatDraftsStorageKey(key){ return 'miaChatDrafts:' + String(currentUser || '').toLowerCase() + ':' + key; }
   function hubWorkspace(){ return /^hub_[a-f0-9]{32}$/.test(activeWorkspaceKey); }
+  // In a team, your private chats with bots are Solo bot chats tagged with
+  // the team: they live on this Mac, not on the Hub. Every other room in a
+  // team is a Hub channel or DM.
+  function teamBotRoom(roomId){
+    return hubWorkspace() && !!roomId && (chatWs.nativeConversations || []).some(function(conversation){ return conversation.id === roomId; });
+  }
+  function inHubRoom(roomId){ return hubWorkspace() && !teamBotRoom(roomId === undefined ? chatWs.activeRoomId : roomId); }
+  // Where this Mac keeps the chats you see: a team's bot chats sit with Solo's.
+  function localChatWorkspaceKey(){ return hubWorkspace() ? 'solo' : activeWorkspaceKey; }
   var appCollaborationMode = WORKSPACE_OPTIONS[activeWorkspaceKey].mode;
   function workspaceLabel(){
     var workspace = WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS.solo;
@@ -541,7 +550,9 @@
     var requestAuthGeneration=authGeneration;
     opts = opts || {};
     opts.credentials = 'include';
-    opts.headers = Object.assign({'Accept':'application/json', 'X-MiaOS-Workspace':activeWorkspaceKey}, opts.headers || {});
+    // A request that names its workspace in the query goes to that one.
+    var namedWorkspace = /[?&]workspace=([^&#]+)/.exec(path);
+    opts.headers = Object.assign({'Accept':'application/json', 'X-MiaOS-Workspace':namedWorkspace ? decodeURIComponent(namedWorkspace[1]) : activeWorkspaceKey}, opts.headers || {});
     if(opts.body && typeof opts.body !== 'string'){
       opts.headers = Object.assign({'Content-Type':'application/json'}, opts.headers || {});
       opts.body = JSON.stringify(opts.body);
@@ -4691,7 +4702,7 @@
   // computer and subscription, exactly as Solo does. `immediate` skips the
   // background throttle; a request arriving mid-poll runs once more after it.
   function pollHubBots(roomId,immediate){
-    if(!hubWorkspace() || !roomId || chatWs.configured===false)return Promise.resolve();
+    if(!inHubRoom(roomId) || !roomId || chatWs.configured===false)return Promise.resolve();
     var state=chatRoomState(roomId),workspace=activeWorkspaceKey;
     if(state.hubExecutionRequest){ if(immediate) state.hubExecutionAgain=true; return state.hubExecutionRequest; }
     if(!immediate && Date.now()-Number(state.hubExecutionAt||0)<15000)return Promise.resolve();
@@ -4707,7 +4718,7 @@
     return state.hubExecutionRequest;
   }
   function refreshHubBotState(roomId,force){
-    if(!hubWorkspace() || !roomId || chatWs.configured===false)return Promise.resolve();
+    if(!inHubRoom(roomId) || !roomId || chatWs.configured===false)return Promise.resolve();
     var state=chatRoomState(roomId),workspace=activeWorkspaceKey,generation=chatWs.navigationGeneration;
     if(state.hubBotRequest)return state.hubBotRequest;
     if(!force && Date.now()-Number(state.hubBotsAt||0)<4000)return Promise.resolve();
@@ -5029,8 +5040,8 @@
   // was just created: it is shared into the channel and, when you are a team
   // admin, published right away. Anyone else's bot waits for an admin.
   // -> Promise<true when published>
-  function shareBotToHubChannel(teamId, channelId, localBotId, mode){
-    return window.MiaHubChat.localCall('POST', '/share', {teamId: teamId, channelId: channelId, localBotId: String(localBotId), mode: mode}).then(function(result){
+  function shareBotToHubChannel(teamId, channelId, localBotId){
+    return window.MiaHubChat.localCall('POST', '/share', {teamId: teamId, channelId: channelId, localBotId: String(localBotId)}).then(function(result){
       var version = result && result.proposal && result.proposal.version, bot = result && result.bot;
       if(!(hubChat.membership && hubChat.membership.role === 'admin') || !version || !bot) return false;
       return hubCall('POST', hubPath() + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ return true; });
@@ -5043,7 +5054,7 @@
   function addCreatedBotToTeam(created, conversation, target){
     var name = String(created.name || 'Bot');
     if(activeWorkspaceKey !== 'hub_' + target.teamId){ loadChatRoom(conversation.id, 'agent', created.name); return; }
-    return shareBotToHubChannel(target.teamId, target.channelId, created.id, 'linked').then(function(published){
+    return shareBotToHubChannel(target.teamId, target.channelId, created.id).then(function(published){
       var channel = hubChannel(target.channelId);
       if(channel) openHubChannel(channel);
       refreshHubBotState(target.channelId, true);
@@ -5052,6 +5063,37 @@
       showBenchToast(name + ' was created, but it could not join ' + target.label + ': ' + (error && error.message || 'try Add bot in the channel.'));
       loadChatRoom(conversation.id, 'agent', created.name);
     });
+  }
+  // Your Solo bots and this team's chats with them. A failure leaves the
+  // Bots section empty; channels still load.
+  function loadTeamBotChats(){
+    var workspace=activeWorkspaceKey;
+    return Promise.all([
+      api('/api/bots?workspace=solo').then(function(res){ return res.status===200 && res.data && res.data.bots || []; }),
+      loadNativeConversations()
+    ]).then(function(results){
+      if(activeWorkspaceKey!==workspace)return;
+      syncChatBotRecords(results[0].filter(function(bot){ return String(bot.status||'').toLowerCase()!=='paused'; }));
+      applyNativeConversationList(results[1]);
+    }).catch(function(){});
+  }
+  // A bot's main chat in this team, made the first time you open it.
+  function openTeamBotChat(bot){
+    var existing=(chatWs.nativeConversations||[]).filter(function(conversation){
+      var metadata=conversation.metadata||{};
+      return metadata.botId===bot.id && metadata.conversationMode!=='fresh';
+    })[0];
+    if(existing)return loadChatRoom(existing.id,'agent',bot.name);
+    var workspace=activeWorkspaceKey;
+    return api('/api/conversations?workspace=solo',{method:'POST',body:{type:'bot',name:bot.name,
+      metadata:{botId:bot.id,teamWorkspace:workspace,departments:Array.isArray(bot.departments)?bot.departments:[],source:'team-bot-chat'}}}).then(function(res){
+      var conversation=res.data && res.data.conversation;
+      if((res.status!==201 && res.status!==200) || !conversation)throw new Error('team bot chat');
+      if(activeWorkspaceKey!==workspace)return;
+      if(!(chatWs.nativeConversations||[]).some(function(item){return item.id===conversation.id;}))chatWs.nativeConversations.push(conversation);
+      applyNativeConversationList(chatWs.nativeConversations);
+      return loadChatRoom(conversation.id,'agent',bot.name);
+    }).catch(function(){ showBenchToast('Couldn\'t open a chat with '+bot.name+'. Try again.'); });
   }
   function initHubChat(){
     // Local startup callbacks may already have selected Mia. A Hub selection
@@ -5064,8 +5106,12 @@
     chatWs.activeRoomId=null;chatWs.activeKind=null;chatWs.activeLabel='';
     chatWs.nativeConversations=[];
     chatWs.native=false; chatWs.allAgents=[]; chatWs.humans=[];
-    return loadHubTeams(false).then(refreshHubChannels).then(function(){
+    hubChat.companyBots=[];
+    var teamBots=loadTeamBotChats();
+    return loadHubTeams(false).then(refreshHubChannels).then(function(){ loadCompanyBots(); return teamBots; }).then(function(){
       hubChat.error='';hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
+      var botChat=(chatWs.nativeConversations||[]).filter(function(c){return c.id===previousRoomId;})[0];
+      if(botChat && !keepSetup){ startChatPolling(); return loadChatRoom(botChat.id,'agent',botChat.name); }
       var room=hubChat.channels.filter(function(c){return c.id===previousRoomId;})[0] || hubChat.channels.filter(function(c){return !hubPrivateConversation(c);})[0] || hubChat.channels[0];
       startChatPolling();
       var newBot=takeNewTeamBotRequest(activeWorkspaceKey,hubChat.channels,Date.now());
@@ -5157,21 +5203,26 @@
       var head=document.createElement('div'); head.className='chat-recents-head hub-section-head';
       head.innerHTML='<button type="button" class="chat-section-toggle" aria-expanded="'+expanded+'" aria-label="'+esc((expanded?'Collapse ':'Expand ')+title)+'" title="'+esc((expanded?'Collapse ':'Expand ')+title)+'"><span class="chat-section-chevron" aria-hidden="true"></span></button>'
         +'<span class="chat-recents-title">'+esc(title)+'</span>'
-        +'<button type="button" class="chat-dm-add-btn hub-section-add" title="'+esc(addLabel)+'" aria-label="'+esc(addLabel)+'">+</button>';
+        +(onAdd?'<button type="button" class="chat-dm-add-btn hub-section-add" title="'+esc(addLabel)+'" aria-label="'+esc(addLabel)+'">+</button>':'');
       el('.chat-section-toggle',head).addEventListener('click',function(){
         hubSidebarSections[key]=!expanded;
         try { localStorage.setItem('miaHubSidebarSections',JSON.stringify(hubSidebarSections)); } catch(_sectionStorageError) {}
         renderHubSidebar();
       });
-      el('.hub-section-add',head).addEventListener('click',function(event){event.stopPropagation();onAdd(event.currentTarget);});
+      if(onAdd)el('.hub-section-add',head).addEventListener('click',function(event){event.stopPropagation();onAdd(event.currentTarget);});
       var list=document.createElement('div'); list.className='hub-section-rows';
       wrap.appendChild(head); wrap.appendChild(list);
       return {node:wrap,list:list};
     }
+    var myBots=chatWs.botRecords||[], companyBots=hubChat.companyBots||[];
+    var pinnedBots=teamBotPins(activeWorkspaceKey);
+    function botPinned(key){ return pinnedBots.indexOf(key)>=0; }
     if(pinned){
       pinned.innerHTML='';
-      if(pinnedChannels.length)pinnedChannels.forEach(function(channel){pinned.appendChild(row(channel));});
-      else pinned.innerHTML='<div class="chat-sidebar-empty chat-pinned-empty">No pinned channels yet</div>';
+      pinnedChannels.forEach(function(channel){pinned.appendChild(row(channel));});
+      myBots.forEach(function(bot){ if(botPinned('mine:'+bot.id))pinned.appendChild(teamBotRow(bot,true)); });
+      companyBots.forEach(function(bot){ if(botPinned('company:'+bot.key))pinned.appendChild(companyBotRow(bot,true)); });
+      if(!pinned.children.length)pinned.innerHTML='<div class="chat-sidebar-empty chat-pinned-empty">Nothing pinned yet</div>';
     }
     if(!all)return;
     all.innerHTML='';
@@ -5183,6 +5234,120 @@
     var dmSection=section('dms','Direct messages','New direct message',openHubDirectMessagePicker);
     dms.forEach(function(channel){dmSection.list.appendChild(row(channel));});
     all.appendChild(dmSection.node);
+    // My Bots are made in Solo; here you chat with them about this team's work.
+    var myBotSection=section('bots','My Bots','',null);
+    myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id))myBotSection.list.appendChild(teamBotRow(bot)); });
+    if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
+    all.appendChild(myBotSection.node);
+    // Company bots: every bot shared into a channel of this workspace you can see.
+    var companySection=section('company-bots','Company bots','',null);
+    companyBots.forEach(function(bot){ if(!botPinned('company:'+bot.key))companySection.list.appendChild(companyBotRow(bot)); });
+    if(!companyBots.length)companySection.list.innerHTML='<div class="chat-sidebar-empty">Bots shared in this workspace show up here</div>';
+    all.appendChild(companySection.node);
+  }
+  // Pinned bots are a personal preference, kept on this computer per workspace.
+  function teamBotPins(workspace){
+    try { return (JSON.parse(localStorage.getItem('miaPinnedTeamBots')||'{}')||{})[workspace]||[]; } catch(_pinStorageError) { return []; }
+  }
+  function toggleTeamBotPin(workspace,key){
+    var all={};
+    try { all=JSON.parse(localStorage.getItem('miaPinnedTeamBots')||'{}')||{}; } catch(_pinStorageError) {}
+    var pins=(all[workspace]||[]).filter(function(item){return item!==key;});
+    if(pins.length===(all[workspace]||[]).length)pins.push(key);
+    all[workspace]=pins;
+    try { localStorage.setItem('miaPinnedTeamBots',JSON.stringify(all)); } catch(_pinStorageError) {}
+    renderChatSidebar();
+  }
+  // A bot row's ⋯ and right-click both offer Pin or Unpin.
+  function wireTeamBotPin(button,key,pinned){
+    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){toggleTeamBotPin(activeWorkspaceKey,key);}]]); }
+    button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();open(button);});
+    var more=el('.hub-channel-more',button);
+    if(more)more.addEventListener('click',function(event){event.stopPropagation();open(more);});
+  }
+  // The same bot can be added to several channels; the Hub lists it per
+  // channel, so it shows once here, by name, with the channels it is in.
+  function companyBotsFromChannels(results){
+    var byKey={},list=[];
+    results.forEach(function(result){
+      (result.bots||[]).forEach(function(bot){
+        if(!bot.published || !bot.name)return;
+        var key=String(bot.name).toLowerCase(), entry=byKey[key];
+        if(!entry){ entry=byKey[key]={key:key,name:bot.name,channels:[]}; list.push(entry); }
+        if(entry.channels.indexOf(result.channel)<0)entry.channels.push(result.channel);
+      });
+    });
+    return list.sort(function(a,b){return a.name.localeCompare(b.name);});
+  }
+  function loadCompanyBots(){
+    var workspace=activeWorkspaceKey;
+    return window.MiaHubChat.teamBots(workspace.slice(4)).then(function(results){
+      if(workspace!==activeWorkspaceKey)return;
+      // The Hub decides who sees which bot: everyone by default, unless an
+      // admin limits it. The sidebar shows exactly what it returns.
+      hubChat.companyBots=companyBotsFromChannels(results);
+      renderChatSidebar();
+    }).catch(function(){/* The sidebar keeps its last list; the next team open retries. */});
+  }
+  // Where a company bot can be used: a channel you're in, else an open
+  // channel you can join; a private one you're not in can't be opened.
+  function companyBotPlace(bot,mine){
+    var joined=bot.channels.filter(function(channel){return !!mine(channel.id);})[0];
+    if(joined)return {action:'open',channel:mine(joined.id)};
+    var open=bot.channels.filter(function(channel){return channel.kind==='channel' && channel.visibility!=='private';})[0];
+    if(open)return {action:'join',channel:open};
+    return {action:'none',channel:null};
+  }
+  function companyBotWhere(channel){
+    var mine=hubChannel(channel.id);
+    if(mine)return hubChannelTitle(mine);
+    return channel.kind==='dm' ? 'Direct message' : channel.kind==='group' ? 'Group' : channel.name || 'Channel';
+  }
+  function openCompanyBot(bot){
+    var place=companyBotPlace(bot,hubChannel);
+    if(place.action==='open')return openHubChannel(place.channel);
+    if(place.action==='none')return showBenchToast(bot.name+' is only in conversations you\'re not part of. Ask whoever added it to add it to one of your channels.');
+    return appConfirm('Join #'+place.channel.name+' to use '+bot.name+'?','Join').then(function(ok){
+      if(!ok)return;
+      return hubCall('POST',hubPath()+'/channels/'+place.channel.id+'/join').then(refreshHubChannels)
+        .then(function(){openHubChannel(hubChannel(place.channel.id));})
+        .catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t join. Try again.'));});
+    });
+  }
+  // A company bot is used in the channels it was shared to; its row opens
+  // one of them so you can mention it there.
+  function companyBotRow(bot,pinned){
+    var button=document.createElement('button'); button.type='button';
+    var place=companyBotPlace(bot,hubChannel);
+    button.className='chat-recent-row hub-channel-row'+(place.action==='open' && chatWs.activeRoomId===place.channel.id?' active':'');
+    button.setAttribute('data-company-bot',bot.key);
+    var where=bot.channels.map(companyBotWhere).join(', ');
+    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,null,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
+      +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
+      +'<span class="row-preview">'+esc(where)+'</span></span>';
+    button.addEventListener('click',function(){ openCompanyBot(bot); });
+    wireTeamBotPin(button,'company:'+bot.key,!!pinned);
+    return button;
+  }
+  // A bot row in a team opens your private chat with it for this team.
+  function teamBotRow(bot,pinned){
+    var chat=(chatWs.nativeConversations||[]).filter(function(conversation){
+      var metadata=conversation.metadata||{};
+      return metadata.botId===bot.id && metadata.conversationMode!=='fresh';
+    })[0];
+    var state=chat && chatWs.byRoom[chat.id];
+    var active=!!chat && chatWs.activeRoomId===chat.id;
+    var preview=chat ? hubRoomPreview(chat.id) : '';
+    var button=document.createElement('button'); button.type='button';
+    button.className='chat-recent-row hub-channel-row'+(active?' active':'');
+    button.setAttribute('data-team-bot-id',bot.id);
+    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,null,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
+      +renderChatActivityIndicator(!!(state && state.thinking),false)
+      +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span></span>'
+      +'<span class="row-preview'+(preview?'':' empty')+'">'+(preview?esc(preview):'&nbsp;')+'</span></span>';
+    button.addEventListener('click',function(){ openTeamBotChat(bot); });
+    wireTeamBotPin(button,'mine:'+bot.id,!!pinned);
+    return button;
   }
   var hubSidebarSections={};
   try { hubSidebarSections=JSON.parse(localStorage.getItem('miaHubSidebarSections')||'{}')||{}; } catch(_sectionStorageError) {}
@@ -5441,6 +5606,8 @@
     return confirmed.length ? confirmed[confirmed.length-1].nativeEvent.sequence : 0;
   }
   function applyHubRows(roomId,rows){
+    // Shared-space updates ride in the channel but never show as messages.
+    rows=(rows||[]).filter(function(row){return !(row && window.MiaSharedSpace && window.MiaSharedSpace.isSpaceMessage(row.body));});
     var state=chatRoomState(roomId);
     state.messages=window.MiaHubChat.merge(state.messages,rows);
     var people=rows.filter(function(row){return row && row.author_type!=='bot' && row.author_type!=='system';});
@@ -5533,6 +5700,11 @@
         var row=event.message;
         if(!channel){refreshChannels=true;return;}
         channel.latest_sequence=Math.max(Number(channel.latest_sequence||0),row.sequence);
+        if(window.MiaSharedSpace && window.MiaSharedSpace.isSpaceMessage(row.body)){
+          if(row.author_id!==subject && window.MiaSpaceUI)window.MiaSpaceUI.receive(roomId,row);
+          markHubSpaceRead(roomId,row.sequence);
+          return;
+        }
         if(state && state.historyInitialized){applyHubRows(roomId,[row]);render[roomId]=true;}
         var fromOther=row.author_type!=='system' && row.author_id!==subject;
         if(!fromOther)return;
@@ -5603,6 +5775,38 @@
         if(changed)renderHubStatus();
       }});
   }
+  // Hidden space updates move the read marker so they never count as unread.
+  var hubSpaceReadTimers={};
+  function markHubSpaceRead(roomId,sequence){
+    var channel=hubChannel(roomId);
+    if(!channel)return;
+    if(Number(channel.last_read||0)>=Number(channel.latest_sequence||0)-1)channel.unread=0;
+    if(hubSpaceReadTimers[roomId])return;
+    hubSpaceReadTimers[roomId]=setTimeout(function(){
+      delete hubSpaceReadTimers[roomId];
+      var latest=Number(channel.latest_sequence||sequence);
+      if(latest<=Number(channel.last_read||0))return;
+      channel.last_read=latest;
+      hubCall('POST',hubPath()+'/channels/'+roomId+'/read',{sequence:latest}).catch(function(){});
+    },5000);
+  }
+  // What the shared-space bar needs from the team: who this is, the team's
+  // channels, and a way to post its hidden updates.
+  window.MiaSpaceHost={
+    teamKey:function(){ return hubWorkspace() && hubChat.membership ? activeWorkspaceKey : null; },
+    me:function(){
+      var membership=hubChat.membership;
+      return membership ? {id:membership.clerk_user_id,name:displayNameForEmail(membership.email || currentUser) || membership.email || 'You'} : null;
+    },
+    channels:function(){
+      return hubChat.channels.filter(function(channel){return channel.kind!=='dm';}).map(function(channel){return {id:channel.id,name:hubChannelTitle(channel)};});
+    },
+    activeChannelId:function(){ return hubChannel(chatWs.activeRoomId) ? chatWs.activeRoomId : null; },
+    send:function(channelId,text){
+      if(!hubWorkspace() || !hubChannel(channelId))return Promise.reject(new Error('That channel is no longer available.'));
+      return hubCall('POST',hubPath()+'/channels/'+channelId+'/messages',{id:window.MiaHubChat.id(),text:text});
+    }
+  };
   function sendHubTyping(){
     if(!hubWorkspace() || !chatWs.activeRoomId || !hubChannel(chatWs.activeRoomId) || Date.now()-hubChat.typingSentAt<4000)return;
     hubChat.typingSentAt=Date.now();
@@ -5663,7 +5867,7 @@
     });
   }
   // Coming back to Mia counts as reading the open channel, as in Solo.
-  window.addEventListener('focus',function(){ if(hubWorkspace() && chatWs.activeRoomId){markHubRead(chatWs.activeRoomId);renderChatSidebar();} });
+  window.addEventListener('focus',function(){ if(inHubRoom() && chatWs.activeRoomId){markHubRead(chatWs.activeRoomId);renderChatSidebar();} });
   document.addEventListener('click',function(event){
     var button=event.target.closest('[data-send-retry]');
     if(!button)return;
@@ -5826,7 +6030,7 @@
 
   function nativeConversationPath(conversationId, suffix){
     var path = '/api/conversations/' + encodeURIComponent(conversationId) + (suffix || '');
-    return path + (path.indexOf('?') === -1 ? '?' : '&') + 'workspace=' + encodeURIComponent(activeWorkspaceKey);
+    return path + (path.indexOf('?') === -1 ? '?' : '&') + 'workspace=' + encodeURIComponent(localChatWorkspaceKey());
   }
 
   function nativeConversationKind(type){
@@ -5984,7 +6188,7 @@
 
   function nativeSocketUrl(){
     var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return protocol + '//' + location.host + '/api/conversations/ws?workspace=' + encodeURIComponent(activeWorkspaceKey);
+    return protocol + '//' + location.host + '/api/conversations/ws?workspace=' + encodeURIComponent(localChatWorkspaceKey());
   }
 
   var miaServiceBannerTimer = null;
@@ -6021,7 +6225,7 @@
           setMiaServiceUnavailable(false);
           retry.disabled = false;
           retry.textContent = 'Restart and reconnect';
-          if(chatWs.native && chatWs.activeRoomId) connectNativeChatSocket(chatWs.activeRoomId);
+          if((chatWs.native || teamBotRoom(chatWs.activeRoomId)) && chatWs.activeRoomId) connectNativeChatSocket(chatWs.activeRoomId);
           return;
         }
         retry.disabled = false;
@@ -6105,7 +6309,7 @@
   }
 
   function connectNativeChatSocket(conversationId){
-    if(hubWorkspace()) return;
+    if(inHubRoom(conversationId)) return;
     closeNativeChatSocket();
     if(!conversationId || typeof WebSocket !== 'function') return;
     var state = chatRoomState(conversationId);
@@ -6132,7 +6336,7 @@
       scheduleMiaServiceUnavailable();
       chatWs.nativeReconnectTimer = setTimeout(function(){
         chatWs.nativeReconnectTimer = null;
-        if(chatWs.native && chatWs.activeRoomId === conversationId) connectNativeChatSocket(conversationId);
+        if((chatWs.native || teamBotRoom(conversationId)) && chatWs.activeRoomId === conversationId) connectNativeChatSocket(conversationId);
       }, 1500);
     };
   }
@@ -6235,15 +6439,27 @@
     notifyDesktopChatMessage(roomId, message);
   }
 
+  // A bot chat tagged with a team shows only in that team; untagged chats
+  // show only outside teams.
+  function nativeConversationInView(conversation){
+    var team = conversation && conversation.metadata && conversation.metadata.teamWorkspace || '';
+    return hubWorkspace() ? !!conversation && conversation.type === 'bot' && team === activeWorkspaceKey : !team;
+  }
   function applyNativeConversationList(conversations){
-    if(hubWorkspace()) return;
     var listWorkspace = conversations && conversations.workspaceKey;
     setMiaServiceUnavailable(false);
     // An archived bot's chat is kept on the server (read-only) but is not a
     // live conversation; it comes back to the sidebar when the bot is restored.
     conversations = (conversations || []).filter(function(conversation){
-      return !(conversation && conversation.type === 'bot' && conversation.metadata && conversation.metadata.botArchived === true);
+      return !(conversation && conversation.type === 'bot' && conversation.metadata && conversation.metadata.botArchived === true)
+        && nativeConversationInView(conversation);
     });
+    if(hubWorkspace()){
+      // A team's channels and DMs come from the Hub; only its bot chats are here.
+      chatWs.nativeConversations = conversations;
+      renderChatSidebar();
+      return;
+    }
     var rooms = conversations.map(nativeConversationToRoom);
     chatWs.native = true;
     chatWs.nativeConversations = conversations || [];
@@ -6328,11 +6544,15 @@
   }
 
   function loadNativeConversations(requestOptions){
-    if(hubWorkspace()) return Promise.resolve([]);
     var workspaceKey = activeWorkspaceKey;
-    return api('/api/conversations?limit=200', requestOptions || {}).then(function(res){
+    return api('/api/conversations?limit=200&workspace=' + encodeURIComponent(localChatWorkspaceKey()), requestOptions || {}).then(function(res){
       if(res.status !== 200) throw new Error(res.data && res.data.error || 'Native conversations unavailable.');
       var conversations = (res.data && res.data.conversations) || [];
+      if(hubWorkspace()){
+        conversations = conversations.filter(nativeConversationInView);
+        conversations.workspaceKey = workspaceKey;
+        return conversations;
+      }
       // A workspace is a scope, not a conversation. Keep the real agent chat
       // available when this scope has no rooms yet, but never synthesize a
       // workspace/home room just to give the center column something to show.
@@ -6592,7 +6812,7 @@
   var CHAT_PAGE_TYPES = ['text/html','image/svg+xml'];
   function chatAttachmentProblem(file){
     var type = String(file.type || '').toLowerCase();
-    var team = hubWorkspace();
+    var team = inHubRoom();
     if(CHAT_PAGE_TYPES.indexOf(type) !== -1 && team) return 'Web pages can\u2019t be sent to a team yet. Save it as a PDF or image to share it.';
     if(CHAT_ATTACHMENT_TYPES.indexOf(type) === -1 && (team || CHAT_PAGE_TYPES.indexOf(type) === -1)) return 'Choose an image (PNG, JPEG, GIF, WebP) or a PDF.';
     var limit = team ? 8 : 25;
@@ -6653,7 +6873,7 @@
   }
 
   function prepareChatAttachment(file, roomId){
-    if(hubWorkspace()) return prepareHubAttachment(file);
+    if(inHubRoom()) return prepareHubAttachment(file);
     return fileAsBase64(file).then(function(dataBase64){
       return api(nativeConversationPath(roomId, '/attachments'), {method:'POST', body:{
         filename: file.name || 'image',
@@ -7778,6 +7998,7 @@
     closeLocalBrowser();
     closeAutomationsPage();
     artifactsPage.open = true;
+    artifactsPage.tabClosed = false;
     document.body.classList.add('browser-collab-mode', 'artifacts-mode');
     setBrowserSidebarOpen(browserSidebarWanted());
     closeChatThread();
@@ -7790,6 +8011,27 @@
     renderArtifactsPage();
     loadArtifacts();
   }
+
+  // The page is one tab in the browser's strip, like the Automations board:
+  // × closes the page; the Artifacts button opens it, and its tab, again.
+  var ARTIFACTS_TAB = 'page';
+  var ARTIFACTS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>';
+  function artifactsStripTabs(){
+    return artifactsPage.tabClosed ? [] : [{id:ARTIFACTS_TAB, label:'Artifacts', iconHtml:ARTIFACTS_ICON, active:artifactsPage.open}];
+  }
+  window.MiaTabStrip.mix.register('artifacts', {
+    tabs: artifactsStripTabs,
+    // The tab is the page itself, so it adds no count to the button.
+    count: function(){ return 0; },
+    close: function(){
+      artifactsPage.tabClosed = true;
+      if(artifactsPage.open) closeArtifactsPage();
+      else window.MiaTabStrip.mix.notify('artifacts', JSON.stringify(artifactsStripTabs()));
+    },
+    show: function(){ if(!artifactsPage.open) runToolsAction('artifacts'); },
+    select: function(){},
+    render: function(){ window.MiaTabStrip.mix.notify('artifacts', JSON.stringify(artifactsStripTabs())); },
+  });
 
   function closeArtifactsPage(){
     if(!artifactsPage.open) return;
@@ -7822,6 +8064,7 @@
   function renderArtifactsPage(){
     var overlay = el('#artifactsOverlay');
     if(!overlay) return;
+    window.MiaTabStrip.mix.notify('artifacts', JSON.stringify(artifactsStripTabs()));
     overlay.hidden = !artifactsPage.open;
     overlay.setAttribute('aria-hidden', artifactsPage.open ? 'false' : 'true');
     overlay.classList.toggle('open', artifactsPage.open);
@@ -9292,7 +9535,7 @@
   }
 
   function setLocalChatTypingActivity(active){
-    if(hubWorkspace()){ if(active) sendHubTyping(); return; }
+    if(inHubRoom()){ if(active) sendHubTyping(); return; }
     if(localChatTyping.timer){
       clearTimeout(localChatTyping.timer);
       localChatTyping.timer = null;
@@ -9626,7 +9869,7 @@
     return localparts;
   }
   function isHumanSender(sender){
-    if(hubWorkspace()) return String(sender||'').indexOf('hub-bot:')!==0;
+    if(inHubRoom()) return String(sender||'').indexOf('hub-bot:')!==0;
     var identity = String(sender || '').toLowerCase();
     var local = identity.split('@')[0];
     var known = chatKnownHumanLocalparts();
@@ -10815,7 +11058,7 @@
     return loadNativeConversations(requestOptions).then(function(conversations){
       var existing = (conversations || []).filter(function(conversation){
         var metadata = conversation.metadata || {};
-        return conversation.type === 'bot' && metadata.botId === agent.id;
+        return conversation.type === 'bot' && metadata.botId === agent.id && nativeConversationInView(conversation);
       })[0];
       if(existing) return existing;
       return api('/api/conversations', Object.assign({}, requestOptions || {}, {method:'POST', body:{
@@ -11032,7 +11275,7 @@
     }
     if(chatWs.configured === false){
       thread.removeAttribute('data-chat-scroll-room');
-      thread.innerHTML = '<div class="no-data">'+esc(hubWorkspace() ? (hubChat.error || 'Shared chat unavailable') : 'Native chat unavailable')+'</div>';
+      thread.innerHTML = '<div class="no-data">'+esc(inHubRoom() ? (hubChat.error || 'Shared chat unavailable') : 'Native chat unavailable')+'</div>';
       syncChatJumpLatest(null, null);
       return;
     }
@@ -11047,7 +11290,7 @@
     updateChatSuggestions(roomId);
     if(chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)) syncMiaBotSetupRequest(roomId, state);
     var botDraftFlow = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel) ? state.botDraft : null;
-    if(hubWorkspace() && !state.historyInitialized && !state.messages.length && !state.thinking) return showChatThreadPlaceholder(thread);
+    if(inHubRoom() && !state.historyInitialized && !state.messages.length && !state.thinking) return showChatThreadPlaceholder(thread);
     if(!state.messages.length && !state.thinking && !botDraftFlow){
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
         ? esc(miaEmptyGreeting(currentRealProfileName()))
@@ -11297,7 +11540,7 @@
     if(!roomId || !eventId) return;
     appConfirm('Delete this message?').then(function(ok){
       if(!ok) return;
-      if(hubWorkspace()) return deleteHubMessage(roomId, eventId);
+      if(inHubRoom(roomId)) return deleteHubMessage(roomId, eventId);
       var state = chatRoomState(roomId);
       if(state.messages.some(function(m){ return m.id === eventId && m.sendFailed; })){
         state.messages = state.messages.filter(function(m){ return m.id !== eventId; });
@@ -11316,7 +11559,7 @@
   // no stored event is rewritten and no automatic redo is triggered.
   function handleEditChatMessage(eventId){
     var roomId = chatWs.activeRoomId;
-    var original = hubWorkspace() ? hubEditablePrompt(roomId, eventId) : editableChatPromptForEvent(roomId, eventId);
+    var original = inHubRoom(roomId) ? hubEditablePrompt(roomId, eventId) : editableChatPromptForEvent(roomId, eventId);
     if(!roomId || !original) return;
     appPrompt(original, {title: 'Edit and resend', message: 'Your edited text is sent as a new message. The original stays.', submitLabel: 'Send'}).then(function(result){
       if(!result || !result.ok || !result.text.trim()) return;
@@ -11838,8 +12081,8 @@
           .catch(function(){ button.disabled = false; showBenchToast('Couldn\'t remove this bot. Try again.'); });
       });
     });
-    // Adding reuses the composer's add-bot confirmation, which asks whether
-    // the channel gets a linked copy or an independent fork.
+    // Adding reuses the composer's add-bot confirmation, which explains the
+    // team gets its own copy.
     els('[data-hub-panel-add]', pane).forEach(function(button){
       button.addEventListener('click', function(){
         var bot = available.filter(function(item){ return String(item.id) === button.getAttribute('data-hub-panel-add'); })[0];
@@ -11854,7 +12097,7 @@
   }
 
   function renderManageAgentsPane(pane){
-    if(hubWorkspace()) return renderHubPeoplePane(pane);
+    if(inHubRoom()) return renderHubPeoplePane(pane);
     var groups = {agent: [], bots: []};
     manageAgentList().forEach(function(agent){
       if(agent.id === 'gateway') groups.agent.push(agent);
@@ -11954,7 +12197,7 @@
     if(!STYLED_SKIN) return;
     prepareChatUtilityPane('agents');
     renderChatInfoPane();
-    if(hubWorkspace()){
+    if(inHubRoom()){
       if(chatWs.activeRoomId) refreshHubBotState(chatWs.activeRoomId, true);
       return;
     }
@@ -12681,7 +12924,7 @@
     renderChatTabs();
     var header = el('#channelHeader');
     if(!header) return;
-    if(hubWorkspace()){
+    if(inHubRoom()){
       header.style.display=chatWs.activeRoomId?'flex':'none';
       var bots=chatWs.activeRoomId && chatRoomState(chatWs.activeRoomId).hubBots || [];
       // The bot count opens People and bots, the one list of this channel's
@@ -12928,7 +13171,7 @@
   }
 
   function renderDeptAgentSelector(){
-    if(hubWorkspace()){
+    if(inHubRoom()){
       setComposerBoundState(!!chatWs.activeRoomId && chatWs.configured!==false);
       // Attach, Google Drive and the model menu work the same as in Solo. A
       // Drive file is shared as a link chip; each teammate opens it with their
@@ -13187,7 +13430,7 @@
     var input = el('#ccInput');
     if(!suggestion || !input) return;
     var mentionOpen = typeof chatMention !== 'undefined' && chatMention.open;
-    var show = !hubWorkspace() && chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
+    var show = !inHubRoom() && chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
     var text = suggestion.querySelector('span');
     if(text) text.textContent = chatInlineSuggestionText();
     suggestion.hidden = !show;
@@ -13330,11 +13573,11 @@
     if(chatWs.pollTimer){ clearInterval(chatWs.pollTimer); chatWs.pollTimer = null; }
     if(chatWs.attentionTimer){ clearInterval(chatWs.attentionTimer); chatWs.attentionTimer = null; }
     // The watch socket stays open on other screens: attention is app-wide.
-    if(chatWs.native) closeNativeChatSocket();
+    if(chatWs.native || chatWs.nativeSocket) closeNativeChatSocket();
   }
 
   function loadOlderChatMessages(roomId){
-    if(hubWorkspace()) return loadOlderHubMessages(roomId);
+    if(inHubRoom(roomId)) return loadOlderHubMessages(roomId);
     var state = roomId && chatWs.byRoom[roomId];
     if(!state || chatWs.activeRoomId !== roomId || state.historyLoading || state.historyComplete || !state.historyCursor) return Promise.resolve();
     var requestedWorkspace = activeWorkspaceKey;
@@ -13422,15 +13665,15 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
   function loadChatRoom(roomId, kind, label){
-    if(hubWorkspace() && (kind!=='group' || !hubChat.channels.some(function(channel){return channel.id===roomId;})))return Promise.resolve();
+    if(inHubRoom(roomId) && (kind!=='group' || !hubChat.channels.some(function(channel){return channel.id===roomId;})))return Promise.resolve();
     // A saved tab's name can be stale (a DM partner learned later); the Hub's is current.
-    if(hubWorkspace())label=hubChannelTitle(hubChannel(roomId));
+    if(inHubRoom(roomId))label=hubChannelTitle(hubChannel(roomId));
     chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     setLocalChatTypingActivity(false);
     closeMentionPopover();
     chatRoster.open = null;
     clearChatAttention(roomId);
-    if(chatWs.native && chatWs.nativeSocketConversationId !== roomId) closeNativeChatSocket();
+    if((chatWs.native || chatWs.nativeSocket) && chatWs.nativeSocketConversationId !== roomId) closeNativeChatSocket();
     swapChatDraft(chatWs.activeRoomId, roomId);
     chatWs.activeRoomId = roomId;
     chatWs.activeRoomWorkspace = activeWorkspaceKey;
@@ -13441,7 +13684,7 @@
     renderChatSidebar();
     refreshChatMain();
     if(chatWs.configured === false) return;
-    if(hubWorkspace()) return Promise.all([loadHubRoom(),refreshHubBotState(roomId,true)]);
+    if(inHubRoom(roomId)) return Promise.all([loadHubRoom(),refreshHubBotState(roomId,true)]);
     loadMentionRoster(roomId); // also feeds the header's roster chips
     loadActiveNativeDispatches(roomId);
     var state = chatRoomState(roomId);
@@ -13501,7 +13744,7 @@
   }
 
   function selectAgentRoom(agent, canNavigate){
-    if(hubWorkspace())return Promise.resolve();
+    if(hubWorkspace())return agent && agent.id!=='gateway' ? openTeamBotChat(agent) : Promise.resolve();
     var generation = chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     function current(){ return chatWs.navigationGeneration === generation && (!canNavigate || canNavigate()); }
     if(!current()) return;
@@ -13660,7 +13903,7 @@
       if(text) submitAgentSetupIntent(text);
       return;
     }
-    if(hubWorkspace()) return sendHubMessage(text,preparedAttachment,threadRootId,boundRoomId||chatWs.activeRoomId);
+    if(inHubRoom(boundRoomId||chatWs.activeRoomId)) return sendHubMessage(text,preparedAttachment,threadRootId,boundRoomId||chatWs.activeRoomId);
     if((!text && !preparedAttachment) || !(boundRoomId || chatWs.activeRoomId)) return;
     if(chatWs.configured === false) return;
     if(!threadRootId && !preparedAttachment && /^\/clear$/i.test(String(text || '').trim())){
@@ -13940,7 +14183,7 @@
   }
 
   function loadMentionRoster(roomId){
-    if(hubWorkspace()) return refreshHubBotState(roomId,false);
+    if(inHubRoom(roomId)) return refreshHubBotState(roomId,false);
     var state = chatRoomState(roomId);
     if(state.mentionRoster || chatWs.configured === false) return;
     var requestedWorkspaceKey = activeWorkspaceKey;
@@ -14082,7 +14325,7 @@
       return '<button type="button" class="cmp-option' + highlighted + '" data-mention-ix="' + i + '"><span class="dm-avatar">' + avatar + '</span><span class="cmp-option-label">' + esc(entry.label) + '</span>' + kind + sub + '</button>';
     }
     var html = '';
-    if(!hubWorkspace()){
+    if(!inHubRoom()){
       html += '<div class="cmp-section-label">YOUR AGENT</div>';
       html += lists.privateAgents.length ? lists.privateAgents.map(optionHtml).join('') : '<div class="cmp-empty">no matches</div>';
     }
@@ -14121,14 +14364,11 @@
         '<button type="button" class="cmp-confirm-btn cmp-confirm-cancel" data-mention-confirm="cancel">Cancel</button>' +
       '</div>' +
     '</div>';
-    if(hubWorkspace() && entry.kind==='human'){
+    if(inHubRoom() && entry.kind==='human'){
       el('.cmp-confirm-text',pop).textContent='Invite '+entry.label+' to this channel? They\'ll see an invitation in their sidebar.';
-    } else if(hubWorkspace()){
+    } else if(inHubRoom()){
       var disclosure=el('.cmp-confirm-text',pop);
-      if(disclosure)disclosure.textContent='Share '+entry.label+'’s instructions? An administrator approves the shared version once. Asking this bot runs it on your computer using your own subscriptions and tools.';
-      var mode=document.createElement('select');mode.id='hubShareMode';mode.setAttribute('aria-label','Sharing behavior');
-      mode.innerHTML='<option value="">Choose linked or fork</option><option value="linked">Linked — propose solo updates for approval</option><option value="fork">Independent fork — no solo synchronization</option>';
-      mode.value=chatMention.shareMode||'';mode.addEventListener('change',function(){chatMention.shareMode=mode.value;});pop.querySelector('.cmp-confirm-text').after(mode);
+      if(disclosure)disclosure.textContent=hubShareNotice(entry.label,workspaceLabel());
     }
     var addBtn = el('[data-mention-confirm="add"]', pop);
     var cancelBtn = el('[data-mention-confirm="cancel"]', pop);
@@ -14136,6 +14376,10 @@
     if(cancelBtn) cancelBtn.addEventListener('mousedown', function(e){ e.preventDefault(); cancelMentionConfirm(); });
   }
 
+  // Sharing gives the team its own copy of the bot's instructions.
+  function hubShareNotice(name, team){
+    return 'Share ' + name + ' with ' + team + '? The team gets its own copy: everyone can see its instructions and use it, and it is no longer linked to your Solo ' + name + '. Skills, automations and memories stay with you. An admin approves it once.';
+  }
   function cancelMentionConfirm(){
     chatMention.confirmEntry = null;
     chatMention.confirmBusy = false;
@@ -14146,10 +14390,9 @@
     var entry = chatMention.confirmEntry;
     if(!entry) return;
     var roomId = chatWs.activeRoomId;
-    if(hubWorkspace() && entry.kind==='agent' && !['linked','fork'].includes(chatMention.shareMode)){showBenchToast('Choose linked or independent fork.');return;}
     chatMention.confirmBusy = true;
     renderMentionPopover();
-    if(hubWorkspace() && entry.kind==='human'){
+    if(inHubRoom() && entry.kind==='human'){
       hubCall('POST',hubPath()+'/channels/'+roomId+'/invites',{member:entry.clerkUserId}).then(function(){
         if(roomId!==chatWs.activeRoomId)return;
         insertMentionText(entry);closeMentionPopover();
@@ -14158,11 +14401,11 @@
         .finally(function(){chatMention.confirmBusy=false;});
       return;
     }
-    if(hubWorkspace()){
+    if(inHubRoom()){
       if(entry.kind!=='agent'){cancelMentionConfirm();return;}
       var workspace=activeWorkspaceKey,generation=chatWs.navigationGeneration;
       function currentHubShare(){return workspace===activeWorkspaceKey && roomId===chatWs.activeRoomId && generation===chatWs.navigationGeneration && chatWs.configured!==false;}
-      shareBotToHubChannel(workspace.slice(4),roomId,entry.id,chatMention.shareMode).then(function(published){
+      shareBotToHubChannel(workspace.slice(4),roomId,entry.id).then(function(published){
         if(!currentHubShare())return;
         return refreshHubBotState(roomId,true).then(function(){if(!currentHubShare())return;insertMentionText(Object.assign({},entry,{inChat:true}));closeMentionPopover();showBenchToast(hubBotJoinedMessage(entry.label,chatWs.activeLabel||'this channel',published));});
       }).catch(function(error){if(currentHubShare()){showBenchToast(error.message);cancelMentionConfirm();}}).finally(function(){if(currentHubShare())chatMention.confirmBusy=false;});
@@ -14439,18 +14682,17 @@
     // DM's roster is fixed at creation time, so that
     // same reasoning applies to a NOT IN CHAT *human* there too, unlike
     // home/department/agent rooms where a human can still be invited.
-    if(hubWorkspace() && entry.kind === 'human' && !hubCanInviteToChannel(chatWs.activeRoomId)){
+    if(inHubRoom() && entry.kind === 'human' && !hubCanInviteToChannel(chatWs.activeRoomId)){
       insertMentionText(entry);
       closeMentionPopover();
       return;
     }
-    if(!hubWorkspace() && (chatWs.activeKind === 'dm' || chatWs.activeKind === 'group' || (entry.kind === 'agent' && chatWs.activeKind !== 'department'))){
+    if(!inHubRoom() && (chatWs.activeKind === 'dm' || chatWs.activeKind === 'group' || (entry.kind === 'agent' && chatWs.activeKind !== 'department'))){
       insertMentionText(entry);
       closeMentionPopover();
       return;
     }
     chatMention.confirmEntry = entry;
-    chatMention.shareMode = "";
     chatMention.confirmBusy = false;
     renderMentionPopover();
   }

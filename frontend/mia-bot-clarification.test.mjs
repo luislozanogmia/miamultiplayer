@@ -20,6 +20,8 @@ function setupContext(state, overrides = {}) {
   const started = [];
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     chatRoomState: () => state,
     currentUser: 'user@example.com',
     setTimeout: (fn) => fn(),
@@ -83,6 +85,8 @@ test('a request opens the card once per session', () => {
 test('Mia review card offers one Accept action and no cancel button', () => {
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     esc: value => String(value),
     agentAvatarHtml: () => '<svg></svg>',
     automationIntervalParts: () => ({ value: 5, unit: 'minutes' }),
@@ -103,6 +107,8 @@ test('a new message closes an unsubmitted Mia draft and continues normal chat', 
   let delivered = '';
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     chatWs: { activeRoomId: 'mia-room', activeKind: 'agent', activeLabel: 'Mia', configured: true },
     chatRoomState: () => state,
     isMiaOrchestrator: () => true,
@@ -125,6 +131,8 @@ test('cancellation clears only an unsubmitted draft and dismisses Mia\'s request
   const answered = [];
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     chatRoomState: () => state,
     clearMiaBotDraftRequest: () => {},
     renderMiaBotDraftRoom: () => { renderCount += 1; },

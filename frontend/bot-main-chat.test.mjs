@@ -12,9 +12,13 @@ function fn(name){
   return source.slice(start, end + 4);
 }
 
-function harness(conversations){
+function harness(conversations, activeWorkspaceKey = 'solo'){
   const context = {
-    hubWorkspace: () => false,
+    activeWorkspaceKey,
+    renderChatSidebar(){},
+    hubWorkspace: () => /^hub_[a-f0-9]{32}$/.test(activeWorkspaceKey),
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     chatWs: { rooms: { home: null, departments: [], dms: [] }, byRoom: {}, botRecords: [] },
     chatModelPicker: null,
     setMiaServiceUnavailable(){},
@@ -26,7 +30,7 @@ function harness(conversations){
   vm.createContext(context);
   vm.runInContext([
     'nativeConversationKind', 'nativeConversationToRoom', 'isNativeMiaConversation',
-    'applyNativeConversationList', 'nativeConversationIdForChatKey', 'conversationHistoryTimestamp',
+    'applyNativeConversationList', 'nativeConversationInView', 'nativeConversationIdForChatKey', 'conversationHistoryTimestamp',
   ].map(fn).join('\n'), context);
   context.applyNativeConversationList(conversations);
   return context;
@@ -42,6 +46,22 @@ test('a bot\'s sidebar row opens its main chat, not an older "New conversation" 
   ]);
   assert.deepEqual(context.chatWs.allAgents.map((agent) => [agent.id, agent.roomId]), [['bot-1', 'main']]);
   assert.equal(context.nativeConversationIdForChatKey('agent:bot-1'), 'main');
+});
+
+test('a team shows only its own bot chats, and Solo never shows a team\'s', () => {
+  const teamA = 'hub_' + 'a'.repeat(32), teamB = 'hub_' + 'b'.repeat(32);
+  const chats = [
+    bot('solo-main', '2026-09-30T00:00:00.000Z', {}),
+    bot('team-a', '2026-10-01T00:00:00.000Z', { teamWorkspace: teamA }),
+    bot('team-b', '2026-10-02T00:00:00.000Z', { teamWorkspace: teamB }),
+    { id: 'mia', type: 'agent', name: 'Mia', createdAt: '2026-09-01T00:00:00.000Z', metadata: { agentId: 'gateway' } },
+  ];
+  const solo = harness(chats);
+  assert.deepEqual(solo.chatWs.nativeConversations.map((chat) => chat.id).sort(), ['mia', 'solo-main']);
+  assert.equal(solo.chatWs.allAgents[0].roomId, 'solo-main');
+  const team = harness(chats, teamA);
+  assert.deepEqual(team.chatWs.nativeConversations.map((chat) => chat.id), ['team-a']);
+  assert.deepEqual(team.chatWs.rooms.dms, [], 'a team\'s DMs stay the Hub\'s');
 });
 
 test('a bot with only "New conversation" chats still gets a sidebar row', () => {

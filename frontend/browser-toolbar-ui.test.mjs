@@ -170,14 +170,11 @@ test('every view bar holds the pane buttons, page navigation, the search and the
   // The Automations controls stay in their page, so the right pane toggle
   // sits right before the dots.
   assert.match(nav, /var VIEW_TOOLS = \{ chat: '#channelHeader' \};/);
-  // Artifacts: filters and "+ Live app" sit under the bar, which gets the
-  // left pane button.
-  const bar = html.match(/<header class="automations-bar artifacts-bar">[\s\S]*?<\/header>/)[0];
-  assert.doesNotMatch(bar, /artifactsChips|artifactsAddBtn/);
+  // Artifacts uses the same bar as every view, docked under its tab row;
+  // its filters and "+ Live app" sit in a row under the bar.
+  assert.match(nav, /artifacts: '#artifactsOverlay \.automations-tabs-row'/);
+  assert.doesNotMatch(html, /<header class="automations-bar artifacts-bar">/);
   assert.match(html, /<div class="artifacts-filter-row">\s*<div class="artifacts-chips" id="artifactsChips"/);
-  // The left pane button and Back, Forward and Reload go along to start it.
-  assert.match(nav, /var lead = \['localBrowserSidebarBtn', 'localBrowserBackBtn', 'localBrowserForwardBtn', 'localBrowserReloadBtn'\]/);
-  assert.match(nav, /if \(home !== viewTools\) \{ if \(home\.firstChild !== lead\[0\]\) home\.prepend\.apply\(home, lead\); \}/);
 });
 
 test('outside the browser, Back and Forward step through the places opened in Mia', async () => {

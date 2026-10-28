@@ -19,6 +19,11 @@ function conversationMetadata(type, metadata) {
   const result = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? { ...metadata }
     : {};
+  if (result.teamWorkspace !== undefined) {
+    if (type !== 'bot' || typeof result.teamWorkspace !== 'string' || !TEAM_WORKSPACE_PATTERN.test(result.teamWorkspace)) {
+      invalidInput('teamWorkspace must name a team workspace on a bot conversation');
+    }
+  }
   if (type !== 'channel') return result;
   const visibility = result.visibility === undefined ? 'public' : result.visibility;
   if (visibility !== 'public' && visibility !== 'private') {
@@ -34,9 +39,13 @@ function publicDispatch(dispatch) {
   return visible;
 }
 
+const TEAM_WORKSPACE_PATTERN = /^hub_[a-f0-9]{32}$/;
+
+// A bot's main Solo chat: not a "New conversation" and not a team's chat.
 function canonicalBotConversationCandidates(conversations) {
   return (conversations || []).filter((conversation) =>
-    conversation && (!conversation.metadata || conversation.metadata.conversationMode !== 'fresh')
+    conversation && (!conversation.metadata
+      || (conversation.metadata.conversationMode !== 'fresh' && !conversation.metadata.teamWorkspace))
   );
 }
 
@@ -254,6 +263,9 @@ function createConversationService({ repository, authorization, realtime = null,
       ...(Array.isArray(sourceMetadata.departments) ? { departments: sourceMetadata.departments.slice() } : {}),
       ...(typeof sourceMetadata.workspaceId === 'string' && sourceMetadata.workspaceId.trim()
         ? { workspaceId: sourceMetadata.workspaceId.trim() }
+        : {}),
+      ...(typeof sourceMetadata.teamWorkspace === 'string' && TEAM_WORKSPACE_PATTERN.test(sourceMetadata.teamWorkspace)
+        ? { teamWorkspace: sourceMetadata.teamWorkspace }
         : {}),
       conversationMode: 'fresh',
       source: 'native-ui-new-conversation',

@@ -6,13 +6,25 @@ const path=require('node:path');
 const moduleSource=fs.readFileSync(path.join(__dirname,'../hub-chat.js'),'utf8');
 const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
 function transport(extra={}){const root={crypto:require('node:crypto').webcrypto,...extra};const context={window:root,TextEncoder};vm.runInNewContext(moduleSource,context);return root.MiaHubChat;}
-function appFunction(name,env){const start=source.indexOf('  function '+name+'(');assert.ok(start>=0,name);const first=source.slice(start,source.indexOf('\n',start));const end=/}\s*$/.test(first)?start+first.length:source.indexOf('\n  }\n',start)+4;assert.ok(end>start,name);vm.runInNewContext(source.slice(start,end),env);return env[name];}
+function appFunction(name,env){if(env.hubWorkspace&&!('inHubRoom' in env))env.inHubRoom=()=>env.hubWorkspace();const start=source.indexOf('  function '+name+'(');assert.ok(start>=0,name);const first=source.slice(start,source.indexOf('\n',start));const end=/}\s*$/.test(first)?start+first.length:source.indexOf('\n  }\n',start)+4;assert.ok(end>start,name);vm.runInNewContext(source.slice(start,end),env);return env[name];}
 test('workspace IDs are strict and generated IDs match server contract',()=>{const api=transport();assert.match(api.id(),/^[a-f0-9]{32}$/);assert.equal(api.teamId('hub_'+'a'.repeat(32)),'a'.repeat(32));assert.equal(api.teamId('hub_../solo'),null);});
 test('message adapter preserves authoritative sender and literal signed-looking body',()=>{const api=transport();const row=api.message({id:'x',author_email:'real@example.test',body:'[fake@example.test] hello',created_at:123,sequence:7});assert.equal(row.hubAuthor,'real@example.test');assert.equal(row.body,'[fake@example.test] hello');assert.equal(row.ts,123000);assert.equal(row.nativeEvent.sequence,7);});
 test('UTF8 limit applies to bytes, not characters',()=>{const api=transport();assert.equal(api.validateText('a'.repeat(16000)).length,16000);assert.throws(()=>api.validateText('😀'.repeat(4001)));assert.equal(api.validateText('',true),'');assert.throws(()=>api.validateText(' '));});
 test('each request obtains a fresh native session; body is exactly supplied data',async()=>{let tokens=0;const sent=[];const api=transport({miaDesktop:{auth:{getSessionToken:async()=>({token:++tokens})}},MiaClerkDesktop:{unwrap:r=>'token'+r.token},fetch:async(url,opts)=>{sent.push({url,opts});return {ok:true,json:async()=>({})};}});await api.call('GET','/v1/me');await api.call('POST','/v1/teams/a/channels/b/messages',{id:'c',text:'hello'});assert.equal(sent[0].opts.headers.authorization,'Bearer token1');assert.equal(sent[1].opts.headers.authorization,'Bearer token2');assert.deepEqual(JSON.parse(sent[1].opts.body),{id:'c',text:'hello'});assert.equal(sent[1].url,'/api/hub/v1/teams/a/channels/b/messages');});
 test('no session means no request or local fallback',async()=>{let fetched=false;const api=transport({fetch:()=>{fetched=true;}});await assert.rejects(api.call('GET','/v1/me'),/Sign in/);assert.equal(fetched,false);});
-test('Hub entrypoints cannot start local conversation/socket or typing transports',async()=>{for(const name of ['loadNativeConversations','applyNativeConversationList','connectNativeChatSocket','connectNativeWatchSocket','pollLiveState','setLocalChatTypingActivity']){const env={hubWorkspace:()=>true};const fn=appFunction(name,env);await fn();}});
+test('Hub channels cannot start local conversation/socket or typing transports',async()=>{for(const name of ['connectNativeChatSocket','connectNativeWatchSocket','pollLiveState','setLocalChatTypingActivity']){const env={hubWorkspace:()=>true};const fn=appFunction(name,env);await fn();}});
+test('a team loads only its own bot chats, from Solo storage on this computer',async()=>{
+  const key=appFunction('localChatWorkspaceKey',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
+  assert.equal(key(),'solo');
+  const inView=appFunction('nativeConversationInView',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
+  assert.equal(inView({type:'bot',metadata:{teamWorkspace:'hub_a'}}),true);
+  assert.equal(inView({type:'bot',metadata:{teamWorkspace:'hub_b'}}),false);
+  assert.equal(inView({type:'bot',metadata:{}}),false);
+  assert.equal(inView({type:'home',metadata:{teamWorkspace:'hub_a'}}),false);
+  const solo=appFunction('nativeConversationInView',{hubWorkspace:()=>false,activeWorkspaceKey:'solo'});
+  assert.equal(solo({type:'bot',metadata:{teamWorkspace:'hub_a'}}),false);
+  assert.equal(solo({type:'bot',metadata:{}}),true);
+});
 test('both Hub/local transition directions persist scope, invalidate history, stop polling and reload',()=>{
   for(const [from,to] of [['hub_'+'a'.repeat(32),'solo'],['solo','hub_'+'a'.repeat(32)]]){
     let reloads=0,stops=0;const stored=[];
@@ -43,7 +55,7 @@ test('Hub roster contains only shared bots and offers local bots through explici
     calls.push({method,path,body});return path==='/available'?{bots:[{id:'local',name:'Private bot'}]}:{running:0};
   }}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_'+'a'.repeat(32),chatWs:{configured:true,activeRoomId:'channel'},chatRoomState:()=>state,hubPath:()=>'/team',
   hubCall:async(method,path)=>path.endsWith('/bots')?{bots:[{id:'shared',name:'Shared bot',published:1}]}:{members:[{email:'human@example.test'}]},
-  chatMention:{open:false},renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
+  chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:appFunction('hubMentionHumans',{mergeUserProfile:()=>{}}),renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
   await appFunction('refreshHubBotState',env)('channel',true);
   assert.equal(state.mentionRoster.agents.length,1);assert.equal(state.mentionRoster.agents[0].id,'shared');
   assert.equal(state.mentionRoster.privateAgents.length,0);
@@ -62,16 +74,17 @@ test('mention typing respects roster throttle and cannot trigger execution polli
   let reads=0,executes=0;const state={};
   const env={Promise,Date:{now:()=>120000},Number,window:{MiaHubChat:{localCall:async(method,path)=>{if(path==='/poll')executes++;return {bots:[]};}}},
     hubWorkspace:()=>true,activeWorkspaceKey:'hub_'+'a'.repeat(32),chatWs:{configured:true,activeRoomId:'channel'},chatRoomState:()=>state,hubPath:()=>'/team',
-    hubCall:async(method,path)=>{reads++;return path.endsWith('/bots')?{bots:[{id:'shared',name:'Shared'}]}:{members:[]};},chatMention:{open:false},renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
+    hubCall:async(method,path)=>{reads++;return path.endsWith('/bots')?{bots:[{id:'shared',name:'Shared'}]}:{members:[]};},chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:appFunction('hubMentionHumans',{mergeUserProfile:()=>{}}),renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
   env.refreshHubBotState=appFunction('refreshHubBotState',env);
   const load=appFunction('loadMentionRoster',env);
   for(let n=0;n<20;n++)await load('channel');
-  assert.equal(reads,2);assert.equal(executes,0);
+  // Channel bots, channel members and the whole team, once.
+  assert.equal(reads,3);assert.equal(executes,0);
 });
 
 test('revoked roster response cannot repopulate bot identities',async()=>{
  let resolve;const state={};
- const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>({bots:[]})}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'room',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:()=>new Promise(r=>{if(!resolve)resolve=r;else r({members:[]});}),chatMention:{open:false},renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
+ const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>({bots:[]})}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'room',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:()=>new Promise(r=>{if(!resolve)resolve=r;else r({members:[]});}),chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:appFunction('hubMentionHumans',{mergeUserProfile:()=>{}}),renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
  const pending=appFunction('refreshHubBotState',env)('room',true);
  env.chatWs.navigationGeneration++;env.chatWs.configured=false;
  resolve({bots:[{id:'old',name:'Old'}]});await pending;
@@ -80,7 +93,7 @@ test('revoked roster response cannot repopulate bot identities',async()=>{
 
 test('share completion cannot insert a mention after navigation during roster refresh',async()=>{
  let resolveRefresh,inserted=0;
- const env={Promise,Number,Object,chatMention:{shareMode:'linked',confirmEntry:{kind:'agent',id:'local',label:'Helper'}},chatWs:{configured:true,activeRoomId:'A',navigationGeneration:1},activeWorkspaceKey:'hub_a',hubWorkspace:()=>true,renderMentionPopover:()=>{},shareBotToHubChannel:async()=>false,refreshHubBotState:()=>new Promise(r=>resolveRefresh=r),insertMentionText:()=>inserted++,closeMentionPopover:()=>{},cancelMentionConfirm:()=>{},showBenchToast:()=>{}};
+ const env={Promise,Number,Object,chatMention:{confirmEntry:{kind:'agent',id:'local',label:'Helper'}},chatWs:{configured:true,activeRoomId:'A',navigationGeneration:1},activeWorkspaceKey:'hub_a',hubWorkspace:()=>true,renderMentionPopover:()=>{},shareBotToHubChannel:async()=>false,refreshHubBotState:()=>new Promise(r=>resolveRefresh=r),insertMentionText:()=>inserted++,closeMentionPopover:()=>{},cancelMentionConfirm:()=>{},showBenchToast:()=>{}};
  appFunction('confirmMentionAdd',env)();await new Promise(r=>setImmediate(r));
  env.chatWs.activeRoomId='B';env.chatWs.navigationGeneration++;
  resolveRefresh();await new Promise(r=>setImmediate(r));
@@ -101,18 +114,20 @@ test('unshared Hub bot selection requires sharing confirmation instead of insert
  assert.equal(inserted,false);assert.equal(env.chatMention.confirmEntry,entry);assert.equal(rendered,true);
 });
 
-test('sharing requires an explicit linked or fork choice before any request',()=>{
- let calls=0,notice='';
- const env={chatWs:{activeRoomId:'room'},chatMention:{confirmEntry:{kind:'agent',id:'local',label:'Helper'}},hubWorkspace:()=>true,showBenchToast:m=>notice=m,window:{MiaHubChat:{localCall:()=>calls++}}};
- appFunction('confirmMentionAdd',env)();
- assert.equal(calls,0);assert.match(notice,/Choose linked/);
+test('sharing a bot always gives the team its own copy, with no linked choice',async()=>{
+ const shared=[];
+ const env={Promise,Number,Object,chatWs:{configured:true,activeRoomId:'room',navigationGeneration:1},chatMention:{confirmEntry:{kind:'agent',id:'local',label:'Helper'}},activeWorkspaceKey:'hub_a',hubWorkspace:()=>true,renderMentionPopover:()=>{},shareBotToHubChannel:async(...args)=>{shared.push(args);return false;},refreshHubBotState:async()=>{},insertMentionText:()=>{},closeMentionPopover:()=>{},cancelMentionConfirm:()=>{},showBenchToast:()=>{},hubBotJoinedMessage:()=>''};
+ appFunction('confirmMentionAdd',env)();await new Promise(r=>setImmediate(r));
+ assert.deepEqual(shared,[['a','room','local']]);
+ const notice=appFunction('hubShareNotice',{})('Coder','Company A');
+ assert.match(notice,/Company A gets|with Company A\?/);assert.match(notice,/no longer linked to your Solo Coder/);assert.match(notice,/Skills, automations and memories stay with you/);
 });
 
 test('shared roster refreshes on the next four-second poll after another participant adds a bot',async()=>{
   const state={hubBotsAt:Date.now()-4001};let requests=0;
-  const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>({bots:[]})}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'channel',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:async(method,path)=>{requests++;return path.endsWith('/bots')?{bots:[{id:'one',name:'One'},{id:'two',name:'Two'}]}:{members:[]};},chatMention:{open:false},renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
+  const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>({bots:[]})}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'channel',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:async(method,path)=>{requests++;return path.endsWith('/bots')?{bots:[{id:'one',name:'One'},{id:'two',name:'Two'}]}:{members:[]};},chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:appFunction('hubMentionHumans',{mergeUserProfile:()=>{}}),renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
   await appFunction('refreshHubBotState',env)('channel',false);
-  assert.equal(requests,2);assert.equal(state.hubBots.length,2);
+  assert.equal(requests,3);assert.equal(state.hubBots.length,2);
 });
 test('server system notices render as inert system rows',()=>{
   const row=transport().message({id:'joined',sequence:9,author_type:'system',author_id:'system:bot-joined',author_email:'',body:'Helper joined the chat.',created_at:100});
@@ -121,7 +136,7 @@ test('server system notices render as inert system rows',()=>{
 
 test('frequent roster refresh reuses the membership directory to preserve request budget',async()=>{
  const state={hubBotsAt:Date.now()-4001,hubDirectoryAt:Date.now(),hubMembers:[{email:'member@example.test'}],hubAvailableBots:[]};const paths=[];
- const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>{throw Error('directory must be cached');}}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'channel',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:async(method,path)=>{paths.push(path);return {bots:[{id:'two',name:'Two'}]};},chatMention:{open:false},renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
+ const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>{throw Error('directory must be cached');}}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'channel',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:async(method,path)=>{paths.push(path);return {bots:[{id:'two',name:'Two'}]};},chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:appFunction('hubMentionHumans',{mergeUserProfile:()=>{}}),renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
  await appFunction('refreshHubBotState',env)('channel',false);
  assert.deepEqual(paths,['/team/channels/channel/bots']);assert.equal(state.mentionRoster.humans[0].email,'member@example.test');
 });
@@ -355,7 +370,7 @@ test('Edit says the edited text is sent as a new message',()=>{
   assert.match(source,/appPrompt\(original, \{title: 'Edit and resend', message: 'Your edited text is sent as a new message\. The original stays\.', submitLabel: 'Send'\}\)/);
 });
 test('a shared channel shows placeholder bars, not "No messages yet", before its history arrives',()=>{
-  assert.match(source,/if\(hubWorkspace\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);\n\s+if\(!state\.messages\.length && !state\.thinking && !botDraftFlow\)\{/);
+  assert.match(source,/if\(inHubRoom\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);\n\s+if\(!state\.messages\.length && !state\.thinking && !botDraftFlow\)\{/);
 });
 test('your own attachment cards stay readable beside the bubble',()=>{
   const css=fs.readFileSync(path.join(__dirname,'../styles.css'),'utf8');
@@ -407,7 +422,7 @@ test('the team People and bots panel shows the channel, not Solo, data',()=>{
   assert.doesNotMatch(member,/Users|Agent<|Archived/);
 });
 test('the People button opens the team panel in a shared team',()=>{
-  assert.match(source,/function renderManageAgentsPane\(pane\)\{\n    if\(hubWorkspace\(\)\) return renderHubPeoplePane\(pane\);/);
+  assert.match(source,/function renderManageAgentsPane\(pane\)\{\n    if\(inHubRoom\(\)\) return renderHubPeoplePane\(pane\);/);
 });
 test('team channel menu follows the Hub permissions',()=>{
   const menu=role=>{const env={hubChat:{membership:{clerk_user_id:'me',role}}};appFunction('hubPrivateConversation',env);return appFunction('hubChannelActions',env);};
@@ -587,11 +602,11 @@ test('adding a bot to a channel publishes it only when you are an admin',async()
     const env={hubChat:{membership:{role}},hubPath:()=>'/v1/teams/t',
       window:{MiaHubChat:{localCall:(m,p,b)=>{calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot1'},proposal:{version:2}});}}},
       hubCall:(m,p)=>{calls.push([m,p]);return Promise.resolve({});}};
-    const published=await appFunction('shareBotToHubChannel',env)('t','chan','local7','fork');
+    const published=await appFunction('shareBotToHubChannel',env)('t','chan','local7');
     return {published,calls};};
   const admin=await run('admin');
   assert.equal(admin.published,true);
-  assert.deepEqual(JSON.parse(JSON.stringify(admin.calls)),[['POST','/share',{teamId:'t',channelId:'chan',localBotId:'local7',mode:'fork'}],
+  assert.deepEqual(JSON.parse(JSON.stringify(admin.calls)),[['POST','/share',{teamId:'t',channelId:'chan',localBotId:'local7'}],
     ['POST','/v1/teams/t/channels/chan/bots/bot1/versions/2/approve']]);
   const member=await run('member');
   assert.equal(member.published,false);assert.equal(member.calls.length,1);
@@ -642,4 +657,71 @@ test('Solo Retry, delete and composer hand-off cover undelivered messages',()=>{
   assert.match(source,/else if\(local\.soloSend\)deliverNativeMessage\(roomId,local\)/);
   assert.match(source,/if\(m\.sendFailed\) return true; \/\/ an undelivered copy exists only here/);
   assert.match(source,/result\.status === 201 \|\| result\.undelivered/);
+});
+test('team sidebar splits My Bots from Company bots',()=>{
+  const body=source.slice(source.indexOf('  function renderHubSidebar(){'),source.indexOf('  function hubInviteRow('));
+  assert.match(body,/section\('bots','My Bots','',null\)/);
+  assert.match(body,/section\('company-bots','Company bots','',null\)/);
+  assert.match(source,/window\.MiaHubChat\.teamBots\(workspace\.slice\(4\)\)/,'the sidebar uses the shared team bot loader');
+  assert.match(require('fs').readFileSync(require('path').join(__dirname,'..','admin.js'),'utf8'),/win\.MiaHubChat\.teamBots\(team\.id\)/,'the Bot Roster uses the same loader');
+});
+test('a company bot shows once, by name, with every channel it is in',()=>{
+  const start=source.indexOf('  function companyBotsFromChannels(');
+  const merge=new Function(source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')();
+  const ux={id:'a',name:'ux-test'}, gtm={id:'b',name:'GTM'};
+  const list=merge([
+    {channel:ux,bots:[{id:'1',name:'Web Research Agent',published:true},{id:'2',name:'Draft',published:false}]},
+    {channel:gtm,bots:[{id:'3',name:'web research agent',published:true},{id:'4',name:'AI News Tracker',published:true}]},
+  ]);
+  assert.deepEqual(list.map(bot=>bot.name),['AI News Tracker','Web Research Agent']);
+  assert.deepEqual(list[1].channels,[ux,gtm]);
+});
+test('bot pins are kept per workspace and toggle on and off',()=>{
+  const start=source.indexOf('  function teamBotPins(');
+  const store={};
+  const api=new Function('localStorage','renderChatSidebar',source.slice(start,source.indexOf('  // A bot row\'s')) + 'return {teamBotPins,toggleTeamBotPin};')(
+    {getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}},()=>{});
+  api.toggleTeamBotPin('hub_a','company:web');
+  api.toggleTeamBotPin('hub_a','mine:7');
+  assert.deepEqual(api.teamBotPins('hub_a'),['company:web','mine:7']);
+  assert.deepEqual(api.teamBotPins('hub_b'),[],'another workspace has its own pins');
+  api.toggleTeamBotPin('hub_a','company:web');
+  assert.deepEqual(api.teamBotPins('hub_a'),['mine:7']);
+});
+
+function hubFetch(routes){
+  const asked=[];
+  const api=transport({miaDesktop:{auth:{getSessionToken:async()=>({token:1})}},MiaClerkDesktop:{unwrap:()=>'t'},
+    fetch:async(url)=>{asked.push(url);const path=url.replace('/api/hub/v1/teams/t1','');const body=routes[path];
+      return body===undefined?{ok:false,status:404,json:async()=>({error:'not_found'})}:{ok:true,json:async()=>body};}});
+  return {api,asked};
+}
+test('team bots come from the one team-wide read, grouped by channel',async()=>{
+  const {api,asked}=hubFetch({'/bots':{bots:[
+    {id:'1',name:'Web',channel_id:'c1',channel_name:'ux-test',channel_kind:'channel',channel_visibility:'open'},
+    {id:'2',name:'News',channel_id:'c2',channel_name:'GTM',channel_kind:'channel',channel_visibility:'open'},
+    {id:'3',name:'News',channel_id:'c1',channel_name:'ux-test',channel_kind:'channel',channel_visibility:'open'}]}});
+  const list=await api.teamBots('t1');
+  assert.deepEqual(asked,['/api/hub/v1/teams/t1/bots'],'one request');
+  assert.deepEqual(JSON.parse(JSON.stringify(list.map(entry=>[entry.channel.name,entry.bots.map(bot=>bot.id)]))),[['ux-test',['1','3']],['GTM',['2']]]);
+});
+test('an older Hub without the team-wide read falls back to each channel',async()=>{
+  const {api,asked}=hubFetch({'/channels':{channels:[{id:'c1',name:'ux-test',kind:'channel'},{id:'c2',name:'GTM',kind:'channel'}]},
+    '/channels/c1/bots':{bots:[{id:'1',name:'Web'}]}});
+  const list=await api.teamBots('t1');
+  assert.equal(asked[0],'/api/hub/v1/teams/t1/bots');
+  assert.deepEqual(JSON.parse(JSON.stringify(list.map(entry=>[entry.channel.name,entry.bots.length]))),[['ux-test',1],['GTM',0]],'a channel that fails reads as empty');
+});
+test('a company bot opens where you can use it: your channel, else an open one to join, else nowhere',()=>{
+  const place=appFunction('companyBotPlace',{});
+  const mine={c1:{id:'c1',name:'ux-test'}};
+  const lookup=id=>mine[id]||null;
+  const general={id:'c2',name:'general',kind:'channel',visibility:'open'};
+  const finance={id:'c3',name:'finance',kind:'channel',visibility:'private'};
+  const dm={id:'c4',name:'dm:x',kind:'dm'};
+  assert.equal(place({channels:[general,{id:'c1',kind:'channel'}]},lookup).action,'open','your own channel wins');
+  assert.equal(place({channels:[general,{id:'c1',kind:'channel'}]},lookup).channel,mine.c1);
+  assert.equal(place({channels:[finance,general]},lookup).action,'join');
+  assert.equal(place({channels:[finance,general]},lookup).channel,general);
+  assert.equal(place({channels:[finance,dm]},lookup).action,'none','private places you are not in cannot be opened');
 });

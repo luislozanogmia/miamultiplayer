@@ -175,11 +175,12 @@
   // too, holding their own tabs; mixed, it holds every view's tabs. It sits
   // in the row of whichever view is showing.
   var docked = 'browser';
-  var DOCKS = { chat: 'chatTabsRow', automations: 'automationsTabs' };
+  var DOCKS = { chat: 'chatTabsRow', automations: 'automationsTabs', artifacts: 'artifactsTabs' };
   function showingView() {
     // Automations also sets the browser's mode class, so it is checked first.
     var classes = document.body.classList;
     if (classes.contains('automations-mode')) return 'automations';
+    if (classes.contains('artifacts-mode')) return 'artifacts';
     return open || classes.contains('browser-collab-mode') ? 'browser' : 'chat';
   }
   // The address bar goes with the tabs: under them in every view. Every
@@ -193,7 +194,7 @@
   viewTools.className = 'local-browser-view-tools';
   // The right pane's toggle sits just before the "more" dots that end the row.
   if (bar) miaToggle && miaToggle.parentNode === bar ? miaToggle.after(viewTools) : bar.append(viewTools);
-  var BAR_AFTER = { chat: '#chatTabsRow', automations: '.automations-tabs-row' };
+  var BAR_AFTER = { chat: '#chatTabsRow', automations: '#automationsOverlay .automations-tabs-row', artifacts: '#artifactsOverlay .automations-tabs-row' };
   var VIEW_TOOLS = { chat: '#channelHeader' };
   var toolsHome = null;
   function dockBar(view) {
@@ -253,21 +254,12 @@
       chatHeaderWatch = new MutationObserver(function () { dockChatActions(bar.getAttribute('data-view') || docked); });
       chatHeaderWatch.observe(header, { childList: true });
     }
-    // Artifacts has its own bar in place of the address bar; the left pane
-    // button and Back, Forward and Reload go along to start it.
-    var home = document.body.classList.contains('artifacts-mode') && document.querySelector('.artifacts-bar') || viewTools;
-    var lead = ['localBrowserSidebarBtn', 'localBrowserBackBtn', 'localBrowserForwardBtn', 'localBrowserReloadBtn']
-      .map(function (id) { return document.getElementById(id); }).filter(Boolean);
-    if (lead.length && bar) {
-      if (home !== viewTools) { if (home.firstChild !== lead[0]) home.prepend.apply(home, lead); }
-      else if (lead[0].parentNode !== bar) { var wrap = bar.querySelector('.local-browser-url-wrap'); wrap.before.apply(wrap, lead); }
-      syncPageNav();
-    }
-    // The pane toggle goes along, just before the chat buttons, and the
-    // view's own list button (where Downloads sits) just before it.
+    var home = viewTools;
+    syncPageNav();
+    // The pane toggle sits just before the chat buttons, and the view's own
+    // list button (where Downloads sits) just before it.
     if (miaToggle && bar) {
-      if (home !== viewTools) { if (miaToggle.parentNode !== home) home.append(miaToggle); }
-      else if (miaToggle.nextSibling !== viewTools) viewTools.before(miaToggle);
+      if (miaToggle.nextSibling !== viewTools) viewTools.before(miaToggle);
       var shelfBtn = document.getElementById('viewShelfBtn');
       if (shelfBtn && shelfBtn.nextSibling !== miaToggle) miaToggle.before(shelfBtn);
     }
