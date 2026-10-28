@@ -3541,11 +3541,9 @@ body.browser-collab-mode .ch-icon-btn.conversation-action-btn svg,body.automatio
 .local-browser-view-tools{display:flex;align-items:center;gap:4px;flex:none;min-width:0;}
 .local-browser-view-tools:empty{display:none;}
 .local-browser-view-tools > .ch-right{position:relative;gap:4px;}
-.artifacts-bar > .ch-right{flex:none;position:relative;gap:4px;margin-left:-6px;}
-.artifacts-bar .artifacts-search{margin-right:auto;}
 .artifacts-filter-row{display:flex;align-items:center;gap:10px;padding:12px 24px 0;flex:none;}
 .local-browser-view-tools > *{position:static;height:auto;min-height:0;margin:0;padding:0;border:0;background:transparent;box-shadow:none;}
-.local-browser-toolbar[data-view="chat"],.local-browser-toolbar[data-view="automations"]{flex:none;}
+.local-browser-toolbar[data-view="chat"],.local-browser-toolbar[data-view="automations"],.local-browser-toolbar[data-view="artifacts"]{flex:none;}
 /* Every view's bar has Back, Forward and Reload; downloads belong to the
    browser. */
 .local-browser-toolbar:not([data-view="browser"]) .local-browser-downloads-btn{display:none;}
@@ -3603,10 +3601,8 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .local-browser-suggest-icon .agent-avatar,.local-browser-suggest-icon [class*="avatar"]{max-width:16px;max-height:16px;}
 
 /* Artifacts: same frame as Automations, a list of rows in the body. */
-.artifacts-title{align-self:center;margin-left:12px;font-size:13px;font-weight:500;color:var(--sand-text-primary);}
 .artifacts-overlay #artifactsCloseBtn{align-self:center;margin:0 8px 0 auto;width:32px;height:32px;border-radius:50%;color:#474747;}
 .artifacts-overlay #artifactsCloseBtn:hover{background:#0000000f;color:#1f1f1f;}
-.artifacts-bar{gap:10px;padding:4px 12px;}
 .artifacts-search{width:180px;height:28px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:14px;background:var(--sand-bg-base);color:var(--sand-text-primary);font:inherit;font-size:13px;}
 .artifacts-chips{display:flex;gap:6px;margin-right:auto;}
 .artifacts-chip{height:26px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:13px;background:transparent;color:var(--sand-text-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;flex:none;}
@@ -3650,3 +3646,35 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .artifacts-row-share{flex:none;width:28px;height:28px;display:inline-flex;opacity:0;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:var(--sand-text-secondary);cursor:pointer;}
 .artifacts-row:hover .artifacts-row-share,.artifacts-row-share:focus-visible{opacity:1;}
 .artifacts-row-share svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+
+/* Shared space: a tab group teammates work in together. Its bar sits under
+   the address bar with a minimap of who is on which tab. */
+.mia-space-bar{flex:none;display:flex;flex-direction:column;gap:6px;padding:6px 12px 8px;border-bottom:1px solid var(--sand-border-subtle);background:var(--sand-bg-base);font:12px/1.35 var(--styled-sans);color:var(--sand-text-primary);}
+.mia-space-bar[hidden],.local-browser-toolbar:not([data-view="browser"]) ~ .mia-space-bar{display:none;}
+.mia-space-invite,.mia-space-head,.mia-space-actions{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;}
+.mia-space-icon{display:inline-flex;color:var(--sand-text-accent);}
+.mia-space-icon svg,.mia-space-bot svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.mia-space-title{font-weight:600;}
+.mia-space-sub,.mia-space-hint{color:var(--sand-text-secondary);}
+.mia-space-people{display:inline-flex;align-items:center;gap:4px;margin-left:auto;}
+.mia-space-person{padding:0;border:0;background:none;border-radius:50%;cursor:pointer;}
+.mia-space-person.following .mia-space-chip{box-shadow:0 0 0 2px var(--sand-border-focus);}
+.mia-space-chip{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--sand-fill-secondary);color:var(--sand-text-primary);font:600 9px/1 var(--styled-sans);letter-spacing:.02em;}
+.mia-space-chip.me{background:var(--sand-fill-accent);color:var(--sand-text-on-primary);}
+.mia-space-chip.lead{box-shadow:0 0 0 2px var(--sand-border-focus);}
+.mia-space-tile-dots .mia-space-chip{width:16px;height:16px;font-size:8px;}
+.mia-space-map{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;}
+.mia-space-map::-webkit-scrollbar{display:none;}
+.mia-space-tile{flex:none;display:flex;flex-direction:column;gap:4px;width:132px;padding:6px 8px;border:1px solid var(--sand-border-default);border-radius:8px;background:var(--sand-bg-elevated);color:inherit;text-align:left;font:inherit;cursor:pointer;}
+.mia-space-tile:hover{background:var(--sand-fill-ghost-hover);}
+.mia-space-tile.mine{border-color:var(--sand-border-focus);}
+.mia-space-tile.presenter{box-shadow:inset 0 0 0 1px var(--sand-border-focus);}
+.mia-space-tile.working{background:var(--sand-fill-accent-subtle);}
+.mia-space-tile-title{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.mia-space-tile-dots{display:flex;align-items:center;gap:3px;min-height:16px;}
+.mia-space-bot{display:inline-flex;color:var(--sand-text-accent);}
+.mia-space-btn{height:24px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:6px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:500 12px/1 var(--styled-sans);cursor:pointer;}
+.mia-space-btn:hover{background:var(--sand-fill-ghost-hover);}
+.mia-space-btn.primary{border-color:transparent;background:var(--sand-fill-primary);color:var(--sand-text-on-primary);}
+.mia-space-select{height:24px;max-width:180px;border:1px solid var(--sand-border-default);border-radius:6px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:12px var(--styled-sans);}
+.mia-space-actions .mia-space-hint{margin-right:auto;}

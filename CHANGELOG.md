@@ -9,6 +9,33 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.2.22]
+
+### Added
+- Shared tab groups (in testing): share a browser tab group with a team
+  channel. Teammates who join open the same pages with their own sign-ins and
+  see a minimap of who is on which tab and where bots are working, can
+  follow one another, and can ask everyone to look at one tab.
+- A Bots section in shared teams: use your own Solo bots privately inside a
+  team. Your chats with them there stay in that team and never show in Solo.
+- The @ menu in a team channel lists the whole team, and picking someone
+  outside the channel invites them.
+
+### Changed
+- Sharing a bot into a team channel gives the team its own copy of the bot's
+  instructions, which everyone in the team can see and use. The copy is no
+  longer linked to your Solo bot; its skills, automations and memories stay
+  with you.
+- Initial setup is now called Models & Subscriptions.
+- The Theme setting is hidden and Mia stays in the light theme; new installs
+  answer in the concise output style.
+
+### Fixed
+- The setup dialog opens without waiting for provider sign-in checks, and its
+  button always reads Connect.
+- Switching connections no longer reloads the app; the model selector updates
+  and a notice confirms the change.
+
 ## [0.2.21] — 2026-10-26
 
 Version 0.2.20 was used for unpublished previews. This is the first public

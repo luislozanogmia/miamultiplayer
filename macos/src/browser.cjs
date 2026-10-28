@@ -2856,6 +2856,21 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       }
       if (command.action === "new") { newTab(); return state(); }
+      // A shared space opens a teammate's tab in the background, so it never
+      // takes over the page this person is reading. Only web pages open this
+      // way: a teammate can never open a local file here.
+      if (command.action === "spaceOpenTab") {
+        const url = typeof command.url === "string" ? command.url.trim() : "";
+        if (!/^https?:\/\/\S+$/i.test(url) || url.length > 4096) return { error: "Only web pages can be shared." };
+        let groupId = groups.has(command.groupId) ? command.groupId : null;
+        const tab = newTab(url, { groupId, after: groupId ? groupTabs(groupId).at(-1)?.id : undefined, activate: command.activate === true });
+        if (!groupId) {
+          const group = createGroup(tab.id);
+          if (group) { updateGroup(group.id, { name: String(command.name || "").slice(0, 80) }); groupId = group.id; }
+        }
+        persistTabs(); publish();
+        return { ...state(), openedId: tab.id, groupId };
+      }
       if (command.action === "downloadShow") {
         const entry = downloadEntries.find(item => item.id === command.id);
         if (!entry || entry.state !== "completed" || !entry.path || !fs.existsSync(entry.path)) {
