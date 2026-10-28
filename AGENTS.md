@@ -22,6 +22,15 @@ app writes into the user's Mia workspace (`backend/miaos-workspace.js`).
 ## How we work
 
 - **No AI attribution** in commits, PRs, or comments.
+- **Check GitHub commit identity before committing or pushing.** In this repo,
+  a wrong numeric prefix in a `@users.noreply.github.com` email made GitHub
+  attribute Luis's release commits to another account even though the author
+  name said Luis. Check `git var GIT_AUTHOR_IDENT` and
+  `git var GIT_COMMITTER_IDENT`; the numeric prefix must be the GitHub account
+  ID of the intended author. Check for repository-local overrides with
+  `git config --show-origin --get user.email`. Stop and correct a mismatch
+  before committing. Do not rewrite published commits or tags as a routine
+  identity fix.
 - **Evidence before claims.** Don't say "fixed" or "works" until you've run
   it. Say what you tested and what you didn't.
 - **Test in dev mode before building.** `scripts/dev_mode.sh` runs the app
