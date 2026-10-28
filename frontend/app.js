@@ -5802,6 +5802,7 @@
       return hubChat.channels.filter(function(channel){return channel.kind!=='dm';}).map(function(channel){return {id:channel.id,name:hubChannelTitle(channel)};});
     },
     activeChannelId:function(){ return hubChannel(chatWs.activeRoomId) ? chatWs.activeRoomId : null; },
+    toast:function(text){ showBenchToast(text); },
     send:function(channelId,text){
       if(!hubWorkspace() || !hubChannel(channelId))return Promise.reject(new Error('That channel is no longer available.'));
       return hubCall('POST',hubPath()+'/channels/'+channelId+'/messages',{id:window.MiaHubChat.id(),text:text});

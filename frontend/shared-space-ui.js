@@ -190,7 +190,7 @@
     var test = channels.filter(function(channel){ return /space-test/i.test(channel.name); })[0];
     return (test && test.id) || (h && h.activeChannelId()) || (channels[0] && channels[0].id) || null;
   }
-  function toast(text){ if(typeof window.showBenchToast === 'function') window.showBenchToast(text); }
+  function toast(text){ var h = host(); if(h && h.toast) h.toast(text); }
 
   // ---- Rendering -----------------------------------------------------------
   var BOT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="8" width="14" height="10" rx="3"></rect><path d="M12 4v4M9.5 13h.01M14.5 13h.01"></path></svg>';
@@ -204,7 +204,7 @@
     var group = selectedGroup();
     var show = !!team && (bound() || visibleInvites.length || group);
     bar.hidden = !show;
-    if(!show){ bar.innerHTML = ''; return; }
+    if(!show){ paint(''); return; }
     if(bound()) return renderSpace();
     var html = '';
     visibleInvites.slice(0, 2).forEach(function(invite){
@@ -214,13 +214,17 @@
     });
     if(group && !visibleInvites.length){
       var h = host(), channels = h ? h.channels() : [], chosen = s.shareChannelId || defaultChannel();
+      var pages = s.browser.tabs.some(function(tab){ return tab.groupId === group.id && model.shareableUrl(tab.url); });
+      if(!pages){ paint('<div class="mia-space-invite"><span class="mia-space-hint">Open a web page in <b>' + esc(group.name || 'this group') + '</b> to share it with your team.</span></div>'); return; }
       html += '<div class="mia-space-invite"><span>Work in <b>' + esc(group.name || 'this group') + '</b> together with your team in</span>' +
         '<select class="mia-space-select" data-space-channel aria-label="Channel to share with">' + channels.map(function(channel){
           return '<option value="' + esc(channel.id) + '"' + (channel.id === chosen ? ' selected' : '') + '>' + esc(channel.name) + '</option>';
         }).join('') + '</select><button type="button" class="mia-space-btn primary" data-space-share>Share group</button></div>';
     }
-    bar.innerHTML = html;
+    paint(html);
   }
+  var painted = null;
+  function paint(html){ if(html !== painted){ painted = html; bar.innerHTML = html; } }
   function renderSpace(){
     var self = me(), live = model.livePresence(s.presence, Date.now()), here = myPresence();
     var mine = self ? {id: self.id, name: self.name, tab: here.tab, bots: here.bots} : null;
@@ -228,7 +232,7 @@
     var others = Object.keys(live).map(function(id){ return live[id]; });
     var followName = s.follow && live[s.follow] ? live[s.follow].name : '';
     var channel = (host() ? host().channels() : []).filter(function(item){ return item.id === s.channelId; })[0];
-    bar.innerHTML =
+    paint(
       '<div class="mia-space-head"><span class="mia-space-title">' + esc(s.space.name) + '</span>' +
         '<span class="mia-space-sub">' + esc(channel ? channel.name : '') + '</span>' +
         '<span class="mia-space-people">' + (self ? chip({name: self.name}, 'me') : '') + others.map(function(person){
@@ -248,7 +252,7 @@
         (followName ? '<button type="button" class="mia-space-btn" data-space-follow="' + esc(s.follow) + '">Stop following ' + esc(followName.split(' ')[0]) + '</button>'
           : '<span class="mia-space-hint">' + (others.length ? 'Click a person to follow them' : 'Waiting for teammates') + '</span>') +
         '<button type="button" class="mia-space-btn" data-space-look>Everyone look here</button>' +
-        '<button type="button" class="mia-space-btn" data-space-leave>Leave</button></div>';
+        '<button type="button" class="mia-space-btn" data-space-leave>Leave</button></div>');
   }
 
   bar.addEventListener('click', function(event){
@@ -270,7 +274,7 @@
     if(event.target.hasAttribute('data-space-channel')) s.shareChannelId = event.target.value;
   });
   window.addEventListener('beforeunload', function(){ if(s.space) post({t: 'leave'}); });
-  setInterval(render, 15000);
+  setInterval(render, 3000);
   bridge.onState(onBrowser);
   command('state').then(function(state){ if(state && state.tabs) onBrowser(state); }).catch(function(){});
   window.MiaSpaceUI = {receive: receive, render: render};
