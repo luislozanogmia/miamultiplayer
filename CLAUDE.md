@@ -28,6 +28,16 @@ second repo.
    pre-commit hook (`.githooks/pre-commit`) enforces this mechanically —
    never bypass it with `--no-verify`.
 
+## Commit identity
+
+Before committing or pushing, check `git var GIT_AUTHOR_IDENT` and
+`git var GIT_COMMITTER_IDENT`. For a GitHub noreply email, its numeric prefix
+must match the intended author's GitHub account ID; the displayed author name
+alone does not control GitHub attribution. Also check
+`git config --show-origin --get user.email` for a repository-local override.
+Correct a mismatch before creating new commits. Published commits and tags
+require an explicit release-history decision before any rewrite.
+
 ## What lives where
 
 - **This repo** — the entire app, plus `operations/` (how we work:
