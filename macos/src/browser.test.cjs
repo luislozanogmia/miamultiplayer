@@ -65,7 +65,7 @@ function harness(options = {}) {
     insertCSS(css) { this.styles = [...(this.styles || []), css]; return Promise.resolve("style-key"); }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
     getURL() { return this.shownUrl || ""; }
-    isLoading() { return false; }
+    isLoading() { return options.pagesLoading === true; }
     isDestroyed() { return this.closed; }
     insertCSS(css) { this.insertedCSS = (this.insertedCSS || 0) + 1; this.lastCSS = css; return Promise.resolve(`css-${this.insertedCSS}`); }
     removeInsertedCSS() { return Promise.resolve(); }
@@ -2340,5 +2340,19 @@ test("a new tab for a bot opens at the end of that bot's group", async () => {
   const again = h.command("state");
   assert.equal(again.tabs.length, count, "the group's blank tab is reused, not a second one");
   assert.equal(again.activeId, added.id);
+  h.window.emit("closed");
+});
+
+test("a joined shared tab opens inside its own named group while its page is still loading", () => {
+  const h = harness({ pagesLoading: true });
+  const opened = h.command("spaceOpenTab", { url: "https://docsend.com/view/x", groupId: null, name: "Deal room", activate: true });
+  assert.ok(!opened.error, opened.error);
+  const tab = opened.tabs.find(item => item.id === opened.openedId);
+  assert.equal(tab.groupId, opened.groupId);
+  assert.equal(opened.groups.find(group => group.id === opened.groupId).name, "Deal room");
+  const next = h.command("spaceOpenTab", { url: "https://example.com/b", groupId: opened.groupId, name: "Deal room" });
+  assert.ok(!next.error, next.error);
+  assert.equal(next.tabs.find(item => item.id === next.openedId).groupId, opened.groupId);
+  assert.equal(next.groups.length, 1);
   h.window.emit("closed");
 });

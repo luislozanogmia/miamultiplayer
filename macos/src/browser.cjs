@@ -1061,6 +1061,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const botId = tab && groups.get(tab.groupId)?.botId;
     return botId ? { kind: "bot", botId } : { kind: "mia" };
   }
+  function botWorkPending(tab) {
+    return Boolean(tab && ((tab.botWork || 0) > 0 || tab.actorOperationCount > 0));
+  }
   function browserWorkPending(tab) {
     return Boolean(tab && ((tab.botWork || 0) > 0
       || pendingBrowserOperations.get(tab.view.webContents)?.size
@@ -1074,8 +1077,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function protocolScript(tab, script, isolated = false) {
     return executeProtocolScript(tab.view.webContents, script, isolated, () => browserWorkSettled(tab));
   }
-  function requireGroupIdle(groupId) {
-    if (groupId && groupTabs(groupId).some(browserWorkPending)) {
+  // A page that is only loading doesn't stop a tab joining its group when
+  // `pagesMayLoad` is set; bot work always does.
+  function requireGroupIdle(groupId, pagesMayLoad = false) {
+    if (groupId && groupTabs(groupId).some(pagesMayLoad ? botWorkPending : browserWorkPending)) {
       throw protocolError("BROWSER_BUSY", "This group still has browser work in progress. Wait for it to finish before changing its controller or tabs.");
     }
   }
@@ -2143,7 +2148,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (value) normalizeStoredTarget(value);
     const groupId = groups.has(options.groupId) ? options.groupId
       : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null;
-    if (!restoring) requireGroupIdle(groupId);
+    if (!restoring) requireGroupIdle(groupId, options.pagesMayLoad === true);
     const view = new WebContentsView({ webPreferences: {
       session: profile, sandbox: true, contextIsolation: true, nodeIntegration: false,
       webSecurity: true, allowRunningInsecureContent: false,
@@ -2406,14 +2411,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function groupTabs(groupId) {
     return [...tabs.values()].filter(tab => tab.groupId === groupId);
   }
+  // An empty group lives only until a tab joins it; normalizeGroups drops it.
+  function addGroup(name = "") {
+    const used = new Set([...groups.values()].map(group => group.color));
+    const color = GROUP_COLORS.find(item => !used.has(item)) || GROUP_COLORS[groups.size % GROUP_COLORS.length];
+    const group = { id: `g${nextGroupNumber++}`, name, color, collapsed: false, botId: null };
+    groups.set(group.id, group);
+    return group;
+  }
   function createGroup(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return null;
     requireMembershipIdle(tab);
-    const used = new Set([...groups.values()].map(group => group.color));
-    const color = GROUP_COLORS.find(item => !used.has(item)) || GROUP_COLORS[groups.size % GROUP_COLORS.length];
-    const group = { id: `g${nextGroupNumber++}`, name: "", color, collapsed: false, botId: null };
-    groups.set(group.id, group);
+    const group = addGroup();
     tab.groupId = group.id;
     normalizeGroups();
     return group;
@@ -2862,12 +2872,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "spaceOpenTab") {
         const url = typeof command.url === "string" ? command.url.trim() : "";
         if (!/^https?:\/\/\S+$/i.test(url) || url.length > 4096) return { error: "Only web pages can be shared." };
-        let groupId = groups.has(command.groupId) ? command.groupId : null;
-        const tab = newTab(url, { groupId, after: groupId ? groupTabs(groupId).at(-1)?.id : undefined, activate: command.activate === true });
-        if (!groupId) {
-          const group = createGroup(tab.id);
-          if (group) { updateGroup(group.id, { name: String(command.name || "").slice(0, 80) }); groupId = group.id; }
-        }
+        // The group exists before the tab: a tab still loading its page can't
+        // be moved into a group afterwards.
+        const groupId = groups.has(command.groupId) ? command.groupId : addGroup(String(command.name || "").slice(0, 80)).id;
+        let tab;
+        try {
+          tab = newTab(url, { groupId, after: groupTabs(groupId).at(-1)?.id, activate: command.activate === true, pagesMayLoad: true });
+        } finally { normalizeGroups(); }
         persistTabs(); publish();
         return { ...state(), openedId: tab.id, groupId };
       }

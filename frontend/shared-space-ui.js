@@ -51,7 +51,7 @@
   }
 
   // ---- Browser -------------------------------------------------------------
-  function groupTabs(){ return s.browser ? s.browser.tabs.filter(function(tab){ return tab.groupId === s.groupId; }) : []; }
+  function groupTabs(){ return s.browser && s.groupId ? s.browser.tabs.filter(function(tab){ return tab.groupId === s.groupId; }) : []; }
   function onBrowser(state){
     s.browser = state;
     if(bound()){
