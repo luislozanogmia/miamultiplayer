@@ -745,6 +745,7 @@
     if(!overlay) return;
     overlay.classList.toggle('hidden', !loading);
     overlay.setAttribute('aria-hidden', loading ? 'false' : 'true');
+    if(!loading && typeof maybeShowViewTips === 'function') maybeShowViewTips();
   }
   function signalDesktopReady(){
     if(desktopReadySignaled) return;
@@ -1789,6 +1790,7 @@
   function closeSettingsDrawer(){
     el('#settingsOverlay').classList.remove('open');
     el('#settingsDrawer').classList.remove('open');
+    setTimeout(maybeShowViewTips, 0);
   }
 
   function stopHarnessAuthPolling(){
@@ -2227,6 +2229,7 @@
     if(apiKey) apiKey.value = '';
     el('#harnessOnboardingOverlay').classList.remove('open');
     el('#harnessOnboarding').classList.remove('open');
+    setTimeout(maybeShowViewTips, 0);
     return true;
   }
 
@@ -18548,6 +18551,7 @@
 
   function tourTeardown(){
     tour.active = false;
+    setTimeout(maybeShowViewTips, 0);
     if(tour.clearStepClick){tour.clearStepClick(); tour.clearStepClick = null;}
     tour.steps = null;
     if(tour.pollTimer) clearTimeout(tour.pollTimer);
@@ -18620,6 +18624,37 @@
     if(localStorage.getItem(TOUR_LS_KEY)) return;
     setTimeout(tourStart, 500);
   }
+
+  // First-run tips for each view (view-tips.js). They wait while anything
+  // sits on top of the view: sign-in, loading, a dialog or the guided tour.
+  var viewTips = window.MiaViewTips ? window.MiaViewTips.install(document, {
+    view: function(){
+      var classes = document.body.classList;
+      if(window.MiaTabStrip && window.MiaTabStrip.mix.on()) return null;
+      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+    },
+    blocked: function(){
+      if(!currentUser || tour.active || document.documentElement.classList.contains('workspace-handoff')) return true;
+      var login = el('#loginWall'), loading = el('#appLoadingOverlay');
+      if((login && !login.classList.contains('hidden')) || (loading && !loading.classList.contains('hidden'))) return true;
+      if(document.querySelector('.drawer-overlay.open, .styled-scrim.open')) return true;
+      // A closed drawer keeps its box off to the side; a dialog is open when
+      // it is what sits under its own middle.
+      return Array.prototype.some.call(document.querySelectorAll('[role="dialog"][aria-modal="true"]'), function(dialog){
+        var rect = dialog.getBoundingClientRect();
+        var x = rect.left + rect.width / 2, y = rect.top + Math.min(rect.height / 2, 40);
+        if(!rect.width || !rect.height || x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+        var hit = document.elementFromPoint(x, y);
+        return !!hit && dialog.contains(hit);
+      });
+    }
+  }) : null;
+  function maybeShowViewTips(){ if(viewTips) viewTips.maybeShow(); }
+  var replayViewTips = el('#settingsReplayViewTips');
+  if(replayViewTips) replayViewTips.addEventListener('click', function(){
+    closeSettingsDrawer();
+    if(viewTips) setTimeout(viewTips.replay, 350);
+  });
 
   var replayBtn = el('#settingsReplayTour');
   if(replayBtn){

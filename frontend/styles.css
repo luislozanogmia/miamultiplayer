@@ -3696,3 +3696,34 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .mia-tip{position:fixed;left:0;top:0;z-index:100000;max-width:240px;padding:4px 8px;border-radius:6px;background:var(--sand-text-primary,#1f1f1f);color:var(--sand-bg-base,#fff);font:500 12px/16px var(--styled-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif);white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;transform:translateY(-2px);transition:opacity 60ms ease,transform 60ms ease,visibility 0s linear 60ms;}
 .mia-tip.is-visible{opacity:1;visibility:visible;transform:none;transition:opacity 60ms ease,transform 60ms ease;}
 @media (prefers-reduced-motion:reduce){.mia-tip,.mia-tip.is-visible{transition:none;transform:none;}}
+/* View tips (view-tips.js): a Mote throws a curved arrow at a real control,
+   with a bold label in a rounded pill. Only the card takes clicks. */
+.mia-tips{position:fixed;inset:0;z-index:9000;pointer-events:none;--tip-color:#e9407f;}
+.mia-tips[hidden]{display:none;}
+.mia-tips-arrow{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
+.mia-tips-path{stroke:var(--tip-color);stroke-width:5;stroke-dasharray:var(--len,600);stroke-dashoffset:var(--len,600);}
+.mia-tips-head{fill:var(--tip-color);stroke:var(--tip-color);stroke-width:2;opacity:0;}
+.mia-tips.is-in .mia-tips-path{animation:miaTipsDraw .42s cubic-bezier(.65,0,.35,1) .22s forwards;}
+.mia-tips.is-in .mia-tips-head{animation:miaTipsFade .12s ease .6s forwards;}
+.mia-tips-mote{position:absolute;width:56px;height:56px;filter:drop-shadow(0 6px 8px rgba(20,20,20,.18));transform-origin:50% 90%;}
+.mia-tips.is-in .mia-tips-mote{animation:miaTipsPop .45s cubic-bezier(.34,1.56,.64,1) both;}
+.mia-tips-card{position:absolute;pointer-events:auto;width:248px;box-sizing:border-box;padding:12px 12px 10px;border-radius:16px;background:var(--sand-bg-base,#fff);color:var(--sand-text-primary,#141414);box-shadow:0 10px 26px -8px rgba(0,0,0,.28),0 0 0 1px rgba(20,20,20,.06);font:400 13px/1.4 var(--sans,system-ui,sans-serif);}
+.mia-tips.is-in .mia-tips-card{animation:miaTipsRise .3s ease .12s both;}
+.mia-tips-pill{display:inline-block;padding:6px 14px;border-radius:999px;background:var(--tip-color);color:#fff;font:700 17px/1.1 var(--sans,system-ui,sans-serif);letter-spacing:-.01em;box-shadow:0 6px 14px -6px rgba(0,0,0,.3);}
+.mia-tips-body{margin:8px 2px 10px;color:var(--sand-text-secondary,#5c5c5c);}
+.mia-tips-actions{display:flex;align-items:center;gap:6px;}
+.mia-tips-count{margin-right:auto;font-size:11.5px;color:var(--sand-text-tertiary,#8a8a8a);}
+.mia-tips-actions button{appearance:none;border:0;border-radius:999px;padding:5px 12px;font:600 12px/1.2 var(--sans,system-ui,sans-serif);cursor:pointer;}
+.mia-tips-skip{background:transparent;color:var(--sand-text-secondary,#5c5c5c);}
+.mia-tips-skip[hidden]{display:none;}
+.mia-tips-next{background:var(--tip-color);color:#fff;}
+.mia-tips-actions button:focus-visible{outline:2px solid var(--tip-color);outline-offset:2px;}
+@keyframes miaTipsPop{0%{transform:scale(.4) rotate(-8deg);opacity:0;}55%{transform:scale(1.08,.92) rotate(6deg);opacity:1;}100%{transform:none;opacity:1;}}
+@keyframes miaTipsDraw{to{stroke-dashoffset:0;}}
+@keyframes miaTipsFade{to{opacity:1;}}
+@keyframes miaTipsRise{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion:reduce){
+  .mia-tips.is-in .mia-tips-path,.mia-tips.is-in .mia-tips-head,.mia-tips.is-in .mia-tips-mote,.mia-tips.is-in .mia-tips-card{animation:none;}
+  .mia-tips-path{stroke-dashoffset:0;}
+  .mia-tips-head{opacity:1;}
+}
