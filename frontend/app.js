@@ -15722,8 +15722,9 @@
     var mix = window.MiaTabStrip.mix;
     function syncMix(){
       mixBtn.setAttribute('aria-pressed', mix.on() ? 'true' : 'false');
-      mixBtn.title = mix.on() ? 'Separate tabs' : 'Mix all tabs';
-      mixBtn.setAttribute('aria-label', mixBtn.title);
+      var mixLabel = mix.on() ? 'Separate tabs' : 'Mix all tabs';
+      mixBtn.setAttribute('data-tip', mixLabel);
+      mixBtn.setAttribute('aria-label', mixLabel);
     }
     if(mixBtn){
       mixBtn.addEventListener('click', function(){ mix.set(!mix.on()); syncMix(); syncSidebarViews(); });
