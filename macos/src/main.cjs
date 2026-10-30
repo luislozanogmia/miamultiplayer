@@ -24,6 +24,7 @@ const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
+const { mainWindowLinkAction } = require("./main-navigation.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 const { createBrowserWorkBroker } = require("./browser-work-broker.cjs");
@@ -1440,11 +1441,13 @@ function isExternalArtifactHttpUrl(value) {
   }
 }
 
+// A web link in an artifact opens as a tab in Mia's own browser (its tabs
+// and sign-ins), never in the artifact pane's sandboxed session or another
+// browser. The pane closes so the tab is in front.
 function openExternalArtifactLink(value) {
   if (!isExternalArtifactHttpUrl(value)) return false;
-  Promise.resolve(shell.openExternal(String(value))).catch(error => {
-    desktopLog(`artifact external link failed: ${error.message}`);
-  });
+  setArtifactPanelVisible(false);
+  void openLinkInMiaBrowser(String(value), "browser");
   return true;
 }
 
@@ -1455,7 +1458,7 @@ function artifactNavigationAllowed(value) {
 function blockArtifactNavigation(event, value) {
   event.preventDefault();
   if (openExternalArtifactLink(value)) {
-    artifactLastError = "External links open in your normal browser.";
+    artifactLastError = "Web links open in Mia's browser.";
   } else {
     artifactLastError = "Only Mia attachment previews can be opened in this pane.";
   }
@@ -1575,6 +1578,21 @@ async function navigateArtifact(value) {
   }
 }
 
+// Opens a page as a normal tab in Mia's browser, the one with the person's
+// tabs and sign-ins, and brings the Browser view forward. An attachment
+// preview first gets its one-time grant (browser-attachment-auth.cjs).
+async function openLinkInMiaBrowser(target, kind = "browser") {
+  if (!nativeBrowser || typeof nativeBrowser.openLink !== "function" || !mainWindow || mainWindow.isDestroyed()) return false;
+  try {
+    if (kind === "attachment") await nativeBrowser.prepareAttachment(target, mainWindow.webContents.session);
+    nativeBrowser.openLink(target);
+    return true;
+  } catch (error) {
+    desktopLog(`open link in Mia browser failed: ${error.message}`);
+    return false;
+  }
+}
+
 function configureArtifactSession() {
   const artifactSession = session.fromPartition(ARTIFACT_PARTITION);
   if (artifactSessionConfigured) return artifactSession;
@@ -1594,7 +1612,7 @@ function configureArtifactContents(contents) {
     } else {
       openExternalArtifactLink(url);
       artifactLastError = isExternalArtifactHttpUrl(url)
-        ? "External links open in your normal browser."
+        ? "Web links open in Mia's browser."
         : "Only Mia attachment previews can be opened in this pane.";
       sendArtifactState();
     }
@@ -1766,18 +1784,24 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
       } : { action: "deny" };
     }
     const provider = harnessAuthRedirectProvider(url, expectedBackendUrl);
-    if (isLocal(url)) return provider ? {
+    if (isLocal(url) && provider) return {
       action: "allow",
       // System-browser providers hand off before the page draws, so their
       // pop-up starts hidden instead of flashing on screen.
       overrideBrowserWindowOptions: harnessAuthPopupOptions(window, !SYSTEM_BROWSER_AUTH_PROVIDERS.has(provider)),
-    } : { action: "allow" };
+    };
     // Desktop login uses the native client and system browser; never revive
     // the cookie-backed embedded Google flow from an old renderer.
     if (isClerkGoogleOAuthUrl(url)) return { action: "deny" };
     if (isAllowedExternalUrl(url)) {
       shell.openExternal(url);
+      return { action: "deny" };
     }
+    // An artifact, attachment or web page never becomes a second app
+    // window: it opens as a tab in Mia's browser, with its sign-ins.
+    const link = mainWindowLinkAction(url, expectedBackendUrl || backendUrl);
+    if (link.action === "allow") return { action: "allow" };
+    if (link.action === "attachment" || link.action === "browser") void openLinkInMiaBrowser(link.url, link.action);
     return { action: "deny" };
   });
   window.webContents.on("did-create-window", (child, details) => {
@@ -1821,14 +1845,20 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
       event.preventDefault();
       return;
     }
-    if (isLocal(url)) return;
     if (isClerkGoogleOAuthUrl(url)) { event.preventDefault(); return; }
     if (isAllowedExternalUrl(url)) {
       event.preventDefault();
       shell.openExternal(url);
       return;
     }
+    // Mia's window only ever shows Mia. A link to an artifact, attachment or
+    // web page (from a chat message, an artifact card, a sign-in button)
+    // opens a Mia browser tab instead of replacing the app; Mia's API is
+    // never a page of its own.
+    const link = mainWindowLinkAction(url, expectedBackendUrl || backendUrl);
+    if (link.action === "allow") return;
     event.preventDefault();
+    if (link.action === "attachment" || link.action === "browser") void openLinkInMiaBrowser(link.url, link.action);
   };
   window.webContents.on("will-navigate", guardNavigation);
   if (harnessAuthProvider) window.webContents.on("will-redirect", guardNavigation);
@@ -2046,8 +2076,22 @@ function createWindow() {
       desktopLog(`renderer console level=${level} line=${lineNumber} message=${message}`);
     });
   }
+  // A gone renderer leaves an empty (black in dark mode) window that never
+  // recovers on its own. Load Mia again; a crash loop stops after a few
+  // tries a minute so it cannot spin.
+  let rendererRecoveries = [];
   window.webContents.on("render-process-gone", (_event, details) => {
-    desktopLog(`renderer process gone reason=${details && details.reason || "unknown"}`);
+    const reason = details && details.reason || "unknown";
+    desktopLog(`renderer process gone reason=${reason}`);
+    if (reason === "clean-exit" || window.isDestroyed()) return;
+    const now = Date.now();
+    rendererRecoveries = rendererRecoveries.filter(at => now - at < 60000);
+    if (rendererRecoveries.length >= 3) return;
+    rendererRecoveries.push(now);
+    setTimeout(() => {
+      if (window.isDestroyed() || !backendUrl) return;
+      window.webContents.loadURL(backendUrl).catch(error => desktopLog(`renderer recovery failed: ${error.message}`));
+    }, 300);
   });
   window.webContents.on("context-menu", (_event, params) => {
     const items = params.isEditable

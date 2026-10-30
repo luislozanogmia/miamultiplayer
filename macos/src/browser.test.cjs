@@ -2356,3 +2356,12 @@ test("a joined shared tab opens inside its own named group while its page is sti
   assert.equal(next.groups.length, 1);
   h.window.emit("closed");
 });
+
+test("a link from Mia's window opens as the person's own tab, in front, in the Browser view", () => {
+  const h = harness();
+  const id = h.controller.openLink("https://www.linkedin.com/login");
+  assert.equal(h.controller.state().activeId, id);
+  assert.equal(h.views.at(-1).webContents.loads.at(-1), "https://www.linkedin.com/login");
+  assert.ok(h.window.webContents.sent.some(item => item.channel === "miaos-browser-open" && item.payload === "web-browser"));
+  assert.throws(() => h.controller.openLink("file:///etc/hosts"));
+});

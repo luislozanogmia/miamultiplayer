@@ -1034,6 +1034,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!window.webContents.isDestroyed()) window.webContents.send("miaos-browser-open", "web-browser");
   }
 
+  // A link from Mia's own window (an artifact, a chat card) opens as the
+  // person's tab, in front, and the Browser view shows it.
+  function openLink(value) {
+    const tab = newTab(value, { activate: true });
+    openBrowserSurface();
+    return tab.id;
+  }
+
   function protocolError(code, message) {
     const error = new Error(message);
     error.code = code;
@@ -3086,7 +3094,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     shortcut: runShortcut, protocol: protocolCommand, persist: persistTabs,
     actors: publicActors,
     prepareToClose: captureMediaState, clearData,
-    prepareAttachment: attachmentAccess.prepare,
+    prepareAttachment: attachmentAccess.prepare, openLink,
     clearLegacyAttachmentCookie: attachmentAccess.removeLegacyBrowserCookie,
   };
 }
