@@ -37,7 +37,10 @@ function navigationHarness() {
   };
   vm.createContext(ctx);
   vm.runInContext("var browserFollowKey='', browserFollowState=null; var chatTextDrafts={};\n" +
-    ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat', 'startAgentSetupChat'].map(sourceFunction).join('\n'), ctx);
+    "var agentSetupResume={}, AGENT_SETUP_UNFINISHED={intent:true, interpreting:true, review:true, activating:true}, FIRST_BOT_COLORS=['#3478d4'];\n" +
+    ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat',
+      'normalizeAgentAvatarColor', 'agentSetupKey', 'freshAgentSetup', 'agentSetupUnfinished', 'newSetupBotColor', 'agentSetupIdentity', 'parkAgentSetup', 'startAgentSetupChat'].map(sourceFunction).join('\n') +
+    "\nvar agentSetup = freshAgentSetup(null); agentSetup.phase = 'idle';", ctx);
   const follow = (id, botId) => ctx.followBrowserTab({ activeId: id, tabs: [{ id, groupId: 'g' + id }], groups: [{ id: 'g' + id, botId }] });
   function created(botId) {
     requests.get(botId).resolve({ status: 201, data: { conversation: { id: 'room-' + botId, type: 'bot', metadata: { botId } } } });

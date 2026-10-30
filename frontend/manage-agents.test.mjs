@@ -554,11 +554,11 @@ test('theme migration owns the legacy developer mode and diagnostics stay availa
 test('New Bot uses a chat-native review and explicit activation flow', async () => {
   const source = await readFile(appUrl, 'utf8');
 
-  assert.match(source, /function startAgentSetupChat\(\)/);
+  assert.match(source, /function startAgentSetupChat\(template\)/);
   assert.match(source, /chatWs\.activeKind === 'agent-setup'\)\{\s*setComposerBoundState\(true\)/);
   assert.match(source, /Let’s set me up\. Tell me in a few words what you want me to do\?/);
   assert.match(source, /api\('\/api\/bots\/interpret'/);
-  assert.match(source, /var modelSelection = chatModelSelectionMetadata\(\);[\s\S]*?intent: agentSetup\.intent,[\s\S]*?modelSelection:modelSelection/);
+  assert.match(source, /var modelSelection = chatModelSelectionMetadata\(\);[\s\S]*?intent: flow\.intent,[\s\S]*?modelSelection:modelSelection/);
   assert.match(source, /Nothing is created or scheduled until you confirm\./);
   assert.match(source, /Yes, activate bot/);
   // Setup creates only the bot. A schedule request is handed to the new bot,
@@ -568,7 +568,7 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.match(source, /automations: \[\],/);
   assert.match(source, /function handOffAgentSetupAutomation\(conversationId, draft\)\{[\s\S]*?api\(nativeConversationPath\(conversationId, '\/events'\)[\s\S]*?'Set up an automation for this request: ' \+ request[\s\S]*?clientIdempotencyKey: 'bot-setup-automation-' \+ conversationId/);
   assert.match(source, /Add the steps or the task prompt this automation should run\./);
-  assert.match(source, /agentAvatarHtml\('New Bot', AGENT_SETUP_ROOM_ID, 28\)/);
+  assert.match(source, /function agentSetupAvatarHtml\(size, markMode, profileInteractive\)/);
   assert.match(source, /status: 'running'/);
   assert.match(source, /createdBotRecords\.push\(created\);[\s\S]*?syncChatBotRecords\(createdBotRecords\);[\s\S]*?applyNativeConversationList/);
   assert.match(source, /I’m active\. What should I work on first\?/);
@@ -826,8 +826,8 @@ test('bot creation has a bounded request with cancel, timeout, and retry recover
 test('chat-native bot setup can cancel or retry bounded interpretation and activation', async () => {
   const [source, styles] = await Promise.all([readFile(appUrl, 'utf8'), readFile(stylesUrl, 'utf8')]);
   assert.match(source, /var AGENT_SETUP_TIMEOUT_MS = 30000/);
-  assert.match(source, /function clearAgentSetupRequest\(abort\)/);
-  assert.match(source, /function finishAgentSetupFailure\(attempt, operation, timedOut, message\)/);
+  assert.match(source, /function clearAgentSetupRequest\(abort, flow\)/);
+  assert.match(source, /function finishAgentSetupFailure\(attempt, operation, timedOut, message, flow\)/);
   assert.match(source, /function cancelAgentSetupFlow\(\)/);
   assert.match(source, /id="agentSetupCancel"/);
   assert.match(source, /id="agentSetupRetry"/);

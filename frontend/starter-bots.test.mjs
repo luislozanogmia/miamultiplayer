@@ -8,7 +8,9 @@ const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 test('chat sidebar exposes starter bot templates without pre-creating bots', () => {
   assert.match(html, /id="chatStarterBotsGroup"[\s\S]*id="chatStarterBots"/);
   assert.match(source, /var CHAT_STARTER_BOTS = \[[\s\S]*Weekly project update[\s\S]*Inbox triage[\s\S]*Research brief/);
-  assert.match(source, /function renderChatStarterBots\(\)[\s\S]*startAgentSetupChat\(\)[\s\S]*input\.value = template\.prompt/);
+  assert.match(source, /function renderChatStarterBots\(\)[\s\S]*startAgentSetupChat\(template\)/);
+  // The template's prompt is the new setup's first composer text.
+  assert.match(source, /function freshAgentSetup\(template\)[\s\S]*composer: template && template\.prompt \? String\(template\.prompt\) : ''/);
   assert.match(source, /CHAT_STARTER_BOTS_HIDDEN_KEY[\s\S]*data-dismiss-starter-bot[\s\S]*hideChatStarterBot/);
   assert.match(source, /group\.hidden = visible\.length === 0/);
   // The group's display:flex must not override [hidden], or an empty

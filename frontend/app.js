@@ -209,6 +209,7 @@
         else delete chatTextDrafts[chatWs.activeRoomId];
       }
       sessionStorage.setItem(chatDraftsStorageKey(bootWorkspaceKey), JSON.stringify(chatTextDrafts));
+      sessionStorage.setItem(agentSetupStorageKey(bootWorkspaceKey), JSON.stringify(agentSetupSnapshots()));
     } catch(_saveWorkspaceStateError) {}
   }
   function restoreChatTextDrafts(){
@@ -766,6 +767,7 @@
     currentUser = email;
     currentAccountEmail = accountEmail || email;
     restoreChatTextDrafts();
+    restoreAgentSetups();
     refreshAppName();
     loadChatPinned();
     loadChatAttention();
@@ -3473,13 +3475,7 @@
       button.addEventListener('click', function(){
         var template = CHAT_STARTER_BOTS.filter(function(item){ return item.name === button.getAttribute('data-starter-bot'); })[0];
         if(!template) return;
-        startAgentSetupChat();
-        var input = el('#ccInput');
-        if(input){
-          input.value = template.prompt;
-          input.dispatchEvent(new Event('input', {bubbles:true}));
-          input.focus();
-        }
+        startAgentSetupChat(template);
       });
     });
     els('[data-dismiss-starter-bot]', wrap).forEach(function(button){
@@ -5117,7 +5113,7 @@
       var newBot=takeNewTeamBotRequest(activeWorkspaceKey,hubChat.channels,Date.now());
       if(newBot) return startTeamBotSetup(newBot);
       if(keepSetup || chatWs.activeKind==='agent-setup'){
-        chatWs.activeRoomId=AGENT_SETUP_ROOM_ID;chatWs.activeKind='agent-setup';chatWs.activeLabel='New Bot';
+        chatWs.activeRoomId=AGENT_SETUP_ROOM_ID;chatWs.activeKind='agent-setup';chatWs.activeLabel=agentSetupIdentity().name;
         renderChatSidebar();return refreshChatMain();
       }
       if(room) return openHubChannel(room);
@@ -6566,18 +6562,55 @@
   }
   var AGENT_SETUP_ROOM_ID = '__bot_setup__';
   var AGENT_SETUP_TIMEOUT_MS = 30000;
-  var agentSetup = {
-    phase: 'idle', // idle | intent | interpreting | review | activating | active
-    intent: '',
-    draft: null,
-    error: '',
-    created: null,
-    liveRoomId: null,
-    requestId: 0,
-    requestController: null,
-    requestTimeoutTimer: null,
-    requestTimedOut: false
-  };
+  // Unfinished setups that are not on screen, one per starter bot ('' is a
+  // plain New Bot), so leaving a setup and coming back restores what was
+  // typed and answered.
+  var agentSetupResume = {};
+  var AGENT_SETUP_UNFINISHED = {intent:true, interpreting:true, review:true, activating:true};
+  function agentSetupKey(template){ return template && template.name ? String(template.name) : ''; }
+  function freshAgentSetup(template){
+    return {phase:'intent', intent:'', draft:null, error:'', created:null, liveRoomId:null, requestId:0, requestController:null, requestTimeoutTimer:null, requestTimedOut:false,
+      key: agentSetupKey(template), templateName: template && template.name ? String(template.name) : '',
+      avatarColor: normalizeAgentAvatarColor(template && template.avatarColor) || newSetupBotColor((typeof chatWs !== 'undefined' && chatWs && chatWs.botRecords) || []),
+      composer: template && template.prompt ? String(template.prompt) : ''};
+  }
+  function agentSetupUnfinished(flow){
+    return !!flow && !!AGENT_SETUP_UNFINISHED[flow.phase] && (flow.phase !== 'intent' || !!flow.intent || !!flow.error || !!String(flow.composer || '').trim());
+  }
+  // A bot's color is settled when its setup starts, so the setup chat, its
+  // browser group and the finished bot all show the same mote. It follows the
+  // rule the server applies when no color is sent (newBotColor in
+  // backend/server.js): blue, red, yellow, green, then a random color.
+  var FIRST_BOT_COLORS = ['#3478d4', '#e5484d', '#f2c230', '#3fa34d'];
+  function newSetupBotColor(bots, random){
+    var taken = {};
+    (bots || []).forEach(function(bot){ taken[normalizeAgentAvatarColor(bot && bot.avatarColor)] = true; });
+    var next = FIRST_BOT_COLORS.filter(function(color){ return !taken[color]; })[0];
+    if((bots || []).length < FIRST_BOT_COLORS.length && next) return next;
+    var hue = Math.floor((random || Math.random)() * 360), sat = 0.72, light = 0.52;
+    function channel(n){
+      var k = (n + hue / 30) % 12;
+      var value = light - sat * Math.min(light, 1 - light) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+      return ('0' + Math.round(value * 255).toString(16)).slice(-2);
+    }
+    return '#' + channel(0) + channel(8) + channel(4);
+  }
+  // phase: idle | intent | interpreting | review | activating | active
+  var agentSetup = freshAgentSetup(null);
+  agentSetup.phase = 'idle';
+  // Who the bot being set up is, wherever it is drawn (chat messages, chat
+  // header, browser group): the starter bot it began from, or New Bot, then
+  // the name it is given. With the color above this is exactly the icon the
+  // starter bot showed and the icon the created bot keeps.
+  function agentSetupIdentity(flow){
+    flow = flow || agentSetup;
+    var name = (flow.created && flow.created.name) || (flow.draft && String(flow.draft.name || '').trim()) || flow.templateName || 'New Bot';
+    return {name: String(name), color: normalizeAgentAvatarColor(flow.avatarColor)};
+  }
+  function agentSetupAvatarHtml(size, markMode, profileInteractive){
+    var who = agentSetupIdentity();
+    return agentAvatarHtml(who.name, null, size, markMode, who.color, profileInteractive);
+  }
   var chatPinnedKeys = {};
   var chatPinnedMigrationInFlight = false;
   var chatAttentionRooms = {};
@@ -8335,8 +8368,8 @@
     },
     // While "+ New bot" setup runs, its group shows the New Bot mote.
     setupPending: function(){ return !!agentSetup.onCreated; },
-    setupMoteHtml: function(){ return agentAvatarHtml('New Bot', AGENT_SETUP_ROOM_ID, 24); },
-    setupColor: function(){ return moteCssColor('New Bot', AGENT_SETUP_ROOM_ID, ''); },
+    setupMoteHtml: function(){ return agentSetupAvatarHtml(24); },
+    setupColor: function(){ var who = agentSetupIdentity(); return moteCssColor(who.name, null, who.color); },
     // Opens the "create a bot" chat; onCreated gets { botId, name } once the
     // bot exists, so the browser can hand it the group made for it.
     startBotSetup: function(onCreated){
@@ -10837,7 +10870,7 @@
 
   function agentSetupMessageHtml(text, human, name){
     var displayName = human ? 'You' : (name || 'New Bot');
-    var mark = human ? humanAvatarInitialsHtml(currentUser) : agentAvatarHtml('New Bot', AGENT_SETUP_ROOM_ID, 28);
+    var mark = human ? humanAvatarInitialsHtml(currentUser) : agentSetupAvatarHtml(28);
     return '<div class="chat-msg-row is-direct agent-setup-message' + (human ? ' is-you' : '') + '">' +
       '<span class="chat-msg-mark' + (human ? '' : ' agent') + '">' + mark + '</span>' +
       '<div class="chat-msg-body"><div class="chat-msg-head"><span class="chat-msg-name">' + esc(displayName) + '</span>' +
@@ -10872,7 +10905,7 @@
         '<span class="agent-setup-automation-choice"><input id="agentSetupAutomationWanted" type="checkbox"' + (draft.automationWanted !== false ? ' checked' : '') + '>' +
         '<span>After setup, ask ' + esc(draft.name || 'the bot') + ' to propose this automation with its steps: “' + esc(automationRequest) + '”. You confirm it in the bot’s chat.</span></span></label>'
       : '';
-    return '<div class="chat-msg-row is-direct agent-setup-review-row"><span class="chat-msg-mark agent' + (view.markClass ? ' ' + view.markClass : '') + '">' + (view.avatarHtml || agentAvatarHtml('New Bot', AGENT_SETUP_ROOM_ID, 28)) + '</span>' +
+    return '<div class="chat-msg-row is-direct agent-setup-review-row"><span class="chat-msg-mark agent' + (view.markClass ? ' ' + view.markClass : '') + '">' + (view.avatarHtml || agentSetupAvatarHtml(28)) + '</span>' +
       '<div class="chat-msg-body"><div class="chat-msg-head"><span class="chat-msg-name">' + esc(view.name || draft.name || 'New Bot') + '</span><span class="chat-msg-tag">' + esc(view.tag || 'Bot') + '</span><span class="chat-msg-time">just now</span></div>' +
       '<div class="agent-setup-card">' +
         '<div class="agent-setup-card-intro">' + esc(view.intro || 'Here’s what I inferred. Edit anything before activating me.') + '</div>' +
@@ -10906,31 +10939,43 @@
     if(flow.creation || flow.phase === 'activating'){
       thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea, .agent-setup-card select').forEach(function(field){ field.disabled = true; });
     }
+    // Edits are kept as they are typed, so leaving the chat does not lose them.
+    thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea').forEach(function(field){
+      field.addEventListener('input', function(){ captureAgentSetupDraft(flow); });
+      field.addEventListener('change', function(){ captureAgentSetupDraft(flow); });
+    });
     var activate = el('#agentSetupActivate', thread);
     if(activate) activate.addEventListener('click', actions.activate);
     var later = el('#agentSetupLater', thread);
     if(later) later.addEventListener('click', actions.later);
   }
 
-  function clearAgentSetupRequest(abort){
-    if(agentSetup.requestTimeoutTimer) clearTimeout(agentSetup.requestTimeoutTimer);
-    agentSetup.requestTimeoutTimer = null;
-    if(abort && agentSetup.requestController){
-      try { agentSetup.requestController.abort(); } catch(error) {}
+  function clearAgentSetupRequest(abort, flow){
+    flow = flow || agentSetup;
+    if(flow.requestTimeoutTimer) clearTimeout(flow.requestTimeoutTimer);
+    flow.requestTimeoutTimer = null;
+    if(abort && flow.requestController){
+      try { flow.requestController.abort(); } catch(error) {}
     }
-    agentSetup.requestController = null;
+    flow.requestController = null;
   }
 
-  function finishAgentSetupFailure(attempt, operation, timedOut, message){
-    if(agentSetup.requestId !== attempt || agentSetup.phase !== operation) return;
-    agentSetup.requestId += 1;
-    clearAgentSetupRequest(true);
-    agentSetup.requestTimedOut = timedOut;
-    agentSetup.phase = operation === 'interpreting' ? 'intent' : 'review';
-    agentSetup.error = operation === 'activating'
-      ? botCreationRecoveryMessage(agentSetup)
+  function agentSetupOnScreen(flow){
+    return agentSetup === flow && chatWs.activeRoomId === AGENT_SETUP_ROOM_ID && chatWs.activeKind === 'agent-setup';
+  }
+
+  function finishAgentSetupFailure(attempt, operation, timedOut, message, flow){
+    flow = flow || agentSetup;
+    if(flow.requestId !== attempt || flow.phase !== operation) return;
+    flow.requestId += 1;
+    clearAgentSetupRequest(true, flow);
+    flow.requestTimedOut = timedOut;
+    flow.phase = operation === 'interpreting' ? 'intent' : 'review';
+    flow.error = operation === 'activating'
+      ? botCreationRecoveryMessage(flow)
       : timedOut ? 'This is taking too long. Nothing was created. Try again.'
       : String(message || (operation === 'interpreting' ? 'I couldn’t prepare the setup. Try again.' : 'The bot could not be activated. Try again.'));
+    if(!agentSetupOnScreen(flow)) return;
     renderChatThread();
     renderDeptAgentSelector();
   }
@@ -10952,11 +10997,11 @@
   }
 
   function renderAgentSetupThread(thread){
-    var name = agentSetup.created && agentSetup.created.name || agentSetup.draft && agentSetup.draft.name || 'New Bot';
+    var name = agentSetupIdentity().name;
     var html = agentSetupMessageHtml('Let’s set me up. Tell me in a few words what you want me to do?', false, name);
     if(agentSetup.intent) html += agentSetupMessageHtml(agentSetup.intent, true, name);
     if(agentSetup.phase === 'interpreting'){
-      html += '<div class="chat-msg-row is-direct agent-setup-message"><span class="chat-msg-mark agent">' + agentAvatarHtml(name, null, 28) + '</span>' +
+      html += '<div class="chat-msg-row is-direct agent-setup-message"><span class="chat-msg-mark agent">' + agentSetupAvatarHtml(28) + '</span>' +
         '<div class="chat-msg-body"><div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span><span class="chat-msg-tag">Bot</span></div>' +
         '<div class="chat-msg-text chat-msg-thinking" aria-live="polite"><span class="chat-thinking-shimmer">Turning that into a clear setup</span></div></div></div>';
     } else if(agentSetup.phase === 'review' || agentSetup.phase === 'activating'){
@@ -10994,19 +11039,97 @@
     if(more) more.addEventListener('click', function(){ loadOlderChatMessages(roomId); });
   }
 
-  function startAgentSetupChat(){
+  // Puts an unfinished setup aside until it is opened again. A setup still
+  // being interpreted gets its description back in the composer, since its
+  // answer can no longer reach a chat that is not open.
+  function parkAgentSetup(flow){
+    if(!agentSetupUnfinished(flow)) return;
+    if(flow.phase === 'interpreting'){
+      flow.requestId += 1;
+      clearAgentSetupRequest(true, flow);
+      flow.composer = flow.composer || flow.intent;
+      flow.intent = '';
+      flow.phase = 'intent';
+    }
+    agentSetupResume[flow.key] = flow;
+  }
+
+  // Unfinished setups survive a reload (Cmd+R, a workspace switch) the way
+  // chat drafts do. A request in flight comes back as the text it was about.
+  function agentSetupStorageKey(key){ return 'miaBotSetups:' + String(currentUser || '').toLowerCase() + ':' + key; }
+  function agentSetupSnapshots(){
+    var flows = Object.keys(agentSetupResume).map(function(key){ return agentSetupResume[key]; });
+    var current = agentSetup;
+    if(current) current.composer = chatTextDrafts[AGENT_SETUP_ROOM_ID] || '';
+    if(flows.indexOf(current) === -1) flows.push(current);
+    return flows.filter(agentSetupUnfinished).map(function(flow){
+      var interpreting = flow.phase === 'interpreting';
+      return {key: flow.key || '', templateName: flow.templateName || '', avatarColor: flow.avatarColor || '',
+        phase: interpreting ? 'intent' : flow.phase === 'activating' ? 'review' : flow.phase,
+        intent: interpreting ? '' : flow.intent || '', composer: interpreting ? (flow.composer || flow.intent || '') : flow.composer || '',
+        draft: flow.draft || null, error: flow.phase === 'activating' ? '' : flow.error || '',
+        creation: flow.creation ? JSON.parse(JSON.stringify(flow.creation)) : null};
+    });
+  }
+  function restoreAgentSetups(){
+    agentSetupResume = {};
+    try {
+      var saved = JSON.parse(sessionStorage.getItem(agentSetupStorageKey(activeWorkspaceKey)) || '[]');
+      (Array.isArray(saved) ? saved : []).forEach(function(snap){
+        if(!snap || typeof snap !== 'object' || !AGENT_SETUP_UNFINISHED[snap.phase] || snap.phase === 'interpreting' || snap.phase === 'activating') return;
+        var flow = Object.assign(freshAgentSetup(null), {key: String(snap.key || ''), templateName: String(snap.templateName || ''),
+          avatarColor: normalizeAgentAvatarColor(snap.avatarColor), phase: snap.phase, intent: String(snap.intent || ''),
+          composer: String(snap.composer || ''), draft: snap.draft && typeof snap.draft === 'object' ? snap.draft : null,
+          error: String(snap.error || '')});
+        if(snap.creation && typeof snap.creation === 'object') flow.creation = snap.creation;
+        if(flow.phase === 'review' && !flow.draft) return;
+        if(agentSetupUnfinished(flow)) agentSetupResume[flow.key] = flow;
+      });
+    } catch(_restoreSetupError) {}
+    // The setup chat's composer text now lives with its setup.
+    delete chatTextDrafts[AGENT_SETUP_ROOM_ID];
+  }
+
+  // Opens the "create a bot" chat, from a starter bot's template or as a
+  // plain New Bot. An unfinished setup for the same starter comes back as it
+  // was left, typed text and answers included; another one is put aside and
+  // comes back the same way. A bot that is being created stays on screen
+  // until it finishes.
+  function startAgentSetupChat(template){
     chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
-    clearAgentSetupRequest(true);
+    var key = agentSetupKey(template);
+    var input = el('#ccInput');
+    var fromRoomId = chatWs.activeRoomId;
+    var fromSetup = fromRoomId === AGENT_SETUP_ROOM_ID && chatWs.activeKind === 'agent-setup';
+    if(fromSetup && input){
+      if(input.value) chatTextDrafts[AGENT_SETUP_ROOM_ID] = input.value;
+      else delete chatTextDrafts[AGENT_SETUP_ROOM_ID];
+    }
+    agentSetup.composer = chatTextDrafts[AGENT_SETUP_ROOM_ID] || '';
+    if(agentSetup.phase !== 'activating' && !(agentSetup.key === key && agentSetupUnfinished(agentSetup))){
+      parkAgentSetup(agentSetup);
+      agentSetup = agentSetupResume[key] || freshAgentSetup(template);
+      delete agentSetupResume[key];
+    }
+    if(agentSetup.composer) chatTextDrafts[AGENT_SETUP_ROOM_ID] = agentSetup.composer;
+    else delete chatTextDrafts[AGENT_SETUP_ROOM_ID];
     rememberChatBack('agent-setup', AGENT_SETUP_ROOM_ID);
     closeManageAgentsPane();
     closeMentionPopover();
     chatRoster.open = null;
     chatInfo.mode = 'automations';
     chatInfo.open = false;
-    agentSetup = {phase:'intent', intent:'', draft:null, error:'', created:null, liveRoomId:null, requestId:0, requestController:null, requestTimeoutTimer:null, requestTimedOut:false};
+    if(fromSetup){
+      if(input && input.value !== agentSetup.composer){
+        input.value = agentSetup.composer;
+        input.dispatchEvent(new Event('input', {bubbles:true}));
+      }
+    } else {
+      swapChatDraft(fromRoomId, AGENT_SETUP_ROOM_ID);
+    }
     chatWs.activeRoomId = AGENT_SETUP_ROOM_ID;
     chatWs.activeKind = 'agent-setup';
-    chatWs.activeLabel = 'New Bot';
+    chatWs.activeLabel = agentSetupIdentity().name;
     renderChatSidebar();
     refreshChatMain();
     setTimeout(function(){ var input = el('#ccInput'); if(input) input.focus(); }, 0);
@@ -11014,41 +11137,45 @@
 
   function submitAgentSetupIntent(text){
     if(agentSetup.phase !== 'intent') return;
-    agentSetup.intent = String(text || '').trim().slice(0, 2000);
-    if(!agentSetup.intent) return;
-    agentSetup.phase = 'interpreting';
-    agentSetup.error = '';
+    var flow = agentSetup;
+    flow.intent = String(text || '').trim().slice(0, 2000);
+    if(!flow.intent) return;
+    flow.composer = '';
+    flow.phase = 'interpreting';
+    flow.error = '';
     renderChatThread();
     renderDeptAgentSelector();
     var modelSelection = chatModelSelectionMetadata();
-    var attempt = ++agentSetup.requestId;
+    var attempt = ++flow.requestId;
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
-    agentSetup.requestController = controller;
-    agentSetup.requestTimedOut = false;
-    agentSetup.requestTimeoutTimer = setTimeout(function(){
-      if(agentSetup.requestId !== attempt || agentSetup.phase !== 'interpreting') return;
+    flow.requestController = controller;
+    flow.requestTimedOut = false;
+    flow.requestTimeoutTimer = setTimeout(function(){
+      if(flow.requestId !== attempt || flow.phase !== 'interpreting') return;
       if(controller) controller.abort();
-      finishAgentSetupFailure(attempt, 'interpreting', true);
+      finishAgentSetupFailure(attempt, 'interpreting', true, null, flow);
     }, AGENT_SETUP_TIMEOUT_MS);
     api('/api/bots/interpret', {
       method:'POST',
       ...(controller ? {signal:controller.signal} : {}),
       body:{
-      intent: agentSetup.intent,
+      intent: flow.intent,
       ...(modelSelection ? {modelSelection:modelSelection} : {})
       }
     }).then(function(res){
-      if(chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID || agentSetup.phase !== 'interpreting') return;
+      // The answer belongs to this setup even if its chat was left meanwhile.
+      if(flow.requestId !== attempt || flow.phase !== 'interpreting') return;
       if(res.status !== 200 || !res.data || !res.data.draft) throw new Error('proposal unavailable');
-      clearAgentSetupRequest(false);
-      agentSetup.draft = res.data.draft;
-      agentSetup.phase = 'review';
+      clearAgentSetupRequest(false, flow);
+      flow.draft = res.data.draft;
+      flow.phase = 'review';
+      if(!agentSetupOnScreen(flow)) return;
       renderChatHeaderBar();
       renderChatThread();
       renderDeptAgentSelector();
     }).catch(function(error){
-      if(chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID || agentSetup.phase !== 'interpreting') return;
-      finishAgentSetupFailure(attempt, 'interpreting', agentSetup.requestTimedOut || !!(error && error.name === 'AbortError'), 'I couldn’t prepare the setup. Try describing the bot again.');
+      if(flow.requestId !== attempt || flow.phase !== 'interpreting') return;
+      finishAgentSetupFailure(attempt, 'interpreting', flow.requestTimedOut || !!(error && error.name === 'AbortError'), 'I couldn’t prepare the setup. Try describing the bot again.', flow);
     });
   }
 
@@ -11098,6 +11225,8 @@
       departments: guessDepartmentsFor(draft.role + ' ' + draft.output),
       setupIntent: intent
     };
+    var color = normalizeAgentAvatarColor(flow.avatarColor);
+    if(color) payload.avatarColor = color;
     if(!payload.model) return {error: 'Connect and choose a model before activating this bot.'};
     return {payload: payload};
   }
@@ -12980,7 +13109,7 @@
     var headerMiaIsWorking = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel, chatWs.activeLabel === 'Mia' ? 'gateway' : null) && roomHasModelResponseActivity(chatWs.activeRoomId);
     var markHtml = officialChannel
       ? '<span class="ch-mark channel">' + esc(benchMark(chatWs.activeLabel || 'Multiplayer Test')) + '</span>'
-      : '<span class="ch-mark dm">' + ((chatWs.activeKind === 'agent' || chatWs.activeKind === 'agent-setup') ? agentAvatarHtml(chatWs.activeKind === 'agent-setup' ? 'New Bot' : chatWs.activeLabel, chatWs.activeKind === 'agent-setup' ? AGENT_SETUP_ROOM_ID : null, 24, headerMiaIsWorking ? 'activity' : null, null, true) : esc(benchMark(chatWs.activeLabel || '?'))) + '</span>';
+      : '<span class="ch-mark dm">' + ((chatWs.activeKind === 'agent' || chatWs.activeKind === 'agent-setup') ? (chatWs.activeKind === 'agent-setup' ? agentSetupAvatarHtml(24, headerMiaIsWorking ? 'activity' : null, true) : agentAvatarHtml(chatWs.activeLabel, null, 24, headerMiaIsWorking ? 'activity' : null, null, true)) : esc(benchMark(chatWs.activeLabel || '?'))) + '</span>';
     var title = chatWs.activeLabel;
     var rosterData = chatRosterData();
     var rosterChips = renderChatRosterChips(rosterData);

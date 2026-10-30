@@ -89,6 +89,7 @@ test('Mia review card offers one Accept action and no cancel button', () => {
     teamBotRoom: () => false,
     esc: value => String(value),
     agentAvatarHtml: () => '<svg></svg>',
+    agentSetupAvatarHtml: () => '<svg></svg>',
     automationIntervalParts: () => ({ value: 5, unit: 'minutes' }),
     AGENT_SETUP_ROOM_ID: 'new-bot',
   });
