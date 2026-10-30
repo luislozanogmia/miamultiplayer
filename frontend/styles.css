@@ -1261,6 +1261,8 @@
   .workspace-rail{position:absolute;top:0;bottom:0;left:0;width:var(--workspace-rail-width);box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0;background:var(--sand-bg-base);border-right:1px solid var(--sand-border-default);z-index:3;}
   html.mac-inset-titlebar .workspace-rail{padding-top:44px;-webkit-app-region:drag;}
   .workspace-rail-tile{appearance:none;position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;border:0;background:transparent;cursor:pointer;-webkit-app-region:no-drag;}
+  .workspace-rail-tile[hidden]{display:none;}
+  .workspace-rail-demo{text-decoration:none;color:inherit;}
   .workspace-rail-mark{display:flex;align-items:center;justify-content:center;width:36px;height:36px;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:9px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:700 12px/1 var(--styled-sans);letter-spacing:.02em;transition:border-color .12s ease,background .12s ease;}
   .workspace-rail-mark svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
   .workspace-rail-tile:hover .workspace-rail-mark{background:var(--sand-fill-secondary);}

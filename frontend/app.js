@@ -123,6 +123,9 @@
       var active = option.getAttribute('data-workspace-key') === activeWorkspaceKey;
       option.classList.toggle('active', active);
       option.setAttribute('aria-current', active ? 'true' : 'false');
+      // Multiplayer Test gave way to the Multiplayer Demo tile. Its local data
+      // is kept, so a workspace already open there still shows where it is.
+      if(option.getAttribute('data-workspace-key') === 'multiplayer_test') option.hidden = !active;
     });
   }
   function activateWorkspace(key, options){

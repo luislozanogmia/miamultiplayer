@@ -7,7 +7,7 @@ const { mainWindowLinkAction } = require("./main-navigation.cjs");
 const BACKEND = "http://localhost:4871";
 
 test("Mia's own pages load in Mia's window", () => {
-  for (const url of [`${BACKEND}/`, `${BACKEND}/admin?workspace=solo#/users`, `${BACKEND}/invite.html`]) {
+  for (const url of [`${BACKEND}/`, `${BACKEND}/admin?workspace=solo#/users`, `${BACKEND}/invite.html`, `${BACKEND}/multiplayer-demo/`]) {
     assert.equal(mainWindowLinkAction(url, BACKEND).action, "allow", url);
   }
 });
