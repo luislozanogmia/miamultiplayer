@@ -453,8 +453,20 @@
   .drawer{position:fixed;top:0;right:0;height:100%;width:min(440px,92vw);background:var(--card);border-left:1px solid var(--rule);z-index:201;transform:translateX(100%);transition:transform .22s ease;display:flex;flex-direction:column;}
   .drawer.open{transform:translateX(0);box-shadow:-20px 0 50px rgba(17,17,17,.12);}
   /* Open panels cover the top strip, a window-drag area on Mac; without
-     opting out, macOS takes clicks on their buttons as window drags. */
-  .drawer.open,.drawer-overlay.open,.styled-scrim.open,[aria-modal="true"].open{-webkit-app-region:no-drag;}
+     opting out, macOS takes clicks on their buttons as window drags. The
+     full-window scrim behind a dialog does not opt out: a no-drag layer the
+     size of the window made the whole window undraggable while any dialog
+     (first-run onboarding included) was open. */
+  .drawer.open,[aria-modal="true"].open{-webkit-app-region:no-drag;}
+  /* Mac: the top of the window stays a drag handle while the sign-in page,
+     the loading screen or a dialog's scrim covers the app's own top row.
+     Later dialogs and drawers opt out (no-drag) where they overlap it. */
+  .window-drag-strip{display:none;}
+  html.mac-inset-titlebar .window-drag-strip{position:fixed;top:0;left:0;right:0;height:36px;z-index:10001;pointer-events:none;-webkit-app-region:drag;}
+  html.mac-inset-titlebar body:has(#loginWall:not(.hidden)) .window-drag-strip,
+  html.mac-inset-titlebar body:has(#appLoadingOverlay:not(.hidden)) .window-drag-strip,
+  html.mac-inset-titlebar body:has(.drawer-overlay.open, .styled-scrim.open) .window-drag-strip{display:block;}
+  html.workspace-handoff .window-drag-strip{display:none !important;}
   .drawer-head{padding:22px 26px;border-bottom:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;}
   .drawer-head h2{font-family:var(--serif);font-size:19px;font-weight:700;margin:0;letter-spacing:-0.02em;}
   .drawer-close{appearance:none;border:none;background:none;font-size:20px;color:var(--faint);cursor:pointer;line-height:1;padding:4px;}
