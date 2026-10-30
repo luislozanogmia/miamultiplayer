@@ -136,3 +136,32 @@ test('each view button can show how many tabs that view has open', () => {
   mix.register('automations', { count: () => 2 });
   assert.equal(mix.counts().automations, 2, 'a view can leave its fixed page out of the count');
 });
+
+test('a fresh install shows no view badges: a blank browser tab and the one standing chat are not counted', async () => {
+  const { mix } = require('./tab-strip.js');
+  mix.register('chat', { count: undefined, tabs: () => [{ id: 'mia', uncounted: true }] });
+  mix.register('automations', { count: () => 0 });
+  mix.register('browser', { tabs: () => [{ id: 1, uncounted: true }] });
+  assert.deepEqual(mix.counts(), { chat: 0, automations: 0, artifacts: 0, browser: 0 });
+  mix.register('browser', { tabs: () => [{ id: 1 }, { id: 2, uncounted: true }] });
+  assert.equal(mix.counts().browser, 1, 'a page counts; the blank tab beside it does not');
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  assert.match(browser, /uncounted: !t\.url/, 'the browser marks blank tabs');
+  assert.match(browser, /mix\.notify\('browser', JSON\.stringify\(state\.tabs\.map\(function \(t\) \{ return \[[^\]]*!!t\.url\]/, 'a tab that loads or closes repaints the badge');
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(app, /uncounted: tabs\.length === 1/, 'the one standing chat is not counted');
+});
+
+test('a badge that drops to zero is removed and the button loses its count label', () => {
+  const { mix } = require('./tab-strip.js');
+  const attrs = { 'data-tip': 'Browser', 'aria-label': 'Browser, 1 open' };
+  let badge = { textContent: '1', removed: false, remove() { this.removed = true; } };
+  const button = { getAttribute: (n) => attrs[n] ?? null, setAttribute: (n, v) => { attrs[n] = v; }, querySelector: () => badge, appendChild() {} };
+  const previous = globalThis.document;
+  globalThis.document = { querySelector: (q) => q.includes('"browser"') ? button : null, createElement: () => badge };
+  try {
+    mix.register('browser', { tabs: () => [{ id: 1, uncounted: true }] });
+    assert.equal(badge.removed, true);
+    assert.equal(attrs['aria-label'], 'Browser');
+  } finally { globalThis.document = previous; }
+});

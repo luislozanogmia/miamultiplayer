@@ -12878,7 +12878,8 @@
     var tabs = chatWs.activeRoomId ? readChatTabs() : [];
     return tabs.map(function(tab){
       var active = tab.roomId === chatWs.activeRoomId;
-      return { id: tab.roomId, label: (active && chatWs.activeLabel) || tab.label || 'Chat', active: active, closable: tabs.length > 1, iconHtml: chatTabMarkHtml(tab) };
+      // The lone chat that is always open is not counted on the Chat button.
+      return { id: tab.roomId, label: (active && chatWs.activeLabel) || tab.label || 'Chat', active: active, closable: tabs.length > 1, uncounted: tabs.length === 1, iconHtml: chatTabMarkHtml(tab) };
     });
   }
   function renderChatTabs(){

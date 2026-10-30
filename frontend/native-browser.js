@@ -304,7 +304,9 @@
   }
   // Mixed tabs (tab-strip.js): the browser's tabs, shown in the other strips.
   window.MiaTabStrip.mix.register('browser', {
-    tabs: function () { return state.tabs.map(function (t) { return { id: t.id, label: t.title || 'New tab', iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url), groupId: t.groupId || null }; }); },
+    // A blank new tab (the one a fresh browser opens) is not counted on the
+    // Browser button; only pages are.
+    tabs: function () { return state.tabs.map(function (t) { return { id: t.id, label: t.title || 'New tab', iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url), groupId: t.groupId || null, uncounted: !t.url }; }); },
     select: function (id) { command('select', { id: id }); },
     render: function () { if (state) render(state); },
   });
@@ -530,7 +532,7 @@
     // Mixed tabs: the other views fold before any of the browser's groups,
     // then the groups fold in what is left.
     var mix = window.MiaTabStrip.mix;
-    mix.notify('browser', JSON.stringify(state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId]; })));
+    mix.notify('browser', JSON.stringify(state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, !!t.url]; })));
     dock(showingView());
     var here = docked === 'browser';
     var hostTabs = here ? state.tabs : (mix.provider(docked).tabs ? mix.provider(docked).tabs() || [] : []);

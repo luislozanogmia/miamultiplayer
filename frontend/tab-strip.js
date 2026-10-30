@@ -157,13 +157,17 @@
     provider: function (view) { return views[view] || {}; },
     register: function (view, provider) { views[view] = Object.assign(views[view] || {}, provider); paintCounts(); },
     // How many tabs each view has open, for the badges on the view buttons.
-  // A view whose strip holds a fixed page (the Automations board) counts
-  // only its other tabs with count().
+    // A view whose strip holds a fixed page (the Automations board) counts
+    // only its other tabs with count(). A tab marked uncounted (a blank new
+    // browser tab, the one chat that is always open) is not something the
+    // person opened, so a fresh install shows no badges.
     counts: function () {
       var out = {};
       MIX_ORDER.forEach(function (view) {
         var provider = views[view] || {};
-        try { out[view] = provider.count ? provider.count() : provider.tabs ? (provider.tabs() || []).length : 0; } catch (e) { out[view] = 0; }
+        try {
+          out[view] = provider.count ? provider.count() : provider.tabs ? (provider.tabs() || []).filter(function (t) { return t && !t.uncounted; }).length : 0;
+        } catch (e) { out[view] = 0; }
       });
       return out;
     },
@@ -277,7 +281,8 @@
       if (!button) return;
       var badge = button.querySelector('.sidebar-view-count');
       var count = counts[view] || 0;
-      if (!count) { if (badge) badge.remove(); return; }
+      var name = button.getAttribute('data-tip') || button.getAttribute('title') || '';
+      if (!count) { if (badge) badge.remove(); if (name) button.setAttribute('aria-label', name); return; }
       if (!badge) {
         badge = document.createElement('span');
         badge.className = 'sidebar-view-count';
@@ -285,7 +290,7 @@
         button.appendChild(badge);
       }
       badge.textContent = count > 99 ? '99+' : String(count);
-      button.setAttribute('aria-label', button.getAttribute('title') + ', ' + count + ' open');
+      button.setAttribute('aria-label', name + ', ' + count + ' open');
     });
   }
 
