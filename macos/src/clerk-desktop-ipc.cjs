@@ -1,6 +1,6 @@
 "use strict";
 
-const { createClerkDesktopFlow } = require("./clerk-desktop-flow.cjs");
+const { createClerkDesktopFlow, failureLine } = require("./clerk-desktop-flow.cjs");
 const CHANNEL = "miaos-clerk-auth";
 
 // Only the top-level local application can request a short-lived session
@@ -40,7 +40,7 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
   function init() {
     if (!client) {
       client = getClient();
-      flow = createClerkDesktopFlow({ client, openExternal, browserFallback, notify });
+      flow = createClerkDesktopFlow({ client, openExternal, browserFallback, notify, log });
     }
   }
   ipcMain.handle(CHANNEL, async (event, action, value) => {
@@ -90,10 +90,10 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
       return { ok: true, result };
     } catch (error) {
       // Exception messages and provider bodies can contain credentials. Never
-      // pass those across IPC or put them in logs. Only the fixed error code
-      // and HTTP status are logged, so failures stay diagnosable.
+      // pass those across IPC or put them in logs. Only the fixed error code,
+      // HTTP status and Clerk's error code are logged, so failures stay diagnosable.
       try {
-        log(`[clerk-auth] ${action} failed: ${error && error.code ? error.code : "UNEXPECTED"} ${error && error.httpStatus ? error.httpStatus : ""}`);
+        log(failureLine(action, error));
       } catch (_) { /* Diagnostics must not interrupt account restoration. */ }
       const local = {
         protocol_unavailable: "Install this Mia build to enable browser sign-in. You can still sign in with an email code.",

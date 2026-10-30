@@ -238,6 +238,16 @@ test('maps FAPI failures to safe errors without exposing response details', asyn
   });
 });
 
+test('keeps Clerk\'s fixed error code but drops anything that is not a plain identifier', async () => {
+  for (const [code, kept] of [['account_transfer_invalid', 'account_transfer_invalid'], ['has spaces', undefined], ['user@example.com', undefined]]) {
+    const { auth } = make({
+      clientJwt: clientJwt(),
+      routes: { 'GET /v1/client': response({ errors: [{ code, message: 'detail' }] }, { status: 400 }) },
+    });
+    await assert.rejects(auth.status(), error => error.code === 'AUTH_REQUEST_FAILED' && error.clerkCode === kept);
+  }
+});
+
 test('storage/keyring failures are safe and never fall back to plaintext', async () => {
   const broken = { async load() { throw new Error('keychain locked'); }, async save() {}, async clear() {} };
   const mock = mockFapi({});
@@ -267,6 +277,10 @@ test('rejects redirect tampering and unsafe callback values locally', async () =
   const { auth, mock } = make();
   await assert.rejects(auth.startGoogle({ redirectUrl: `miamultiplayer://auth/clerk?state=${'A'.repeat(64)}` }), error => error.code === 'INVALID_REDIRECT_URL');
   await assert.rejects(auth.startGoogle({ redirectUrl: `${REDIRECT}&extra=1` }), error => error.code === 'INVALID_REDIRECT_URL');
+  await assert.rejects(auth.startGoogle({ redirectUrl: `https://miamultiplayer.com/auth/done/?state=${'a'.repeat(64)}&extra=1` }), error => error.code === 'INVALID_REDIRECT_URL');
+  for (const lookalike of ['https://miamultiplayer.com.evil.example/auth/done/', 'http://miamultiplayer.com/auth/done/', 'https://miamultiplayer.com:8443/auth/done/', 'https://miamultiplayer.com/auth/done/x']) {
+    await assert.rejects(auth.startGoogle({ redirectUrl: `${lookalike}?state=${'a'.repeat(64)}` }), error => error.code === 'INVALID_REDIRECT_URL', lookalike);
+  }
   await assert.rejects(auth.completeGoogle({ nonce: 'short' }), error => error.code === 'INVALID_CALLBACK');
   assert.equal(mock.calls.length, 0);
 });
