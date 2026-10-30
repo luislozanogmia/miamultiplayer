@@ -155,6 +155,13 @@
       mix.changed();
     },
     provider: function (view) { return views[view] || {}; },
+    // Which view the strip's (+) opens a tab in: the docked view's own new
+    // tab (a new chat in Chat), else a browser tab. Mixed, the strip holds
+    // every view's tabs, so (+) is the browser's new tab.
+    newTabView: function (docked) {
+      if (mixed || docked === 'browser') return 'browser';
+      return (views[docked] || {}).newTab ? docked : 'browser';
+    },
     register: function (view, provider) { views[view] = Object.assign(views[view] || {}, provider); paintCounts(); },
     // How many tabs each view has open, for the badges on the view buttons.
     // A view whose strip holds a fixed page (the Automations board) counts

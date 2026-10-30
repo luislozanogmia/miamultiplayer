@@ -165,3 +165,19 @@ test('a badge that drops to zero is removed and the button loses its count label
     assert.equal(attrs['aria-label'], 'Browser');
   } finally { globalThis.document = previous; }
 });
+
+test('(+) in the mixed strip opens a browser tab, not a new chat', async () => {
+  const { mix } = require('./tab-strip.js');
+  mix.register('chat', { newTab: () => {} });
+  const wasMixed = mix.on();
+  try {
+    mix.set(false);
+    assert.equal(mix.newTabView('chat'), 'chat', 'unmixed, Chat\'s (+) is a new chat');
+    assert.equal(mix.newTabView('automations'), 'browser', 'a view with no new tab opens a browser tab');
+    mix.set(true);
+    assert.equal(mix.newTabView('chat'), 'browser');
+    assert.equal(mix.newTabView('browser'), 'browser');
+  } finally { mix.set(wasMixed); }
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  assert.match(browser, /var target = mix\.newTabView\(docked\);/, 'the (+) button asks the strip where to open');
+});

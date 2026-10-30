@@ -31,11 +31,13 @@
   add.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
   add.title = 'New tab'; add.setAttribute('aria-label', 'New browser tab');
   // The new-tab button opens a tab in the view the strip is in; where that
-  // view has no new tab (Automations), it opens a browser tab.
+  // view has no new tab (Automations), or the tabs are mixed into one strip,
+  // it opens a browser tab.
   add.onclick = function () {
-    var provider = window.MiaTabStrip.mix.provider(docked);
-    if (docked !== 'browser' && provider.newTab) { provider.newTab(); return; }
-    if (docked !== 'browser') window.MiaTabStrip.mix.open('browser');
+    var mix = window.MiaTabStrip.mix;
+    var target = mix.newTabView(docked);
+    if (target !== 'browser') { mix.provider(target).newTab(); return; }
+    if (docked !== 'browser') mix.open('browser');
     command('new').then(focusLocation);
   };
   strip.append(add);
