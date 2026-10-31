@@ -1,7 +1,8 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { CALLBACK_URL, FLOW_TTL_MS, parseCallback, createClerkDesktopFlow } = require("./clerk-desktop-flow.cjs");
+const { CALLBACK_URL, FINISH_PAGE_URL, FLOW_TTL_MS, parseCallback, createClerkDesktopFlow } = require("./clerk-desktop-flow.cjs");
+const { NativeClerkAuthError } = require("./clerk-native-auth.cjs");
 const state = "a".repeat(64);
 const callback = `${CALLBACK_URL}?state=${state}&rotating_token_nonce=${"n".repeat(32)}`;
 test("opaque nonce grammar is bounded and shared with the auth exchange", () => {
@@ -14,6 +15,9 @@ test("opaque nonce grammar is bounded and shared with the auth exchange", () => 
 });
 test("callback requires exact scheme, host, path, state and a single nonce", () => {
   assert.ok(parseCallback(callback, state));
+  // Clerk sends no nonce when the Google account has no Mia account yet.
+  assert.deepEqual(parseCallback(`${CALLBACK_URL}?state=${state}`, state), { nonce: "" });
+  assert.equal(parseCallback(`${CALLBACK_URL}?state=${"b".repeat(64)}`, state), null);
   assert.equal(parseCallback(callback.replace(state, "é".repeat(64)), state), null);
   for (const bad of [callback.replace("miamultiplayer:", "https:"), callback.replace("auth/", "evil/"), callback.replace("/clerk?", "/clerk/other?"), callback + "#fragment", callback + "&state=" + state, callback + "&rotating_token_nonce=other", callback.replace(state, "b".repeat(64)), "bad-url"]) {
     assert.equal(parseCallback(bad, state), null);
@@ -48,6 +52,47 @@ test("a returned arbitrary URL is never opened", async () => {
   const flow = createClerkDesktopFlow({ client: { startGoogle: async () => ({ url: "https://attacker.example/login" }) }, openExternal: async () => { opened = true; } });
   await assert.rejects(flow.startGoogle(), /unsupported/);
   assert.equal(opened, false);
+});
+
+test("Google first asks Clerk to finish on the web page, then falls back to the app link once", async () => {
+  const redirects = []; const lines = [];
+  const client = {
+    startGoogle: async ({ redirectUrl }) => {
+      redirects.push(redirectUrl.split("?")[0]);
+      if (redirectUrl.startsWith(FINISH_PAGE_URL)) throw new NativeClerkAuthError("AUTH_REQUEST_FAILED", { httpStatus: 400, clerkCode: "resource_missmatch" });
+      return { url: "https://accounts.google.com/o/oauth2/auth" };
+    },
+    cancel: async () => {},
+  };
+  const flow = createClerkDesktopFlow({ client, openExternal: async () => {}, log: line => lines.push(line), randomState: () => state });
+  await flow.startGoogle(); await flow.cancel(); await flow.startGoogle();
+  assert.deepEqual(redirects, [FINISH_PAGE_URL, CALLBACK_URL, CALLBACK_URL], "a refused finish page is not retried every time");
+  assert.equal(lines.length, 1);
+});
+test("an allowlisted finish page is used, and other Clerk errors are not hidden by the fallback", async () => {
+  const redirects = [];
+  const ok = createClerkDesktopFlow({ client: { startGoogle: async ({ redirectUrl }) => { redirects.push(redirectUrl); return { url: "https://accounts.google.com/o/oauth2/auth" }; } }, openExternal: async () => {}, randomState: () => state });
+  await ok.startGoogle();
+  assert.deepEqual(redirects, [`${FINISH_PAGE_URL}?state=${state}`]);
+  const failing = createClerkDesktopFlow({ client: { startGoogle: async () => { throw new NativeClerkAuthError("RATE_LIMITED", { httpStatus: 429 }); } }, openExternal: async () => {} });
+  await assert.rejects(failing.startGoogle(), error => error.code === "RATE_LIMITED");
+});
+test("a Google sign-in Clerk already expired says so, and the reason reaches the log", async () => {
+  const notifications = []; const lines = [];
+  const client = {
+    startGoogle: async () => ({ url: "https://accounts.google.com/o/oauth2/auth" }),
+    completeGoogle: async () => { throw new NativeClerkAuthError("AUTH_REQUEST_FAILED", { httpStatus: 400, clerkCode: "account_transfer_invalid" }); },
+    cancel: async () => {},
+  };
+  const flow = createClerkDesktopFlow({ client, openExternal: async () => {}, notify: value => notifications.push(value), log: line => lines.push(line), randomState: () => state });
+  await flow.startGoogle();
+  assert.equal(await flow.acceptCallback(callback.replace(state, "b".repeat(64))), false);
+  assert.equal(await flow.acceptCallback(callback), false);
+  assert.match(notifications.at(-1).error, /took too long/);
+  assert.deepEqual(lines, [
+    "[clerk-auth] google callback ignored: it does not match the current sign-in",
+    "[clerk-auth] google callback failed: AUTH_REQUEST_FAILED 400 account_transfer_invalid",
+  ]);
 });
 
 function linuxFlow(overrides = {}) {

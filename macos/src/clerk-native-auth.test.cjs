@@ -137,6 +137,43 @@ test('Google callback reloads the original attempt, transfers sign-up, and expos
   assert.equal(getCount, 0);
 });
 
+test('new-account Google callback without a nonce transfers to sign-up', async () => {
+  const pending = {
+    object: 'sign_in_attempt', id: 'sia_google', status: 'needs_first_factor',
+    first_factor_verification: { status: 'unverified', external_verification_redirect_url: `${ISSUER}/oauth/start` },
+  };
+  const transferred = { ...pending, first_factor_verification: { status: 'transferable' } };
+  const activeSession = { object: 'session', id: 'sess_new', status: 'active', expire_at: 5000 };
+  const activeClient = signedOutClient({ sessions: [activeSession], last_active_session_id: 'sess_new' });
+  const signUp = { object: 'sign_up_attempt', id: 'sua_google', status: 'complete', missing_fields: [] };
+  const { auth, mock } = make({
+    clientJwt: clientJwt(),
+    routes: {
+      'POST /v1/client/sign_ins': wrapped(pending, signedOutClient({ sign_in: pending })),
+      'GET /v1/client/sign_ins/sia_google': wrapped(transferred, signedOutClient({ sign_in: transferred })),
+      'POST /v1/client/sign_ups': wrapped(signUp, activeClient),
+    },
+  });
+  await auth.startGoogle({ redirectUrl: REDIRECT });
+  assert.deepEqual(await auth.completeGoogle({ nonce: '' }), { status: 'active', sessionId: 'sess_new' });
+  assert.equal(mock.calls[1].url.searchParams.has('rotating_token_nonce'), false);
+  assert.deepEqual(mock.calls[2].body, { transfer: 'true' });
+});
+
+test('a callback without a nonce is rejected unless Clerk marked the attempt transferable', async () => {
+  const signIn = { object: 'sign_in_attempt', id: 'sia_google', status: 'needs_first_factor', first_factor_verification: { status: 'unverified', external_verification_redirect_url: `${ISSUER}/oauth/start` } };
+  const { auth, mock } = make({
+    clientJwt: clientJwt(),
+    routes: {
+      'POST /v1/client/sign_ins': wrapped(signIn, signedOutClient({ sign_in: signIn })),
+      'GET /v1/client/sign_ins/sia_google': wrapped(signIn, signedOutClient({ sign_in: signIn })),
+    },
+  });
+  await auth.startGoogle({ redirectUrl: REDIRECT });
+  await assert.rejects(auth.completeGoogle({ nonce: '' }), error => error.code === 'INVALID_CALLBACK');
+  assert.equal(mock.calls.some(call => call.url.pathname.endsWith('/sign_ups')), false);
+});
+
 test('callback nonce replay is rejected before FAPI', async () => {
   const signIn = { object: 'sign_in_attempt', id: 'sia_google', status: 'needs_first_factor', first_factor_verification: { status: 'unverified', external_verification_redirect_url: `${ISSUER}/oauth/start` } };
   const { auth, mock } = make({
@@ -238,6 +275,16 @@ test('maps FAPI failures to safe errors without exposing response details', asyn
   });
 });
 
+test('keeps Clerk\'s fixed error code but drops anything that is not a plain identifier', async () => {
+  for (const [code, kept] of [['account_transfer_invalid', 'account_transfer_invalid'], ['has spaces', undefined], ['user@example.com', undefined]]) {
+    const { auth } = make({
+      clientJwt: clientJwt(),
+      routes: { 'GET /v1/client': response({ errors: [{ code, message: 'detail' }] }, { status: 400 }) },
+    });
+    await assert.rejects(auth.status(), error => error.code === 'AUTH_REQUEST_FAILED' && error.clerkCode === kept);
+  }
+});
+
 test('storage/keyring failures are safe and never fall back to plaintext', async () => {
   const broken = { async load() { throw new Error('keychain locked'); }, async save() {}, async clear() {} };
   const mock = mockFapi({});
@@ -267,6 +314,10 @@ test('rejects redirect tampering and unsafe callback values locally', async () =
   const { auth, mock } = make();
   await assert.rejects(auth.startGoogle({ redirectUrl: `miamultiplayer://auth/clerk?state=${'A'.repeat(64)}` }), error => error.code === 'INVALID_REDIRECT_URL');
   await assert.rejects(auth.startGoogle({ redirectUrl: `${REDIRECT}&extra=1` }), error => error.code === 'INVALID_REDIRECT_URL');
+  await assert.rejects(auth.startGoogle({ redirectUrl: `https://miamultiplayer.com/auth/done/?state=${'a'.repeat(64)}&extra=1` }), error => error.code === 'INVALID_REDIRECT_URL');
+  for (const lookalike of ['https://miamultiplayer.com.evil.example/auth/done/', 'http://miamultiplayer.com/auth/done/', 'https://miamultiplayer.com:8443/auth/done/', 'https://miamultiplayer.com/auth/done/x']) {
+    await assert.rejects(auth.startGoogle({ redirectUrl: `${lookalike}?state=${'a'.repeat(64)}` }), error => error.code === 'INVALID_REDIRECT_URL', lookalike);
+  }
   await assert.rejects(auth.completeGoogle({ nonce: 'short' }), error => error.code === 'INVALID_CALLBACK');
   assert.equal(mock.calls.length, 0);
 });
