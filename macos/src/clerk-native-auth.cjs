@@ -355,10 +355,15 @@ function createNativeClerkClient(options = {}) {
   async function completeGoogle({ nonce } = {}) {
     forgetSessionToken();
     const rotatingNonce = String(nonce || '');
-    if (!validClerkNonce(rotatingNonce)) throw safeError('INVALID_CALLBACK');
+    // An empty nonce means Clerk had no account to sign in to; only the
+    // new-account transfer below may complete it.
+    const newAccount = rotatingNonce === '';
+    if (!newAccount && !validClerkNonce(rotatingNonce)) throw safeError('INVALID_CALLBACK');
     return exclusive(async context => {
-      if (usedNonces.has(rotatingNonce)) throw safeError('CALLBACK_REPLAYED');
-      usedNonces.add(rotatingNonce);
+      if (!newAccount) {
+        if (usedNonces.has(rotatingNonce)) throw safeError('CALLBACK_REPLAYED');
+        usedNonces.add(rotatingNonce);
+      }
       if (!googleSignInId) {
         await refreshClient(context);
         googleSignInId = client && client.sign_in && client.sign_in.id
@@ -367,11 +372,13 @@ function createNativeClerkClient(options = {}) {
       if (!googleSignInId) throw safeError('NO_AUTH_ATTEMPT');
       const payload = await request(`/v1/client/sign_ins/${encodeURIComponent(googleSignInId)}`, {
         ...context,
-        query: { rotating_token_nonce: rotatingNonce },
+        ...(newAccount ? {} : { query: { rotating_token_nonce: rotatingNonce } }),
       });
       const signIn = unwrapResponse(payload, 'sign_in_attempt');
       const verification = signIn.first_factor_verification;
-      if (verification && verification.status === 'transferable') {
+      const transferable = verification && verification.status === 'transferable';
+      if (newAccount && !transferable) throw safeError('INVALID_CALLBACK');
+      if (transferable) {
         const signUpPayload = await request('/v1/client/sign_ups', {
           ...context,
           method: 'POST',

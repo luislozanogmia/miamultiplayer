@@ -137,6 +137,43 @@ test('Google callback reloads the original attempt, transfers sign-up, and expos
   assert.equal(getCount, 0);
 });
 
+test('new-account Google callback without a nonce transfers to sign-up', async () => {
+  const pending = {
+    object: 'sign_in_attempt', id: 'sia_google', status: 'needs_first_factor',
+    first_factor_verification: { status: 'unverified', external_verification_redirect_url: `${ISSUER}/oauth/start` },
+  };
+  const transferred = { ...pending, first_factor_verification: { status: 'transferable' } };
+  const activeSession = { object: 'session', id: 'sess_new', status: 'active', expire_at: 5000 };
+  const activeClient = signedOutClient({ sessions: [activeSession], last_active_session_id: 'sess_new' });
+  const signUp = { object: 'sign_up_attempt', id: 'sua_google', status: 'complete', missing_fields: [] };
+  const { auth, mock } = make({
+    clientJwt: clientJwt(),
+    routes: {
+      'POST /v1/client/sign_ins': wrapped(pending, signedOutClient({ sign_in: pending })),
+      'GET /v1/client/sign_ins/sia_google': wrapped(transferred, signedOutClient({ sign_in: transferred })),
+      'POST /v1/client/sign_ups': wrapped(signUp, activeClient),
+    },
+  });
+  await auth.startGoogle({ redirectUrl: REDIRECT });
+  assert.deepEqual(await auth.completeGoogle({ nonce: '' }), { status: 'active', sessionId: 'sess_new' });
+  assert.equal(mock.calls[1].url.searchParams.has('rotating_token_nonce'), false);
+  assert.deepEqual(mock.calls[2].body, { transfer: 'true' });
+});
+
+test('a callback without a nonce is rejected unless Clerk marked the attempt transferable', async () => {
+  const signIn = { object: 'sign_in_attempt', id: 'sia_google', status: 'needs_first_factor', first_factor_verification: { status: 'unverified', external_verification_redirect_url: `${ISSUER}/oauth/start` } };
+  const { auth, mock } = make({
+    clientJwt: clientJwt(),
+    routes: {
+      'POST /v1/client/sign_ins': wrapped(signIn, signedOutClient({ sign_in: signIn })),
+      'GET /v1/client/sign_ins/sia_google': wrapped(signIn, signedOutClient({ sign_in: signIn })),
+    },
+  });
+  await auth.startGoogle({ redirectUrl: REDIRECT });
+  await assert.rejects(auth.completeGoogle({ nonce: '' }), error => error.code === 'INVALID_CALLBACK');
+  assert.equal(mock.calls.some(call => call.url.pathname.endsWith('/sign_ups')), false);
+});
+
 test('callback nonce replay is rejected before FAPI', async () => {
   const signIn = { object: 'sign_in_attempt', id: 'sia_google', status: 'needs_first_factor', first_factor_verification: { status: 'unverified', external_verification_redirect_url: `${ISSUER}/oauth/start` } };
   const { auth, mock } = make({
