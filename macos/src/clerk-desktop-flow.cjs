@@ -20,10 +20,13 @@ function parseCallback(value, expectedState) {
     || url.username || url.password || url.port || url.hash) return null;
   const states = url.searchParams.getAll("state");
   const nonces = url.searchParams.getAll("rotating_token_nonce");
-  if (states.length !== 1 || nonces.length !== 1 || !expectedState) return null;
+  // Clerk omits the nonce when Google verified someone without an account
+  // yet: the attempt is then "transferable" and becomes a sign-up.
+  if (states.length !== 1 || nonces.length > 1 || !expectedState) return null;
   const state = states[0];
   if (!/^[a-f0-9]{64}$/.test(state) || !/^[a-f0-9]{64}$/.test(expectedState)
     || !crypto.timingSafeEqual(Buffer.from(state), Buffer.from(expectedState))) return null;
+  if (nonces.length === 0) return { nonce: "" };
   if (!validClerkNonce(nonces[0])) return null;
   return { nonce: nonces[0] };
 }

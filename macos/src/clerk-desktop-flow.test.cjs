@@ -15,6 +15,9 @@ test("opaque nonce grammar is bounded and shared with the auth exchange", () => 
 });
 test("callback requires exact scheme, host, path, state and a single nonce", () => {
   assert.ok(parseCallback(callback, state));
+  // Clerk sends no nonce when the Google account has no Mia account yet.
+  assert.deepEqual(parseCallback(`${CALLBACK_URL}?state=${state}`, state), { nonce: "" });
+  assert.equal(parseCallback(`${CALLBACK_URL}?state=${"b".repeat(64)}`, state), null);
   assert.equal(parseCallback(callback.replace(state, "é".repeat(64)), state), null);
   for (const bad of [callback.replace("miamultiplayer:", "https:"), callback.replace("auth/", "evil/"), callback.replace("/clerk?", "/clerk/other?"), callback + "#fragment", callback + "&state=" + state, callback + "&rotating_token_nonce=other", callback.replace(state, "b".repeat(64)), "bad-url"]) {
     assert.equal(parseCallback(bad, state), null);
