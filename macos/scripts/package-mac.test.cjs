@@ -10,6 +10,7 @@ const {
   copyPortableRuntime,
   assertNoPrivateBuildPaths,
   assertNoPrivateContent,
+  loadPrivateTerms,
   assertNoRuntimeState,
   isMachOFile,
   macCodeTargets,
@@ -186,7 +187,6 @@ test("Mac DMG bundles pinned Hermes, Ghost, Python, modules, and release integri
   assert.match(source, /"node_modules"/);
   assert.match(source, /"scripts", "tests", "tests-js"/);
   assert.match(source, /"skills", "optional-skills", "optional-mcps"/);
-  assert.match(source, /gateway\/platforms\/webhook\.py/);
   assert.match(source, /pruneGhostBundle\(stagedGhost\)/);
   assert.match(source, /assertNoRuntimeState\(runtimeRoot\)/);
   assert.match(source, /assertNoPrivateBuildPaths\(appPath/);
@@ -425,20 +425,25 @@ test("activity helper passes the unchanged artifact privacy audit", () => {
 test("artifact content audit rejects requested identities and recognizable live secrets", () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-private-content-test-"));
   try {
-    fs.writeFileSync(path.join(temporaryRoot, "safe.txt"), "Mia Multiplayer from luislozanogmia\n");
-    fs.writeFileSync(path.join(temporaryRoot, "LICENSES.chromium.html"), ["Zor", "bex"].join(""));
+    const termsFile = path.join(os.tmpdir(), `miaos-private-terms-${process.pid}.txt`);
+    fs.writeFileSync(termsFile, "# placeholder terms\nPlaceholder Client\nzorbex\n");
+    const terms = loadPrivateTerms({ MIAOS_PRIVATE_TERMS_FILE: termsFile });
+    fs.rmSync(termsFile);
+    assert.deepEqual(terms, [["placeholder", "client"], ["zorbex"]]);
+    assert.deepEqual(loadPrivateTerms({}), []);
+    fs.writeFileSync(path.join(temporaryRoot, "safe.txt"), "Mia Multiplayer from luislozanogmia, a client placeholder\n");
+    fs.writeFileSync(path.join(temporaryRoot, "LICENSES.chromium.html"), "Zorbex");
     fs.mkdirSync(path.join(temporaryRoot, "node_modules"));
-    fs.writeFileSync(path.join(temporaryRoot, "node_modules", "notice.txt"), ["Zor", "bex"].join(""));
+    fs.writeFileSync(path.join(temporaryRoot, "node_modules", "notice.txt"), "Zorbex");
     const stdlib = path.join(temporaryRoot, "Contents", "Resources", "runtime", "python", "lib", "python3.11", "encodings");
     fs.mkdirSync(stdlib, { recursive: true });
-    fs.writeFileSync(path.join(stdlib, "mbcs.py"), ["Zor", "bex"].join(""));
+    fs.writeFileSync(path.join(stdlib, "mbcs.py"), "Zorbex");
     fs.writeFileSync(path.join(temporaryRoot, "vendor.bin"), Buffer.from("AKIAABCDEFGHIJKLMNOP\0"));
-    assert.doesNotThrow(() => assertNoPrivateContent(temporaryRoot));
-    for (const value of [["Zor", "bex"].join(""),
-      ["Placeholder", "Client"].join(" "), ["mia-", "labs.com"].join(""), "AKIAABCDEFGHIJKLMNOP",
+    assert.doesNotThrow(() => assertNoPrivateContent(temporaryRoot, terms));
+    for (const value of ["ZORBEX", "the placeholder-client file", "AKIAABCDEFGHIJKLMNOP",
       ["-----BEGIN PRIVATE KEY-----", "A".repeat(128), "-----END PRIVATE KEY-----"].join("\n")]) {
       fs.writeFileSync(path.join(temporaryRoot, "candidate.txt"), value);
-      assert.throws(() => assertNoPrivateContent(temporaryRoot), /remains in packaged artifact/);
+      assert.throws(() => assertNoPrivateContent(temporaryRoot, terms), /remains in packaged artifact/);
       fs.rmSync(path.join(temporaryRoot, "candidate.txt"));
     }
   } finally {

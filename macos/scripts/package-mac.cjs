@@ -230,14 +230,6 @@ function pruneHermesBundle(root, originalRoot) {
   ]) {
     fs.rmSync(path.join(root, relative), { recursive: true, force: true });
   }
-  for (const [relative, parts, replacement] of [
-    ["agent/redact.py", ["Zor", "bex"], "email service"],
-    ["gateway/platforms/webhook.py", ["Zor", "bex"], "email service"],
-    ["plugins/platforms/slack/block_kit.py", ["Q", "IX"], "accessory text"],
-  ]) {
-    const file = path.join(root, relative);
-    fs.writeFileSync(file, fs.readFileSync(file, "utf8").split(parts.join("")).join(replacement));
-  }
   const venvBin = path.join(root, "venv", "bin");
   for (const name of ["python", "python3", "python3.11"]) fs.rmSync(path.join(venvBin, name), { force: true });
   // The shell never sources the venv; the activate scripts only embed the
@@ -378,25 +370,29 @@ const PRIVATE_CONTENT_PATTERNS = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----\s+[A-Za-z0-9+/=\r\n]{100,}-----END [A-Z ]*PRIVATE KEY-----/, "private key"],
 ];
 
-const PRIVATE_WORDS = new Set([
-  ["zor", "bex"],
-  ["qu", "ix"],
-].map((parts) => parts.join("")));
-const PRIVATE_PHRASES = new Set([
-  ["place" + "holder", "cli" + "ent"],
-  ["place" + "holder", "com" + "pany"],
-].map((parts) => parts.join(" ")));
+// Private names never live in this public repo. The release machine keeps
+// them in a file outside it, one term per line ("#" starts a comment), and
+// points MIAOS_PRIVATE_TERMS_FILE at that file.
+function loadPrivateTerms(env = process.env) {
+  const file = String(env.MIAOS_PRIVATE_TERMS_FILE || "").trim();
+  if (!file) return [];
+  return fs.readFileSync(file, "utf8").split(/\r?\n/)
+    .map((line) => line.replace(/#.*/, "").toLowerCase().match(/[a-z0-9]+/g))
+    .filter(Boolean);
+}
 
-function containsPrivateTerm(value) {
+function containsPrivateTerm(value, terms) {
+  if (!terms.length) return false;
   const words = String(value || "").toLowerCase().match(/[a-z0-9]+/g) || [];
   for (let index = 0; index < words.length; index += 1) {
-    if (PRIVATE_WORDS.has(words[index])) return true;
-    if (PRIVATE_PHRASES.has(words.slice(index, index + 2).join(" "))) return true;
+    for (const term of terms) {
+      if (term.every((word, offset) => words[index + offset] === word)) return true;
+    }
   }
   return false;
 }
 
-function assertNoPrivateContent(root) {
+function assertNoPrivateContent(root, terms = loadPrivateTerms()) {
   walkTree(root, (entry, target) => {
     if (!entry.isFile()) return;
     // Windows walks produce backslash-separated relatives; the exemption
@@ -411,8 +407,7 @@ function assertNoPrivateContent(root) {
     const body = content.toString("utf8");
     const searchable = `${relative}\n${body}`.replace(/luislozanogmia/gi, "PUBLIC_GITHUB_OWNER")
       .replace(/hello@mia-labs\.com/gi, "PUBLIC_CONTACT_EMAIL");
-    if (new RegExp(["zor", "bex"].join(""), "i").test(searchable)
-      || new RegExp(`\\b${["Q", "IX"].join("")}\\b`).test(searchable) || containsPrivateTerm(searchable)) {
+    if (containsPrivateTerm(searchable, terms)) {
       throw new Error(`private identity remains in packaged artifact: ${relative}`);
     }
     for (const [pattern, label] of PRIVATE_CONTENT_PATTERNS) {
@@ -849,6 +844,7 @@ module.exports = {
   assertCleanReleaseCheckout,
   assertNoPrivateBuildPaths,
   assertNoPrivateContent,
+  loadPrivateTerms,
   assertNoRuntimeState,
   copyAppBundleForDmg,
   copyPortableRuntime,

@@ -161,14 +161,6 @@ function pruneWindowsHermesBundle(root, originalRoot) {
   ]) {
     fs.rmSync(path.join(root, relative), { recursive: true, force: true });
   }
-  for (const [relative, parts, replacement] of [
-    ["agent/redact.py", ["Zor", "bex"], "email service"],
-    ["gateway/platforms/webhook.py", ["Zor", "bex"], "email service"],
-    ["plugins/platforms/slack/block_kit.py", ["Q", "IX"], "accessory text"],
-  ]) {
-    const file = path.join(root, relative);
-    fs.writeFileSync(file, fs.readFileSync(file, "utf8").split(parts.join("")).join(replacement));
-  }
   // The venv interpreter processes dependency .pth files, including native
   // Windows DLL paths. Generated console-script and activation launchers
   // embed the build machine's path; replace the interpreter separately with
