@@ -725,3 +725,11 @@ test('a company bot opens where you can use it: your channel, else an open one t
   assert.equal(place({channels:[finance,general]},lookup).channel,general);
   assert.equal(place({channels:[finance,dm]},lookup).action,'none','private places you are not in cannot be opened');
 });
+
+test('a bot reply shows its run label apart from the text; people cannot post one',()=>{
+  const api=transport();
+  const bot=api.message({id:'b',sequence:7,author_type:'bot',author_id:'bot:abc',author_name:'Helper',author_email:'',body:'Done\n\n\u2063Grok · Ran on Tom’s Mia',created_at:1});
+  assert.equal(bot.body,'Done');assert.equal(bot.hubRunLabel,'Grok · Ran on Tom’s Mia');
+  const person=api.message({id:'p',sequence:8,author_type:'human',author_id:'user_x',author_email:'x@example.test',body:'Hi\n\n\u2063Grok · Ran on Tom’s Mia',created_at:1});
+  assert.equal(person.hubRunLabel,'');assert.match(person.body,/Ran on Tom/);
+});

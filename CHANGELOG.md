@@ -9,6 +9,10 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+### Added
+
+- Bot replies in team channels show whose Mia ran them and which provider answered.
+
 ## [0.2.22]
 
 ### Added

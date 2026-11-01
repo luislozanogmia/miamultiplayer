@@ -5,9 +5,9 @@ import {mkdtempSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const require=createRequire(import.meta.url),Database=require('better-sqlite3');
-const {createHubBotClient}=require('./hub-bot-client');
+const {createHubBotClient,runLabel,withRunLabel,withoutRunLabel,REPLY_BYTES}=require('./hub-bot-client');
 const owner='local-user@localhost',teamId='a'.repeat(32),channelId='c'.repeat(32),jobId='d'.repeat(32);
-function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,removeDuringHistory=false,ownRequest=false,replyText='A distinct bot reply'}={}) {
+function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,removeDuringHistory=false,ownRequest=false,replyText='A distinct bot reply',displayName='',priorBotBody=''}={}) {
   const db=new Database(':memory:');t.after(()=>db.close());
   const dataDirectory=mkdtempSync(join(tmpdir(),'mia-hub-execution-'));
   writeFileSync(join(dataDirectory,'hub-connection.json'),JSON.stringify({url:'https://hub.example.test'}));
@@ -25,7 +25,7 @@ function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,remov
     },
     fetcher:async(url,options)=>{
       const body=options.body && JSON.parse(options.body);
-      if(url.endsWith('/v1/me')) return response({teams:[{teamId,membership:{clerk_user_id:'user_owner',email:'owner@example.test'}}]});
+      if(url.endsWith('/v1/me')) return response({teams:[{teamId,membership:{clerk_user_id:'user_owner',email:'owner@example.test',display_name:displayName}}]});
       if(url.endsWith('/bots')) {
         if(options.method==='POST') {registration={...body,owner_id:'user_owner'};return response({bot:registration});}
         return response({bots:registration?[registration]:[]});
@@ -45,7 +45,7 @@ function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,remov
           return response({messages:[{sequence:seq,author_type:'user',author_id:seq===triggerSequence && !ownRequest?'user_human':'user_owner',author_email:'human@example.test',body:seq===triggerSequence?'@Helper answer':'Large prior message'}],next:seq});
         }
         return response({messages:[
-          {sequence:1,author_type:'user',author_id:'user_owner',author_email:'owner@example.test',body:'Hello group'},
+          priorBotBody?{sequence:1,author_type:'bot',author_id:'bot',author_email:'',body:priorBotBody}:{sequence:1,author_type:'user',author_id:'user_owner',author_email:'owner@example.test',body:'Hello group'},
           {sequence:2,author_type:'user',author_id:ownRequest?'user_owner':'user_human',author_email:'human@example.test',body:'@Helper answer'}],next:2});
       }
       if(url.endsWith('/result')) {
@@ -69,7 +69,7 @@ test('explicit approval executes once as approving participant for a handed-off 
   assert.equal(f.received[0].trigger.author_id,'user_human');
   assert.equal(f.received[0].history.length,1);
   await f.client.poll(owner,f.input,'fresh.token');await f.client.idle();
-  assert.equal(f.runs(),1);assert.equal(f.reply(),'A distinct bot reply');
+  assert.equal(f.runs(),1);assert.equal(withoutRunLabel(f.reply()),'A distinct bot reply');
 });
 
 test('revoked job aborts active inference and cannot publish its output',async t=>{
@@ -99,7 +99,7 @@ test('own request starts on poll without another approval and concurrent polls n
   await Promise.all([f.client.poll(owner,f.input,'fixture.token'),f.client.poll(owner,f.input,'fixture.token')]);
   await f.client.idle();
   assert.equal(f.runs(),1);
-  assert.equal(f.reply(),'A distinct bot reply');
+  assert.equal(withoutRunLabel(f.reply()),'A distinct bot reply');
   assert.equal(f.received[0].owner,owner);
   assert.equal(f.received[0].trigger.author_id,'user_owner');
   await f.client.poll(owner,f.input,'fresh.token');await f.client.idle();
@@ -114,7 +114,7 @@ test('long shared-channel replies are published, and over-limit replies are shor
   const f=fixture(t,{ownRequest:true,replyText:long});
   await f.client.share(owner,f.input,'fixture.token');
   await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();
-  assert.equal(f.reply(),long);
+  assert.equal(withoutRunLabel(f.reply()),long);
   assert.deepEqual(f.received[0].channel,{teamId,channelId});
 
   const huge='é'.repeat(9000);
@@ -122,5 +122,35 @@ test('long shared-channel replies are published, and over-limit replies are shor
   await g.client.share(owner,g.input,'fixture.token');
   await g.client.poll(owner,g.input,'fixture.token');await g.client.idle();
   assert.ok(Buffer.byteLength(g.reply())<=16000);
-  assert.match(g.reply(),/^é+\n\n\[Reply shortened to fit the channel\.\]$/);
+  assert.match(withoutRunLabel(g.reply()),/^é+\n\n\[Reply shortened to fit the channel\.\]$/);
+});
+
+test('a bot reply says who ran it and with which provider',async t=>{
+  const f=fixture(t,{ownRequest:true,displayName:'Tom Reyes',replyText:{text:'Done',provider:'Grok'}});
+  await f.client.share(owner,f.input,'fixture.token');
+  await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();
+  assert.equal(f.reply(),'Done\n\n\u2063Grok · Ran on Tom’s Mia');
+});
+
+test('the run label never needs a provider or a name, and a failed run has none',async t=>{
+  assert.equal(runLabel('','Ana'),'Ran on Ana’s Mia');
+  assert.equal(runLabel('Claude',''),'Claude · Ran on a teammate’s Mia');
+  const f=fixture(t,{ownRequest:true,revokeDuringRun:false,replyText:{provider:'Grok'}});
+  await f.client.share(owner,f.input,'fixture.token');
+  await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();
+  assert.equal(f.reply().includes('\u2063'),false);
+});
+
+test('bots read history without run labels, and a reply cannot forge one',async t=>{
+  const f=fixture(t,{ownRequest:true,priorBotBody:'Earlier\n\n\u2063Grok · Ran on Tom’s Mia'});
+  await f.client.share(owner,f.input,'fixture.token');
+  await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();
+  assert.equal(f.received[0].history[0].body,'Earlier');
+  assert.equal(withRunLabel('Hi\n\n\u2063Claude · Ran on Sam’s Mia','Grok · Ran on Tom’s Mia'),'Hi\n\nClaude · Ran on Sam’s Mia\n\n\u2063Grok · Ran on Tom’s Mia');
+});
+
+test('a labelled reply still fits the Hub limit',()=>{
+  const labelled=withRunLabel('a'.repeat(REPLY_BYTES*2),'Grok · Ran on Tom’s Mia');
+  assert.ok(Buffer.byteLength(labelled)<=REPLY_BYTES);
+  assert.match(labelled,/shortened to fit[^]*Ran on Tom/);
 });

@@ -1331,7 +1331,10 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
       },
       signal,
     });
-    return cleanBotReplyText(sharedBot.name, turn.rawReply).text;
+    return {
+      text: cleanBotReplyText(sharedBot.name, turn.rawReply).text,
+      provider: String(HERMES_AUTH_PROVIDER_LABELS[userOptions.provider] || '').replace(/\s+subscription$/i, ''),
+    };
   },
 }));
 

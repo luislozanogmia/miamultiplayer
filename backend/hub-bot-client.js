@@ -6,12 +6,29 @@ const {CLERK_INSTANCES}=require('./clerk-config');
 // The Hub stores at most 16,000 UTF-8 bytes per message. A longer reply is
 // cut at a character boundary rather than lost.
 const REPLY_BYTES=16000, CUT_NOTE='\n\n[Reply shortened to fit the channel.]';
-function fitReply(text) {
-  if(typeof text!=='string' || Buffer.byteLength(text)<=REPLY_BYTES) return text;
-  const room=REPLY_BYTES-Buffer.byteLength(CUT_NOTE);
+function fitReply(text,limit=REPLY_BYTES) {
+  if(typeof text!=='string' || Buffer.byteLength(text)<=limit) return text;
+  const room=limit-Buffer.byteLength(CUT_NOTE);
   let cut=Buffer.from(text).subarray(0,room).toString('utf8');
   if(cut.endsWith('\uFFFD')) cut=cut.slice(0,-1);
   return cut.trimEnd()+CUT_NOTE;
+}
+// A reply ends with one line saying where it ran, such as "Grok · Ran on Tom's
+// Mia". The invisible mark lets Mia show it as a label and leave it out of what
+// bots read; an app that doesn't know the mark just shows the readable line.
+const RUN_LABEL_MARK='\n\n\u2063';
+function runLabel(provider,memberName) {
+  const first=String(memberName||'').trim().split(/\s+/)[0];
+  return [provider,'Ran on '+(first?first+'’s':'a teammate’s')+' Mia'].filter(Boolean).join(' · ');
+}
+function withRunLabel(text,label) {
+  if(typeof text!=='string' || !text.trim()) return fitReply(text);
+  const clean=text.replace(/\u2063/g,''),tail=RUN_LABEL_MARK+label;
+  return fitReply(clean,REPLY_BYTES-Buffer.byteLength(tail))+tail;
+}
+function withoutRunLabel(body) {
+  const at=typeof body==='string'?body.lastIndexOf(RUN_LABEL_MARK):-1;
+  return at<0?body:body.slice(0,at);
 }
 function failure(status,code) { return Object.assign(new Error(code),{status,code}); }
 async function requestHub(origin,token,method,path,body,fetcher=fetch) {
@@ -79,7 +96,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
       const history=[];let after=Math.max(0,claim.triggerSequence-40);
       for(let page=0;page<3 && after<claim.triggerSequence;page++) {
         const result=await requestHub(s.origin,token(),'GET',base(s)+'/messages/after/'+after,undefined,fetcher);
-        history.push(...(result.messages||[]).filter(row=>row.sequence<=claim.triggerSequence));
+        history.push(...(result.messages||[]).filter(row=>row.sequence<=claim.triggerSequence)
+          .map(row=>row.author_type==='bot'?{...row,body:withoutRunLabel(row.body)}:row));
         if(!result.next || result.next<=after) break;
         after=result.next;
       }
@@ -91,7 +109,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
         channel:{teamId:s.teamId,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null});
       if(controller.signal.aborted) throw new Error('cancelled');
-      journal.saveReply(s,run.job_id,fitReply(typeof reply==='string'?reply:reply && reply.text));
+      journal.saveReply(s,run.job_id,withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName)));
     } catch {
       journal.saveReply(s,run.job_id,'This bot could not complete the request. Please send a new message to try again.');
     } finally {clearTimeout(timeout);clearInterval(check);}
@@ -119,7 +137,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
     if(!isOwnerActive(owner) || !current || current.subject!==identity.subject || current.issuer!==identity.issuer || current.email!==identity.email) throw failure(403,'account_changed');
     const team=(me.teams||[]).find(team=>team.teamId===input.teamId && team.membership);
     if(!team || typeof team.membership.clerk_user_id!=='string' || team.membership.clerk_user_id!==identity.subject || String(team.membership.email||'').trim().toLowerCase()!==String(identity.email).trim().toLowerCase()) throw failure(403,'account_mismatch');
-    return {origin,owner,teamId:input.teamId,channelId:input.channelId,subject:team.membership.clerk_user_id};
+    return {origin,owner,teamId:input.teamId,channelId:input.channelId,subject:team.membership.clerk_user_id,
+      memberName:team.membership.display_name||current.displayName||''};
   }
   return {
     journal,
@@ -195,4 +214,4 @@ function createHubBotRouter(options) {
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
-module.exports={createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES};
+module.exports={createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};

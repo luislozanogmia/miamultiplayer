@@ -997,6 +997,7 @@
   .chat-msg-name{font-family:var(--styled-sans);font-weight:500;font-size:14px;line-height:20px;letter-spacing:0;color:var(--sand-text-primary);}
   .chat-msg-tag{font-family:var(--styled-sans);font-size:11px;letter-spacing:.02em;padding:2px 7px;border-radius:5px;background:var(--sand-fill-accent-subtle);color:var(--sand-text-accent);}
   .chat-msg-time{font-family:var(--styled-sans);font-size:12px;line-height:16px;color:var(--sand-text-secondary);}
+  .chat-msg-run{margin-top:6px;font-size:12px;line-height:1.35;color:var(--sand-text-tertiary,var(--sand-text-secondary));}
   /* The bubble itself: agent = #eeeeee, first-in-group corner flat top-left;
      user = #070707/#fcfcfc, flat top-right (mirrored). Consecutive bubbles
      from the same sender stack with a 4px gap via .grouped's tighter

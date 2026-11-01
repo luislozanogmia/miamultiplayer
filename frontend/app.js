@@ -10787,6 +10787,7 @@
       : (isPreReasoning ? chatPreReasoningHtml(text, compactBrowserMessage) : (isLongMessage ? chatExpandableMessageHtml(text, false, compactBrowserMessage) : mdLite(text)))) : '';
     var mediaHtml = '';
     messageHtml += googleDriveMessageChips(driveDisplay.files);
+    if(m.hubRunLabel) messageHtml += '<div class="chat-msg-run">✓ ' + esc(m.hubRunLabel) + '</div>';
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
     var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
       (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
