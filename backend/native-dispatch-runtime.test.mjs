@@ -133,7 +133,7 @@ test('shared channel bot runs reuse the Solo bot turn and reply cleaning', () =>
   assert.match(hub, /await turnWorkspaceContext\(owner,/);
   assert.match(hub, /await runBotReplyTurn\(\{/);
   assert.match(hub, /googleWriteAuthorized: false/);
-  assert.match(hub, /return cleanBotReplyText\(sharedBot\.name, turn\.rawReply\)\.text/);
+  assert.match(hub, /text: cleanBotReplyText\(sharedBot\.name, turn\.rawReply\)\.text/);
   assert.doesNotMatch(hub, /scheduleInference\(|buildBotContext\(/);
   const reply = source.slice(source.indexOf('async function runNativeConversationAgentReply('));
   assert.match(reply, /const replyParts = cleanBotReplyText\(agent\.name,/);
