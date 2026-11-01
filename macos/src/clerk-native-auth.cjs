@@ -6,6 +6,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const REDIRECT_SCHEME = 'miamultiplayer:';
 const REDIRECT_HOST = 'auth';
 const REDIRECT_PATH = '/clerk';
+// The web finish page receives Clerk's redirect, tells the person they are
+// signed in, and forwards the same parameters to the app link above.
+const FINISH_PAGE_URL = 'https://miamultiplayer.com/auth/done/';
 const ID_PATTERNS = Object.freeze({
   client: /^client_[A-Za-z0-9_-]+$/,
   signIn: /^sia_[A-Za-z0-9_-]+$/,
@@ -14,11 +17,14 @@ const ID_PATTERNS = Object.freeze({
 });
 
 class NativeClerkAuthError extends Error {
-  constructor(code, { httpStatus, retryable = false } = {}) {
+  constructor(code, { httpStatus, clerkCode, retryable = false } = {}) {
     super(code);
     this.name = 'NativeClerkAuthError';
     this.code = code;
     if (Number.isInteger(httpStatus)) this.httpStatus = httpStatus;
+    // Clerk's own error code (for example account_transfer_invalid) says why a
+    // request was refused. It is a fixed identifier, never user data.
+    if (typeof clerkCode === 'string' && /^[a-z_]{1,64}$/.test(clerkCode)) this.clerkCode = clerkCode;
     this.retryable = Boolean(retryable);
   }
 }
@@ -86,7 +92,9 @@ function googleRedirect(value) {
     throw safeError('INVALID_REDIRECT_URL');
   }
   const stateValues = url.searchParams.getAll('state');
-  if (url.protocol !== REDIRECT_SCHEME || url.hostname !== REDIRECT_HOST || url.pathname !== REDIRECT_PATH
+  const appLink = url.protocol === REDIRECT_SCHEME && url.hostname === REDIRECT_HOST && url.pathname === REDIRECT_PATH;
+  const finishPage = `${url.origin}${url.pathname}` === FINISH_PAGE_URL;
+  if (!(appLink || finishPage) || url.port
     || url.username || url.password || url.hash || url.searchParams.size !== 1
     || stateValues.length !== 1 || !/^[a-f0-9]{64}$/.test(stateValues[0])) {
     throw safeError('INVALID_REDIRECT_URL');
@@ -273,8 +281,10 @@ function createNativeClerkClient(options = {}) {
       await rotateClientJwt(response, updatedClient && updatedClient.id);
       if (!response.ok) {
         const retryable = response.status === 429 || response.status >= 500;
+        const firstError = payload && Array.isArray(payload.errors) ? payload.errors[0] : null;
         throw safeError(response.status === 429 ? 'RATE_LIMITED' : 'AUTH_REQUEST_FAILED', {
           httpStatus: response.status,
+          clerkCode: firstError && firstError.code,
           retryable,
         });
       }
@@ -345,10 +355,15 @@ function createNativeClerkClient(options = {}) {
   async function completeGoogle({ nonce } = {}) {
     forgetSessionToken();
     const rotatingNonce = String(nonce || '');
-    if (!validClerkNonce(rotatingNonce)) throw safeError('INVALID_CALLBACK');
+    // An empty nonce means Clerk had no account to sign in to; only the
+    // new-account transfer below may complete it.
+    const newAccount = rotatingNonce === '';
+    if (!newAccount && !validClerkNonce(rotatingNonce)) throw safeError('INVALID_CALLBACK');
     return exclusive(async context => {
-      if (usedNonces.has(rotatingNonce)) throw safeError('CALLBACK_REPLAYED');
-      usedNonces.add(rotatingNonce);
+      if (!newAccount) {
+        if (usedNonces.has(rotatingNonce)) throw safeError('CALLBACK_REPLAYED');
+        usedNonces.add(rotatingNonce);
+      }
       if (!googleSignInId) {
         await refreshClient(context);
         googleSignInId = client && client.sign_in && client.sign_in.id
@@ -357,11 +372,13 @@ function createNativeClerkClient(options = {}) {
       if (!googleSignInId) throw safeError('NO_AUTH_ATTEMPT');
       const payload = await request(`/v1/client/sign_ins/${encodeURIComponent(googleSignInId)}`, {
         ...context,
-        query: { rotating_token_nonce: rotatingNonce },
+        ...(newAccount ? {} : { query: { rotating_token_nonce: rotatingNonce } }),
       });
       const signIn = unwrapResponse(payload, 'sign_in_attempt');
       const verification = signIn.first_factor_verification;
-      if (verification && verification.status === 'transferable') {
+      const transferable = verification && verification.status === 'transferable';
+      if (newAccount && !transferable) throw safeError('INVALID_CALLBACK');
+      if (transferable) {
         const signUpPayload = await request('/v1/client/sign_ups', {
           ...context,
           method: 'POST',
@@ -493,6 +510,7 @@ function createNativeClerkClient(options = {}) {
 
 module.exports = {
   DEFAULT_API_VERSION,
+  FINISH_PAGE_URL,
   NativeClerkAuthError,
   createNativeClerkClient,
 };
