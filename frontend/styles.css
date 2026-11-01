@@ -2274,6 +2274,7 @@
   body.styled-skin .login-main{min-height:100%;padding:28px;}
   body.styled-skin .login-side{display:none;}
   body.styled-skin .login-split{display:grid;grid-template-columns:minmax(430px,.88fr) minmax(520px,1.12fr);height:100%;padding:12px;gap:12px;background:#f3f2ef;}
+  html.mac-inset-titlebar body.styled-skin .login-split{padding-top:38px;}
   body.styled-skin .login-main{min-height:0;padding:26px 34px 22px;background:#fff;border:1px solid #e7e5e0;border-radius:20px;}
   body.styled-skin .login-mark-row{min-height:36px;}
   body.styled-skin .login-center{padding:34px 0;}

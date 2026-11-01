@@ -27,3 +27,7 @@ test('the top of the Mac window drags while sign-in, loading or a dialog covers 
   }
   assert.match(css, /\.window-drag-strip\{display:none;\}/, 'with the app showing, its own top row is the handle');
 });
+
+test('the sign-in cards start below the Mac window buttons', () => {
+  assert.match(css, /html\.mac-inset-titlebar body\.styled-skin \.login-split\{padding-top:38px;\}/);
+});
