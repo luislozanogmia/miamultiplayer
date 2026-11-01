@@ -10123,6 +10123,7 @@
   function askBeforeDoHtml(request){
     return '<div class="chat-approval" data-ask-before-do-card="' + esc(request.id) + '">' +
       '<div class="chat-approval-title">Do you approve?</div>' +
+      (request.line ? '<div class="chat-approval-line">' + esc(request.line) + '</div>' : '') +
       (request.summary ? '<pre class="chat-approval-action">' + esc(request.summary) + '</pre>' : '') +
       '<div class="chat-approval-actions">' + askBeforeDoActionsHtml(request) + '</div></div>';
   }

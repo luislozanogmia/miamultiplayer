@@ -66,15 +66,20 @@ READ_VERB = re.compile(r"(^|_)(list|get|read|search|find|query|fetch|download|ex
 SCHEMA = {
     "name": TOOL,
     "description": (
-        "Ask the user to approve an action Mia blocked. They see that exact action with Yes and No. "
+        "Ask the user to approve an action Mia blocked. They answer Yes or No. "
         "This waits for their answer. If they approve, run exactly the same call once."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "request_id": {"type": "string", "description": "The request_id from the BLOCKED message."},
+            "what_happens": {
+                "type": "string",
+                "description": "One plain sentence the user reads on the request, saying what will happen if they "
+                               "say yes, such as: This will delete notes.txt. No commands.",
+            },
         },
-        "required": ["request_id"],
+        "required": ["request_id", "what_happens"],
     },
 }
 
@@ -162,8 +167,10 @@ def _on_pre_tool_call(tool_name: str = "", args: Any = None, session_id: str = "
 
 
 def _request_approval(args: Any, **_: Any) -> str:
-    request_id = str((args or {}).get("request_id") or "")
-    answer = _post("/request", {"requestId": request_id}, ANSWER_TIMEOUT_SECONDS)
+    args = args or {}
+    answer = _post("/request", {
+        "requestId": str(args.get("request_id") or ""), "whatHappens": str(args.get("what_happens") or ""),
+    }, ANSWER_TIMEOUT_SECONDS)
     return json.dumps(answer or {"approved": False, "message": UNAVAILABLE})
 
 

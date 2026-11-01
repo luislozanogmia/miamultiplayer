@@ -3,21 +3,22 @@
 // Ask-before-do: Mia's side of the gate in hermes-plugins/mia-ask-before-do.
 // A risky tool call is blocked until the agent asks with request_approval and
 // the user answers that request in the app. A yes unlocks that exact call once.
-// The request shows the call the gate saw, not the model's account of it, and
+// A yes unlocks the call the gate saw, whatever the model says about it, and
 // only the signed-in requester can answer, so the model cannot talk its way
-// past this. Scheduled runs have nobody to ask; they follow the prompt rule and
-// the owner's automation.
+// past this. The one line on the card is the model's own words. Scheduled runs
+// have nobody to ask; they follow the prompt rule and the owner's automation.
 
 const http = require('node:http');
 const crypto = require('node:crypto');
 
 const MAX_BYTES = 64 * 1024;
 const MAX_SESSIONS = 500;
+const MAX_LINE = 200;
 const ANSWER_WINDOW_MS = 5 * 60 * 1000;
 
 function blockedMessage(summary, requestId) {
   return `BLOCKED by ask-before-do, nothing ran: ${summary}. To ask the user, call request_approval with request_id `
-    + `"${requestId}". They will see this exact action with Yes and No, and a yes unlocks it once. `
+    + `"${requestId}" and what_happens, one plain sentence on what will happen. They answer Yes or No, and a yes unlocks this exact action once. `
     + 'Do not ask in text first and do not reach the same result another way.';
 }
 
@@ -25,11 +26,15 @@ function noUserMessage(summary) {
   return `BLOCKED by ask-before-do, nothing ran: ${summary}. Nobody can approve this here. Report it as waiting for the user.`;
 }
 
-// The approval as chat stores it. The action itself appears only in verbose
-// output, so a command and anything in it stays out of a concise chat.
-function approvalCard(summary, chatOutput) {
-  if (chatOutput !== 'verbose') return { text: 'Do you approve?' };
-  return { text: `Do you approve?\n\n${summary}`, summary };
+// The approval as chat stores it: the question and one line on what will
+// happen. The action itself appears only in verbose output, so a command and
+// anything in it stays out of a concise chat.
+function approvalCard(summary, chatOutput, whatHappens) {
+  const flat = String(whatHappens || '').split(/\s+/).filter(Boolean).join(' ');
+  const line = flat.length > MAX_LINE ? `${flat.slice(0, MAX_LINE)}...` : flat;
+  const text = line ? `Do you approve?\n\n${line}` : 'Do you approve?';
+  if (chatOutput !== 'verbose') return { text, line };
+  return { text: `${text}\n\n${summary}`, line, summary };
 }
 
 const ANSWERS = {
@@ -89,14 +94,14 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
       return { allow: false, message: blockedMessage(what, request.id) };
     },
     // Waits for the user's answer. The tool call stays open until then.
-    async requestApproval({ requestId }) {
+    async requestApproval({ requestId, whatHappens }) {
       const request = requests.get(String(requestId || ''));
       if (!request) return { approved: false, message: 'That request is no longer open. Try the action again to get a new one.' };
       if (request.answer) return request.answer;
       request.answer = (async () => {
         const { state } = request;
         const id = crypto.randomUUID();
-        const record = await state.present({ id, summary: request.summary, requester: state.requester });
+        const record = await state.present({ id, summary: request.summary, whatHappens, requester: state.requester });
         const status = await new Promise((finish) => {
           const approval = { id, requester: state.requester, conversationId: state.conversationId, finish };
           approval.timer = setTimeout(() => settle(approval, 'expired'), answerWindowMs);

@@ -1073,6 +1073,7 @@
   .chat-msg-text a:hover{opacity:.85;}
   .chat-approval{display:flex;flex-direction:column;gap:8px;}
   .chat-approval-title{font-weight:600;}
+  .chat-approval-line{overflow-wrap:anywhere;}
   .chat-approval-action,.chat-msg-text pre.chat-approval-action{margin:0;padding:8px 10px;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--sand-border-default);border-radius:8px;background:var(--sand-bg-elevated);font-size:12px;line-height:18px;}
   .chat-approval-actions{display:flex;align-items:center;gap:8px;min-height:28px;}
   .chat-approval-status{font-size:12px;line-height:16px;color:var(--sand-text-secondary);}

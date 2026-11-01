@@ -187,7 +187,13 @@ test('the gate answers only with its token', async (t) => {
 });
 
 test('the approval shows the action only in verbose output', () => {
-  assert.deepEqual(approvalCard('rm a.txt', 'concise'), { text: 'Do you approve?' });
-  assert.deepEqual(approvalCard('rm a.txt', undefined), { text: 'Do you approve?' });
-  assert.deepEqual(approvalCard('rm a.txt', 'verbose'), { text: 'Do you approve?\n\nrm a.txt', summary: 'rm a.txt' });
+  const line = 'This deletes a.txt.';
+  assert.deepEqual(approvalCard('rm a.txt', 'concise', line), { text: `Do you approve?\n\n${line}`, line });
+  assert.deepEqual(approvalCard('rm a.txt', undefined), { text: 'Do you approve?', line: '' });
+  assert.deepEqual(approvalCard('rm a.txt', 'verbose', line), { text: `Do you approve?\n\n${line}\n\nrm a.txt`, line, summary: 'rm a.txt' });
+});
+
+test('the line on the approval stays one short line', () => {
+  assert.equal(approvalCard('rm a.txt', 'concise', '  This\n deletes   a.txt. ').line, 'This deletes a.txt.');
+  assert.equal(approvalCard('rm a.txt', 'concise', 'x'.repeat(500)).line.length, 203);
 });
