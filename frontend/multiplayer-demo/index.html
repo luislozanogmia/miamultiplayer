@@ -3,57 +3,47 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; frame-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'" />
 <title>Mia Multiplayer Demo</title>
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
-<link rel="stylesheet" href="multiplayer.css?v=20261030-demo-1" />
+<link rel="stylesheet" href="demo-library.css?v=20261101-demo-2" />
 </head>
 <body>
-<!-- A local, scripted demo: the teammates, bots, pages and messages are
-     made up, and nothing here talks to any server. -->
+<!-- Local, scripted demos: the teammates, bots, pages and messages are made
+     up, and nothing here talks to any server. -->
 <header class="mpd-banner" role="banner">
   <span class="mpd-badge">Demo</span>
   <span class="mpd-copy"><strong>Multiplayer Demo</strong> · sample teammates and bots. Nothing here is real or sent anywhere.</span>
   <a class="mpd-back" href="/#/chat">Back to Mia</a>
 </header>
-<div class="mp-app">
-  <section class="mp-browser" aria-label="Shared browser">
-    <div class="mp-tabsrow">
-      <button type="button" class="mp-icon-btn" aria-label="Your bots"><img src="../assets/mote/mote.svg" alt="" draggable="false" /></button>
-      <div class="mp-tabs" id="tabs" role="tablist" aria-label="Shared tabs"></div>
-      <div class="mp-presence" id="presence" aria-label="Players in this tab"></div>
+<main class="lib" id="library">
+  <h1>See what Mia can do</h1>
+  <p class="lib-sub">Pick a demo and click to play.</p>
+  <div class="lib-cols">
+    <section aria-labelledby="soloHead">
+      <h2 id="soloHead">Solo</h2>
+      <p class="lib-group-sub">You and your bots.</p>
+      <ul class="lib-list" id="soloList"></ul>
+    </section>
+    <section aria-labelledby="teamHead">
+      <h2 id="teamHead">Multiplayer</h2>
+      <p class="lib-group-sub">Your team and everyone's bots.</p>
+      <ul class="lib-list" id="teamList"></ul>
+    </section>
+  </div>
+</main>
+<section class="player" id="player" aria-labelledby="playerTitle" hidden>
+  <header class="player-bar">
+    <button type="button" class="player-btn" id="playerClose"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>All demos</button>
+    <div class="player-text">
+      <h2 id="playerTitle"></h2>
+      <p id="playerText"></p>
     </div>
-    <div class="mp-toolbar">
-      <span class="mp-dot" aria-hidden="true"></span>
-      <button type="button" class="mp-icon-btn" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
-      <button type="button" class="mp-icon-btn" aria-label="Forward"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
-      <button type="button" class="mp-icon-btn" aria-label="Reload"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button>
-      <div class="mp-url" id="url"></div>
-      <div class="mp-live" id="live"><img src="../assets/icons/mode-multiplayer.png" alt="" /><span class="mp-live-dot" aria-hidden="true"></span><span id="liveText">Multiplayer</span></div>
-    </div>
-    <div class="mp-screen" id="screen">
-      <div class="mp-page" id="page"></div>
-      <div class="mp-layer" id="layer" aria-hidden="true"></div>
-    </div>
-  </section>
-  <aside class="mp-room" aria-label="Room chat">
-    <header class="mp-room-head">
-      <h1><img src="../assets/icons/mode-multiplayer.png" alt="" /><span id="roomTitle">Room</span></h1>
-      <p id="roomSub">Everyone here sees the same tab.</p>
-      <div class="mp-roster" id="roster"></div>
-    </header>
-    <div class="mp-msgs" id="msgs" aria-live="polite"></div>
-    <form class="mp-composer" id="composer" autocomplete="off">
-      <textarea id="composerInput" rows="1" placeholder="Message the demo room or @ a bot" aria-label="Message the demo room"></textarea>
-      <button type="submit" class="mp-send" aria-label="Send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
-    </form>
-  </aside>
-</div>
-<div class="mp-demo" role="group" aria-label="Demo controls">
-  <span>Demo</span>
-  <button type="button" id="pauseBtn">Pause</button>
-  <button type="button" id="restartBtn">Restart</button>
-</div>
-<script src="multiplayer.js?v=20261030-demo-1"></script>
+    <button type="button" class="player-btn" id="playerReplay"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>Replay</button>
+    <button type="button" class="player-btn" id="playerNext">Next<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+  </header>
+  <div class="player-stage" id="playerStage"><div class="player-win" id="playerWin"></div></div>
+</section>
+<script src="demo-library.js?v=20261101-demo-2"></script>
 </body>
 </html>

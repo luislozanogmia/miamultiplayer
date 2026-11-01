@@ -38,6 +38,7 @@ process.env.HERMES_CRON_EXECUTIONS_DB = String(process.env.HERMES_CRON_EXECUTION
 process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = String(process.env.MIAOS_AUTOMATION_ARTIFACT_DIR || '').trim()
   || path.join(RUNTIME_DIR, 'bot-artifacts');
 const { EFFECTIVE_RELEASE_PROFILE, MIAOS_AGENT_SEARCH_ONLY } = require('./release-profile');
+const { DEMO_FRAME_CSP, isDemoFramePath } = require('./demo-frame-policy');
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
 const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
@@ -958,6 +959,10 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
+  if (isDemoFramePath(req.path)) {
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Content-Security-Policy', DEMO_FRAME_CSP);
+  }
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=()');
   if (req.path === '/api' || req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
