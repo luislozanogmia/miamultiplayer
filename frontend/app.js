@@ -14320,24 +14320,30 @@
     return name.indexOf(q) !== -1 || (q.indexOf('@') !== -1 ? email.indexOf(q) !== -1 : localpart.indexOf(q) !== -1);
   }
 
-  function loadMentionRoster(roomId){
+  // refresh re-reads a loaded roster behind the one on screen, so a bot made
+  // since then shows up the next time someone types @.
+  function loadMentionRoster(roomId, refresh){
     if(inHubRoom(roomId)) return refreshHubBotState(roomId,false);
     var state = chatRoomState(roomId);
-    if(state.mentionRoster || chatWs.configured === false) return;
+    if(chatWs.configured === false) return;
+    var previous = state.mentionRoster;
+    if(previous && (!refresh || previous.loading || state.mentionRosterRefreshing)) return;
     var requestedWorkspaceKey = activeWorkspaceKey;
-    state.mentionRoster = {humans: [], agents: [], privateAgents: [], notInChatAgents: [], loading: true};
+    if(previous) state.mentionRosterRefreshing = true;
+    else state.mentionRoster = {humans: [], agents: [], privateAgents: [], notInChatAgents: [], loading: true};
     Promise.all([
       api(nativeConversationPath(roomId, '/members')),
       loadHumanDirectoryResponse(),
       api('/api/bots'),
       api('/api/agents')
     ]).then(function(results){
+      state.mentionRosterRefreshing = false;
       if(activeWorkspaceKey !== requestedWorkspaceKey){
         clearSoloHumanDirectoryState();
         return;
       }
       var membersRes = results[0], usersRes = results[1], agentsRes = results[2], privateAgentsRes = results[3];
-      if(membersRes.status !== 200){ state.mentionRoster = null; return; }
+      if(membersRes.status !== 200){ if(!previous) state.mentionRoster = null; return; }
       var members = (membersRes.data && membersRes.data.members) || [];
       var activeHumansByEmail = {};
       var humans = members.filter(function(member){ return member.principalType === 'user'; }).map(function(member){
@@ -14370,12 +14376,16 @@
         : [];
       humans.forEach(function(human){ mergeUserProfile(human.email, human); });
       state.mentionRoster = {humans: humans, agents: agents, privateAgents: privateAgents, notInChatAgents: notInChatAgents, loading: false};
+      if(previous && JSON.stringify(previous) === JSON.stringify(state.mentionRoster)) return;
       if(chatMention.open && chatWs.activeRoomId === roomId) renderMentionPopover();
       if(chatWs.activeRoomId === roomId){ renderChatHeaderBar(); renderChatThread(); }
       var isSidebarChannel = (chatWs.rooms.home && chatWs.rooms.home.roomId === roomId) ||
         chatWs.rooms.departments.some(function(d){ return d.roomId === roomId; });
       if(isSidebarChannel) renderChatSidebar();
-    }).catch(function(){ state.mentionRoster = null; });
+    }).catch(function(){
+      state.mentionRosterRefreshing = false;
+      if(!previous) state.mentionRoster = null;
+    });
   }
 
   // #17 calls this after an invite/add-to-department succeeds so the next
@@ -14591,7 +14601,7 @@
     chatMention.highlight = 0;
     chatMention.confirmEntry = null;
     chatMention.confirmBusy = false;
-    if(chatWs.activeRoomId) loadMentionRoster(chatWs.activeRoomId);
+    if(chatWs.activeRoomId) loadMentionRoster(chatWs.activeRoomId, true);
     var pop = el('#chatMentionPopover');
     if(pop) pop.classList.add('open');
     positionMentionPopover();
