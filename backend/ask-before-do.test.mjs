@@ -177,6 +177,55 @@ print(json.dumps(out))
   assert.equal(safeWhenUnreachable, null);
 });
 
+test('a browser click waits for a yes when the button it names says so', async (t) => {
+  const gate = await createAskBeforeDoGate();
+  t.after(() => gate.stop());
+  gate.bindTurn({ sessionId: 's1' }, { scope: 'c', conversationId: 'c', enabled: true, requester: 'a', present: async () => async () => {} });
+  const script = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1] + "/__init__.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn): hooks[name] = fn
+    def register_tool(self, name, toolset, schema, handler): pass
+m.register(Ctx())
+pre, post = hooks["pre_tool_call"], hooks["post_tool_call"]
+def ghost(tool, args): return "ghost-cli call " + tool + " --arguments '" + json.dumps(args) + "'"
+names = ["Send", "Post", "Submit", "Buy now", "Confirm", "Publish", "Pay", "Delete", "Place order", "Complete purchase",
+         "Sender", "Posts", "Sort order", "Checkout", "Remove filter", "Home"]
+elements = [{"number": i + 1, "role": "button", "name": n, "selector": "#x"} for i, n in enumerate(names)]
+page = json.dumps({"text": "", "elements": elements}, indent=2)
+post(tool_name="terminal", args={"command": ghost("ghost_vacuum", {})}, result=json.dumps({"output": page, "exit_code": 0}), session_id="s1")
+post(tool_name="browser_snapshot", args={}, session_id="s1", result=json.dumps({"success": True,
+     "snapshot": '- button "Send" [ref=e1]\\n- link "Home" [ref=e2]'}))
+clicks = [pre(tool_name="terminal", args={"command": ghost("ghost_click", {"choice": i + 1, "snapshot_id": "a"})}, session_id="s1")
+          for i in range(len(names))]
+print(json.dumps({
+  "clicks": [bool(c) for c in clicks],
+  "send": bool(pre(tool_name="browser_click", args={"ref": "@e1"}, session_id="s1")),
+  "home": bool(pre(tool_name="browser_click", args={"ref": "@e2"}, session_id="s1")),
+  "otherChat": bool(pre(tool_name="browser_click", args={"ref": "@e1"}, session_id="s2")),
+  "escaped": bool(pre(tool_name="terminal", args={"command": 'ghost-cli call ghost_click --arguments "{\\\\"choice\\\\":1}"'}, session_id="s1")),
+  "selector": bool(pre(tool_name="terminal", args={"command": ghost("ghost_click", {"selector": "#send"})}, session_id="s1")),
+  "fill": bool(pre(tool_name="terminal", args={"command": ghost("ghost_fill", {"choice": 1, "value": "send it"})}, session_id="s1")),
+  "summary": m.classify("browser_click", {"ref": "e1"}, "s1"),
+}))
+`;
+  const { stdout } = await promisify(execFile)('python3', ['-c', script, pluginDir], {
+    env: { ...process.env, MIA_ASK_BEFORE_DO_URL: gate.url, GATEWAY_RELAY_MIA_ASK_BEFORE_DO_TOKEN: gate.token },
+  });
+  const out = JSON.parse(stdout);
+  assert.deepEqual(out.clicks, [...Array(10).fill(true), ...Array(6).fill(false)]);
+  assert.equal(out.send, true);
+  assert.equal(out.home, false);
+  assert.equal(out.otherChat, false);
+  assert.equal(out.escaped, true);
+  assert.equal(out.selector, true);
+  assert.equal(out.fill, false);
+  assert.deepEqual(out.summary, ['send', 'Click: Send']);
+});
+
 test('the gate answers only with its token', async (t) => {
   const gate = await createAskBeforeDoGate();
   t.after(() => gate.stop());

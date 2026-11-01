@@ -56,8 +56,15 @@ COMMAND_RULES = [
 ]
 
 # Words on a button in the browser. Only labelled targets can be recognised.
-CLICK_WORDS = re.compile(r"\b(send|submit|post|publish|buy|purchase|pay|checkout|order|delete|remove|confirm)\b", re.I)
-BROWSER_CLICKS = re.compile(r"\bghost_(click|fill|press|submit)\b")
+CLICK_WORDS = re.compile(r"\b(send|post|submit|buy|confirm|publish|pay|delete|place order|complete purchase)\b", re.I)
+GHOST_CLICK = re.compile(r"\bghost_click\b")
+GHOST_CHOICE = re.compile(r"\bchoice\W+(\d+)")
+# A click names only a number or ref, so labels come from the page read before
+# it: an element in ghost_vacuum's JSON, a line in browser_snapshot's text.
+GHOST_ELEMENT = re.compile(r'"number":\s*(\d+),\s*"role":\s*"[^"]*",\s*"name":\s*"((?:[^"\\]|\\.)*)"')
+SNAPSHOT_ELEMENT = re.compile(r'"((?:[^"\\\n]|\\.)*)"[^\n]*\[ref=(e\d+)\]')
+MAX_REMEMBERED_PAGES = 200
+_page_labels: Dict[Tuple[str, str], Dict[str, str]] = {}
 
 WRITE_VERB = re.compile(r"(^|_)(send|delete|remove|trash|create|update|edit|post|publish|share|move|modify|write|reply|forward|invite|add|set)(_|$)")
 READ_VERB = re.compile(r"(^|_)(list|get|read|search|find|query|fetch|download|export|view|show|describe|check|draft)(_|$)")
@@ -105,23 +112,32 @@ def _from_text(text: str) -> Optional[str]:
     return None
 
 
-def classify(tool_name: str, args: Any) -> Optional[Tuple[str, str]]:
+def _click(session: str, browser: str, target: str, text: str) -> Optional[Tuple[str, str]]:
+    label = _page_labels.get((session, browser), {}).get(target, "")
+    if not CLICK_WORDS.search(f"{label} {text}"):
+        return None
+    return ("send", "Click: " + _short(label or text))
+
+
+def classify(tool_name: str, args: Any, session: str = "") -> Optional[Tuple[str, str]]:
     """(category, what it does) when the call waits for a yes, else None."""
     args = args if isinstance(args, dict) else {}
     name = str(tool_name or "")
     if name == "terminal":
         command = str(args.get("command") or "")
         category = _from_text(command)
-        if not category and BROWSER_CLICKS.search(command) and CLICK_WORDS.search(command):
-            category = "send"
+        click = GHOST_CLICK.search(command)
+        if not category and click:
+            target = command[click.end():]
+            choice = GHOST_CHOICE.search(target)
+            return _click(session, "ghost", choice.group(1) if choice else "", target)
         return (category, _short(command)) if category else None
     if name == "execute_code":
         code = str(args.get("code") or "")
         category = _from_text(code)
         return (category, "Run code: " + _short(code)) if category else None
     if name == "browser_click":
-        target = json.dumps(args, default=str)
-        return ("send", "Click: " + _short(target)) if CLICK_WORDS.search(target) else None
+        return _click(session, "hermes", str(args.get("ref") or "").lstrip("@"), json.dumps(args, default=str))
     if name.startswith("mcp_"):
         lowered = name.lower()
         if "draft" not in lowered and WRITE_VERB.search(lowered):
@@ -154,16 +170,42 @@ def _post(path: str, body: Dict[str, Any], timeout: float) -> Optional[Dict[str,
 
 def _on_pre_tool_call(tool_name: str = "", args: Any = None, session_id: str = "",
                       task_id: str = "", **_: Any) -> Optional[Dict[str, str]]:
-    found = classify(tool_name, args)
+    session = str(session_id or task_id or "")
+    found = classify(tool_name, args, session)
     if not found:
         return None
     decision = _post("/decide", {
-        "sessionId": str(session_id or task_id or ""), "category": found[0], "summary": found[1],
+        "sessionId": session, "category": found[0], "summary": found[1],
         "fingerprint": _fingerprint(tool_name, args),
     }, 10)
     if decision and decision.get("allow") is True:
         return None
     return {"action": "block", "message": str((decision or {}).get("message") or UNAVAILABLE)}
+
+
+def _from_result(result: Any, field: str) -> str:
+    try:
+        return str(json.loads(result).get(field) or "")
+    except (TypeError, ValueError, AttributeError):
+        return ""
+
+
+def _on_post_tool_call(tool_name: str = "", args: Any = None, result: Any = None, session_id: str = "",
+                       task_id: str = "", **_: Any) -> None:
+    command = str(args.get("command") or "") if isinstance(args, dict) else ""
+    if tool_name == "browser_snapshot":
+        browser = "hermes"
+        labels = {ref: label for label, ref in SNAPSHOT_ELEMENT.findall(_from_result(result, "snapshot"))}
+    elif tool_name == "terminal" and "ghost_vacuum" in command:
+        browser = "ghost"
+        labels = dict(GHOST_ELEMENT.findall(_from_result(result, "output")))
+    else:
+        return
+    key = (str(session_id or task_id or ""), browser)
+    _page_labels.pop(key, None)
+    _page_labels[key] = labels
+    if len(_page_labels) > MAX_REMEMBERED_PAGES:
+        _page_labels.pop(next(iter(_page_labels)))
 
 
 def _request_approval(args: Any, **_: Any) -> str:
@@ -176,4 +218,5 @@ def _request_approval(args: Any, **_: Any) -> str:
 
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_tool(name=TOOL, toolset=TOOLSET, schema=SCHEMA, handler=_request_approval)

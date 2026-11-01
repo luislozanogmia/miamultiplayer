@@ -1,7 +1,8 @@
 name: mia-ask-before-do
-version: "0.2.2"
+version: "0.2.3"
 description: "Mia: actions that cannot be undone or that other people will see wait for the user's approval in the app. Mia's backend decides; this plugin only stops the call and asks."
 author: "Mia"
 license: MIT
 hooks:
   - pre_tool_call
+  - post_tool_call
