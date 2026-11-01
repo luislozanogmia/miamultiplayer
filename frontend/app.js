@@ -15730,9 +15730,10 @@
     if(drawer) drawer.classList.add('open');
     // A team channel starts with only its creator; teammates join from
     // Browse channels or by invitation.
-    var team = hubWorkspace(), intro = el('#channelNameIntro'), hint = el('#channelNameHint');
-    if(intro) intro.textContent = team ? 'Start a channel in this team. You\'re its first member.' : 'Start an official conversation for everyone in this space.';
-    if(hint) hint.textContent = team ? 'Teammates can find it in Browse channels, or you can invite them. Shared bots can be added here.' : 'Official channels are shared team conversations. Shared bots can be added here.';
+    var team = hubWorkspace(), kicker = el('#channelNameKicker'), intro = el('#channelNameIntro'), hint = el('#channelNameHint');
+    if(kicker) kicker.textContent = team ? 'Shared space' : 'Solo';
+    if(intro) intro.textContent = team ? 'Start a channel in this team. You\'re its first member.' : 'Start a conversation with your bots.';
+    if(hint) hint.textContent = team ? 'Teammates can find it in Browse channels, or you can invite them. Shared bots can be added here.' : 'Only you and your bots can see it. Type @ to add a bot.';
     var privateRow = el('#channelPrivateRow'), privateBox = el('#channelPrivateInput');
     if(privateRow) privateRow.hidden = !team;
     if(privateBox) privateBox.checked = false;

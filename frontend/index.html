@@ -1221,9 +1221,9 @@
 <section class="drawer styled-channel-drawer" id="channelNameDrawer" role="dialog" aria-modal="true" aria-labelledby="channelNameTitle">
   <div class="drawer-head styled-channel-head">
     <div>
-      <div class="styled-channel-kicker">Shared space</div>
+      <div class="styled-channel-kicker" id="channelNameKicker">Solo</div>
       <h2 id="channelNameTitle">New channel</h2>
-      <p id="channelNameIntro">Start an official conversation for everyone in this space.</p>
+      <p id="channelNameIntro">Start a conversation with your bots.</p>
     </div>
     <button class="drawer-close styled-channel-close" id="channelNameClose" aria-label="Close">&times;</button>
   </div>
@@ -1232,7 +1232,7 @@
     <div class="form-field styled-channel-field">
       <label for="channelNameInput">Channel name</label>
       <input type="text" id="channelNameInput" placeholder="e.g. product, launch, or friends" autocomplete="off" maxlength="80" />
-      <small id="channelNameHint">Official channels are shared team conversations. Shared bots can be added here.</small>
+      <small id="channelNameHint">Only you and your bots can see it. Type @ to add a bot.</small>
     </div>
     <label class="styled-channel-private" id="channelPrivateRow" hidden>
       <input type="checkbox" id="channelPrivateInput" />
