@@ -20,6 +20,8 @@ const CLAUDE_SUBSCRIPTION_PLUGIN = 'claude-subscription-directsdk-experimental';
 const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
 // Refuses Hermes' own browser tools until the session has tried ghost-cli.
 const GHOST_FIRST_PLUGIN = 'mia-ghost-first';
+const ASK_BEFORE_DO_PLUGIN = 'mia-ask-before-do';
+const ASK_BEFORE_DO_TOOLSET = 'mia_ask_before_do';
 // These top-level lists describe profile intent; the pinned gateway uses its
 // full CLI defaults because Mia does not set platform_toolsets.cli. Google
 // MCP tools are additive, not a confinement boundary for other runtime tools.
@@ -203,6 +205,7 @@ function runtimeProfileConfig({
     ...profileModelBlock(model),
     'toolsets:',
     ...toolsets.map((name) => `  - ${name}`),
+    `  - ${ASK_BEFORE_DO_TOOLSET}`,
     'agent:',
     `  max_turns: ${maxTurns}`,
     '  coding_context: off',
@@ -241,15 +244,14 @@ function runtimeProfileConfig({
       `  auto_source_bashrc: ${terminal.autoSourceBashrc === true ? 'true' : 'false'}`,
     );
   }
-  if (terminal && terminal.cwd) {
-    // Only profiles with a terminal can run ghost-cli, so only they get the
-    // ghost-first guard; elsewhere it would lock the browser fallback away.
-    lines.push(
-      'plugins:',
-      '  enabled:',
-      `    - ${GHOST_FIRST_PLUGIN}`,
-    );
-  }
+  // Only profiles with a terminal can run ghost-cli, so only they get the
+  // ghost-first guard; elsewhere it would lock the browser fallback away.
+  lines.push(
+    'plugins:',
+    '  enabled:',
+    `    - ${ASK_BEFORE_DO_PLUGIN}`,
+    ...(terminal && terminal.cwd ? [`    - ${GHOST_FIRST_PLUGIN}`] : []),
+  );
   if (googleWorkspace) lines.push(...googleWorkspaceMcpConfig());
   lines.push('');
   return lines.join('\n');
@@ -314,6 +316,7 @@ function provisionRuntimeProfile({
   fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(profileDir, 0o700);
   provisionBundledPlugin(profileDir, CLAUDE_SUBSCRIPTION_PLUGIN);
+  provisionBundledPlugin(profileDir, ASK_BEFORE_DO_PLUGIN);
   if (terminal && terminal.cwd) provisionBundledPlugin(profileDir, GHOST_FIRST_PLUGIN);
   for (const name of ['sessions', 'memories', 'skills', 'cron']) {
     fs.mkdirSync(path.join(profileDir, name), { recursive: true, mode: 0o700 });
@@ -485,6 +488,7 @@ module.exports = {
   runtimeProfileConfig,
   setHermesProfileModel,
   GHOST_FIRST_PLUGIN,
+  ASK_BEFORE_DO_PLUGIN,
   provisionBundledPlugin,
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,

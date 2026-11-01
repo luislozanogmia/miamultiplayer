@@ -1321,7 +1321,8 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
       ].filter(Boolean).join('\n\n'),
       googleRefs: workspace.safeGoogleRefs,
       googleWriteAuthorized: false,
-      globalInstructions: '',
+      // Only the requester's ask-before-do choice, none of their private instructions.
+      globalInstructions: { askBeforeDo: currentInstructionSettings(owner).askBeforeDo },
       seedMessages: (systemPrompt) => [{ role: 'system', content: systemPrompt }].concat(history.map(row => ({
         role: row.author_type === 'bot' ? 'assistant' : 'user',
         content: speaker(row),
@@ -3186,6 +3187,9 @@ function normalizeInstructionSettings(value) {
   return {
     agent: String(input.agent || '').trim().slice(0, MAX_GLOBAL_INSTRUCTIONS_LENGTH),
     bot: String(input.bot || '').trim().slice(0, MAX_GLOBAL_INSTRUCTIONS_LENGTH),
+    // On unless the user turned it off, including for anyone who saved
+    // instructions before this setting existed.
+    askBeforeDo: input.askBeforeDo !== false,
   };
 }
 
@@ -3200,9 +3204,15 @@ function currentInstructionSettings(email) {
   return instructionSettingsForUser(db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS), email);
 }
 
+// What the prompts receive: each kind's text plus the ask-before-do setting.
+function promptInstructions(email) {
+  const { agent, bot, askBeforeDo } = currentInstructionSettings(email);
+  return { agent: { text: agent, askBeforeDo }, bot: { text: bot, askBeforeDo } };
+}
+
 function syncBotAutomationWithInstructions(bot, existingJob, existingRegistry) {
   const owner = ownerOf(bot);
-  const globalInstructions = currentInstructionSettings(owner).bot;
+  const globalInstructions = promptInstructions(owner).bot;
   return cronSync.syncBotAutomation(bot, existingJob, existingRegistry, { globalInstructions });
 }
 let runtimeApiKey = '';
@@ -4501,6 +4511,43 @@ app.post('/api/settings/output', requireAuth, (req, res) => {
   return res.status(200).json({ chatOutput: output });
 });
 
+// Scheduled prompts are stored in Hermes cron jobs. Refresh the user's active
+// bots so a saved preference applies there as well as on the next chat.
+async function syncOwnerBotsWithInstructions(owner) {
+  const bots = db.loadAll(conn, 'bots').filter((bot) => ownerOf(bot) === owner && bot.status !== 'draft');
+  const synced = await Promise.allSettled(bots.map((bot) => syncBotAutomationWithInstructions(bot)));
+  synced.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      db.saveOne(conn, 'bots', bots[index].id, bots[index]);
+    } else {
+      console.error('cron-sync: failed to apply global bot instructions for', bots[index].id, result.reason && result.reason.message);
+    }
+  });
+}
+
+// The user's answer to a request for approval. Only the requester can give it.
+app.post('/api/ask-before-do/:id', requireAuth, (req, res) => {
+  const approved = (req.body || {}).approved;
+  if (typeof approved !== 'boolean') return res.status(400).json({ error: 'approved must be true or false' });
+  const result = askBeforeDoGate ? askBeforeDoGate.answer({ id: req.params.id, requester: req.userEmail, approved }) : 'gone';
+  if (result === 'forbidden') return res.status(403).json({ error: 'Only the person who asked can answer this.' });
+  if (result === 'gone') return res.status(410).json({ error: 'This request is no longer open.' });
+  return res.status(200).json({ ok: true });
+});
+
+app.post('/api/settings/ask-before-do', requireAuth, async (req, res) => {
+  const enabled = (req.body || {}).enabled;
+  if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be true or false' });
+  const owner = String(req.userEmail || '').trim().toLowerCase();
+  const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
+  if (!settings.instructionsByUser || typeof settings.instructionsByUser !== 'object') settings.instructionsByUser = {};
+  const instructions = { ...instructionSettingsForUser(settings, owner), askBeforeDo: enabled };
+  settings.instructionsByUser[owner] = instructions;
+  db.saveSingleton(conn, 'settings', settings);
+  await syncOwnerBotsWithInstructions(owner);
+  return res.status(200).json({ instructions });
+});
+
 app.post('/api/settings/instructions', requireAuth, async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   if (typeof body.agent !== 'string' || typeof body.bot !== 'string') {
@@ -4512,21 +4559,14 @@ app.post('/api/settings/instructions', requireAuth, async (req, res) => {
   const owner = String(req.userEmail || '').trim().toLowerCase();
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   if (!settings.instructionsByUser || typeof settings.instructionsByUser !== 'object') settings.instructionsByUser = {};
-  const instructions = normalizeInstructionSettings(body);
+  const instructions = normalizeInstructionSettings({
+    agent: body.agent,
+    bot: body.bot,
+    askBeforeDo: instructionSettingsForUser(settings, owner).askBeforeDo,
+  });
   settings.instructionsByUser[owner] = instructions;
   db.saveSingleton(conn, 'settings', settings);
-
-  // Scheduled prompts are stored in Hermes cron jobs. Refresh the user's
-  // active bots so this preference applies there as well as on the next chat.
-  const bots = db.loadAll(conn, 'bots').filter((bot) => ownerOf(bot) === owner && bot.status !== 'draft');
-  const synced = await Promise.allSettled(bots.map((bot) => syncBotAutomationWithInstructions(bot)));
-  synced.forEach((result, index) => {
-    if (result.status === 'fulfilled') {
-      db.saveOne(conn, 'bots', bots[index].id, bots[index]);
-    } else {
-      console.error('cron-sync: failed to apply global bot instructions for', bots[index].id, result.reason && result.reason.message);
-    }
-  });
+  await syncOwnerBotsWithInstructions(owner);
   return res.status(200).json({ instructions });
 });
 
@@ -7183,6 +7223,7 @@ function nativeDispatchWasStopped(dispatch) {
 // a permanent "I'm working through this now." bot message in the thread and
 // sidebar preview. Soft-delete the row and tell live clients about it.
 function removeNativeDispatchProgressEvent(dispatch) {
+  askBeforeDoGate?.cancelConversation(dispatch.conversationId);
   try {
     const row = conn.prepare(
       `SELECT id FROM events
@@ -7362,7 +7403,34 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   );
   const parentEventId = nativeReplyParentEventId(trigger);
   const agent = nativeDispatchActor(dispatch, conversation, trigger);
-  const globalInstructions = currentInstructionSettings(isGatewayAgent ? trigger.senderId : ownerOf(agent));
+  const globalInstructions = promptInstructions(isGatewayAgent ? trigger.senderId : ownerOf(agent));
+  // One scope per conversation and actor: a bot outside its own chat gets a new
+  // Hermes session each turn, and the yes arrives on the next one.
+  const bindAskBeforeDoTurn = (session) => askBeforeDoGate?.bindTurn(session, {
+    scope: `${conversation.id}:${agent.id || 'mia'}`,
+    enabled: globalInstructions.bot.askBeforeDo,
+    requester: trigger.senderId,
+    conversationId: conversation.id,
+    // No dispatchId: a request is not the reply, so the task keeps running.
+    present: async ({ id, summary, requester }) => {
+      const metadata = { runtime: 'hermes', agentName: agent.name, askBeforeDo: { id, summary, requester, status: 'pending' } };
+      const created = await createNativeDispatchReplyEvent(dispatch, trigger, {
+        type: replyEventType,
+        content: { text: `Do you approve?\n\n${summary}` },
+        parentEventId,
+        clientIdempotencyKey: `ask-before-do-${id}`,
+        metadata,
+      });
+      return async (status) => {
+        const event = nativeConversationRepository.updateEvent({
+          companyId: conversation.companyId,
+          id: created.event.id,
+          metadata: { ...metadata, askBeforeDo: { ...metadata.askBeforeDo, status } },
+        });
+        try { nativeConversationRealtime.publish(event); } catch (_publishError) {}
+      };
+    },
+  });
   const replyPrincipalType = isGatewayAgent ? 'agent' : 'bot';
   const replyEventType = isGatewayAgent ? 'agent_message' : 'bot_message';
   const slashCommand = nativeSlashCommand(trigger);
@@ -7628,6 +7696,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
+        bindAskBeforeDoTurn(session);
         activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision };
         nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
         if (ownsPrivateAgentConversation) {
@@ -7715,6 +7784,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
+        bindAskBeforeDoTurn(session);
         bindNativeHermesSessionEvents();
         nativeGatewaySessionConversations.set(String(session.sessionId), {
           companyId: conversation.companyId,
@@ -8318,6 +8388,7 @@ function shutdownBackend() {
   backendShutdownStarted = true;
   disconnectAllHermesAuth();
   browserWorkWorkerBroker?.stop().catch(() => {});
+  askBeforeDoGate?.stop().catch(() => {});
   closeHermesGatewayRuntime();
   nativeConversationWebSocket.close();
 
@@ -8433,6 +8504,18 @@ function applyChatOutputSetting(output) {
 // Browser collaboration uses the existing Hermes gateway and the desktop's
 // private authority. No worker receives the desktop capability or storage key.
 let browserWorkWorkerBroker = null;
+// Ask-before-do's gate must exist before the gateway starts, since the gateway
+// inherits where to reach it. Its plugin refuses risky calls if it cannot.
+let askBeforeDoGate = null;
+async function initializeAskBeforeDoGate() {
+  const { createAskBeforeDoGate } = require('./ask-before-do');
+  askBeforeDoGate = await createAskBeforeDoGate();
+  // In process.env so a gateway restarted after a clean slate inherits it too.
+  // The token can only ask; a yes comes only from the user's own reply.
+  process.env.GATEWAY_RELAY_MIA_ASK_BEFORE_DO_TOKEN = askBeforeDoGate.token;
+  process.env.MIA_ASK_BEFORE_DO_URL = askBeforeDoGate.url;
+}
+
 async function initializeBrowserWork() {
   if (!browserWorkDesktopConfig.url || !browserWorkDesktopConfig.token || !browserWorkDesktopConfig.key) return;
   const { createBrowserWorkDesktopClient } = require('./browser-work-desktop-client');
@@ -8509,6 +8592,7 @@ async function initializeBrowserWork() {
 }
 
 async function onBackendListening() {
+  await initializeAskBeforeDoGate().catch((error) => console.error('Ask-before-do gate unavailable', error.message));
   await initializeBrowserWork().catch(() => console.error("Browser collaboration unavailable; check secure runtime readiness."));
   console.log(`Mia backend listening on port ${PORT}`);
   // Starting the runtime also clears profile copies of root keys, but only
@@ -8539,7 +8623,7 @@ async function onBackendListening() {
     // bot records. Running these in parallel allowed a stale origin-chat
     // pointer to overwrite the repaired bot-conversation destination.
     .then(() => cronSync.reconcileBotCrons(conn, {
-      globalInstructionsForBot: (bot) => currentInstructionSettings(ownerOf(bot)).bot,
+      globalInstructionsForBot: (bot) => promptInstructions(ownerOf(bot)).bot,
     }))
     .then(deliverBotCronResults)
     .catch((err) => console.error('bot/cron boot reconciliation failed', err.message));

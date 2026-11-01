@@ -1071,6 +1071,14 @@
   .chat-msg-text a{color:var(--sand-text-accent);text-decoration:underline;text-underline-offset:2px;word-break:break-all;}
   .chat-msg-row.is-you .chat-msg-text a{color:var(--sand-text-on-primary);}
   .chat-msg-text a:hover{opacity:.85;}
+  .chat-approval{display:flex;flex-direction:column;gap:8px;}
+  .chat-approval-title{font-weight:600;}
+  .chat-approval-action,.chat-msg-text pre.chat-approval-action{margin:0;padding:8px 10px;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--sand-border-default);border-radius:8px;background:var(--sand-bg-elevated);font-size:12px;line-height:18px;}
+  .chat-approval-actions{display:flex;align-items:center;gap:8px;min-height:28px;}
+  .chat-approval-status{font-size:12px;line-height:16px;color:var(--sand-text-secondary);}
+  .chat-approval-button{appearance:none;-webkit-appearance:none;min-width:64px;border:1px solid var(--sand-border-default);border-radius:999px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font-family:var(--styled-sans);font-size:12px;line-height:16px;font-weight:500;padding:5px 12px;cursor:pointer;}
+  .chat-approval-button.primary{border-color:var(--sand-text-primary);background:var(--sand-text-primary);color:var(--sand-bg-elevated);}
+  .chat-approval-button:disabled{opacity:.5;cursor:default;}
   .chat-msg-retry-row{display:flex;margin-top:6px;}
   .chat-msg-retry-row .chat-msg-failed{align-self:center;margin-right:8px;font-size:12px;line-height:16px;color:var(--sand-text-danger,#b42318);}
   .chat-msg-retry{appearance:none;-webkit-appearance:none;border:1px solid var(--sand-border-default);border-radius:999px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font-family:var(--styled-sans);font-size:12px;line-height:16px;font-weight:500;padding:5px 12px;cursor:pointer;transition:background .14s ease,border-color .14s ease,color .14s ease;}

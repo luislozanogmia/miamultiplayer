@@ -1628,6 +1628,8 @@
     var bot = el('#settingsBotInstructions');
     if(agent) agent.value = String(instructions.agent || '');
     if(bot) bot.value = String(instructions.bot || '');
+    var askBeforeDo = el('#settingsAskBeforeDo');
+    if(askBeforeDo) askBeforeDo.checked = instructions.askBeforeDo !== false;
   }
 
   function loadHarnessSettings(showFirstRun){
@@ -2593,6 +2595,19 @@
         note.classList.add('visible');
         setTimeout(function(){ note.classList.remove('visible'); }, 4000);
       }
+    });
+  });
+  var settingsAskBeforeDo = el('#settingsAskBeforeDo');
+  if(settingsAskBeforeDo) settingsAskBeforeDo.addEventListener('change', function(){
+    var enabled = settingsAskBeforeDo.checked;
+    settingsAskBeforeDo.disabled = true;
+    api('/api/settings/ask-before-do', {method:'POST', body:{enabled: enabled}}).then(function(res){
+      if(res.status !== 200) throw new Error(res.data && res.data.error || 'Could not save this setting.');
+    }).catch(function(error){
+      settingsAskBeforeDo.checked = !enabled;
+      showBenchToast(error.message || 'Could not save this setting.');
+    }).finally(function(){
+      settingsAskBeforeDo.disabled = false;
     });
   });
   var settingsInstructionsSave = el('#settingsInstructionsSave');
@@ -6173,6 +6188,7 @@
       nativeDispatchId: event.metadata && typeof event.metadata.dispatchId === 'string' ? event.metadata.dispatchId : null,
       nativeProgress: !!(event.metadata && event.metadata.progress === true),
       nativeDiagnostic: !!(event.metadata && event.metadata.diagnostic === true),
+      askBeforeDo: event.metadata && event.metadata.askBeforeDo && typeof event.metadata.askBeforeDo === 'object' ? event.metadata.askBeforeDo : null,
       nativeEvent: event
     };
   }
@@ -10083,6 +10099,61 @@
     ].some(function(pattern){ return pattern.test(normalized); });
   }
 
+  // A request for approval from the ask-before-do gate. Answering it here is
+  // the only thing that unlocks the action; the server checks who answered.
+  var askBeforeDoLocalStatus = {};
+  var ASK_BEFORE_DO_LABELS = {approved: 'Approved', declined: 'Not approved', expired: 'No answer, nothing ran', gone: 'No longer open'};
+
+  function askBeforeDoOwn(request){
+    return String(request.requester || '').toLowerCase() === String(currentUser || '').toLowerCase();
+  }
+
+  function askBeforeDoStatus(request){
+    return request.status !== 'pending' ? request.status : (askBeforeDoLocalStatus[request.id] || 'pending');
+  }
+
+  function askBeforeDoActionsHtml(request){
+    var status = askBeforeDoStatus(request);
+    if(status !== 'pending') return '<span class="chat-approval-status">' + esc(ASK_BEFORE_DO_LABELS[status] || status) + '</span>';
+    if(!askBeforeDoOwn(request)) return '<span class="chat-approval-status">Waiting for ' + esc(displayNameForEmail(request.requester)) + '</span>';
+    return '<button type="button" class="chat-approval-button primary" data-ask-before-do="' + esc(request.id) + '" data-approved="1">Yes</button>' +
+      '<button type="button" class="chat-approval-button" data-ask-before-do="' + esc(request.id) + '" data-approved="0">No</button>';
+  }
+
+  function askBeforeDoHtml(request){
+    return '<div class="chat-approval" data-ask-before-do-card="' + esc(request.id) + '">' +
+      '<div class="chat-approval-title">Do you approve?</div>' +
+      '<pre class="chat-approval-action">' + esc(request.summary || '') + '</pre>' +
+      '<div class="chat-approval-actions">' + askBeforeDoActionsHtml(request) + '</div></div>';
+  }
+
+  function openAskBeforeDoRequest(roomId){
+    var messages = (roomId && chatRoomState(roomId).messages) || [];
+    for(var i = messages.length - 1; i >= 0; i--){
+      var request = messages[i].askBeforeDo;
+      if(request && askBeforeDoOwn(request) && askBeforeDoStatus(request) === 'pending') return request;
+    }
+    return null;
+  }
+
+  function answerAskBeforeDo(id, approved){
+    function show(status){
+      askBeforeDoLocalStatus[id] = status;
+      var actions = el('[data-ask-before-do-card="' + id + '"] .chat-approval-actions');
+      if(actions) actions.innerHTML = '<span class="chat-approval-status">' + esc(ASK_BEFORE_DO_LABELS[status] || status) + '</span>';
+    }
+    return api('/api/ask-before-do/' + encodeURIComponent(id), {method:'POST', body:{approved: approved}}).then(function(res){
+      show(res && res.status >= 400 ? 'gone' : (approved ? 'approved' : 'declined'));
+    }).catch(function(){ show('gone'); });
+  }
+
+  document.addEventListener('click', function(event){
+    var button = event.target.closest && event.target.closest('[data-ask-before-do]');
+    if(!button) return;
+    button.disabled = true;
+    answerAskBeforeDo(button.getAttribute('data-ask-before-do'), button.getAttribute('data-approved') === '1');
+  });
+
   var chatRetryAttempts = {};
   function wireChatRetryActions(root){
     els('[data-chat-retry]', root).forEach(function(button){
@@ -10786,6 +10857,7 @@
       ? '<span class="chat-thinking-shimmer">' + esc(text) + '</span>'
       : (isPreReasoning ? chatPreReasoningHtml(text, compactBrowserMessage) : (isLongMessage ? chatExpandableMessageHtml(text, false, compactBrowserMessage) : mdLite(text)))) : '';
     var mediaHtml = '';
+    if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
     if(m.hubRunLabel) messageHtml += '<div class="chat-msg-run">✓ ' + esc(m.hubRunLabel) + '</div>';
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
@@ -14044,6 +14116,16 @@
     if(inHubRoom(boundRoomId||chatWs.activeRoomId)) return sendHubMessage(text,preparedAttachment,threadRootId,boundRoomId||chatWs.activeRoomId);
     if((!text && !preparedAttachment) || !(boundRoomId || chatWs.activeRoomId)) return;
     if(chatWs.configured === false) return;
+    // With a request open the agent is waiting, so a reply here answers it: a
+    // plain yes or no directly, and anything else is a no plus the new message.
+    var openRequest = !threadRootId && !preparedAttachment && openAskBeforeDoRequest(boundRoomId || chatWs.activeRoomId);
+    if(openRequest){
+      var reply = String(text || '').trim();
+      var plainYes = /^(yes|si|sí)[.!]?$/i.test(reply);
+      var plainNo = /^no[.!]?$/i.test(reply);
+      var answered = answerAskBeforeDo(openRequest.id, plainYes);
+      if(plainYes || plainNo) return answered.then(function(){ return {status: 200}; });
+    }
     if(!threadRootId && !preparedAttachment && /^\/clear$/i.test(String(text || '').trim())){
       if(!composerSlashCommands().length){
         showBenchToast('/clear starts a new conversation in Mia and bot chats.');

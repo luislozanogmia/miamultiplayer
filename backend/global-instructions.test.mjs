@@ -64,3 +64,43 @@ test('settings expose and persist both instruction fields with bounded input', a
   assert.match(app, /api\('\/api\/settings\/instructions', \{method:'POST'/);
   assert.match(styles, /\.styled-settings-instructions-text/);
 });
+
+test('ask-before-do reaches Mia, bot chats and scheduled work, and only when on', () => {
+  const bot = { name: 'Social', instructions: 'Prepare social media posts.' };
+  const automation = { name: 'Daily post', enabled: true, frequency: 'daily', prompt: 'Draft today’s post.' };
+  const prompts = (globalInstructions) => [
+    inference.buildContext({ name: 'Mia', department: 'Mia' }, [], 'Hi', '', 'Sam', globalInstructions),
+    inference.buildBotContext(bot, [], '', '', 'Sam', globalInstructions),
+    inference.buildScheduledBotPrompt(bot, automation, { userDisplayName: 'Sam', globalInstructions }),
+  ];
+
+  for (const prompt of prompts({ text: 'Be brief.', askBeforeDo: true })) {
+    assert.match(prompt, /Ask-before-do/);
+    assert.match(prompt, /deleting anything, sending a message or email, posting or publishing/);
+    assert.match(prompt, /BLOCKED by ask-before-do, nothing ran/);
+    assert.match(prompt, /Call request_approval/);
+    assert.match(prompt, /exactly the same call once/);
+    assert.match(prompt, /In a scheduled automation nobody can answer/);
+    assert.match(prompt, /Be brief\./);
+  }
+  for (const prompt of prompts({ text: 'Be brief.', askBeforeDo: false })) {
+    assert.doesNotMatch(prompt, /Ask-before-do/);
+    assert.match(prompt, /Be brief\./);
+  }
+  // Plain strings keep working, and an empty section stays empty.
+  assert.equal(inference.userInstructionSection('Bot', ''), '');
+  assert.equal(inference.userInstructionSection('Bot', { text: '', askBeforeDo: false }), '');
+  assert.doesNotMatch(inference.userInstructionSection('Bot', 'Be brief.'), /Ask-before-do/);
+});
+
+test('ask-before-do defaults on, survives saving instructions, and is wired to every prompt path', async () => {
+  const server = await readFile(new URL('./server.js', import.meta.url), 'utf8');
+  assert.match(server, /askBeforeDo: input\.askBeforeDo !== false/);
+  const route = server.slice(server.indexOf("app.post('/api/settings/instructions'"), server.indexOf('// The harness owns provider login'));
+  assert.match(route, /askBeforeDo: instructionSettingsForUser\(settings, owner\)\.askBeforeDo/);
+  assert.match(server, /app\.post\('\/api\/settings\/ask-before-do'/);
+  assert.match(server, /const globalInstructions = promptInstructions\(isGatewayAgent/);
+  assert.match(server, /globalInstructionsForBot: \(bot\) => promptInstructions\(ownerOf\(bot\)\)\.bot/);
+  assert.match(server, /globalInstructions: \{ askBeforeDo: currentInstructionSettings\(owner\)\.askBeforeDo \}/);
+  assert.doesNotMatch(server, /globalInstructions: '',/);
+});
