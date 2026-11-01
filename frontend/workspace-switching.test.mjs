@@ -202,6 +202,9 @@ test('startup and workspace switching keep credentials behind a dedicated loadin
   assert.ok(loadingIndex >= 0 && loadingIndex < loginIndex, 'loading overlay is the first painted gate');
   assert.match(html, /id="appLoadingOverlay"[\s\S]*assets\/favicon\.svg[\s\S]*<span>Loading<\/span>/);
   assert.match(styles, /\.app-loading-overlay\{[^}]*z-index:10000;[^}]*display:flex;/);
+  // A fading wall would outlast the loading screen's fade and show sign-in
+  // to a signed-in user on every full page load.
+  assert.doesNotMatch(styles, /\.login-wall\{[^}]*transition:/);
   assert.match(source, /function setAppLoading\(loading\)/);
 
   const showStart = source.indexOf('function showApp(email');
