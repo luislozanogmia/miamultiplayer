@@ -25,6 +25,13 @@ function noUserMessage(summary) {
   return `BLOCKED by ask-before-do, nothing ran: ${summary}. Nobody can approve this here. Report it as waiting for the user.`;
 }
 
+// The approval as chat stores it. The action itself appears only in verbose
+// output, so a command and anything in it stays out of a concise chat.
+function approvalCard(summary, chatOutput) {
+  if (chatOutput !== 'verbose') return { text: 'Do you approve?' };
+  return { text: `Do you approve?\n\n${summary}`, summary };
+}
+
 const ANSWERS = {
   approved: 'Approved once. Run exactly the same call again now. Any other call needs its own approval.',
   declined: 'The user said no. Nothing ran. Do not try again or reach the same result another way unless they ask.',
@@ -162,4 +169,4 @@ async function createAskBeforeDoGate(options) {
   };
 }
 
-module.exports = { createAskBeforeDoGate, createGateState };
+module.exports = { approvalCard, createAskBeforeDoGate, createGateState };

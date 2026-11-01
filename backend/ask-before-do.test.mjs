@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { createAskBeforeDoGate, createGateState } = require('./ask-before-do.js');
+const { approvalCard, createAskBeforeDoGate, createGateState } = require('./ask-before-do.js');
 const pluginDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'hermes-plugins', 'mia-ask-before-do');
 
 function bound({ enabled = true, answerWindowMs } = {}) {
@@ -184,4 +184,10 @@ test('the gate answers only with its token', async (t) => {
   assert.equal((await post({})).status, 403);
   assert.equal((await post({ Authorization: 'Bearer wrong' })).status, 403);
   assert.deepEqual(await (await post({ Authorization: `Bearer ${gate.token}` })).json(), { allow: true });
+});
+
+test('the approval shows the action only in verbose output', () => {
+  assert.deepEqual(approvalCard('rm a.txt', 'concise'), { text: 'Do you approve?' });
+  assert.deepEqual(approvalCard('rm a.txt', undefined), { text: 'Do you approve?' });
+  assert.deepEqual(approvalCard('rm a.txt', 'verbose'), { text: 'Do you approve?\n\nrm a.txt', summary: 'rm a.txt' });
 });

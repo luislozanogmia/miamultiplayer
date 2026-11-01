@@ -40,6 +40,7 @@ process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = String(process.env.MIAOS_AUTOMATION_
 const { EFFECTIVE_RELEASE_PROFILE, MIAOS_AGENT_SEARCH_ONLY } = require('./release-profile');
 const { DEMO_FRAME_CSP, isDemoFramePath } = require('./demo-frame-policy');
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
+const { approvalCard } = require('./ask-before-do');
 const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const browserSuggestions = require('./browser-suggestions');
@@ -7413,10 +7414,11 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     conversationId: conversation.id,
     // No dispatchId: a request is not the reply, so the task keeps running.
     present: async ({ id, summary, requester }) => {
-      const metadata = { runtime: 'hermes', agentName: agent.name, askBeforeDo: { id, summary, requester, status: 'pending' } };
+      const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput);
+      const metadata = { runtime: 'hermes', agentName: agent.name, askBeforeDo: { id, summary: card.summary, requester, status: 'pending' } };
       const created = await createNativeDispatchReplyEvent(dispatch, trigger, {
         type: replyEventType,
-        content: { text: `Do you approve?\n\n${summary}` },
+        content: { text: card.text },
         parentEventId,
         clientIdempotencyKey: `ask-before-do-${id}`,
         metadata,
