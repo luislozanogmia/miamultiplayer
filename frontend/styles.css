@@ -242,7 +242,7 @@
   /* Workspace switch: the shell shows at once and stays inert until the
      session is confirmed; the last sidebar of the new workspace shows dimmed
      until its live list arrives. */
-  html.workspace-handoff .app-loading-overlay,html.workspace-handoff .login-wall{display:none;}
+  html.workspace-handoff .app-loading-overlay{display:none;}
   html.workspace-handoff .app-shell{display:flex;pointer-events:none;}
   /* Workspace switch: grey bars hold the sidebar list and the chat until
      their data arrives, then the content comes into focus. */
@@ -285,8 +285,8 @@
     position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999;
     background:var(--paper);
   }
-  /* No fade: the loading screen covers the wall when it hides, and a fade
-     would outlast the loading screen's and show sign-in to a signed-in user. */
+  /* Starts hidden in index.html; only the signed-out paths show it. No fade:
+     it must never show through to someone who has just signed in. */
   .login-wall.hidden{opacity:0;visibility:hidden;pointer-events:none;}
   .login-split{min-height:100%;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,0.85fr);}
   .login-main{display:flex;flex-direction:column;padding:38px 44px;min-width:0;}

@@ -673,8 +673,8 @@
   function showClerkSignIn(){
     var nativeAuth=AUTH_CONFIG && desktopClerkAuth();
     if(!nativeAuth)return showResolvedClerkSignIn();
-    // Keep the credential wall covered until the saved native session has
-    // resolved. Workspace/provider reloads are not interactive sign-ins.
+    // Keep the loading screen up until the saved native session has resolved.
+    // Workspace/provider reloads are not interactive sign-ins.
     setAppLoading(true);
     return nativeAuth.status().then(window.MiaClerkDesktop.unwrap).then(function(state){
       if(state && state.status==='active')return finishClerkLogin().then(function(restored){if(!restored)return showResolvedClerkSignIn();});
