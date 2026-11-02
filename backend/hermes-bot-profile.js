@@ -455,6 +455,47 @@ function provisionHermesGoogleAgentProfile({
   });
 }
 
+// Personal agents (see private-agents.js) each get their own pair of Hermes
+// profiles, so memory, sessions and skills are separate from Mia's and from
+// every other agent. The names are derived from the agent id and can never
+// equal one of the four fixed profiles above.
+const PRIVATE_AGENT_ID_PATTERN = /^agent_[a-f0-9]{24}$/;
+const PRIVATE_AGENT_PROFILE_PATTERN = /^miaos-agent-[a-f0-9]{24}(-google)?$/;
+
+function privateAgentProfileName(agentId, google = false) {
+  if (!PRIVATE_AGENT_ID_PATTERN.test(String(agentId || ''))) {
+    throw new Error('invalid personal agent id');
+  }
+  return 'miaos-' + String(agentId).replace(/_/g, '-') + (google ? '-google' : '');
+}
+
+// Same posture as Mia's own agent profiles (full tools, the shared guarded
+// workspace terminal, background review on) except that a personal agent does
+// not edit bots, so the instruction-file guard stays on. It reads the same
+// toolset lists as Mia; platform_toolsets is deliberately not set.
+function provisionHermesPrivateAgentProfile({
+  agentId,
+  google = false,
+  profilesRoot = path.join(hermesHome(), 'profiles'),
+  searchOnly = MIAOS_AGENT_SEARCH_ONLY,
+  workspaceDir,
+} = {}) {
+  if (typeof searchOnly !== 'boolean') throw new Error('Mia agent profile searchOnly must be a boolean');
+  if (MIAOS_AGENT_SEARCH_ONLY && !searchOnly) {
+    throw new Error(`Mia release profile ${MIAOS_RELEASE_PROFILE} cannot disable search-only agent confinement`);
+  }
+  return provisionRuntimeProfile({
+    profilesRoot,
+    profile: privateAgentProfileName(agentId, google),
+    toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : FULL_AGENT_TOOLSETS,
+    maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
+    terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
+    googleWorkspace: google === true,
+    backgroundReview: backgroundReviewEnabledForGateway(),
+    editsBots: false,
+  });
+}
+
 function provisionHermesRuntimeProfiles(options = {}) {
   const agent = provisionHermesAgentProfile(options);
   const googleAgent = provisionHermesGoogleAgentProfile(options);
@@ -495,4 +536,7 @@ module.exports = {
   provisionHermesBotProfile,
   provisionHermesGoogleBotProfile,
   provisionHermesRuntimeProfiles,
+  PRIVATE_AGENT_PROFILE_PATTERN,
+  privateAgentProfileName,
+  provisionHermesPrivateAgentProfile,
 };

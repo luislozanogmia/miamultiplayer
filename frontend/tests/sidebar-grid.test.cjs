@@ -17,5 +17,5 @@ test('section titles are row-sized and the chevron shows on hover or when folded
   assert.ok(css.includes('.chat-recents-head:hover > .chat-section-toggle,.chat-recents-head > .chat-section-toggle:focus-visible,.chat-recents-head > .chat-section-toggle[aria-expanded="false"]{opacity:1;}'));
   const avatar=Number(rule('body.styled-skin .chat-row-mark.tile').match(/width:(\d+)px/)[1]);
   assert.equal(Number(rule('.sidebar-upcoming-mark').match(/width:(\d+)px/)[1]),avatar);
-  assert.match(html,/class="sidebar-upcoming-row"[^>]*><span class="sidebar-upcoming-mark"[\s\S]*?<span class="row-label">New agent<\/span><span class="row-preview">Coming soon<\/span>/);
+  assert.match(html,/class="sidebar-upcoming-row"[^>]*><span class="sidebar-upcoming-mark"[\s\S]*?<span class="row-label">New agent<\/span><span class="row-preview">Your own private agent<\/span>/);
 });

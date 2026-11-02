@@ -6185,7 +6185,7 @@
     return {
       id: event.id,
       sender: event.senderId || 'unknown',
-      nativeAgentName: event.senderId === 'gateway' ? 'Mia'
+      nativeAgentName: event.senderId === 'gateway' ? ((window.miaPrivateAgents && window.miaPrivateAgents.nameForConversation(chatWs.nativeConversations, event.conversationId)) || 'Mia')
         : (event.metadata && typeof event.metadata.botName === 'string' ? event.metadata.botName
           : (event.metadata && typeof event.metadata.agentName === 'string' ? event.metadata.agentName : null)),
       body: body,
@@ -6505,7 +6505,8 @@
     chatWs.rooms.home = rooms.filter(function(room){ return room.kind === 'home'; })[0] || null;
     chatWs.rooms.departments = rooms.filter(function(room){ return room.kind === 'department'; });
     chatWs.rooms.dms = rooms.filter(function(room){ return room.kind === 'dm' || room.kind === 'group'; });
-    var agentRooms = rooms.filter(function(room){ return room.kind === 'agent'; });
+    // A personal agent's chat is neither Mia nor a bot; its own sidebar list opens it.
+    var agentRooms = rooms.filter(function(room){ return room.kind === 'agent' && !(typeof window !== 'undefined' && window.miaPrivateAgents && window.miaPrivateAgents.isConversation(room.nativeConversation)); });
     var seenBotRooms = {};
     // A bot's sidebar row is its main chat; chats started with "New
     // conversation" live in History and only stand in when nothing else exists.
@@ -15342,6 +15343,7 @@
     if(botsWrap) botsWrap.innerHTML = botEntries.length ? botEntries.map(conversationRowHtml).join('') : '<div class="chat-sidebar-empty">No bots yet</div>';
     allWrap.innerHTML = dmRowsHtml + hiddenHtml;
     renderChatStarterBots();
+    if(typeof window !== 'undefined' && window.miaPrivateAgents) window.miaPrivateAgents.sync();
     [pinnedWrap, allWrap, botsWrap].filter(Boolean).forEach(function(wrap){
       var homeRow = el('.chat-recent-row[data-chat-kind="home"]', wrap);
       if(homeRow) homeRow.addEventListener('click', function(){ clearChatBack(); clearChatActive(); homeRow.classList.add('active'); selectHomeRoom(); });
@@ -15873,6 +15875,44 @@
     if(input) input.addEventListener('keydown', function(event){ if(event.key === 'Enter') createNamedChannel(); });
   })();
 
+  // Personal agents (private-agents-ui.js): the sidebar list and its actions.
+  if(window.miaPrivateAgents) window.miaPrivateAgents.init({
+    container: function(){ return el('#chatPrivateAgents'); },
+    api: api, esc: esc, toast: showBenchToast, confirm: appConfirm,
+    prompt: appPrompt,
+    avatar: function(name, id){ return agentAvatarHtml(name, id, 40, null, null, true); },
+    hubWorkspace: hubWorkspace,
+    currentUser: function(){ return currentUser; },
+    activeRoomId: function(){ return chatWs.activeRoomId; },
+    conversations: function(){ return chatWs.nativeConversations || []; },
+    loadChatRoom: loadChatRoom,
+    adopt: function(conversation){
+      if(!(chatWs.nativeConversations || []).some(function(item){ return item.id === conversation.id; })) chatWs.nativeConversations.push(conversation);
+      applyNativeConversationList(chatWs.nativeConversations);
+      renderChatSidebar();
+    },
+    renamed: function(agentId, name){
+      (chatWs.nativeConversations || []).forEach(function(item){
+        if(window.miaPrivateAgents.agentIdOf(item) === agentId) item.name = name;
+      });
+      if(chatWs.activeKind === 'agent' && window.miaPrivateAgents.agentIdOf((chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0]) === agentId){
+        chatWs.activeLabel = name;
+        renderChatHeaderBar();
+      }
+    },
+    removed: function(agentId){
+      var wasActive = false;
+      chatWs.nativeConversations = (chatWs.nativeConversations || []).filter(function(item){
+        var mine = window.miaPrivateAgents.agentIdOf(item) === agentId;
+        if(mine && item.id === chatWs.activeRoomId) wasActive = true;
+        return !mine;
+      });
+      applyNativeConversationList(chatWs.nativeConversations);
+      renderChatSidebar();
+      if(wasActive && chatWs.gatewayAgent) selectAgentRoom(chatWs.gatewayAgent, null);
+    }
+  });
+
   function openHarnessAgentSetup(){
     loadHarnessSettings(false).then(function(settings){ openHarnessOnboarding(settings); });
   }
@@ -15950,7 +15990,7 @@
     if(artifactsPage.open && action !== 'artifacts' && action !== 'new-bot' && action !== 'bot-store') closeArtifactsPage();
     if(action === 'new-chat') openDmCompose();
     else if(action === 'new-bot') startAgentSetupChat();
-    else if(action === 'new-agent') openHarnessAgentSetup();
+    else if(action === 'new-agent'){ if(window.miaPrivateAgents) window.miaPrivateAgents.create(); }
     else if(action === 'new-channel') openNewChannelFlow();
     else if(action === 'bot-store') openBotStorePane();
     else if(action === 'connected-apps') openPluginPane();
