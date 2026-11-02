@@ -90,6 +90,24 @@ function saveCredentials(directory, credentials) {
   }
 }
 
+const CALLBACK_PAGE_CSS = `:root{color-scheme:light dark;--bg:#faf9f7;--card:#fff;--ink:#141414;--muted:#6b6a67;--line:#e9e7e2}
+@media (prefers-color-scheme:dark){:root{--bg:#141414;--card:#1e1e1d;--ink:#f5f4f1;--muted:#a3a29e;--line:#32322f}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{width:100%;max-width:420px;padding:36px 32px;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:16px}
+svg{display:block;margin:0 auto 18px}
+h1{margin:0 0 8px;font-size:22px;line-height:1.25;font-weight:650;letter-spacing:-.015em}
+p{margin:0;color:var(--muted)}`;
+const CALLBACK_PAGE_CSP = `default-src 'none'; style-src 'sha256-${crypto.createHash('sha256').update(CALLBACK_PAGE_CSS).digest('base64')}'`;
+const CALLBACK_ICON_OK = '<svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="22" fill="#16a34a"/><path d="M13 22.5l6.2 6.2L31 16.8" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CALLBACK_ICON_FAILED = '<svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="22" fill="#c2410c"/><path d="M22 12.5v12" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/><circle cx="22" cy="31" r="2" fill="#fff"/></svg>';
+
+// Every heading and message is a fixed string from this file; nothing from the
+// request reaches the page, so it needs no escaping and no script.
+function callbackPage(status, heading, text) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${heading} \u00b7 Mia</title><style>${CALLBACK_PAGE_CSS}</style></head><body><main>${status === 200 ? CALLBACK_ICON_OK : CALLBACK_ICON_FAILED}<h1>${heading}</h1><p>${text}</p></main></body></html>`;
+}
+
 async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = fetch,
   timeoutMs = 5 * 60 * 1000, client, directory, persist,
   filePicker = false, onPicked, log = message => console.error(message) } = {}) {
@@ -126,10 +144,10 @@ async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = f
   server.requestTimeout = 10000;
   server.headersTimeout = 10000;
   server.on('request', async (req, res) => {
-    const reply = (status, text) => {
-      res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store',
-        'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'", 'Connection': 'close' });
-      res.end(text);
+    const reply = (status, text, heading) => {
+      res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+        'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': CALLBACK_PAGE_CSP, 'Connection': 'close' });
+      res.end(callbackPage(status, heading || 'Google sign-in didn\u2019t finish', text));
     };
     let url;
     try { url = new URL(req.url, redirect); } catch (_) { reply(400, 'Invalid sign-in response.'); return; }
@@ -190,7 +208,7 @@ async function startNativeGoogleLogin({ env = process.env, scopes, fetchImpl = f
         child.result = { state: 'connected' };
       }
       res.on('finish', finish);
-      reply(200, filePicker ? 'File access verified. You can close this tab and return to Mia.' : 'Google is connected. You can close this tab and return to Mia.');
+      reply(200, 'You can close this tab and return to Mia.', filePicker ? 'File access verified' : 'Google is connected');
     } catch (_) {
       if (!stopped) {
         try { log(`[google-native-login] failed stage=${failureStage}${failureReason ? ` reason=${failureReason}` : ''}`); }

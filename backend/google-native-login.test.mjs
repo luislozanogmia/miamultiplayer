@@ -48,7 +48,16 @@ test('native callback binds state and PKCE, writes once, and returns no credenti
   assert.equal((await fetch(duplicate)).status, 400);
   const result = await fetch(callback(login));
   assert.equal(result.status, 200);
-  assert.doesNotMatch(await result.text(), /fixture-access|fixture-refresh/);
+  const page = await result.text();
+  assert.doesNotMatch(page, /fixture-access|fixture-refresh|fixture-code/);
+  assert.match(result.headers.get('content-type'), /^text\/html/);
+  assert.match(page, /<h1>Google is connected<\/h1>/);
+  // The page shows a result and nothing else: no script, and its one style block is pinned by hash.
+  assert.doesNotMatch(page, /<script|<a |<form|<img/);
+  const csp = result.headers.get('content-security-policy');
+  assert.match(csp, /^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/]+='$/);
+  const css = page.match(/<style>([\s\S]*)<\/style>/)[1];
+  assert.ok(csp.includes(crypto.createHash('sha256').update(css).digest('base64')));
   assert.equal(saves.length, 1);
   assert.equal(saves[0][1].refresh_token, 'fixture-refresh');
   const verifier = exchanges[0].options.body.get('code_verifier');

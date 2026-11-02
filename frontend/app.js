@@ -17242,6 +17242,7 @@
         actionButton + '</div>' +
         '<section class="hermes-connector-setup-panel" id="' + esc(panelId) + '" tabindex="-1"' + (googleAccountPanelOpen ? '' : ' hidden') + '>' +
         (connected ? '<p>Use the Drive icon in chat to attach files.</p>' : '<p>' + esc(body) + '</p>') +
+        (pending ? '<p>Google may say it hasn’t verified Mia yet, because its review of Mia is still in progress. To continue, choose Advanced, then go to Mia.</p>' : '') +
         (actions ? '<div class="hermes-connector-setup-actions">' + actions + '</div>' : '') +
         '<p class="hermes-connector-setup-feedback" data-google-account-feedback aria-live="polite">' + esc(googleAccountFeedback) + '</p></section></article>';
     }
