@@ -299,3 +299,25 @@ test('shared channel bot replies get the Solo display cleaning', async () => {
   const security = (await import('./chat-security.js')).default;
   assert.equal(security.sanitizeBotMessage('<think>private</think>The answer.'), 'The answer.');
 });
+
+test('a short message in the narrow pane never offers Show more, even measured before layout', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('  function syncChatCompactPreviewVisibility(');
+  const sync = new Function('els', `${app.slice(start, app.indexOf('  function wireChatExpandableMessages(', start))}; return syncChatCompactPreviewVisibility;`);
+  const run = (preview) => {
+    const toggle = { hidden: true, setAttribute() {} };
+    const classes = new Set();
+    Object.assign(preview, {
+      classList: { toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)), contains: (name) => classes.has(name) },
+      hasAttribute: () => false,
+      closest: () => ({ querySelector: () => toggle }),
+    });
+    sync(() => [preview])({});
+    return { toggle, classes };
+  };
+  assert.equal(run({ clientHeight: 0, scrollHeight: 0 }).toggle.hidden, true, 'an unmeasured preview is not clipped, so it needs no toggle');
+  assert.equal(run({ clientHeight: 20, scrollHeight: 20 }).toggle.hidden, true, 'one line fits');
+  assert.equal(run({ clientHeight: 60, scrollHeight: 200 }).toggle.hidden, false, 'a long message is clipped and offers the toggle');
+  const html = app.slice(app.indexOf('  function chatExpandableMessageHtml('), app.indexOf('  function syncChatCompactPreviewVisibility('));
+  assert.match(html, /aria-expanded="false"' \+ \(truncated \? '' : ' hidden'\) \+ '>'/, 'the toggle starts hidden until a measurement asks for it');
+});

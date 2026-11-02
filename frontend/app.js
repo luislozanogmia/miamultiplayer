@@ -10625,7 +10625,7 @@
     var toggleAttr = isPreReasoning ? ' data-pre-reasoning-toggle' : '';
     var labelAttr = isPreReasoning ? ' data-pre-reasoning-label' : '';
     var toggle = hasMore
-      ? '<button type="button" class="chat-expandable-toggle' + toggleClass + '" data-chat-expand-toggle' + toggleAttr + ' aria-expanded="false">' +
+      ? '<button type="button" class="chat-expandable-toggle' + toggleClass + '" data-chat-expand-toggle' + toggleAttr + ' aria-expanded="false"' + (truncated ? '' : ' hidden') + '>' +
           '<span data-chat-expand-label' + labelAttr + '>Show more</span><span class="chat-expandable-chevron chat-pre-reasoning-chevron" aria-hidden="true"></span>' +
         '</button>'
       : '';
@@ -10647,14 +10647,10 @@
         toggle.setAttribute('aria-hidden', 'false');
         return;
       }
-      // A hidden or not-yet-laid-out panel measures 0×0, which looks like
-      // "fits" and would hide the toggle on a message that is actually cut.
-      // Leave the toggle visible until a real measurement says otherwise.
-      if(!preview.clientHeight){
-        toggle.hidden = false;
-        toggle.setAttribute('aria-hidden', 'false');
-        return;
-      }
+      // A hidden, not-yet-laid-out or expanded preview measures 0×0, which says
+      // nothing. Keep the toggle as it is: a preview is only clipped after a
+      // real measurement, so an unmeasured short message shows whole, no toggle.
+      if(!preview.clientHeight) return;
       var fits = preview.scrollHeight <= preview.clientHeight + 1;
       preview.classList.toggle('chat-compact-preview-overflow', !fits);
       toggle.hidden = fits;
