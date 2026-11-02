@@ -57,6 +57,18 @@ const HUB_FILE_AREA = /^\/v1\/teams\/[a-f0-9]{32}\/(?:files|file-spaces)(?:\/|$)
 const HUB_WORKFLOW_ROUTE = new RegExp(FILE_BASE + '/workflow(?:s|-runs|-steps|-approvals)(?:[/?]|$)');
 const HUB_WORKFLOW_WRITE = new RegExp(FILE_BASE + '/workflows(?:/' + FILE_ID + '/versions)?$');
 const HUB_WORKFLOW_QUERY = new RegExp(FILE_BASE + '/(?:workflow-runs\\?(?:state=(?:active|recent|all)(?:&workflow=' + FILE_ID + ')?|workflow=' + FILE_ID + ')|workflow-approvals\\?state=(?:pending|decided|all))$');
+// Team mini-apps: the only routes under a team's /apps. The catalog holds up to
+// 200 apps, so it takes the same 2 MiB response limit as the workflow lists.
+const APP_VERSION = '[1-9][0-9]{0,8}';
+const APP_ROUTES = [
+  ['GET', new RegExp(FILE_BASE + '/apps$')],
+  ['POST', new RegExp(FILE_BASE + '/apps$')],
+  ['DELETE', new RegExp(FILE_BASE + '/apps/' + FILE_ID + '$')],
+  ['POST', new RegExp(FILE_BASE + '/apps/' + FILE_ID + '/versions$')],
+  ['POST', new RegExp(FILE_BASE + '/apps/' + FILE_ID + '/versions/' + APP_VERSION + '/(?:approve|reject)$')],
+];
+const HUB_APP_AREA = /^\/v1\/teams\/[a-f0-9]{32}\/apps(?:\/|$)/;
+function hubAppRoute(method, route) { return APP_ROUTES.some(([verb, pattern]) => verb === method && pattern.test(route)); }
 // Returns the route's name, or null when it is not an allowed team file route.
 function hubFileRoute(method, route) {
   const found = FILE_ROUTES.find(([verb, , pattern]) => verb === method && pattern.test(route));
@@ -68,7 +80,7 @@ function hubRouteLimits(method, route) {
     // Finishing a 500 MB upload lists up to 63 parts (an ETag and a hash each).
     request: method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000
       : file === 'complete' ? 32768 : method === 'POST' && HUB_WORKFLOW_WRITE.test(route) ? 16384 : 8192,
-    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : HUB_WORKFLOW_ROUTE.test(route) ? 2097152 : 131072,
+    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : HUB_WORKFLOW_ROUTE.test(route) || HUB_APP_AREA.test(route) ? 2097152 : 131072,
     // The Hub joins S3's multipart parts while it completes, which can take a while.
     timeout: method === 'GET' && HUB_FEED.test(route) ? 30000 : HUB_UPLOAD.test(route) || HUB_DOWNLOAD.test(route) || file === 'complete' ? 30000 : 15000,
   };
@@ -87,6 +99,7 @@ function createHubClient({ dataDirectory, fetcher = fetch }) {
       return res.status(404).json({ error: 'not_found' });
     }
     if (HUB_FILE_AREA.test(route) && !hubFileRoute(req.method, route)) return res.status(404).json({ error: 'not_found' });
+    if (HUB_APP_AREA.test(route) && !hubAppRoute(req.method, route)) return res.status(404).json({ error: 'not_found' });
     const authorization = req.headers.authorization;
     if (typeof authorization !== 'string' || !/^Bearer [A-Za-z0-9_.-]+$/.test(authorization) || authorization.length > 16384) {
       return res.status(401).json({ error: 'sign_in_required' });
@@ -108,4 +121,4 @@ function createHubClient({ dataDirectory, fetcher = fetch }) {
     } catch { return res.status(503).json({ error: 'hub_unavailable' }); }
   };
 }
-module.exports = { createHubClient, hubEndpoint, hubRouteLimits, hubFileRoute };
+module.exports = { createHubClient, hubEndpoint, hubRouteLimits, hubFileRoute, hubAppRoute };

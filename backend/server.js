@@ -1788,6 +1788,17 @@ app.delete('/api/artifacts/links/:id', requireAuth, (req, res) => {
   res.status(204).end();
 });
 
+// Apps: local folders and links, and the bundles teammates publish.
+const teamApps = require('./team-apps');
+const TEAM_APPS_DIR = process.env.MIAOS_TEAM_APPS_DIR || path.join(ARTIFACTS_DATA_DIR, 'team-apps');
+teamApps.registerAppRoutes(app, {
+  express, requireAuth,
+  workspaceDir: () => miaosWorkspaceDir(),
+  dataDir: () => ARTIFACTS_DATA_DIR,
+  appsDir: () => TEAM_APPS_DIR,
+  workspaceId: workspaceIdFromRequest,
+});
+
 app.post('/api/dev/clean-slate/confirmation', requireLocalDevelopment, requireAuth, (req, res) => {
   if (workspaceIdFromRequest(req) !== 'solo') {
     return res.status(409).json({ error: 'clean_slate_requires_solo', message: 'Switch to Solo before requesting a clean-slate confirmation.' });
@@ -2023,6 +2034,7 @@ function wipeMiaDataForEverything({ keepEmail, keepSessionToken }) {
   const directories = {
     attachments: removeDirectoryContents(NATIVE_ATTACHMENT_DIR, failures),
     workspaceArtifacts: removeDirectoryContents(WORKSPACE_ARTIFACT_DIR, failures),
+    teamApps: removeDirectoryContents(TEAM_APPS_DIR, failures),
     automationArtifacts: removeMarkedBotWorkspaces(process.env.MIAOS_AUTOMATION_ARTIFACT_DIR, failures),
   };
   return { conversations, attachments, directories, failures };
