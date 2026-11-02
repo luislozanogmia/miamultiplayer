@@ -29,6 +29,7 @@ const {
 const {
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+  PRIVATE_AGENT_PROFILE_PATTERN,
   MIAOS_BOT_HERMES_PROFILE,
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   FULL_AGENT_TOOLSETS,
@@ -872,8 +873,23 @@ function runInference(prompt, options) {
 // A persistent session runs under Mia's agent profiles, or under the bot
 // profiles for a bot's own chat (botWorker), with the same vision fallback a
 // one-shot bot turn gets.
+// A personal agent runs under its own profile. Only a name that matches the
+// reserved pattern AND is registered is accepted; everything else keeps the
+// fixed Mia/bot mapping below, so Mia's resolution is unchanged.
+let privateAgentProfileValidator = null;
+function setPrivateAgentProfileValidator(validator) {
+  privateAgentProfileValidator = typeof validator === 'function' ? validator : null;
+}
+
 function persistentSessionOptions(options) {
   if (options && options.botWorker === true) return standaloneGatewayOptions(options);
+  if (options && typeof options.profile === 'string' && PRIVATE_AGENT_PROFILE_PATTERN.test(options.profile)) {
+    if (!privateAgentProfileValidator || !privateAgentProfileValidator(options.profile)) {
+      // Fail closed: never fall back to Mia's profile for an agent's name.
+      throw new Error('Personal agent profile is not registered.');
+    }
+    return { ...options, profile: options.profile };
+  }
   const profile = options && options.profile === MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     : MIAOS_AGENT_HERMES_PROFILE;
@@ -978,6 +994,7 @@ async function startHermesGatewayRuntime() {
 }
 
 module.exports = {
+  setPrivateAgentProfileValidator,
   getHermesGatewayClient,
   buildContext,
   buildBotContext,

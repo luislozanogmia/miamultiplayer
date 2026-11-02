@@ -19,6 +19,9 @@ function conversationMetadata(type, metadata) {
   const result = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? { ...metadata }
     : {};
+  // Which personal agent a chat belongs to is decided by the server alone; a
+  // client can never attach one (that would let a chat borrow another profile).
+  if (result.privateAgentId !== undefined) invalidInput('privateAgentId is set by the server');
   if (result.teamWorkspace !== undefined) {
     if (type !== 'bot' || typeof result.teamWorkspace !== 'string' || !TEAM_WORKSPACE_PATTERN.test(result.teamWorkspace)) {
       invalidInput('teamWorkspace must name a team workspace on a bot conversation');
@@ -255,11 +258,16 @@ function createConversationService({ repository, authorization, realtime = null,
     // clean model session, while every older chat stays in History.
     const miaSource = Boolean(source && source.type === 'agent' && sourceMetadata.agentId === 'gateway');
     const botSource = Boolean(source && source.type === 'bot' && typeof sourceMetadata.botId === 'string' && sourceMetadata.botId.trim());
-    if (!miaSource && !botSource) {
+    // A personal agent's chat is 'agent'-typed with privateAgentId and no agentId.
+    const privateSource = Boolean(source && source.type === 'agent' && !miaSource
+      && typeof sourceMetadata.privateAgentId === 'string' && sourceMetadata.privateAgentId);
+    if (!miaSource && !botSource && !privateSource) {
       invalidInput('a bot or Mia conversation is required');
     }
     const metadata = {
-      ...(miaSource ? { agentId: 'gateway' } : { botId: sourceMetadata.botId.trim() }),
+      ...(miaSource ? { agentId: 'gateway' }
+        : privateSource ? { privateAgentId: sourceMetadata.privateAgentId }
+          : { botId: sourceMetadata.botId.trim() }),
       ...(Array.isArray(sourceMetadata.departments) ? { departments: sourceMetadata.departments.slice() } : {}),
       ...(typeof sourceMetadata.workspaceId === 'string' && sourceMetadata.workspaceId.trim()
         ? { workspaceId: sourceMetadata.workspaceId.trim() }
@@ -277,7 +285,7 @@ function createConversationService({ repository, authorization, realtime = null,
     };
     const conversation = repository.createConversation({
       companyId: normalizedCompanyId,
-      type: miaSource ? 'agent' : 'bot',
+      type: miaSource || privateSource ? 'agent' : 'bot',
       name: source.name,
       createdBy: owner.principalId,
       createdAt,

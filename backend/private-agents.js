@@ -13,6 +13,7 @@
 
 const crypto = require('crypto');
 const db = require('./db');
+const { PRIVATE_AGENT_PROFILE_PATTERN, privateAgentProfileName } = require('./hermes-bot-profile');
 
 const TABLE = 'agents';
 const ID_PATTERN = /^agent_[a-f0-9]{24}$/;
@@ -43,8 +44,8 @@ function isPrivateAgentId(id) {
 
 // Hermes profile name reserved for this agent's own memory and sessions.
 // Derived from the id, so it can never collide with Mia's or a bot profile.
-function hermesProfileFor(id) {
-  return 'miaos-' + String(id).replace(/_/g, '-');
+function hermesProfileFor(id, google = false) {
+  return privateAgentProfileName(id, google);
 }
 
 function publicView(record) {
@@ -106,6 +107,32 @@ function createPrivateAgentStore(conn) {
     },
     get(owner, id) {
       return publicView(requireOwned(owner, id));
+    },
+    // Which personal agent a conversation belongs to, for the requesting owner
+    // only. Returns null for a conversation with no privateAgentId (Mia and
+    // bots follow their own paths untouched). Anything else that does not
+    // resolve to an agent this owner owns fails closed: it never falls back to
+    // Mia's profile.
+    resolveForConversation(owner, metadata) {
+      const claimed = metadata && typeof metadata === 'object' ? metadata.privateAgentId : undefined;
+      if (claimed === undefined) return null;
+      const record = typeof claimed === 'string' ? find(owner, claimed) : null;
+      if (!record) {
+        throw new PrivateAgentError(404, 'agent_unavailable', 'This personal agent is no longer available.');
+      }
+      return {
+        id: record.id,
+        name: record.name,
+        profile: hermesProfileFor(record.id),
+        googleProfile: hermesProfileFor(record.id, true),
+      };
+    },
+    // True when `profile` names a registered agent's profile (any owner). The
+    // inference layer uses this to accept only profiles that really exist.
+    hasProfile(profile) {
+      if (!PRIVATE_AGENT_PROFILE_PATTERN.test(String(profile || ''))) return false;
+      return db.loadAll(conn, TABLE).some((record) => record && record.kind === 'agent'
+        && (hermesProfileFor(record.id) === profile || hermesProfileFor(record.id, true) === profile));
     },
     // Internal view for the runtime (profile name); never sent to a client.
     profileFor(owner, id) {

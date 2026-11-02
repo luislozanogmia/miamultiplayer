@@ -42,7 +42,7 @@ const { DEMO_FRAME_CSP, isDemoFramePath } = require('./demo-frame-policy');
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
 const { approvalCard } = require('./ask-before-do');
 const { localDateString } = require('./local-date');
-const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
+const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured, provisionHermesPrivateAgentProfile } = require('./hermes-bot-profile');
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const browserSuggestions = require('./browser-suggestions');
 const nextStep = require('./next-step');
@@ -97,6 +97,7 @@ const {
   restartHermesGatewayRuntime,
   stopHermesGatewayRuntime,
   withStoppedHermesGateway,
+  setPrivateAgentProfileValidator,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
@@ -5865,9 +5866,27 @@ app.get('/api/agents', requireAuth, (req, res) => {
   res.status(200).json({ agents: agent ? [agent] : [] });
 });
 
-// Extra personal agents (registry only; chat is not wired yet).
-const privateAgentStore = require('./private-agents').createPrivateAgentStore(conn);
-require('./private-agent-routes').registerPrivateAgentRoutes(app, { store: privateAgentStore, requireAuth });
+// Extra personal agents: a private registry, a Hermes profile pair each, and a
+// chat that is a Mia-shaped conversation carrying metadata.privateAgentId.
+const privateAgents = require('./private-agents');
+const privateAgentStore = privateAgents.createPrivateAgentStore(conn);
+const privateAgentLifecycle = require('./private-agent-lifecycle').createPrivateAgentLifecycle({
+  store: privateAgentStore,
+  repository: nativeConversationRepository,
+  companyIdFor: (owner) => nativeCompanyId('solo', owner),
+  isSoloWorkspace: (req) => workspaceIdFromRequest(req) === 'solo',
+  profilesRoot: path.join(process.env.HERMES_HOME, 'profiles'),
+  provisionProfile: (options) => provisionHermesPrivateAgentProfile({
+    ...options,
+    ...(!EFFECTIVE_RELEASE_PROFILE.agentSearchOnly && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()
+      ? { workspaceDir: miaosWorkspaceDir() } : {}),
+  }),
+});
+require('./private-agent-routes').registerPrivateAgentRoutes(app, {
+  store: privateAgentStore, requireAuth, lifecycle: privateAgentLifecycle,
+});
+// Inference accepts a personal agent's profile only while it is registered.
+setPrivateAgentProfileValidator((profile) => privateAgentStore.hasProfile(profile));
 
 app.get('/api/agents/gateway', requireAuth, (req, res) => {
   const agent = privateGatewayAgent(req);
@@ -6452,6 +6471,22 @@ function allNativeConversationEvents({ companyId, conversationId, includeDeleted
   return events;
 }
 
+// The actor for a personal agent's turn: its own name and a short persona, no
+// bot roster, not a manager.
+function privateAgentActor(resolved, ownerEmail) {
+  return {
+    id: GATEWAY_AGENT_ID,
+    name: resolved.name,
+    department: resolved.name,
+    manager: false,
+    instructions:
+      `You are ${resolved.name}, a personal agent that runs on ${senderDisplayName(ownerEmail)}'s computer. ` +
+      `You keep your own memory and conversations, separate from Mia and from every bot, and you are private: ` +
+      `you are never shared with a team. You do not manage bots; if the user wants a bot created or changed, ` +
+      `tell them to ask Mia.`,
+  };
+}
+
 function nativeDispatchActor(dispatch, conversation, trigger) {
   if (dispatch.targetType === 'gateway') {
     const department = conversation.metadata && conversation.metadata.department;
@@ -6476,6 +6511,9 @@ function nativeReplyParentEventId(trigger) {
 
 function nativeMiaHandoffBots(conversation, reply) {
   if (!conversation || conversation.type === 'bot') return [];
+  // A personal agent does not manage bots: its replies never call one in or
+  // mirror the user's message into a bot's chat.
+  if (conversation.metadata && conversation.metadata.privateAgentId !== undefined) return [];
   const roster = db.loadAll(conn, 'bots')
     .filter((bot) => recordBelongsToCompany(bot, NATIVE_COMPANY_ID, conversation.companyId))
     .map((bot) => ({
@@ -6582,7 +6620,7 @@ function buildHermesTaskPrompt(agentForPrompt, transcript, message, senderLabel,
   return [basePrompt, appOwnedToolPolicy({ botWorker: true }), actionInstruction].filter(Boolean).join('\n\n');
 }
 
-function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstructions) {
+function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstructions, { editsBots = true } = {}) {
   // The legacy gateway session carried the persona and browser boundary for the
   // room, then received only the new user message on each turn. Native Mia
   // keeps that same shape: the durable native transcript is seeded once and
@@ -6596,7 +6634,7 @@ function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstr
     globalInstructions
   );
   const onboardingGuide = 'For a new user, help them get one useful thing done. Ask one relevant question at a time. If they ask to be shown around, briefly explain chat, connected apps, bots, and automations, then offer a small first task. Do not require a biography or invent a name from an email address. Respect the preferred name confirmed in the conversation.';
-  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext(), miaosBotInstructionsPromptContext()].filter(Boolean).join('\n\n');
+  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext(), editsBots ? miaosBotInstructionsPromptContext() : ''].filter(Boolean).join('\n\n');
 }
 
 // Mia edits bots in the background through their files. Driving the bot
@@ -7413,7 +7451,26 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     chatModelSelectionInferenceOptions(null, chatModelSelection)
   );
   const parentEventId = nativeReplyParentEventId(trigger);
-  const agent = nativeDispatchActor(dispatch, conversation, trigger);
+  // A conversation carrying metadata.privateAgentId belongs to one personal
+  // agent. It resolves for the requesting owner only; anything else fails closed
+  // with a visible message and never runs on Mia's profile.
+  let privateAgent = null;
+  if (conversation.metadata && conversation.metadata.privateAgentId !== undefined) {
+    try {
+      privateAgent = privateAgentStore.resolveForConversation(trigger.senderId, conversation.metadata);
+      privateAgentLifecycle.ensureProfiles(privateAgent.id);
+    } catch (error) {
+      console.error('personal agent unavailable', dispatch.id, error && error.message);
+      return createNativeDispatchReplyEvent(dispatch, trigger, {
+        type: 'agent_message',
+        content: { text: 'This personal agent is not available, so nothing was run. Open it again from the sidebar, or create a new one.' },
+        parentEventId: nativeReplyParentEventId(trigger),
+        clientIdempotencyKey: `native-dispatch-${dispatch.id}`,
+        metadata: { runtime: 'hermes', dispatchId: dispatch.id, status: 'failed', agentName: 'Agent' },
+      });
+    }
+  }
+  const agent = privateAgent ? privateAgentActor(privateAgent, trigger.senderId) : nativeDispatchActor(dispatch, conversation, trigger);
   const globalInstructions = promptInstructions(isGatewayAgent ? trigger.senderId : ownerOf(agent));
   // One scope per conversation and actor: a bot outside its own chat gets a new
   // Hermes session each turn, and the yes arrives on the next one.
@@ -7493,7 +7550,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     safeGoogleRefs,
   } = await turnWorkspaceContext(senderLabel, transcript, message, conversation, agent);
   const googleProfileAuthorized = connectionInventory.googleToolsEnabled;
-  const googleGatewayProfile = googleProfileAuthorized
+  const googleGatewayProfile = privateAgent
+    ? (googleProfileAuthorized ? privateAgent.googleProfile : privateAgent.profile)
+    : googleProfileAuthorized
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     : MIAOS_AGENT_HERMES_PROFILE;
   const googleGatewaySessionKey = googleGatewayProfile + ':' + connectionInventory.revision;
@@ -7664,7 +7723,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     }
   };
   if (dispatch.targetType === 'gateway') {
-    const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel, globalInstructions.agent);
+    const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel, globalInstructions.agent, { editsBots: !privateAgent });
     const ownsPrivateAgentConversation = conversation.type === 'agent'
       && String(conversation.createdBy || '').toLowerCase() === senderLabel;
     const gatewayMessage = [buildHermesGatewayTurnMessage(
@@ -7672,17 +7731,18 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       senderLabel,
       platformContext,
       safeGoogleRefs,
-      googleWorkspaceWriteAuthorized && googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+      googleWorkspaceWriteAuthorized && googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+        && !(privateAgent && googleProfileAuthorized),
       globalInstructions.agent
     ), nativeBrowserContextNote(trigger, {
       ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly,
     }),
     // Only Mia's own chat shows the bot setup card.
-    ownsPrivateAgentConversation && !slashCommand ? miaBotSetupActions.botSetupInstruction() : '',
+    ownsPrivateAgentConversation && !slashCommand && !privateAgent ? miaBotSetupActions.botSetupInstruction() : '',
     slashCommand ? '' : nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
-    ownsMiaChat = ownsPrivateAgentConversation && !slashCommand;
+    ownsMiaChat = ownsPrivateAgentConversation && !slashCommand && !privateAgent;
     if (slashCommand && !ownsPrivateAgentConversation) {
       return createNativeDispatchReplyEvent(dispatch, trigger, {
         type: replyEventType,
@@ -7699,7 +7759,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       storedSessionId: ownsPrivateAgentConversation && conversation.metadata
         && (conversation.metadata.hermesGatewayProfile
           ? conversation.metadata.hermesGatewayProfile === googleGatewaySessionKey
-          : googleGatewayProfile === MIAOS_AGENT_HERMES_PROFILE)
+          : (googleGatewayProfile === MIAOS_AGENT_HERMES_PROFILE || (privateAgent && !googleProfileAuthorized)))
         ? conversation.metadata.hermesGatewaySessionId
         : null,
       seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
@@ -8208,7 +8268,7 @@ app.use(
           console.error('Google account credential cleanup failed for deleted user', err.message);
         }
         const ownedAgents = db.loadAll(conn, 'bots').filter((agent) => ownerOf(agent) === owner);
-        privateAgentStore.removeAllFor(owner);
+        privateAgentLifecycle.removeAllFor(owner);
         const deletedAt = new Date().toISOString();
         for (const agent of ownedAgents) {
           for (const conversation of nativeBotConversations(agent, true)) {
