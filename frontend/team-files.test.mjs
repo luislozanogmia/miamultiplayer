@@ -414,6 +414,24 @@ test('cancelling releases the reservation', async () => {
   assert.equal(world.store.map.has(FILE), false);
 });
 
+test('cancelling while the Hub is still reserving releases the space once it answers', async () => {
+  const world = fakeWorld({ size: 1000 });
+  const reserve = world.client.reserve;
+  let answer;
+  world.client.reserve = body => new Promise(resolve => { answer = () => resolve(reserve(body)); });
+  const m = manager(world);
+  m.add([world.file]);
+  await wait(() => m.jobs()[0].state === 'reserving' && answer);
+  m.cancel(m.jobs()[0].id);
+  assert.equal(m.jobs()[0].state, 'cancelled');
+  answer();
+  await wait(() => world.removed.length > 0);
+  assert.deepEqual(world.removed, [FILE]);
+  assert.equal(m.jobs()[0].state, 'cancelled');
+  assert.equal(world.puts.length, 0);
+  assert.equal(world.store.map.has(FILE), false);
+});
+
 test('the local store survives bad data and remembers who added what', () => {
   const memory = new Map();
   const storage = { getItem: k => memory.get(k) ?? null, setItem: (k, v) => memory.set(k, v) };

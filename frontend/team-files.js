@@ -438,6 +438,11 @@
       // A team workflow's file belongs to one run's automation space.
       if(space.runId) body.runId = space.runId;
       var reply = await client.reserve(body);
+      // Cancelled while the Hub was answering: it has only now said what to release.
+      if(job.abort.signal.aborted){
+        client.remove(reply.fileId).catch(function(){});
+        throw fail('aborted');
+      }
       var count = partCount(job.sizeBytes);
       if(reply.partBytes !== PART_BYTES || reply.partCount !== count){
         // The Hub's plan is not the one Mia hashed for; release it and stop.
