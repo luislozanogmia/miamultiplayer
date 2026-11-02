@@ -117,6 +117,7 @@ test('a new message closes an unsubmitted Mia draft and continues normal chat', 
     miaBotDraftBusy: () => false,
     cancelMiaBotDraft: () => { state.botDraft = null; },
     composerHermesCommand: () => null,
+    openAskBeforeDoRequest: () => null,
     sendNativeConversationEvent: text => { delivered = text; return Promise.resolve({ status: 201 }); },
   });
   load(context, 'sendActiveRoomMessage');

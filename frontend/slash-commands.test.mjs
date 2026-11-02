@@ -51,6 +51,7 @@ function harness({ roomId = 'mia', kind = 'agent', messages = [] } = {}) {
     createFreshConversationForActiveBot: () => { freshRequests += 1; return Promise.resolve({ id: 'new' }); },
     showBenchToast: (message) => toasts.push(message),
     isMiaOrchestrator: () => false,
+    openAskBeforeDoRequest: () => null,
   });
   vm.runInContext(constant('COMPOSER_SLASH_COMMANDS') + constant('HERMES_SLASH_COMMAND_NAMES'), context);
   for (const name of [
