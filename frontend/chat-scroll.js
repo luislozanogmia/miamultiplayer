@@ -99,6 +99,17 @@
     state.chatScrollTop = view.scrollTop;
   }
 
+  // A request that needs an answer brings the reader to the latest message once.
+  // Scrolling away afterwards is respected, so it can't pull them back.
+  function revealRequest(state, id){
+    if(!state || !id || state.revealedRequestId === id) return false;
+    state.revealedRequestId = id;
+    state.followLatest = true;
+    state.chatScrollAnchor = null;
+    state.newVisibleMessages = false;
+    return true;
+  }
+
   function syncButton(button, view, state){
     if(!button) return;
     var hidden = !view || !state || nearBottom(view);
@@ -116,6 +127,6 @@
   }
 
   return {BOTTOM_THRESHOLD:BOTTOM_THRESHOLD, nearBottom:nearBottom, visibleAnchor:visibleAnchor,
-    capture:capture, restore:restore, replace:replace, jumpToLatest:jumpToLatest, syncButton:syncButton,
+    capture:capture, restore:restore, replace:replace, jumpToLatest:jumpToLatest, revealRequest:revealRequest, syncButton:syncButton,
     noteIncoming:noteIncoming};
 });

@@ -11497,6 +11497,8 @@
       return;
     }
     var state = chatRoomState(roomId);
+    var openApproval = openAskBeforeDoRequest(roomId);
+    if(openApproval && window.MiaChatScroll) window.MiaChatScroll.revealRequest(state, openApproval.id);
     updateChatSuggestions(roomId);
     if(chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)) syncMiaBotSetupRequest(roomId, state);
     var botDraftFlow = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel) ? state.botDraft : null;
