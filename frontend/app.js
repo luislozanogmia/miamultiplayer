@@ -4779,7 +4779,10 @@
     var channel=hubChannel(roomId), me=hubChat.membership||{};
     return !!channel && channel.kind!=='dm' && (me.role==='admin' || channel.created_by===me.clerk_user_id);
   }
-  function stopHubFeed(){ if(hubChat.feed){hubChat.feed.stop();hubChat.feed=null;} }
+  function stopHubFeed(){
+    if(hubChat.feed){hubChat.feed.stop();hubChat.feed=null;}
+    if(window.MiaTeamWorkflowsUi)window.MiaTeamWorkflowsUi.detach();
+  }
   function hubFeedback(error){
     hubChat.error = error && error.message || '';
     if(error && (error.status === 403 || error.status === 404)){
@@ -4817,6 +4820,8 @@
       noteHubRemovals(teams);
       sendHubDisplayName(teams.filter(function(team){return !team.invited;}));
       try { localStorage.setItem(HUB_TEAMS_STORAGE_KEY, JSON.stringify(teams.filter(function(team){return !team.invited;}))); } catch(_hubTeamsStorageError) {}
+      // Steps owned by this person run whichever team is on screen.
+      if(window.MiaTeamWorkflowsUi)window.MiaTeamWorkflowsUi.setTeams(teams.filter(function(team){return !team.invited;}).map(function(team){return team.teamId;}));
       renderHubTeamOptions(teams);
     }).catch(function(error){ hubChat.teamsAt=0; if(hubWorkspace()) hubFeedback(error); }).finally(function(){hubChat.teamsPromise=null;});
     return hubChat.teamsPromise;
@@ -5713,6 +5718,7 @@
     var subject=hubChat.membership && hubChat.membership.clerk_user_id, refreshChannels=false, refreshTeams=false, render={};
     events.forEach(function(event){
       var roomId=event.channel_id, channel=hubChannel(roomId), state=roomId && chatWs.byRoom[roomId];
+      if(globalThis.MiaTeamWorkflowsUi && globalThis.MiaTeamWorkflowsUi.handles(event.kind))globalThis.MiaTeamWorkflowsUi.onEvent(event);
       if(event.kind==='message' && event.message){
         var row=event.message;
         if(!channel){refreshChannels=true;return;}
@@ -5769,6 +5775,7 @@
         Object.keys(chatWs.byRoom).forEach(function(key){chatWs.byRoom[key].historyInitialized=false;});
         refreshHubChannels().then(function(){ if(chatWs.activeRoomId)return loadHubRoom(); }).catch(function(){});
         if(lost && chatWs.activeRoomId)pollHubBots(chatWs.activeRoomId,true);
+        if(window.MiaTeamWorkflowsUi)window.MiaTeamWorkflowsUi.onReset();
       },
       onTyping:function(typing){
         if(workspace!==activeWorkspaceKey)return;
@@ -5791,6 +5798,12 @@
         }
         if(changed)renderHubStatus();
       }});
+    if(window.MiaTeamWorkflowsUi)window.MiaTeamWorkflowsUi.attach({teamId:workspace.slice(4),call:hubCall,confirm:appConfirm,toast:showToast,
+      subject:function(){return hubChat.membership && hubChat.membership.clerk_user_id;},
+      isAdmin:function(){return !!(hubChat.membership && hubChat.membership.role==='admin');},
+      showPage:function(){ if(!automationsPage.open)runToolsAction('automations'); },
+      onPeople:function(){ if(chatWs.activeRoomId && workspace===activeWorkspaceKey)renderChatThread(); }});
+    if(window.MiaTeamWorkflowsUi && automationsPage.open)renderAutomationsPage();
   }
   // Hidden space updates move the read marker so they never count as unread.
   var hubSpaceReadTimers={};
@@ -7885,7 +7898,11 @@
     var body = el('#automationsBody');
     if(!body) return;
     var scroll = body.scrollTop;
-    body.innerHTML = '<div class="automations-content">' + (found ? automationsDetailHtml(row, found.automation, found.bot) : automationsBoardHtml(rows)) + '</div>';
+    // Team workflows sit above the bot automations, in team workspaces only.
+    var teamWorkflows = !found && hubWorkspace() && window.MiaTeamWorkflowsUi ? window.MiaTeamWorkflowsUi : null;
+    body.innerHTML = '<div class="automations-content">' + (teamWorkflows ? '<div id="teamWorkflowsMount"></div>' : '')
+      + (found ? automationsDetailHtml(row, found.automation, found.bot) : '<div data-wf-board>' + automationsBoardHtml(rows) + '</div>') + '</div>';
+    if(teamWorkflows) teamWorkflows.mountInto(el('#teamWorkflowsMount', body));
     if(!found) body.scrollTop = scroll;
     els('[data-automations-id]', body).forEach(function(button){
       button.addEventListener('click', function(){
@@ -8031,6 +8048,7 @@
     renderChatHeaderBar();
     renderAutomationsPage();
     loadActiveAutomationRuns();
+    if(hubWorkspace() && window.MiaTeamWorkflowsUi) window.MiaTeamWorkflowsUi.pageOpened();
   }
 
   function closeAutomationsPage(){
@@ -10777,6 +10795,9 @@
           else if(!current)return '<div class="chat-msg-system"><p>Bot sharing request removed.</p></div>';
         }
         return window.MiaHubBots.admissionHtml(request,displayNameForEmail(request.requester_email));
+      }
+      if(m.hubWorkflowApproval && hubWorkspace() && window.MiaTeamWorkflowsUi){
+        return '<div class="chat-msg-system twf-approval-row">' + window.MiaTeamWorkflowsUi.channelCardHtml(m.hubWorkflowApproval) + '</div>';
       }
       var systemAvatar = '';
       if(m.member && m.member.kind === 'agent'){

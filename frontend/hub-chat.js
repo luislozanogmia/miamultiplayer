@@ -98,7 +98,8 @@
     var file=row.attachment && !deleted ? {id:row.attachment.id, filename:row.attachment.filename || 'image',
       mimeType:row.attachment.mime_type, size:row.attachment.size, channelId:row.channel_id || null} : null;
     return {id:'hub-sequence-'+row.sequence, hubMessageId:row.id, hubMessage:true, hubAuthorId:row.author_id || null,
-      hubBotRequest:row.author_type==='system' && row.author_id==='system:bot-request'?row.bot_request:null, system:row.author_type==='system',
+      hubBotRequest:row.author_type==='system' && row.author_id==='system:bot-request'?row.bot_request:null,
+      hubWorkflowApproval:row.author_type==='system' && row.author_id==='system:workflow-approval' && row.workflow_approval?row.workflow_approval:null, system:row.author_type==='system',
       sender:row.author_type==='bot'?'hub-bot:'+row.author_id:row.author_email, hubAuthor:row.author_type==='bot'||row.author_type==='system'?null:row.author_email,
       nativeAgentName:row.author_type==='bot'?row.author_name:null, body:deleted ? 'Message deleted' : (runAt<0 ? row.body : row.body.slice(0,runAt)), hubRunLabel:runAt<0 ? '' : row.body.slice(runAt+3), ts:row.created_at * 1000,
       threadRoot:row.thread_root_sequence ? 'hub-sequence-'+row.thread_root_sequence : null, deleted:deleted, pending:false,

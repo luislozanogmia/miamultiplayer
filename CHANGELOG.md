@@ -10,6 +10,7 @@ automatically through the in-app updater.
 ## [Unreleased]
 
 ### Added
+- Team workflows: one job shared across people, shown in Automations in team workspaces. Each step runs on its owner's computer with their own bot, one short note and any files pass to the next person, and approval cards appear in the channel. An interrupted step always asks before it runs again. Needs a team server that offers workflows.
 
 - Bot replies in team channels show whose Mia ran them and which provider answered.
 - Team files: in a team channel, group or direct message, the Files button now has a Team files screen for the team's shared storage (up to 500 MB a file, 100 GB for the team). Add files, watch them upload and get scanned for viruses, download them once they are clean, and delete your own (admins can delete any). Files are checked against their fingerprint on both sides, and blocked or interrupted uploads say what happened and can be retried or resumed. Solo files stay on your computer. Not yet tested against the live team service.
