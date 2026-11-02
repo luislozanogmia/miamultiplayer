@@ -4742,11 +4742,14 @@
   function refreshHubBotState(roomId,force){
     if(!inHubRoom(roomId) || !roomId || chatWs.configured===false)return Promise.resolve();
     var state=chatRoomState(roomId),workspace=activeWorkspaceKey,generation=chatWs.navigationGeneration;
-    if(state.hubBotRequest)return state.hubBotRequest;
+    // A request from before this navigation gets discarded below, so it can't
+    // answer for this one.
+    if(state.hubBotRequest && state.hubBotRequestGeneration===generation)return state.hubBotRequest;
     if(!force && Date.now()-Number(state.hubBotsAt||0)<4000)return Promise.resolve();
     state.hubBotsAt=Date.now();
     var refreshDirectory=force || !state.hubDirectoryAt || Date.now()-state.hubDirectoryAt>=60000;
-    state.hubBotRequest=Promise.all([
+    state.hubBotRequestGeneration=generation;
+    var request=state.hubBotRequest=Promise.all([
       hubCall('GET',hubPath()+'/channels/'+roomId+'/bots'),
       // The channel's own members; a Hub without per-channel membership
       // answers 404 here, and then every team member is in every channel.
@@ -4767,8 +4770,8 @@
         privateAgents:[],notInChatAgents:(results[2].bots||[]).filter(function(bot){return !names[bot.name.toLowerCase()];}),loading:false};
       renderChatHeaderBar();if(previousAdmissions!==JSON.stringify(state.hubBots.map(function(b){return b.admission;})))renderChatThread();if(chatMention.open)renderMentionPopover();
       if(chatInfo.open && chatInfo.mode==='agents')renderChatInfoPane();
-    }).catch(function(){/* Human transport reports its own access/connectivity state. */}).finally(function(){state.hubBotRequest=null;});
-    return state.hubBotRequest;
+    }).catch(function(){/* Human transport reports its own access/connectivity state. */}).finally(function(){if(state.hubBotRequest===request)state.hubBotRequest=null;});
+    return request;
   }
   // Channel members first, then the rest of the team as "not in chat".
   function hubMentionHumans(channelMembers,teamMembers){

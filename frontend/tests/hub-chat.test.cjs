@@ -788,3 +788,19 @@ test('a version an admin\'s delete cleared reads plainly',async()=>{
   const source=require('fs').readFileSync(require('path').join(__dirname,'..','hub-chat.js'),'utf8');
   assert.match(source,/version_superseded:'That version is no longer available/);
 });
+test('a channel reopened during startup still gets its bot count from the reopen',async()=>{
+  const pending=[];const state={};
+  const env={Promise,Date,Number,JSON,window:{MiaHubChat:{localCall:async()=>({bots:[]})}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_'+'a'.repeat(32),
+    chatWs:{configured:true,activeRoomId:'deals',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',
+    hubCall:(method,path)=>path.endsWith('/bots')?new Promise(resolve=>pending.push(resolve)):Promise.resolve({members:[]}),
+    chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:()=>[],renderChatHeaderBar:()=>{},renderChatThread:()=>{}};
+  const refresh=appFunction('refreshHubBotState',env);
+  const first=refresh('deals',true);
+  env.chatWs.navigationGeneration=2;
+  const second=refresh('deals',true);
+  assert.equal(pending.length,2,'the reopen asks again instead of waiting on a request it will discard');
+  pending[0]({bots:[{id:'stale',name:'Stale',published:1}]});await first;
+  assert.equal(state.hubBotRequest!==null&&state.hubBotRequest!==undefined,true,'the old request ending leaves the new one in place');
+  pending[1]({bots:[{id:'deal-desk',name:'Deal Desk',published:1}]});await second;
+  assert.deepEqual(state.hubBots.map(bot=>bot.id),['deal-desk']);
+});
