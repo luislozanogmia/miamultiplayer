@@ -74,10 +74,41 @@ test('reads the one-line note the bot ends with and never lets a whole reply tra
   assert.deepEqual(readOutcome('Thinking\n\nNOTE: Quote drafted'),{outcome:'done',note:'Quote drafted'});
   assert.deepEqual(readOutcome('**NOTE:** Quote drafted**'),{outcome:'done',note:'Quote drafted'});
   assert.deepEqual(readOutcome('tried\nFAILED: no access to the sheet'),{outcome:'failed',note:'no access to the sheet'});
-  assert.deepEqual(readOutcome('first line\nsecond line'),{outcome:'done',note:'second line'});
+  assert.deepEqual(readOutcome('first line\nsecond line'),{outcome:'done',note:'Step finished.'});
   assert.equal(readOutcome('').outcome,'failed');
   assert.equal(readOutcome('NOTE: '+'x'.repeat(500)).note.length,200);
   assert.equal(oneLine('a\nb c\td'),'a b c d');
+});
+
+test('a reply with no NOTE line never sends any of its text to the team',async t=>{
+  const f=fixture(t,{reply:'Here is the key I used\nsk-live-private-value'});
+  await poll(f);await f.client.idle();
+  assert.equal(f.hub.reports[0].note,'Step finished.');
+  assert.doesNotMatch(JSON.stringify(f.hub.reports),/sk-live|key I used/);
+});
+
+test('a note is cleaned to what the Hub accepts, keeping the joiners some scripts need',()=>{
+  // The same rule as the Hub's oneLine, so what it refuses never leaves here.
+  const refused=/[\p{Cc}\p{Zl}\p{Zp}\p{Cs}]|(?![\u200c\u200d])\p{Cf}/u;
+  const dirty='a\u200bb\u202Ec\uFEFFd\u2028e\u2029f\u0085g\uD800h\u00ADi';
+  assert.equal(refused.test(oneLine(dirty)),false);
+  assert.equal(oneLine('a\u200bb'),'ab');
+  assert.equal(oneLine('क्\u200dष and 👩\u200d💻 \u200c'),'क्\u200dष and 👩\u200d💻 \u200c');
+  assert.equal(readOutcome('NOTE: \u200b\u202E').note,'Step finished.');
+});
+
+test('a refused note never loses the report: it goes again with a plain note and its files',async t=>{
+  const f=fixture(t,{reportStatus:(hub,body)=>body.note==='Bad note'?json({error:'invalid_note'},400):null,runBot:async args=>{
+    writeFileSync(join(/save it in this folder: (.+)/.exec(args.trigger.body)[1],'quote.pdf'),'quote bytes');
+    return {text:'NOTE: Bad note'};
+  }});
+  await poll(f);await f.client.idle();
+  assert.equal(f.hub.reports.length,2);
+  assert.deepEqual([f.hub.reports[1].outcome,f.hub.reports[1].note,f.hub.reports[1].fileIds],['done','Step finished.',[fileId]]);
+  assert.equal(f.db.prepare('SELECT state FROM hub_workflow_steps').get().state,'reported');
+  const g=fixture(t,{reply:'FAILED: Bad note',reportStatus:(hub,body)=>body.note==='Bad note'?json({error:'invalid_note'},400):null});
+  await poll(g);await g.client.idle();
+  assert.deepEqual([g.hub.reports[1].outcome,g.hub.reports[1].note],['failed','The bot could not finish this step.']);
 });
 
 test('the prompt marks other people\'s notes and files as information, not instructions',()=>{

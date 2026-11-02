@@ -18,6 +18,7 @@ const SCAN_CHECK_MS = 5000;
 const MAX_RUNNING = 2;
 const MAX_FILES = 10;
 const NOTE_MAX = 200;
+const DONE_NOTE = 'Step finished.';
 const FAILED_NOTE = 'The bot could not finish this step.';
 const INTERRUPTED_NOTE = 'Stopped after an interruption. The step may have partly run.';
 const TYPES = {'.pdf':'application/pdf','.txt':'text/plain','.md':'text/markdown','.csv':'text/csv','.json':'application/json','.html':'text/html',
@@ -26,14 +27,18 @@ const TYPES = {'.pdf':'application/pdf','.txt':'text/plain','.md':'text/markdown
   '.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation'};
 
 function failure(status,code) { return Object.assign(new Error(code),{status,code}); }
-// A step's note is shown to the whole team and must be one short line.
+// A step's note is shown to the whole team and must be one short line. The Hub
+// refuses control characters, line and paragraph separators, lone surrogates and
+// invisible format characters, so none of them leave here. Only the zero-width
+// joiner and non-joiner stay, because emoji sequences and some scripts need them.
 function oneLine(text,max=NOTE_MAX) {
-  const clean=String(text==null?'':text).replace(/[\p{Cc}\u2028\u2029]+/gu,' ').replace(/\s+/g,' ').trim();
+  const clean=String(text==null?'':text).replace(/(?![\u200c\u200d])\p{Cf}|\p{Cs}/gu,'').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu,' ').replace(/\s+/g,' ').trim();
   const points=[...clean];
   return points.length<=max?clean:points.slice(0,max-1).join('').trimEnd()+'…';
 }
-// The bot ends its reply with "NOTE: ..." or "FAILED: ...". Anything else falls
-// back to its last line, so a reply never travels whole.
+// The bot ends its reply with "NOTE: ..." or "FAILED: ...". Without that line the
+// team gets a fixed note: none of a raw reply is ever sent, because any line of it
+// could hold something private, such as a key the bot printed.
 function readOutcome(reply) {
   const lines=String(reply==null?'':reply).split(/\r?\n/).map(line=>line.replace(/^[\s*_#>`-]+/,'').replace(/[\s*_`]+$/,'')).filter(Boolean);
   if(!lines.length) return {outcome:'failed',note:'The bot finished without a reply.'};
@@ -41,10 +46,10 @@ function readOutcome(reply) {
     const match=/^(NOTE|FAILED)\s*:[\s*_`]*(.*)$/i.exec(lines[i]);
     if(match) {
       const note=oneLine(match[2]);
-      return match[1].toUpperCase()==='FAILED'?{outcome:'failed',note:note||FAILED_NOTE}:{outcome:'done',note:note||'Step finished.'};
+      return match[1].toUpperCase()==='FAILED'?{outcome:'failed',note:note||FAILED_NOTE}:{outcome:'done',note:note||DONE_NOTE};
     }
   }
-  return {outcome:'done',note:oneLine(lines[lines.length-1])||'Step finished.'};
+  return {outcome:'done',note:DONE_NOTE};
 }
 function withAddition(note,addition) {
   if(!addition) return note;
@@ -205,6 +210,13 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     } catch(error) {
       if(error.code==='invalid_file_ref' && fileIds.length) {
         journal.saveReport(s,row,{outcome:row.outcome,note:withAddition(row.note,'(Files could not be shared.)'),fileIds:[]});
+        return publish(s,journal.get(s,row.run_id,row.n,row.claim_id),token);
+      }
+      // A refused note must not cost the finished work. The plain note always passes.
+      if(error.code==='invalid_note') {
+        const plain=row.outcome==='failed'?FAILED_NOTE:DONE_NOTE;
+        if(row.note===plain) return;
+        journal.saveReport(s,row,{outcome:row.outcome,note:plain,fileIds});
         return publish(s,journal.get(s,row.run_id,row.n,row.claim_id),token);
       }
       // A 401, 429 or outage keeps the report for the next poll.
