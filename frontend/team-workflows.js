@@ -112,7 +112,7 @@
       case 'pending': return 'Not started yet';
       case 'queued': {
         var since = sinceText(step.queued_at, now);
-        return 'Waiting for ' + possessive(owner) + ' Mia' + (since ? ' since ' + since : '') + (step.interrupted ? ' (it was interrupted and needs a decision)' : '');
+        return 'Waiting for ' + possessive(owner) + ' Mia' + (since ? ' \u00b7 ' + since : '') + (step.interrupted ? ' (it was interrupted and needs a decision)' : '');
       }
       case 'claimed': return 'Starting on ' + possessive(owner) + ' Mia';
       case 'working': return 'Bot is working on ' + possessive(owner) + ' Mia';

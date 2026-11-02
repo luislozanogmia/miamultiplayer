@@ -21,8 +21,8 @@ test('names read as Name · Department, and never invent a person', () => {
 });
 
 test('a waiting step reads as waiting on that person\'s computer', () => {
-  assert.equal(wf.stepLine({ state: 'queued', owner_id: 'u1', queued_at: secondsAgo(7200) }, people, now), 'Waiting for Pat’s Mia since 2 hours ago');
-  assert.equal(wf.stepLine({ state: 'queued', owner_id: 'u3', queued_at: secondsAgo(30) }, people, now), 'Waiting for Chris’ Mia since just now');
+  assert.equal(wf.stepLine({ state: 'queued', owner_id: 'u1', queued_at: secondsAgo(7200) }, people, now), 'Waiting for Pat’s Mia · 2 hours ago');
+  assert.equal(wf.stepLine({ state: 'queued', owner_id: 'u3', queued_at: secondsAgo(30) }, people, now), 'Waiting for Chris’ Mia · just now');
   assert.equal(wf.stepLine({ state: 'working', owner_id: 'u1' }, people, now), 'Bot is working on Pat’s Mia');
   assert.equal(wf.stepLine({ state: 'waiting', owner_id: 'u1', approver_id: 'u3' }, people, now), 'Waiting for Chris to approve');
   assert.equal(wf.stepLine({ state: 'paused', paused_reason: 'stuck' }, people, now), 'This step waited 24 hours without starting.');
