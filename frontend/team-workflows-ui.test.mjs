@@ -9,6 +9,9 @@ const tf = require('./team-files.js');
 globalThis.MiaTeamWorkflows = wf;
 globalThis.MiaTeamFiles = tf;
 const ui = require('./team-workflows-ui.js');
+// A queue looks for work once a minute forever; that must not keep this file's process alive.
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...rest) => { const timer = realSetTimeout(fn, ms, ...rest); if (ms >= 1000) timer.unref(); return timer; };
 const ID = n => String(n).repeat(32);
 const people = wf.directory([{ clerk_user_id: 'u1', display_name: 'Pat', department: 'Sales' }, { clerk_user_id: 'u2', display_name: 'Lee', department: 'Finance' }]);
 const approval = extra => ({ id: ID(1), run_id: ID(2), step_n: 2, state: 'pending', approver_id: 'u2', owner_id: 'u1', workflow_name: 'Quote flow', run_summary: 'Inbound', step_text: 'Check it', step_note: 'Looks fine', canDecide: true, ...extra });

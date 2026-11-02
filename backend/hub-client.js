@@ -49,11 +49,12 @@ const FILE_ROUTES = [
   ['DELETE', 'space', new RegExp(FILE_BASE + '/file-spaces/' + FILE_ID + '/members/[A-Za-z0-9_-]{1,128}$')],
 ];
 const HUB_FILE_AREA = /^\/v1\/teams\/[a-f0-9]{32}\/(?:files|file-spaces)(?:\/|$)/;
-// Team workflows: the only routes beyond the defaults. The workflow list can
-// carry 50 definitions, and a definition write can reach 16 KB. Run and
-// approval lists are the only other Hub reads with a query string, and only
+// Team workflows: the only routes beyond the defaults. Lists, run detail and
+// work orders can reach several hundred KB, so every workflow route takes the
+// Hub's own 2 MiB response limit, and a definition write can reach 16 KB. Run
+// and approval lists are the only other Hub reads with a query string, and only
 // these exact values are forwarded.
-const HUB_WORKFLOW_LIST = new RegExp(FILE_BASE + '/workflows$');
+const HUB_WORKFLOW_ROUTE = new RegExp(FILE_BASE + '/workflow(?:s|-runs|-steps|-approvals)(?:[/?]|$)');
 const HUB_WORKFLOW_WRITE = new RegExp(FILE_BASE + '/workflows(?:/' + FILE_ID + '/versions)?$');
 const HUB_WORKFLOW_QUERY = new RegExp(FILE_BASE + '/(?:workflow-runs\\?(?:state=(?:active|recent|all)(?:&workflow=' + FILE_ID + ')?|workflow=' + FILE_ID + ')|workflow-approvals\\?state=(?:pending|decided|all))$');
 // Returns the route's name, or null when it is not an allowed team file route.
@@ -67,7 +68,7 @@ function hubRouteLimits(method, route) {
     // Finishing a 500 MB upload lists up to 63 parts (an ETag and a hash each).
     request: method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000
       : file === 'complete' ? 32768 : method === 'POST' && HUB_WORKFLOW_WRITE.test(route) ? 16384 : 8192,
-    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : method === 'GET' && HUB_WORKFLOW_LIST.test(route) ? 524288 : 131072,
+    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : HUB_WORKFLOW_ROUTE.test(route) ? 2097152 : 131072,
     // The Hub joins S3's multipart parts while it completes, which can take a while.
     timeout: method === 'GET' && HUB_FEED.test(route) ? 30000 : HUB_UPLOAD.test(route) || HUB_DOWNLOAD.test(route) || file === 'complete' ? 30000 : 15000,
   };

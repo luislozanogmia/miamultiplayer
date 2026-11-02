@@ -130,16 +130,15 @@ function wfProxy(reply={}){
  };
  return {seen,send};
 }
-test('workflow limits widen only for the list and the definition writes',()=>{
- assert.equal(hubRouteLimits('GET',WF_BASE+'/workflows').response,524288);
+test('every workflow route takes the Hub\'s 2 MiB response limit, and only definition writes a larger body',()=>{
+ for(const [method,route] of [['GET','/workflows'],['GET','/workflows/'+WF_ID],['GET','/workflow-runs'],['GET','/workflow-runs?state=recent'],['GET','/workflow-runs/'+WF_ID],['GET','/workflow-steps'],['GET','/workflow-approvals?state=pending'],['POST','/workflow-runs/'+WF_ID+'/steps/1/claim'],['POST','/workflows/'+WF_ID+'/runs']])
+  assert.equal(hubRouteLimits(method,WF_BASE+route).response,2097152,route);
+ assert.equal(hubRouteLimits('GET',WF_BASE+'/channels').response,131072);
+ assert.equal(hubRouteLimits('POST',WF_BASE+'/channels').response,131072);
  assert.equal(hubRouteLimits('POST',WF_BASE+'/workflows').request,16384);
  assert.equal(hubRouteLimits('POST',WF_BASE+'/workflows/'+WF_ID+'/versions').request,16384);
- for(const [method,route] of [['GET','/workflows/'+WF_ID],['GET','/workflow-runs'],['GET','/workflow-steps'],['GET','/workflow-approvals?state=pending'],['GET','/channels']])
-  assert.equal(hubRouteLimits(method,WF_BASE+route).response,131072,route);
  for(const [method,route] of [['POST','/workflows/'+WF_ID+'/runs'],['POST','/workflows/'+WF_ID+'/versions/1/approve'],['PATCH','/workflows/'+WF_ID],['POST','/workflow-runs/'+WF_ID+'/steps/1/report'],['POST','/channels']])
   assert.equal(hubRouteLimits(method,WF_BASE+route).request,8192,route);
- // The list limit is a read limit: writing to the same path keeps the default response bound.
- assert.equal(hubRouteLimits('POST',WF_BASE+'/workflows').response,131072);
  assert.equal(hubRouteLimits('GET',WF_BASE+'/workflows').request,8192);
 });
 test('a 16 KB definition reaches the Hub, a larger one and an oversized run body do not',async()=>{
