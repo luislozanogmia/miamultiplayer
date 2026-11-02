@@ -16,6 +16,7 @@ const { currentHermesModel } = require('./retired-models');
 const fs = require('fs');
 const path = require('path');
 const { externalChatEnabled } = require('./chat-security');
+const { redactHermesDiagnosticText } = require('./redact-secrets');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
 const { HermesRuntimeController } = require('./hermes-runtime-controller');
 const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
@@ -73,14 +74,6 @@ const hermesDiagnostics = {
   events: [],
   updatedAt: null,
 };
-
-function redactHermesDiagnosticText(value, maxLength = 12000) {
-  let text = String(value || '');
-  text = text.replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,;]+/gi, '$1[REDACTED]');
-  text = text.replace(/((?:api[_-]?key|token|password|secret|client_secret)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]');
-  text = text.replace(/(https?:\/\/[^\s/]+\/[^\s]*[?&](?:token|key|secret|password)=[^\s&]+)/gi, '[REDACTED_URL]');
-  return text.length > maxLength ? `${text.slice(0, maxLength)}\n[…truncated…]` : text;
-}
 
 function recordHermesDiagnostic(event) {
   if (!hermesDiagnostics.traceCommands || !event || typeof event !== 'object') return;
