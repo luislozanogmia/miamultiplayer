@@ -218,6 +218,25 @@ function installBundle(appsDir, identity, { sha256, bytes }) {
   return { teamId: String(identity.teamId), appId: String(identity.appId), version: String(identity.version), name: bundle.name };
 }
 
+// What an installed version is made of, for an admin looking before approving.
+// Symbolic links can't come from a bundle; one found here isn't counted as a file.
+function listInstalledFiles(appsDir, identity) {
+  const root = installLocation(appsDir, identity);
+  if (!readMarker(root)) throw appError(404, 'not_found', "That app isn't installed yet.");
+  const files = [];
+  const walk = (folder, prefix) => {
+    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      if (entry.name === INSTALL_MARKER) continue;
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(path.join(folder, entry.name), relative);
+      else if (entry.isFile()) files.push({ path: relative, sizeBytes: fs.statSync(path.join(folder, entry.name)).size });
+    }
+  };
+  walk(root, '');
+  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { files, totalBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0) };
+}
+
 // path.relative's answer with forward slashes, on any system.
 function toSlashes(relative, separator = path.sep) {
   return relative.split(separator).join('/');
@@ -292,7 +311,9 @@ async function listLocal({ workspaceDir, dataDir, workspaceId, probe = artifacts
   return { apps: listLocalApps(workspaceDir), links };
 }
 
-function registerAppRoutes(app, { express, requireAuth, workspaceDir, dataDir, appsDir, workspaceId }) {
+function registerAppRoutes(app, { express, requireAuth, workspaceDir, dataDir, appsDir, previewsDir, workspaceId }) {
+  // A version waiting for review installs apart from the versions people run.
+  const folderFor = query => (query.preview === '1' ? previewsDir() : appsDir());
   const send = (res, error) => {
     if (!error.status) return res.status(500).json({ error: 'app_failed', message: 'That did not work. Try again.' });
     return res.status(error.status).json({ error: error.code, message: error.message });
@@ -313,17 +334,21 @@ function registerAppRoutes(app, { express, requireAuth, workspaceDir, dataDir, a
     } catch (error) { send(res, error); }
   });
   app.get('/api/apps/installed', requireAuth, (req, res) => {
-    try { res.json({ installed: isInstalled(appsDir(), identity(req.query), String(req.query.sha256 || '')) }); }
+    try { res.json({ installed: isInstalled(folderFor(req.query), identity(req.query), String(req.query.sha256 || '')) }); }
+    catch (error) { send(res, error); }
+  });
+  app.get('/api/apps/installed/files', requireAuth, (req, res) => {
+    try { res.json(listInstalledFiles(folderFor(req.query), identity(req.query))); }
     catch (error) { send(res, error); }
   });
   app.post('/api/apps/install', requireAuth, express.raw({ type: 'application/octet-stream', limit: MAX_BUNDLE_BYTES }), (req, res) => {
-    try { res.status(201).json({ installed: installBundle(appsDir(), identity(req.query), { sha256: String(req.query.sha256 || ''), bytes: req.body }) }); }
+    try { res.status(201).json({ installed: installBundle(folderFor(req.query), identity(req.query), { sha256: String(req.query.sha256 || ''), bytes: req.body }) }); }
     catch (error) { send(res, error); }
   });
 }
 
 module.exports = {
   BUNDLE_FORMAT, ENTRY, INSTALL_MARKER, MAX_BUNDLE_BYTES, MAX_BYTES, MAX_FILES,
-  buildBundle, bundleFilename, findPathConflict, installBundle, isInstalled, listLocal, listLocalApps,
+  buildBundle, bundleFilename, findPathConflict, installBundle, isInstalled, listInstalledFiles, listLocal, listLocalApps,
   parseBundle, registerAppRoutes, resolveLocalApp, safeAppName, safeBundlePath, sha256Hex, toSlashes,
 };

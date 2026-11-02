@@ -1791,11 +1791,13 @@ app.delete('/api/artifacts/links/:id', requireAuth, (req, res) => {
 // Apps: local folders and links, and the bundles teammates publish.
 const teamApps = require('./team-apps');
 const TEAM_APPS_DIR = process.env.MIAOS_TEAM_APPS_DIR || path.join(ARTIFACTS_DATA_DIR, 'team-apps');
+const TEAM_APP_PREVIEWS_DIR = process.env.MIAOS_TEAM_APP_PREVIEWS_DIR || path.join(ARTIFACTS_DATA_DIR, 'team-app-previews');
 teamApps.registerAppRoutes(app, {
   express, requireAuth,
   workspaceDir: () => miaosWorkspaceDir(),
   dataDir: () => ARTIFACTS_DATA_DIR,
   appsDir: () => TEAM_APPS_DIR,
+  previewsDir: () => TEAM_APP_PREVIEWS_DIR,
   workspaceId: workspaceIdFromRequest,
 });
 
@@ -2035,6 +2037,7 @@ function wipeMiaDataForEverything({ keepEmail, keepSessionToken }) {
     attachments: removeDirectoryContents(NATIVE_ATTACHMENT_DIR, failures),
     workspaceArtifacts: removeDirectoryContents(WORKSPACE_ARTIFACT_DIR, failures),
     teamApps: removeDirectoryContents(TEAM_APPS_DIR, failures),
+    teamAppPreviews: removeDirectoryContents(TEAM_APP_PREVIEWS_DIR, failures),
     automationArtifacts: removeMarkedBotWorkspaces(process.env.MIAOS_AUTOMATION_ARTIFACT_DIR, failures),
   };
   return { conversations, attachments, directories, failures };

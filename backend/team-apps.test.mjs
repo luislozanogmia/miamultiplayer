@@ -179,3 +179,33 @@ test('the proxy refuses anything else under a team\'s apps before calling the Hu
   assert.equal(reply.code, 404);
   assert.equal(called, 0);
 });
+
+test('a preview installs apart from the live app and lists its files with sizes', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-preview-'));
+  try {
+    const source = path.join(base, 'source');
+    fs.mkdirSync(path.join(source, 'css'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'index.html'), '<p>hello</p>');
+    fs.writeFileSync(path.join(source, 'css', 'a.css'), 'p{}');
+    const built = apps.buildBundle(source, { name: 'Report' });
+    const sha256 = apps.sha256Hex(built.bytes);
+    const identity = { teamId: 'a'.repeat(32), appId: 'b'.repeat(32), version: '3' };
+    const live = path.join(base, 'team-apps'), previews = path.join(base, 'team-app-previews');
+    apps.installBundle(previews, identity, { sha256, bytes: built.bytes });
+    assert.equal(apps.isInstalled(live, identity, sha256), false, 'a preview is not an install');
+    assert.equal(fs.existsSync(live), false);
+    assert.deepEqual(apps.listInstalledFiles(previews, identity), {
+      files: [{ path: 'css/a.css', sizeBytes: 3 }, { path: 'index.html', sizeBytes: 12 }], totalBytes: 15,
+    });
+    assert.throws(() => apps.listInstalledFiles(live, identity), /isn't installed/);
+    assert.throws(() => apps.listInstalledFiles(previews, { ...identity, appId: '../x' }));
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test('the app routes keep previews in their own folder', () => {
+  const source = fs.readFileSync(new URL('./team-apps.js', import.meta.url), 'utf8');
+  assert.match(source, /\/api\/apps\/installed\/files/);
+  const server = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  assert.match(server, /previewsDir: \(\) => TEAM_APP_PREVIEWS_DIR/);
+  assert.match(server, /removeDirectoryContents\(TEAM_APP_PREVIEWS_DIR/, 'a clean slate removes previews too');
+});
