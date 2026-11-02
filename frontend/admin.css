@@ -219,3 +219,7 @@ table.admin-table tr:hover td{background:var(--accent-soft);}
   .admin-users-toolbar{align-items:stretch;flex-direction:column;}
   .admin-users-bulk-actions{justify-content:flex-start;}
 }
+
+/* A member's department, edited in place in the team member table. */
+.admin-department-input{display:block;width:100%;max-width:200px;margin-top:4px;padding:3px 6px;border:1px solid transparent;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;}
+.admin-department-input:hover,.admin-department-input:focus{border-color:currentColor;outline:none;}

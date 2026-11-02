@@ -203,7 +203,7 @@
     var search = String(options.search == null ? '' : options.search).trim();
     var admins = (members || []).filter(function(m){ return m.role === 'admin'; }).length;
     var rows = filterAdminUsers((members || []).map(function(m){
-      return {id: m.clerk_user_id, email: m.email, role: m.role};
+      return {id: m.clerk_user_id, email: m.email, role: m.role, department: m.department || ''};
     }), search);
     if(!rows.length) return '<tr><td colspan="7" class="admin-empty">' + (search ? 'No users match your search.' : 'No members yet.') + '</td></tr>';
     return rows.map(function(u){
@@ -230,7 +230,8 @@
         '<td><div class="admin-cell-user">' +
           '<div class="admin-avatar">' + esc(initialsFor(u)) + '</div>' +
           '<div><div class="admin-cell-name">' + esc(u.email) + '</div>' +
-          '<div class="admin-cell-sub">' + (self ? 'You' : 'Teammate') + (owner ? ' · Owner' : '') + '</div></div>' +
+          '<div class="admin-cell-sub">' + (self ? 'You' : 'Teammate') + (owner ? ' · Owner' : '') + '</div>' +
+          '<input type="text" class="admin-department-input" maxlength="40" placeholder="Add department" data-team-department data-id="' + esc(u.id) + '" data-email="' + esc(u.email) + '" value="' + esc(u.department) + '" aria-label="Department for ' + esc(u.email) + '"></div>' +
         '</div></td>' +
         '<td>' + esc(owner ? 'Owner' : u.role === 'admin' ? 'Admin' : 'Member') + '</td>' +
         '<td><span class="pill ok">Active</span></td>' +
@@ -642,7 +643,7 @@
           usersState.seats = results[1];
           usersState.ownerId = result.owner_id || null;
           usersState.items = (result.members || []).map(function(m){
-            return {clerk_user_id: m.clerk_user_id, email: m.email, role: m.role};
+            return {clerk_user_id: m.clerk_user_id, email: m.email, role: m.role, department: m.department || ''};
           });
           renderUsers();
           return usersState.items;
@@ -977,6 +978,17 @@
             .then(function(){ btn.disabled = false; });
         }
         else userAction(btn.getAttribute('data-action'), btn.getAttribute('data-email'));
+      });
+      if(usersBody && team) usersBody.addEventListener('change', function(ev){
+        var input = ev.target.closest && ev.target.closest('input[data-team-department]');
+        if(!input) return;
+        var department = String(input.value).replace(/\s+/g, ' ').trim();
+        var email = input.getAttribute('data-email');
+        input.disabled = true;
+        hub('PATCH', '/members/' + encodeURIComponent(input.getAttribute('data-id')), {department: department}).then(function(){
+          toast(department ? email + ' is now in ' + department : email + ' has no department');
+          return loadUsers();
+        }, function(){ input.disabled = false; loadUsers(); });
       });
       if(usersBody) usersBody.addEventListener('change', function(ev){
         var checkbox = ev.target.closest && ev.target.closest('input.admin-user-select');

@@ -296,3 +296,11 @@ test('team Users count shows the seat limit and pending invites', () => {
   assert.equal(admin.teamUsersSummary(1, {used: 4, limit: 25}), '1 of 25 users · 3 invites pending');
   assert.equal(admin.teamUsersSummary(2, null), '2 users', 'without seat data it still counts users');
 });
+
+test('team members show an editable department, escaped', () => {
+  const html = admin.renderTeamUsersTable([{clerk_user_id: 'x', email: 'a@example.test', role: 'member', department: 'Sa"les'}], {});
+  assert.match(html, /data-team-department data-id="x"/);
+  assert.match(html, /value="Sa&quot;les"/);
+  assert.match(html, /maxlength="40"/);
+  assert.match(admin.renderTeamUsersTable([{clerk_user_id: 'x', email: 'a@example.test', role: 'member'}], {}), /value=""/);
+});
