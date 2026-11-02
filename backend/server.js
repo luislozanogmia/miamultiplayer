@@ -6479,6 +6479,7 @@ function privateAgentActor(resolved, ownerEmail) {
     name: resolved.name,
     department: resolved.name,
     manager: false,
+    editsBots: false,
     instructions:
       `You are ${resolved.name}, a personal agent that runs on ${senderDisplayName(ownerEmail)}'s computer. ` +
       `You keep your own memory and conversations, separate from Mia and from every bot, and you are private: ` +
@@ -6488,6 +6489,9 @@ function privateAgentActor(resolved, ownerEmail) {
 }
 
 function nativeDispatchActor(dispatch, conversation, trigger) {
+  if (conversation.metadata && conversation.metadata.privateAgentId !== undefined) {
+    return privateAgentActor(privateAgentStore.resolveForConversation(trigger.senderId, conversation.metadata), trigger.senderId);
+  }
   if (dispatch.targetType === 'gateway') {
     const department = conversation.metadata && conversation.metadata.department;
     return miaReplyAgent(trigger.senderId, department || 'Mia', conversation.companyId);
@@ -6620,7 +6624,7 @@ function buildHermesTaskPrompt(agentForPrompt, transcript, message, senderLabel,
   return [basePrompt, appOwnedToolPolicy({ botWorker: true }), actionInstruction].filter(Boolean).join('\n\n');
 }
 
-function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstructions, { editsBots = true } = {}) {
+function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstructions) {
   // The legacy gateway session carried the persona and browser boundary for the
   // room, then received only the new user message on each turn. Native Mia
   // keeps that same shape: the durable native transcript is seeded once and
@@ -6634,7 +6638,9 @@ function buildHermesGatewaySystemPrompt(agentForPrompt, senderLabel, globalInstr
     globalInstructions
   );
   const onboardingGuide = 'For a new user, help them get one useful thing done. Ask one relevant question at a time. If they ask to be shown around, briefly explain chat, connected apps, bots, and automations, then offer a small first task. Do not require a biography or invent a name from an email address. Respect the preferred name confirmed in the conversation.';
-  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext(), editsBots ? miaosBotInstructionsPromptContext() : ''].filter(Boolean).join('\n\n');
+  // A personal agent does not manage bots, so it gets no bot-instruction guidance.
+  if (agentForPrompt && agentForPrompt.editsBots === false) return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext()].filter(Boolean).join('\n\n');
+  return [basePrompt, onboardingGuide, loadMiaGhostSkill(), miaosAgentWorkspacePromptContext(), miaosBotInstructionsPromptContext()].filter(Boolean).join('\n\n');
 }
 
 // Mia edits bots in the background through their files. Driving the bot
@@ -7470,7 +7476,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       });
     }
   }
-  const agent = privateAgent ? privateAgentActor(privateAgent, trigger.senderId) : nativeDispatchActor(dispatch, conversation, trigger);
+  const agent = nativeDispatchActor(dispatch, conversation, trigger);
   const globalInstructions = promptInstructions(isGatewayAgent ? trigger.senderId : ownerOf(agent));
   // One scope per conversation and actor: a bot outside its own chat gets a new
   // Hermes session each turn, and the yes arrives on the next one.
@@ -7550,9 +7556,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     safeGoogleRefs,
   } = await turnWorkspaceContext(senderLabel, transcript, message, conversation, agent);
   const googleProfileAuthorized = connectionInventory.googleToolsEnabled;
-  const googleGatewayProfile = privateAgent
-    ? (googleProfileAuthorized ? privateAgent.googleProfile : privateAgent.profile)
-    : googleProfileAuthorized
+  const googleGatewayProfile = googleProfileAuthorized
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     : MIAOS_AGENT_HERMES_PROFILE;
   const googleGatewaySessionKey = googleGatewayProfile + ':' + connectionInventory.revision;
@@ -7562,6 +7566,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   const googleWorkspaceWriteAuthorized = googleWorkspaceWriteRequested
     && googleWorkspaceWriteKinds.length > 0
     && googleWorkspaceConnected;
+  // A personal agent runs under its own profile pair; Mia keeps the fixed names above.
+  const gatewayProfile = privateAgent
+    ? (googleProfileAuthorized ? privateAgent.googleProfile : privateAgent.profile)
+    : googleGatewayProfile;
+  const gatewaySessionKey = privateAgent
+    ? gatewayProfile + ':' + connectionInventory.revision
+    : googleGatewaySessionKey;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
   const inferenceOptions = {
@@ -7582,7 +7593,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // executeNativeConversationDispatch enforces via the same abort path the
     // wall-clock timeout uses (see the token budget tracker there).
     maxTokens: hermesTokenBudgetFromOptions(userOptions),
-    profile: isGatewayAgent ? googleGatewayProfile : googleBotProfile,
+    profile: isGatewayAgent ? gatewayProfile : googleBotProfile,
     ...(isGatewayAgent && !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly
       && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()
       ? { workspaceDir: miaosWorkspaceDir() }
@@ -7723,7 +7734,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     }
   };
   if (dispatch.targetType === 'gateway') {
-    const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel, globalInstructions.agent, { editsBots: !privateAgent });
+    const systemPrompt = buildHermesGatewaySystemPrompt(agent, senderLabel, globalInstructions.agent);
     const ownsPrivateAgentConversation = conversation.type === 'agent'
       && String(conversation.createdBy || '').toLowerCase() === senderLabel;
     const gatewayMessage = [buildHermesGatewayTurnMessage(
@@ -7731,7 +7742,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       senderLabel,
       platformContext,
       safeGoogleRefs,
-      googleWorkspaceWriteAuthorized && googleGatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE
+      googleWorkspaceWriteAuthorized && gatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE
         && !(privateAgent && googleProfileAuthorized),
       globalInstructions.agent
     ), nativeBrowserContextNote(trigger, {
@@ -7758,8 +7769,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     const gatewayRunArgs = {
       storedSessionId: ownsPrivateAgentConversation && conversation.metadata
         && (conversation.metadata.hermesGatewayProfile
-          ? conversation.metadata.hermesGatewayProfile === googleGatewaySessionKey
-          : (googleGatewayProfile === MIAOS_AGENT_HERMES_PROFILE || (privateAgent && !googleProfileAuthorized)))
+          ? conversation.metadata.hermesGatewayProfile === gatewaySessionKey
+          : (gatewayProfile === MIAOS_AGENT_HERMES_PROFILE || (privateAgent && !googleProfileAuthorized)))
         ? conversation.metadata.hermesGatewaySessionId
         : null,
       seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
@@ -7776,7 +7787,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
             companyId: conversation.companyId,
             conversationId: conversation.id,
           });
-          persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, googleGatewaySessionKey);
+          persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, gatewaySessionKey);
         }
       },
       signal,
@@ -7817,7 +7828,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         conversation,
         trigger.id,
         gatewayResult.storedSessionId,
-        googleGatewaySessionKey
+        gatewaySessionKey
       );
       if (gatewayResult.storedSessionId && !sessionOwner) return;
     }

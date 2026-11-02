@@ -241,8 +241,8 @@ test('server wiring: fail closed, no bot hand-offs, no bot setup card, Mia path 
   assert.match(server, /return createNativeDispatchReplyEvent\(dispatch, trigger, \{\s*type: 'agent_message',\s*content: \{ text: 'This personal agent is not available/);
   assert.match(server, /!slashCommand && !privateAgent \? miaBotSetupActions\.botSetupInstruction\(\)/);
   assert.match(server, /ownsMiaChat = ownsPrivateAgentConversation && !slashCommand && !privateAgent;/);
-  // Mia's own selection is still the original ternary when no agent resolved.
-  assert.match(server, /: googleProfileAuthorized\s*\? MIAOS_AGENT_GOOGLE_HERMES_PROFILE\s*: MIAOS_AGENT_HERMES_PROFILE;/);
+  // Mia's own selection is the original ternary; an agent's profile overrides it afterwards.
+  assert.match(server, /const googleGatewayProfile = googleProfileAuthorized\s*\? MIAOS_AGENT_GOOGLE_HERMES_PROFILE\s*: MIAOS_AGENT_HERMES_PROFILE;/);
   // Nothing in the Hub paths mentions personal agents except the refusal hook.
   const hub = fs.readFileSync(new URL('./hub-bot-client.js', import.meta.url), 'utf8');
   assert.equal((hub.match(/isPrivateAgent/g) || []).length, 2);
