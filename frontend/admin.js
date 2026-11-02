@@ -1,7 +1,7 @@
 (function(root, factory){
-  if(typeof module === 'object' && module.exports) module.exports = factory();
-  else factory(root);
-})(typeof window !== 'undefined' ? window : this, function(root){
+  if(typeof module === 'object' && module.exports) module.exports = factory(undefined, require('./team-files.js'), require('./team-workflows.js'));
+  else factory(root, root.MiaTeamFiles, root.MiaTeamWorkflows);
+})(typeof window !== 'undefined' ? window : this, function(root, tf, wf){
   'use strict';
 
   /* ============ pure helpers (exported for tests, no DOM/window needed) ============ */
@@ -446,6 +446,555 @@
     }).join('');
   }
 
+  /* ============ team controls: shared pieces ============ */
+
+  var HUB_VIEWS = ['automations', 'files', 'apps', 'sessions'];
+  var HUB_ID = /^[a-f0-9]{32}$/;
+  var SESSION_REFRESH_MS = 15000;
+
+  // Team controls need a team; Backup is local only. Anything else lands on Overview.
+  function adminViewFromHash(hash, isTeam){
+    var view = String(hash || '').replace(/^#\/?/, '');
+    if(view === 'agent-roster') view = 'agents';
+    if(['overview', 'users', 'agents', 'invites', 'activity'].indexOf(view) !== -1) return view;
+    if(view === 'backup' && !isTeam) return view;
+    if(HUB_VIEWS.indexOf(view) !== -1 && isTeam) return view;
+    return 'overview';
+  }
+
+  // What a failed read means, in the admin's words. `retry` says whether trying
+  // again can help, so nobody is offered a button that can't.
+  function hubLoadError(error){
+    var status = error && error.status, code = error && error.code;
+    if(status === 401 || code === 'sign_in_required') return {kind: 'signin', message: 'Sign in to your Mia account, then try again.', retry: true};
+    if(status === 403) return {kind: 'forbidden', message: 'Only admins of this team can see this.', retry: false};
+    if(status === 404) return {kind: 'missing', message: 'This is not available right now. Your team server may need an update, or your admin access may have changed.', retry: true};
+    if(!status || status >= 500) return {kind: 'offline', message: 'Mia can’t reach the shared team service right now. Check your connection and try again.', retry: true};
+    return {kind: 'error', message: 'Mia could not load this. Try again.', retry: true};
+  }
+
+  function hubStateHtml(message, view, retry){
+    return '<div class="card hub-state" role="status"><p>' + esc(message) + '</p>' +
+      (retry ? '<button type="button" class="btn small" data-hub-action="retry" data-hub-id="' + esc(view) + '">Try again</button>' : '') + '</div>';
+  }
+  function hubButton(label, action, id, options){
+    options = options || {};
+    return '<button type="button" class="btn small' + (options.tone ? ' ' + options.tone : '') + '" data-hub-action="' + esc(action) + '" data-hub-id="' + esc(id) + '"' +
+      (options.version ? ' data-hub-version="' + Number(options.version) + '"' : '') + (options.disabled ? ' disabled' : '') + '>' + esc(label) + '</button>';
+  }
+  function hubPill(label, tone){ return '<span class="pill' + (tone ? ' ' + tone : '') + '">' + esc(label) + '</span>'; }
+  function hubSectionHead(title, note){
+    return '<div class="hub-section-head"><h2 class="hub-section-title">' + esc(title) + '</h2>' + (note ? '<span class="hub-section-note">' + esc(note) + '</span>' : '') + '</div>';
+  }
+
+  var HUB_LOADING = {automations: 'Loading automations…', files: 'Loading files…', apps: 'Loading apps…', sessions: 'Loading browser sessions…'};
+
+  // Every view has the same first-load, failed-load and stale-data handling.
+  function renderHubView(view, state, now){
+    if(!state.loaded){
+      if(state.error) return hubStateHtml(state.error.message, view, state.error.retry);
+      return '<div class="card hub-state" role="status"><p>' + esc(HUB_LOADING[view]) + '</p></div>';
+    }
+    var banner = state.error
+      ? '<div class="hub-banner" role="status"><span>Showing what Mia last loaded. ' + esc(state.error.message) + '</span>' +
+        hubButton('Try again', 'retry', view) + '</div>' : '';
+    var body = {automations: renderHubAutomations, files: renderHubFiles, apps: renderHubApps, sessions: renderHubSessions}[view](state, now);
+    return banner + body;
+  }
+
+  function hubMapPool(list, size, fn){
+    var results = new Array(list.length), next = 0;
+    function worker(){
+      if(next >= list.length) return Promise.resolve();
+      var at = next++;
+      return Promise.resolve().then(function(){ return fn(list[at]); }).then(function(value){ results[at] = value; return worker(); });
+    }
+    var workers = [];
+    for(var i = 0; i < Math.min(size, list.length); i++) workers.push(worker());
+    return Promise.all(workers).then(function(){ return results; });
+  }
+
+  // The words on every dialog. Filled in with textContent, so Hub text stays text.
+  function hubConfirmCopy(action, item, extra){
+    item = item || {};
+    extra = extra || {};
+    switch(action){
+      case 'wf-archive': return {title: 'Archive ' + item.name + '?', body: 'Archive this workflow? Runs in progress will finish, and no new ones will start.', confirmLabel: 'Archive', danger: true};
+      case 'wf-approve': return {title: 'Approve version ' + extra.version + ' of ' + item.name + '?', body: 'It goes live for the team. Runs already in progress keep their version.', confirmLabel: 'Approve'};
+      case 'wf-reject': return {title: 'Reject version ' + extra.version + ' of ' + item.name + '?', body: 'It will not go live. Anything live now stays live.', confirmLabel: 'Reject', danger: true};
+      case 'file-delete': return {title: 'Delete ' + item.filename + '?',
+        body: 'This removes the file for everyone on the team and frees its space. It can’t be undone. Copies people already downloaded stay on their computers.' + (item.spaceKind === 'app' ? ' A team app may depend on this file.' : ''),
+        confirmLabel: 'Delete', danger: true};
+      case 'app-approve': {
+        var version = item.pending || {};
+        return version.kind === 'link'
+          ? {title: 'Approve ' + item.name + ' for everyone?', body: 'This opens on every teammate’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.', detail: version.url, confirmLabel: 'Approve for everyone'}
+          : {title: 'Approve ' + item.name + ' for everyone?', body: 'This runs on every teammate’s computer. Only approve an app you trust. Published by ' + (item.publisher && item.publisher.name || 'a former teammate') + '.', confirmLabel: 'Approve for everyone'};
+      }
+      case 'app-reject': return {title: 'Reject version ' + Number(item.pending && item.pending.version) + ' of ' + item.name + '?',
+        body: 'It won’t reach the team. ' + (item.live ? 'The live version stays live. ' : '') + 'The publisher can send a new version.', confirmLabel: 'Reject', danger: true};
+      case 'app-archive': return {title: 'Archive ' + item.name + '?', body: 'It leaves the catalog for everyone, and teammates can no longer open it from there. Its file is not deleted.', confirmLabel: 'Archive', danger: true};
+      case 'session-end': return {title: 'End ' + (item.name || 'this session') + '?',
+        body: 'This closes the session for everyone in it. Their tabs stay open on their own computers. Older versions of Mia ignore this, so someone on an older version may reopen it.',
+        confirmLabel: 'End session', danger: true};
+    }
+    return null;
+  }
+
+  /* ============ team controls: automations ============ */
+
+  var HUB_TONE = {good: 'ok', waiting: 'warn', attention: 'warn', working: 'warn', bad: 'bad', quiet: ''};
+
+  function hubLiveVersion(workflow){
+    if(Number.isSafeInteger(workflow.published) && workflow.published > 0) return 'Version ' + workflow.published;
+    return workflow.published ? 'Live' : 'Nothing live yet';
+  }
+  function hubChannelLabel(channels, id){
+    var channel = channels && channels[id];
+    return channel && channel.name ? '#' + channel.name : 'A channel you have not joined';
+  }
+
+  function renderHubWorkflow(entry, st){
+    var workflow = entry.workflow, proposal = entry.proposal, people = st.people, status = wf.workflowStatus(workflow), busy = st.busy || {};
+    var id = workflow.id, trigger = workflow.definition && workflow.definition.trigger;
+    var versionBusy = !!busy['wf-version:' + id], html = '<div class="card hub-item"><div class="hub-item-head"><div class="hub-item-title">' + esc(workflow.name) + '</div>' +
+      '<div class="hub-item-pills">' + hubPill(status.label, HUB_TONE[status.tone]) + (proposal && workflow.published ? hubPill('Version waiting', 'warn') : '') + '</div></div>' +
+      '<div class="hub-item-text">' + esc(trigger ? wf.triggerLine(trigger) : 'No approved version yet') + '</div>' +
+      '<div class="hub-item-meta">' + esc(hubChannelLabel(st.channels, workflow.channel_id)) + ' · Live: ' + esc(hubLiveVersion(workflow)) + '</div>';
+    if(!entry.detail) html += '<div class="hub-item-meta">Mia could not check this workflow for a version waiting for approval.</div>';
+    if(proposal){
+      var steps = (proposal.definition && proposal.definition.steps) || [];
+      html += '<div class="hub-review"><div class="hub-review-title">Version ' + Number(proposal.version) + ' is waiting for approval</div>' +
+        '<div class="hub-item-meta">Proposed by ' + esc(wf.displayName(people, proposal.proposed_by)) + '. It goes live once an admin approves it. Runs already in progress keep their version.</div>' +
+        '<div class="hub-item-meta">' + esc(wf.triggerLine(proposal.definition && proposal.definition.trigger)) + '</div>' +
+        (steps.length ? '<ol>' + steps.map(function(step){
+          return '<li>' + esc(step.text) + ' <span class="hub-item-meta">(' + esc(wf.shortName(people, step.ownerMemberId)) + ')</span></li>';
+        }).join('') + '</ol>' : '') +
+        '<div class="hub-item-actions">' + hubButton('Approve', 'wf-approve', id, {tone: 'primary', version: proposal.version, disabled: versionBusy}) +
+        hubButton('Reject', 'wf-reject', id, {version: proposal.version, disabled: versionBusy}) + '</div></div>';
+    }
+    html += '<div class="hub-item-actions">' +
+      (workflow.published ? hubButton(workflow.enabled ? 'Pause' : 'Resume', 'wf-toggle', id, {disabled: !!busy['wf-toggle:' + id]}) : '') +
+      hubButton('Archive', 'wf-archive', id, {tone: 'danger', disabled: !!busy['wf-archive:' + id]}) + '</div></div>';
+    return html;
+  }
+
+  function renderHubAutomations(st, now){
+    var list = st.workflows || [], people = st.people || {}, approvals = st.approvals || [], runs = (st.runs || []).slice(0, 25);
+    var html = '';
+    if(approvals.length || st.approvalsError){
+      html += hubSectionHead('Waiting for approval', 'The named approver decides each of these in Mia.');
+      html += st.approvalsError ? hubStateHtml(st.approvalsError.message, 'automations', st.approvalsError.retry) : '<div class="hub-list">' + approvals.map(function(approval){
+        return '<div class="card hub-item"><div class="hub-item-head"><div class="hub-item-title">' + esc(approval.workflow_name) + '</div>' + hubPill('Waiting', 'warn') + '</div>' +
+          '<div class="hub-item-text">Step ' + esc(approval.step_n) + ': ' + esc(approval.step_text) + '</div>' +
+          '<div class="hub-item-meta">Waiting for ' + esc(wf.shortName(people, approval.approver_id)) + (approval.created_at ? ' · ' + esc(wf.sinceText(approval.created_at, now)) : '') + '</div></div>';
+      }).join('') + '</div>';
+    }
+    html += hubSectionHead('Workflows', list.length ? list.length + (list.length === 1 ? ' workflow' : ' workflows') : '');
+    html += list.length ? '<div class="hub-list">' + list.map(function(entry){ return renderHubWorkflow(entry, Object.assign({}, st, {people: people})); }).join('') + '</div>'
+      : '<div class="card hub-state"><p>No automations yet. A workflow someone creates in Mia shows up here.</p></div>';
+    html += hubSectionHead('Recent runs');
+    if(st.runsError) html += hubStateHtml(st.runsError.message, 'automations', st.runsError.retry);
+    else if(!runs.length) html += '<div class="card hub-state"><p>No runs yet.</p></div>';
+    else html += '<div class="card admin-table-wrap"><table class="admin-table hub-files-table"><thead><tr><th>Workflow</th><th>State</th><th>Now</th><th>Started by</th><th>Started</th></tr></thead><tbody>' +
+      runs.map(function(run){
+        var state = wf.runState(run.state);
+        return '<tr><td><div class="admin-cell-name">' + esc(run.workflow_name) + '</div><div class="admin-cell-sub">' + esc(run.summary || '') + '</div></td>' +
+          '<td>' + hubPill(state.label, HUB_TONE[state.tone]) + '</td>' +
+          '<td class="admin-cell-sub">' + esc(wf.isOpenRun(run) ? wf.runLine(run, people, now) : (run.final_note || '')) + '</td>' +
+          '<td class="admin-cell-sub">' + esc(wf.shortName(people, run.started_by)) + '</td>' +
+          '<td class="admin-cell-sub">' + esc(fmtDate(hubTime(run.created_at))) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+    return html;
+  }
+
+  /* ============ team controls: files ============ */
+
+  var HUB_FILE_CURSOR = /^[1-9][0-9]{0,14}\/[a-f0-9]{32}$/;
+
+  function hubFileWhere(file){
+    var name = file.spaceName;
+    switch(file.spaceKind){
+      case 'channel': return name ? '#' + name : 'A channel';
+      case 'group': return name ? 'Group: ' + name : 'A group';
+      case 'dm': return 'A direct message';
+      case 'automation': return name ? 'Workflow: ' + name : 'A workflow';
+      case 'app': return 'A team app';
+      default: return 'Team files';
+    }
+  }
+  function hubFileScan(file){
+    if(file.state === 'reserved' || file.state === 'uploading') return {label: 'Uploading', tone: ''};
+    var verdict = tf.scanVerdict(file);
+    if(verdict === 'clean') return {label: 'Clean', tone: 'ok'};
+    if(verdict === 'pending') return {label: 'Scanning', tone: 'warn'};
+    return {label: file.scanStatus === 'THREATS_FOUND' ? 'Threat found' : 'Could not scan', tone: 'bad'};
+  }
+  function hubUsageHtml(st){
+    if(st.usageError) return '<div class="card hub-usage"><div class="hub-usage-text">Storage used is not available right now.</div></div>';
+    var usage = st.usage;
+    if(!usage) return '';
+    var percent = Math.min(100, Math.round(usage.usedBytes / usage.quotaBytes * 100));
+    return '<div class="card hub-usage' + (percent >= 100 ? ' full' : percent >= 90 ? ' high' : '') + '">' +
+      '<div class="hub-usage-text">' + esc(tf.formatBytes(usage.usedBytes)) + ' of ' + esc(tf.formatBytes(usage.quotaBytes)) + ' used</div>' +
+      '<div class="hub-usage-bar" role="progressbar" aria-label="Team file storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + Math.max(percent, usage.usedBytes > 0 ? 1 : 0) + '%"></span></div></div>';
+  }
+  function renderHubFiles(st){
+    var list = st.files || [], busy = st.busy || {};
+    var html = hubUsageHtml(st);
+    if(!list.length) return html + '<div class="card hub-state"><p>No team files yet.</p></div>';
+    html += '<div class="card admin-table-wrap"><table class="admin-table hub-files-table"><thead><tr><th>File</th><th>Size</th><th>Where it lives</th><th>Uploaded by</th><th>Date</th><th>Scan</th><th></th></tr></thead><tbody>' +
+      list.map(function(file){
+        var scan = hubFileScan(file), uploader = file.uploader && file.uploader.name;
+        return '<tr><td class="hub-filename">' + esc(file.filename) + '</td>' +
+          '<td class="admin-cell-sub">' + esc(tf.formatBytes(file.sizeBytes)) + '</td>' +
+          '<td class="admin-cell-sub">' + esc(hubFileWhere(file)) + '</td>' +
+          '<td class="admin-cell-sub">' + esc(uploader || 'A former teammate') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(fmtDate(hubTime(file.createdAt))) + '</td>' +
+          '<td>' + hubPill(scan.label, scan.tone) + '</td>' +
+          '<td class="admin-row-control">' + hubButton('Delete', 'file-delete', file.fileId, {tone: 'danger', disabled: !!busy['file-delete:' + file.fileId]}) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+    if(st.nextCursor || st.moreError){
+      html += '<div class="hub-more">' + (st.moreError ? '<span>Mia could not load more files.</span>' : '') +
+        hubButton(st.loadingMore ? 'Loading…' : st.moreError ? 'Try again' : 'Load more', 'files-more', 'files', {disabled: !!st.loadingMore}) + '</div>';
+    }
+    return html;
+  }
+
+  /* ============ team controls: apps ============ */
+
+  function hubAppVersionSize(version){
+    return version.kind === 'link' ? {label: 'Address', value: version.url || ''} : {label: 'Size', value: tf.formatBytes(version.sizeBytes)};
+  }
+  var HUB_APP_SCAN = {
+    clean: {text: 'Clean. Ready to approve.', tone: 'ok', approve: true},
+    pending: {text: 'Still being scanned for viruses. You can approve it once it is clean.', tone: 'warn', approve: false},
+    blocked: {text: 'Failed the virus scan. It can’t be approved.', tone: 'bad', approve: false},
+    unknown: {text: 'Mia could not check the scan. The team server checks again when you approve.', tone: 'warn', approve: true}
+  };
+  function hubAppReadiness(version, scans){
+    if(version.kind === 'link') return {text: 'No file to scan. This is a web address.', tone: '', approve: true};
+    return HUB_APP_SCAN[(scans && scans[version.fileId]) || 'unknown'];
+  }
+  function hubFact(label, value, className){
+    return value ? '<dt>' + esc(label) + '</dt><dd' + (className ? ' class="' + className + '"' : '') + '>' + esc(value) + '</dd>' : '';
+  }
+  function hubAppFacts(app, version, readiness){
+    var size = hubAppVersionSize(version);
+    return '<dl class="hub-facts">' + hubFact('Published by', app.publisher && app.publisher.name || 'A former teammate') +
+      hubFact('Kind', version.kind === 'link' ? 'Web address' : 'App file') +
+      hubFact(size.label, size.value, version.kind === 'link' ? 'hub-address' : '') +
+      hubFact('Note', version.note) +
+      (readiness ? hubFact('Scan', readiness.text, readiness.tone ? 'hub-ready-' + readiness.tone : '') : '') + '</dl>';
+  }
+  function renderHubApp(app, st){
+    var busy = st.busy || {}, pending = app.pending, live = app.live;
+    var html = '<div class="card hub-item"><div class="hub-item-head"><div class="hub-item-title">' + esc(app.name) + '</div><div class="hub-item-pills">' +
+      (pending ? hubPill('Waiting for review', 'warn') : '') + (live ? hubPill('Live', 'ok') : '') + (!pending && !live ? hubPill('Not live', '') : '') + '</div></div>' +
+      (app.description ? '<div class="hub-item-text">' + esc(app.description) + '</div>' : '');
+    if(pending){
+      var readiness = hubAppReadiness(pending, st.scans), versionBusy = !!busy['app-version:' + app.id];
+      html += '<div class="hub-review"><div class="hub-review-title">Version ' + Number(pending.version) + (live ? ' would replace the live version' : ' is waiting for review') + '</div>' +
+        hubAppFacts(app, pending, readiness) +
+        '<div class="hub-item-meta">Approving makes this run on every teammate’s computer.' + (live ? ' Version ' + Number(live.version) + ' stays live until then.' : '') + '</div>' +
+        '<div class="hub-item-actions">' + hubButton('Approve for everyone', 'app-approve', app.id, {tone: 'primary', version: pending.version, disabled: versionBusy || !readiness.approve}) +
+        hubButton('Reject', 'app-reject', app.id, {version: pending.version, disabled: versionBusy}) + '</div></div>';
+    }
+    if(live) html += '<div class="hub-item-meta" style="margin-top:8px">Live: version ' + Number(live.version) + '</div>' + hubAppFacts(app, live);
+    html += '<div class="hub-item-actions">' + hubButton('Archive', 'app-archive', app.id, {tone: 'danger', disabled: !!busy['app-archive:' + app.id]}) + '</div></div>';
+    return html;
+  }
+  function renderHubApps(st){
+    var list = st.apps || [];
+    if(!list.length) return '<div class="card hub-state"><p>No apps yet. An app a teammate publishes shows up here for review.</p></div>';
+    var waiting = list.filter(function(app){ return app.pending; }).length;
+    return hubSectionHead('Catalog', list.length + (list.length === 1 ? ' app' : ' apps') + (waiting ? ' · ' + waiting + ' waiting for review' : '')) +
+      '<div class="hub-list">' + list.map(function(app){ return renderHubApp(app, st); }).join('') + '</div>';
+  }
+
+  /* ============ team controls: browser sessions ============ */
+
+  var HUB_SESSION_SPACE = /^[a-z0-9]{6,32}$/;
+  var HUB_ENDED_HIDE_MS = 20000;
+
+  function hubSessionKey(session){ return session.channelId + '/' + session.spaceId; }
+  function hubSessionEndable(session){ return HUB_ID.test(session.channelId || '') && HUB_SESSION_SPACE.test(session.spaceId || ''); }
+  function renderHubSessions(st, now){
+    var list = st.sessions || [], busy = st.busy || {};
+    var note = '<div class="hub-note">Ending a session closes it for everyone in it, and their tabs stay open on their own computers. Older versions of Mia ignore this, so someone on an older version may reopen it, and it would show up here again. Page addresses are never shown here.</div>';
+    if(!list.length) return note + '<div class="card hub-state"><p>No live browser sessions right now.</p></div>';
+    return note + '<div class="card admin-table-wrap"><table class="admin-table hub-sessions-table"><thead><tr><th>Session</th><th>Channel</th><th>Started by</th><th>In it now</th><th>Tabs</th><th>Last seen</th><th></th></tr></thead><tbody>' +
+      list.map(function(session){
+        var key = hubSessionKey(session), people = (session.people || []).map(function(person){ return person && person.name || 'A teammate'; });
+        return '<tr><td class="admin-cell-name">' + esc(session.name || 'Shared tabs') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(session.channelName ? '#' + session.channelName : 'A channel') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(session.startedBy && session.startedBy.name || 'A teammate') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(people.length ? people.join(', ') : 'Nobody') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(session.tabCount != null ? session.tabCount : '—') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(wf.sinceText(session.lastSeenAt, now) || '—') + '</td>' +
+          '<td class="admin-row-control">' + (hubSessionEndable(session)
+            ? hubButton('End', 'session-end', key, {tone: 'danger', disabled: !!busy['session-end:' + key]})
+            : '<span class="admin-row-protected">Can’t be ended here</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  /* ============ team controls: loading and actions, no DOM ============ */
+
+  // Holds each view's data and runs every Hub call, so screens only draw it.
+  // options: {teamId, call(method, path, body), confirm(copy) -> Promise<bool>, toast(text, isError), onChange(view), now()}
+  function createHubAdmin(options){
+    var call = options.call, base = '/v1/teams/' + options.teamId;
+    var now = options.now || function(){ return Date.now(); };
+    var workflows = wf.createClient({teamId: options.teamId, call: call});
+    var files = tf.createClient({teamId: options.teamId, call: call});
+    var state = {};
+    HUB_VIEWS.forEach(function(view){ state[view] = {loaded: false, error: null, busy: {}, token: 0, inflight: null, updatedAt: 0}; });
+
+    function changed(view){ if(options.onChange) options.onChange(view); }
+    var loaders = {};
+
+    function load(view, opts){
+      var st = state[view];
+      if(st.inflight && !(opts && opts.force)) return st.inflight;
+      var token = ++st.token;
+      var run = Promise.resolve().then(loaders[view]).then(function(apply){
+        if(token !== st.token) return;
+        apply();
+        st.loaded = true; st.error = null; st.updatedAt = now();
+      }, function(error){
+        if(token !== st.token) return;
+        st.error = hubLoadError(error);
+        // Lost access, or the route is gone: leave no controls that can't work.
+        if(st.error.kind === 'forbidden' || st.error.kind === 'missing') st.loaded = false;
+      }).then(function(){
+        if(token !== st.token) return;
+        st.inflight = null;
+        changed(view);
+      });
+      st.inflight = run;
+      changed(view);
+      return run;
+    }
+
+    // Confirm first, then one call at a time per control; a failure also re-reads,
+    // since it usually means someone else changed the thing first.
+    function perform(view, key, copy, work, done, failText){
+      var st = state[view];
+      if(st.busy[key]) return Promise.resolve();
+      return (copy ? options.confirm(copy) : Promise.resolve(true)).then(function(ok){
+        if(!ok) return;
+        st.busy[key] = true;
+        changed(view);
+        return Promise.resolve().then(work).then(function(result){
+          delete st.busy[key];
+          return done(result);
+        }, function(error){
+          delete st.busy[key];
+          options.toast(failText(error), true);
+          return load(view, {force: true});
+        });
+      });
+    }
+
+    var actions = {
+      retry: function(view){ return load(view, {force: true}); }
+    };
+
+    /* ---- automations ---- */
+    loaders.automations = function(){
+      function optional(promise){ return promise.then(function(value){ return {value: value}; }, function(error){ return {error: hubLoadError(error)}; }); }
+      return Promise.all([workflows.workflows(), optional(workflows.members()), optional(workflows.channels()), optional(workflows.runs('all')), optional(workflows.approvals('pending'))]).then(function(results){
+        var list = (results[0] && results[0].workflows || []).filter(function(item){ return item && HUB_ID.test(item.id || ''); });
+        // Only the detail route lists versions, and it is where a waiting one shows.
+        return hubMapPool(list, 6, function(item){
+          return workflows.workflow(item.id).then(function(reply){ return reply && reply.workflow || null; }, function(){ return null; });
+        }).then(function(details){
+          return function(){
+            var st = state.automations, names = {};
+            ((results[2].value && results[2].value.channels) || []).forEach(function(channel){ if(channel && channel.id) names[channel.id] = channel; });
+            st.workflows = list.map(function(item, index){ return {workflow: item, detail: details[index], proposal: details[index] ? wf.latestProposal(details[index]) : null}; })
+              .sort(function(a, b){ return (b.proposal ? 1 : 0) - (a.proposal ? 1 : 0) || String(a.workflow.name).localeCompare(String(b.workflow.name)); });
+            st.people = wf.directory(results[1].value && results[1].value.members);
+            st.channels = names;
+            st.runs = (results[3].value && results[3].value.runs) || [];
+            st.runsError = results[3].error || null;
+            st.approvals = (results[4].value && results[4].value.approvals) || [];
+            st.approvalsError = results[4].error || null;
+          };
+        });
+      });
+    };
+    function workflowEntry(id){ return (state.automations.workflows || []).filter(function(entry){ return entry.workflow.id === id; })[0]; }
+    function workflowFail(fallback){ return function(error){ return wf.errorMessage(error, fallback); }; }
+    function afterWorkflow(text){ return function(){ options.toast(text); return load('automations', {force: true}); }; }
+    actions['wf-toggle'] = function(id){
+      var entry = workflowEntry(id); if(!entry) return Promise.resolve();
+      var on = !entry.workflow.enabled;
+      return perform('automations', 'wf-toggle:' + id, null, function(){ return workflows.setEnabled(id, on); },
+        afterWorkflow((on ? 'Resumed ' : 'Paused ') + entry.workflow.name), workflowFail('Mia could not change this workflow.'));
+    };
+    actions['wf-archive'] = function(id){
+      var entry = workflowEntry(id); if(!entry) return Promise.resolve();
+      return perform('automations', 'wf-archive:' + id, hubConfirmCopy('wf-archive', entry.workflow), function(){ return workflows.archive(id); },
+        afterWorkflow('Archived ' + entry.workflow.name), workflowFail('Mia could not archive this workflow.'));
+    };
+    ['approve', 'reject'].forEach(function(decision){
+      actions['wf-' + decision] = function(id, version){
+        var entry = workflowEntry(id); if(!entry) return Promise.resolve();
+        if(!entry.proposal || entry.proposal.version !== version) return load('automations', {force: true});
+        return perform('automations', 'wf-version:' + id, hubConfirmCopy('wf-' + decision, entry.workflow, {version: version}), function(){
+          return decision === 'approve' ? workflows.approveVersion(id, version) : workflows.rejectVersion(id, version);
+        }, afterWorkflow((decision === 'approve' ? 'Approved' : 'Rejected') + ' version ' + version + ' of ' + entry.workflow.name), workflowFail('Mia could not save your decision.'));
+      };
+    });
+
+    /* ---- files ---- */
+    function cleanFile(file){
+      return file && HUB_ID.test(file.fileId || '') && typeof file.filename === 'string' ? file : null;
+    }
+    function fileList(reply){
+      return {files: (reply && Array.isArray(reply.files) ? reply.files : []).filter(cleanFile),
+        nextCursor: reply && typeof reply.nextCursor === 'string' && HUB_FILE_CURSOR.test(reply.nextCursor) ? reply.nextCursor : null};
+    }
+    function refreshUsage(){
+      var st = state.files;
+      return files.usage().then(function(usage){ st.usage = usage; st.usageError = false; }, function(){ st.usageError = true; }).then(function(){ changed('files'); });
+    }
+    loaders.files = function(){
+      var usage = files.usage().then(function(value){ return {value: value}; }, function(){ return {failed: true}; });
+      return Promise.all([call('GET', base + '/files/admin'), usage]).then(function(results){
+        return function(){
+          var st = state.files, page = fileList(results[0]);
+          st.files = page.files; st.nextCursor = page.nextCursor; st.moreError = false; st.loadingMore = false;
+          st.usage = results[1].value || st.usage || null; st.usageError = !!results[1].failed;
+        };
+      });
+    };
+    actions['files-more'] = function(){
+      var st = state.files, token = st.token, cursor = st.nextCursor;
+      if(st.loadingMore || !cursor) return Promise.resolve();
+      st.loadingMore = true; st.moreError = false;
+      changed('files');
+      return call('GET', base + '/files/admin/before/' + cursor).then(function(reply){
+        if(token !== st.token) return;
+        var page = fileList(reply), seen = {};
+        st.files.forEach(function(file){ seen[file.fileId] = true; });
+        st.files = st.files.concat(page.files.filter(function(file){ return !seen[file.fileId]; }));
+        st.nextCursor = page.nextCursor; st.loadingMore = false;
+        changed('files');
+      }, function(){
+        if(token !== st.token) return;
+        st.loadingMore = false; st.moreError = true;
+        changed('files');
+      });
+    };
+    actions['file-delete'] = function(id){
+      var st = state.files, file = (st.files || []).filter(function(item){ return item.fileId === id; })[0];
+      if(!file) return Promise.resolve();
+      function gone(){ st.files = st.files.filter(function(item){ return item.fileId !== id; }); changed('files'); return refreshUsage(); }
+      return perform('files', 'file-delete:' + id, hubConfirmCopy('file-delete', file), function(){
+        return files.remove(id).catch(function(error){
+          // Someone else already removed it; that is the outcome the admin wanted.
+          if(error && error.status === 404) return {alreadyGone: true};
+          throw error;
+        });
+      }, function(result){
+        options.toast(result && result.alreadyGone ? file.filename + ' was already deleted' : 'Deleted ' + file.filename);
+        return gone();
+      }, function(error){ return tf.friendly(error); });
+    };
+
+    /* ---- apps ---- */
+    function cleanVersion(version){
+      return version && Number.isSafeInteger(version.version) && version.version > 0 ? version : null;
+    }
+    loaders.apps = function(){
+      return call('GET', base + '/apps').then(function(reply){
+        var list = (reply && Array.isArray(reply.apps) ? reply.apps : []).filter(function(app){ return app && HUB_ID.test(app.id || '') && typeof app.name === 'string'; })
+          .map(function(app){ return Object.assign({}, app, {live: cleanVersion(app.live), pending: cleanVersion(app.pending)}); })
+          .sort(function(a, b){ return (b.pending ? 1 : 0) - (a.pending ? 1 : 0) || a.name.localeCompare(b.name); });
+        var bundles = list.filter(function(app){ return app.pending && app.pending.kind !== 'link' && HUB_ID.test(app.pending.fileId || ''); });
+        // Scan state lives on the file, so look before offering Approve.
+        return hubMapPool(bundles, 4, function(app){
+          return files.status(app.pending.fileId).then(function(reply){ return tf.scanVerdict(reply); }, function(){ return 'unknown'; });
+        }).then(function(verdicts){
+          return function(){
+            var scans = {};
+            bundles.forEach(function(app, index){ scans[app.pending.fileId] = verdicts[index]; });
+            state.apps.apps = list; state.apps.scans = scans;
+          };
+        });
+      });
+    };
+    function appById(id){ return (state.apps.apps || []).filter(function(app){ return app.id === id; })[0]; }
+    function appFail(error){
+      if(error && error.status === 404) return 'This app changed or was removed. Check the list and try again.';
+      return tf.friendly(error);
+    }
+    function afterApp(text){ return function(){ options.toast(text); return load('apps', {force: true}); }; }
+    ['approve', 'reject'].forEach(function(decision){
+      actions['app-' + decision] = function(id, version){
+        var app = appById(id);
+        if(!app) return Promise.resolve();
+        if(!app.pending || app.pending.version !== version) return load('apps', {force: true});
+        if(decision === 'approve' && !hubAppReadiness(app.pending, state.apps.scans).approve) return Promise.resolve();
+        return perform('apps', 'app-version:' + id, hubConfirmCopy('app-' + decision, app), function(){
+          return call('POST', base + '/apps/' + id + '/versions/' + version + '/' + decision, {});
+        }, afterApp((decision === 'approve' ? 'Approved ' : 'Rejected version ' + version + ' of ') + app.name), appFail);
+      };
+    });
+    actions['app-archive'] = function(id){
+      var app = appById(id);
+      if(!app) return Promise.resolve();
+      return perform('apps', 'app-archive:' + id, hubConfirmCopy('app-archive', app), function(){
+        return call('DELETE', base + '/apps/' + id, {});
+      }, afterApp('Archived ' + app.name), appFail);
+    };
+
+    /* ---- browser sessions ---- */
+    state.sessions.hidden = {};
+    loaders.sessions = function(){
+      return call('GET', base + '/browser-sessions').then(function(reply){
+        return function(){
+          var st = state.sessions, at = now();
+          // Hub rows can lag a moment behind an End. After that the Hub is right,
+          // including when someone on an older version has reopened the session.
+          Object.keys(st.hidden).forEach(function(key){ if(st.hidden[key] <= at) delete st.hidden[key]; });
+          st.sessions = (reply && Array.isArray(reply.sessions) ? reply.sessions : []).filter(function(session){
+            return session && typeof session.channelId === 'string' && typeof session.spaceId === 'string' && !st.hidden[hubSessionKey(session)];
+          });
+        };
+      });
+    };
+    actions['session-end'] = function(key){
+      var st = state.sessions, session = (st.sessions || []).filter(function(item){ return hubSessionKey(item) === key; })[0];
+      if(!session || !hubSessionEndable(session)) return Promise.resolve();
+      function finish(text){
+        st.hidden[key] = now() + HUB_ENDED_HIDE_MS;
+        st.sessions = st.sessions.filter(function(item){ return hubSessionKey(item) !== key; });
+        options.toast(text);
+        return load('sessions', {force: true});
+      }
+      return perform('sessions', 'session-end:' + key, hubConfirmCopy('session-end', session), function(){
+        return call('POST', base + '/browser-sessions/' + session.channelId + '/' + session.spaceId + '/end', {}).catch(function(error){
+          if(error && error.status === 404) return {alreadyGone: true};
+          throw error;
+        });
+      }, function(result){
+        return finish(result && result.alreadyGone ? 'That session had already ended' : 'Ended ' + (session.name || 'the session'));
+      }, function(error){ return wf.errorMessage(error, 'Mia could not end this session.'); });
+    };
+
+    return {
+      state: state,
+      load: load,
+      act: function(action, id, version){
+        var run = actions[action];
+        return run ? run(id, version == null ? null : Number(version)) : Promise.resolve();
+      }
+    };
+  }
+
   /* ============ DOM-dependent runtime (browser only) ============ */
 
   function initBrowser(win){
@@ -522,13 +1071,11 @@
       if(name === 'agents') loadAgents();
       if(name === 'invites') loadInvites();
       if(name === 'activity') loadActivity();
+      if(hubAdmin && HUB_VIEWS.indexOf(name) !== -1) hubAdmin.load(name);
     }
 
     function currentViewFromHash(){
-      var h = (win.location.hash || '').replace(/^#\/?/, '');
-      if(h === 'agent-roster') h = 'agents';
-      var known = ['overview', 'users', 'agents', 'invites', 'activity', 'backup'];
-      return known.indexOf(h) !== -1 ? h : 'overview';
+      return adminViewFromHash(win.location.hash, !!team);
     }
 
     /* ---- overview ---- */
@@ -557,6 +1104,88 @@
       overviewTimer = setInterval(function(){
         if(currentViewFromHash() === 'overview' && !doc.hidden) loadOverview();
       }, team ? 30000 : 10000);
+      if(team) setInterval(refreshOpenSessions, SESSION_REFRESH_MS);
+    }
+
+    /* ---- team controls ---- */
+    var hubAdmin = null;
+    var hubPainted = {};
+    var hubConfirmResolve = null;
+    var hubConfirmOpener = null;
+
+    function refreshOpenSessions(){
+      if(hubAdmin && currentViewFromHash() === 'sessions' && !doc.hidden) hubAdmin.load('sessions');
+    }
+
+    // A refresh must not take the keyboard away from whoever is on a button.
+    function hubButtonKey(el){
+      return el && el.getAttribute && el.getAttribute('data-hub-action')
+        ? [el.getAttribute('data-hub-action'), el.getAttribute('data-hub-id'), el.getAttribute('data-hub-version')].join('|') : '';
+    }
+    function hubFindButton(key){
+      return key ? $all('button[data-hub-action]').filter(function(btn){ return hubButtonKey(btn) === key; })[0] : null;
+    }
+    function hubPaint(view){
+      var body = $('[data-hub-body="' + view + '"]'), st = hubAdmin.state[view];
+      if(!body) return;
+      var html = renderHubView(view, st, Date.now());
+      if(html !== hubPainted[view]){
+        var focused = hubButtonKey(doc.activeElement);
+        hubPainted[view] = html;
+        body.innerHTML = html;
+        var again = hubFindButton(focused);
+        if(again && !again.disabled) again.focus();
+      }
+      var updated = $('#hub' + view.charAt(0).toUpperCase() + view.slice(1) + 'Updated');
+      if(updated) updated.textContent = st.updatedAt ? 'Updated ' + new Date(st.updatedAt).toLocaleTimeString() : '';
+    }
+
+    function hubConfirm(copy){
+      if(hubConfirmResolve) hubConfirmClose(false);
+      hubConfirmOpener = doc.activeElement;
+      $('#hubConfirmTitle').textContent = copy.title;
+      $('#hubConfirmBody').textContent = copy.body;
+      var detail = $('#hubConfirmDetail');
+      detail.textContent = copy.detail || '';
+      detail.hidden = !copy.detail;
+      var ok = $('#hubConfirmOk');
+      ok.textContent = copy.confirmLabel;
+      ok.className = 'btn ' + (copy.danger ? 'danger-solid' : 'primary');
+      openOverlay('hubConfirmOverlay');
+      $('#hubConfirmCancel').focus();
+      return new Promise(function(resolve){ hubConfirmResolve = resolve; });
+    }
+    function hubConfirmClose(answer){
+      var resolve = hubConfirmResolve, opener = hubConfirmOpener;
+      hubConfirmResolve = null; hubConfirmOpener = null;
+      closeOverlay('hubConfirmOverlay');
+      if(opener && opener.focus && !opener.disabled) opener.focus();
+      if(resolve) resolve(answer);
+    }
+    function wireHubAdmin(){
+      $all('[data-hub-body]').forEach(function(body){
+        body.addEventListener('click', function(ev){
+          var btn = ev.target.closest && ev.target.closest('button[data-hub-action]');
+          if(!btn || btn.disabled) return;
+          hubAdmin.act(btn.getAttribute('data-hub-action'), btn.getAttribute('data-hub-id'), btn.getAttribute('data-hub-version'));
+        });
+      });
+      $all('[data-hub-refresh]').forEach(function(btn){
+        btn.addEventListener('click', function(){ hubAdmin.load(btn.getAttribute('data-hub-refresh'), {force: true}); });
+      });
+      $('#hubConfirmCancel').addEventListener('click', function(){ hubConfirmClose(false); });
+      $('#hubConfirmOk').addEventListener('click', function(){ hubConfirmClose(true); });
+      var overlay = $('#hubConfirmOverlay');
+      overlay.addEventListener('click', function(ev){ if(ev.target === overlay) hubConfirmClose(false); });
+      overlay.addEventListener('keydown', function(ev){
+        if(ev.key === 'Escape') hubConfirmClose(false);
+        if(ev.key === 'Tab'){
+          // Two buttons, so Tab just moves between them and stays in the dialog.
+          ev.preventDefault();
+          (doc.activeElement === $('#hubConfirmOk') ? $('#hubConfirmCancel') : $('#hubConfirmOk')).focus();
+        }
+      });
+      doc.addEventListener('visibilitychange', refreshOpenSessions);
     }
 
     /* ---- users ---- */
@@ -1140,6 +1769,8 @@
         win.location.href = '/';
       });
 
+      if(team) wireHubAdmin();
+
       win.addEventListener('hashchange', function(){ showView(currentViewFromHash()); });
     }
 
@@ -1159,7 +1790,7 @@
     }
 
     function bootTeam(teamId){
-      if(!win.MiaHubChat){
+      if(!win.MiaHubChat || !tf || !wf){
         blocked('Admin Center is unavailable', 'The shared team connection did not load. Restart Mia and try again.');
         return;
       }
@@ -1183,10 +1814,11 @@
         if(groupHead) groupHead.textContent = 'Channel';
         var agentsSub = $('#agentsSub');
         if(agentsSub) agentsSub.textContent = 'Bots in the channels you are in, with the member who added each one.';
+        hubAdmin = createHubAdmin({teamId: team.id, call: win.MiaHubChat.call, confirm: hubConfirm, toast: toast, onChange: hubPaint});
+        $all('[data-team-only]').forEach(function(el){ el.hidden = false; });
         $('#adminWrap').hidden = false;
         wire();
-        var view = currentViewFromHash();
-        showView(view === 'backup' ? 'overview' : view);
+        showView(currentViewFromHash());
         loadOverview();
         startAutoRefresh();
       }).catch(function(){
@@ -1234,6 +1866,13 @@
   var exportsObj = {
     esc: esc,
     adminWorkspaceKey: adminWorkspaceKey,
+    adminViewFromHash: adminViewFromHash,
+    hubLoadError: hubLoadError,
+    hubConfirmCopy: hubConfirmCopy,
+    createHubAdmin: createHubAdmin,
+    renderHubView: renderHubView,
+    hubFileWhere: hubFileWhere,
+    hubFileScan: hubFileScan,
     hubTeamId: hubTeamId,
     renderTeamOverviewTiles: renderTeamOverviewTiles,
     renderTeamUsersTable: renderTeamUsersTable,
