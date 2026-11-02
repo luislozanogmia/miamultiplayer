@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Mia · Admin</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
-<link rel="stylesheet" href="admin.css?v=2" />
+<link rel="stylesheet" href="admin.css?v=3" />
 </head>
 <body>
 
@@ -30,6 +30,10 @@
       <button type="button" class="admin-nav-item" data-view="overview">Overview</button>
       <button type="button" class="admin-nav-item" data-view="users">Users</button>
       <button type="button" class="admin-nav-item" data-view="agents">Bot Roster</button>
+      <button type="button" class="admin-nav-item" data-view="automations" data-team-only hidden>Automations</button>
+      <button type="button" class="admin-nav-item" data-view="files" data-team-only hidden>Files</button>
+      <button type="button" class="admin-nav-item" data-view="apps" data-team-only hidden>Apps</button>
+      <button type="button" class="admin-nav-item" data-view="sessions" data-team-only hidden>Browser sessions</button>
       <button type="button" class="admin-nav-item" data-view="invites">Invites</button>
       <button type="button" class="admin-nav-item" data-view="activity">Activity</button>
       <button type="button" class="admin-nav-item" data-view="backup" data-local-only>Backup</button>
@@ -51,6 +55,11 @@
         </div>
       </div>
       <div class="admin-tiles" id="overviewTiles"></div>
+      <div class="card hub-history-card" id="channelHistoryCard" data-team-only hidden>
+        <h2>Channel history</h2>
+        <p>Channel history is managed in Mia. Delete a message from the message itself, or archive a channel from its menu. An archived channel keeps its history, and an admin can restore it from Browse channels.</p>
+        <a class="btn small link" href="/#/chat">Open channels in Mia</a>
+      </div>
     </section>
 
     <!-- Users -->
@@ -111,6 +120,66 @@
           <tbody id="agentsBody"></tbody>
         </table>
       </div>
+    </section>
+
+    <!-- Automations (shared teams) -->
+    <section class="admin-view" data-view="automations">
+      <div class="admin-head">
+        <div>
+          <h1>Automations</h1>
+          <div class="admin-head-sub">Every workflow on this team, what is live, and what is waiting for a decision.</div>
+        </div>
+        <div class="admin-head-actions">
+          <div class="admin-updated" id="hubAutomationsUpdated"></div>
+          <button type="button" class="btn small" data-hub-refresh="automations">Refresh</button>
+        </div>
+      </div>
+      <div id="hubAutomationsBody" data-hub-body="automations"></div>
+    </section>
+
+    <!-- Files (shared teams) -->
+    <section class="admin-view" data-view="files">
+      <div class="admin-head">
+        <div>
+          <h1>Files</h1>
+          <div class="admin-head-sub">Every file on this team, newest first.</div>
+        </div>
+        <div class="admin-head-actions">
+          <div class="admin-updated" id="hubFilesUpdated"></div>
+          <button type="button" class="btn small" data-hub-refresh="files">Refresh</button>
+        </div>
+      </div>
+      <div id="hubFilesBody" data-hub-body="files"></div>
+    </section>
+
+    <!-- Apps (shared teams) -->
+    <section class="admin-view" data-view="apps">
+      <div class="admin-head">
+        <div>
+          <h1>Apps</h1>
+          <div class="admin-head-sub">Every app on this team. Versions waiting for review come first.</div>
+        </div>
+        <div class="admin-head-actions">
+          <div class="admin-updated" id="hubAppsUpdated"></div>
+          <button type="button" class="btn small" data-hub-refresh="apps">Refresh</button>
+        </div>
+      </div>
+      <div id="hubAppsBody" data-hub-body="apps"></div>
+    </section>
+
+    <!-- Browser sessions (shared teams) -->
+    <section class="admin-view" data-view="sessions">
+      <div class="admin-head">
+        <div>
+          <h1>Browser sessions</h1>
+          <div class="admin-head-sub">Tab groups shared to a channel right now.</div>
+        </div>
+        <div class="admin-head-actions">
+          <div class="admin-updated" id="hubSessionsUpdated"></div>
+          <button type="button" class="btn small" data-hub-refresh="sessions">Refresh</button>
+        </div>
+      </div>
+      <div id="hubSessionsBody" data-hub-body="sessions"></div>
     </section>
 
     <!-- Invites -->
@@ -231,6 +300,19 @@
   </div>
 </div>
 
+<!-- Confirm a team action -->
+<div class="admin-overlay" id="hubConfirmOverlay" hidden>
+  <div class="admin-dialog card" role="alertdialog" aria-modal="true" aria-labelledby="hubConfirmTitle" aria-describedby="hubConfirmBody">
+    <h2 id="hubConfirmTitle"></h2>
+    <p class="hub-confirm-body" id="hubConfirmBody"></p>
+    <p class="hub-confirm-detail" id="hubConfirmDetail" hidden></p>
+    <div class="admin-dialog-actions">
+      <button type="button" class="btn" id="hubConfirmCancel">Cancel</button>
+      <button type="button" class="btn primary" id="hubConfirmOk">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <!-- Reset password dialog -->
 <div class="admin-overlay" id="resetPwOverlay" hidden>
   <div class="admin-dialog card">
@@ -249,6 +331,8 @@
 <script src="assets/mia-mark.js"></script>
 <script src="clerk-desktop-ui.js"></script>
 <script src="hub-chat.js"></script>
-<script src="admin.js?v=20261024-team-owner-1"></script>
+<script src="team-files.js"></script>
+<script src="team-workflows.js"></script>
+<script src="admin.js?v=20261102-hub-admin-1"></script>
 </body>
 </html>
