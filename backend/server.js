@@ -1318,7 +1318,7 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
       senderLabel: trigger.author_email,
       message: trigger.body,
       promptLine: '[' + trigger.author_email + '] ' + trigger.body,
-      platformContext: [workspace.workspaceContext,
+      platformContext: [localDateLine(), workspace.workspaceContext,
         'This is a shared team channel. Distinguish each speaker. Reply to the current request; do not treat another bot reply as a new request. Keep the reply within 15,000 UTF-8 bytes.',
       ].filter(Boolean).join('\n\n'),
       googleRefs: workspace.safeGoogleRefs,
@@ -6299,9 +6299,12 @@ function confirmedSenderDisplayName(sender) {
 }
 
 
-function buildPlatformContext(includeAgentCreationGuidance, ownerEmail, companyId = NATIVE_COMPANY_ID) {
-  const today = localDateString();
+function localDateLine() {
   const timezone = localTimezoneName();
+  return `Today is ${localDateString()}${timezone ? ` (${timezone})` : ''}.`;
+}
+
+function buildPlatformContext(includeAgentCreationGuidance, ownerEmail, companyId = NATIVE_COMPANY_ID) {
   // Bot roster and departments are the only app state Mia needs in ordinary
   // chat. Retired vertical-specific tables must not leak into a generic OSS
   // installation's prompt just because their legacy storage still exists.
@@ -6315,7 +6318,7 @@ function buildPlatformContext(includeAgentCreationGuidance, ownerEmail, companyI
     : 'No bots created yet.';
 
   const lines = [
-    `Instance: ${INSTANCE_NAME}, an operating system for ${INSTANCE_TEAM_DESCRIPTION}. Today is ${today}${timezone ? ` (${timezone})` : ''}.`,
+    `Instance: ${INSTANCE_NAME}, an operating system for ${INSTANCE_TEAM_DESCRIPTION}. ${localDateLine()}`,
     `Departments: ${departments.length ? departments.join(', ') : 'none configured'}.`,
     agentsLine,
     `Available workspace surfaces include chat, bots, connected apps, documents, a web browser, and settings.`,

@@ -32,15 +32,19 @@ test('single-digit months and days are padded', () => {
   assert.equal(localDateString(new Date(2026, 0, 5, 12)), '2026-01-05');
 });
 
-test('the date given to Mia and bots comes from the local clock', async () => {
+test('Mia, bots and team channel bots are all told the local date', async () => {
   const source = await readFile(new URL('./server.js', import.meta.url), 'utf8');
-  const start = source.indexOf('function buildPlatformContext(');
-  const end = source.indexOf('\n// Mia is a default Chief-of-Staff', start);
-  const contextBuilder = source.slice(start, end);
-  assert.match(contextBuilder, /const today = localDateString\(\);/);
+  const line = source.slice(source.indexOf('function localDateLine('), source.indexOf('function buildPlatformContext('));
+  assert.match(line, /Today is \$\{localDateString\(\)\}/);
+  assert.match(line, /localTimezoneName\(\)/);
+  assert.doesNotMatch(line, /toISOString/);
+
+  const contextBuilder = source.slice(source.indexOf('function buildPlatformContext('), source.indexOf('\n// Mia is a default Chief-of-Staff'));
+  assert.match(contextBuilder, /\$\{localDateLine\(\)\}/);
   assert.doesNotMatch(contextBuilder, /toISOString/);
-  assert.match(contextBuilder, /Today is \$\{today\}/);
-  assert.match(contextBuilder, /localTimezoneName\(\)/);
+
+  const teamBotTurn = source.slice(source.indexOf('runBot: async ('), source.indexOf("'This is a shared team channel."));
+  assert.match(teamBotTurn, /platformContext: \[localDateLine\(\), workspace\.workspaceContext,/);
 });
 
 test('the local date and time use the machine clock with no offset', () => {
