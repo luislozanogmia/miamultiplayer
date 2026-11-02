@@ -29,16 +29,12 @@
   var add = document.createElement('button');
   add.type = 'button'; add.className = 'native-browser-new-tab';
   add.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
-  add.title = 'New tab'; add.setAttribute('aria-label', 'New browser tab');
-  // The new-tab button opens a tab in the view the strip is in; where that
-  // view has no new tab (Automations), or the tabs are mixed into one strip,
-  // it opens a browser tab.
+  add.title = 'Search or start something'; add.setAttribute('aria-label', 'Search or start something');
+  // The same in every view: the bar opens with its ways to start something.
+  // The browser needs a tab for the address to open in, so it makes one first.
   add.onclick = function () {
-    var mix = window.MiaTabStrip.mix;
-    var target = mix.newTabView(docked);
-    if (target !== 'browser') { mix.provider(target).newTab(); return; }
-    if (docked !== 'browser') mix.open('browser');
-    command('new').then(focusLocation);
+    var open = function () { focusLocation(); window.miaOpenStartRows(); };
+    (docked === 'browser' ? command('new') : Promise.resolve()).then(open);
   };
   strip.append(add);
   // » lists the groups a crowded strip had no room for. It sits outside the
@@ -538,7 +534,6 @@
     dock(showingView());
     var here = docked === 'browser';
     var hostTabs = here ? state.tabs : (mix.provider(docked).tabs ? mix.provider(docked).tabs() || [] : []);
-    add.hidden = !here && !mix.provider(docked).newTab && !mix.on();
     var items = mix.arrange(docked, hostTabs, tabStrip.room((here ? stripNeeded(groups) : hostTabs.length * TAB_MIN_WIDTH) + (add.offsetWidth || 0)));
     var byId = {};
     state.tabs.forEach(function (t) { byId[t.id] = t; });

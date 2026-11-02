@@ -163,3 +163,43 @@ test('the open chat answers first with its own matching messages', () => {
   assert.ok(row.text.startsWith('…') && row.text.includes('LinkedIn'), 'a long message is cut to show the match');
   assert.deepEqual(omnibox.everywhere('lina', { ...sources, current: null }, { view: 'chat' })[0].parts.map(part => part.label), ['People'], 'no open chat, no part');
 });
+
+test('with nothing typed, the bar offers only ways to start something', () => {
+  const sources = {
+    browser: [{ kind: 'search', query: '' }],
+    people: [{ kind: 'human', id: 'lina@example.com', name: 'Lina' }],
+    start: [{ id: 'new-chat', name: 'New chat' }, { id: 'new-automation', name: 'New automation' }],
+  };
+  const groups = omnibox.everywhere('  ', sources, { view: 'chat' });
+  assert.deepEqual(groups.map(group => group.key), ['start']);
+  assert.equal(groups[0].title, 'Start something');
+  assert.deepEqual(groups[0].parts[0].rows.map(row => [row.kind, row.target.id]), [['start', 'new-chat'], ['start', 'new-automation']]);
+});
+
+test('typing still reaches the ways to start something, after the results', () => {
+  const sources = {
+    browser: [],
+    chats: [{ roomId: 'r1', name: 'New hires' }],
+    start: [{ id: 'new-chat', name: 'New chat' }, { id: 'add-app', name: 'Add a live app' }],
+  };
+  const groups = omnibox.everywhere('new', sources, { view: 'chat' });
+  assert.deepEqual(groups.map(group => group.key), ['chat', 'start']);
+  assert.deepEqual(groups[1].parts[0].rows.map(row => row.target.id), ['new-chat']);
+});
+
+test('every match is listed, not just the first few', () => {
+  const people = Array.from({ length: 30 }, (_, i) => ({ kind: 'human', id: `juan${i}@example.com`, name: `Juan ${i}` }));
+  const chats = Array.from({ length: 30 }, (_, i) => ({ roomId: `r${i}`, name: `Juan chat ${i}` }));
+  const artifacts = Array.from({ length: 30 }, (_, i) => ({ id: `a${i}`, name: `juan-${i}.html` }));
+  const groups = omnibox.everywhere('juan', { browser: [], people, chats, artifacts }, { view: 'chat' });
+  const rows = key => groups.find(group => group.key === key).parts.flatMap(part => part.rows);
+  assert.equal(rows('chat').length, 60);
+  assert.equal(rows('artifacts').length, 30);
+});
+
+test('artifacts are searched, and lead while the Artifacts page is open', () => {
+  const sources = { browser: [], chats: [{ roomId: 'r1', name: 'quote chat' }], artifacts: [{ id: 'a1', name: 'quote.pdf', from: 'Sales' }] };
+  const groups = omnibox.everywhere('quote', sources, { view: 'artifacts' });
+  assert.deepEqual(groups.map(group => group.key), ['artifacts', 'chat']);
+  assert.deepEqual(groups[0].parts[0].rows[0], { kind: 'artifact', target: sources.artifacts[0] });
+});

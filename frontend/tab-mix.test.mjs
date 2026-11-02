@@ -166,18 +166,9 @@ test('a badge that drops to zero is removed and the button loses its count label
   } finally { globalThis.document = previous; }
 });
 
-test('(+) in the mixed strip opens a browser tab, not a new chat', async () => {
-  const { mix } = require('./tab-strip.js');
-  mix.register('chat', { newTab: () => {} });
-  const wasMixed = mix.on();
-  try {
-    mix.set(false);
-    assert.equal(mix.newTabView('chat'), 'chat', 'unmixed, Chat\'s (+) is a new chat');
-    assert.equal(mix.newTabView('automations'), 'browser', 'a view with no new tab opens a browser tab');
-    mix.set(true);
-    assert.equal(mix.newTabView('chat'), 'browser');
-    assert.equal(mix.newTabView('browser'), 'browser');
-  } finally { mix.set(wasMixed); }
+test('(+) opens the bar in every view, mixed or not', async () => {
   const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
-  assert.match(browser, /var target = mix\.newTabView\(docked\);/, 'the (+) button asks the strip where to open');
+  assert.match(browser, /add\.onclick = function \(\) \{[^}]*miaOpenStartRows/, 'the (+) button opens the bar and its ways to start something');
+  assert.match(browser, /docked === 'browser' \? command\('new'\)/, 'only the browser opens a tab first');
+  assert.doesNotMatch(browser, /add\.hidden/, 'the (+) button shows in every view');
 });

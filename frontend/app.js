@@ -8529,6 +8529,7 @@
       row.classList.toggle('active', active);
       row.setAttribute('aria-selected', active ? 'true' : 'false');
       if(active && input) input.setAttribute('aria-activedescendant', row.id);
+      if(active) row.scrollIntoView({block:'nearest'});
     });
   }
   function localBrowserSuggestMarkup(text, query){
@@ -8539,9 +8540,16 @@
   var LOCAL_BROWSER_SUGGEST_CHAT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_AUTOMATION = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_STEP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_START = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_ARTIFACT = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>';
   function localBrowserSuggestRow(item, i, query){
     var icon, line;
-    if(item.kind === 'person' || item.kind === 'chat' || item.kind === 'automation' || item.kind === 'step' || item.kind === 'message'){
+    if(item.kind === 'start' || item.kind === 'artifact'){
+      icon = '<span class="local-browser-suggest-icon">' + (item.kind === 'start' ? LOCAL_BROWSER_SUGGEST_START : LOCAL_BROWSER_SUGGEST_ARTIFACT) + '</span>';
+      var from = item.kind === 'artifact' ? item.target.from || item.target.type : '';
+      line = '<span class="local-browser-suggest-title">' + localBrowserSuggestMarkup(item.target.name, query) + '</span>' +
+        (from ? '<span class="local-browser-suggest-sep"> – </span><span class="local-browser-suggest-hint">' + esc(from) + '</span>' : '');
+    } else if(item.kind === 'person' || item.kind === 'chat' || item.kind === 'automation' || item.kind === 'step' || item.kind === 'message'){
       var target = item.target || {};
       icon = '<span class="local-browser-suggest-icon">' + (item.kind === 'person'
         ? (target.kind === 'human' ? '<span class="local-browser-suggest-avatar">' + humanAvatarContent(target.id) + '</span>' : agentAvatarHtml(target.name, target.id, 18, null, null, false))
@@ -8578,7 +8586,8 @@
     var box = el('#localBrowserUrlSuggest');
     if(!box) return;
     localBrowserSuggestItems = (result && result.rows) || [];
-    localBrowserSuggestIndex = localBrowserSuggestItems.length ? 0 : -1;
+    // Nothing typed means nothing chosen yet, so Enter doesn't start a new chat.
+    localBrowserSuggestIndex = localBrowserSuggestItems.length && localBrowserSuggestTyped.trim() ? 0 : -1;
     var input = el('#localBrowserUrl');
     if(!localBrowserSuggestItems.length){
       closeLocalBrowserSuggest();
@@ -8618,7 +8627,71 @@
   // with tabs mixed or not.
   function localBrowserSuggestView(){
     var classes = document.body.classList;
-    return classes.contains('automations-mode') ? 'automations' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+    return classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('automations-mode') ? 'automations' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+  }
+  // The (+) on the tab strip: the bar, open on its ways to start something.
+  window.miaOpenStartRows = function(){
+    var input = el('#localBrowserUrl');
+    if(!input || !window.MiaBrowserOmnibox) return;
+    input.value = '';
+    queueLocalBrowserSuggest(input, false);
+  };
+  function localBrowserStartItems(){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    return [{id:'new-chat', name:'New chat'}]
+      .concat(hubWorkspace() ? [{id:'new-channel', name:'New channel'}] : [])
+      .concat([{id:'new-automation', name:'New automation'}])
+      .concat(hubWorkspace() ? [] : [{id:'new-bot', name:'New bot'}])
+      .concat([{id:'add-app', name:'Add a live app'}])
+      .concat(browser && browser.command ? [{id:'new-tab', name:'New browser tab'}] : []);
+  }
+  function runLocalBrowserStart(id){
+    if(id === 'new-automation'){
+      runToolsAction('automations');
+      // After this click finishes, or it would close the menu the button opens.
+      window.setTimeout(function(){ var add = el('#automationsAddBtn'); if(add) add.click(); }, 0);
+    } else if(id === 'add-app'){
+      runToolsAction('artifacts');
+      setArtifactsAddOpen(true);
+    } else if(id === 'new-tab'){
+      openWebBrowserTool();
+      window.miaDesktop.browser.command({action:'new'}).then(function(state){
+        followBrowserTab(state && !state.error ? state : null);
+        var input = el('#localBrowserUrl');
+        if(input) input.focus();
+      }).catch(function(){});
+    } else runToolsAction(id);
+  }
+  // People on your other teams, so a search finds them from any workspace.
+  var otherTeamPeople = {at:0, rows:[], request:null};
+  function loadOtherTeamPeople(){
+    if(otherTeamPeople.request || Date.now() - otherTeamPeople.at < 60000) return;
+    var teams = cachedHubTeams().filter(function(team){ return 'hub_' + team.teamId !== activeWorkspaceKey; });
+    if(!teams.length) return;
+    var me = String(currentUser || '').toLowerCase();
+    otherTeamPeople.request = Promise.all(teams.map(function(team){
+      return hubCall('GET', '/v1/teams/' + team.teamId + '/members').then(function(result){
+        return (result.members || []).filter(function(member){ return member.email && String(member.email).toLowerCase() !== me; }).map(function(member){
+          return {kind:'human', id:String(member.email), name:String(member.display_name || member.email), sub:team.name, teamKey:'hub_' + team.teamId};
+        });
+      }).catch(function(){ return []; });
+    })).then(function(lists){
+      otherTeamPeople.rows = Array.prototype.concat.apply([], lists);
+      otherTeamPeople.at = Date.now();
+      otherTeamPeople.request = null;
+      var input = el('#localBrowserUrl');
+      if(input && document.activeElement === input && input.value.trim()) queueLocalBrowserSuggest(input, false);
+    });
+  }
+  // Opening someone on another team reloads into that team, then opens the chat.
+  var PENDING_PERSON_KEY = 'miaOpenPersonAfterSwitch';
+  function openPendingPerson(){
+    var pending = null;
+    try {
+      pending = JSON.parse(sessionStorage.getItem(PENDING_PERSON_KEY) || 'null');
+      sessionStorage.removeItem(PENDING_PERSON_KEY);
+    } catch(_pendingPersonError) {}
+    if(pending && pending.to === activeWorkspaceKey && Date.now() - pending.at < 60000) openHumanDirectMessage(pending.email, false);
   }
   function localBrowserEverywhereSources(browserRows){
     var directory = chatSearchDirectorySnapshot();
@@ -8629,7 +8702,7 @@
       var record = chatSearchAgentRecord(agent) || agent;
       var id = String(record.id || agent.id || '');
       return {kind:'agent', id:id, name:String(record.name || agent.name || id || 'Bot'), sub:id === 'gateway' ? 'Agent' : 'Bot'};
-    }));
+    })).concat(otherTeamPeople.rows);
     var rooms = hubWorkspace() ? (chatWs.rooms.dms || []) : (chatWs.nativeConversations || []).map(nativeConversationToRoom);
     // A bot's main chat is its People row; history keeps the rest, dated
     // so same-named conversations can be told apart.
@@ -8648,7 +8721,7 @@
     var automations = automationsBoardRows().map(function(row){
       return {botId:row.botId, automationId:row.automationId, name:row.name, botName:row.botName, steps:row.steps || []};
     });
-    return {browser:browserRows, people:people, chats:chats, automations:automations, current:localBrowserCurrentChat()};
+    return {browser:browserRows, people:people, chats:chats, automations:automations, artifacts:artifactsPage.items, start:localBrowserStartItems(), current:localBrowserCurrentChat()};
   }
   // The open chat's messages, newest first, for "In <chat>" results.
   function localBrowserCurrentChat(){
@@ -8707,6 +8780,14 @@
   }
   function chooseLocalBrowserSuggest(item, input){
     if(!item) return;
+    if(item.kind === 'start' || item.kind === 'artifact'){
+      if(input) input.value = '';
+      closeLocalBrowserSuggest();
+      if(input) input.blur();
+      if(item.kind === 'start') runLocalBrowserStart(item.target.id);
+      else openArtifact(item.target.id);
+      return;
+    }
     if(item.kind === 'message'){
       if(input) input.value = '';
       closeLocalBrowserSuggest();
@@ -8719,6 +8800,11 @@
       if(input) input.value = '';
       closeLocalBrowserSuggest();
       if(input) input.blur();
+      if(target.teamKey){
+        try { sessionStorage.setItem(PENDING_PERSON_KEY, JSON.stringify({to:target.teamKey, email:target.id, at:Date.now()})); } catch(_pendingPersonError) {}
+        switchWorkspace(target.teamKey);
+        return;
+      }
       closeBrowserSidebarDrawer();
       closeLocalBrowser();
       closeAutomationsPage();
@@ -8820,6 +8906,8 @@
     if(input && window.MiaBrowserOmnibox){
       input.addEventListener('focus', function(){
         if(!chatSearchDirectory.loaded) loadChatSearchDirectory();
+        if(!artifactsPage.open) loadArtifacts();
+        loadOtherTeamPeople();
         // History changes as you browse, so each visit to the bar reloads it.
         loadLocalBrowserHistory(true);
       });
@@ -13119,7 +13207,6 @@
     },
     close: closeChatTab,
     move: moveChatTab,
-    newTab: function(){ runToolsAction('new-chat'); },
     render: function(){ renderChatTabs(); },
   });
   // Drag a tab onto another to put it in that tab's place.
@@ -15632,7 +15719,7 @@
   }
 
   function initChatWorkspace(){
-    if(hubWorkspace()) return initHubChat();
+    if(hubWorkspace()) return initHubChat().then(openPendingPerson);
     return Promise.all([
       loadNativeConversations(),
       loadAgents(),
