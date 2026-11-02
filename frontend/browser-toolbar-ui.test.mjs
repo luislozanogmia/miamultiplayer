@@ -198,6 +198,7 @@ test('outside the browser, Back and Forward step through the places opened in Mi
     closeBrowserSidebarDrawer() {}, closeLocalBrowser: () => classes.delete('browser-collab-mode'), openWebBrowserTool() {},
     closeAutomationsPage: () => classes.delete('automations-mode'),
     closeArtifactsPage: () => classes.delete('artifacts-mode'),
+    closeAppsPage: () => classes.delete('artifacts-mode'),
     clearChatActive() {},
     loadChatRoom: (roomId) => { calls.push('room:' + roomId); ctx.chatWs.activeRoomId = roomId; },
     loadArtifacts: () => calls.push('reload:artifacts'),
