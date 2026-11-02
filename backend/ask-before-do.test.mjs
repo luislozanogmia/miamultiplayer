@@ -193,12 +193,18 @@ m.register(Ctx())
 pre, post = hooks["pre_tool_call"], hooks["post_tool_call"]
 def ghost(tool, args): return "ghost-cli call " + tool + " --arguments '" + json.dumps(args) + "'"
 names = ["Send", "Post", "Submit", "Buy now", "Confirm", "Publish", "Pay", "Delete", "Place order", "Complete purchase",
-         "Sender", "Posts", "Sort order", "Checkout", "Remove filter", "Home"]
+         "Enviar", "Publicar", "Comprar ahora", "Confirmar", "Pagar", "Eliminar", "Borrar",
+         "Realizar pedido", "Hacer pedido", "Finalizar compra", "Completar compra",
+         "Sender", "Posts", "Sort order", "Checkout", "Remove filter", "Home", "Enviado", "Pedidos", "Inicio"]
 elements = [{"number": i + 1, "role": "button", "name": n, "selector": "#x"} for i, n in enumerate(names)]
 page = json.dumps({"text": "", "elements": elements}, indent=2)
 post(tool_name="terminal", args={"command": ghost("ghost_vacuum", {})}, result=json.dumps({"output": page, "exit_code": 0}), session_id="s1")
 post(tool_name="browser_snapshot", args={}, session_id="s1", result=json.dumps({"success": True,
      "snapshot": '- button "Send" [ref=e1]\\n- link "Home" [ref=e2]'}))
+def vacuum(session, output): post(tool_name="terminal", args={"command": ghost("ghost_vacuum", {}) + " | head -5"}, result=json.dumps({"output": output}), session_id=session)
+vacuum("cut", '{\\n  "text": "Page: x\\\\\\\\n\\\\\\\\n[1] button: Inicio\\\\\\\\n[2] button: Enviar",\\n  "elements": [')
+vacuum("reread", '{\\n  "text": "Page: x\\\\\\\\n\\\\\\\\n[2] button: Enviar",')
+vacuum("reread", '{\\n  "tab_id": 7,')
 clicks = [pre(tool_name="terminal", args={"command": ghost("ghost_click", {"choice": i + 1, "snapshot_id": "a"})}, session_id="s1")
           for i in range(len(names))]
 print(json.dumps({
@@ -207,6 +213,9 @@ print(json.dumps({
   "home": bool(pre(tool_name="browser_click", args={"ref": "@e2"}, session_id="s1")),
   "otherChat": bool(pre(tool_name="browser_click", args={"ref": "@e1"}, session_id="s2")),
   "escaped": bool(pre(tool_name="terminal", args={"command": 'ghost-cli call ghost_click --arguments "{\\\\"choice\\\\":1}"'}, session_id="s1")),
+  "cutShort": bool(pre(tool_name="terminal", args={"command": ghost("ghost_click", {"choice": 2})}, session_id="cut")),
+  "cutShortHome": bool(pre(tool_name="terminal", args={"command": ghost("ghost_click", {"choice": 1})}, session_id="cut")),
+  "reread": bool(pre(tool_name="terminal", args={"command": ghost("ghost_click", {"choice": 2})}, session_id="reread")),
   "selector": bool(pre(tool_name="terminal", args={"command": ghost("ghost_click", {"selector": "#send"})}, session_id="s1")),
   "fill": bool(pre(tool_name="terminal", args={"command": ghost("ghost_fill", {"choice": 1, "value": "send it"})}, session_id="s1")),
   "summary": m.classify("browser_click", {"ref": "e1"}, "s1"),
@@ -216,11 +225,14 @@ print(json.dumps({
     env: { ...process.env, MIA_ASK_BEFORE_DO_URL: gate.url, GATEWAY_RELAY_MIA_ASK_BEFORE_DO_TOKEN: gate.token },
   });
   const out = JSON.parse(stdout);
-  assert.deepEqual(out.clicks, [...Array(10).fill(true), ...Array(6).fill(false)]);
+  assert.deepEqual(out.clicks, [...Array(21).fill(true), ...Array(9).fill(false)]);
   assert.equal(out.send, true);
   assert.equal(out.home, false);
   assert.equal(out.otherChat, false);
   assert.equal(out.escaped, true);
+  assert.equal(out.cutShort, true);
+  assert.equal(out.cutShortHome, false);
+  assert.equal(out.reread, true);
   assert.equal(out.selector, true);
   assert.equal(out.fill, false);
   assert.deepEqual(out.summary, ['send', 'Click: Send']);

@@ -56,11 +56,16 @@ COMMAND_RULES = [
 ]
 
 # Words on a button in the browser. Only labelled targets can be recognised.
-CLICK_WORDS = re.compile(r"\b(send|post|submit|buy|confirm|publish|pay|delete|place order|complete purchase)\b", re.I)
+CLICK_WORDS = re.compile(
+    r"\b(send|post|submit|buy|confirm|publish|pay|delete|place order|complete purchase"
+    r"|enviar|publicar|comprar|confirmar|pagar|eliminar|borrar"
+    r"|realizar pedido|hacer pedido|finalizar compra|completar compra)\b", re.I)
 GHOST_CLICK = re.compile(r"\bghost_click\b")
 GHOST_CHOICE = re.compile(r"\bchoice\W+(\d+)")
 # A click names only a number or ref, so labels come from the page read before
-# it: an element in ghost_vacuum's JSON, a line in browser_snapshot's text.
+# it: ghost_vacuum's text line and element JSON, a line in browser_snapshot's
+# text. The agent often cuts a read short with head, and the text line comes first.
+GHOST_LINE = re.compile(r'\[(\d+)\] [^:\\\n"]+: ((?:[^"\\\n]|\\")*)')
 GHOST_ELEMENT = re.compile(r'"number":\s*(\d+),\s*"role":\s*"[^"]*",\s*"name":\s*"((?:[^"\\]|\\.)*)"')
 SNAPSHOT_ELEMENT = re.compile(r'"((?:[^"\\\n]|\\.)*)"[^\n]*\[ref=(e\d+)\]')
 MAX_REMEMBERED_PAGES = 200
@@ -198,12 +203,13 @@ def _on_post_tool_call(tool_name: str = "", args: Any = None, result: Any = None
         labels = {ref: label for label, ref in SNAPSHOT_ELEMENT.findall(_from_result(result, "snapshot"))}
     elif tool_name == "terminal" and "ghost_vacuum" in command:
         browser = "ghost"
-        labels = dict(GHOST_ELEMENT.findall(_from_result(result, "output")))
+        output = _from_result(result, "output")
+        labels = {**dict(GHOST_LINE.findall(output)), **dict(GHOST_ELEMENT.findall(output))}
     else:
         return
+    # Add to what is known: a read cut short must not make a button forgettable.
     key = (str(session_id or task_id or ""), browser)
-    _page_labels.pop(key, None)
-    _page_labels[key] = labels
+    _page_labels[key] = {**_page_labels.pop(key, {}), **labels}
     if len(_page_labels) > MAX_REMEMBERED_PAGES:
         _page_labels.pop(next(iter(_page_labels)))
 
