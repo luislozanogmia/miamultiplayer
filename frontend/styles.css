@@ -645,6 +645,20 @@
   .hub-removed-title{font-size:15.5px;font-weight:700;line-height:1.35;color:var(--ink);margin-bottom:6px;}
   .btn.app-confirm-danger{background:var(--danger);border-color:var(--danger);color:#FFFFFF;}
   .btn.app-confirm-danger:hover{background:#9A1B0C;border-color:#9A1B0C;}
+  /* Bot versions & runs, and a bot's Review. */
+  .hub-bot-dialog{box-sizing:border-box;width:min(650px,calc(100vw - 32px));max-height:min(85vh,calc(100vh - 32px));padding:22px;background:var(--paper);color:var(--ink);border:1px solid var(--rule);border-radius:16px;box-shadow:0 24px 60px rgba(20,18,15,.22);font-family:var(--sans);font-size:14px;line-height:1.5;overflow:auto;overflow-wrap:anywhere;}
+  .hub-bot-dialog::backdrop{background:rgba(17,17,17,.32);}
+  .hub-bot-dialog h2{margin:0 0 8px;font-size:18px;font-weight:600;line-height:1.3;}
+  .hub-bot-dialog h3{margin:18px 0 6px;font-size:14px;font-weight:600;}
+  .hub-bot-dialog p{margin:0 0 8px;color:var(--ink-soft);}
+  .hub-bot-dialog p:empty{display:none;}
+  .hub-bot-dialog pre{margin:8px 0;padding:10px 12px;max-height:280px;overflow:auto;background:var(--paper-2);border-radius:10px;font-family:inherit;font-size:13.5px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;}
+  .hub-bot-dialog-card{margin-top:16px;padding-top:12px;border-top:1px solid var(--rule);}
+  .hub-bot-dialog details{margin:6px 0;}
+  .hub-bot-dialog summary{cursor:pointer;color:var(--ink-soft);}
+  .hub-bot-dialog textarea,.hub-bot-dialog select{box-sizing:border-box;max-width:100%;padding:8px 10px;background:var(--paper);color:var(--ink);border:1px solid var(--rule-strong);border-radius:10px;font:inherit;}
+  .hub-bot-dialog textarea{display:block;width:100%;min-height:100px;resize:vertical;}
+  .hub-bot-dialog .btn{margin:6px 8px 6px 0;}
   .app-prompt-overlay{position:fixed;inset:0;background:rgba(17,17,17,.32);z-index:500;display:none;place-items:center;padding:24px;}
   .app-prompt-overlay.open{display:grid;animation:fadein .14s ease-out;}
   .chat-image-viewer{position:fixed;inset:0;background:rgba(17,17,17,.72);z-index:520;display:grid;place-items:center;padding:32px;animation:fadein .14s ease-out;}
