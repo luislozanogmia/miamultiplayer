@@ -169,6 +169,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     ? path.resolve(options.workspaceRoot)
     : "";
   let activeId = null;
+  let lastActiveCounter = 0;
   // Tab groups are a named, colored run of adjacent tabs. A tab
   // belongs to at most one group (tab.groupId); a group with no tabs is gone.
   const groups = new Map();
@@ -799,6 +800,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const state = () => ({ groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
+    lastActiveAt: tab.lastActiveAt || 0,
     active: tab.id === activeId,
     loading: tab.view.webContents.isLoading(), timing: tab.timing,
     canGoBack: tab.view.webContents.navigationHistory.canGoBack(),
@@ -894,6 +896,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function activateTab(id) {
     if (fullscreenId !== null && fullscreenId !== id) exitPageFullscreen();
     activeId = id;
+    if (tabs.has(id)) tabs.get(id).lastActiveAt = ++lastActiveCounter;
     // The tab in front is never hidden inside a collapsed group.
     const group = groups.get(tabs.get(id)?.groupId);
     if (group) group.collapsed = false;

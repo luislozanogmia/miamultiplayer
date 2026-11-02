@@ -149,7 +149,7 @@ test('a fresh install shows no view badges: a blank browser tab and the one stan
   assert.match(browser, /uncounted: !t\.url/, 'the browser marks blank tabs');
   assert.match(browser, /mix\.notify\('browser', JSON\.stringify\(state\.tabs\.map\(function \(t\) \{ return \[[^\]]*!!t\.url\]/, 'a tab that loads or closes repaints the badge');
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /uncounted: tabs\.length === 1/, 'the one standing chat is not counted');
+  assert.match(app, /register\('chat', \{\n\s*tabs: function\(\)\{ return \[\]; \}/, 'chats have no tabs, so they are never counted');
 });
 
 test('a badge that drops to zero is removed and the button loses its count label', () => {
@@ -183,4 +183,29 @@ test('every way to start something shows its own icon, not a shared plus', async
   // New bot is always the plain pink mote, whatever color the next bot gets.
   assert.match(icons, /'new-bot': '<img src="assets\/mote\/mote-static\.svg"/);
   assert.doesNotMatch(icons, /M12 5v14M5 12h14/);
+});
+
+test('a group chip opens the group\'s latest page, from any view', async () => {
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  const start = browser.indexOf('  function latestGroupTab(');
+  const latestGroupTab = new Function(`${browser.slice(start, browser.indexOf('  function groupChip(', start))}; return latestGroupTab;`)();
+  const tabs = [
+    { id: 1, groupId: 'g', lastActiveAt: 7 },
+    { id: 2, groupId: 'g', lastActiveAt: 3 },
+    { id: 3, groupId: 'other', lastActiveAt: 9 },
+  ];
+  assert.equal(latestGroupTab(tabs, 'g').id, 1);
+  assert.equal(latestGroupTab([{ id: 4, groupId: 'g' }, { id: 5, groupId: 'g' }], 'g').id, 5, 'falls back to the last tab');
+  assert.equal(latestGroupTab(tabs, 'none'), null);
+  const click = browser.slice(browser.indexOf('    chip.onclick = function () {'), browser.indexOf("    chip.addEventListener('contextmenu'"));
+  assert.match(click, /docked !== 'browser'\) window\.MiaTabStrip\.mix\.open\('browser', latest\.id\)/);
+});
+
+test('following a bot is a switch that keeps its name and shows on or off', async () => {
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(browser, /followButton\.setAttribute\('role', 'switch'\)/);
+  assert.match(browser, /followButton\.setAttribute\('aria-checked', following \? 'true' : 'false'\)/);
+  assert.doesNotMatch(browser, /'Unfollow'/);
+  assert.match(styles, /\.local-browser-follow\[aria-checked="true"\] \.local-browser-follow-track::after\{transform/);
 });

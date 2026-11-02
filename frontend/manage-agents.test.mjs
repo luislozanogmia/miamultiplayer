@@ -691,6 +691,13 @@ test('agent editor exposes a persisted avatar color with an automatic fallback',
   assert.match(html, /id="benchEditColorOptions"/);
   assert.match(styles, /\.bench-agent-color-swatch\.selected/);
   assert.match(styles, /\.bench-agent-color-custom input/);
+  // The custom-color control is a rainbow whatever its value, on every surface.
+  for (const prefix of ['bench', 'styled', 'manage']) {
+    assert.match(styles, new RegExp(`\\.${prefix}-agent-color-custom input\\{[^}]*background:var\\(--agent-color-rainbow\\)`));
+    assert.match(styles, new RegExp(`\\.${prefix}-agent-color-custom input::-webkit-color-swatch\\{[^}]*opacity:0`));
+    assert.match(styles, new RegExp(`\\.${prefix}-agent-color-custom\\.selected input`));
+  }
+  assert.match(source, /'-custom' \+ \(custom \? ' selected' : ''\)/);
   assert.match(styles, /\.mote-avatar-img\[role="button"\]/);
 });
 

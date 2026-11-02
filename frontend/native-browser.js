@@ -349,10 +349,12 @@
   var botControlLabel = document.createElement('span');
   var takeOver = document.createElement('button');
   takeOver.type = 'button'; takeOver.className = 'local-browser-take-over'; takeOver.textContent = 'Take over';
-  // Follow keeps the page the bot works on in front, so you watch it move
-  // from tab to tab; Unfollow leaves you where you are.
+  // Follow is a switch. On keeps the page the bot works on in front, so you
+  // watch it move from tab to tab; off leaves you where you are.
   var followButton = document.createElement('button');
   followButton.type = 'button'; followButton.className = 'local-browser-follow';
+  followButton.setAttribute('role', 'switch');
+  followButton.innerHTML = '<span class="local-browser-follow-track" aria-hidden="true"></span>Follow';
   followButton.onclick = function () {
     var botId = botControl.getAttribute('data-bot-id');
     if (followingBot()) follow = null; else if (botId) startFollow(botId);
@@ -454,8 +456,7 @@
     name.textContent = activity.name || 'A bot';
     botControlLabel.replaceChildren(name, document.createTextNode(' has control'));
     var following = followingBot() === activity.botId;
-    followButton.textContent = following ? 'Unfollow' : 'Follow';
-    followButton.setAttribute('aria-pressed', following ? 'true' : 'false');
+    followButton.setAttribute('aria-checked', following ? 'true' : 'false');
     followButton.title = following ? 'Stay on this page when ' + (activity.name || 'the bot') + ' moves on'
       : 'Show the page ' + (activity.name || 'the bot') + ' works on as it moves between tabs';
   }
@@ -822,6 +823,12 @@
   });
   // A group's label sits before its tabs. Click collapses or expands it;
   // right-click opens the group menu; dropping a tab on it joins the group.
+  // The page last in front, or its last tab if none has been this session.
+  function latestGroupTab(tabs, groupId) {
+    return tabs.filter(function (t) { return t.groupId === groupId; }).reduce(function (latest, t) {
+      return !latest || (t.lastActiveAt || 0) >= (latest.lastActiveAt || 0) ? t : latest;
+    }, null);
+  }
   function groupChip(g, index, folded) {
     var chip = document.createElement('button');
     chip.type = 'button';
@@ -832,10 +839,14 @@
     chip.title = (g.name || 'Unnamed group') + (g.collapsed ? ' (collapsed)' : folded ? ' (folded to make room)' : '');
     chip.textContent = g.name;
     chip.onclick = function () {
-      // A folded group opens by bringing its last tab to the front.
-      var last = folded && state.tabs.filter(function (t) { return t.groupId === g.id; }).pop();
-      if (last) command('select', { id: last.id });
-      else command('groupUpdate', { groupId: g.id, collapsed: !g.collapsed });
+      // A group already in front folds or unfolds. Otherwise the chip opens
+      // the group's latest page, from any view.
+      var inFront = docked === 'browser' && !folded && state.tabs.some(function (t) { return t.groupId === g.id && t.id === state.activeId; });
+      if (inFront) { command('groupUpdate', { groupId: g.id, collapsed: !g.collapsed }); return; }
+      var latest = latestGroupTab(state.tabs, g.id);
+      if (!latest) command('groupUpdate', { groupId: g.id, collapsed: !g.collapsed });
+      else if (docked !== 'browser') window.MiaTabStrip.mix.open('browser', latest.id);
+      else command('select', { id: latest.id });
     };
     chip.addEventListener('contextmenu', function (event) {
       event.preventDefault();

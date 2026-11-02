@@ -4029,7 +4029,8 @@
       var selected = current === option.value;
       return '<button type="button" class="' + classPrefix + '-swatch' + (selected ? ' selected' : '') + '" data-agent-color="' + option.value + '" aria-label="' + esc(option.label) + '" aria-pressed="' + (selected ? 'true' : 'false') + '" title="' + esc(option.label) + '" style="--agent-color:' + option.value + '"></button>';
     }).join('');
-    html += '<label class="' + classPrefix + '-custom" title="Choose a custom color"><span>Custom</span><input type="color" id="' + colorInputId + '" value="' + (current || AGENT_COLOR_OPTIONS[0].value) + '" aria-label="Custom agent color" /></label>';
+    var custom = current && !AGENT_COLOR_OPTIONS.some(function(option){ return option.value === current; });
+    html += '<label class="' + classPrefix + '-custom' + (custom ? ' selected' : '') + '" title="Choose a custom color"><span>Custom</span><input type="color" id="' + colorInputId + '" value="' + (current || AGENT_COLOR_OPTIONS[0].value) + '" aria-label="Custom agent color" /></label>';
     return html;
   }
 
@@ -5143,7 +5144,7 @@
     return loadHubTeams(false).then(refreshHubChannels).then(function(){ loadCompanyBots(); return teamBots; }).then(function(){
       hubChat.error='';hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
       var botChat=(chatWs.nativeConversations||[]).filter(function(c){return c.id===previousRoomId;})[0];
-      if(botChat && !keepSetup){ startChatPolling(); return restoreChatRoom(function(){ return loadChatRoom(botChat.id,'agent',botChat.name); }); }
+      if(botChat && !keepSetup){ startChatPolling(); return loadChatRoom(botChat.id,'agent',botChat.name); }
       var room=hubChat.channels.filter(function(c){return c.id===previousRoomId;})[0] || hubChat.channels.filter(function(c){return !hubPrivateConversation(c);})[0] || hubChat.channels[0];
       startChatPolling();
       var newBot=takeNewTeamBotRequest(activeWorkspaceKey,hubChat.channels,Date.now());
@@ -5152,7 +5153,7 @@
         chatWs.activeRoomId=AGENT_SETUP_ROOM_ID;chatWs.activeKind='agent-setup';chatWs.activeLabel=agentSetupIdentity().name;
         renderChatSidebar();return refreshChatMain();
       }
-      if(room) return restoreChatRoom(function(){ return openHubChannel(room); });
+      if(room) return openHubChannel(room);
       refreshChatMain();
     }).catch(retryHubChat);
   }
@@ -6045,7 +6046,7 @@
     var label = room.kind === 'department' ? (room.department || room.name)
       : (room.kind === 'dm' || room.kind === 'group') ? dmLabel(room)
       : room.name;
-    restoreChatRoom(function(){ loadChatRoom(room.roomId, room.kind, label); });
+    loadChatRoom(room.roomId, room.kind, label);
     return true;
   }
 
@@ -6523,11 +6524,9 @@
     var rooms = conversations.map(nativeConversationToRoom);
     chatWs.native = true;
     chatWs.nativeConversations = conversations || [];
-    if(listWorkspace && listWorkspace === activeWorkspaceKey && !pruneChatTabs(chatWs.nativeConversations)){
-      // The chat on screen is another workspace's: leave it for this one's.
+    // The chat on screen is another workspace's: leave it for this one's.
+    if(listWorkspace && listWorkspace === activeWorkspaceKey && /^conv_/.test(chatWs.activeRoomId || '') && !chatWs.nativeConversations.some(function(conversation){ return conversation && conversation.id === chatWs.activeRoomId; })){
       chatWs.activeRoomId = null;
-      var nextTab = readChatTabs()[0];
-      if(nextTab) setTimeout(function(){ if(!chatWs.activeRoomId) loadChatRoom(nextTab.roomId, nextTab.kind, nextTab.label); }, 0);
     }
     chatWs.configured = true;
     chatWs.rooms.home = rooms.filter(function(room){ return room.kind === 'home'; })[0] || null;
@@ -6618,7 +6617,7 @@
       // available when this scope has no rooms yet, but never synthesize a
       // workspace/home room just to give the center column something to show.
       return Promise.resolve(ensureNativeMiaConversation(conversations, requestOptions)).then(function(list){
-        // Remembers which workspace this list is, for pruneChatTabs.
+        // Remembers which workspace this list is, to spot another workspace's chat.
         if(Array.isArray(list)) list.workspaceKey = workspaceKey;
         return list;
       });
@@ -9402,11 +9401,10 @@
     }
     if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onOpen){
       window.miaDesktop.browser.onOpen(function(action){
-        // In the chat view, Cmd/Ctrl+T opens a new chat and Cmd/Ctrl+W closes
-        // the current chat tab, the same keys the browser uses for its tabs.
-        if(chatViewShowing() && (action === 't' || action === 'w')){
-          if(action === 't') runToolsAction('new-chat');
-          else closeChatTab(chatWs.activeRoomId);
+        // In the chat view, Cmd/Ctrl+T opens a new chat. A chat has no tab, so
+        // Cmd/Ctrl+W has nothing to close there.
+        if(chatViewShowing() && action === 't'){
+          runToolsAction('new-chat');
           return;
         }
         if(action === 'w') return;
@@ -10154,7 +10152,8 @@
       body: {}
     }).then(function(res){
       if(res.status !== 200) throw new Error(res.data && (res.data.message || res.data.error) || 'Stop failed');
-      chatWs.tasks = (chatWs.tasks || []).filter(function(candidate){ return candidate.id !== taskId; });
+      var stoppedIds = (res.data && res.data.stoppedDispatchIds) || [taskId];
+      chatWs.tasks = (chatWs.tasks || []).filter(function(candidate){ return candidate.id !== taskId && stoppedIds.indexOf(candidate.id) === -1; });
       delete chatTaskStopPending[taskId];
       stopChatThinking(task.roomId);
       renderLiveViews();
@@ -13609,185 +13608,27 @@
     if(!channelMenu.open) return;
     var header = el('#channelHeader');
     if(header && header.contains(e.target)) return;
-    if(e.target.closest && e.target.closest('#chatTabsRow .mia-tab.active button[role="tab"]')) return;
     closeChannelMenu();
   });
   document.addEventListener('keydown', function(e){
     if(e.key === 'Escape' && channelMenu.open) closeChannelMenu();
   });
 
-  // Chat tabs: every chat you open gets a tab beside the others, like the
-  // browser and Automations, so switching back is one click. Closing a tab
-  // keeps the chat; the open tabs are remembered per workspace.
-  function chatTabsStorageKey(){
-    return 'miaChatTabs:' + String(currentUser || 'preview').toLowerCase() + ':' + activeWorkspaceKey;
-  }
-  function readChatTabs(){
-    try {
-      var tabs = JSON.parse(localStorage.getItem(chatTabsStorageKey()) || '[]');
-      return Array.isArray(tabs) ? tabs.filter(function(tab){ return tab && tab.roomId; }) : [];
-    } catch(_chatTabsReadError) { return []; }
-  }
-  function writeChatTabs(tabs){
-    try { localStorage.setItem(chatTabsStorageKey(), JSON.stringify(tabs.slice(0, 20))); } catch(_chatTabsWriteError) {}
-  }
-  function openChatTab(roomId, kind, label){
-    if(!roomId) return;
-    var tabs = readChatTabs();
-    // An agent has one chat per workspace: when its conversation id changes
-    // (a restart or onboarding), its old tab becomes this one in place.
-    var sameAgent = function(item){ return kind === 'agent' && item.kind === 'agent' && label && item.label === label; };
-    var at = tabs.findIndex(function(item){ return item.roomId === roomId || sameAgent(item); });
-    tabs = tabs.filter(function(item, index){ return index === at || !(item.roomId === roomId || sameAgent(item)); });
-    var tab = at >= 0 ? tabs.find(function(item){ return item.roomId === roomId || sameAgent(item); }) : null;
-    if(tab){ tab.roomId = roomId; tab.kind = kind; if(label) tab.label = label; }
-    else tabs.push({roomId:roomId, kind:kind, label:label || ''});
-    writeChatTabs(tabs);
-  }
-  // Drops tabs for this workspace's conversations that are no longer in its
-  // list, such as another workspace's chat saved here before; sending there
-  // was refused as not a member.
-  function pruneChatTabs(conversations){
-    var known = {};
-    (conversations || []).forEach(function(conversation){ if(conversation && conversation.id) known[conversation.id] = true; });
-    var tabs = readChatTabs();
-    var kept = tabs.filter(function(tab){ return !/^conv_/.test(tab.roomId) || known[tab.roomId]; });
-    if(kept.length !== tabs.length) writeChatTabs(kept);
-    return !/^conv_/.test(chatWs.activeRoomId || '') || !!known[chatWs.activeRoomId];
-  }
-  // A lone chat tab can close beside other tabs in the mixed strip. The room
-  // stays selected behind the other views, and the closed tab is remembered per
-  // workspace so a reload doesn't bring it back. Showing the chat, or picking a
-  // chat, gives it a tab again.
-  function chatTabClosedKey(){ return chatTabsStorageKey() + ':closed'; }
-  function chatTabClosed(){
-    try { return localStorage.getItem(chatTabClosedKey()) === '1'; } catch(_chatTabClosedReadError) { return false; }
-  }
-  function setChatTabClosed(closed){
-    try { localStorage.setItem(chatTabClosedKey(), closed ? '1' : '0'); } catch(_chatTabClosedWriteError) {}
-  }
-  function reopenChatTab(){ if(chatTabClosed()) setChatTabClosed(false); }
-  // While the view is changing, or a room is being restored behind one.
-  var chatTabStaysClosed = false;
-  function leaveChatFor(tab){
-    chatTabStaysClosed = true;
-    try { window.MiaTabStrip.mix.open(tab.view, tab.tab.id); } finally { chatTabStaysClosed = false; }
-  }
-  // For a room opened by startup, not by the person. A chat whose tab they
-  // closed loads behind the tab they can still see, or, with nothing else
-  // open, shows as normal.
-  function restoreChatRoom(open){
-    if(!chatTabClosed()) return open();
-    chatTabStaysClosed = true;
-    var opened;
-    try { opened = open(); } finally { chatTabStaysClosed = false; }
-    var next = window.MiaTabStrip.mix.neighbor('chat', chatWs.activeRoomId);
-    if(next) leaveChatFor(next);
-    else setChatTabClosed(false);
-    renderChatTabs();
-    return opened;
-  }
-  function closeChatTab(roomId){
-    var tabs = readChatTabs();
-    var index = tabs.findIndex(function(item){ return item.roomId === roomId; });
-    if(index < 0) return;
-    if(tabs.length < 2){
-      var neighbor = window.MiaTabStrip.mix.neighbor('chat', roomId);
-      if(!neighbor) return;
-      writeChatTabs([]);
-      setChatTabClosed(true);
-      if(chatViewShowing()) leaveChatFor(neighbor);
-      renderChatTabs();
-      return;
-    }
-    tabs.splice(index, 1);
-    writeChatTabs(tabs);
-    if(chatWs.activeRoomId === roomId){
-      var next = tabs[Math.min(index, tabs.length - 1)];
-      loadChatRoom(next.roomId, next.kind, next.label);
-    } else {
-      renderChatTabs();
-    }
-  }
-  // A tab shows the same mark as the chat's sidebar row (Mia, the bot's
-  // avatar, a channel or a group), remembered so it survives a sidebar redraw.
-  var chatTabMarks = {};
-  function chatTabMarkHtml(tab){
-    var roomId = tab.roomId;
-    var sidebar = el('.chat-sidebar');
-    var rows = sidebar ? sidebar.querySelectorAll('[data-chat-room-id],[data-hub-channel-id]') : [];
-    for(var i = 0; i < rows.length; i += 1){
-      var id = rows[i].getAttribute('data-chat-room-id') || rows[i].getAttribute('data-hub-channel-id');
-      var mark = id === roomId && rows[i].querySelector('.chat-row-mark');
-      if(mark){ chatTabMarks[roomId] = mark.outerHTML; break; }
-    }
-    if(chatTabMarks[roomId]) return chatTabMarks[roomId];
-    // No sidebar row for this room yet: draw the mark from its kind, as the
-    // chat header does.
-    var label = tab.label || '';
-    if(tab.kind === 'agent') return '<span class="chat-row-mark tile">' + agentAvatarHtml(label, label === 'Mia' ? 'gateway' : null, 40, null, null, true) + '</span>';
-    if(tab.kind === 'home' || tab.kind === 'department') return '<span class="chat-row-mark channel">' + esc(benchMark(label || 'Multiplayer Test')) + '</span>';
-    if(tab.kind === 'group' && hubWorkspace()) return '<span class="chat-row-mark channel">#</span>';
-    return '<span class="chat-row-mark tile">' + esc(benchMark(label || 'Chat')) + '</span>';
-  }
-  // With tabs showing, the chat's menu drops from its tab.
   function chatViewShowing(){
     var classes = document.body.classList;
     return !classes.contains('automations-mode') && !classes.contains('artifacts-mode') && !classes.contains('apps-mode') && !classes.contains('browser-collab-mode');
   }
-  // Chat tabs live in the browser's tab strip (native-browser.js), which
-  // sits in the chat's row while the chat shows. A lone tab closes only when
-  // the strip has another tab to move to.
-  function chatStripTabs(){
-    var tabs = chatWs.activeRoomId ? readChatTabs() : [];
-    var others = window.MiaTabStrip.mix.hasOthers('chat');
-    return tabs.map(function(tab){
-      var active = tab.roomId === chatWs.activeRoomId;
-      // The lone chat that is always open is not counted on the Chat button.
-      return { id: tab.roomId, label: (active && chatWs.activeLabel) || tab.label || 'Chat', active: active, closable: tabs.length > 1 || others, uncounted: tabs.length === 1, iconHtml: chatTabMarkHtml(tab) };
-    });
-  }
+  // Chats and channels are picked from the sidebar and never get a tab. The
+  // strip in the chat's row (native-browser.js) holds the other views' tabs.
   function renderChatTabs(){
     var row = el('#chatTabsRow');
-    if(!row) return;
-    // Solo and Multiplayer Test switch without a reload, so the chat on
-    // screen can still be the old workspace's: only its own workspace gets its tab.
-    if(chatWs.activeRoomId && chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID && (!chatWs.activeRoomWorkspace || chatWs.activeRoomWorkspace === activeWorkspaceKey)){
-      if(!chatTabStaysClosed && chatViewShowing()) reopenChatTab();
-      if(!chatTabClosed()) openChatTab(chatWs.activeRoomId, chatWs.activeKind, chatWs.activeLabel);
-    }
-    var tabs = chatStripTabs();
-    var mix = window.MiaTabStrip.mix;
-    row.hidden = !tabs.length && !mix.on();
-    mix.notify('chat', JSON.stringify(tabs));
+    if(row) row.hidden = !window.MiaTabStrip.mix.on();
   }
-  // Mixed tabs (tab-strip.js): the chat's tabs, shown in the other strips.
   window.MiaTabStrip.mix.register('chat', {
-    tabs: chatStripTabs,
+    tabs: function(){ return []; },
     show: function(){ closeBrowserSidebarDrawer(); closeLocalBrowser(); closeAutomationsPage(); applyLeftPane(); },
-    select: function(roomId){
-      var tab = readChatTabs().find(function(item){ return item.roomId === roomId; });
-      if(tab && roomId !== chatWs.activeRoomId) loadChatRoom(tab.roomId, tab.kind, tab.label);
-    },
-    // The active tab carries the chat's name, so it opens the chat's menu.
-    reselect: function(){
-      var titleBtn = el('#channelTitleBtn');
-      if(titleBtn) titleBtn.click();
-    },
-    close: closeChatTab,
-    move: moveChatTab,
     render: function(){ renderChatTabs(); },
   });
-  // Drag a tab onto another to put it in that tab's place.
-  function moveChatTab(roomId, targetRoomId){
-    var tabs = readChatTabs();
-    var from = tabs.findIndex(function(item){ return item.roomId === roomId; });
-    var to = tabs.findIndex(function(item){ return item.roomId === targetRoomId; });
-    if(from < 0 || to < 0 || from === to) return;
-    tabs.splice(to, 0, tabs.splice(from, 1)[0]);
-    writeChatTabs(tabs);
-    renderChatTabs();
-  }
 
   function renderChatHeaderBar(){
     renderChatTabs();
@@ -14534,7 +14375,6 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
   function loadChatRoom(roomId, kind, label){
-    if(!chatTabStaysClosed) reopenChatTab();
     if(inHubRoom(roomId) && (kind!=='group' || !hubChat.channels.some(function(channel){return channel.id===roomId;})))return Promise.resolve();
     // A saved tab's name can be stale (a DM partner learned later); the Hub's is current.
     if(inHubRoom(roomId))label=hubChannelTitle(hubChannel(roomId));
