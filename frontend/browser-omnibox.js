@@ -255,38 +255,49 @@
   // browser, chat, automation. Each group holds labelled parts of rows.
   //   sources: {browser:[rows from suggest()], people:[{name, sub}],
   //     chats:[{name}], automations:[{name, botName, steps:[text]}],
-  //     current:{name, messages:[{id, text, author}]} (the open chat, newest first)}
-  //   options.view: 'browser' | 'chat' | 'automations'; null with tabs mixed.
-  var GROUP_ORDER = ['browser', 'chat', 'automations'];
-  var PART_LIMIT = 4;
+  //     artifacts:[{name, from}],
+  //     current:{name, messages:[{id, text, author}]} (the open chat, newest first),
+  //     start:[{id, name}] (ways to start something new)}
+  //   options.view: 'browser' | 'chat' | 'automations' | 'artifacts'; null with tabs mixed.
+  // Every match is listed; the box scrolls. With nothing typed, only the ways
+  // to start something show; typing matches them too, after the results.
+  var GROUP_ORDER = ['browser', 'chat', 'automations', 'artifacts'];
+  function startGroup(items){
+    return {key:'start', title:'Start something', parts:[{label:'', rows:items.map(function(item){ return {kind:'start', target:item}; })}]};
+  }
   function everywhere(query, sources, options){
     sources = sources || {};
     var view = options && options.view;
+    if(!String(query || '').trim()) return (sources.start || []).length ? [startGroup(sources.start)] : [];
     var groups = {
-      browser: {key:'browser', title:'Browser', parts:[{label:'', rows:(sources.browser || []).slice(0, view && view !== 'browser' ? PART_LIMIT : MAX_ROWS)}]},
+      browser: {key:'browser', title:'Browser', parts:[{label:'', rows:(sources.browser || []).slice(0, MAX_ROWS)}]},
       chat: {key:'chat', title:'Chat', parts:[
         // The chat you have open answers first, from its own messages.
         {label:sources.current ? 'In ' + sources.current.name : '', rows:messageRows(sources.current, query)},
-        {label:'People', rows:ranked(sources.people, query, function(person){ return [person.name, person.sub || '']; }, PART_LIMIT).map(function(person){ return {kind:'person', target:person}; })},
-        {label:'Chat history', rows:ranked(sources.chats, query, function(chat){ return chat.name; }, PART_LIMIT).map(function(chat){ return {kind:'chat', target:chat}; })}
+        {label:'People', rows:ranked(sources.people, query, function(person){ return [person.name, person.sub || '']; }).map(function(person){ return {kind:'person', target:person}; })},
+        {label:'Chat history', rows:ranked(sources.chats, query, function(chat){ return chat.name; }).map(function(chat){ return {kind:'chat', target:chat}; })}
       ]},
       automations: {key:'automations', title:'Automation', parts:[
-        {label:'Automations', rows:ranked(sources.automations, query, function(automation){ return [automation.name, automation.botName || '']; }, PART_LIMIT).map(function(automation){ return {kind:'automation', target:automation}; })},
+        {label:'Automations', rows:ranked(sources.automations, query, function(automation){ return [automation.name, automation.botName || '']; }).map(function(automation){ return {kind:'automation', target:automation}; })},
         {label:'Steps', rows:stepRows(sources.automations, query)}
+      ]},
+      artifacts: {key:'artifacts', title:'Artifacts', parts:[
+        {label:'', rows:ranked(sources.artifacts, query, function(artifact){ return [artifact.name, artifact.from || '']; }).map(function(artifact){ return {kind:'artifact', target:artifact}; })}
       ]}
     };
     var order = GROUP_ORDER.indexOf(view) === -1 ? GROUP_ORDER : [view].concat(GROUP_ORDER.filter(function(key){ return key !== view; }));
+    var starts = ranked(sources.start, query, function(item){ return item.name; });
     return order.map(function(key){
       var group = groups[key];
       group.parts = group.parts.filter(function(part){ return part.rows.length; });
       return group;
-    }).filter(function(group){ return group.parts.length; });
+    }).concat(starts.length ? [startGroup(starts)] : []).filter(function(group){ return group.parts.length; });
   }
 
   // A long message is shown from just before the match, so the match is visible.
   function messageRows(current, query){
     if(!current) return [];
-    return ranked(current.messages, query, function(message){ return message.text; }, PART_LIMIT).map(function(message){
+    return ranked(current.messages, query, function(message){ return message.text; }).map(function(message){
       var text = String(message.text || '').replace(/\s+/g, ' ').trim();
       var at = text.toLowerCase().indexOf((terms(query)[0] || '').toLowerCase());
       if(at > 40) text = '…' + text.slice(at - 20);
@@ -301,7 +312,7 @@
         steps.push({text:String(step || ''), number:index + 1, automation:automation});
       });
     });
-    return ranked(steps, query, function(step){ return step.text; }, PART_LIMIT).map(function(step){
+    return ranked(steps, query, function(step){ return step.text; }).map(function(step){
       return {kind:'step', target:step.automation, text:step.text, number:step.number};
     });
   }
