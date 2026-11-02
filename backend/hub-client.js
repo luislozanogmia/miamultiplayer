@@ -39,6 +39,8 @@ const FILE_ROUTES = [
   ['POST', 'parts', new RegExp(FILE_BASE + '/files/' + FILE_ID + '/parts$')],
   ['POST', 'complete', new RegExp(FILE_BASE + '/files/' + FILE_ID + '/complete$')],
   ['GET', 'status', new RegExp(FILE_BASE + '/files/' + FILE_ID + '/status$')],
+  ['GET', 'admin', new RegExp(FILE_BASE + '/files/admin$')],
+  ['GET', 'admin', new RegExp(FILE_BASE + '/files/admin/before/[1-9][0-9]{0,14}/' + FILE_ID + '$')],
   ['GET', 'download', new RegExp(FILE_BASE + '/files/' + FILE_ID + '/download$')],
   ['DELETE', 'delete', new RegExp(FILE_BASE + '/files/' + FILE_ID + '$')],
   ['GET', 'list', new RegExp(FILE_BASE + '/file-spaces/(?:channel|group|dm|automation)/' + FILE_ID + '/files$')],
@@ -49,6 +51,23 @@ const FILE_ROUTES = [
   ['DELETE', 'space', new RegExp(FILE_BASE + '/file-spaces/' + FILE_ID + '/members/[A-Za-z0-9_-]{1,128}$')],
 ];
 const HUB_FILE_AREA = /^\/v1\/teams\/[a-f0-9]{32}\/(?:files|file-spaces)(?:\/|$)/;
+// Team apps and live browser sessions (see the Hub's apps and admin API). The
+// same rule: under these two areas only these exact shapes and methods pass.
+const HUB_ADMIN_ROUTES = [
+  ['GET', new RegExp(FILE_BASE + '/browser-sessions$')],
+  ['POST', new RegExp(FILE_BASE + '/browser-sessions/' + FILE_ID + '/[a-z0-9]{6,32}/end$')],
+  ['GET', new RegExp(FILE_BASE + '/apps$')],
+  ['POST', new RegExp(FILE_BASE + '/apps$')],
+  ['POST', new RegExp(FILE_BASE + '/apps/' + FILE_ID + '/versions$')],
+  ['POST', new RegExp(FILE_BASE + '/apps/' + FILE_ID + '/versions/[1-9][0-9]{0,8}/(?:approve|reject)$')],
+  ['DELETE', new RegExp(FILE_BASE + '/apps/' + FILE_ID + '$')],
+];
+const HUB_ADMIN_AREA = /^\/v1\/teams\/[a-f0-9]{32}\/(?:browser-sessions|apps)(?:\/|$)/;
+// These lists can pass the default response limit (200 apps with two versions each).
+const HUB_ADMIN_LIST = new RegExp(FILE_BASE + '/(?:apps|browser-sessions|files/admin(?:/before/[1-9][0-9]{0,14}/' + FILE_ID + ')?)$');
+function hubAdminRoute(method, route) {
+  return HUB_ADMIN_ROUTES.some(([verb, pattern]) => verb === method && pattern.test(route));
+}
 // Team workflows: the only routes beyond the defaults. Lists, run detail and
 // work orders can reach several hundred KB, so every workflow route takes the
 // Hub's own 2 MiB response limit, and a definition write can reach 16 KB. Run
@@ -68,7 +87,7 @@ function hubRouteLimits(method, route) {
     // Finishing a 500 MB upload lists up to 63 parts (an ETag and a hash each).
     request: method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000
       : file === 'complete' ? 32768 : method === 'POST' && HUB_WORKFLOW_WRITE.test(route) ? 16384 : 8192,
-    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : HUB_WORKFLOW_ROUTE.test(route) ? 2097152 : 131072,
+    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : HUB_WORKFLOW_ROUTE.test(route) || (method === 'GET' && HUB_ADMIN_LIST.test(route)) ? 2097152 : 131072,
     // The Hub joins S3's multipart parts while it completes, which can take a while.
     timeout: method === 'GET' && HUB_FEED.test(route) ? 30000 : HUB_UPLOAD.test(route) || HUB_DOWNLOAD.test(route) || file === 'complete' ? 30000 : 15000,
   };
@@ -87,6 +106,7 @@ function createHubClient({ dataDirectory, fetcher = fetch }) {
       return res.status(404).json({ error: 'not_found' });
     }
     if (HUB_FILE_AREA.test(route) && !hubFileRoute(req.method, route)) return res.status(404).json({ error: 'not_found' });
+    if (HUB_ADMIN_AREA.test(route) && !hubAdminRoute(req.method, route)) return res.status(404).json({ error: 'not_found' });
     const authorization = req.headers.authorization;
     if (typeof authorization !== 'string' || !/^Bearer [A-Za-z0-9_.-]+$/.test(authorization) || authorization.length > 16384) {
       return res.status(401).json({ error: 'sign_in_required' });
@@ -108,4 +128,4 @@ function createHubClient({ dataDirectory, fetcher = fetch }) {
     } catch { return res.status(503).json({ error: 'hub_unavailable' }); }
   };
 }
-module.exports = { createHubClient, hubEndpoint, hubRouteLimits, hubFileRoute };
+module.exports = { createHubClient, hubEndpoint, hubRouteLimits, hubFileRoute, hubAdminRoute };

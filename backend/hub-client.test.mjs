@@ -189,3 +189,39 @@ test('the plain workflow routes stay forwarded as ordinary team routes',async()=
   assert.equal(seen.length,1,route);
  }
 });
+
+test('Hub admin screens reach exactly their routes through the proxy, and nothing else in those areas',async()=>{
+ const t='/v1/teams/'+'a'.repeat(32),id='b'.repeat(32),f='c'.repeat(32),space='0123456789abcdef';
+ const previous=process.env.MIA_HUB_URL;process.env.MIA_HUB_URL='https://hub.example.com';
+ const seen=[];
+ const proxy=createHubClient({fetcher:async(url)=>{seen.push(url);return new Response('{}');}});
+ const send=async(method,url)=>{const res={status(code){this.code=code;return this;},json(){return this;}};
+  await proxy({url,method,headers:{authorization:'Bearer token'},body:{}},res);return res.code;};
+ try{
+  for(const [method,path] of [
+   ['GET','/files/admin'],['GET','/files/admin/before/1790000000/'+f],['GET','/files/usage'],['DELETE','/files/'+f],
+   ['GET','/browser-sessions'],['POST','/browser-sessions/'+id+'/'+space+'/end'],
+   ['GET','/apps'],['POST','/apps'],['POST','/apps/'+id+'/versions'],['POST','/apps/'+id+'/versions/2/approve'],['POST','/apps/'+id+'/versions/2/reject'],['DELETE','/apps/'+id],
+   // Automations use the existing workflow routes.
+   ['GET','/workflows'],['GET','/workflows/'+id],['PATCH','/workflows/'+id],['DELETE','/workflows/'+id],
+   ['POST','/workflows/'+id+'/versions/3/approve'],['POST','/workflows/'+id+'/versions/3/reject'],
+   ['GET','/workflow-runs?state=all'],['GET','/workflow-approvals?state=pending'],
+  ]) assert.equal(await send(method,t+path),200,method+' '+path);
+  const forwarded=seen.length;
+  for(const [method,path] of [
+   ['POST','/files/admin'],['DELETE','/files/admin'],['GET','/files/admin/before/0/'+f],['GET','/files/admin/before/1790000000/nope'],['GET','/files/admin/extra'],
+   ['DELETE','/browser-sessions'],['GET','/browser-sessions/'+id],['GET','/browser-sessions/'+id+'/'+space+'/end'],['POST','/browser-sessions/nope/'+space+'/end'],
+   ['POST','/browser-sessions/'+id+'/UPPER_CASE/end'],['POST','/browser-sessions/'+id+'/'+space+'/start'],
+   ['PATCH','/apps/'+id],['GET','/apps/'+id],['POST','/apps/nope/versions/2/approve'],['POST','/apps/'+id+'/versions/0/approve'],['POST','/apps/'+id+'/versions/2/publish'],
+  ]) assert.equal(await send(method,t+path),404,method+' '+path);
+  assert.equal(seen.length,forwarded,'a refused route never reaches the Hub');
+ }finally{if(previous===undefined)delete process.env.MIA_HUB_URL;else process.env.MIA_HUB_URL=previous;}
+});
+
+test('Hub admin lists may be long, and their writes stay small',()=>{
+ const t='/v1/teams/'+'a'.repeat(32),id='b'.repeat(32),f='c'.repeat(32);
+ for(const path of ['/apps','/browser-sessions','/files/admin','/files/admin/before/1790000000/'+f]) assert.equal(hubRouteLimits('GET',t+path).response,2097152,path);
+ const end=hubRouteLimits('POST',t+'/browser-sessions/'+id+'/0123456789abcdef/end');
+ assert.equal(end.response,131072);assert.equal(end.request,8192);assert.equal(end.timeout,15000);
+ assert.equal(hubRouteLimits('DELETE',t+'/apps/'+id).response,131072);
+});
