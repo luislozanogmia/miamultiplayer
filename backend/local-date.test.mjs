@@ -43,7 +43,7 @@ test('Mia, bots and team channel bots are all told the local date', async () => 
   assert.match(contextBuilder, /\$\{localDateLine\(\)\}/);
   assert.doesNotMatch(contextBuilder, /toISOString/);
 
-  const teamBotTurn = source.slice(source.indexOf('runBot: async ('), source.indexOf("'This is a shared team channel."));
+  const teamBotTurn = source.slice(source.indexOf('async function runSharedBotTurn('), source.indexOf("'This is a shared team channel."));
   assert.match(teamBotTurn, /platformContext: \[localDateLine\(\), workspace\.workspaceContext,/);
 });
 
