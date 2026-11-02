@@ -624,6 +624,7 @@
     }
   }
   function hubFileScan(file){
+    if(file.state === 'deleting') return {label: 'Deleting', tone: ''};
     if(file.state === 'reserved' || file.state === 'uploading') return {label: 'Uploading', tone: ''};
     var verdict = tf.scanVerdict(file);
     if(verdict === 'clean') return {label: 'Clean', tone: 'ok'};
@@ -652,7 +653,7 @@
           '<td class="admin-cell-sub">' + esc(uploader || 'A former teammate') + '</td>' +
           '<td class="admin-cell-sub">' + esc(fmtDate(hubTime(file.createdAt))) + '</td>' +
           '<td>' + hubPill(scan.label, scan.tone) + '</td>' +
-          '<td class="admin-row-control">' + hubButton('Delete', 'file-delete', file.fileId, {tone: 'danger', disabled: !!busy['file-delete:' + file.fileId]}) + '</td></tr>';
+          '<td class="admin-row-control">' + (file.state === 'deleting' ? '' : hubButton('Delete', 'file-delete', file.fileId, {tone: 'danger', disabled: !!busy['file-delete:' + file.fileId]})) + '</td></tr>';
       }).join('') + '</tbody></table></div>';
     if(st.nextCursor || st.moreError){
       html += '<div class="hub-more">' + (st.moreError ? '<span>Mia could not load more files.</span>' : '') +
@@ -716,6 +717,7 @@
 
   var HUB_SESSION_SPACE = /^[a-z0-9]{6,32}$/;
   var HUB_ENDED_HIDE_MS = 20000;
+  var HUB_SESSION_LIMIT = 50;
 
   function hubSessionKey(session){ return session.channelId + '/' + session.spaceId; }
   function hubSessionEndable(session){ return HUB_ID.test(session.channelId || '') && HUB_SESSION_SPACE.test(session.spaceId || ''); }
@@ -723,11 +725,12 @@
     var list = st.sessions || [], busy = st.busy || {};
     var note = '<div class="hub-note">Ending a session closes it for everyone in it, and their tabs stay open on their own computers. Older versions of Mia ignore this, so someone on an older version may reopen it, and it would show up here again. Page addresses are never shown here.</div>';
     if(!list.length) return note + '<div class="card hub-state"><p>No live browser sessions right now.</p></div>';
+    if(list.length >= HUB_SESSION_LIMIT) note += '<div class="hub-note">Showing the ' + HUB_SESSION_LIMIT + ' most recent sessions.</div>';
     return note + '<div class="card admin-table-wrap"><table class="admin-table hub-sessions-table"><thead><tr><th>Session</th><th>Channel</th><th>Started by</th><th>In it now</th><th>Tabs</th><th>Last seen</th><th></th></tr></thead><tbody>' +
       list.map(function(session){
         var key = hubSessionKey(session), people = (session.people || []).map(function(person){ return person && person.name || 'A teammate'; });
         return '<tr><td class="admin-cell-name">' + esc(session.name || 'Shared tabs') + '</td>' +
-          '<td class="admin-cell-sub">' + esc(session.channelName ? '#' + session.channelName : 'A channel') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(session.channelName ? '#' + session.channelName : 'A direct message') + '</td>' +
           '<td class="admin-cell-sub">' + esc(session.startedBy && session.startedBy.name || 'A teammate') + '</td>' +
           '<td class="admin-cell-sub">' + esc(people.length ? people.join(', ') : 'Nobody') + '</td>' +
           '<td class="admin-cell-sub">' + esc(session.tabCount != null ? session.tabCount : '—') + '</td>' +
@@ -890,7 +893,7 @@
     };
     actions['file-delete'] = function(id){
       var st = state.files, file = (st.files || []).filter(function(item){ return item.fileId === id; })[0];
-      if(!file) return Promise.resolve();
+      if(!file || file.state === 'deleting') return Promise.resolve();
       function gone(){ st.files = st.files.filter(function(item){ return item.fileId !== id; }); changed('files'); return refreshUsage(); }
       return perform('files', 'file-delete:' + id, hubConfirmCopy('file-delete', file), function(){
         return files.remove(id).catch(function(error){

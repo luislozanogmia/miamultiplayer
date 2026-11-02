@@ -555,3 +555,27 @@ test('team controls are declared in the page and load their helpers first', asyn
   assert.ok(html.indexOf('team-workflows.js') < html.indexOf('admin.js?v='));
   assert.match(html, /id="channelHistoryCard" data-team-only hidden/);
 });
+
+test('a file already being deleted says so and offers no second delete', async () => {
+  const {hub, calls, confirms} = hubHarness({
+    'GET /files/admin': {files: [{fileId: hex('d'), filename: 'a.pdf', sizeBytes: 5, spaceKind: 'app', spaceName: null, createdAt: NOW_S, state: 'deleting'}], nextCursor: null},
+    'GET /files/usage': {usedBytes: 5, quotaBytes: 10},
+  });
+  await hub.load('files');
+  const html = admin.renderHubView('files', hub.state.files, NOW);
+  assert.match(html, /Deleting/);
+  assert.match(html, /A team app/);
+  assert.doesNotMatch(html, /file-delete/);
+  await hub.act('file-delete', hex('d'));
+  assert.equal(confirms.length, 0);
+  assert.equal(calls.filter((c) => c.startsWith('DELETE')).length, 0);
+});
+
+test('a session in a direct message is named as one, and a full list says it is capped', async () => {
+  const rows = Array.from({length: 50}, (_, i) => ({channelId: hex('c'), channelName: null, spaceId: 'space' + String(i).padStart(2, '0'), name: 'Tabs'}));
+  const {hub} = hubHarness({'GET /browser-sessions': {sessions: rows}});
+  await hub.load('sessions');
+  const html = admin.renderHubView('sessions', hub.state.sessions, NOW);
+  assert.match(html, /A direct message/);
+  assert.match(html, /Showing the 50 most recent sessions/);
+});
