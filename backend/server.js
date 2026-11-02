@@ -41,6 +41,7 @@ const { EFFECTIVE_RELEASE_PROFILE, MIAOS_AGENT_SEARCH_ONLY } = require('./releas
 const { DEMO_FRAME_CSP, isDemoFramePath } = require('./demo-frame-policy');
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
 const { approvalCard } = require('./ask-before-do');
+const { localDateString } = require('./local-date');
 const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured } = require('./hermes-bot-profile');
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const browserSuggestions = require('./browser-suggestions');
@@ -6299,7 +6300,8 @@ function confirmedSenderDisplayName(sender) {
 
 
 function buildPlatformContext(includeAgentCreationGuidance, ownerEmail, companyId = NATIVE_COMPANY_ID) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateString();
+  const timezone = localTimezoneName();
   // Bot roster and departments are the only app state Mia needs in ordinary
   // chat. Retired vertical-specific tables must not leak into a generic OSS
   // installation's prompt just because their legacy storage still exists.
@@ -6313,7 +6315,7 @@ function buildPlatformContext(includeAgentCreationGuidance, ownerEmail, companyI
     : 'No bots created yet.';
 
   const lines = [
-    `Instance: ${INSTANCE_NAME}, an operating system for ${INSTANCE_TEAM_DESCRIPTION}. Today is ${today}.`,
+    `Instance: ${INSTANCE_NAME}, an operating system for ${INSTANCE_TEAM_DESCRIPTION}. Today is ${today}${timezone ? ` (${timezone})` : ''}.`,
     `Departments: ${departments.length ? departments.join(', ') : 'none configured'}.`,
     agentsLine,
     `Available workspace surfaces include chat, bots, connected apps, documents, a web browser, and settings.`,
