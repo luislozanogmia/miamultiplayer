@@ -5140,7 +5140,7 @@
     return loadHubTeams(false).then(refreshHubChannels).then(function(){ loadCompanyBots(); return teamBots; }).then(function(){
       hubChat.error='';hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
       var botChat=(chatWs.nativeConversations||[]).filter(function(c){return c.id===previousRoomId;})[0];
-      if(botChat && !keepSetup){ startChatPolling(); return loadChatRoom(botChat.id,'agent',botChat.name); }
+      if(botChat && !keepSetup){ startChatPolling(); return restoreChatRoom(function(){ return loadChatRoom(botChat.id,'agent',botChat.name); }); }
       var room=hubChat.channels.filter(function(c){return c.id===previousRoomId;})[0] || hubChat.channels.filter(function(c){return !hubPrivateConversation(c);})[0] || hubChat.channels[0];
       startChatPolling();
       var newBot=takeNewTeamBotRequest(activeWorkspaceKey,hubChat.channels,Date.now());
@@ -5149,7 +5149,7 @@
         chatWs.activeRoomId=AGENT_SETUP_ROOM_ID;chatWs.activeKind='agent-setup';chatWs.activeLabel=agentSetupIdentity().name;
         renderChatSidebar();return refreshChatMain();
       }
-      if(room) return openHubChannel(room);
+      if(room) return restoreChatRoom(function(){ return openHubChannel(room); });
       refreshChatMain();
     }).catch(retryHubChat);
   }
@@ -5321,12 +5321,11 @@
   }
   // A bot was added, removed, accepted, approved or rejected. A burst of those
   // is one request, and it is dropped if the team changes while it waits.
-  var companyBotsRefreshTimer=null;
   function refreshCompanyBots(){
     if(!hubWorkspace())return;
     var workspace=activeWorkspaceKey;
-    clearTimeout(companyBotsRefreshTimer);
-    companyBotsRefreshTimer=setTimeout(function(){ if(workspace===activeWorkspaceKey)loadCompanyBots(); },300);
+    clearTimeout(hubChat.companyBotsTimer);
+    hubChat.companyBotsTimer=setTimeout(function(){ if(workspace===activeWorkspaceKey)loadCompanyBots(); },300);
   }
   function hubBotsChanged(roomId){
     refreshCompanyBots();
@@ -6043,7 +6042,7 @@
     var label = room.kind === 'department' ? (room.department || room.name)
       : (room.kind === 'dm' || room.kind === 'group') ? dmLabel(room)
       : room.name;
-    loadChatRoom(room.roomId, room.kind, label);
+    restoreChatRoom(function(){ loadChatRoom(room.roomId, room.kind, label); });
     return true;
   }
 
@@ -13653,10 +13652,51 @@
     if(kept.length !== tabs.length) writeChatTabs(kept);
     return !/^conv_/.test(chatWs.activeRoomId || '') || !!known[chatWs.activeRoomId];
   }
+  // A lone chat tab can close beside other tabs in the mixed strip. The room
+  // stays selected behind the other views, and the closed tab is remembered per
+  // workspace so a reload doesn't bring it back. Showing the chat, or picking a
+  // chat, gives it a tab again.
+  function chatTabClosedKey(){ return chatTabsStorageKey() + ':closed'; }
+  function chatTabClosed(){
+    try { return localStorage.getItem(chatTabClosedKey()) === '1'; } catch(_chatTabClosedReadError) { return false; }
+  }
+  function setChatTabClosed(closed){
+    try { localStorage.setItem(chatTabClosedKey(), closed ? '1' : '0'); } catch(_chatTabClosedWriteError) {}
+  }
+  function reopenChatTab(){ if(chatTabClosed()) setChatTabClosed(false); }
+  // While the view is changing, or a room is being restored behind one.
+  var chatTabStaysClosed = false;
+  function leaveChatFor(tab){
+    chatTabStaysClosed = true;
+    try { window.MiaTabStrip.mix.open(tab.view, tab.tab.id); } finally { chatTabStaysClosed = false; }
+  }
+  // For a room opened by startup, not by the person. A chat whose tab they
+  // closed loads behind the tab they can still see, or, with nothing else
+  // open, shows as normal.
+  function restoreChatRoom(open){
+    if(!chatTabClosed()) return open();
+    chatTabStaysClosed = true;
+    var opened;
+    try { opened = open(); } finally { chatTabStaysClosed = false; }
+    var next = window.MiaTabStrip.mix.neighbor('chat', chatWs.activeRoomId);
+    if(next) leaveChatFor(next);
+    else setChatTabClosed(false);
+    renderChatTabs();
+    return opened;
+  }
   function closeChatTab(roomId){
     var tabs = readChatTabs();
     var index = tabs.findIndex(function(item){ return item.roomId === roomId; });
-    if(index < 0 || tabs.length < 2) return;
+    if(index < 0) return;
+    if(tabs.length < 2){
+      var neighbor = window.MiaTabStrip.mix.neighbor('chat', roomId);
+      if(!neighbor) return;
+      writeChatTabs([]);
+      setChatTabClosed(true);
+      if(chatViewShowing()) leaveChatFor(neighbor);
+      renderChatTabs();
+      return;
+    }
     tabs.splice(index, 1);
     writeChatTabs(tabs);
     if(chatWs.activeRoomId === roomId){
@@ -13693,14 +13733,15 @@
     return !classes.contains('automations-mode') && !classes.contains('artifacts-mode') && !classes.contains('apps-mode') && !classes.contains('browser-collab-mode');
   }
   // Chat tabs live in the browser's tab strip (native-browser.js), which
-  // sits in the chat's row while the chat shows. A lone tab can't be
-  // closed: there is always a chat open.
+  // sits in the chat's row while the chat shows. A lone tab closes only when
+  // the strip has another tab to move to.
   function chatStripTabs(){
     var tabs = chatWs.activeRoomId ? readChatTabs() : [];
+    var others = window.MiaTabStrip.mix.hasOthers('chat');
     return tabs.map(function(tab){
       var active = tab.roomId === chatWs.activeRoomId;
       // The lone chat that is always open is not counted on the Chat button.
-      return { id: tab.roomId, label: (active && chatWs.activeLabel) || tab.label || 'Chat', active: active, closable: tabs.length > 1, uncounted: tabs.length === 1, iconHtml: chatTabMarkHtml(tab) };
+      return { id: tab.roomId, label: (active && chatWs.activeLabel) || tab.label || 'Chat', active: active, closable: tabs.length > 1 || others, uncounted: tabs.length === 1, iconHtml: chatTabMarkHtml(tab) };
     });
   }
   function renderChatTabs(){
@@ -13708,7 +13749,10 @@
     if(!row) return;
     // Solo and Multiplayer Test switch without a reload, so the chat on
     // screen can still be the old workspace's: only its own workspace gets its tab.
-    if(chatWs.activeRoomId && chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID && (!chatWs.activeRoomWorkspace || chatWs.activeRoomWorkspace === activeWorkspaceKey)) openChatTab(chatWs.activeRoomId, chatWs.activeKind, chatWs.activeLabel);
+    if(chatWs.activeRoomId && chatWs.activeRoomId !== AGENT_SETUP_ROOM_ID && (!chatWs.activeRoomWorkspace || chatWs.activeRoomWorkspace === activeWorkspaceKey)){
+      if(!chatTabStaysClosed && chatViewShowing()) reopenChatTab();
+      if(!chatTabClosed()) openChatTab(chatWs.activeRoomId, chatWs.activeKind, chatWs.activeLabel);
+    }
     var tabs = chatStripTabs();
     var mix = window.MiaTabStrip.mix;
     row.hidden = !tabs.length && !mix.on();
@@ -14487,6 +14531,7 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
   function loadChatRoom(roomId, kind, label){
+    if(!chatTabStaysClosed) reopenChatTab();
     if(inHubRoom(roomId) && (kind!=='group' || !hubChat.channels.some(function(channel){return channel.id===roomId;})))return Promise.resolve();
     // A saved tab's name can be stale (a DM partner learned later); the Hub's is current.
     if(inHubRoom(roomId))label=hubChannelTitle(hubChannel(roomId));

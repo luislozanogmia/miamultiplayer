@@ -599,7 +599,7 @@ test('a group picker says when the team is too small for a group',async()=>{
 // bot is published at once, anyone else's waits for an admin.
 test('adding a bot to a channel publishes it only when you are an admin',async()=>{
   const run=async role=>{const calls=[];
-    const env={hubChat:{membership:{role}},hubPath:()=>'/v1/teams/t',
+    const env={hubChat:{membership:{role}},hubPath:()=>'/v1/teams/t',refreshCompanyBots(){},
       window:{MiaHubChat:{localCall:(m,p,b)=>{calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot1'},proposal:{version:2}});}}},
       hubCall:(m,p)=>{calls.push([m,p]);return Promise.resolve({});}};
     const published=await appFunction('shareBotToHubChannel',env)('t','chan','local7');
@@ -783,4 +783,8 @@ test('every bot change refreshes the company bot list',()=>{
   assert.match(source,/chatWs\.activeRoomId===roomId\)return hubBotsChanged\(roomId\);/,'the admission card');
   const manager=require('fs').readFileSync(require('path').join(__dirname,'..','hub-bot-manager.js'),'utf8');
   assert.match(manager,/await scope\.refresh\(\)/,'the dialogs call the refresh they were given');
+});
+test('a version an admin\'s delete cleared reads plainly',async()=>{
+  const source=require('fs').readFileSync(require('path').join(__dirname,'..','hub-chat.js'),'utf8');
+  assert.match(source,/version_superseded:'That version is no longer available/);
 });

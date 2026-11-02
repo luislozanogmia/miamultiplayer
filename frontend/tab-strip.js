@@ -243,6 +243,24 @@
         return list;
       }, []);
     },
+    // Whether this view's tabs have company in the mixed strip. With tabs
+    // apart, each view's strip holds only its own.
+    hasOthers: function (view) {
+      return mixed && MIX_ORDER.some(function (v) {
+        return v !== view && views[v] && views[v].tabs && (views[v].tabs() || []).length > 0;
+      });
+    },
+    // The tab to move to when this one closes: the next one along that belongs
+    // to another view, else the one before it.
+    neighbor: function (view, id) {
+      if (!mix.hasOthers(view)) return null;
+      var items = mix.arrange(view, views[view] && views[view].tabs ? views[view].tabs() || [] : [], 0);
+      var at = -1, key = mixKey(view, id);
+      items.forEach(function (item, index) { if (item.key === key) at = index; });
+      for (var i = at + 1; i < items.length; i += 1) if (!items[i].own) return items[i];
+      for (var j = at - 1; j >= 0; j -= 1) if (!items[j].own) return items[j];
+      return null;
+    },
     // Drag one tab onto another, from any view: it takes that tab's place.
     move: function (fromKey, toKey) {
       var from = order.indexOf(fromKey), to = order.indexOf(toKey);

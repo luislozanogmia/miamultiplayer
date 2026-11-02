@@ -171,3 +171,105 @@ test('the Mac titlebar offset leaves the centered connection dialog inside the w
   assert.match(css, /html\.mac-inset-titlebar \.styled-sheet:not\(\.styled-onboarding-sheet\)/);
   assert.match(css, /html\.mac-inset-titlebar \.styled-onboarding-sheet\{top:calc\(50% \+ 22px\);max-height:calc\(100vh - 76px\);\}/);
 });
+
+// The mixed strip with one other view's tab. Opening that view takes the chat off the screen.
+function mixedHarness(others = [{ id: 'board', label: 'Automations' }]) {
+  const h = harness();
+  const body = new Set();
+  h.context.document.body.classList = { contains: (c) => body.has(c), toggle() {} };
+  h.opened = [];
+  h.others = others;
+  h.context.MiaTabStrip.mix.register('automations', {
+    tabs: () => h.others,
+    show: () => { body.add('automations-mode'); h.opened.push('automations'); h.context.renderChatTabs(); },
+    select: (id) => h.opened.push(id),
+  });
+  h.context.MiaTabStrip.mix.set(true);
+  h.showChat = () => { body.delete('automations-mode'); h.context.renderChatTabs(); };
+  h.reload = () => {
+    body.delete('automations-mode');
+    h.context.chatWs.activeRoomId = null;
+    h.opened.length = 0;
+  };
+  return h;
+}
+
+test('a lone chat next to another view\'s tab closes, and focus moves to that tab', () => {
+  const h = mixedHarness();
+  h.open('mia', 'Mia');
+  assert.equal(h.tabs().find((t) => t.id === 'mia').closable, true);
+  h.context.closeChatTab('mia');
+  assert.deepEqual(h.ids(), []);
+  assert.deepEqual(h.opened, ['automations', 'board']);
+  assert.equal(h.tabs().some((t) => t.id === 'mia'), false, 'it does not come back on the next redraw');
+  h.context.renderChatTabs();
+  assert.deepEqual(h.ids(), []);
+});
+
+test('a lone chat stays when it is the only tab of any kind, or when tabs are not mixed', () => {
+  const alone = mixedHarness([]);
+  alone.open('mia', 'Mia');
+  assert.equal(alone.tabs()[0].closable, false);
+  alone.context.closeChatTab('mia');
+  assert.deepEqual(alone.ids(), ['mia']);
+  const apart = mixedHarness();
+  apart.open('mia', 'Mia');
+  apart.context.MiaTabStrip.mix.set(false);
+  assert.equal(apart.context.chatStripTabs()[0].closable, false);
+  apart.context.closeChatTab('mia');
+  assert.deepEqual(apart.ids(), ['mia']);
+});
+
+test('coming back to the chat view gives the open chat its tab again', () => {
+  const h = mixedHarness();
+  h.open('mia', 'Mia');
+  h.context.closeChatTab('mia');
+  h.showChat();
+  assert.deepEqual(h.ids(), ['mia']);
+});
+
+test('a chat picked from the sidebar brings its tab back from any view', () => {
+  const h = mixedHarness();
+  h.open('mia', 'Mia');
+  h.context.closeChatTab('mia');
+  h.context.reopenChatTab();
+  h.context.renderChatTabs();
+  assert.deepEqual(h.ids(), ['mia']);
+});
+
+test('a reload keeps a closed chat tab closed and shows a tab that is still open', () => {
+  const h = mixedHarness();
+  h.open('mia', 'Mia');
+  h.context.closeChatTab('mia');
+  h.reload();
+  h.context.restoreChatRoom(() => h.open('mia', 'Mia'));
+  assert.deepEqual(h.ids(), [], 'the room is selected behind the page, without a tab');
+  assert.deepEqual(h.opened, ['automations', 'board'], 'not an empty chat');
+});
+
+test('a reload with nothing else open shows the chat with its tab', () => {
+  const h = mixedHarness();
+  h.open('mia', 'Mia');
+  h.context.closeChatTab('mia');
+  h.reload();
+  h.others = [];
+  h.context.restoreChatRoom(() => h.open('mia', 'Mia'));
+  assert.deepEqual(h.ids(), ['mia']);
+  assert.deepEqual(h.opened, []);
+});
+
+test('Solo and each team remember a closed chat tab apart', () => {
+  const h = mixedHarness();
+  h.open('mia', 'Mia');
+  h.context.closeChatTab('mia');
+  h.context.activeWorkspaceKey = 'hub_a';
+  assert.equal(h.context.chatTabClosed(), false);
+  h.context.activeWorkspaceKey = 'solo';
+  assert.equal(h.context.chatTabClosed(), true);
+});
+
+test('every automatic opening of a room at startup keeps a closed tab closed', () => {
+  assert.match(source, /restoreChatRoom\(function\(\)\{ loadChatRoom\(room\.roomId, room\.kind, label\); \}\)/, 'Solo');
+  assert.match(source, /if\(room\) return restoreChatRoom\(function\(\)\{ return openHubChannel\(room\); \}\)/, 'a team');
+  assert.match(source, /restoreChatRoom\(function\(\)\{ return loadChatRoom\(botChat\.id,'agent',botChat\.name\); \}\)/, 'a team bot chat');
+});
