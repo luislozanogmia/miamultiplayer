@@ -11,6 +11,7 @@ automatically through the in-app updater.
 
 ### Added
 
+- A registry for personal agents: create, rename and delete extra private agents through `/api/private-agents`. They are never shareable (the share route and the Hub share path refuse them) and are kept apart from bots. Chat and the sidebar "New agent" button are not enabled yet.
 - Bot replies in team channels show whose Mia ran them and which provider answered.
 
 ## [0.2.22]

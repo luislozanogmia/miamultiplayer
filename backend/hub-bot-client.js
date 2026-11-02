@@ -41,7 +41,7 @@ async function requestHub(origin,token,method,path,body,fetcher=fetch) {
   if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','invalid_claim'].includes(result.error)?result.error:'hub_request_failed');
   return result;
 }
-function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getAccountIdentity,runBot,checkIntervalMs=15000,fetcher=fetch}) {
+function createHubBotClient({db,dataDirectory,getBot,listBots,isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,checkIntervalMs=15000,fetcher=fetch}) {
   const journal=createHubBotJournal(db);
   const inFlight=new Map(), freshTokens=new Map(), selections=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
@@ -189,6 +189,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
     // only, no longer tied to the Solo bot. Skills, automations and memories
     // stay in Solo.
     async share(owner,input,token) {
+      // Personal agents are private to their owner and never leave the machine.
+      if(isPrivateAgent(String(input.localBotId||''))) throw failure(403,'agent_not_shareable');
       const scope=await context(owner,input,token);
       const bot=getBot(String(input.localBotId||''),scope.owner);
       if(!bot) throw failure(404,'bot_not_found');

@@ -1290,6 +1290,7 @@ function requireMiaAdmin(req, res, next) {
 
 // Sharing requires both the local interactive session and matching Hub identity.
 app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createHubBotRouter({
+  isPrivateAgent: (id) => require('./private-agents').isPrivateAgentId(id),
   db: conn,
   dataDirectory: path.dirname(path.resolve(DB_PATH)),
   isOwnerActive: isActiveWorkspaceUser,
@@ -5864,6 +5865,10 @@ app.get('/api/agents', requireAuth, (req, res) => {
   res.status(200).json({ agents: agent ? [agent] : [] });
 });
 
+// Extra personal agents (registry only; chat is not wired yet).
+const privateAgentStore = require('./private-agents').createPrivateAgentStore(conn);
+require('./private-agent-routes').registerPrivateAgentRoutes(app, { store: privateAgentStore, requireAuth });
+
 app.get('/api/agents/gateway', requireAuth, (req, res) => {
   const agent = privateGatewayAgent(req);
   if (!agent) return res.status(404).json({ error: 'not_found' });
@@ -8203,6 +8208,7 @@ app.use(
           console.error('Google account credential cleanup failed for deleted user', err.message);
         }
         const ownedAgents = db.loadAll(conn, 'bots').filter((agent) => ownerOf(agent) === owner);
+        privateAgentStore.removeAllFor(owner);
         const deletedAt = new Date().toISOString();
         for (const agent of ownedAgents) {
           for (const conversation of nativeBotConversations(agent, true)) {
