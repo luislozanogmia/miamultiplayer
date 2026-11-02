@@ -348,9 +348,17 @@ test('a link an app was stopped from opening reads plainly', () => {
 });
 
 test('the new refusals read plainly, and an app with nothing live is not openable', () => {
-  assert.match(page.errorMessage({ code: 'app_pending_limit' }), /20 apps waiting/);
+  assert.match(page.errorMessage({ code: 'app_pending_limit' }), /20 apps that aren’t live yet.*Remove any you no longer need/);
+  assert.match(page.errorMessage({ code: 'version_superseded' }), /no longer available/);
   assert.match(teamFiles.friendly({ code: 'file_in_use', message: 'raw' }), /team app is using this file/);
   const html = page.bodyHtml(state({ teamId: TEAM, me: 'me', catalog: page.normalizeCatalog({ apps: [catalogApp({ publisher: { id: 'x', name: 'Sam' }, live: null, pending: null })] }) }), esc);
   assert.doesNotMatch(html, /data-app-open-team/);
   assert.match(html, /Not available/);
+});
+
+test('a rejected version whose file is gone asks for nothing and offers no review', () => {
+  const app = { id: 'a'.repeat(32), name: 'Tool', publisher: { id: 'u', name: 'Pat' }, live: null, pending: { version: 2, kind: 'bundle', fileId: 'f'.repeat(32), state: 'rejected' } };
+  assert.deepEqual(Array.from(page.filesToCheck([app], {})), []);
+  assert.equal(page.reviewCount({ isAdmin: true, catalog: [app], scans: {} }), 0);
+  assert.equal(page.appState(app, {}), 'rejected');
 });

@@ -523,7 +523,7 @@
       case 'wf-approve': return {title: 'Approve version ' + extra.version + ' of ' + item.name + '?', body: 'It goes live for the team. Runs already in progress keep their version.', confirmLabel: 'Approve'};
       case 'wf-reject': return {title: 'Reject version ' + extra.version + ' of ' + item.name + '?', body: 'It will not go live. Anything live now stays live.', confirmLabel: 'Reject', danger: true};
       case 'file-delete': return {title: 'Delete ' + item.filename + '?',
-        body: 'This removes the file for everyone on the team and frees its space. It can’t be undone. Copies people already downloaded stay on their computers.' + (item.appId ? ' This is an app’s file, so deleting it removes the app "' + (item.appName || 'this app') + '" from the team.' : item.spaceKind === 'app' ? ' A team app may depend on this file.' : ''),
+        body: 'This removes the file for everyone on the team and frees its space. It can’t be undone. Copies people already downloaded stay on their computers.' + (item.appId ? ' This is an app’s file, so deleting it removes this file’s apps from the team' + (item.appName ? ', including "' + item.appName + '".' : '.') : item.spaceKind === 'app' ? ' A team app may depend on this file.' : ''),
         confirmLabel: 'Delete', danger: true};
       case 'app-approve': {
         var version = item.pending || {};
@@ -726,15 +726,15 @@
   function hubSessionEndable(session){ return HUB_ID.test(session.channelId || '') && HUB_SESSION_SPACE.test(session.spaceId || ''); }
   function renderHubSessions(st, now){
     var list = st.sessions || [], busy = st.busy || {};
-    var note = '<div class="hub-note">Ending a session closes it for everyone in it, and their tabs stay open on their own computers. Older versions of Mia ignore this, so someone on an older version may reopen it, and it would show up here again. Page addresses are never shown here.</div>';
-    if(!list.length) return note + '<div class="card hub-state"><p>No live browser sessions right now.</p></div>';
+    var note = '<div class="hub-note">Ending a session closes it for everyone in it, and their tabs stay open on their own computers. Older versions of Mia ignore this, so someone on an older version may reopen it, and it would show up here again. Page addresses are never shown here. In a very busy channel a live session might not be listed.</div>';
+    if(!list.length) return note + '<div class="card hub-state"><p>No live browser sessions found.</p></div>';
     if(list.length >= HUB_SESSION_LIMIT) note += '<div class="hub-note">Showing the ' + HUB_SESSION_LIMIT + ' most recent sessions.</div>';
     return note + '<div class="card admin-table-wrap"><table class="admin-table hub-sessions-table"><thead><tr><th>Session</th><th>Channel</th><th>Started by</th><th>In it now</th><th>Tabs</th><th>Last seen</th><th></th></tr></thead><tbody>' +
       list.map(function(session){
         var key = hubSessionKey(session), people = (session.people || []).map(function(person){ return person && person.name || 'A teammate'; });
         return '<tr><td class="admin-cell-name">' + esc(session.name || 'Shared tabs') + '</td>' +
           '<td class="admin-cell-sub">' + esc(session.channelName ? '#' + session.channelName : 'A direct message') + '</td>' +
-          '<td class="admin-cell-sub">' + esc(session.startedBy && session.startedBy.name || 'A teammate') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(session.startedBy && session.startedBy.name || 'Not known') + '</td>' +
           '<td class="admin-cell-sub">' + esc(people.length ? people.join(', ') : 'Nobody') + '</td>' +
           '<td class="admin-cell-sub">' + esc(session.tabCount != null ? session.tabCount : '—') + '</td>' +
           '<td class="admin-cell-sub">' + esc(wf.sinceText(session.lastSeenAt, now) || '—') + '</td>' +

@@ -50,6 +50,7 @@
     sharing_mode_required:'Choose linked or independent fork.', sharing_mode_immutable:'This bot’s sharing mode can’t be changed.',
     fork_has_no_solo_sync:'An independent fork doesn’t sync from Solo.', invalid_definition:'Bot instructions must be 1 to 6,000 characters.',
     version_already_approved:'That version is already approved.', version_rejected:'That version was rejected.',
+    version_superseded:'That version is no longer available. Refresh to see the latest.',
     approval_in_progress:'Another admin is reviewing this bot. Refresh in a moment.',
     dispatch_claimed:'Another participant is already running this.', dispatch_completed:'This run has already finished.',
     dispatch_expired:'This request expired. Send a new message to try again.', invalid_job:'That run is no longer available.'

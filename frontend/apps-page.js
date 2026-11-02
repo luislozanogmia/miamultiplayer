@@ -26,9 +26,9 @@
     app_limit: 'Your team has reached its limit of 200 apps. Remove one, then try again.',
     idempotency_conflict: 'That publish clashed with an earlier try. Try again.',
     version_rejected: 'This version was already turned down. Change the app, then publish again.',
-    version_superseded: 'A newer version has replaced this one. Check the list and try again.',
+    version_superseded: 'This version is no longer available. Check the list and try again.',
     version_already_approved: 'This version is already live.',
-    app_pending_limit: 'You already have 20 apps waiting for review. Wait for an admin to review them, then try again.',
+    app_pending_limit: 'You have 20 apps that aren’t live yet, including any that were turned down. Remove any you no longer need, then try again.',
   };
   function errorMessage(error, fallback){
     if(error && ERRORS[error.code]) return ERRORS[error.code];

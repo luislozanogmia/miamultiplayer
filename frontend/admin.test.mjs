@@ -615,7 +615,19 @@ test('approving a bundle warns the scan cannot see inside it, in the same words 
 test('deleting a file that is an app warns that the app goes too, and the row names the app', () => {
   const file = {fileId: hex('f'), filename: 'tool.miaapp', spaceKind: 'app', appId: hex('b'), appName: 'Tool'};
   const copy = admin.hubConfirmCopy('file-delete', file);
-  assert.match(copy.body, /removes the app "Tool" from the team/);
+  assert.match(copy.body, /removes this file’s apps from the team, including "Tool"/);
   assert.equal(admin.hubFileWhere(file), 'App: Tool');
   assert.doesNotMatch(admin.hubConfirmCopy('file-delete', {fileId: hex('f'), filename: 'a.txt', spaceKind: 'channel'}).body, /app/i);
+});
+
+test('a session with no known starter says so, and an empty list does not claim to be complete', async () => {
+  const { hub } = hubHarness({'GET /browser-sessions': {sessions: [{channelId: hex('c'), channelName: 'ops', spaceId: 'abc123', name: 'Tabs', startedBy: null, people: [], lastSeenAt: NOW_S, tabCount: 1}]}});
+  await hub.load('sessions');
+  const html = admin.renderHubView('sessions', hub.state.sessions, NOW);
+  assert.match(html, />Not known</);
+  assert.doesNotMatch(html, /A teammate/);
+  assert.match(html, /might not be listed/, 'the list may not hold every live session');
+  const empty = hubHarness({'GET /browser-sessions': {sessions: []}});
+  await empty.hub.load('sessions');
+  assert.doesNotMatch(admin.renderHubView('sessions', empty.hub.state.sessions, NOW), /right now/);
 });
