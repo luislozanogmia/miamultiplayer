@@ -8508,7 +8508,7 @@
       delete appsPage.installing[id];
       showAppTab(reply.key, app.name, {kind: 'team', appId: id});
     }).catch(function(error){
-      appsPage.installing[id] = {error: window.MiaAppsPage.errorMessage(error, 'That app could not be opened.')};
+      appsPage.installing[id] = {error: window.MiaAppsPage.openErrorMessage(error, app.publisher && app.publisher.name)};
       renderAppsPage();
     });
   }
@@ -8560,7 +8560,10 @@
     if(!app || !app.pending) return;
     hubCall('POST', '/v1/teams/' + teamId + '/apps/' + id + '/versions/' + app.pending.version + '/' + decision, {}).then(function(){
       return loadAppsCatalog(teamId);
-    }).then(renderAppsPage).catch(function(error){ showBenchToast(window.MiaAppsPage.errorMessage(error, 'That did not work. Try again.')); });
+    }).then(renderAppsPage).catch(function(error){
+      showBenchToast(window.MiaAppsPage.errorMessage(error, 'That did not work. Try again.'));
+      loadAppsCatalog(teamId).then(renderAppsPage);
+    });
   }
   function archiveTeamApp(id){
     var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;

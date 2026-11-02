@@ -231,3 +231,29 @@ test('the view is wired in everywhere the other views are', () => {
   // A running app must never be a frame in Mia's own page, or get anywhere near it.
   assert.doesNotMatch(app.slice(app.indexOf('var appsPage ='), app.indexOf('(function wireAutomationsPage')), /<iframe|<webview/);
 });
+
+test('the final Hub answers each read plainly, and a live app whose file was deleted says so', () => {
+  for (const code of ['app_limit', 'idempotency_conflict', 'version_rejected', 'version_superseded', 'version_already_approved', 'app_name_taken', 'file_not_ready']) {
+    assert.doesNotMatch(page.errorMessage({ code, message: 'raw' }), /raw|\(/, code);
+  }
+  assert.match(page.openErrorMessage({ code: 'not_found', status: 404 }, 'Sam'), /no longer on your team\. Ask Sam to publish it again/);
+  assert.match(page.openErrorMessage({ status: 404 }), /Ask whoever published it/);
+  assert.equal(page.openErrorMessage({ message: 'raw network text' }), 'That app could not be opened.');
+  assert.match(page.openErrorMessage({ code: 'file_not_ready' }), /virus check/);
+});
+
+test('a publisher sees their own rejected app and can publish over it', () => {
+  const rejected = catalogApp({ pending: bundle({ state: 'rejected' }) });
+  const html = page.bodyHtml(state({ teamId: TEAM, catalog: [rejected], local: [{ id: 'folder:r', name: 'Report', folder: 'r' }] }), esc);
+  assert.match(html, /Not approved/);
+  assert.match(html, /Publish update/);
+  assert.doesNotMatch(html, /data-app-open-team/, 'nothing live to open');
+});
+
+test('a too-long link address or name is handled before the Hub would refuse it', async () => {
+  assert.match(page.linkPublishProblem({ url: 'https://example.com/' + 'a'.repeat(2048) }), /too long/);
+  const calls = [];
+  await page.publishLink({ call: async (...args) => { calls.push(args); return {}; }, teamId: TEAM, newId: () => APP, link: { name: 'n'.repeat(120), url: 'https://example.com/' } });
+  assert.equal(calls[0][2].name.length, 80);
+  assert.equal(page.publishedAs([catalogApp({ name: 'n'.repeat(80) })], 'n'.repeat(120), 'me').name.length, 80);
+});

@@ -12,6 +12,8 @@
   var SHA256 = /^[a-f0-9]{64}$/;
   var SCAN_WAIT_MS = 5000;
   var SCAN_WAITS = 60;
+  var MAX_NAME_LENGTH = 80;
+  var MAX_URL_LENGTH = 2048;
 
   var ERRORS = {
     app_name_taken: 'Your team already has an app with that name. Rename the folder, then try again.',
@@ -21,11 +23,24 @@
     hub_unavailable: 'Your team could not be reached. Check your connection, then try again.',
     sign_in_required: 'Sign in again, then try again.',
     forbidden: 'Only a team admin can do that.',
+    app_limit: 'Your team has reached its limit of 200 apps. Remove one, then try again.',
+    idempotency_conflict: 'That publish clashed with an earlier try. Try again.',
+    version_rejected: 'This version was already turned down. Change the app, then publish again.',
+    version_superseded: 'A newer version has replaced this one. Check the list and try again.',
+    version_already_approved: 'This version is already live.',
   };
   function errorMessage(error, fallback){
     if(error && ERRORS[error.code]) return ERRORS[error.code];
     if(error && ERRORS[error.message]) return ERRORS[error.message];
     return fallback || (error && error.message) || 'That did not work. Try again.';
+  }
+
+  // The app is still listed, but its file was deleted from the team.
+  function openErrorMessage(error, publisherName){
+    if(error && (error.code === 'not_found' || error.status === 404)){
+      return "This app's file is no longer on your team. Ask " + (publisherName || 'whoever published it') + ' to publish it again.';
+    }
+    return errorMessage(error, 'That app could not be opened.');
   }
 
   function fail(message, code){
@@ -66,6 +81,7 @@
   function linkPublishProblem(link){
     if(link && link.local) return 'A localhost address only works on your computer. To share this app, publish its folder instead.';
     if(!link || !isPublishableAddress(link.url)) return 'Only an https address can be shared with your team.';
+    if(String(link.url).length > MAX_URL_LENGTH) return 'That address is too long to share with your team.';
     return '';
   }
 
@@ -100,9 +116,12 @@
     }).map(function(app){ return app.pending.fileId; });
   }
 
+  // A saved link's name can be longer than the Hub allows.
+  function hubName(name){ return Array.from(String(name || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim()).slice(0, MAX_NAME_LENGTH).join('').trim(); }
+
   // The team app a local folder or link was published as: same name, same person.
   function publishedAs(catalog, name, me){
-    var wanted = String(name || '').trim().toLowerCase();
+    var wanted = hubName(name).toLowerCase();
     return catalog.filter(function(app){
       return app.name.trim().toLowerCase() === wanted && !!me && app.publisher.id === me;
     })[0] || null;
@@ -122,7 +141,7 @@
     var call = options.call, base = '/v1/teams/' + options.teamId + '/apps', body = options.version;
     var send = function(){
       if(options.existing) return call('POST', base + '/' + options.existing.id + '/versions', body);
-      return call('POST', base, Object.assign({id: options.newId(), name: options.name, description: options.description || ''}, body));
+      return call('POST', base, Object.assign({id: options.newId(), name: hubName(options.name), description: options.description || ''}, body));
     };
     for(var attempt = 0;; attempt++){
       try { return await send(); }
@@ -321,7 +340,7 @@
     + 'with an index.html at the top of that folder. Keep every file it needs inside that folder. Tell me the folder name when it is done.';
 
   return {BUILD_PROMPT: BUILD_PROMPT, appState: appState, bodyHtml: bodyHtml, createUploader: createUploader, errorMessage: errorMessage, filesToCheck: filesToCheck, installVersion: installVersion,
-    isPublishableAddress: isPublishableAddress, linkPublishProblem: linkPublishProblem, matches: matches, newAppId: newAppId, nextTabAfterClose: nextTabAfterClose,
+    isPublishableAddress: isPublishableAddress, linkPublishProblem: linkPublishProblem, matches: matches, newAppId: newAppId, openErrorMessage: openErrorMessage, nextTabAfterClose: nextTabAfterClose,
     normalizeCatalog: normalizeCatalog, publishFolder: publishFolder, publishLink: publishLink, publishedAs: publishedAs, runHtml: runHtml, stateText: stateText,
     stripTabs: stripTabs, submitVersion: submitVersion, waitForScan: waitForScan};
 });
