@@ -8540,12 +8540,19 @@
   var LOCAL_BROWSER_SUGGEST_CHAT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_AUTOMATION = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_STEP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"></path></svg>';
-  var LOCAL_BROWSER_SUGGEST_START = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_ARTIFACT = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>';
+  var LOCAL_BROWSER_SUGGEST_START_ICONS = {
+    'new-chat': LOCAL_BROWSER_SUGGEST_CHAT,
+    'new-channel': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"></path></svg>',
+    'new-automation': LOCAL_BROWSER_SUGGEST_AUTOMATION,
+    'new-bot': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"></path><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M2 14h2M20 14h2M15 13v2M9 13v2"></path></svg>',
+    'add-app': LOCAL_BROWSER_SUGGEST_ARTIFACT,
+    'new-tab': LOCAL_BROWSER_SUGGEST_GLOBE
+  };
   function localBrowserSuggestRow(item, i, query){
     var icon, line;
     if(item.kind === 'start' || item.kind === 'artifact'){
-      icon = '<span class="local-browser-suggest-icon">' + (item.kind === 'start' ? LOCAL_BROWSER_SUGGEST_START : LOCAL_BROWSER_SUGGEST_ARTIFACT) + '</span>';
+      icon = '<span class="local-browser-suggest-icon">' + (item.kind === 'start' ? LOCAL_BROWSER_SUGGEST_START_ICONS[item.target.id] : LOCAL_BROWSER_SUGGEST_ARTIFACT) + '</span>';
       var from = item.kind === 'artifact' ? item.target.from || item.target.type : '';
       line = '<span class="local-browser-suggest-title">' + localBrowserSuggestMarkup(item.target.name, query) + '</span>' +
         (from ? '<span class="local-browser-suggest-sep"> – </span><span class="local-browser-suggest-hint">' + esc(from) + '</span>' : '');

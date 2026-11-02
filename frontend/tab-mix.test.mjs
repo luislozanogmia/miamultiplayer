@@ -172,3 +172,13 @@ test('(+) opens the bar in every view, mixed or not', async () => {
   assert.match(browser, /docked === 'browser' \? command\('new'\)/, 'only the browser opens a tab first');
   assert.doesNotMatch(browser, /add\.hidden/, 'the (+) button shows in every view');
 });
+
+test('every way to start something shows its own icon, not a shared plus', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const items = app.slice(app.indexOf('function localBrowserStartItems'), app.indexOf('function runLocalBrowserStart'));
+  const ids = [...items.matchAll(/id:'([a-z-]+)'/g)].map((match) => match[1]);
+  assert.equal(ids.length, 6);
+  const icons = app.slice(app.indexOf('var LOCAL_BROWSER_SUGGEST_START_ICONS'), app.indexOf('function localBrowserSuggestRow'));
+  for (const id of ids) assert.ok(icons.includes(`'${id}':`), id);
+  assert.doesNotMatch(icons, /M12 5v14M5 12h14/);
+});
