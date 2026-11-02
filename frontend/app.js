@@ -14032,6 +14032,13 @@
     return null;
   }
 
+  // In Solo there is no one else to read an untagged channel message, so a
+  // send the server routed to nobody would otherwise look like a hung model.
+  function nativeMessageReachedNobody(res, threadRootId){
+    var decision = res && res.data && res.data.dispatch && res.data.dispatch.decision;
+    return activeWorkspaceKey === 'solo' && !threadRootId && !!decision && decision.mode === 'none';
+  }
+
   // threadRootId, when given, is the thread this send belongs to — set by
   // the thread box's inline reply composer. Everything else about the send
   // (addressing resolution, agent mentions) is identical to a main-timeline
@@ -14098,6 +14105,7 @@
       if(res.status !== 201 && res.status !== 200) return failed(res);
       state.messages = state.messages.filter(function(message){ return message !== pendingMsg; });
       if(res.data && res.data.event) applyNativeEvent(res.data.event);
+      if(nativeMessageReachedNobody(res, threadRootId)) addSystemChatLine(roomId, 'Nobody was notified. Tag @Mia or a bot to get a reply.');
       if(!activeDispatchAtSend && res.data && res.data.dispatch && Array.isArray(res.data.dispatch.dispatches)){
         setRoomNativeDispatches(roomId, res.data.dispatch.dispatches);
         renderComposerTaskControl();
