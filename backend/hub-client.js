@@ -27,11 +27,42 @@ const HUB_FEED = /^\/v1\/teams\/[a-f0-9]{32}\/events\/after\/(?:0|[1-9][0-9]{0,1
 const HUB_MESSAGE = /^\/v1\/teams\/[a-f0-9]{32}\/channels\/[a-f0-9]{32}\/messages$/;
 // The admin activity log is the only Hub route that takes a query string.
 const HUB_AUDIT = /^\/v1\/teams\/[a-f0-9]{32}\/audit\?(?:before|limit)=[1-9][0-9]{0,15}(?:&(?:before|limit)=[1-9][0-9]{0,15})?$/;
+// Team files (see the Hub's team file API). The Hub only ever sees JSON: file
+// bytes go straight from the app to signed S3 links, never through this proxy.
+// Anything under a team's /files or /file-spaces must match one of these exact
+// shapes and methods; every other path there is refused here, not forwarded.
+const FILE_ID = '[a-f0-9]{32}';
+const FILE_BASE = '^/v1/teams/[a-f0-9]{32}';
+const FILE_ROUTES = [
+  ['GET', 'usage', new RegExp(FILE_BASE + '/files/usage$')],
+  ['POST', 'upload', new RegExp(FILE_BASE + '/files/uploads$')],
+  ['POST', 'parts', new RegExp(FILE_BASE + '/files/' + FILE_ID + '/parts$')],
+  ['POST', 'complete', new RegExp(FILE_BASE + '/files/' + FILE_ID + '/complete$')],
+  ['GET', 'status', new RegExp(FILE_BASE + '/files/' + FILE_ID + '/status$')],
+  ['GET', 'download', new RegExp(FILE_BASE + '/files/' + FILE_ID + '/download$')],
+  ['DELETE', 'delete', new RegExp(FILE_BASE + '/files/' + FILE_ID + '$')],
+  ['GET', 'list', new RegExp(FILE_BASE + '/file-spaces/(?:channel|group|dm|automation)/' + FILE_ID + '/files$')],
+  ['GET', 'list', new RegExp(FILE_BASE + '/file-spaces/(?:channel|group|dm|automation)/' + FILE_ID + '/files/before/[1-9][0-9]{0,14}/' + FILE_ID + '$')],
+  ['POST', 'space', new RegExp(FILE_BASE + '/file-spaces$')],
+  ['GET', 'space', new RegExp(FILE_BASE + '/file-spaces/' + FILE_ID + '/members$')],
+  ['PUT', 'space', new RegExp(FILE_BASE + '/file-spaces/' + FILE_ID + '/members/[A-Za-z0-9_-]{1,128}$')],
+  ['DELETE', 'space', new RegExp(FILE_BASE + '/file-spaces/' + FILE_ID + '/members/[A-Za-z0-9_-]{1,128}$')],
+];
+const HUB_FILE_AREA = /^\/v1\/teams\/[a-f0-9]{32}\/(?:files|file-spaces)(?:\/|$)/;
+// Returns the route's name, or null when it is not an allowed team file route.
+function hubFileRoute(method, route) {
+  const found = FILE_ROUTES.find(([verb, , pattern]) => verb === method && pattern.test(route));
+  return found ? found[1] : null;
+}
 function hubRouteLimits(method, route) {
+  const file = hubFileRoute(method, route);
   return {
-    request: method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000 : 8192,
+    // Finishing a 500 MB upload lists up to 63 parts (an ETag and a hash each).
+    request: method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000
+      : file === 'complete' ? 32768 : 8192,
     response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : 131072,
-    timeout: method === 'GET' && HUB_FEED.test(route) ? 30000 : HUB_UPLOAD.test(route) || HUB_DOWNLOAD.test(route) ? 30000 : 15000,
+    // The Hub joins S3's multipart parts while it completes, which can take a while.
+    timeout: method === 'GET' && HUB_FEED.test(route) ? 30000 : HUB_UPLOAD.test(route) || HUB_DOWNLOAD.test(route) || file === 'complete' ? 30000 : 15000,
   };
 }
 // Decision (review item 18): unlike /api/hub-bots, this proxy does not require
@@ -47,6 +78,7 @@ function createHubClient({ dataDirectory, fetcher = fetch }) {
       || !(/^\/v1\/[A-Za-z0-9_/%.-]+$/.test(route) || (req.method === 'GET' && HUB_AUDIT.test(route))) || route.length > 2048 || route.includes('..') || /%2f|%5c/i.test(route)) {
       return res.status(404).json({ error: 'not_found' });
     }
+    if (HUB_FILE_AREA.test(route) && !hubFileRoute(req.method, route)) return res.status(404).json({ error: 'not_found' });
     const authorization = req.headers.authorization;
     if (typeof authorization !== 'string' || !/^Bearer [A-Za-z0-9_.-]+$/.test(authorization) || authorization.length > 16384) {
       return res.status(401).json({ error: 'sign_in_required' });
@@ -68,4 +100,4 @@ function createHubClient({ dataDirectory, fetcher = fetch }) {
     } catch { return res.status(503).json({ error: 'hub_unavailable' }); }
   };
 }
-module.exports = { createHubClient, hubEndpoint, hubRouteLimits };
+module.exports = { createHubClient, hubEndpoint, hubRouteLimits, hubFileRoute };
