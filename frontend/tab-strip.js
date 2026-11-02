@@ -283,6 +283,10 @@
       var badge = button.querySelector('.sidebar-view-count');
       var count = counts[view] || 0;
       var name = button.getAttribute('data-tip') || button.getAttribute('title') || '';
+      // Something waiting for this person outranks how many tabs are open.
+      var provider = views[view] || {}, waiting = 0;
+      try { waiting = provider.attention ? provider.attention() : 0; } catch (e) { waiting = 0; }
+      if (waiting) count = waiting;
       if (!count) { if (badge) badge.remove(); if (name) button.setAttribute('aria-label', name); return; }
       if (!badge) {
         badge = document.createElement('span');
@@ -291,7 +295,8 @@
         button.appendChild(badge);
       }
       badge.textContent = count > 99 ? '99+' : String(count);
-      button.setAttribute('aria-label', name + ', ' + count + ' open');
+      badge.classList.toggle('sidebar-view-count-attention', !!waiting);
+      button.setAttribute('aria-label', name + ', ' + count + (waiting ? ' waiting for review' : ' open'));
     });
   }
 

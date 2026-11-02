@@ -54,6 +54,7 @@
     scan_status_conflict: 'This file’s scan result changed. Refresh and try again.',
     invalid_scan_status: 'The scan result could not be read. Try again.',
     not_found: 'This file is no longer available to you.',
+    file_in_use: 'A team app is using this file, so it can’t be deleted. Remove the app first.',
     unsafe_url: 'Mia refused a file link that did not point at your team’s storage.',
     unsafe_headers: 'Mia refused upload instructions it did not expect.',
     bad_response: 'The file service sent something Mia could not read. Try again.',

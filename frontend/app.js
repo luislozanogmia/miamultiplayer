@@ -4457,13 +4457,18 @@
   // app.js yet, so this is it. Auto-dismisses; a second call replaces any toast
   // still showing rather than stacking.
   function showToast(message){ showBenchToast(message); }
-  function showBenchToast(message){
+  function showBenchToast(message, onClick){
     var existing = document.getElementById('benchToast');
     if(existing) existing.remove();
     var toast = document.createElement('div');
     toast.id = 'benchToast';
     toast.className = 'bench-toast';
     toast.textContent = message;
+    if(onClick){
+      toast.classList.add('bench-toast-action');
+      toast.setAttribute('role', 'button');
+      toast.addEventListener('click', function(){ toast.remove(); onClick(); });
+    }
     document.body.appendChild(toast);
     requestAnimationFrame(function(){ toast.classList.add('show'); });
     setTimeout(function(){
@@ -4813,6 +4818,7 @@
         if('hub_'+team.teamId===activeWorkspaceKey) hubChat.membership=team.membership || null;
       });
       syncAdminMenuItem();
+      loadAppsReviews();
       // A team you're invited to shows too, dimmed, as in Slack: opening it
       // joins it. Only joined teams are remembered for the next launch.
       var teams=(result.teams||[]).filter(function(team){return (team.membership || team.invite) && /^[a-f0-9]{32}$/.test(team.teamId);})
@@ -5722,6 +5728,7 @@
     events.forEach(function(event){
       var roomId=event.channel_id, channel=hubChannel(roomId), state=roomId && chatWs.byRoom[roomId];
       if(globalThis.MiaTeamWorkflowsUi && globalThis.MiaTeamWorkflowsUi.handles(event.kind))globalThis.MiaTeamWorkflowsUi.onEvent(event);
+      if(event.kind==='app_review')onAppReviewEvent(event);
       if(event.kind==='message' && event.message){
         var row=event.message;
         if(!channel){refreshChannels=true;return;}
@@ -5779,6 +5786,7 @@
         refreshHubChannels().then(function(){ if(chatWs.activeRoomId)return loadHubRoom(); }).catch(function(){});
         if(lost && chatWs.activeRoomId)pollHubBots(chatWs.activeRoomId,true);
         if(window.MiaTeamWorkflowsUi)window.MiaTeamWorkflowsUi.onReset();
+        loadAppsReviews();
       },
       onTyping:function(typing){
         if(workspace!==activeWorkspaceKey)return;
@@ -8273,7 +8281,7 @@
   // its own tab beside the page's.
   var APPS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>';
   var appsPage = {open:false, tabClosed:false, activeTab:'page', tabs:[], query:'', loading:false, error:'', catalogError:'',
-    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, teamId:'', me:'', isAdmin:false};
+    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, previews:{}, teamId:'', me:'', isAdmin:false};
   var appsUploaders = {};
   var appsScanTimer = null;
 
@@ -8315,6 +8323,7 @@
     tabs: appsStripTabs,
     // The page's own tab is the page; only running apps count.
     count: function(){ return appsPage.tabs.length; },
+    attention: function(){ return window.MiaAppsPage.reviewCount(appsPage); },
     close: function(id){
       if(id === 'page'){
         appsPage.tabClosed = true;
@@ -8338,16 +8347,74 @@
   if(appsDesktop() && appsDesktop().onState) appsDesktop().onState(function(state){
     var tab = state && appsTabByKey(state.key);
     if(!tab) return;
+    if(state.blockedLink){
+      tab.note = window.MiaAppsPage.blockedLinkNote(state.blockedLink);
+      window.clearTimeout(tab.noteTimer);
+      tab.noteTimer = window.setTimeout(function(){ tab.note = ''; renderAppsPage(); }, 10000);
+      renderAppsPage();
+      return;
+    }
     tab.status = state.status;
     tab.error = state.error || '';
     renderAppsPage();
   });
 
-  function loadApps(){
+  function syncAppsIdentity(){
     var teamId = appsTeamId();
     appsPage.teamId = teamId;
     appsPage.me = hubChat.membership && hubChat.membership.clerk_user_id || '';
     appsPage.isAdmin = !!(hubChat.membership && hubChat.membership.role === 'admin');
+    return teamId;
+  }
+  // The count on the Apps tab needs the catalog before the page is opened. Only
+  // an admin asks; a member never has anything to review.
+  function loadAppsReviews(){
+    var teamId = syncAppsIdentity();
+    if(!teamId || !appsPage.isAdmin) return Promise.resolve();
+    return loadAppsCatalog(teamId).then(renderAppsPage).then(takeAppsReviewHandoff);
+  }
+  function takeAppsReviewHandoff(){
+    var handoff = null;
+    try {
+      handoff = JSON.parse(localStorage.getItem('miaAppsReviewHandoff') || 'null');
+      if(handoff) localStorage.removeItem('miaAppsReviewHandoff');
+    } catch(_reviewHandoffError) {}
+    if(handoff && handoff.teamId === appsPage.teamId && Date.now() - Number(handoff.at) < 120000) openAppsReview(handoff.appId);
+  }
+  function openAppsReview(appId){
+    if(!appsPage.open) runToolsAction('apps');
+    appsPage.tabClosed = false;
+    appsPage.activeTab = 'page';
+    appsPage.query = '';
+    var search = el('#appsSearch');
+    if(search) search.value = '';
+    renderAppsPage();
+    var row = document.querySelector('[data-app-review="' + String(appId).replace(/[^a-f0-9]/g, '') + '"]');
+    if(row) row.scrollIntoView({block: 'center'});
+  }
+  function onAppReviewEvent(event){
+    var review = window.MiaAppsPage && window.MiaAppsPage.reviewFromEvent(event, !!(hubChat.membership && hubChat.membership.role === 'admin'));
+    if(!review) return;
+    var teamId = syncAppsIdentity();
+    if(!teamId) return;
+    loadAppsCatalog(teamId).then(function(){
+      renderAppsPage();
+      var app = appsPage.catalog.filter(function(entry){ return entry.id === review.appId; })[0] || null;
+      // Decided or removed before this got here.
+      if(!window.MiaAppsPage.isWaitingForReview(app)) return;
+      var text = window.MiaAppsPage.reviewNotice(app), go = function(){ openAppsReview(review.appId); };
+      showBenchToast(text, go);
+      if(appInForeground() || !desktopNotificationsEnabled()) return;
+      if(nativeDesktopNotifications()){ showNativeNotification({title: 'Mia', body: text, tag: window.MiaAppsPage.reviewTag(review.appId)}); return; }
+      try {
+        var notification = new window.Notification('Mia', {body: text, tag: window.MiaAppsPage.reviewTag(review.appId)});
+        notification.onclick = function(){ window.focus(); notification.close(); go(); };
+      } catch(_reviewNotificationError) {}
+    });
+  }
+
+  function loadApps(){
+    var teamId = syncAppsIdentity();
     if(!teamId){ appsPage.catalog = []; appsPage.catalogError = ''; }
     appsPage.loading = true;
     appsPage.error = '';
@@ -8401,6 +8468,11 @@
     if(body) body.hidden = !!tab;
     if(filter) filter.hidden = !!tab;
     if(host) host.hidden = !tab;
+    var paneNote = el('#appsPaneNote');
+    if(paneNote){
+      paneNote.hidden = !(tab && tab.note);
+      paneNote.innerHTML = tab && tab.note ? '<span>' + esc(tab.note) + '</span><button type="button" class="artifacts-bar-text-btn" data-app-note-dismiss="' + esc(tab.key) + '">Dismiss</button>' : '';
+    }
     if(appsPage.open && window.MiaAppsPage){
       if(!tab && body) body.innerHTML = window.MiaAppsPage.bodyHtml(appsPage, esc);
       if(tab && host) host.innerHTML = window.MiaAppsPage.runHtml(tab, esc);
@@ -8476,31 +8548,66 @@
   function appsIdentityQuery(identity, sha256){
     return 'teamId=' + encodeURIComponent(identity.teamId) + '&appId=' + encodeURIComponent(identity.appId) + '&version=' + encodeURIComponent(identity.version) + '&sha256=' + encodeURIComponent(sha256);
   }
+  // Gets one version onto this computer. A preview uses the same checks and the
+  // same code, in a folder of its own: `progress` is told how far the download got.
+  function installTeamVersion(teamId, appId, version, preview, progress){
+    var suffix = preview ? '&preview=1' : '';
+    var client = window.MiaTeamFiles.createClient({teamId: teamId, call: hubCall});
+    return window.MiaAppsPage.installVersion({teamId: teamId, appId: appId, version: version,
+      isInstalled: function(identity, sha256){
+        return api('/api/apps/installed?' + appsIdentityQuery(identity, sha256) + suffix).then(function(res){ return res.status === 200 && res.data.installed === true; });
+      },
+      download: function(file){
+        return window.MiaTeamFiles.downloadFile({client: client, file: file, onProgress: function(done, total){ progress(total ? Math.floor(done * 100 / total) : null); }});
+      },
+      install: function(identity, sha256, blob){
+        return appsBytes('/api/apps/install?' + appsIdentityQuery(identity, sha256) + suffix, {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: blob}).then(function(res){
+          if(res.status === 201) return;
+          return res.json().catch(function(){ return {}; }).then(function(data){ throw new Error(data.message || 'That app could not be installed.'); });
+        });
+      },
+    });
+  }
+  // An admin looks before approving. A link opens only here, on this click.
+  function previewTeamApp(id){
+    var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
+    if(!appsPage.isAdmin || !window.MiaAppsPage.isWaitingForReview(app)) return;
+    var version = app.pending;
+    if(version.kind === 'link'){ openAppAddress(version.url); return; }
+    var desktop = appsDesktop();
+    if(!desktop || !window.MiaTeamFiles){ showBenchToast('Apps run in the Mia desktop app.'); return; }
+    if(appsPage.previews[id] && appsPage.previews[id].loading) return;
+    var preview = appsPage.previews[id] = {version: version.version, loading: true};
+    renderAppsPage();
+    installTeamVersion(teamId, id, version, true, function(percent){
+      if(preview.percent !== percent){ preview.percent = percent; renderAppsPage(); }
+    }).then(function(identity){
+      return api('/api/apps/installed/files?' + appsIdentityQuery(identity, version.sha256) + '&preview=1').then(function(res){
+        if(res.status !== 200) throw new Error('That app could not be opened.');
+        preview.files = Array.isArray(res.data.files) ? res.data.files : [];
+        preview.totalBytes = res.data.totalBytes;
+        return desktop.open(Object.assign({kind: 'preview'}, identity));
+      });
+    }).then(function(reply){
+      if(!reply || !reply.ok) throw new Error(reply && reply.error || 'That app could not be opened.');
+      preview.loading = false;
+      showAppTab(reply.key, 'Preview: ' + app.name, {kind: 'preview', appId: id});
+    }).catch(function(error){
+      preview.loading = false;
+      preview.error = window.MiaAppsPage.openErrorMessage(error, app.publisher && app.publisher.name);
+      renderAppsPage();
+    });
+  }
   function openTeamApp(id){
     var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
     if(!app || !app.live || appsPage.installing[id] && !appsPage.installing[id].error) return;
     if(app.live.kind === 'link'){ openAppAddress(app.live.url); return; }
     var desktop = appsDesktop();
     if(!desktop || !window.MiaTeamFiles){ showBenchToast('Apps run in the Mia desktop app.'); return; }
-    var client = window.MiaTeamFiles.createClient({teamId: teamId, call: hubCall});
     appsPage.installing[id] = {};
     renderAppsPage();
-    window.MiaAppsPage.installVersion({teamId: teamId, appId: id, version: app.live,
-      isInstalled: function(identity, sha256){
-        return api('/api/apps/installed?' + appsIdentityQuery(identity, sha256)).then(function(res){ return res.status === 200 && res.data.installed === true; });
-      },
-      download: function(file){
-        return window.MiaTeamFiles.downloadFile({client: client, file: file, onProgress: function(done, total){
-          var percent = total ? Math.floor(done * 100 / total) : null;
-          if(appsPage.installing[id] && appsPage.installing[id].percent !== percent){ appsPage.installing[id].percent = percent; renderAppsPage(); }
-        }});
-      },
-      install: function(identity, sha256, blob){
-        return appsBytes('/api/apps/install?' + appsIdentityQuery(identity, sha256), {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: blob}).then(function(res){
-          if(res.status === 201) return;
-          return res.json().catch(function(){ return {}; }).then(function(data){ throw new Error(data.message || 'That app could not be installed.'); });
-        });
-      },
+    installTeamVersion(teamId, id, app.live, false, function(percent){
+      if(appsPage.installing[id] && appsPage.installing[id].percent !== percent){ appsPage.installing[id].percent = percent; renderAppsPage(); }
     }).then(function(identity){
       return desktop.open(Object.assign({kind: 'team'}, identity));
     }).then(function(reply){
@@ -8557,9 +8664,12 @@
   }
   function decideTeamApp(id, decision){
     var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
-    if(!app || !app.pending) return;
-    hubCall('POST', '/v1/teams/' + teamId + '/apps/' + id + '/versions/' + app.pending.version + '/' + decision, {}).then(function(){
-      return loadAppsCatalog(teamId);
+    if(!window.MiaAppsPage.isWaitingForReview(app)) return;
+    (decision === 'approve' ? appConfirm(window.MiaAppsPage.approveMessage(app), 'Approve for everyone') : Promise.resolve(true)).then(function(yes){
+      if(!yes) return null;
+      return hubCall('POST', '/v1/teams/' + teamId + '/apps/' + id + '/versions/' + app.pending.version + '/' + decision, {}).then(function(){
+        return loadAppsCatalog(teamId);
+      });
     }).then(renderAppsPage).catch(function(error){
       showBenchToast(window.MiaAppsPage.errorMessage(error, 'That did not work. Try again.'));
       loadAppsCatalog(teamId).then(renderAppsPage);
@@ -8598,6 +8708,8 @@
       'data-app-approve': function(id){ decideTeamApp(id, 'approve'); },
       'data-app-reject': function(id){ decideTeamApp(id, 'reject'); },
       'data-app-archive': archiveTeamApp,
+      'data-app-preview': previewTeamApp,
+      'data-app-note-dismiss': function(key){ var tab = appsTabByKey(key); if(tab){ tab.note = ''; renderAppsPage(); } },
       'data-app-open-link': function(id){ var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0]; if(link) openAppAddress(link.url); },
       'data-app-reload': function(key){ var tab = appsTabByKey(key), desktop = appsDesktop(); if(tab && desktop){ tab.status = 'loading'; desktop.reload(key).catch(function(){}); renderAppsPage(); } },
     };
@@ -16917,6 +17029,8 @@
     }, 60000);
     var nativeNotifications = nativeDesktopNotifications();
     if(nativeNotifications && typeof nativeNotifications.onClick === 'function') nativeNotifications.onClick(function(roomId){
+      var reviewApp = window.MiaAppsPage && window.MiaAppsPage.reviewTagApp(roomId);
+      if(reviewApp){ openAppsReview(reviewApp); return; }
       if(roomId && roomId !== chatWs.activeRoomId) openNotifiedConversation(String(roomId));
     });
     var notifications = el('#chatAcctNotifications');

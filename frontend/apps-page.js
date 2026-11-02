@@ -28,6 +28,7 @@
     version_rejected: 'This version was already turned down. Change the app, then publish again.',
     version_superseded: 'A newer version has replaced this one. Check the list and try again.',
     version_already_approved: 'This version is already live.',
+    app_pending_limit: 'You already have 20 apps waiting for review. Wait for an admin to review them, then try again.',
   };
   function errorMessage(error, fallback){
     if(error && ERRORS[error.code]) return ERRORS[error.code];
@@ -108,6 +109,43 @@
     none: 'Not available',
   };
   function stateText(state){ return STATE_TEXT[state] || ''; }
+
+  // ---- Reviewing ---------------------------------------------------------------
+  var APP_SCAN_NOTE = 'The virus scan can’t fully see inside an app bundle, so review it first.';
+  var REVIEW_TAG = 'apps-review:';
+  function isWaitingForReview(app){ return !!(app && app.pending && app.pending.state !== 'rejected'); }
+  // Admins of the team on screen only: a member never gets a count for this.
+  function reviewCount(state){
+    if(!state.isAdmin || !state.teamId) return 0;
+    return state.catalog.filter(isWaitingForReview).length;
+  }
+  function reviewFromEvent(event, isAdmin){
+    var review = event && event.kind === 'app_review' && event.app_review;
+    if(!isAdmin || !review || !ID.test(review.app_id || '') || !Number.isSafeInteger(review.version) || review.version < 1) return null;
+    return {appId: review.app_id, version: review.version};
+  }
+  function reviewNotice(app){ return (app ? '"' + app.name + '" is' : 'A team app is') + ' waiting for your review.'; }
+  function reviewTag(appId){ return REVIEW_TAG + appId; }
+  function reviewTagApp(tag){
+    var text = String(tag || '');
+    var appId = text.indexOf(REVIEW_TAG) === 0 ? text.slice(REVIEW_TAG.length) : '';
+    return ID.test(appId) ? appId : '';
+  }
+  function approveMessage(app){
+    var pending = app.pending || {};
+    if(pending.kind === 'link') return 'Approve "' + app.name + '" for everyone? It opens ' + pending.url + ' on every teammate’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.';
+    return 'Approve "' + app.name + '" for everyone? It runs on every teammate’s computer. ' + APP_SCAN_NOTE;
+  }
+  function blockedLinkNote(blocked){
+    if(blocked && blocked.reason === 'no-input') return 'This app tried to open ' + blocked.host + ' without a click, so Mia stopped it. Click inside the app to open a link.';
+    return 'This app tried to open an address Mia does not allow, so Mia stopped it.';
+  }
+  function formatSize(bytes){
+    var value = Number(bytes) || 0;
+    if(value < 1024) return value + ' B';
+    if(value < 1024 * 1024) return Math.round(value / 1024) + ' KB';
+    return (Math.round(value / 104857.6) / 10) + ' MB';
+  }
 
   // Pending bundles whose virus check is worth asking about.
   function filesToCheck(catalog, scans){
@@ -247,7 +285,8 @@
 
   // ---- Tabs -------------------------------------------------------------------
   function stripTabs(state, icon){
-    var page = state.tabClosed ? [] : [{id: 'page', label: 'Apps', iconHtml: icon, active: state.open && state.activeTab === 'page'}];
+    var waiting = reviewCount(state);
+    var page = state.tabClosed ? [] : [{id: 'page', label: waiting ? 'Apps (' + waiting + ')' : 'Apps', iconHtml: icon, active: state.open && state.activeTab === 'page'}];
     return page.concat(state.tabs.map(function(tab){
       return {id: tab.key, label: tab.name, title: tab.name, iconHtml: icon, active: state.open && state.activeTab === tab.key};
     }));
@@ -311,17 +350,43 @@
       if(ready) actions += button(esc, 'Approve', 'data-app-approve="' + esc(app.id) + '"') + button(esc, 'Reject', 'data-app-reject="' + esc(app.id) + '"');
     }
     if(state.isAdmin || (state.me && app.publisher.id === state.me)) actions += button(esc, 'Remove', 'data-app-archive="' + esc(app.id) + '" aria-label="Remove ' + esc(app.name) + ' from the team"');
-    return row(esc, app.live && app.live.kind === 'link' || (!app.live && app.pending && app.pending.kind === 'link') ? 'Link' : 'App', app.name, meta, actions);
+    return row(esc, app.live && app.live.kind === 'link' || (!app.live && app.pending && app.pending.kind === 'link') ? 'Link' : 'App', app.name, meta, actions)
+      + (state.isAdmin && isWaitingForReview(app) ? reviewBlock(esc, app, state, status) : '');
+  }
+  // What an admin can look at before deciding. Nothing here opens by itself.
+  function reviewBlock(esc, app, state, status){
+    var pending = app.pending, html = '<div class="apps-review" role="listitem" data-app-review="' + esc(app.id) + '">';
+    if(pending.kind === 'link'){
+      return html + '<div class="apps-review-head">Version ' + Number(pending.version) + ' is this address:</div><div class="apps-review-address">' + esc(pending.url) + '</div>'
+        + '<div class="apps-review-actions">' + button(esc, 'Open address', 'data-app-preview="' + esc(app.id) + '"') + '</div></div>';
+    }
+    html += '<div class="apps-review-head">Version ' + Number(pending.version) + ' · ' + esc(formatSize(pending.sizeBytes)) + '</div>';
+    if(status === 'scanning') return html + '<div class="apps-note" role="status">You can preview it once the virus check is done.</div></div>';
+    if(status === 'blocked') return html + '<div class="apps-note apps-note-bad" role="status">The virus check refused this version, so it can’t be previewed.</div></div>';
+    var previews = state.previews || {}, preview = previews[app.id] && previews[app.id].version === pending.version ? previews[app.id] : null;
+    var actions = preview && preview.loading
+      ? '<span class="apps-note" role="status">' + esc(preview.percent != null ? 'Getting it… ' + preview.percent + '%' : 'Getting it…') + '</span>'
+      : button(esc, 'Preview', 'data-app-preview="' + esc(app.id) + '"');
+    if(preview && preview.error) actions = '<span class="apps-note apps-note-bad" role="alert">' + esc(preview.error) + '</span>' + actions;
+    html += '<div class="apps-review-actions">' + actions + '<span class="apps-note">Runs in a sandbox, apart from the live app.</span></div>';
+    if(preview && preview.files){
+      html += '<div class="apps-review-head">' + preview.files.length + (preview.files.length === 1 ? ' file' : ' files') + ' · ' + esc(formatSize(preview.totalBytes)) + '</div><ul class="apps-review-files">'
+        + preview.files.map(function(file){ return '<li><span class="apps-review-path">' + esc(file.path) + '</span><span class="apps-note">' + esc(formatSize(file.sizeBytes)) + '</span></li>'; }).join('') + '</ul>';
+    }
+    return html + '</div>';
   }
   function bodyHtml(state, esc){
     var team = !!state.teamId;
     if(state.loading && !state.local.length && !state.links.length && !state.catalog.length) return '<div class="artifacts-empty">Loading…</div>';
     var mine = localRows(esc, state);
-    var shared = team ? state.catalog.filter(function(app){ return matches([app.name, app.description, app.publisher.name], state.query); }).map(function(app){ return catalogRow(esc, app, state); }) : [];
+    var listed = team ? state.catalog.filter(function(app){ return matches([app.name, app.description, app.publisher.name], state.query); }) : [];
+    var toReview = state.isAdmin ? listed.filter(isWaitingForReview) : [];
+    var rowOf = function(app){ return catalogRow(esc, app, state); };
+    var shared = listed.filter(function(app){ return toReview.indexOf(app) === -1; }).map(rowOf);
     var html = '';
     if(state.error) html += '<div class="artifacts-empty">' + esc(state.error) + '</div>';
     if(team && state.catalogError) html += '<div class="apps-banner" role="status"><span>' + esc(state.catalogError) + '</span>' + button(esc, 'Try again', 'data-apps-retry') + '</div>';
-    if(team) html += section(esc, 'Your team', shared);
+    if(team) html += section(esc, 'Waiting for your review', toReview.map(rowOf)) + section(esc, 'Your team', shared);
     html += section(esc, 'On this computer', mine);
     if(html) return html;
     if(state.query) return '<div class="artifacts-empty">Nothing matches.</div>';
@@ -339,7 +404,8 @@
     + 'Make it a static web app, using only HTML, CSS and JavaScript with no server, in a new folder under apps/ in the Mia folder, '
     + 'with an index.html at the top of that folder. Keep every file it needs inside that folder. Tell me the folder name when it is done.';
 
-  return {BUILD_PROMPT: BUILD_PROMPT, appState: appState, bodyHtml: bodyHtml, createUploader: createUploader, errorMessage: errorMessage, filesToCheck: filesToCheck, installVersion: installVersion,
+  return {APP_SCAN_NOTE: APP_SCAN_NOTE, approveMessage: approveMessage, blockedLinkNote: blockedLinkNote, isWaitingForReview: isWaitingForReview, reviewCount: reviewCount, reviewFromEvent: reviewFromEvent, reviewNotice: reviewNotice, reviewTag: reviewTag, reviewTagApp: reviewTagApp,
+    BUILD_PROMPT: BUILD_PROMPT, appState: appState, bodyHtml: bodyHtml, createUploader: createUploader, errorMessage: errorMessage, filesToCheck: filesToCheck, installVersion: installVersion,
     isPublishableAddress: isPublishableAddress, linkPublishProblem: linkPublishProblem, matches: matches, newAppId: newAppId, openErrorMessage: openErrorMessage, nextTabAfterClose: nextTabAfterClose,
     normalizeCatalog: normalizeCatalog, publishFolder: publishFolder, publishLink: publishLink, publishedAs: publishedAs, runHtml: runHtml, stateText: stateText,
     stripTabs: stripTabs, submitVersion: submitVersion, waitForScan: waitForScan};

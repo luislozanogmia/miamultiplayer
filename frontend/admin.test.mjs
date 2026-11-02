@@ -579,3 +579,43 @@ test('a session in a direct message is named as one, and a full list says it is 
   assert.match(html, /A direct message/);
   assert.match(html, /Showing the 50 most recent sessions/);
 });
+
+test('a rejected version is not waiting: no Approve, no count, and its file is not polled', async () => {
+  const fileId = hex('f');
+  const rejected = {id: hex('b'), name: 'Tool', publisher: {id: 'u', name: 'Pat'}, live: null, pending: {version: 2, state: 'rejected', kind: 'bundle', fileId, sizeBytes: 9}};
+  const {hub, calls} = hubHarness({'GET /apps': {apps: [rejected]}});
+  await hub.load('apps');
+  assert.equal(calls.filter((c) => c.includes('/status')).length, 0, 'no scan to ask about');
+  const html = admin.renderHubView('apps', hub.state.apps, NOW);
+  assert.doesNotMatch(html, /app-approve|app-reject|Waiting for review|waiting for review/);
+  assert.match(html, /Version 2 was rejected/);
+  await hub.act('app-approve', hex('b'), 2);
+  await hub.act('app-reject', hex('b'), 2);
+  assert.equal(calls.filter((c) => c.startsWith('POST')).length, 0, 'a stale button does nothing');
+});
+
+test('a waiting app offers Review, which leads to the Apps page', async () => {
+  const app = {id: hex('b'), name: 'Tool', publisher: {id: 'u', name: 'Pat'}, pending: {version: 2, state: 'pending', kind: 'link', url: 'https://x.example.com/'}};
+  const opened = [];
+  const hub = admin.createHubAdmin({teamId: HUB_TEAM, call: async () => ({apps: [app]}), confirm: async () => true, toast: () => {}, openReview: (id) => opened.push(id)});
+  await hub.load('apps');
+  assert.match(admin.renderHubView('apps', hub.state.apps, NOW), /data-hub-action="app-review"/);
+  await hub.act('app-review', hex('b'));
+  assert.deepEqual(opened, [hex('b')]);
+});
+
+test('approving a bundle warns the scan cannot see inside it, in the same words as the Apps page', () => {
+  const require = createRequire(import.meta.url);
+  const page = require('./apps-page.js');
+  const copy = admin.hubConfirmCopy('app-approve', {name: 'Tool', publisher: {name: 'Pat'}, pending: {version: 1, kind: 'bundle'}});
+  assert.ok(copy.body.includes(page.APP_SCAN_NOTE), copy.body);
+  assert.doesNotMatch(admin.hubConfirmCopy('app-approve', {name: 'Site', pending: {version: 1, kind: 'link', url: 'https://x.example.com/'}}).body, /virus scan/);
+});
+
+test('deleting a file that is an app warns that the app goes too, and the row names the app', () => {
+  const file = {fileId: hex('f'), filename: 'tool.miaapp', spaceKind: 'app', appId: hex('b'), appName: 'Tool'};
+  const copy = admin.hubConfirmCopy('file-delete', file);
+  assert.match(copy.body, /removes the app "Tool" from the team/);
+  assert.equal(admin.hubFileWhere(file), 'App: Tool');
+  assert.doesNotMatch(admin.hubConfirmCopy('file-delete', {fileId: hex('f'), filename: 'a.txt', spaceKind: 'channel'}).body, /app/i);
+});

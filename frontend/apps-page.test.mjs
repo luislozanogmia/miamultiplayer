@@ -257,3 +257,100 @@ test('a too-long link address or name is handled before the Hub would refuse it'
   assert.equal(calls[0][2].name.length, 80);
   assert.equal(page.publishedAs([catalogApp({ name: 'n'.repeat(80) })], 'n'.repeat(120), 'me').name.length, 80);
 });
+
+const waiting = (extra = {}) => catalogApp({ publisher: { id: 'other', name: 'Sam' }, pending: bundle(), ...extra });
+
+test('an admin reviews a waiting version: Preview once the scan is done, its files, and no Preview for members', () => {
+  const clean = { [FILE]: 'clean' };
+  const admin = page.bodyHtml(state({ teamId: TEAM, me: 'me', isAdmin: true, catalog: [waiting()], scans: clean }), esc);
+  assert.match(admin, /Waiting for your review/);
+  assert.match(admin, /data-app-preview="b{32}"/);
+  assert.match(admin, /data-app-approve/);
+  assert.match(admin, /data-app-review="b{32}"/);
+  const scanning = page.bodyHtml(state({ teamId: TEAM, me: 'me', isAdmin: true, catalog: [waiting()], scans: {} }), esc);
+  assert.doesNotMatch(scanning, /data-app-preview/, 'nothing to download until the scan is done');
+  const blocked = page.bodyHtml(state({ teamId: TEAM, me: 'me', isAdmin: true, catalog: [waiting()], scans: { [FILE]: 'blocked' } }), esc);
+  assert.doesNotMatch(blocked, /data-app-preview/);
+  const member = page.bodyHtml(state({ teamId: TEAM, me: 'me', isAdmin: false, catalog: [waiting()], scans: clean }), esc);
+  assert.doesNotMatch(member, /data-app-preview|Waiting for your review/);
+  const files = page.bodyHtml(state({ teamId: TEAM, me: 'me', isAdmin: true, catalog: [waiting()], scans: clean,
+    previews: { [APP]: { version: 1, files: [{ path: 'js/<evil>.js', sizeBytes: 2048 }, { path: 'index.html', sizeBytes: 10 }], totalBytes: 2058 } } }), esc);
+  assert.match(files, /js\/&lt;evil&gt;\.js/);
+  assert.match(files, /2 KB/);
+  assert.match(files, /2 files/);
+  const old = page.bodyHtml(state({ teamId: TEAM, me: 'me', isAdmin: true, catalog: [waiting({ pending: bundle({ version: 2 }) })], scans: clean,
+    previews: { [APP]: { version: 1, files: [{ path: 'stale.js', sizeBytes: 1 }], totalBytes: 1 } } }), esc);
+  assert.doesNotMatch(old, /stale\.js/, 'the list belongs to one version');
+  const rejected = page.bodyHtml(state({ teamId: TEAM, me: 'me', isAdmin: true, catalog: [waiting({ pending: bundle({ state: 'rejected' }) })], scans: clean }), esc);
+  assert.doesNotMatch(rejected, /data-app-preview|data-app-approve|Waiting for your review/);
+});
+
+test('a waiting link shows its whole address and opens only when asked', () => {
+  const long = 'https://tools.example.com/a/very/long/path?with=query&and=more';
+  const html = page.bodyHtml(state({ teamId: TEAM, me: 'me', isAdmin: true, catalog: [waiting({ pending: link({ state: 'pending', url: long }) })] }), esc);
+  assert.ok(html.includes(esc(long)), 'the full address, not just the host');
+  assert.match(html, /<button[^>]*data-app-preview="b{32}"/);
+  assert.doesNotMatch(html, /<iframe|<img|src=/);
+});
+
+test('the approval says the scan cannot see inside a bundle, and only for a bundle', () => {
+  const copy = page.approveMessage(waiting());
+  assert.match(copy, /virus scan can.t fully see inside an app bundle, so review it first/);
+  assert.match(copy, /Report/);
+  const linked = page.approveMessage(waiting({ pending: link({ state: 'pending' }) }));
+  assert.match(linked, /https:\/\/app\.example\.com\//);
+  assert.doesNotMatch(linked, /virus scan/);
+});
+
+test('the count on the Apps tab is for admins, and only for versions still waiting', () => {
+  const catalog = [waiting(), waiting({ id: 'e'.repeat(32), pending: bundle({ state: 'rejected' }) }), catalogApp({ id: 'f'.repeat(32), live: link() })];
+  assert.equal(page.reviewCount(state({ teamId: TEAM, isAdmin: true, catalog })), 1);
+  assert.equal(page.reviewCount(state({ teamId: TEAM, isAdmin: false, catalog })), 0);
+  assert.equal(page.reviewCount(state({ teamId: '', isAdmin: true, catalog })), 0, 'Solo has no reviews');
+  const tabs = page.stripTabs(state({ teamId: TEAM, isAdmin: true, catalog }), '');
+  assert.equal(tabs[0].label, 'Apps (1)');
+  assert.equal(page.stripTabs(state({ teamId: TEAM, isAdmin: false, catalog }), '')[0].label, 'Apps');
+});
+
+test('an app_review event reaches admins only, and only when it is well formed', () => {
+  const event = { kind: 'app_review', app_review: { app_id: APP, version: 2 } };
+  assert.deepEqual(page.reviewFromEvent(event, true), { appId: APP, version: 2 });
+  assert.equal(page.reviewFromEvent(event, false), null, 'members never see it');
+  for (const bad of [{ kind: 'message' }, { kind: 'app_review' }, { kind: 'app_review', app_review: { app_id: 'x', version: 2 } }, { kind: 'app_review', app_review: { app_id: APP, version: 0 } }]) {
+    assert.equal(page.reviewFromEvent(bad, true), null);
+  }
+  assert.match(page.reviewNotice(catalogApp({ name: 'Report' })), /Report.*review/);
+  assert.match(page.reviewNotice(null), /review/);
+  assert.equal(page.reviewTag(APP), 'apps-review:' + APP);
+  assert.equal(page.reviewTagApp('apps-review:' + APP), APP);
+  assert.equal(page.reviewTagApp(APP), '', 'a chat notification stays a chat notification');
+  assert.equal(page.reviewTagApp('apps-review:../x'), '');
+});
+
+test('the wiring: review events, the count badge, the preview and the handoff from Admin Center', () => {
+  const app = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(app, /event\.kind==='app_review'/);
+  assert.match(app, /attention: function\(\)\{ return window\.MiaAppsPage\.reviewCount\(appsPage\); \}/);
+  assert.match(app, /kind: 'preview'/);
+  assert.match(app, /'data-app-preview': previewTeamApp/);
+  assert.match(app, /MiaAppsPage\.approveMessage\(app\)/);
+  assert.match(app, /miaAppsReviewHandoff/);
+  assert.match(app, /reviewTagApp\(/);
+  assert.match(app, /state\.blockedLink/);
+  const main = readFileSync(new URL('../macos/src/main.cjs', import.meta.url), 'utf8');
+  assert.match(main, /command\.kind === "preview"/);
+  assert.match(main, /teamAppPreviewIdentity/);
+});
+
+test('a link an app was stopped from opening reads plainly', () => {
+  assert.match(page.blockedLinkNote({ reason: 'no-input', host: 'evil.example' }), /evil\.example without a click/);
+  assert.match(page.blockedLinkNote({ reason: 'refused', host: '' }), /address Mia does not allow/);
+});
+
+test('the new refusals read plainly, and an app with nothing live is not openable', () => {
+  assert.match(page.errorMessage({ code: 'app_pending_limit' }), /20 apps waiting/);
+  assert.match(teamFiles.friendly({ code: 'file_in_use', message: 'raw' }), /team app is using this file/);
+  const html = page.bodyHtml(state({ teamId: TEAM, me: 'me', catalog: page.normalizeCatalog({ apps: [catalogApp({ publisher: { id: 'x', name: 'Sam' }, live: null, pending: null })] }) }), esc);
+  assert.doesNotMatch(html, /data-app-open-team/);
+  assert.match(html, /Not available/);
+});

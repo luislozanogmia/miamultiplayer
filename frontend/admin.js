@@ -523,13 +523,13 @@
       case 'wf-approve': return {title: 'Approve version ' + extra.version + ' of ' + item.name + '?', body: 'It goes live for the team. Runs already in progress keep their version.', confirmLabel: 'Approve'};
       case 'wf-reject': return {title: 'Reject version ' + extra.version + ' of ' + item.name + '?', body: 'It will not go live. Anything live now stays live.', confirmLabel: 'Reject', danger: true};
       case 'file-delete': return {title: 'Delete ' + item.filename + '?',
-        body: 'This removes the file for everyone on the team and frees its space. It can’t be undone. Copies people already downloaded stay on their computers.' + (item.spaceKind === 'app' ? ' A team app may depend on this file.' : ''),
+        body: 'This removes the file for everyone on the team and frees its space. It can’t be undone. Copies people already downloaded stay on their computers.' + (item.appId ? ' This is an app’s file, so deleting it removes the app "' + (item.appName || 'this app') + '" from the team.' : item.spaceKind === 'app' ? ' A team app may depend on this file.' : ''),
         confirmLabel: 'Delete', danger: true};
       case 'app-approve': {
         var version = item.pending || {};
         return version.kind === 'link'
           ? {title: 'Approve ' + item.name + ' for everyone?', body: 'This opens on every teammate’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.', detail: version.url, confirmLabel: 'Approve for everyone'}
-          : {title: 'Approve ' + item.name + ' for everyone?', body: 'This runs on every teammate’s computer. Only approve an app you trust. Published by ' + (item.publisher && item.publisher.name || 'a former teammate') + '.', confirmLabel: 'Approve for everyone'};
+          : {title: 'Approve ' + item.name + ' for everyone?', body: 'This runs on every teammate’s computer. Only approve an app you trust. Published by ' + (item.publisher && item.publisher.name || 'a former teammate') + '. The virus scan can’t fully see inside an app bundle, so review it first.', confirmLabel: 'Approve for everyone'};
       }
       case 'app-reject': return {title: 'Reject version ' + Number(item.pending && item.pending.version) + ' of ' + item.name + '?',
         body: 'It won’t reach the team. ' + (item.live ? 'The live version stays live. ' : '') + 'The publisher can send a new version.', confirmLabel: 'Reject', danger: true};
@@ -619,7 +619,7 @@
       case 'group': return name ? 'Group: ' + name : 'A group';
       case 'dm': return 'A direct message';
       case 'automation': return name ? 'Workflow: ' + name : 'A workflow';
-      case 'app': return 'A team app';
+      case 'app': return file.appName ? 'App: ' + file.appName : 'A team app';
       default: return 'Team files';
     }
   }
@@ -688,19 +688,22 @@
       hubFact('Note', version.note) +
       (readiness ? hubFact('Scan', readiness.text, readiness.tone ? 'hub-ready-' + readiness.tone : '') : '') + '</dl>';
   }
+  // A rejected version stays on the app until a new one replaces it, but nothing waits on it.
+  function hubAppWaiting(app){ return !!(app.pending && app.pending.state !== 'rejected'); }
   function renderHubApp(app, st){
-    var busy = st.busy || {}, pending = app.pending, live = app.live;
+    var busy = st.busy || {}, rejected = app.pending && !hubAppWaiting(app) ? app.pending : null, pending = rejected ? null : app.pending, live = app.live;
     var html = '<div class="card hub-item"><div class="hub-item-head"><div class="hub-item-title">' + esc(app.name) + '</div><div class="hub-item-pills">' +
-      (pending ? hubPill('Waiting for review', 'warn') : '') + (live ? hubPill('Live', 'ok') : '') + (!pending && !live ? hubPill('Not live', '') : '') + '</div></div>' +
+      (pending ? hubPill('Waiting for review', 'warn') : '') + (live ? hubPill('Live', 'ok') : '') + (rejected ? hubPill('Not approved', '') : '') + (!pending && !live && !rejected ? hubPill('Not live', '') : '') + '</div></div>' +
       (app.description ? '<div class="hub-item-text">' + esc(app.description) + '</div>' : '');
     if(pending){
       var readiness = hubAppReadiness(pending, st.scans), versionBusy = !!busy['app-version:' + app.id];
       html += '<div class="hub-review"><div class="hub-review-title">Version ' + Number(pending.version) + (live ? ' would replace the live version' : ' is waiting for review') + '</div>' +
         hubAppFacts(app, pending, readiness) +
         '<div class="hub-item-meta">Approving makes this run on every teammate’s computer.' + (live ? ' Version ' + Number(live.version) + ' stays live until then.' : '') + '</div>' +
-        '<div class="hub-item-actions">' + hubButton('Approve for everyone', 'app-approve', app.id, {tone: 'primary', version: pending.version, disabled: versionBusy || !readiness.approve}) +
+        '<div class="hub-item-actions">' + hubButton('Review', 'app-review', app.id) + hubButton('Approve for everyone', 'app-approve', app.id, {tone: 'primary', version: pending.version, disabled: versionBusy || !readiness.approve}) +
         hubButton('Reject', 'app-reject', app.id, {version: pending.version, disabled: versionBusy}) + '</div></div>';
     }
+    if(rejected) html += '<div class="hub-item-meta" style="margin-top:8px">Version ' + Number(rejected.version) + ' was rejected. The publisher can send a new version.</div>';
     if(live) html += '<div class="hub-item-meta" style="margin-top:8px">Live: version ' + Number(live.version) + '</div>' + hubAppFacts(app, live);
     html += '<div class="hub-item-actions">' + hubButton('Archive', 'app-archive', app.id, {tone: 'danger', disabled: !!busy['app-archive:' + app.id]}) + '</div></div>';
     return html;
@@ -708,7 +711,7 @@
   function renderHubApps(st){
     var list = st.apps || [];
     if(!list.length) return '<div class="card hub-state"><p>No apps yet. An app a teammate publishes shows up here for review.</p></div>';
-    var waiting = list.filter(function(app){ return app.pending; }).length;
+    var waiting = list.filter(hubAppWaiting).length;
     return hubSectionHead('Catalog', list.length + (list.length === 1 ? ' app' : ' apps') + (waiting ? ' · ' + waiting + ' waiting for review' : '')) +
       '<div class="hub-list">' + list.map(function(app){ return renderHubApp(app, st); }).join('') + '</div>';
   }
@@ -915,8 +918,8 @@
       return call('GET', base + '/apps').then(function(reply){
         var list = (reply && Array.isArray(reply.apps) ? reply.apps : []).filter(function(app){ return app && HUB_ID.test(app.id || '') && typeof app.name === 'string'; })
           .map(function(app){ return Object.assign({}, app, {live: cleanVersion(app.live), pending: cleanVersion(app.pending)}); })
-          .sort(function(a, b){ return (b.pending ? 1 : 0) - (a.pending ? 1 : 0) || a.name.localeCompare(b.name); });
-        var bundles = list.filter(function(app){ return app.pending && app.pending.kind !== 'link' && HUB_ID.test(app.pending.fileId || ''); });
+          .sort(function(a, b){ return (hubAppWaiting(b) ? 1 : 0) - (hubAppWaiting(a) ? 1 : 0) || a.name.localeCompare(b.name); });
+        var bundles = list.filter(function(app){ return hubAppWaiting(app) && app.pending.kind !== 'link' && HUB_ID.test(app.pending.fileId || ''); });
         // Scan state lives on the file, so look before offering Approve.
         return hubMapPool(bundles, 4, function(app){
           return files.status(app.pending.fileId).then(function(reply){ return tf.scanVerdict(reply); }, function(){ return 'unknown'; });
@@ -939,13 +942,17 @@
       actions['app-' + decision] = function(id, version){
         var app = appById(id);
         if(!app) return Promise.resolve();
-        if(!app.pending || app.pending.version !== version) return load('apps', {force: true});
+        if(!hubAppWaiting(app) || app.pending.version !== version) return load('apps', {force: true});
         if(decision === 'approve' && !hubAppReadiness(app.pending, state.apps.scans).approve) return Promise.resolve();
         return perform('apps', 'app-version:' + id, hubConfirmCopy('app-' + decision, app), function(){
           return call('POST', base + '/apps/' + id + '/versions/' + version + '/' + decision, {});
         }, afterApp((decision === 'approve' ? 'Approved ' : 'Rejected version ' + version + ' of ') + app.name), appFail);
       };
     });
+    actions['app-review'] = function(id){
+      if(options.openReview && appById(id)) options.openReview(id);
+      return Promise.resolve();
+    };
     actions['app-archive'] = function(id){
       var app = appById(id);
       if(!app) return Promise.resolve();
@@ -1817,7 +1824,14 @@
         if(groupHead) groupHead.textContent = 'Channel';
         var agentsSub = $('#agentsSub');
         if(agentsSub) agentsSub.textContent = 'Bots in the channels you are in, with the member who added each one.';
-        hubAdmin = createHubAdmin({teamId: team.id, call: win.MiaHubChat.call, confirm: hubConfirm, toast: toast, onChange: hubPaint});
+        hubAdmin = createHubAdmin({teamId: team.id, call: win.MiaHubChat.call, confirm: hubConfirm, toast: toast, onChange: hubPaint, openReview: function(appId){
+          // Reviewing happens on the Apps page, where the app can run in its sandbox.
+          try {
+            win.localStorage.setItem('miaAppsReviewHandoff', JSON.stringify({teamId: team.id, appId: appId, at: Date.now()}));
+            win.localStorage.setItem('miaosActiveWorkspace', 'hub_' + team.id);
+          } catch(_reviewHandoffError) {}
+          win.location.href = '/';
+        }});
         $all('[data-team-only]').forEach(function(el){ el.hidden = false; });
         $('#adminWrap').hidden = false;
         wire();
