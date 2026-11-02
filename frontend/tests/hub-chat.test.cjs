@@ -733,3 +733,54 @@ test('a bot reply shows its run label apart from the text; people cannot post on
   const person=api.message({id:'p',sequence:8,author_type:'human',author_id:'user_x',author_email:'x@example.test',body:'Hi\n\n\u2063Grok · Ran on Tom’s Mia',created_at:1});
   assert.equal(person.hubRunLabel,'');assert.match(person.body,/Ran on Tom/);
 });
+
+function companyRowEnv(activeRoomId){
+  return {document:{createElement:()=>({className:'',innerHTML:'',setAttribute(){},addEventListener(){}})},
+    companyBotPlace:()=>({action:'open',channel:{id:'c1'}}),hubChannel:()=>({id:'c1'}),chatWs:{activeRoomId},
+    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){}};
+}
+test('a company bot row never lights up: the open channel is the channel row\'s to show',()=>{
+  const row=appFunction('companyBotRow',companyRowEnv('c1'));
+  const bot={key:'web',name:'Web',channels:[{id:'c1'}]};
+  assert.doesNotMatch(row(bot,false).className,/\bactive\b/);
+  assert.doesNotMatch(row(bot,true).className,/\bactive\b/,'a pinned row is the same');
+});
+test('the company bot list refreshes once after a burst of bot changes, only for the team still open',()=>{
+  const timers=[];let loads=0;
+  const env={hubWorkspace:()=>env.activeWorkspaceKey.indexOf('hub_')===0,activeWorkspaceKey:'hub_a',hubChat:{},loadCompanyBots(){loads+=1;},
+    setTimeout:(fn)=>{timers.push(fn);return timers.length;},clearTimeout:(id)=>{timers[id-1]=null;}};
+  const refresh=appFunction('refreshCompanyBots',env);
+  refresh();refresh();refresh();
+  timers.filter(Boolean).forEach((fn)=>fn());
+  assert.equal(loads,1,'a burst is one request');
+  timers.length=0;
+  refresh();env.activeWorkspaceKey='hub_b';
+  timers.filter(Boolean).forEach((fn)=>fn());
+  assert.equal(loads,1,'the team changed before it ran');
+  timers.length=0;env.activeWorkspaceKey='solo';
+  refresh();
+  assert.equal(timers.filter(Boolean).length,0,'Solo has no company bots');
+});
+test('an older company bot answer cannot overwrite a newer one',async()=>{
+  const answers=[];let renders=0;
+  const env={activeWorkspaceKey:'hub_a',hubChat:{},renderChatSidebar(){renders+=1;},companyBotsFromChannels:(list)=>list,
+    window:{MiaHubChat:{teamBots:()=>new Promise((resolve)=>answers.push(resolve))}}};
+  const load=appFunction('loadCompanyBots',env);
+  const first=load(),second=load();
+  answers[1](['new']);await second;
+  answers[0](['old']);await first;
+  assert.deepEqual(Array.from(env.hubChat.companyBots),['new']);
+  assert.equal(renders,1);
+});
+test('every bot change refreshes the company bot list',()=>{
+  assert.match(source,/kind==='bots'\)\{\s*refreshCompanyBots\(\);/,'a channel event says the bots changed');
+  const share=source.slice(source.indexOf('  function shareBotToHubChannel('),source.indexOf('  function hubBotJoinedMessage('));
+  assert.match(share,/refreshCompanyBots\(\)/,'adding a bot, and approving it');
+  const after=source.slice(source.indexOf('  function hubBotsChanged('));
+  assert.match(after.slice(0,200),/refreshCompanyBots\(\);\s*return refreshHubBotState\(roomId,\s*true\)/);
+  assert.match(source,/data-hub-panel-remove'\)\)\s*\.then\(function\(\)\{ return hubBotsChanged\(roomId\); \}\)/,'removing a bot');
+  assert.doesNotMatch(source,/refresh:function\(\)\{\s*return refreshHubBotState\(/,'accepting, rejecting and approving go through the dialogs\' refresh');
+  assert.match(source,/chatWs\.activeRoomId===roomId\)return hubBotsChanged\(roomId\);/,'the admission card');
+  const manager=require('fs').readFileSync(require('path').join(__dirname,'..','hub-bot-manager.js'),'utf8');
+  assert.match(manager,/await scope\.refresh\(\)/,'the dialogs call the refresh they were given');
+});

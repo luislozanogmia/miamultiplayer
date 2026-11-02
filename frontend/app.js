@@ -5071,8 +5071,9 @@
   function shareBotToHubChannel(teamId, channelId, localBotId){
     return window.MiaHubChat.localCall('POST', '/share', {teamId: teamId, channelId: channelId, localBotId: String(localBotId)}).then(function(result){
       var version = result && result.proposal && result.proposal.version, bot = result && result.bot;
+      refreshCompanyBots();
       if(!(hubChat.membership && hubChat.membership.role === 'admin') || !version || !bot) return false;
-      return hubCall('POST', hubPath() + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ return true; });
+      return hubCall('POST', hubPath() + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ refreshCompanyBots(); return true; });
     });
   }
   function hubBotJoinedMessage(name, label, published){
@@ -5309,13 +5310,27 @@
   }
   function loadCompanyBots(){
     var workspace=activeWorkspaceKey;
+    var request=hubChat.companyBotsRequest=Number(hubChat.companyBotsRequest||0)+1;
     return window.MiaHubChat.teamBots(workspace.slice(4)).then(function(results){
-      if(workspace!==activeWorkspaceKey)return;
+      if(workspace!==activeWorkspaceKey || request!==hubChat.companyBotsRequest)return;
       // The Hub decides who sees which bot: everyone by default, unless an
       // admin limits it. The sidebar shows exactly what it returns.
       hubChat.companyBots=companyBotsFromChannels(results);
       renderChatSidebar();
     }).catch(function(){/* The sidebar keeps its last list; the next team open retries. */});
+  }
+  // A bot was added, removed, accepted, approved or rejected. A burst of those
+  // is one request, and it is dropped if the team changes while it waits.
+  var companyBotsRefreshTimer=null;
+  function refreshCompanyBots(){
+    if(!hubWorkspace())return;
+    var workspace=activeWorkspaceKey;
+    clearTimeout(companyBotsRefreshTimer);
+    companyBotsRefreshTimer=setTimeout(function(){ if(workspace===activeWorkspaceKey)loadCompanyBots(); },300);
+  }
+  function hubBotsChanged(roomId){
+    refreshCompanyBots();
+    return refreshHubBotState(roomId,true);
   }
   // Where a company bot can be used: a channel you're in, else an open
   // channel you can join; a private one you're not in can't be opened.
@@ -5755,6 +5770,7 @@
         if(channel){channel.last_read=Math.max(Number(channel.last_read||0),Number(event.last_read||0));
           if(channel.last_read>=Number(channel.latest_sequence||0))channel.unread=0;else refreshChannels=true;}
       } else if(event.kind==='bots'){
+        refreshCompanyBots();
         if(roomId===chatWs.activeRoomId)refreshHubBotState(roomId,true);
         else if(state)state.hubBotsAt=0;
       } else if(event.kind==='members'){
@@ -11351,7 +11367,7 @@
     if(!button || !hubWorkspace())return;
     var roomId=chatWs.activeRoomId,workspace=activeWorkspaceKey;
     window.MiaHubBots.decide({teamId:workspace.slice(4),channelId:roomId,
-      refresh:function(){if(activeWorkspaceKey===workspace && chatWs.activeRoomId===roomId)return refreshHubBotState(roomId,true);}},
+      refresh:function(){if(activeWorkspaceKey===workspace && chatWs.activeRoomId===roomId)return hubBotsChanged(roomId);}},
       button.getAttribute('data-bot-id'),Number(button.getAttribute('data-version')),button.getAttribute('data-hub-admission-action'),button);
   });
   function chatMsgHtml(m, grouped, opts){
@@ -12875,13 +12891,13 @@
       });
     });
     els('[data-hub-panel-review]', pane).forEach(function(button){
-      button.addEventListener('click', function(){ window.MiaHubBots.open({teamId:activeWorkspaceKey.slice(4), channelId:roomId, refresh:function(){ return refreshHubBotState(roomId, true); }}); });
+      button.addEventListener('click', function(){ window.MiaHubBots.open({teamId:activeWorkspaceKey.slice(4), channelId:roomId, refresh:function(){ return hubBotsChanged(roomId); }}); });
     });
     els('[data-hub-panel-remove]', pane).forEach(function(button){
       button.addEventListener('click', function(){
         button.disabled = true;
         hubCall('DELETE', hubPath() + '/channels/' + roomId + '/bots/' + button.getAttribute('data-hub-panel-remove'))
-          .then(function(){ return refreshHubBotState(roomId, true); })
+          .then(function(){ return hubBotsChanged(roomId); })
           .catch(function(){ button.disabled = false; showBenchToast('Couldn\'t remove this bot. Try again.'); });
       });
     });
@@ -13747,7 +13763,7 @@
         if(hubChannelMenu){closeHubChannelMenu();return;}
         openHubChannelMenu(channel,rect.right-200,rect.bottom+4);
       });
-      el('#hubManageBots',header).addEventListener('click',function(){window.MiaHubBots.open({teamId:activeWorkspaceKey.slice(4),channelId:chatWs.activeRoomId,refresh:function(){return refreshHubBotState(chatWs.activeRoomId,true);}});});
+      el('#hubManageBots',header).addEventListener('click',function(){window.MiaHubBots.open({teamId:activeWorkspaceKey.slice(4),channelId:chatWs.activeRoomId,refresh:function(){return hubBotsChanged(chatWs.activeRoomId);}});});
       if(el('#chatMobileBack'))el('#chatMobileBack').addEventListener('click',closeMobileChatRoom);
       return;
     }
