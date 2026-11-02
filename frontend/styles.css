@@ -3780,6 +3780,9 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .twf-card-row{display:flex;align-items:center;justify-content:space-between;gap:12px;}
 .twf-card-row .twf-actions{margin-top:0;}
 .twf-card-title{font-weight:500;}
+.twf-gate{margin-top:8px;display:grid;gap:4px;font-size:13px;line-height:1.45;overflow-wrap:anywhere;}
+.twf-gate-row{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;}
+.twf-gate-label{color:var(--sand-text-secondary);}
 .twf-card-text{margin-top:6px;font-size:13px;color:var(--sand-text-secondary);line-height:1.45;}
 .twf-note{margin-top:4px;font-size:13px;color:var(--sand-text-primary);}
 .twf-label{display:block;margin-top:10px;font-size:13px;color:var(--sand-text-secondary);}

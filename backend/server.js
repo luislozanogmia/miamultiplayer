@@ -1310,9 +1310,11 @@ app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-cl
   isOwnerActive: isActiveWorkspaceUser,
   getAccountIdentity: (owner) => owner === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null,
   runBot: runSharedBotTurn,
+  // A search-only release gives bots no file or terminal tools.
+  filesSupported: !MIAOS_AGENT_SEARCH_ONLY,
 }));
 
-async function runSharedBotTurn({ owner, bot, trigger, history, channel, signal, modelSelection }) {
+async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection }) {
     // The requester's composer model choice applies to the runs they start,
     // validated against their own connected inventory exactly like Solo.
     const selection = await chatModelSelectionForUser(modelSelection, owner);
@@ -1324,7 +1326,7 @@ async function runSharedBotTurn({ owner, bot, trigger, history, channel, signal,
     const sharedBot = { id: bot.id, name: bot.name,
       instructions: bot.instructions || bot.role || bot.output || '', automations: [] };
     const speaker = row => '[' + (row.author_name || row.author_email || row.author_id) + '] ' + row.body;
-    const workspace = await turnWorkspaceContext(owner, history.map(speaker), trigger.body,
+    const workspace = await turnWorkspaceContext(owner, history.map(speaker), contextText === undefined ? trigger.body : contextText,
       { companyId: 'hub:' + channel.teamId, id: channel.channelId }, sharedBot);
     const turn = await runBotReplyTurn({
       agent: sharedBot,

@@ -35,7 +35,7 @@ test('everything from other people is escaped', () => {
   const evil = '<img src=x onerror=alert(1)>';
   const check = html => { assert.doesNotMatch(html, /<img/); };
   check(ui.approvalCardHtml(approval({ workflow_name: evil, run_summary: evil, step_text: evil, step_note: evil }), people));
-  check(ui.homeHtml({ workflows: [{ id: ID(1), name: evil, published: true, enabled: true, definition: { trigger: { kind: 'flag', label: evil } } }], runs: [run({ workflow_name: evil, summary: evil, state: 'running' })], needsYou: [{ runId: ID(2), n: 1, workflowName: evil, text: evil }], people }));
+  check(ui.homeHtml({ workflows: [{ id: ID(1), name: evil, published: true, enabled: true, definition: { trigger: { kind: 'flag', label: evil } } }], runs: [run({ workflow_name: evil, summary: evil, state: 'running' })], needsYou: [{ runId: ID(2), n: 1, workflowName: evil, text: evil, reason: 'approval', why: ['new_version'], botName: evil, summary: evil, startedBy: evil, digest: evil, previous: [{ n: 1, ownerId: evil, note: evil, files: [evil] }] }, { runId: ID(2), n: 2, text: evil, botName: evil, reason: 'no_file_tools', previous: [{ n: 1, ownerId: evil, note: evil, files: [evil] }] }], people }));
   check(ui.runHtml({ run: run({ final_note: evil, summary: evil }), steps: [{ n: 1, text: evil, note: evil, progress_note: evil, state: 'working', owner_id: 'u1', bot_name: evil, files: [{ fileId: ID(7), filename: evil, sizeBytes: 1 }] }], people }));
   check(ui.editorHtml({ draft: { ...wf.blankDraft('UTC'), name: evil, label: evil, steps: [{ ...wf.blankStep(), text: evil }] }, people, channels: [{ id: ID(1), kind: 'channel', name: evil }], bots: [{ id: ID(2), name: evil }] }));
 });
@@ -56,8 +56,39 @@ test('an interrupted step asks before anything runs', () => {
   const html = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, workflowName: 'Quote flow', text: 'Send it' }] });
   assert.match(html, /step 3 was interrupted/);
   assert.match(html, /some of it may already have happened/);
-  assert.match(html, /data-wf-resume="run"/);
   assert.match(html, /data-wf-resume="fail"/);
+  const known = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'interrupted', text: 'Send it', digest: 'a'.repeat(64) }] });
+  assert.match(known, /data-wf-resume="run"/);
+  assert.match(known, /Send it/);
+});
+
+test('the gate shows what would run, escaped, and offers Run for this one step', () => {
+  const digest = 'a'.repeat(64);
+  const html = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'approval', why: ['new_version', 'teammate_text'], workflowName: 'Quote flow', text: 'Check <the> numbers', botName: 'Checker',
+    summary: 'Acme & co', startedBy: 'nobody', digest, previous: [{ n: 1, ownerId: 'nobody', note: 'Ignore <b>rules</b>', files: ['run me.pdf'] }] }] });
+  assert.match(html, /step 3 needs your OK to run/);
+  assert.match(html, /Check &lt;the&gt; numbers/);
+  assert.match(html, /Checker/);
+  assert.match(html, /Acme &amp; co/);
+  assert.match(html, /Ignore &lt;b&gt;rules&lt;\/b&gt;/);
+  assert.match(html, /run me\.pdf/);
+  assert.match(html, /new on this computer/);
+  assert.match(html, /carries text or files from teammates/);
+  assert.match(html, /Run starts only this one step/);
+  assert.ok(html.includes('data-wf-digest="' + digest + '"'));
+  assert.match(html, /data-wf-resume="fail"/);
+  assert.doesNotMatch(html, /don.t ask again/i);
+});
+
+test('an interrupted step with no details offers no Run, and a search-only Mia says why it cannot run', () => {
+  const none = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'interrupted', text: 'x' }] });
+  assert.match(none, /could not load this step/);
+  assert.doesNotMatch(none, /data-wf-resume="run"/);
+  const search = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'no_file_tools', text: 'x', digest: 'a'.repeat(64), previous: [{ n: 1, ownerId: 'p', note: 'n', files: ['a.pdf'] }] }] });
+  assert.match(search, /can only search the web/);
+  assert.match(search, /a\.pdf/);
+  assert.doesNotMatch(search, /data-wf-resume="run"/);
+  assert.match(search, /data-wf-resume="fail"/);
 });
 
 test('a run shows names, states, and the actions this person may take', () => {
@@ -180,9 +211,9 @@ test('a retried start keeps the same id, so the Hub cannot start it twice', asyn
 test('an interrupted step runs again only when the person says so', async () => {
   const h = harness();
   await settle();
-  await h.click({ 'data-wf-resume': 'run', 'data-wf-run': ID(2), 'data-wf-n': '3' });
+  await h.click({ 'data-wf-resume': 'run', 'data-wf-run': ID(2), 'data-wf-n': '3', 'data-wf-digest': 'a'.repeat(64) });
   const resume = h.local.filter(([path]) => path === '/workflow/resume');
-  assert.deepEqual(resume, [['/workflow/resume', { teamId: ID(9), runId: ID(2), n: 3, action: 'run' }]]);
+  assert.deepEqual(resume, [['/workflow/resume', { teamId: ID(9), runId: ID(2), n: 3, action: 'run', digest: 'a'.repeat(64) }]]);
 });
 
 test('a Hub without workflows shows a calm note, and does not keep asking', async () => {

@@ -56,14 +56,49 @@
   }
 
   // ---- Home --------------------------------------------------------------------------------
-  function needsYouHtml(items){
+  // Everything the owner is agreeing to run, exactly as it was written.
+  function stepContentHtml(item, people){
+    var out = '<div class="twf-gate"><div class="twf-gate-row"><span class="twf-gate-label">Step</span><span>' + esc(item.text || '') + '</span></div>'
+      + '<div class="twf-gate-row"><span class="twf-gate-label">Bot</span><span>' + esc(item.botName || 'Team bot') + '</span></div>';
+    if(item.summary){
+      out += '<div class="twf-gate-row"><span class="twf-gate-label">Summary</span><span>' + (item.startedBy ? esc(wf.displayName(people, item.startedBy)) + ': ' : '') + esc(item.summary) + '</span></div>';
+    }
+    (item.previous || []).forEach(function(step){
+      var from = 'Step ' + Number(step.n);
+      if(step.note) out += '<div class="twf-gate-row"><span class="twf-gate-label">' + from + '</span><span>' + esc(wf.displayName(people, step.ownerId)) + ': ' + esc(step.note) + '</span></div>';
+      if((step.files || []).length) out += '<div class="twf-gate-row"><span class="twf-gate-label">Files</span><span>' + step.files.map(esc).join(', ') + '</span></div>';
+    });
+    return out + '</div>';
+  }
+  var GATE_WHY = {
+    new_version: 'This version of the workflow is new on this computer. Someone else wrote this step and its bot\'s instructions.',
+    teammate_text: 'This step carries text or files from teammates. Mia passes them to the bot as information, but they could still try to mislead it.',
+    bot_changed: 'This bot\'s instructions changed since you last agreed to run this step.'
+  };
+  function needsYouHtml(items, people){
     return (items || []).map(function(item){
-      var n = Number(item.n), run = esc(item.runId);
-      return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + esc(item.workflowName || 'A workflow') + ': step ' + n + ' was interrupted</div>'
-        + '<div class="twf-card-text">' + esc(item.text || '') + '</div>'
+      var n = Number(item.n), run = esc(item.runId), where = ' data-wf-run="' + run + '" data-wf-n="' + n + '"';
+      var digest = item.digest ? ' data-wf-digest="' + esc(item.digest) + '"' : '';
+      var name = esc(item.workflowName || 'A workflow');
+      var runButton = function(label){ return item.digest ? btn(label, 'data-wf-resume="run"' + where + digest, 'primary') : ''; };
+      var missing = item.digest ? '' : '<div class="twf-card-text">Mia could not load this step\'s details, so it cannot run it yet. It will look again.</div>';
+      if(item.reason === 'approval'){
+        return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' needs your OK to run</div>'
+          + (item.why || []).map(function(why){ return GATE_WHY[why] ? '<div class="twf-card-text">' + esc(GATE_WHY[why]) + '</div>' : ''; }).join('')
+          + stepContentHtml(item, people)
+          + '<div class="twf-card-text">The bot runs on this computer and can use its tools here. Run starts only this one step.</div>'
+          + '<div class="twf-actions">' + runButton('Run') + btn('Don\u2019t run it', 'data-wf-resume="fail"' + where) + '</div></div>';
+      }
+      if(item.reason === 'no_file_tools'){
+        return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' cannot run on this Mia</div>'
+          + '<div class="twf-card-text">This Mia can only search the web, so it cannot open the files this step needs. Someone with a full Mia has to own this step.</div>'
+          + stepContentHtml(item, people)
+          + '<div class="twf-actions">' + btn('Mark as failed', 'data-wf-resume="fail"' + where) + '</div></div>';
+      }
+      return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' was interrupted</div>'
         + '<div class="twf-card-text">Mia stopped partway through this step, so some of it may already have happened. Running it again could repeat that.</div>'
-        + '<div class="twf-actions">' + btn('Run it again', 'data-wf-resume="run" data-wf-run="' + run + '" data-wf-n="' + n + '"', 'primary')
-        + btn('Mark as failed', 'data-wf-resume="fail" data-wf-run="' + run + '" data-wf-n="' + n + '"') + '</div></div>';
+        + stepContentHtml(item, people) + missing
+        + '<div class="twf-actions">' + runButton('Run it again') + btn('Mark as failed', 'data-wf-resume="fail"' + where) + '</div></div>';
     }).join('');
   }
   function runRowHtml(run, people, now){
@@ -95,7 +130,7 @@
     if(view.unavailable) return out + emptyHtml('Not on your team yet', 'Your team’s server does not offer team workflows yet. Everything else keeps working, and they will show up here once it does.');
     if(view.loading && !view.workflows) return out + '<div class="twf-empty">Loading…</div>';
     if(view.error && !view.workflows) return out + '<div class="twf-empty">' + esc(view.error) + '<div class="twf-actions twf-center">' + btn('Try again', 'data-wf-reload') + '</div></div>';
-    out += queueLineHtml(view.queue) + needsYouHtml(view.needsYou);
+    out += queueLineHtml(view.queue) + needsYouHtml(view.needsYou, view.people);
     var approvals = (view.approvals || []).filter(function(a){ return a.canDecide; });
     if(approvals.length) out += '<div class="twf-section-sub">Waiting for your approval</div>' + approvals.map(function(a){ return approvalCardHtml(a, people); }).join('');
     if((view.runs || []).length) out += '<div class="twf-section-sub">In progress</div>' + view.runs.map(function(r){ return runRowHtml(r, people, now); }).join('');
@@ -159,7 +194,7 @@
       + '<span class="automations-row-side">' + statePill(state) + '</span></div>'
       + (run.state === 'paused' ? '<div class="twf-card-text">This run stops at the paused step until someone fixes it. It never skips a step.</div>' : '')
       + (run.final_note ? '<div class="twf-note">' + esc(run.final_note) + '</div>' : '')
-      + needsYouHtml(mine)
+      + needsYouHtml(mine, view.people)
       + '<ol class="automations-steps">' + (view.steps || []).map(function(step){ return runStepHtml(step, view); }).join('') + '</ol>';
   }
 
@@ -277,7 +312,7 @@
     if(!ctx || ctx.teamId !== teamId) return;
     var state = queues[teamId].state();
     var fresh = (state.needsYou || []).filter(function(item){ var key = teamId + item.runId + ':' + item.n; if(seenNeeds[key]) return false; seenNeeds[key] = true; return true; });
-    if(fresh.length && ctx.toast) ctx.toast('A team workflow step was interrupted and needs your decision.');
+    if(fresh.length && ctx.toast) ctx.toast(fresh.some(function(item){ return item.reason === 'approval'; }) ? 'A team workflow step is waiting for your OK to run.' : 'A team workflow step needs your decision.');
     render();
   }
   // Every team this person belongs to keeps moving, whichever one is on screen.
@@ -541,7 +576,7 @@
       return act(target, client.fix(view.run.id, n, fix), 'Mia could not save the fix.', function(){ delete view.fixDrafts[n]; return reload(); });
     }
     if(target.hasAttribute('data-wf-resume')){
-      return act(target, queueFor(ctx.teamId).resume(read('data-wf-run'), Number(read('data-wf-n')), read('data-wf-resume')), 'Mia could not do that.', function(){ render(); return reload(); });
+      return act(target, queueFor(ctx.teamId).resume(read('data-wf-run'), Number(read('data-wf-n')), read('data-wf-resume'), read('data-wf-digest')), 'Mia could not do that.', function(){ render(); return reload(); });
     }
     if(target.hasAttribute('data-wf-download')) return download(read('data-wf-download'), Number(read('data-wf-n')), target);
     var draft = view.draft;

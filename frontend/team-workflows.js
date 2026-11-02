@@ -19,17 +19,19 @@
     workflow_limit: 'This team already has 50 workflows. Archive one before adding another.',
     version_already_approved: 'This version was already approved.',
     version_rejected: 'This version was already rejected. Save a new version instead.',
+    version_superseded: 'A newer version has replaced this one, so it can no longer be approved. To use it again, propose it as a new version.',
     idempotency_conflict: 'This was already sent with different details. Close it and start again.',
     not_a_starter: 'You are not one of the people who can start this workflow.',
     workflow_not_published: 'This workflow has no approved version yet.',
     workflow_paused: 'This workflow is paused. Resume it first.',
     run_limit: 'This team has 50 workflows in progress. Wait for one to finish, or cancel one.',
     invalid_summary: 'Write the summary as one line, up to 200 characters.',
-    invalid_run: 'The team server refused this start. Nothing was shared.',
+    invalid_run: 'The team server refused this because it does not match the run. Nothing was shared.',
     invalid_fix: 'That person cannot take this step. They must be in the workflow\'s channel, and the approver must be someone else.',
     not_fixer: 'Only the person named on this step or an admin can fix it.',
     step_not_paused: 'This step is no longer paused.',
     run_not_active: 'This workflow run has already ended.',
+    run_finished: 'This workflow run has already finished, so it takes no more files.',
     already_decided: 'Someone already decided this.',
     self_approval: 'You own this step, so someone else has to approve it.',
     not_approver: 'Only the named approver or an admin can decide this.',
@@ -38,6 +40,10 @@
     forbidden: 'Only the person who started this run or an admin can do that.',
     writes_paused: 'The team server is not taking changes right now. Try again shortly.',
     step_gone: 'This step has moved on. There is nothing left to do here.',
+    step_changed: 'This step changed after you saw it. Check the new details, then choose again.',
+    step_paused: 'This step is paused. Someone has to fix it before it can run.',
+    step_not_queued: 'This step is no longer waiting to run.',
+    no_file_tools: 'This Mia can only search the web, so it cannot open the files this step needs.',
     step_running: 'This step is already running on this computer.',
     step_claimed: 'Another of your computers is working on this step.',
     bot_runtime_unavailable: 'Mia cannot run bots right now. Restart Mia and try again.',
@@ -363,8 +369,11 @@
     return {
       wake: wake,
       state: function(){ return state; },
-      resume: function(runId, n, action){
-        return post('/workflow/resume', {teamId: teamId, runId: runId, n: n, action: action === 'fail' ? 'fail' : 'run'}).then(function(result){ wake(); return result; });
+      // `digest` names the exact content the person saw, so Run covers only that.
+      resume: function(runId, n, action, digest){
+        var body = {teamId: teamId, runId: runId, n: n, action: action === 'fail' ? 'fail' : 'run'};
+        if(body.action === 'run' && digest) body.digest = digest;
+        return post('/workflow/resume', body).then(function(result){ wake(); return result; }, function(error){ wake(); throw error; });
       },
       stop: function(){ stopped = true; if(timer) clearTimer(timer); timer = null; }
     };

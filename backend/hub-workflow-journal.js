@@ -9,6 +9,11 @@ const { randomBytes } = require('node:crypto');
 // prepared -> claimed -> started -> report_ready -> reported
 // Any of them can end in `stopped`. A step that never reached `started` did
 // nothing and may be claimed again with the same claim id.
+//
+// `approved_digest` is what the person last pressed Run on, so a step runs only
+// with that exact content. `held` means the step was claimed but found to need the
+// person after all. hub_workflow_accepted records the steps of a workflow version
+// this person has accepted on this computer.
 const OPEN = ['prepared','claimed','started','report_ready'];
 
 function createHubWorkflowJournal(db) {
@@ -18,8 +23,17 @@ function createHubWorkflowJournal(db) {
     state TEXT NOT NULL CHECK(state IN ('prepared','claimed','started','report_ready','reported','stopped')),
     approved INTEGER NOT NULL DEFAULT 0, workflow_name TEXT NOT NULL DEFAULT '', step_text TEXT NOT NULL DEFAULT '',
     outcome TEXT, note TEXT, file_ids TEXT,
+    approved_digest TEXT, held INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(origin,owner,subject,team_id,run_id,n,claim_id)
+  );
+  CREATE TABLE IF NOT EXISTS hub_workflow_accepted (
+    origin TEXT NOT NULL, owner TEXT NOT NULL, subject TEXT NOT NULL, team_id TEXT NOT NULL,
+    accept_key TEXT NOT NULL, bot_version INTEGER, accepted_at INTEGER NOT NULL,
+    PRIMARY KEY(origin,owner,subject,team_id,accept_key)
   );`);
+  const columns = db.prepare('PRAGMA table_info(hub_workflow_steps)').all().map(column => column.name);
+  if (!columns.includes('approved_digest')) db.exec('ALTER TABLE hub_workflow_steps ADD COLUMN approved_digest TEXT');
+  if (!columns.includes('held')) db.exec('ALTER TABLE hub_workflow_steps ADD COLUMN held INTEGER NOT NULL DEFAULT 0');
   const scope = s => [s.origin,s.owner,s.subject,s.teamId];
   const where = 'origin=? AND owner=? AND subject=? AND team_id=?';
   const inOpen = OPEN.map(state => `'${state}'`).join(',');
@@ -51,6 +65,26 @@ function createHubWorkflowJournal(db) {
     reopen(s,row) {
       return db.prepare(`UPDATE hub_workflow_steps SET state='prepared',approved=1 WHERE ${where} AND run_id=? AND n=? AND claim_id=? AND state='started'`)
         .run(...scope(s),row.run_id,row.n,row.claim_id).changes === 1;
+    },
+    // The person pressed Run on exactly this content.
+    approve(s,row,digest) {
+      return db.prepare(`UPDATE hub_workflow_steps SET approved=1,approved_digest=?,held=0 WHERE ${where} AND run_id=? AND n=? AND claim_id=?`)
+        .run(digest,...scope(s),row.run_id,row.n,row.claim_id).changes === 1;
+    },
+    hold(s,row) {
+      return db.prepare(`UPDATE hub_workflow_steps SET held=1,approved_digest=NULL WHERE ${where} AND run_id=? AND n=? AND claim_id=?`)
+        .run(...scope(s),row.run_id,row.n,row.claim_id).changes === 1;
+    },
+    accepted(s,key) {
+      return db.prepare(`SELECT * FROM hub_workflow_accepted WHERE ${where} AND accept_key=?`).get(...scope(s),key);
+    },
+    accept(s,key,now = Date.now()) {
+      db.prepare(`INSERT INTO hub_workflow_accepted(origin,owner,subject,team_id,accept_key,accepted_at) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(origin,owner,subject,team_id,accept_key) DO NOTHING`).run(...scope(s),key,Math.floor(now / 1000));
+    },
+    // The bot's instructions are only known once the step is claimed.
+    acceptedBot(s,key,version) {
+      db.prepare(`UPDATE hub_workflow_accepted SET bot_version=? WHERE ${where} AND accept_key=?`).run(version,...scope(s),key);
     },
     saveReport(s,row,{outcome,note,fileIds=[]}) {
       return db.prepare(`UPDATE hub_workflow_steps SET state='report_ready',outcome=?,note=?,file_ids=? WHERE ${where} AND run_id=? AND n=? AND claim_id=? AND state IN (${inOpen})`)
