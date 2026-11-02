@@ -433,8 +433,11 @@
 
     async function reserve(job){
       var hash = job.hash;
-      var reply = await client.reserve({spaceKind: space.kind, spaceId: space.id, sizeBytes: job.sizeBytes, sha256: hash.sha256,
-        filename: job.filename, contentType: contentTypeOf(job.file.type)});
+      var body = {spaceKind: space.kind, spaceId: space.id, sizeBytes: job.sizeBytes, sha256: hash.sha256,
+        filename: job.filename, contentType: contentTypeOf(job.file.type)};
+      // A team workflow's file belongs to one run's automation space.
+      if(space.runId) body.runId = space.runId;
+      var reply = await client.reserve(body);
       var count = partCount(job.sizeBytes);
       if(reply.partBytes !== PART_BYTES || reply.partCount !== count){
         // The Hub's plan is not the one Mia hashed for; release it and stop.

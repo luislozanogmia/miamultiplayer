@@ -1299,7 +1299,18 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
     return bot && sameOwner(bot, owner) && bot.status !== 'draft' ? bot : null;
   },
   listBots: (owner) => db.loadAll(conn, 'bots').filter(bot => sameOwner(bot, owner) && bot.status !== 'draft'),
-  runBot: async ({ owner, bot, trigger, history, channel, signal, modelSelection }) => {
+  runBot: runSharedBotTurn,
+}));
+// Team workflow steps: the same bot turn, the owner's own account, one step at a time.
+app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-client').createHubWorkflowRouter({
+  db: conn,
+  dataDirectory: path.dirname(path.resolve(DB_PATH)),
+  isOwnerActive: isActiveWorkspaceUser,
+  getAccountIdentity: (owner) => owner === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null,
+  runBot: runSharedBotTurn,
+}));
+
+async function runSharedBotTurn({ owner, bot, trigger, history, channel, signal, modelSelection }) {
     // The requester's composer model choice applies to the runs they start,
     // validated against their own connected inventory exactly like Solo.
     const selection = await chatModelSelectionForUser(modelSelection, owner);
@@ -1343,8 +1354,7 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
       text: cleanBotReplyText(sharedBot.name, turn.rawReply).text,
       provider: String(HERMES_AUTH_PROVIDER_LABELS[userOptions.provider] || '').replace(/\s+subscription$/i, ''),
     };
-  },
-}));
+}
 
 function nativeConversationPrincipal(email, workspaceId = DEFAULT_WORKSPACE_ID) {
   const principalId = String(email || '').trim().toLowerCase();
