@@ -16092,10 +16092,25 @@
       return [];
     }
     function when(ms){ return window.MiaArtifactsPage ? window.MiaArtifactsPage.when(ms) : ''; }
+    // Team files (shared 100 GB store): team conversations only, never Solo.
+    function teamFilesChannel(){
+      if(!hubWorkspace() || !chatWs.activeRoomId) return null;
+      var channel = hubChannel(chatWs.activeRoomId);
+      return channel && ['channel', 'group', 'dm'].indexOf(channel.kind) >= 0 ? channel : null;
+    }
+    function openTeamFiles(){
+      var channel = teamFilesChannel();
+      if(!channel || !window.MiaTeamFilesUi) return;
+      setOpen(false);
+      window.MiaTeamFilesUi.open({teamId: activeWorkspaceKey.slice(4), spaceKind: channel.kind, spaceId: channel.id, title: hubChannelLabel(channel),
+        isAdmin: !!(hubChat.membership && hubChat.membership.role === 'admin'), call: hubCall, confirm: appConfirm});
+    }
     function render(){
       var list = el('#viewShelfList'), empty = el('#viewShelfEmpty'), search = el('#viewShelfSearch');
       var conf = window.MiaViewShelf && window.MiaViewShelf.config(shownView);
       if(!list || !empty || !conf) return;
+      var teamFilesBtn = el('#viewShelfTeamFiles');
+      if(teamFilesBtn) teamFilesBtn.hidden = !(shownView === 'chat' && window.MiaTeamFilesUi && teamFilesChannel());
       var query = search ? search.value : '';
       var shown = rows.filter(function(row){ return window.MiaViewShelf.matches(row, query); });
       list.innerHTML = window.MiaViewShelf.rowsHtml(shown, esc, when);
@@ -16155,6 +16170,8 @@
       if(!btn || !panel) return;
       btn.addEventListener('click', function(){ setOpen(!open); });
       el('#viewShelfClose').addEventListener('click', function(){ setOpen(false); });
+      var teamFilesBtn = el('#viewShelfTeamFiles');
+      if(teamFilesBtn) teamFilesBtn.addEventListener('click', openTeamFiles);
       el('#viewShelfSearch').addEventListener('input', render);
       el('#viewShelfList').addEventListener('click', function(event){
         var target = event.target.closest('[data-shelf-row]');

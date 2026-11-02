@@ -3739,3 +3739,29 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
   .mia-tips-path{stroke-dashoffset:0;}
   .mia-tips-head{opacity:1;}
 }
+
+/* Team files: the shared files panel for a channel, group or direct message. */
+.tf-overlay{position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(17,17,17,.32);}
+.tf-overlay[hidden]{display:none;}
+.tf-overlay.tf-drop .tf-window{outline:2px dashed var(--sand-text-secondary);outline-offset:-8px;}
+.tf-window{width:min(720px,100%);max-height:min(680px,100%);display:flex;flex-direction:column;background:var(--sand-bg-base);color:var(--sand-text-primary);border:1px solid var(--sand-border-default);border-radius:14px;box-shadow:0 24px 60px rgba(20,18,15,.22);overflow:hidden;font-family:var(--styled-sans);}
+.tf-head{display:flex;align-items:center;gap:10px;padding:14px 16px 10px 20px;flex:none;}
+.tf-head h2{flex:1;min-width:0;margin:0;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tf-body{flex:1;min-height:0;overflow:auto;padding:0 20px 20px;}
+.tf-usage{margin:2px 0 4px;}
+.tf-usage-text{font-size:12px;color:var(--sand-text-secondary);margin-bottom:4px;}
+.tf-bar{display:block;height:4px;border-radius:2px;background:var(--sand-fill-secondary);overflow:hidden;}
+.tf-bar>span{display:block;height:100%;background:var(--sand-text-primary);}
+.tf-usage-high .tf-bar>span{background:#b3261e;}
+.tf-row{cursor:default;padding:8px 6px;}
+.tf-row .artifacts-row-text{flex:1;}
+.tf-row .artifacts-row-meta{white-space:normal;}
+.tf-row .tf-bar{margin-top:6px;max-width:260px;}
+.tf-bad .artifacts-row-meta{color:#b3261e;}
+.tf-actions{flex:none;display:flex;gap:6px;margin-left:auto;}
+.tf-actions .artifacts-bar-text-btn[disabled]{opacity:.5;cursor:default;}
+.tf-notice{margin:10px 0 0;padding:8px 10px;border-radius:8px;background:#fff7f5;border:1px solid #d8a8a1;color:#6f251c;font-size:13px;}
+.tf-more{display:flex;justify-content:center;padding:12px 0 0;}
+@media (max-width:560px){.tf-overlay{padding:8px;}.tf-row{flex-wrap:wrap;}.tf-actions{width:100%;justify-content:flex-end;}}
+.view-shelf-team-files{margin:8px 12px 12px;align-self:flex-start;}
+.view-shelf-team-files[hidden]{display:none;}
