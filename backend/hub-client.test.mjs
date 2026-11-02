@@ -5,7 +5,7 @@ import {mkdtempSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const require=createRequire(import.meta.url);
-const {hubEndpoint,createHubClient}=require('./hub-client.js');
+const {hubEndpoint,createHubClient,hubRouteLimits}=require('./hub-client.js');
 
 test('fresh installations discover public production Hub without embedded credentials',()=>{
  const previous=process.env.MIA_HUB_URL;delete process.env.MIA_HUB_URL;
@@ -117,4 +117,65 @@ test('team file routes keep tight bounds: only completing an upload gets a large
  const parts=Array.from({length:63},(_,i)=>({number:i+1,etag:'"'+'e'.repeat(32)+'-1"',sha256:'f'.repeat(64)}));
  assert.ok(Buffer.byteLength(JSON.stringify({parts}))<32768);
  assert.equal(hubFileRoute('GET',t+'/channels/'+s+'/messages'),null);
+});
+
+const WF_TEAM='a'.repeat(32), WF_ID='b'.repeat(32), WF_BASE='/v1/teams/'+WF_TEAM;
+function wfProxy(reply={}){
+ const seen=[];
+ const proxy=createHubClient({fetcher:async(url,options)=>{seen.push({url,options});return new Response(typeof reply==='string'?reply:JSON.stringify(reply));}});
+ const send=async(method,url,body)=>{
+  const response={status(code){this.code=code;return this;},json(data){this.data=data;return this;}};
+  await proxy({method,url,body,headers:{authorization:'Bearer fixture.token'}},response);
+  return response;
+ };
+ return {seen,send};
+}
+test('workflow limits widen only for the list and the definition writes',()=>{
+ assert.equal(hubRouteLimits('GET',WF_BASE+'/workflows').response,524288);
+ assert.equal(hubRouteLimits('POST',WF_BASE+'/workflows').request,16384);
+ assert.equal(hubRouteLimits('POST',WF_BASE+'/workflows/'+WF_ID+'/versions').request,16384);
+ for(const [method,route] of [['GET','/workflows/'+WF_ID],['GET','/workflow-runs'],['GET','/workflow-steps'],['GET','/workflow-approvals?state=pending'],['GET','/channels']])
+  assert.equal(hubRouteLimits(method,WF_BASE+route).response,131072,route);
+ for(const [method,route] of [['POST','/workflows/'+WF_ID+'/runs'],['POST','/workflows/'+WF_ID+'/versions/1/approve'],['PATCH','/workflows/'+WF_ID],['POST','/workflow-runs/'+WF_ID+'/steps/1/report'],['POST','/channels']])
+  assert.equal(hubRouteLimits(method,WF_BASE+route).request,8192,route);
+ // The list limit is a read limit: writing to the same path keeps the default response bound.
+ assert.equal(hubRouteLimits('POST',WF_BASE+'/workflows').response,131072);
+ assert.equal(hubRouteLimits('GET',WF_BASE+'/workflows').request,8192);
+});
+test('a 16 KB definition reaches the Hub, a larger one and an oversized run body do not',async()=>{
+ const {seen,send}=wfProxy({saved:true});
+ const within=await send('POST',WF_BASE+'/workflows',{definition:'x'.repeat(16000)});
+ assert.equal(within.code,200);assert.equal(seen.length,1);
+ const over=await send('POST',WF_BASE+'/workflows/'+WF_ID+'/versions',{definition:'x'.repeat(16400)});
+ assert.equal(over.code,413);assert.equal(seen.length,1);
+ const run=await send('POST',WF_BASE+'/workflows/'+WF_ID+'/runs',{id:WF_ID,summary:'x'.repeat(9000)});
+ assert.equal(run.code,413);assert.equal(seen.length,1);
+});
+test('a workflow list response over 128 KB passes up to 512 KB and stops beyond it',async()=>{
+ const body=size=>JSON.stringify({workflows:[{name:'x'.repeat(size)}]});
+ assert.equal((await wfProxy(body(300*1024)).send('GET',WF_BASE+'/workflows')).code,200);
+ assert.equal((await wfProxy(body(530*1024)).send('GET',WF_BASE+'/workflows')).code,503);
+ assert.equal((await wfProxy(body(300*1024)).send('GET',WF_BASE+'/workflows/'+WF_ID)).code,503);
+});
+test('only the exact workflow query strings are forwarded',async()=>{
+ for(const query of ['/workflow-runs?state=active','/workflow-runs?state=recent','/workflow-runs?state=all','/workflow-runs?workflow='+WF_ID,'/workflow-runs?state=all&workflow='+WF_ID,
+  '/workflow-approvals?state=pending','/workflow-approvals?state=decided','/workflow-approvals?state=all']){
+  const {seen,send}=wfProxy({runs:[]});
+  assert.equal((await send('GET',WF_BASE+query)).code,200,query);
+  assert.equal(seen[0].url.endsWith(query),true);
+ }
+ for(const [method,query] of [['POST','/workflow-runs?state=active'],['GET','/workflow-runs?state=open'],['GET','/workflow-runs?state=active&x=1'],['GET','/workflow-runs?workflow=abc'],
+  ['GET','/workflow-runs?state=active&workflow='+WF_ID+'&state=all'],['GET','/workflow-approvals?state=open'],['GET','/workflow-approvals?workflow='+WF_ID],
+  ['GET','/workflows?state=active'],['GET','/workflow-steps?state=queued'],['GET','/channels?state=active'],['GET','/workflow-runs?state=active#x']]){
+  const {seen,send}=wfProxy({});
+  assert.equal((await send(method,WF_BASE+query)).code,404,query);
+  assert.equal(seen.length,0,query);
+ }
+});
+test('the plain workflow routes stay forwarded as ordinary team routes',async()=>{
+ for(const [method,route] of [['GET','/workflows'],['GET','/workflow-steps'],['GET','/workflow-runs/'+WF_ID],['POST','/workflow-runs/'+WF_ID+'/steps/2/claim'],['POST','/workflow-approvals/'+WF_ID+'/approve'],['PATCH','/members/user_1'],['DELETE','/workflows/'+WF_ID]]){
+  const {seen,send}=wfProxy({});
+  assert.equal((await send(method,WF_BASE+route,{})).code,200,route);
+  assert.equal(seen.length,1,route);
+ }
 });
