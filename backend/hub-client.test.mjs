@@ -150,11 +150,12 @@ test('a 16 KB definition reaches the Hub, a larger one and an oversized run body
  const run=await send('POST',WF_BASE+'/workflows/'+WF_ID+'/runs',{id:WF_ID,summary:'x'.repeat(9000)});
  assert.equal(run.code,413);assert.equal(seen.length,1);
 });
-test('a workflow list response over 128 KB passes up to 512 KB and stops beyond it',async()=>{
+test('a workflow response over 128 KB passes up to 2 MiB and stops beyond it',async()=>{
  const body=size=>JSON.stringify({workflows:[{name:'x'.repeat(size)}]});
- assert.equal((await wfProxy(body(300*1024)).send('GET',WF_BASE+'/workflows')).code,200);
- assert.equal((await wfProxy(body(530*1024)).send('GET',WF_BASE+'/workflows')).code,503);
- assert.equal((await wfProxy(body(300*1024)).send('GET',WF_BASE+'/workflows/'+WF_ID)).code,503);
+ assert.equal((await wfProxy(body(700*1024)).send('GET',WF_BASE+'/workflows')).code,200);
+ assert.equal((await wfProxy(body(300*1024)).send('GET',WF_BASE+'/workflows/'+WF_ID)).code,200);
+ assert.equal((await wfProxy(body(2100*1024)).send('GET',WF_BASE+'/workflows')).code,503);
+ assert.equal((await wfProxy(body(300*1024)).send('GET',WF_BASE+'/channels')).code,503);
 });
 test('only the exact workflow query strings are forwarded',async()=>{
  for(const query of ['/workflow-runs?state=active','/workflow-runs?state=recent','/workflow-runs?state=all','/workflow-runs?workflow='+WF_ID,'/workflow-runs?state=all&workflow='+WF_ID,

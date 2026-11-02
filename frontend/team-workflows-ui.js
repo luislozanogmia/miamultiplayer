@@ -404,7 +404,7 @@
   }
   function reloadSoon(){
     if(reloadTimer) return;
-    reloadTimer = root.setTimeout(function(){ reloadTimer = null; if(mount && mount.isConnected) reload(); }, 300);
+    reloadTimer = root.setTimeout(function(){ reloadTimer = null; if(mount && mount.isConnected) new Promise(function(done){ done(reload()); }).catch(function(){}); }, 300); // A background refresh that fails keeps what is on screen.
   }
   // One feed event from the Hub. A step queued for this person wakes the queue
   // right away; the rest only redraw what is open.

@@ -11,7 +11,7 @@ globalThis.MiaTeamFiles = tf;
 const ui = require('./team-workflows-ui.js');
 // A queue looks for work once a minute forever; that must not keep this file's process alive.
 const realSetTimeout = globalThis.setTimeout;
-globalThis.setTimeout = (fn, ms, ...rest) => { const timer = realSetTimeout(fn, ms, ...rest); if (ms >= 1000) timer.unref(); return timer; };
+globalThis.setTimeout = (fn, ms, ...rest) => { const timer = realSetTimeout(fn, ms, ...rest); if (ms >= 30000) timer.unref(); return timer; };
 const ID = n => String(n).repeat(32);
 const people = wf.directory([{ clerk_user_id: 'u1', display_name: 'Pat', department: 'Sales' }, { clerk_user_id: 'u2', display_name: 'Lee', department: 'Finance' }]);
 const approval = extra => ({ id: ID(1), run_id: ID(2), step_n: 2, state: 'pending', approver_id: 'u2', owner_id: 'u1', workflow_name: 'Quote flow', run_summary: 'Inbound', step_text: 'Check it', step_note: 'Looks fine', canDecide: true, ...extra });
@@ -109,7 +109,7 @@ function harness(routes = {}, { admin = false, subject = 'u1' } = {}) {
     calls.push([method, route, body]);
     let answer = routes[method + ' ' + route] ?? routes[route];
     if (typeof answer === 'function') answer = answer();
-    if (answer instanceof Error) throw answer;
+    if (answer instanceof Error) throw Object.assign(new Error(answer.message), answer);
     if (answer !== undefined) return answer;
     if (route === '/members') return { members: [{ clerk_user_id: 'u1', display_name: 'Pat' }, { clerk_user_id: 'u2', display_name: 'Lee' }] };
     if (route === '/workflows') return { workflows: [] };
