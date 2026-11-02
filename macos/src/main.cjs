@@ -24,7 +24,7 @@ const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
-const { APP_PARTITION_PREFIX, APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes, localAppRoot, teamAppIdentity, teamAppRoot } = require("./app-sandbox.cjs");
+const { APP_PARTITION_PREFIX, APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes, localAppRoot, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot } = require("./app-sandbox.cjs");
 const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { mainWindowLinkAction } = require("./main-navigation.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
@@ -943,6 +943,7 @@ async function startLocalBackend(exactPort = null) {
     HERMES_HOME: hermesHome,
     MIAOS_WORKSPACE_DIR: workspaceDir,
     MIAOS_TEAM_APPS_DIR: path.join(dataDirectory, "team-apps"),
+    MIAOS_TEAM_APP_PREVIEWS_DIR: path.join(dataDirectory, "team-app-previews"),
     MIAOS_HERMES_GUARD_BIN: path.join(BACKEND_ROOT, "miaos-hermes-bin"),
     HERMES_BIN,
     MIAOS_HERMES_BIN: HERMES_BIN,
@@ -2069,6 +2070,7 @@ function createWindow() {
     WebContentsView,
     openWebLink: url => { void openLinkInMiaBrowser(url); },
     onState: payload => { if (!window.isDestroyed()) window.webContents.send("miaos-app-state", payload); },
+    onLinkBlocked: payload => { if (!window.isDestroyed()) window.webContents.send("miaos-app-state", { key: payload.key, blockedLink: payload }); },
   });
   window.webContents.on("did-start-loading", () => windowAppPanes.closeAll());
   createArtifactPanel();
@@ -2490,6 +2492,10 @@ ipcMain.handle("miaos-app-pane", (event, command = {}) => {
     if (command.kind === "team") {
       const root = teamAppRoot(path.join(app.getPath("userData"), "team-apps"), command);
       return { ok: true, key: appPanes.open(teamAppIdentity(command.teamId, command.appId), root) };
+    }
+    if (command.kind === "preview") {
+      const root = teamAppRoot(path.join(app.getPath("userData"), "team-app-previews"), command);
+      return { ok: true, key: appPanes.open(teamAppPreviewIdentity(command.teamId, command.appId), root) };
     }
     if (command.kind === "local") {
       const { root, source } = localAppRoot(miaosWorkspacePath(), command.id);

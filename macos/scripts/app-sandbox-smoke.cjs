@@ -15,6 +15,8 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "mia-app-smoke-"));
 app.setPath("userData", path.join(scratch, "data"));
 app.commandLine.appendSwitch("use-mock-keychain");
 protocol.registerSchemesAsPrivileged([APP_SCHEME_PRIVILEGES]);
+// Closing the only window must not end the run: that is one of the things checked.
+app.on("window-all-closed", () => {});
 
 function writeApp(name) {
   const root = path.join(scratch, name);
@@ -42,16 +44,20 @@ app.whenReady().then(async () => {
   const port = backend.address().port;
   fs.writeFileSync(path.join(scratch, "secret.txt"), "secret");
 
+  // Never shown: a real click on a window on screen would count as input, by design.
   const window = new BrowserWindow({ show: false, width: 800, height: 600 });
   const links = [];
+  const notes = [];
   const created = [];
   class TrackedView extends WebContentsView { constructor(options) { super(options); created.push(this); } }
-  const panes = createAppPanes({ window, session, WebContentsView: TrackedView, openWebLink: (url) => links.push(url) });
+  const panes = createAppPanes({ window, session, WebContentsView: TrackedView, openWebLink: (url) => links.push(url), onLinkBlocked: (note) => notes.push(note) });
   const oneId = appIdentity("smoke/one"), twoId = appIdentity("smoke/two");
   panes.open(oneId, writeApp("one"));
   panes.open(twoId, writeApp("two"));
   panes.layout(oneId.key, { x: 0, y: 0, width: 800, height: 600 });
   const [one, two] = created.map((view) => view.webContents);
+  const inputSeen = [];
+  for (const contents of [one, two]) contents.on("input-event", (_event, input) => { if (input.type !== "mouseMove") inputSeen.push(input.type); });
   await until(() => !one.isLoading() && !two.isLoading(), "both apps load");
   assert.equal(one.getTitle(), "one");
   assert.equal(two.getTitle(), "two");
@@ -94,19 +100,52 @@ app.whenReady().then(async () => {
   assert.equal(await run(two, `String(localStorage.getItem("mine"))`), "null", "apps can't read each other's data");
   assert.equal(await run(two, `document.cookie`), "");
 
-  // A window from the app stays in its pane; a web link goes to Mia's browser.
-  assert.equal(await run(two, `String(window.open("https://example.com/from-open"))`), "null");
-  await until(() => links.includes("https://example.com/from-open"), "web link handed over");
+  // Nothing leaves for the person's signed-in browser without real input.
+  panes.layout(twoId.key, { x: 0, y: 0, width: 800, height: 600 });
+  await run(two, `window.__i = 0; window.__flood = setInterval(() => { location.href = "https://example.com/flood-nav/" + (window.__i++); }, 100); 1`);
+  await wait(3200);
+  await run(two, `clearInterval(window.__flood); 1`);
+  assert.deepEqual(links, [], `a setInterval of location.href opens nothing (input seen: ${inputSeen.join() || "none"})`);
+  assert.ok(notes.some((note) => note.key === twoId.key && note.reason === "no-input" && note.host === "example.com"), "the person is told");
+  assert.ok(notes.length <= 2, `one note every few seconds, not one per try: ${notes.length}`);
+  await run(two, `window.__flood = setInterval(() => { window.open("https://example.com/flood-open"); }, 100); 1`);
+  await wait(2200);
+  await run(two, `clearInterval(window.__flood); 1`);
+  assert.deepEqual(links, [], "a setInterval of window.open opens nothing");
+  // A page's own events aren't input.
+  await run(two, `document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); document.body.click(); location.href = "https://example.com/synthetic"; 1`).catch(() => {});
+  await wait(300);
+  assert.deepEqual(links, [], "a click the page made up doesn't count");
+
+  // A real click, through the browser process's input path, does work.
+  await run(two, `document.body.innerHTML = '<button id="go" style="position:fixed;inset:0;width:100%;height:100%">go</button>'; document.getElementById("go").onclick = () => { window.open("https://example.com/clicked"); }; 1`);
+  const click = () => {
+    two.sendInputEvent({ type: "mouseDown", x: 300, y: 300, button: "left", clickCount: 1 });
+    two.sendInputEvent({ type: "mouseUp", x: 300, y: 300, button: "left", clickCount: 1 });
+  };
+  click();
+  await until(() => links.includes("https://example.com/clicked"), "a real click opens the link");
+  assert.equal(links.length, 1, "one click, one tab");
   await wait(1100);
+  await run(two, `document.getElementById("go").onclick = () => { location.href = "https://example.com/clicked-nav"; }; 1`);
+  click();
+  await until(() => links.includes("https://example.com/clicked-nav"), "a real click navigates out");
+  assert.match(two.getURL(), /^mia-app:/);
+  // Input just now in the other app doesn't help this one.
+  await wait(1100);
+  panes.layout(oneId.key, { x: 0, y: 0, width: 800, height: 600 });
+  one.sendInputEvent({ type: "mouseDown", x: 300, y: 300, button: "left", clickCount: 1 });
+  await wait(1200);
+  const before = links.length;
+  await run(two, `location.href = "https://example.com/other-pane"; 1`).catch(() => {});
+  await wait(300);
+  assert.equal(links.length, before, "input in another app doesn't count");
+  await wait(2200);
   run(two, `location.href = "http://127.0.0.1:${port}/nav"`).catch(() => {});
   await wait(300);
   assert.match(two.getURL(), /^mia-app:/, "stays on its own origin");
   assert.deepEqual(hits, [], "navigation did not reach the backend");
   assert.equal(links.includes(`http://127.0.0.1:${port}/nav`), false);
-  await wait(1100);
-  run(two, `location.href = "https://example.com/from-nav"`).catch(() => {});
-  await until(() => links.includes("https://example.com/from-nav"), "web navigation handed over");
-  assert.match(two.getURL(), /^mia-app:/);
   await run(two, `location.href = "/page2.html"; 1`).catch(() => {});
   await until(() => two.getURL().endsWith("/page2.html"), "the app moves inside itself");
 
@@ -118,9 +157,21 @@ app.whenReady().then(async () => {
   assert.equal(session.fromPartition(oneId.partition).getStoragePath().includes("Partitions"), true);
   assert.notEqual(oneId.partition, "persist:mia-browser");
 
+  // The Mia window closes and reopens without quitting (a Mac habit), on the same
+  // sessions. The app it already opened must open again, on the files of the newest version.
+  const oneNext = writeApp("one-next");
   panes.closeAll();
-  backend.close();
   window.destroy();
+  const reopened = new BrowserWindow({ show: false, width: 800, height: 600 });
+  const panesAgain = createAppPanes({ window: reopened, session, WebContentsView: TrackedView, openWebLink: (url) => links.push(url) });
+  panesAgain.open(oneId, oneNext);
+  const again = created[created.length - 1].webContents;
+  await until(() => !again.isLoading() && again.getTitle() === "one-next", "the reopened window serves the new version");
+  assert.equal(await run(again, `localStorage.getItem("mine")`), "one", "the app keeps its data");
+  panesAgain.close(oneId.key);
+  panesAgain.closeAll();
+  backend.close();
+  reopened.destroy();
   fs.rmSync(scratch, { recursive: true, force: true });
   console.log("app sandbox smoke passed");
   app.exit(0);

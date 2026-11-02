@@ -69,6 +69,13 @@ function teamAppIdentity(teamId, appId) {
   return appIdentity(`team/${teamId}/${appId}`);
 }
 
+// An admin's look at a version nobody approved yet. It gets its own origin and
+// partition, so unapproved code can't read what the live app keeps on this computer.
+function teamAppPreviewIdentity(teamId, appId) {
+  if (!ID.test(String(teamId)) || !ID.test(String(appId))) throw new Error("That app could not be found.");
+  return appIdentity(`team-preview/${teamId}/${appId}`);
+}
+
 // Same answer on Mac and Windows; the path module is a parameter so both can be tested.
 function isInside(root, candidate, pathApi = path) {
   const relative = pathApi.relative(root, candidate);
@@ -172,7 +179,10 @@ function isPrivateIpv6(host) {
     return isPrivateIpv4([groups[6] >> 8, groups[6] & 255]);
   }
   const first = groups[0];
-  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00;
+  // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) carry an IPv4 address and can lead back here.
+  if (first === 0x64 && groups[1] === 0xff9b && groups.slice(2, 6).every(group => group === 0)) return true;
+  if (first === 0x2002) return true;
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xffc0) === 0xfec0 || (first & 0xff00) === 0xff00;
 }
 
 function expandIpv6(host) {
@@ -268,19 +278,42 @@ function configureAppSession(ses, record) {
   ses.protocol.handle(APP_SCHEME, request => appFileResponse(record.root, request, record.host));
 }
 
-// Where a web link from an app goes: an https page opens in Mia's browser. An
-// app can't use this to flood the person with tabs, or to open anything else.
-function createWebLinkGate(openWebLink, { minGapMs = 1000, now = () => Date.now() } = {}) {
+// A session lasts as long as Mia does and can be set up only once, while the
+// window and its panes come and go (on a Mac, closing the window doesn't quit
+// Mia). So what was set up is remembered by session, and the handler above reads
+// the record's current folder on every request.
+const configuredSessions = new WeakMap();
+function appSessionRecord(ses, host) {
+  let record = configuredSessions.get(ses);
+  if (!record) {
+    record = { host, root: "" };
+    configureAppSession(ses, record);
+    configuredSessions.set(ses, record);
+  }
+  return record;
+}
+
+// Where a web link from an app goes: an https page opens in Mia's browser, where
+// the person is signed in. So it takes real use of that app just before: `input`
+// is filled from input the browser process saw, which a page can't fake, and one
+// use opens one tab. Answers "opened", "no-input", "refused" or "too-fast".
+function createWebLinkGate(openWebLink, { minGapMs = 1000, inputWindowMs = 2000, now = () => Date.now() } = {}) {
   let last = -Infinity;
-  return function openFromApp(value) {
+  return function openFromApp(value, input = { at: -Infinity }) {
     let url;
-    try { url = new URL(String(value)); } catch (_) { return false; }
-    if (url.protocol !== "https:" || isPrivateAddress(url.hostname) || now() - last < minGapMs) return false;
+    try { url = new URL(String(value)); } catch (_) { return { outcome: "refused", host: "" }; }
+    if (url.protocol !== "https:" || isPrivateAddress(url.hostname)) return { outcome: "refused", host: "" };
+    if (now() - input.at > inputWindowMs) return { outcome: "no-input", host: url.hostname };
+    if (now() - last < minGapMs) return { outcome: "too-fast", host: url.hostname };
     last = now();
+    input.at = -Infinity;
     openWebLink(url.toString());
-    return true;
+    return { outcome: "opened", host: url.hostname };
   };
 }
+
+// Pressing something, not passing over it. Scrolling and moving don't count.
+const USER_INPUT = new Set(["mouseDown", "mouseUp", "keyDown", "rawKeyDown", "touchStart", "touchEnd", "gestureTap"]);
 
 function ownOrigin(value, host) {
   try {
@@ -289,16 +322,24 @@ function ownOrigin(value, host) {
   } catch (_) { return false; }
 }
 
-function configureAppContents(contents, { host, openFromApp }) {
+function configureAppContents(contents, { host, openFromApp, onBlocked = () => {}, now = () => Date.now() }) {
+  const input = { at: -Infinity };
+  contents.on("input-event", (_event, inputEvent) => {
+    if (inputEvent && USER_INPUT.has(inputEvent.type)) input.at = now();
+  });
+  const leave = (url) => {
+    const { outcome, host: address } = openFromApp(url, input) || {};
+    if (outcome === "no-input" || outcome === "refused") onBlocked({ reason: outcome, host: address });
+  };
   const stay = (event, url) => {
     if (ownOrigin(url, host)) return;
     event.preventDefault();
-    openFromApp(url);
+    leave(url);
   };
   contents.setWindowOpenHandler(({ url }) => {
     // A new window from the app stays in this pane; anything else leaves it.
     if (ownOrigin(url, host)) setImmediate(() => { if (!contents.isDestroyed()) contents.loadURL(url).catch(() => {}); });
-    else openFromApp(url);
+    else leave(url);
     return { action: "deny" };
   });
   contents.on("will-navigate", event => stay(event, event.url));
@@ -330,12 +371,13 @@ function localAppRoot(miaFolder, id) {
 
 // The open apps, as native views over the page's pane. One shows at a time;
 // the others stay alive behind it, like browser tabs.
-function createAppPanes({ window, session, WebContentsView, openWebLink, onState = () => {} }) {
+function createAppPanes({ window, session, WebContentsView, openWebLink, onState = () => {}, onLinkBlocked = () => {}, now = () => Date.now() }) {
   const panes = new Map();
-  const configured = new Map();
   let shown = "";
   let bounds = null;
-  const gate = createWebLinkGate(openWebLink);
+  const gate = createWebLinkGate(openWebLink, { now });
+  // An app stopped in a loop would otherwise send a note every few milliseconds.
+  const NOTE_GAP_MS = 3000;
   const state = (pane, status, error = "") => {
     pane.status = status;
     pane.error = error;
@@ -349,17 +391,21 @@ function createAppPanes({ window, session, WebContentsView, openWebLink, onState
       pane.view.setVisible(show);
     }
   }
-  function create(identity, record) {
-    const ses = session.fromPartition(identity.partition);
-    if (!configured.has(identity.key)) {
-      configureAppSession(ses, record);
-      configured.set(identity.key, record);
-    }
+  function create(identity, root) {
     const view = new WebContentsView({ webPreferences: appWebPreferences(identity.partition) });
     view.setBackgroundColor("#ffffff");
     const contents = view.webContents;
-    const pane = { identity, view, status: "loading", error: "" };
-    configureAppContents(contents, { host: identity.host, openFromApp: gate });
+    const pane = { identity, view, root, status: "loading", error: "", notedAt: -Infinity };
+    configureAppContents(contents, {
+      host: identity.host,
+      openFromApp: gate,
+      now,
+      onBlocked: ({ reason, host }) => {
+        if (now() - pane.notedAt < NOTE_GAP_MS) return;
+        pane.notedAt = now();
+        onLinkBlocked({ key: identity.key, reason, host });
+      },
+    });
     contents.on("did-start-loading", () => { if (panes.get(identity.key) === pane) state(pane, "loading"); });
     contents.on("did-finish-load", () => { if (panes.get(identity.key) === pane && pane.status !== "error") state(pane, "ready"); });
     contents.on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
@@ -380,13 +426,12 @@ function createAppPanes({ window, session, WebContentsView, openWebLink, onState
   return {
     // Opens or re-opens an app from a folder. Returns the key its tab goes by.
     open(identity, root) {
-      const record = configured.get(identity.key) || { host: identity.host, root };
-      const changed = record.root !== root;
-      record.root = root;
+      appSessionRecord(session.fromPartition(identity.partition), identity.host).root = root;
       let pane = panes.get(identity.key);
       const fresh = !pane;
-      if (!pane) pane = create(identity, record);
-      if (fresh || changed || pane.status === "error") {
+      if (!pane) pane = create(identity, root);
+      if (fresh || pane.root !== root || pane.status === "error") {
+        pane.root = root;
         pane.status = "loading";
         pane.view.webContents.loadURL(`${identity.origin}/`).catch(() => { /* did-fail-load reports it */ });
       }
@@ -416,5 +461,5 @@ module.exports = {
   APP_CSP, APP_PARTITION_PREFIX, APP_SCHEME, APP_SCHEME_PRIVILEGES,
   appFileResponse, appIdentity, appResponseHeaders, appWebPreferences, configureAppContents, configureAppSession,
   createAddressCheck, createAppPanes, createWebLinkGate, isInside, isPrivateAddress, localAppRoot, requestAllowed,
-  requestSegments, resolveAppFile, teamAppIdentity, teamAppRoot,
+  requestSegments, resolveAppFile, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot,
 };
