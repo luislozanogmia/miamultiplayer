@@ -180,5 +180,7 @@ test('every way to start something shows its own icon, not a shared plus', async
   assert.equal(ids.length, 6);
   const icons = app.slice(app.indexOf('var LOCAL_BROWSER_SUGGEST_START_ICONS'), app.indexOf('function localBrowserSuggestRow'));
   for (const id of ids) assert.ok(icons.includes(`'${id}':`), id);
+  // New bot is always the plain pink mote, whatever color the next bot gets.
+  assert.match(icons, /'new-bot': '<img src="assets\/mote\/mote-static\.svg"/);
   assert.doesNotMatch(icons, /M12 5v14M5 12h14/);
 });

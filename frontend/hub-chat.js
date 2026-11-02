@@ -127,7 +127,7 @@
   // One live connection per team: the Hub holds each request until something
   // changes, so a quiet team costs one request about every 20 seconds.
   function feed(options){
-    var cursor=0, stopped=false, failures=0, timer=null;
+    var cursor=0, synced=false, stopped=false, failures=0, timer=null;
     function schedule(delay){ if(!stopped) timer=root.setTimeout(next, delay); }
     function next(){
       timer=null;
@@ -136,13 +136,16 @@
         if(stopped) return;
         failures=0;
         if(options.onStatus) options.onStatus('live');
-        var first=cursor===0;
+        // Cursor 0 returns no history, so a team's first events need a reload too.
+        var first=!synced || (cursor===0 && result.next>0);
+        synced=true;
         if(Number.isSafeInteger(result.next)) cursor=result.next;
         if(result.reset || first) options.onReset(!!result.reset);
         if(result.events && result.events.length) options.onEvents(result.events);
         if(options.onTyping) options.onTyping(result.typing || []);
         // A Hub that answered without holding the request is polled gently.
-        schedule(result.wait && !first ? 3000 : 0);
+        // So is a team with no events yet: cursor 0 never waits.
+        schedule(cursor===0 || (result.wait && !first) ? 3000 : 0);
       }).catch(function(error){
         if(stopped) return;
         failures++;

@@ -5660,8 +5660,11 @@
     var roomId=chatWs.activeRoomId;
     if(!roomId || !hubWorkspace() || !hubChannel(roomId))return Promise.resolve();
     var workspace=activeWorkspaceKey, generation=chatWs.navigationGeneration, state=chatRoomState(roomId);
-    if(state.hubLoading)return state.hubLoading;
-    state.hubLoading=hubCall('GET',hubPath()+'/channels/'+roomId+'/messages/before/0').then(function(result){
+    // A load from before this navigation gets discarded below, so it can't
+    // answer for this one.
+    if(state.hubLoading && state.hubLoadingGeneration===generation)return state.hubLoading;
+    state.hubLoadingGeneration=generation;
+    var request=state.hubLoading=hubCall('GET',hubPath()+'/channels/'+roomId+'/messages/before/0').then(function(result){
       if(workspace!==activeWorkspaceKey || generation!==chatWs.navigationGeneration || roomId!==chatWs.activeRoomId)return;
       if(!state.historyInitialized){
         // Replacing drops stale rows from before a reset; unsent copies stay.
@@ -5674,8 +5677,8 @@
       markHubRead(roomId);
       renderChatSidebar();renderChatThread();renderDeptAgentSelector();
     }).catch(function(error){ if(workspace===activeWorkspaceKey && generation===chatWs.navigationGeneration)hubFeedback(error); })
-      .finally(function(){state.hubLoading=null;});
-    return state.hubLoading;
+      .finally(function(){ if(state.hubLoading===request)state.hubLoading=null; });
+    return request;
   }
   function loadOlderHubMessages(roomId){
     var state=roomId && chatWs.byRoom[roomId];
@@ -6874,6 +6877,11 @@
     var limit = team ? 8 : 25;
     if(file.size > limit * 1024 * 1024) return 'Files must be ' + limit + ' MB or smaller.';
     return '';
+  }
+  function clearChatAttachmentError(){
+    if(!chatAttachment.error) return;
+    chatAttachment.error = '';
+    renderChatAttachment();
   }
   function stageChatAttachment(file){
     if(!file) return false;
@@ -8537,7 +8545,7 @@
       return piece.match ? '<strong>' + esc(piece.text) + '</strong>' : esc(piece.text);
     }).join('');
   }
-  var LOCAL_BROWSER_SUGGEST_CHAT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"></path></svg>';
+  var LOCAL_BROWSER_SUGGEST_CHAT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_AUTOMATION = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_STEP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"></path></svg>';
   var LOCAL_BROWSER_SUGGEST_ARTIFACT = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>';
@@ -8545,7 +8553,7 @@
     'new-chat': LOCAL_BROWSER_SUGGEST_CHAT,
     'new-channel': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"></path></svg>',
     'new-automation': LOCAL_BROWSER_SUGGEST_AUTOMATION,
-    'new-bot': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"></path><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M2 14h2M20 14h2M15 13v2M9 13v2"></path></svg>',
+    'new-bot': '<img src="assets/mote/mote-static.svg" alt="" class="mote-avatar-img" style="width:18px;height:18px">',
     'add-app': LOCAL_BROWSER_SUGGEST_ARTIFACT,
     'new-tab': LOCAL_BROWSER_SUGGEST_GLOBE
   };
@@ -12391,7 +12399,9 @@
     // Adding reuses the composer's add-bot confirmation, which explains the
     // team gets its own copy.
     els('[data-hub-panel-add]', pane).forEach(function(button){
-      button.addEventListener('click', function(){
+      button.addEventListener('click', function(e){
+        // The document's outside-click handler would close the popover this opens.
+        e.stopPropagation();
         var bot = available.filter(function(item){ return String(item.id) === button.getAttribute('data-hub-panel-add'); })[0];
         var input = el('#ccInput');
         if(!bot || !input) return;
@@ -13978,6 +13988,7 @@
     chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     setLocalChatTypingActivity(false);
     closeMentionPopover();
+    clearChatAttachmentError();
     chatRoster.open = null;
     clearChatAttention(roomId);
     if((chatWs.native || chatWs.nativeSocket) && chatWs.nativeSocketConversationId !== roomId) closeNativeChatSocket();
@@ -16714,11 +16725,10 @@
           return;
         }
         if(popup) try { popup.close(); } catch(_error) {}
-        setGoogleAccountStatus(data, data.state === 'unavailable'
-          ? 'Direct Google connection is not available in this Mia environment yet.'
-          : data.state === 'setup_required'
-            ? 'Direct Google connection is not available in this Mia environment yet.'
-            : 'Google sign-in could not be started.');
+        // The panel's body already says when Google is unavailable.
+        setGoogleAccountStatus(data, data.state === 'unavailable' || data.state === 'setup_required'
+          ? ''
+          : 'Google sign-in could not be started.');
       }).catch(function(){
         if(popup) try { popup.close(); } catch(_error) {}
         setGoogleAccountStatus({state:'connection_error', connected:false}, 'Google sign-in could not be started.');
@@ -17026,8 +17036,9 @@
       else { channelMenu.open = true; channelMenu.roomId = chatWs.activeRoomId; channelMenu.confirming = false; channelMenu.busy = false; }
       renderChatHeaderBar();
     });
-    // Picking an action closes the menu, as in Chrome.
-    els('.conv-more-item', header).forEach(function(item){
+    // Picking an action closes the menu, as in Chrome. Restart stays open to
+    // ask for confirmation first.
+    els('.conv-more-item:not(#channelMenuResetItem)', header).forEach(function(item){
       item.addEventListener('click', function(){ setTimeout(closeChannelMenu); });
     });
     var showTabs = el('#chatShowBotTabsBtn', header);
@@ -17430,6 +17441,7 @@
       function reallySend(){
         closeMentionPopover();
         if(!file){
+          clearChatAttachmentError();
           input.value = '';
           syncDraftState();
           Promise.resolve(sendActiveRoomMessage(text, null, null, driveRoomId)).then(function(result){

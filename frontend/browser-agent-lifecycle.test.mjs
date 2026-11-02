@@ -23,7 +23,7 @@ function navigationHarness() {
     Promise, Event: class {}, chatRoster: {}, chatModelPicker: null, AGENT_SETUP_ROOM_ID: '__setup__', activeWorkspaceKey: 'solo',
     chatWs: { activeRoomId: 'room-b', configured: true, nativeConversations: [{ id: 'room-b', type: 'bot', metadata: { botId: 'b' } }], allAgents: [a, b], botRecords: [a, b], botRecordsLoaded: true },
     localBrowserState: { open: true }, document: { body: { classList: { contains: () => true } } }, window: {},
-    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {}, saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
+    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttachmentError() {}, clearChatAttention() {}, closeNativeChatSocket() {}, saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     clearChatBack() {}, rememberChatBack() {}, clearChatActive() {},
     clearAgentSetupRequest() {}, closeManageAgentsPane() {}, chatInfo: {}, setTimeout() {},
     isNativeMiaConversation: c => c.type === 'agent', applyNativeConversationList() {},
