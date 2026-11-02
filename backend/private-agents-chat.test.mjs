@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3');
 const dbStore = require('./db.js');
 const { createPrivateAgentStore } = require('./private-agents.js');
-const { createPrivateAgentLifecycle } = require('./private-agent-lifecycle.js');
+const { createPrivateAgentLifecycle, moveFolderToTrash } = require('./private-agent-lifecycle.js');
 const { createConversationRepository } = require('./conversation-repository');
 const { createConversationAuthorization } = require('./conversation-authorization');
 const { createConversationRealtime } = require('./conversation-realtime');
@@ -210,6 +210,65 @@ test('deleting an agent needs confirmation, moves its folders to the Trash and r
   assert.equal(repository.getConversation({ companyId: company(alice), id: mia.id }).deletedAt, null);
   assert.ok(fs.existsSync(path.join(profilesRoot, profiles.privateAgentProfileName(other.id))));
   assert.deepEqual(store.list(alice).map((a) => a.id), [other.id]);
+});
+
+test('if the second folder cannot move, the first moves back and nothing is deleted', (t) => {
+  const { store, repository, lifecycle, profilesRoot, trashDir } = fixture(t);
+  const agent = store.create(alice, { name: 'Notes' });
+  lifecycle.ensureProfiles(agent.id);
+  const chat = lifecycle.openConversation(alice, agent.id, {});
+  const base = path.join(profilesRoot, profiles.privateAgentProfileName(agent.id));
+  const google = path.join(profilesRoot, profiles.privateAgentProfileName(agent.id, true));
+  fs.writeFileSync(path.join(base, 'memories', 'note.md'), 'keep me');
+  const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (from === google) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+    return rename(from, to);
+  });
+  assert.throws(() => lifecycle.remove(alice, agent.id, {}, { confirm: true }), { code: 'EBUSY' });
+  assert.equal(fs.readFileSync(path.join(base, 'memories', 'note.md'), 'utf8'), 'keep me');
+  assert.ok(fs.existsSync(google));
+  assert.deepEqual(fs.readdirSync(trashDir), []);
+  assert.equal(store.list(alice).length, 1);
+  assert.equal(repository.getConversation({ companyId: company(alice), id: chat.id }).deletedAt, null);
+});
+
+test('removing an account hides its agents\' chats and moves their folders to the Trash', (t) => {
+  const { store, repository, lifecycle, profilesRoot, trashDir } = fixture(t);
+  const agent = store.create(alice, { name: 'Notes' });
+  const theirs = store.create(bob, { name: 'Theirs' });
+  lifecycle.ensureProfiles(agent.id);
+  lifecycle.ensureProfiles(theirs.id);
+  const chat = lifecycle.openConversation(alice, agent.id, {});
+  const other = lifecycle.openConversation(bob, theirs.id, {});
+  lifecycle.removeAllFor(alice);
+  assert.ok(repository.getConversation({ companyId: company(alice), id: chat.id, includeDeleted: true }).deletedAt);
+  assert.equal(repository.getConversation({ companyId: company(bob), id: other.id }).deletedAt, null);
+  assert.equal(fs.readdirSync(trashDir).length, 2);
+  assert.ok(fs.existsSync(path.join(profilesRoot, profiles.privateAgentProfileName(theirs.id))));
+  assert.deepEqual(store.list(alice), []);
+  assert.equal(store.list(bob).length, 1);
+});
+
+test('without a test folder, an agent\'s folders go to the real Trash of each system', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-pa-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const folder = (name) => { const dir = path.join(home, 'profiles', name); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'note.md'), 'x'); return dir; };
+  const mac = folder('mac');
+  const moved = moveFolderToTrash(mac, { platform: 'darwin', home });
+  assert.equal(moved, path.join(home, '.Trash', 'mac'));
+  assert.ok(fs.existsSync(path.join(moved, 'note.md')));
+  const seen = [];
+  const win = folder('win');
+  assert.equal(moveFolderToTrash(win, { platform: 'win32', runPowerShell: (full) => seen.push(full) }), undefined, 'the Recycle Bin gives no path back');
+  assert.deepEqual(seen, [win]);
+  const xdg = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = path.join(home, 'xdg');
+  t.after(() => { if (xdg === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = xdg; });
+  const linux = folder('linux');
+  assert.equal(moveFolderToTrash(linux, { platform: 'linux', home }), path.join(home, 'xdg', 'Trash', 'files', 'linux'));
+  assert.equal(moveFolderToTrash(path.join(home, 'absent'), { platform: 'darwin', home }), null);
+  assert.ok(!fs.readdirSync(path.join(home, 'profiles')).includes('mac'));
 });
 
 test('agent chats stay out of Solo-only scope and out of every Hub path', async (t) => {

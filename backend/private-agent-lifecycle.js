@@ -5,23 +5,21 @@
 // Dependencies are injected so this stays testable without a server.
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { moveFile, moveToTrash } = require('./artifacts');
 const { PrivateAgentError } = require('./private-agents');
 const { privateAgentProfileName } = require('./hermes-bot-profile');
 
 const GATEWAY_MEMBER = 'gateway';
 
-// Moves a folder to the OS Trash instead of deleting it. macOS has a user
-// Trash folder; elsewhere the folder is kept in the app's own trash folder so
-// it stays recoverable. Returns the new location, or null when absent.
-function moveFolderToTrash(folder, { trashDir, now = () => Date.now() } = {}) {
+// Moves a folder to the OS Trash (the Recycle Bin on Windows) instead of deleting
+// it, so it stays recoverable. Returns null when the folder is absent, otherwise
+// the new location, which Windows does not report. `trashDir` is for tests.
+function moveFolderToTrash(folder, { trashDir, now = () => Date.now(), platform, home, runPowerShell } = {}) {
   if (!fs.existsSync(folder)) return null;
-  const target = trashDir || (process.platform === 'darwin'
-    ? path.join(os.homedir(), '.Trash')
-    : path.join(path.dirname(path.dirname(path.resolve(folder))), 'trash'));
-  fs.mkdirSync(target, { recursive: true });
-  const destination = path.join(target, `${path.basename(folder)} ${now()}`);
+  if (!trashDir) return moveToTrash(folder, { platform, home, runPowerShell });
+  fs.mkdirSync(trashDir, { recursive: true });
+  const destination = path.join(trashDir, `${path.basename(folder)} ${now()}`);
   fs.renameSync(folder, destination);
   return destination;
 }
@@ -41,6 +39,34 @@ function createPrivateAgentLifecycle({
       return conversation.type === 'agent' && metadata.privateAgentId === agentId
         && String(conversation.createdBy || '').toLowerCase() === String(owner).toLowerCase();
     });
+  }
+
+  // Both folders or neither: if the second cannot move, the first moves back. The
+  // Recycle Bin gives no path to move back from, so on Windows the first stays there.
+  function trashProfiles(agentId) {
+    const moved = [];
+    try {
+      for (const google of [false, true]) {
+        const folder = path.join(profilesRoot, privateAgentProfileName(agentId, google));
+        const destination = moveFolderToTrash(folder, { trashDir });
+        if (destination !== null) moved.push({ folder, destination });
+      }
+    } catch (error) {
+      for (const { folder, destination } of moved) {
+        if (destination) moveFile(destination, folder);
+      }
+      throw error;
+    }
+    return moved.length;
+  }
+
+  function hideConversations(companyId, owner, agentId) {
+    const deletedAt = new Date().toISOString();
+    const conversations = conversationsOf(companyId, owner, agentId);
+    for (const conversation of conversations) {
+      repository.updateConversation({ companyId, id: conversation.id, deletedAt, updatedAt: deletedAt });
+    }
+    return conversations.length;
   }
 
   return {
@@ -101,12 +127,13 @@ function createPrivateAgentLifecycle({
         });
       }
     },
-    // Account removal: the agents go, their Hermes folders go to the Trash.
+    // Account removal: the agents go, their Hermes folders go to the Trash and
+    // their chats are hidden, the same as deleting each one.
     removeAllFor(owner) {
+      const companyId = companyIdFor(owner);
       for (const agent of store.list(owner)) {
-        for (const google of [false, true]) {
-          moveFolderToTrash(path.join(profilesRoot, privateAgentProfileName(agent.id, google)), { trashDir });
-        }
+        trashProfiles(agent.id);
+        hideConversations(companyId, owner, agent.id);
       }
       return store.removeAllFor(owner);
     },
@@ -117,19 +144,10 @@ function createPrivateAgentLifecycle({
       if (confirm !== true) {
         throw new PrivateAgentError(400, 'confirmation_required', 'Confirm to delete this agent.');
       }
-      const trashed = [];
-      for (const google of [false, true]) {
-        const moved = moveFolderToTrash(path.join(profilesRoot, privateAgentProfileName(agentId, google)), { trashDir });
-        if (moved) trashed.push(moved);
-      }
-      const companyId = companyIdFor(owner, req);
-      const deletedAt = new Date().toISOString();
-      const conversations = conversationsOf(companyId, owner, agentId);
-      for (const conversation of conversations) {
-        repository.updateConversation({ companyId, id: conversation.id, deletedAt, updatedAt: deletedAt });
-      }
+      const profilesTrashed = trashProfiles(agentId);
+      const conversationsRemoved = hideConversations(companyIdFor(owner, req), owner, agentId);
       const result = store.remove(owner, agentId, { confirm: true });
-      return { ...result, conversationsRemoved: conversations.length, profilesTrashed: trashed.length };
+      return { ...result, conversationsRemoved, profilesTrashed };
     },
   };
 }
