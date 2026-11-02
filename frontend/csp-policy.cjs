@@ -22,6 +22,10 @@ const BASE_CSP_DIRECTIVES = Object.freeze([
     'https://*.clerk-telemetry.com',
     'https://img.clerk.com',
     'https://*.protect.clerk.com:*',
+    // Team files go straight to signed S3 links. CSP cannot pin a bucket name,
+    // so this allows the team buckets' region only; team-files.js checks that
+    // each link is for the open team's own bucket before it sends anything.
+    'https://*.s3.us-east-1.amazonaws.com',
   ]],
   ['worker-src', ["'self'", 'blob:']],
   ['child-src', ["'self'", 'blob:']],
