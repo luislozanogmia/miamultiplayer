@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {createHash} from 'node:crypto';
-import {existsSync,mkdtempSync,readdirSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdtempSync,readdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {basename,dirname,join} from 'node:path';
 const require=createRequire(import.meta.url),Database=require('better-sqlite3');
@@ -29,6 +29,7 @@ function fixture(t,{interrupted=false,previous=[],reply='Worked hard.\nNOTE: Quo
     const body=typeof options.body==='string'?JSON.parse(options.body):options.body;
     if(url.includes('.s3.us-east-1.amazonaws.com')) {
       if(options.method==='PUT') {hub.puts.push(url);return new Response('',{headers:{etag:'"tag"'}});}
+      if(hub.slowBody) return {ok:true,body:hub.slowBody(options.signal)};
       return new Response(hub.download);
     }
     const route=url.replace('https://hub.example.test','');
@@ -175,6 +176,115 @@ test('a cancelled run seen on the first progress never starts the bot',async t=>
   const f=fixture(t,{progress:()=>json({error:'run_not_active'},409)});
   await poll(f);await f.client.idle();
   assert.equal(f.hub.runs.length,0);
+});
+
+test('a lease that ended before the first progress never starts the bot, and the step is claimed again later',async t=>{
+  let expired=true;
+  const f=fixture(t,{progress:hub=>expired?json({error:'lease_expired'},409):(hub.stepRow.state='working',json({state:'working',deadline:1}))});
+  await poll(f);await f.client.idle();
+  assert.equal(f.hub.runs.length,0);
+  assert.deepEqual(f.hub.reports,[]);
+  assert.equal(f.db.prepare('SELECT state FROM hub_workflow_steps').get().state,'claimed','nothing began, so it is not uncertain work');
+  expired=false;
+  f.hub.stepRow.state='queued';
+  await poll(f);await f.client.idle();
+  assert.equal(f.hub.runs.length,1);
+  assert.equal(f.hub.claims[1],f.hub.claims[0]);
+});
+
+const until=async condition=>{
+  const deadline=Date.now()+3000;
+  while(!condition()) {
+    if(Date.now()>deadline) throw new Error('timed out waiting');
+    await new Promise(resolve=>setTimeout(resolve,2));
+  }
+};
+// A download that sits still until the test lets it finish. Aborting it fails it,
+// as a real one does.
+function slowDownload(hub,bytes) {
+  let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  hub.slowBody=signal=>{
+    let sent=false;
+    return {getReader:()=>({cancel(){},read:()=>{
+      if(sent) return Promise.resolve({done:true});
+      hub.reading=true;
+      return new Promise((resolve,reject)=>{
+        signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{code:'aborted'})),{once:true});
+        gate.then(()=>{sent=true;resolve({done:false,value:new Uint8Array(Buffer.from(bytes))});});
+      });
+    }})};
+  };
+  return release;
+}
+
+test('progress keeps going during a slow download, so the lease does not run out under it',async t=>{
+  const f=fixture(t,{previous:previousFile('hello')});
+  f.hub.downloadSha=sha('hello');
+  const release=slowDownload(f.hub,'hello');
+  await poll(f);
+  await until(()=>f.hub.reading);
+  await until(()=>f.hub.progress.length>=3);
+  assert.equal(f.hub.runs.length,0,'the bot is still waiting for its file');
+  release();
+  await f.client.idle();
+  assert.equal(f.hub.runs.length,1);
+});
+
+test('a lease that ends during a download stops it, and the bot does not start',async t=>{
+  const f=fixture(t,{previous:previousFile('hello'),progress:()=>json({error:'lease_expired'},409)});
+  f.hub.downloadSha=sha('hello');
+  slowDownload(f.hub,'hello');
+  await poll(f);
+  await until(()=>f.hub.reading);
+  await until(()=>f.hub.progress.length>=1);
+  await f.client.idle();
+  assert.equal(f.hub.runs.length,0);
+  assert.deepEqual(f.hub.reports,[]);
+});
+
+test('run again moves the crashed attempt\'s files aside, so they are never shared',async t=>{
+  const db=new Database(':memory:');
+  let outbox,finish;
+  const before=fixture(t,{db,runBot:args=>{
+    outbox=/save it in this folder: (.+)/.exec(args.trigger.body)[1];
+    writeFileSync(join(outbox,'partial.csv'),'half written');
+    return new Promise(resolve=>{finish=resolve;});
+  }});
+  await poll(before);
+  await until(()=>before.hub.runs.length);
+  const after=fixture(t,{db,dataDirectory:before.dataDirectory,interrupted:true,runBot:async args=>{
+    writeFileSync(join(/save it in this folder: (.+)/.exec(args.trigger.body)[1],'whole.csv'),'all of it');
+    return {text:'NOTE: done'};
+  }});
+  after.hub.stepRow.state='working';
+  await after.client.resume(owner,{teamId,runId,n:1,action:'run'},'token');
+  await after.client.idle();
+  assert.deepEqual(after.hub.uploads.map(upload=>upload.filename),['whole.csv']);
+  const aside=join(after.dataDirectory,'workflow-steps-set-aside',teamId,runId,'1');
+  const [attempt]=readdirSync(aside);
+  assert.equal(readFileSync(join(aside,attempt,'partial.csv'),'utf8'),'half written','moved, not deleted');
+  finish({text:'NOTE: late'});
+  await before.client.idle();
+});
+
+test('run again after the lease ended still keeps the crashed attempt\'s files',async t=>{
+  const db=new Database(':memory:');
+  let finish;
+  const before=fixture(t,{db,runBot:args=>{
+    writeFileSync(join(/save it in this folder: (.+)/.exec(args.trigger.body)[1],'partial.csv'),'half');
+    return new Promise(resolve=>{finish=resolve;});
+  }});
+  await poll(before);
+  while(!before.hub.runs.length) await new Promise(resolve=>setTimeout(resolve,2));
+  const after=fixture(t,{db,dataDirectory:before.dataDirectory,interrupted:true});
+  await after.client.resume(owner,{teamId,runId,n:1,action:'run'},'token');
+  await after.client.idle();
+  assert.equal(after.hub.reports[0].outcome,'done');
+  assert.equal(after.hub.uploads.length,0);
+  assert.equal(readdirSync(join(after.dataDirectory,'workflow-steps-set-aside',teamId,runId,'1')).length,1);
+  finish({text:'NOTE: late'});
+  await before.client.idle();
 });
 
 test('a step held by another computer is left alone',async t=>{

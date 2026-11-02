@@ -111,6 +111,9 @@ function localInputName(filename,taken) {
 // Only these mean the file itself is the problem. Anything else (a rate limit, a
 // sign-in, an outage) passes, so the step waits and nothing is reported.
 const FILE_BLOCKED=['integrity_failed','file_integrity_mismatch','not_found','unsafe_url'];
+function outboxHasFiles(folder) {
+  try {return fs.readdirSync(folder).length>0;} catch {return false;}
+}
 const NO_STORE={records:()=>[],isMine:()=>false,save(){},drop(){}};
 
 function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdentity,runBot,fetcher=fetch,progressMs=PROGRESS_MS,stepTimeoutMs=STEP_TIMEOUT_MS,scanWaitMs=SCAN_WAIT_MS,scanCheckMs=SCAN_CHECK_MS,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
@@ -165,6 +168,16 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     if(folder.startsWith(workRoot()+path.sep)) {try {fs.rmSync(folder,{recursive:true,force:true});} catch {/* Only a local copy. */}}
   }
   function finish(s,row) {journal.stop(s,row);clearWork(s,row);}
+  const outboxOf=(s,row)=>path.join(workDir(s,row),'for-next-step');
+  // Whatever an earlier attempt left for the next person may be half written, so
+  // it is never shared. It moves out of the way and stays on this computer.
+  function setAsideOutbox(s,row) {
+    const outbox=outboxOf(s,row);
+    if(!outboxHasFiles(outbox)) return;
+    const aside=path.join(dataDirectory,'workflow-steps-set-aside',s.teamId,row.run_id,String(row.n));
+    fs.mkdirSync(aside,{recursive:true});
+    fs.renameSync(outbox,path.join(aside,row.claim_id+'-'+Date.now()));
+  }
 
   // ---- Files between steps ---------------------------------------------------------
   function fileClient(s,token) {
@@ -280,40 +293,57 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     }
     const channelId=stepRun.run && stepRun.run.channel_id;
     if(!ID.test(channelId||'')) return finish(s,row);
-    const input=await fetchInputs(s,row,order,stepRun,token,controller.signal);
-    if(input.wait) return;
+    const ping=async()=>callHub(s.origin,token(),'POST',stepPath(s,row.run_id,row.n)+'/progress',{claimId:row.claim_id});
+    const stopOn=error=>{
+      // lease_expired once the bot has started: the Hub re-queued the step while this
+      // computer was away. The work continues, because a late report is still
+      // accepted; if another computer claims it the next answer is invalid_claim and
+      // this stops.
+      if(['run_not_active','invalid_claim','step_not_claimed'].includes(error.code)) {stopped=true;controller.abort();}
+    };
+    // Progress keeps the lease alive. It starts here, because a slow download can
+    // otherwise outlast the lease and let another computer take the step.
+    function keepLease(onError) {
+      let checking=Promise.resolve();
+      const tick=setInterval(()=>{
+        checking=checking.then(async()=>{
+          if(stopped) return;
+          if(!identityValid(s)) {stopped=true;controller.abort();return;}
+          await ping();
+        }).catch(onError);
+      },progressMs);
+      return async()=>{clearInterval(tick);await checking;};
+    }
+    // Nothing has started yet, so a lost lease simply means stop: the next poll
+    // claims again under the same id. Starting anyway could run the step twice.
+    let leaseLost=false;
+    const beforeStart=error=>{
+      stopOn(error);
+      if(error.code==='lease_expired') {leaseLost=true;controller.abort();}
+    };
+    const stopDownloadLease=keepLease(beforeStart);
+    let input;
+    try {input=await fetchInputs(s,row,order,stepRun,token,controller.signal);}
+    finally {await stopDownloadLease();}
+    if(stopped) return finish(s,row);
+    if(leaseLost || input.wait) return;
     if(input.blocked || input.missing) {
       journal.saveReport(s,row,{outcome:'failed',note:input.missing?'A file from step '+input.missing+' was blocked or removed, so this step did not run.':'A file from an earlier step could not be opened.'});
       return publish(s,journal.get(s,row.run_id,row.n,row.claim_id),token());
     }
-    const outbox=path.join(workDir(s,row),'for-next-step');
-    fs.mkdirSync(outbox,{recursive:true});
-    const ping=async()=>callHub(s.origin,token(),'POST',stepPath(s,row.run_id,row.n)+'/progress',{claimId:row.claim_id});
-    const stopOn=error=>{
-      // lease_expired: the Hub re-queued the step while this computer was away.
-      // The work continues, because a late report is still accepted; if another
-      // computer claims it the next answer is invalid_claim and this stops.
-      if(['run_not_active','invalid_claim','step_not_claimed'].includes(error.code)) {stopped=true;controller.abort();}
-    };
+    const outbox=outboxOf(s,row);
     try {await ping();}
     catch(error) {
-      stopOn(error);
+      beforeStart(error);
       if(stopped) return finish(s,row);
-      if(error.code!=='lease_expired') return;
+      return;
     }
     if(!identityValid(s)) return finish(s,row);
+    try {setAsideOutbox(s,row);} catch {return;}
+    fs.mkdirSync(outbox,{recursive:true});
     // Commit before any inference call. From here a crash is uncertain work.
     if(!journal.start(s,row)) return;
-    let checking=false;
-    const tick=setInterval(async()=>{
-      if(checking) return;
-      checking=true;
-      try {
-        if(!identityValid(s)) {stopped=true;controller.abort();return;}
-        await ping();
-      } catch(error) {stopOn(error);}
-      finally {checking=false;}
-    },progressMs);
+    const stopLease=keepLease(stopOn);
     const limit=setTimeout(()=>{timedOut=true;controller.abort();},stepTimeoutMs);
     let result={outcome:'failed',note:FAILED_NOTE},files={fileIds:[],skipped:0};
     try {
@@ -325,7 +355,7 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
       if(result.outcome==='done' && !controller.signal.aborted) files=await sendOutputs(s,order,outbox,token,controller.signal);
     } catch {
       // The error text can carry private content, so it never becomes the note.
-    } finally {clearInterval(tick);clearTimeout(limit);}
+    } finally {clearTimeout(limit);await stopLease();}
     if(stopped) return finish(s,row);
     if(timedOut) result={outcome:'failed',note:'The bot did not finish within '+Math.round(stepTimeoutMs/60000)+' minutes.'};
     const addition=files.skipped>0?'('+files.skipped+(files.skipped===1?' file was':' files were')+' not shared.)':'';
@@ -421,6 +451,8 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
         return {reported:true};
       }
       if(row && row.state==='started') {
+        // The crashed attempt's files must survive whichever claim runs next.
+        setAsideOutbox(s,row);
         // While the lease lasts only this claim can pick it up; afterwards a fresh one.
         if(held) journal.reopen(s,row);
         else {finish(s,row);row=null;}
