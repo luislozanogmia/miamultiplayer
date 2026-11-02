@@ -17,7 +17,7 @@ test('the header holds the views; managing bots sits on the Bots section', async
 
   assert.ok(menuStart >= 0, 'account menu is present');
   assert.ok(html.indexOf('id="chatSidebarDeveloperBtn"', toolbarStart) > toolbarStart, 'developer toolbar control is present');
-  assert.deepEqual([...html.slice(viewsStart, html.indexOf('</div>', viewsStart)).matchAll(/data-sidebar-view="(\w+)"/g)].map((m) => m[1]), ['chat', 'automations', 'artifacts', 'browser']);
+  assert.deepEqual([...html.slice(viewsStart, html.indexOf('</div>', viewsStart)).matchAll(/data-sidebar-view="(\w+)"/g)].map((m) => m[1]), ['chat', 'automations', 'artifacts', 'browser', 'apps']);
   assert.ok(html.indexOf('id="chatSidebarManageAgentsBtn"') > botsStart, 'people/agents control is on the Bots section');
   assert.doesNotMatch(html, /id="chatSidebarToolsBtn"|id="chatToolsMenu"|id="chatSidebarPins"/, 'the tools menu is gone');
   assert.equal(html.indexOf('id="chatAcctManageAgents"', menuStart), -1, 'Manage Agents was removed from the account menu');
@@ -40,7 +40,7 @@ test('each creation and utility action has one control, all routed through runTo
 test('every action control uses one canonical Lucide icon system', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const controls = [...html.matchAll(/<button[^>]*data-tools-action="[^"]+"[\s\S]*?<\/button>/g)].map((m) => m[0]).filter((b) => !b.includes('chat-dm-add-btn'));
-  assert.equal(controls.length, 7, 'rail, view, New chat and New agent controls');
+  assert.equal(controls.length, 8, 'rail, view, New chat and New agent controls');
   for (const control of controls) {
     assert.match(control, /data-icon-set="lucide"/);
     assert.doesNotMatch(control, /<img|data-mia-mark|stroke-width=/, 'legacy and one-off icon treatments are removed');

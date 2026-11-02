@@ -42,7 +42,7 @@ test('an empty Mia folder invites you to add a live app', () => {
 
 test('Artifacts, Automations and Browser open the same way in Solo and in a team', () => {
   const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /var sharedView = action === 'automations' \|\| action === 'artifacts' \|\| action === 'web-browser';/);
+  assert.match(app, /var sharedView = action === 'automations' \|\| action === 'artifacts' \|\| action === 'apps' \|\| action === 'web-browser';/);
   assert.match(app, /if\(hubWorkspace\(\) && !sharedView\)/);
   const html = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   assert.match(html, /data-sidebar-view="artifacts" data-tools-action="artifacts"/);

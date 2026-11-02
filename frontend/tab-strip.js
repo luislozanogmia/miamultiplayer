@@ -118,7 +118,7 @@
   // dragged since, so it reads the same from any view; a tab from another
   // view opens that view at that tab. Each view registers
   // { tabs(), select(id), show(), render() }.
-  var MIX_ORDER = ['chat', 'automations', 'artifacts', 'browser'];
+  var MIX_ORDER = ['chat', 'automations', 'artifacts', 'browser', 'apps'];
   var MIX_KEY = 'miaTabsMixed', ORDER_KEY = 'miaTabsMixOrder';
   var root = typeof window !== 'undefined' ? window : globalThis;
   var views = {};
@@ -268,6 +268,7 @@
     automations: { label: 'Automations', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6h4"></path><circle cx="12" cy="12" r="10"></circle></svg>' },
     artifacts: { label: 'Artifacts', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>' },
     browser: { label: 'Browser', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>' },
+    apps: { label: 'Apps', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>' },
   };
   // A chat or automation tab in the browser's strip. In its own view it is
   // that view's tab (active, closes, reorders); from another view it opens
@@ -443,7 +444,7 @@
     // this view's own tabs it also moves it in the view's own order.
     // Another view's tab closes and reorders in that view.
     function routed(id) {
-      var m = typeof id === 'string' && /^(chat|automations|artifacts|browser):(.*)$/.exec(id);
+      var m = typeof id === 'string' && /^(chat|automations|artifacts|browser|apps):(.*)$/.exec(id);
       return m && m[1] !== view ? { view: m[1], id: m[2] } : null;
     }
     var ownClose = handlers.close, ownMenu = handlers.menu;

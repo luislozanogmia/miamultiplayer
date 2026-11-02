@@ -84,8 +84,8 @@ test('Artifacts has a real tab in the browser strip, like the Automations board'
   const strip = await readFile(new URL('./tab-strip.js', import.meta.url), 'utf8');
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   assert.match(html, /<div class="automations-tabs" id="artifactsTabs"><\/div>/, 'no plain-text title in the row');
-  assert.match(strip, /MIX_ORDER = \['chat', 'automations', 'artifacts', 'browser'\]/);
-  assert.match(strip, /\^\(chat\|automations\|artifacts\|browser\):/, 'its × goes to Artifacts, not the browser');
+  assert.match(strip, /MIX_ORDER = \['chat', 'automations', 'artifacts', 'browser', 'apps'\]/);
+  assert.match(strip, /\^\(chat\|automations\|artifacts\|browser\|apps\):/, 'its × goes to Artifacts, not the browser');
   assert.match(app, /mix\.register\('artifacts', \{\s*tabs: artifactsStripTabs/);
   assert.match(app, /label:'Artifacts', iconHtml:ARTIFACTS_ICON, active:artifactsPage\.open/);
 });

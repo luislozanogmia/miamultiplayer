@@ -173,12 +173,13 @@
   // too, holding their own tabs; mixed, it holds every view's tabs. It sits
   // in the row of whichever view is showing.
   var docked = 'browser';
-  var DOCKS = { chat: 'chatTabsRow', automations: 'automationsTabs', artifacts: 'artifactsTabs' };
+  var DOCKS = { chat: 'chatTabsRow', automations: 'automationsTabs', artifacts: 'artifactsTabs', apps: 'appsTabs' };
   function showingView() {
     // Automations also sets the browser's mode class, so it is checked first.
     var classes = document.body.classList;
     if (classes.contains('automations-mode')) return 'automations';
     if (classes.contains('artifacts-mode')) return 'artifacts';
+    if (classes.contains('apps-mode')) return 'apps';
     return open || classes.contains('browser-collab-mode') ? 'browser' : 'chat';
   }
   // The address bar goes with the tabs: under them in every view. Every
@@ -192,7 +193,7 @@
   viewTools.className = 'local-browser-view-tools';
   // The right pane's toggle sits just before the "more" dots that end the row.
   if (bar) miaToggle && miaToggle.parentNode === bar ? miaToggle.after(viewTools) : bar.append(viewTools);
-  var BAR_AFTER = { chat: '#chatTabsRow', automations: '#automationsOverlay .automations-tabs-row', artifacts: '#artifactsOverlay .automations-tabs-row' };
+  var BAR_AFTER = { chat: '#chatTabsRow', automations: '#automationsOverlay .automations-tabs-row', artifacts: '#artifactsOverlay .automations-tabs-row', apps: '#appsOverlay .automations-tabs-row' };
   var VIEW_TOOLS = { chat: '#channelHeader' };
   var toolsHome = null;
   function dockBar(view) {

@@ -26,7 +26,7 @@ test('the view and mix buttons use the shared tip, not the slow native title', a
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   const views = html.slice(html.indexOf('<div class="sidebar-views"'), html.indexOf('</div>', html.indexOf('<div class="sidebar-views"')));
   const buttons = views.match(/<button[^>]*>/g);
-  assert.equal(buttons.length, 5, 'Chat, Automations, Artifacts, Browser and Mix');
+  assert.equal(buttons.length, 6, 'Chat, Automations, Artifacts, Browser, Apps and Mix');
   for (const button of buttons) {
     assert.match(button, /data-tip="[^"]+"/);
     assert.doesNotMatch(button, /\stitle=/, 'a native title would show a second, slow tooltip');

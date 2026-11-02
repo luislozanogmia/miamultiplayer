@@ -3628,6 +3628,20 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .local-browser-suggest-icon .agent-avatar,.local-browser-suggest-icon [class*="avatar"]{max-width:16px;max-height:16px;}
 
 /* Artifacts: same frame as Automations, a list of rows in the body. */
+.apps-overlay #appsCloseBtn{align-self:center;margin:0 8px 0 auto;width:32px;height:32px;border-radius:50%;color:#474747;}
+.apps-overlay #appsCloseBtn:hover{background:#0000000f;color:#1f1f1f;}
+.apps-overlay .artifacts-search{margin-right:auto;}
+.apps-pane-host{flex:1;min-height:0;position:relative;overflow:auto;}
+.apps-row{gap:12px;padding:10px 6px;flex-wrap:wrap;}
+.apps-row-main{flex:1 1 240px;min-width:0;display:flex;align-items:center;gap:12px;}
+.apps-row-meta{white-space:normal;}
+.apps-row-actions{flex:none;max-width:100%;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px;}
+.apps-note{font-size:12px;color:var(--sand-text-secondary);}
+.apps-note-bad{color:#b3261e;max-width:320px;}
+.apps-state-live,.apps-state-live-pending,.apps-state-live-rejected{color:var(--sand-text-primary);}
+.apps-state-rejected,.apps-state-blocked{color:#b3261e;}
+.apps-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:10px 12px;border:1px solid var(--sand-border-default);border-radius:8px;font-size:13px;color:var(--sand-text-secondary);}
+.apps-overlay .artifacts-empty .artifacts-bar-text-btn{margin-top:14px;}
 .artifacts-overlay #artifactsCloseBtn{align-self:center;margin:0 8px 0 auto;width:32px;height:32px;border-radius:50%;color:#474747;}
 .artifacts-overlay #artifactsCloseBtn:hover{background:#0000000f;color:#1f1f1f;}
 .artifacts-search{width:180px;height:28px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:14px;background:var(--sand-bg-base);color:var(--sand-text-primary);font:inherit;font-size:13px;}

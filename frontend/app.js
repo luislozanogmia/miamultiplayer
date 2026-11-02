@@ -7671,6 +7671,7 @@
   function openWebBrowserTool(options){
     closeAutomationsPage();
     closeArtifactsPage();
+    closeAppsPage();
     localBrowserState.open = true;
     try {
       if(window.miaDesktop && window.miaDesktop.state) window.miaDesktop.state.set(LOCAL_BROWSER_OPEN_STATE_KEY, '1');
@@ -8042,6 +8043,7 @@
   function openAutomationsPage(){
     closeLocalBrowser();
     closeArtifactsPage();
+    closeAppsPage();
     automationsPage.open = true;
     automationsPage.boardClosed = false;
     automationsPage.botId = null;
@@ -8080,6 +8082,7 @@
   function openArtifactsPage(){
     closeLocalBrowser();
     closeAutomationsPage();
+    closeAppsPage();
     artifactsPage.open = true;
     artifactsPage.tabClosed = false;
     document.body.classList.add('browser-collab-mode', 'artifacts-mode');
@@ -8168,6 +8171,11 @@
     var target = item.kind === 'app' ? item.url : item.path;
     rememberRecentArtifact(item.id);
     closeArtifactsPage();
+    openAddressInBrowserTab(target, 'That artifact could not be opened.');
+  }
+  // A new tab in Mia's own browser, with this person's sign-ins.
+  function openAddressInBrowserTab(target, failure){
+    var browser = window.miaDesktop.browser;
     openWebBrowserTool();
     browser.command({action: 'new'}).then(function(){
       return browser.command({action: 'navigate', value: target});
@@ -8175,7 +8183,7 @@
       if(state && state.error) showBenchToast(state.error);
       followBrowserTab(state && !state.error ? state : null);
     }).catch(function(error){
-      showBenchToast(error && error.message ? error.message : 'That artifact could not be opened.');
+      showBenchToast(error && error.message ? error.message : failure);
     });
   }
 
@@ -8256,6 +8264,348 @@
         setArtifactsAddOpen(false);
         loadArtifacts();
       }).catch(function(){ error.textContent = 'That app could not be added.'; });
+    });
+  })();
+
+  // Apps page: small web apps people build and share. One page for Solo and a
+  // team; a team view adds the team's catalog. Each running app is a sandboxed
+  // native view (macos/src/app-sandbox.cjs) placed over the page's pane, with
+  // its own tab beside the page's.
+  var APPS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>';
+  var appsPage = {open:false, tabClosed:false, activeTab:'page', tabs:[], query:'', loading:false, error:'', catalogError:'',
+    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, teamId:'', me:'', isAdmin:false};
+  var appsUploaders = {};
+  var appsScanTimer = null;
+
+  function appsTeamId(){ return hubWorkspace() ? activeWorkspaceKey.slice(4) : ''; }
+  function appsDesktop(){ return window.miaDesktop && window.miaDesktop.apps ? window.miaDesktop.apps : null; }
+
+  function openAppsPage(){
+    closeLocalBrowser();
+    closeAutomationsPage();
+    closeArtifactsPage();
+    appsPage.open = true;
+    appsPage.tabClosed = false;
+    document.body.classList.add('browser-collab-mode', 'apps-mode');
+    setBrowserSidebarOpen(browserSidebarWanted());
+    closeChatThread();
+    closeChatTasksPanel();
+    chatInfo.mode = 'automations';
+    chatInfo.open = false;
+    if(!chatWs.activeRoomId && chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
+    renderChatInfoPane();
+    renderChatHeaderBar();
+    renderAppsPage();
+    loadApps();
+  }
+  function closeAppsPage(){
+    if(!appsPage.open) return;
+    appsPage.open = false;
+    clearAppsScanTimer();
+    document.body.classList.remove('apps-mode', 'browser-sidebar-open');
+    if(!localBrowserState.open) document.body.classList.remove('browser-collab-mode');
+    applyLeftPane();
+    renderAppsPage();
+    renderChatInfoPane();
+    renderChatHeaderBar();
+  }
+  function appsStripTabs(){ return window.MiaAppsPage ? window.MiaAppsPage.stripTabs(appsPage, APPS_ICON) : []; }
+  function notifyAppsTabs(){ window.MiaTabStrip.mix.notify('apps', JSON.stringify(appsStripTabs())); }
+  window.MiaTabStrip.mix.register('apps', {
+    tabs: appsStripTabs,
+    // The page's own tab is the page; only running apps count.
+    count: function(){ return appsPage.tabs.length; },
+    close: function(id){
+      if(id === 'page'){
+        appsPage.tabClosed = true;
+        if(appsPage.activeTab === 'page' && appsPage.tabs.length) appsPage.activeTab = appsPage.tabs[0].key;
+        else if(appsPage.open && appsPage.activeTab === 'page') closeAppsPage();
+      } else closeAppTab(id);
+      renderAppsPage();
+    },
+    show: function(){ if(!appsPage.open) runToolsAction('apps'); },
+    select: function(id){ appsPage.activeTab = id === 'page' || appsTabByKey(id) ? id : 'page'; if(id === 'page') appsPage.tabClosed = false; renderAppsPage(); },
+    render: notifyAppsTabs,
+  });
+  function appsTabByKey(key){ return appsPage.tabs.filter(function(tab){ return tab.key === key; })[0] || null; }
+  function closeAppTab(key){
+    appsPage.activeTab = window.MiaAppsPage.nextTabAfterClose(appsPage, key);
+    appsPage.tabs = appsPage.tabs.filter(function(tab){ return tab.key !== key; });
+    if(!appsPage.tabs.length) appsPage.tabClosed = false;
+    var desktop = appsDesktop();
+    if(desktop) desktop.close(key).catch(function(){});
+  }
+  if(appsDesktop() && appsDesktop().onState) appsDesktop().onState(function(state){
+    var tab = state && appsTabByKey(state.key);
+    if(!tab) return;
+    tab.status = state.status;
+    tab.error = state.error || '';
+    renderAppsPage();
+  });
+
+  function loadApps(){
+    var teamId = appsTeamId();
+    appsPage.teamId = teamId;
+    appsPage.me = hubChat.membership && hubChat.membership.clerk_user_id || '';
+    appsPage.isAdmin = !!(hubChat.membership && hubChat.membership.role === 'admin');
+    if(!teamId){ appsPage.catalog = []; appsPage.catalogError = ''; }
+    appsPage.loading = true;
+    appsPage.error = '';
+    renderAppsPage();
+    var local = api('/api/apps/local').then(function(res){
+      if(res.status !== 200) throw new Error('local');
+      appsPage.local = Array.isArray(res.data.apps) ? res.data.apps : [];
+      appsPage.links = Array.isArray(res.data.links) ? res.data.links : [];
+    }).catch(function(){ appsPage.error = 'The apps on this computer could not be loaded. Try again.'; });
+    var catalog = teamId ? loadAppsCatalog(teamId) : Promise.resolve();
+    Promise.all([local, catalog]).then(function(){
+      appsPage.loading = false;
+      renderAppsPage();
+    });
+  }
+  // Your own apps still work when the team can't be reached, so this only says so.
+  function loadAppsCatalog(teamId){
+    return hubCall('GET', '/v1/teams/' + teamId + '/apps').then(function(reply){
+      if(teamId !== appsTeamId()) return;
+      appsPage.catalog = window.MiaAppsPage.normalizeCatalog(reply);
+      appsPage.catalogError = '';
+      checkAppsScans(teamId);
+    }).catch(function(){
+      if(teamId === appsTeamId()) appsPage.catalogError = "Your team's apps could not be loaded. Check your connection, then try again.";
+    });
+  }
+  function clearAppsScanTimer(){ if(appsScanTimer){ window.clearTimeout(appsScanTimer); appsScanTimer = null; } }
+  // Asks about pending files until each has a verdict, while the page is open.
+  function checkAppsScans(teamId){
+    clearAppsScanTimer();
+    var ids = window.MiaAppsPage.filesToCheck(appsPage.catalog, appsPage.scans);
+    if(!ids.length || !appsPage.open || !window.MiaTeamFiles) return;
+    var client = window.MiaTeamFiles.createClient({teamId: teamId, call: hubCall});
+    Promise.all(ids.map(function(id){
+      return client.status(id).then(function(reply){ appsPage.scans[id] = window.MiaTeamFiles.scanVerdict(reply); }, function(){ /* asked again below */ });
+    })).then(function(){
+      renderAppsPage();
+      if(appsPage.open && window.MiaAppsPage.filesToCheck(appsPage.catalog, appsPage.scans).length) appsScanTimer = window.setTimeout(function(){ checkAppsScans(teamId); }, 5000);
+    });
+  }
+
+  function renderAppsPage(){
+    var overlay = el('#appsOverlay');
+    if(!overlay) return;
+    notifyAppsTabs();
+    overlay.hidden = !appsPage.open;
+    overlay.setAttribute('aria-hidden', appsPage.open ? 'false' : 'true');
+    overlay.classList.toggle('open', appsPage.open);
+    var tab = appsTabByKey(appsPage.activeTab);
+    var body = el('#appsBody'), host = el('#appsPaneHost'), filter = el('#appsFilterRow');
+    if(body) body.hidden = !!tab;
+    if(filter) filter.hidden = !!tab;
+    if(host) host.hidden = !tab;
+    if(appsPage.open && window.MiaAppsPage){
+      if(!tab && body) body.innerHTML = window.MiaAppsPage.bodyHtml(appsPage, esc);
+      if(tab && host) host.innerHTML = window.MiaAppsPage.runHtml(tab, esc);
+    }
+    syncAppPane();
+  }
+  // Native views sit above HTML, so the running app steps aside for anything
+  // that covers the page: the search bar's list, a tab menu, Settings, a
+  // confirmation. Whatever is on top at a few spots across the pane says so.
+  function appPaneCovered(host){
+    if(!document.body.classList.contains('apps-mode')) return true;
+    var box = host.getBoundingClientRect();
+    if(box.width < 1 || box.height < 1) return true;
+    var inset = 6;
+    return [0, 0.33, 0.66, 1].some(function(across){
+      return [0, 0.5, 1].some(function(down){
+        var top = document.elementFromPoint(box.left + inset + (box.width - inset * 2) * across, box.top + inset + (box.height - inset * 2) * down);
+        return !!top && !host.contains(top) && !top.contains(host);
+      });
+    });
+  }
+  var appPaneShown = '', appPaneWatch = null;
+  function syncAppPane(){
+    var desktop = appsDesktop();
+    if(!desktop || !appsPage) return;
+    var host = el('#appsPaneHost'), tab = appsTabByKey(appsPage.activeTab);
+    var running = appsPage.open && !!tab && !!host;
+    // Nothing tells the page when a dialog opens somewhere else, so it keeps looking.
+    if(running && !appPaneWatch) appPaneWatch = window.setInterval(syncAppPane, 400);
+    if(!running && appPaneWatch){ window.clearInterval(appPaneWatch); appPaneWatch = null; }
+    var box = running && !appPaneCovered(host) ? host.getBoundingClientRect() : null;
+    var rect = box ? {x: box.x, y: box.y, width: box.width, height: box.height} : null;
+    var next = rect ? tab.key + JSON.stringify(rect) : '';
+    if(next === appPaneShown) return;
+    appPaneShown = next;
+    desktop.layout(rect ? tab.key : '', rect).catch(function(){});
+  }
+  (function watchAppPane(){
+    var host = el('#appsPaneHost');
+    if(!host || !appsDesktop()) return;
+    if(window.ResizeObserver) new ResizeObserver(syncAppPane).observe(host);
+    window.addEventListener('resize', syncAppPane);
+    new MutationObserver(syncAppPane).observe(document.body, {attributes: true, attributeFilter: ['class']});
+    var suggest = el('#localBrowserUrlSuggest');
+    if(suggest) new MutationObserver(syncAppPane).observe(suggest, {attributes: true, attributeFilter: ['hidden']});
+  })();
+
+  function showAppTab(key, name, source){
+    if(!appsTabByKey(key)) appsPage.tabs.push({key: key, name: name, source: source, status: 'loading', error: ''});
+    appsPage.activeTab = key;
+    appPaneShown = '';
+    renderAppsPage();
+  }
+  function openLocalApp(id){
+    var item = appsPage.local.filter(function(entry){ return entry.id === id; })[0], desktop = appsDesktop();
+    if(!item) return;
+    if(!desktop){ showBenchToast('Apps run in the Mia desktop app.'); return; }
+    desktop.open({kind: 'local', id: id}).then(function(reply){
+      if(!reply || !reply.ok){ showBenchToast(reply && reply.error || 'That app could not be opened.'); return; }
+      showAppTab(reply.key, item.name, {kind: 'local', id: id});
+    }).catch(function(){ showBenchToast('That app could not be opened.'); });
+  }
+  function openAppAddress(url){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!browser || !browser.command){ showBenchToast('Apps open in the Mia desktop app.'); return; }
+    closeAppsPage();
+    openAddressInBrowserTab(url, 'That app could not be opened.');
+  }
+  // The backend's app routes that carry bytes, which api() would turn into JSON.
+  function appsBytes(path, options){
+    return fetch(path, Object.assign({credentials: 'include'}, options, {headers: Object.assign({'X-MiaOS-Workspace': activeWorkspaceKey}, options.headers || {})}));
+  }
+  function appsIdentityQuery(identity, sha256){
+    return 'teamId=' + encodeURIComponent(identity.teamId) + '&appId=' + encodeURIComponent(identity.appId) + '&version=' + encodeURIComponent(identity.version) + '&sha256=' + encodeURIComponent(sha256);
+  }
+  function openTeamApp(id){
+    var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
+    if(!app || !app.live || appsPage.installing[id] && !appsPage.installing[id].error) return;
+    if(app.live.kind === 'link'){ openAppAddress(app.live.url); return; }
+    var desktop = appsDesktop();
+    if(!desktop || !window.MiaTeamFiles){ showBenchToast('Apps run in the Mia desktop app.'); return; }
+    var client = window.MiaTeamFiles.createClient({teamId: teamId, call: hubCall});
+    appsPage.installing[id] = {};
+    renderAppsPage();
+    window.MiaAppsPage.installVersion({teamId: teamId, appId: id, version: app.live,
+      isInstalled: function(identity, sha256){
+        return api('/api/apps/installed?' + appsIdentityQuery(identity, sha256)).then(function(res){ return res.status === 200 && res.data.installed === true; });
+      },
+      download: function(file){
+        return window.MiaTeamFiles.downloadFile({client: client, file: file, onProgress: function(done, total){
+          var percent = total ? Math.floor(done * 100 / total) : null;
+          if(appsPage.installing[id] && appsPage.installing[id].percent !== percent){ appsPage.installing[id].percent = percent; renderAppsPage(); }
+        }});
+      },
+      install: function(identity, sha256, blob){
+        return appsBytes('/api/apps/install?' + appsIdentityQuery(identity, sha256), {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: blob}).then(function(res){
+          if(res.status === 201) return;
+          return res.json().catch(function(){ return {}; }).then(function(data){ throw new Error(data.message || 'That app could not be installed.'); });
+        });
+      },
+    }).then(function(identity){
+      return desktop.open(Object.assign({kind: 'team'}, identity));
+    }).then(function(reply){
+      if(!reply || !reply.ok) throw new Error(reply && reply.error || 'That app could not be opened.');
+      delete appsPage.installing[id];
+      showAppTab(reply.key, app.name, {kind: 'team', appId: id});
+    }).catch(function(error){
+      appsPage.installing[id] = {error: window.MiaAppsPage.errorMessage(error, 'That app could not be opened.')};
+      renderAppsPage();
+    });
+  }
+  function appsUploader(teamId){
+    if(appsUploaders[teamId]) return appsUploaders[teamId];
+    var client = window.MiaTeamFiles.createClient({teamId: teamId, call: hubCall});
+    var storage = (function(){ try { return window.localStorage; } catch(_appsStorageError){ return null; } })();
+    var store = window.MiaTeamFiles.createStore(storage || {getItem: function(){ return null; }, setItem: function(){}});
+    appsUploaders[teamId] = window.MiaAppsPage.createUploader(window.MiaTeamFiles.createManager, {client: client, store: store, teamId: teamId, space: {kind: 'app', id: teamId}});
+    return appsUploaders[teamId];
+  }
+  function newAppsId(){ return window.MiaAppsPage.newAppId(function(bytes){ return window.crypto.getRandomValues(bytes); }); }
+  function publishLocalApp(id){
+    var teamId = appsPage.teamId;
+    if(!teamId || !window.MiaTeamFiles) return;
+    var folder = appsPage.local.filter(function(entry){ return entry.id === id; })[0];
+    var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0];
+    var item = folder || link;
+    if(!item || appsPage.publishing[id] && appsPage.publishing[id].step) return;
+    var existing = window.MiaAppsPage.publishedAs(appsPage.catalog, item.name, appsPage.me);
+    var setStep = function(step){ appsPage.publishing[id] = {step: step}; renderAppsPage(); };
+    var publishing;
+    if(link){
+      setStep('publishing');
+      publishing = window.MiaAppsPage.publishLink({call: hubCall, teamId: teamId, existing: existing, newId: newAppsId, link: link});
+    } else {
+      publishing = window.MiaAppsPage.publishFolder({call: hubCall, teamId: teamId, existing: existing, newId: newAppsId, item: folder, onStep: setStep,
+        client: window.MiaTeamFiles.createClient({teamId: teamId, call: hubCall}), uploader: appsUploader(teamId), verdict: window.MiaTeamFiles.scanVerdict,
+        sleep: function(ms){ return new Promise(function(done){ window.setTimeout(done, ms); }); },
+        buildBundle: function(appId){
+          return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name})}).then(function(res){
+            if(res.status !== 200) return res.json().catch(function(){ return {}; }).then(function(data){ throw new Error(data.message || 'That app could not be packed.'); });
+            var filename = decodeURIComponent(res.headers.get('X-Mia-App-Filename') || 'app.miaapp');
+            return res.blob().then(function(blob){ return {file: new File([blob], filename, {type: 'application/octet-stream'})}; });
+          });
+        }});
+    }
+    publishing.then(function(){
+      delete appsPage.publishing[id];
+      showBenchToast(appsPage.isAdmin ? '"' + item.name + '" is published.' : '"' + item.name + '" is waiting for an admin to approve it.');
+      return loadAppsCatalog(teamId);
+    }).then(renderAppsPage).catch(function(error){
+      appsPage.publishing[id] = {error: window.MiaAppsPage.errorMessage(error, 'That app could not be published.')};
+      renderAppsPage();
+    });
+  }
+  function decideTeamApp(id, decision){
+    var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
+    if(!app || !app.pending) return;
+    hubCall('POST', '/v1/teams/' + teamId + '/apps/' + id + '/versions/' + app.pending.version + '/' + decision, {}).then(function(){
+      return loadAppsCatalog(teamId);
+    }).then(renderAppsPage).catch(function(error){ showBenchToast(window.MiaAppsPage.errorMessage(error, 'That did not work. Try again.')); });
+  }
+  function archiveTeamApp(id){
+    var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
+    if(!app) return;
+    appConfirm('Remove "' + app.name + '" from your team? Nobody on your team will be able to open it from here.', 'Remove').then(function(yes){
+      if(!yes) return null;
+      return hubCall('DELETE', '/v1/teams/' + teamId + '/apps/' + id, {}).then(function(){ return loadAppsCatalog(teamId); }).then(renderAppsPage);
+    }).catch(function(error){ showBenchToast(window.MiaAppsPage.errorMessage(error, 'That did not work. Try again.')); });
+  }
+  // Puts the request in the composer so the person can say what the app is for.
+  function buildAppWithBot(){
+    closeAppsPage();
+    var input = el('#ccInput');
+    if(!input) return;
+    input.value = window.MiaAppsPage.BUILD_PROMPT;
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    input.focus();
+    var at = input.value.indexOf('[say what it should do]');
+    if(at >= 0) input.setSelectionRange(at, at + '[say what it should do]'.length);
+  }
+  (function wireAppsPage(){
+    var overlay = el('#appsOverlay');
+    if(!overlay) return;
+    var close = el('#appsCloseBtn');
+    if(close) close.addEventListener('click', closeAppsPage);
+    var search = el('#appsSearch');
+    if(search) search.addEventListener('input', function(){ appsPage.query = search.value; renderAppsPage(); });
+    var actions = {
+      'data-app-open-local': openLocalApp,
+      'data-app-open-team': openTeamApp,
+      'data-app-publish': publishLocalApp,
+      'data-app-approve': function(id){ decideTeamApp(id, 'approve'); },
+      'data-app-reject': function(id){ decideTeamApp(id, 'reject'); },
+      'data-app-archive': archiveTeamApp,
+      'data-app-open-link': function(id){ var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0]; if(link) openAppAddress(link.url); },
+      'data-app-reload': function(key){ var tab = appsTabByKey(key), desktop = appsDesktop(); if(tab && desktop){ tab.status = 'loading'; desktop.reload(key).catch(function(){}); renderAppsPage(); } },
+    };
+    overlay.addEventListener('click', function(e){
+      if(e.target.closest('[data-app-build]')){ buildAppWithBot(); return; }
+      if(e.target.closest('[data-apps-retry]')){ loadApps(); return; }
+      if(e.target.closest('[data-app-add-link]')){ runToolsAction('artifacts'); setArtifactsAddOpen(true); return; }
+      for(var name in actions){
+        var target = e.target.closest('[' + name + ']');
+        if(target){ actions[name](target.getAttribute(name)); return; }
+      }
     });
   })();
 
@@ -8573,6 +8923,7 @@
     'new-channel': '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"></path></svg>',
     'new-automation': LOCAL_BROWSER_SUGGEST_AUTOMATION,
     'new-bot': '<img src="assets/mote/mote-static.svg" alt="" class="mote-avatar-img" style="width:18px;height:18px">',
+    'new-app': '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>',
     'add-app': LOCAL_BROWSER_SUGGEST_ARTIFACT,
     'new-tab': LOCAL_BROWSER_SUGGEST_GLOBE
   };
@@ -8661,7 +9012,7 @@
   // with tabs mixed or not.
   function localBrowserSuggestView(){
     var classes = document.body.classList;
-    return classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('automations-mode') ? 'automations' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+    return classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('apps-mode') ? 'apps' : classes.contains('automations-mode') ? 'automations' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
   }
   // The (+) on the tab strip: the bar, open on its ways to start something.
   window.miaOpenStartRows = function(){
@@ -8676,7 +9027,7 @@
       .concat(hubWorkspace() ? [{id:'new-channel', name:'New channel'}] : [])
       .concat([{id:'new-automation', name:'New automation'}])
       .concat(hubWorkspace() ? [] : [{id:'new-bot', name:'New bot'}])
-      .concat([{id:'add-app', name:'Add a live app'}])
+      .concat([{id:'new-app', name:'New app'}, {id:'add-app', name:'Add a live app'}])
       .concat(browser && browser.command ? [{id:'new-tab', name:'New browser tab'}] : []);
   }
   function runLocalBrowserStart(id){
@@ -8684,6 +9035,8 @@
       runToolsAction('automations');
       // After this click finishes, or it would close the menu the button opens.
       window.setTimeout(function(){ var add = el('#automationsAddBtn'); if(add) add.click(); }, 0);
+    } else if(id === 'new-app'){
+      runToolsAction('apps');
     } else if(id === 'add-app'){
       runToolsAction('artifacts');
       setArtifactsAddOpen(true);
@@ -13207,7 +13560,7 @@
   // With tabs showing, the chat's menu drops from its tab.
   function chatViewShowing(){
     var classes = document.body.classList;
-    return !classes.contains('automations-mode') && !classes.contains('artifacts-mode') && !classes.contains('browser-collab-mode');
+    return !classes.contains('automations-mode') && !classes.contains('artifacts-mode') && !classes.contains('apps-mode') && !classes.contains('browser-collab-mode');
   }
   // Chat tabs live in the browser's tab strip (native-browser.js), which
   // sits in the chat's row while the chat shows. A lone tab can't be
@@ -16084,7 +16437,7 @@
   function runToolsAction(action){
     // Views (Automations, Artifacts, Browser) are the same in Solo and a
     // team; only creating chats and bots differs.
-    var sharedView = action === 'automations' || action === 'artifacts' || action === 'web-browser';
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser';
     if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
@@ -16093,6 +16446,7 @@
     if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store') closeLocalBrowser();
     if(automationsPage.open && action !== 'automations' && action !== 'new-bot' && action !== 'bot-store') closeAutomationsPage();
     if(artifactsPage.open && action !== 'artifacts' && action !== 'new-bot' && action !== 'bot-store') closeArtifactsPage();
+    if(appsPage.open && action !== 'apps' && action !== 'new-bot' && action !== 'bot-store') closeAppsPage();
     if(action === 'new-chat') openDmCompose();
     else if(action === 'new-bot') startAgentSetupChat();
     else if(action === 'new-agent'){ if(window.miaPrivateAgents) window.miaPrivateAgents.create(); }
@@ -16101,6 +16455,7 @@
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsPage();
     else if(action === 'artifacts') openArtifactsPage();
+    else if(action === 'apps') openAppsPage();
     else if(action === 'web-browser') openWebBrowserTool({forActiveBot:true});
   }
 
@@ -16122,6 +16477,7 @@
       closeLocalBrowser();
       closeAutomationsPage();
       closeArtifactsPage();
+      closeAppsPage();
     });
     // Mix on shows every view's tabs in one strip; off keeps them apart.
     var mixBtn = el('#sidebarMixBtn');
@@ -16146,7 +16502,7 @@
   // With Mix on the strip holds every view, so none is selected: Mix is.
   function syncSidebarViews(){
     var body = document.body;
-    var view = window.MiaTabStrip.mix.on() ? null : body.classList.contains('automations-mode') ? 'automations' : body.classList.contains('artifacts-mode') ? 'artifacts' : body.classList.contains('browser-collab-mode') ? 'browser' : 'chat';
+    var view = window.MiaTabStrip.mix.on() ? null : body.classList.contains('automations-mode') ? 'automations' : body.classList.contains('artifacts-mode') ? 'artifacts' : body.classList.contains('apps-mode') ? 'apps' : body.classList.contains('browser-collab-mode') ? 'browser' : 'chat';
     els('[data-sidebar-view]').forEach(function(button){
       var on = button.getAttribute('data-sidebar-view') === view;
       button.classList.toggle('active', on);
@@ -16162,7 +16518,7 @@
     var places = [], at = -1;
     function view(){
       var classes = document.body.classList;
-      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('apps-mode') ? 'apps' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
     }
     function here(){
       return {view:view(), workspace:activeWorkspaceKey, roomId:chatWs.activeRoomId || null, kind:chatWs.activeKind, label:chatWs.activeLabel};
@@ -16195,12 +16551,14 @@
       at += step;
       if(place.view === 'automations') runToolsAction('automations');
       else if(place.view === 'artifacts') runToolsAction('artifacts');
-      else if(place.view === 'browser'){ closeAutomationsPage(); closeArtifactsPage(); if(!localBrowserState.open) openWebBrowserTool(); }
+      else if(place.view === 'apps') runToolsAction('apps');
+      else if(place.view === 'browser'){ closeAutomationsPage(); closeArtifactsPage(); closeAppsPage(); if(!localBrowserState.open) openWebBrowserTool(); }
       else {
         closeBrowserSidebarDrawer();
         closeLocalBrowser();
         closeAutomationsPage();
         closeArtifactsPage();
+        closeAppsPage();
       }
       // A chat from another workspace stays there.
       if(place.roomId && place.workspace === activeWorkspaceKey && place.roomId !== chatWs.activeRoomId){
@@ -16237,7 +16595,7 @@
     var open = false, rows = [], shownView = null;
     function view(){
       var classes = document.body.classList;
-      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('apps-mode') ? 'apps' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
     }
     function fileFrom(m){
       if(m.hubMessage) return m.hubAuthor || '';
@@ -18920,7 +19278,7 @@
     view: function(){
       var classes = document.body.classList;
       if(window.MiaTabStrip && window.MiaTabStrip.mix.on()) return null;
-      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
+      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('apps-mode') ? 'apps' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
     },
     blocked: function(){
       if(!currentUser || tour.active || document.documentElement.classList.contains('workspace-handoff')) return true;

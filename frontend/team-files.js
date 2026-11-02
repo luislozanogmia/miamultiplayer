@@ -17,6 +17,9 @@
   var HEX64 = /^[a-f0-9]{64}$/;
   var CURSOR = /^[1-9][0-9]{0,14}\/[a-f0-9]{32}$/;
   var SPACE_KINDS = ['channel', 'group', 'dm'];
+  // Uploads this computer tracks. An `app` space holds published mini-apps; only
+  // an admin may list it, and nothing here needs to, so list() stays narrower.
+  var UPLOAD_KINDS = SPACE_KINDS.concat('app');
 
   function fail(code, extra){
     var error = new Error(errorMessage(code));
@@ -361,7 +364,7 @@
     }
     function write(teamId, data){ try { storage.setItem(PREFIX + teamId, JSON.stringify(data)); } catch(_){} }
     function validRecord(r){
-      return r && ID.test(r.fileId) && ID.test(r.spaceId) && SPACE_KINDS.indexOf(r.spaceKind) >= 0 && typeof r.filename === 'string'
+      return r && ID.test(r.fileId) && ID.test(r.spaceId) && UPLOAD_KINDS.indexOf(r.spaceKind) >= 0 && typeof r.filename === 'string'
         && Number.isSafeInteger(r.sizeBytes) && HEX64.test(r.sha256 || '') && STATES_STORED.indexOf(r.state) >= 0
         && r.parts && typeof r.parts === 'object' && !Array.isArray(r.parts);
     }

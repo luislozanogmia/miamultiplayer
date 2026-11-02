@@ -43,7 +43,7 @@ test('there is one tab strip, the browser\'s, and it moves into the chat and Aut
   assert.match(html, /class="automations-tabs" id="automationsTabs"/);
   assert.doesNotMatch(html, /class="native-browser-tabs[^"]*" id="(chatTabsRow|automationsTabs)"/);
   assert.doesNotMatch(app, /MiaTabStrip\.create\(/);
-  assert.match(browser, /var DOCKS = \{ chat: 'chatTabsRow', automations: 'automationsTabs', artifacts: 'artifactsTabs' \};/);
+  assert.match(browser, /var DOCKS = \{ chat: 'chatTabsRow', automations: 'automationsTabs', artifacts: 'artifactsTabs', apps: 'appsTabs' \};/);
   assert.match(browser, /dock\(showingView\(\)\);/);
 });
 
@@ -132,7 +132,7 @@ test('each view button can show how many tabs that view has open', () => {
   mix.register('chat', { tabs: () => [{ id: 'a' }, { id: 'b' }] });
   mix.register('automations', { tabs: () => [{ id: 'x' }, { id: 'y' }, { id: 'z' }] });
   mix.register('browser', { tabs: () => { throw new Error('not ready'); } });
-  assert.deepEqual(mix.counts(), { chat: 2, automations: 3, artifacts: 0, browser: 0 });
+  assert.deepEqual(mix.counts(), { chat: 2, automations: 3, artifacts: 0, browser: 0, apps: 0 });
   mix.register('automations', { count: () => 2 });
   assert.equal(mix.counts().automations, 2, 'a view can leave its fixed page out of the count');
 });
@@ -142,7 +142,7 @@ test('a fresh install shows no view badges: a blank browser tab and the one stan
   mix.register('chat', { count: undefined, tabs: () => [{ id: 'mia', uncounted: true }] });
   mix.register('automations', { count: () => 0 });
   mix.register('browser', { tabs: () => [{ id: 1, uncounted: true }] });
-  assert.deepEqual(mix.counts(), { chat: 0, automations: 0, artifacts: 0, browser: 0 });
+  assert.deepEqual(mix.counts(), { chat: 0, automations: 0, artifacts: 0, browser: 0, apps: 0 });
   mix.register('browser', { tabs: () => [{ id: 1 }, { id: 2, uncounted: true }] });
   assert.equal(mix.counts().browser, 1, 'a page counts; the blank tab beside it does not');
   const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
@@ -177,7 +177,7 @@ test('every way to start something shows its own icon, not a shared plus', async
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   const items = app.slice(app.indexOf('function localBrowserStartItems'), app.indexOf('function runLocalBrowserStart'));
   const ids = [...items.matchAll(/id:'([a-z-]+)'/g)].map((match) => match[1]);
-  assert.equal(ids.length, 6);
+  assert.equal(ids.length, 7);
   const icons = app.slice(app.indexOf('var LOCAL_BROWSER_SUGGEST_START_ICONS'), app.indexOf('function localBrowserSuggestRow'));
   for (const id of ids) assert.ok(icons.includes(`'${id}':`), id);
   // New bot is always the plain pink mote, whatever color the next bot gets.
