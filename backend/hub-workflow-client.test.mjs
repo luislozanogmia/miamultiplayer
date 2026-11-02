@@ -55,12 +55,16 @@ function fixture(t,{interrupted=false,previous=[],reply='Worked hard.\nNOTE: Quo
       hub.stepState='gone';
       return json({step:{},run:{}});
     }
-    if(route.endsWith(`/workflow-runs/${runId}`)) return json({run:{id:runId,channel_id:channelId},steps:hub.stepState==='gone'?[{n:1,owner_id:'user_owner',state:'done'}]:[{n:1,owner_id:'user_owner',state:hub.stepState}]});
+    if(route.endsWith(`/workflow-runs/${runId}`)) return json({run:{id:runId,channel_id:channelId},steps:[...(hub.earlierSteps||[]),hub.stepState==='gone'?{n:1,owner_id:'user_owner',state:'done'}:{n:1,owner_id:'user_owner',state:hub.stepState}]});
     if(route.endsWith('/files/uploads')) {hub.uploads.push(body);return json({fileId,partBytes:require('../frontend/team-files.js').PART_BYTES,partCount:1,expiresAt:0});}
     if(route.endsWith('/parts')) return json({parts:body.parts.map(part=>({number:part.number,url:s3Url(fileId),headers:{'x-amz-checksum-sha256':Buffer.from(part.sha256,'hex').toString('base64')}}))});
     if(route.endsWith('/complete')) return json({scanStatus:'PENDING'});
     if(route.endsWith('/status')) {hub.scans++;return json(hub.scanReply||{scanStatus:'NO_THREATS_FOUND',state:'ready'});}
-    if(route.endsWith('/download')) return json({url:s3Url(previous[0].files[0].fileId),sha256:hub.downloadSha});
+    if(route.endsWith('/download')) {
+      hub.downloads=(hub.downloads||0)+1;
+      if(hub.downloadError) return json({error:hub.downloadError[0]},hub.downloadError[1]);
+      return json({url:hub.downloadUrl||s3Url(previous[0].files[0].fileId),sha256:hub.downloadSha});
+    }
     throw new Error('unexpected route '+route);
   };
   const defaultBot=async args=>{hub.runs.push(args);return {text:reply};};
@@ -313,14 +317,80 @@ test('a file with the wrong fingerprint fails the step before the bot starts',as
   assert.match(f.hub.reports[0].note,/could not be opened/);
 });
 
-test('a file still being scanned waits: nothing started, nothing reported, claim kept',async t=>{
+test('a file still being scanned asks the Hub each time, and the step goes ahead once it is clean',async t=>{
   const f=fixture(t,{previous:previousFile('hello','pending_scan')});
+  f.hub.download='hello';f.hub.downloadSha=sha('hello');
+  f.hub.downloadError=['file_not_ready',409];
   await poll(f);await f.client.idle();
+  assert.equal(f.hub.downloads,1,'asking is what moves the file along at the Hub');
   assert.equal(f.hub.runs.length,0);
   assert.deepEqual(f.hub.reports,[]);
-  assert.deepEqual(f.hub.progress,[]);
   await poll(f);await f.client.idle();
+  assert.equal(f.hub.downloads,2);
   assert.equal(f.hub.claims[1],f.hub.claims[0]);
+  f.hub.downloadError=null;
+  await poll(f);await f.client.idle();
+  assert.equal(f.hub.runs.length,1);
+  assert.equal(f.hub.reports[0].outcome,'done');
+});
+
+for(const [code,status] of [['rate_limited',429],['hub_sign_in_required',401],['file_storage_unavailable',503],['writes_paused',503],['download_allowance_exceeded',429]]) {
+  test(`a temporary download error waits instead of failing the step: ${code}`,async t=>{
+    const f=fixture(t,{previous:previousFile('hello')});
+    f.hub.downloadError=[code,status];
+    await poll(f);await f.client.idle();
+    assert.equal(f.hub.runs.length,0);
+    assert.deepEqual(f.hub.reports,[]);
+    assert.equal(f.db.prepare('SELECT state FROM hub_workflow_steps').get().state,'claimed');
+  });
+}
+
+test('a file that is gone or points somewhere unsafe blocks the step before the bot starts',async t=>{
+  const gone=fixture(t,{previous:previousFile('hello')});
+  gone.hub.downloadError=['not_found',404];
+  await poll(gone);await gone.client.idle();
+  assert.equal(gone.hub.runs.length,0);
+  assert.equal(gone.hub.reports[0].outcome,'failed');
+  const unsafe=fixture(t,{previous:previousFile('hello')});
+  unsafe.hub.downloadUrl='https://evil.example.test/x';unsafe.hub.downloadSha=sha('hello');
+  await poll(unsafe);await unsafe.client.idle();
+  assert.equal(unsafe.hub.runs.length,0);
+  assert.equal(unsafe.hub.reports[0].outcome,'failed');
+});
+
+test('a file blocked after it was reported is named as missing, and the step does not run without it',async t=>{
+  // The Hub leaves a quarantined file out of `files` but still counts it.
+  const f=fixture(t,{previous:[{n:1,ownerId:'x',ownerName:'Pat',department:'',note:'Drafted',files:[]}]});
+  f.hub.earlierSteps=[{n:1,owner_id:'x',state:'done',note:'Drafted',file_count:1,files:[]}];
+  await poll(f);await f.client.idle();
+  assert.equal(f.hub.runs.length,0);
+  assert.equal(f.hub.reports[0].outcome,'failed');
+  assert.match(f.hub.reports[0].note,/blocked or removed/);
+});
+
+test('a file name that this computer cannot store is stored under one it can',async t=>{
+  let seen=[];
+  const names=['\u6587'.repeat(200)+'.pdf','a:b:c.txt','CON.txt','same.txt','same.txt','trailing. '];
+  const bytes='hello';
+  const previous=[{n:1,ownerId:'x',ownerName:'Pat',department:'',note:'Drafted',files:names.map(filename=>({fileId:'1'.repeat(32),filename,contentType:'text/plain',sizeBytes:5,sha256:sha(bytes),state:'ready'}))}];
+  const f=fixture(t,{previous,runBot:async args=>{seen=[...args.trigger.body.matchAll(/from-step-1[\\/]([^"\n]+)/g)].map(match=>match[1]);return {text:'NOTE: ok'};}});
+  f.hub.download=bytes;f.hub.downloadSha=sha(bytes);
+  await poll(f);await f.client.idle();
+  assert.equal(f.hub.reports[0].outcome,'done');
+  assert.equal(seen.length,6);
+  assert.ok(seen.every(name=>Buffer.byteLength(name)<=240 && !/[<>:"|?*]/.test(name) && !/[. ]$/.test(name)),seen.join(','));
+  assert.ok(seen[0].endsWith('.pdf'));
+  assert.ok(!/^CON(\.|$)/i.test(seen[2]));
+  assert.equal(new Set(seen).size,6,'two files with one name both survive');
+});
+
+test('an earlier step whose number is not a whole number blocks the step',async t=>{
+  const f=fixture(t,{previous:[{...previousFile('hello')[0],n:'../..'}]});
+  f.hub.download='hello';f.hub.downloadSha=sha('hello');
+  await poll(f);await f.client.idle();
+  assert.equal(f.hub.runs.length,0);
+  assert.equal(f.hub.reports[0].outcome,'failed');
+  assert.equal(f.hub.downloads,undefined,'nothing is fetched into a folder named by that value');
 });
 
 test('a Hub without workflows answers quietly, and a different account never runs',async t=>{

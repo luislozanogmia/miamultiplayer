@@ -86,6 +86,31 @@ function outboxFiles(folder) {
   return entries.filter(entry=>entry.isFile() && !entry.name.startsWith('.')).map(entry=>entry.name).sort()
     .map(name=>({name,path:path.join(folder,name),size:fs.statSync(path.join(folder,name)).size}));
 }
+// A name from the team, made safe for this computer's disk on every platform:
+// no Windows-reserved characters or device names, and within the byte limit
+// filesystems put on a name, however long its characters are in UTF-8.
+const FILE_NAME_BYTES=240;
+const RESERVED_NAME=/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
+function localInputName(filename,taken) {
+  let name=path.basename(teamFiles.safeFilename(filename)).replace(/[<>:"|?*]/g,'_').replace(/[. ]+$/,'');
+  if(!name) name='file';
+  if(RESERVED_NAME.test(name)) name='_'+name;
+  const dot=name.lastIndexOf('.');
+  const ext=dot>0 && Buffer.byteLength(name.slice(dot))<=16?name.slice(dot):'';
+  const stem=[...(ext?name.slice(0,dot):name)];
+  const fitted=suffix=>{
+    const kept=[...stem];
+    while(Buffer.byteLength(kept.join('')+suffix+ext)>FILE_NAME_BYTES) kept.pop();
+    return kept.join('')+suffix+ext;
+  };
+  name=fitted('');
+  for(let copy=2;taken.has(name.toLowerCase());copy++) name=fitted(' '+copy);
+  taken.add(name.toLowerCase());
+  return name;
+}
+// Only these mean the file itself is the problem. Anything else (a rate limit, a
+// sign-in, an outage) passes, so the step waits and nothing is reported.
+const FILE_BLOCKED=['integrity_failed','file_integrity_mismatch','not_found','unsafe_url'];
 const NO_STORE={records:()=>[],isMine:()=>false,save(){},drop(){}};
 
 function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdentity,runBot,fetcher=fetch,progressMs=PROGRESS_MS,stepTimeoutMs=STEP_TIMEOUT_MS,scanWaitMs=SCAN_WAIT_MS,scanCheckMs=SCAN_CHECK_MS,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
@@ -148,26 +173,30 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
       throw Object.assign(new Error(teamFiles.errorMessage(error.code,error.status)),{code:error.code,status:error.status});
     })});
   }
-  // Earlier steps' files, verified against their fingerprint. `wait` means a
-  // scan has not finished: nothing has started, so the step is simply claimed
-  // again on a later poll. `blocked` means a file is gone or failed its check.
-  async function fetchInputs(s,row,order,token,signal) {
+  // Earlier steps' files, verified against their fingerprint. `wait` means nothing
+  // has started, so the step is simply claimed again on a later poll; a file still
+  // being scanned lands here too, because asking for it is what moves it along at
+  // the Hub. `blocked` means a file is gone or failed its check, and `missing`
+  // names an earlier step whose file the Hub no longer lists.
+  async function fetchInputs(s,row,order,detail,token,signal) {
     const client=fileClient(s,token),inputs=[];
-    for(const item of order.previous) for(const file of item.files||[]) {
-      if(file.state!=='ready') return {wait:true};
-      if(!ID.test(file.fileId||'')) return {blocked:true};
-      const folder=path.join(workDir(s,row),'from-step-'+item.n);
-      fs.mkdirSync(folder,{recursive:true});
-      let name=path.basename(teamFiles.safeFilename(file.filename));
-      if(name==='.' || name==='..') name='file';
-      try {
-        const blob=await teamFiles.downloadFile({client,fetch:fetcher,signal,file:{fileId:file.fileId,sizeBytes:file.sizeBytes,sha256:file.sha256,spaceId:order.spaceId}});
-        fs.writeFileSync(path.join(folder,name),Buffer.from(await blob.arrayBuffer()));
-      } catch(error) {
-        if(error.code==='file_not_ready' || error.code==='hub_unavailable' || error.code==='download_failed' || error.code==='aborted') return {wait:true};
-        return {blocked:true};
+    for(const item of order.previous) {
+      if(!Number.isSafeInteger(item.n) || item.n<1) return {blocked:true};
+      const listed=(detail.steps||[]).find(step=>step.n===item.n);
+      if(listed && Number.isSafeInteger(listed.file_count) && listed.file_count>(item.files||[]).length) return {missing:item.n};
+      const folder=path.join(workDir(s,row),'from-step-'+item.n),taken=new Set();
+      for(const file of item.files||[]) {
+        if(!ID.test(file.fileId||'')) return {blocked:true};
+        fs.mkdirSync(folder,{recursive:true});
+        const name=localInputName(file.filename,taken);
+        try {
+          const blob=await teamFiles.downloadFile({client,fetch:fetcher,signal,file:{fileId:file.fileId,sizeBytes:file.sizeBytes,sha256:file.sha256,spaceId:order.spaceId}});
+          fs.writeFileSync(path.join(folder,name),Buffer.from(await blob.arrayBuffer()));
+        } catch(error) {
+          return FILE_BLOCKED.includes(error.code)?{blocked:true}:{wait:true};
+        }
+        inputs.push({n:item.n,path:path.join(folder,name)});
       }
-      inputs.push({n:item.n,path:path.join(folder,name)});
     }
     return {inputs};
   }
@@ -251,10 +280,10 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     }
     const channelId=stepRun.run && stepRun.run.channel_id;
     if(!ID.test(channelId||'')) return finish(s,row);
-    const input=await fetchInputs(s,row,order,token,controller.signal);
+    const input=await fetchInputs(s,row,order,stepRun,token,controller.signal);
     if(input.wait) return;
-    if(input.blocked) {
-      journal.saveReport(s,row,{outcome:'failed',note:'A file from an earlier step could not be opened.'});
+    if(input.blocked || input.missing) {
+      journal.saveReport(s,row,{outcome:'failed',note:input.missing?'A file from step '+input.missing+' was blocked or removed, so this step did not run.':'A file from an earlier step could not be opened.'});
       return publish(s,journal.get(s,row.run_id,row.n,row.claim_id),token());
     }
     const outbox=path.join(workDir(s,row),'for-next-step');
