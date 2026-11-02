@@ -3739,3 +3739,10 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
   .mia-tips-path{stroke-dashoffset:0;}
   .mia-tips-head{opacity:1;}
 }
+
+/* Personal agents list: one row per agent, rename/delete on hover or focus. */
+.private-agent-row{position:relative;}
+.private-agent-actions{position:absolute;top:4px;right:6px;display:none;gap:4px;}
+.private-agent-row:hover .private-agent-actions,.private-agent-row:focus-within .private-agent-actions{display:flex;}
+.private-agents-list:empty{display:none;}
+.chat-recents-group.is-collapsed .private-agents-list{display:none;}

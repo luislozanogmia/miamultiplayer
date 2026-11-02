@@ -32,7 +32,7 @@ test('each creation and utility action has one control, all routed through runTo
     assert.equal((html.match(new RegExp(`data-tools-action="${action}"`, 'g')) || []).length, 1, `${action} appears once`);
   }
   assert.match(html, /data-tools-action="new-agent" aria-disabled="true"/, 'New agent stays visible but unavailable');
-  assert.match(source, /function runToolsAction\(action\)\{[\s\S]*action === 'new-chat'\) openDmCompose\(\)[\s\S]*action === 'new-bot'\) startAgentSetupChat\(\)[\s\S]*action === 'new-agent'\) openHarnessAgentSetup\(\)[\s\S]*action === 'new-channel'\) openNewChannelFlow\(\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
+  assert.match(source, /function runToolsAction\(action\)\{[\s\S]*action === 'new-chat'\) openDmCompose\(\)[\s\S]*action === 'new-bot'\) startAgentSetupChat\(\)[\s\S]*action === 'new-agent'\)\{ if\(window\.miaPrivateAgents\) window\.miaPrivateAgents\.create\(\); \}[\s\S]*action === 'new-channel'\) openNewChannelFlow\(\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
   assert.match(source, /\['New direct message', openChatDmAddPopover\], \['New channel', openNewChannelFlow\]/, 'outside teams New channel is on the conversations +');
   assert.match(source, /function openHarnessAgentSetup\(\)[\s\S]*loadHarnessSettings\(false\)[\s\S]*openHarnessOnboarding\(settings\)/);
 });
