@@ -14,6 +14,10 @@ const { randomBytes } = require('node:crypto');
 // with that exact content. `held` means the step was claimed but found to need the
 // person after all. hub_workflow_accepted records the steps of a workflow version
 // this person has accepted on this computer.
+//
+// `review` is set on a started row when the bot finished but its report needs the
+// person: what they will see and choose from. A row with a review never runs by
+// itself. `report` is the full report, sent along with the note.
 const OPEN = ['prepared','claimed','started','report_ready'];
 
 function createHubWorkflowJournal(db) {
@@ -23,7 +27,7 @@ function createHubWorkflowJournal(db) {
     state TEXT NOT NULL CHECK(state IN ('prepared','claimed','started','report_ready','reported','stopped')),
     approved INTEGER NOT NULL DEFAULT 0, workflow_name TEXT NOT NULL DEFAULT '', step_text TEXT NOT NULL DEFAULT '',
     outcome TEXT, note TEXT, file_ids TEXT,
-    approved_digest TEXT, held INTEGER NOT NULL DEFAULT 0,
+    approved_digest TEXT, held INTEGER NOT NULL DEFAULT 0, report TEXT, review TEXT,
     PRIMARY KEY(origin,owner,subject,team_id,run_id,n,claim_id)
   );
   CREATE TABLE IF NOT EXISTS hub_workflow_accepted (
@@ -34,6 +38,8 @@ function createHubWorkflowJournal(db) {
   const columns = db.prepare('PRAGMA table_info(hub_workflow_steps)').all().map(column => column.name);
   if (!columns.includes('approved_digest')) db.exec('ALTER TABLE hub_workflow_steps ADD COLUMN approved_digest TEXT');
   if (!columns.includes('held')) db.exec('ALTER TABLE hub_workflow_steps ADD COLUMN held INTEGER NOT NULL DEFAULT 0');
+  if (!columns.includes('report')) db.exec('ALTER TABLE hub_workflow_steps ADD COLUMN report TEXT');
+  if (!columns.includes('review')) db.exec('ALTER TABLE hub_workflow_steps ADD COLUMN review TEXT');
   const scope = s => [s.origin,s.owner,s.subject,s.teamId];
   const where = 'origin=? AND owner=? AND subject=? AND team_id=?';
   const inOpen = OPEN.map(state => `'${state}'`).join(',');
@@ -63,7 +69,7 @@ function createHubWorkflowJournal(db) {
     start(s,row) { return move(s,row,['claimed'],'started'); },
     // The person chose to run an interrupted step again under the same claim.
     reopen(s,row) {
-      return db.prepare(`UPDATE hub_workflow_steps SET state='prepared',approved=1 WHERE ${where} AND run_id=? AND n=? AND claim_id=? AND state='started'`)
+      return db.prepare(`UPDATE hub_workflow_steps SET state='prepared',approved=1,review=NULL WHERE ${where} AND run_id=? AND n=? AND claim_id=? AND state='started'`)
         .run(...scope(s),row.run_id,row.n,row.claim_id).changes === 1;
     },
     // The person pressed Run on exactly this content.
@@ -86,12 +92,21 @@ function createHubWorkflowJournal(db) {
     acceptedBot(s,key,version) {
       db.prepare(`UPDATE hub_workflow_accepted SET bot_version=? WHERE ${where} AND accept_key=?`).run(version,...scope(s),key);
     },
-    saveReport(s,row,{outcome,note,fileIds=[]}) {
-      return db.prepare(`UPDATE hub_workflow_steps SET state='report_ready',outcome=?,note=?,file_ids=? WHERE ${where} AND run_id=? AND n=? AND claim_id=? AND state IN (${inOpen})`)
-        .run(outcome,note,JSON.stringify(fileIds),...scope(s),row.run_id,row.n,row.claim_id).changes === 1;
+    // The bot finished and the person decides what the team hears. The row stays
+    // `started`, so nothing can run it again by itself.
+    holdForReview(s,row,review) {
+      return db.prepare(`UPDATE hub_workflow_steps SET review=? WHERE ${where} AND run_id=? AND n=? AND claim_id=? AND state='started'`)
+        .run(JSON.stringify(review),...scope(s),row.run_id,row.n,row.claim_id).changes === 1;
+    },
+    saveReport(s,row,{outcome,note,report=null,fileIds=[]}) {
+      return db.prepare(`UPDATE hub_workflow_steps SET state='report_ready',outcome=?,note=?,report=?,file_ids=?,review=NULL WHERE ${where} AND run_id=? AND n=? AND claim_id=? AND state IN (${inOpen})`)
+        .run(outcome,note,report?JSON.stringify(report):null,JSON.stringify(fileIds),...scope(s),row.run_id,row.n,row.claim_id).changes === 1;
     },
     reported(s,row) { return move(s,row,['report_ready'],'reported'); },
-    stop(s,row) { return move(s,row,OPEN,'stopped'); },
+    stop(s,row) {
+      return db.prepare(`UPDATE hub_workflow_steps SET state='stopped',review=NULL WHERE ${where} AND run_id=? AND n=? AND claim_id=? AND state IN (${inOpen})`)
+        .run(...scope(s),row.run_id,row.n,row.claim_id).changes === 1;
+    },
   };
 }
 module.exports = { createHubWorkflowJournal };

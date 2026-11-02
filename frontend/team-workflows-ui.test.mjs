@@ -349,3 +349,55 @@ test('the page declares its scripts and only team workspaces draw the screens', 
   assert.match(app, /!found && hubWorkspace\(\) && window\.MiaTeamWorkflowsUi/);
   assert.match(app, /m\.hubWorkflowApproval && hubWorkspace\(\)/);
 });
+
+const REPORT = { did: 'Drafted the quote', how: 'From the <b>sheet</b>.', failed: 'Totals not checked', next: 'Check the totals', decision: 'Which price list?' };
+const card = extra => ({ runId: ID(2), n: 3, workflowName: 'Quote flow', text: 'Send it', digest: 'a'.repeat(64), reviewDigest: 'b'.repeat(64), why: [], ...extra });
+
+test('a partly done card shows the whole report and offers exactly its three choices', () => {
+  const html = ui.homeHtml({ workflows: [], people, needsYou: [card({ reason: 'report_partial', report: REPORT, outputFiles: ['a<b>.pdf'] })] });
+  for(const text of ['Partly done', 'Drafted the quote', 'Totals not checked', 'Check the totals', 'Which price list?', 'Nothing has gone to the team yet', 'Send as partly done', 'Run it again', 'Mark as failed']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /<b>/);
+  assert.match(html, /a&lt;b&gt;\.pdf/);
+  assert.match(html, /data-wf-resume="send"[^>]*data-wf-digest="b{64}"/);
+  assert.match(html, /data-wf-resume="run"[^>]*data-wf-digest="a{64}"/);
+  assert.doesNotMatch(html, /data-wf-resume="done"/);
+  assert.match(ui.homeHtml({ workflows: [], people, needsYou: [card({ reason: 'report_partial', report: REPORT, why: ['said_done'] })] }), /said this step was done/);
+});
+
+test('"Did this step finish?" shows the bot\'s last message as only yours, with its three choices', () => {
+  const html = ui.homeHtml({ workflows: [], people, needsYou: [card({ reason: 'report_unclear', report: null, lastMessage: '<script>private</script>' })] });
+  for(const text of ['did step 3 finish?', 'Only you can see this', 'Mark as done', 'Run it again', 'Mark as failed']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /data-wf-resume="done"[^>]*data-wf-digest="b{64}"/);
+  assert.doesNotMatch(html, /data-wf-resume="send"/);
+  assert.match(ui.homeHtml({ workflows: [], people, needsYou: [card({ reason: 'report_unclear', why: ['looks_secret'], lastMessage: 'x' })] }), /password or key/);
+});
+
+test('the OK card shows earlier reports in full, with a decision in view for the next owner', () => {
+  const html = ui.homeHtml({ workflows: [], people, needsYou: [card({ reason: 'approval', why: ['teammate_text'], previous: [{ n: 2, ownerId: 'u1', note: 'n', outcome: 'partial', report: REPORT, files: [] }] })] });
+  for(const text of ['Pat', 'Partly done', 'Drafted the quote', 'Totals not checked', 'Check the totals', 'Needs a decision', 'Which price list?']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /<details/);
+  assert.doesNotMatch(html, /<b>/);
+});
+
+test('the run view shows the result and what was done, a decision, and the rest behind Read report', () => {
+  const steps = [{ n: 1, text: 'Draft', owner_id: 'u1', state: 'done', note: 'Drafted', outcome: 'partial', report: REPORT }, { n: 2, text: 'Old', owner_id: 'u1', state: 'done', note: 'An older note', outcome: null, report: null }];
+  const html = ui.runHtml({ run: run({ state: 'finished' }), steps, people, approvals: [], needsYou: [], now: 2 });
+  assert.match(html, /data-state="partial"/);
+  assert.match(html, /Partly done/);
+  assert.match(html, /Read report/);
+  assert.match(html, /Which price list\?/);
+  assert.match(html, /data-wf-keep-open="report:/);
+  assert.match(html, /An older note/);
+  assert.equal(wf.stepLine({ state: 'done', outcome: 'partial', owner_id: 'u1' }, people, 2), 'Partly done');
+});
+
+test('the queue carries the person\'s answer and what they read', async () => {
+  const posts = [];
+  const queue = wf.createQueue({ teamId: ID(1), post: async (route, body) => { posts.push([route, body]); return {}; } });
+  await queue.resume(ID(2), 3, 'send', 'b'.repeat(64));
+  await queue.resume(ID(2), 3, 'done', 'b'.repeat(64));
+  queue.stop();
+  const sent = posts.filter(p => p[0] === '/workflow/resume').map(p => p[1]);
+  assert.deepEqual(sent.map(p => [p.action, p.digest]), [['send', 'b'.repeat(64)], ['done', 'b'.repeat(64)]]);
+});

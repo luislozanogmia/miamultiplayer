@@ -9,6 +9,7 @@
   // tested; the controller below wires it to the Hub. Team workspaces only.
   var wf = root.MiaTeamWorkflows || (typeof require === 'function' ? require('./team-workflows.js') : null);
   var tf = root.MiaTeamFiles || (typeof require === 'function' ? require('./team-files.js') : null);
+  var sr = root.MiaStepReport || (typeof require === 'function' ? require('./step-report.js') : null);
 
   function esc(value){
     return String(value == null ? '' : value).replace(/[&<>"']/g, function(c){
@@ -49,7 +50,8 @@
       + '<div class="twf-approval-title">' + esc(step) + '</div>'
       + (approval.run_summary ? '<div class="twf-approval-line">' + esc(approval.run_summary) + '</div>' : '')
       + (approval.step_text ? '<div class="twf-approval-line">' + esc(approval.step_text) + '</div>' : '')
-      + (approval.step_note ? '<div class="twf-approval-line">' + esc(wf.displayName(people, approval.owner_id)) + ': ' + esc(approval.step_note) + '</div>' : '')
+      + (sr.normalize(approval.step_report) ? '<div class="twf-approval-line">' + esc(wf.displayName(people, approval.owner_id)) + ':' + sr.summaryHtml({outcome: approval.step_outcome, note: approval.step_note, report: approval.step_report}, esc, 'report:' + id) + '</div>'
+        : approval.step_note ? '<div class="twf-approval-line">' + esc(wf.displayName(people, approval.owner_id)) + ': ' + esc(approval.step_note) + '</div>' : '')
       + '<div class="twf-approval-status">' + esc(status) + '</div>'
       + (controls ? '<div class="twf-actions">' + controls + '</div>' : '')
       + '<div class="twf-feedback" role="status" data-wf-feedback></div></div>';
@@ -69,7 +71,9 @@
     }
     (item.previous || []).forEach(function(step){
       var from = 'Step ' + Number(step.n);
-      if(step.note) out += '<div class="twf-gate-row"><span class="twf-gate-label">' + from + '</span><span>' + esc(wf.displayName(people, step.ownerId)) + ': ' + esc(step.note) + '</span></div>';
+      // In full, because this is what the person agrees to pass to the bot.
+      if(sr.normalize(step.report)) out += '<div class="twf-gate-row"><span class="twf-gate-label">' + from + '</span><span>' + esc(wf.displayName(people, step.ownerId)) + sr.fullHtml(step, esc) + '</span></div>';
+      else if(step.note) out += '<div class="twf-gate-row"><span class="twf-gate-label">' + from + '</span><span>' + esc(wf.displayName(people, step.ownerId)) + ': ' + esc(step.note) + '</span></div>';
       if((step.files || []).length) out += '<div class="twf-gate-row"><span class="twf-gate-label">Files</span><span>' + step.files.map(esc).join(', ') + '</span></div>';
     });
     return out + '</div>';
@@ -85,7 +89,7 @@
       var n = Number(item.n), run = esc(item.runId), where = ' data-wf-run="' + run + '" data-wf-n="' + n + '"';
       var digest = item.digest ? ' data-wf-digest="' + esc(item.digest) + '"' : '';
       var name = esc(item.workflowName || 'A workflow');
-      var runButton = function(label){ return item.digest ? btn(label, 'data-wf-resume="run"' + where + digest, 'primary') : ''; };
+      var runButton = function(label, kind){ return item.digest ? btn(label, 'data-wf-resume="run"' + where + digest, kind === undefined ? 'primary' : kind) : ''; };
       var missing = item.digest ? '' : '<div class="twf-card-text">Mia could not load this step\'s details, so it cannot run it yet. It will look again.</div>';
       if(item.reason === 'approval'){
         return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' needs your OK to run</div>'
@@ -93,6 +97,22 @@
           + stepContentHtml(item, people)
           + '<div class="twf-card-text">The bot runs on this computer and can use its tools here. Run starts only this one step.</div>'
           + '<div class="twf-actions">' + runButton('Run') + btn('Don\u2019t run it', 'data-wf-resume="fail"' + where) + '</div></div>';
+      }
+      var reviewed = item.reviewDigest ? ' data-wf-digest="' + esc(item.reviewDigest) + '"' : '';
+      var failButton = btn('Mark as failed', 'data-wf-resume="fail"' + where + reviewed);
+      var waitingFiles = (item.outputFiles || []).length ? '<div class="twf-card-text">Files waiting to be shared: ' + item.outputFiles.map(esc).join(', ') + '</div>' : '';
+      if(item.reason === 'report_partial'){
+        return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' is only partly done</div>'
+          + '<div class="twf-card-text">' + esc((item.why || []).indexOf('said_done') >= 0 ? 'The bot said this step was done, but it also listed something that failed or wasn\'t checked.' : 'The bot finished part of this step.') + ' Nothing has gone to the team yet.</div>'
+          + sr.fullHtml({outcome: 'partial', report: item.report}, esc) + waitingFiles
+          + '<div class="twf-actions">' + btn('Send as partly done', 'data-wf-resume="send"' + where + reviewed, 'primary') + runButton('Run it again', '') + failButton + '</div></div>';
+      }
+      if(item.reason === 'report_unclear'){
+        return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': did step ' + n + ' finish?</div>'
+          + '<div class="twf-card-text">' + esc((item.why || []).indexOf('looks_secret') >= 0 ? 'The bot\'s report looked like it held a password or key, so Mia did not send it.' : 'The bot did not end with a complete report, so Mia can\'t tell.') + ' Nothing has gone to the team yet.</div>'
+          + (item.lastMessage ? '<div class="twf-gate-instructions-label">The bot\'s last message. Only you can see this.</div><pre class="twf-gate-instructions" tabindex="0" data-wf-keep-scroll="reply:' + run + ':' + n + '">' + esc(item.lastMessage) + '</pre>' : '<div class="twf-card-text">The bot left no message.</div>')
+          + waitingFiles
+          + '<div class="twf-actions">' + btn('Mark as done', 'data-wf-resume="done"' + where + reviewed, 'primary') + runButton('Run it again', '') + failButton + '</div></div>';
       }
       if(item.reason === 'instructions_unavailable'){
         return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' is waiting</div>'
@@ -179,11 +199,14 @@
     var run = view.run, people = view.people, me = view.me;
     var approval = (view.approvals || []).filter(function(a){ return a.step_n === step.n; }).slice(-1)[0];
     var meta = wf.displayName(people, step.owner_id) + (step.bot_name ? ' · ' + step.bot_name : '');
-    var out = '<li class="automations-step" data-state="' + esc(wf.stepMark(step.state)) + '"><span class="automations-step-n"><span class="automations-step-mark" data-state="' + esc(wf.stepMark(step.state)) + '"></span>' + Number(step.n) + '</span><span>'
+    var hasReport = !!sr.normalize(step.report), mark = esc(wf.stepMarkOf(step));
+    var out = '<li class="automations-step" data-state="' + mark + '"><span class="automations-step-n"><span class="automations-step-mark" data-state="' + mark + '"></span>' + Number(step.n) + '</span><span>'
       + '<div>' + esc(step.text) + '</div><div class="automations-step-note">' + esc(meta) + '</div>'
-      + '<div class="automations-step-note">' + esc(wf.stepLine(step, people, view.now)) + '</div>';
+      // The report's own headline says the result, so it is not said twice.
+      + (hasReport && (step.state === 'done' || step.state === 'failed') ? '' : '<div class="automations-step-note">' + esc(wf.stepLine(step, people, view.now)) + '</div>');
     if(step.state === 'working' && step.progress_note) out += '<div class="automations-step-note">' + esc(step.progress_note) + '</div>';
-    if(step.note) out += '<div class="twf-note">' + esc(step.note) + '</div>';
+    if(hasReport) out += sr.summaryHtml(step, esc, 'report:' + run.id + ':' + step.n);
+    else if(step.note) out += '<div class="twf-note">' + esc(step.note) + '</div>';
     out += stepFilesHtml(step);
     if(wf.canRetry(step, me, view.isAdmin) && wf.isOpenRun(run)) out += '<div class="twf-actions">' + btn('Retry this step', 'data-wf-retry="' + Number(step.n) + '"') + '</div>';
     if(approval && approval.state === 'pending') out += approvalCardHtml(approval, people, {inRun: true});
@@ -373,9 +396,12 @@
     // Polling redraws the page, so a long set of instructions keeps its place.
     var kept = {}, boxes = function(){ return mount.querySelectorAll ? Array.prototype.slice.call(mount.querySelectorAll('[data-wf-keep-scroll]')) : []; };
     boxes().forEach(function(box){ kept[box.getAttribute('data-wf-keep-scroll')] = box.scrollTop; });
+    var wasOpen = {}, opened = function(){ return mount.querySelectorAll ? Array.prototype.slice.call(mount.querySelectorAll('[data-wf-keep-open]')) : []; };
+    opened().forEach(function(box){ if(box.open) wasOpen[box.getAttribute('data-wf-keep-open')] = true; });
     mount.innerHTML = screenHtml();
     if(scroller) scroller.scrollTop = top;
     boxes().forEach(function(box){ var place = kept[box.getAttribute('data-wf-keep-scroll')]; if(place) box.scrollTop = place; });
+    opened().forEach(function(box){ if(wasOpen[box.getAttribute('data-wf-keep-open')]) box.open = true; });
     // On a detail screen the rest of the page steps aside.
     var board = mount.parentNode && mount.parentNode.querySelector('[data-wf-board]');
     if(board) board.hidden = view.screen !== 'home';

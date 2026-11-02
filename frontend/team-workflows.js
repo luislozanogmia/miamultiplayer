@@ -45,6 +45,7 @@
     step_not_queued: 'This step is no longer waiting to run.',
     no_file_tools: 'This Mia can only search the web, so it cannot open the files this step needs.',
     step_running: 'This step is already running on this computer.',
+    steps_busy: 'Mia is busy with other steps on this computer. Try again in a moment.',
     step_claimed: 'Another of your computers is working on this step.',
     bot_runtime_unavailable: 'Mia cannot run bots right now. Restart Mia and try again.',
     hub_unavailable: 'Mia cannot reach the team server. Your work is safe; try again shortly.',
@@ -110,6 +111,7 @@
   // Maps a step state to the marks the Automations page already draws.
   var STEP_MARKS = {done: 'done', working: 'working', claimed: 'working', queued: 'unreported', waiting: 'unreported', failed: 'failed', rejected: 'failed', paused: 'needs_you', cancelled: 'skipped'};
   function stepMark(state){ return STEP_MARKS[state] || 'pending'; }
+  function stepMarkOf(step){ return step.state === 'done' && step.outcome === 'partial' ? 'partial' : stepMark(step.state); }
   // The line under a step. A queued step waits for its owner's own computer,
   // which is the normal case, so it reads as waiting and never as a problem.
   function stepLine(step, people, now){
@@ -123,7 +125,7 @@
       case 'claimed': return 'Starting on ' + possessive(owner) + ' Mia';
       case 'working': return 'Bot is working on ' + possessive(owner) + ' Mia';
       case 'waiting': return 'Waiting for ' + shortName(people, step.approver_id) + ' to approve';
-      case 'done': return 'Done';
+      case 'done': return step.outcome === 'partial' ? 'Partly done' : 'Done';
       case 'rejected': return 'Rejected';
       case 'failed': return 'Failed';
       case 'paused': return pausedReason(step.paused_reason);
@@ -369,10 +371,10 @@
     return {
       wake: wake,
       state: function(){ return state; },
-      // `digest` names the exact content the person saw, so Run covers only that.
+      // `digest` names the exact content the person saw, so their answer covers only that.
       resume: function(runId, n, action, digest){
-        var body = {teamId: teamId, runId: runId, n: n, action: action === 'fail' ? 'fail' : 'run'};
-        if(body.action === 'run' && digest) body.digest = digest;
+        var body = {teamId: teamId, runId: runId, n: n, action: ['fail', 'send', 'done'].indexOf(action) >= 0 ? action : 'run'};
+        if(digest) body.digest = digest;
         return post('/workflow/resume', body).then(function(result){ wake(); return result; }, function(error){ wake(); throw error; });
       },
       stop: function(){ stopped = true; if(timer) clearTimer(timer); timer = null; }
@@ -382,7 +384,7 @@
   return {
     ID: ID, SUMMARY_MAX: SUMMARY_MAX, NAME_MAX: NAME_MAX, LABEL_MAX: LABEL_MAX, STEP_MAX: STEP_MAX, STEPS_MAX: STEPS_MAX, DEPARTMENT_MAX: DEPARTMENT_MAX, WEEKDAYS: WEEKDAYS,
     errorMessage: errorMessage, directory: directory, shortName: shortName, displayName: displayName, sinceText: sinceText,
-    runState: runState, isOpenRun: isOpenRun, pausedReason: pausedReason, stepMark: stepMark, stepLine: stepLine, runLine: runLine,
+    runState: runState, isOpenRun: isOpenRun, pausedReason: pausedReason, stepMark: stepMark, stepMarkOf: stepMarkOf, stepLine: stepLine, runLine: runLine,
     canCancel: canCancel, canRetry: canRetry, canFix: canFix, canStart: canStart,
     cleanLine: cleanLine, randomId: randomId, startBody: startBody, triggerLine: triggerLine, titleCase: titleCase, localTimezone: localTimezone,
     blankStep: blankStep, blankDraft: blankDraft, draftFromWorkflow: draftFromWorkflow, buildDefinition: buildDefinition, checkDraft: checkDraft,
