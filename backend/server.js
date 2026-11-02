@@ -5397,7 +5397,7 @@ app.get('/api/backup', requireGlobalSettingsAdmin, (req, res) => {
   settings.lastBackup = exportedAt;
   db.saveSingleton(conn, 'settings', settings);
 
-  res.setHeader('Content-Disposition', `attachment; filename="miaos-backup-${exportedAt.slice(0, 10)}.json"`);
+  res.setHeader('Content-Disposition', `attachment; filename="miaos-backup-${localDateString()}.json"`);
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Cache-Control', 'no-store');
   res.status(200).send(JSON.stringify(backup, null, 2));

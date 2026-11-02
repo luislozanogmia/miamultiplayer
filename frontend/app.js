@@ -7405,7 +7405,7 @@
         : 'unavailable';
       var summary = [
         'Mia safe support summary',
-        'Generated: ' + new Date().toISOString(),
+        'Generated: ' + new Date().toString(),
         'Workspace: ' + workspaceLabel(),
         'Chat: ' + chatStatus,
         'Health: ' + (health.ok === true ? 'ok' : 'unavailable'),

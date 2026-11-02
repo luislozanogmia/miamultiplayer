@@ -13,6 +13,7 @@ const http = require('http');
 const https = require('https');
 const os = require('os');
 const path = require('path');
+const { localDateTimeString } = require('./local-date');
 const { ARTIFACT_MAX_BYTES, artifactMimeTypeForFilename } = require('./artifact-policy');
 
 const FILE_KINDS = Object.freeze({
@@ -123,7 +124,7 @@ function moveToTrash(full, { platform = process.platform, home = os.homedir(), r
   fs.mkdirSync(files, { recursive: true });
   fs.mkdirSync(info, { recursive: true });
   const name = freeName(files, path.basename(full));
-  fs.writeFileSync(path.join(info, `${name}.trashinfo`), `[Trash Info]\nPath=${encodeURI(full)}\nDeletionDate=${new Date().toISOString().slice(0, 19)}\n`);
+  fs.writeFileSync(path.join(info, `${name}.trashinfo`), `[Trash Info]\nPath=${encodeURI(full)}\nDeletionDate=${localDateTimeString()}\n`);
   moveFile(full, path.join(files, name));
 }
 

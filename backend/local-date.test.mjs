@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { localDateString } = require('./local-date.js');
+const { localDateString, localDateTimeString } = require('./local-date.js');
 
 function inTimeZone(timeZone, run) {
   const previous = process.env.TZ;
@@ -41,4 +41,18 @@ test('the date given to Mia and bots comes from the local clock', async () => {
   assert.doesNotMatch(contextBuilder, /toISOString/);
   assert.match(contextBuilder, /Today is \$\{today\}/);
   assert.match(contextBuilder, /localTimezoneName\(\)/);
+});
+
+test('the local date and time use the machine clock with no offset', () => {
+  const evening = new Date('2026-11-02T01:14:05Z');
+  assert.equal(inTimeZone('America/Monterrey', () => localDateTimeString(evening)), '2026-11-01T19:14:05');
+});
+
+test('dates people see in file names and summaries are not cut from UTC', async () => {
+  const read = (file) => readFile(new URL(file, import.meta.url), 'utf8');
+  for (const file of ['./server.js', './admin.js']) {
+    assert.match(await read(file), /miaos-backup-\$\{localDateString\(\)\}\.json/);
+  }
+  assert.match(await read('./artifacts.js'), /DeletionDate=\$\{localDateTimeString\(\)\}/);
+  assert.match(await read('../frontend/app.js'), /'Generated: ' \+ new Date\(\)\.toString\(\)/);
 });
