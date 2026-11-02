@@ -443,6 +443,7 @@ function loadMain(environment = {}) {
       loadURL(url) { this.loadedUrls.push(url); }
       close() { this.closed = true; }
     },
+    protocol: { registerSchemesAsPrivileged() {} },
     dialog: { showMessageBox() { return Promise.resolve({ response: 1 }); } },
     ipcMain: { handle() {}, on() {}, removeHandler() {} },
     Menu: { setApplicationMenu() {}, buildFromTemplate(template) { return template; } },

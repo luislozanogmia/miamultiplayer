@@ -32,6 +32,18 @@ contextBridge.exposeInMainWorld("miaDesktop", {
   artifact: {
     open: (url) => ipcRenderer.invoke("miaos-artifact-open", url),
   },
+  // Apps run in a sandboxed native view over the page's pane (app-sandbox.cjs).
+  apps: {
+    open: (source) => ipcRenderer.invoke("miaos-app-pane", { ...source, action: "open" }),
+    layout: (key, bounds) => ipcRenderer.invoke("miaos-app-pane", { action: "layout", key, bounds }),
+    reload: (key) => ipcRenderer.invoke("miaos-app-pane", { action: "reload", key }),
+    close: (key) => ipcRenderer.invoke("miaos-app-pane", { action: "close", key }),
+    onState: (callback) => {
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on("miaos-app-state", listener);
+      return () => ipcRenderer.removeListener("miaos-app-state", listener);
+    },
+  },
   notifications: {
     // Resolves "shown", "blocked" (macOS said no), "pending" (still asking),
     // "failed" or "unsupported".

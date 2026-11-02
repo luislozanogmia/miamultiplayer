@@ -12,6 +12,7 @@ const {
   safeStorage,
   WebContentsView,
   autoUpdater: nativeAutoUpdater,
+  protocol,
 } = require("electron");
 const http = require("node:http");
 const net = require("node:net");
@@ -23,6 +24,7 @@ const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
+const { APP_PARTITION_PREFIX, APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes, localAppRoot, teamAppIdentity, teamAppRoot } = require("./app-sandbox.cjs");
 const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { mainWindowLinkAction } = require("./main-navigation.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
@@ -159,6 +161,8 @@ const MIA_MAC_ICON_PATH = app.isPackaged
   ? path.join(process.resourcesPath, "electron.icns")
   : path.join(__dirname, "..", "assets", "mia.icns");
 const PREFERRED_PORT = Number(process.env.MIAOS_PORT) || 4870;
+// Only before the app is ready, so at load: apps run under their own scheme.
+protocol.registerSchemesAsPrivileged([APP_SCHEME_PRIVILEGES]);
 // No persist: prefix is intentional: artifact previews must not retain cookies
 // or other browsing state between app launches.
 const ARTIFACT_PARTITION = "miaos-artifacts";
@@ -230,6 +234,7 @@ let backendUrl = null;
 let isQuitting = false;
 let ghostBridge = null;
 let googleWorkspaceBroker = null;
+let appPanes = null;
 let artifactToolbarView = null;
 let artifactView = null;
 let artifactPanelVisible = false;
@@ -937,6 +942,7 @@ async function startLocalBackend(exactPort = null) {
     [PROCESS_SECRETS_MARKER]: "1",
     HERMES_HOME: hermesHome,
     MIAOS_WORKSPACE_DIR: workspaceDir,
+    MIAOS_TEAM_APPS_DIR: path.join(dataDirectory, "team-apps"),
     MIAOS_HERMES_GUARD_BIN: path.join(BACKEND_ROOT, "miaos-hermes-bin"),
     HERMES_BIN,
     MIAOS_HERMES_BIN: HERMES_BIN,
@@ -2055,6 +2061,16 @@ function createWindow() {
     },
   );
   const windowNativeBrowser = nativeBrowser;
+  // Apps in the page's pane (app-sandbox.cjs). A reload of Mia's own page
+  // forgets its tabs, so the apps they showed close with it.
+  const windowAppPanes = appPanes = createAppPanes({
+    window,
+    session,
+    WebContentsView,
+    openWebLink: url => { void openLinkInMiaBrowser(url); },
+    onState: payload => { if (!window.isDestroyed()) window.webContents.send("miaos-app-state", payload); },
+  });
+  window.webContents.on("did-start-loading", () => windowAppPanes.closeAll());
   createArtifactPanel();
   const windowArtifactToolbarView = artifactToolbarView;
   const windowArtifactView = artifactView;
@@ -2124,6 +2140,8 @@ function createWindow() {
   });
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
+    windowAppPanes.closeAll();
+    if (appPanes === windowAppPanes) appPanes = null;
     if (artifactToolbarView === windowArtifactToolbarView) artifactToolbarView = null;
     if (artifactView === windowArtifactView) artifactView = null;
     if (!mainWindow) {
@@ -2347,6 +2365,13 @@ ipcMain.handle("miaos-reset-relaunch", async (event) => {
   const storages = [mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.session : null];
   try { storages.push(session.fromPartition(ARTIFACT_PARTITION)); } catch (_) { /* no artifact partition yet */ }
   try { storages.push(session.fromPartition(BROWSER_PARTITION)); } catch (_) { /* no browser partition yet */ }
+  // Every app's own storage: the partition folders are the only list of them.
+  if (appPanes) appPanes.closeAll();
+  try {
+    const partitions = fs.readdirSync(path.join(userData, "Partitions"));
+    const prefix = APP_PARTITION_PREFIX.slice("persist:".length);
+    for (const name of partitions) if (name.startsWith(prefix)) storages.push(session.fromPartition(`persist:${name}`));
+  } catch (_) { /* no app has run yet */ }
   for (const storage of storages) {
     if (!storage || typeof storage.clearStorageData !== "function") continue;
     try {
@@ -2452,6 +2477,29 @@ function isMainWindowSender(event) {
     && event.sender === mainWindow.webContents
     && isTrustedMainWindowUrl(ipcSenderUrl(event));
 }
+
+// Which folder an app runs from is decided here from its id; the page never
+// names a path.
+ipcMain.handle("miaos-app-pane", (event, command = {}) => {
+  if (!isMainWindowSender(event) || !appPanes) return { ok: false, error: "Not authorized." };
+  try {
+    if (command.action === "layout") { appPanes.layout(command.key, command.bounds); return { ok: true }; }
+    if (command.action === "close") { appPanes.close(command.key); return { ok: true }; }
+    if (command.action === "reload") return { ok: appPanes.reload(command.key) };
+    if (command.action !== "open") return { ok: false, error: "Not authorized." };
+    if (command.kind === "team") {
+      const root = teamAppRoot(path.join(app.getPath("userData"), "team-apps"), command);
+      return { ok: true, key: appPanes.open(teamAppIdentity(command.teamId, command.appId), root) };
+    }
+    if (command.kind === "local") {
+      const { root, source } = localAppRoot(miaosWorkspacePath(), command.id);
+      return { ok: true, key: appPanes.open(appIdentity(source), root) };
+    }
+    return { ok: false, error: "That app could not be found." };
+  } catch (_) {
+    return { ok: false, error: "That app could not be opened." };
+  }
+});
 
 ipcMain.handle("miaos-google-workspace-auth-open", async (event, value) => {
   if (!isMainWindowSender(event)) return { ok: false };
