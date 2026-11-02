@@ -995,13 +995,63 @@ test('the digest covers every field of a report, the decision included',async t=
   }
 });
 
+const OWN_REPORT={did:'Drafted the quote',how:'Used the sheet.',failed:'Nothing',next:'Send it.',decision:'Should we absorb shipping?'};
+const ownStep=(n,report)=>({n,ownerId:'user_owner',ownerName:'Me',department:'',note:'Drafted the quote',outcome:'done',report,files:[]});
+const acceptStep=f=>{
+  const scope={origin:'https://hub.example.test',owner,subject:ident.subject,teamId};
+  const key=acceptKey({workflowId:WORKFLOW_ID,version:7,n:f.hub.stepRow.n,text:'Draft the quote',botId});
+  f.client.journal.accept(scope,key);f.client.journal.acceptedBot(scope,key,3);
+};
+
+test('a question left by the owner\'s own last step asks before the next one runs',async t=>{
+  const f=fixture(t,{autoRun:false,previous:[ownStep(1,OWN_REPORT)]});
+  acceptStep(f);
+  const [card]=(await rawPoll(f)).needsYou;
+  assert.equal(card.reason,'approval');
+  assert.deepEqual(card.why,['open_decision']);
+  assert.equal(card.previous[0].report.decision,OWN_REPORT.decision);
+  assert.deepEqual(f.hub.claims,[]);
+  await press(f,card);
+  await f.client.idle();
+  assert.equal(f.hub.runs.length,1);
+});
+
+test('a question already past the last step does not ask again',async t=>{
+  const {decision,...settled}=OWN_REPORT;
+  const f=fixture(t,{autoRun:false,previous:[ownStep(1,OWN_REPORT),ownStep(2,settled)]});
+  acceptStep(f);
+  assert.deepEqual((await poll(f)).needsYou,[]);
+  await f.client.idle();
+  assert.equal(f.hub.runs.length,1);
+});
+
+test('a question that appears only at the claim is held, not run',async t=>{
+  const {decision,...settled}=OWN_REPORT;
+  const f=fixture(t,{autoRun:false,previous:[ownStep(1,OWN_REPORT)]});
+  acceptStep(f);
+  f.hub.earlierSteps=[{n:1,owner_id:'user_owner',state:'done',note:'Drafted the quote',outcome:'done',report:settled,file_count:0,files:[]}];
+  await poll(f);await f.client.idle();
+  assert.deepEqual(f.hub.runs,[]);
+  assert.equal(f.db.prepare('SELECT held FROM hub_workflow_steps').get().held,1);
+});
+
+test('a bare key in a report goes to the owner, never the team',async t=>{
+  const key='sk-'+'a1B2'.repeat(10);
+  const f=fixture(t,{reply:block('Called the service with '+key)});
+  await poll(f);await f.client.idle();
+  assert.deepEqual(f.hub.reports,[]);
+  const card=await reviewCard(f);
+  assert.deepEqual(card.why,['looks_secret']);
+  assert.equal(card.report,null);
+});
+
 test('a teammate\'s report alone counts as teammate text on an accepted step',async t=>{
   const f=fixture(t,{autoRun:false,previous:teammateReport({note:''})});
   const scope={origin:'https://hub.example.test',owner,subject:ident.subject,teamId};
   const key=acceptKey({workflowId:WORKFLOW_ID,version:7,n:2,text:'Draft the quote',botId});
   f.client.journal.accept(scope,key);f.client.journal.acceptedBot(scope,key,3);
   const [card]=(await rawPoll(f)).needsYou;
-  assert.deepEqual(card.why,['teammate_text']);
+  assert.deepEqual(card.why,['teammate_text','open_decision']);
   assert.deepEqual(f.hub.claims,[]);
 });
 

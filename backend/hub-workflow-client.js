@@ -107,6 +107,12 @@ const readableDefinition=definition=>definition && Number.isSafeInteger(definiti
   ?{version:definition.version,instructions:definition.instructions}:null;
 const carriesOthers=(gate,subject)=>(!!gate.summary && gate.startedBy!==subject)
   || gate.previous.some(item=>item.ownerId!==subject && (!!item.note || !!item.report || item.files.length>0));
+// A question from the step just before this one. Whoever wrote it, someone decides
+// before the next bot runs, so the bot doesn't quietly answer it.
+const openDecision=gate=>{
+  const last=gate.previous.reduce((latest,item)=>!latest||item.n>latest.n?item:latest,null);
+  return !!(last && last.report && last.report.decision);
+};
 const reviewDigest=row=>createHash('sha256').update(row.review).digest('hex');
 const hasInputFiles=gate=>gate.previous.some(item=>item.files.length>0);
 const missingFile=gate=>gate.previous.find(item=>item.missing>0);
@@ -382,7 +388,7 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
         if(current.held || current.approved_digest!==gate.digest) {journal.hold(s,row);return;}
       } else {
         const accepted=journal.accepted(s,acceptKey(gate));
-        if(current.held || carriesOthers(gate,s.subject) || !accepted || accepted.bot_version!==gate.definition.version) {journal.hold(s,row);return;}
+        if(current.held || carriesOthers(gate,s.subject) || openDecision(gate) || !accepted || accepted.bot_version!==gate.definition.version) {journal.hold(s,row);return;}
       }
     }
     const ping=async()=>callHub(s.origin,token(),'POST',stepPath(s,row.run_id,row.n)+'/progress',{claimId:row.claim_id});
@@ -502,6 +508,7 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     if(!accepted) why.push('new_version');
     else if(accepted.bot_version!==gate.definition.version) why.push('bot_changed');
     if(carries) why.push('teammate_text');
+    if(openDecision(gate)) why.push('open_decision');
     if(row && row.held && !why.length) why.push('changed_after_ok');
     return why.length?{reason:'approval',why}:null;
   }

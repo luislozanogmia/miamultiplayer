@@ -82,6 +82,7 @@
     new_version: 'This version of the workflow is new on this computer. Someone else wrote this step and its bot\'s instructions.',
     teammate_text: 'This step carries text or files from teammates. Mia passes them to the bot as information, but they could still try to mislead it.',
     bot_changed: 'This bot\'s instructions changed since you last agreed to run this step.',
+    open_decision: 'The last step left a question that someone has to decide. Read it before this step runs.',
     changed_after_ok: 'What this step would run changed after you agreed, so Mia did not run it. Check it again.'
   };
   function needsYouHtml(items, people){

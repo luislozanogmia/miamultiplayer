@@ -73,6 +73,12 @@ test('the gate shows the bot\'s exact instructions and version, escaped, on firs
   }
 });
 
+test('the gate says when the last step left a question to decide', () => {
+  const html = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'approval', why: ['open_decision'], text: 'Send it', botName: 'Checker', digest: 'a'.repeat(64) }] });
+  assert.match(html, /left a question/);
+  assert.match(html, /data-wf-resume="run"/);
+});
+
 test('unreadable instructions: the step is said to wait, with no Run and only a way to decline', () => {
   const html = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'instructions_unavailable', why: [], workflowName: 'Quote flow', text: 'Send it', botName: 'Checker', digest: '' }] });
   assert.match(html, /step 3 is waiting/);
