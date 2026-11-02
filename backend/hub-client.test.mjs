@@ -141,6 +141,16 @@ test('every workflow route takes the Hub\'s 2 MiB response limit, and only defin
   assert.equal(hubRouteLimits(method,WF_BASE+route).request,8192,route);
  assert.equal(hubRouteLimits('GET',WF_BASE+'/workflows').request,8192);
 });
+test('a step\'s pinned bot instructions pass through the proxy at the workflow limit',async()=>{
+ const route=WF_BASE+'/workflow-runs/'+WF_ID+'/steps/12/definition';
+ assert.equal(hubRouteLimits('GET',route).response,2097152);
+ const {seen,send}=wfProxy({definition:{version:3,instructions:'x'.repeat(6000),digest:'0'.repeat(64)}});
+ const answer=await send('GET',route);
+ assert.equal(answer.code,200);
+ assert.equal(answer.data.definition.instructions.length,6000);
+ assert.equal(seen.length,1);
+ assert.ok(seen[0].url.endsWith(route));
+});
 test('a 16 KB definition reaches the Hub, a larger one and an oversized run body do not',async()=>{
  const {seen,send}=wfProxy({saved:true});
  const within=await send('POST',WF_BASE+'/workflows',{definition:'x'.repeat(16000)});

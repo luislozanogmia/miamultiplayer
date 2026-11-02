@@ -101,16 +101,21 @@ function gateFromDetail(detail,n) {
 function gateFromOrder(order,detail) {
   const run=detail && detail.run,steps=detail && Array.isArray(detail.steps)?detail.steps:[];
   if(!run || typeof run.workflow_id!=='string' || !Number.isSafeInteger(run.version)) return null;
-  return {workflowId:run.workflow_id,version:run.version,n:order.n,text:order.text,botId:order.botId,botName:order.botName||'',workflowName:order.workflowName||'',
+  return {workflowId:run.workflow_id,version:run.version,n:order.n,text:order.text,botId:order.botId,botName:order.botName||'',workflowName:order.workflowName||'',definition:readableDefinition(order.definition),
     summary:order.summary||'',startedBy:run.started_by||'',previous:order.previous.map(item=>previousView(item,steps.find(step=>step.n===item.n)))};
 }
 // Exactly what the person saw. Files are compared by ID and name, not scan state, so
 // a scan finishing does not ask again.
 const gateDigest=gate=>sha256([gate.workflowId,gate.version,gate.n,gate.text,gate.botId,gate.botName,gate.summary,gate.startedBy,
-  gate.previous.map(item=>[item.n,item.ownerId,item.note,item.files.map(file=>[file.fileId,file.filename])])]);
+  gate.previous.map(item=>[item.n,item.ownerId,item.note,item.files.map(file=>[file.fileId,file.filename])]),
+  gate.definition.version,gate.definition.instructions]);
 // One step of one version. A person who owns two steps has only seen the one shown.
 const acceptKey=gate=>sha256([gate.workflowId,gate.version,gate.n,gate.text,gate.botId]);
-const withDigest=gate=>gate && Object.assign(gate,{digest:gateDigest(gate)});
+// Without the bot's instructions there is nothing the person could agree to, so no digest.
+const withDigest=gate=>gate && Object.assign(gate,{digest:gate.definition?gateDigest(gate):''});
+const readableDefinition=definition=>definition && Number.isSafeInteger(definition.version) && definition.version>=1
+  && typeof definition.instructions==='string' && definition.instructions.trim()
+  ?{version:definition.version,instructions:definition.instructions}:null;
 const carriesOthers=(gate,subject)=>(!!gate.summary && gate.startedBy!==subject)
   || gate.previous.some(item=>item.ownerId!==subject && (!!item.note || item.files.length>0));
 const hasInputFiles=gate=>gate.previous.some(item=>item.files.length>0);
@@ -338,17 +343,20 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     const channelId=stepRun.run && stepRun.run.channel_id;
     if(!ID.test(channelId||'')) return finish(s,row);
     const gate=withDigest(gateFromOrder(order,stepRun));
-    if(!gate) return finish(s,row);
+    if(!gate || !gate.definition) return finish(s,row);
     // The work order is what the bot would be given, so it decides, not what was
     // read before the claim. A file gone from the list or a bad order only ends in
     // a failure report, with nothing run.
     if(!missingFile(gate) && order.previous.every(item=>Number.isSafeInteger(item.n) && item.n>=1)) {
-      const current=journal.get(s,row.run_id,row.n,row.claim_id),key=acceptKey(gate);
+      const current=journal.get(s,row.run_id,row.n,row.claim_id);
       if(!filesSupported && hasInputFiles(gate)) {journal.hold(s,row);return;}
-      if(current.approved_digest && current.approved_digest===gate.digest && !current.held) journal.acceptedBot(s,key,order.definition.version);
-      else {
-        const accepted=journal.accepted(s,key);
-        if(carriesOthers(gate,s.subject) || !accepted || accepted.bot_version!==order.definition.version) {journal.hold(s,row);return;}
+      // Pressing Run covers what the card showed and nothing else. The check before the
+      // claim should have caught any difference; this one is the safety net.
+      if(current.approved_digest) {
+        if(current.held || current.approved_digest!==gate.digest) {journal.hold(s,row);return;}
+      } else {
+        const accepted=journal.accepted(s,acceptKey(gate));
+        if(current.held || carriesOthers(gate,s.subject) || !accepted || accepted.bot_version!==gate.definition.version) {journal.hold(s,row);return;}
       }
     }
     const ping=async()=>callHub(s.origin,token(),'POST',stepPath(s,row.run_id,row.n)+'/progress',{claimId:row.claim_id});
@@ -440,20 +448,29 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     } catch(error) {return !(error.status>=400 && error.status<500 && ![401,429].includes(error.status));}
   }
   async function readGate(s,runId,n,token) {
-    try {return withDigest(gateFromDetail(await callHub(s.origin,token,'GET',base(s)+'/workflow-runs/'+runId),n));}
+    let gate;
+    try {gate=gateFromDetail(await callHub(s.origin,token,'GET',base(s)+'/workflow-runs/'+runId),n);}
     catch {return null;}
+    if(!gate) return null;
+    // The instructions pinned to this step, read without claiming it. Any failure,
+    // including an older Hub without this route, leaves them unknown and the step waits.
+    try {gate.definition=readableDefinition((await callHub(s.origin,token,'GET',stepPath(s,runId,n)+'/definition')).definition);}
+    catch {gate.definition=null;}
+    return withDigest(gate);
   }
   // Why this step has to wait for the person, or null when it may run. Nothing has
   // been claimed at this point, so the Hub keeps it queued and no lease can run out.
   function gateReason(s,gate,row) {
+    if(!gate.definition) return {reason:'instructions_unavailable',why:[]};
     // A file gone from the list only ends in a failure report, with nothing run.
     if(missingFile(gate)) return null;
     if(!filesSupported && hasInputFiles(gate)) return {reason:'no_file_tools',why:[]};
     if(row && !row.held && row.approved_digest===gate.digest) return null;
     const accepted=journal.accepted(s,acceptKey(gate)),carries=carriesOthers(gate,s.subject),why=[];
     if(!accepted) why.push('new_version');
+    else if(accepted.bot_version!==gate.definition.version) why.push('bot_changed');
     if(carries) why.push('teammate_text');
-    if(row && row.held && accepted && !carries) why.push('bot_changed');
+    if(row && row.held && !why.length) why.push('changed_after_ok');
     return why.length?{reason:'approval',why}:null;
   }
   // Everything the person needs to decide, as written. The screen escapes it.
@@ -461,7 +478,7 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     const card={runId:step.runId,n:step.n,reason:decision.reason,why:decision.why||[],
       workflowName:(gate&&gate.workflowName)||step.workflowName||(row&&row.workflow_name)||'',text:(gate&&gate.text)||step.text||(row&&row.step_text)||'',botName:(gate&&gate.botName)||step.botName||''};
     if(!gate) return card;
-    return {...card,digest:gate.digest,version:gate.version,summary:gate.summary,startedBy:gate.startedBy,
+    return {...card,digest:gate.digest,version:gate.version,definition:gate.definition,summary:gate.summary,startedBy:gate.startedBy,
       previous:gate.previous.map(item=>({n:item.n,ownerId:item.ownerId,note:item.note,files:item.files.map(file=>String(file.filename||''))}))};
   }
 
@@ -545,7 +562,7 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
       }
       if(cantOpenFiles) throw failure(409,'no_file_tools');
       // What is here now must be what the person was shown.
-      if(!gate || gate.digest!==input.digest) throw failure(409,'step_changed');
+      if(!gate || !gate.definition || gate.digest!==input.digest) throw failure(409,'step_changed');
       if(row && row.state==='started') {
         // The crashed attempt's files must survive whichever claim runs next.
         setAsideOutbox(s,row);
@@ -554,7 +571,9 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
         else {finish(s,row);row=null;}
       } else if(!row && held) throw failure(409,'step_claimed');
       row=journal.open(s,input.runId,input.n)||journal.prepare(s,step,true);
+      // Only what the card showed is agreed to.
       journal.accept(s,acceptKey(gate));
+      journal.acceptedBot(s,acceptKey(gate),gate.definition.version);
       journal.approve(s,row,gate.digest);
       row=journal.get(s,row.run_id,row.n,row.claim_id);
       launch(s,row,token);

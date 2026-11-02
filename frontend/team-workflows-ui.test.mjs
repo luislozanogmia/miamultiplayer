@@ -62,6 +62,31 @@ test('an interrupted step asks before anything runs', () => {
   assert.match(known, /Send it/);
 });
 
+test('the gate shows the bot\'s exact instructions and version, escaped, on first acceptance and when they change', () => {
+  const instructions = 'Use <img src=x onerror=alert(1)> the "terminal"\n\nThen & stop.';
+  for (const why of ['new_version', 'bot_changed']) {
+    const html = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'approval', why: [why], text: 'Send it', botName: 'Checker', digest: 'a'.repeat(64), definition: { version: 4, instructions } }] });
+    assert.match(html, /Bot instructions · version 4/);
+    assert.ok(html.includes('Use &lt;img src=x onerror=alert(1)&gt; the &quot;terminal&quot;\n\nThen &amp; stop.'), 'line breaks are kept, nothing is live');
+    assert.doesNotMatch(html, /<img/);
+    assert.match(html, /data-wf-resume="run"/);
+  }
+});
+
+test('unreadable instructions: the step is said to wait, with no Run and only a way to decline', () => {
+  const html = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'instructions_unavailable', why: [], workflowName: 'Quote flow', text: 'Send it', botName: 'Checker', digest: '' }] });
+  assert.match(html, /step 3 is waiting/);
+  assert.match(html, /could not read this bot/);
+  assert.doesNotMatch(html, /Bot instructions ·/);
+  assert.doesNotMatch(html, /data-wf-resume="run"/);
+  assert.match(html, /data-wf-resume="fail"/);
+});
+
+test('a card changed after the OK says so', () => {
+  const html = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'approval', why: ['changed_after_ok'], text: 'Send it', digest: 'a'.repeat(64), definition: { version: 4, instructions: 'x' } }] });
+  assert.match(html, /changed after you agreed/);
+});
+
 test('the gate shows what would run, escaped, and offers Run for this one step', () => {
   const digest = 'a'.repeat(64);
   const html = ui.homeHtml({ workflows: [], people, needsYou: [{ runId: ID(2), n: 3, reason: 'approval', why: ['new_version', 'teammate_text'], workflowName: 'Quote flow', text: 'Check <the> numbers', botName: 'Checker',
@@ -166,6 +191,19 @@ function harness(routes = {}, { admin = false, subject = 'u1' } = {}) {
 const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
 const writes = calls => calls.filter(([method]) => method !== 'GET');
 const flagged = { id: ID(1), name: 'Flow', enabled: true, published: true, definition: { trigger: { kind: 'flag', label: 'Quote', starters: ['u1'] }, steps: [] } };
+
+test('a redraw keeps the place in a long set of instructions', async () => {
+  const h = harness({});
+  await settle();
+  const key = 'instructions:' + ID(2) + ':3';
+  const box = top => ({ scrollTop: top, getAttribute: () => key });
+  const before = box(120), after = box(0);
+  let boxes = [before];
+  h.mount.querySelectorAll = () => boxes;
+  Object.defineProperty(h.mount, 'innerHTML', { configurable: true, get: () => '', set: () => { boxes = [after]; } });
+  ui.mountInto(h.mount);
+  assert.equal(after.scrollTop, 120);
+});
 
 test('a flag start sends nothing until Start, and then only id and summary', async () => {
   const h = harness({ [`/workflows/${ID(1)}`]: { workflow: flagged }, [`/workflow-runs?state=all&workflow=${ID(1)}`]: { runs: [] },

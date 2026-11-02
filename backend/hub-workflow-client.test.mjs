@@ -23,9 +23,9 @@ function fixture(t,{interrupted=false,previous=[],reply='Worked hard.\nNOTE: Quo
     writeFileSync(join(dataDirectory,'hub-connection.json'),JSON.stringify({url:'https://hub.example.test'}));
   }
   const last=previous.at(-1),stepN=last?(Number.isSafeInteger(last.n)?last.n+1:2):1;
-  const hub={claims:[],progress:[],reports:[],uploads:[],puts:[],scans:0,runs:[],stepState:'queued',detailReads:0,summary,botVersion,
+  const hub={claims:[],progress:[],reports:[],uploads:[],puts:[],scans:0,runs:[],stepState:'queued',detailReads:0,definitionReads:0,summary,botVersion,
     stepRow:{runId,n:stepN,workflowName:'Quote flow',text:'Draft the quote',botId,botName:'Drafter',state:'queued',attempt:1,interrupted}};
-  const order=n=>({runId,n,text:hub.stepRow.text,workflowName:'Quote flow',summary:hub.summary,definition:{version:hub.botVersion,instructions:'Pinned instructions v'+hub.botVersion},
+  const order=n=>({runId,n,text:hub.stepRow.text,workflowName:'Quote flow',summary:hub.summary,definition:{version:hub.botVersion,instructions:hub.orderInstructions??'Pinned instructions v'+hub.botVersion},
     botId,botName:'Drafter',spaceId,previous,deadline:1,interrupted:hub.stepRow.interrupted,attempt:1});
   const fetcher=async(url,options={})=>{
     url=String(url);
@@ -36,6 +36,12 @@ function fixture(t,{interrupted=false,previous=[],reply='Worked hard.\nNOTE: Quo
       return new Response(hub.download);
     }
     const route=url.replace('https://hub.example.test','');
+    if(route.endsWith('/definition')) {
+      hub.definitionReads++;
+      if(hub.definitionError) return json({error:hub.definitionError[0]},hub.definitionError[1]);
+      const pinned=hub.shownVersion??hub.botVersion;
+      return json({definition:{version:pinned,instructions:hub.shownInstructions??'Pinned instructions v'+pinned,digest:'0'.repeat(64)}});
+    }
     if(route==='/v1/me') return json({teams:[{teamId,membership:{clerk_user_id:'user_owner',email:'owner@example.test'}}]});
     if(route.endsWith('/workflow-steps')) {
       if(steps) return steps(hub);
@@ -727,6 +733,136 @@ test('an own-text step that picks up someone else\'s text at the claim is held, 
   assert.deepEqual(f.hub.runs,[]);
   assert.equal(f.db.prepare('SELECT held FROM hub_workflow_steps').get().held,1);
   assert.equal((await poll(f)).needsYou.length,1);
+});
+
+test('the first card shows the exact instructions and their version, before any claim',async t=>{
+  const f=fixture(t,{accepted:false,autoRun:false});
+  f.hub.shownInstructions='Use <b>the</b> terminal\n\nThen stop.';
+  f.hub.orderInstructions=f.hub.shownInstructions;
+  const [card]=(await rawPoll(f)).needsYou;
+  assert.deepEqual(card.why,['new_version']);
+  assert.deepEqual(card.definition,{version:3,instructions:'Use <b>the</b> terminal\n\nThen stop.'});
+  assert.deepEqual(f.hub.claims,[]);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM hub_workflow_accepted').get().n,0,'seeing the card accepts nothing');
+  await press(f,card);await f.client.idle();
+  assert.equal(f.hub.runs.length,1);
+  assert.equal(f.hub.runs[0].bot.instructions,'Use <b>the</b> terminal\n\nThen stop.');
+  assert.equal(f.db.prepare('SELECT bot_version FROM hub_workflow_accepted').get().bot_version,3);
+});
+
+test('instructions at the Hub\'s 6000-byte limit reach the card whole',async t=>{
+  const f=fixture(t,{accepted:false,autoRun:false});
+  f.hub.shownInstructions='é'.repeat(3000);
+  const [card]=(await rawPoll(f)).needsYou;
+  assert.equal(Buffer.byteLength(card.definition.instructions),6000);
+  assert.equal(card.definition.instructions,f.hub.shownInstructions);
+});
+
+test('a different pinned version on an accepted step asks again before any claim, and shows the new text',async t=>{
+  const f=fixture(t,{autoRun:false});
+  f.hub.botVersion=4;
+  const [card]=(await rawPoll(f)).needsYou;
+  await f.client.idle();
+  assert.deepEqual(f.hub.claims,[],'nothing is claimed to find this out');
+  assert.deepEqual(f.hub.runs,[]);
+  assert.deepEqual(card.why,['bot_changed']);
+  assert.deepEqual(card.definition,{version:4,instructions:'Pinned instructions v4'});
+  assert.equal(f.db.prepare('SELECT bot_version FROM hub_workflow_accepted').get().bot_version,3,'not agreed to yet');
+});
+
+test('the instructions are part of what Run covers: a card from before they changed runs nothing',async t=>{
+  const f=fixture(t,{accepted:false,autoRun:false});
+  const [card]=(await rawPoll(f)).needsYou;
+  f.hub.shownInstructions='Something else, same version';
+  await assert.rejects(press(f,card),{code:'step_changed'});
+  assert.deepEqual(f.hub.claims,[]);
+  assert.deepEqual(f.hub.runs,[]);
+  const [next]=(await rawPoll(f)).needsYou;
+  assert.notEqual(next.digest,card.digest);
+});
+
+test('a pinned version that differs at the claim from what was shown runs nothing, and the card comes back',async t=>{
+  const f=fixture(t,{accepted:false,autoRun:false});
+  const [card]=(await rawPoll(f)).needsYou;
+  assert.equal(card.definition.version,3);
+  f.hub.botVersion=4;f.hub.shownVersion=3;
+  await press(f,card);await f.client.idle();
+  assert.equal(f.hub.claims.length,1);
+  assert.deepEqual(f.hub.runs,[],'version 4 was never shown');
+  assert.equal(f.db.prepare('SELECT bot_version FROM hub_workflow_accepted').get().bot_version,3,'only what was seen is recorded');
+  assert.equal(f.db.prepare('SELECT held FROM hub_workflow_steps').get().held,1);
+  delete f.hub.shownVersion;
+  const [again]=(await rawPoll(f)).needsYou;
+  assert.equal(again.reason,'approval');
+  assert.deepEqual(again.definition,{version:4,instructions:'Pinned instructions v4'});
+  await f.client.idle();
+  assert.deepEqual(f.hub.runs,[]);
+  await press(f,again);await f.client.idle();
+  assert.equal(f.hub.runs[0].bot.instructions,'Pinned instructions v4');
+  assert.equal(f.db.prepare('SELECT bot_version FROM hub_workflow_accepted').get().bot_version,4);
+});
+
+test('different instructions under the same version at the claim run nothing, even on an accepted step',async t=>{
+  const f=fixture(t,{autoRun:false,summary:'From a teammate',startedBy:'user_teammate',accepted:false});
+  const scope={origin:'https://hub.example.test',owner,subject:ident.subject,teamId};
+  const key=acceptKey({workflowId:WORKFLOW_ID,version:7,n:1,text:'Draft the quote',botId});
+  f.client.journal.accept(scope,key);f.client.journal.acceptedBot(scope,key,3);
+  const [card]=(await rawPoll(f)).needsYou;
+  // The read before the claim still agrees with the card; only the work order differs.
+  f.hub.orderInstructions='Swapped after the card';
+  await press(f,card);await f.client.idle();
+  assert.deepEqual(f.hub.runs,[]);
+  assert.equal(f.db.prepare('SELECT held FROM hub_workflow_steps').get().held,1);
+});
+
+test('when the definition route fails the step waits, unclaimed, and the card offers no Run',async t=>{
+  for(const [name,error] of [['outage',['hub_unavailable',503]],['rate limit',['rate_limited',429]],['sign-in',['unauthorized',401]],['older Hub',['not_found',404]]]) {
+    await t.test(name,async t=>{
+      const f=fixture(t,{autoRun:false});
+      f.hub.definitionError=error;
+      const {needsYou}=await rawPoll(f);
+      await f.client.idle();
+      assert.deepEqual(f.hub.claims,[]);
+      assert.deepEqual(f.hub.runs,[]);
+      assert.equal(needsYou.length,1);
+      assert.equal(needsYou[0].reason,'instructions_unavailable');
+      assert.ok(!needsYou[0].digest,'no digest, so the screen has no Run button');
+      assert.ok(!needsYou[0].definition);
+      await assert.rejects(press(f,{...needsYou[0],digest:'a'.repeat(64)}),{code:'step_changed'});
+      assert.deepEqual(f.hub.claims,[]);
+      f.hub.definitionError=null;
+      await rawPoll(f);await f.client.idle();
+      assert.equal(f.hub.runs.length,1,'it runs once the instructions can be read');
+    });
+  }
+});
+
+test('a garbled definition answer counts as unreadable',async t=>{
+  const f=fixture(t,{autoRun:false});
+  f.hub.shownInstructions='';
+  const [card]=(await rawPoll(f)).needsYou;
+  await f.client.idle();
+  assert.equal(card.reason,'instructions_unavailable');
+  assert.deepEqual(f.hub.claims,[]);
+});
+
+test('the definition is not read for a step already running here',async t=>{
+  let release;
+  const f=fixture(t,{runBot:()=>new Promise(resolve=>{release=()=>resolve({text:'NOTE: Done'});})});
+  await rawPoll(f);
+  const reads=f.hub.definitionReads;
+  assert.equal(reads,1);
+  await new Promise(resolve=>setTimeout(resolve,20));
+  await rawPoll(f);
+  assert.equal(f.hub.definitionReads,reads);
+  release();await f.client.idle();
+});
+
+test('a step held on another of this person\'s computers costs no definition read',async t=>{
+  const f=fixture(t,{autoRun:false});
+  f.hub.stepRow.state='working';
+  await rawPoll(f);
+  assert.equal(f.hub.definitionReads,0);
 });
 
 test('new bot instructions on an accepted version wait for the person',async t=>{

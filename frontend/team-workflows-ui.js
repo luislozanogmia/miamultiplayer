@@ -60,6 +60,10 @@
   function stepContentHtml(item, people){
     var out = '<div class="twf-gate"><div class="twf-gate-row"><span class="twf-gate-label">Step</span><span>' + esc(item.text || '') + '</span></div>'
       + '<div class="twf-gate-row"><span class="twf-gate-label">Bot</span><span>' + esc(item.botName || 'Team bot') + '</span></div>';
+    if(item.definition){
+      out += '<div class="twf-gate-instructions-label">Bot instructions · version ' + Number(item.definition.version) + '</div>'
+        + '<pre class="twf-gate-instructions" tabindex="0" data-wf-keep-scroll="instructions:' + esc(item.runId) + ':' + Number(item.n) + '">' + esc(item.definition.instructions) + '</pre>';
+    }
     if(item.summary){
       out += '<div class="twf-gate-row"><span class="twf-gate-label">Summary</span><span>' + (item.startedBy ? esc(wf.displayName(people, item.startedBy)) + ': ' : '') + esc(item.summary) + '</span></div>';
     }
@@ -73,7 +77,8 @@
   var GATE_WHY = {
     new_version: 'This version of the workflow is new on this computer. Someone else wrote this step and its bot\'s instructions.',
     teammate_text: 'This step carries text or files from teammates. Mia passes them to the bot as information, but they could still try to mislead it.',
-    bot_changed: 'This bot\'s instructions changed since you last agreed to run this step.'
+    bot_changed: 'This bot\'s instructions changed since you last agreed to run this step.',
+    changed_after_ok: 'What this step would run changed after you agreed, so Mia did not run it. Check it again.'
   };
   function needsYouHtml(items, people){
     return (items || []).map(function(item){
@@ -88,6 +93,12 @@
           + stepContentHtml(item, people)
           + '<div class="twf-card-text">The bot runs on this computer and can use its tools here. Run starts only this one step.</div>'
           + '<div class="twf-actions">' + runButton('Run') + btn('Don\u2019t run it', 'data-wf-resume="fail"' + where) + '</div></div>';
+      }
+      if(item.reason === 'instructions_unavailable'){
+        return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' is waiting</div>'
+          + '<div class="twf-card-text">Mia could not read this bot\'s instructions, so the step has not started. It only runs once you can see them. Mia will look again. If this keeps happening, the team server may need an update.</div>'
+          + stepContentHtml(item, people)
+          + '<div class="twf-actions">' + btn('Don\u2019t run it', 'data-wf-resume="fail"' + where) + '</div></div>';
       }
       if(item.reason === 'no_file_tools'){
         return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' cannot run on this Mia</div>'
@@ -311,7 +322,7 @@
   function onQueue(teamId){
     if(!ctx || ctx.teamId !== teamId) return;
     var state = queues[teamId].state();
-    var fresh = (state.needsYou || []).filter(function(item){ var key = teamId + item.runId + ':' + item.n; if(seenNeeds[key]) return false; seenNeeds[key] = true; return true; });
+    var fresh = (state.needsYou || []).filter(function(item){ if(item.reason === 'instructions_unavailable') return false; var key = teamId + item.runId + ':' + item.n; if(seenNeeds[key]) return false; seenNeeds[key] = true; return true; });
     if(fresh.length && ctx.toast) ctx.toast(fresh.some(function(item){ return item.reason === 'approval'; }) ? 'A team workflow step is waiting for your OK to run.' : 'A team workflow step needs your decision.');
     render();
   }
@@ -359,8 +370,12 @@
   function render(){
     if(!mount || !ctx || !mount.isConnected) return;
     var scroller = mount.closest ? mount.closest('.automations-body') : null, top = scroller ? scroller.scrollTop : 0;
+    // Polling redraws the page, so a long set of instructions keeps its place.
+    var kept = {}, boxes = function(){ return mount.querySelectorAll ? Array.prototype.slice.call(mount.querySelectorAll('[data-wf-keep-scroll]')) : []; };
+    boxes().forEach(function(box){ kept[box.getAttribute('data-wf-keep-scroll')] = box.scrollTop; });
     mount.innerHTML = screenHtml();
     if(scroller) scroller.scrollTop = top;
+    boxes().forEach(function(box){ var place = kept[box.getAttribute('data-wf-keep-scroll')]; if(place) box.scrollTop = place; });
     // On a detail screen the rest of the page steps aside.
     var board = mount.parentNode && mount.parentNode.querySelector('[data-wf-board]');
     if(board) board.hidden = view.screen !== 'home';

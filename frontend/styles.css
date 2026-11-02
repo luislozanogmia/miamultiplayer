@@ -3783,6 +3783,9 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .twf-gate{margin-top:8px;display:grid;gap:4px;font-size:13px;line-height:1.45;overflow-wrap:anywhere;}
 .twf-gate-row{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;}
 .twf-gate-label{color:var(--sand-text-secondary);}
+.twf-gate-instructions-label{margin-top:4px;color:var(--sand-text-secondary);}
+.twf-gate-instructions{margin:0;padding:8px 10px;max-height:min(420px,50vh);overflow-y:auto;border:1px solid var(--sand-border-subtle);border-radius:8px;font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;}
+.twf-gate-instructions:focus-visible{outline:2px solid #0b57d0;outline-offset:-1px;}
 .twf-card-text{margin-top:6px;font-size:13px;color:var(--sand-text-secondary);line-height:1.45;}
 .twf-note{margin-top:4px;font-size:13px;color:var(--sand-text-primary);}
 .twf-label{display:block;margin-top:10px;font-size:13px;color:var(--sand-text-secondary);}
