@@ -5346,8 +5346,7 @@
   // one of them so you can mention it there.
   function companyBotRow(bot,pinned){
     var button=document.createElement('button'); button.type='button';
-    var place=companyBotPlace(bot,hubChannel);
-    button.className='chat-recent-row hub-channel-row'+(place.action==='open' && chatWs.activeRoomId===place.channel.id?' active':'');
+    button.className='chat-recent-row hub-channel-row';
     button.setAttribute('data-company-bot',bot.key);
     var where=bot.channels.map(companyBotWhere).join(', ');
     button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,null,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
