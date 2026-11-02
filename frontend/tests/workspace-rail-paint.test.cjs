@@ -38,8 +38,8 @@ test('the rail and title are painted from the saved teams before app.js runs',()
 });
 test('the painted tiles match the ones app.js renders',()=>{
   const teams=app.slice(app.indexOf('  function renderHubTeamOptions('),app.indexOf('  renderHubTeamOptions(cachedHubTeams());'));
-  assert.match(teams,/button\.className='workspace-rail-tile';/);
-  assert.match(teams,/'<span class="workspace-rail-mark" aria-hidden="true">'\+esc\(workspaceCode\(team\.name\)\)\+'<\/span><strong class="workspace-rail-name">'\+esc\(team\.name\)\+'<\/strong>'/);
+  assert.match(teams,/button\.className='workspace-rail-tile'\+/);
+  assert.match(teams,/'<span class="workspace-rail-mark" aria-hidden="true">'\+esc\(workspaceCode\(team\.name\)\)\+'<\/span><strong class="workspace-rail-name">'\+esc\(label\)\+'<\/strong>'/);
   const start=app.indexOf('  function workspaceCode(');
   const appCode=vm.runInNewContext('('+app.slice(start+2,app.indexOf('\n  }\n',start)+4)+')',{String});
   const paintCode=vm.runInNewContext('('+paint.slice(paint.indexOf('function code('),paint.indexOf('\n    }\n',paint.indexOf('function code('))+6)+')',{String});

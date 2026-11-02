@@ -91,6 +91,7 @@ function loadRoomContext({ state, api }) {
   const loadRoom = functionSlice('loadChatRoom', '\n\n  function selectHomeRoom');
   let socketConnections = 0;
   const context = {
+    chatTabStaysClosed: false, reopenChatTab() {},
     hubWorkspace: () => false,
     inHubRoom: () => false,
     teamBotRoom: () => false,

@@ -28,7 +28,7 @@ test('a tab for another workspace\'s conversation is dropped once this workspace
 
 test('renderChatTabs only saves the open chat under the workspace it was opened in', () => {
   const render = source.slice(source.indexOf('  function renderChatTabs(){'), source.indexOf('  // Mixed tabs (tab-strip.js)'));
-  assert.match(render, /\(!chatWs\.activeRoomWorkspace \|\| chatWs\.activeRoomWorkspace === activeWorkspaceKey\)\) openChatTab\(/);
+  assert.match(render, /\(!chatWs\.activeRoomWorkspace \|\| chatWs\.activeRoomWorkspace === activeWorkspaceKey\)\)\{[^}]*openChatTab\(/);
   assert.match(source, /chatWs\.activeRoomId = roomId;\n\s*chatWs\.activeRoomWorkspace = activeWorkspaceKey;/);
   assert.match(source, /if\(listWorkspace && listWorkspace === activeWorkspaceKey && !pruneChatTabs\(/, 'prunes only with a list fetched for this workspace');
 });

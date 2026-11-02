@@ -177,7 +177,7 @@ function hubEnv(overrides={}){
     chatRoomState:id=>byRoom[id]||(byRoom[id]={messages:[]}),hubPath:()=>'/team',appInForeground:()=>true,
     renderChatSidebar:()=>{},renderChatThread:()=>{},renderDeptAgentSelector:()=>{},renderChatHeaderBar:()=>{},refreshChatMain:()=>{},
     showBenchToast:()=>{},showDesktopNotification:()=>{},notifyDesktopChatMessage:()=>{},pollHubBots:()=>{},refreshHubBotState:()=>{},refreshHubChannels:()=>Promise.resolve(),
-    startChatThinking:()=>{},stopChatThinking:()=>{},hubCall:async()=>({messages:[],hasMore:false}),...overrides};
+    startChatThinking:()=>{},stopChatThinking:()=>{},hubCall:async()=>({messages:[],hasMore:false}),hubRememberPeople:()=>{},hubMember:()=>null,mergeUserProfile:()=>{},loadHubTeams:()=>Promise.resolve(),...overrides};
   for(const name of ['hubChannel','hubSequence','hubOwnMessage','hubLatestSequence','applyHubRows','markHubRead','loadHubRoom','loadOlderHubMessages','sendHubMessage','deliverHubMessage','hubMessageDeletable','deleteHubMessage','applyHubEvents','trackHubDispatch','hubRoomThinking','hubFeedback','stopHubFeed'])
     if(!(name in overrides))env[name]=appFunction(name,env);
   return env;
@@ -324,7 +324,7 @@ test('an offline send says it is offline instead of a sign-in or keyring message
 test('team channels offer Attach, Google Drive and the model menu, and keep dictation hidden',()=>{
   const nodes={};['#ccPlusBtn','#ccDriveBtn','#ccModelBtn','#ccMicBtn','#ccInput'].forEach(s=>{nodes[s]={style:{display:'none'},disabled:true};});
   let open={kind:'channel',name:'general'};
-  const env={hubWorkspace:()=>true,chatWs:{activeRoomId:'room'},el:s=>nodes[s],setComposerBoundState:()=>{},hubChannel:()=>open,hubChannelTitle:()=>'ana',hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),};
+  const env={hubWorkspace:()=>true,chatWs:{activeRoomId:'room'},el:s=>nodes[s],setComposerBoundState:()=>{},setComposerBlocked:()=>{},hubDmWithFormerMember:()=>false,hubChannel:()=>open,hubChannelTitle:()=>'ana',hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),};
   appFunction('renderDeptAgentSelector',env)();
   assert.equal(nodes['#ccPlusBtn'].style.display,'');assert.equal(nodes['#ccModelBtn'].style.display,'');
   assert.equal(nodes['#ccDriveBtn'].style.display,'');assert.equal(nodes['#ccDriveBtn'].disabled,false);assert.equal(nodes['#ccMicBtn'].style.display,'none');
@@ -380,7 +380,7 @@ test('your own attachment cards stay readable beside the bubble',()=>{
 });
 test('a reload reopens the shared channel you last had open',async()=>{
   const run=async(stored,channels)=>{const opened=[];const env={chatWs:{activeRoomId:null},hubChat:{channels},storedActiveChatLocation:()=>stored,
-    loadHubTeams:()=>Promise.resolve(),refreshHubChannels:()=>{},startChatPolling(){},refreshChatMain(){},hubFeedback:e=>{throw e;},takeNewTeamBotRequest:()=>null,Date,activeWorkspaceKey:'hub_x',
+    loadHubTeams:()=>Promise.resolve(),refreshHubChannels:()=>{},startChatPolling(){},refreshChatMain(){},hubFeedback:e=>{throw e;},takeNewTeamBotRequest:()=>null,Date,activeWorkspaceKey:'hub_x',loadTeamBotChats:()=>Promise.resolve(),loadCompanyBots(){},restoreChatRoom:open=>open(),retryHubChat:e=>{throw e;},clearTimeout,
     openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),Number,Promise};
     await appFunction('initHubChat',env)();return opened;};
   const channels=[{id:'first',name:'general'},{id:'second',name:'ux-test'}];
@@ -393,7 +393,7 @@ test('a second startup keeps the New Bot setup chat the first one opened',async(
   const opened=[];let main=0;
   const env={chatWs:{activeRoomId:'agent-setup',activeKind:'agent-setup'},hubChat:{channels:[{id:'first',name:'general'}]},storedActiveChatLocation:()=>'',
     loadHubTeams:()=>Promise.resolve(),refreshHubChannels:()=>{},startChatPolling(){},refreshChatMain(){main++;},renderChatSidebar(){},hubFeedback:e=>{throw e;},
-    takeNewTeamBotRequest:()=>null,Date,activeWorkspaceKey:'hub_x',AGENT_SETUP_ROOM_ID:'agent-setup',
+    takeNewTeamBotRequest:()=>null,Date,activeWorkspaceKey:'hub_x',AGENT_SETUP_ROOM_ID:'agent-setup',agentSetupIdentity:()=>({name:'New bot'}),loadTeamBotChats:()=>Promise.resolve(),loadCompanyBots(){},restoreChatRoom:open=>open(),retryHubChat:e=>{throw e;},clearTimeout,
     openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:()=>false,Number,Promise};
   await appFunction('initHubChat',env)();
   assert.deepEqual(opened,[]);assert.equal(env.chatWs.activeKind,'agent-setup');assert.equal(env.chatWs.activeRoomId,'agent-setup');assert.equal(main,1);
@@ -437,8 +437,8 @@ test('team channel menu follows the Hub permissions',()=>{
   assert.equal(menu('member')({kind:'channel',pinned:true})[0].label,'Unpin');
 });
 test('a direct message shows the other person, never its internal name',()=>{
-  const env={hubChat:{membership:{clerk_user_id:'me'},members:[{clerk_user_id:'me',email:'self@example.test'},{clerk_user_id:'ana',email:'ana@example.test'}]},displayNameForEmail:e=>e.split('@')[0]};
-  appFunction('hubPrivateConversation',env);const title=appFunction('hubChannelTitle',env);const label=appFunction('hubChannelLabel',env);
+  const env={hubChat:{membership:{clerk_user_id:'me'},members:[{clerk_user_id:'me',email:'self@example.test'},{clerk_user_id:'ana',email:'ana@example.test'}]},displayNameForEmail:e=>e.split('@')[0],hubKnownPeople:()=>({})};
+  appFunction('hubOtherMemberIds',env);appFunction('hubMember',env);appFunction('hubPersonEmail',env);appFunction('hubPrivateConversation',env);const title=appFunction('hubChannelTitle',env);const label=appFunction('hubChannelLabel',env);
   assert.equal(title({kind:'dm',name:'dm:ana:me',member_ids:['me','ana']}),'ana');
   assert.equal(title({kind:'dm',name:'dm:gone:me',member_ids:['me','gone']}),'Former teammate');
   assert.equal(label({kind:'dm',name:'dm:ana:me',member_ids:['me','ana']}),'ana');
@@ -452,7 +452,7 @@ test('losing the open channel moves you to a channel you can still use',async()=
   const env={activeWorkspaceKey:'hub_x',hubPath:()=>'/t',Promise,
     hubCall:(m,p)=>Promise.resolve(p==='/t/channels'?{channels:[{id:'group',kind:'group'},{id:'dm',kind:'dm'},{id:'general',kind:'channel'}]}:p==='/t/channel-invites'?{invites:[{channel_id:'x'}]}:{members:[]}),hubPrivateConversation:c=>c.kind==='dm'||c.kind==='group',
     hubChat:{channels:[],members:[]},chatWs:{activeRoomId:'archived',activeKind:'group',rooms:{}},hubRoom:c=>c,
-    hubChannel:id=>env.hubChat.channels.filter(c=>c.id===id)[0]||null,openHubChannel:c=>opened.push(c.id),refreshChatMain:()=>mainRefreshed++,renderChatSidebar(){}};
+    hubChannel:id=>env.hubChat.channels.filter(c=>c.id===id)[0]||null,openHubChannel:c=>opened.push(c.id),refreshChatMain:()=>mainRefreshed++,renderChatSidebar(){},hubRememberPeople(){},hubRememberDmPartners(){}};
   await appFunction('refreshHubChannels',env)();
   assert.deepEqual(opened,['general']);assert.equal(env.chatWs.activeRoomId,null);
   assert.deepEqual(env.hubChat.invites,[{channel_id:'x'}],'pending invitations load with the channel list');
