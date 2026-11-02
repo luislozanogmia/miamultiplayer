@@ -11,7 +11,7 @@
   var HEARTBEAT_MS = 30000;
 
   var s = {space:null, teamKey:null, channelId:null, groupId:null, links:{}, presence:{}, invites:{},
-    follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null};
+    follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null, ended:{}, notice:null};
 
   function key(){ return Array.from(crypto.getRandomValues(new Uint8Array(8)), function(b){ return b.toString(16).padStart(2, '0'); }).join(''); }
   function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch){ return '&#' + ch.charCodeAt(0) + ';'; }); }
@@ -89,6 +89,7 @@
     }, Promise.resolve());
   }
   function openLinked(tab, activate){
+    if(!s.space) return Promise.resolve();
     s.pendingOpens++;
     return command('spaceOpenTab', {url: tab.url, groupId: s.groupId, name: s.space.name, activate: activate}).then(function(result){
       if(result && result.openedId){ s.links[tab.k] = result.openedId; s.groupId = result.groupId || s.groupId; }
@@ -99,6 +100,11 @@
   function receive(channelId, row){
     var message = model.decode(row && row.body);
     if(!message) return;
+    // Only the Hub can end a session; the same words from anyone else mean nothing.
+    if(message.t === 'end'){
+      if(model.isAdminEnd(row)) endedByAdmin(channelId, message.space);
+      return;
+    }
     message.from = {id: row.author_id, name: message.from && message.from.name || row.author_name || row.author_email || 'Teammate'};
     if(bound() && message.space === s.space.id){
       if(message.t === 'space'){
@@ -114,11 +120,24 @@
         if(s.follow === message.from.id && now && (!before || before.tab !== now.tab || before.url !== now.url)) goTo(now.tab, now.url);
         if(message.t === 'leave' && s.follow === message.from.id) s.follow = null;
       }
-    } else if(message.t === 'space' && !bound()){
+    } else if(message.t === 'space' && !bound() && !s.ended[message.space]){
       var invite = s.invites[message.space];
       s.invites[message.space] = {channelId: channelId, teamKey: teamKey(), from: message.from, space: model.applySpace(invite && invite.space, message), at: Date.now()};
     } else if(message.t === 'leave' && s.invites[message.space] && s.invites[message.space].from.id === message.from.id){
       delete s.invites[message.space];
+    }
+    render();
+  }
+  // Tabs stay open on this computer, the same as leaving. The session's id is
+  // remembered so a teammate's last update can't offer it again right away.
+  function endedByAdmin(channelId, spaceId){
+    s.ended[spaceId] = true;
+    delete s.invites[spaceId];
+    if(bound() && s.space.id === spaceId && s.channelId === channelId){
+      var text = 'An admin ended ' + s.space.name + ' for everyone. Your tabs stay open on this computer.';
+      s.notice = {text: text, at: Date.now()};
+      leave(false);
+      toast(text);
     }
     render();
   }
@@ -162,6 +181,7 @@
       return chain.then(function(){ return openLinked(tab, index === 0); });
     }, Promise.resolve()).then(function(){
       s.pendingOpens--;
+      if(!s.space) return render();
       s.follow = invite.from.id;
       sendPresence(true); render();
     });
@@ -202,11 +222,13 @@
     var visibleInvites = Object.keys(s.invites).map(function(id){ return s.invites[id]; })
       .filter(function(invite){ return invite.teamKey === team && Date.now() - invite.at < 120000; });
     var group = selectedGroup();
-    var show = !!team && (bound() || visibleInvites.length || group);
+    if(s.notice && Date.now() - s.notice.at >= 60000) s.notice = null;
+    var show = !!team && (bound() || visibleInvites.length || group || s.notice);
     bar.hidden = !show;
     if(!show){ paint(''); return; }
     if(bound()) return renderSpace();
-    var html = '';
+    var html = s.notice ? '<div class="mia-space-invite" role="status"><span class="mia-space-hint">' + esc(s.notice.text) +
+      '</span><button type="button" class="mia-space-btn" data-space-dismiss>OK</button></div>' : '';
     visibleInvites.slice(0, 2).forEach(function(invite){
       html += '<div class="mia-space-invite"><span class="mia-space-icon">' + BOT_ICON + '</span><span><b>' + esc(invite.from.name) + '</b> is sharing <b>' +
         esc(invite.space.name) + '</b> · ' + invite.space.tabs.length + ' tab' + (invite.space.tabs.length === 1 ? '' : 's') +
@@ -215,7 +237,7 @@
     if(group && !visibleInvites.length){
       var h = host(), channels = h ? h.channels() : [], chosen = s.shareChannelId || defaultChannel();
       var pages = s.browser.tabs.some(function(tab){ return tab.groupId === group.id && model.shareableUrl(tab.url); });
-      if(!pages){ paint('<div class="mia-space-invite"><span class="mia-space-hint">Open a web page in <b>' + esc(group.name || 'this group') + '</b> to share it with your team.</span></div>'); return; }
+      if(!pages){ paint(html + '<div class="mia-space-invite"><span class="mia-space-hint">Open a web page in <b>' + esc(group.name || 'this group') + '</b> to share it with your team.</span></div>'); return; }
       html += '<div class="mia-space-invite"><span>Work in <b>' + esc(group.name || 'this group') + '</b> together with your team in</span>' +
         '<select class="mia-space-select" data-space-channel aria-label="Channel to share with">' + channels.map(function(channel){
           return '<option value="' + esc(channel.id) + '"' + (channel.id === chosen ? ' selected' : '') + '>' + esc(channel.name) + '</option>';
@@ -258,7 +280,8 @@
   bar.addEventListener('click', function(event){
     var target = event.target.closest('button');
     if(!target) return;
-    if(target.hasAttribute('data-space-share')) share();
+    if(target.hasAttribute('data-space-dismiss')){ s.notice = null; render(); }
+    else if(target.hasAttribute('data-space-share')) share();
     else if(target.hasAttribute('data-space-join')) join(target.getAttribute('data-space-join'));
     else if(target.hasAttribute('data-space-leave')) leave(false);
     else if(target.hasAttribute('data-space-look')) lookHere();

@@ -22,6 +22,14 @@
     } catch(_error) { return null; }
   }
 
+  // An admin ending a session reaches everyone as a Hub system message. Only the
+  // channel row's own author counts; the JSON inside the body can claim anything.
+  var ADMIN_AUTHOR = 'system:admin';
+  function isAdminEnd(row){
+    var message = row && decode(row.body);
+    return !!message && message.t === 'end' && row.author_type === 'system' && row.author_id === ADMIN_AUTHOR;
+  }
+
   // Only web pages are shared: a teammate can never open a local file or a
   // script URL on someone else's computer.
   function shareableUrl(url){
@@ -131,7 +139,7 @@
     return true;
   }
 
-  return {MARKER: MARKER, PRESENCE_TTL_MS: PRESENCE_TTL_MS, MAX_TABS: MAX_TABS, encode: encode, decode: decode, isSpaceMessage: isSpaceMessage,
+  return {MARKER: MARKER, PRESENCE_TTL_MS: PRESENCE_TTL_MS, MAX_TABS: MAX_TABS, encode: encode, decode: decode, isSpaceMessage: isSpaceMessage, isAdminEnd: isAdminEnd,
     shareableUrl: shareableUrl, applySpace: applySpace, applyPresence: applyPresence, livePresence: livePresence, initials: initials,
     tiles: tiles, hostOf: hostOf, reconcile: reconcile, localTabList: localTabList, sameTabs: sameTabs};
 });

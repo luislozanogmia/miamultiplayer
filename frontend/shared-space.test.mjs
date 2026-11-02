@@ -70,3 +70,14 @@ test('local tabs map onto the space: new ones get a key, closed ones drop out', 
   assert.ok(space.sameTabs(list.tabs, list.tabs.map((tab) => ({ ...tab }))));
   assert.ok(!space.sameTabs(list.tabs, list.tabs.slice(1)));
 });
+
+test('only a row the Hub wrote as system:admin counts as an admin ending a session', () => {
+  const body = space.encode({ t: 'end', space: 's1', from: { id: 'system:admin' } });
+  assert.equal(space.isAdminEnd({ body, author_id: 'system:admin', author_type: 'system' }), true);
+  assert.equal(space.isAdminEnd({ body, author_id: 'user_1', author_type: 'user' }), false, 'the JSON from field is not proof');
+  assert.equal(space.isAdminEnd({ body, author_id: 'system:admin', author_type: 'user' }), false);
+  assert.equal(space.isAdminEnd({ body, author_id: 'system:bot-request', author_type: 'system' }), false);
+  assert.equal(space.isAdminEnd({ body: space.encode({ t: 'leave', space: 's1' }), author_id: 'system:admin', author_type: 'system' }), false);
+  assert.equal(space.isAdminEnd({ body: 'end', author_id: 'system:admin', author_type: 'system' }), false);
+  assert.equal(space.isAdminEnd(null), false);
+});
