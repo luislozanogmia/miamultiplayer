@@ -497,6 +497,9 @@ function provisionHermesPrivateAgentProfile({
 }
 
 function provisionHermesRuntimeProfiles(options = {}) {
+  // Scheduled jobs run from the Hermes home itself, not from a profile, so a
+  // job pinned to the Claude subscription needs the provider there as well.
+  provisionBundledPlugin(options.profilesRoot ? path.dirname(options.profilesRoot) : hermesHome(), CLAUDE_SUBSCRIPTION_PLUGIN);
   const agent = provisionHermesAgentProfile(options);
   const googleAgent = provisionHermesGoogleAgentProfile(options);
   const bot = provisionHermesBotProfile(options);
