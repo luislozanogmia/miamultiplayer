@@ -106,3 +106,10 @@ test('hidden toggles stay hidden in every mode and the active filter keeps its c
   assert.match(css, /^\s*\.chat-pre-reasoning-toggle\[hidden\],\.chat-expandable-toggle\[hidden\]\{display:none;\}/m);
   assert.match(css, /\.artifacts-chip\.on:hover\{background:var\(--sand-text-primary\);\}/);
 });
+
+test('shared bot size errors explain the current limits', () => {
+  const source = read('./hub-chat.js');
+  assert.match(source, /bot_storage_limit:'This team has used all 256 MB/);
+  assert.match(source, /bot_too_large_for_team:'/);
+  assert.doesNotMatch(source, /1 to 6,000 characters/);
+});

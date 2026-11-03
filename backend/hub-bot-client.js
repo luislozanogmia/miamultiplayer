@@ -40,7 +40,7 @@ async function requestHub(origin,token,method,path,body,fetcher=fetch) {
   const chunks=[];let length=0;
   for await(const chunk of response.body) {length+=chunk.length;if(length>RESPONSE_BYTES) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
   const result=JSON.parse(Buffer.concat(chunks));
-  if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','invalid_claim'].includes(result.error)?result.error:'hub_request_failed');
+  if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','invalid_claim','bot_storage_limit'].includes(result.error)?result.error:'hub_request_failed');
   return result;
 }
 function sharedSkills(value) {
@@ -208,7 +208,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       // A Hub that has not been updated refuses skills and long instructions.
       const proposed=await requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
         {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual',...(skills.length?{skills}:{})},fetcher)
-        .catch(error=>{throw error.status===400 || error.status===413?failure(413,'bot_too_large_for_team'):error;});
+        .catch(error=>{throw error.code!=='bot_storage_limit' && (error.status===400 || error.status===413)?failure(413,'bot_too_large_for_team'):error;});
       return {bot:result.bot,proposal:proposed.proposal};
     },
   };
