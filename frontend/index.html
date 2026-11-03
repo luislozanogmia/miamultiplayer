@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <script src="assets/workspace-handoff.js?v=20261024-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261102-apps-3" />
+<link rel="stylesheet" href="styles.css?v=20261103-call-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -490,6 +490,7 @@
             <div class="chat-main-col">
               <div class="chat-tabs-row" id="chatTabsRow" hidden></div>
               <header class="channel-header" id="channelHeader" style="display:none;"></header>
+              <div class="mia-space-chat-invites" id="miaSpaceChatInvites" hidden></div>
               <div class="chat-thread" id="chatThread" data-placeholder><div class="chat-thread-placeholder" aria-hidden="true"><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:38%"></span><span class="mia-placeholder" style="width:72%"></span><span class="mia-placeholder" style="width:54%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:30%"></span><span class="mia-placeholder" style="width:64%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:44%"></span><span class="mia-placeholder" style="width:80%"></span><span class="mia-placeholder" style="width:46%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:34%"></span><span class="mia-placeholder" style="width:58%"></span></span></div></div></div>
               <button type="button" class="chat-jump-latest" id="chatJumpLatest" aria-label="Jump to latest message" title="Jump to latest message" aria-hidden="true" hidden>
                 <span class="chat-jump-latest-label" aria-hidden="true"></span>
@@ -716,6 +717,7 @@
 </div>
 
 <!-- Local browser surface. -->
+<div class="mia-space-call" id="miaSpaceCall" hidden></div>
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
     <div class="native-browser-tabs-row" id="localBrowserTabsRow">
@@ -738,6 +740,7 @@
         <div class="local-browser-suggest" id="localBrowserUrlSuggest" role="listbox" hidden></div>
       </div>
       <button type="submit" class="local-browser-go-btn">Go</button>
+      <button type="button" class="mia-space-invite-btn" id="localBrowserInviteBtn" title="Browse together: invite people to these tabs" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"></path><path d="M18 8v6M15 11h6"></path></svg>Invite</button>
       <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
       </button>
@@ -748,8 +751,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
       </button>
     </form>
-    <!-- A tab group shared with teammates: its minimap, follow and join. -->
-    <div class="mia-space-bar" id="miaSpaceBar" hidden></div>
+    <div class="mia-space-pagehead" id="miaSpacePageHead" hidden></div>
     <div class="local-browser-screen" id="localBrowserScreen">
       <img class="local-browser-snapshot" id="localBrowserSnapshot" alt="" aria-hidden="true" hidden />
       <section class="local-browser-downloads" id="localBrowserDownloads" role="dialog" aria-label="Downloads" hidden>
@@ -782,6 +784,8 @@
         <a id="localBrowserBlockedLink" href="#" target="_blank" rel="noopener" hidden>Open in a browser tab</a>
       </div>
     </div>
+    <!-- A tab group shared with teammates: its live minimap, follow and join. -->
+    <div class="mia-space-bar" id="miaSpaceBar" hidden></div>
     <footer class="local-browser-foot" hidden>Local browser · Mia is available on the right</footer>
   </section>
 </div>
@@ -1304,16 +1308,16 @@
     <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
     <script src="automations-board.js?v=20261019-automations-1"></script>
     <script src="needs-you.js?v=20261102-1"></script>
-    <script src="artifacts-page.js?v=20261026-artifacts-1"></script>
+    <script src="artifacts-page.js?v=20261103-artifacts-2"></script>
     <script src="apps-page.js?v=20261102-apps-3"></script>
     <script src="view-shelf.js?v=20261027-shelf-1"></script>
     <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
     <script src="tab-strip.js?v=20261102-apps-3"></script>
-    <script src="native-browser.js?v=20261030-polish-1"></script>
+    <script src="native-browser.js?v=20261103-call-1"></script>
     <script src="hub-bot-manager.js"></script>
     <script src="hub-chat.js"></script>
     <script src="safe-page-url.js?v=20261102-space-1"></script>
-    <script src="shared-space.js?v=20261103-space-3"></script>
+    <script src="shared-space.js?v=20261103-space-6"></script>
     <script src="team-files.js?v=20261102-team-files-2"></script>
     <script src="team-files-ui.js?v=20261102-team-files-1"></script>
     <script src="step-report.js?v=20261102-step-report-1"></script>
@@ -1321,7 +1325,8 @@
     <script src="team-workflows-ui.js?v=20261102-team-workflows-2"></script>
     <script src="private-agents-ui.js?v=20261102-agents-1"></script>
     <script src="app.js?v=20261102-apps-3"></script>
-    <script src="shared-space-ui.js?v=20261103-space-5"></script>
+    <script src="shared-space-live.js?v=20261103-space-1"></script>
+    <script src="shared-space-ui.js?v=20261103-space-8"></script>
     <script src="hub-teams.js"></script>
 </body>
 </html>

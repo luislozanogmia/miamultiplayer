@@ -69,7 +69,7 @@ test('the minimap shows each person and bot on their tab', () => {
   assert.equal(tiles[0].title, 'a.com');
   assert.ok(tiles[0].mine);
   assert.deepEqual(tiles[0].people.map((p) => p.initials), ['LU']);
-  assert.deepEqual(tiles[0].bots, [{ name: 'Scout', mia: undefined, owner: 'Ana Ruiz' }]);
+  assert.deepEqual(tiles[0].bots, [{ name: 'Scout', mia: undefined, owner: 'Ana Ruiz', ownerId: 'u2' }]);
   assert.deepEqual(tiles[1].people.map((p) => p.initials), ['AR']);
 });
 
@@ -101,4 +101,34 @@ test('only a row the Hub wrote as system:admin counts as an admin ending a sessi
   assert.equal(space.isAdminEnd({ body: space.encode({ t: 'leave', space: 's1' }), author_id: 'system:admin', author_type: 'system' }), false);
   assert.equal(space.isAdminEnd({ body: 'end', author_id: 'system:admin', author_type: 'system' }), false);
   assert.equal(space.isAdminEnd(null), false);
+});
+
+test('a tile shows the copy of the page from the computer doing the work', () => {
+  const now = 100000;
+  const tile = { k: 'k1', mine: true, people: [{ id: 'me' }, { id: 'tom' }], bots: [{ ownerId: 'ana' }] };
+  const frames = { k1: { me: { url: 'mine', at: now }, tom: { url: 'toms', at: now }, ana: { url: 'anas', at: now } } };
+  assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'anas');
+  frames.k1.ana.at = now - 60000;
+  assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'mine', 'a bot computer that went quiet gives way');
+  assert.equal(space.pickFrame({ ...tile, mine: false, people: [{ id: 'tom' }], bots: [] }, frames, 'me', now).url, 'toms');
+  assert.equal(space.pickFrame({ k: 'k2', mine: false, people: [], bots: [] }, frames, 'me', now), null);
+});
+
+test('the toolbar line counts who is working across the group', () => {
+  const tile = (k, bots) => ({ k, bots: bots.map((name) => ({ name })) });
+  assert.deepEqual(space.activity([tile('a', ['Pricing Bot']), tile('b', [])], [], 0), { lead: 'Pricing Bot', rest: ' is working in tab 1' });
+  assert.deepEqual(space.activity([tile('a', ['Pricing Bot']), tile('b', ['CRM Bot'])], [{ name: 'Tom', tab: 'b' }], 0), { lead: '2 bots and 1 person', rest: ' are working in this tab group' });
+  assert.deepEqual(space.activity([tile('a', [])], [{ name: 'Tom', tab: 'a' }], 0), { lead: 'Tom', rest: ' is working in tab 1' });
+  assert.deepEqual(space.activity([tile('a', []), tile('b', []), tile('c', [])], [], 3), { lead: 'All 3 tabs', rest: ' are done' });
+  assert.equal(space.activity([tile('a', []), tile('b', [])], [], 1), null);
+});
+
+test('the toolbar line keeps Follow reachable when nobody is moving', () => {
+  assert.deepEqual(space.toolbarLine(null, 'Tom', [{ name: 'Tom' }]), { lead: 'Following Tom', rest: '' });
+  const working = { lead: 'Tom', rest: ' is working in tab 1' };
+  assert.deepEqual(space.toolbarLine(working, 'Tom', [{ name: 'Tom' }]), { lead: 'Following Tom', rest: '' });
+  assert.equal(space.toolbarLine(working, null, [{ name: 'Tom' }]), working);
+  assert.deepEqual(space.toolbarLine(null, null, [{ name: 'Tom' }]), { lead: 'Tom', rest: ' is in this session' });
+  assert.deepEqual(space.toolbarLine(null, null, [{ name: 'Tom' }, { name: 'Ana' }]), { lead: '2 people', rest: ' are in this session' });
+  assert.equal(space.toolbarLine(null, null, []), null);
 });

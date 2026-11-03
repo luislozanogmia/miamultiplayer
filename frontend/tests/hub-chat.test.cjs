@@ -100,13 +100,6 @@ test('share completion cannot insert a mention after navigation during roster re
  assert.equal(inserted,0);
 });
 
-test('Add bot click does not bubble into the document popover dismiss handler',()=>{
- let stopped=false,opened=false;const input={value:'',focus(){},setSelectionRange(){}};
- const env={el:()=>input,mentionTriggerAt:()=>({atPos:0,query:''}),openMentionPopover:()=>opened=true};
- appFunction('openHubBotPicker',env)({stopPropagation:()=>stopped=true});
- assert.equal(stopped,true);assert.equal(opened,true);assert.equal(input.value,'@');
-});
-
 test('unshared Hub bot selection requires sharing confirmation instead of inserting a plain mention',()=>{
  let inserted=false,rendered=false;const entry={kind:'agent',id:'local',label:'Helper',inChat:false};
  const env={hubWorkspace:()=>true,chatWs:{activeKind:'group'},chatMention:{},insertMentionText:()=>inserted=true,closeMentionPopover:()=>{},renderMentionPopover:()=>rendered=true,renderMentionConfirm:()=>rendered=true};
@@ -146,10 +139,21 @@ test('frequent roster refresh reuses the membership directory to preserve reques
 test('the header bot count opens the People and bots list instead of its own',()=>{
  const header={style:{},innerHTML:''},handlers={},control=id=>({addEventListener:(type,fn)=>{handlers[id]=fn;}});
  let opened=0;const openManageAgentsPane=()=>opened++;
- const env={hubWorkspace:()=>true,chatWs:{activeRoomId:'channel',activeLabel:'Shared'},chatRoomState:()=>({hubBots:[{id:'bot',name:'Pod',published:null},{id:'b2',name:'Live',published:1}]}),hubChat:{},el:selector=>selector==='#channelHeader'?header:control(selector),els:()=>[],esc:s=>s,openHubBotPicker:()=>{},openManageAgentsPane,closeMobileChatRoom:()=>{},renderChatTabs:()=>{}};
+ const env={window:{},hubWorkspace:()=>true,chatWs:{activeRoomId:'channel',activeLabel:'Shared'},chatRoomState:()=>({hubBots:[{id:'bot',name:'Pod',published:null},{id:'b2',name:'Live',published:1}],hubMembers:[{},{}],hubDirectoryAt:1}),hubChat:{},el:selector=>selector==='#channelHeader'?header:control(selector),els:()=>[],esc:s=>s,openManageAgentsPane,closeMobileChatRoom:()=>{},renderChatTabs:()=>{}};
  appFunction('renderChatHeaderBar',env)();
- assert.match(header.innerHTML,/1 bots/);assert.doesNotMatch(header.innerHTML,/Remove|@Pod|ch-roster-panel/);
+ assert.match(header.innerHTML,/>1 bot &amp; 2 users<|>1 bot & 2 users</);assert.doesNotMatch(header.innerHTML,/Remove|@Pod|ch-roster-panel|Add bot|Bot versions/);
  assert.equal(handlers['#hubBotsToggle'],openManageAgentsPane);
+});
+
+test('history skips pages holding only hidden shared-session messages',async()=>{
+ const state={historyCursor:30,messages:[]},asked=[];
+ const pages={30:{messages:[{id:'hidden'}],hasMore:true,before:20},20:{messages:[{id:'hidden'}],hasMore:true,before:10},10:{messages:[{id:'real'}],hasMore:true,before:5}};
+ const env={Promise,activeWorkspaceKey:'hub_a',chatWs:{byRoom:{room:state},activeRoomId:'room',navigationGeneration:1},renderChatThread:()=>{},hubPath:()=>'/t',HUB_EMPTY_PAGES_MAX:20,
+  hubCall:async(method,path)=>{const cursor=Number(path.split('/').pop());asked.push(cursor);return pages[cursor];},
+  applyHubRows:(room,rows)=>{state.messages.push(...rows.filter(row=>row.id!=='hidden'));}};
+ env.loadOlderHubMessages=appFunction('loadOlderHubMessages',env);
+ await env.loadOlderHubMessages('room');
+ assert.deepEqual(asked,[30,20,10]);assert.equal(state.messages.length,1);assert.equal(state.historyCursor,5);assert.equal(state.historyLoading,false);
 });
 
 test('administrator approval button is visible without expanding instruction details',async()=>{

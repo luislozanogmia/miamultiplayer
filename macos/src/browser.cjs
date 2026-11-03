@@ -638,6 +638,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         title: tab.title,
         media: tab.media || null,
         groupId: tab.groupId || null,
+        private: tab.private === true,
       })),
     };
     const temporaryPath = `${statePath}.${process.pid}.tmp`;
@@ -797,9 +798,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Counts the times the user closed the last tab; the app leaves browser
   // mode when it goes up. A blank tab still replaces the closed one.
   let lastTabCloses = 0;
+  let sessionGroupId = null;
   const state = () => ({ workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
+    private: tab.private === true,
     lastActiveAt: tab.lastActiveAt || 0,
     active: tab.id === activeId,
     loading: tab.view.webContents.isLoading(), timing: tab.timing,
@@ -1803,6 +1806,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     };
     try {
       const result = await runProtocolCommand(method, params, actor, touch);
+      // The spot a bot just clicked or typed in, for the shared minimap.
+      const target = result && result.target, worked = [...touched].at(-1);
+      if (worked && target) worked.botPoint = { x: target.x + target.width / 2, y: target.y + target.height / 2, at: Date.now() };
       if (actor && [...touched].some(tab => !tabs.has(tab.id) || !botOwnsTab(actor, tab))
           && method !== "tab_close") {
         throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
@@ -2115,7 +2121,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!panelOpen || disposed) return false;
     if (key === "l") focusLocation();
     else if (key === "f") { window.webContents.focus(); window.webContents.send("miaos-browser-find"); }
-    else if (key === "t") { newTab(); focusLocation(); }
+    else if (key === "t") { newSessionOrPlainTab(); focusLocation(); }
     else if (key === "w") closeTabByPerson(activeId);
     else if (key === "r") active()?.view.webContents.reloadIgnoringCache();
     else if (active()) {
@@ -2155,6 +2161,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     for (const item of order) tabs.set(item.id, item);
     return true;
   }
+  // In a shared session a new tab belongs to the session.
+  function newSessionOrPlainTab() {
+    if (!sessionGroupId || !groups.has(sessionGroupId)) return newTab();
+    const members = groupTabs(sessionGroupId);
+    const blank = members.find(item => !item.url);
+    if (blank) { activateTab(blank.id); layout(); persistTabs(); return blank; }
+    return newTab(undefined, { after: members.at(-1)?.id, groupId: sessionGroupId });
+  }
   function newTab(value, options = {}) {
     if (value) normalizeStoredTarget(value);
     const groupId = groups.has(options.groupId) ? options.groupId
@@ -2177,6 +2191,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         ? options.title.slice(0, 500) : "New tab", error: "", favicon: null, faviconPending: false,
       faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [], snapshots: new Map(), crashed: false,
       media: options.media || null,
+      // Stays on this computer during a shared session; what it opens does too.
+      private: options.private === true || tabs.get(options.after)?.private === true,
       // A tab opened from a grouped tab (a link, New Tab to the Right,
       // Duplicate) joins its opener's group.
       groupId,
@@ -2198,6 +2214,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // pressing Take over, so the person and the bot never type on one page.
     // Bots never send mouse events, so this is always the person.
     wc.on("before-mouse-event", (_event, mouse) => {
+      // Where this person's pointer is, for teammates in a shared session.
+      if (mouse.type === "mouseMove" || mouse.type === "mouseDown") tab.pointer = { x: mouse.x, y: mouse.y, at: Date.now() };
       if (mouse.type !== "mouseDown" || tab.id !== activeId) return;
       if (heldByRenderer.has(tab.id) || (tab.botWork || 0) > 0 || tab.actorOperationCount > 0) {
         groupBotEvent({ action: "page-click", tabId: tab.id });
@@ -2379,6 +2397,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("context-menu", (_event, params) => {
       const items = [];
       if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: menuAction(() => newTab(params.linkURL, { activate: false, after: tab.id })) });
+      if (sessionGroupId && /^https?:\/\//i.test(params.linkURL) && !tab.private) items.push({ label: "Open link in private tab", click: menuAction(() => newTab(params.linkURL, { groupId: null, private: true })) });
+      if (sessionGroupId) items.push({ label: "New private tab", click: menuAction(() => newTab(undefined, { groupId: null, private: true })) });
       const imageURL = params.mediaType === "image" && typeof params.srcURL === "string"
         && (/^https?:\/\//i.test(params.srcURL) || /^blob:https?:\/\//i.test(params.srcURL) || /^data:image\//i.test(params.srcURL))
         ? params.srcURL
@@ -2876,10 +2896,92 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (typeof command.url === "string") removeVisit(command.url);
         return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       }
-      if (command.action === "new") { newTab(); return state(); }
+      if (command.action === "new") { newSessionOrPlainTab(); return state(); }
+      if (command.action === "spaceSession") {
+        sessionGroupId = typeof command.groupId === "string" || Number.isInteger(command.groupId) ? command.groupId : null;
+        return state();
+      }
+      if (command.action === "privateTabMenu") {
+        Menu.buildFromTemplate([{ label: "New private tab", click: menuAction(() => newTab(undefined, { groupId: null, private: true })) }]).popup({ window });
+        return state();
+      }
       // A shared space opens a teammate's tab in the background, so it never
       // takes over the page this person is reading. Only web pages open this
       // way: a teammate can never open a local file here.
+      // Low-rate stills of shared tabs for the live minimap. Tabs not in front
+      // are captured without showing them or changing the person's selection.
+      if (command.action === "spaceFrames") {
+        const ids = Array.isArray(command.ids) ? command.ids.slice(0, 24) : [];
+        const width = boundedInteger(command.width, 360, 120, 640);
+        return Promise.all(ids.map(async id => {
+          const item = tabs.get(id);
+          if (!item || !item.url || item.view.webContents.isDestroyed()) return null;
+          try {
+            const image = visible && activeId === id ? await item.view.webContents.capturePage() : await captureHiddenPage(item);
+            if (!image || image.isEmpty()) return null;
+            const small = image.resize({ width: Math.min(width, image.getSize().width), quality: "good" });
+            return { id, dataUrl: `data:image/jpeg;base64,${small.toJPEG(55).toString("base64")}` };
+          } catch (_) { return null; }
+        })).then(frames => ({ frames: frames.filter(Boolean) }));
+      }
+      if (command.action === "spacePointers") {
+        const pointers = {};
+        const fallback = active()?.view.getBounds();
+        for (const id of Array.isArray(command.ids) ? command.ids.slice(0, 24) : []) {
+          const item = tabs.get(id);
+          if (!item) continue;
+          let box = item.view.getBounds();
+          if (!box.width || !box.height) box = fallback;
+          if (!box || !box.width || !box.height) continue;
+          const place = point => point ? { x: Math.min(1, Math.max(0, point.x / box.width)), y: Math.min(1, Math.max(0, point.y / box.height)), at: point.at } : null;
+          pointers[id] = { pointer: place(item.pointer), bot: place(item.botPoint) };
+        }
+        return { pointers };
+      }
+      // Teammates' pointers over the page. Native views cover the shell DOM, so
+      // like bot presence these live in the page: click-through and out of its reach.
+      if (command.action === "spaceCursors") {
+        const item = tabs.get(command.id);
+        if (!item || !item.url || item.view.webContents.isDestroyed()) return {};
+        const list = (Array.isArray(command.cursors) ? command.cursors : []).slice(0, 12).map(cursor => ({
+          id: String(cursor.id || "").slice(0, 120), label: String(cursor.label || "").slice(0, 60),
+          x: Math.min(1, Math.max(0, Number(cursor.x) || 0)), y: Math.min(1, Math.max(0, Number(cursor.y) || 0)),
+          color: /^(#[0-9a-f]{6}|hsl\(\d+, ?\d+%, ?\d+%\))$/i.test(cursor.color || "") ? cursor.color : "#5b3fd6",
+        }));
+        return executeProtocolScript(item.view.webContents, `(() => {
+          const list = ${JSON.stringify(list)};
+          let host = globalThis.__miaSpaceCursors;
+          if (!list.length) { host?.el.remove(); globalThis.__miaSpaceCursors = null; return; }
+          if (!host || !host.el.isConnected) {
+            const el = document.createElement('div');
+            el.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
+            const root = el.attachShadow({ mode: 'closed' });
+            const style = document.createElement('style');
+            style.textContent = '.c{position:absolute;display:flex;align-items:flex-start;transition:left .3s linear,top .3s linear;font:600 11px/1.2 system-ui,sans-serif}svg{width:16px;height:16px;flex:none}span{margin:12px 0 0 -4px;padding:2px 7px;border-radius:999px;color:#fff;white-space:nowrap}@media (prefers-reduced-motion:reduce){.c{transition:none}}';
+            root.append(style);
+            document.documentElement.append(el);
+            host = globalThis.__miaSpaceCursors = { el, root, marks: new Map() };
+          }
+          const seen = new Set();
+          for (const cursor of list) {
+            seen.add(cursor.id);
+            let mark = host.marks.get(cursor.id);
+            if (!mark) {
+              mark = document.createElement('div');
+              mark.className = 'c';
+              mark.innerHTML = '<svg viewBox="0 0 16 16"><path d="M2 1l11 6-5 1.5L6 14z" stroke="#fff" stroke-width="1"/></svg><span></span>';
+              host.root.append(mark);
+              host.marks.set(cursor.id, mark);
+            }
+            mark.querySelector('span').textContent = cursor.label;
+            mark.querySelector('span').style.background = cursor.color;
+            mark.querySelector('path').style.fill = cursor.color;
+            mark.style.left = (cursor.x * 100) + '%';
+            mark.style.top = (cursor.y * 100) + '%';
+          }
+          for (const [id, mark] of host.marks) if (!seen.has(id)) { mark.remove(); host.marks.delete(id); }
+        })()`, true).catch(() => {}).then(() => ({}));
+      }
       if (command.action === "spaceOpenTab") {
         const url = typeof command.url === "string" ? command.url.trim() : "";
         if (!/^https?:\/\/\S+$/i.test(url) || url.length > 4096) return { error: "Only web pages can be shared." };
@@ -3047,7 +3149,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     for (const savedTab of restored.tabs) {
       newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false,
-        groupId: savedTab.groupId });
+        groupId: savedTab.groupId, private: savedTab.private === true });
     }
     normalizeGroups();
     activateTab(tabs.has(restored.activeId) ? restored.activeId : [...tabs.keys()].at(-1));

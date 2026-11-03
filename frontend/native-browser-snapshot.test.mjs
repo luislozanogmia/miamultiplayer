@@ -5,6 +5,7 @@ import test from 'node:test';
 
 const source = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
 const coverSource = source.slice(source.indexOf('  var snapshot ='), source.indexOf('  // Like a menu:'));
+const followMenuSource = source.slice(source.indexOf('  function setFollowMenuOpen'), source.indexOf('  // A click anywhere else or Escape closes the list.'));
 function deferred() {
   let resolve;
   const promise = new Promise(r => { resolve = r; });
@@ -21,7 +22,7 @@ function harness() {
     document: { getElementById: () => snapshot },
     open: true, overlay: { hidden: false },
     selected: () => page,
-    suggestCovered: false, downloadsOpen: false,
+    suggestCovered: false, downloadsOpen: false, followMenuOpen: false, followMenuRequested: false, callMenuCovered: false, callMenuRequested: false,
     downloadsView: { hidden: true, style: { setProperty() {} } },
     downloadsBtn: { setAttribute() {}, getBoundingClientRect: () => ({ right: 100 }) },
     downloadsSearch: { value: '', focus() {} }, screen: { getBoundingClientRect: () => ({ right: 200 }) },
@@ -160,5 +161,38 @@ test('a page change clears a committed cover image rather than retaining previou
   await h.decoded(0);
   h.page({ id: 2, url: 'https://example.test/b', loading: false });
   assert.equal(h.snapshot.src, '');
+  assert.equal(h.snapshot.hidden, true);
+});
+
+test('the follow list opens once its page still is ready, and closing it mid-capture keeps it shut', async () => {
+  const h = harness();
+  const rect = () => ({ left: 0, width: 800 });
+  Object.assign(h.c, {
+    followMenuToken: 0,
+    followWho: { setAttribute() {}, getBoundingClientRect: rect },
+    followMenu: { hidden: true, style: {} },
+    renderFollowMenu() {},
+  });
+  h.c.screen.getBoundingClientRect = rect;
+  vm.runInContext(followMenuSource, h.c);
+
+  const opening = h.c.setFollowMenuOpen(true);
+  await h.captured(0, 'page-a');
+  await h.decoded(0);
+  await opening;
+  assert.equal(h.captures.length, 1, 'the capture must be kept, not retried');
+  assert.equal(h.c.followMenuOpen, true);
+  assert.equal(h.c.followMenu.hidden, false);
+  assert.equal(h.snapshot.hidden, false);
+
+  h.c.setFollowMenuOpen(false);
+  h.timers();
+  const reopening = h.c.setFollowMenuOpen(true);
+  h.c.setFollowMenuOpen(false);
+  await h.captured(1, 'page-a');
+  await reopening;
+  assert.equal(h.captures.length, 2, 'a dismissed list must not capture again');
+  assert.equal(h.c.followMenuOpen, false);
+  assert.equal(h.c.followMenu.hidden, true);
   assert.equal(h.snapshot.hidden, true);
 });

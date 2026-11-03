@@ -235,3 +235,11 @@ test('the chat icon opens the conversation menu, and the bar dots are the tab me
   assert.match(browser, /command\('tabMenu', \{ id: state\.activeId \}\)/);
   assert.match(browser, /tabMenuBtn\.hidden = view !== 'browser'/);
 });
+
+test('the mote and name open the menu, and the menu leads to the bot settings', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /id="channelTitleBtn"[^\n]*\+ markHtml \+ title/);
+  assert.match(source, /agentAvatarHtml\(chatWs\.activeLabel,[^\n]*!channelMenuKind\(\)\)/);
+  assert.match(source, /activeMetadata\.botId \? item\('chatBotSettingsBtn', 'Bot settings'/);
+  assert.match(source, /el\('#chatBotSettingsBtn', header\);\n\s+if\(botSettings\) botSettings\.addEventListener\('click', openActiveBotSettings\)/);
+});

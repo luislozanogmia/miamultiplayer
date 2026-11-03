@@ -104,5 +104,8 @@
     }).join('');
   }
 
-  return {FILTERS: FILTERS, bodyHtml: bodyHtml, chipsHtml: chipsHtml, counts: counts, matches: matches, sections: sections, when: when};
+  var CREATE_PROMPT = 'Create an artifact for me: [say what it should do].\n\n'
+    + 'Make it a web page, PDF or image file in the Mia folder, and tell me the file name when it is done.';
+
+  return {CREATE_PROMPT: CREATE_PROMPT, FILTERS: FILTERS, bodyHtml: bodyHtml, chipsHtml: chipsHtml, counts: counts, matches: matches, sections: sections, when: when};
 });

@@ -56,6 +56,8 @@
     if(!message || message.t !== 'space' || !Number.isSafeInteger(message.rev)) return current;
     var incoming = {id: message.space, name: String(message.name || 'Shared tabs').slice(0, 80), rev: message.rev,
       by: message.from && message.from.id || '', tabs: cleanTabs(message.tabs)};
+    var startedAt = Number(message.startedAt) || current && current.startedAt;
+    if(startedAt) incoming.startedAt = startedAt;
     return newer(current, incoming) ? incoming : current;
   }
 
@@ -66,7 +68,7 @@
     if(message.t === 'leave') { delete next[from.id]; return next; }
     if(message.t !== 'here') return next;
     next[from.id] = {id: from.id, name: String(from.name || 'Teammate').slice(0, 80), tab: typeof message.tab === 'string' ? message.tab : null,
-      url: shareableUrl(message.url), follow: typeof message.follow === 'string' ? message.follow : null,
+      url: shareableUrl(message.url), follow: typeof message.follow === 'string' ? message.follow : null, away: message.away === true,
       bots: (Array.isArray(message.bots) ? message.bots : []).slice(0, 8).filter(function(bot){ return bot && typeof bot.tab === 'string'; })
         .map(function(bot){ return {tab: bot.tab, name: String(bot.name || 'Bot').slice(0, 80), mia: !!bot.mia}; }),
       at: now};
@@ -94,10 +96,50 @@
       });
       var bots = [];
       people.forEach(function(person){ (person.bots || []).forEach(function(bot){
-        if(bot.tab === tab.k) bots.push({name: bot.name, mia: bot.mia, owner: person.name});
+        if(bot.tab === tab.k) bots.push({name: bot.name, mia: bot.mia, owner: person.name, ownerId: person.id});
       }); });
       return {k: tab.k, title: tab.title || hostOf(tab.url) || 'New tab', url: tab.url, people: here, bots: bots, mine: !!(me && me.tab === tab.k)};
     });
+  }
+  // Whose copy of a tab its tile shows: a bot's computer first, then yours if
+  // you are on it, then anyone on it, then the newest still anyone sent.
+  var FRAME_FRESH_MS = 20000;
+  function pickFrame(tile, frames, selfId, now){
+    var byPerson = frames && frames[tile.k] || {};
+    var order = tile.bots.map(function(bot){ return bot.ownerId; });
+    if(tile.mine && selfId) order.push(selfId);
+    tile.people.forEach(function(person){ order.push(person.id); });
+    for(var i = 0; i < order.length; i++){
+      var frame = byPerson[order[i]];
+      if(frame && now - frame.at < FRAME_FRESH_MS) return frame;
+    }
+    return Object.keys(byPerson).map(function(id){ return byPerson[id]; }).sort(function(a, b){ return b.at - a.at; })[0] || null;
+  }
+  // The line beside Follow: who is working in this group right now.
+  // `active` holds teammates (other than you) moving on a tab: [{name, tab}].
+  function activity(tiles, active, doneCount){
+    var bots = [];
+    tiles.forEach(function(tile, index){ tile.bots.forEach(function(bot){ bots.push({name: bot.name, tab: index + 1}); }); });
+    var people = [];
+    (active || []).forEach(function(person){
+      var index = tiles.map(function(tile){ return tile.k; }).indexOf(person.tab);
+      if(index >= 0) people.push({name: person.name, tab: index + 1});
+    });
+    var total = bots.length + people.length;
+    if(!total) return doneCount && doneCount === tiles.length ? {lead: tiles.length === 1 ? 'The tab' : 'All ' + tiles.length + ' tabs', rest: tiles.length === 1 ? ' is done' : ' are done'} : null;
+    if(total === 1){ var one = bots[0] || people[0]; return {lead: one.name, rest: ' is working in tab ' + one.tab}; }
+    var parts = [];
+    if(bots.length) parts.push(bots.length + (bots.length === 1 ? ' bot' : ' bots'));
+    if(people.length) parts.push(people.length + (people.length === 1 ? ' person' : ' people'));
+    return {lead: parts.join(' and '), rest: ' are working in this tab group'};
+  }
+  // What the toolbar shows while someone else is in the session. Follow stays
+  // reachable when nobody is moving, and while you are following someone.
+  function toolbarLine(summary, followedName, others){
+    if(followedName) return {lead: 'Following ' + followedName, rest: ''};
+    if(summary) return summary;
+    if(!others || !others.length) return null;
+    return others.length === 1 ? {lead: others[0].name, rest: ' is in this session'} : {lead: others.length + ' people', rest: ' are in this session'};
   }
   function hostOf(url){ var m = /^https?:\/\/([^/?#]+)/i.exec(url || ''); return m ? m[1].replace(/^www\./, '') : ''; }
 
@@ -157,7 +199,7 @@
     return true;
   }
 
-  return {MARKER: MARKER, PRESENCE_TTL_MS: PRESENCE_TTL_MS, MAX_TABS: MAX_TABS, encode: encode, decode: decode, isSpaceMessage: isSpaceMessage, isAdminEnd: isAdminEnd,
+  return {pickFrame: pickFrame, activity: activity, toolbarLine: toolbarLine, MARKER: MARKER, PRESENCE_TTL_MS: PRESENCE_TTL_MS, MAX_TABS: MAX_TABS, encode: encode, decode: decode, isSpaceMessage: isSpaceMessage, isAdminEnd: isAdminEnd,
     shareableUrl: shareableUrl, applySpace: applySpace, applyPresence: applyPresence, livePresence: livePresence, initials: initials,
     tiles: tiles, hostOf: hostOf, reconcile: reconcile, localTabList: localTabList, reuseGroupTabs: reuseGroupTabs, pendingPages: pendingPages, sameTabs: sameTabs};
 });

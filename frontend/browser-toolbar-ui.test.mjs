@@ -48,7 +48,7 @@ test('a tab group opens with its bot, then its name chip, and one line runs from
   const js = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
 
   assert.match(js, /strip\.append\(groupHead\(tabGroup, index, folded\)\)/);
-  assert.match(js, /head\.append\(groupOwner\(g\), groupChip\(g, index, folded\)\)/, 'the bot leads, the name follows');
+  assert.match(js, /head\.append\(groupOwner\(g\)\);[\s\S]{0,120}head\.append\(groupChip\(g, index, folded\)\)/, 'the bot leads, the name follows');
   assert.match(css, /\.native-browser-group-head\{[^}]*box-shadow:inset 0 -2px 0 var\(--tab-group-color\);/, 'the line starts under the bot');
   assert.match(css, /\.native-browser-group-owner\{[^}]*background:transparent;/, 'no circle behind the bot');
   assert.match(css, /\.mia-tab\.in-group\{box-shadow:inset 0 -2px 0 var\(--tab-group-color\);\}/);
@@ -233,4 +233,9 @@ test('outside the browser, Back and Forward step through the places opened in Mi
   // In the browser the page owns the buttons.
   classes.delete('artifacts-mode');
   assert.equal(nav.owns(), false);
+});
+
+test('a closed sidebar leaves nothing poking out over the tab row', async () => {
+  const source = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(source, /body\.browser-collab-mode:not\(\.browser-sidebar-open\) \.chat-sidebar\{visibility:hidden;\}/);
 });

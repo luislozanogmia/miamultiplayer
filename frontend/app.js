@@ -4724,13 +4724,6 @@
     input.value+=(input.value && !/\s$/.test(input.value)?' ':'')+'@'+name+' ';
     input.focus();input.dispatchEvent(new Event('input',{bubbles:true}));
   }
-  function openHubBotPicker(event){
-    if(event && event.stopPropagation)event.stopPropagation();
-    var input=el('#ccInput');if(!input)return;
-    input.value+=(input.value && !/\s$/.test(input.value)?' ':'')+'@';
-    input.focus();input.setSelectionRange(input.value.length,input.value.length);
-    openMentionPopover(mentionTriggerAt(input));
-  }
   // The requester's own Mia runs their bot requests right away, on their own
   // computer and subscription, exactly as Solo does. `immediate` skips the
   // background throttle; a request arriving mid-poll runs once more after it.
@@ -4766,7 +4759,7 @@
       // answers 404 here, and then every team member is in every channel.
       refreshDirectory ? hubCall('GET',hubPath()+'/channels/'+roomId+'/members').catch(function(error){
         if(error && error.status===404)return hubCall('GET',hubPath()+'/members');throw error;
-      }) : Promise.resolve({members:state.hubMembers||[]}),
+      }).then(function(result){return Array.isArray(result)?{members:result}:result;}) : Promise.resolve({members:state.hubMembers||[]}),
       refreshDirectory ? window.MiaHubChat.localCall('GET','/available').catch(function(){return {bots:[]};}) : Promise.resolve({bots:state.hubAvailableBots||[]}),
       // Everyone in the team, so @ also offers teammates outside this channel.
       refreshDirectory ? hubCall('GET',hubPath()+'/members').catch(function(){return {members:hubChat.members||[]};}) : Promise.resolve({members:hubChat.members||[]})
@@ -4774,6 +4767,8 @@
       if(workspace!==activeWorkspaceKey || roomId!==chatWs.activeRoomId || generation!==chatWs.navigationGeneration || chatWs.configured===false)return;
       var previousAdmissions=JSON.stringify((state.hubBots||[]).map(function(b){return b.admission;}));
       state.hubBots=results[0].bots||[];
+      // A channel with no member list of its own is open to the whole team.
+      if(refreshDirectory && !(results[1].members||[]).length)results[1].members=results[3].members||[];
       if(refreshDirectory){state.hubMembers=results[1].members||[];state.hubAvailableBots=results[2].bots||[];state.hubDirectoryAt=Date.now();hubChat.members=results[3].members||hubChat.members||[];}
       var names={};state.hubBots.forEach(function(bot){names[bot.name.toLowerCase()]=true;});
       state.mentionRoster={humans:hubMentionHumans(results[1].members||[],results[3].members||[]),
@@ -5103,7 +5098,7 @@
       refreshHubBotState(target.channelId, true);
       showBenchToast(hubBotJoinedMessage(name, target.label, published));
     }).catch(function(error){
-      showBenchToast(name + ' was created, but it could not join ' + target.label + ': ' + (error && error.message || 'try Add bot in the channel.'));
+      showBenchToast(name + ' was created, but it could not join ' + target.label + ': ' + (error && error.message || 'add it from People and bots in the channel.'));
       loadChatRoom(conversation.id, 'agent', created.name);
     });
   }
@@ -5722,22 +5717,30 @@
       hubChat.error='';chatWs.configured=true;
       markHubRead(roomId);
       renderChatSidebar();renderChatThread();renderDeptAgentSelector();
+      if(!state.messages.length && state.historyCursor)return loadOlderHubMessages(roomId);
     }).catch(function(error){ if(workspace===activeWorkspaceKey && generation===chatWs.navigationGeneration)hubFeedback(error); })
       .finally(function(){ if(state.hubLoading===request)state.hubLoading=null; });
     return request;
   }
-  function loadOlderHubMessages(roomId){
+  // A shared browser session's hidden messages can fill many pages, so a page
+  // that shows nothing moves straight on to the next one. The limit only stops
+  // a runaway; a long session can bury real messages hundreds of pages down.
+  var HUB_EMPTY_PAGES_MAX=500;
+  function loadOlderHubMessages(roomId,emptyPages){
     var state=roomId && chatWs.byRoom[roomId];
     if(!state || chatWs.activeRoomId!==roomId || state.historyLoading || !state.historyCursor)return Promise.resolve();
-    var workspace=activeWorkspaceKey, generation=chatWs.navigationGeneration, cursor=state.historyCursor;
+    var workspace=activeWorkspaceKey, generation=chatWs.navigationGeneration, cursor=state.historyCursor, gained=true;
     state.historyLoading=true;renderChatThread();
     return hubCall('GET',hubPath()+'/channels/'+roomId+'/messages/before/'+cursor).then(function(result){
       if(workspace!==activeWorkspaceKey || generation!==chatWs.navigationGeneration || roomId!==chatWs.activeRoomId)return;
+      var shown=state.messages.length;
       applyHubRows(roomId,result.messages||[]);
       state.historyCursor=result.hasMore && result.before<cursor ? result.before : null;
       state.historyComplete=!state.historyCursor;
-    }).catch(function(){/* Keep the cursor so a later upward scroll retries. */}).then(function(){
+      gained=state.messages.length>shown;
+    }).catch(function(){/* Keep the cursor so a later upward scroll retries. */gained=true;}).then(function(){
       state.historyLoading=false;
+      if(!gained && state.historyCursor && (emptyPages||0)<HUB_EMPTY_PAGES_MAX)return loadOlderHubMessages(roomId,(emptyPages||0)+1);
       if(chatWs.activeRoomId===roomId)renderChatThread();
     });
   }
@@ -5880,6 +5883,21 @@
     },
     activeChannelId:function(){ return hubChannel(chatWs.activeRoomId) ? chatWs.activeRoomId : null; },
     toast:function(text){ showBenchToast(text); },
+    moteSrc:function(name){ return moteSrcFor(name,true); },
+    // A session is a room: the browser in front, its chat beside it.
+    enterSession:function(channelId){
+      if(!localBrowserState.open)openWebBrowserTool();
+      if(chatWs.activeRoomId!==channelId && hubChannel(channelId))openHubChannel(hubChannel(channelId));
+      closeBrowserSidebarDrawer();
+      renderChatHeaderBar();
+    },
+    // Back to Mia: out of the room, still in the call.
+    leaveRoom:function(){ closeLocalBrowser(); },
+    leftSession:function(){ if(localBrowserState.open)setBrowserSidebarOpen(browserSidebarWanted()); applyLeftPane(); renderChatHeaderBar(); },
+    channelPeople:function(channelId){
+      var state=chatRoomState(channelId), members=(state.hubMembers||[]).length ? state.hubMembers : (hubChat.members||[]);
+      return members.map(function(member){return {id:member.clerk_user_id,name:member.display_name||displayNameForEmail(member.email)||member.email||'Teammate'};});
+    },
     sharedSession:function(active){ api('/api/browser/shared-session',{method:'POST',body:{active:active===true}}).catch(function(){}); },
     send:function(channelId,text){
       if(!hubWorkspace() || !hubChannel(channelId))return Promise.reject(new Error('That channel is no longer available.'));
@@ -8732,11 +8750,14 @@
     }).catch(function(error){ showBenchToast(window.MiaAppsPage.errorMessage(error, 'That did not work. Try again.')); });
   }
   // Puts the request in the composer so the person can say what the app is for.
-  function buildAppWithBot(){
+  function buildAppWithBot(){ draftInChat(window.MiaAppsPage.BUILD_PROMPT); }
+  // Puts a ready request in the message box, with the part to fill in selected.
+  function draftInChat(prompt){
     closeAppsPage();
+    closeArtifactsPage();
     var input = el('#ccInput');
     if(!input) return;
-    input.value = window.MiaAppsPage.BUILD_PROMPT;
+    input.value = prompt;
     input.dispatchEvent(new Event('input', {bubbles: true}));
     input.focus();
     var at = input.value.indexOf('[say what it should do]');
@@ -9087,7 +9108,7 @@
     'new-automation': LOCAL_BROWSER_SUGGEST_AUTOMATION,
     'new-bot': '<img src="assets/mote/mote-static.svg" alt="" class="mote-avatar-img" style="width:18px;height:18px">',
     'new-app': '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>',
-    'add-app': LOCAL_BROWSER_SUGGEST_ARTIFACT,
+    'new-artifact': LOCAL_BROWSER_SUGGEST_ARTIFACT,
     'new-tab': LOCAL_BROWSER_SUGGEST_GLOBE
   };
   function localBrowserSuggestRow(item, i, query){
@@ -9190,7 +9211,7 @@
       .concat(hubWorkspace() ? [{id:'new-channel', name:'New channel'}] : [])
       .concat([{id:'new-automation', name:'New automation'}])
       .concat(hubWorkspace() ? [] : [{id:'new-bot', name:'New bot'}])
-      .concat([{id:'new-app', name:'New app'}, {id:'add-app', name:'Add a live app'}])
+      .concat([{id:'new-app', name:'New app'}, {id:'new-artifact', name:'Create an artifact'}])
       .concat(browser && browser.command ? [{id:'new-tab', name:'New browser tab'}] : []);
   }
   function runLocalBrowserStart(id){
@@ -9200,9 +9221,8 @@
       window.setTimeout(function(){ var add = el('#automationsAddBtn'); if(add) add.click(); }, 0);
     } else if(id === 'new-app'){
       runToolsAction('apps');
-    } else if(id === 'add-app'){
-      runToolsAction('artifacts');
-      setArtifactsAddOpen(true);
+    } else if(id === 'new-artifact'){
+      draftInChat(window.MiaArtifactsPage.CREATE_PROMPT);
     } else if(id === 'new-tab'){
       openWebBrowserTool();
       window.miaDesktop.browser.command({action:'new'}).then(function(state){
@@ -12236,6 +12256,12 @@
     updateChatSuggestions(roomId);
     if(chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)) syncMiaBotSetupRequest(roomId, state);
     var botDraftFlow = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel) ? state.botDraft : null;
+    // Older pages are still there, so "no messages" would not be true yet.
+    if(inHubRoom() && !state.messages.length && !state.thinking && state.historyCursor){
+      replaceChatTimeline(thread, roomId, state, chatHistoryControlHtml(state), options);
+      wireChatHistoryControl(thread, roomId);
+      return;
+    }
     if(inHubRoom() && !state.historyInitialized && !state.messages.length && !state.thinking) return showChatThreadPlaceholder(thread);
     if(!state.messages.length && !state.thinking && !botDraftFlow){
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
@@ -13003,10 +13029,12 @@
       '<div class="manage-agents-body">' +
       (channel ? '<div class="hub-people-context">' + esc(workspaceLabel()) + ' · ' + esc(channel.kind === 'dm' ? 'Direct message' : channel.kind === 'group' ? hubChannelTitle(channel) : '#' + channel.name) + '</div>' : '<div class="hub-people-context">Open a channel to see its people and bots.</div>') +
       (channel ? section('People in this channel', members.length, people, isTeamAdmin ? '<button type="button" class="manage-agent-section-link" id="hubPanelInvite">Invite people</button>' : '') +
-        section('Bots in this channel', bots.length, botRows) +
+        section('Bots in this channel', bots.length, botRows, '<button type="button" class="manage-agent-section-link" id="hubPanelVersions">Bot versions &amp; runs</button>') +
         (availableRows.length ? section('Your bots not in this channel', available.length, availableRows) : '') : '') + '</div>';
     var close = el('#manageAgentsPaneClose', pane);
     if(close) close.addEventListener('click', closeManageAgentsPane);
+    var versions = el('#hubPanelVersions', pane);
+    if(versions) versions.addEventListener('click', function(){ window.MiaHubBots.open({teamId: activeWorkspaceKey.slice(4), channelId: roomId, refresh: function(){ return hubBotsChanged(roomId); }}); });
     var invite = el('#hubPanelInvite', pane);
     // Invitations, like every team membership change, live in the Admin Center.
     if(invite) invite.addEventListener('click', function(){ location.href = '/admin?workspace=' + encodeURIComponent(activeWorkspaceKey) + '#/invites'; });
@@ -13503,6 +13531,16 @@
       row('Model', '<span id="cipModelValue">' + esc(tags ? tags.textContent.trim() : '') + '</span>', 'data-bot-setting="model"') +
       (agent ? row('Brief', '', 'data-bot-setting="edit"') + row('Workplaces', places ? String(places) : '', 'data-bot-setting="edit"') + row('Avatar color', color, 'data-bot-setting="edit"') : '') + '</section>';
   }
+  // The same editor the details pane opens, from the conversation's menu.
+  function openActiveBotSettings(){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
+    var botId = conversation && conversation.metadata && conversation.metadata.botId;
+    return loadBenchAgents().then(function(){
+      var bench = botId && findBenchAgentByServerId(botId);
+      if(!bench){ showBenchToast('Bot editor is unavailable right now'); return; }
+      openEditCinema(bench.id);
+    });
+  }
   function bindDetailsBotSettings(pane, agent){
     els('[data-bot-setting]', pane).forEach(function(button){
       button.addEventListener('click', function(event){
@@ -13819,13 +13857,16 @@
     if(!header) return;
     if(inHubRoom()){
       header.style.display=chatWs.activeRoomId?'flex':'none';
-      var bots=chatWs.activeRoomId && chatRoomState(chatWs.activeRoomId).hubBots || [];
-      // The bot count opens People and bots, the one list of this channel's
-      // bots with the actions you are allowed to take.
-      header.innerHTML='<div class="ch-left"><button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to channels">‹</button><span class="channel-header-title">'+esc(chatWs.activeLabel||'')+'</span></div><div class="ch-right"><button type="button" class="ch-roster-chip" id="hubBotsToggle">'+bots.filter(function(bot){return !!bot.published;}).length+' bots</button><button type="button" class="ch-roster-chip" id="hubAddBot">Add bot</button><button type="button" class="ch-roster-chip" id="hubManageBots">Bot versions & runs</button>'+
+      var hubRoom=chatWs.activeRoomId && chatRoomState(chatWs.activeRoomId) || {};
+      var botCount=(hubRoom.hubBots||[]).filter(function(bot){return !!bot.published;}).length, userCount=(hubRoom.hubMembers||[]).length;
+      var peopleCount=botCount+(botCount===1?' bot':' bots')+(hubRoom.hubDirectoryAt?' & '+userCount+(userCount===1?' user':' users'):'');
+      // The count opens People and bots, where this channel's bots are added
+      // and managed. It stays on this header: nothing here goes in the address bar.
+      header.innerHTML='<div class="ch-left"><button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to channels">‹</button><span class="channel-header-title'+(window.MiaSpaceUI && window.MiaSpaceUI.inChannel(chatWs.activeRoomId) ? ' in-call' : '')+'">'+esc(chatWs.activeLabel||'')+'</span></div><div class="ch-right ch-stays">'+(window.MiaSpaceUI && window.MiaSpaceUI.sessionGroup()===null ? '<button type="button" class="ch-roster-chip ch-browse-together" id="hubBrowseTogether" title="Open a shared browser with this chat and invite people">Browse together</button>' : '')+'<button type="button" class="ch-roster-chip" id="hubBotsToggle">'+peopleCount+'</button>'+
         '<button type="button" class="ch-icon-btn conv-more-btn" id="hubChannelMoreBtn" title="More" aria-label="More" aria-haspopup="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg></button></div>';
       el('#hubBotsToggle',header).addEventListener('click',openManageAgentsPane);
-      el('#hubAddBot',header).addEventListener('click',openHubBotPicker);
+      var browseTogether=el('#hubBrowseTogether',header);
+      if(browseTogether)browseTogether.addEventListener('click',function(){window.MiaSpaceUI.startInChannel(chatWs.activeRoomId).then(renderChatHeaderBar);});
       // The same channel menu as right-clicking it in the sidebar, under the dots.
       el('#hubChannelMoreBtn',header).addEventListener('click',function(event){
         event.stopPropagation();
@@ -13834,7 +13875,6 @@
         if(hubChannelMenu){closeHubChannelMenu();return;}
         openHubChannelMenu(channel,rect.right-200,rect.bottom+4);
       });
-      el('#hubManageBots',header).addEventListener('click',function(){window.MiaHubBots.open({teamId:activeWorkspaceKey.slice(4),channelId:chatWs.activeRoomId,refresh:function(){return hubBotsChanged(chatWs.activeRoomId);}});});
       if(el('#chatMobileBack'))el('#chatMobileBack').addEventListener('click',closeMobileChatRoom);
       return;
     }
@@ -13871,7 +13911,7 @@
     var headerMiaIsWorking = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel, chatWs.activeLabel === 'Mia' ? 'gateway' : null) && roomHasModelResponseActivity(chatWs.activeRoomId);
     var markHtml = officialChannel
       ? '<span class="ch-mark channel">' + esc(benchMark(chatWs.activeLabel || 'Multiplayer Test')) + '</span>'
-      : '<span class="ch-mark dm">' + ((chatWs.activeKind === 'agent' || chatWs.activeKind === 'agent-setup') ? (chatWs.activeKind === 'agent-setup' ? agentSetupAvatarHtml(24, headerMiaIsWorking ? 'activity' : null, true) : agentAvatarHtml(chatWs.activeLabel, null, 24, headerMiaIsWorking ? 'activity' : null, null, true)) : esc(benchMark(chatWs.activeLabel || '?'))) + '</span>';
+      : '<span class="ch-mark dm">' + ((chatWs.activeKind === 'agent' || chatWs.activeKind === 'agent-setup') ? (chatWs.activeKind === 'agent-setup' ? agentSetupAvatarHtml(24, headerMiaIsWorking ? 'activity' : null, true) : agentAvatarHtml(chatWs.activeLabel, null, 24, headerMiaIsWorking ? 'activity' : null, null, !channelMenuKind())) : esc(benchMark(chatWs.activeLabel || '?'))) + '</span>';
     var title = chatWs.activeLabel;
     var rosterData = chatRosterData();
     var rosterChips = renderChatRosterChips(rosterData);
@@ -16582,6 +16622,8 @@
   // Only its own button closes it, and that choice is remembered.
   var BROWSER_SIDEBAR_CLOSED_KEY = 'mia.browserSidebarClosed';
   function browserSidebarWanted(){
+    // In a call the sidebar stays out until asked for; back in Mia it's the usual one.
+    if(document.body.classList.contains('mia-session-mode') && document.body.classList.contains('browser-collab-mode')) return false;
     try { return localStorage.getItem('mia.browserSidebarClosed') !== '1'; } catch(_sidebarStorageError) { return true; }
   }
   function setBrowserSidebarOpen(open){
@@ -17552,6 +17594,7 @@
         (activeBotTabsAvailable(activeConversation) ? item('chatShowBotTabsBtn', 'Show this bot\'s tabs', '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 9h18M9 5v4"></path>') : '') +
         item('chatHistoryBtn', 'History', '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l3 2"></path>') +
         item('chatNewConversationBtn', 'New conversation', '<path d="M12 5v14M5 12h14"></path>', ' title="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '')) +
+        (activeConversation && activeMetadata.botId ? item('chatBotSettingsBtn', 'Bot settings', '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>') : '') +
         (channelMenuKind() ? '<div class="conv-more-sep" role="separator"></div>' + renderChannelMenuHtml() : '')
       : '';
     return '<div class="conversation-header-actions conv-more" role="group" aria-label="Conversation actions">' +
@@ -17635,6 +17678,8 @@
     els('.conv-more-item:not(#channelMenuResetItem)', header).forEach(function(item){
       item.addEventListener('click', function(){ setTimeout(closeChannelMenu); });
     });
+    var botSettings = el('#chatBotSettingsBtn', header);
+    if(botSettings) botSettings.addEventListener('click', openActiveBotSettings);
     var showTabs = el('#chatShowBotTabsBtn', header);
     if(showTabs) showTabs.addEventListener('click', showActiveBotTabs);
     var share = el('#chatShareConversation', header);

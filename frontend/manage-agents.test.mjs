@@ -978,3 +978,10 @@ test('the Theme choice is hidden and everyone gets the light theme', async () =>
   assert.match(styles, /\.styled-settings-row\[hidden\]\{display:none;\}/, 'the row layout must not override hidden');
   assert.match(source, /var THEME_CHOICE_AVAILABLE = false;\s*function developerModeEnabled\(\)\{\s*if\(!THEME_CHOICE_AVAILABLE\) return false;/);
 });
+
+test('a shared session keeps the sidebar closed, even when the browser reopens after a restart', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /function browserSidebarWanted\(\)\{\s*\/\/[^\n]*\n\s*if\(document\.body\.classList\.contains\('mia-session-mode'\) && document\.body\.classList\.contains\('browser-collab-mode'\)\) return false;/);
+  // The open path sets the browser's mode first, so a reopen counts as in the call.
+  assert.match(source, /classList\.add\('browser-collab-mode'\);\s*setBrowserSidebarOpen\(browserSidebarWanted\(\)\);/);
+});

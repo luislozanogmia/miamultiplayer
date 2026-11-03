@@ -55,3 +55,11 @@ test('recently opened comes first on the unfiltered list, and artifacts that are
   assert.doesNotMatch(html, /missing/);
   assert.doesNotMatch(page.bodyHtml({ items, filter: 'all', query: 'report', recentIds: ['b'] }, esc, now), /Recently opened/);
 });
+
+test('the start menu creates an artifact by drafting the request in chat', () => {
+  const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(app, /\{id:'new-artifact', name:'Create an artifact'\}/);
+  assert.match(app, /id === 'new-artifact'\)\{\n\s+draftInChat\(window\.MiaArtifactsPage\.CREATE_PROMPT\)/);
+  assert.doesNotMatch(app, /Add a live app/);
+  assert.match(page.CREATE_PROMPT, /\[say what it should do\]/);
+});

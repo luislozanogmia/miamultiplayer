@@ -36,6 +36,12 @@
     var open = function () { focusLocation(); window.miaOpenStartRows(); };
     (docked === 'browser' ? command('new') : Promise.resolve()).then(open);
   };
+  // In a session, right-click + for a tab the team doesn't get.
+  add.addEventListener('contextmenu', function (event) {
+    if (!window.MiaSpaceUI || window.MiaSpaceUI.sessionGroup() === null) return;
+    event.preventDefault();
+    command('privateTabMenu');
+  });
   strip.append(add);
   // » lists the groups a crowded strip had no room for. It sits outside the
   // scrolling strip so it is always in reach.
@@ -220,6 +226,8 @@
     if (after && after.nextSibling !== bar) after.after(bar);
     if (!after && view === 'browser' && bar.nextSibling !== barHome) barHome.before(bar);
     var tools = view === 'browser' ? null : document.querySelector(VIEW_TOOLS[view]);
+    // A team chat keeps its own header, with its name and who is in it.
+    if (tools && tools.querySelector('.ch-stays')) tools = null;
     if (toolsHome && toolsHome.node !== tools) {
       toolsHome.next ? toolsHome.next.before(toolsHome.node) : toolsHome.parent.append(toolsHome.node);
       toolsHome = null;
@@ -258,7 +266,7 @@
     reload.title = tab && tab.loading ? 'Stop loading' : 'Reload';
     reload.setAttribute('aria-label', reload.title);
   }
-  // Every view keeps the chat's buttons in this bar, last, so its "more"
+  // Every view keeps a bot chat's buttons in this bar, last, so its "more"
   // dots end the row. In the chat the whole header moves here; elsewhere the
   // header stays over the conversation pane and only its buttons move. The
   // header redraws itself, so its new buttons are moved again each time.
@@ -268,7 +276,7 @@
     var header = document.getElementById('channelHeader');
     if (!header) return;
     if (!chatHeaderWatch) {
-      chatHeaderWatch = new MutationObserver(function () { dockChatActions(bar.getAttribute('data-view') || docked); });
+      chatHeaderWatch = new MutationObserver(function () { dockBar(bar.getAttribute('data-view') || docked); });
       chatHeaderWatch.observe(header, { childList: true });
     }
     var home = viewTools;
@@ -280,6 +288,12 @@
       if (miaToggle.nextSibling !== viewTools) viewTools.before(miaToggle);
     }
     var parked = chatActions && chatActions.parentNode && chatActions.parentNode !== header ? chatActions : null;
+    header.classList.toggle('is-side-pane', view !== 'chat');
+    if (header.querySelector(':scope > .ch-stays')) {
+      if (parked) parked.remove();
+      chatActions = null;
+      return;
+    }
     if (view === 'chat') {
       if (parked) header.querySelector(':scope > .ch-right') ? parked.remove() : header.append(parked);
       chatActions = null;
@@ -378,6 +392,26 @@
     if (followingBot()) follow = null; else if (botId) startFollow(botId);
     render(state);
   };
+  // In a call the bar across the window holds who you follow: the name picks
+  // the person, the switch turns it on. shared-space-ui.js places this in the bar.
+  var callFollow = document.createElement('div');
+  callFollow.className = 'mia-space-call-follow'; callFollow.hidden = true;
+  var callFollowLabel = document.createElement('span');
+  callFollowLabel.className = 'mia-space-call-follow-label';
+  var callFollowSwitch = document.createElement('button');
+  callFollowSwitch.type = 'button'; callFollowSwitch.className = 'local-browser-follow';
+  callFollowSwitch.setAttribute('role', 'switch');
+  callFollowSwitch.innerHTML = '<span class="local-browser-follow-track" aria-hidden="true"></span>Follow';
+  callFollowSwitch.onclick = function () {
+    if (window.MiaSpaceUI) window.MiaSpaceUI.followWorker();
+    render(state);
+  };
+  var followWho = document.createElement('button');
+  followWho.type = 'button'; followWho.className = 'local-browser-follow-who'; followWho.hidden = true;
+  followWho.setAttribute('aria-haspopup', 'menu'); followWho.setAttribute('aria-expanded', 'false');
+  followWho.title = 'Choose who to follow';
+  followWho.onclick = function () { setFollowMenuOpen(!followMenuOpen); };
+  callFollow.append(callFollowLabel, followWho, callFollowSwitch);
   botControl.append(botControlLabel, followButton, takeOver);
   var urlWrap = overlay.querySelector('.local-browser-url-wrap');
   if (urlWrap) urlWrap.after(botControl);
@@ -464,15 +498,102 @@
     // Recheck after the reply may have ended; render() reschedules.
     botHoldTimer = setTimeout(function () { render(state); }, 1000);
   }
+  var followMenuOpen = false;
+  var followMenuRequested = false;
+  var followMenuToken = 0;
+  var followMenu = document.createElement('div');
+  followMenu.className = 'local-browser-follow-menu'; followMenu.hidden = true;
+  followMenu.setAttribute('role', 'menu'); followMenu.setAttribute('aria-label', 'Who to follow');
+  // Hangs from the call bar, over the tabs and the still of the page.
+  document.body.append(followMenu);
+  function renderFollowMenu() {
+    followMenu.replaceChildren();
+    window.MiaSpaceUI.followPeople().forEach(function (person) {
+      var row = document.createElement('button');
+      row.type = 'button'; row.className = 'local-browser-follow-person';
+      row.setAttribute('role', 'menuitemradio');
+      row.setAttribute('aria-checked', person.following ? 'true' : 'false');
+      var face = document.createElement('span');
+      face.className = 'local-browser-follow-face'; face.style.background = person.color;
+      face.textContent = person.name.split(/\s+/).map(function (part) { return part.charAt(0); }).join('').slice(0, 2).toUpperCase();
+      var text = document.createElement('span');
+      text.className = 'local-browser-follow-text';
+      var who = document.createElement('strong'); who.textContent = person.name;
+      text.append(who);
+      if (person.where) { var where = document.createElement('small'); where.textContent = 'On ' + person.where; text.append(where); }
+      row.append(face, text);
+      row.onclick = function () {
+        setFollowMenuOpen(false);
+        window.MiaSpaceUI.followPerson(person.id);
+        render(state);
+      };
+      followMenu.append(row);
+    });
+  }
+  function setFollowMenuOpen(next) {
+    var token = ++followMenuToken;
+    followMenuRequested = next;
+    followWho.setAttribute('aria-expanded', next ? 'true' : 'false');
+    if (!next) {
+      followMenuOpen = false;
+      followMenu.hidden = true;
+      layout();
+      hideStill();
+      return Promise.resolve();
+    }
+    return showStill().then(function (ready) {
+      if (token !== followMenuToken) return;
+      if (!ready) return followMenuRequested ? setFollowMenuOpen(true) : undefined;
+      var screenBox = screen.getBoundingClientRect();
+      // The name can be past the page, over the chat; the list stays over the page.
+      followMenu.style.left = Math.max(8, Math.min(screenBox.left + screenBox.width - 268, Math.round(followWho.getBoundingClientRect().left))) + 'px';
+      renderFollowMenu();
+      followMenuOpen = true;
+      followMenu.hidden = false;
+      layout();
+    });
+  }
+  // A click anywhere else or Escape closes the list.
+  document.addEventListener('mousedown', function (event) {
+    if (!followMenuOpen || followMenu.contains(event.target) || followWho.contains(event.target)) return;
+    setFollowMenuOpen(false);
+  }, true);
+  document.addEventListener('keydown', function (event) {
+    if (followMenuOpen && event.key === 'Escape') setFollowMenuOpen(false);
+  });
+  function renderCallFollow() {
+    var ui = window.MiaSpaceUI, session = ui ? ui.sessionGroup() : null;
+    var shared = session !== null ? ui.activity({ groupId: session }) : null;
+    callFollow.hidden = !shared;
+    if (!shared) { if (followMenuOpen) setFollowMenuOpen(false); return; }
+    callFollowSwitch.hidden = !shared.canFollow;
+    var name = document.createElement('strong');
+    name.textContent = shared.lead;
+    var line = [name, document.createTextNode(shared.rest)];
+    var picking = shared.canFollow && ui.followPeople().length > 0;
+    followWho.hidden = !picking; callFollowLabel.hidden = picking;
+    if (picking) {
+      var caret = document.createElement('span');
+      caret.className = 'local-browser-follow-caret'; caret.setAttribute('aria-hidden', 'true');
+      followWho.replaceChildren(line[0], line[1], caret);
+    } else {
+      callFollowLabel.replaceChildren(line[0], line[1]);
+      if (followMenuOpen) setFollowMenuOpen(false);
+    }
+    callFollowSwitch.setAttribute('aria-checked', shared.following ? 'true' : 'false');
+    callFollowSwitch.title = shared.following ? 'Stop following' : 'Show the tab they work on as they move';
+  }
   function renderBotControl(tab) {
+    renderCallFollow();
     var activity = tab && botWorking(tab);
     botControl.hidden = !activity;
-
     if (!activity) { botControl.removeAttribute('data-bot-id'); return; }
-    botControl.setAttribute('data-bot-id', activity.botId);
+    takeOver.hidden = false;
+    followButton.hidden = false;
     var name = document.createElement('strong');
     name.textContent = activity.name || 'A bot';
     botControlLabel.replaceChildren(name, document.createTextNode(' has control'));
+    botControl.setAttribute('data-bot-id', activity.botId);
     var following = followingBot() === activity.botId;
     followButton.setAttribute('aria-checked', following ? 'true' : 'false');
     followButton.title = following ? 'Stay on this page when ' + (activity.name || 'the bot') + ' moves on'
@@ -486,7 +607,7 @@
       var rect = screen.getBoundingClientRect();
       // Native views sit above HTML; hide them while something covers the page.
       // The docked "Your bots" panel doesn't: it narrows the screen instead.
-      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen &&
+      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation') &&
         !document.querySelector('.app-prompt-overlay.open');
@@ -494,7 +615,7 @@
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view
       // steps aside without pausing what it plays.
-      if (downloadsOpen || suggestCovered || tabsListOpen) payload.menu = true;
+      if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered) payload.menu = true;
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
@@ -560,7 +681,18 @@
     state.tabs.forEach(function (t) { byId[t.id] = t; });
     var reserved = items.reduce(function (sum, item) { return item.view === 'browser' ? sum : sum + (item.head ? MIX_HEAD_WIDTH : TAB_MIN_WIDTH); }, 0);
     var crowd = crowdedStrip(groups, working, reserved);
-    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, front, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, tabTypeIcon(t.url), t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
+    // In a session the strip is the session: its tabs, all showing, and your private ones.
+    var session = window.MiaSpaceUI ? window.MiaSpaceUI.sessionGroup() : null;
+    if (session !== null) {
+      crowd = { hidden: [], folded: [] };
+      front = {};
+      items = items.filter(function (item) {
+        if (item.head || item.view !== 'browser') return false;
+        var member = byId[item.tab.id];
+        return !!member && (member.groupId === session || member.private);
+      });
+    }
+    var signature = JSON.stringify([session, state.activeId, state.groups, owners, crowd, front, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, tabTypeIcon(t.url), t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
     // A redraw mid-rename would drop what the user is typing; catch up once
     // it ends. The tab strip itself waits out a drag.
     signature += JSON.stringify([docked, items.map(function (item) {
@@ -585,12 +717,13 @@
         var folded = tabGroup && crowd.folded.indexOf(tabGroup.id) >= 0;
         if (tabGroup && t.groupId !== previousGroupId) strip.append(groupHead(tabGroup, index, folded));
         previousGroupId = t.groupId || null;
-        if (tabGroup && (tabGroup.collapsed || folded)) return;
+        if (tabGroup && (tabGroup.collapsed || folded) && session === null) return;
         if (tabGroup && front[tabGroup.id] && front[tabGroup.id].id !== t.id) return;
         var group = tabStrip.tab({
-          id: t.id, label: t.title, active: here && t.id === state.activeId, iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url),
+          id: t.id, label: t.private ? 'Private · ' + t.title : t.title, active: here && t.id === state.activeId,
+          iconUrl: t.private ? null : t.favicon, iconHtml: t.private ? PRIVATE_ICON : tabTypeIcon(t.url),
           index: index, groupId: t.groupId || null,
-          className: (tabGroup ? 'in-group' : '') + (working[t.id] ? ' bot-working' : ''),
+          className: (tabGroup ? 'in-group' : '') + (working[t.id] ? ' bot-working' : '') + (t.private ? ' private' : ''),
         });
         if (tabGroup) {
           paintGroup(group, tabGroup);
@@ -641,7 +774,9 @@
     var head = document.createElement('span');
     head.className = 'native-browser-group-head' + (g.name ? '' : ' unnamed') + (g.collapsed || folded ? ' collapsed' : '');
     paintGroup(head, g);
-    head.append(groupOwner(g), groupChip(g, index, folded));
+    // In a call the bar across the window names the group.
+    head.append(groupOwner(g));
+    if (!(window.MiaSpaceUI && window.MiaSpaceUI.isSharedGroup(g.id))) head.append(groupChip(g, index, folded));
     return head;
   }
   // When every tab would shrink past readable, idle groups fold to their
@@ -848,6 +983,7 @@
       return !latest || (t.lastActiveAt || 0) >= (latest.lastActiveAt || 0) ? t : latest;
     }, null);
   }
+  var PRIVATE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>';
   function groupChip(g, index, folded) {
     var chip = document.createElement('button');
     chip.type = 'button';
@@ -1151,6 +1287,20 @@
       group.append(downloadRow(item));
     });
   }
+  // The call bar's Invite and More lists hang over the page, which draws above
+  // any HTML, so a still of the page stands in while one is open.
+  var callMenuCovered = false, callMenuRequested = false, callMenuToken = 0;
+  function coverPage(next) {
+    var token = ++callMenuToken;
+    callMenuRequested = next;
+    if (!next) { callMenuCovered = false; layout(); hideStill(); return; }
+    if (!open) return;
+    showStill().then(function (ready) {
+      if (token !== callMenuToken || !ready) return;
+      callMenuCovered = true;
+      layout();
+    });
+  }
   var snapshot = document.getElementById('localBrowserSnapshot');
   var downloadsToken = 0;
   var snapshotTimer = null;
@@ -1188,15 +1338,15 @@
   function showStill() {
     clearTimeout(snapshotTimer);
     syncStillPage();
-    if (!snapshot.hidden && (suggestCovered || downloadsOpen || tabsListOpen)) return Promise.resolve(true);
-    if (!suggestCovered && !downloadsOpen && !tabsListOpen) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
+    if (!snapshot.hidden && (suggestCovered || downloadsOpen || tabsListOpen || followMenuOpen || callMenuCovered)) return Promise.resolve(true);
+    if (!suggestCovered && !downloadsOpen && !tabsListOpen && !followMenuOpen && !callMenuCovered) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
     if (stillPending) return stillPending;
     if (!pageShowing()) return Promise.resolve(true);
     var generation = stillGeneration;
     var key = stillPage;
     function current() {
       return generation === stillGeneration && key === stillPageKey() &&
-        (suggestRequested || downloadsRequested || tabsListRequested);
+        (suggestRequested || downloadsRequested || tabsListRequested || followMenuRequested || callMenuRequested);
     }
     var pending = command('snapshot').then(function (result) {
       if (!current()) return false;
@@ -1217,7 +1367,7 @@
     return pending;
   }
   function hideStill() {
-    if (downloadsRequested || suggestRequested || tabsListRequested) return;
+    if (downloadsRequested || suggestRequested || tabsListRequested || followMenuRequested || callMenuRequested) return;
     // Invalidate capture/decode immediately, even before either menu has
     // committed its cover. Keep only an already visible still for the
     // native view's short return transition; a reopen always captures anew.
@@ -1331,6 +1481,10 @@
     if (event.key === 'Escape') { input.value = selected() && selected().url || ''; input.blur(); }
   });
   window.miaNativeBrowser = {
+    refresh: function () { render(state); },
+    // The shared call's follow controls, and the still under its menus.
+    callFollow: callFollow,
+    coverPage: coverPage,
     // Counts only (feedback report); never URLs or titles.
     counts: function () { return { tabs: (state.tabs || []).length, groups: (state.groups || []).length }; },
     render: function (visible) {

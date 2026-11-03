@@ -10,11 +10,13 @@ const ADMIN_END = { author_id: 'system:admin', author_type: 'system' };
 async function sharedBar({ stored = new Map(), browserState = null } = {}) {
   const sent = [], toasts = [], announced = [], commands = [], listeners = {};
   let publish = () => {};
-  const bar = { hidden: true, innerHTML: '', addEventListener(kind, fn) { listeners[kind] = fn; } };
+  const bodyClasses = new Set(['browser-collab-mode']);
+  const bar = { querySelector: () => null, hidden: true, innerHTML: '', addEventListener(kind, fn) { listeners[kind] = fn; } };
+  const call = { querySelector: () => null, hidden: true, innerHTML: '', addEventListener() {} };
   const state = browserState || { groups: [{ id: 'g1', name: 'Launch' }], selectedGroupId: 'g1',
     tabs: [{ id: 't1', groupId: 'g1', active: true, url: 'https://example.com/', title: 'Example' }] };
   const window = {
-    document: { getElementById: () => bar }, addEventListener() {},
+    document: { getElementById: (id) => (id === 'miaSpaceBar' ? bar : id === 'miaSpaceCall' ? call : null), body: { classList: { toggle(name, on) { if (on === undefined ? !bodyClasses.has(name) : on) bodyClasses.add(name); else bodyClasses.delete(name); }, contains: (name) => bodyClasses.has(name) } } }, addEventListener() {},
     miaDesktop: { browser: { command: async (payload) => {
       commands.push(payload);
       return payload.action === 'spaceOpenTab' ? { openedId: 'opened' + commands.length, groupId: 'g2' } : state;
@@ -25,12 +27,12 @@ async function sharedBar({ stored = new Map(), browserState = null } = {}) {
   };
   const context = vm.createContext({ window, document: window.document, crypto, setInterval() { return 1; }, clearInterval() {},
     setTimeout() { return 1; }, clearTimeout() {}, Date, Promise, JSON, Object, Array, Uint8Array, String, Number, URL, URLSearchParams });
-  for (const file of ['safe-page-url.js', 'shared-space.js', 'shared-space-ui.js']) vm.runInContext(await readFile(new URL('./' + file, import.meta.url), 'utf8'), context);
+  for (const file of ['safe-page-url.js', 'shared-space.js', 'shared-space-live.js', 'shared-space-ui.js']) vm.runInContext(await readFile(new URL('./' + file, import.meta.url), 'utf8'), context);
   await new Promise((resolve) => setImmediate(resolve));
   const click = (attribute, value = '') => listeners.click({ target: { closest: () => ({ hasAttribute: (name) => name === attribute, getAttribute: () => value }) } });
   const model = window.MiaSharedSpace, ui = window.MiaSpaceUI;
   const spaceId = () => model.decode(sent[0]).space;
-  return { bar, sent, toasts, announced, commands, click, model, ui, spaceId, sharing: () => /data-space-leave/.test(bar.innerHTML), stored, publish: (next) => publish(next) };
+  return { bar, sent, toasts, announced, commands, click, model, ui, spaceId, call, body: bodyClasses, sharing: () => /data-space-leave/.test(call.innerHTML), stored, publish: (next) => publish(next) };
 }
 
 test('a spoofed end message from a teammate leaves the session open', async () => {
@@ -247,4 +249,143 @@ test('My Bots keeps its own list, and dialogs hide the browser page that would c
   const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
   assert.match(browser, /!document\.querySelector\('\.app-prompt-overlay\.open'\)/);
   assert.match(browser, /attributeFilter: \['class'\], childList: true/);
+});
+
+test('a session has no Share a tab tile and its controls sit in the call bar', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  assert.doesNotMatch(page.bar.innerHTML, /Share a tab|data-space-add/);
+  assert.match(page.call.innerHTML, /data-space-invite/);
+  assert.match(page.call.innerHTML, /In a call: /);
+  assert.match(page.call.innerHTML, /data-space-back/);
+  assert.equal(page.commands.some((item) => item.action === 'spaceSession' && item.groupId === 'g1'), true);
+});
+
+test('Not now keeps an invite away until someone invites this person directly', async () => {
+  const page = await sharedBar();
+  const space = (rev) => ({ body: page.model.encode({ t: 'space', space: 'abcdef012345', name: 'Launch', rev, tabs: [{ k: 'tab001', url: 'https://example.com/' }], from: { name: 'Ana' } }), author_id: 'ana', author_name: 'Ana' });
+  page.ui.receive(CHANNEL, space(1));
+  assert.match(page.bar.innerHTML, /data-space-join/);
+  page.click('data-space-decline', 'abcdef012345');
+  page.ui.receive(CHANNEL, space(2));
+  assert.doesNotMatch(page.bar.innerHTML, /data-space-join/);
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'ring', space: 'abcdef012345', to: 'someone-else' }), author_id: 'ana' });
+  assert.doesNotMatch(page.bar.innerHTML, /data-space-join/);
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'ring', space: 'abcdef012345', to: 'me', from: { name: 'Ana' } }), author_id: 'ana' });
+  assert.match(page.bar.innerHTML, /invited you to browse together/);
+});
+
+test('the double chevron collapses the minimap and stays there to bring it back', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  assert.match(page.bar.innerHTML, /class="mia-space-tile/);
+  assert.match(page.bar.innerHTML, /data-space-map="hide"/);
+  page.click('data-space-map', 'hide');
+  assert.doesNotMatch(page.bar.innerHTML, /class="mia-space-tile/);
+  assert.match(page.bar.innerHTML, /data-space-map="show"/);
+  assert.equal(page.bar.hidden, false, 'the way back stays on screen');
+  assert.equal(page.stored.get('miaSharedMapHidden'), 'true');
+  page.click('data-space-map', 'show');
+  assert.match(page.bar.innerHTML, /class="mia-space-tile/);
+  assert.equal(page.stored.has('miaSharedMapHidden'), false);
+});
+
+test('a minimap tile follows its page title without sending an update', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  const before = page.sent.length;
+  page.publish({ groups: [{ id: 'g1', name: 'Launch' }], selectedGroupId: 'g1',
+    tabs: [{ id: 't1', groupId: 'g1', active: true, url: 'https://example.com/', title: 'A later title' }] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(page.bar.innerHTML, /A later title/);
+  assert.equal(page.sent.length, before);
+});
+
+test('the Invite list closes when you click away, press Escape or click the page', async () => {
+  const source = await readFile(new URL('./shared-space-ui.js', import.meta.url), 'utf8');
+  assert.match(source, /document\.addEventListener\('click', function\(event\)\{ if\(!callBar\.contains\(event\.target\)\) closeCallMenu\(\); \}, true\)/);
+  assert.match(source, /event\.key === 'Escape'\) closeCallMenu\(\)/);
+  assert.match(source, /window\.addEventListener\('blur', closeCallMenu\)/);
+});
+
+test('someone who joins hears at once where everyone is, and only once', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  const before = page.sent.length;
+  const body = page.model.encode({ t: 'here', space: page.spaceId(), tab: null, from: { id: 'user_ana', name: 'Ana' } });
+  const hello = { body, author_id: 'user_ana', author_type: 'user', author_name: 'Ana' };
+  page.ui.receive(CHANNEL, hello);
+  assert.equal(page.sent.length, before + 1);
+  assert.equal(page.model.decode(page.sent.at(-1)).t, 'here');
+  page.ui.receive(CHANNEL, hello);
+  assert.equal(page.sent.length, before + 1, 'a known person gets no answer, so two people cannot loop');
+});
+
+test('Follow stays in the toolbar after clicking it, with nobody moving', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  const tab = { groupId: 'g1' };
+  assert.equal(page.ui.activity(tab), null, 'alone in the session there is nobody to follow');
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: null, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user' });
+  const before = page.ui.activity(tab);
+  assert.deepEqual([before.lead, before.rest, before.canFollow, before.following], ['Ana', ' is in this session', true, false]);
+  page.ui.followWorker();
+  const on = page.ui.activity(tab);
+  assert.deepEqual([on.lead, on.canFollow, on.following], ['Following Ana', true, true]);
+  page.ui.followWorker();
+  const off = page.ui.activity(tab);
+  assert.deepEqual([off.lead, off.canFollow, off.following], ['Ana', true, false]);
+});
+
+test('the Follow picker lists everyone here and switches who you follow', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  const arrive = (id, name) => page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: null, from: { id, name } }), author_id: id, author_type: 'user' });
+  arrive('user_ana', 'Ana');
+  arrive('user_tom', 'Tom');
+  assert.deepEqual(page.ui.followPeople().map((person) => [person.name, person.following]), [['Ana', false], ['Tom', false]]);
+  page.ui.followPerson('user_tom');
+  assert.equal(page.ui.activity({ groupId: 'g1' }).lead, 'Following Tom');
+  page.ui.followPerson('user_ana');
+  assert.deepEqual(page.ui.followPeople().map((person) => person.following), [true, false]);
+  assert.equal(page.ui.activity({ groupId: 'g1' }).lead, 'Following Ana');
+  page.ui.followPerson('user_ana');
+  assert.equal(page.ui.activity({ groupId: 'g1' }).following, false);
+});
+
+test('Back to Mia keeps you in the call: a pill to return, teammates see you away, Following waits', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  const ana = (tab) => page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab, url: 'https://example.com/' + tab, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user' });
+  ana(null);
+  page.ui.followPerson('user_ana');
+  page.body.delete('browser-collab-mode');
+  page.ui.render();
+  assert.equal(page.body.has('mia-call-zoomed'), false);
+  assert.match(page.call.innerHTML, /data-space-return/);
+  assert.doesNotMatch(page.call.innerHTML, /data-space-leave/);
+  const told = page.sent.map((body) => page.model.decode(body)).filter((message) => message && message.t === 'here').at(-1);
+  assert.equal(told.away, true);
+  const selects = () => page.commands.filter((item) => item.action === 'select').length;
+  const before = selects();
+  assert.equal(page.ui.followPeople()[0].following, true);
+  ana(page.model.decode(page.sent[0]).tabs[0].k);
+  assert.equal(selects(), before, 'following pauses while you are out');
+  page.body.add('browser-collab-mode');
+  page.ui.render();
+  assert.equal(page.body.has('mia-call-zoomed'), true);
+  assert.match(page.call.innerHTML, /data-space-leave/);
+  const back = page.sent.map((body) => page.model.decode(body)).filter((message) => message && message.t === 'here').at(-1);
+  assert.equal(back.away, false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(selects(), before + 1, 'coming back catches up with them');
+});
+
+test('a teammate who stepped out shows as away in the bar', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: null, away: true, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user' });
+  page.ui.render();
+  assert.match(page.call.innerHTML, /mia-space-person away/);
+  assert.match(page.call.innerHTML, /Ana is away/);
 });
