@@ -118,3 +118,27 @@ test('upstream runtime rejects inherited paid-API and custom-endpoint overrides 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'refused');
 });
+
+test('a tool called with no arguments does not break the stream reader', () => {
+  const result = runPython(`
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from admission import Capture
+def stream(fragments):
+    capture = Capture()
+    events = [
+        {'type': 'message_start', 'message': {'content': [], 'usage': {}}},
+        {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'tool_use', 'id': 't', 'name': 'skills_list', 'input': {}}},
+        *[{'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'input_json_delta', 'partial_json': part}} for part in fragments],
+        {'type': 'content_block_stop', 'index': 0},
+        {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use'}, 'usage': {}},
+        {'type': 'message_stop'},
+    ]
+    capture.feed(''.join('data: ' + json.dumps(event) + '\\n\\n' for event in events).encode())
+    return {'input': capture.message['content'][0]['input'], 'complete': capture.complete}
+print(json.dumps([stream(['']), stream(['', '']), stream([]), stream(['{"a"', ':1}'])]))
+`);
+  assert.equal(result.status, 0, result.stderr);
+  const expected = input => ({ input, complete: true });
+  assert.deepEqual(JSON.parse(result.stdout), [expected({}), expected({}), expected({}), expected({ a: 1 })]);
+});
