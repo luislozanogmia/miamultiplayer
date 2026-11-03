@@ -1748,7 +1748,6 @@
   // client-side only; every field keeps its id so the save handlers below
   // are untouched by the layout.
   function showSettingsPane(name){
-    if(name === 'skills') refreshSkillsPane();
     if(name === 'mia') loadMiaAppPane();
     els('#settingsNav .styled-settings-nav-item').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-pane') === name);
@@ -5481,6 +5480,13 @@
     openSidebarAddMenu(anchor,[['New channel',openNewChannelFlow],['Browse channels',openHubBrowseChannels]]);
   }
   // A section's + menu: each item is [label, run].
+  // The browser's page is a native view drawn over the app, so a sidebar menu
+  // that reached past the sidebar would be hidden behind it.
+  function sidebarMenuLeft(x,width){
+    var sidebar=document.body.classList.contains('browser-collab-mode')&&el('.chat-sidebar');
+    var limit=sidebar?sidebar.getBoundingClientRect().right:window.innerWidth;
+    return Math.max(8,Math.min(x,limit-width-8));
+  }
   function openSidebarAddMenu(anchor,items){
     closeHubChannelMenu();
     var menu=document.createElement('div');
@@ -5488,7 +5494,7 @@
     menu.innerHTML=items.map(function(item,index){return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item" data-sidebar-add="'+index+'">'+esc(item[0])+'</button>';}).join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
     var box=anchor.getBoundingClientRect();
-    menu.style.left=Math.max(8,Math.min(box.left,window.innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.left=sidebarMenuLeft(box.left,menu.offsetWidth)+'px';
     menu.style.top=Math.max(8,Math.min(box.bottom+4,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
       var button=event.target.closest('[data-sidebar-add]');
@@ -5549,7 +5555,7 @@
       return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item'+(item.danger?' chat-sidebar-ctx-item-danger':'')+'" data-hub-channel-action="'+item.id+'">'+esc(item.label)+'</button>';
     }).join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
-    menu.style.left=Math.max(8,Math.min(x,window.innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.left=sidebarMenuLeft(x,menu.offsetWidth)+'px';
     menu.style.top=Math.max(8,Math.min(y,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
       var button=event.target.closest('[data-hub-channel-action]');
@@ -7307,7 +7313,7 @@
       setSeparator('hide', hasCopy && hasHide);
       menu.hidden = false;
       var w = menu.offsetWidth, h = menu.offsetHeight;
-      menu.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + 'px';
+      menu.style.left = sidebarMenuLeft(x, w) + 'px';
       menu.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + 'px';
     }
 
@@ -9341,7 +9347,19 @@
       .concat([{id:'new-app', name:'New app'}, {id:'new-artifact', name:'Create an artifact'}])
       .concat(browser && browser.command ? [{id:'new-tab', name:'New browser tab'}] : []);
   }
+  // The "Start something" list opens from a blank tab: a new browser tab reuses it,
+  // and anything else leaves it behind, so picking never adds a second empty tab.
   function runLocalBrowserStart(id){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!browser || !browser.command) return startFromBrowser(id, false);
+    Promise.resolve(browser.command({action:'state'})).catch(function(){ return null; }).then(function(state){
+      var tabs = state && state.tabs || [];
+      var blank = tabs.filter(function(tab){ return tab.id === state.activeId && !tab.url && !tab.groupId; })[0];
+      if(blank && id !== 'new-tab' && tabs.length > 1) browser.command({action:'close', id:blank.id}).catch(function(){});
+      startFromBrowser(id, !!blank);
+    });
+  }
+  function startFromBrowser(id, onBlankTab){
     if(id === 'new-automation'){
       runToolsAction('automations');
       // After this click finishes, or it would close the menu the button opens.
@@ -9352,8 +9370,8 @@
       draftInChat(window.MiaArtifactsPage.CREATE_PROMPT);
     } else if(id === 'new-tab'){
       openWebBrowserTool();
-      window.miaDesktop.browser.command({action:'new'}).then(function(state){
-        followBrowserTab(state && !state.error ? state : null);
+      (onBlankTab ? Promise.resolve(null) : window.miaDesktop.browser.command({action:'new'})).then(function(state){
+        if(state) followBrowserTab(state.error ? null : state);
         var input = el('#localBrowserUrl');
         if(input) input.focus();
       }).catch(function(){});
@@ -11845,7 +11863,7 @@
     return [draft.role, draft.output].filter(Boolean).join('\n\n');
   }
 
-  // The skills library, shared by the setup card, the bot editor and Settings.
+  // The skills library, shared by the setup card, the bot editor and the Skills pane.
   var skillsLibrary = null;
   function loadSkillsLibrary(){
     return api('/api/skills').then(function(res){
@@ -11857,7 +11875,7 @@
   }
   function skillPickerRowsHtml(selected){
     var skills = skillsLibrary ? skillsLibrary.skills : [];
-    if(!skills.length) return '<div class="skill-picker-empty">' + (skillsLibrary ? 'No skills yet. Add them in Settings, under Skills.' : 'Loading skills…') + '</div>';
+    if(!skills.length) return '<div class="skill-picker-empty">' + (skillsLibrary ? 'No skills yet. Add them from Skills in the left bar.' : 'Loading skills…') + '</div>';
     return skills.map(function(skill){
       return '<label class="skill-picker-row"><input type="checkbox" value="' + esc(skill.id) + '"' + (selected.indexOf(skill.id) !== -1 ? ' checked' : '') + '>' +
         '<span><span class="skill-picker-name">' + esc(skill.name) + '</span>' + (skill.description ? '<span class="skill-picker-desc">' + esc(skill.description) + '</span>' : '') + '</span></label>';
@@ -13583,6 +13601,34 @@
     syncSidebarToolButtons();
   }
 
+  // The skills form keeps living in one element, so its handlers survive the pane redrawing.
+  var skillsShell = el('#skillsShell');
+  function renderSkillsUtilityPane(pane){
+    pane.setAttribute('aria-label', 'Skills');
+    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open');
+    pane.classList.add('open', 'bot-store-open');
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Skills</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="skillsPaneClose" aria-label="Close Skills" title="Close Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div></div>';
+    var body = document.createElement('div');
+    body.className = 'bot-store-body';
+    if(skillsShell) body.appendChild(skillsShell);
+    pane.appendChild(body);
+    el('#skillsPaneClose', pane).addEventListener('click', closeSkillsPane);
+  }
+  function openSkillsPane(){
+    if(!STYLED_SKIN) return;
+    prepareChatUtilityPane('skills');
+    renderChatInfoPane();
+    refreshSkillsPane();
+  }
+  function closeSkillsPane(){
+    if(chatInfo.mode !== 'skills') return;
+    chatInfo.mode = 'automations';
+    chatInfo.open = false;
+    renderChatInfoPane();
+    syncSidebarToolButtons();
+  }
+
   function openBotStorePane(){
     if(!STYLED_SKIN) return;
     prepareChatUtilityPane('bot-store');
@@ -13795,8 +13841,8 @@
       restorePluginShell();
       chatInfo.mode = 'automations';
     }
-    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-store';
-    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'bot-store') || (!specialMode && !isInfoPaneAvailable())){
+    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-store' || chatInfo.mode === 'skills';
+    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'bot-store' && chatInfo.mode !== 'skills') || (!specialMode && !isInfoPaneAvailable())){
       restorePluginShell();
       pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open', 'bot-store-open');
       pane.innerHTML = '';
@@ -13825,6 +13871,10 @@
     }
     if(chatInfo.mode === 'agents'){
       renderManageAgentsPane(pane);
+      return;
+    }
+    if(chatInfo.mode === 'skills'){
+      renderSkillsUtilityPane(pane);
       return;
     }
     if(chatInfo.mode === 'plugins'){
@@ -16913,13 +16963,13 @@
   function runToolsAction(action){
     // Views (Automations, Artifacts, Browser) are the same in Solo and a
     // team; only creating chats and bots differs.
-    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser';
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills';
     if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
     // layout back — closing the browser here would kill browser mode for no
     // reason. Every other tools-menu action still needs the full layout.
-    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store') closeLocalBrowser();
+    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store' && action !== 'skills') closeLocalBrowser();
     if(automationsPage.open && action !== 'automations' && action !== 'new-bot' && action !== 'bot-store') closeAutomationsPage();
     if(artifactsPage.open && action !== 'artifacts' && action !== 'new-bot' && action !== 'bot-store') closeArtifactsPage();
     if(appsPage.open && action !== 'apps' && action !== 'new-bot' && action !== 'bot-store') closeAppsPage();
@@ -16928,6 +16978,7 @@
     else if(action === 'new-agent'){ if(window.miaPrivateAgents) window.miaPrivateAgents.create(); }
     else if(action === 'new-channel') openNewChannelFlow();
     else if(action === 'bot-store') openBotStorePane();
+    else if(action === 'skills') openSkillsPane();
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsPage();
     else if(action === 'artifacts') openArtifactsPage();

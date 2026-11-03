@@ -380,6 +380,9 @@
                 <span class="workspace-rail-mark" aria-hidden="true">+</span><strong class="workspace-rail-name">Add a workspace</strong>
               </button>
               <div class="workspace-rail-spacer"></div>
+              <button type="button" class="workspace-rail-tile workspace-rail-util" data-tools-action="skills" aria-label="Skills">
+                <span class="workspace-rail-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 12h-5"></path><path d="M15 8h-5"></path><path d="M19 17V5a2 2 0 0 0-2-2H4"></path><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"></path></svg></span><strong class="workspace-rail-name">Skills</strong>
+              </button>
               <button type="button" class="workspace-rail-tile workspace-rail-util" id="railNotificationsBtn" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false" aria-controls="railNotificationsPanel">
                 <span class="workspace-rail-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"></path><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"></path></svg></span><strong class="workspace-rail-name">Notifications</strong>
               </button>
@@ -561,6 +564,17 @@
               </div>
             </div>
             <aside class="chat-info-pane" id="chatInfoPane" aria-label="Details"></aside>
+            <div id="skillsHome" hidden><div class="skills-shell" id="skillsShell">
+        <div class="styled-settings-card" id="settingsSkillsList"></div>
+        <div class="styled-settings-row styled-settings-row-actions"><button class="styled-settings-pill-btn" id="settingsSkillNew">New skill</button></div>
+        <div class="styled-settings-card styled-settings-instructions-card" id="settingsSkillForm" hidden>
+          <input class="styled-settings-field skill-form-field" id="settingsSkillName" aria-label="Skill name" placeholder="Name" maxlength="64">
+          <input class="styled-settings-field skill-form-field" id="settingsSkillDescription" aria-label="When to use this skill" placeholder="When to use it" maxlength="500">
+          <textarea class="styled-settings-field styled-settings-instructions-text" id="settingsSkillBody" aria-label="Skill instructions" placeholder="How to do the job, step by step" maxlength="20000"></textarea>
+          <div class="agent-setup-error" id="settingsSkillError" role="alert"></div>
+          <div class="styled-settings-row styled-settings-row-actions"><button class="styled-settings-pill-btn" id="settingsSkillCancel">Cancel</button><button class="styled-settings-pill-btn" id="settingsSkillSave">Save skill</button></div>
+        </div>
+            </div></div>
             <aside class="chat-thread-panel" id="chatThreadPanel" hidden>
               <div class="ctp-resize" data-ctp-resize title="Drag to resize"></div>
               <div class="ctp-header cip-pane-head">
@@ -873,7 +887,6 @@
   <nav class="styled-settings-nav" id="settingsNav">
     <button class="styled-settings-nav-item active" data-pane="general"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg>General</button>
     <button class="styled-settings-nav-item" data-pane="instructions"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h10v11H3z"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>Instructions</button>
-    <button class="styled-settings-nav-item" data-pane="skills">Skills</button>
     <button class="styled-settings-nav-item" data-pane="model"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h6M12 8v2.5M14.5 8v1.8"/></svg>Access</button>
     <button class="styled-settings-nav-item" data-pane="security"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l5 2v4.2c0 3-2.2 5.3-5 6.2-2.8-.9-5-3.2-5-6.2V3.8l5-2z"/><path d="M5.8 8l1.5 1.5L10.3 6.5"/></svg>Security</button>
     <button class="styled-settings-nav-item" data-pane="backups"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v8.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8M2.8 8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2"/></svg>Backups</button>
@@ -1033,18 +1046,6 @@
       </div>
     </section>
 
-    <section class="styled-settings-pane" data-pane="skills">
-      <h1 class="styled-settings-h1">Skills</h1>
-      <div class="styled-settings-card" id="settingsSkillsList"></div>
-      <div class="styled-settings-row styled-settings-row-actions"><button class="styled-settings-pill-btn" id="settingsSkillNew">New skill</button></div>
-      <div class="styled-settings-card styled-settings-instructions-card" id="settingsSkillForm" hidden>
-        <input class="styled-settings-field skill-form-field" id="settingsSkillName" aria-label="Skill name" placeholder="Name" maxlength="64">
-        <input class="styled-settings-field skill-form-field" id="settingsSkillDescription" aria-label="When to use this skill" placeholder="When to use it" maxlength="500">
-        <textarea class="styled-settings-field styled-settings-instructions-text" id="settingsSkillBody" aria-label="Skill instructions" placeholder="How to do the job, step by step" maxlength="20000"></textarea>
-        <div class="agent-setup-error" id="settingsSkillError" role="alert"></div>
-        <div class="styled-settings-row styled-settings-row-actions"><button class="styled-settings-pill-btn" id="settingsSkillCancel">Cancel</button><button class="styled-settings-pill-btn" id="settingsSkillSave">Save skill</button></div>
-      </div>
-    </section>
 
     <section class="styled-settings-pane" data-pane="model">
       <h1 class="styled-settings-h1">Access</h1>

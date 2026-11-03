@@ -40,3 +40,27 @@ test('the Mac titlebar offset leaves the centered connection dialog inside the w
   assert.match(css, /html\.mac-inset-titlebar \.styled-sheet:not\(\.styled-onboarding-sheet\)/);
   assert.match(css, /html\.mac-inset-titlebar \.styled-onboarding-sheet\{top:calc\(50% \+ 22px\);max-height:calc\(100vh - 76px\);\}/);
 });
+
+test('picking from the Start something list reuses the blank tab or closes it, never adding a second', () => {
+  const start = source.indexOf('function runLocalBrowserStart(id){');
+  const handler = source.slice(start, source.indexOf('function startFromBrowser(id, onBlankTab){', start));
+  assert.match(handler, /!tab\.url && !tab\.groupId/);
+  assert.match(handler, /blank && id !== 'new-tab' && tabs\.length > 1\) browser\.command\(\{action:'close', id:blank\.id\}\)/);
+  assert.match(source, /onBlankTab \? Promise\.resolve\(null\) : window\.miaDesktop\.browser\.command\(\{action:'new'\}\)/);
+});
+
+test('a sidebar menu stays clear of the page drawn over the app while the browser is open', () => {
+  const start = source.indexOf('function sidebarMenuLeft(x,width){');
+  const left = new Function('document', 'el', 'window', source.slice(start, source.indexOf('function openSidebarAddMenu', start)) + 'return sidebarMenuLeft;');
+  const body = open => ({ body: { classList: { contains: () => open } } });
+  const sidebar = () => ({ getBoundingClientRect: () => ({ right: 330 }) });
+  assert.equal(left(body(true), sidebar, { innerWidth: 1280 })(209, 248), 74);
+  assert.equal(left(body(false), sidebar, { innerWidth: 1280 })(209, 248), 209);
+});
+
+test('Skills opens from the left rail and is gone from Settings', () => {
+  const rail = html.slice(html.indexOf('id="workspaceSwitcherMenu"'), html.indexOf('id="railNotificationsBtn"'));
+  assert.match(rail, /data-tools-action="skills" aria-label="Skills"/);
+  assert.doesNotMatch(html, /data-pane="skills"/);
+  assert.match(source, /action === 'skills'\) openSkillsPane\(\)/);
+});

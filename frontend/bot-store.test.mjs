@@ -15,7 +15,7 @@ test('the rail exposes a Bot marketplace entry point wired to its own pane', asy
   assert.match(source, /function runToolsAction\(action\)\{[\s\S]*?action === 'bot-store'\) openBotStorePane\(\)/);
   // Bot creation from the tools menu is exempted from closing browser mode;
   // Bot store joins that exemption so it stays reachable the same way.
-  assert.match(source, /if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
+  assert.match(source, /if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store' && action !== 'skills'\) closeLocalBrowser\(\);/);
 });
 
 test('Bot store fetches the catalog index and every manifest before rendering cards', async () => {

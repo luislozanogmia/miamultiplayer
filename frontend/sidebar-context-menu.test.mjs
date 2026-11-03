@@ -68,6 +68,7 @@ test('right-click exposes conversation delete and keeps bot delete separate', as
   const deletedBots = [];
   vm.runInNewContext(source.slice(start, end), {
     el: node, document: { addEventListener() {} }, window: { innerWidth: 1200, innerHeight: 800 },
+    sidebarMenuLeft: (x) => x,
     isChatPinned: () => false, chatNeedsAttention: () => false,
     deleteNativeConversation: (entry) => deletedChats.push(entry.roomId),
     findBenchAgentByServerId: (id) => ({ id }), deleteBenchAgent: (agent) => deletedBots.push(agent.id),
