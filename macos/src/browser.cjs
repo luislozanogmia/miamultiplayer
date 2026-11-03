@@ -7,6 +7,7 @@ const { fileURLToPath, pathToFileURL } = require("node:url");
 const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
+const { PAGE_HELPERS, cleanAnchor, readScript, scrollScript } = require("./space-anchor.cjs");
 
 const { createActorRuntime } = require("./browser-actors.cjs");
 const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
@@ -2936,7 +2937,21 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
           const place = point => point ? { x: Math.min(1, Math.max(0, point.x / box.width)), y: Math.min(1, Math.max(0, point.y / box.height)), at: point.at } : null;
           pointers[id] = { pointer: place(item.pointer), bot: place(item.botPoint) };
         }
-        return { pointers };
+        // The page in front also says what the pointer is over and what is in view.
+        const front = pointers[activeId] && tabs.get(activeId);
+        if (!front || !front.url || front.view.webContents.isDestroyed()) return { pointers };
+        return executeProtocolScript(front.view.webContents, readScript(front.pointer), true).then(read => {
+          if (read && read.pointer && pointers[activeId].pointer) pointers[activeId].pointer.a = cleanAnchor(read.pointer);
+          if (read && read.view) pointers[activeId].view = { a: cleanAnchor(read.view.a), top: read.view.top === true };
+          return { pointers };
+        }).catch(() => ({ pointers }));
+      }
+      // Following someone: show the part of the page they are reading.
+      if (command.action === "spaceScroll") {
+        const item = tabs.get(command.id);
+        const script = scrollScript(command.view);
+        if (!item || !item.url || !script || item.view.webContents.isDestroyed()) return {};
+        return executeProtocolScript(item.view.webContents, script, true).catch(() => {}).then(() => ({}));
       }
       // Teammates' pointers over the page. Native views cover the shell DOM, so
       // like bot presence these live in the page: click-through and out of its reach.
@@ -2945,22 +2960,32 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (!item || !item.url || item.view.webContents.isDestroyed()) return {};
         const list = (Array.isArray(command.cursors) ? command.cursors : []).slice(0, 12).map(cursor => ({
           id: String(cursor.id || "").slice(0, 120), label: String(cursor.label || "").slice(0, 60),
-          x: Math.min(1, Math.max(0, Number(cursor.x) || 0)), y: Math.min(1, Math.max(0, Number(cursor.y) || 0)),
+          x: Math.min(1, Math.max(0, Number(cursor.x) || 0)), y: Math.min(1, Math.max(0, Number(cursor.y) || 0)), a: cleanAnchor(cursor.a),
           color: /^(#[0-9a-f]{6}|hsl\(\d+, ?\d+%, ?\d+%\))$/i.test(cursor.color || "") ? cursor.color : "#5b3fd6",
         }));
-        return executeProtocolScript(item.view.webContents, `(() => {
+        return executeProtocolScript(item.view.webContents, `(() => {${PAGE_HELPERS}
           const list = ${JSON.stringify(list)};
           let host = globalThis.__miaSpaceCursors;
           if (!list.length) { host?.el.remove(); globalThis.__miaSpaceCursors = null; return; }
           if (!host || !host.el.isConnected) {
             const el = document.createElement('div');
-            el.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
+            el.style.cssText = 'all:initial;position:fixed;inset:0;overflow:hidden;z-index:2147483647;pointer-events:none;';
             const root = el.attachShadow({ mode: 'closed' });
             const style = document.createElement('style');
             style.textContent = '.c{position:absolute;display:flex;align-items:flex-start;transition:left .3s linear,top .3s linear;font:600 11px/1.2 system-ui,sans-serif}svg{width:16px;height:16px;flex:none}span{margin:12px 0 0 -4px;padding:2px 7px;border-radius:999px;color:#fff;white-space:nowrap}@media (prefers-reduced-motion:reduce){.c{transition:none}}';
             root.append(style);
             document.documentElement.append(el);
             host = globalThis.__miaSpaceCursors = { el, root, marks: new Map() };
+            // A pointer stays on its spot while this person scrolls the page under it.
+            host.place = (mark, instant) => {
+              const spot = mark.cursor.a ? findAnchor(mark.cursor.a) : { x: mark.cursor.x * innerWidth, y: mark.cursor.y * innerHeight };
+              mark.style.transition = instant ? 'none' : '';
+              mark.style.left = spot.x + 'px';
+              mark.style.top = spot.y + 'px';
+            };
+            const replace = () => { const live = globalThis.__miaSpaceCursors; if (live) for (const mark of live.marks.values()) live.place(mark, true); };
+            addEventListener('scroll', replace, { capture: true, passive: true });
+            addEventListener('resize', replace, { passive: true });
           }
           const seen = new Set();
           for (const cursor of list) {
@@ -2976,8 +3001,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             mark.querySelector('span').textContent = cursor.label;
             mark.querySelector('span').style.background = cursor.color;
             mark.querySelector('path').style.fill = cursor.color;
-            mark.style.left = (cursor.x * 100) + '%';
-            mark.style.top = (cursor.y * 100) + '%';
+            mark.cursor = cursor;
+            host.place(mark);
           }
           for (const [id, mark] of host.marks) if (!seen.has(id)) { mark.remove(); host.marks.delete(id); }
         })()`, true).catch(() => {}).then(() => ({}));

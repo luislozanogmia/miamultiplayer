@@ -32,7 +32,7 @@ async function sharedBar({ stored = new Map(), browserState = null } = {}) {
   const click = (attribute, value = '') => listeners.click({ target: { closest: () => ({ hasAttribute: (name) => name === attribute, getAttribute: () => value }) } });
   const model = window.MiaSharedSpace, ui = window.MiaSpaceUI;
   const spaceId = () => model.decode(sent[0]).space;
-  return { bar, sent, toasts, announced, commands, click, model, ui, spaceId, call, body: bodyClasses, sharing: () => /data-space-leave/.test(call.innerHTML), stored, publish: (next) => publish(next) };
+  return { window, bar, sent, toasts, announced, commands, click, model, ui, spaceId, call, body: bodyClasses, sharing: () => /data-space-leave/.test(call.innerHTML), stored, publish: (next) => publish(next) };
 }
 
 test('a spoofed end message from a teammate leaves the session open', async () => {
@@ -388,4 +388,44 @@ test('a teammate who stepped out shows as away in the bar', async () => {
   page.ui.render();
   assert.match(page.call.innerHTML, /mia-space-person away/);
   assert.match(page.call.innerHTML, /Ana is away/);
+});
+
+test('everyone follows whoever started the call, even when someone else sent the invite', async () => {
+  const page = await sharedBar();
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'space', space: 'feedfeedfeedfeed', name: 'Launch', rev: 2, host: 'user_host', from: { id: 'user_2', name: 'Teammate' }, tabs: [{ k: 'aaaaaa01', url: 'https://a.com/', title: 'A' }] }), author_id: 'user_2', author_type: 'user', author_name: 'Teammate' });
+  page.click('data-space-allow', 'feedfeedfeedfeed');
+  await flush();
+  const here = page.sent.map((text) => page.model.decode(text)).filter((message) => message.t === 'here').at(-1);
+  assert.equal(here.follow, 'user_host');
+});
+
+test('the host of a new call is its starter and follows nobody', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  const space = page.sent.map((text) => page.model.decode(text)).find((message) => message.t === 'space');
+  assert.equal(space.host, 'me');
+  const later = page.model.applySpace(page.model.applySpace(null, space), { t: 'space', space: space.space, rev: 9, from: { id: 'user_2' }, tabs: [] });
+  assert.equal(later.host, 'me', 'someone else changing the tabs does not take over the call');
+});
+
+test('only the person you follow moves your page', async () => {
+  const page = await sharedBar();
+  let live;
+  page.window.RTCPeerConnection = function () {};
+  page.window.MiaSpaceLive = { createMesh: (options) => { live = options; return { send() {}, sync() {}, close() {} }; } };
+  page.click('data-space-share');
+  const tab = page.model.decode(page.sent[0]).tabs[0].k;
+  for (const [id, name] of [['user_ana', 'Ana'], ['user_tom', 'Tom']]) {
+    page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab, url: 'https://example.com/', from: { id, name } }), author_id: id, author_type: 'user' });
+  }
+  const scrolls = () => page.commands.filter((command) => command.action === 'spaceScroll');
+  const view = { t: 'v', tab, a: { p: [0], t: 'BODY' }, top: false };
+  live.onMessage('user_ana', view);
+  assert.equal(scrolls().length, 0, 'nobody is followed yet');
+  page.ui.followPerson('user_ana');
+  live.onMessage('user_tom', view);
+  assert.equal(scrolls().length, 0, 'someone else on the page only shows as a pointer');
+  live.onMessage('user_ana', view);
+  assert.equal(scrolls().length, 1);
+  assert.equal(scrolls()[0].id, 't1');
 });

@@ -518,7 +518,7 @@
       face.textContent = person.name.split(/\s+/).map(function (part) { return part.charAt(0); }).join('').slice(0, 2).toUpperCase();
       var text = document.createElement('span');
       text.className = 'local-browser-follow-text';
-      var who = document.createElement('strong'); who.textContent = person.name;
+      var who = document.createElement('strong'); who.textContent = person.name + (person.host ? ' (host)' : '');
       text.append(who);
       if (person.where) { var where = document.createElement('small'); where.textContent = 'On ' + person.where; text.append(where); }
       row.append(face, text);

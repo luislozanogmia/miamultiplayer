@@ -58,6 +58,9 @@
       by: message.from && message.from.id || '', tabs: cleanTabs(message.tabs)};
     var startedAt = Number(message.startedAt) || current && current.startedAt;
     if(startedAt) incoming.startedAt = startedAt;
+    // Whoever started the call stays its host, whoever last changed the tabs.
+    var hostId = typeof message.host === 'string' && message.host || current && current.host;
+    if(hostId) incoming.host = hostId;
     return newer(current, incoming) ? incoming : current;
   }
 
@@ -101,14 +104,15 @@
       return {k: tab.k, title: tab.title || hostOf(tab.url) || 'New tab', url: tab.url, people: here, bots: bots, mine: !!(me && me.tab === tab.k)};
     });
   }
-  // Whose copy of a tab its tile shows: a bot's computer first, then yours if
-  // you are on it, then anyone on it, then the newest still anyone sent.
+  // Whose copy of a tab its tile shows: who you follow first, then a bot's
+  // computer, then a teammate on it, then yours, then the newest still anyone sent.
   var FRAME_FRESH_MS = 20000;
-  function pickFrame(tile, frames, selfId, now){
+  function pickFrame(tile, frames, selfId, now, followId){
     var byPerson = frames && frames[tile.k] || {};
-    var order = tile.bots.map(function(bot){ return bot.ownerId; });
-    if(tile.mine && selfId) order.push(selfId);
-    tile.people.forEach(function(person){ order.push(person.id); });
+    var order = followId ? [followId] : [];
+    tile.bots.forEach(function(bot){ if(bot.ownerId !== selfId) order.push(bot.ownerId); });
+    tile.people.forEach(function(person){ if(person.id !== selfId) order.push(person.id); });
+    if(selfId) order.push(selfId);
     for(var i = 0; i < order.length; i++){
       var frame = byPerson[order[i]];
       if(frame && now - frame.at < FRAME_FRESH_MS) return frame;

@@ -109,7 +109,13 @@ test('a tile shows the copy of the page from the computer doing the work', () =>
   const frames = { k1: { me: { url: 'mine', at: now }, tom: { url: 'toms', at: now }, ana: { url: 'anas', at: now } } };
   assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'anas');
   frames.k1.ana.at = now - 60000;
-  assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'mine', 'a bot computer that went quiet gives way');
+  assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'toms', 'a bot computer that went quiet gives way to a teammate on the tab');
+  assert.equal(space.pickFrame(tile, frames, 'me', now, 'me').url, 'mine');
+  frames.k1.ana.at = now;
+  assert.equal(space.pickFrame(tile, frames, 'me', now, 'tom').url, 'toms', 'who you follow comes first, even over a bot');
+  frames.k1.tom.at = now - 60000; frames.k1.ana.at = now - 60000;
+  assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'mine', 'your own copy is the last live choice');
+  frames.k1.tom.at = now;
   assert.equal(space.pickFrame({ ...tile, mine: false, people: [{ id: 'tom' }], bots: [] }, frames, 'me', now).url, 'toms');
   assert.equal(space.pickFrame({ k: 'k2', mine: false, people: [], bots: [] }, frames, 'me', now), null);
 });

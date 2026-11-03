@@ -11,7 +11,7 @@
   var HEARTBEAT_MS = 30000;
   // The minimap: about one frame a second where someone is working, a slower
   // refresh for the other tabs, and pointers a few times a second.
-  var FRAME_MS = 1000, IDLE_FRAME_EVERY = 5, FRAME_WIDTH = 360, POINTER_MS = 250, POINTER_FRESH_MS = 15000, MAX_FRAME_CHARS = 200000;
+  var FRAME_MS = 1000, IDLE_FRAME_EVERY = 5, FRAME_WIDTH = 360, POINTER_MS = 250, POINTER_FRESH_MS = 15000, VIEW_RESEND_MS = 2000, MAX_FRAME_CHARS = 200000;
   var pageHead = document.getElementById('miaSpacePageHead');
   // In the chat beside the browser: the call controls, and invitations for this person.
   var callBar = document.getElementById('miaSpaceCall'), chatInvites = document.getElementById('miaSpaceChatInvites');
@@ -76,7 +76,7 @@
     clearTimeout(s.timers[kind]);
     s.timers[kind] = setTimeout(fn, delay);
   }
-  function sendSpace(){ if(bound()) post({t: 'space', name: s.space.name, rev: s.space.rev, startedAt: s.space.startedAt, tabs: s.space.tabs}); }
+  function sendSpace(){ if(bound()) post({t: 'space', name: s.space.name, rev: s.space.rev, startedAt: s.space.startedAt, host: s.space.host, tabs: s.space.tabs}); }
   function myPresence(){
     var state = s.browser, linksByLocal = {};
     Object.keys(s.links).forEach(function(k){ linksByLocal[s.links[k]] = k; });
@@ -224,7 +224,7 @@
         // Someone new can't see us until we say where we are; both sides answer once.
         if(message.t === 'here' && !before) sendPresence(true);
         if(s.follow === message.from.id && now && s.zoomed && (!before || before.tab !== now.tab || before.url !== now.url)) goTo(now.tab, now.url);
-        if(message.t === 'leave' && s.follow === message.from.id) s.follow = null;
+        if(message.t === 'leave' && s.follow === message.from.id) s.follow = hostToFollow();
       }
     } else if(message.t === 'space' && !bound() && !s.ended[message.space]){
       var invite = s.invites[message.space];
@@ -281,7 +281,7 @@
     var tabs = s.browser.tabs.filter(function(tab){ return tab.groupId === group.id; });
     var list = model.localTabList(null, {}, tabs, key);
     if(!list.tabs.length){ toast('Open a web page in this group first.'); return; }
-    start(channelId, {id: key(), name: group.name || 'Shared tabs', rev: 1, by: self.id, startedAt: Date.now(), tabs: list.tabs}, group.id, list.links);
+    start(channelId, {id: key(), name: group.name || 'Shared tabs', rev: 1, by: self.id, host: self.id, startedAt: Date.now(), tabs: list.tabs}, group.id, list.links);
     enterRoom();
     sendSpace(); sendPresence(true); render();
   }
@@ -295,7 +295,7 @@
       if(!result || !result.openedId || bound()) return;
       var tabKey = key(), links = {};
       links[tabKey] = result.openedId;
-      start(channelId, {id: key(), name: channel.name, rev: 1, by: self.id, startedAt: Date.now(), tabs: [{k: tabKey, url: START_PAGE, title: 'Google'}]}, result.groupId, links);
+      start(channelId, {id: key(), name: channel.name, rev: 1, by: self.id, host: self.id, startedAt: Date.now(), tabs: [{k: tabKey, url: START_PAGE, title: 'Google'}]}, result.groupId, links);
       enterRoom();
       sendSpace(); sendPresence(true); render();
       s.callMenu = 'invite'; renderCall();
@@ -335,6 +335,7 @@
     start(invite.channelId, invite.space, reuse.groupId, reuse.links);
     s.joined = true;
     enterRoom();
+    s.follow = invite.space.host || invite.from.id;
     var reusedFirst = invite.space.tabs.filter(function(tab){ return tab.url && reuse.links[tab.k]; })[0];
     if(reusedFirst) command('select', {id: reuse.links[reusedFirst.k]}).catch(function(){});
     if(approveEach){
@@ -349,7 +350,6 @@
     }, Promise.resolve()).then(function(){
       s.pendingOpens--;
       if(!s.space) return render();
-      s.follow = invite.from.id;
       sendPresence(true); render();
     });
     render();
@@ -403,6 +403,11 @@
     post({t: 'look', tab: here.tab, url: here.url});
     toast('Everyone in the space is coming to this tab.');
   }
+  // Everyone follows the host unless they choose someone else.
+  function hostToFollow(){
+    var hostId = s.space && s.space.host, self = me();
+    return hostId && (!self || hostId !== self.id) && s.presence[hostId] ? hostId : null;
+  }
   function followPerson(id){
     s.follow = s.follow === id ? null : id;
     var person = s.presence[id];
@@ -431,7 +436,7 @@
   function stopLive(){
     if(s.mesh) s.mesh.close();
     s.mesh = null; s.frames = {}; s.pointers = {}; s.botPoints = {}; s.worked = {}; s.done = {}; s.lastBot = {};
-    s.cursorSig = ''; s.frameTick = 0;
+    s.cursorSig = ''; s.frameTick = 0; s.viewSig = ''; s.viewAt = 0;
     if(s.cursorTab){ command('spaceCursors', {id: s.cursorTab, cursors: []}).catch(function(){}); s.cursorTab = null; }
     if(pageHead){ pageHead.hidden = true; pageHead.textContent = ''; }
     syncToolbar();
@@ -448,8 +453,21 @@
       if(!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return;
       if(message.t === 'p') s.pointers[fromId] = {k: message.tab, x: x, y: y, at: Date.now()};
       else s.botPoints[fromId + '|' + String(message.name || 'Bot').slice(0, 80)] = {k: message.tab, x: x, y: y, at: Date.now()};
+      if(message.t === 'p') s.pointers[fromId].a = message.a;
       syncLive();
+    } else if(message.t === 'v' && fromId === s.follow){
+      followScroll(fromId, message);
     }
+  }
+  // Only the person you follow moves your page; everyone else's pointer just shows on it.
+  function followScroll(fromId, message){
+    var person = s.presence[fromId], self = me(), id = s.links[message.tab];
+    var local = s.browser && s.browser.tabs.filter(function(tab){ return tab.id === id && tab.active; })[0];
+    if(!s.zoomed || !local || !person || person.tab !== message.tab) return;
+    // Two people following each other would push each other's pages around.
+    if(self && person.follow === self.id) return;
+    if(model.shareableUrl(local.url) !== person.url) return;
+    command('spaceScroll', {id: id, view: {a: message.a, top: message.top === true}}).catch(function(){});
   }
   function keepFrame(tabKey, personId, url){
     (s.frames[tabKey] = s.frames[tabKey] || {})[personId] = {url: url, at: Date.now()};
@@ -492,10 +510,13 @@
       links.forEach(function(link){
         var now = pointers[link.tab.id];
         if(!now) return;
-        if(link.tab.active && now.pointer && (!s.pointers[me().id] || s.pointers[me().id].stamp !== now.pointer.at)){
-          s.pointers[me().id] = {k: link.k, x: now.pointer.x, y: now.pointer.y, at: now.pointer.at, stamp: now.pointer.at};
-          if(s.mesh) s.mesh.send({t: 'p', tab: link.k, x: now.pointer.x, y: now.pointer.y});
+        var mine = s.pointers[me().id], spot = now.pointer && JSON.stringify(now.pointer.a);
+        // Scrolling moves what the pointer is over, even when the mouse stays still.
+        if(link.tab.active && now.pointer && (!mine || mine.stamp !== now.pointer.at || mine.spot !== spot)){
+          s.pointers[me().id] = {k: link.k, x: now.pointer.x, y: now.pointer.y, a: now.pointer.a, at: Date.now(), stamp: now.pointer.at, spot: spot};
+          if(s.mesh) s.mesh.send({t: 'p', tab: link.k, x: now.pointer.x, y: now.pointer.y, a: now.pointer.a});
         }
+        if(link.tab.active && now.view) sendView(link.k, now.view);
         var worker = link.tab.botActivity;
         if(worker && now.bot){
           var id = me().id + '|' + (worker.name || (worker.mia ? 'Mia' : 'Bot')), seen = s.botPoints[id];
@@ -507,6 +528,13 @@
       });
       syncLive();
     }).catch(function(){});
+  }
+  // Sent again now and then: these messages can be lost, and someone may start following at any time.
+  function sendView(tabKey, view){
+    var sig = tabKey + JSON.stringify(view), time = Date.now();
+    if(!s.mesh || (sig === s.viewSig && time - s.viewAt < VIEW_RESEND_MS)) return;
+    s.viewSig = sig; s.viewAt = time;
+    s.mesh.send({t: 'v', tab: tabKey, a: view.a, top: view.top});
   }
   function tone(id){
     var hash = 0;
@@ -569,7 +597,7 @@
       else if(s.worked[tile.k]) s.done[tile.k] = true;
       var node = bar.querySelector('[data-space-tab="' + tile.k + '"]');
       if(!node) return;
-      var frame = model.pickFrame(tile, s.frames, self && self.id, now), img = node.querySelector('.mia-space-frame');
+      var frame = model.pickFrame(tile, s.frames, self && self.id, now, s.follow), img = node.querySelector('.mia-space-frame');
       if(img && frame && img.getAttribute('src') !== frame.url){ img.src = frame.url; img.hidden = false; }
       node.classList.toggle('working', tile.bots.length > 0);
       node.classList.toggle('done', !!s.done[tile.k]);
@@ -607,7 +635,7 @@
       Object.keys(s.pointers).forEach(function(id){
         var point = s.pointers[id], person = s.presence[id];
         if(self && id === self.id || !person || point.k !== tile.k || now - point.at >= POINTER_FRESH_MS) return;
-        cursors.push({id: 'p' + id, label: person.name, x: point.x, y: point.y, color: tone(id)});
+        cursors.push({id: 'p' + id, label: person.name, x: point.x, y: point.y, a: point.a, color: tone(id)});
       });
       Object.keys(s.botPoints).forEach(function(id){
         var point = s.botPoints[id];
@@ -902,7 +930,7 @@
       if(!bound()) return [];
       return othersHere().map(function(person){
         var tab = s.presence[person.id].tab;
-        return {id: person.id, name: person.name, where: tab ? tabTitle(tab) : '', color: tone(person.id), following: s.follow === person.id};
+        return {id: person.id, name: person.name, host: s.space.host === person.id, where: tab ? tabTitle(tab) : '', color: tone(person.id), following: s.follow === person.id};
       });
     },
     followPerson: function(id){ if(bound()) followPerson(id); },
