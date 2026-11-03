@@ -27,6 +27,7 @@ const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { APP_PARTITION_PREFIX, APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes, localAppRoot, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot } = require("./app-sandbox.cjs");
 const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { mainWindowLinkAction } = require("./main-navigation.cjs");
+const { createExternalLinkQueue, isWebLink, webLinksFromArgv } = require("./external-links.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 const { createBrowserWorkBroker } = require("./browser-work-broker.cjs");
@@ -225,6 +226,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 let mainWindow = null;
+let startupComplete = false;
 let nativeBrowser = null;
 let browserWorkBroker = null;
 let browserWorkKey = null;
@@ -274,7 +276,16 @@ function receiveAuthCallback(value) {
     if (accepted) activateMainWindow();
   }).catch(() => desktopLog("Native sign-in callback could not be completed"));
 }
-app.on("open-url", (event, value) => { event.preventDefault(); receiveAuthCallback(value); });
+const externalLinks = createExternalLinkQueue({ open: url => void openLinkInMiaBrowser(url) });
+// Windows and Linux pass the link on the command line of a cold start. macOS
+// sends it through open-url instead, and can do so before the app is ready.
+for (const url of webLinksFromArgv(process.argv.slice(1))) externalLinks.receive(url);
+app.on("open-url", (event, value) => {
+  event.preventDefault();
+  if (!isWebLink(value)) return receiveAuthCallback(value);
+  externalLinks.receive(value);
+  if (startupComplete) activateMainWindow();
+});
 
 const UPDATE_GITHUB_OWNER = "luislozanogmia";
 const UPDATE_GITHUB_REPO = "miamultiplayer";
@@ -2168,6 +2179,7 @@ function createWindow() {
   });
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
+    if (!mainWindow) externalLinks.setReady(false);
     windowAppPanes.closeAll();
     if (appPanes === windowAppPanes) appPanes = null;
     if (artifactToolbarView === windowArtifactToolbarView) artifactToolbarView = null;
@@ -2476,6 +2488,7 @@ ipcMain.on("miaos-renderer-ready", (event) => {
 ipcMain.on("miaos-renderer-hydrated", (event) => {
   if (!isMainWindowSender(event)) return;
   desktopLog("renderer hydration received");
+  externalLinks.setReady(true);
   repaintDevelopmentUi(mainWindow);
 });
 
@@ -2658,6 +2671,7 @@ function activateMainWindow() {
 
 app.on("second-instance", (_event, argv) => {
   for (const value of argv || []) if (typeof value === "string" && value.startsWith("miamultiplayer:")) receiveAuthCallback(value);
+  for (const url of webLinksFromArgv(argv)) externalLinks.receive(url);
   activateMainWindow();
 });
 
@@ -2760,6 +2774,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   }
   if (runtimeReady && process.env.MIAOS_ARTIFACT_URL) await navigateArtifact(process.env.MIAOS_ARTIFACT_URL);
 
+  startupComplete = true;
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) activateMainWindow();
   });
