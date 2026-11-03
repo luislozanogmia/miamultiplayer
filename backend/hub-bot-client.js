@@ -5,6 +5,8 @@ const {CLERK_INSTANCES}=require('./clerk-config');
 
 // The Hub stores at most 16,000 UTF-8 bytes per message. A longer reply is
 // cut at a character boundary rather than lost.
+// A definition holds long instructions and up to ten skills.
+const RESPONSE_BYTES=8*1024*1024;
 const REPLY_BYTES=16000, CUT_NOTE='\n\n[Reply shortened to fit the channel.]';
 function fitReply(text,limit=REPLY_BYTES) {
   if(typeof text!=='string' || Buffer.byteLength(text)<=limit) return text;
@@ -36,12 +38,16 @@ async function requestHub(origin,token,method,path,body,fetcher=fetch) {
   const response=await fetcher(origin+path,{method,redirect:'error',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
     body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
   const chunks=[];let length=0;
-  for await(const chunk of response.body) {length+=chunk.length;if(length>131072) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
+  for await(const chunk of response.body) {length+=chunk.length;if(length>RESPONSE_BYTES) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
   const result=JSON.parse(Buffer.concat(chunks));
   if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','invalid_claim'].includes(result.error)?result.error:'hub_request_failed');
   return result;
 }
-function createHubBotClient({db,dataDirectory,getBot,listBots,isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,checkIntervalMs=15000,fetcher=fetch}) {
+function sharedSkills(value) {
+  return (Array.isArray(value)?value:[]).filter(skill=>skill && typeof skill.name==='string' && typeof skill.body==='string' && skill.body.trim())
+    .map(skill=>({name:skill.name,description:typeof skill.description==='string'?skill.description:'',body:skill.body}));
+}
+function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,checkIntervalMs=15000,fetcher=fetch}) {
   const journal=createHubBotJournal(db);
   const inFlight=new Map(), freshTokens=new Map(), selections=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
@@ -105,7 +111,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isPrivateAgent=()=
       // Recheck revocation immediately before invoking the existing runtime.
       await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
       if(!localIdentityValid(s) || controller.signal.aborted) throw new Error('owner_changed');
-      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions};
+      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
         channel:{teamId:s.teamId,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null});
       if(controller.signal.aborted) throw new Error('cancelled');
@@ -186,8 +192,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isPrivateAgent=()=
       return {bots:listBots(owner).map(bot=>({id:String(bot.id),name:bot.name}))};
     },
     // Sharing forks the bot: the team gets its own copy of the instructions
-    // only, no longer tied to the Solo bot. Skills, automations and memories
-    // stay in Solo.
+    // and of its skills' text, no longer tied to the Solo bot or the library.
+    // Automations and memories stay in Solo.
     async share(owner,input,token) {
       // Personal agents are private to their owner and never leave the machine.
       if(isPrivateAgent(String(input.localBotId||''))) throw failure(403,'agent_not_shareable');
@@ -198,8 +204,11 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isPrivateAgent=()=
       const result=await requestHub(scope.origin,token,'POST',`/v1/teams/${scope.teamId}/channels/${scope.channelId}/bots`,
         {id:binding.registration_id,name:binding.public_name},fetcher);
       if(!result.bot || result.bot.owner_id!==scope.subject || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
+      const skills=bundleSkills(bot);
+      // A Hub that has not been updated refuses skills and long instructions.
       const proposed=await requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
-        {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual'},fetcher);
+        {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual',...(skills.length?{skills}:{})},fetcher)
+        .catch(error=>{throw error.status===400 || error.status===413?failure(413,'bot_too_large_for_team'):error;});
       return {bot:result.bot,proposal:proposed.proposal};
     },
   };

@@ -3907,3 +3907,16 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .mia-app-card-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
 .mia-app-card-answer{margin-top:8px;font-size:13px;opacity:.7}
 .mia-app-posted{margin-top:4px;font-size:11px;opacity:.55}
+
+  /* Skills: picker on the setup card and bot editor, list in Settings */
+  body.styled-skin .skill-picker{display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto;}
+  body.styled-skin .skill-picker-row{display:flex;align-items:flex-start;gap:8px;padding:6px 2px;font-size:13px;line-height:1.4;color:var(--sand-text-primary);text-transform:none;letter-spacing:0;cursor:pointer;}
+  body.styled-skin .skill-picker-row input{width:auto;margin-top:3px;flex:none;}
+  body.styled-skin .skill-picker-name{display:block;font-weight:600;}
+  body.styled-skin .skill-picker-desc{display:block;color:var(--sand-text-secondary);}
+  body.styled-skin .skill-picker-empty{font-size:13px;line-height:1.4;color:var(--sand-text-secondary);text-transform:none;letter-spacing:0;}
+  body.styled-skin .skills-row-actions{display:flex;gap:6px;flex:none;}
+  body.styled-skin .skill-form-field{display:block;width:calc(100% - 32px);max-width:none;margin:16px 16px 0;text-align:left;}
+  body.styled-skin #settingsSkillBody{min-height:240px;margin-top:16px;}
+  body.styled-skin #settingsSkillError:empty{display:none;}
+  body.styled-skin #settingsSkillError{margin:0 16px;}

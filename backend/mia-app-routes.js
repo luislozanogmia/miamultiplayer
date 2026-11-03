@@ -77,6 +77,9 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
       const runs = lastRunsByBot(active.checklists);
       return { bots: bots.map(bot => ({ ...botSummary(bot), lastRuns: runs[bot.id] || [] })) };
     } },
+    skills_list: { group: 'A', description: 'The skills library: each skill with the bots that carry it.', args: {}, async run({ call }) {
+      return call('GET', '/api/skills');
+    } },
     bot_get: { group: 'A', description: "One bot's instructions, automations, departments and last run.", args: { bot_id: 'string' }, async run({ call, args }) {
       const bot = await botOf(call, args.bot_id);
       const active = await call('GET', '/api/automations/active');

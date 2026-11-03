@@ -30,7 +30,7 @@ function setupContext(state, overrides = {}) {
   });
   load(context, 'pendingMiaBotSetupMessage');
   load(context, 'syncMiaBotSetupRequest');
-  vm.runInContext('var startedMiaBotSetupRequests = {};', context);
+  vm.runInContext('var startedMiaBotSetupRequests = {}; var MAX_BOT_BRIEF_CHARS = 100000;', context);
   return { context, started };
 }
 
@@ -84,6 +84,8 @@ test('a request opens the card once per session', () => {
 
 test('Mia review card offers one Accept action and no cancel button', () => {
   const context = vm.createContext({
+    MAX_BOT_BRIEF_CHARS: 100000, skillPickerHtml: () => '<div>Skills</div>',
+    agentSetupDraftInstructions: (draft) => draft.instructions || [draft.role, draft.output].filter(Boolean).join('\n\n'),
     hubWorkspace: () => false,
     inHubRoom: () => false,
     teamBotRoom: () => false,

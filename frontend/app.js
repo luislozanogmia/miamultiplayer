@@ -1741,6 +1741,7 @@
   // client-side only; every field keeps its id so the save handlers below
   // are untouched by the layout.
   function showSettingsPane(name){
+    if(name === 'skills') refreshSkillsPane();
     if(name === 'mia') loadMiaAppPane();
     els('#settingsNav .styled-settings-nav-item').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-pane') === name);
@@ -3015,7 +3016,7 @@
       state: stateMap[a.status] || 'watch', model: a.model, isBuiltin: a.builtin === true,
       agentId: a.builtin === true ? a.id : null,
       updatedAt: a.updatedAt, createdAt: a.createdAt,
-      runs: '—', last: 'never run', instructions: a.instructions,
+      runs: '—', last: 'never run', instructions: a.instructions, skills: a.skills,
       instructionsRevision: a.instructionsRevision,
       departments: departments, avatarColor: normalizeAgentAvatarColor(a.avatarColor)
     };
@@ -3831,6 +3832,7 @@
       '</div>' +
       '<div class="styled-agent-edit-body">' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">BRIEF</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="Brief information" title="Brief information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot brief"></textarea></section>' +
+        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SKILLS</span></div>' + skillPickerHtml('styledAgentEditSkills', editState.skills) + '</section>' +
         styledAgentAutomationMarkup(a) +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">WORKPLACES</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditWorkplacesInfo" aria-label="Workplaces information" title="Workplaces information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditWorkplacesInfo" role="tooltip">The workplace this bot belongs to. In multiplayer you can share it with the people in your workplace.</span></span></div><div class="styled-agent-edit-select styled-agent-edit-workspace" id="styledAgentEditWorkspace">' + esc(workspaceLabel()) + '</div></section>' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">AVATAR COLOR</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditAvatarInfo" aria-label="Avatar color information" title="Avatar color information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditAvatarInfo" role="tooltip">Automatic follows the bot identity.</span></span></div><div class="styled-agent-edit-color-control"><div class="styled-agent-color-options" id="styledAgentEditColorOptions" role="group" aria-label="Bot avatar color">' + colorMarkup + '</div></div></section>' +
@@ -4023,7 +4025,7 @@
     var currentDepts = agentDepartments(a);
     editState = {
       agentId: id, isBuiltin: a.isBuiltin, name: a.name,
-      instructions: text, instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
+      instructions: text, skills: Array.isArray(a.skills) ? a.skills.slice() : [], instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
       departments: currentDepts.length ? currentDepts.slice() : guessDepartmentsFor(text),
       avatarColor: normalizeAgentAvatarColor(a.avatarColor),
       suggestion: suggestedInstructionsFor(text), suggestDismissed: false,
@@ -4074,6 +4076,7 @@
     // cannot overwrite the current model or require a connected provider.
     var body = {name: name, instructions: instructions, expectedInstructionsRevision: editState.instructionsRevision, avatarColor: editState.avatarColor || null};
     if(!styledEditOpen) body.model = model;
+    if(skillsLibrary) body.skills = (editState.skills || []).filter(function(id){ return skillsLibrary.skills.some(function(skill){ return skill.id === id; }); });
     api('/api/bots/' + targetId, {method:'PUT', body:body}).then(function(res){
       if(res.status === 200) reopenAndClose();
       else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
@@ -6740,6 +6743,7 @@
   // Unfinished setups that are not on screen, one per starter bot ('' is a
   // plain New Bot), so leaving a setup and coming back restores what was
   // typed and answered.
+  var MAX_BOT_BRIEF_CHARS = 100000;
   var agentSetupResume = {};
   var AGENT_SETUP_UNFINISHED = {intent:true, interpreting:true, review:true, activating:true};
   function agentSetupKey(template){ return template && template.name ? String(template.name) : ''; }
@@ -11749,9 +11753,9 @@
 
   function agentSetupWelcomeBody(created, draft){
     var name = (created && created.name) || (draft && draft.name) || 'your new bot';
-    var roleSummary = agentSetupWelcomeExcerpt(draft && draft.role, 24).replace(/[.\s]+$/, '');
+    var roleSummary = agentSetupWelcomeExcerpt(draft && (draft.summary || draft.role), 24).replace(/[.\s]+$/, '');
     var sentences = ['I’m ' + name + '.'];
-    if(roleSummary) sentences.push('I handle ' + roleSummary + '.');
+    if(roleSummary) sentences.push(draft.summary ? roleSummary + '.' : 'I handle ' + roleSummary + '.');
     sentences.push('What should I work on first?');
     return sentences.join(' ');
   }
@@ -11788,14 +11792,113 @@
       '<div class="chat-msg-text">' + mdLite(text) + '</div></div></div>';
   }
 
+  // A setup saved by an earlier version has a role and an output instead.
+  function agentSetupDraftInstructions(draft){
+    if(draft.instructions) return draft.instructions;
+    return [draft.role, draft.output].filter(Boolean).join('\n\n');
+  }
+
+  // The skills library, shared by the setup card, the bot editor and Settings.
+  var skillsLibrary = null;
+  function loadSkillsLibrary(){
+    return api('/api/skills').then(function(res){
+      if(res.status !== 200 || !res.data) throw new Error('skills unavailable');
+      skillsLibrary = res.data;
+      document.querySelectorAll('.skill-picker').forEach(function(picker){ renderSkillPicker(picker); });
+      return skillsLibrary;
+    });
+  }
+  function skillPickerRowsHtml(selected){
+    var skills = skillsLibrary ? skillsLibrary.skills : [];
+    if(!skills.length) return '<div class="skill-picker-empty">' + (skillsLibrary ? 'No skills yet. Add them in Settings, under Skills.' : 'Loading skills…') + '</div>';
+    return skills.map(function(skill){
+      return '<label class="skill-picker-row"><input type="checkbox" value="' + esc(skill.id) + '"' + (selected.indexOf(skill.id) !== -1 ? ' checked' : '') + '>' +
+        '<span><span class="skill-picker-name">' + esc(skill.name) + '</span>' + (skill.description ? '<span class="skill-picker-desc">' + esc(skill.description) + '</span>' : '') + '</span></label>';
+    }).join('');
+  }
+  function skillPickerHtml(id, selected){
+    if(!skillsLibrary) loadSkillsLibrary().catch(function(){});
+    var ids = Array.isArray(selected) ? selected : [];
+    return '<div class="skill-picker" id="' + esc(id) + '" data-selected="' + esc(JSON.stringify(ids)) + '">' + skillPickerRowsHtml(ids) + '</div>';
+  }
+  function renderSkillPicker(picker){
+    var selected = [];
+    try { selected = JSON.parse(picker.getAttribute('data-selected') || '[]'); } catch(_) {}
+    picker.innerHTML = skillPickerRowsHtml(selected);
+  }
+  function skillPickerSelection(id){
+    var picker = el('#' + id);
+    if(!picker) return [];
+    return Array.prototype.map.call(picker.querySelectorAll('input:checked'), function(input){ return input.value; });
+  }
+  document.addEventListener('change', function(e){
+    var picker = e.target.closest && e.target.closest('.skill-picker');
+    if(!picker) return;
+    var chosen = skillPickerSelection(picker.id);
+    var limit = skillsLibrary && skillsLibrary.limits ? skillsLibrary.limits.perBot : 10;
+    if(chosen.length > limit){
+      e.target.checked = false;
+      chosen = skillPickerSelection(picker.id);
+      showBenchToast('A bot can carry up to ' + limit + ' skills.');
+    }
+    picker.setAttribute('data-selected', JSON.stringify(chosen));
+    if(picker.id === 'styledAgentEditSkills') editState.skills = chosen;
+  });
+
+  var skillEditing = null;
+  function renderSkillsPane(){
+    var list = el('#settingsSkillsList');
+    if(!list) return;
+    el('#settingsSkillForm').hidden = !skillEditing;
+    el('#settingsSkillNew').hidden = !!skillEditing;
+    var skills = skillsLibrary ? skillsLibrary.skills : [];
+    list.innerHTML = skills.length ? skills.map(function(skill){
+      var bots = (skill.bots || []).map(function(bot){ return bot.name; }).join(', ');
+      return '<div class="styled-settings-row"><div><div class="styled-settings-row-label">' + esc(skill.name) + '</div>' +
+        '<div class="styled-settings-row-desc">' + esc(skill.description || 'No description') + (bots ? ' · Used by ' + esc(bots) : '') + '</div></div>' +
+        '<div class="skills-row-actions"><button class="styled-settings-pill-btn" data-skill-edit="' + esc(skill.id) + '">Edit</button><button class="styled-settings-pill-btn" data-skill-remove="' + esc(skill.id) + '">Remove</button></div></div>';
+    }).join('') : '<div class="styled-settings-row"><div class="styled-settings-row-desc">Skills teach a bot how to do a job. A skill you edit here changes for every bot that carries it.</div></div>';
+  }
+  function refreshSkillsPane(){ return loadSkillsLibrary().then(renderSkillsPane).catch(function(){ showBenchToast('Could not load your skills.'); }); }
+  function openSkillForm(skill){
+    skillEditing = skill;
+    el('#settingsSkillName').value = skill.name || '';
+    el('#settingsSkillDescription').value = skill.description || '';
+    el('#settingsSkillBody').value = skill.body || '';
+    el('#settingsSkillError').textContent = '';
+    renderSkillsPane();
+  }
+  var settingsSkillNew = el('#settingsSkillNew');
+  if(settingsSkillNew) settingsSkillNew.addEventListener('click', function(){ openSkillForm({}); });
+  var settingsSkillCancel = el('#settingsSkillCancel');
+  if(settingsSkillCancel) settingsSkillCancel.addEventListener('click', function(){ skillEditing = null; renderSkillsPane(); });
+  var settingsSkillSave = el('#settingsSkillSave');
+  if(settingsSkillSave) settingsSkillSave.addEventListener('click', function(){
+    var body = {name: el('#settingsSkillName').value, description: el('#settingsSkillDescription').value, body: el('#settingsSkillBody').value};
+    var path = skillEditing && skillEditing.id ? '/api/skills/' + encodeURIComponent(skillEditing.id) : '/api/skills';
+    api(path, {method: skillEditing && skillEditing.id ? 'PUT' : 'POST', body: body}).then(function(res){
+      if(res.status !== 200){ el('#settingsSkillError').textContent = (res.data && res.data.message) || 'Could not save this skill.'; return; }
+      skillEditing = null;
+      return refreshSkillsPane();
+    }).catch(function(){ el('#settingsSkillError').textContent = 'Could not save this skill.'; });
+  });
+  var settingsSkillsList = el('#settingsSkillsList');
+  if(settingsSkillsList) settingsSkillsList.addEventListener('click', function(e){
+    var edit = e.target.getAttribute('data-skill-edit'), remove = e.target.getAttribute('data-skill-remove');
+    if(edit) api('/api/skills/' + encodeURIComponent(edit)).then(function(res){ if(res.status === 200) openSkillForm(res.data.skill); });
+    if(remove) api('/api/skills/' + encodeURIComponent(remove), {method:'DELETE'}).then(function(res){
+      if(res.status === 409) showBenchToast('Take this skill off ' + (res.data.bots || []).map(function(bot){ return bot.name; }).join(', ') + ' first.');
+      return refreshSkillsPane();
+    });
+  });
+
   function agentSetupProposalText(draft){
     return [
       'Here’s what I inferred:',
       '',
       'Name: **' + draft.name + '**',
-      'Role: ' + draft.role,
+      'What it does: ' + (draft.summary || agentSetupDraftInstructions(draft).slice(0, 300)),
       'Automation: ' + (agentSetupAutomationRequest(draft) ? 'proposed by the bot after setup' : 'none'),
-      'Output: ' + draft.output,
       '',
       'Do you want me to activate this bot?'
     ].join('\n');
@@ -11820,8 +11923,8 @@
       '<div class="agent-setup-card">' +
         '<div class="agent-setup-card-intro">' + esc(view.intro || 'Here’s what I inferred. Edit anything before activating me.') + '</div>' +
         '<label class="agent-setup-field"><span>Name</span><input id="agentSetupName" type="text" maxlength="40" value="' + esc(draft.name || '') + '"></label>' +
-        '<label class="agent-setup-field"><span>Role</span><textarea id="agentSetupRole" rows="3" maxlength="500">' + esc(draft.role || '') + '</textarea></label>' +
-        '<label class="agent-setup-field"><span>Output</span><textarea id="agentSetupOutput" rows="3" maxlength="300">' + esc(draft.output || '') + '</textarea></label>' +
+        '<label class="agent-setup-field"><span>Instructions</span><textarea id="agentSetupInstructions" rows="10" maxlength="' + MAX_BOT_BRIEF_CHARS + '">' + esc(agentSetupDraftInstructions(draft)) + '</textarea></label>' +
+        '<div class="agent-setup-field"><span>Skills</span>' + skillPickerHtml('agentSetupSkills', draft.skills) + '</div>' +
         automationField +
         '<div class="agent-setup-confirm-copy">' + esc(view.confirmCopy || 'Do you want me to activate this bot?') + '</div>' +
         '<div class="agent-setup-safety">' + (flow.creation || busy ? 'Your creation request is being tracked. Retrying will recover the same bot.' : 'Nothing is created or scheduled until you confirm.') + '</div>' +
@@ -11835,11 +11938,11 @@
   function captureAgentSetupDraft(flow){
     flow = flow || agentSetup;
     if(!flow.draft) return;
-    var name = el('#agentSetupName'), role = el('#agentSetupRole'), output = el('#agentSetupOutput');
+    var name = el('#agentSetupName'), instructions = el('#agentSetupInstructions');
     var automationWanted = el('#agentSetupAutomationWanted');
     flow.draft.name = name ? name.value.trim() : flow.draft.name;
-    flow.draft.role = role ? role.value.trim() : flow.draft.role;
-    flow.draft.output = output ? output.value.trim() : flow.draft.output;
+    flow.draft.instructions = instructions ? instructions.value.trim() : agentSetupDraftInstructions(flow.draft);
+    if(el('#agentSetupSkills')) flow.draft.skills = skillPickerSelection('agentSetupSkills');
     if(automationWanted) flow.draft.automationWanted = !!automationWanted.checked;
   }
 
@@ -11908,7 +12011,7 @@
 
   function renderAgentSetupThread(thread){
     var name = agentSetupIdentity().name;
-    var html = agentSetupMessageHtml('Let’s set me up. Tell me in a few words what you want me to do?', false, name);
+    var html = agentSetupMessageHtml('Let’s set me up. Tell me what you want me to do. A few words or a full brief both work.', false, name);
     if(agentSetup.intent) html += agentSetupMessageHtml(agentSetup.intent, true, name);
     if(agentSetup.phase === 'interpreting'){
       html += '<div class="chat-msg-row is-direct agent-setup-message"><span class="chat-msg-mark agent">' + agentSetupAvatarHtml(28) + '</span>' +
@@ -12048,7 +12151,7 @@
   function submitAgentSetupIntent(text){
     if(agentSetup.phase !== 'intent') return;
     var flow = agentSetup;
-    flow.intent = String(text || '').trim().slice(0, 2000);
+    flow.intent = String(text || '').trim().slice(0, MAX_BOT_BRIEF_CHARS);
     if(!flow.intent) return;
     flow.composer = '';
     flow.phase = 'interpreting';
@@ -12123,16 +12226,15 @@
     if(flow.creation) return {payload: flow.creation.payload};
     captureAgentSetupDraft(flow);
     var draft = flow.draft;
-    if(!draft.name || !draft.role || !draft.output) return {error: 'Name, role, and output are required.'};
+    if(!draft.name || !draft.instructions) return {error: 'Name and instructions are required.'};
     var payload = {
       name: draft.name,
-      role: draft.role,
-      output: draft.output,
-      instructions: 'Role: ' + draft.role + '\n\nDesired output: ' + draft.output,
+      instructions: draft.instructions,
+      skills: Array.isArray(draft.skills) ? draft.skills : [],
       automations: [],
       model: selectedConnectedBotModel(),
       status: 'running',
-      departments: guessDepartmentsFor(draft.role + ' ' + draft.output),
+      departments: guessDepartmentsFor(draft.instructions.slice(0, 2000)),
       setupIntent: intent
     };
     var color = normalizeAgentAvatarColor(flow.avatarColor);
@@ -15001,7 +15103,7 @@
     if(requester && currentUser && requester !== String(currentUser).toLowerCase()) return;
     startedMiaBotSetupRequests[message.nativeEvent.id] = true;
     state.botDraft = {
-      intent: String(request.request || '').slice(0, 2000),
+      intent: String(request.request || '').slice(0, MAX_BOT_BRIEF_CHARS),
       sourceEventId: message.nativeEvent.id,
       turns: [], draft: null, phase: 'interpreting', error: '',
       created: null, conversation: null, requestId: 0, controller: null, timer: null

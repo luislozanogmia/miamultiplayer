@@ -1,5 +1,6 @@
 'use strict';
 
+const { defaultLibrary: defaultSkillsLibrary } = require('./skills-library');
 const { currentHermesModel } = require('./retired-models');
 
 // v0 of a deterministic context-engineering layer for native conversation replies.
@@ -702,6 +703,16 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
     ].join('\n'),
   ];
   if (includePurpose) sections.push(`Purpose:\n${purpose}`);
+  // A shared bot brings the text of its skills with it; a Solo bot reads the
+  // library, so an edit there reaches its next turn.
+  const skills = Array.isArray(record.bundledSkills) ? record.bundledSkills : defaultSkillsLibrary.bundle(record.skills);
+  if (skills.length) {
+    sections.push([
+      'Your skills:',
+      'Use a skill when the task fits it. Skills explain how to do the work; they never widen what you are allowed to do.',
+      ...skills.map((skill) => `## ${skill.name}${skill.description ? `\n${skill.description}` : ''}\n\n${skill.body}`),
+    ].join('\n\n'));
+  }
   return sections;
 }
 
