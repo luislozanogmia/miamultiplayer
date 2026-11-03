@@ -21,10 +21,10 @@
   var MAP_TOGGLE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6l5 5 5-5M7 13l5 5 5-5"/></svg>';
   var MAP_KEY = 'miaSharedMapHidden', SESSION_KEY = 'miaSharedSession', LEFTOVERS_KEY = 'miaSharedLeftoverGroups', RESUME_MS = 3600000;
 
-  var s = {space:null, teamKey:null, channelId:null, groupId:null, links:{}, presence:{}, invites:{},
+  var s = {space:null, teamKey:null, channelId:null, groupId:null, links:{}, presence:{}, participants:{}, invites:{},
     follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null, ended:{}, notice:null,
-    confirming:null, approveEach:false, ignored:{}, joined:false, resumeChecked:false, dismissed:{}, rung:{}, invited:{}, callMenu:null, joinedAt:0,
-    sharePicking:null, zoomed:false, covered:false, mapHidden:false, mesh:null, frames:{}, pointers:{}, botPoints:{}, worked:{}, done:{}, lastBot:{}, frameBusy:false, frameTick:0, cursorSig:'', cursorTab:null, pillSig:''};
+    confirming:null, approveEach:false, approved:{}, approving:{}, ignored:{}, joined:false, resumeChecked:false, dismissed:{}, rung:{}, invited:{}, callMenu:null, joinedAt:0,
+    sharePicking:null, zoomed:false, covered:false, mapHidden:false, mesh:null, frames:{}, pointers:{}, botPoints:{}, worked:{}, done:{}, lastBot:{}, frameBusy:false, frameTick:0, cursorSig:'', cursorTab:null, pillSig:'', sendQueue:null, joinReady:false};
 
   function key(){ return Array.from(crypto.getRandomValues(new Uint8Array(8)), function(b){ return b.toString(16).padStart(2, '0'); }).join(''); }
   function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch){ return '&#' + ch.charCodeAt(0) + ';'; }); }
@@ -49,7 +49,7 @@
   function saveSession(){
     if(!bound() || !me()) return;
     writeStored(SESSION_KEY, {space: s.space, teamKey: s.teamKey, channelId: s.channelId, groupId: s.groupId, links: s.links,
-      follow: s.follow, approveEach: s.approveEach, ignored: s.ignored, joined: s.joined, user: me().id, at: Date.now()});
+      follow: s.follow, approveEach: s.approveEach, approved: s.approved, ignored: s.ignored, joined: s.joined, user: me().id, at: Date.now()});
   }
   function resumeSession(){
     var team = teamKey(), self = me();
@@ -61,22 +61,46 @@
     start(saved.channelId, saved.space, saved.groupId || null, saved.links);
     enterRoom();
     s.follow = saved.follow || null; s.approveEach = !!saved.approveEach; s.ignored = saved.ignored || {}; s.joined = !!saved.joined;
-    sendPresence(true);
+    s.approved = saved.approved || {};
+    if(s.approveEach && !saved.approved) Object.keys(s.links).forEach(function(k){
+      var local = s.browser && s.browser.tabs.filter(function(tab){ return tab.id === s.links[k]; })[0];
+      if(local) s.approved[k] = model.shareableUrl(local.url);
+    });
+    announceJoin();
   }
 
   // ---- Sending -------------------------------------------------------------
   function post(message){
     var h = host(), self = me();
-    if(!h || !self || !s.channelId) return;
+    if(!h || !self || !s.channelId || !s.space) return Promise.resolve(false);
     var payload = Object.assign({space: s.space.id, from: {id: self.id, name: self.name}, at: Date.now()}, message);
-    h.send(s.channelId, model.encode(payload)).catch(function(){ /* The next heartbeat resends the state. */ });
+    var channelId = s.channelId, body = model.encode(payload);
+    // Preserve Join -> presence -> Leave order even when requests finish at
+    // different speeds. Otherwise an old Join could arrive after Leave.
+    function send(){
+      try { return Promise.resolve(h.send(channelId, body)).then(function(){ return true; }, function(){ return false; }); }
+      catch(_sendError) { return Promise.resolve(false); }
+    }
+    var result = s.sendQueue ? s.sendQueue.then(send) : send();
+    s.sendQueue = result.then(function(){}, function(){});
+    return result;
   }
   // Each kind of update goes out at most this often; the latest one wins.
   function later(kind, delay, fn){
     clearTimeout(s.timers[kind]);
     s.timers[kind] = setTimeout(fn, delay);
   }
-  function sendSpace(){ if(bound()) post({t: 'space', name: s.space.name, rev: s.space.rev, startedAt: s.space.startedAt, host: s.space.host, tabs: s.space.tabs}); }
+  function sendSpace(){ return bound() ? post({t: 'space', name: s.space.name, rev: s.space.rev, startedAt: s.space.startedAt, host: s.space.host, tabs: s.space.tabs}) : Promise.resolve(false); }
+  // Hub records this authenticated user's Join message in the channel. A
+  // presence ping or a WebRTC offer alone never grants access to live pages.
+  function announceJoin(){
+    if(!bound()) return Promise.resolve(false);
+    var spaceId = s.space.id;
+    return post({t: 'join'}).then(function(sent){
+      if(sent && bound() && s.space.id === spaceId){ s.joinReady = true; sendPresence(true); }
+      return sent;
+    });
+  }
   function myPresence(){
     var state = s.browser, linksByLocal = {};
     Object.keys(s.links).forEach(function(k){ linksByLocal[s.links[k]] = k; });
@@ -103,7 +127,7 @@
     render();
   }
   function sendPresence(force){
-    if(!bound()) return;
+    if(!bound() || !s.joinReady) return;
     var here = myPresence(), sig = JSON.stringify(here);
     if(!force && sig === s.sent.here) return;
     s.sent.here = sig; post(here);
@@ -122,7 +146,13 @@
       if(groupGone && state.tabs.length && !s.pendingOpens){ leave(true); return render(); }
       if(!s.pendingOpens){
         // Tabs opened, closed or moved in this group change the space for everyone.
-        var next = model.localTabList(s.space, s.links, groupTabs(), key, s.approveEach);
+        var next = model.localTabList(s.space, s.links, groupTabs(), key, s.approveEach, s.approved, s.approving);
+        if(s.approveEach) groupTabs().forEach(function(tab){
+          var k = Object.keys(next.links).filter(function(item){ return next.links[item] === tab.id; })[0];
+          var url = model.shareableUrl(tab.url);
+          if(k && url && (!s.approving[k] || s.approving[k] === url) && s.approved[k] !== url) s.approved[k] = url;
+          if(k && s.approving[k] === url) delete s.approving[k];
+        });
         s.links = next.links;
         if(!model.sameTabs(s.space.tabs, next.tabs)){
           s.space = Object.assign({}, s.space, {tabs: next.tabs, rev: s.space.rev + 1, by: me().id});
@@ -194,6 +224,7 @@
       if(model.isAdminEnd(row)) endedByAdmin(channelId, message.space);
       return;
     }
+    if(row.author_type !== 'user' || typeof row.author_id !== 'string' || !row.author_id) return;
     message.from = {id: row.author_id, name: message.from && message.from.name || row.author_name || row.author_email || 'Teammate'};
     if(message.t === 'ring'){
       var self = me();
@@ -205,7 +236,18 @@
       }
       return;
     }
-    if(bound() && message.space === s.space.id){
+    if(bound() && message.space === s.space.id && channelId === s.channelId){
+      if(message.t === 'join'){
+        if(message.to && (!me() || message.to !== me().id)) return;
+        var firstJoin = !s.participants[message.from.id];
+        s.participants[message.from.id] = true;
+        if(firstJoin) post({t: 'join', to: message.from.id}).then(function(){
+          if(bound() && s.participants[message.from.id]){ sendSpace(); sendPresence(true); }
+        });
+        render();
+        return;
+      }
+      if(!s.participants[message.from.id]) return;
       if(message.t === 'rtc'){
         // Live views connect directly; these hidden messages only introduce the two computers.
         if(s.mesh && me() && message.to === me().id && message.from.id !== me().id) s.mesh.signal(message.from.id, message);
@@ -224,7 +266,10 @@
         // Someone new can't see us until we say where we are; both sides answer once.
         if(message.t === 'here' && !before) sendPresence(true);
         if(s.follow === message.from.id && now && s.zoomed && (!before || before.tab !== now.tab || before.url !== now.url)) goTo(now.tab, now.url);
-        if(message.t === 'leave' && s.follow === message.from.id) s.follow = hostToFollow();
+        if(message.t === 'leave'){
+          delete s.participants[message.from.id];
+          if(s.follow === message.from.id) s.follow = hostToFollow();
+        }
       }
     } else if(message.t === 'space' && !bound() && !s.ended[message.space]){
       var invite = s.invites[message.space];
@@ -261,7 +306,9 @@
   function announce(active){ var h = host(); if(h && h.sharedSession) h.sharedSession(active); }
   function start(channelId, space, groupId, links){
     s.space = space; s.teamKey = teamKey(); s.channelId = channelId; s.groupId = groupId; s.links = links || {};
-    s.presence = {}; s.follow = null; s.sent = {}; s.confirming = null; s.approveEach = false; s.ignored = {}; s.joined = false;
+    s.presence = {}; s.participants = {}; s.follow = null; s.sent = {}; s.confirming = null; s.approveEach = false; s.approved = {}; s.approving = {}; s.ignored = {}; s.joined = false;
+    s.sendQueue = null; s.joinReady = false;
+    if(me()) s.participants[me().id] = true;
     s.sharePicking = null; s.invited = {}; s.callMenu = null; s.joinedAt = Date.now();
     delete s.rung[space.id]; delete s.dismissed[space.id];
     command('spaceSession', {groupId: groupId}).catch(function(){});
@@ -272,7 +319,7 @@
       if(!bound()) return;
       announce(true);
       s.presence = model.livePresence(s.presence, Date.now());
-      sendPresence(true); sendSpace(); render();
+      announceJoin(); sendSpace(); render();
     }, HEARTBEAT_MS);
   }
   function share(){
@@ -282,8 +329,9 @@
     var list = model.localTabList(null, {}, tabs, key);
     if(!list.tabs.length){ toast('Open a web page in this group first.'); return; }
     start(channelId, {id: key(), name: group.name || 'Shared tabs', rev: 1, by: self.id, host: self.id, startedAt: Date.now(), tabs: list.tabs}, group.id, list.links);
+    list.tabs.forEach(function(tab){ s.approved[tab.k] = tab.url; });
     enterRoom();
-    sendSpace(); sendPresence(true); render();
+    sendSpace().then(announceJoin); render();
   }
   // Starting from a chat always opens a new group, so no page you already had
   // open is shared by surprise.
@@ -296,8 +344,9 @@
       var tabKey = key(), links = {};
       links[tabKey] = result.openedId;
       start(channelId, {id: key(), name: channel.name, rev: 1, by: self.id, host: self.id, startedAt: Date.now(), tabs: [{k: tabKey, url: START_PAGE, title: 'Google'}]}, result.groupId, links);
+      s.approved[tabKey] = START_PAGE;
       enterRoom();
-      sendSpace(); sendPresence(true); render();
+      sendSpace().then(announceJoin); render();
       s.callMenu = 'invite'; renderCall();
     }).catch(function(){ toast('Could not start the session. Try again.'); });
   }
@@ -334,13 +383,17 @@
   function enterSession(invite, approveEach, reuse){
     start(invite.channelId, invite.space, reuse.groupId, reuse.links);
     s.joined = true;
+    Object.keys(reuse.links).forEach(function(k){
+      var local = s.browser && s.browser.tabs.filter(function(tab){ return tab.id === reuse.links[k]; })[0];
+      if(local) s.approved[k] = model.shareableUrl(local.url);
+    });
     enterRoom();
     s.follow = invite.space.host || invite.from.id;
     var reusedFirst = invite.space.tabs.filter(function(tab){ return tab.url && reuse.links[tab.k]; })[0];
     if(reusedFirst) command('select', {id: reuse.links[reusedFirst.k]}).catch(function(){});
     if(approveEach){
       s.approveEach = true;
-      sendPresence(true); render();
+      announceJoin(); render();
       return;
     }
     s.pendingOpens++;
@@ -350,7 +403,7 @@
     }, Promise.resolve()).then(function(){
       s.pendingOpens--;
       if(!s.space) return render();
-      sendPresence(true); render();
+      announceJoin(); render();
     });
     render();
   }
@@ -381,7 +434,7 @@
     announce(false);
     clearInterval(s.timers.beat);
     stopLive();
-    s.space = null; s.groupId = null; s.links = {}; s.presence = {}; s.follow = null;
+    s.space = null; s.groupId = null; s.links = {}; s.presence = {}; s.participants = {}; s.follow = null;
     render();
     if(host() && host().leftSession) host().leftSession();
   }
@@ -394,8 +447,31 @@
   }
   function openPage(tabKey){
     var tab = s.space && s.space.tabs.filter(function(item){ return item.k === tabKey; })[0];
-    if(!tab || !tab.url || s.links[tab.k]) return;
-    openLinked(tab, true).then(function(){ sendPresence(true); render(); });
+    if(!tab || !tab.url) return;
+    var spaceId = s.space.id, target = tab.url, id = s.links[tab.k];
+    if(id){
+      var local = s.browser && s.browser.tabs.filter(function(item){ return item.id === id; })[0];
+      s.approving[tab.k] = target;
+      command('select', {id: id}).then(function(){
+        if(!bound() || s.space.id !== spaceId || !s.space.tabs.some(function(item){ return item.k === tab.k && item.url === target; })) return false;
+        if(local && model.shareableUrl(local.url) === target) return true;
+        return command('navigate', {value: target}).then(function(result){
+          if(result && Array.isArray(result.tabs)) onBrowser(result);
+          return true;
+        });
+      }).then(function(opened){
+        if(!bound() || s.space.id !== spaceId) return;
+        if(!opened) delete s.approving[tab.k];
+        else if(local && model.shareableUrl(local.url) === target){ s.approved[tab.k] = target; delete s.approving[tab.k]; }
+        if(opened) delete s.ignored[tab.k];
+        sendPresence(true); render();
+      }).catch(function(){ delete s.approving[tab.k]; toast('Could not open that page. Try again.'); });
+      return;
+    }
+    openLinked(tab, true).then(function(){
+      if(bound() && s.space.id === spaceId && s.links[tab.k]){ s.approved[tab.k] = target; delete s.ignored[tab.k]; sendPresence(true); }
+      render();
+    });
   }
   function lookHere(){
     var here = myPresence();
@@ -429,7 +505,7 @@
     var self = me();
     if(self && window.MiaSpaceLive && window.RTCPeerConnection) s.mesh = window.MiaSpaceLive.createMesh({
       selfId: self.id,
-      signal: function(to, payload){ if(bound()) post(Object.assign({t: 'rtc', to: to}, payload)); },
+      signal: function(to, payload){ if(bound() && s.joinReady && s.participants[to]) post(Object.assign({t: 'rtc', to: to}, payload)); },
       onMessage: onLive
     });
   }
@@ -442,7 +518,7 @@
     syncToolbar();
   }
   function onLive(fromId, message){
-    if(!bound() || !s.presence[fromId] || !message || typeof message.tab !== 'string') return;
+    if(!bound() || !s.participants[fromId] || !s.presence[fromId] || !message || typeof message.tab !== 'string') return;
     if(!s.space.tabs.some(function(tab){ return tab.k === message.tab; })) return;
     if(message.t === 'f'){
       if(typeof message.url !== 'string' || message.url.length > MAX_FRAME_CHARS || !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(message.url)) return;
@@ -827,9 +903,9 @@
     var self = me(), live = model.livePresence(s.presence, Date.now()), here = myPresence();
     var mine = self ? {id: self.id, name: self.name, tab: here.tab, bots: here.bots} : null;
     var tiles = model.tiles(shownSpace(), live, mine);
-    var others = Object.keys(live).map(function(id){ return live[id]; });
+    var others = Object.keys(live).filter(function(id){ return !!s.participants[id]; }).map(function(id){ return live[id]; });
     // One line per page waiting for a yes; the rest follow as these are answered.
-    var waiting = s.approveEach ? model.pendingPages(s.space, s.links, s.ignored) : [];
+    var waiting = s.approveEach ? model.pendingPages(s.space, s.links, s.ignored, s.approved) : [];
     var approvals = waiting.slice(0, 3).map(function(tab){
       return '<div class="mia-space-invite"><span title="' + esc(tab.url) + '">Open <b>' + esc(model.hostOf(tab.url)) + '</b>' + (tab.title ? ' · ' + esc(tab.title) : '') + '?</span>' +
         '<span class="mia-space-choices"><button type="button" class="mia-space-btn primary" data-space-open="' + esc(tab.k) + '">Open</button>' +
@@ -868,7 +944,12 @@
     else if(target.hasAttribute('data-space-approve')) join(target.getAttribute('data-space-approve'), true);
     else if(target.hasAttribute('data-space-decline')) declineInvite(target.getAttribute('data-space-decline'));
     else if(target.hasAttribute('data-space-open')) openPage(target.getAttribute('data-space-open'));
-    else if(target.hasAttribute('data-space-ignore')){ s.ignored[target.getAttribute('data-space-ignore')] = true; render(); }
+    else if(target.hasAttribute('data-space-ignore')){
+      var ignoredKey = target.getAttribute('data-space-ignore');
+      var ignoredTab = s.space && s.space.tabs.filter(function(tab){ return tab.k === ignoredKey; })[0];
+      if(ignoredTab) s.ignored[ignoredKey] = ignoredTab.url;
+      render();
+    }
     else if(target.hasAttribute('data-space-leave')) leave(false);
     else if(target.hasAttribute('data-space-look')){ s.callMenu = null; lookHere(); renderCall(); }
     else if(target.hasAttribute('data-space-invite')){ s.callMenu = s.callMenu === 'invite' ? null : 'invite'; renderCall(); }

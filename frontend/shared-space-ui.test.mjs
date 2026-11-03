@@ -7,13 +7,13 @@ const CHANNEL = 'c'.repeat(32);
 const ADMIN_END = { author_id: 'system:admin', author_type: 'system' };
 
 // The real bar in a small stand-in for the browser, signed in and sharing one tab group.
-async function sharedBar({ stored = new Map(), browserState = null } = {}) {
+async function sharedBar({ stored = new Map(), browserState = null, selfId = 'me' } = {}) {
   const sent = [], toasts = [], announced = [], commands = [], listeners = {};
   let publish = () => {};
   const bodyClasses = new Set(['browser-collab-mode']);
   const bar = { querySelector: () => null, hidden: true, innerHTML: '', addEventListener(kind, fn) { listeners[kind] = fn; } };
   const call = { querySelector: () => null, hidden: true, innerHTML: '', addEventListener() {} };
-  const state = browserState || { groups: [{ id: 'g1', name: 'Launch' }], selectedGroupId: 'g1',
+  let state = browserState || { groups: [{ id: 'g1', name: 'Launch' }], selectedGroupId: 'g1',
     tabs: [{ id: 't1', groupId: 'g1', active: true, url: 'https://example.com/', title: 'Example' }] };
   const window = {
     document: { getElementById: (id) => (id === 'miaSpaceBar' ? bar : id === 'miaSpaceCall' ? call : null), body: { classList: { toggle(name, on) { if (on === undefined ? !bodyClasses.has(name) : on) bodyClasses.add(name); else bodyClasses.delete(name); }, contains: (name) => bodyClasses.has(name) } } }, addEventListener() {},
@@ -22,7 +22,7 @@ async function sharedBar({ stored = new Map(), browserState = null } = {}) {
       return payload.action === 'spaceOpenTab' ? { openedId: 'opened' + commands.length, groupId: 'g2' } : state;
     }, onState(fn) { publish = fn; } } },
     localStorage: { getItem: (name) => stored.get(name) ?? null, setItem: (name, value) => stored.set(name, value), removeItem: (name) => stored.delete(name) },
-    MiaSpaceHost: { me: () => ({ id: 'me', name: 'Me' }), teamKey: () => 'hub_team', channels: () => [{ id: CHANNEL, name: 'general' }],
+    MiaSpaceHost: { me: () => ({ id: selfId, name: 'Me' }), teamKey: () => 'hub_team', channels: () => [{ id: CHANNEL, name: 'general' }],
       activeChannelId: () => CHANNEL, toast: (text) => toasts.push(text), sharedSession: (active) => announced.push(active), send: async (id, text) => { sent.push(text); } },
   };
   const context = vm.createContext({ window, document: window.document, crypto, setInterval() { return 1; }, clearInterval() {},
@@ -32,7 +32,7 @@ async function sharedBar({ stored = new Map(), browserState = null } = {}) {
   const click = (attribute, value = '') => listeners.click({ target: { closest: () => ({ hasAttribute: (name) => name === attribute, getAttribute: () => value }) } });
   const model = window.MiaSharedSpace, ui = window.MiaSpaceUI;
   const spaceId = () => model.decode(sent[0]).space;
-  return { window, bar, sent, toasts, announced, commands, click, model, ui, spaceId, call, body: bodyClasses, sharing: () => /data-space-leave/.test(call.innerHTML), stored, publish: (next) => publish(next) };
+  return { window, bar, sent, toasts, announced, commands, click, model, ui, spaceId, call, body: bodyClasses, sharing: () => /data-space-leave/.test(call.innerHTML), stored, publish: (next) => { state = next; publish(next); } };
 }
 
 test('a spoofed end message from a teammate leaves the session open', async () => {
@@ -56,6 +56,7 @@ test('the Hub ending the session closes it for this person and says an admin did
   assert.equal(page.sharing(), false);
   assert.match(page.toasts[0], /An admin ended Launch/);
   assert.match(page.bar.innerHTML, /An admin ended Launch/);
+  await flush();
   assert.equal(page.model.decode(page.sent.at(-1)).t, 'leave', 'the Hub stops counting this person');
   page.click('data-space-dismiss');
   assert.doesNotMatch(page.bar.innerHTML, /An admin ended/);
@@ -90,8 +91,12 @@ test('the backend is told when a shared session starts and ends', async () => {
 });
 
 // A teammate's session, offered to this person: two pages, as the host sends them.
-const offer = (page, tabs = [{ k: 'aaaaaa01', url: 'https://a.com/', title: 'A' }, { k: 'aaaaaa02', url: 'https://b.com/', title: 'B' }], rev = 1) =>
+const joinPeer = (page, id, name = 'Teammate') =>
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'join', space: page.spaceId() }), author_id: id, author_type: 'user', author_name: name });
+const offer = (page, tabs = [{ k: 'aaaaaa01', url: 'https://a.com/', title: 'A' }, { k: 'aaaaaa02', url: 'https://b.com/', title: 'B' }], rev = 1) => {
+  if(page.sharing()) joinPeer(page, 'user_2');
   page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'space', space: 'feedfeedfeedfeed', name: 'Launch', rev, tabs }), author_id: 'user_2', author_type: 'user', author_name: 'Teammate' });
+};
 const opened = (page) => page.commands.filter((item) => item.action === 'spaceOpenTab').map((item) => item.url);
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -146,6 +151,87 @@ test('approve by page opens only what the person says yes to', async () => {
   assert.equal(opened(page).length, 1, 'a later page waits too');
   assert.match(page.bar.innerHTML, /c\.com/);
   assert.doesNotMatch(page.bar.innerHTML, /data-space-open="aaaaaa02"/, 'an ignored page stays ignored');
+});
+
+test('approve by page asks again when an opened tab moves to a new address', async () => {
+  const page = await sharedBar();
+  offer(page, [{ k: 'aaaaaa01', url: 'https://a.com/', title: 'A' }]);
+  page.click('data-space-approve', 'feedfeedfeedfeed');
+  page.click('data-space-open', 'aaaaaa01');
+  await flush();
+  const openIndex = page.commands.findIndex((item) => item.action === 'spaceOpenTab');
+  const local = { groups: [{ id: 'g2', name: 'Launch' }], selectedGroupId: 'g2',
+    tabs: [{ id: 'opened' + (openIndex + 1), groupId: 'g2', active: true, url: 'https://a.com/', title: 'A' }] };
+  page.publish(local);
+  offer(page, [{ k: 'aaaaaa01', url: 'https://b.com/', title: 'B' }], 2);
+  await flush();
+  assert.match(page.bar.innerHTML, /data-space-open="aaaaaa01"/);
+  assert.equal(page.commands.filter((item) => item.action === 'navigate').length, 0);
+  page.publish(local);
+  await flush();
+  assert.match(page.bar.innerHTML, /b\.com/, 'the old local page must not replace the new team address');
+  page.click('data-space-open', 'aaaaaa01');
+  await flush();
+  assert.equal(page.commands.filter((item) => item.action === 'navigate').at(-1).value, 'https://b.com/');
+  assert.match(page.bar.innerHTML, /data-space-open="aaaaaa01"/, 'approval stays pending until this computer reaches the new address');
+  page.publish({ ...local, tabs: [{ ...local.tabs[0], url: 'https://b.com/', title: 'B' }] });
+  assert.doesNotMatch(page.bar.innerHTML, /data-space-open="aaaaaa01"/);
+  offer(page, [{ k: 'aaaaaa01', url: 'https://c.com/', title: 'C' }], 3);
+  await flush();
+  assert.match(page.bar.innerHTML, /c\.com/, 'a third address needs its own choice');
+});
+
+test('only a joined human in this channel can send presence and live connection offers', async () => {
+  const page = await sharedBar();
+  const signaled = [], synced = [];
+  page.window.RTCPeerConnection = function() {};
+  page.window.MiaSpaceLive = { createMesh: () => ({signal: (...args) => signaled.push(args), sync: (ids) => synced.push(ids), close() {}, send() {}, openCount: () => 0}) };
+  page.click('data-space-share');
+  const id = page.spaceId(), marker = (t, extra = {}) => page.model.encode({t, space: id, ...extra});
+  const deliver = (author_id, author_type, t, extra) => page.ui.receive(CHANNEL, {body: marker(t, extra), author_id, author_type});
+  deliver('bot_1', 'bot', 'join');
+  deliver('user_2', 'user', 'here', {tab: null});
+  deliver('user_2', 'user', 'rtc', {to: 'me', sid: 's', kind: 'offer', sdp: 'fake'});
+  assert.deepEqual(signaled, []);
+  assert.equal(page.ui.followPeople().length, 0);
+  deliver('user_2', 'user', 'join');
+  deliver('user_2', 'user', 'here', {tab: null});
+  deliver('user_2', 'user', 'rtc', {to: 'me', sid: 's', kind: 'offer', sdp: 'fake'});
+  assert.equal(signaled.length, 1);
+  assert.equal(page.ui.followPeople().length, 1);
+  deliver('user_2', 'user', 'leave');
+  deliver('user_2', 'user', 'rtc', {to: 'me', sid: 's2', kind: 'offer', sdp: 'fake'});
+  assert.equal(signaled.length, 1, 'Leave revokes connection access');
+  assert.equal(page.ui.followPeople().length, 0);
+  assert.ok(synced.some((ids) => ids.length === 0), 'the peer connection is removed');
+});
+
+test('host and guest exchange authenticated Join records before presence', async () => {
+  const host = await sharedBar({ selfId: 'host' });
+  host.click('data-space-share');
+  await flush();
+  const guest = await sharedBar({ selfId: 'guest' });
+  const relay = (target, sender, message) => target.ui.receive(CHANNEL, {
+    body: sender.model.encode(message), author_id: sender === host ? 'host' : 'guest', author_type: 'user', author_name: 'Teammate'
+  });
+  const initial = host.sent.map((body) => host.model.decode(body)).find((message) => message.t === 'space');
+  relay(guest, host, initial);
+  guest.click('data-space-allow', host.spaceId());
+  await flush();
+  const guestJoin = guest.sent.map((body) => guest.model.decode(body)).find((message) => message.t === 'join');
+  assert.ok(guestJoin, 'Join is recorded before the guest advertises presence');
+  assert.equal(guest.model.decode(guest.sent[0]).t, 'join');
+  relay(host, guest, guestJoin);
+  await flush();
+  const reply = host.sent.map((body) => host.model.decode(body)).find((message) => message.t === 'join' && message.to === 'guest');
+  assert.ok(reply, 'the host records its own participation for the guest');
+  relay(guest, host, reply);
+  const guestHere = guest.sent.map((body) => guest.model.decode(body)).find((message) => message.t === 'here');
+  relay(host, guest, guestHere);
+  assert.equal(host.ui.followPeople().length, 1);
+  const hostHere = host.sent.map((body) => host.model.decode(body)).find((message) => message.t === 'here');
+  relay(guest, host, hostHere);
+  assert.equal(guest.ui.followPeople().length, 1);
 });
 
 test('approving by page: a teammate asking everyone to look cannot change the address', async () => {
@@ -263,15 +349,15 @@ test('a session has no Share a tab tile and its controls sit in the call bar', a
 
 test('Not now keeps an invite away until someone invites this person directly', async () => {
   const page = await sharedBar();
-  const space = (rev) => ({ body: page.model.encode({ t: 'space', space: 'abcdef012345', name: 'Launch', rev, tabs: [{ k: 'tab001', url: 'https://example.com/' }], from: { name: 'Ana' } }), author_id: 'ana', author_name: 'Ana' });
+  const space = (rev) => ({ body: page.model.encode({ t: 'space', space: 'abcdef012345', name: 'Launch', rev, tabs: [{ k: 'tab001', url: 'https://example.com/' }], from: { name: 'Ana' } }), author_id: 'ana', author_type: 'user', author_name: 'Ana' });
   page.ui.receive(CHANNEL, space(1));
   assert.match(page.bar.innerHTML, /data-space-join/);
   page.click('data-space-decline', 'abcdef012345');
   page.ui.receive(CHANNEL, space(2));
   assert.doesNotMatch(page.bar.innerHTML, /data-space-join/);
-  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'ring', space: 'abcdef012345', to: 'someone-else' }), author_id: 'ana' });
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'ring', space: 'abcdef012345', to: 'someone-else' }), author_id: 'ana', author_type: 'user' });
   assert.doesNotMatch(page.bar.innerHTML, /data-space-join/);
-  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'ring', space: 'abcdef012345', to: 'me', from: { name: 'Ana' } }), author_id: 'ana' });
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'ring', space: 'abcdef012345', to: 'me', from: { name: 'Ana' } }), author_id: 'ana', author_type: 'user' });
   assert.match(page.bar.innerHTML, /invited you to browse together/);
 });
 
@@ -293,6 +379,7 @@ test('the double chevron collapses the minimap and stays there to bring it back'
 test('a minimap tile follows its page title without sending an update', async () => {
   const page = await sharedBar();
   page.click('data-space-share');
+  await flush();
   const before = page.sent.length;
   page.publish({ groups: [{ id: 'g1', name: 'Launch' }], selectedGroupId: 'g1',
     tabs: [{ id: 't1', groupId: 'g1', active: true, url: 'https://example.com/', title: 'A later title' }] });
@@ -311,14 +398,23 @@ test('the Invite list closes when you click away, press Escape or click the page
 test('someone who joins hears at once where everyone is, and only once', async () => {
   const page = await sharedBar();
   page.click('data-space-share');
+  await flush();
   const before = page.sent.length;
   const body = page.model.encode({ t: 'here', space: page.spaceId(), tab: null, from: { id: 'user_ana', name: 'Ana' } });
   const hello = { body, author_id: 'user_ana', author_type: 'user', author_name: 'Ana' };
   page.ui.receive(CHANNEL, hello);
-  assert.equal(page.sent.length, before + 1);
+  assert.equal(page.sent.length, before, 'presence alone does not admit a teammate');
+  joinPeer(page, 'user_ana', 'Ana');
+  await flush();
+  assert.ok(page.sent.slice(before).some((text) => page.model.decode(text).t === 'join'), 'our Join is sent back to the new person');
+  const answered = page.sent.length;
+  page.ui.receive(CHANNEL, hello);
+  await flush();
+  assert.equal(page.sent.length, answered + 1);
   assert.equal(page.model.decode(page.sent.at(-1)).t, 'here');
   page.ui.receive(CHANNEL, hello);
-  assert.equal(page.sent.length, before + 1, 'a known person gets no answer, so two people cannot loop');
+  await flush();
+  assert.equal(page.sent.length, answered + 1, 'a known person gets no answer, so two people cannot loop');
 });
 
 test('Follow stays in the toolbar after clicking it, with nobody moving', async () => {
@@ -326,6 +422,7 @@ test('Follow stays in the toolbar after clicking it, with nobody moving', async 
   page.click('data-space-share');
   const tab = { groupId: 'g1' };
   assert.equal(page.ui.activity(tab), null, 'alone in the session there is nobody to follow');
+  joinPeer(page, 'user_ana', 'Ana');
   page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: null, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user' });
   const before = page.ui.activity(tab);
   assert.deepEqual([before.lead, before.rest, before.canFollow, before.following], ['Ana', ' is in this session', true, false]);
@@ -340,7 +437,7 @@ test('Follow stays in the toolbar after clicking it, with nobody moving', async 
 test('the Follow picker lists everyone here and switches who you follow', async () => {
   const page = await sharedBar();
   page.click('data-space-share');
-  const arrive = (id, name) => page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: null, from: { id, name } }), author_id: id, author_type: 'user' });
+  const arrive = (id, name) => { joinPeer(page, id, name); page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: null, from: { id, name } }), author_id: id, author_type: 'user' }); };
   arrive('user_ana', 'Ana');
   arrive('user_tom', 'Tom');
   assert.deepEqual(page.ui.followPeople().map((person) => [person.name, person.following]), [['Ana', false], ['Tom', false]]);
@@ -356,11 +453,13 @@ test('the Follow picker lists everyone here and switches who you follow', async 
 test('Back to Mia keeps you in the call: a pill to return, teammates see you away, Following waits', async () => {
   const page = await sharedBar();
   page.click('data-space-share');
+  joinPeer(page, 'user_ana', 'Ana');
   const ana = (tab) => page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab, url: 'https://example.com/' + tab, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user' });
   ana(null);
   page.ui.followPerson('user_ana');
   page.body.delete('browser-collab-mode');
   page.ui.render();
+  await flush();
   assert.equal(page.body.has('mia-call-zoomed'), false);
   assert.match(page.call.innerHTML, /data-space-return/);
   assert.doesNotMatch(page.call.innerHTML, /data-space-leave/);
@@ -373,6 +472,7 @@ test('Back to Mia keeps you in the call: a pill to return, teammates see you awa
   assert.equal(selects(), before, 'following pauses while you are out');
   page.body.add('browser-collab-mode');
   page.ui.render();
+  await flush();
   assert.equal(page.body.has('mia-call-zoomed'), true);
   assert.match(page.call.innerHTML, /data-space-leave/);
   const back = page.sent.map((body) => page.model.decode(body)).filter((message) => message && message.t === 'here').at(-1);
@@ -384,6 +484,7 @@ test('Back to Mia keeps you in the call: a pill to return, teammates see you awa
 test('a teammate who stepped out shows as away in the bar', async () => {
   const page = await sharedBar();
   page.click('data-space-share');
+  joinPeer(page, 'user_ana', 'Ana');
   page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: null, away: true, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user' });
   page.ui.render();
   assert.match(page.call.innerHTML, /mia-space-person away/);
@@ -416,6 +517,7 @@ test('only the person you follow moves your page', async () => {
   page.click('data-space-share');
   const tab = page.model.decode(page.sent[0]).tabs[0].k;
   for (const [id, name] of [['user_ana', 'Ana'], ['user_tom', 'Tom']]) {
+    joinPeer(page, id, name);
     page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab, url: 'https://example.com/', from: { id, name } }), author_id: id, author_type: 'user' });
   }
   const scrolls = () => page.commands.filter((command) => command.action === 'spaceScroll');

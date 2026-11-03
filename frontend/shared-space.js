@@ -165,7 +165,7 @@
   // get a key, closed ones drop out, and pages keep their latest address.
   // With `keepUnopened`, tabs this person has not opened stay in the list, in
   // their place: not approving a page must not remove it for everyone.
-  function localTabList(space, links, groupTabs, makeKey, keepUnopened){
+  function localTabList(space, links, groupTabs, makeKey, keepUnopened, approved, opening){
     var byLocal = {};
     Object.keys(links).forEach(function(key){ byLocal[links[key]] = key; });
     var previous = {};
@@ -176,7 +176,17 @@
       var key = byLocal[tab.id];
       if(!key){ if(!url) return; key = makeKey(); }
       nextLinks[key] = tab.id;
-      list.push({k: key, url: url || (previous[key] && previous[key].url) || '', title: String(tab.title || '').slice(0, 200)});
+      // In page-approval mode, a remote address may be waiting while this
+      // computer is still showing the last approved address. Do not publish
+      // that old address back to the team and undo their navigation.
+      if(keepUnopened && previous[key] && (
+        (approved && approved[key] === url && previous[key].url !== url) ||
+        (opening && opening[key] && opening[key] !== url)
+      )){
+        list.push(previous[key]);
+      } else {
+        list.push({k: key, url: url || (previous[key] && previous[key].url) || '', title: String(tab.title || '').slice(0, 200)});
+      }
     });
     if(keepUnopened) (space ? space.tabs : []).forEach(function(tab, index){
       if(!links[tab.k]) list.splice(Math.min(index, list.length), 0, tab);
@@ -194,8 +204,10 @@
     return {links: links, strays: (groupTabs || []).filter(function(local){ return !used[local.id]; }).map(function(local){ return local.id; })};
   }
   // Pages waiting for this person's answer: in the space, not open here, not ignored.
-  function pendingPages(space, links, ignored){
-    return (space ? space.tabs : []).filter(function(tab){ return tab.url && !links[tab.k] && !ignored[tab.k]; });
+  function pendingPages(space, links, ignored, approved){
+    return (space ? space.tabs : []).filter(function(tab){
+      return tab.url && (!links[tab.k] || !approved || approved[tab.k] !== tab.url) && (!ignored || ignored[tab.k] !== tab.url);
+    });
   }
   function sameTabs(a, b){
     if(a.length !== b.length) return false;

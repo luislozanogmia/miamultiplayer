@@ -41,7 +41,17 @@ test('a page this person has not opened stays in the space for everyone', () => 
   const kept = space.localTabList(s, links, local, () => 'x', true);
   assert.ok(space.sameTabs(s.tabs, kept.tabs), 'same list and order, so no update goes out');
   assert.deepEqual(space.localTabList(s, links, local, () => 'x').tabs.map((tab) => tab.k), ['aaaaaa02'], 'without it, unopened tabs drop');
-  assert.deepEqual(space.pendingPages(s, links, { aaaaaa03: true }).map((tab) => tab.k), ['aaaaaa01']);
+  assert.deepEqual(space.pendingPages(s, links, { aaaaaa03: 'https://c.com/' }, { aaaaaa02: 'https://b.com/' }).map((tab) => tab.k), ['aaaaaa01']);
+});
+
+test('a new address in an already approved tab waits, without reverting the team page', () => {
+  const k = 'aaaaaa01', old = 'https://example.test/old', changed = 'https://example.test/new';
+  const session = { tabs: [{ k, url: changed, title: 'New' }] };
+  const links = { [k]: 'local-tab' }, approved = { [k]: old };
+  assert.deepEqual(space.pendingPages(session, links, {}, approved).map((tab) => tab.url), [changed]);
+  assert.deepEqual(space.localTabList(session, links, [{ id: 'local-tab', url: old, title: 'Old' }], () => 'unused', true, approved).tabs, session.tabs);
+  assert.deepEqual(space.pendingPages(session, links, { [k]: changed }, approved), [], 'ignore applies only to this address');
+  assert.deepEqual(space.pendingPages({ tabs: [{ k, url: 'https://example.test/next' }] }, links, { [k]: changed }, approved).map((tab) => tab.url), ['https://example.test/next']);
 });
 
 test('the tab list settles on the same version everywhere', () => {
