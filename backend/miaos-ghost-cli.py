@@ -44,6 +44,9 @@ SUPPORTED_METHODS = {
     "ghost_group_move_tab": "group_move_tab",
     "ghost_group_remove": "group_remove",
     "ghost_work_propose": "work_propose",
+    "ghost_work_start": "work_start",
+    "ghost_work_status": "work_status",
+    "ghost_work_results": "work_results",
     "ghost_downloads": "downloads",
 }
 

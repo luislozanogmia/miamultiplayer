@@ -10,8 +10,8 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "dev_mode.sh currently supports macOS local development." >&2
+if [[ "$(uname -s)" != "Darwin" && "$(uname -s)" != "Linux" ]]; then
+  echo "dev_mode.sh supports macOS and Linux local development." >&2
   exit 1
 fi
 
@@ -98,6 +98,14 @@ if [[ ! -x "$runtime_root/hermes/hermes-agent/hermes" ]]; then
   fi
   echo "Installing dev mode's own Hermes and Ghost into $runtime_root (first run only)…"
   bash "$script_dir/provision-dev-runtime.sh" "$runtime_root"
+fi
+
+# Linux has no other source for the Google Workspace CLI dev mode requires.
+if [[ "$(uname -s)" == "Linux" && "$runtime_root" == "$default_runtime_root" \
+      && -z "${MIA_DEV_GWS_BIN:-}" && ! -x "$runtime_root/gws/gws" ]] \
+    && ! command -v gws >/dev/null 2>&1; then
+  echo "Installing the pinned Google Workspace CLI into $runtime_root (first run only)…"
+  bash "$script_dir/provision-dev-gws.sh" "$runtime_root"
 fi
 
 # Claim the root for this checkout so the next dev launch (from any checkout)

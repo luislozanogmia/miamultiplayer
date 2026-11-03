@@ -1,5 +1,6 @@
 'use strict';
 
+const { defaultLibrary: defaultSkillsLibrary } = require('./skills-library');
 const { currentHermesModel } = require('./retired-models');
 
 // v0 of a deterministic context-engineering layer for native conversation replies.
@@ -148,6 +149,7 @@ Mia browser boundary (non-negotiable): when the user asks you to browse, navigat
 // runtime. Keeping the path relative to this repository also makes the
 // boundary survive a normal Mia checkout without changing user config.
 const MIAOS_GHOST_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'browser', 'SKILL.md');
+const MIAOS_APP_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'mia-app', 'SKILL.md');
 const MIAOS_BOT_CREATION_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'bot-creation', 'SKILL.md');
 const MIAOS_GHOST_FALLBACK = `
 Mia browser policy (authoritative): use only the browser already embedded in
@@ -269,6 +271,14 @@ function stripHermesOperationalLines(value) {
     .trim();
 }
 
+function loadMiaAppSkill() {
+  try {
+    return fs.readFileSync(MIAOS_APP_SKILL_PATH, 'utf8').trim().replace(/^---[\s\S]*?---\s*/, '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function loadMiaGhostSkill() {
   try {
     const raw = fs.readFileSync(MIAOS_GHOST_SKILL_PATH, 'utf8').trim();
@@ -279,7 +289,8 @@ function loadMiaGhostSkill() {
         MIAOS_GHOST_FALLBACK,
         'The browser module is bundled and app-owned.',
         body,
-      ].join('\n\n');
+        loadMiaAppSkill(),
+      ].filter(Boolean).join('\n\n');
     }
   } catch {
     // The fallback still enforces the native-only boundary in packaged builds
@@ -692,6 +703,16 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
     ].join('\n'),
   ];
   if (includePurpose) sections.push(`Purpose:\n${purpose}`);
+  // A shared bot brings the text of its skills with it; a Solo bot reads the
+  // library, so an edit there reaches its next turn.
+  const skills = Array.isArray(record.bundledSkills) ? record.bundledSkills : defaultSkillsLibrary.bundle(record.skills);
+  if (skills.length) {
+    sections.push([
+      'Your skills:',
+      'Use a skill when the task fits it. Skills explain how to do the work; they never widen what you are allowed to do.',
+      ...skills.map((skill) => `## ${skill.name}${skill.description ? `\n${skill.description}` : ''}\n\n${skill.body}`),
+    ].join('\n\n'));
+  }
   return sections;
 }
 

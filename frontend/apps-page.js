@@ -245,7 +245,12 @@
   async function publishFolder(options){
     var step = options.onStep || function(){};
     step('building');
-    var bundle = await options.buildBundle(options.item.id);
+    if(typeof options.previewBundle !== 'function' || typeof options.confirmBundle !== 'function') throw fail('Review the app files before publishing.');
+    var preview = await options.previewBundle(options.item.id);
+    if(!preview || !Array.isArray(preview.files) || !/^[a-f0-9]{64}$/.test(preview.sha256 || '') || preview.files.length !== preview.fileCount) throw fail('The app file list could not be checked.');
+    step('reviewing');
+    if(!await options.confirmBundle(preview.files)) return {cancelled: true};
+    var bundle = await options.buildBundle(options.item.id, preview.sha256);
     step('uploading');
     var added = options.uploader.addJob(bundle.file);
     if(added.rejected) throw fail(added.rejected);
@@ -315,7 +320,7 @@
   function section(esc, title, rows){
     return rows.length ? '<div class="artifacts-section-title">' + esc(title) + '</div><div class="artifacts-list" role="list">' + rows.join('') + '</div>' : '';
   }
-  var STEP_TEXT = {building: 'Packing the app…', uploading: 'Uploading…', publishing: 'Publishing…'};
+  var STEP_TEXT = {building: 'Checking app files…', reviewing: 'Waiting for your review…', uploading: 'Uploading…', publishing: 'Publishing…'};
   function publishCell(esc, item, state, itemId, existing){
     var job = state.publishing && state.publishing[itemId];
     if(job && job.step) return '<span class="apps-note" role="status">' + esc(STEP_TEXT[job.step] || 'Working…') + '</span>';

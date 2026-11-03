@@ -901,7 +901,7 @@ test("closing a window explicitly releases both artifact renderer views", () => 
 test("desktop state permits only scoped chat selection and browser-open state", () => {
   const source = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
   assert.match(source, /normalized === "miaBrowserOpen"/);
-  assert.match(source, /\^miaChatActive:/);
+  assert.match(source, /\^\(miaChatActive\|miaAgentChats\):/);
   assert.match(source, /windowNativeBrowser\.prepareToClose\(\)/);
   assert.match(source, /new Promise\(resolve => setTimeout\(resolve, 1000\)\)/);
 });

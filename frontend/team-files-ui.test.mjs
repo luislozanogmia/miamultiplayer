@@ -147,7 +147,7 @@ test('the panel loads usage and files, downloads with a hash check, deletes with
     calls.push(method + ' ' + path);
     if (path.endsWith('/files/usage')) return { usedBytes: 3, quotaBytes: 100000000000 };
     if (path.includes('/file-spaces/')) return { files: listed, nextCursor: null };
-    if (path.endsWith('/download')) return { fileId: ID(1), url: `https://mia-hub-files-123456789012-${TEAM}.s3.us-east-1.amazonaws.com/spaces/${SPACE}/${ID(1)}?X=1`, sha256: hash, expiresIn: 300 };
+    if (path.endsWith('/download')) return { fileId: ID(1), url: `https://test-storage-${TEAM}.s3.us-east-1.amazonaws.com/spaces/${SPACE}/${ID(1)}?X=1`, storageOrigin: `https://test-storage-${TEAM}.s3.us-east-1.amazonaws.com`, sha256: hash, expiresIn: 300 };
     return {};
   };
   globalThis.fetch = async () => ({ ok: true, body: { getReader: () => { let sent = false; return { read: async () => (sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array(bytes) })), cancel() {} }; } } });

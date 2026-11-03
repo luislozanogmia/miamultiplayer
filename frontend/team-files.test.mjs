@@ -7,7 +7,8 @@ const require = createRequire(import.meta.url);
 const tf = require('./team-files.js');
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const TEAM = 'a'.repeat(32), SPACE = 'b'.repeat(32), FILE = 'c'.repeat(32);
-const HOST = `mia-hub-files-123456789012-${TEAM}.s3.us-east-1.amazonaws.com`;
+const HOST = `test-storage-${TEAM}.s3.us-east-1.amazonaws.com`;
+const ORIGIN = `https://${HOST}`;
 const link = (file = FILE, space = SPACE) => `https://${HOST}/spaces/${space}/${file}?X-Amz-Signature=abc&X-Amz-Expires=300`;
 
 test('part maths follows the Hub: 8,000,000-byte parts, a shorter last part, a 500,000,000-byte ceiling', () => {
@@ -65,17 +66,17 @@ test('checksum header is the part hash in base64', () => {
   assert.equal(tf.checksumBase64(sha(bytes)), createHash('sha256').update(bytes).digest('base64'));
 });
 
-test('signed links must be https, the team bucket, and this file key; anything else is refused', () => {
-  const expected = { teamId: TEAM, spaceId: SPACE, fileId: FILE };
+test('signed links must match the Hub-provided storage origin and this file key', () => {
+  const expected = { teamId: TEAM, spaceId: SPACE, fileId: FILE, storageOrigin: ORIGIN };
   assert.equal(tf.validateS3Url(link(), expected), link());
   const bad = [
     link().replace('https:', 'http:'),
     `https://evil.example/spaces/${SPACE}/${FILE}`,
     `https://${HOST}.evil.example/spaces/${SPACE}/${FILE}`,
     `https://evil-${HOST}/spaces/${SPACE}/${FILE}`,
-    `https://mia-hub-files-123456789012-${'f'.repeat(32)}.s3.us-east-1.amazonaws.com/spaces/${SPACE}/${FILE}`,
+    `https://test-storage-${'f'.repeat(32)}.s3.us-east-1.amazonaws.com/spaces/${SPACE}/${FILE}`,
     `https://${HOST.replace('us-east-1', 'eu-west-1')}/spaces/${SPACE}/${FILE}`,
-    `https://s3.us-east-1.amazonaws.com/mia-hub-files-123456789012-${TEAM}/spaces/${SPACE}/${FILE}`,
+    `https://s3.us-east-1.amazonaws.com/test-storage-${TEAM}/spaces/${SPACE}/${FILE}`,
     `https://other-bucket.s3.us-east-1.amazonaws.com/spaces/${SPACE}/${FILE}`,
     `https://user:pw@${HOST}/spaces/${SPACE}/${FILE}`,
     `https://${HOST}:8443/spaces/${SPACE}/${FILE}`,
@@ -90,6 +91,8 @@ test('signed links must be https, the team bucket, and this file key; anything e
   for (const url of bad) assert.throws(() => tf.validateS3Url(url, expected), { code: 'unsafe_url' }, String(url).slice(0, 80));
   assert.throws(() => tf.validateS3Url(link(), { teamId: 'nope', spaceId: SPACE, fileId: FILE }), { code: 'unsafe_url' });
   assert.throws(() => tf.validateS3Url(link(), { teamId: TEAM, spaceId: SPACE }), { code: 'unsafe_url' });
+  assert.throws(() => tf.validateS3Url(link(), { ...expected, storageOrigin: 'https://other-bucket.s3.us-east-1.amazonaws.com' }), { code: 'unsafe_url' });
+  assert.throws(() => tf.validateS3Url(link(), { ...expected, storageOrigin: 'https://user:pass@' + HOST }), { code: 'unsafe_url' });
 });
 
 test('upload headers: the checksum must be ours, forbidden headers are dropped, unknown ones refused', () => {
@@ -212,7 +215,7 @@ function fakeWorld({ size = 17000001, partBehaviour = () => 200, uploadsDisabled
     },
     signParts: async (id, parts) => {
       world.hub.push(['parts', parts.map(p => p.number)]);
-      return parts.map(p => ({ number: p.number, url: link(), sizeBytes: p.sizeBytes,
+      return parts.map(p => ({ number: p.number, url: link(), storageOrigin: ORIGIN, sizeBytes: p.sizeBytes,
         headers: { 'content-length': String(p.sizeBytes), 'x-amz-checksum-sha256': tf.checksumBase64(p.sha256) } }));
     },
     complete: async (id, parts) => { world.hub.push(['complete', parts]); return { fileId: id, scanStatus: 'PENDING' }; },
@@ -459,7 +462,7 @@ test('a download checks the link, streams the bytes, and verifies the whole-file
   const bytes = randomBytes(1234);
   const file = { fileId: FILE, spaceId: SPACE, sha256: sha(bytes), sizeBytes: bytes.length };
   const fetched = [];
-  const client = { teamId: TEAM, download: async () => ({ fileId: FILE, url: link(), sha256: sha(bytes), expiresIn: 300 }) };
+  const client = { teamId: TEAM, download: async () => ({ fileId: FILE, url: link(), storageOrigin: ORIGIN, sha256: sha(bytes), expiresIn: 300 }) };
   const blob = await tf.downloadFile({ client, file, fetch: async (url, init) => { fetched.push([url, init.credentials]); return { ok: true, body: streamOf(bytes) }; } });
   assert.deepEqual(Buffer.from(await blob.arrayBuffer()), bytes);
   assert.deepEqual(fetched, [[link(), 'omit']]);
@@ -471,7 +474,7 @@ test('a download checks the link, streams the bytes, and verifies the whole-file
   await assert.rejects(tf.downloadFile({ client, file, fetch: async () => ({ ok: true, body: streamOf(bytes.subarray(0, 10)) }) }), { code: 'integrity_failed' });
   await assert.rejects(tf.downloadFile({ client, file: { ...file, sha256: 'd'.repeat(64) }, fetch: async () => { throw new Error('should not fetch'); } }), { code: 'integrity_failed' });
   // A link for a different team or file is never fetched.
-  const wrong = { teamId: TEAM, download: async () => ({ url: link('d'.repeat(32)), sha256: sha(bytes) }) };
+  const wrong = { teamId: TEAM, download: async () => ({ url: link('d'.repeat(32)), storageOrigin: ORIGIN, sha256: sha(bytes) }) };
   await assert.rejects(tf.downloadFile({ client: wrong, file, fetch: async () => { throw new Error('should not fetch'); } }), { code: 'unsafe_url' });
   await assert.rejects(tf.downloadFile({ client, file, fetch: async () => ({ ok: false, status: 403 }) }), { code: 'download_failed' });
 });

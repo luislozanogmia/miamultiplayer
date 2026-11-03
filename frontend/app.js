@@ -353,7 +353,8 @@
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
     });
   }
-  function appConfirm(message, confirmLabel){
+  function appConfirm(message, confirmLabel, options){
+    options = options || {};
     return new Promise(function(resolve){
       var previousFocus = document.activeElement;
       var overlay = document.createElement('div');
@@ -370,6 +371,12 @@
       copy.className = 'app-confirm-msg';
       copy.id = 'appConfirmMessage';
       copy.textContent = String(message || 'Are you sure?');
+      if(options.fileList){
+        card.style.maxWidth = '560px';
+        copy.style.whiteSpace = 'pre-wrap';
+        copy.style.maxHeight = '60vh';
+        copy.style.overflowY = 'auto';
+      }
 
       var actions = document.createElement('div');
       actions.className = 'app-confirm-actions';
@@ -408,7 +415,7 @@
       confirm.addEventListener('click', function(){ finish(true); });
       overlay.addEventListener('click', function(event){ if(event.target === overlay) finish(false); });
       document.addEventListener('keydown', onKeydown);
-      confirm.focus();
+      (options.fileList ? cancel : confirm).focus();
     });
   }
   function appPrompt(initialText, options){
@@ -1741,6 +1748,8 @@
   // client-side only; every field keeps its id so the save handlers below
   // are untouched by the layout.
   function showSettingsPane(name){
+    if(name === 'skills') refreshSkillsPane();
+    if(name === 'mia') loadMiaAppPane();
     els('#settingsNav .styled-settings-nav-item').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-pane') === name);
     });
@@ -1750,6 +1759,59 @@
     var content = el('#settingsContent');
     if(content) content.scrollTop = 0;
   }
+  // Settings > Mia: which proposals run without a card, and what Mia did.
+  function loadMiaAppPane(){
+    api('/api/mia-app/trust').then(function(res){
+      els('[data-mia-trust]').forEach(function(box){ box.checked = !!(res.data.trust && res.data.trust[box.getAttribute('data-mia-trust')]); });
+    }).catch(function(){});
+    api('/api/mia-app/activity').then(function(res){
+      var list = el('#miaActivityList');
+      if(!list) return;
+      var items = (res.data && res.data.activity) || [];
+      list.innerHTML = items.length ? items.map(function(item){
+        return '<div class="styled-settings-row"><div><div class="styled-settings-row-label">' + esc(item.summary) + '</div><div class="styled-settings-row-desc">' +
+          esc(new Date(item.at).toLocaleString()) + (item.via === 'accepted' ? ' · you accepted' : item.via === 'trusted' ? ' · without asking' : '') + (item.undoneAt ? ' · undone' : '') + '</div></div>' +
+          (item.canUndo ? '<button type="button" class="styled-settings-pill-btn" data-mia-undo="' + esc(item.id) + '">Undo</button>' : '') + '</div>';
+      }).join('') : '<div class="styled-settings-row-desc">Nothing yet.</div>';
+    }).catch(function(){});
+  }
+  document.addEventListener('change', function(e){
+    var box = e.target.closest && e.target.closest('[data-mia-trust]');
+    if(!box) return;
+    var body = {};
+    body[box.getAttribute('data-mia-trust')] = box.checked;
+    api('/api/mia-app/trust', {method: 'POST', body: body}).then(loadMiaAppPane, loadMiaAppPane);
+  });
+  document.addEventListener('click', function(e){
+    var undo = e.target.closest && e.target.closest('[data-mia-undo]');
+    if(undo){
+      undo.disabled = true;
+      api('/api/mia-app/activity/' + encodeURIComponent(undo.getAttribute('data-mia-undo')) + '/undo', {method: 'POST', body: {}}).then(function(res){
+        if(res.status !== 200) showBenchToast((res.data && res.data.error) || 'That could not be undone.');
+        loadMiaAppPane();
+      }, loadMiaAppPane);
+      return;
+    }
+    var decision = e.target.closest && e.target.closest('[data-mia-app-decision]');
+    var card = decision && decision.closest('[data-mia-app-card]');
+    if(!card) return;
+    var eventId = card.getAttribute('data-mia-app-card');
+    var state = miaAppCardStates[eventId] = {busy: true, error: ''};
+    renderChatThread();
+    api('/api/mia-app/proposals/' + encodeURIComponent(eventId), {method: 'POST', body: {decision: decision.getAttribute('data-mia-app-decision')}}).then(function(res){
+      state.busy = false;
+      if(res.data && res.data.result && res.data.result.clientAction === 'installTeamApp'){
+        installTeamVersion(res.data.result.teamId, res.data.result.appId, res.data.result.version, false).catch(function(){ showBenchToast('That app could not be installed.'); });
+      }
+      if(res.data && res.data.event){ delete miaAppCardStates[eventId]; applyNativeEvent(res.data.event); return; }
+      state.error = (res.data && res.data.error) || 'That didn’t work. Try again.';
+      renderChatThread();
+    }, function(){
+      state.busy = false;
+      state.error = 'That didn’t work. Try again.';
+      renderChatThread();
+    });
+  });
   function renderSettingsAccount(){
     var avatar = el('#settingsAcctAvatar'), name = el('#settingsAcctName'), email = el('#settingsAcctEmail');
     if(!avatar || !currentUser) return;
@@ -2961,7 +3023,7 @@
       state: stateMap[a.status] || 'watch', model: a.model, isBuiltin: a.builtin === true,
       agentId: a.builtin === true ? a.id : null,
       updatedAt: a.updatedAt, createdAt: a.createdAt,
-      runs: '—', last: 'never run', instructions: a.instructions,
+      runs: '—', last: 'never run', instructions: a.instructions, skills: a.skills,
       instructionsRevision: a.instructionsRevision,
       departments: departments, avatarColor: normalizeAgentAvatarColor(a.avatarColor)
     };
@@ -3777,6 +3839,7 @@
       '</div>' +
       '<div class="styled-agent-edit-body">' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">BRIEF</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="Brief information" title="Brief information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot brief"></textarea></section>' +
+        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SKILLS</span></div>' + skillPickerHtml('styledAgentEditSkills', editState.skills) + '</section>' +
         styledAgentAutomationMarkup(a) +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">WORKPLACES</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditWorkplacesInfo" aria-label="Workplaces information" title="Workplaces information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditWorkplacesInfo" role="tooltip">The workplace this bot belongs to. In multiplayer you can share it with the people in your workplace.</span></span></div><div class="styled-agent-edit-select styled-agent-edit-workspace" id="styledAgentEditWorkspace">' + esc(workspaceLabel()) + '</div></section>' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">AVATAR COLOR</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditAvatarInfo" aria-label="Avatar color information" title="Avatar color information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditAvatarInfo" role="tooltip">Automatic follows the bot identity.</span></span></div><div class="styled-agent-edit-color-control"><div class="styled-agent-color-options" id="styledAgentEditColorOptions" role="group" aria-label="Bot avatar color">' + colorMarkup + '</div></div></section>' +
@@ -3969,7 +4032,7 @@
     var currentDepts = agentDepartments(a);
     editState = {
       agentId: id, isBuiltin: a.isBuiltin, name: a.name,
-      instructions: text, instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
+      instructions: text, skills: Array.isArray(a.skills) ? a.skills.slice() : [], instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
       departments: currentDepts.length ? currentDepts.slice() : guessDepartmentsFor(text),
       avatarColor: normalizeAgentAvatarColor(a.avatarColor),
       suggestion: suggestedInstructionsFor(text), suggestDismissed: false,
@@ -4020,6 +4083,7 @@
     // cannot overwrite the current model or require a connected provider.
     var body = {name: name, instructions: instructions, expectedInstructionsRevision: editState.instructionsRevision, avatarColor: editState.avatarColor || null};
     if(!styledEditOpen) body.model = model;
+    if(skillsLibrary) body.skills = (editState.skills || []).filter(function(id){ return skillsLibrary.skills.some(function(skill){ return skill.id === id; }); });
     api('/api/bots/' + targetId, {method:'PUT', body:body}).then(function(res){
       if(res.status === 200) reopenAndClose();
       else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
@@ -5123,12 +5187,15 @@
       applyNativeConversationList(results[1]);
     }).catch(function(){});
   }
-  // A bot's main chat in this team, made the first time you open it.
+  // The chat you last had open with a bot in this team, else its main chat,
+  // made the first time you open it.
   function openTeamBotChat(bot){
-    var existing=(chatWs.nativeConversations||[]).filter(function(conversation){
-      var metadata=conversation.metadata||{};
-      return metadata.botId===bot.id && metadata.conversationMode!=='fresh';
-    })[0];
+    var lastChat=rememberedAgentChats()[bot.id];
+    var botChats=(chatWs.nativeConversations||[]).filter(function(conversation){
+      return (conversation.metadata||{}).botId===bot.id;
+    });
+    var existing=botChats.filter(function(conversation){ return conversation.id===lastChat; })[0]
+      || botChats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0];
     if(existing)return loadChatRoom(existing.id,'agent',bot.name);
     var workspace=activeWorkspaceKey;
     return api('/api/conversations?workspace=solo',{method:'POST',body:{type:'bot',name:bot.name,
@@ -6049,6 +6116,40 @@
     try { return localStorage.getItem(key) || ''; } catch(_activeChatStorageError) { return ''; }
   }
 
+  // The chat you last had open with Mia or each bot. Their sidebar row opens
+  // it, so a "New conversation" stays where you are until you pick another
+  // one from History.
+  function agentChatsStorageKey(){
+    return 'miaAgentChats:' + String(currentUser || 'preview').toLowerCase() + ':' + activeWorkspaceKey;
+  }
+  function rememberedAgentChats(){
+    var key = agentChatsStorageKey(), raw = '';
+    try {
+      if(window.miaDesktop && window.miaDesktop.state && typeof window.miaDesktop.state.get === 'function') raw = window.miaDesktop.state.get(key) || '';
+    } catch(_agentChatsDesktopStateError) {}
+    try { raw = raw || localStorage.getItem(key) || ''; } catch(_agentChatsStorageError) {}
+    try { return JSON.parse(raw) || {}; } catch(_agentChatsParseError) { return {}; }
+  }
+  function agentChatOwnerId(conversation){
+    if(isNativeMiaConversation(conversation)) return 'gateway';
+    var metadata = conversation && conversation.metadata || {};
+    return conversation && conversation.type === 'bot' && metadata.botId ? String(metadata.botId) : null;
+  }
+  function rememberAgentChat(roomId){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+    var ownerId = agentChatOwnerId(conversation);
+    if(!ownerId) return;
+    var chats = rememberedAgentChats();
+    chats[ownerId] = roomId;
+    var key = agentChatsStorageKey(), value = JSON.stringify(chats);
+    try {
+      if(window.miaDesktop && window.miaDesktop.state && typeof window.miaDesktop.state.set === 'function') window.miaDesktop.state.set(key, value);
+    } catch(_agentChatsDesktopStateError) {}
+    try { localStorage.setItem(key, value); } catch(_agentChatsStorageError) {}
+    var agent = ownerId === 'gateway' ? chatWs.gatewayAgent : (chatWs.allAgents || []).filter(function(item){ return String(item.id) === ownerId; })[0];
+    if(agent){ agent.roomId = roomId; agent.nativeConversationId = roomId; agent.conversationId = roomId; }
+  }
+
   function restorableNativeConversation(conversations, roomId){
     if(!roomId || !Array.isArray(conversations)) return null;
     return conversations.filter(function(conversation){
@@ -6573,8 +6674,13 @@
     // A personal agent's chat is neither Mia nor a bot; its own sidebar list opens it.
     var agentRooms = rooms.filter(function(room){ return room.kind === 'agent' && !(typeof window !== 'undefined' && window.miaPrivateAgents && window.miaPrivateAgents.isConversation(room.nativeConversation)); });
     var seenBotRooms = {};
-    // A bot's sidebar row is its main chat; chats started with "New
-    // conversation" live in History and only stand in when nothing else exists.
+    // A bot's sidebar row opens the chat you last had open with it, else its
+    // main chat; chats started with "New conversation" live in History and only
+    // stand in when nothing else exists.
+    var agentChats = rememberedAgentChats();
+    function currentAgentRoom(main, ownerId, candidates){
+      return candidates.filter(function(room){ return room.id === agentChats[ownerId]; })[0] || main;
+    }
     var uniqueBotRooms = agentRooms.filter(function(room){ return !isNativeMiaConversation(room.nativeConversation); })
       .sort(function(left, right){
         var leftFresh = left.metadata && left.metadata.conversationMode === 'fresh' ? 1 : 0;
@@ -6587,24 +6693,30 @@
         seenBotRooms[key] = true;
         return true;
       });
-    chatWs.allAgents = uniqueBotRooms.map(function(room){
+    chatWs.allAgents = uniqueBotRooms.map(function(main){
+      var ownerId = String(main.agentId || main.id);
+      var room = currentAgentRoom(main, ownerId, agentRooms.filter(function(item){
+        return !isNativeMiaConversation(item.nativeConversation) && String(item.agentId || item.id) === ownerId;
+      }));
       return {
-        id: room.agentId || room.id,
-        name: room.name,
+        id: main.agentId || main.id,
+        name: main.name,
         roomId: room.roomId,
         conversationId: room.conversationId,
         nativeConversationId: room.id,
-        departments: room.metadata.departments || []
+        departments: main.metadata.departments || []
       };
     });
     if(Array.isArray(chatWs.botRecords) && chatWs.botRecords.length) syncChatBotRecords(chatWs.botRecords);
-    // Mia's sidebar row is her original chat; chats started with "New
-    // conversation" (conversationMode 'fresh') live in History, like bots'.
+    // Mia's row works the same way: the chat you last had open, else her
+    // original chat. "New conversation" chats (conversationMode 'fresh') live
+    // in History, like bots'.
     var miaRooms = agentRooms.filter(function(room){ return isNativeMiaConversation(room.nativeConversation); });
     var mia = miaRooms.filter(function(room){
       var metadata = room.nativeConversation && room.nativeConversation.metadata || {};
       return metadata.conversationMode !== 'fresh';
     })[0] || miaRooms[0];
+    if(mia) mia = currentAgentRoom(mia, 'gateway', miaRooms);
     chatWs.gatewayAgent = mia ? {id:'gateway', name:mia.name || 'Mia', roomId:mia.roomId, conversationId:mia.id, manager:true, department:'Mia'} : null;
     chatWs.allDepartments = chatWs.rooms.departments.map(function(room){ return room.department; });
     chatWs.humans = [];
@@ -6666,6 +6778,7 @@
   // Unfinished setups that are not on screen, one per starter bot ('' is a
   // plain New Bot), so leaving a setup and coming back restores what was
   // typed and answered.
+  var MAX_BOT_BRIEF_CHARS = 100000;
   var agentSetupResume = {};
   var AGENT_SETUP_UNFINISHED = {intent:true, interpreting:true, review:true, activating:true};
   function agentSetupKey(template){ return template && template.name ? String(template.name) : ''; }
@@ -8711,16 +8824,26 @@
       publishing = window.MiaAppsPage.publishFolder({call: hubCall, teamId: teamId, existing: existing, newId: newAppsId, item: folder, onStep: setStep,
         client: window.MiaTeamFiles.createClient({teamId: teamId, call: hubCall}), uploader: appsUploader(teamId), verdict: window.MiaTeamFiles.scanVerdict,
         sleep: function(ms){ return new Promise(function(done){ window.setTimeout(done, ms); }); },
-        buildBundle: function(appId){
-          return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name})}).then(function(res){
+        previewBundle: function(appId){
+          return api('/api/apps/local/preview', {method: 'POST', body: {id: appId, name: folder.name}}).then(function(res){
+            if(res.status !== 200) throw new Error(res.data.message || 'That app could not be checked.');
+            return res.data;
+          });
+        },
+        confirmBundle: function(files){
+          return appConfirm('Publish these ' + files.length + ' files to the team?\n\n' + files.join('\n'), 'Publish files', {fileList: true});
+        },
+        buildBundle: function(appId, sha256){
+          return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name, sha256: sha256})}).then(function(res){
             if(res.status !== 200) return res.json().catch(function(){ return {}; }).then(function(data){ throw new Error(data.message || 'That app could not be packed.'); });
             var filename = decodeURIComponent(res.headers.get('X-Mia-App-Filename') || 'app.miaapp');
             return res.blob().then(function(blob){ return {file: new File([blob], filename, {type: 'application/octet-stream'})}; });
           });
         }});
     }
-    publishing.then(function(){
+    publishing.then(function(result){
       delete appsPage.publishing[id];
+      if(result && result.cancelled) return renderAppsPage();
       showBenchToast(appsPage.isAdmin ? '"' + item.name + '" is published.' : '"' + item.name + '" is waiting for an admin to approve it.');
       return loadAppsCatalog(teamId);
     }).then(renderAppsPage).catch(function(error){
@@ -10420,7 +10543,9 @@
     if(dm) return dmLabel(dm);
     if(chatWs.gatewayAgent && (chatWs.gatewayAgent.roomId === roomId || chatWs.gatewayAgent.nativeConversationId === roomId)) return 'Mia';
     var agent = chatWs.allAgents.filter(function(item){ return item.roomId === roomId || item.nativeConversationId === roomId; })[0];
-    return agent ? agent.name : 'New message';
+    if(agent) return agent.name;
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+    return conversation && conversation.name || 'New message';
   }
   // In the desktop app notifications are native (the main process shows
   // them, and macOS asks "Allow notifications from Mia?" the first time).
@@ -11017,12 +11142,17 @@
         timezone: automationCardTimezone()
       });
     }
+    if(window.MiaAppCard && m.nativeEvent){
+      var miaCardState = miaAppCardStates[m.nativeEvent.id] || {};
+      html += window.MiaAppCard.html(m, {esc: esc, busy: !!miaCardState.busy, error: miaCardState.error || ''});
+    }
     return html;
   }
 
   // Unsaved edits, busy state and errors for bot automation cards, by event
   // id, so a thread re-render for a new message keeps what the user typed.
   var automationCardStates = {};
+  var miaAppCardStates = {};
 
   function automationCardTimezone(){
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch(_) { return ''; }
@@ -11670,9 +11800,9 @@
 
   function agentSetupWelcomeBody(created, draft){
     var name = (created && created.name) || (draft && draft.name) || 'your new bot';
-    var roleSummary = agentSetupWelcomeExcerpt(draft && draft.role, 24).replace(/[.\s]+$/, '');
+    var roleSummary = agentSetupWelcomeExcerpt(draft && (draft.summary || draft.role), 24).replace(/[.\s]+$/, '');
     var sentences = ['I’m ' + name + '.'];
-    if(roleSummary) sentences.push('I handle ' + roleSummary + '.');
+    if(roleSummary) sentences.push(draft.summary ? roleSummary + '.' : 'I handle ' + roleSummary + '.');
     sentences.push('What should I work on first?');
     return sentences.join(' ');
   }
@@ -11709,14 +11839,113 @@
       '<div class="chat-msg-text">' + mdLite(text) + '</div></div></div>';
   }
 
+  // A setup saved by an earlier version has a role and an output instead.
+  function agentSetupDraftInstructions(draft){
+    if(draft.instructions) return draft.instructions;
+    return [draft.role, draft.output].filter(Boolean).join('\n\n');
+  }
+
+  // The skills library, shared by the setup card, the bot editor and Settings.
+  var skillsLibrary = null;
+  function loadSkillsLibrary(){
+    return api('/api/skills').then(function(res){
+      if(res.status !== 200 || !res.data) throw new Error('skills unavailable');
+      skillsLibrary = res.data;
+      document.querySelectorAll('.skill-picker').forEach(function(picker){ renderSkillPicker(picker); });
+      return skillsLibrary;
+    });
+  }
+  function skillPickerRowsHtml(selected){
+    var skills = skillsLibrary ? skillsLibrary.skills : [];
+    if(!skills.length) return '<div class="skill-picker-empty">' + (skillsLibrary ? 'No skills yet. Add them in Settings, under Skills.' : 'Loading skills…') + '</div>';
+    return skills.map(function(skill){
+      return '<label class="skill-picker-row"><input type="checkbox" value="' + esc(skill.id) + '"' + (selected.indexOf(skill.id) !== -1 ? ' checked' : '') + '>' +
+        '<span><span class="skill-picker-name">' + esc(skill.name) + '</span>' + (skill.description ? '<span class="skill-picker-desc">' + esc(skill.description) + '</span>' : '') + '</span></label>';
+    }).join('');
+  }
+  function skillPickerHtml(id, selected){
+    if(!skillsLibrary) loadSkillsLibrary().catch(function(){});
+    var ids = Array.isArray(selected) ? selected : [];
+    return '<div class="skill-picker" id="' + esc(id) + '" data-selected="' + esc(JSON.stringify(ids)) + '">' + skillPickerRowsHtml(ids) + '</div>';
+  }
+  function renderSkillPicker(picker){
+    var selected = [];
+    try { selected = JSON.parse(picker.getAttribute('data-selected') || '[]'); } catch(_) {}
+    picker.innerHTML = skillPickerRowsHtml(selected);
+  }
+  function skillPickerSelection(id){
+    var picker = el('#' + id);
+    if(!picker) return [];
+    return Array.prototype.map.call(picker.querySelectorAll('input:checked'), function(input){ return input.value; });
+  }
+  document.addEventListener('change', function(e){
+    var picker = e.target.closest && e.target.closest('.skill-picker');
+    if(!picker) return;
+    var chosen = skillPickerSelection(picker.id);
+    var limit = skillsLibrary && skillsLibrary.limits ? skillsLibrary.limits.perBot : 10;
+    if(chosen.length > limit){
+      e.target.checked = false;
+      chosen = skillPickerSelection(picker.id);
+      showBenchToast('A bot can carry up to ' + limit + ' skills.');
+    }
+    picker.setAttribute('data-selected', JSON.stringify(chosen));
+    if(picker.id === 'styledAgentEditSkills') editState.skills = chosen;
+  });
+
+  var skillEditing = null;
+  function renderSkillsPane(){
+    var list = el('#settingsSkillsList');
+    if(!list) return;
+    el('#settingsSkillForm').hidden = !skillEditing;
+    el('#settingsSkillNew').hidden = !!skillEditing;
+    var skills = skillsLibrary ? skillsLibrary.skills : [];
+    list.innerHTML = skills.length ? skills.map(function(skill){
+      var bots = (skill.bots || []).map(function(bot){ return bot.name; }).join(', ');
+      return '<div class="styled-settings-row"><div><div class="styled-settings-row-label">' + esc(skill.name) + '</div>' +
+        '<div class="styled-settings-row-desc">' + esc(skill.description || 'No description') + (bots ? ' · Used by ' + esc(bots) : '') + '</div></div>' +
+        '<div class="skills-row-actions"><button class="styled-settings-pill-btn" data-skill-edit="' + esc(skill.id) + '">Edit</button><button class="styled-settings-pill-btn" data-skill-remove="' + esc(skill.id) + '">Remove</button></div></div>';
+    }).join('') : '<div class="styled-settings-row"><div class="styled-settings-row-desc">Skills teach a bot how to do a job. A skill you edit here changes for every bot that carries it.</div></div>';
+  }
+  function refreshSkillsPane(){ return loadSkillsLibrary().then(renderSkillsPane).catch(function(){ showBenchToast('Could not load your skills.'); }); }
+  function openSkillForm(skill){
+    skillEditing = skill;
+    el('#settingsSkillName').value = skill.name || '';
+    el('#settingsSkillDescription').value = skill.description || '';
+    el('#settingsSkillBody').value = skill.body || '';
+    el('#settingsSkillError').textContent = '';
+    renderSkillsPane();
+  }
+  var settingsSkillNew = el('#settingsSkillNew');
+  if(settingsSkillNew) settingsSkillNew.addEventListener('click', function(){ openSkillForm({}); });
+  var settingsSkillCancel = el('#settingsSkillCancel');
+  if(settingsSkillCancel) settingsSkillCancel.addEventListener('click', function(){ skillEditing = null; renderSkillsPane(); });
+  var settingsSkillSave = el('#settingsSkillSave');
+  if(settingsSkillSave) settingsSkillSave.addEventListener('click', function(){
+    var body = {name: el('#settingsSkillName').value, description: el('#settingsSkillDescription').value, body: el('#settingsSkillBody').value};
+    var path = skillEditing && skillEditing.id ? '/api/skills/' + encodeURIComponent(skillEditing.id) : '/api/skills';
+    api(path, {method: skillEditing && skillEditing.id ? 'PUT' : 'POST', body: body}).then(function(res){
+      if(res.status !== 200){ el('#settingsSkillError').textContent = (res.data && res.data.message) || 'Could not save this skill.'; return; }
+      skillEditing = null;
+      return refreshSkillsPane();
+    }).catch(function(){ el('#settingsSkillError').textContent = 'Could not save this skill.'; });
+  });
+  var settingsSkillsList = el('#settingsSkillsList');
+  if(settingsSkillsList) settingsSkillsList.addEventListener('click', function(e){
+    var edit = e.target.getAttribute('data-skill-edit'), remove = e.target.getAttribute('data-skill-remove');
+    if(edit) api('/api/skills/' + encodeURIComponent(edit)).then(function(res){ if(res.status === 200) openSkillForm(res.data.skill); });
+    if(remove) api('/api/skills/' + encodeURIComponent(remove), {method:'DELETE'}).then(function(res){
+      if(res.status === 409) showBenchToast('Take this skill off ' + (res.data.bots || []).map(function(bot){ return bot.name; }).join(', ') + ' first.');
+      return refreshSkillsPane();
+    });
+  });
+
   function agentSetupProposalText(draft){
     return [
       'Here’s what I inferred:',
       '',
       'Name: **' + draft.name + '**',
-      'Role: ' + draft.role,
+      'What it does: ' + (draft.summary || agentSetupDraftInstructions(draft).slice(0, 300)),
       'Automation: ' + (agentSetupAutomationRequest(draft) ? 'proposed by the bot after setup' : 'none'),
-      'Output: ' + draft.output,
       '',
       'Do you want me to activate this bot?'
     ].join('\n');
@@ -11741,8 +11970,8 @@
       '<div class="agent-setup-card">' +
         '<div class="agent-setup-card-intro">' + esc(view.intro || 'Here’s what I inferred. Edit anything before activating me.') + '</div>' +
         '<label class="agent-setup-field"><span>Name</span><input id="agentSetupName" type="text" maxlength="40" value="' + esc(draft.name || '') + '"></label>' +
-        '<label class="agent-setup-field"><span>Role</span><textarea id="agentSetupRole" rows="3" maxlength="500">' + esc(draft.role || '') + '</textarea></label>' +
-        '<label class="agent-setup-field"><span>Output</span><textarea id="agentSetupOutput" rows="3" maxlength="300">' + esc(draft.output || '') + '</textarea></label>' +
+        '<label class="agent-setup-field"><span>Instructions</span><textarea id="agentSetupInstructions" rows="10" maxlength="' + MAX_BOT_BRIEF_CHARS + '">' + esc(agentSetupDraftInstructions(draft)) + '</textarea></label>' +
+        '<div class="agent-setup-field"><span>Skills</span>' + skillPickerHtml('agentSetupSkills', draft.skills) + '</div>' +
         automationField +
         '<div class="agent-setup-confirm-copy">' + esc(view.confirmCopy || 'Do you want me to activate this bot?') + '</div>' +
         '<div class="agent-setup-safety">' + (flow.creation || busy ? 'Your creation request is being tracked. Retrying will recover the same bot.' : 'Nothing is created or scheduled until you confirm.') + '</div>' +
@@ -11756,11 +11985,11 @@
   function captureAgentSetupDraft(flow){
     flow = flow || agentSetup;
     if(!flow.draft) return;
-    var name = el('#agentSetupName'), role = el('#agentSetupRole'), output = el('#agentSetupOutput');
+    var name = el('#agentSetupName'), instructions = el('#agentSetupInstructions');
     var automationWanted = el('#agentSetupAutomationWanted');
     flow.draft.name = name ? name.value.trim() : flow.draft.name;
-    flow.draft.role = role ? role.value.trim() : flow.draft.role;
-    flow.draft.output = output ? output.value.trim() : flow.draft.output;
+    flow.draft.instructions = instructions ? instructions.value.trim() : agentSetupDraftInstructions(flow.draft);
+    if(el('#agentSetupSkills')) flow.draft.skills = skillPickerSelection('agentSetupSkills');
     if(automationWanted) flow.draft.automationWanted = !!automationWanted.checked;
   }
 
@@ -11829,7 +12058,7 @@
 
   function renderAgentSetupThread(thread){
     var name = agentSetupIdentity().name;
-    var html = agentSetupMessageHtml('Let’s set me up. Tell me in a few words what you want me to do?', false, name);
+    var html = agentSetupMessageHtml('Let’s set me up. Tell me what you want me to do. A few words or a full brief both work.', false, name);
     if(agentSetup.intent) html += agentSetupMessageHtml(agentSetup.intent, true, name);
     if(agentSetup.phase === 'interpreting'){
       html += '<div class="chat-msg-row is-direct agent-setup-message"><span class="chat-msg-mark agent">' + agentSetupAvatarHtml(28) + '</span>' +
@@ -11969,7 +12198,7 @@
   function submitAgentSetupIntent(text){
     if(agentSetup.phase !== 'intent') return;
     var flow = agentSetup;
-    flow.intent = String(text || '').trim().slice(0, 2000);
+    flow.intent = String(text || '').trim().slice(0, MAX_BOT_BRIEF_CHARS);
     if(!flow.intent) return;
     flow.composer = '';
     flow.phase = 'interpreting';
@@ -12044,16 +12273,15 @@
     if(flow.creation) return {payload: flow.creation.payload};
     captureAgentSetupDraft(flow);
     var draft = flow.draft;
-    if(!draft.name || !draft.role || !draft.output) return {error: 'Name, role, and output are required.'};
+    if(!draft.name || !draft.instructions) return {error: 'Name and instructions are required.'};
     var payload = {
       name: draft.name,
-      role: draft.role,
-      output: draft.output,
-      instructions: 'Role: ' + draft.role + '\n\nDesired output: ' + draft.output,
+      instructions: draft.instructions,
+      skills: Array.isArray(draft.skills) ? draft.skills : [],
       automations: [],
       model: selectedConnectedBotModel(),
       status: 'running',
-      departments: guessDepartmentsFor(draft.role + ' ' + draft.output),
+      departments: guessDepartmentsFor(draft.instructions.slice(0, 2000)),
       setupIntent: intent
     };
     var color = normalizeAgentAvatarColor(flow.avatarColor);
@@ -14201,11 +14429,10 @@
       : 'Ask the OS anything...';
   }
 
-  // One strong inline prompt suggestion replaces the old batch of pills. The
-  // suggestion is intentionally stable and easy to accept with Tab, so it
-  // reads like a nudge inside the composer rather than another control row.
+  // One inline prompt suggestion replaces the old batch of pills, easy to
+  // accept with Tab. Once a chat has messages it only ever offers the next step
+  // from the latest reply, and shows nothing when there isn't one.
   var LS_AGENT_SUGGESTIONS = 'miaos.agentSuggestions';
-  var CHAT_INLINE_SUGGESTION = 'Can we create a newsletter agent?';
   function agentSuggestionsEnabled(){
     return localStorage.getItem(LS_AGENT_SUGGESTIONS) !== 'off';
   }
@@ -14241,7 +14468,7 @@
       if(chatWs.activeKind === 'agent') return 'What should I ask ' + (chatWs.activeLabel || 'this bot') + '?';
       if(chatWs.activeKind === 'dm' || chatWs.activeKind === 'group') return 'What should we work on together?';
     }
-    return CHAT_INLINE_SUGGESTION;
+    return '';
   }
   function updateChatSuggestions(roomId){
     renderChatSuggestions();
@@ -14297,9 +14524,13 @@
       miaOnboardingChat = res.data;
       // A bot-owned browser tab in front keeps that bot's chat in the panel.
       var followingBot = String(browserFollowKey || '').indexOf('|bot:') !== -1;
+      // A different chat you already have open stays open; the onboarding
+      // questions wait in their own chat instead of pulling you back to them.
+      var openChat = chatWs.activeRoomId || storedActiveChatLocation();
+      var otherChatOpen = !!openChat && openChat !== res.data.conversationId;
       // Onboarding is Solo's chat; opening it in another workspace refused
       // every send there as FORBIDDEN.
-      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1 && !followingBot && activeWorkspaceKey === 'solo'){
+      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1 && !followingBot && !otherChatOpen && activeWorkspaceKey === 'solo'){
         loadChatRoom(res.data.conversationId, 'agent', 'Mia');
       } else if(chatWs.activeRoomId === res.data.conversationId){
         renderChatThread();
@@ -14367,7 +14598,9 @@
     var mentionOpen = typeof chatMention !== 'undefined' && chatMention.open;
     var show = !inHubRoom() && chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
     var text = suggestion.querySelector('span');
-    if(text) text.textContent = chatInlineSuggestionText();
+    var suggested = chatInlineSuggestionText();
+    if(text) text.textContent = suggested;
+    show = show && !!suggested;
     suggestion.hidden = !show;
     suggestion.setAttribute('aria-hidden', show ? 'false' : 'true');
   }
@@ -14617,6 +14850,7 @@
     chatWs.activeLabel = label;
     if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
     if(roomId !== AGENT_SETUP_ROOM_ID) saveActiveChatLocation(roomId);
+    rememberAgentChat(roomId);
     renderChatSidebar();
     refreshChatMain();
     if(chatWs.configured === false) return;
@@ -14938,7 +15172,7 @@
     if(requester && currentUser && requester !== String(currentUser).toLowerCase()) return;
     startedMiaBotSetupRequests[message.nativeEvent.id] = true;
     state.botDraft = {
-      intent: String(request.request || '').slice(0, 2000),
+      intent: String(request.request || '').slice(0, MAX_BOT_BRIEF_CHARS),
       sourceEventId: message.nativeEvent.id,
       turns: [], draft: null, phase: 'interpreting', error: '',
       created: null, conversation: null, requestId: 0, controller: null, timer: null

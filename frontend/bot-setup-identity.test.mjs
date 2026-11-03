@@ -16,6 +16,8 @@ function harness({ bots = [], storage = new Map(), user = 'tester@example.com' }
   const input = { value: '', events: 0, dispatchEvent() { this.events += 1; }, focus() {} };
   const avatars = [];
   const context = vm.createContext({
+    skillPickerHtml: () => '<div>Skills</div>', skillPickerSelection: () => [], MAX_BOT_BRIEF_CHARS: 100000,
+    agentSetupDraftInstructions: (draft) => draft.instructions || [draft.role, draft.output].filter(Boolean).join('\n\n'),
     Math, JSON, Object, Array, String, Number, Promise,
     el: (selector) => (selector === '#ccInput' ? input : null),
     Event: class { constructor(type) { this.type = type; } },
