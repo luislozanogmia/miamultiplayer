@@ -5950,7 +5950,7 @@
       return membership ? {id:membership.clerk_user_id,name:displayNameForEmail(membership.email || currentUser) || membership.email || 'You'} : null;
     },
     channels:function(){
-      return hubChat.channels.filter(function(channel){return channel.kind!=='dm';}).map(function(channel){return {id:channel.id,name:hubChannelTitle(channel)};});
+      return hubChat.channels.map(function(channel){return {id:channel.id,name:hubChannelTitle(channel)};});
     },
     activeChannelId:function(){ return hubChannel(chatWs.activeRoomId) ? chatWs.activeRoomId : null; },
     toast:function(text){ showBenchToast(text); },

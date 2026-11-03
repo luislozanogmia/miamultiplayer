@@ -541,3 +541,9 @@ test('only the person you follow moves your page', async () => {
   assert.equal(scrolls().length, 1);
   assert.equal(scrolls()[0].id, 't1');
 });
+
+test('a call can start from any chat that offers Browse together, direct messages included', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const host = app.slice(app.indexOf('window.MiaSpaceHost={'), app.indexOf('activeChannelId:function()', app.indexOf('window.MiaSpaceHost={')));
+  assert.match(host, /channels:function\(\)\{\s*return hubChat\.channels\.map\(/);
+});
