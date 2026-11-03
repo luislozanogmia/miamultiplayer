@@ -11,7 +11,8 @@
   var HEARTBEAT_MS = 30000;
 
   var s = {space:null, teamKey:null, channelId:null, groupId:null, links:{}, presence:{}, invites:{},
-    follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null, ended:{}, notice:null};
+    follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null, ended:{}, notice:null,
+    confirming:null, approveEach:false, ignored:{}};
 
   function key(){ return Array.from(crypto.getRandomValues(new Uint8Array(8)), function(b){ return b.toString(16).padStart(2, '0'); }).join(''); }
   function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch){ return '&#' + ch.charCodeAt(0) + ';'; }); }
@@ -55,11 +56,12 @@
   function onBrowser(state){
     s.browser = state;
     if(bound()){
-      var groupGone = !state.groups.some(function(group){ return group.id === s.groupId; });
+      // Someone approving page by page may have no group yet.
+      var groupGone = !!s.groupId && !state.groups.some(function(group){ return group.id === s.groupId; });
       if(groupGone && state.tabs.length && !s.pendingOpens){ leave(true); return render(); }
       if(!s.pendingOpens){
         // Tabs opened, closed or moved in this group change the space for everyone.
-        var next = model.localTabList(s.space, s.links, groupTabs(), key);
+        var next = model.localTabList(s.space, s.links, groupTabs(), key, s.approveEach);
         s.links = next.links;
         if(!model.sameTabs(s.space.tabs, next.tabs)){
           s.space = Object.assign({}, s.space, {tabs: next.tabs, rev: s.space.rev + 1, by: me().id});
@@ -75,7 +77,8 @@
     if(!id) return Promise.resolve();
     var local = s.browser && s.browser.tabs.filter(function(tab){ return tab.id === id; })[0];
     return command('select', {id: id}).then(function(){
-      var target = model.shareableUrl(url);
+      // Approving page by page: come to the tab, but no new address without a yes.
+      var target = s.approveEach ? '' : model.shareableUrl(url);
       if(target && local && model.shareableUrl(local.url) !== target) return command('navigate', {value: target});
     }).catch(function(){});
   }
@@ -85,6 +88,7 @@
     var plan = model.reconcile(s.space, s.links, s.browser ? s.browser.tabs : []);
     plan.close.forEach(function(id){ command('close', {id: id}).catch(function(){}); });
     plan.close.forEach(function(id){ Object.keys(s.links).forEach(function(k){ if(s.links[k] === id) delete s.links[k]; }); });
+    if(s.approveEach) return Promise.resolve();
     return plan.open.reduce(function(chain, tab){
       return chain.then(function(){ return openLinked(tab, false); });
     }, Promise.resolve());
@@ -156,7 +160,7 @@
   function announce(active){ var h = host(); if(h && h.sharedSession) h.sharedSession(active); }
   function start(channelId, space, groupId, links){
     s.space = space; s.teamKey = teamKey(); s.channelId = channelId; s.groupId = groupId; s.links = links || {};
-    s.presence = {}; s.follow = null; s.sent = {};
+    s.presence = {}; s.follow = null; s.sent = {}; s.confirming = null; s.approveEach = false; s.ignored = {};
     announce(true);
     clearInterval(s.timers.beat);
     s.timers.beat = setInterval(function(){
@@ -175,11 +179,17 @@
     start(channelId, {id: key(), name: group.name || 'Shared tabs', rev: 1, by: self.id, tabs: list.tabs}, group.id, list.links);
     sendSpace(); sendPresence(true); render();
   }
-  function join(spaceId){
+  // `approveEach`: nothing opens until this person says yes to that page.
+  function join(spaceId, approveEach){
     var invite = s.invites[spaceId];
     if(!invite || !invite.space || !invite.space.tabs.length) return;
     delete s.invites[spaceId];
     start(invite.channelId, invite.space, null, {});
+    if(approveEach){
+      s.approveEach = true;
+      sendPresence(true); render();
+      return;
+    }
     s.pendingOpens++;
     var first = invite.space.tabs.filter(function(tab){ return tab.url; });
     first.reduce(function(chain, tab, index){
@@ -198,6 +208,16 @@
     clearInterval(s.timers.beat);
     s.space = null; s.groupId = null; s.links = {}; s.presence = {}; s.follow = null;
     render();
+  }
+  function declineInvite(spaceId){
+    delete s.invites[spaceId];
+    s.confirming = null;
+    render();
+  }
+  function openPage(tabKey){
+    var tab = s.space && s.space.tabs.filter(function(item){ return item.k === tabKey; })[0];
+    if(!tab || !tab.url || s.links[tab.k]) return;
+    openLinked(tab, true).then(function(){ sendPresence(true); render(); });
   }
   function lookHere(){
     var here = myPresence();
@@ -235,6 +255,15 @@
     if(bound()) return renderSpace();
     var html = s.notice ? '<div class="mia-space-invite" role="status"><span class="mia-space-hint">' + esc(s.notice.text) +
       '</span><button type="button" class="mia-space-btn" data-space-dismiss>OK</button></div>' : '';
+    var confirming = s.confirming && visibleInvites.filter(function(invite){ return invite.space.id === s.confirming; })[0];
+    if(confirming){
+      var id = esc(confirming.space.id);
+      paint(html + '<div class="mia-space-invite mia-space-confirm" role="alertdialog" aria-label="Before you join"><span>In shared-browser sessions, each person in the session can open tabs for the whole group, and they open immediately on your computer.</span>' +
+        '<span class="mia-space-choices"><button type="button" class="mia-space-btn primary" data-space-allow="' + id + '">Allow all pages</button>' +
+        '<button type="button" class="mia-space-btn" data-space-approve="' + id + '">Approve by page</button>' +
+        '<button type="button" class="mia-space-btn" data-space-decline="' + id + '">Leave session</button></span></div>');
+      return;
+    }
     visibleInvites.slice(0, 2).forEach(function(invite){
       html += '<div class="mia-space-invite"><span class="mia-space-icon">' + BOT_ICON + '</span><span><b>' + esc(invite.from.name) + '</b> is sharing <b>' +
         esc(invite.space.name) + '</b> · ' + invite.space.tabs.length + ' tab' + (invite.space.tabs.length === 1 ? '' : 's') +
@@ -260,7 +289,14 @@
     var others = Object.keys(live).map(function(id){ return live[id]; });
     var followName = s.follow && live[s.follow] ? live[s.follow].name : '';
     var channel = (host() ? host().channels() : []).filter(function(item){ return item.id === s.channelId; })[0];
-    paint(
+    // One line per page waiting for a yes; the rest follow as these are answered.
+    var waiting = s.approveEach ? model.pendingPages(s.space, s.links, s.ignored) : [];
+    var approvals = waiting.slice(0, 3).map(function(tab){
+      return '<div class="mia-space-invite"><span title="' + esc(tab.url) + '">Open <b>' + esc(model.hostOf(tab.url)) + '</b>' + (tab.title ? ' · ' + esc(tab.title) : '') + '?</span>' +
+        '<span class="mia-space-choices"><button type="button" class="mia-space-btn primary" data-space-open="' + esc(tab.k) + '">Open</button>' +
+        '<button type="button" class="mia-space-btn" data-space-ignore="' + esc(tab.k) + '">Ignore</button></span></div>';
+    }).join('') + (waiting.length > 3 ? '<span class="mia-space-hint">' + (waiting.length - 3) + ' more waiting</span>' : '');
+    paint(approvals +
       '<div class="mia-space-head"><span class="mia-space-title">' + esc(s.space.name) + '</span>' +
         '<span class="mia-space-sub">' + esc(channel ? channel.name : '') + '</span>' +
         '<span class="mia-space-people">' + (self ? chip({name: self.name}, 'me') : '') + others.map(function(person){
@@ -288,7 +324,13 @@
     if(!target) return;
     if(target.hasAttribute('data-space-dismiss')){ s.notice = null; render(); }
     else if(target.hasAttribute('data-space-share')) share();
-    else if(target.hasAttribute('data-space-join')) join(target.getAttribute('data-space-join'));
+    // Joining someone else's session: warn first, nothing opens until they choose.
+    else if(target.hasAttribute('data-space-join')){ s.confirming = target.getAttribute('data-space-join'); render(); }
+    else if(target.hasAttribute('data-space-allow')) join(target.getAttribute('data-space-allow'), false);
+    else if(target.hasAttribute('data-space-approve')) join(target.getAttribute('data-space-approve'), true);
+    else if(target.hasAttribute('data-space-decline')) declineInvite(target.getAttribute('data-space-decline'));
+    else if(target.hasAttribute('data-space-open')) openPage(target.getAttribute('data-space-open'));
+    else if(target.hasAttribute('data-space-ignore')){ s.ignored[target.getAttribute('data-space-ignore')] = true; render(); }
     else if(target.hasAttribute('data-space-leave')) leave(false);
     else if(target.hasAttribute('data-space-look')) lookHere();
     else if(target.hasAttribute('data-space-follow')) followPerson(target.getAttribute('data-space-follow'));

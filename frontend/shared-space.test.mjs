@@ -34,6 +34,16 @@ test('secrets in an address never reach teammates, sent or received', () => {
   assert.equal(here.u1.url, 'https://x.test/p');
 });
 
+test('a page this person has not opened stays in the space for everyone', () => {
+  const s = { tabs: [{ k: 'aaaaaa01', url: 'https://a.com/' }, { k: 'aaaaaa02', url: 'https://b.com/' }, { k: 'aaaaaa03', url: 'https://c.com/' }] };
+  const links = { aaaaaa02: 't2' };
+  const local = [{ id: 't2', url: 'https://b.com/', title: 'B' }];
+  const kept = space.localTabList(s, links, local, () => 'x', true);
+  assert.ok(space.sameTabs(s.tabs, kept.tabs), 'same list and order, so no update goes out');
+  assert.deepEqual(space.localTabList(s, links, local, () => 'x').tabs.map((tab) => tab.k), ['aaaaaa02'], 'without it, unopened tabs drop');
+  assert.deepEqual(space.pendingPages(s, links, { aaaaaa03: true }).map((tab) => tab.k), ['aaaaaa01']);
+});
+
 test('the tab list settles on the same version everywhere', () => {
   const tabs = [{ k: 'aaaaaa01', url: 'https://a.com' }];
   const first = space.applySpace(null, { t: 'space', space: 's1', rev: 2, from: { id: 'u1' }, tabs });

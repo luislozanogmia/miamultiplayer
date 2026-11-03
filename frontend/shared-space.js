@@ -117,7 +117,9 @@
   }
   // The space's tab list as this computer's group now has it: new local tabs
   // get a key, closed ones drop out, and pages keep their latest address.
-  function localTabList(space, links, groupTabs, makeKey){
+  // With `keepUnopened`, tabs this person has not opened stay in the list, in
+  // their place: not approving a page must not remove it for everyone.
+  function localTabList(space, links, groupTabs, makeKey, keepUnopened){
     var byLocal = {};
     Object.keys(links).forEach(function(key){ byLocal[links[key]] = key; });
     var previous = {};
@@ -130,7 +132,14 @@
       nextLinks[key] = tab.id;
       list.push({k: key, url: url || (previous[key] && previous[key].url) || '', title: String(tab.title || '').slice(0, 200)});
     });
+    if(keepUnopened) (space ? space.tabs : []).forEach(function(tab, index){
+      if(!links[tab.k]) list.splice(Math.min(index, list.length), 0, tab);
+    });
     return {tabs: list.slice(0, MAX_TABS), links: nextLinks};
+  }
+  // Pages waiting for this person's answer: in the space, not open here, not ignored.
+  function pendingPages(space, links, ignored){
+    return (space ? space.tabs : []).filter(function(tab){ return tab.url && !links[tab.k] && !ignored[tab.k]; });
   }
   function sameTabs(a, b){
     if(a.length !== b.length) return false;
@@ -140,5 +149,5 @@
 
   return {MARKER: MARKER, PRESENCE_TTL_MS: PRESENCE_TTL_MS, MAX_TABS: MAX_TABS, encode: encode, decode: decode, isSpaceMessage: isSpaceMessage, isAdminEnd: isAdminEnd,
     shareableUrl: shareableUrl, applySpace: applySpace, applyPresence: applyPresence, livePresence: livePresence, initials: initials,
-    tiles: tiles, hostOf: hostOf, reconcile: reconcile, localTabList: localTabList, sameTabs: sameTabs};
+    tiles: tiles, hostOf: hostOf, reconcile: reconcile, localTabList: localTabList, pendingPages: pendingPages, sameTabs: sameTabs};
 });

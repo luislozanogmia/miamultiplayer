@@ -3744,6 +3744,7 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .mia-space-icon svg,.mia-space-bot svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
 .mia-space-title{font-weight:600;}
 .mia-space-sub,.mia-space-hint{color:var(--sand-text-secondary);}
+.mia-space-choices{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto;}
 .mia-space-people{display:inline-flex;align-items:center;gap:4px;margin-left:auto;}
 .mia-space-person{padding:0;border:0;background:none;border-radius:50%;cursor:pointer;}
 .mia-space-person.following .mia-space-chip{box-shadow:0 0 0 2px var(--sand-border-focus);}
