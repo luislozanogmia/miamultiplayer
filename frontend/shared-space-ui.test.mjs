@@ -118,6 +118,16 @@ test('the person who shares the group gets no warning', async () => {
   assert.equal(page.sharing(), true);
 });
 
+test('browser coordination sends tab addresses without page titles or claimed user identity', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  const announcement = page.model.decode(page.sent[0]);
+  assert.equal(announcement.t,'space');
+  assert.equal(announcement.tabs[0].url,'https://example.com/');
+  assert.equal(Object.hasOwn(announcement.tabs[0],'title'),false);
+  assert.equal(Object.hasOwn(announcement,'from'),false);
+});
+
 test('allow all pages opens them right away, as well as later ones', async () => {
   const page = await sharedBar();
   offer(page);

@@ -52,6 +52,7 @@ test('only image routes carry large bodies and only the team feed waits longer',
   assert.equal(hubRouteLimits('POST', `/v1/teams/${team}/channels/${channel}/files`).request, 12 * 1024 * 1024);
   assert.equal(hubRouteLimits('GET', `/v1/teams/${team}/channels/${channel}/files/${file}`).response, 12 * 1024 * 1024);
   assert.equal(hubRouteLimits('POST', `/v1/teams/${team}/channels/${channel}/messages`).request, 40000);
+  assert.equal(hubRouteLimits('POST', `/v1/teams/${team}/channels/${channel}/space-events`).request, 40000);
   assert.equal(hubRouteLimits('POST', `/v1/teams/${team}/channels`).request, 8192);
   assert.equal(hubRouteLimits('GET', `/v1/teams/${team}/channels/${channel}/messages/before/0`).response, 131072);
   assert.equal(hubRouteLimits('GET', `/v1/teams/${team}/events/after/12`).timeout, 30000);

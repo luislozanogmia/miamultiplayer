@@ -5732,7 +5732,7 @@
   }
   function applyHubRows(roomId,rows){
     // Shared-space updates ride in the channel but never show as messages.
-    rows=(rows||[]).filter(function(row){return !(row && window.MiaSharedSpace && window.MiaSharedSpace.isSpaceMessage(row.body));});
+    rows=(rows||[]).filter(function(row){return !(row && window.MiaHubChat.isSpaceControl(row.body));});
     var state=chatRoomState(roomId);
     state.messages=window.MiaHubChat.merge(state.messages,rows);
     var people=rows.filter(function(row){return row && row.author_type!=='bot' && row.author_type!=='system';});
@@ -5834,11 +5834,15 @@
       var roomId=event.channel_id, channel=hubChannel(roomId), state=roomId && chatWs.byRoom[roomId];
       if(globalThis.MiaTeamWorkflowsUi && globalThis.MiaTeamWorkflowsUi.handles(event.kind))globalThis.MiaTeamWorkflowsUi.onEvent(event);
       if(event.kind==='app_review')onAppReviewEvent(event);
+      if(event.kind==='space' && event.space){
+        if(channel && event.space.author_id!==subject && window.MiaSpaceUI)window.MiaSpaceUI.receive(roomId,event.space);
+        return;
+      }
       if(event.kind==='message' && event.message){
         var row=event.message;
         if(!channel){refreshChannels=true;return;}
         channel.latest_sequence=Math.max(Number(channel.latest_sequence||0),row.sequence);
-        if(window.MiaSharedSpace && window.MiaSharedSpace.isSpaceMessage(row.body)){
+        if(window.MiaHubChat.isSpaceControl(row.body)){
           if(row.author_id!==subject && window.MiaSpaceUI)window.MiaSpaceUI.receive(roomId,row);
           markHubSpaceRead(roomId,row.sequence);
           return;
@@ -5968,7 +5972,7 @@
     sharedSession:function(active){ api('/api/browser/shared-session',{method:'POST',body:{active:active===true}}).catch(function(){}); },
     send:function(channelId,text){
       if(!hubWorkspace() || !hubChannel(channelId))return Promise.reject(new Error('That channel is no longer available.'));
-      return hubCall('POST',hubPath()+'/channels/'+channelId+'/messages',{id:window.MiaHubChat.id(),text:text});
+      return hubCall('POST',hubPath()+'/channels/'+channelId+'/space-events',{text:text});
     }
   };
   function sendHubTyping(){

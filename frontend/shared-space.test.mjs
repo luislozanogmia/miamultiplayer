@@ -8,7 +8,9 @@ const space = require('./shared-space.js');
 test('space updates round-trip behind their marker and anything else is ignored', () => {
   const body = space.encode({ t: 'here', space: 'abc123', tab: 'k1' });
   assert.ok(space.isSpaceMessage(body));
+  assert.ok(space.isSpaceMessage(body.slice(1)), 'the same control packet remains recognizable if its invisible marker was removed');
   assert.deepEqual(space.decode(body), { t: 'here', space: 'abc123', tab: 'k1' });
+  assert.deepEqual(space.decode(body.slice(1)), { t: 'here', space: 'abc123', tab: 'k1' });
   assert.equal(space.decode('hello team'), null);
   assert.equal(space.decode(space.MARKER + '{not json'), null);
   assert.equal(space.decode(space.MARKER + JSON.stringify({ t: 'here' })), null, 'a message without a space id is dropped');

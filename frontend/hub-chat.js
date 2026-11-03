@@ -65,6 +65,12 @@
     return 'The shared team service could not do that' + (code ? ' (' + code + ')' : '') + '. Try again.';
   }
   function failure(code, status){ var error = new Error(errorMessage(code, status)); error.status = status; error.code = code; return error; }
+  // Browser-session traffic is stored in the channel transport. Recognize it
+  // without depending on the browser-session UI loading successfully, so a
+  // partial or older client never turns control packets into chat messages.
+  function isSpaceControl(body){
+    return typeof body === 'string' && /^(?:\u2063)?mia-space\/1 \{/.test(body);
+  }
   function teamId(key){ var m = /^hub_([a-f0-9]{32})$/.exec(key || ''); return m ? m[1] : null; }
   async function sessionToken(){
     var native = root.miaDesktop && root.miaDesktop.auth;
@@ -111,9 +117,9 @@
   // Upserts authoritative rows, replacing the sender's optimistic copy by its
   // client-generated id, and keeps unsent copies after the confirmed history.
   function merge(messages, rows){
-    var list=(messages || []).slice();
+    var list=(messages || []).filter(function(item){ return !isSpaceControl(item && item.body); });
     (rows || []).forEach(function(row){
-      if(!row || !Number.isSafeInteger(row.sequence)) return;
+      if(!row || !Number.isSafeInteger(row.sequence) || isSpaceControl(row.body)) return;
       var next=message(row), index=-1;
       for(var i=0;i<list.length;i++){
         if(list[i].id===next.id || (list[i].hubLocal && list[i].hubMessageId===next.hubMessageId)){ index=i; break; }
@@ -204,7 +210,7 @@
       });
     });
   }
-  var api = {id:id, teamId:teamId, call:call, localCall:localCall, message:message, merge:merge, validateText:validateText, feed:feed, fileUrl:fileUrl, teamBots:teamBots};
+  var api = {id:id, teamId:teamId, call:call, localCall:localCall, message:message, merge:merge, isSpaceControl:isSpaceControl, validateText:validateText, feed:feed, fileUrl:fileUrl, teamBots:teamBots};
   root.MiaHubChat = api;
   if(typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
