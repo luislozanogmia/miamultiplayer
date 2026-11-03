@@ -410,3 +410,33 @@ test('a chat link wraps between words, so a short label never splits mid-word', 
   // The bubble's own wrap rule still keeps a long bare URL inside it.
   assert.match(styles, /\.chat-msg-text\{[^}]*overflow-wrap:anywhere;/);
 });
+
+test('the composer only suggests a reply\'s next step once a chat has messages', async () => {
+  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(source + html, /newsletter (agent|bot)\?/, 'no fixed suggestion is left');
+  const start = source.indexOf('function chatInlineSuggestionText(){');
+  const body = source.slice(start, source.indexOf('function updateChatSuggestions', start));
+  assert.match(body, /var nextStep = chatReplyNextStep\(roomId\);\n\s+if\(nextStep\) return nextStep;/);
+  assert.match(body, /return '';\n\s+\}\n\s*$/);
+  const sync = source.slice(source.indexOf('function syncInlineChatSuggestion(){'), source.indexOf('// Detailed output includes'));
+  assert.match(sync, /show = show && !!suggested;/, 'an empty suggestion hides the Tab hint');
+});
+
+test('a direct message keeps the whole line when the chat gets narrow', async () => {
+  const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const inset = 'clamp(0px,calc((100% - 420px) * .5),28%)';
+  assert.ok(styles.includes('.chat-msg-row.is-direct.is-you{padding-left:' + inset + ';}'));
+  assert.ok(styles.includes('.chat-msg-row.is-direct:not(.is-you){padding-right:' + inset + ';}'));
+  assert.match(styles, /\.chat-msg-row\.is-direct \.chat-msg-body\{flex:0 1 auto;max-width:max\(72%,420px\);\}/);
+  // Same specificity as the desktop inset, so the phone width actually wins.
+  assert.match(styles, /@media \(max-width:760px\)[\s\S]*\.chat-msg-row\.is-direct:not\(\.is-you\)\{padding-right:8%;\}/);
+});
+
+test('a narrow window only clips and fades a message that has a Show more', async () => {
+  const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const start = styles.indexOf('A 150-word preview is still too tall');
+  const rule = styles.slice(start, styles.indexOf('mask-repeat:no-repeat;', start));
+  assert.match(rule, /\.chat-expandable-preview\[data-chat-truncated\],/);
+  assert.doesNotMatch(rule, /\.chat-expandable-preview,/, 'a short message has no Show more to reveal clipped text');
+});

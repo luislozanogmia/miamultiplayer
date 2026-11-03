@@ -2470,7 +2470,7 @@
   /* Direct chats keep identity chrome in the main timeline so mixed rooms
      remain readable: human and agent messages must be distinguishable even
      when the room is not a department channel. */
-  body.styled-skin .chat-msg-row.is-direct .chat-msg-body{flex:0 1 auto;max-width:72%;}
+  body.styled-skin .chat-msg-row.is-direct .chat-msg-body{flex:0 1 auto;max-width:max(72%,420px);}
   /* Table-carrying direct messages break out of the 72%/28% prose rhythm so
      the data table can use the column's full width (HN/GitHub pulse tables).
      Prose messages keep the conversational cap. */
@@ -2480,8 +2480,10 @@
   body.styled-skin .chat-msg-row.is-direct.is-you .chat-msg-body{align-items:flex-end;}
   body.styled-skin .chat-msg-row.is-direct .chat-msg-text{max-width:100%;padding:10px 12px;border-radius:18px;}
   body.styled-skin .chat-msg-row.is-direct.grouped .chat-msg-text{border-radius:18px;}
-  body.styled-skin .chat-msg-row.is-direct.is-you{padding-left:28%;}
-  body.styled-skin .chat-msg-row.is-direct:not(.is-you){padding-right:28%;}
+  /* The far-edge inset gives way as the chat narrows, reaching zero at 420px,
+     so a bubble keeps the whole line however small the window or pane gets. */
+  body.styled-skin .chat-msg-row.is-direct.is-you{padding-left:clamp(0px,calc((100% - 420px) * .5),28%);}
+  body.styled-skin .chat-msg-row.is-direct:not(.is-you){padding-right:clamp(0px,calc((100% - 420px) * .5),28%);}
   body.styled-skin .chat-msg-row.is-direct .chat-thread-pill{font-size:12px;margin:2px 12px 0;}
   body.styled-skin .chat-date-divider{padding:8px 0 12px;font-size:12px;}
   body.styled-skin .chat-empty-hero{padding:32px 24px;}
@@ -3412,9 +3414,12 @@
     body.styled-skin .chat-sidebar .chat-recent-row .row-label{display:block !important;}
     /* A 150-word preview is still too tall when a compact window wraps it
        into a narrow bubble. Keep the collapsed portion to about one quarter
-       of the conversation viewport; Show more still reveals the full reply. */
-    body.styled-skin .chat-expandable-preview,
-    body.styled-skin .chat-pre-reasoning-preview{
+       of the conversation viewport; Show more still reveals the full reply.
+       Only a cut-off preview has a Show more, so a short message stays whole. */
+    body.styled-skin .chat-expandable-preview[data-chat-truncated],
+    body.styled-skin .chat-pre-reasoning-preview[data-chat-truncated],
+    body.styled-skin .chat-expandable-preview.chat-compact-preview-overflow,
+    body.styled-skin .chat-pre-reasoning-preview.chat-compact-preview-overflow{
       max-height:clamp(64px,calc(25vh - 44px),176px);
       overflow:hidden;
       -webkit-mask-image:linear-gradient(to bottom,#000 0, #000 calc(100% - 22px),transparent 100%);
@@ -3472,7 +3477,7 @@
     /* Bubbles get the phone's width: the desktop 28% row inset that keeps
        1:1 bubbles off the far edge is too greedy at 390px -- shrink it, and
        raise the 72% body cap. */
-    body.styled-skin .chat-msg-row.is-direct{padding-right:8%;}
+    body.styled-skin .chat-msg-row.is-direct:not(.is-you){padding-right:8%;}
     body.styled-skin .chat-msg-row.is-direct.is-you{padding-right:0;padding-left:8%;}
     body.styled-skin .chat-msg-row.is-direct .chat-msg-body{max-width:92%;}
     body.styled-skin .chat-msg-text{max-width:100%;}

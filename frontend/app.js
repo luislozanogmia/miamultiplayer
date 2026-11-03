@@ -5119,12 +5119,15 @@
       applyNativeConversationList(results[1]);
     }).catch(function(){});
   }
-  // A bot's main chat in this team, made the first time you open it.
+  // The chat you last had open with a bot in this team, else its main chat,
+  // made the first time you open it.
   function openTeamBotChat(bot){
-    var existing=(chatWs.nativeConversations||[]).filter(function(conversation){
-      var metadata=conversation.metadata||{};
-      return metadata.botId===bot.id && metadata.conversationMode!=='fresh';
-    })[0];
+    var lastChat=rememberedAgentChats()[bot.id];
+    var botChats=(chatWs.nativeConversations||[]).filter(function(conversation){
+      return (conversation.metadata||{}).botId===bot.id;
+    });
+    var existing=botChats.filter(function(conversation){ return conversation.id===lastChat; })[0]
+      || botChats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0];
     if(existing)return loadChatRoom(existing.id,'agent',bot.name);
     var workspace=activeWorkspaceKey;
     return api('/api/conversations?workspace=solo',{method:'POST',body:{type:'bot',name:bot.name,
@@ -6021,6 +6024,40 @@
     try { return localStorage.getItem(key) || ''; } catch(_activeChatStorageError) { return ''; }
   }
 
+  // The chat you last had open with Mia or each bot. Their sidebar row opens
+  // it, so a "New conversation" stays where you are until you pick another
+  // one from History.
+  function agentChatsStorageKey(){
+    return 'miaAgentChats:' + String(currentUser || 'preview').toLowerCase() + ':' + activeWorkspaceKey;
+  }
+  function rememberedAgentChats(){
+    var key = agentChatsStorageKey(), raw = '';
+    try {
+      if(window.miaDesktop && window.miaDesktop.state && typeof window.miaDesktop.state.get === 'function') raw = window.miaDesktop.state.get(key) || '';
+    } catch(_agentChatsDesktopStateError) {}
+    try { raw = raw || localStorage.getItem(key) || ''; } catch(_agentChatsStorageError) {}
+    try { return JSON.parse(raw) || {}; } catch(_agentChatsParseError) { return {}; }
+  }
+  function agentChatOwnerId(conversation){
+    if(isNativeMiaConversation(conversation)) return 'gateway';
+    var metadata = conversation && conversation.metadata || {};
+    return conversation && conversation.type === 'bot' && metadata.botId ? String(metadata.botId) : null;
+  }
+  function rememberAgentChat(roomId){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+    var ownerId = agentChatOwnerId(conversation);
+    if(!ownerId) return;
+    var chats = rememberedAgentChats();
+    chats[ownerId] = roomId;
+    var key = agentChatsStorageKey(), value = JSON.stringify(chats);
+    try {
+      if(window.miaDesktop && window.miaDesktop.state && typeof window.miaDesktop.state.set === 'function') window.miaDesktop.state.set(key, value);
+    } catch(_agentChatsDesktopStateError) {}
+    try { localStorage.setItem(key, value); } catch(_agentChatsStorageError) {}
+    var agent = ownerId === 'gateway' ? chatWs.gatewayAgent : (chatWs.allAgents || []).filter(function(item){ return String(item.id) === ownerId; })[0];
+    if(agent){ agent.roomId = roomId; agent.nativeConversationId = roomId; agent.conversationId = roomId; }
+  }
+
   function restorableNativeConversation(conversations, roomId){
     if(!roomId || !Array.isArray(conversations)) return null;
     return conversations.filter(function(conversation){
@@ -6545,8 +6582,13 @@
     // A personal agent's chat is neither Mia nor a bot; its own sidebar list opens it.
     var agentRooms = rooms.filter(function(room){ return room.kind === 'agent' && !(typeof window !== 'undefined' && window.miaPrivateAgents && window.miaPrivateAgents.isConversation(room.nativeConversation)); });
     var seenBotRooms = {};
-    // A bot's sidebar row is its main chat; chats started with "New
-    // conversation" live in History and only stand in when nothing else exists.
+    // A bot's sidebar row opens the chat you last had open with it, else its
+    // main chat; chats started with "New conversation" live in History and only
+    // stand in when nothing else exists.
+    var agentChats = rememberedAgentChats();
+    function currentAgentRoom(main, ownerId, candidates){
+      return candidates.filter(function(room){ return room.id === agentChats[ownerId]; })[0] || main;
+    }
     var uniqueBotRooms = agentRooms.filter(function(room){ return !isNativeMiaConversation(room.nativeConversation); })
       .sort(function(left, right){
         var leftFresh = left.metadata && left.metadata.conversationMode === 'fresh' ? 1 : 0;
@@ -6559,24 +6601,30 @@
         seenBotRooms[key] = true;
         return true;
       });
-    chatWs.allAgents = uniqueBotRooms.map(function(room){
+    chatWs.allAgents = uniqueBotRooms.map(function(main){
+      var ownerId = String(main.agentId || main.id);
+      var room = currentAgentRoom(main, ownerId, agentRooms.filter(function(item){
+        return !isNativeMiaConversation(item.nativeConversation) && String(item.agentId || item.id) === ownerId;
+      }));
       return {
-        id: room.agentId || room.id,
-        name: room.name,
+        id: main.agentId || main.id,
+        name: main.name,
         roomId: room.roomId,
         conversationId: room.conversationId,
         nativeConversationId: room.id,
-        departments: room.metadata.departments || []
+        departments: main.metadata.departments || []
       };
     });
     if(Array.isArray(chatWs.botRecords) && chatWs.botRecords.length) syncChatBotRecords(chatWs.botRecords);
-    // Mia's sidebar row is her original chat; chats started with "New
-    // conversation" (conversationMode 'fresh') live in History, like bots'.
+    // Mia's row works the same way: the chat you last had open, else her
+    // original chat. "New conversation" chats (conversationMode 'fresh') live
+    // in History, like bots'.
     var miaRooms = agentRooms.filter(function(room){ return isNativeMiaConversation(room.nativeConversation); });
     var mia = miaRooms.filter(function(room){
       var metadata = room.nativeConversation && room.nativeConversation.metadata || {};
       return metadata.conversationMode !== 'fresh';
     })[0] || miaRooms[0];
+    if(mia) mia = currentAgentRoom(mia, 'gateway', miaRooms);
     chatWs.gatewayAgent = mia ? {id:'gateway', name:mia.name || 'Mia', roomId:mia.roomId, conversationId:mia.id, manager:true, department:'Mia'} : null;
     chatWs.allDepartments = chatWs.rooms.departments.map(function(room){ return room.department; });
     chatWs.humans = [];
@@ -10390,7 +10438,9 @@
     if(dm) return dmLabel(dm);
     if(chatWs.gatewayAgent && (chatWs.gatewayAgent.roomId === roomId || chatWs.gatewayAgent.nativeConversationId === roomId)) return 'Mia';
     var agent = chatWs.allAgents.filter(function(item){ return item.roomId === roomId || item.nativeConversationId === roomId; })[0];
-    return agent ? agent.name : 'New message';
+    if(agent) return agent.name;
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+    return conversation && conversation.name || 'New message';
   }
   // In the desktop app notifications are native (the main process shows
   // them, and macOS asks "Allow notifications from Mia?" the first time).
@@ -14149,11 +14199,10 @@
       : 'Ask the OS anything...';
   }
 
-  // One strong inline prompt suggestion replaces the old batch of pills. The
-  // suggestion is intentionally stable and easy to accept with Tab, so it
-  // reads like a nudge inside the composer rather than another control row.
+  // One inline prompt suggestion replaces the old batch of pills, easy to
+  // accept with Tab. Once a chat has messages it only ever offers the next step
+  // from the latest reply, and shows nothing when there isn't one.
   var LS_AGENT_SUGGESTIONS = 'miaos.agentSuggestions';
-  var CHAT_INLINE_SUGGESTION = 'Can we create a newsletter agent?';
   function agentSuggestionsEnabled(){
     return localStorage.getItem(LS_AGENT_SUGGESTIONS) !== 'off';
   }
@@ -14189,7 +14238,7 @@
       if(chatWs.activeKind === 'agent') return 'What should I ask ' + (chatWs.activeLabel || 'this bot') + '?';
       if(chatWs.activeKind === 'dm' || chatWs.activeKind === 'group') return 'What should we work on together?';
     }
-    return CHAT_INLINE_SUGGESTION;
+    return '';
   }
   function updateChatSuggestions(roomId){
     renderChatSuggestions();
@@ -14245,9 +14294,13 @@
       miaOnboardingChat = res.data;
       // A bot-owned browser tab in front keeps that bot's chat in the panel.
       var followingBot = String(browserFollowKey || '').indexOf('|bot:') !== -1;
+      // A different chat you already have open stays open; the onboarding
+      // questions wait in their own chat instead of pulling you back to them.
+      var openChat = chatWs.activeRoomId || storedActiveChatLocation();
+      var otherChatOpen = !!openChat && openChat !== res.data.conversationId;
       // Onboarding is Solo's chat; opening it in another workspace refused
       // every send there as FORBIDDEN.
-      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1 && !followingBot && activeWorkspaceKey === 'solo'){
+      if(['name','topics','schedule','news-created'].indexOf(res.data.phase) !== -1 && !followingBot && !otherChatOpen && activeWorkspaceKey === 'solo'){
         loadChatRoom(res.data.conversationId, 'agent', 'Mia');
       } else if(chatWs.activeRoomId === res.data.conversationId){
         renderChatThread();
@@ -14315,7 +14368,9 @@
     var mentionOpen = typeof chatMention !== 'undefined' && chatMention.open;
     var show = !inHubRoom() && chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
     var text = suggestion.querySelector('span');
-    if(text) text.textContent = chatInlineSuggestionText();
+    var suggested = chatInlineSuggestionText();
+    if(text) text.textContent = suggested;
+    show = show && !!suggested;
     suggestion.hidden = !show;
     suggestion.setAttribute('aria-hidden', show ? 'false' : 'true');
   }
@@ -14565,6 +14620,7 @@
     chatWs.activeLabel = label;
     if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
     if(roomId !== AGENT_SETUP_ROOM_ID) saveActiveChatLocation(roomId);
+    rememberAgentChat(roomId);
     renderChatSidebar();
     refreshChatMain();
     if(chatWs.configured === false) return;
