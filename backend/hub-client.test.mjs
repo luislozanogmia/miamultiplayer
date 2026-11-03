@@ -130,9 +130,9 @@ function wfProxy(reply={}){
  };
  return {seen,send};
 }
-test('every workflow route takes the Hub\'s 2 MiB response limit, and only definition writes a larger body',()=>{
+test('every workflow route takes the Hub\'s 4 MiB response limit, and only definition writes a larger body',()=>{
  for(const [method,route] of [['GET','/workflows'],['GET','/workflows/'+WF_ID],['GET','/workflow-runs'],['GET','/workflow-runs?state=recent'],['GET','/workflow-runs/'+WF_ID],['GET','/workflow-steps'],['GET','/workflow-approvals?state=pending'],['POST','/workflow-runs/'+WF_ID+'/steps/1/claim'],['POST','/workflows/'+WF_ID+'/runs']])
-  assert.equal(hubRouteLimits(method,WF_BASE+route).response,2097152,route);
+  assert.equal(hubRouteLimits(method,WF_BASE+route).response,4194304,route);
  assert.equal(hubRouteLimits('GET',WF_BASE+'/channels').response,131072);
  assert.equal(hubRouteLimits('POST',WF_BASE+'/channels').response,131072);
  assert.equal(hubRouteLimits('POST',WF_BASE+'/workflows').request,16384);
@@ -143,7 +143,7 @@ test('every workflow route takes the Hub\'s 2 MiB response limit, and only defin
 });
 test('a step\'s pinned bot instructions pass through the proxy at the workflow limit',async()=>{
  const route=WF_BASE+'/workflow-runs/'+WF_ID+'/steps/12/definition';
- assert.equal(hubRouteLimits('GET',route).response,2097152);
+ assert.equal(hubRouteLimits('GET',route).response,4194304);
  const {seen,send}=wfProxy({definition:{version:3,instructions:'x'.repeat(6000),digest:'0'.repeat(64)}});
  const answer=await send('GET',route);
  assert.equal(answer.code,200);
@@ -160,11 +160,12 @@ test('a 16 KB definition reaches the Hub, a larger one and an oversized run body
  const run=await send('POST',WF_BASE+'/workflows/'+WF_ID+'/runs',{id:WF_ID,summary:'x'.repeat(9000)});
  assert.equal(run.code,413);assert.equal(seen.length,1);
 });
-test('a workflow response over 128 KB passes up to 2 MiB and stops beyond it',async()=>{
+test('a workflow response over 128 KB passes up to 4 MiB and stops beyond it',async()=>{
  const body=size=>JSON.stringify({workflows:[{name:'x'.repeat(size)}]});
  assert.equal((await wfProxy(body(700*1024)).send('GET',WF_BASE+'/workflows')).code,200);
  assert.equal((await wfProxy(body(300*1024)).send('GET',WF_BASE+'/workflows/'+WF_ID)).code,200);
- assert.equal((await wfProxy(body(2100*1024)).send('GET',WF_BASE+'/workflows')).code,503);
+ assert.equal((await wfProxy(body(2100*1024)).send('GET',WF_BASE+'/workflows')).code,200);
+ assert.equal((await wfProxy(body(4100*1024)).send('GET',WF_BASE+'/workflows')).code,503);
  assert.equal((await wfProxy(body(300*1024)).send('GET',WF_BASE+'/channels')).code,503);
 });
 test('only the exact workflow query strings are forwarded',async()=>{
