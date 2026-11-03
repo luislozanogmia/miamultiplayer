@@ -8,7 +8,7 @@ const ADMIN_END = { author_id: 'system:admin', author_type: 'system' };
 
 // The real bar in a small stand-in for the browser, signed in and sharing one tab group.
 async function sharedBar() {
-  const sent = [], toasts = [], listeners = {};
+  const sent = [], toasts = [], announced = [], listeners = {};
   const bar = { hidden: true, innerHTML: '', addEventListener(kind, fn) { listeners[kind] = fn; } };
   const state = { groups: [{ id: 'g1', name: 'Launch' }], selectedGroupId: 'g1',
     tabs: [{ id: 't1', groupId: 'g1', active: true, url: 'https://example.com/', title: 'Example' }] };
@@ -16,16 +16,16 @@ async function sharedBar() {
     document: { getElementById: () => bar }, addEventListener() {},
     miaDesktop: { browser: { command: async () => state, onState() {} } },
     MiaSpaceHost: { me: () => ({ id: 'me', name: 'Me' }), teamKey: () => 'hub_team', channels: () => [{ id: CHANNEL, name: 'general' }],
-      activeChannelId: () => CHANNEL, toast: (text) => toasts.push(text), send: async (id, text) => { sent.push(text); } },
+      activeChannelId: () => CHANNEL, toast: (text) => toasts.push(text), sharedSession: (active) => announced.push(active), send: async (id, text) => { sent.push(text); } },
   };
   const context = vm.createContext({ window, document: window.document, crypto, setInterval() { return 1; }, clearInterval() {},
-    setTimeout() { return 1; }, clearTimeout() {}, Date, Promise, JSON, Object, Array, Uint8Array, String, Number });
-  for (const file of ['shared-space.js', 'shared-space-ui.js']) vm.runInContext(await readFile(new URL('./' + file, import.meta.url), 'utf8'), context);
+    setTimeout() { return 1; }, clearTimeout() {}, Date, Promise, JSON, Object, Array, Uint8Array, String, Number, URL, URLSearchParams });
+  for (const file of ['safe-page-url.js', 'shared-space.js', 'shared-space-ui.js']) vm.runInContext(await readFile(new URL('./' + file, import.meta.url), 'utf8'), context);
   await new Promise((resolve) => setImmediate(resolve));
   const click = (attribute) => listeners.click({ target: { closest: () => ({ hasAttribute: (name) => name === attribute, getAttribute: () => '' }) } });
   const model = window.MiaSharedSpace, ui = window.MiaSpaceUI;
   const spaceId = () => model.decode(sent[0]).space;
-  return { bar, sent, toasts, click, model, ui, spaceId, sharing: () => /data-space-leave/.test(bar.innerHTML) };
+  return { bar, sent, toasts, announced, click, model, ui, spaceId, sharing: () => /data-space-leave/.test(bar.innerHTML) };
 }
 
 test('a spoofed end message from a teammate leaves the session open', async () => {
@@ -72,4 +72,12 @@ test('an ended session is no longer offered, and a teammate\'s late update does 
   assert.doesNotMatch(page.bar.innerHTML, /data-space-join/);
   page.ui.receive(CHANNEL, invite('abcdef0123456789'));
   assert.doesNotMatch(page.bar.innerHTML, /data-space-join/);
+});
+
+test('the backend is told when a shared session starts and ends', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  assert.deepEqual(page.announced, [true]);
+  page.click('data-space-leave');
+  assert.deepEqual(page.announced, [true, false]);
 });

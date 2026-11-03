@@ -5871,6 +5871,7 @@
     },
     activeChannelId:function(){ return hubChannel(chatWs.activeRoomId) ? chatWs.activeRoomId : null; },
     toast:function(text){ showBenchToast(text); },
+    sharedSession:function(active){ api('/api/browser/shared-session',{method:'POST',body:{active:active===true}}).catch(function(){}); },
     send:function(channelId,text){
       if(!hubWorkspace() || !hubChannel(channelId))return Promise.reject(new Error('That channel is no longer available.'));
       return hubCall('POST',hubPath()+'/channels/'+channelId+'/messages',{id:window.MiaHubChat.id(),text:text});

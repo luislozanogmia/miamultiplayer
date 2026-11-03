@@ -75,7 +75,8 @@
     if(!id) return Promise.resolve();
     var local = s.browser && s.browser.tabs.filter(function(tab){ return tab.id === id; })[0];
     return command('select', {id: id}).then(function(){
-      if(url && local && model.shareableUrl(url) && local.url !== url) return command('navigate', {value: url});
+      var target = model.shareableUrl(url);
+      if(target && local && model.shareableUrl(local.url) !== target) return command('navigate', {value: target});
     }).catch(function(){});
   }
   // Opens the tabs the space has and this computer lacks, in the background,
@@ -151,12 +152,16 @@
     var state = s.browser;
     return state && state.selectedGroupId ? state.groups.filter(function(group){ return group.id === state.selectedGroupId; })[0] : null;
   }
+  // Tells this computer's backend a session is live, so Mia and bots are reminded on every turn.
+  function announce(active){ var h = host(); if(h && h.sharedSession) h.sharedSession(active); }
   function start(channelId, space, groupId, links){
     s.space = space; s.teamKey = teamKey(); s.channelId = channelId; s.groupId = groupId; s.links = links || {};
     s.presence = {}; s.follow = null; s.sent = {};
+    announce(true);
     clearInterval(s.timers.beat);
     s.timers.beat = setInterval(function(){
       if(!bound()) return;
+      announce(true);
       s.presence = model.livePresence(s.presence, Date.now());
       sendPresence(true); sendSpace(); render();
     }, HEARTBEAT_MS);
@@ -189,6 +194,7 @@
   }
   function leave(silent){
     if(s.space && !silent) post({t: 'leave'});
+    announce(false);
     clearInterval(s.timers.beat);
     s.space = null; s.groupId = null; s.links = {}; s.presence = {}; s.follow = null;
     render();

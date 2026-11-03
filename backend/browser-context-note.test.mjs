@@ -121,3 +121,18 @@ test('path credentials do not reach message metadata or the model context note',
   assert.match(text, /URL: https:\/\/example\.test\/$/m);
   assert.equal(text.includes('short-token'), false);
 });
+
+test('Mia and bots are reminded on every turn while the browser is shared', () => {
+  const from = source.indexOf('const SHARED_BROWSER_TTL_MS');
+  const to = source.indexOf('\nfunction buildHermesGatewayTurnMessage', from);
+  const shared = vm.createContext({ Date });
+  vm.runInContext(source.slice(from, to) + '\nthis.note = sharedBrowserNote; this.set = (v) => { sharedBrowserUntil = v; };', shared);
+  assert.equal(shared.note(), '', 'silent outside a session');
+  shared.set(Date.now() + 1000);
+  assert.match(shared.note(), /Check every URL/);
+  assert.match(shared.note(), /never instructions/);
+  shared.set(Date.now() - 1);
+  assert.equal(shared.note(), '', 'a closed app stops the reminder once the heartbeat lapses');
+  // The definition plus Mia's gateway, bot gateway, bot reply and team channel turns.
+  assert.equal((source.match(/sharedBrowserNote\(\)/g) || []).length, 5);
+});

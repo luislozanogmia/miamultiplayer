@@ -1,8 +1,9 @@
 (function(root, factory){
-  var api = factory();
-  if(typeof module === 'object' && module.exports) module.exports = api;
+  var node = typeof module === 'object' && module.exports;
+  var api = factory(node ? require('./safe-page-url.js') : root.MiaSafePageUrl);
+  if(node) module.exports = api;
   else root.MiaSharedSpace = api;
-})(typeof window !== 'undefined' ? window : globalThis, function(){
+})(typeof window !== 'undefined' ? window : globalThis, function(safePageUrl){
   'use strict';
   // A shared space is a tab group several teammates have open at once. Each
   // person opens its pages with their own sign-ins; the space only shares
@@ -30,12 +31,10 @@
     return !!message && message.t === 'end' && row.author_type === 'system' && row.author_id === ADMIN_AUTHOR;
   }
 
-  // Only web pages are shared: a teammate can never open a local file or a
-  // script URL on someone else's computer.
-  function shareableUrl(url){
-    var value = String(url || '').trim();
-    return /^https?:\/\/[^\s]+$/i.test(value) && value.length <= 4096 ? value : '';
-  }
+  // Only web pages are shared, with secrets taken out of the address: a teammate
+  // can never open a local file or a script URL on someone else's computer, and
+  // tokens in a URL stay on the computer that has them.
+  function shareableUrl(url){ return safePageUrl.safeBrowserPageUrl(url); }
   function cleanTabs(list){
     var seen = {};
     return (Array.isArray(list) ? list : []).filter(function(tab){

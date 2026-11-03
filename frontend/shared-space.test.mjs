@@ -20,7 +20,18 @@ test('only web pages are shared, never local files or scripts', () => {
   assert.equal(space.shareableUrl('javascript:alert(1)'), '');
   const next = space.applySpace(null, { t: 'space', space: 's1', rev: 1, from: { id: 'u1' },
     tabs: [{ k: 'aaaaaa01', url: 'file:///Users/x' }, { k: 'aaaaaa02', url: 'https://a.com' }] });
-  assert.deepEqual(next.tabs.map((tab) => tab.url), ['', 'https://a.com']);
+  assert.deepEqual(next.tabs.map((tab) => tab.url), ['', 'https://a.com/']);
+});
+
+test('secrets in an address never reach teammates, sent or received', () => {
+  assert.equal(space.shareableUrl('https://user:pw@x.test/p?token=abc&q=ok#access_token=zzz'), 'https://x.test/p?q=ok');
+  assert.equal(space.shareableUrl('https://x.test/reset/abc123'), 'https://x.test/');
+  const tabs = space.localTabList(null, {}, [{ id: 't1', url: 'https://x.test/p?token=abc', title: 'P' }], () => 'aaaaaa01');
+  assert.equal(tabs.tabs[0].url, 'https://x.test/p');
+  const received = space.applySpace(null, { t: 'space', space: 's1', rev: 1, from: { id: 'u1' }, tabs: [{ k: 'aaaaaa01', url: 'https://x.test/p?password=abc' }] });
+  assert.equal(received.tabs[0].url, 'https://x.test/p', 'a list from a modified app is cleaned on arrival');
+  const here = space.applyPresence({}, { t: 'here', from: { id: 'u1' }, url: 'https://x.test/p?sig=abc' }, 1);
+  assert.equal(here.u1.url, 'https://x.test/p');
 });
 
 test('the tab list settles on the same version everywhere', () => {
@@ -65,7 +76,7 @@ test('local tabs map onto the space: new ones get a key, closed ones drop out', 
   const s = { tabs: [{ k: 'aaaaaa01', url: 'https://a.com' }] };
   const list = space.localTabList(s, { aaaaaa01: 't1', aaaaaa02: 't2' },
     [{ id: 't1', url: 'about:blank', title: 'A' }, { id: 't3', url: 'https://c.com', title: 'C' }, { id: 't4', url: 'file:///x' }], makeKey);
-  assert.deepEqual(list.tabs, [{ k: 'aaaaaa01', url: 'https://a.com', title: 'A' }, { k: 'newkey01', url: 'https://c.com', title: 'C' }]);
+  assert.deepEqual(list.tabs, [{ k: 'aaaaaa01', url: 'https://a.com', title: 'A' }, { k: 'newkey01', url: 'https://c.com/', title: 'C' }]);
   assert.deepEqual(list.links, { aaaaaa01: 't1', newkey01: 't3' });
   assert.ok(space.sameTabs(list.tabs, list.tabs.map((tab) => ({ ...tab }))));
   assert.ok(!space.sameTabs(list.tabs, list.tabs.slice(1)));
