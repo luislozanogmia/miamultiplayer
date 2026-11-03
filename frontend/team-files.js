@@ -239,16 +239,20 @@
   }
 
   // ---- Link and header checks ---------------------------------------------------
-  // A signed link must point at this team's own bucket, over https, at this
-  // file's own key, before anything is sent to it or read from it.
+  // The authenticated Hub supplies the storage origin with each signed link.
+  // Keep the bucket name out of public client code, then bind the link to that
+  // exact origin and the requested file's key before transferring bytes.
   function validateS3Url(raw, expected){
     expected = expected || {};
     var url;
     try { url = new URL(String(raw)); } catch(_){ throw fail('unsafe_url'); }
     if(String(raw).length > 4096 || url.protocol !== 'https:' || url.username || url.password || url.port || url.hash) throw fail('unsafe_url');
     if(!ID.test(expected.teamId || '') || !ID.test(expected.fileId || '') || !ID.test(expected.spaceId || '')) throw fail('unsafe_url');
-    var host = new RegExp('^mia-hub-files-[0-9]{12}-' + expected.teamId + '\\.s3\\.us-east-1\\.amazonaws\\.com$');
-    if(!host.test(url.hostname)) throw fail('unsafe_url');
+    var origin;
+    try { origin = new URL(String(expected.storageOrigin || '')); } catch(_){ throw fail('unsafe_url'); }
+    if(origin.protocol !== 'https:' || origin.username || origin.password || origin.port || origin.pathname !== '/' || origin.search || origin.hash
+      || !/^[a-z0-9][a-z0-9.-]*\.s3\.us-east-1\.amazonaws\.com$/.test(origin.hostname)
+      || origin.origin !== expected.storageOrigin || url.origin !== origin.origin) throw fail('unsafe_url');
     if(url.pathname !== '/spaces/' + expected.spaceId + '/' + expected.fileId) throw fail('unsafe_url');
     return url.toString();
   }
@@ -341,7 +345,7 @@
       status: function(id){ return call('GET', base + '/files/' + fileId(id) + '/status'); },
       download: function(id){
         return call('GET', base + '/files/' + fileId(id) + '/download').then(function(r){
-          if(!r || typeof r.url !== 'string' || !HEX64.test(r.sha256 || '')) throw fail('bad_response');
+          if(!r || typeof r.url !== 'string' || typeof r.storageOrigin !== 'string' || !HEX64.test(r.sha256 || '')) throw fail('bad_response');
           return r;
         });
       },
@@ -458,7 +462,7 @@
     }
 
     async function putPart(job, signed, range, partHash){
-      var url = validateS3Url(signed.url, {teamId: teamId, spaceId: job.record.spaceId, fileId: job.record.fileId});
+      var url = validateS3Url(signed.url, {teamId: teamId, spaceId: job.record.spaceId, fileId: job.record.fileId, storageOrigin: signed.storageOrigin});
       var headers = partHeaders(signed.headers, partHash);
       var attempt = 0, lastCode = 'part_failed';
       while(attempt < PART_ATTEMPTS){
@@ -671,7 +675,7 @@
     var file = options.file, client = options.client, fetcher = options.fetch || root.fetch.bind(root);
     var reply = await client.download(file.fileId);
     if(file.sha256 && reply.sha256 !== file.sha256) throw fail('integrity_failed');
-    var url = validateS3Url(reply.url, {teamId: client.teamId, spaceId: file.spaceId, fileId: file.fileId});
+    var url = validateS3Url(reply.url, {teamId: client.teamId, spaceId: file.spaceId, fileId: file.fileId, storageOrigin: reply.storageOrigin});
     var response;
     try { response = await fetcher(url, {method: 'GET', credentials: 'omit', redirect: 'error', signal: options.signal}); }
     catch(_){ throw fail('download_failed'); }

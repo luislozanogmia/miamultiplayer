@@ -55,6 +55,14 @@ function safeBundlePath(value) {
     && !WINDOWS_RESERVED.test(part));
 }
 
+// A local app can sit beside a developer's credentials and build output.
+// Never put those files in a team bundle, even when they are not dotfiles.
+function sensitiveAppAsset(value) {
+  const basename = String(value || '').split('/').pop();
+  return /(?:^|[._-])(?:auth|credential|credentials|secret|secrets|token|tokens|password|passwd|private|keychain|service-account)(?:[._-]|$)/i.test(basename)
+    || /\.(?:pem|key|p12|pfx|jks|keystore|map|db|sqlite|sqlite3|log|bak|backup)$/i.test(basename);
+}
+
 function safeAppName(value) {
   const name = String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   return Array.from(name).slice(0, MAX_NAME_LENGTH).join('').trim();
@@ -100,6 +108,7 @@ function collectBundleFiles(folder) {
       if (!safeBundlePath(relative)) {
         throw appError(400, 'invalid_path', `"${relative}" has a name that won't work on every computer. Rename it and try again.`);
       }
+      if (sensitiveAppAsset(relative)) throw appError(400, 'sensitive_file', `"${relative}" looks private. Move it out of the app folder before publishing.`);
       const stat = fs.lstatSync(full);
       if (!stat.isFile()) continue;
       total += stat.size;
@@ -131,7 +140,7 @@ function buildBundle(folder, { name } = {}) {
     return { path: file.path, base64: bytes.toString('base64') };
   });
   const bytes = Buffer.from(JSON.stringify({ format: BUNDLE_FORMAT, name: appName, entry: ENTRY, files }));
-  return { name: appName, filename: bundleFilename(appName), bytes, fileCount: files.length, sha256: sha256Hex(bytes) };
+  return { name: appName, filename: bundleFilename(appName), bytes, files: list.map(file => file.path), fileCount: files.length, sha256: sha256Hex(bytes) };
 }
 
 function sha256Hex(bytes) {
@@ -153,7 +162,7 @@ function parseBundle(bytes) {
   if (parsed.files.length > MAX_FILES) throw appError(413, 'too_many_files', `This app has more than ${MAX_FILES} files.`);
   let total = 0;
   const files = parsed.files.map(file => {
-    if (!file || typeof file !== 'object' || !safeBundlePath(file.path)) throw invalid();
+    if (!file || typeof file !== 'object' || !safeBundlePath(file.path) || sensitiveAppAsset(file.path)) throw invalid();
     if (typeof file.base64 !== 'string' || file.base64.length % 4 !== 0 || !BASE64.test(file.base64)) throw invalid();
     const content = Buffer.from(file.base64, 'base64');
     total += content.length;
@@ -323,11 +332,20 @@ function registerAppRoutes(app, { express, requireAuth, workspaceDir, dataDir, a
     try { res.json(await listLocal({ workspaceDir: workspaceDir(), dataDir: dataDir(), workspaceId: workspaceId(req) })); }
     catch (error) { send(res, error); }
   });
-  // The bundle comes back as bytes; the page hands it to the team files upload.
+  // Preview the exact file list and digest before any bytes go to the team.
+  app.post('/api/apps/local/preview', requireAuth, express.json({ limit: '8kb' }), (req, res) => {
+    try {
+      const body = req.body || {};
+      const bundle = buildBundle(resolveLocalApp(workspaceDir(), body.id), { name: body.name });
+      res.json({ files: bundle.files, fileCount: bundle.fileCount, sha256: bundle.sha256 });
+    } catch (error) { send(res, error); }
+  });
+  // The bundle comes back as bytes only if it matches the reviewed digest.
   app.post('/api/apps/local/bundle', requireAuth, express.json({ limit: '8kb' }), (req, res) => {
     try {
       const body = req.body || {};
       const bundle = buildBundle(resolveLocalApp(workspaceDir(), body.id), { name: body.name });
+      if (!SHA256.test(String(body.sha256 || '')) || bundle.sha256 !== body.sha256) throw appError(409, 'app_changed', 'The app files changed since you reviewed them. Review the file list again.');
       res.set('Content-Type', 'application/octet-stream');
       res.set('X-Mia-App-Filename', encodeURIComponent(bundle.filename));
       res.send(bundle.bytes);

@@ -482,7 +482,7 @@ test('styled chat bot avatars open the selected bot in the right profile panel',
   assert.match(source, /id="styledAgentEditSave"/);
   assert.match(source, /id="styledAgentEditDelete"/);
   assert.match(source, /if\(remove\) remove\.addEventListener\('click', deleteEditCinemaAgent\)/);
-  assert.match(source, /function appConfirm\(message, confirmLabel\)[\s\S]*app-confirm-overlay open[\s\S]*confirm\.addEventListener\('click',[\s\S]*finish\(true\)/);
+  assert.match(source, /function appConfirm\(message, confirmLabel, options\)[\s\S]*app-confirm-overlay open[\s\S]*confirm\.addEventListener\('click',[\s\S]*finish\(true\)/);
   assert.match(source, /function deleteBenchAgent\(a, onDeleted\)[\s\S]*appConfirm\('Archive ' \+ a\.name \+ '\? [\s\S]*method:'DELETE'/);
   assert.match(source, /function removeDeletedBotChatState\(botId\)[\s\S]*metadata\.botId[\s\S]*var wasActive = deletedRoomIds\.indexOf\(String\(chatWs\.activeRoomId \|\| ''\)\) !== -1/);
   assert.match(source, /function removeDeletedBotChatState\(botId\)[\s\S]*if\(wasActive\)\{[\s\S]*chatWs\.activeRoomId = null[\s\S]*saveActiveChatLocation\(null\)[\s\S]*refreshChatMain\(\)/);

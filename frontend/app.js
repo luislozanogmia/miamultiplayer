@@ -353,7 +353,8 @@
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
     });
   }
-  function appConfirm(message, confirmLabel){
+  function appConfirm(message, confirmLabel, options){
+    options = options || {};
     return new Promise(function(resolve){
       var previousFocus = document.activeElement;
       var overlay = document.createElement('div');
@@ -370,6 +371,12 @@
       copy.className = 'app-confirm-msg';
       copy.id = 'appConfirmMessage';
       copy.textContent = String(message || 'Are you sure?');
+      if(options.fileList){
+        card.style.maxWidth = '560px';
+        copy.style.whiteSpace = 'pre-wrap';
+        copy.style.maxHeight = '60vh';
+        copy.style.overflowY = 'auto';
+      }
 
       var actions = document.createElement('div');
       actions.className = 'app-confirm-actions';
@@ -408,7 +415,7 @@
       confirm.addEventListener('click', function(){ finish(true); });
       overlay.addEventListener('click', function(event){ if(event.target === overlay) finish(false); });
       document.addEventListener('keydown', onKeydown);
-      confirm.focus();
+      (options.fileList ? cancel : confirm).focus();
     });
   }
   function appPrompt(initialText, options){
@@ -8711,16 +8718,26 @@
       publishing = window.MiaAppsPage.publishFolder({call: hubCall, teamId: teamId, existing: existing, newId: newAppsId, item: folder, onStep: setStep,
         client: window.MiaTeamFiles.createClient({teamId: teamId, call: hubCall}), uploader: appsUploader(teamId), verdict: window.MiaTeamFiles.scanVerdict,
         sleep: function(ms){ return new Promise(function(done){ window.setTimeout(done, ms); }); },
-        buildBundle: function(appId){
-          return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name})}).then(function(res){
+        previewBundle: function(appId){
+          return api('/api/apps/local/preview', {method: 'POST', body: {id: appId, name: folder.name}}).then(function(res){
+            if(res.status !== 200) throw new Error(res.data.message || 'That app could not be checked.');
+            return res.data;
+          });
+        },
+        confirmBundle: function(files){
+          return appConfirm('Publish these ' + files.length + ' files to the team?\n\n' + files.join('\n'), 'Publish files', {fileList: true});
+        },
+        buildBundle: function(appId, sha256){
+          return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name, sha256: sha256})}).then(function(res){
             if(res.status !== 200) return res.json().catch(function(){ return {}; }).then(function(data){ throw new Error(data.message || 'That app could not be packed.'); });
             var filename = decodeURIComponent(res.headers.get('X-Mia-App-Filename') || 'app.miaapp');
             return res.blob().then(function(blob){ return {file: new File([blob], filename, {type: 'application/octet-stream'})}; });
           });
         }});
     }
-    publishing.then(function(){
+    publishing.then(function(result){
       delete appsPage.publishing[id];
+      if(result && result.cancelled) return renderAppsPage();
       showBenchToast(appsPage.isAdmin ? '"' + item.name + '" is published.' : '"' + item.name + '" is waiting for an admin to approve it.');
       return loadAppsCatalog(teamId);
     }).then(renderAppsPage).catch(function(error){

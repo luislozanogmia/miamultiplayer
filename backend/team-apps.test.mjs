@@ -53,6 +53,40 @@ test('dotfiles, node_modules and symlinks stay out of a bundle', (t) => {
   assert.doesNotMatch(bundle.bytes.toString(), /private/);
 });
 
+test('private files beside an app are refused before any bundle can be shared', (t) => {
+  for (const name of ['credentials.json', 'auth.json', 'keys/private.pem', 'assets/app.js.map', 'backup.sqlite']) {
+    const source = folder(t, { 'index.html': '<p>hello</p>', [name]: 'fixture-only' });
+    assert.throws(() => apps.buildBundle(source), (error) => error.code === 'sensitive_file', name);
+    assert.throws(() => apps.parseBundle(bundleBytes([entry, file(name, 'fixture-only')])), /damaged|not made by Mia/, name);
+  }
+});
+
+test('the reviewed app digest must still match before bundle bytes are returned', (t) => {
+  const source = folder(t, { 'index.html': '<p>one</p>' });
+  const handlers = new Map();
+  const app = { get() {}, post(route, ...middleware) { handlers.set(route, middleware.at(-1)); } };
+  const express = { json: () => () => {}, raw: () => () => {} };
+  apps.registerAppRoutes(app, { express, requireAuth: () => {}, workspaceDir: () => path.dirname(source) });
+  const call = (route, body) => {
+    const res = { statusCode: 200, headers: {}, status(code) { this.statusCode = code; return this; },
+      set(name, value) { this.headers[name] = value; return this; }, json(value) { this.data = value; return this; },
+      send(value) { this.bytes = value; return this; } };
+    handlers.get(route)({ body }, res);
+    return res;
+  };
+  const reviewed = call('/api/apps/local/preview', { id: 'folder:report', name: 'Report' });
+  assert.deepEqual(reviewed.data.files, ['index.html']);
+  fs.writeFileSync(path.join(source, 'index.html'), '<p>changed</p>');
+  const stale = call('/api/apps/local/bundle', { id: 'folder:report', name: 'Report', sha256: reviewed.data.sha256 });
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.data.error, 'app_changed');
+  assert.equal(stale.bytes, undefined);
+  const next = call('/api/apps/local/preview', { id: 'folder:report', name: 'Report' });
+  const accepted = call('/api/apps/local/bundle', { id: 'folder:report', name: 'Report', sha256: next.data.sha256 });
+  assert.ok(Buffer.isBuffer(accepted.bytes));
+  assert.equal(apps.sha256Hex(accepted.bytes), next.data.sha256);
+});
+
 test('a folder used through a link, or without an index.html, is refused', (t) => {
   const root = folder(t);
   const link = path.join(path.dirname(root), 'link');

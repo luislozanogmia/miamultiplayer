@@ -79,15 +79,18 @@ test('publishing a folder builds, uploads, then publishes that file', async () =
   const steps = [], calls = [];
   const uploader = fakeUploader({ state: 'scanning', record: { fileId: FILE } });
   await page.publishFolder({ call: async (...args) => { calls.push(args); return {}; }, teamId: TEAM, newId: () => APP, item: { id: 'folder:apps/report', name: 'report' },
-    uploader, onStep: (step) => steps.push(step), buildBundle: async (id) => { assert.equal(id, 'folder:apps/report'); return { file: {} }; } });
-  assert.deepEqual(steps, ['building', 'uploading', 'publishing']);
+    uploader, onStep: (step) => steps.push(step), previewBundle: async () => ({ files: ['index.html'], fileCount: 1, sha256: SHA }),
+    confirmBundle: async files => { assert.deepEqual(files, ['index.html']); return true; },
+    buildBundle: async (id, sha256) => { assert.equal(id, 'folder:apps/report'); assert.equal(sha256, SHA); return { file: {} }; } });
+  assert.deepEqual(steps, ['building', 'reviewing', 'uploading', 'publishing']);
   assert.deepEqual(calls, [['POST', `/v1/teams/${TEAM}/apps`, { id: APP, name: 'report', description: '', kind: 'bundle', fileId: FILE }]]);
   assert.equal(uploader.forgotten, 'upload-1');
 });
 
 test('a failed upload or a refused file stops before the Hub hears about it', async () => {
   const call = async () => assert.fail('must not publish');
-  const run = (script) => page.publishFolder({ call, teamId: TEAM, newId: () => APP, item: { id: 'x', name: 'x' }, uploader: fakeUploader(script), buildBundle: async () => ({ file: {} }) });
+  const run = (script) => page.publishFolder({ call, teamId: TEAM, newId: () => APP, item: { id: 'x', name: 'x' }, uploader: fakeUploader(script),
+    previewBundle: async () => ({ files: ['index.html'], fileCount: 1, sha256: SHA }), confirmBundle: async () => true, buildBundle: async () => ({ file: {} }) });
   await assert.rejects(run({ state: 'failed', error: { message: 'No connection.' } }), /No connection/);
   await assert.rejects(run({ state: 'quarantined' }), /virus check refused/);
   await assert.rejects(run({ state: 'scanning', record: { fileId: 'bad' } }), /did not finish/);
@@ -98,9 +101,20 @@ test('the Hub saying the file is not ready waits for the check once, then asks a
   const call = async () => { attempts++; if (attempts === 1) throw Object.assign(new Error('x'), { code: 'file_not_ready' }); return {}; };
   const replies = [{ scanStatus: 'PENDING' }, { scanStatus: 'NO_THREATS_FOUND' }];
   await page.publishFolder({ call, teamId: TEAM, newId: () => APP, item: { id: 'x', name: 'x' }, uploader: fakeUploader({ state: 'scanning', record: { fileId: FILE } }),
+    previewBundle: async () => ({ files: ['index.html'], fileCount: 1, sha256: SHA }), confirmBundle: async () => true,
     buildBundle: async () => ({ file: {} }), client: { status: async () => replies.shift() }, verdict: teamFiles.scanVerdict, sleep: async () => {} });
   assert.equal(attempts, 2);
   await assert.rejects(page.waitForScan({ fileId: FILE, client: { status: async () => ({ scanStatus: 'THREATS_FOUND' }) }, verdict: teamFiles.scanVerdict, sleep: async () => {} }), /refused/);
+});
+
+test('declining the exact app file list sends nothing to the team', async () => {
+  let built = false;
+  const result = await page.publishFolder({ call: async () => assert.fail('no team publish'), teamId: TEAM, item: { id: 'x', name: 'x' },
+    uploader: { addJob: () => assert.fail('no upload') }, previewBundle: async () => ({ files: ['index.html', 'css/a.css'], fileCount: 2, sha256: SHA }),
+    confirmBundle: async files => { assert.deepEqual(files, ['index.html', 'css/a.css']); return false; },
+    buildBundle: async () => { built = true; return { file: {} }; } });
+  assert.equal(result.cancelled, true);
+  assert.equal(built, false);
 });
 
 test('the real upload manager accepts the app space and reports a job to follow', () => {
@@ -139,7 +153,7 @@ test('opening a team app uses what is installed, otherwise downloads and install
 
 test('a sha mismatch during download is refused before anything is installed', async () => {
   let installed = false;
-  const client = { teamId: TEAM, download: async () => ({ url: `https://mia-hub-files-123456789012-${TEAM}.s3.us-east-1.amazonaws.com/spaces/${TEAM}/${FILE}`, sha256: 'e'.repeat(64) }) };
+  const client = { teamId: TEAM, download: async () => ({ url: `https://test-storage-${TEAM}.s3.us-east-1.amazonaws.com/spaces/${TEAM}/${FILE}`, storageOrigin: `https://test-storage-${TEAM}.s3.us-east-1.amazonaws.com`, sha256: 'e'.repeat(64) }) };
   await assert.rejects(page.installVersion({ teamId: TEAM, appId: APP, version: bundle({ state: 'approved' }), isInstalled: async () => false,
     download: (file) => teamFiles.downloadFile({ client, file, fetch: async () => assert.fail('must not fetch') }),
     install: async () => { installed = true; } }));

@@ -12,7 +12,8 @@ const owner='local-user@localhost',teamId='a'.repeat(32),runId='b'.repeat(32),ch
 const ident={subject:'user_owner',email:'owner@example.test',issuer:'https://clerk.miamultiplayer.com'};
 const json=(body,status=200)=>new Response(JSON.stringify(body),{status});
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
-const s3Url=id=>`https://mia-hub-files-123456789012-${teamId}.s3.us-east-1.amazonaws.com/spaces/${spaceId}/${id}`;
+const storageOrigin=`https://test-storage-${teamId}.s3.us-east-1.amazonaws.com`;
+const s3Url=id=>`${storageOrigin}/spaces/${spaceId}/${id}`;
 
 const WORKFLOW_ID='9'.repeat(32);
 // The block a bot ends its reply with.
@@ -80,13 +81,13 @@ function fixture(t,{interrupted=false,previous=[],reply='Worked hard.\n'+block()
         steps:[...earlier,...(hub.otherSteps||[]).map(n=>({n,text:hub.stepRow.text,bot_id:botId,bot_name:'Drafter',owner_id:'user_owner',state:'queued'})),{n:hub.stepRow.n,text:hub.stepRow.text,bot_id:botId,bot_name:'Drafter',owner_id:'user_owner',state:hub.stepState==='gone'?'done':hub.stepState}]});
     }
     if(route.endsWith('/files/uploads')) {hub.uploads.push(body);return json({fileId,partBytes:require('../frontend/team-files.js').PART_BYTES,partCount:1,expiresAt:0});}
-    if(route.endsWith('/parts')) return json({parts:body.parts.map(part=>({number:part.number,url:s3Url(fileId),headers:{'x-amz-checksum-sha256':Buffer.from(part.sha256,'hex').toString('base64')}}))});
+    if(route.endsWith('/parts')) return json({parts:body.parts.map(part=>({number:part.number,url:s3Url(fileId),storageOrigin,headers:{'x-amz-checksum-sha256':Buffer.from(part.sha256,'hex').toString('base64')}}))});
     if(route.endsWith('/complete')) return json({scanStatus:'PENDING'});
     if(route.endsWith('/status')) {hub.scans++;return json(hub.scanReply||{scanStatus:'NO_THREATS_FOUND',state:'ready'});}
     if(route.endsWith('/download')) {
       hub.downloads=(hub.downloads||0)+1;
       if(hub.downloadError) return json({error:hub.downloadError[0]},hub.downloadError[1]);
-      return json({url:hub.downloadUrl||s3Url(previous[0].files[0].fileId),sha256:hub.downloadSha});
+      return json({url:hub.downloadUrl||s3Url(previous[0].files[0].fileId),storageOrigin,sha256:hub.downloadSha});
     }
     throw new Error('unexpected route '+route);
   };
