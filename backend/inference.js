@@ -975,6 +975,13 @@ async function runBotInferenceViaHermesGateway(
 
 async function steerHermesGatewaySession(sessionId, text, client = null) {
   client = client || await getHermesGatewayClient();
+  try {
+    const result = await client.redirect(sessionId, text);
+    if (result && (result.status === 'redirected' || result.status === 'queued')) return { ...result, status: 'queued' };
+  } catch (error) {
+    // 4010: this agent can't redirect its active turn, but it can still steer.
+    if (!(error && error.gatewayError && error.code === 4010)) throw error;
+  }
   return client.steer(sessionId, text);
 }
 

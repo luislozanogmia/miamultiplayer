@@ -515,12 +515,16 @@ test("application menu keeps macOS-only roles off Windows and adds a quit item t
 
   const macTemplate = withPlatform("darwin", () => main.createApplicationMenuTemplate());
   assert.equal(macTemplate[0].role, "appMenu");
+  const macSettings = macTemplate[0].submenu.find(item => item.label === "Settings…");
+  assert.equal(macSettings.accelerator, "CommandOrControl+,");
+  assert.equal(macTemplate[0].submenu.some(item => item.role === "quit"), true);
   assert.equal(macTemplate.some(item => item.label === "File" && item.submenu.some(entry => entry.role === "quit")), false);
 
   const winTemplate = withPlatform("win32", () => main.createApplicationMenuTemplate());
   assert.equal(winTemplate.some(item => item.role === "appMenu"), false);
   const winFile = winTemplate.find(item => item.label === "File");
   assert.equal(winFile.submenu.some(entry => entry.role === "quit"), true);
+  assert.equal(winFile.submenu[0].label, "Settings…");
   const help = winTemplate.find(item => item.role === "help");
   assert.equal(help.submenu[0].enabled, true);
 });

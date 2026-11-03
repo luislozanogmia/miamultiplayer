@@ -458,6 +458,7 @@ const nativeConversationDispatchPlanner = createConversationDispatchService({
 const nativeDispatchChains = new Map();
 const nativeDispatchAbortControllers = new Map();
 const nativeActiveGatewaySessions = new Map();
+const nativeTurnStartWaiters = new Map();
 // A deletion request is a local process-wide revocation barrier. The users
 // row is also marked disabled before dispatch cleanup begins, so the guard
 // remains fail-closed for any other request sharing this database.
@@ -614,11 +615,32 @@ function queueNativeConversationDispatch(dispatch) {
   return settled;
 }
 
-function scheduleNativeConversationDispatch(dispatch) {
+// A message sent while the turn ahead of it is still starting has nothing to
+// steer into: Hermes would hold it until that whole turn ends. So it waits for
+// the turn's first event, or for the turn to end without one.
+function waitForNativeTurnStart(key) {
+  const chain = nativeDispatchChains.get(key);
+  const active = nativeActiveGatewaySessions.get(key);
+  if (!chain || (active && active.turnStarted)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const waiters = nativeTurnStartWaiters.get(key) || [];
+    waiters.push(resolve);
+    nativeTurnStartWaiters.set(key, waiters);
+    chain.catch(() => {}).then(resolve);
+  });
+}
+
+function markNativeTurnStarted(key, activeGateway) {
+  activeGateway.turnStarted = true;
+  const waiters = nativeTurnStartWaiters.get(key) || [];
+  nativeTurnStartWaiters.delete(key);
+  for (const resolve of waiters) resolve();
+}
+
+async function scheduleNativeConversationDispatch(dispatch) {
   const key = nativeDispatchChainKey(dispatch);
-  const activeGateway = dispatch && dispatch.targetType === 'gateway'
-    ? nativeActiveGatewaySessions.get(key)
-    : null;
+  await waitForNativeTurnStart(key);
+  const activeGateway = nativeActiveGatewaySessions.get(key) || null;
   if (activeGateway && activeGateway.dispatchId !== dispatch.id) {
     return trySteerNativeConversationDispatch(dispatch, activeGateway).then((steered) => (
       steered ? undefined : queueNativeConversationDispatch(dispatch)
@@ -7346,6 +7368,37 @@ async function createNativeArtifactAttachments({ conversation, principal, artifa
   return attachments;
 }
 
+const MID_RUN_MESSAGE_RULE = 'The user sent this while you are working. Answer it in a short message now, before your next tool call, then carry on with your work unless they asked you to stop or change course.';
+
+const MID_RUN_NUDGE = 'Answer the user\'s last message now in a short message, before anything else. Your command keeps running in the background.';
+
+// A model can fold its answer into the tool it was about to run, which keeps the
+// person waiting for that tool. Ask once more, so the tool yields and it answers.
+function nudgeMidRunAnswer(activeGateway) {
+  if (!activeGateway || !activeGateway.midRunMessage || activeGateway.midRunNudged) return false;
+  activeGateway.midRunNudged = true;
+  Promise.resolve().then(() => steerHermesGatewaySession(activeGateway.sessionId, MID_RUN_NUDGE)).catch(() => {});
+  return true;
+}
+
+// The model's next words after a message sent mid-run are its answer. Post them
+// as that message's reply; otherwise they would wait for the whole run to end.
+function postMidRunAnswer(activeGateway, agent, text) {
+  const pending = activeGateway && activeGateway.midRunMessage;
+  if (!pending) return false;
+  const safeText = cleanBotReplyText(agent.name, stripAgentActionBlocks(redactHermesChatDetail(text))).text;
+  if (!safeText) return false;
+  activeGateway.midRunMessage = null;
+  Promise.resolve().then(() => createNativeDispatchReplyEvent(pending.dispatch, pending.trigger, {
+    type: pending.dispatch.targetType === 'gateway' ? 'agent_message' : 'bot_message',
+    content: { text: safeText },
+    parentEventId: nativeReplyParentEventId(pending.trigger),
+    clientIdempotencyKey: `native-dispatch-${pending.dispatch.id}`,
+    metadata: { runtime: 'hermes', dispatchId: pending.dispatch.id, agentName: agent.name },
+  })).catch(() => {});
+  return true;
+}
+
 async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   const trigger = nativeConversationRepository.getEvent({
     companyId: dispatch.companyId,
@@ -7364,17 +7417,23 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   const conversation = nativeConversationRepository.getConversation({ companyId: dispatch.companyId, id: dispatch.conversationId });
   if (!conversation) return false;
   const workspaceConnection = await googleWorkspaceAgentContextForOwner(trigger.senderId, '');
-  const inventory = connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: GATEWAY_AGENT_ID }, false);
+  const inventory = connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: activeGateway.agentId || GATEWAY_AGENT_ID }, false);
   if (inventory.revision !== activeGateway.capabilityRevision) return false;
   let result;
   try {
-    result = await steerHermesGatewaySession(activeGateway.sessionId, inventory.note + '\n\nUser: ' + message);
+    result = await steerHermesGatewaySession(activeGateway.sessionId, inventory.note + '\n\nUser: ' + message + '\n\n' + MID_RUN_MESSAGE_RULE);
   } catch (_) {
     return false;
   }
   if (cancelNativeDispatchForInactiveUser(dispatch, trigger)) return true;
   if (!result || result.status !== 'queued') return false;
-  connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: GATEWAY_AGENT_ID });
+  connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: activeGateway.agentId || GATEWAY_AGENT_ID });
+  // Mia invoked in a channel can only post under a claimed dispatch, so there
+  // the answer arrives with the final reply.
+  if (dispatch.targetType !== 'gateway' || conversation.type === 'agent') {
+    activeGateway.midRunMessage = activeGateway.midRunMessage || { dispatch, trigger };
+    activeGateway.midRunNudged = false;
+  }
   const claimToken = `native-steer-${crypto.randomUUID()}`;
   const claimed = nativeConversationRepository.claimDispatch({
     companyId: dispatch.companyId,
@@ -7708,6 +7767,21 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   };
   const postHermesProgress = (type, payload) => {
     if (trackBudget) trackBudget(type, payload);
+    if (type !== 'session.info') {
+      const activeGateway = nativeActiveGatewaySessions.get(nativeDispatchChainKey(dispatch));
+      if (activeGateway && activeGateway.dispatchId === dispatch.id && !activeGateway.turnStarted) {
+        markNativeTurnStarted(nativeDispatchChainKey(dispatch), activeGateway);
+      }
+    }
+    if (type === 'tool.start') {
+      const activeGateway = nativeActiveGatewaySessions.get(nativeDispatchChainKey(dispatch));
+      if (activeGateway && activeGateway.dispatchId === dispatch.id) nudgeMidRunAnswer(activeGateway);
+    }
+    if (type === 'message.interim') {
+      const activeGateway = nativeActiveGatewaySessions.get(nativeDispatchChainKey(dispatch));
+      if (activeGateway && activeGateway.dispatchId === dispatch.id
+        && postMidRunAnswer(activeGateway, agent, payload && (payload.text || payload.rendered))) return;
+    }
     if (type === 'thinking.delta') {
       const wait = providerWaitStatus(payload && payload.text);
       if (wait && wait.kind === 'cleared') {
@@ -7884,6 +7958,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       EFFECTIVE_RELEASE_PROFILE.agentSearchOnly ? '' : PAGE_ICON_RULE,
       slashCommand ? '' : nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
+    const botGatewayKey = nativeDispatchChainKey(dispatch);
+    let activeBotRecord = null;
     const botRunArgs = {
       storedSessionId: conversation.metadata && conversation.metadata.hermesGatewayProfile === sessionKey
         ? conversation.metadata.hermesGatewaySessionId
@@ -7896,6 +7972,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         throwIfNativeDispatchUserInactive(dispatch, trigger);
         bindAskBeforeDoTurn(session);
         bindNativeHermesSessionEvents();
+        activeBotRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision, agentId: agent.id };
+        nativeActiveGatewaySessions.set(botGatewayKey, activeBotRecord);
         nativeGatewaySessionConversations.set(String(session.sessionId), {
           companyId: conversation.companyId,
           conversationId: conversation.id,
@@ -7908,20 +7986,26 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       },
       signal,
     };
-    inferenceResult = slashCommand
-      ? await runSlashCommandViaHermesGateway({
-        ...botRunArgs,
-        name: slashCommand.name,
-        arg: slashCommand.arg,
-        onNotice: (notice) => createNativeDispatchReplyEvent(dispatch, trigger, {
-          type: replyEventType,
-          content: { text: notice },
-          parentEventId,
-          clientIdempotencyKey: `native-dispatch-${dispatch.id}-command-notice`,
-          metadata: { runtime: 'hermes', agentName: agent.name, slashCommand: slashCommand.name, goalStatus: true },
-        }),
-      })
-      : await runInferenceViaHermesGateway({ ...botRunArgs, message: turnMessage });
+    try {
+      inferenceResult = slashCommand
+        ? await runSlashCommandViaHermesGateway({
+          ...botRunArgs,
+          name: slashCommand.name,
+          arg: slashCommand.arg,
+          onNotice: (notice) => createNativeDispatchReplyEvent(dispatch, trigger, {
+            type: replyEventType,
+            content: { text: notice },
+            parentEventId,
+            clientIdempotencyKey: `native-dispatch-${dispatch.id}-command-notice`,
+            metadata: { runtime: 'hermes', agentName: agent.name, slashCommand: slashCommand.name, goalStatus: true },
+          }),
+        })
+        : await runInferenceViaHermesGateway({ ...botRunArgs, message: turnMessage });
+    } finally {
+      if (activeBotRecord && nativeActiveGatewaySessions.get(botGatewayKey) === activeBotRecord) {
+        nativeActiveGatewaySessions.delete(botGatewayKey);
+      }
+    }
     if (slashCommand && inferenceResult && inferenceResult.sessionId && slashCommand.name === 'goal') {
       const goal = await nativeGoalSnapshot(inferenceResult.sessionId);
       if (goal !== undefined) inferenceResult.goal = goal;

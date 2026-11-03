@@ -93,10 +93,10 @@ test('the panel only opens for a team conversation', () => {
 test('app, page and shelf hooks: Team files is a team-only button that reuses the one panel', () => {
   const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
   assert.match(app, /function teamFilesChannel\(\)\{\s*if\(!hubWorkspace\(\) \|\| !chatWs\.activeRoomId\) return null;/);
-  assert.match(app, /teamFilesBtn\.hidden = !\(shownView === 'chat' && window\.MiaTeamFilesUi && teamFilesChannel\(\)\)/);
+  assert.match(app, /var teamFiles = window\.MiaTeamFilesUi && teamFilesChannel\(\);/);
+  assert.match(app, /teamFiles \? '<button type="button" class="cip-section-link" id="cipTeamFiles">Team files<\/button>'/);
   assert.match(app, /window\.MiaTeamFilesUi\.open\(\{teamId: activeWorkspaceKey\.slice\(4\), spaceKind: channel\.kind, spaceId: channel\.id/);
   const html = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
-  assert.match(html, /id="viewShelfTeamFiles"[^>]* hidden>/);
   assert.ok(html.indexOf('team-files.js') > 0 && html.indexOf('team-files.js') < html.indexOf('team-files-ui.js') && html.indexOf('team-files-ui.js') < html.indexOf('src="app.js'));
   // The existing chat attachment flow is untouched.
   assert.match(fs.readFileSync(new URL('./hub-chat.js', import.meta.url), 'utf8'), /\/channels\/'\+file\.channelId\+'\/files\/'\+file\.id/);

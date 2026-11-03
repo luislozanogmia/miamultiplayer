@@ -226,3 +226,12 @@ test('header fresh action is bot-only and leaves generic new chat in Tools', asy
   assert.match(source, /if\(create\) create\.addEventListener\('click', createFreshConversationForActiveBot\)/);
   assert.match(source, /if\(action === 'new-chat'\) openDmCompose\(\)/);
 });
+
+test('the chat icon opens the conversation menu, and the bar dots are the tab menu', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.doesNotMatch(source, /chatMoreBtn/, 'a conversation is not a tab, so it has no dots');
+  assert.equal(source.match(/placeChannelMenuUnderTitle\(header\);/g).length, 2, 'both header layouts place the menu');
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  assert.match(browser, /command\('tabMenu', \{ id: state\.activeId \}\)/);
+  assert.match(browser, /tabMenuBtn\.hidden = view !== 'browser'/);
+});

@@ -1083,7 +1083,7 @@
   .chat-msg-text .chat-math-block{display:block;margin:10px 0;padding:10px 12px;overflow-x:auto;text-align:center;white-space:nowrap;border-radius:8px;background:rgba(255,255,255,.52);}
   .chat-msg-text .chat-math-inline{display:inline;white-space:nowrap;}
   .chat-msg-text .chat-math sub,.chat-msg-text .chat-math sup{font-size:.72em;line-height:0;}
-  .chat-msg-text a{color:var(--sand-text-accent);text-decoration:underline;text-underline-offset:2px;word-break:break-all;}
+  .chat-msg-text a{color:var(--sand-text-accent);text-decoration:underline;text-underline-offset:2px;}
   .chat-msg-row.is-you .chat-msg-text a{color:var(--sand-text-on-primary);}
   .chat-msg-text a:hover{opacity:.85;}
   .chat-approval{display:flex;flex-direction:column;gap:8px;}
@@ -1317,6 +1317,12 @@
   .rail-notifications{position:absolute;bottom:12px;left:calc(100% + 6px);width:260px;box-sizing:border-box;padding:12px 14px;background:var(--sand-bg-elevated);border:1px solid var(--sand-border-default);border-radius:12px;box-shadow:var(--sand-shadow-popover);z-index:60;font-family:var(--styled-sans);-webkit-app-region:no-drag;}
   .rail-notifications[hidden]{display:none;}
   .rail-notifications-title{font-size:13px;font-weight:600;color:var(--sand-text-primary);margin-bottom:6px;}
+  .rail-notifications-list{display:flex;flex-direction:column;max-height:320px;overflow-y:auto;margin:0 -6px;}
+  .rail-notifications-list[hidden],.rail-notifications-empty[hidden]{display:none;}
+  .rail-notifications-row{appearance:none;display:block;width:100%;padding:6px;border:0;border-radius:6px;background:transparent;text-align:left;cursor:pointer;font:inherit;}
+  .rail-notifications-row:hover{background:var(--sand-fill-ghost-hover);}
+  .rail-notifications-row-title{display:block;font-size:12px;line-height:17px;font-weight:600;color:var(--sand-text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .rail-notifications-row-detail{display:block;font-size:12px;line-height:17px;color:var(--sand-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .rail-notifications-empty{font-size:12px;line-height:17px;color:var(--sand-text-secondary);}
   /* One bar for the three views. Every view is named while the names fit;
      a narrower sidebar names only the selected one. */
@@ -1325,8 +1331,7 @@
   .sidebar-view-btn svg{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
   .sidebar-view-btn{position:relative;}
   .sidebar-view-count{position:absolute;top:-3px;right:-3px;min-width:14px;height:14px;box-sizing:border-box;padding:0 4px;border-radius:7px;background:var(--sand-text-secondary);color:var(--sand-bg-base);font:600 9px/14px var(--styled-sans);text-align:center;pointer-events:none;}
-  .sidebar-view-count.sidebar-view-count-attention,.sidebar-view-btn.active .sidebar-view-count.sidebar-view-count-attention{background:#b3261e;}
-  .sidebar-view-btn.active .sidebar-view-count{background:var(--sand-text-primary);}
+  .sidebar-view-count,.sidebar-view-btn.active .sidebar-view-count{background:#b3261e;}
   .sidebar-view-btn:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
   .sidebar-view-btn.active{background:var(--sand-fill-accent-subtle);color:var(--sand-text-accent);cursor:default;}
   @container (max-width: 250px){
@@ -1729,7 +1734,6 @@
      Swaps in place to the Routine editor. */
   .chat-info-pane{flex:0 0 var(--sand-info-pane-width);width:var(--sand-info-pane-width);box-sizing:border-box;min-width:0;display:none;flex-direction:column;min-height:0;background:var(--sand-bg-elevated);border:1px solid var(--sand-border-subtle);border-left-color:var(--sand-border-default);border-radius:0 14px 14px 0;font-family:var(--styled-sans);overflow-y:auto;}
   .chat-info-pane.open{display:flex;}
-  .cip-routines{padding:14px 16px 16px;flex:1;display:flex;flex-direction:column;min-height:0;}
   .cip-routines-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
   .cip-routines-title{font-family:var(--styled-sans);font-size:12px;color:var(--sand-text-secondary);}
   .cip-routines-add{appearance:none;border:none;background:none;color:var(--sand-text-secondary);cursor:pointer;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:6px;}
@@ -1743,10 +1747,6 @@
   .cip-routine-row.paused .cip-routine-dot{color:var(--sand-text-tertiary);}
   .cip-routine-name{font-size:12.5px;color:var(--sand-text-primary);}
   .cip-routine-meta{font-size:11.5px;color:var(--sand-text-secondary);}
-  .cip-routines-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:0 22px;text-align:center;}
-  .cip-routines-empty.has-running{flex:0 0 auto;padding:18px 22px;}
-  .cip-running-head{margin-top:18px;}
-  .cip-routines-empty-text{font-size:12.5px;color:var(--sand-text-secondary);line-height:1.45;}
   .styled-btn-secondary{appearance:none;height:34px;border-radius:8px;background:var(--sand-fill-secondary);border:1px solid var(--sand-border-weak);font-family:var(--styled-sans);font-size:14px;font-weight:400;color:var(--sand-text-primary);padding:6px 14px;cursor:pointer;transition:background .12s ease;}
   .styled-btn-secondary:hover{background:var(--sand-fill-secondary-hover);}
   .styled-btn-secondary.danger{color:var(--sand-text-danger);}
@@ -2515,7 +2515,7 @@
      underneath without touching its open state, so closing the thread
      brings the automations pane straight back. */
   body.styled-skin .chat-thread-panel{flex:0 0 var(--sand-thread-pane-width);width:var(--sand-thread-pane-width);box-sizing:border-box;background:var(--sand-bg-base);border-left:1px solid var(--sand-border-default);}
-  body.styled-skin .chat-thread-panel .ctp-header{height:44px;min-height:44px;padding:0 10px 0 16px;gap:8px;}
+  body.styled-skin .chat-thread-panel .ctp-header{box-sizing:border-box;height:calc(var(--mia-top-tabs) + var(--mia-top-bar));min-height:calc(var(--mia-top-tabs) + var(--mia-top-bar));padding:var(--mia-top-tabs) 10px 0 16px;gap:8px;}
   body.styled-skin .chat-thread-panel .ctp-header-title{font-size:13px;line-height:16px;font-weight:500;}
   body.styled-skin .chat-thread-panel .ctp-header-room{font-size:12px;}
   body.styled-skin .chat-thread-panel .ctp-close{margin-left:0;width:28px;height:28px;border-radius:8px;font-size:inherit;}
@@ -2531,13 +2531,34 @@
   body.styled-skin .chat-thread-panel .chat-msg-row.is-direct .chat-msg-body{flex:1 1 auto;max-width:100%;}
   body.styled-skin .chat-thread-panel .chat-msg-text{max-width:100%;}
   body.styled-skin.ctp-open .chat-info-pane.open{display:none;}
-  body.styled-skin .cip-pane-head{height:44px;min-height:44px;padding:0 10px 0 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--sand-border-subtle);}
+  /* The pane's top two rows match the tab row and the address bar, so their dividers run straight across. */
+  body.styled-skin{--mia-top-tabs:37px;--mia-top-bar:42px;}
+  body.styled-skin .cip-pane-head{flex:none;box-sizing:border-box;height:calc(var(--mia-top-tabs) + var(--mia-top-bar));min-height:calc(var(--mia-top-tabs) + var(--mia-top-bar));padding:0 10px 0 16px;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:var(--mia-top-tabs) minmax(0,1fr);align-items:center;border-bottom:1px solid var(--sand-border-subtle);}
+  body.styled-skin .cip-pane-head::before{content:"";grid-row:1;grid-column:1/-1;align-self:stretch;margin:0 -10px 0 -16px;background:var(--mia-canvas);box-shadow:inset 0 -1px 0 var(--sand-border-subtle);}
+  body.styled-skin .cip-pane-head .cip-pane-title{grid-row:2;grid-column:1/-1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  body.styled-skin .cip-pane-head .cip-automation-back{grid-row:2;grid-column:1;justify-self:start;}
+  body.styled-skin .cip-pane-head>.cip-pane-actions,body.styled-skin .cip-pane-head>.cip-pane-btn{grid-row:1;grid-column:2;position:relative;}
+  body.styled-skin .cip-pane-head .cip-pane-spacer{display:none;}
+  body.styled-skin .chat-info-pane .cip-details{flex:1;min-height:0;overflow-y:auto;}
+  body.styled-skin .cip-section{padding:14px 16px;border-top:1px solid var(--sand-border-subtle);}
+  body.styled-skin .cip-section:first-child{border-top:0;}
+  body.styled-skin .cip-section-count{font-size:12px;color:var(--sand-text-tertiary);}
+  body.styled-skin .cip-section-empty{font-size:12.5px;color:var(--sand-text-secondary);}
+  body.styled-skin .cip-section-link{appearance:none;display:block;margin-top:6px;padding:0;border:0;background:none;color:var(--sand-text-secondary);font:inherit;font-size:12.5px;cursor:pointer;}
+  body.styled-skin .cip-section-link:hover{color:var(--sand-text-primary);}
+  body.styled-skin .cip-files-search{box-sizing:border-box;width:100%;height:30px;margin-bottom:8px;padding:0 10px;border:1px solid var(--sand-border-subtle);border-radius:8px;background:transparent;font:inherit;font-size:12.5px;}
+  body.styled-skin .cip-setting-row{appearance:none;width:100%;display:flex;align-items:center;gap:8px;min-height:32px;padding:0 4px;border:0;border-radius:8px;background:none;color:inherit;font:inherit;font-size:13px;text-align:left;cursor:pointer;}
+  body.styled-skin .cip-setting-row:hover{background:var(--sand-fill-ghost-hover);}
+  body.styled-skin .cip-setting-row:focus-visible{outline:2px solid var(--sand-border-focus);outline-offset:1px;}
+  body.styled-skin .cip-setting-label{flex:none;color:var(--sand-text-secondary);}
+  body.styled-skin .cip-setting-value{flex:1;min-width:0;display:flex;justify-content:flex-end;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;}
+  body.styled-skin .cip-setting-swatch{width:12px;height:12px;border-radius:50%;}
+  body.styled-skin .cip-setting-chevron{flex:none;width:12px;height:12px;fill:none;stroke:var(--sand-text-tertiary);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
   body.styled-skin .cip-pane-spacer{flex:1;}
   body.styled-skin .cip-pane-actions{display:flex;gap:2px;}
   body.styled-skin .cip-pane-btn{width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--sand-text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;}
   body.styled-skin .cip-pane-btn svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.45;stroke-linecap:round;stroke-linejoin:round;}
   body.styled-skin .cip-pane-btn:last-child svg{width:18px;height:18px;stroke-width:1.55;}
-  body.styled-skin #chatInfoSettings{display:none;}
   body.styled-skin .cip-pane-btn:hover{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
   /* Plugins use the same right-side surface as the info panel. The full
      marketplace remains in the DOM as a reusable template, but never takes
@@ -3305,16 +3326,11 @@
   /* The window buttons now sit over the docked rail, not the tabs. */
   html.mac-inset-titlebar body.browser-sidebar-open .local-browser-overlay .native-browser-tabs-row,
   html.mac-inset-titlebar body.browser-sidebar-open .automations-tabs-row{padding-left:16px;}
-  body.styled-skin .cip-routines{padding:0 16px 18px;border-top:1px solid var(--sand-border-subtle);}
-  body.styled-skin .chat-info-pane.computer-hidden .cip-routines{padding-top:18px;}
-  body.styled-skin .chat-info-pane.computer-hidden .cip-routines-empty{flex:0 0 auto;justify-content:flex-start;padding-top:0;}
   body.styled-skin .cip-routines-title{font-size:13px;font-weight:500;color:var(--sand-text-primary);}
   body.styled-skin .cip-routine-list{gap:8px;}
   body.styled-skin .cip-routine-row{padding:8px 4px;}
   body.styled-skin .cip-routine-name{display:block;font-size:13px;}
   body.styled-skin .cip-routine-meta{display:block;font-size:11px;margin-top:2px;}
-  body.styled-skin .cip-routines-empty{justify-content:center;align-items:center;padding:0 18px;}
-  body.styled-skin .cip-routines-empty-text{max-width:250px;}
   body.styled-skin .styled-btn-secondary{height:32px;font-size:13px;}
   /* Empty automations state: plain text + zap, same voice as the header's
      "2 users / 1 agents" chips — no grey ribbon. */
@@ -3598,8 +3614,6 @@ body.browser-collab-mode .ch-icon-btn.conversation-action-btn svg,body.automatio
 /* Outside the browser that spot holds the view's own list: the chat's files,
    the latest runs, or recently opened artifacts. It opens like Downloads, as
    a card under its button. */
-.view-shelf-btn[hidden],.local-browser-toolbar[data-view="browser"] .view-shelf-btn{display:none;}
-.local-browser-downloads.view-shelf{position:fixed;top:var(--shelf-top,56px);right:var(--shelf-right,8px);z-index:200;max-height:min(520px,calc(100vh - var(--shelf-top,56px) - 12px));}
 .local-browser-share-btn{display:none!important;}
 /* The Automations controls sit at the top of its page, under the bar. */
 .automations-overlay:not(.artifacts-overlay) .automations-bar{height:auto;padding:12px 24px 0;background:transparent;border-bottom:0;}
@@ -3614,9 +3628,11 @@ html.mac-inset-titlebar body:not(.browser-collab-mode).left-pane-closed #chatTab
 .local-browser-toolbar[data-view="chat"] .local-browser-sidebar-btn{display:inline-flex;}
 .pane-count{position:absolute;top:1px;right:-2px;min-width:15px;height:15px;padding:0 4px;box-sizing:border-box;border-radius:8px;background:#d93025;color:#fff;font:600 10px/15px var(--styled-sans);text-align:center;pointer-events:none;}
 body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-pane-closed) .pane-count{display:none;}
-/* In the address bar the chat's name stays in its tab and the sidebar;
-   its actions sit behind one More button that opens a Chrome-style menu. */
-.local-browser-view-tools .channel-header .ch-left{display:none!important;}
+/* In the address bar the chat's name stays in the sidebar; its actions open
+   from its icon in a Chrome-style menu. The bar's dots belong to the tab. */
+.local-browser-view-tools .channel-header .channel-header-title{display:none!important;}
+.local-browser-view-tools .channel-header .ch-title-btn{display:flex!important;}
+.local-browser-view-tools>.ch-right #hubChannelMoreBtn,#localBrowserTabMenuBtn[hidden]{display:none;}
 .local-browser-view-tools .channel-header,.local-browser-view-tools .ch-right,.local-browser-view-tools .ch-roster-chip{background:transparent!important;}
 .conv-more{position:relative;display:flex;align-items:center;}
 .conv-more-btn{width:32px!important;height:32px!important;border-radius:50%!important;color:#474747!important;}
@@ -3809,8 +3825,6 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .tf-notice{margin:10px 0 0;padding:8px 10px;border-radius:8px;background:#fff7f5;border:1px solid #d8a8a1;color:#6f251c;font-size:13px;}
 .tf-more{display:flex;justify-content:center;padding:12px 0 0;}
 @media (max-width:560px){.tf-overlay{padding:8px;}.tf-row{flex-wrap:wrap;}.tf-actions{width:100%;justify-content:flex-end;}}
-.view-shelf-team-files{margin:8px 12px 12px;align-self:flex-start;}
-.view-shelf-team-files[hidden]{display:none;}
 
 /* Team workflows: inside the Automations page and on channel approval cards. */
 .twf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:6px 0 10px;}

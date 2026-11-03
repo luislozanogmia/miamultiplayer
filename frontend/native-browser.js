@@ -104,6 +104,11 @@
     miaToggle.setAttribute('aria-label', miaToggle.title);
     miaToggle.setAttribute('aria-pressed', String(open));
   }
+  // The pane also opens and closes from inside the app (its own button, the
+  // bot editor), and the app loads after this file: both must reach the toggle.
+  window.miaSyncRightToggle = syncRightToggle;
+  var detailsPane = document.getElementById('chatInfoPane');
+  if (detailsPane) new MutationObserver(syncRightToggle).observe(detailsPane, { attributes: true, attributeFilter: ['class'] });
   if (miaToggle) miaToggle.onclick = function () {
     if (chatRightPane()) { chatRightPane().toggle(); syncRightToggle(); return; }
     miaPane.collapsed = !miaPane.collapsed; applyMiaPane(); saveMiaPane();
@@ -193,6 +198,19 @@
   viewTools.className = 'local-browser-view-tools';
   // The right pane's toggle sits just before the "more" dots that end the row.
   if (bar) miaToggle && miaToggle.parentNode === bar ? miaToggle.after(viewTools) : bar.append(viewTools);
+  // The dots that end the row are the open tab's menu, the same as right-clicking it.
+  var tabMenuBtn = document.createElement('button');
+  tabMenuBtn.type = 'button';
+  tabMenuBtn.className = 'ch-icon-btn conv-more-btn';
+  tabMenuBtn.id = 'localBrowserTabMenuBtn';
+  tabMenuBtn.title = 'Tab options';
+  tabMenuBtn.setAttribute('aria-label', 'Tab options');
+  tabMenuBtn.setAttribute('aria-haspopup', 'menu');
+  tabMenuBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg>';
+  tabMenuBtn.addEventListener('click', function () {
+    if (state && state.activeId) command('tabMenu', { id: state.activeId });
+  });
+  if (bar) viewTools.after(tabMenuBtn);
   var BAR_AFTER = { chat: '#chatTabsRow', automations: '#automationsOverlay .automations-tabs-row', artifacts: '#artifactsOverlay .automations-tabs-row', apps: '#appsOverlay .automations-tabs-row' };
   var VIEW_TOOLS = { chat: '#channelHeader' };
   var toolsHome = null;
@@ -254,13 +272,12 @@
       chatHeaderWatch.observe(header, { childList: true });
     }
     var home = viewTools;
+    tabMenuBtn.hidden = view !== 'browser';
+    if (tabMenuBtn.previousSibling !== viewTools) viewTools.after(tabMenuBtn);
     syncPageNav();
-    // The pane toggle sits just before the chat buttons, and the view's own
-    // list button (where Downloads sits) just before it.
+    // The pane toggle sits just before the chat buttons.
     if (miaToggle && bar) {
       if (miaToggle.nextSibling !== viewTools) viewTools.before(miaToggle);
-      var shelfBtn = document.getElementById('viewShelfBtn');
-      if (shelfBtn && shelfBtn.nextSibling !== miaToggle) miaToggle.before(shelfBtn);
     }
     var parked = chatActions && chatActions.parentNode && chatActions.parentNode !== header ? chatActions : null;
     if (view === 'chat') {
@@ -301,11 +318,12 @@
   function tabTypeIcon(url) {
     return /^(file:|https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$))/i.test(String(url || '')) ? BLOCKS_ICON : GLOBE_ICON;
   }
+  function restingBlank() { return state.tabs.length === 1 && !state.tabs[0].url && !state.tabs[0].groupId; }
   // Mixed tabs (tab-strip.js): the browser's tabs, shown in the other strips.
   window.MiaTabStrip.mix.register('browser', {
-    // A blank new tab (the one a fresh browser opens) is not counted on the
-    // Browser button; only pages are.
-    tabs: function () { return state.tabs.map(function (t) { return { id: t.id, label: t.title || 'New tab', iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url), groupId: t.groupId || null, uncounted: !t.url }; }); },
+    // The blank tab left after the last one closes is the browser at rest, not
+    // a tab you opened, so the other views don't list it.
+    tabs: function () { return restingBlank() ? [] : state.tabs.map(function (t) { return { id: t.id, label: t.title || 'New tab', iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url), groupId: t.groupId || null }; }); },
     select: function (id) { command('select', { id: id }); },
     render: function () { if (state) render(state); },
   });

@@ -1941,10 +1941,35 @@ function createApplicationMenuTemplate() {
   // The application-name menu (role "appMenu") exists only on macOS and
   // throws when built elsewhere; Windows and Linux get their quit affordance
   // in the File menu instead.
+  const settingsItem = {
+    label: "Settings…",
+    accelerator: "CommandOrControl+,",
+    click: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.show();
+      mainWindow.webContents.send("miaos-open-settings");
+    },
+  };
   const fileItems = [{ label: "Close Window", click: () => mainWindow?.close() }];
+  if (process.platform !== "darwin") fileItems.unshift(settingsItem, { type: "separator" });
   if (process.platform !== "darwin") fileItems.push({ type: "separator" }, { role: "quit" });
   const template = [
-    ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
+    ...(process.platform === "darwin" ? [{
+      role: "appMenu",
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        settingsItem,
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    }] : []),
     { label: "File", submenu: fileItems },
     { role: "editMenu" },
     { label: "View", submenu: viewItems },
@@ -2272,6 +2297,10 @@ createDesktopNotifications({
     activateMainWindow();
   },
   openExternal: url => shell.openExternal(url),
+  setBadgeCount: count => {
+    if (app.dock) app.dock.setBadge(count ? String(count) : "");
+    else app.setBadgeCount(count);
+  },
   log: message => desktopLog(message),
 }).register(ipcMain);
 

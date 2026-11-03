@@ -163,7 +163,7 @@ test('automation panel renders durable bot schedules separately from running wor
   assert.match(pane, /var automationBots = automationBotsForPanel\(isMia, agent\)/);
   assert.match(pane, /var automationRuns = activeAutomationRunsForPanel\(isMia, agent\)/);
   assert.match(pane, /<span class="cip-routines-title">Automations<\/span>/);
-  assert.match(pane, /<span class="cip-routines-title">Running now<\/span>/);
+  assert.ok(pane.indexOf('+ running + routines +') > 0, 'running automations are listed before scheduled ones');
   assert.doesNotMatch(pane, /var routines = tasks\.length/);
   assert.doesNotMatch(pane, /var running = tasks\.length/);
   assert.match(pane, /data-automation-id="/);
@@ -336,7 +336,7 @@ test('normal assistant info moves Automations up while browser collaboration int
 
   assert.ok(paneStart >= 0 && paneEnd > paneStart, 'assistant information pane exists');
   assert.doesNotMatch(pane, /Local(?:'s|&apos;s) computer|cip-computer/i);
-  assert.match(pane, /<div class="cip-routines">/);
+  assert.match(pane, /<div class="cip-details">/);
   assert.match(pane, /<span class="cip-routines-title">Automations<\/span>/);
   assert.match(browser, /document\.body\.classList\.add\('browser-collab-mode'\)/);
   assert.match(browser, /chatInfo\.mode = 'automations';\s*chatInfo\.open = false;/);

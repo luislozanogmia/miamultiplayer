@@ -6,6 +6,11 @@ const { contextBridge, ipcRenderer } = require("electron");
 // Node.js access and no raw IPC object; it can only ask the main process to
 // retry the local connection when the backend was unavailable at startup.
 contextBridge.exposeInMainWorld("miaDesktop", {
+  onOpenSettings: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("miaos-open-settings", listener);
+    return () => ipcRenderer.removeListener("miaos-open-settings", listener);
+  },
   version: () => ipcRenderer.sendSync("mia-version"),
   ready: () => ipcRenderer.send("miaos-renderer-ready"),
   hydrated: () => ipcRenderer.send("miaos-renderer-hydrated"),
@@ -49,6 +54,7 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     // "failed" or "unsupported".
     show: (payload) => ipcRenderer.invoke("miaos-notification-show", payload),
     openSettings: () => ipcRenderer.invoke("miaos-notification-settings"),
+    setBadge: (count) => ipcRenderer.invoke("miaos-notification-badge", count),
     onClick: (callback) => {
       const listener = (_event, tag) => callback(tag);
       ipcRenderer.on("miaos-notification-click", listener);

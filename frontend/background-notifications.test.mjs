@@ -54,6 +54,7 @@ function harness({ activeRoomId = 'bot-a', focused = true, permission = 'granted
       ],
     },
     chatAttentionRooms: attention,
+    scheduleNeedsYouRender: () => {},
     chatTaskStopPending: {},
     renderComposerTaskControl() {},
     saveChatAttention() {},

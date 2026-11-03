@@ -1612,7 +1612,10 @@
 
   // Hoisted so both the boot-time /api/settings load and the drawer's change
   // handler (defined much later in this module) share one renderer.
+  var chatOutputMode = 'concise';
   function renderOutputSetting(mode){
+    chatOutputMode = mode;
+    renderChatActivityPanel();
     var select = el('#settingsOutputMode');
     var note = el('#settingsOutputNote');
     var verbose = mode === 'verbose';
@@ -1777,6 +1780,7 @@
     if(!window.miaDesktop || !window.miaDesktop.defaultBrowser){ row.hidden = true; return; }
     Promise.resolve(window.miaDesktop.defaultBrowser.get()).then(renderSettingsDefaultBrowserState).catch(function(){ row.hidden = true; });
   }
+  if(window.miaDesktop && window.miaDesktop.onOpenSettings) window.miaDesktop.onOpenSettings(function(){ openSettingsDrawer(); });
   function openSettingsDrawer(pane){
     // Same constraint as openHarnessOnboarding: the native browser view
     // covers HTML overlays, so close its panel before showing the sheet.
@@ -2967,6 +2971,7 @@
     if(typeof chatWs === 'undefined' || !chatWs) return records;
     var existing = Array.isArray(chatWs.allAgents) ? chatWs.allAgents : [];
     chatWs.botRecords = records.slice();
+    scheduleNeedsYouRender();
     chatWs.botRecordsLoaded = true;
     chatWs.allAgents = records.map(function(record){
       var binding = existing.filter(function(agent){ return String(agent.id || '') === String(record.id || ''); })[0];
@@ -3759,15 +3764,16 @@
     var statusMeta = styledAgentStatusMeta(a);
     var colorMarkup = agentColorSwatchesHtml(editState.avatarColor, 'styledAgentEditColorInput', 'styled-agent-color');
     return '<div class="styled-agent-edit-surface" id="styledAgentEditSurface">' +
+      '<div class="cip-pane-head"><span class="cip-pane-title">Bot settings</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions"><button type="button" class="cip-pane-btn" id="styledAgentEditClose" aria-label="Close agent editor" title="Close agent editor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
       '<div class="styled-agent-edit-header">' +
-      '<div class="styled-agent-edit-header-copy"><span class="styled-agent-edit-eyebrow">BOT PROFILE</span>' +
+      '<div class="styled-agent-edit-header-copy">' +
           '<div class="styled-agent-edit-title-row"><span class="styled-agent-edit-avatar" id="styledAgentEditAvatar">' + agentAvatarHtml(editState.name || a.name, avatarId, 42, null, editState.avatarColor) + '</span>' +
             '<div class="styled-agent-edit-title-copy"><input type="text" id="styledAgentEditName" class="styled-agent-edit-name" maxlength="40" value="' + esc(editState.name || a.name) + '" aria-label="Bot name" />' +
               '<div class="styled-agent-edit-status"><span class="styled-agent-status-dot ' + esc(a.state) + '"></span>' + esc(styledAgentStatusLabel(a)) + (statusMeta ? '<span class="styled-agent-edit-meta">' + esc(statusMeta) + '</span>' : '') + '</div>' +
             '</div>' +
           '</div>' +
         '</div>' +
-        '<button type="button" class="cip-pane-btn styled-agent-edit-close" id="styledAgentEditClose" aria-label="Close agent editor" title="Close agent editor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button>' +
+        '' +
       '</div>' +
       '<div class="styled-agent-edit-body">' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">BRIEF</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="Brief information" title="Brief information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot brief"></textarea></section>' +
@@ -3893,10 +3899,13 @@
     var styledEditOpen = STYLED_SKIN && chatInfo.mode === 'agent-edit';
     if(styledEditOpen){
       chatInfo.mode = 'automations';
-      chatInfo.open = false;
+      // Opened from the details pane, the editor goes back to it.
+      chatInfo.open = !!chatInfo.editFromDetails;
+      chatInfo.editFromDetails = false;
       document.body.classList.remove('cinema-open');
       var infoPane = el('#chatInfoPane');
       if(infoPane){ infoPane.classList.remove('open', 'agent-edit-open'); infoPane.innerHTML = ''; }
+      if(chatInfo.open) renderChatInfoPane();
       syncSidebarToolButtons();
       returnAgentEditFocus();
     }
@@ -6490,6 +6499,7 @@
       syncNativeDispatchFromEvent(event);
       renderComposerTaskControl();
     }
+    if(message && message.askBeforeDo) scheduleNeedsYouRender();
     if(recordWatchedSidebarMessage(roomId, message)) renderChatSidebar();
     // Progress stays quiet so a long task produces one notification, not a stream.
     if(metadata.progress === true && metadata.status !== 'failed') return;
@@ -7001,6 +7011,7 @@
     } catch(err){ chatAttentionRooms = {}; }
   }
   function saveChatAttention(){
+    scheduleNeedsYouRender();
     try { localStorage.setItem(chatAttentionStorageKey(), JSON.stringify(chatAttentionRooms)); } catch(err) {}
   }
   function chatNeedsAttention(roomId){
@@ -7226,7 +7237,7 @@
   // It is presentation-only: closing it never changes the active room or
   // the underlying chat data, and the user's close/reopen choice survives a
   // reload.
-  var chatInfo = {open: true, mode: 'automations', automationBotId: null, automationId: null};
+  var chatInfo = {open: true, mode: 'automations', automationBotId: null, automationId: null, filesExpanded: false, filesKey: null, editFromDetails: false};
   var pluginShell = null;
   var pluginPaneRoomId = null;
   var localBrowserState = {open: false, roomId: null};
@@ -7794,6 +7805,14 @@
     }).join('');
   }
 
+  function automationsRunHistoryHtml(){
+    var shelf = window.MiaViewShelf;
+    automationsPage.runHistory = shelf ? shelf.runHistory(chatWs.automationRuns, chatWs.botRecords, botAutomationList) : [];
+    if(!automationsPage.runHistory.length) return '';
+    return '<div class="automations-group-title">Run history</div><div class="automations-run-history">' +
+      shelf.rowsHtml(automationsPage.runHistory, esc, shelfWhen) + '</div>';
+  }
+
   function automationStepStateLabel(state){
     return {working:'Working on it', done:'Done', skipped:'Skipped', failed:'Failed', needs_you:'Needs you', escalated:'Needs you', unreported:'Not reported', pending:'Not started'}[state] || '';
   }
@@ -7935,12 +7954,18 @@
     // Team workflows sit above the bot automations, in team workspaces only.
     var teamWorkflows = !found && hubWorkspace() && window.MiaTeamWorkflowsUi ? window.MiaTeamWorkflowsUi : null;
     body.innerHTML = '<div class="automations-content">' + (teamWorkflows ? '<div id="teamWorkflowsMount"></div>' : '')
-      + (found ? automationsDetailHtml(row, found.automation, found.bot) : '<div data-wf-board>' + automationsBoardHtml(rows) + '</div>') + '</div>';
+      + (found ? automationsDetailHtml(row, found.automation, found.bot) : '<div data-wf-board>' + automationsBoardHtml(rows) + '</div>' + automationsRunHistoryHtml()) + '</div>';
     if(teamWorkflows) teamWorkflows.mountInto(el('#teamWorkflowsMount', body));
     if(!found) body.scrollTop = scroll;
     els('[data-automations-id]', body).forEach(function(button){
       button.addEventListener('click', function(){
         openAutomationsDetail(button.getAttribute('data-automations-bot'), button.getAttribute('data-automations-id'));
+      });
+    });
+    els('[data-shelf-row]', body).forEach(function(button){
+      button.addEventListener('click', function(){
+        var run = automationsPage.runHistory[Number(button.getAttribute('data-shelf-row'))];
+        if(run) openAutomationsDetail(run.botId, run.automationId);
       });
     });
     var edit = el('#automationsEdit', body);
@@ -7992,8 +8017,7 @@
         return {id:automationsTabId(tab.botId, tab.automationId), label:record && record.automation.name || 'Automation', iconHtml:AUTOMATIONS_ICON};
       }));
     },
-    // The board is the page itself, not an opened automation.
-    count: function(){ return automationsPage.tabs.length; },
+    attention: function(){ return window.MiaNeedsYou.count(needsYouItems(), 'automations'); },
     close: closeAutomationsTab,
     move: moveAutomationsTab,
     show: function(){ if(!automationsPage.open) runToolsAction('automations'); },
@@ -8182,7 +8206,7 @@
     var chips = el('#artifactsChips');
     if(chips) chips.innerHTML = window.MiaArtifactsPage.chipsHtml(artifactsPage.items, artifactsPage.filter, esc);
     var body = el('#artifactsBody');
-    if(body) body.innerHTML = window.MiaArtifactsPage.bodyHtml(artifactsPage, esc);
+    if(body) body.innerHTML = window.MiaArtifactsPage.bodyHtml(Object.assign({}, artifactsPage, {recentIds: recentArtifactIds()}), esc);
   }
 
   // Files open from the Mia folder (the browser previews nothing outside
@@ -8337,8 +8361,6 @@
   function notifyAppsTabs(){ window.MiaTabStrip.mix.notify('apps', JSON.stringify(appsStripTabs())); }
   window.MiaTabStrip.mix.register('apps', {
     tabs: appsStripTabs,
-    // The page's own tab is the page; only running apps count.
-    count: function(){ return appsPage.tabs.length; },
     attention: function(){ return window.MiaAppsPage.reviewCount(appsPage); },
     close: function(id){
       if(id === 'page'){
@@ -10011,6 +10033,7 @@
       var checklists = Array.isArray(res.data.checklists) ? res.data.checklists : [];
       var checklistsChanged = JSON.stringify(chatWs.automationChecklists || []) !== JSON.stringify(checklists);
       chatWs.automationChecklists = checklists;
+      scheduleNeedsYouRender();
       if(checklistsChanged && automationsPage.open) renderAutomationsPage();
       var changed = JSON.stringify(chatWs.automationRuns || []) !== JSON.stringify(next);
       notifyFinishedAutomationRuns(chatWs.knownAutomationRuns || chatWs.automationRuns, next);
@@ -10297,6 +10320,68 @@
     });
     return Object.keys(ids);
   }
+  function needsYouItems(){
+    if(!window.MiaNeedsYou) return [];
+    var rooms = [], seen = {};
+    function add(id, pending){
+      var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item && String(item.id) === String(id); })[0];
+      var channel = !conversation && hubChannel(id);
+      var label = chatAttentionLabel(id);
+      if(seen[id] || (!conversation && !channel && label === 'New message')) return;
+      seen[id] = true;
+      rooms.push({id: id, pending: pending, kind: conversation ? nativeConversationKind(conversation.type) : 'group', label: channel ? hubChannelTitle(channel) : conversationNotificationLabel(id)});
+    }
+    Object.keys(chatWs.byRoom || {}).forEach(function(id){ if(openAskBeforeDoRequest(id)) add(id, true); });
+    Object.keys(chatAttentionRooms).forEach(function(id){ add(id, false); });
+    return window.MiaNeedsYou.items({
+      rooms: rooms,
+      automations: automationsBoardRows(),
+      appReviews: window.MiaAppsPage ? window.MiaAppsPage.reviewCount(appsPage) : 0,
+    });
+  }
+  function openNeedsYouItem(item){
+    if(item.view === 'automations'){ window.MiaTabStrip.mix.open('automations'); openAutomationsDetail(item.botId, item.automationId); return; }
+    window.MiaTabStrip.mix.open(item.view);
+    if(item.view === 'chat'){ closeChatUtilityPane(); loadChatRoom(item.id, item.kind, item.title); }
+  }
+  function renderNeedsYou(){
+    window.MiaTabStrip.mix.repaint();
+    renderLeftPaneCount();
+    var list = el('#railNotificationsList'), empty = el('#railNotificationsEmpty'), bell = el('#railNotificationsBtn');
+    if(!list || !empty || !bell) return;
+    var items = needsYouItems();
+    syncNeedsYouWithOs(items.length);
+    list._items = items;
+    list.hidden = !items.length;
+    empty.hidden = !!items.length;
+    list.innerHTML = items.map(function(item, index){
+      return '<button type="button" class="rail-notifications-row" data-needs-you-row="' + index + '"><span class="rail-notifications-row-title">' + esc(item.title) + '</span><span class="rail-notifications-row-detail">' + esc(item.detail) + '</span></button>';
+    }).join('');
+    bell.setAttribute('aria-label', items.length ? 'Notifications, ' + items.length + ' need' + (items.length === 1 ? 's' : '') + ' you' : 'Notifications');
+  }
+  // What needs this person reaches them through the OS: the count on the Dock
+  // icon, and one notification for each automation that newly needs them.
+  // Chats and app reviews notify when their message or review arrives.
+  var osBadgeCount = -1;
+  function syncNeedsYouWithOs(count){
+    var native = nativeDesktopNotifications();
+    if(native && native.setBadge && count !== osBadgeCount){ osBadgeCount = count; native.setBadge(count); }
+    var seen = [];
+    try { seen = JSON.parse(localStorage.getItem(NEEDS_YOU_NOTIFIED_KEY) || '[]'); } catch(err) {}
+    var result = window.MiaNeedsYou.automationAlerts(automationsBoardRows(), seen);
+    if(JSON.stringify(result.seen) !== JSON.stringify(seen)){
+      try { localStorage.setItem(NEEDS_YOU_NOTIFIED_KEY, JSON.stringify(result.seen)); } catch(err) {}
+    }
+    result.alerts.forEach(function(row){
+      showDesktopNotification(window.MiaNeedsYou.automationTag(row), row.botName + ' needs you', row.name + (row.detail ? ': ' + row.detail : ''));
+    });
+  }
+  var NEEDS_YOU_NOTIFIED_KEY = 'mia-needs-you-notified';
+  var needsYouRenderTimer = null;
+  function scheduleNeedsYouRender(){
+    if(needsYouRenderTimer) return;
+    needsYouRenderTimer = setTimeout(function(){ needsYouRenderTimer = null; renderNeedsYou(); }, 50);
+  }
   function chatAttentionLabel(roomId){
     if(chatWs.rooms.home && chatWs.rooms.home.roomId === roomId) return 'Multiplayer Test';
     var dept = chatWs.rooms.departments.filter(function(room){ return room.roomId === roomId; })[0];
@@ -10474,7 +10559,7 @@
     // A reply whose last line is a question is the bot waiting on the user.
     var lines = text.split(/\n+/).map(function(line){ return line.trim(); }).filter(Boolean);
     var asksUser = lines.length > 0 && /\?\s*$/.test(lines[lines.length - 1]);
-    var title = asksUser ? name + ' needs your input' : name + ' replied';
+    var title = message && message.askBeforeDo ? name + ' needs your OK' : asksUser ? name + ' needs your input' : name + ' replied';
     showDesktopNotification(roomId, title, excerpt(text.replace(/\s+/g, ' '), 120) || 'New message');
   }
   function notifyFinishedAutomationRuns(previous, next){
@@ -10601,7 +10686,21 @@
       end = matcher.lastIndex;
     }
     if(!match || !matcher.exec(raw)) return raw;
-    return raw.slice(0, end).replace(/\s+$/, '') + '…';
+    return closeCutMarkdown(raw.slice(0, end).replace(/\s+$/, '')) + '…';
+  }
+  // The preview cuts raw markdown at a word, so a span can be left open. Inline
+  // spans never cross a line, so only the last line needs repair: drop a link
+  // that has no address yet, and close or drop the markers still open.
+  function closeCutMarkdown(text){
+    var lineStart = text.lastIndexOf('\n') + 1;
+    var line = text.slice(lineStart);
+    var withoutLink = line.replace(/\[[^\]\n]*(?:\]\([^)\n]*)?$/, '');
+    if(withoutLink !== line) line = withoutLink.replace(/[\s(]+$/, '');
+    if((line.match(/`/g) || []).length % 2) line += '`';
+    var outsideCode = line.replace(/`[^`]*`/g, '');
+    if((outsideCode.match(/\*\*/g) || []).length % 2) line += '**';
+    line = line.replace(/(^|[\s(])[*_](?=[^\s*_])([^*_`]*)$/, '$1$2');
+    return text.slice(0, lineStart) + line;
   }
   function isPreReasoningNotice(text){
     return /^\s*(?:Mia\s+)?Pre-reasoning(?:\s|:)/i.test(String(text || ''));
@@ -10742,6 +10841,7 @@
   function answerAskBeforeDo(id, approved){
     function show(status){
       askBeforeDoLocalStatus[id] = status;
+      scheduleNeedsYouRender();
       var actions = el('[data-ask-before-do-card="' + id + '"] .chat-approval-actions');
       if(actions) actions.innerHTML = '<span class="chat-approval-status">' + esc(ASK_BEFORE_DO_LABELS[status] || status) + '</span>';
     }
@@ -11034,26 +11134,42 @@
     var label = html.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
     return '<span class="chat-math' + (display ? ' chat-math-block' : ' chat-math-inline') + '" role="math" aria-label="' + esc(label) + '">' + html + '</span>';
   }
-  function mdInline(raw){
+  function mdInline(raw, insideLink){
+    // [label](https://…), optionally with a "title". Code spans are matched first
+    // so a link written inside backticks stays code. One level of (parens) is
+    // allowed in the URL (wikipedia-style paths); other schemes stay plain text.
+    var MD_LINK_RE = /(`[^`\n]+`)|\[([^\[\]\n]+)\]\((https?:\/\/(?:[^\s()<>"]|\([^\s()<>"]*\))+)(?:\s+"[^"\n]*")?\)/g;
+    var links = [];
+    var text = String(raw == null ? '' : raw);
+    // Links become tokens first so **bold** can wrap them and nothing inside a
+    // URL is read as markdown. A label never linkifies: no nested <a>.
+    if(!insideLink) text = text.replace(MD_LINK_RE, function(match, code, label, url){
+      if(code) return match;
+      links.push('<a href="' + esc(url) + '" title="' + esc(url) + '" data-chat-web-link>' + mdInline(label, true) + '</a>');
+      return 'MIAOSLINKTOKEN' + (links.length - 1) + 'END';
+    });
     // Keep a bold code span as one token. Splitting on backticks alone turns
     // **`file.pdf`** into three fragments, so neither pair of ** markers can
     // be matched and the presentation syntax leaks into the rendered chat.
-    return String(raw == null ? '' : raw).split(/(\*\*`[^`\n]+`\*\*|`[^`\n]+`)/g).map(function(seg){
+    return text.split(/(\*\*`[^`\n]+`\*\*|`[^`\n]+`)/g).map(function(seg){
       if(/^\*\*`[^`\n]+`\*\*$/.test(seg)) return '<strong><code>' + esc(seg.slice(3, -3)) + '</code></strong>';
       if(/^`[^`\n]+`$/.test(seg)) return '<code>' + esc(seg.slice(1, -1)) + '</code>';
       var math = [];
-      seg = seg.replace(/\\\(([^\n]+?)\\\)|\$([^$\n]+)\$/g, function(_match, parenMath, dollarMath){
+      // $…$ follows the usual markdown rule so money stays money: no digit or
+      // space after the opening $, no space before the closing $, and no
+      // letter or digit right after it. \(…\) is always math.
+      seg = seg.replace(/\\\(([^\n]+?)\\\)|\$(?![\s\d])([^$\n]*[^$\s])\$(?![A-Za-z0-9])/g, function(_match, parenMath, dollarMath){
         var index = math.length;
         math.push(renderMathExpression(parenMath === undefined ? dollarMath : parenMath, false));
         return 'MIAOSMATHTOKEN' + index + 'END';
       });
-      var html = linkifyEsc(seg);
+      var html = insideLink ? esc(seg) : linkifyEsc(seg);
       html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
       // word-boundary guards keep snake_case and URL underscores untouched
       html = html.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
       html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
       return html.replace(/MIAOSMATHTOKEN(\d+)END/g, function(_token, index){ return math[Number(index)] || ''; });
-    }).join('');
+    }).join('').replace(/MIAOSLINKTOKEN(\d+)END/g, function(_token, index){ return links[Number(index)] || ''; });
   }
   // A line counts as a table row once it's wrapped in pipes on both ends —
   // deliberately loose (real GFM requires a leading pipe only optionally),
@@ -12038,7 +12154,8 @@
     // A new turn that has not reported a tool yet starts from a clean slate.
     if(live && (!state || state.dispatchId !== task.id)) state = {dispatchId: task.id, label: '', files: [], startedAt: task.startedAt};
     var files = state ? state.files : [];
-    if(!live && !files.length){
+    // The live activity panel is part of detailed output.
+    if(chatOutputMode !== 'verbose' || (!live && !files.length)){
       panel.hidden = true;
       panel.innerHTML = '';
       if(chatActivityTimer){ clearInterval(chatActivityTimer); chatActivityTimer = null; }
@@ -12071,6 +12188,7 @@
   }
 
   function renderChatThread(options){
+    syncDetailsFiles();
     var thread = el('#chatThread');
     if(!thread) return;
     renderGoalChip();
@@ -13355,6 +13473,43 @@
     });
   }
 
+  // The details pane's Bot settings: the model opens the composer's picker
+  // (it applies per turn), the rest open the bot's editor.
+  function detailsBotRecord(agent){
+    return agent ? benchAgents.filter(function(item){ return item.id === agent.id || item.agentId === agent.id; })[0] : null;
+  }
+  function detailsBotSettingsHtml(agent){
+    if(chatWs.activeKind !== 'agent') return '';
+    var CHEVRON = '<svg class="cip-setting-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg>';
+    var bench = detailsBotRecord(agent), tags = el('#ccModelTags');
+    function row(label, value, attr){
+      return '<button type="button" class="cip-setting-row" ' + attr + '><span class="cip-setting-label">' + esc(label) + '</span><span class="cip-setting-value">' + value + '</span>' + CHEVRON + '</button>';
+    }
+    var color = bench ? '<span class="cip-setting-swatch" style="background:' + esc(moteCssColor(bench.name, bench.id, bench.avatarColor)) + '"></span>' : '';
+    var places = bench ? agentDepartments(bench).length : 0;
+    return '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">Bot settings</span></div>' +
+      row('Model', '<span id="cipModelValue">' + esc(tags ? tags.textContent.trim() : '') + '</span>', 'data-bot-setting="model"') +
+      (agent ? row('Brief', '', 'data-bot-setting="edit"') + row('Workplaces', places ? String(places) : '', 'data-bot-setting="edit"') + row('Avatar color', color, 'data-bot-setting="edit"') : '') + '</section>';
+  }
+  function bindDetailsBotSettings(pane, agent){
+    els('[data-bot-setting]', pane).forEach(function(button){
+      button.addEventListener('click', function(event){
+        if(button.getAttribute('data-bot-setting') === 'model'){
+          event.stopPropagation();
+          var picker = el('#ccModelBtn');
+          if(picker) picker.click();
+          return;
+        }
+        loadBenchAgents().then(function(){
+          var bench = detailsBotRecord(agent);
+          if(!bench){ showBenchToast('Bot editor is unavailable right now'); return; }
+          openEditCinema(bench.id);
+          chatInfo.editFromDetails = chatInfo.mode === 'agent-edit';
+        });
+      });
+    });
+  }
+
   function renderChatInfoPane(){
     var pane = el('#chatInfoPane');
     if(!pane) return;
@@ -13407,7 +13562,7 @@
       return;
     }
     pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open', 'bot-store-open');
-    pane.setAttribute('aria-label', 'Automations');
+    pane.setAttribute('aria-label', 'Details');
     var agent = chatWs.activeKind === 'agent'
       ? chatWs.allAgents.filter(function(a){ return a.roomId === chatWs.activeRoomId || a.nativeConversationId === chatWs.activeRoomId || a.name === chatWs.activeLabel; })[0]
       : null;
@@ -13415,23 +13570,28 @@
     var isMia = isMiaOrchestrator(name, agent && agent.id);
     var automationBots = automationBotsForPanel(isMia, agent);
     var automationRuns = activeAutomationRunsForPanel(isMia, agent);
-    var routines = automationBots.length ? automationBots.map(function(entry){
+    var routines = automationBots.map(function(entry){
       return '<button type="button" class="cip-routine-row" data-bot-id="' + esc(entry.bot.id) + '" data-automation-id="' + esc(entry.automation.id) + '" aria-label="View ' + esc(entry.automation.name || 'automation') + '"><span class="cip-routine-dot">&#9679;</span>' +
         '<span><span class="cip-routine-name">' + esc(entry.automation.name || 'Automation') + '</span>' +
         '<span class="cip-routine-meta">' + esc(automationScheduleText(entry.automation)) + '</span></span></button>';
-    }).join('') : '<div class="cip-routines-empty' + (automationRuns.length ? ' has-running' : '') + '"><div class="cip-routines-empty-text">No automations yet.</div><button type="button" class="cip-automation-link" id="chatInfoAddRoutine"><svg class="cip-automation-zap" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9 1.5 3 9h4.2L7 14.5 13 7H8.8L9 1.5z"/></svg><span>Create automation</span></button></div>';
-    var running = automationRuns.length ? '<div class="cip-routines-head cip-running-head"><span class="cip-routines-title">Running now</span></div><div class="cip-routine-list">' + automationRuns.map(function(run){
+    }).join('');
+    var running = automationRuns.map(function(run){
       return '<button type="button" class="cip-routine-row" data-running-automation-id="' + esc(run.id) + '"' + (run.conversationId ? '' : ' disabled') + ' aria-label="Open ' + esc(run.name || 'automation') + ' conversation"><span class="cip-routine-dot">&#9679;</span>' +
         '<span><span class="cip-routine-name">' + esc(runningAutomationLabel(run)) + '</span>' +
         '<span class="cip-routine-meta">Running</span></span></button>';
-    }).join('') + '</div>' : '';
+    }).join('');
+    var fileRows = chatFileRows();
     pane.classList.add('open');
-    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
-      '<button type="button" class="cip-pane-btn" id="chatInfoSettings" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.3a3.7 3.7 0 1 0 0 7.4 3.7 3.7 0 0 0 0-7.4Zm7.1 3.7a7.2 7.2 0 0 0-.1-1l1.2-.9-1.7-2.9-1.4.6a7.3 7.3 0 0 0-1.7-1l-.2-1.5h-3.4l-.2 1.5a7.3 7.3 0 0 0-1.7 1l-1.4-.6-1.7 2.9 1.2.9a7.2 7.2 0 0 0 0 2l-1.2.9 1.7 2.9 1.4-.6a7.3 7.3 0 0 0 1.7 1l.2 1.5h3.4l.2-1.5a7.3 7.3 0 0 0 1.7-1l1.4.6 1.7-2.9-1.2-.9a7.2 7.2 0 0 0 .1-1Z"></path></svg></button>' +
-      '<button type="button" class="cip-pane-btn" id="chatInfoClose" aria-label="Close automations" title="Close automations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
-      '<div class="cip-routines">' + (automationBots.length ? '<div class="cip-routines-head"><span class="cip-routines-title">Automations</span>' +
+    chatInfo.filesKey = JSON.stringify([chatWs.activeRoomId, fileRows.map(function(row){ return row.id; })]);
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">' + esc(name) + '</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="chatInfoClose" aria-label="Hide details" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
+      '<div class="cip-details">' + detailsFilesHtml(fileRows) +
+      '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">Automations</span>' +
       '<button type="button" class="cip-routines-add" id="chatInfoAddRoutineTop" aria-label="Add automation">+</button></div>' +
-      '<div class="cip-routine-list">' + routines + '</div>' : routines) + running + '</div>';
+      (running || routines ? '<div class="cip-routine-list">' + running + routines + '</div>' : '<div class="cip-section-empty">No automations yet.</div>') + '</section>' +
+      detailsBotSettingsHtml(agent) + '</div>';
+    bindDetailsFiles(pane, fileRows);
+    bindDetailsBotSettings(pane, agent);
     var close = el('#chatInfoClose', pane);
     if(close) close.addEventListener('click', function(){
       chatInfo.automationBotId = null;
@@ -13441,15 +13601,11 @@
       renderChatInfoPane();
       renderChatHeaderBar();
     });
-    var settings = el('#chatInfoSettings', pane);
-    if(settings) settings.addEventListener('click', function(){ showBenchToast('Bot settings are upcoming'); });
     bindAutomationRows(pane);
     bindRunningAutomationRows(pane);
-    els('#chatInfoAddRoutine, #chatInfoAddRoutineTop', pane).forEach(function(btn){
-      btn.addEventListener('click', function(){
-        if(!agent) return showBenchToast('Open a bot conversation to add an automation.');
-        if(!openAutomationDetail(agent.id, null, true)) showBenchToast('This bot already has 10 automations.');
-      });
+    el('#chatInfoAddRoutineTop', pane).addEventListener('click', function(){
+      if(!agent) return showBenchToast('Open a bot conversation to add an automation.');
+      if(!openAutomationDetail(agent.id, null, true)) showBenchToast('This bot already has 10 automations.');
     });
   }
 
@@ -13485,6 +13641,23 @@
     channelMenu.roomId = null;
     channelMenu.confirming = false;
     channelMenu.busy = false;
+  }
+
+  // The chat's actions can be docked in the top bar, under the panes' layers,
+  // so the open menu sits on the page itself, under the chat's icon.
+  var placedChannelMenu = null;
+  function placeChannelMenuUnderTitle(header){
+    if(placedChannelMenu) placedChannelMenu.remove();
+    placedChannelMenu = null;
+    var menu = el('#channelMenu', header), title = el('#channelTitleBtn', header);
+    if(!channelMenu.open || !menu || !title) return;
+    document.body.appendChild(menu);
+    placedChannelMenu = menu;
+    var rect = title.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = (rect.bottom + 6) + 'px';
+    menu.style.right = 'auto';
+    menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
   }
 
   function closeChannelMenu(){
@@ -13604,6 +13777,7 @@
     if(!channelMenu.open) return;
     var header = el('#channelHeader');
     if(header && header.contains(e.target)) return;
+    if(placedChannelMenu && placedChannelMenu.contains(e.target)) return;
     closeChannelMenu();
   });
   document.addEventListener('keydown', function(e){
@@ -13622,6 +13796,7 @@
   }
   window.MiaTabStrip.mix.register('chat', {
     tabs: function(){ return []; },
+    attention: function(){ return window.MiaNeedsYou.count(needsYouItems(), 'chat'); },
     show: function(){ closeBrowserSidebarDrawer(); closeLocalBrowser(); closeAutomationsPage(); applyLeftPane(); },
     render: function(){ renderChatTabs(); },
   });
@@ -13705,6 +13880,7 @@
       wireChannelMenu(header);
       wireChatRosterControls(header, rosterData);
       wireConversationHeaderActions(header);
+      placeChannelMenuUnderTitle(header);
       renderChatInfoPane();
       return;
     }
@@ -13715,6 +13891,7 @@
     wireChannelMenu(header);
     wireChatRosterControls(header, rosterData);
     wireConversationHeaderActions(header);
+    placeChannelMenuUnderTitle(header);
   }
 
   /* Department rooms have no single persona of their own (see addendum #3) —
@@ -16414,10 +16591,10 @@
       toggle.setAttribute('aria-label', closed ? 'Open your bots' : 'Close your bots');
     });
   }
-  // The count bubble on the pane button: how many conversations in the
-  // sidebar have unread messages, shown while the sidebar is out of sight.
+  // The count bubble on the pane button: what needs this person, shown
+  // while the sidebar is out of sight.
   function renderLeftPaneCount(){
-    var count = els('.chat-sidebar .chat-activity-dot.is-unread').length;
+    var count = needsYouItems().length;
     els('#localBrowserSidebarBtn, #automationsSidebarBtn').forEach(function(toggle){
       var bubble = toggle.querySelector('.pane-count');
       if(!count){ if(bubble) bubble.remove(); return; }
@@ -16429,6 +16606,7 @@
     toggle: function(){ toggleChatInfoPane(); return !!chatInfo.open; },
     open: function(){ return !!chatInfo.open; }
   };
+  if(window.miaSyncRightToggle) window.miaSyncRightToggle();
   applyLeftPane();
   (function watchSidebarUnread(){
     var scroll = el('.chat-sidebar-scroll');
@@ -16437,7 +16615,7 @@
     new MutationObserver(function(){
       if(queued) return;
       queued = true;
-      requestAnimationFrame(function(){ queued = false; renderLeftPaneCount(); });
+      requestAnimationFrame(function(){ queued = false; scheduleNeedsYouRender(); });
     }).observe(scroll, {childList:true, subtree:true, attributes:true, attributeFilter:['class']});
   })();
   function closeBrowserSidebarDrawer(){
@@ -16592,9 +16770,7 @@
   })();
   window.miaAppNav = appNav;
 
-  // Where the browser has Downloads, every other view has its own list: the
-  // files in the open chat, the latest automation runs, or the artifacts you
-  // opened last. One button and one card; the view picks what they show.
+  // The artifacts you opened last, listed first on the Artifacts page.
   var RECENT_ARTIFACTS_STORE = 'mia.recentArtifacts.v1';
   function recentArtifactIds(){
     try { var ids = JSON.parse(window.localStorage.getItem(RECENT_ARTIFACTS_STORE) || '[]'); return Array.isArray(ids) ? ids.map(String) : []; }
@@ -16605,141 +16781,100 @@
     try { window.localStorage.setItem(RECENT_ARTIFACTS_STORE, JSON.stringify(window.MiaViewShelf.rememberRecent(recentArtifactIds(), id))); }
     catch(error){}
   }
-  var viewShelf = (function(){
-    var open = false, rows = [], shownView = null;
-    function view(){
-      var classes = document.body.classList;
-      return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('apps-mode') ? 'apps' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
-    }
-    function fileFrom(m){
-      if(m.hubMessage) return m.hubAuthor || '';
-      if(isHumanSender(m.sender)) return 'You';
-      return m.nativeAgentName || m.sender || '';
-    }
-    function collect(shown){
-      var shelf = window.MiaViewShelf;
-      if(shown === 'chat'){
-        var state = chatWs.activeRoomId ? chatRoomState(chatWs.activeRoomId) : null;
-        return shelf.chatFiles(state ? state.messages : [], function(m){
-          var media = m.media && m.media.url ? m.media : null;
-          return m.hubMessage ? hubAttachmentsFor(m) : Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (media ? [media] : []);
-        }, fileFrom);
-      }
-      if(shown === 'automations') return shelf.runHistory(chatWs.automationRuns, chatWs.botRecords, botAutomationList);
-      if(shown === 'artifacts') return shelf.recentArtifacts(recentArtifactIds(), artifactsPage.items);
-      return [];
-    }
-    function when(ms){ return window.MiaArtifactsPage ? window.MiaArtifactsPage.when(ms) : ''; }
-    // Team files (shared 100 GB store): team conversations only, never Solo.
-    function teamFilesChannel(){
-      if(!hubWorkspace() || !chatWs.activeRoomId) return null;
-      var channel = hubChannel(chatWs.activeRoomId);
-      return channel && ['channel', 'group', 'dm'].indexOf(channel.kind) >= 0 ? channel : null;
-    }
-    function openTeamFiles(){
-      var channel = teamFilesChannel();
-      if(!channel || !window.MiaTeamFilesUi) return;
-      setOpen(false);
-      window.MiaTeamFilesUi.open({teamId: activeWorkspaceKey.slice(4), spaceKind: channel.kind, spaceId: channel.id, title: hubChannelLabel(channel),
-        isAdmin: !!(hubChat.membership && hubChat.membership.role === 'admin'), call: hubCall, confirm: appConfirm});
-    }
-    function render(){
-      var list = el('#viewShelfList'), empty = el('#viewShelfEmpty'), search = el('#viewShelfSearch');
-      var conf = window.MiaViewShelf && window.MiaViewShelf.config(shownView);
-      if(!list || !empty || !conf) return;
-      var teamFilesBtn = el('#viewShelfTeamFiles');
-      if(teamFilesBtn) teamFilesBtn.hidden = !(shownView === 'chat' && window.MiaTeamFilesUi && teamFilesChannel());
+  // The details pane's Files section: the files in the open chat.
+  var DETAILS_FILES_SHOWN = 5;
+  function chatFileFrom(m){
+    if(m.hubMessage) return m.hubAuthor || '';
+    if(isHumanSender(m.sender)) return 'You';
+    return m.nativeAgentName || m.sender || '';
+  }
+  function chatFileRows(){
+    if(!window.MiaViewShelf) return [];
+    var state = chatWs.activeRoomId ? chatRoomState(chatWs.activeRoomId) : null;
+    return window.MiaViewShelf.chatFiles(state ? state.messages : [], function(m){
+      var media = m.media && m.media.url ? m.media : null;
+      return m.hubMessage ? hubAttachmentsFor(m) : Array.isArray(m.attachments) && m.attachments.length ? m.attachments : (media ? [media] : []);
+    }, chatFileFrom);
+  }
+  function shelfWhen(ms){ return window.MiaArtifactsPage ? window.MiaArtifactsPage.when(ms) : ''; }
+  // Team files (shared 100 GB store): team conversations only, never Solo.
+  function teamFilesChannel(){
+    if(!hubWorkspace() || !chatWs.activeRoomId) return null;
+    var channel = hubChannel(chatWs.activeRoomId);
+    return channel && ['channel', 'group', 'dm'].indexOf(channel.kind) >= 0 ? channel : null;
+  }
+  function openTeamFiles(){
+    var channel = teamFilesChannel();
+    if(!channel || !window.MiaTeamFilesUi) return;
+    window.MiaTeamFilesUi.open({teamId: activeWorkspaceKey.slice(4), spaceKind: channel.kind, spaceId: channel.id, title: hubChannelLabel(channel),
+      isAdmin: !!(hubChat.membership && hubChat.membership.role === 'admin'), call: hubCall, confirm: appConfirm});
+  }
+  function openChatFileRow(row){
+    if(!row) return;
+    if(/^blob:/.test(row.previewUrl)) openChatImageViewer(row.previewUrl, null);
+    else if(row.canPreview && window.miaDesktop && window.miaDesktop.browser && typeof window.miaDesktop.browser.prepareAttachment === 'function' && window.miaNativeBrowser) openAttachmentInMiaBrowser(row.previewUrl);
+    else if(row.url){ var link = document.createElement('a'); link.href = row.url; link.download = row.name; document.body.append(link); link.click(); link.remove(); }
+  }
+  function detailsFilesHtml(rows){
+    var more = rows.length > DETAILS_FILES_SHOWN;
+    var teamFiles = window.MiaTeamFilesUi && teamFilesChannel();
+    return '<section class="cip-section" id="cipFiles"><div class="cip-routines-head"><span class="cip-routines-title">Files</span>' +
+      (rows.length ? '<span class="cip-section-count">' + rows.length + '</span>' : '') + '</div>' +
+      (more && chatInfo.filesExpanded ? '<input type="search" class="cip-files-search" id="cipFilesSearch" placeholder="Search files" aria-label="Search files" autocomplete="off" spellcheck="false">' : '') +
+      (rows.length ? '<div class="cip-files-list" id="cipFilesList"></div>' : '<div class="cip-section-empty">Files shared in this chat appear here.</div>') +
+      (more ? '<button type="button" class="cip-section-link" id="cipFilesAll">' + (chatInfo.filesExpanded ? 'Show less' : 'See all') + '</button>' : '') +
+      (teamFiles ? '<button type="button" class="cip-section-link" id="cipTeamFiles">Team files</button>' : '') + '</section>';
+  }
+  function bindDetailsFiles(pane, rows){
+    var list = el('#cipFilesList', pane), search = el('#cipFilesSearch', pane), all = el('#cipFilesAll', pane), team = el('#cipTeamFiles', pane);
+    function paint(){
+      if(!list) return;
       var query = search ? search.value : '';
       var shown = rows.filter(function(row){ return window.MiaViewShelf.matches(row, query); });
-      list.innerHTML = window.MiaViewShelf.rowsHtml(shown, esc, when);
+      if(!chatInfo.filesExpanded) shown = shown.slice(0, DETAILS_FILES_SHOWN);
+      list.innerHTML = shown.length ? window.MiaViewShelf.rowsHtml(shown, esc, shelfWhen) : '<div class="cip-section-empty">Nothing matches.</div>';
       list._shelfRows = shown;
-      empty.hidden = shown.length > 0;
-      empty.textContent = rows.length ? 'Nothing matches.' : conf.empty;
     }
-    function setOpen(next){
-      var panel = el('#viewShelf'), btn = el('#viewShelfBtn'), search = el('#viewShelfSearch');
-      if(!panel || !btn) return;
-      open = !!next && !btn.hidden;
-      panel.hidden = !open;
-      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if(!open){ if(search) search.value = ''; return; }
-      shownView = view();
-      var conf = window.MiaViewShelf.config(shownView);
-      el('#viewShelfTitle').textContent = conf.title;
-      if(search){ search.placeholder = conf.search; search.setAttribute('aria-label', conf.search); }
-      var rect = btn.getBoundingClientRect();
-      panel.style.setProperty('--shelf-top', Math.round(rect.bottom + 6) + 'px');
-      panel.style.setProperty('--shelf-right', Math.max(8, Math.round(window.innerWidth - rect.right)) + 'px');
-      rows = collect(shownView);
-      render();
-      // Recently opened needs the artifacts list; it may still be loading.
-      if(shownView === 'artifacts' && !artifactsPage.items.length) api('/api/artifacts').then(function(res){
-        if(res.status === 200 && Array.isArray(res.data.artifacts) && !artifactsPage.items.length) artifactsPage.items = res.data.artifacts;
-        if(open && shownView === 'artifacts'){ rows = collect('artifacts'); render(); }
-      }).catch(function(){});
-      if(search) search.focus({preventScroll: true});
-    }
-    function sync(){
-      var btn = el('#viewShelfBtn');
-      if(!btn || !window.MiaViewShelf) return;
-      var shown = view(), conf = window.MiaViewShelf.config(shown);
-      btn.hidden = !conf;
-      if(open && shown !== shownView) setOpen(false);
-      if(!conf) return;
-      if(btn.getAttribute('data-shelf-view') !== shown){
-        btn.setAttribute('data-shelf-view', shown);
-        btn.querySelector('svg').innerHTML = conf.icon;
-        btn.title = conf.label;
-        btn.setAttribute('aria-label', conf.label);
-      }
-    }
-    function choose(row){
-      setOpen(false);
-      if(row.kind === 'artifact') openArtifact(row.id);
-      else if(row.kind === 'run') openAutomationsDetail(row.botId, row.automationId);
-      else if(row.kind === 'file'){
-        if(/^blob:/.test(row.previewUrl)) openChatImageViewer(row.previewUrl, null);
-        else if(row.canPreview && window.miaDesktop && window.miaDesktop.browser && typeof window.miaDesktop.browser.prepareAttachment === 'function' && window.miaNativeBrowser) openAttachmentInMiaBrowser(row.previewUrl);
-        else if(row.url){ var link = document.createElement('a'); link.href = row.url; link.download = row.name; document.body.append(link); link.click(); link.remove(); }
-      }
-    }
-    function wire(){
-      var btn = el('#viewShelfBtn'), panel = el('#viewShelf');
-      if(!btn || !panel) return;
-      btn.addEventListener('click', function(){ setOpen(!open); });
-      el('#viewShelfClose').addEventListener('click', function(){ setOpen(false); });
-      var teamFilesBtn = el('#viewShelfTeamFiles');
-      if(teamFilesBtn) teamFilesBtn.addEventListener('click', openTeamFiles);
-      el('#viewShelfSearch').addEventListener('input', render);
-      el('#viewShelfList').addEventListener('click', function(event){
-        var target = event.target.closest('[data-shelf-row]');
-        var shown = el('#viewShelfList')._shelfRows || [];
-        if(target) choose(shown[Number(target.getAttribute('data-shelf-row'))]);
-      });
-      panel.addEventListener('keydown', function(event){
-        if(event.key !== 'Escape') return;
-        setOpen(false);
-        btn.focus({preventScroll: true});
-      });
-      // Like a menu: a click anywhere else closes it.
-      document.addEventListener('mousedown', function(event){
-        if(open && !panel.contains(event.target) && !btn.contains(event.target)) setOpen(false);
-      }, true);
-      new MutationObserver(sync).observe(document.body, {attributes: true, attributeFilter: ['class']});
-      sync();
-    }
-    return {wire:wire, sync:sync, setOpen:setOpen};
-  })();
-  viewShelf.wire();
-  window.miaViewShelf = viewShelf;
+    paint();
+    if(list) list.addEventListener('click', function(event){
+      var target = event.target.closest('[data-shelf-row]');
+      if(target) openChatFileRow(list._shelfRows[Number(target.getAttribute('data-shelf-row'))]);
+    });
+    if(search) search.addEventListener('input', paint);
+    if(all) all.addEventListener('click', function(){
+      chatInfo.filesExpanded = !chatInfo.filesExpanded;
+      chatInfo.filesKey = null;
+      syncDetailsFiles();
+    });
+    if(team) team.addEventListener('click', openTeamFiles);
+  }
+  // A file can arrive while the pane is open: redraw only its Files section.
+  function syncDetailsFiles(){
+    var section = el('#cipFiles');
+    if(!section || !chatInfo.open || chatInfo.mode !== 'automations') return;
+    var rows = chatFileRows();
+    var key = JSON.stringify([chatWs.activeRoomId, rows.map(function(row){ return row.id; })]);
+    if(key === chatInfo.filesKey || document.activeElement === el('#cipFilesSearch')) return;
+    chatInfo.filesKey = key;
+    section.outerHTML = detailsFilesHtml(rows);
+    bindDetailsFiles(el('#chatInfoPane'), rows);
+  }
 
-  // Notifications collect what needs you across workspaces; until that
-  // feed exists the panel says there is nothing waiting.
+  // Notifications: everything that needs this person, the same list the
+  // view badges count. A row opens the place that is waiting.
   (function(){
     var button = el('#railNotificationsBtn'), panel = el('#railNotificationsPanel');
     if(!button || !panel) return;
+    panel.addEventListener('click', function(e){
+      var row = e.target.closest && e.target.closest('[data-needs-you-row]');
+      if(!row) return;
+      var item = (el('#railNotificationsList')._items || [])[Number(row.getAttribute('data-needs-you-row'))];
+      setOpen(false);
+      if(item) openNeedsYouItem(item);
+    });
     function setOpen(open){
       panel.hidden = !open;
+      if(open) renderNeedsYou();
       button.classList.toggle('open', open);
       button.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
@@ -16930,6 +17065,8 @@
     if(nativeNotifications && typeof nativeNotifications.onClick === 'function') nativeNotifications.onClick(function(roomId){
       var reviewApp = window.MiaAppsPage && window.MiaAppsPage.reviewTagApp(roomId);
       if(reviewApp){ openAppsReview(reviewApp); return; }
+      var needsAutomation = window.MiaNeedsYou && window.MiaNeedsYou.automationFromTag(roomId);
+      if(needsAutomation){ openNeedsYouItem(needsAutomation); return; }
       if(roomId && roomId !== chatWs.activeRoomId) openNotifiedConversation(String(roomId));
     });
     var notifications = el('#chatAcctNotifications');
@@ -17406,7 +17543,6 @@
         (channelMenuKind() ? '<div class="conv-more-sep" role="separator"></div>' + renderChannelMenuHtml() : '')
       : '';
     return '<div class="conversation-header-actions conv-more" role="group" aria-label="Conversation actions">' +
-      '<button type="button" class="ch-icon-btn conv-more-btn" id="chatMoreBtn" title="More" aria-label="More" aria-haspopup="menu" aria-controls="channelMenu" aria-expanded="' + (channelMenu.open ? 'true' : 'false') + '"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg></button>' +
       '<div class="channel-menu conv-more-menu' + (channelMenu.open ? ' open' : '') + '" id="channelMenu" role="menu">' + menu + '</div>' +
     '</div>';
   }
@@ -17482,13 +17618,6 @@
   }
 
   function wireConversationHeaderActions(header){
-    var more = el('#chatMoreBtn', header);
-    if(more) more.addEventListener('click', function(e){
-      e.stopPropagation();
-      if(channelMenu.open) resetChannelMenuState();
-      else { channelMenu.open = true; channelMenu.roomId = chatWs.activeRoomId; channelMenu.confirming = false; channelMenu.busy = false; }
-      renderChatHeaderBar();
-    });
     // Picking an action closes the menu, as in Chrome. Restart stays open to
     // ask for confirmation first.
     els('.conv-more-item:not(#channelMenuResetItem)', header).forEach(function(item){
@@ -18447,6 +18576,10 @@
     if(!btn || !menu || !optionsWrap || !title || !back || !tags || !pickerRoot) return;
 
     var picker = chatModelPicker;
+    new MutationObserver(function(){
+      var value = el('#cipModelValue');
+      if(value) value.textContent = tags.textContent.trim();
+    }).observe(tags, {childList: true, characterData: true, subtree: true});
     var effortLabels = {none:'None', low:'Low', medium:'Medium', high:'High', xhigh:'Extra high', max:'Max', ultra:'Ultra'};
 
     // The "Choose a model family" back screen lists every provider offered by

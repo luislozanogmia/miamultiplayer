@@ -156,21 +156,8 @@
     },
     provider: function (view) { return views[view] || {}; },
     register: function (view, provider) { views[view] = Object.assign(views[view] || {}, provider); paintCounts(); },
-    // How many tabs each view has open, for the badges on the view buttons.
-    // A view whose strip holds a fixed page (the Automations board) counts
-    // only its other tabs with count(). A tab marked uncounted (a blank new
-    // browser tab, the one chat that is always open) is not something the
-    // person opened, so a fresh install shows no badges.
-    counts: function () {
-      var out = {};
-      MIX_ORDER.forEach(function (view) {
-        var provider = views[view] || {};
-        try {
-          out[view] = provider.count ? provider.count() : provider.tabs ? (provider.tabs() || []).filter(function (t) { return t && !t.uncounted; }).length : 0;
-        } catch (e) { out[view] = 0; }
-      });
-      return out;
-    },
+    // A view's waiting items changed, so its badge needs drawing again.
+    repaint: function () { paintCounts(); },
     changed: function () {
       MIX_ORDER.forEach(function (view) { if (views[view] && views[view].render) views[view].render(); });
     },
@@ -291,20 +278,17 @@
   // A chat or automation tab in the browser's strip. In its own view it is
   // that view's tab (active, closes, reorders); from another view it opens
   // its view there. Closing and moving go to its own view.
-  // The count badge on each view button (Chat 2, Automations 3, ...).
+  // The count badge on each view button: what is waiting for this person
+  // there, never how many tabs are open.
   function paintCounts() {
     if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
-    var counts = mix.counts();
     MIX_ORDER.forEach(function (view) {
       var button = document.querySelector('.sidebar-view-btn[data-sidebar-view="' + view + '"]');
       if (!button) return;
       var badge = button.querySelector('.sidebar-view-count');
-      var count = counts[view] || 0;
       var name = button.getAttribute('data-tip') || button.getAttribute('title') || '';
-      // Something waiting for this person outranks how many tabs are open.
-      var provider = views[view] || {}, waiting = 0;
-      try { waiting = provider.attention ? provider.attention() : 0; } catch (e) { waiting = 0; }
-      if (waiting) count = waiting;
+      var provider = views[view] || {}, count = 0;
+      try { count = provider.attention ? provider.attention() : 0; } catch (e) { count = 0; }
       if (!count) { if (badge) badge.remove(); if (name) button.setAttribute('aria-label', name); return; }
       if (!badge) {
         badge = document.createElement('span');
@@ -313,8 +297,7 @@
         button.appendChild(badge);
       }
       badge.textContent = count > 99 ? '99+' : String(count);
-      badge.classList.toggle('sidebar-view-count-attention', !!waiting);
-      button.setAttribute('aria-label', name + ', ' + count + (waiting ? ' waiting for review' : ' open'));
+      button.setAttribute('aria-label', name + ', ' + count + ' need' + (count === 1 ? 's' : '') + ' you');
     });
   }
 

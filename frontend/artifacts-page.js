@@ -92,6 +92,12 @@
     }
     var list = sections(state.items, state.filter, state.query);
     if(!list.length) return '<div class="artifacts-empty">Nothing matches.</div>';
+    // The ones opened last come first, on the unfiltered list; ids of artifacts that are gone drop out.
+    var byId = {};
+    state.items.forEach(function(item){ byId[item.id] = item; });
+    var recent = state.filter === 'all' && !String(state.query || '').trim()
+      ? (state.recentIds || []).map(function(id){ return byId[id]; }).filter(Boolean) : [];
+    if(recent.length) list = [{title: 'Recently opened', items: recent}].concat(list);
     return list.map(function(section){
       return '<div class="artifacts-section-title">' + esc(section.title) + '</div>'
         + '<div class="artifacts-list" role="list">' + section.items.map(function(item){ return rowHtml(item, esc, now); }).join('') + '</div>';

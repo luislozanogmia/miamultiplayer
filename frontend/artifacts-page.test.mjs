@@ -47,3 +47,11 @@ test('Artifacts, Automations and Browser open the same way in Solo and in a team
   const html = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   assert.match(html, /data-sidebar-view="artifacts" data-tools-action="artifacts"/);
 });
+
+test('recently opened comes first on the unfiltered list, and artifacts that are gone drop out', () => {
+  const items = [{ id: 'a', kind: 'page', type: 'HTML', name: 'report.html', modifiedAt: 5 }, { id: 'b', kind: 'page', type: 'HTML', name: 'notes.html', modifiedAt: 4 }];
+  const html = page.bodyHtml({ items, filter: 'all', query: '', recentIds: ['b', 'missing'] }, esc, now);
+  assert.ok(html.indexOf('Recently opened') >= 0 && html.indexOf('Recently opened') < html.indexOf('notes.html'));
+  assert.doesNotMatch(html, /missing/);
+  assert.doesNotMatch(page.bodyHtml({ items, filter: 'all', query: 'report', recentIds: ['b'] }, esc, now), /Recently opened/);
+});

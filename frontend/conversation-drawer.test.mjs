@@ -30,12 +30,10 @@ test('conversation actions sit behind one More button with a Chrome-style menu',
   const actionEnd = source.indexOf('\n\n  function createFreshConversationForActiveBot', actionStart);
   const actions = source.slice(actionStart, actionEnd);
 
-  assert.match(actions, /id="chatMoreBtn"[^']*aria-haspopup="menu"/);
-  assert.match(actions, /<circle cx="12" cy="5" r="1\.4"><\/circle><circle cx="12" cy="12" r="1\.4"><\/circle><circle cx="12" cy="19" r="1\.4"><\/circle>/, 'vertical dots');
   assert.match(actions, /channelMenuKind\(\) \? '<div class="conv-more-sep" role="separator"><\/div>' \+ renderChannelMenuHtml\(\)/, 'restart or reset lives in the same menu');
   assert.equal((actions.match(/item\('/g) || []).length, 5);
   assert.match(styles, /\.conv-more-item svg\{[^}]*width:18px;[^}]*height:18px;[^}]*stroke:#474747;[^}]*stroke-width:2;/, 'the bar\'s own icon weight and color');
-  assert.match(styles, /\.local-browser-view-tools \.channel-header \.ch-left\{display:none!important;\}/, 'the chat name stays out of the address bar');
+  assert.match(styles, /\.local-browser-view-tools \.channel-header \.channel-header-title\{display:none!important;\}/, 'the chat name stays out of the bar, its icon stays');
 });
 
 test('history and new conversation reuse one right-side drawer', async () => {
@@ -83,4 +81,11 @@ test('in the address bar the right pane toggle comes before the view buttons, so
 test('in every view the pane toggle sits just before the chat buttons', async () => {
   const source = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
   assert.match(source, /if \(miaToggle\.nextSibling !== viewTools\) viewTools\.before\(miaToggle\);/);
+});
+
+test('the pane toggle follows the details pane, however it opened or closed', async () => {
+  const nav = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(nav, /new MutationObserver\(syncRightToggle\)\.observe\(detailsPane, \{ attributes: true, attributeFilter: \['class'\] \}\)/);
+  assert.match(app, /window\.miaChatRightPane = \{[\s\S]*?\};\s*if\(window\.miaSyncRightToggle\) window\.miaSyncRightToggle\(\);/, 'the app loads after the toggle');
 });
