@@ -215,6 +215,7 @@ test('native browser visibility owner occludes and restores the live view withou
   const end = nativeBrowserSource.indexOf('\n  function render(next)', start);
   const commands = [];
   const classes = new Set();
+  let dialog = null;
   const context = {
     hubWorkspace: () => false,
     inHubRoom: () => false,
@@ -223,12 +224,20 @@ test('native browser visibility owner occludes and restores the live view withou
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
     overlay: { hidden: false },
-    document: { body: { classList: { contains(name) { return classes.has(name); } } } },
+    document: { querySelector: () => dialog, body: { classList: { contains(name) { return classes.has(name); } } } },
     bridge: { command(payload) { commands.push(payload); return Promise.resolve(); } },
     JSON,
   };
   vm.createContext(context);
   vm.runInContext(nativeBrowserSource.slice(start, end), context);
+  context.layout();
+  assert.equal(commands.at(-1).visible, true);
+  dialog = {};
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, false, 'an open dialog hides the page that would cover it');
+  dialog = null;
+  context.lastLayout = '';
   context.layout();
   assert.equal(commands.at(-1).visible, true);
   context.downloadsOpen = true;
@@ -268,7 +277,7 @@ test('native browser visibility owner occludes and restores the live view withou
 test('conversation drawer toggles native occlusion and row avatars retain bookmark markup', () => {
   assert.match(source, /function openConversationDrawer\(mode\)[\s\S]*classList\.add\('native-browser-occluded-conversation'\)/);
   assert.match(source, /function closeDmCompose\(\)[\s\S]*classList\.remove\('native-browser-occluded-conversation'\)/);
-  assert.match(nativeBrowserSource, /MutationObserver\(layout\)\.observe\(document\.body, \{ attributes: true, attributeFilter: \['class'\] \}\)/);
+  assert.match(nativeBrowserSource, /MutationObserver\(layout\)\.observe\(document\.body, \{ attributes: true, attributeFilter: \['class'\], childList: true \}\)/);
   assert.match(source, /conversation-history-bookmark[\s\S]*conversation-history-row-agent/);
 });
 

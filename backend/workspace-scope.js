@@ -33,6 +33,17 @@ function recordBelongsToCompany(record, baseCompanyId, companyId) {
   return workspaceCompanyId(baseCompanyId, workspaceIdForRecord(record), record.owner) === companyId;
 }
 
+// A team's My Bots chat is stored in Solo whichever list its bot came from, so
+// the conversation's workspace can differ from the bot's. It still only runs
+// your own bot.
+function botAnswersConversation(bot, baseCompanyId, conversation, senderId) {
+  if (!bot || !conversation) return false;
+  if (recordBelongsToCompany(bot, baseCompanyId, conversation.companyId)) return true;
+  const owner = String(bot.owner || '').trim().toLowerCase();
+  return Boolean(conversation.metadata && conversation.metadata.source === 'team-bot-chat')
+    && Boolean(owner) && owner === String(senderId || '').trim().toLowerCase();
+}
+
 function departmentsMetaKey(ownerEmail, workspaceId) {
   const owner = String(ownerEmail || '').trim().toLowerCase();
   const base = `departments:${owner}`;
@@ -42,6 +53,7 @@ function departmentsMetaKey(ownerEmail, workspaceId) {
 module.exports = {
   DEFAULT_WORKSPACE_ID,
   WORKSPACE_IDS,
+  botAnswersConversation,
   departmentsMetaKey,
   normalizeWorkspaceId,
   recordBelongsToCompany,

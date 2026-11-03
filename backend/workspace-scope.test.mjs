@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
   DEFAULT_WORKSPACE_ID,
+  botAnswersConversation,
   departmentsMetaKey,
   recordBelongsToCompany,
   workspaceCompanyId,
@@ -32,4 +33,18 @@ test('workspace request and department persistence use separate validated scopes
   assert.equal(workspaceIdFromRequest({ headers: { 'x-miaos-workspace': 'friends' }, query: {} }), 'multiplayer_test');
   assert.equal(departmentsMetaKey('Alice@Example.com', 'multiplayer_test'), 'departments:alice@example.com');
   assert.equal(departmentsMetaKey('Alice@Example.com', 'solo'), 'departments:alice@example.com:solo');
+});
+
+test('a team My Bots chat runs only your own bot, whichever list it came from', () => {
+  const base = 'company-base';
+  const solo = workspaceCompanyId(base, 'solo');
+  const team = workspaceCompanyId(base, 'hub_team');
+  const bot = { id: 'b1', companyId: team, owner: 'Alice@Example.com' };
+  const chat = { companyId: solo, metadata: { source: 'team-bot-chat' } };
+  assert.equal(botAnswersConversation(bot, base, chat, 'alice@example.com'), true);
+  assert.equal(botAnswersConversation(bot, base, chat, 'bob@example.com'), false);
+  assert.equal(botAnswersConversation(bot, base, { companyId: solo, metadata: {} }, 'alice@example.com'), false);
+  assert.equal(botAnswersConversation({ ...bot, owner: '' }, base, chat, ''), false);
+  assert.equal(botAnswersConversation(null, base, chat, 'alice@example.com'), false);
+  assert.equal(botAnswersConversation(bot, base, { companyId: team, metadata: {} }, 'bob@example.com'), true);
 });

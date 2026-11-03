@@ -4674,6 +4674,7 @@
     allDepartments: [],    // channel names projected only from authoritative conversation rows
     allAgents: [],         // every task bot (GET /api/bots)
     botRecords: [],        // complete GET /api/bots records, including durable automation config
+    myBotRecords: [],      // the bots listed under My Bots in a team
     automationRuns: [],    // active Hermes cron sessions only
     gatewayAgent: null,        // Mia's real private orchestrator room, exposed as an independent agent row
     activeRoomId: null,
@@ -5112,10 +5113,18 @@
     var workspace=activeWorkspaceKey;
     return Promise.all([
       api('/api/bots?workspace=solo').then(function(res){ return res.status===200 && res.data && res.data.bots || []; }),
-      loadNativeConversations()
+      loadNativeConversations(),
+      api('/api/bots').then(function(res){ return res.status===200 && res.data && res.data.bots || []; })
     ]).then(function(results){
       if(activeWorkspaceKey!==workspace)return;
-      syncChatBotRecords(results[0].filter(function(bot){ return String(bot.status||'').toLowerCase()!=='paused'; }));
+      // botRecords also takes this workspace's own list later, so My Bots keeps its own:
+      // your Solo bots plus any bot made while in this team.
+      var seen={}, myBots=results[0].concat(results[2]).filter(function(bot){
+        if(seen[bot.id] || String(bot.status||'').toLowerCase()==='paused')return false;
+        return seen[bot.id]=true;
+      });
+      chatWs.myBotRecords=myBots;
+      syncChatBotRecords(myBots);
       applyNativeConversationList(results[1]);
     }).catch(function(){});
   }
@@ -5256,7 +5265,7 @@
       wrap.appendChild(head); wrap.appendChild(list);
       return {node:wrap,list:list};
     }
-    var myBots=chatWs.botRecords||[], companyBots=hubChat.companyBots||[];
+    var myBots=chatWs.myBotRecords||[], companyBots=hubChat.companyBots||[];
     var pinnedBots=teamBotPins(activeWorkspaceKey);
     function botPinned(key){ return pinnedBots.indexOf(key)>=0; }
     if(pinned){
@@ -12078,6 +12087,7 @@
     });
     createdBotRecords.push(created);
     syncChatBotRecords(createdBotRecords);
+    if(hubWorkspace())chatWs.myBotRecords=(chatWs.myBotRecords||[]).concat(created);
     chatWs.nativeConversations.push(conversation);
     applyNativeConversationList(chatWs.nativeConversations);
     renderChatSidebar();
@@ -13457,6 +13467,7 @@
           });
           createdBotRecords.push(created);
           syncChatBotRecords(createdBotRecords);
+          if(hubWorkspace())chatWs.myBotRecords=(chatWs.myBotRecords||[]).concat(created);
           chatWs.nativeConversations.push(conversation);
           applyNativeConversationList(chatWs.nativeConversations);
           chatRoomState(conversation.id).localWelcome = buildBotStoreWelcomeMessage(conversation.id, created, freshManifest.welcome);

@@ -488,7 +488,8 @@
       // The docked "Your bots" panel doesn't: it narrows the screen instead.
       var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen &&
         !document.body.classList.contains('native-browser-occluded-about') &&
-        !document.body.classList.contains('native-browser-occluded-conversation');
+        !document.body.classList.contains('native-browser-occluded-conversation') &&
+        !document.querySelector('.app-prompt-overlay.open');
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view
@@ -1287,7 +1288,8 @@
     downloadsBtn.focus({ preventScroll: true });
   });
   new ResizeObserver(layout).observe(screen);
-  new MutationObserver(layout).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  // Dialogs are added to the body directly.
+  new MutationObserver(layout).observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
   function syncNativeTheme() {
     render(state);
     return command('theme', { dark: developerModeEnabled() });

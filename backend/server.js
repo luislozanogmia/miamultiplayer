@@ -172,6 +172,7 @@ const { miaosWorkspacePromptContext, PAGE_ICON_RULE, workspaceDir: miaosWorkspac
 const {
   DEFAULT_WORKSPACE_ID,
   departmentsMetaKey,
+  botAnswersConversation,
   recordBelongsToCompany,
   workspaceCompanyId,
   workspaceIdForRecord,
@@ -6552,7 +6553,7 @@ function nativeDispatchActor(dispatch, conversation, trigger) {
     return miaReplyAgent(trigger.senderId, department || 'Mia', conversation.companyId);
   }
   const bot = db.loadOne(conn, 'bots', dispatch.targetId);
-  if (!bot || !recordBelongsToCompany(bot, NATIVE_COMPANY_ID, conversation.companyId)) {
+  if (!botAnswersConversation(bot, NATIVE_COMPANY_ID, conversation, trigger.senderId)) {
     throw new Error(`native bot ${dispatch.targetId} not found`);
   }
   return Object.assign({}, bot, {

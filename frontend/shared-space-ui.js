@@ -9,10 +9,13 @@
   if(!model || !bridge || !bar) return;
   var host = function(){ return window.MiaSpaceHost || null; };
   var HEARTBEAT_MS = 30000;
+  // Switching workspace reloads this page, so the session lives in storage:
+  // coming back within this long puts you back in it without asking again.
+  var SESSION_KEY = 'miaSharedSession', LEFTOVERS_KEY = 'miaSharedLeftoverGroups', RESUME_MS = 3600000;
 
   var s = {space:null, teamKey:null, channelId:null, groupId:null, links:{}, presence:{}, invites:{},
     follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null, ended:{}, notice:null,
-    confirming:null, approveEach:false, ignored:{}};
+    confirming:null, approveEach:false, ignored:{}, joined:false, resumeChecked:false};
 
   function key(){ return Array.from(crypto.getRandomValues(new Uint8Array(8)), function(b){ return b.toString(16).padStart(2, '0'); }).join(''); }
   function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch){ return '&#' + ch.charCodeAt(0) + ';'; }); }
@@ -20,6 +23,34 @@
   function teamKey(){ var h = host(); return h ? h.teamKey() : null; }
   function bound(){ return !!(s.space && s.teamKey && s.teamKey === teamKey()); }
   function command(action, extra){ return bridge.command(Object.assign({action: action}, extra || {})); }
+  function readStored(name){
+    try { return JSON.parse(window.localStorage.getItem(name) || 'null'); } catch(_storedError) { return null; }
+  }
+  function writeStored(name, value){
+    try {
+      if(value) window.localStorage.setItem(name, JSON.stringify(value));
+      else window.localStorage.removeItem(name);
+    } catch(_storedError) {}
+  }
+
+  // ---- Staying in a session across a reload --------------------------------
+  // Only written while the session is showing, so `at` is when it was last in use.
+  function saveSession(){
+    if(!bound() || !me()) return;
+    writeStored(SESSION_KEY, {space: s.space, teamKey: s.teamKey, channelId: s.channelId, groupId: s.groupId, links: s.links,
+      follow: s.follow, approveEach: s.approveEach, ignored: s.ignored, joined: s.joined, user: me().id, at: Date.now()});
+  }
+  function resumeSession(){
+    var team = teamKey(), self = me();
+    if(s.resumeChecked || s.space || !team || !self) return;
+    s.resumeChecked = true;
+    var saved = readStored(SESSION_KEY);
+    if(!saved || saved.teamKey !== team) return;
+    if(saved.user !== self.id || !saved.space || Date.now() - Number(saved.at || 0) >= RESUME_MS){ writeStored(SESSION_KEY, null); return; }
+    start(saved.channelId, saved.space, saved.groupId || null, saved.links);
+    s.follow = saved.follow || null; s.approveEach = !!saved.approveEach; s.ignored = saved.ignored || {}; s.joined = !!saved.joined;
+    sendPresence(true);
+  }
 
   // ---- Sending -------------------------------------------------------------
   function post(message){
@@ -55,7 +86,10 @@
   function groupTabs(){ return s.browser && s.groupId ? s.browser.tabs.filter(function(tab){ return tab.groupId === s.groupId; }) : []; }
   function onBrowser(state){
     s.browser = state;
-    if(bound()){
+    resumeSession();
+    // The browser can still be on another workspace's tabs right after a reload.
+    var onOurTabs = !state.workspace || state.workspace === s.teamKey;
+    if(bound() && onOurTabs){
       // Someone approving page by page may have no group yet.
       var groupGone = !!s.groupId && !state.groups.some(function(group){ return group.id === s.groupId; });
       if(groupGone && state.tabs.length && !s.pendingOpens){ leave(true); return render(); }
@@ -105,6 +139,7 @@
   function receive(channelId, row){
     var message = model.decode(row && row.body);
     if(!message) return;
+    resumeSession();
     // Only the Hub can end a session; the same words from anyone else mean nothing.
     if(message.t === 'end'){
       if(model.isAdminEnd(row)) endedByAdmin(channelId, message.space);
@@ -160,7 +195,7 @@
   function announce(active){ var h = host(); if(h && h.sharedSession) h.sharedSession(active); }
   function start(channelId, space, groupId, links){
     s.space = space; s.teamKey = teamKey(); s.channelId = channelId; s.groupId = groupId; s.links = links || {};
-    s.presence = {}; s.follow = null; s.sent = {}; s.confirming = null; s.approveEach = false; s.ignored = {};
+    s.presence = {}; s.follow = null; s.sent = {}; s.confirming = null; s.approveEach = false; s.ignored = {}; s.joined = false;
     announce(true);
     clearInterval(s.timers.beat);
     s.timers.beat = setInterval(function(){
@@ -184,16 +219,29 @@
     var invite = s.invites[spaceId];
     if(!invite || !invite.space || !invite.space.tabs.length) return;
     delete s.invites[spaceId];
-    start(invite.channelId, invite.space, null, {});
+    var reuse = leftoverPlan(invite);
+    // Pages that aren't part of this session leave the group first, so they are never shared.
+    if(reuse.strays.length){
+      Promise.all(reuse.strays.map(function(id){ return command('groupRemoveTab', {id: id}).catch(function(){}); }))
+        .then(function(){ enterSession(invite, approveEach, reuse); });
+      return;
+    }
+    enterSession(invite, approveEach, reuse);
+  }
+  function enterSession(invite, approveEach, reuse){
+    start(invite.channelId, invite.space, reuse.groupId, reuse.links);
+    s.joined = true;
+    var reusedFirst = invite.space.tabs.filter(function(tab){ return tab.url && reuse.links[tab.k]; })[0];
+    if(reusedFirst) command('select', {id: reuse.links[reusedFirst.k]}).catch(function(){});
     if(approveEach){
       s.approveEach = true;
       sendPresence(true); render();
       return;
     }
     s.pendingOpens++;
-    var first = invite.space.tabs.filter(function(tab){ return tab.url; });
+    var first = invite.space.tabs.filter(function(tab){ return tab.url && !reuse.links[tab.k]; });
     first.reduce(function(chain, tab, index){
-      return chain.then(function(){ return openLinked(tab, index === 0); });
+      return chain.then(function(){ return openLinked(tab, index === 0 && !reusedFirst); });
     }, Promise.resolve()).then(function(){
       s.pendingOpens--;
       if(!s.space) return render();
@@ -202,8 +250,28 @@
     });
     render();
   }
+  // Leaving keeps the tabs, so joining the same group again picks up that copy
+  // instead of opening a second one.
+  function leftoverKey(channelId, name){ return [teamKey(), channelId, name].join('|'); }
+  function leftoverPlan(invite){
+    var leftovers = readStored(LEFTOVERS_KEY) || {}, id = leftoverKey(invite.channelId, invite.space.name), groupId = leftovers[id];
+    delete leftovers[id];
+    writeStored(LEFTOVERS_KEY, leftovers);
+    // A group of another name took this number: not the copy from last time.
+    var same = groupId && s.browser && s.browser.groups.some(function(group){ return group.id === groupId && group.name === invite.space.name; });
+    var tabs = same ? s.browser.tabs.filter(function(tab){ return tab.groupId === groupId; }) : [];
+    var plan = model.reuseGroupTabs(invite.space, tabs);
+    plan.groupId = Object.keys(plan.links).length ? groupId : null;
+    return plan;
+  }
   function leave(silent){
     if(s.space && !silent) post({t: 'leave'});
+    if(s.space && s.joined && s.groupId && !silent){
+      var leftovers = readStored(LEFTOVERS_KEY) || {};
+      leftovers[leftoverKey(s.channelId, s.space.name)] = s.groupId;
+      writeStored(LEFTOVERS_KEY, leftovers);
+    }
+    writeStored(SESSION_KEY, null);
     announce(false);
     clearInterval(s.timers.beat);
     s.space = null; s.groupId = null; s.links = {}; s.presence = {}; s.follow = null;
@@ -244,6 +312,8 @@
     return '<span class="mia-space-chip ' + (extraClass || '') + '" title="' + esc(person.name) + '"' + (attrs || '') + '>' + esc(person.initials || model.initials(person.name)) + '</span>';
   }
   function render(){
+    resumeSession();
+    saveSession();
     var team = teamKey();
     var visibleInvites = Object.keys(s.invites).map(function(id){ return s.invites[id]; })
       .filter(function(invite){ return invite.teamKey === team && Date.now() - invite.at < 120000; });
@@ -344,7 +414,6 @@
   bar.addEventListener('change', function(event){
     if(event.target.hasAttribute('data-space-channel')) s.shareChannelId = event.target.value;
   });
-  window.addEventListener('beforeunload', function(){ if(s.space) post({t: 'leave'}); });
   setInterval(render, 3000);
   bridge.onState(onBrowser);
   command('state').then(function(state){ if(state && state.tabs) onBrowser(state); }).catch(function(){});

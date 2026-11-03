@@ -137,6 +137,16 @@
     });
     return {tabs: list.slice(0, MAX_TABS), links: nextLinks};
   }
+  // Rejoining: which tabs of the copy left on this computer are the session's
+  // pages (matched by address), and which are something else and must not be shared.
+  function reuseGroupTabs(space, groupTabs){
+    var links = {}, used = {};
+    (space ? space.tabs : []).forEach(function(tab){
+      var match = (groupTabs || []).filter(function(local){ return !used[local.id] && tab.url && shareableUrl(local.url) === tab.url; })[0];
+      if(match){ links[tab.k] = match.id; used[match.id] = true; }
+    });
+    return {links: links, strays: (groupTabs || []).filter(function(local){ return !used[local.id]; }).map(function(local){ return local.id; })};
+  }
   // Pages waiting for this person's answer: in the space, not open here, not ignored.
   function pendingPages(space, links, ignored){
     return (space ? space.tabs : []).filter(function(tab){ return tab.url && !links[tab.k] && !ignored[tab.k]; });
@@ -149,5 +159,5 @@
 
   return {MARKER: MARKER, PRESENCE_TTL_MS: PRESENCE_TTL_MS, MAX_TABS: MAX_TABS, encode: encode, decode: decode, isSpaceMessage: isSpaceMessage, isAdminEnd: isAdminEnd,
     shareableUrl: shareableUrl, applySpace: applySpace, applyPresence: applyPresence, livePresence: livePresence, initials: initials,
-    tiles: tiles, hostOf: hostOf, reconcile: reconcile, localTabList: localTabList, pendingPages: pendingPages, sameTabs: sameTabs};
+    tiles: tiles, hostOf: hostOf, reconcile: reconcile, localTabList: localTabList, reuseGroupTabs: reuseGroupTabs, pendingPages: pendingPages, sameTabs: sameTabs};
 });

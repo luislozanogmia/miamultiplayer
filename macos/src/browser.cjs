@@ -797,7 +797,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Counts the times the user closed the last tab; the app leaves browser
   // mode when it goes up. A blank tab still replaces the closed one.
   let lastTabCloses = 0;
-  const state = () => ({ groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
     lastActiveAt: tab.lastActiveAt || 0,
