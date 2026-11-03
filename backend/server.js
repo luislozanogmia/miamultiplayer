@@ -6699,7 +6699,7 @@ function miaosBotInstructionsPromptContext() {
   return [
     `Each bot's instructions are the AGENTS.md file in its folder under ${BOT_PACKAGE_DIR} (folders are named <bot-name>--<bot-id>).`,
     'To change what a bot does, edit that AGENTS.md directly with your file tools. Mia uses the new text from the bot\'s next chat and scheduled run.',
-    'Do not open or click through Mia\'s bot editor or other app screens to do this. Leave bot.yaml and automations.yaml alone; Mia regenerates them.',
+    'Do not open or click through Mia\'s bot editor or other app screens to do this. Leave bot.yaml and automations.yaml alone; Mia regenerates them. To add or change an automation, use mia-app automation_propose.',
   ].join('\n');
 }
 
@@ -8437,6 +8437,8 @@ app.use(
 // confusing for the Hermes onboarding client because it expects JSON.
 const browserWorkRouter = express.Router();
 app.use(browserWorkRouter);
+const miaAppRouter = express.Router();
+app.use(miaAppRouter);
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'not_found' });
 });
@@ -8805,11 +8807,66 @@ async function initializeBrowserWork() {
   });
 }
 
-require('./mia-app-routes').registerMiaAppRoutes(app, {
+const miaAppRoutes = require('./mia-app-routes');
+miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
   requireAuth, requireInteractiveAuth,
   loadSettings: () => db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS),
   saveSettings: settings => db.saveSingleton(conn, 'settings', settings),
-  tools: require('./mia-app-routes').createMiaAppTools({ browserWork: () => miaAppBrowserWork }),
+  tools: miaAppRoutes.createMiaAppTools({
+    browserWork: () => miaAppBrowserWork,
+    botRuns(botId, limit) {
+      const bot = db.loadOne(conn, 'bots', botId);
+      if (!bot) return [];
+      const directory = cronSync.botPackageDirectoryFor(bot);
+      return (bot.automations || []).map(automation => ({
+        automationId: automation.id, name: automation.name,
+        reports: cronSync.readRunReports(directory, automation.id).slice(-limit),
+      }));
+    },
+    botAutomationActions,
+    automationDestination(bot) {
+      const conversation = nativeBotConversation(bot);
+      return { conversationId: conversation ? conversation.id : undefined, companyId: nativeCompanyId(workspaceIdForRecord(bot), ownerOf(bot)) };
+    },
+    workspaceDir: () => miaosWorkspaceDir(),
+    botModel: async owner => (await inferenceOptionsForUser(owner, { profile: MIAOS_BOT_HERMES_PROFILE })).model,
+  }),
+  activity: miaAppRoutes.createActivityLog(ARTIFACTS_DATA_DIR),
+  resolveTurn(session, owner) {
+    const target = session.length <= 200 ? nativeGatewaySessionConversations.get(session) : null;
+    if (!target) return null;
+    try {
+      nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
+    } catch (_) { return null; }
+    return { ...target, workspace: String(target.companyId).includes(':solo:') ? 'solo' : 'multiplayer_test' };
+  },
+  postCard(target, proposal) {
+    const created = nativeConversationService.createEvent({
+      companyId: target.companyId, conversationId: target.conversationId,
+      principal: { companyId: target.companyId, principalId: 'gateway', principalType: 'agent' },
+      type: 'agent_message', content: { text: proposal.summary }, metadata: { miaAppProposal: proposal },
+    });
+    bumpVersion();
+    return created.event.id;
+  },
+  findCard(req, eventId, owner) {
+    const workspace = workspaceIdFromRequest(req);
+    const companyId = nativeCompanyId(workspace, owner);
+    const event = nativeConversationRepository.getEvent({ companyId, id: eventId, includeDeleted: false });
+    const proposal = event && event.metadata && event.metadata.miaAppProposal;
+    const conversation = event && nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
+    if (!proposal || !conversation || conversation.type !== 'agent'
+      || String(conversation.createdBy || '').toLowerCase() !== owner
+      || String(proposal.requestedBy || '').toLowerCase() !== owner) return null;
+    return { event, proposal, companyId, workspace, conversationId: event.conversationId };
+  },
+  updateCard({ event, companyId }, proposal) {
+    const updated = nativeConversationRepository.updateEvent({
+      companyId, id: event.id, metadata: { ...event.metadata, miaAppProposal: proposal }, editedAt: event.editedAt || event.createdAt,
+    });
+    bumpVersion();
+    return updated;
+  },
 });
 
 async function onBackendListening() {

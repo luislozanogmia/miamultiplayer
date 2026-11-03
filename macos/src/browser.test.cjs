@@ -2459,3 +2459,17 @@ test("Mia starts a suggestion only through the person's confirmation or their ow
   assert.equal(h.dialogCalls.length, dialogs);
   assert.equal((await h.controller.protocol("work_status", mia({ proposal_id: trusted.proposal_id }))).work_id, "work-1");
 });
+
+test("only Mia's own chat session reaches mia-app", async () => {
+  const calls = [];
+  const h = harness({
+    resolveActor: knownActor({ "s-mia": { kind: "mia" }, "s-bot": { botId: "bot-a", name: "Scout" } }),
+    appRequest: async (pathname, request) => { calls.push({ pathname, body: request.body }); return { result: { ok: true } }; },
+  });
+  await assert.rejects(h.controller.protocol("app_call", { actor_session: "s-bot", tool: "bots_list" }), { code: "FORBIDDEN_FOR_ACTOR" });
+  await assert.rejects(h.controller.protocol("app_call", { tool: "bots_list" }), { code: "BROWSER_ACTOR_UNAVAILABLE" });
+  assert.equal(calls.length, 0);
+
+  assert.deepEqual(await h.controller.protocol("app_call", { actor_session: "s-mia", tool: "bots_list", arguments: { a: 1 } }), { ok: true });
+  assert.equal(JSON.stringify(calls[0]), JSON.stringify({ pathname: "/api/mia-app/call", body: { tool: "bots_list", arguments: { a: 1 }, turn: "s-mia" } }));
+});

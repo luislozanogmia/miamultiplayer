@@ -1741,6 +1741,7 @@
   // client-side only; every field keeps its id so the save handlers below
   // are untouched by the layout.
   function showSettingsPane(name){
+    if(name === 'mia') loadMiaAppPane();
     els('#settingsNav .styled-settings-nav-item').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-pane') === name);
     });
@@ -1750,6 +1751,59 @@
     var content = el('#settingsContent');
     if(content) content.scrollTop = 0;
   }
+  // Settings > Mia: which proposals run without a card, and what Mia did.
+  function loadMiaAppPane(){
+    api('/api/mia-app/trust').then(function(res){
+      els('[data-mia-trust]').forEach(function(box){ box.checked = !!(res.data.trust && res.data.trust[box.getAttribute('data-mia-trust')]); });
+    }).catch(function(){});
+    api('/api/mia-app/activity').then(function(res){
+      var list = el('#miaActivityList');
+      if(!list) return;
+      var items = (res.data && res.data.activity) || [];
+      list.innerHTML = items.length ? items.map(function(item){
+        return '<div class="styled-settings-row"><div><div class="styled-settings-row-label">' + esc(item.summary) + '</div><div class="styled-settings-row-desc">' +
+          esc(new Date(item.at).toLocaleString()) + (item.via === 'accepted' ? ' · you accepted' : item.via === 'trusted' ? ' · without asking' : '') + (item.undoneAt ? ' · undone' : '') + '</div></div>' +
+          (item.canUndo ? '<button type="button" class="styled-settings-pill-btn" data-mia-undo="' + esc(item.id) + '">Undo</button>' : '') + '</div>';
+      }).join('') : '<div class="styled-settings-row-desc">Nothing yet.</div>';
+    }).catch(function(){});
+  }
+  document.addEventListener('change', function(e){
+    var box = e.target.closest && e.target.closest('[data-mia-trust]');
+    if(!box) return;
+    var body = {};
+    body[box.getAttribute('data-mia-trust')] = box.checked;
+    api('/api/mia-app/trust', {method: 'POST', body: body}).then(loadMiaAppPane, loadMiaAppPane);
+  });
+  document.addEventListener('click', function(e){
+    var undo = e.target.closest && e.target.closest('[data-mia-undo]');
+    if(undo){
+      undo.disabled = true;
+      api('/api/mia-app/activity/' + encodeURIComponent(undo.getAttribute('data-mia-undo')) + '/undo', {method: 'POST', body: {}}).then(function(res){
+        if(res.status !== 200) showBenchToast((res.data && res.data.error) || 'That could not be undone.');
+        loadMiaAppPane();
+      }, loadMiaAppPane);
+      return;
+    }
+    var decision = e.target.closest && e.target.closest('[data-mia-app-decision]');
+    var card = decision && decision.closest('[data-mia-app-card]');
+    if(!card) return;
+    var eventId = card.getAttribute('data-mia-app-card');
+    var state = miaAppCardStates[eventId] = {busy: true, error: ''};
+    renderChatThread();
+    api('/api/mia-app/proposals/' + encodeURIComponent(eventId), {method: 'POST', body: {decision: decision.getAttribute('data-mia-app-decision')}}).then(function(res){
+      state.busy = false;
+      if(res.data && res.data.result && res.data.result.clientAction === 'installTeamApp'){
+        installTeamVersion(res.data.result.teamId, res.data.result.appId, res.data.result.version, false).catch(function(){ showBenchToast('That app could not be installed.'); });
+      }
+      if(res.data && res.data.event){ delete miaAppCardStates[eventId]; applyNativeEvent(res.data.event); return; }
+      state.error = (res.data && res.data.error) || 'That didn’t work. Try again.';
+      renderChatThread();
+    }, function(){
+      state.busy = false;
+      state.error = 'That didn’t work. Try again.';
+      renderChatThread();
+    });
+  });
   function renderSettingsAccount(){
     var avatar = el('#settingsAcctAvatar'), name = el('#settingsAcctName'), email = el('#settingsAcctEmail');
     if(!avatar || !currentUser) return;
@@ -11037,12 +11091,17 @@
         timezone: automationCardTimezone()
       });
     }
+    if(window.MiaAppCard && m.nativeEvent){
+      var miaCardState = miaAppCardStates[m.nativeEvent.id] || {};
+      html += window.MiaAppCard.html(m, {esc: esc, busy: !!miaCardState.busy, error: miaCardState.error || ''});
+    }
     return html;
   }
 
   // Unsaved edits, busy state and errors for bot automation cards, by event
   // id, so a thread re-render for a new message keeps what the user typed.
   var automationCardStates = {};
+  var miaAppCardStates = {};
 
   function automationCardTimezone(){
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch(_) { return ''; }

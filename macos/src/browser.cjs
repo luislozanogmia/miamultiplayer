@@ -134,6 +134,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const shellContents = window.webContents;
   let workProposal = null;
   const workStarts = new Map();
+  let miaPageRead = null;
   let workspaceChangedAt = null;
   const actorCapability = Symbol("trusted-browser-actor");
   const actorRuntime = createActorRuntime({
@@ -1863,6 +1864,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     } });
     return start ? { ...workStartResult(id, start), ...result } : result;
   }
+  // Mia's `mia-app` calls. The backend picks the routes; the host adds what only
+  // it knows: which session asks, and which page Mia just read.
+  async function protocolAppCall(params, session) {
+    const tool = typeof params.tool === "string" ? params.tool : "";
+    const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments) ? params.arguments : {};
+    if (!session) throw protocolError("FORBIDDEN_FOR_ACTOR", "mia-app only runs inside a Mia chat turn.");
+    if (tool === "browser_work_start") return protocolWorkCommand("work_start", args);
+    const reading = miaPageRead && miaPageRead.session === session && Date.now() - miaPageRead.at < 600000 ? { url: miaPageRead.url, title: miaPageRead.title } : null;
+    const { result } = await appRequest("/api/mia-app/call", { method: "POST", timeoutMs: 170000, body: { tool, arguments: args, turn: session, ...(reading ? { reading } : {}) } });
+    return result;
+  }
   async function protocolCommand(method, params = {}) {
     if (params && Object.hasOwn(params, "actor_id") && params[actorCapability] !== true) throw protocolError("TRUSTED_ACTOR_REQUIRED", "Actor identity must come from trusted coordinator dispatch.");
     // A bot session (actor_session) resolves its own tab; never default it to the person's.
@@ -1914,7 +1926,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
 
   async function runProtocolCommand(method, params, actor, touch) {
     params = { ...params };
+    const actorSession = params.actor_session;
     delete params.actor_session;
+    if (method === "app_call") {
+      if (actor || params[actorCapability] === true) throw protocolError("FORBIDDEN_FOR_ACTOR", "Only Mia can use mia-app.");
+      return protocolAppCall(params, actorSession);
+    }
+    if (!actor && ["read", "vacuum", "eval", "screenshot"].includes(method)) {
+      const page = (params.tab_id && tabs.get(params.tab_id)) || active();
+      if (page && /^https?:/i.test(page.url || "")) miaPageRead = { session: actorSession, url: page.url, title: page.title || "", at: Date.now() };
+    }
     if (method.startsWith("work_") && actor) throw protocolError("FORBIDDEN_FOR_ACTOR", "Only Mia can suggest or start browser work.");
     if (method === "status") {
       const ownedTabs = actor ? [...tabs.values()].filter(tab => botOwnsTab(actor, tab)) : [...tabs.values()];

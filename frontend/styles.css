@@ -2848,6 +2848,7 @@
   .automations-add-title,.automations-add-empty{padding:6px 8px;font-size:12px;color:var(--sand-text-tertiary);}
   .automations-add-empty{max-width:240px;line-height:1.4;}
   .automations-add-item{appearance:none;width:100%;display:flex;align-items:center;gap:10px;padding:7px 8px;border:0;border-radius:8px;background:transparent;color:#1f1f1f;font:inherit;font-size:13px;text-align:left;cursor:pointer;}
+  .automations-add-item .mote-avatar-img{width:20px;height:20px;flex:none;}
   .automations-add-item:hover{background:#0000000a;}
   .automations-add-item:disabled{opacity:.5;cursor:default;}
   .automations-group-toggle{display:flex;gap:2px;flex:none;}
@@ -3898,3 +3899,11 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .private-agent-row:hover .private-agent-actions,.private-agent-row:focus-within .private-agent-actions{display:flex;}
 .private-agents-list:empty{display:none;}
 .chat-recents-group.is-collapsed .private-agents-list{display:none;}
+
+.mia-app-card{margin-top:8px;padding:12px 14px;border:1px solid var(--line,rgba(0,0,0,.12));border-radius:12px;max-width:520px}
+.mia-app-card-title{font-weight:600}
+.mia-app-card-detail{margin-top:6px;white-space:pre-wrap;font-size:13px;opacity:.8;max-height:160px;overflow:auto}
+.mia-app-card-reading{margin-top:8px;font-size:12px;color:#b45309}
+.mia-app-card-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+.mia-app-card-answer{margin-top:8px;font-size:13px;opacity:.7}
+.mia-app-posted{margin-top:4px;font-size:11px;opacity:.55}
