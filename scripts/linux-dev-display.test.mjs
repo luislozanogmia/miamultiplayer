@@ -7,12 +7,14 @@ import test from 'node:test';
 
 const script = new URL('./linux-dev-display.sh', import.meta.url).pathname;
 
-async function runWithSession(environ) {
+async function runWithSession(environ, busWithKeyring = '') {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mia-dev-display-'));
   const bin = path.join(root, 'bin');
   await mkdir(bin);
   await writeFile(path.join(bin, 'pgrep'), environ === null ? '#!/bin/sh\nexit 1\n' : '#!/bin/sh\necho 4242\n');
   await chmod(path.join(bin, 'pgrep'), 0o755);
+  await writeFile(path.join(bin, 'dbus-send'), `#!/bin/sh\n[ "$DBUS_SESSION_BUS_ADDRESS" = "${busWithKeyring}" ] && echo 'boolean true' || echo 'boolean false'\n`);
+  await chmod(path.join(bin, 'dbus-send'), 0o755);
   if (environ !== null) {
     await mkdir(path.join(root, 'proc', '4242'), { recursive: true });
     await writeFile(path.join(root, 'proc', '4242', 'environ'), `${environ.join('\0')}\0`);
@@ -34,6 +36,26 @@ test('exports the display and session of the remote desktop', async () => {
   assert.match(result.stdout, /^export DISPLAY=:10\.0$/m);
   assert.match(result.stdout, /^export XAUTHORITY=\/home\/dev\/\.Xauthority$/m);
   assert.match(result.stdout, /^export XDG_CURRENT_DESKTOP=XFCE$/m);
+});
+
+test('keeps the desktop bus when the keyring is on it', async () => {
+  const result = await runWithSession([
+    'DISPLAY=:10.0',
+    'DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-test',
+    'XDG_RUNTIME_DIR=/run/user/1234',
+  ], 'unix:path=/tmp/dbus-test');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^export DBUS_SESSION_BUS_ADDRESS=unix:path=\/tmp\/dbus-test$/m);
+});
+
+test('uses the user bus when only it has the keyring', async () => {
+  const result = await runWithSession([
+    'DISPLAY=:10.0',
+    'DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-test',
+    'XDG_RUNTIME_DIR=/run/user/1234',
+  ], 'unix:path=/run/user/1234/bus');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^export DBUS_SESSION_BUS_ADDRESS=unix:path=\/run\/user\/1234\/bus$/m);
 });
 
 test('refuses to run with no desktop session', async () => {
