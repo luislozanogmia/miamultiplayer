@@ -67,6 +67,7 @@ function portableBot(record) {
     if (record[key] !== undefined && record[key] !== null) result[key] = record[key];
   }
   if (Array.isArray(record.departments)) result.departments = record.departments.slice();
+  if (Array.isArray(record.skills) && record.skills.length) result.skills = record.skills.slice();
   return result;
 }
 

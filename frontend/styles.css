@@ -2470,7 +2470,7 @@
   /* Direct chats keep identity chrome in the main timeline so mixed rooms
      remain readable: human and agent messages must be distinguishable even
      when the room is not a department channel. */
-  body.styled-skin .chat-msg-row.is-direct .chat-msg-body{flex:0 1 auto;max-width:72%;}
+  body.styled-skin .chat-msg-row.is-direct .chat-msg-body{flex:0 1 auto;max-width:max(72%,420px);}
   /* Table-carrying direct messages break out of the 72%/28% prose rhythm so
      the data table can use the column's full width (HN/GitHub pulse tables).
      Prose messages keep the conversational cap. */
@@ -2480,8 +2480,10 @@
   body.styled-skin .chat-msg-row.is-direct.is-you .chat-msg-body{align-items:flex-end;}
   body.styled-skin .chat-msg-row.is-direct .chat-msg-text{max-width:100%;padding:10px 12px;border-radius:18px;}
   body.styled-skin .chat-msg-row.is-direct.grouped .chat-msg-text{border-radius:18px;}
-  body.styled-skin .chat-msg-row.is-direct.is-you{padding-left:28%;}
-  body.styled-skin .chat-msg-row.is-direct:not(.is-you){padding-right:28%;}
+  /* The far-edge inset gives way as the chat narrows, reaching zero at 420px,
+     so a bubble keeps the whole line however small the window or pane gets. */
+  body.styled-skin .chat-msg-row.is-direct.is-you{padding-left:clamp(0px,calc((100% - 420px) * .5),28%);}
+  body.styled-skin .chat-msg-row.is-direct:not(.is-you){padding-right:clamp(0px,calc((100% - 420px) * .5),28%);}
   body.styled-skin .chat-msg-row.is-direct .chat-thread-pill{font-size:12px;margin:2px 12px 0;}
   body.styled-skin .chat-date-divider{padding:8px 0 12px;font-size:12px;}
   body.styled-skin .chat-empty-hero{padding:32px 24px;}
@@ -2846,6 +2848,7 @@
   .automations-add-title,.automations-add-empty{padding:6px 8px;font-size:12px;color:var(--sand-text-tertiary);}
   .automations-add-empty{max-width:240px;line-height:1.4;}
   .automations-add-item{appearance:none;width:100%;display:flex;align-items:center;gap:10px;padding:7px 8px;border:0;border-radius:8px;background:transparent;color:#1f1f1f;font:inherit;font-size:13px;text-align:left;cursor:pointer;}
+  .automations-add-item .mote-avatar-img{width:20px;height:20px;flex:none;}
   .automations-add-item:hover{background:#0000000a;}
   .automations-add-item:disabled{opacity:.5;cursor:default;}
   .automations-group-toggle{display:flex;gap:2px;flex:none;}
@@ -3427,9 +3430,12 @@
     body.styled-skin .chat-sidebar .chat-recent-row .row-label{display:block !important;}
     /* A 150-word preview is still too tall when a compact window wraps it
        into a narrow bubble. Keep the collapsed portion to about one quarter
-       of the conversation viewport; Show more still reveals the full reply. */
-    body.styled-skin .chat-expandable-preview,
-    body.styled-skin .chat-pre-reasoning-preview{
+       of the conversation viewport; Show more still reveals the full reply.
+       Only a cut-off preview has a Show more, so a short message stays whole. */
+    body.styled-skin .chat-expandable-preview[data-chat-truncated],
+    body.styled-skin .chat-pre-reasoning-preview[data-chat-truncated],
+    body.styled-skin .chat-expandable-preview.chat-compact-preview-overflow,
+    body.styled-skin .chat-pre-reasoning-preview.chat-compact-preview-overflow{
       max-height:clamp(64px,calc(25vh - 44px),176px);
       overflow:hidden;
       -webkit-mask-image:linear-gradient(to bottom,#000 0, #000 calc(100% - 22px),transparent 100%);
@@ -3487,7 +3493,7 @@
     /* Bubbles get the phone's width: the desktop 28% row inset that keeps
        1:1 bubbles off the far edge is too greedy at 390px -- shrink it, and
        raise the 72% body cap. */
-    body.styled-skin .chat-msg-row.is-direct{padding-right:8%;}
+    body.styled-skin .chat-msg-row.is-direct:not(.is-you){padding-right:8%;}
     body.styled-skin .chat-msg-row.is-direct.is-you{padding-right:0;padding-left:8%;}
     body.styled-skin .chat-msg-row.is-direct .chat-msg-body{max-width:92%;}
     body.styled-skin .chat-msg-text{max-width:100%;}
@@ -3999,3 +4005,24 @@ body.mia-session-mode #localBrowserCloseBtn,body.mia-session-mode .native-browse
 .private-agent-row:hover .private-agent-actions,.private-agent-row:focus-within .private-agent-actions{display:flex;}
 .private-agents-list:empty{display:none;}
 .chat-recents-group.is-collapsed .private-agents-list{display:none;}
+
+.mia-app-card{margin-top:8px;padding:12px 14px;border:1px solid var(--line,rgba(0,0,0,.12));border-radius:12px;max-width:520px}
+.mia-app-card-title{font-weight:600}
+.mia-app-card-detail{margin-top:6px;white-space:pre-wrap;font-size:13px;opacity:.8;max-height:160px;overflow:auto}
+.mia-app-card-reading{margin-top:8px;font-size:12px;color:#b45309}
+.mia-app-card-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+.mia-app-card-answer{margin-top:8px;font-size:13px;opacity:.7}
+.mia-app-posted{margin-top:4px;font-size:11px;opacity:.55}
+
+  /* Skills: picker on the setup card and bot editor, list in Settings */
+  body.styled-skin .skill-picker{display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto;}
+  body.styled-skin .skill-picker-row{display:flex;align-items:flex-start;gap:8px;padding:6px 2px;font-size:13px;line-height:1.4;color:var(--sand-text-primary);text-transform:none;letter-spacing:0;cursor:pointer;}
+  body.styled-skin .skill-picker-row input{width:auto;margin-top:3px;flex:none;}
+  body.styled-skin .skill-picker-name{display:block;font-weight:600;}
+  body.styled-skin .skill-picker-desc{display:block;color:var(--sand-text-secondary);}
+  body.styled-skin .skill-picker-empty{font-size:13px;line-height:1.4;color:var(--sand-text-secondary);text-transform:none;letter-spacing:0;}
+  body.styled-skin .skills-row-actions{display:flex;gap:6px;flex:none;}
+  body.styled-skin .skill-form-field{display:block;width:calc(100% - 32px);max-width:none;margin:16px 16px 0;text-align:left;}
+  body.styled-skin #settingsSkillBody{min-height:240px;margin-top:16px;}
+  body.styled-skin #settingsSkillError:empty{display:none;}
+  body.styled-skin #settingsSkillError{margin:0 16px;}

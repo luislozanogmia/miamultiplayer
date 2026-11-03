@@ -16,7 +16,7 @@ test('the onboarding chat (always Solo\'s) only opens while Solo is on screen', 
     const c = {
       activeWorkspaceKey: workspace, browserFollowKey: '', chatWs: { activeRoomId: null }, miaOnboardingChat: null,
       api: async () => ({ status: 200, data: { phase: 'news-created', conversationId: 'conv_solo_mia' } }),
-      loadChatRoom: (roomId) => opened.push(workspace + ':' + roomId), renderChatThread() {}, showToast() {},
+      storedActiveChatLocation: () => '', loadChatRoom: (roomId) => opened.push(workspace + ':' + roomId), renderChatThread() {}, showToast() {},
     };
     vm.createContext(c);
     vm.runInContext(fn, c);

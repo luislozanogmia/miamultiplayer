@@ -24,6 +24,20 @@ const {
   setHermesProfileModel,
 } = require('./hermes-bot-profile');
 
+test('the scheduler home gets the Claude provider too, since scheduled jobs run from it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-scheduler-plugin-'));
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot: path.join(root, 'profiles') });
+    const installed = path.join(root, 'plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
+    assert.equal(
+      fs.readFileSync(path.join(installed, 'plugin.yaml'), 'utf8'),
+      fs.readFileSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, 'plugin.yaml'), 'utf8')
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Claude DirectSDK is provisioned unchanged for agent, Google-agent, and bot profiles', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-claude-plugin-'));
   const profilesRoot = path.join(root, 'profiles');

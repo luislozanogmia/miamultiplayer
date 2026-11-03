@@ -19,7 +19,7 @@ test("actor binding rejects missing/mismatched tabs and expected URL", async () 
 });
 test("worker bots cannot arrange groups or suggest assignments", async () => {
   const { runtime } = fixture();
-  for (const method of ["group_list", "group_create", "group_rename", "group_move_tab", "group_remove", "work_propose"]) {
+  for (const method of ["group_list", "group_create", "group_rename", "group_move_tab", "group_remove", "work_propose", "work_start", "work_status", "work_results"]) {
     await assert.rejects(runtime.run(method, params(), () => assert.fail(`${method} ran`)), { code: "FORBIDDEN_FOR_ACTOR" });
   }
 });

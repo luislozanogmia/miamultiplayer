@@ -27,6 +27,7 @@ const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { APP_PARTITION_PREFIX, APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes, localAppRoot, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot } = require("./app-sandbox.cjs");
 const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { mainWindowLinkAction } = require("./main-navigation.cjs");
+const { createExternalLinkQueue, isWebLink, webLinksFromArgv } = require("./external-links.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 const { createBrowserWorkBroker } = require("./browser-work-broker.cjs");
@@ -225,6 +226,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 let mainWindow = null;
+let startupComplete = false;
 let nativeBrowser = null;
 let browserWorkBroker = null;
 let browserWorkKey = null;
@@ -274,7 +276,16 @@ function receiveAuthCallback(value) {
     if (accepted) activateMainWindow();
   }).catch(() => desktopLog("Native sign-in callback could not be completed"));
 }
-app.on("open-url", (event, value) => { event.preventDefault(); receiveAuthCallback(value); });
+const externalLinks = createExternalLinkQueue({ open: url => void openLinkInMiaBrowser(url) });
+// Windows and Linux pass the link on the command line of a cold start. macOS
+// sends it through open-url instead, and can do so before the app is ready.
+for (const url of webLinksFromArgv(process.argv.slice(1))) externalLinks.receive(url);
+app.on("open-url", (event, value) => {
+  event.preventDefault();
+  if (!isWebLink(value)) return receiveAuthCallback(value);
+  externalLinks.receive(value);
+  if (startupComplete) activateMainWindow();
+});
 
 const UPDATE_GITHUB_OWNER = "luislozanogmia";
 const UPDATE_GITHUB_REPO = "miamultiplayer";
@@ -413,7 +424,7 @@ function runtimeLogPath(name) {
 
 function isAllowedRendererStateKey(key) {
   const normalized = String(key || "");
-  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || normalized === "miaTabsMixed" || /^miaChatActive:[^\r\n]{1,500}$/.test(normalized);
+  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || normalized === "miaTabsMixed" || /^(miaChatActive|miaAgentChats):[^\r\n]{1,500}$/.test(normalized);
 }
 
 function readRendererState() {
@@ -2084,6 +2095,7 @@ function createWindow() {
         log: desktopLog,
       }),
       resolveActor: sessionId => resolveBrowserActor(window, sessionId),
+      appRequest: (pathname, request) => desktopAppRequest(window, pathname, request),
     },
   );
   const windowNativeBrowser = nativeBrowser;
@@ -2167,6 +2179,7 @@ function createWindow() {
   });
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
+    if (!mainWindow) externalLinks.setReady(false);
     windowAppPanes.closeAll();
     if (appPanes === windowAppPanes) appPanes = null;
     if (artifactToolbarView === windowArtifactToolbarView) artifactToolbarView = null;
@@ -2231,6 +2244,21 @@ async function loadMiaOS() {
 
 // Hermes session id -> { actor, at }. A bot's browser calls arrive in bursts
 // from one session, so a short cache keeps each call off the backend.
+// A call Mia's own Ghost session asked for, sent as the signed-in person. Only
+// the host decides which paths those are; nothing here takes a path from Mia.
+async function desktopAppRequest(window, pathname, { method = "GET", body, timeoutMs = 15000 } = {}) {
+  if (!backendUrl || !window || window.isDestroyed()) throw Object.assign(new Error("The Mia app connection is unavailable."), { code: "APP_UNAVAILABLE" });
+  const response = await window.webContents.session.fetch(new URL(pathname, backendUrl).href, {
+    method, credentials: "include", redirect: "error",
+    headers: { Origin: new URL(backendUrl).origin, ...(body ? { "Content-Type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(data.error || "The Mia app could not do that."), { code: "APP_REQUEST_FAILED" });
+  return data;
+}
+
 const browserActorCache = new Map();
 const BROWSER_ACTOR_TTL_MS = 60_000;
 
@@ -2460,6 +2488,7 @@ ipcMain.on("miaos-renderer-ready", (event) => {
 ipcMain.on("miaos-renderer-hydrated", (event) => {
   if (!isMainWindowSender(event)) return;
   desktopLog("renderer hydration received");
+  externalLinks.setReady(true);
   repaintDevelopmentUi(mainWindow);
 });
 
@@ -2642,6 +2671,7 @@ function activateMainWindow() {
 
 app.on("second-instance", (_event, argv) => {
   for (const value of argv || []) if (typeof value === "string" && value.startsWith("miamultiplayer:")) receiveAuthCallback(value);
+  for (const url of webLinksFromArgv(argv)) externalLinks.receive(url);
   activateMainWindow();
 });
 
@@ -2744,6 +2774,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   }
   if (runtimeReady && process.env.MIAOS_ARTIFACT_URL) await navigateArtifact(process.env.MIAOS_ARTIFACT_URL);
 
+  startupComplete = true;
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) activateMainWindow();
   });

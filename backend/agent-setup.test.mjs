@@ -37,3 +37,19 @@ test('the setup prompt asks the model for the bot and any schedule the user aske
   assert.doesNotMatch(prompt, /"automation":/);
   assert.match(prompt, /Help me monitor the market/);
 });
+
+test('a long brief stays word for word and the model only names the bot', () => {
+  const intent = `${'Check every source.\n'.repeat(200)}Then write the summary.`;
+  const draft = normalizeAgentDraft(JSON.stringify({ name: 'Scout', summary: 'Writes summaries.', instructions: 'A shorter rewrite.' }), { intent });
+  assert.equal(draft.instructions, intent);
+  assert.equal(draft.summary, 'Writes summaries.');
+  assert.match(buildAgentSetupPrompt(intent), /word for word/);
+  assert.ok(buildAgentSetupPrompt(intent).includes(intent), 'the whole brief reaches the model');
+});
+
+test('a draft only picks skills that are in the library', () => {
+  const skills = [{ id: 'voice', name: 'Voice', description: 'How we write' }];
+  const draft = normalizeAgentDraft(JSON.stringify({ name: 'Scout', instructions: 'Write.', skills: ['voice', 'voice', 'made-up'] }), { intent: 'Write posts', skills });
+  assert.deepEqual(draft.skills, ['voice']);
+  assert.match(buildAgentSetupPrompt('Write posts', skills), /voice: Voice - How we write/);
+});

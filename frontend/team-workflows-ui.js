@@ -64,7 +64,11 @@
       + '<div class="twf-gate-row"><span class="twf-gate-label">Bot</span><span>' + esc(item.botName || 'Team bot') + '</span></div>';
     if(item.definition){
       out += '<div class="twf-gate-instructions-label">Bot instructions · version ' + Number(item.definition.version) + '</div>'
-        + '<pre class="twf-gate-instructions" tabindex="0" data-wf-keep-scroll="instructions:' + esc(item.runId) + ':' + Number(item.n) + '">' + esc(item.definition.instructions) + '</pre>';
+        + '<pre class="twf-gate-instructions" tabindex="0" data-wf-keep-scroll="instructions:' + esc(item.runId) + ':' + Number(item.n) + '">' + esc(item.definition.instructions) + '</pre>'
+        + (item.definition.skills || []).map(function(skill, index){
+          return '<div class="twf-gate-instructions-label">Skill · ' + esc(skill.name) + '</div>'
+            + '<pre class="twf-gate-instructions" tabindex="0" data-wf-keep-scroll="skill:' + esc(item.runId) + ':' + Number(item.n) + ':' + index + '">' + esc(skill.body) + '</pre>';
+        }).join('');
     }
     if(item.summary){
       out += '<div class="twf-gate-row"><span class="twf-gate-label">Summary</span><span>' + (item.startedBy ? esc(wf.displayName(people, item.startedBy)) + ': ' : '') + esc(item.summary) + '</span></div>';

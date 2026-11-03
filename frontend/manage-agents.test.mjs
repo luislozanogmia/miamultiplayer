@@ -556,7 +556,7 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
 
   assert.match(source, /function startAgentSetupChat\(template\)/);
   assert.match(source, /chatWs\.activeKind === 'agent-setup'\)\{\s*setComposerBoundState\(true\)/);
-  assert.match(source, /Let’s set me up\. Tell me in a few words what you want me to do\?/);
+  assert.match(source, /Let’s set me up\. Tell me what you want me to do\. A few words or a full brief both work\./);
   assert.match(source, /api\('\/api\/bots\/interpret'/);
   assert.match(source, /var modelSelection = chatModelSelectionMetadata\(\);[\s\S]*?intent: flow\.intent,[\s\S]*?modelSelection:modelSelection/);
   assert.match(source, /Nothing is created or scheduled until you confirm\./);
