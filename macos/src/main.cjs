@@ -2019,8 +2019,7 @@ function installBrowserMenu() {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       // Browser menu actions must never fall through to shell/window actions.
       // Focus Address and New Tab can also serve as browser entry points when
-      // the browser surface is currently closed; in the chat view New Tab opens
-      // a new chat and Close Tab does nothing.
+      // the browser surface is currently closed; Close Tab does nothing there.
       if (["l", "t", "w"].includes(key) && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("miaos-browser-open", key);
       }

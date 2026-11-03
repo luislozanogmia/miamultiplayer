@@ -9580,12 +9580,8 @@
     }
     if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onOpen){
       window.miaDesktop.browser.onOpen(function(action){
-        // In the chat view, Cmd/Ctrl+T opens a new chat. A chat has no tab, so
+        // Cmd/Ctrl+T opens a browser tab from anywhere. A chat has no tab, so
         // Cmd/Ctrl+W has nothing to close there.
-        if(chatViewShowing() && action === 't'){
-          runToolsAction('new-chat');
-          return;
-        }
         if(action === 'w') return;
         openWebBrowserTool();
         window.setTimeout(function(){
@@ -14066,10 +14062,6 @@
     if(e.key === 'Escape' && channelMenu.open) closeChannelMenu();
   });
 
-  function chatViewShowing(){
-    var classes = document.body.classList;
-    return !classes.contains('automations-mode') && !classes.contains('artifacts-mode') && !classes.contains('apps-mode') && !classes.contains('browser-collab-mode');
-  }
   // Chats and channels are picked from the sidebar and never get a tab. The
   // strip in the chat's row (native-browser.js) holds the other views' tabs.
   function renderChatTabs(){

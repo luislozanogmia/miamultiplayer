@@ -13,11 +13,10 @@ test('chats and channels never get a tab', () => {
   }
 });
 
-test('Cmd/Ctrl+T opens a new chat in the chat view and Cmd/Ctrl+W closes nothing there', () => {
+test('Cmd/Ctrl+T opens a browser tab from the chat view and Cmd/Ctrl+W closes nothing there', () => {
   const start = source.indexOf('window.miaDesktop.browser.onOpen(function(action){');
   const handler = source.slice(start, source.indexOf('openWebBrowserTool();', start));
-  assert.match(handler, /chatViewShowing\(\) && action === 't'/);
-  assert.match(handler, /runToolsAction\('new-chat'\)/);
+  assert.doesNotMatch(handler, /new-chat/);
   assert.match(handler, /if\(action === 'w'\) return;/);
 });
 
