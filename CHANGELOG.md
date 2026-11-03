@@ -9,39 +9,62 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
-### Added
-- Team workflows: one job shared across people, shown in Automations in team workspaces. Each step runs on its owner's computer with their own bot, one short note and any files pass to the next person, and approval cards appear in the channel. An interrupted step always asks before it runs again. Needs a team server that offers workflows.
+## [0.3.0] — Multiplayer
 
-- A registry for personal agents: create, rename and delete extra private agents through `/api/private-agents`. They are never shareable (the share route and the Hub share path refuse them) and are kept apart from bots. Chat and the sidebar "New agent" button are not enabled yet.
-- Bot replies in team channels show whose Mia ran them and which provider answered.
-- Team files: in a team channel, group or direct message, the Files button now has a Team files screen for the team's shared storage (up to 500 MB a file, 100 GB for the team). Add files, watch them upload and get scanned for viruses, download them once they are clean, and delete your own (admins can delete any). Files are checked against their fingerprint on both sides, and blocked or interrupted uploads say what happened and can be retried or resumed. Solo files stay on your computer. Not yet tested against the live team service.
-
-## [0.2.22]
+Version 0.2.22 was used for unpublished previews. The preceding public release
+is 0.2.21.
 
 ### Added
-- Shared tab groups (in testing): share a browser tab group with a team
-  channel. Teammates who join open the same pages with their own sign-ins and
-  see a minimap of who is on which tab and where bots are working, can
-  follow one another, and can ask everyone to look at one tab.
+- Shared tab groups: invite teammates into a browser session. Everyone opens
+  pages with their own sign-ins, sees who is on each tab, and can follow a
+  teammate or ask everyone to look at one tab. Joining and page navigation
+  require the participant's approval.
+- Team workflows in Automations, with assigned steps, approval cards, reports,
+  files passed between steps, and a fresh approval before an interrupted step
+  runs again. Each participant's step runs on their computer.
+- Team files for channels, groups, and direct messages, with upload scanning,
+  fingerprint checks, download, retry, and member or admin deletion controls.
+- Team apps that can be reviewed, approved, installed, and run in a sandboxed
+  pane. Publishing first shows the complete file list.
+- Admin Center controls for team files, apps, browser sessions, and bot review.
 - A Bots section in shared teams: use your own Solo bots privately inside a
   team. Your chats with them there stay in that team and never show in Solo.
 - The @ menu in a team channel lists the whole team, and picking someone
   outside the channel invites them.
+- Bot skills and longer instructions, including skill review before a shared
+  bot or workflow runs. Mia can also carry out approved browser work.
+- Private agents can be created, renamed, and deleted through the local API;
+  their chat and sidebar entry are not enabled yet.
+- Linux dev mode for the remote desktop display.
 
 ### Changed
 - Sharing a bot into a team channel gives the team its own copy of the bot's
   instructions, which everyone in the team can see and use. The copy is no
   longer linked to your Solo bot; its skills, automations and memories stay
   with you.
+- Team bot replies show which participant's Mia ran them and which provider
+  answered.
 - Initial setup is now called Models & Subscriptions.
 - The Theme setting is hidden and Mia stays in the light theme; new installs
   answer in the concise output style.
+- Shared-browser coordination uses Hub events, keeping tab and presence data
+  out of channel chat messages. Older control messages are hidden in chat.
 
 ### Fixed
 - The setup dialog opens without waiting for provider sign-in checks, and its
   button always reads Connect.
 - Switching connections no longer reloads the app; the model selector updates
   and a notice confirms the change.
+- Shared browser live previews require an explicit Join, and an already
+  approved tab asks again when it navigates to a new page.
+- Browser work asks for confirmation after reading a page and rejects a start
+  if an assigned tab changes while the confirmation is open.
+- App bundles reject sensitive files and stop if their contents change after
+  the user reviews the file list.
+
+### Known limitation
+- Bots with terminal access can edit the shared local skill library. Use
+  trusted skills until per-bot file isolation is available.
 
 ## [0.2.21] — 2026-10-26
 
