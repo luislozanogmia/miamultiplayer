@@ -133,6 +133,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const tabs = new Map();
   const shellContents = window.webContents;
   let workProposal = null;
+  const workStarts = new Map();
+  let workspaceChangedAt = null;
   const actorCapability = Symbol("trusted-browser-actor");
   const actorRuntime = createActorRuntime({
     getTab: id => tabs.get(id),
@@ -1697,6 +1699,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Mia's personal agent arranges groups and suggests bot assignments through
   // the bridge it already browses with. A suggestion only prefills the
   // person's browser-work form: starting work and every approval stay theirs.
+  // Switching workspace swaps every tab out, so Mia can tell "my tabs moved"
+  // from "my tabs were closed".
+  const workspaceFields = () => ({ workspace: workspaceKey, ...(workspaceChangedAt ? { workspace_changed_at: workspaceChangedAt } : {}) });
   function protocolGroupList() {
     const owners = actorRuntime.list();
     const selected = tabs.get(activeId)?.groupId || null;
@@ -1708,6 +1713,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return { ...protocolTabResult(tab), active: tab.id === activeId, ...(bot ? { bot } : {}) };
     };
     return {
+      ...workspaceFields(),
       selected_group_id: selected,
       groups: groupList().map(group => ({
         group_id: group.id, name: group.name, selected: group.id === selected,
@@ -1751,10 +1757,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       });
       if (new Set(assignments.map(item => item.tabId)).size !== assignments.length) throw invalid("Assign each tab once.");
       if (new Set(assignments.map(item => item.bot.toLowerCase())).size !== assignments.length) throw invalid("Each bot can own one tab.");
-      workProposal = { id: randomUUID(), groupId: group.id, goal, assignments, createdAt: Date.now() };
+      const replaced = workProposal;
+      workProposal = { id: randomUUID(), groupId: group.id, goal, assignments, createdAt: Date.now(), ...(replaced ? { replacedProposalId: replaced.id } : {}) };
       publish();
-      return { proposed: true, proposal_id: workProposal.id, group_id: group.id,
-        next: "Shown to the person in the Browser work panel. Work starts only after they confirm it there." };
+      return { proposed: true, proposal_id: workProposal.id, group_id: group.id, ...(replaced ? { replaced_proposal_id: replaced.id } : {}),
+        next: "Shown to the person in the Browser work panel. Call ghost_work_start to ask them to start it; nothing runs until they confirm." };
     }
     let created = null;
     if (method === "group_create") {
@@ -1773,6 +1780,88 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     else throw protocolError("UNKNOWN_METHOD", `Unknown browser method: ${method}`);
     layout(); persistTabs(); publish();
     return { ...(created ? { group_id: created } : {}), ...protocolGroupList() };
+  }
+  const workStartResult = (id, start) => ({ proposal_id: id, status: start.status, ...(start.workId ? { work_id: start.workId } : {}), ...(start.error ? { error: start.error } : {}) });
+  function appRequest(pathname, request) {
+    if (typeof options.appRequest !== "function") throw protocolError("APP_UNAVAILABLE", "The Mia app connection is unavailable.");
+    return options.appRequest(pathname, request);
+  }
+  // The person already confirmed, or switched this on themselves. Runs through
+  // the same plan and start as the panel's Start button, under their session.
+  async function launchWorkProposal(proposal, start, selection) {
+    const group = groups.get(proposal.groupId);
+    start.status = "starting";
+    proposal.starting = true;
+    publish();
+    try {
+      if (!group) throw new Error("This tab group is no longer available.");
+      const { work } = await appRequest("/api/browser-work/proposal/start", { method: "POST", timeoutMs: 300000, body: {
+        groupId: group.id, goal: proposal.goal, assignments: proposal.assignments, ...selection,
+        context: { groupName: group.name, tabs: groupTabs(group.id).map(tab => ({ id: tab.id, title: tab.title, origin: tabOrigin(tab) })) },
+      } });
+      start.status = work.status === "queued" ? "queued" : "running";
+      start.workId = work.id;
+      if (workProposal?.id === proposal.id) workProposal = null;
+    } catch (error) {
+      // The suggestion stays in the panel so the person can start it by hand.
+      start.status = "failed";
+      start.error = String(error?.message || "Browser work could not start.").slice(0, 400);
+      delete proposal.starting;
+    }
+    publish();
+  }
+  function tabOrigin(tab) {
+    try { const url = new URL(tab.url); return ["https:", "http:"].includes(url.protocol) ? url.origin : ""; } catch (_) { return ""; }
+  }
+  function confirmWorkProposal(proposal) {
+    const rows = proposal.assignments.map(item => `${item.bot} → Tab ${item.tabId}${tabOrigin(tabs.get(item.tabId)) ? ` · ${tabOrigin(tabs.get(item.tabId))}` : ""}`);
+    const count = proposal.assignments.length;
+    return dialog.showMessageBox(window, {
+      type: "question", title: "Browser work",
+      message: `Mia wants to start ${count} ${count === 1 ? "bot" : "bots"} on ${count === 1 ? "tab" : "tabs"} ${proposal.assignments.map(item => item.tabId).join(", ")}`,
+      detail: `${proposal.goal}\n\n${rows.join("\n")}`,
+      buttons: ["Start", "Cancel"], defaultId: 1, cancelId: 1,
+    }).then(result => result && result.response === 0, () => false);
+  }
+  async function protocolWorkCommand(method, params) {
+    const invalid = message => protocolError("INVALID_PARAMS", message);
+    if (method === "work_start") {
+      const id = typeof params.proposal_id === "string" ? params.proposal_id : "";
+      if (workStarts.has(id)) return workStartResult(id, workStarts.get(id));
+      if (!workProposal || workProposal.id !== id) throw invalid("This suggestion is no longer pending. Call ghost_work_propose again.");
+      const selection = {
+        ...(params.models && typeof params.models === "object" && !Array.isArray(params.models) ? { models: params.models } : {}),
+        ...(params.personal_model && typeof params.personal_model === "object" ? { personalSelection: params.personal_model } : {}),
+      };
+      const proposal = workProposal;
+      const start = { status: "awaiting_confirmation" };
+      workStarts.set(id, start);
+      if (workStarts.size > 32) workStarts.delete(workStarts.keys().next().value);
+      const trust = await appRequest("/api/mia-app/trust", { timeoutMs: 3000 }).catch(() => null);
+      if (trust?.trust?.browserWork === true) launchWorkProposal(proposal, start, selection);
+      else {
+        // A native dialog: page content can neither draw it nor click it.
+        confirmWorkProposal(proposal).then(accepted => {
+          if (workProposal?.id !== proposal.id) { start.status = "replaced"; return; }
+          if (accepted) return launchWorkProposal(proposal, start, selection);
+          start.status = "declined";
+          workProposal = null;
+          publish();
+        });
+      }
+      return workStartResult(id, start);
+    }
+    const id = typeof params.proposal_id === "string" ? params.proposal_id : "";
+    if (id && !workStarts.has(id)) throw invalid("Unknown suggestion. Call ghost_work_start first.");
+    const start = id ? workStarts.get(id) : null;
+    const workId = typeof params.work_id === "string" && params.work_id ? params.work_id : start?.workId;
+    if (start && !workId) return workStartResult(id, start);
+    if (method === "work_results" && !workId) throw invalid("work_id is required.");
+    const { result } = await appRequest("/api/mia-app/call", { method: "POST", body: {
+      tool: method === "work_status" ? "browser_work_status" : "browser_work_results",
+      arguments: workId ? { work_id: workId } : {},
+    } });
+    return start ? { ...workStartResult(id, start), ...result } : result;
   }
   async function protocolCommand(method, params = {}) {
     if (params && Object.hasOwn(params, "actor_id") && params[actorCapability] !== true) throw protocolError("TRUSTED_ACTOR_REQUIRED", "Actor identity must come from trusted coordinator dispatch.");
@@ -1826,6 +1915,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   async function runProtocolCommand(method, params, actor, touch) {
     params = { ...params };
     delete params.actor_session;
+    if (method.startsWith("work_") && actor) throw protocolError("FORBIDDEN_FOR_ACTOR", "Only Mia can suggest or start browser work.");
     if (method === "status") {
       const ownedTabs = actor ? [...tabs.values()].filter(tab => botOwnsTab(actor, tab)) : [...tabs.values()];
       const foreground = active();
@@ -1841,6 +1931,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         active_title: current ? (current.title || current.url || "New tab") : "",
       };
       if (actor) status.your_tabs = ownedTabs.length;
+      else Object.assign(status, workspaceFields());
       return status;
     }
     if (method === "tab_list") {
@@ -1933,6 +2024,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
 
     if (method.startsWith("group_") || method === "work_propose") return protocolGroupCommand(method, params);
+    if (["work_start", "work_status", "work_results"].includes(method)) return protocolWorkCommand(method, params);
 
     const supportedTabMethod = [
       "navigate", "read", "vacuum", "click", "fill", "eval", "key",
@@ -3082,6 +3174,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     activeId = null;
     workProposal = null;
     workspaceKey = key;
+    workspaceChangedAt = Date.now();
     statePath = workspaceStatePath(key);
     historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
     loadHistory();

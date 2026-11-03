@@ -116,12 +116,24 @@
       if (next && next.tabs) updateBrowserState(next);
     } catch (e) { error(e.message || 'Could not update browser groups.'); }
   }
+  function suggestedBot(state, tabId) {
+    var item = ((state.workProposal && state.workProposal.assignments) || []).find(function (a) { return a.tabId === tabId; });
+    return item ? item.bot : '';
+  }
   function decorateTabs(strip, state) {
     Array.from(strip.querySelectorAll('[data-tab-id]')).forEach(function (tab) {
       var id = Number(tab.getAttribute('data-tab-id'));
       var ownership = (state.ownership || []).find(function (o) { return o.tabId === id; });
       var old = tab.querySelector('.browser-worker-mote'); if (old) old.remove();
       tab.classList.toggle('browser-worker-owned', !!ownership);
+      var suggested = !ownership && suggestedBot(state, id);
+      if (suggested) {
+        var outline = node('span', 'browser-worker-mote browser-worker-mote-suggested', '');
+        outline.title = suggested + ' · Suggested by Mia';
+        outline.setAttribute('aria-label', outline.title);
+        outline.append(node('img')); outline.firstChild.src = 'assets/mote/mote.svg'; outline.firstChild.alt = '';
+        tab.append(outline);
+      }
       if (ownership) {
         var mote = node('span', 'browser-worker-mote', '');
         mote.title = String(ownership.name || ownership.botId || ownership.actorId) + ' · ' + (labels[ownership.status] || 'Assigned');
@@ -154,10 +166,12 @@
     var group = (browserState.groups || []).find(function (g) { return g.id === proposal.groupId; });
     box.append(node('strong', '', 'Mia suggests'), node('p', '', proposal.goal));
     box.append(node('small', '', 'Group · ' + (group ? group.name : 'no longer available')));
+    if (proposal.replacedProposalId) box.append(node('small', '', 'This replaces Mia’s earlier suggestion.'));
     proposal.assignments.forEach(function (item) {
       var tab = (browserState.tabs || []).find(function (t) { return t.id === item.tabId; });
       box.append(node('p', 'browser-work-proposal-row', item.bot + ' → Tab ' + item.tabId + ' · ' + (tab ? tab.title || 'New tab' : 'closed')));
     });
+    if (proposal.starting) { box.append(node('small', '', 'Starting…')); return; }
     var review = button('Review suggestion', function () { applyProposal(proposal); }, !group || pending.has('proposal'));
     var dismiss = button('Dismiss', function () { appliedProposalId = null; error(''); clearProposal(proposal.id); });
     box.append(review, dismiss);
@@ -401,5 +415,5 @@
     bridge.command({ action: 'state' }).then(updateBrowserState).catch(function () { error('Browser unavailable.'); });
     if (timer) clearInterval(timer); timer = setInterval(refresh, 2000); refresh();
   }
-  return { workLabel: workLabel, workerLabel: workerLabel, displayOrder: displayOrder, proposalBot: proposalBot, selectedConnectedModel: selectedConnectedModel, taskRecoveryState: taskRecoveryState, preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
+  return { workLabel: workLabel, workerLabel: workerLabel, displayOrder: displayOrder, proposalBot: proposalBot, suggestedBot: suggestedBot, selectedConnectedModel: selectedConnectedModel, taskRecoveryState: taskRecoveryState, preservedResponse: preservedResponse, configuredModelIndex: configuredModelIndex, connectedModels: connectedModels, recoveryState: recoveryState, pageOrigin: pageOrigin, visibleTabs: visibleTabs, projection: projection, decorateTabs: decorateTabs, updateBrowserState: updateBrowserState, mount: mount, refresh: refresh };
 });

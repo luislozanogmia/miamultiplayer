@@ -2084,6 +2084,7 @@ function createWindow() {
         log: desktopLog,
       }),
       resolveActor: sessionId => resolveBrowserActor(window, sessionId),
+      appRequest: (pathname, request) => desktopAppRequest(window, pathname, request),
     },
   );
   const windowNativeBrowser = nativeBrowser;
@@ -2231,6 +2232,21 @@ async function loadMiaOS() {
 
 // Hermes session id -> { actor, at }. A bot's browser calls arrive in bursts
 // from one session, so a short cache keeps each call off the backend.
+// A call Mia's own Ghost session asked for, sent as the signed-in person. Only
+// the host decides which paths those are; nothing here takes a path from Mia.
+async function desktopAppRequest(window, pathname, { method = "GET", body, timeoutMs = 15000 } = {}) {
+  if (!backendUrl || !window || window.isDestroyed()) throw Object.assign(new Error("The Mia app connection is unavailable."), { code: "APP_UNAVAILABLE" });
+  const response = await window.webContents.session.fetch(new URL(pathname, backendUrl).href, {
+    method, credentials: "include", redirect: "error",
+    headers: { Origin: new URL(backendUrl).origin, ...(body ? { "Content-Type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(data.error || "The Mia app could not do that."), { code: "APP_REQUEST_FAILED" });
+  return data;
+}
+
 const browserActorCache = new Map();
 const BROWSER_ACTOR_TTL_MS = 60_000;
 

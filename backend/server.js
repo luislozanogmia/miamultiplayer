@@ -8711,6 +8711,7 @@ async function initializeAskBeforeDoGate() {
   process.env.MIA_ASK_BEFORE_DO_URL = askBeforeDoGate.url;
 }
 
+let miaAppBrowserWork = null;
 async function initializeBrowserWork() {
   if (!browserWorkDesktopConfig.url || !browserWorkDesktopConfig.token || !browserWorkDesktopConfig.key) return;
   const { createBrowserWorkDesktopClient } = require('./browser-work-desktop-client');
@@ -8767,6 +8768,7 @@ async function initializeBrowserWork() {
     },
   });
   coordinator.recoverInterrupted();
+  miaAppBrowserWork = coordinator;
   browserWorkRouter.use('/api/browser-work', requireAuth, (req, res, next) => req.method === 'GET' ? next() : requireInteractiveAuth(req, res, next), async (req, res, next) => {
     try {
       if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'personalSelection')) {
@@ -8781,10 +8783,34 @@ async function initializeBrowserWork() {
       next();
     } catch (_) { res.status(409).json({ error: 'Worker model inventory is unavailable' }); }
   });
+  // Reached only from the desktop host, after the person's confirmation or
+  // their own opt-in; the plan and start are the Start button's.
+  browserWorkRouter.post('/api/browser-work/proposal/start', async (req, res) => {
+    try {
+      const owner = req.userEmail;
+      const candidates = await require('./browser-work-proposal').resolveProposalCandidates({
+        assignments: req.body?.assignments, models: req.body?.models,
+        bots: db.loadAll(conn, 'bots').filter(bot => sameOwner(bot, owner) && bot.status !== 'draft'),
+        resolveSelection: selection => chatModelSelectionForUser(selection, owner),
+        defaultModel: () => inferenceOptionsForUser(owner, { profile: MIAOS_AGENT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir() }),
+      });
+      const work = await coordinator.plan(owner, { groupId: req.body?.groupId, goal: req.body?.goal, context: req.body?.context, candidates,
+        ...(req.body?.personalSelection ? { personalSelection: req.body.personalSelection } : {}) });
+      coordinator.start(owner, work.id).catch(() => console.error('Browser work stopped before completion'));
+      res.status(201).json({ work: require('./browser-work-coordinator').serializeBrowserWork(work) });
+    } catch (error) { res.status(error.status || 500).json({ error: error.status ? error.message : 'Browser work could not start' }); }
+  });
   registerBrowserWorkRoutes(browserWorkRouter, { coordinator, ownerFromRequest: req => req.userEmail,
     onError: () => console.error('Browser work stopped before completion'),
   });
 }
+
+require('./mia-app-routes').registerMiaAppRoutes(app, {
+  requireAuth, requireInteractiveAuth,
+  loadSettings: () => db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS),
+  saveSettings: settings => db.saveSingleton(conn, 'settings', settings),
+  tools: require('./mia-app-routes').createMiaAppTools({ browserWork: () => miaAppBrowserWork }),
+});
 
 async function onBackendListening() {
   await initializeAskBeforeDoGate().catch((error) => console.error('Ask-before-do gate unavailable', error.message));
