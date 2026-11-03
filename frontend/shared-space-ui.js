@@ -73,7 +73,7 @@
   function post(message){
     var h = host(), self = me();
     if(!h || !self || !s.channelId || !s.space) return Promise.resolve(false);
-    var payload = Object.assign({space: s.space.id, from: {id: self.id, name: self.name}, at: Date.now()}, message);
+    var payload = Object.assign({space: s.space.id, at: Date.now()}, message);
     var channelId = s.channelId, body = model.encode(payload);
     // Preserve Join -> presence -> Leave order even when requests finish at
     // different speeds. Otherwise an old Join could arrive after Leave.
@@ -90,7 +90,8 @@
     clearTimeout(s.timers[kind]);
     s.timers[kind] = setTimeout(fn, delay);
   }
-  function sendSpace(){ return bound() ? post({t: 'space', name: s.space.name, rev: s.space.rev, startedAt: s.space.startedAt, host: s.space.host, tabs: s.space.tabs}) : Promise.resolve(false); }
+  function sendSpace(){ return bound() ? post({t: 'space', name: s.space.name, rev: s.space.rev, startedAt: s.space.startedAt, host: s.space.host,
+    tabs: s.space.tabs.map(function(tab){ return {k:tab.k,url:tab.url}; })}) : Promise.resolve(false); }
   // Hub records this authenticated user's Join message in the channel. A
   // presence ping or a WebRTC offer alone never grants access to live pages.
   function announceJoin(){
@@ -225,7 +226,7 @@
       return;
     }
     if(row.author_type !== 'user' || typeof row.author_id !== 'string' || !row.author_id) return;
-    message.from = {id: row.author_id, name: message.from && message.from.name || row.author_name || row.author_email || 'Teammate'};
+    message.from = {id: row.author_id, name: row.author_name || row.author_email || message.from && message.from.name || 'Teammate'};
     if(message.t === 'ring'){
       var self = me();
       if(self && message.to === self.id && message.from.id !== self.id && !(bound() && s.space.id === message.space)){

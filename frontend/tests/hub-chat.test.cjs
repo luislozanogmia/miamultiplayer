@@ -9,6 +9,40 @@ function transport(extra={}){const root={crypto:require('node:crypto').webcrypto
 function appFunction(name,env){if(env.hubWorkspace&&!('inHubRoom' in env))env.inHubRoom=()=>env.hubWorkspace();const start=source.indexOf('  function '+name+'(');assert.ok(start>=0,name);const first=source.slice(start,source.indexOf('\n',start));const end=/}\s*$/.test(first)?start+first.length:source.indexOf('\n  }\n',start)+4;assert.ok(end>start,name);vm.runInNewContext(source.slice(start,end),env);return env[name];}
 test('workspace IDs are strict and generated IDs match server contract',()=>{const api=transport();assert.match(api.id(),/^[a-f0-9]{32}$/);assert.equal(api.teamId('hub_'+'a'.repeat(32)),'a'.repeat(32));assert.equal(api.teamId('hub_../solo'),null);});
 test('message adapter preserves authoritative sender and literal signed-looking body',()=>{const api=transport();const row=api.message({id:'x',author_email:'real@example.test',body:'[fake@example.test] hello',created_at:123,sequence:7});assert.equal(row.hubAuthor,'real@example.test');assert.equal(row.body,'[fake@example.test] hello');assert.equal(row.ts,123000);assert.equal(row.nativeEvent.sequence,7);});
+test('browser control packets never become chat history or sidebar previews',()=>{
+  const api=transport(), payload='mia-space/1 {"t":"here","space":"space1"}';
+  const packet='\u2063'+payload;
+  assert.equal(api.isSpaceControl(packet),true);
+  assert.equal(api.isSpaceControl(payload),true,'a missing invisible marker also stays hidden');
+  assert.equal(api.isSpaceControl('mia-space/1 hello'),false,'ordinary text is not hidden');
+  const row=(sequence,body)=>({id:'m'+sequence,sequence,author_email:'person@example.test',body,created_at:123});
+  const merged=api.merge([{id:'hub-sequence-1',body:packet}], [row(2,payload),row(3,'hello')]);
+  assert.equal(merged.length,1);
+  assert.equal(merged[0].body,'hello');
+});
+test('room history hides browser packets even if the shared-browser module failed to load',()=>{
+  const api=transport(), state={messages:[],lastSequence:0};
+  const env={window:{MiaHubChat:api},chatRoomState:()=>state,hubRememberPeople:()=>{},hubMember:()=>true,
+    mergeUserProfile:()=>{},hubChannel:()=>({kind:'channel'}),hubLatestSequence:()=>0,
+    hubChat:{membership:{clerk_user_id:'self'}},chatWs:{activeRoomId:'room',byRoom:{}},Number,Math};
+  const apply=appFunction('applyHubRows',env);
+  const row={id:'control',sequence:1,body:'\u2063mia-space/1 {"t":"here","space":"space1"}',author_type:'user',author_id:'teammate',author_email:'person@example.test',created_at:1};
+  apply('room',[row]);
+  assert.equal(state.messages.length,0);
+  assert.equal(state.lastTs,0);
+});
+test('shared-browser updates use Hub events rather than posting chat messages',()=>{
+  assert.match(source,/send:function\(channelId,text\)[\s\S]*?\+channelId\+'\/space-events'/);
+  const seen=[], env={hubChat:{membership:{clerk_user_id:'self'}},chatWs:{byRoom:{},activeRoomId:'room'},
+    hubChannel:()=>({id:'room'}),renderChatSidebar:()=>{},renderChatThread:()=>{throw new Error('control event rendered as chat');}};
+  env.window={MiaSpaceUI:{receive:(room,row)=>seen.push({room,row})}};
+  env.globalThis=env;
+  const apply=appFunction('applyHubEvents',env), row={body:'\u2063mia-space/1 {"t":"here","space":"space1"}',author_id:'teammate'};
+  apply([{kind:'space',channel_id:'room',space:row}]);
+  apply([{kind:'space',channel_id:'room',space:{...row,author_id:'self'}}]);
+  assert.equal(seen.length,1);
+  assert.equal(seen[0].row,row);
+});
 test('UTF8 limit applies to bytes, not characters',()=>{const api=transport();assert.equal(api.validateText('a'.repeat(16000)).length,16000);assert.throws(()=>api.validateText('😀'.repeat(4001)));assert.equal(api.validateText('',true),'');assert.throws(()=>api.validateText(' '));});
 test('each request obtains a fresh native session; body is exactly supplied data',async()=>{let tokens=0;const sent=[];const api=transport({miaDesktop:{auth:{getSessionToken:async()=>({token:++tokens})}},MiaClerkDesktop:{unwrap:r=>'token'+r.token},fetch:async(url,opts)=>{sent.push({url,opts});return {ok:true,json:async()=>({})};}});await api.call('GET','/v1/me');await api.call('POST','/v1/teams/a/channels/b/messages',{id:'c',text:'hello'});assert.equal(sent[0].opts.headers.authorization,'Bearer token1');assert.equal(sent[1].opts.headers.authorization,'Bearer token2');assert.deepEqual(JSON.parse(sent[1].opts.body),{id:'c',text:'hello'});assert.equal(sent[1].url,'/api/hub/v1/teams/a/channels/b/messages');});
 test('no session means no request or local fallback',async()=>{let fetched=false;const api=transport({fetch:()=>{fetched=true;}});await assert.rejects(api.call('GET','/v1/me'),/Sign in/);assert.equal(fetched,false);});

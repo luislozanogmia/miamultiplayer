@@ -14,11 +14,11 @@
   var MAX_TABS = 24;
 
   function encode(payload){ return MARKER + JSON.stringify(payload); }
-  function isSpaceMessage(body){ return typeof body === 'string' && body.indexOf(MARKER) === 0; }
+  function isSpaceMessage(body){ return typeof body === 'string' && /^(?:\u2063)?mia-space\/1 \{/.test(body); }
   function decode(body){
     if(!isSpaceMessage(body)) return null;
     try {
-      var value = JSON.parse(body.slice(MARKER.length));
+      var value = JSON.parse(body.slice(body.indexOf('mia-space/1 ') + 'mia-space/1 '.length));
       return value && typeof value === 'object' && typeof value.t === 'string' && typeof value.space === 'string' ? value : null;
     } catch(_error) { return null; }
   }
