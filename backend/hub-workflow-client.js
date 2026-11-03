@@ -1,4 +1,5 @@
 'use strict';
+const {sharedSkills}=require('./hub-bot-client');
 const { createHash, randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -97,14 +98,14 @@ function gateFromOrder(order,detail) {
 // a scan finishing does not ask again.
 const gateDigest=gate=>sha256([gate.workflowId,gate.version,gate.n,gate.text,gate.botId,gate.botName,gate.summary,gate.startedBy,
   gate.previous.map(item=>[item.n,item.ownerId,item.note,item.outcome,item.report && stepReport.FIELDS.map(field=>item.report[field]||null),item.files.map(file=>[file.fileId,file.filename])]),
-  gate.definition.version,gate.definition.instructions]);
+  gate.definition.version,gate.definition.instructions,...(gate.definition.skills&&gate.definition.skills.length?[gate.definition.skills]:[])]);
 // One step of one version. A person who owns two steps has only seen the one shown.
 const acceptKey=gate=>sha256([gate.workflowId,gate.version,gate.n,gate.text,gate.botId]);
 // Without the bot's instructions there is nothing the person could agree to, so no digest.
 const withDigest=gate=>gate && Object.assign(gate,{digest:gate.definition?gateDigest(gate):''});
 const readableDefinition=definition=>definition && Number.isSafeInteger(definition.version) && definition.version>=1
   && typeof definition.instructions==='string' && definition.instructions.trim()
-  ?{version:definition.version,instructions:definition.instructions}:null;
+  ?{version:definition.version,instructions:definition.instructions,...(sharedSkills(definition.skills).length?{skills:sharedSkills(definition.skills)}:{})}:null;
 const carriesOthers=(gate,subject)=>(!!gate.summary && gate.startedBy!==subject)
   || gate.previous.some(item=>item.ownerId!==subject && (!!item.note || !!item.report || item.files.length>0));
 // A question from the step just before this one. Whoever wrote it, someone decides
@@ -446,7 +447,7 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     let read=null,files={fileIds:[],skipped:0};
     try {
       const reply=await runBot({owner:s.owner,
-        bot:{id:'shared-'+order.botId+'-v'+order.definition.version,name:order.botName||'Team bot',instructions:order.definition.instructions},
+        bot:{id:'shared-'+order.botId+'-v'+order.definition.version,name:order.botName||'Team bot',instructions:order.definition.instructions,bundledSkills:sharedSkills(order.definition.skills)},
         trigger:{author_email:s.email,body:stepPrompt(order,input.inputs,filesSupported?outbox:null)},
         // Only the step's own text may name Google files to open, never a teammate's note.
         contextText:order.text,history:[],channel:{teamId:s.teamId,channelId},

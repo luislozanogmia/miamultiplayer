@@ -1321,3 +1321,13 @@ test('a search-only Mia runs a step with no files and does not offer the bot a f
   assert.match(f.hub.runs[0].trigger.body,/can only search the web/);
   assert.equal(f.hub.reports[0].outcome,'done');
 });
+
+test('a shared bot version with long instructions and skills fits the app limits',()=>{
+  const {hubRouteLimits}=require('./hub-client');
+  const bot='/v1/teams/'+'a'.repeat(32)+'/channels/'+'c'.repeat(32)+'/bots/'+'b'.repeat(32);
+  const worst=2*1024*1024;
+  assert.ok(hubRouteLimits('POST',bot+'/versions').request>=worst);
+  assert.ok(hubRouteLimits('GET',bot+'/definition').response>=worst);
+  assert.ok(hubRouteLimits('GET',bot+'/versions').response>=5*worst);
+  assert.equal(hubRouteLimits('POST',bot+'/messages').request,8192,'other routes keep their small limit');
+});

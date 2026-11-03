@@ -6,7 +6,7 @@ const {CLERK_INSTANCES}=require('./clerk-config');
 // The Hub stores at most 16,000 UTF-8 bytes per message. A longer reply is
 // cut at a character boundary rather than lost.
 // A definition holds long instructions and up to ten skills.
-const RESPONSE_BYTES=8*1024*1024;
+const RESPONSE_BYTES=12*1024*1024;
 const REPLY_BYTES=16000, CUT_NOTE='\n\n[Reply shortened to fit the channel.]';
 function fitReply(text,limit=REPLY_BYTES) {
   if(typeof text!=='string' || Buffer.byteLength(text)<=limit) return text;
@@ -225,4 +225,4 @@ function createHubBotRouter(options) {
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
-module.exports={createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};
+module.exports={sharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};
