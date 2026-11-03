@@ -1,0 +1,1052 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=1280"><meta name="robots" content="noindex"><title>Mia browser preview</title><style>@font-face { font-family: "Instrument Sans"; font-style: normal; font-weight: 400 700; font-display: swap; src: url("assets/fonts/InstrumentSans-Variable.woff2") format("woff2-variations"), url("assets/fonts/InstrumentSans-Variable.woff2") format("woff2"); }
+
+:root{--paper: #FFFFFF; --mia-canvas: #f4f5f5; --paper-2: #F2F0EC; --tint: #FAF9F7; --card: #FFFFFF; --ink: #111111; --body: #1F1D1B; --ink-soft: #57534E; --mid: #57534E; --muted: #6B6560; --faint: #8A857E; --light: #A8A29B; --rule: #E6E2DC; --rule-strong: #EDEAE4; --term: #111111; --accent: #DC4E13; --accent-hover: #C0430F; --accent-soft: #FCEDE6; --accent-text: #B8410E; --accent-tint: rgba(220,78,19,0.10); --green: #1F8A4C; --green-tint: #E7F5EB; --danger: #B3200E; --danger-tint: #FDEEEB; --danger-border: #F0C9C2; --bar-h: 96px; --sidebar-w: 248px; --serif: "Instrument Sans",system-ui,sans-serif; --sans: "Instrument Sans",system-ui,sans-serif; --mono: "JetBrains Mono",ui-monospace,monospace; --dk-bg2: #F2F0EC; --dk-border: #E6E2DC; --dk-hair: #EDEAE4; --dk-ink: #111111; --dk-ink2: #6B6560; --dk-muted: #57534E; --dk-faint: #8A857E; --dk-surface: #FFFFFF; --dk-track: #DDD8D1; --dk-pill: #FBEDE6; --dk-avatar: #EFECE7; --dk-ink3: #57534E; --dk-orange: #DC4E13; --dk-green: #1F8A4C; --dk-green-bg: oklch(0.93 0.05 155); --dk-green-fg: oklch(0.42 0.09 155); --dk-amber: oklch(0.72 0.14 60); --dk-amber-bg: oklch(0.95 0.04 70); --dk-amber-fg: oklch(0.45 0.09 62); --styled-sans: -apple-system, system-ui, "Segoe UI", sans-serif; --sand-bg-base: #ffffff; --sand-bg-subtle: #ffffff; --sand-bg-elevated: #ffffff; --sand-bg-scrim: #14141480; --sand-text-primary: #141414; --sand-text-secondary: #14141499; --sand-text-tertiary: #1414149c; --sand-text-disabled: #14141474; --sand-text-on-primary: #fcfcfc; --sand-text-accent: #0c64c1; --sand-text-danger: #c21d2e; --sand-fill-bubble-agent: #eeeeee; --sand-fill-bubble-user: #070707; --sand-fill-accent: #1084fe; --sand-fill-accent-hover: #0c64c1; --sand-fill-accent-subtle: #1084fe17; --sand-fill-primary: #070707; --sand-fill-primary-hover: #2f2f2f; --sand-fill-secondary: #77777717; --sand-fill-secondary-hover: #7777772b; --sand-fill-ghost-hover: #77777717; --sand-fill-ghost-selected: #7777772b; --sand-fill-danger: #ff263c; --sand-agent-selected-fill: #77777720; --sand-border-subtle: #1414140d; --sand-border-weak: #1414141a; --sand-border-default: #14141426; --sand-border-strong: #1414144d; --sand-border-focus: #0c64c1; --sand-shadow-control: 0 1px 2px #0000001f; --sand-shadow-inline: 0 4px 12px -1px #00000014, 0 2px 4px -2px #0000000f, 0 0 0 1px #e4e4e40a; --sand-shadow-modal: 0 20px 32px -5px #0000001a, 0 8px 12px -6px #0000001a, 0 0 0 1px #e4e4e40a; --sand-shadow-popover: 0 10px 20px -3px #0000001a, 0 4px 6px -4px #0000001a, 0 0 0 1px #e4e4e40a; --sand-font-weight-regular: 420; --sand-font-weight-medium: 500; --sand-font-weight-semibold: 600; --sand-sidebar-width: 20%; --workspace-rail-width: 76px; --sand-info-pane-width: max(320px,25%); --sand-thread-pane-width: max(420px,35vw); --sand-supplementary5: #ff309b; --sand-supplementary1: #ff6700; --sand-supplementary3: #00bca6; --sand-supplementary4: #9159fe; --sand-danger: #ff263c; --sand-success: #00c972; --sand-warning: #ff9800; --sand-success-fg: #00673a; --sand-success-bg: #00c97217; --sand-success-border: #00c9722b; --sand-warning-fg: #8a6400; --sand-warning-bg: #fff4c2; --sand-warning-border: #efd889; --ui-surface-canvas: var(--sand-bg-base); --ui-surface-subtle: var(--sand-bg-subtle); --ui-surface-raised: var(--sand-bg-elevated); --ui-surface-message: var(--sand-fill-bubble-agent); --ui-text-primary: var(--sand-text-primary); --ui-text-secondary: var(--sand-text-secondary); --ui-text-disabled: var(--sand-text-disabled); --ui-text-on-accent: var(--sand-text-on-primary); --ui-border-subtle: var(--sand-border-subtle); --ui-border-default: var(--sand-border-default); --ui-border-strong: var(--sand-border-strong); --ui-action: var(--sand-fill-primary); --ui-action-hover: var(--sand-fill-primary-hover); --ui-focus: var(--sand-border-focus); --ui-icon-feature: var(--sand-text-secondary);}
+*{box-sizing: border-box;}
+html, body{height: 100%;}
+body{margin: 0px; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; text-rendering: optimizelegibility; overflow: hidden;}
+::selection{background: var(--accent-tint);}
+button, input, textarea{font-family: inherit;}
+@keyframes mia-placeholder-shimmer { 
+  0% { background-position: 100% 0px; }
+  100% { background-position: -100% 0px; }
+}
+@keyframes mia-reveal { 
+  0% { opacity: 0; filter: blur(6px); }
+  100% { opacity: 1; filter: blur(0px); }
+}
+@media (prefers-reduced-motion: reduce){
+@keyframes mia-reveal { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+}
+.app-shell{display: none; height: 100%; flex-direction: column; background: var(--paper); padding: 14px; gap: 14px; box-sizing: border-box;}
+.app-shell.visible{display: flex;}
+*{scrollbar-width: thin; scrollbar-color: rgba(107, 101, 96, 0.28) transparent;}
+::-webkit-scrollbar{width: 6px; height: 6px;}
+::-webkit-scrollbar-track{background: transparent;}
+::-webkit-scrollbar-thumb{background: rgba(107, 101, 96, 0.28); border-radius: 999px; border-width: medium; border-style: none; border-color: currentcolor; border-image: initial;}
+::-webkit-scrollbar-thumb:hover{background: rgba(107, 101, 96, 0.45);}
+::-webkit-scrollbar-corner{background: transparent;}
+.shell{flex: 1 1 0%; display: flex; min-height: 0px;}
+.content{flex: 1 1 0%; min-width: 0px; overflow-y: auto; height: 100%;}
+.content.chat-mode{overflow: hidden;}
+.panel{display: none; height: 100%;}
+.panel.active{display: block;}
+#panel-chat.active{display: flex; flex-direction: column; height: 100%; min-height: 0px;}
+@keyframes benchSettle { 
+  0% { box-shadow: rgba(220, 78, 19, 0.34) 0px 0px 0px 0px; }
+  100% { box-shadow: rgba(220, 78, 19, 0) 0px 0px 0px 14px; }
+}
+@keyframes benchJustAddedPulse { 
+  0% { box-shadow: rgba(220, 78, 19, 0.5) 0px 0px 0px 0px; }
+  70% { box-shadow: rgba(220, 78, 19, 0) 0px 0px 0px 10px; }
+  100% { box-shadow: rgba(220, 78, 19, 0) 0px 0px 0px 0px; }
+}
+@keyframes chat-msg-found { 
+  0%, 40% { box-shadow: 0 0 0 3px var(--mia-gold, #E4B43C); }
+  100% { box-shadow: transparent 0px 0px 0px 3px; }
+}
+@keyframes benchNameSuggested { 
+  0% { background: var(--dk-pill); box-shadow: 0 0 0 3px var(--dk-pill); }
+  100% { background: transparent; box-shadow: rgba(220, 78, 19, 0) 0px 0px 0px 0px; }
+}
+.mote-avatar-img{width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none;}
+.mia-avatar-mark{display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; line-height: 0; overflow: visible; background: transparent;}
+.mia-avatar-mark .mia-mark{display: block; max-width: 100%; max-height: 100%;}
+@keyframes mia-pop { 
+  0% { transform: scale(1); fill: var(--mia-dot); }
+  12% { fill: var(--mia-gold); }
+  50% { transform: scale(1.5); fill: var(--mia-gold-hi); }
+  88% { fill: var(--mia-gold); }
+  100% { transform: scale(1); fill: var(--mia-dot); }
+}
+.chat-msg-mark.mia-mark-host{background: transparent; border-radius: 0px; overflow: visible;}
+.chat-msg-mark.agent:has(.mote-avatar-img), .chat-msg-mark.agent:has(.mia-avatar-mark), .ch-mark.dm:has(.mote-avatar-img){background: none; border-radius: 0px; overflow: visible;}
+.chat-empty-hero{flex: 1 1 0%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 32px 24px; text-align: center;}
+.chat-empty-hero-mote{width: 132px; height: auto;}
+.chat-empty-hero-text{font-family: var(--styled-sans); font-size: 13.5px; color: var(--sand-text-secondary); max-width: 34ch; line-height: 1.5;}
+.chat-thread{flex: 1 1 0%; min-width: 0px; max-width: 100%; min-height: 0px; display: flex; flex-direction: column; gap: 3px; overflow: hidden auto; padding: 16px 24px 8px; box-sizing: border-box; font-family: var(--styled-sans);}
+@supports (anchor-name: --a){
+.chat-thread{anchor-name: --chat-thread;}
+}
+.chat-date-divider{align-self: center; font-family: var(--styled-sans); font-size: 12px; line-height: 16px; color: var(--sand-text-secondary); padding: 6px 0px 10px;}
+.chat-msg-row{position: relative; display: flex; min-width: 0px; max-width: 100%; gap: 8px; padding: 3px 4px; box-sizing: border-box; border-radius: 10px; transition: background 0.1s;}
+.chat-msg-row:hover{background: var(--sand-fill-ghost-hover);}
+.chat-msg-row.is-you{flex-direction: row-reverse;}
+.chat-msg-row.is-you:hover{background: transparent;}
+.chat-msg-mark{flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px; background: rgb(239, 236, 231); color: rgb(92, 86, 77); display: flex; align-items: center; justify-content: center; font-family: var(--styled-sans); font-weight: 600; font-size: 11px; overflow: hidden;}
+.chat-msg-mark.agent{background: var(--sand-supplementary5); color: rgb(255, 255, 255);}
+.chat-msg-mark img{width: 100%; height: 100%; object-fit: cover;}
+.mote-avatar-img[role="button"]{cursor: pointer; outline-offset: 2px; pointer-events: auto;}
+.mote-avatar-img[role="button"]:hover{transform: scale(1.08);}
+.chat-msg-row.is-you .chat-msg-mark{display: none;}
+.chat-msg-body{flex: 1 1 0%; min-width: 0px; max-width: 100%; display: flex; flex-direction: column; gap: 4px;}
+.chat-msg-row.is-you .chat-msg-body{align-items: flex-end;}
+.chat-msg-head{display: flex; align-items: center; gap: 8px; flex-wrap: wrap;}
+.chat-msg-row.is-you .chat-msg-head{flex-direction: row-reverse;}
+.chat-msg-name{font-family: var(--styled-sans); font-weight: 500; font-size: 14px; line-height: 20px; letter-spacing: 0px; color: var(--sand-text-primary);}
+.chat-msg-tag{font-family: var(--styled-sans); font-size: 11px; letter-spacing: 0.02em; padding: 2px 7px; border-radius: 5px; background: var(--sand-fill-accent-subtle); color: var(--sand-text-accent);}
+.chat-msg-time{font-family: var(--styled-sans); font-size: 12px; line-height: 16px; color: var(--sand-text-secondary);}
+.chat-msg-text{display: inline-block; min-width: 0px; max-width: min(100%, 520px); overflow-wrap: anywhere; font-family: var(--styled-sans); font-size: 14px; line-height: 20px; font-weight: var(--sand-font-weight-regular); color: var(--sand-text-primary); background: var(--sand-fill-bubble-agent); border-radius: 6px 18px 18px; padding: 8px 12px; box-sizing: border-box; cursor: text; user-select: text; app-region: no-drag;}
+.chat-msg-text *{user-select: text; app-region: no-drag;}
+.chat-msg-row.is-you .chat-msg-text::selection, .chat-msg-row.is-you .chat-msg-text ::selection{background: var(--sand-fill-accent); color: var(--sand-text-on-primary);}
+.chat-msg-row.is-you .chat-msg-text{background: var(--sand-fill-bubble-user); color: var(--sand-text-on-primary); border-radius: 18px 6px 18px 18px;}
+.chat-artifact-card{display: flex; align-items: center; gap: 10px; min-width: 0px; width: min(100%, 520px); padding: 8px 10px; box-sizing: border-box; background: var(--sand-fill-bubble-agent,#f0f0f4); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 10px; color: var(--sand-text-primary,#222);}
+.chat-artifact-icon{display: flex; align-items: center; justify-content: center; flex: 0 0 34px; width: 34px; height: 34px; font-size: 22px;}
+.chat-artifact-copy{display: flex; flex: 1 1 0%; min-width: 0px; flex-direction: column; gap: 2px;}
+.chat-artifact-name{min-width: 0px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 18px;}
+.chat-artifact-type{min-width: 0px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 15px; color: var(--sand-text-secondary,#777);}
+.chat-artifact-actions{display: flex; align-items: center; gap: 8px; margin-top: 2px;}
+.chat-artifact-preview, .chat-artifact-download{font-family: var(--styled-sans); font-size: 12px; line-height: 16px; color: var(--sand-text-accent); text-decoration: none; cursor: pointer;}
+.chat-artifact-preview{appearance: none; padding: 0px; border: 0px; background: transparent;}
+.chat-artifact-preview:hover, .chat-artifact-download:hover{text-decoration: underline;}
+.chat-msg-text .chat-md-p{margin: 0px 0px 10px;}
+.chat-msg-text .chat-md-list{margin: 2px 0px 12px; padding-left: 1.35em;}
+.chat-msg-text .chat-md-list li{margin: 4px 0px; padding-left: 0.15em;}
+.chat-msg-text .chat-md-list li::marker{color: var(--sand-text-secondary);}
+.chat-msg-text strong{font-weight: 700;}
+.chat-msg-text a{color: var(--sand-text-accent); text-decoration: underline; text-underline-offset: 2px; word-break: break-all;}
+.chat-msg-text a:hover{opacity: 0.85;}
+ .chat-expandable-message{padding: 10px 12px 9px;}
+ .chat-expandable-preview{min-width: 0px; max-width: 100%; overflow-wrap: anywhere; line-height: 20px;}
+.chat-msg-thinking{display: inline-block; color: var(--sand-text-secondary); background: transparent; padding: 0px;}
+.chat-thinking-shimmer{display: inline-block; color: rgb(174, 178, 182); background: linear-gradient(90deg, rgb(174, 178, 182) 0%, rgb(174, 178, 182) 40%, rgb(255, 255, 255) 50%, rgb(174, 178, 182) 60%, rgb(174, 178, 182) 100%) 140% 0px / 220% 100% text; -webkit-text-fill-color: transparent; animation: 1.8s ease-in-out 0s infinite normal none running chatThinkingSweep;}
+@keyframes chatThinkingSweep { 
+  0% { background-position: 140% 0px; }
+  100% { background-position: -40% 0px; }
+}
+.conversation-header-actions{display: flex; align-items: center; gap: 2px; padding-left: 6px; border-left: 1px solid var(--sand-border-subtle);}
+@media (max-width: 760px){
+.conversation-header-actions{gap: 0px; padding-left: 2px;}
+}
+.chat-composer-wrap{flex: 0 0 auto; padding: 0px 24px 16px;}
+.chat-composer{height: 44px; border: 1px solid var(--sand-border-strong); border-radius: 22px; background: var(--sand-bg-base); box-shadow: var(--sand-shadow-inline); transition: border-color 0.12s; display: flex; align-items: center; padding: 0px 6px;}
+.cc-input-row{position: relative; flex: 1 1 0%; min-width: 0px; display: flex; align-items: center; height: 100%;}
+.cc-inline-suggestion{position: absolute; inset: 0px 4px; display: flex; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; pointer-events: none; color: var(--sand-text-secondary); font-family: var(--styled-sans); font-size: 14px; line-height: 20px;}
+.cc-inline-suggestion-tab{flex: 0 0 auto; color: var(--sand-text-tertiary); font-size: 11px; line-height: 16px; font-style: italic;}
+.cc-inline-suggestion span{overflow: hidden; text-overflow: ellipsis;}
+.cc-input{position: relative; z-index: 1; flex: 1 1 0%; font-family: var(--styled-sans); font-size: 14px; line-height: 20px; color: var(--sand-text-primary); padding: 0px 4px; border-width: medium; border-style: none; border-color: currentcolor; border-image: initial; outline: none; background: transparent; width: 100%; min-width: 0px; resize: none; overflow-y: auto;}
+.cc-input::placeholder{color: var(--sand-text-secondary); opacity: 1;}
+.cc-bottom-row{display: flex; align-items: center; gap: 6px; flex: 0 0 auto;}
+.cc-plus-btn{appearance: none; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; border-width: medium; border-style: none; border-color: currentcolor; border-image: initial; background: var(--sand-fill-secondary); color: var(--sand-text-secondary); font-size: 16px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.12s, color 0.12s;}
+.cc-plus-btn:hover{background: var(--sand-fill-secondary-hover); color: var(--sand-text-primary);}
+.cc-right-cluster{margin-left: auto; display: flex; align-items: center; gap: 6px; flex: 0 0 auto;}
+.cc-icon-btn{appearance: none; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; border-width: medium; border-style: none; border-color: currentcolor; border-image: initial; background: var(--sand-fill-primary); color: var(--sand-text-on-primary); font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.12s;}
+.cc-icon-btn:hover{background: var(--sand-fill-primary-hover);}
+.cc-send{border-width: medium; border-style: none; border-color: currentcolor; border-image: initial; background: var(--sand-fill-primary); color: var(--sand-text-on-primary); border-radius: 50%; width: 28px; height: 28px; font-size: 13px; cursor: pointer; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; transition: background 0.12s, opacity 0.12s;}
+.cc-send-icon{display: block; width: 17px; height: 17px; fill: none; stroke: currentcolor; stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round;}
+.cc-send:disabled{opacity: 0.45; cursor: default;}
+@keyframes recPulse { 
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.chat-layout{display: grid; grid-template-columns: calc(var(--sand-sidebar-width) + var(--workspace-rail-width)) minmax(0,1fr); gap: 0px; flex: 1 1 0%; min-height: 0px; height: 100%; width: 100%; font-family: var(--styled-sans); background: var(--sand-bg-base); border: 1px solid var(--sand-border-subtle); border-radius: 14px; overflow: hidden;}
+@keyframes workspace-invite-glow { 
+  50% { box-shadow: 0 0 0 1px var(--mia-gold-hi),0 0 16px 3px color-mix(in srgb,var(--mia-gold-hi) 70%,transparent); }
+}
+.human-avatar-initials{position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; border-radius: 50%; box-sizing: border-box; line-height: 1; color: rgb(255, 255, 255); font-weight: 600;}
+.human-avatar-initials.human-avatar-tone-0{background: var(--sand-fill-accent);}
+.chat-task-dot{width: 6px; height: 6px; border-radius: 50%; background: oklch(0.72 0.16 60); animation: 1.6s ease-in-out 0s infinite normal none running chatTaskPulse;}
+@keyframes chatTaskPulse { 
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.chat-app{max-width: none; flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: row; min-height: 0px; background: var(--sand-bg-base);}
+.chat-main-col{position: relative; flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; min-height: 0px;}
+@keyframes capPulse { 
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@media (max-width: 1100px){
+.chat-app{position: relative;}
+}
+.channel-header{display: flex; align-items: center; justify-content: space-between; gap: 14px; height: 44px; min-height: 44px; padding: 0px 20px; border-bottom: 1px solid var(--sand-border-subtle); flex: 0 0 auto; font-family: var(--styled-sans);}
+.ch-left{min-width: 0px; display: flex; align-items: center; gap: 10px;}
+.ch-title-row{display: flex; align-items: center; gap: 9px; min-width: 0px; position: relative;}
+.ch-title-btn{appearance: none; background: none; border-width: medium; border-style: none; border-color: currentcolor; border-image: initial; padding: 0px; margin: 0px; display: flex; align-items: center; gap: 6px; min-width: 0px; cursor: pointer;}
+.channel-menu{display: none; position: absolute; top: calc(100% + 8px); left: 0px; min-width: 190px; background: var(--sand-bg-elevated); border: 1px solid var(--sand-border-default); border-radius: 12px; padding: 5px; box-shadow: var(--sand-shadow-popover); z-index: 60;}
+.ch-mark{flex: 0 0 auto; display: flex; align-items: center; justify-content: center; font-family: var(--styled-sans); font-weight: 600;}
+.ch-mark.dm{width: 24px; height: 24px; border-radius: 7px; background: var(--sand-supplementary5); color: rgb(255, 255, 255); font-size: 10px; overflow: hidden;}
+.ch-mark.dm img{width: 100%; height: 100%; object-fit: cover;}
+.channel-header-title{margin: 0px; font-family: var(--styled-sans); font-weight: 500; font-size: 14px; line-height: 20px; color: var(--sand-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.ch-right{display: flex; align-items: center; gap: 6px; flex: 0 0 auto; position: relative;}
+.ch-icon-btn{appearance: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 5px; height: 20px; padding: 0px; border: 0px; border-radius: 0px; background: transparent; color: var(--sand-text-secondary); font-family: var(--styled-sans); font-size: 11px; font-weight: 400; line-height: 16px; cursor: pointer; transition: color 0.12s;}
+.ch-icon-btn:hover{background: transparent; color: var(--sand-text-primary);}
+.ch-icon-btn svg{display: block; width: 15px; height: 15px;}
+@keyframes fadein { 
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: none; }
+}
+.cc-model-select{position: relative; flex: 0 1 auto; min-width: 0px;}
+.cc-model-btn{appearance: none; font-family: var(--styled-sans); font-size: 11px; color: var(--sand-text-primary); background: var(--sand-fill-secondary); border-width: medium; border-style: none; border-color: currentcolor; border-image: initial; border-radius: 8px; height: 26px; max-width: 190px; padding: 0px 8px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; transition: background 0.12s;}
+.cc-model-btn:hover{background: var(--sand-fill-secondary-hover);}
+.cc-model-tags{display: block; min-width: 0px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; color: var(--sand-text-primary);}
+.cc-model-bolt{width: 12px; height: 12px; color: var(--sand-text-secondary); opacity: 0.5; flex: 0 0 auto; stroke: currentcolor; stroke-width: 1.35; stroke-linejoin: round;}
+.cc-model-placeholder{color: var(--sand-text-secondary);}
+.cc-model-btn .caret{font-size: 17px; line-height: 12px; color: var(--sand-text-secondary);}
+.styled-btn-secondary{appearance: none; height: 34px; border-radius: 8px; background: var(--sand-fill-secondary); border: 1px solid var(--sand-border-weak); font-family: var(--styled-sans); font-size: 14px; font-weight: 400; color: var(--sand-text-primary); padding: 6px 14px; cursor: pointer; transition: background 0.12s;}
+.styled-btn-secondary:hover{background: var(--sand-fill-secondary-hover);}
+@keyframes styledApiSweep { 
+  0% { transform: translateX(0px); }
+  100% { transform: translateX(430%); }
+}
+@keyframes styledApiFieldsIn { 
+  0% { opacity: 0; transform: translateY(5px); }
+  100% { opacity: 1; transform: none; }
+}
+@media (max-width: 1100px){
+[data-shell]{grid-template-columns: 64px minmax(0px, 1fr) !important;}
+}
+@media (max-width: 900px){
+.shell{flex-direction: column;}
+}
+body.styled-skin{background: var(--sand-bg-base); font-family: var(--styled-sans); color: var(--sand-text-primary);}
+body.styled-skin .app-shell{padding: 0px; gap: 0px; height: 100vh; background: var(--sand-bg-base);}
+body.styled-skin .shell{flex: 1 1 0%; min-height: 0px; display: flex;}
+body.styled-skin .content{height: 100%; overflow: hidden;}
+body.styled-skin #panel-chat{flex-direction: column; height: 100%; min-height: 0px; background: var(--sand-bg-base); display: flex !important;}
+body.styled-skin .panel:not(#panel-chat){display: none !important;}
+:root{--mia-dot: #141414; --mia-gold: #C9962B; --mia-gold-hi: #E6B94A;}
+.mia-mark circle{fill: var(--mia-dot); transform-box: fill-box; transform-origin: center center;}
+.mia-mark circle.gold{fill: var(--mia-gold);}
+body.styled-skin .chat-layout{grid-template-columns: calc(var(--sand-sidebar-width) + var(--workspace-rail-width)) minmax(0,1fr); min-width: 0px; height: 100%; border: 0px; border-radius: 0px;}
+body.styled-skin .chat-app{min-width: 0px; min-height: 0px; overflow: hidden; background: var(--sand-bg-base);}
+body.styled-skin .chat-main-col{flex: 1 1 auto; width: auto; min-width: 0px; min-height: 0px; overflow: hidden; background: var(--sand-bg-base);}
+body.styled-skin .channel-header{height: 52px; min-height: 52px; padding: 0px 16px; border-bottom: 1px solid var(--sand-border-subtle); background: var(--paper);}
+body.styled-skin .ch-title-row{gap: 8px;}
+body.styled-skin .ch-mark.dm{width: 24px; height: 24px; border-radius: 0px; background: none; overflow: visible;}
+body.styled-skin .ch-mark.dm img{object-fit: contain;}
+body.styled-skin .ch-mark.dm:has(.mote-avatar-img){background: none;}
+body.styled-skin .channel-header-title{font-size: 14px; font-weight: 500;}
+body.styled-skin .ch-right{gap: 10px;}
+body.styled-skin .ch-icon-btn{width: auto; height: 20px; border-radius: 0px; padding: 0px;}
+body.styled-skin .chat-thread{padding: 10px 16px 8px; gap: 3px; background: var(--sand-bg-base);}
+body.styled-skin .chat-msg-row{padding: 3px 0px; border-radius: 10px;}
+body.styled-skin .chat-msg-row:hover{background: transparent;}
+body.styled-skin .chat-msg-row.is-direct .chat-msg-body{flex: 0 1 auto; max-width: 72%;}
+body.styled-skin .chat-msg-row.is-direct.is-you .chat-msg-body{align-items: flex-end;}
+body.styled-skin .chat-msg-row.is-direct .chat-msg-text{max-width: 100%; padding: 10px 12px; border-radius: 18px;}
+body.styled-skin .chat-msg-row.is-direct.is-you{padding-left: 28%;}
+body.styled-skin .chat-msg-row.is-direct:not(.is-you){padding-right: 28%;}
+body.styled-skin .chat-date-divider{padding: 8px 0px 12px; font-size: 12px;}
+body.styled-skin .chat-empty-hero{padding: 32px 24px;}
+body.styled-skin .chat-empty-hero-mote{width: 132px;}
+body.styled-skin .chat-empty-hero-text{font-size: 13.5px;}
+body.styled-skin .chat-composer-wrap{padding: 0px 16px 16px;}
+body.styled-skin .chat-composer{position: relative; width: 100%; height: auto; min-height: 96px; box-sizing: border-box; padding: 10px; border-radius: 18px; background: var(--sand-bg-base); box-shadow: rgba(0, 0, 0, 0.05) 0px 2px 8px -1px, rgba(0, 0, 0, 0.03) 0px 1px 2px; display: flex; flex-direction: column; align-items: stretch; gap: 4px;}
+body.styled-skin .cc-input-row{width: 100%; height: auto; min-height: 32px; flex: 1 1 auto; align-items: flex-start;}
+body.styled-skin .cc-input{height: auto; min-height: 44px; max-height: 33vh; field-sizing: content; box-sizing: border-box; font-size: 14px; line-height: 22px; padding: 4px 1px;}
+body.styled-skin .cc-bottom-row{position: static; inset: auto; width: 100%; height: 28px; flex: 0 0 28px; display: flex; align-items: center; justify-content: space-between; pointer-events: auto;}
+body.styled-skin .cc-plus-btn, body.styled-skin .cc-right-cluster{pointer-events: auto;}
+body.styled-skin .cc-plus-btn{width: 28px; height: 28px;}
+body.styled-skin .cc-right-cluster{gap: 6px; margin-left: auto;}
+body.styled-skin .cc-icon-btn{width: 28px; height: 28px;}
+body.styled-skin .cc-send{width: 28px; height: 28px; background: var(--sand-fill-primary);}
+.automations-overlay{position: fixed; inset: 0px; z-index: 120; display: none; background: var(--sand-bg-base); color: var(--sand-text-primary); font-family: var(--styled-sans);}
+.automations-overlay.open{display: block;}
+body.browser-collab-mode .automations-overlay.open{right: var(--browser-mia-pane-width);}
+.automations-window{position: absolute; inset: 0px; display: flex; flex-direction: column; min-width: 0px;}
+.automations-window{font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;}
+.automations-tabs-row{display: flex; align-items: flex-end; gap: 8px; min-height: 52px; padding: 18px 0px 0px 16px; background: rgb(223, 227, 231); flex: 0 0 auto;}
+.automations-tabs-row #automationsCloseBtn{align-self: center; margin: 0px 8px 0px auto; width: 32px; height: 32px; border-radius: 50%; color: rgb(71, 71, 71);}
+.automations-tabs-row #automationsCloseBtn:hover{background: rgba(0, 0, 0, 0.06); color: rgb(31, 31, 31);}
+.automations-bar{display: flex; align-items: center; gap: 8px; height: 42px; padding: 4px 8px; background: rgb(255, 255, 255); border-bottom: 1px solid rgb(227, 227, 227); flex: 0 0 auto;}
+.automations-bar-btn{display: inline-flex; align-items: center; justify-content: center;}
+.automations-bar .local-browser-btn{width: 32px; height: 32px; border-radius: 50%; color: rgb(71, 71, 71);}
+.automations-bar .local-browser-btn:hover{background: rgba(0, 0, 0, 0.06); color: rgb(31, 31, 31);}
+.automations-summary{flex: 1 1 0%; min-width: 0px; font-size: 13px; color: var(--sand-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.automations-add-wrap{position: relative; flex: 0 0 auto;}
+.automations-add-wrap svg{width: 18px; height: 18px; fill: none; stroke: currentcolor; stroke-width: 1.8; stroke-linecap: round;}
+.automations-body{flex: 1 1 0%; min-height: 0px; overflow: auto; padding: 8px 24px 40px;}
+.automations-content{max-width: 760px; margin: 0px auto;}
+.automations-row-side{font-size: 12px; color: var(--sand-text-tertiary); white-space: nowrap;}
+@keyframes automations-live { 
+  50% { opacity: 0.35; }
+}
+.automations-detail-head{display: flex; align-items: flex-start; gap: 12px; margin: 6px 0px 14px;}
+.automations-detail-title{font-size: 20px; font-weight: 500; line-height: 1.3;}
+.automations-detail-sub{margin-top: 3px; font-size: 13px; color: var(--sand-text-tertiary);}
+.automations-detail-head .automations-row-side{margin-left: auto; padding-top: 5px;}
+.automations-steps{list-style: none; margin: 0px; padding: 0px;}
+.automations-step{display: grid; grid-template-columns: 24px minmax(0px, 1fr); gap: 10px; padding: 11px 0px; border-top: 1px solid var(--sand-border-subtle); font-size: 14px; line-height: 1.45;}
+.automations-step-n{display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--sand-text-tertiary); padding-top: 2px;}
+.automations-step{grid-template-columns: 40px minmax(0px, 1fr);}
+@keyframes automations-spin { 
+  100% { transform: rotate(360deg); }
+}
+.automations-actions{display: flex; gap: 8px; margin-top: 18px;}
+.local-browser-overlay{position: fixed; inset: 0px; z-index: 120; display: none; background: rgb(255, 255, 255); font-family: var(--styled-sans);}
+.local-browser-overlay.open{display: block;}
+.local-browser-window{position: absolute; inset: 0px; display: flex; flex-direction: column; min-width: 0px; min-height: 0px; background: rgb(255, 255, 255); overflow: hidden;}
+.local-browser-dot{width: 8px; height: 8px; border-radius: 50%; background: rgb(74, 222, 128); flex: 0 0 auto; cursor: default; position: relative;}
+.local-browser-btn{appearance: none; border: 0px; background: transparent; color: rgb(107, 110, 104); width: 28px; height: 28px; border-radius: 7px; cursor: pointer; font: 15px/1 var(--styled-sans); flex: 0 0 auto;}
+.local-browser-btn:hover:not(:disabled){background: rgba(0, 0, 0, 0.04); color: rgb(48, 48, 46);}
+.local-browser-btn:disabled{cursor: default; opacity: 0.35;}
+.local-browser-btn svg{display: block; width: 18px; height: 18px; margin: auto; fill: none; stroke: currentcolor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;}
+.local-browser-toolbar{height: 44px; min-height: 44px; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--sand-border-subtle); background: rgb(247, 247, 245);}
+.local-browser-search-engine{display: flex; align-items: center; gap: 2px; flex: 0 0 auto; height: 32px; padding: 2px; border: 1px solid rgb(208, 210, 206); border-radius: 9px; background: rgb(255, 255, 255);}
+.local-browser-search-engine-btn{appearance: none; display: grid; place-items: center; width: 27px; height: 26px; padding: 5px; border: 0px; border-radius: 6px; background: transparent; cursor: pointer; outline: none;}
+.local-browser-search-engine-btn[aria-pressed="true"]{background: rgb(236, 236, 234); box-shadow: rgb(216, 216, 212) 0px 0px 0px 1px inset;}
+.local-browser-search-engine-btn:hover{background: rgb(242, 242, 239);}
+.local-browser-url-wrap{position: relative; flex: 1 1 0%; min-width: 0px; display: flex;}
+.local-browser-toolbar input{appearance: none; min-width: 0px; flex: 1 1 0%; height: 32px; padding: 0px 11px; border: 1px solid rgb(208, 210, 206); border-radius: 9px; background: rgb(255, 255, 255); color: rgb(32, 33, 36); caret-color: rgb(32, 33, 36); font: 13px / 1.2 ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; margin: 0px 4px;}
+.local-browser-toolbar input:focus{border-color: var(--sand-fill-accent); box-shadow: 0 0 0 2px var(--sand-fill-accent-subtle);}
+.local-browser-go-btn{appearance: none; height: 32px; padding: 0px 12px; border: 1px solid rgb(32, 33, 36); border-radius: 8px; background: rgb(32, 33, 36); color: rgb(255, 255, 255); font: 12px var(--styled-sans); cursor: pointer;}
+.local-browser-go-btn:hover{background: rgb(54, 56, 59);}
+.local-browser-share-btn{appearance: none; display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; padding: 0px; border: 1px solid rgb(208, 210, 206); border-radius: 8px; background: rgb(237, 237, 235); color: rgb(140, 143, 137);}
+.local-browser-share-btn svg{width: 17px; height: 17px; fill: none; stroke: currentcolor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;}
+.local-browser-share-btn:disabled{cursor: default; opacity: 0.62;}
+.local-browser-screen{position: relative; display: flex; flex: 1 1 0%; min-width: 0px; min-height: 0px; background: rgb(255, 255, 255); overflow: hidden;}
+.native-browser-tabs-row{display: flex; align-items: center; background: rgb(237, 237, 235); flex: 0 0 auto;}
+.native-browser-tabs{display: flex; align-items: center; gap: 4px; min-height: 36px; padding: 4px 8px; background: rgb(237, 237, 235); overflow-x: auto; flex: 1 1 0%; min-width: 0px;}
+.native-browser-tabs-row .local-browser-close-btn{flex: 0 0 auto; margin: 0px 6px 0px 2px;}
+.mia-tab{display: flex; flex: 0 1 190px; min-width: 100px; max-width: 220px; border-radius: 7px; background: rgb(225, 225, 223);}
+.mia-tab.active{background: rgb(255, 255, 255); box-shadow: rgba(0, 0, 0, 0.05) 0px 1px 3px;}
+.mia-tab button, .native-browser-new-tab{appearance: none; border: 0px; background: transparent; color: rgb(48, 48, 46); padding: 6px 9px; font: 12px/18px var(--styled-sans); cursor: pointer;}
+.mia-tab button[role="tab"]{display: flex; align-items: center; gap: 6px; min-width: 0px; flex: 1 1 0%; text-align: left;}
+.mia-tab-icon{width: 14px; height: 14px; flex: 0 0 auto; border-radius: 3px;}
+.mia-tab-label{min-width: 0px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.mia-tab button.mia-tab-close{flex: 0 0 auto; padding: 6px; width: 27px;}
+.native-browser-new-tab{flex: 0 0 auto; font-size: 18px; border-radius: 6px;}
+.mia-tab button:hover, .native-browser-new-tab:hover{background: rgba(0, 0, 0, 0.04); border-radius: 6px;}
+.local-browser-snapshot{position: absolute; inset: 0px; z-index: 1; width: 100%; height: 100%; object-fit: fill; pointer-events: none; user-select: none;}
+.local-browser-snapshot[hidden]{display: none;}
+.local-browser-downloads{position: absolute; top: 6px; right: var(--downloads-right,8px); z-index: 3; width: min(380px, 100% - 16px); max-height: min(520px, 100% - 12px); display: flex; flex-direction: column; background: rgb(255, 255, 255); border-radius: 12px; box-shadow: rgba(0, 0, 0, 0.06) 0px 0px 0px 1px, rgba(0, 0, 0, 0.24) 0px 12px 32px -6px, rgba(0, 0, 0, 0.08) 0px 2px 6px; overflow: hidden; transform-origin: right top; animation: 0.14s ease-out 0s 1 normal none running local-browser-menu-in; font: 13px / 1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: rgb(31, 31, 31);}
+@keyframes local-browser-menu-in { 
+  0% { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  100% { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce){
+.local-browser-downloads{animation: auto ease 0s 1 normal none running none;}
+}
+.local-browser-downloads[hidden]{display: none;}
+.local-browser-downloads-head{display: flex; align-items: center; gap: 6px; padding: 12px 10px 8px 16px;}
+.local-browser-downloads-head h2{flex: 1 1 0%; margin: 0px; font: 600 14px / 1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;}
+.local-browser-downloads-clear{appearance: none; border: 0px; border-radius: 6px; background: transparent; color: rgb(11, 87, 208); padding: 5px 8px; font: 500 12px / 1 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; cursor: pointer;}
+.local-browser-downloads-clear:hover{background: rgba(11, 87, 208, 0.08);}
+.local-browser-downloads-clear:disabled{cursor: default; color: rgb(154, 160, 166); background: transparent;}
+.local-browser-downloads-icon-btn{appearance: none; flex: 0 0 auto; display: grid; place-items: center; width: 28px; height: 28px; padding: 0px; border: 0px; border-radius: 50%; background: transparent; color: rgb(71, 71, 71); cursor: pointer;}
+.local-browser-downloads-icon-btn svg{width: 16px; height: 16px; fill: none; stroke: currentcolor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;}
+.local-browser-downloads-icon-btn:hover{background: rgba(0, 0, 0, 0.06); color: rgb(31, 31, 31);}
+.local-browser-downloads-search{display: flex; align-items: center; gap: 8px; margin: 0px 12px 6px; padding: 0px 12px; height: 34px; border-radius: 17px; background: rgb(241, 243, 244); color: rgb(95, 99, 104);}
+.local-browser-downloads-search svg{flex: 0 0 auto; width: 16px; height: 16px; fill: none; stroke: currentcolor; stroke-width: 1.8; stroke-linecap: round;}
+.local-browser-downloads-search input{flex: 1 1 0%; min-width: 0px; border: 0px; background: transparent; outline: none; color: rgb(31, 31, 31); font: 13px / 1 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;}
+.local-browser-downloads-list{flex: 1 1 0%; min-height: 0px; overflow-y: auto; padding: 0px 6px 8px;}
+@keyframes local-browser-download-slide { 
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.local-browser-downloads-empty{margin: 20px 24px 24px; text-align: center; color: rgb(95, 99, 104); font-size: 12px;}
+.local-browser-downloads-btn{position: relative;}
+.local-browser-empty{position: absolute; inset: 0px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--sand-text-secondary); font-size: 13px; text-align: center;}
+.local-browser-blocked{position: absolute; inset: 0px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; color: var(--sand-text-secondary); font-size: 13px; text-align: center;}
+.local-browser-blocked[hidden]{display: none;}
+.local-browser-blocked a{color: var(--sand-text-accent); text-decoration: underline;}
+.local-browser-empty-title{font-size: 17px; color: var(--sand-text-primary);}
+.local-browser-home{display: flex; flex-direction: column; align-items: center; width: min(720px, 100% - 32px);}
+.local-browser-home-logo{display: block; width: 96px; height: 96px; color: var(--sand-text-primary);}
+.local-browser-home-logo svg{display: block; width: 96px; height: 96px;}
+.local-browser-home-logo circle{opacity: 0; animation: 0.5s ease 0s 1 normal forwards running browserHomeDot;}
+.local-browser-home-title{margin: 18px 0px 36px; font-size: 34px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.1; color: var(--sand-text-primary); opacity: 0; animation: 0.6s ease 0.45s 1 normal forwards running browserHomeIn;}
+.local-browser-home-title span{color: rgb(200, 150, 46);}
+@keyframes browserHomeDot { 
+  100% { opacity: 1; }
+}
+@keyframes browserHomeIn { 
+  100% { opacity: 1; transform: none; }
+}
+.local-browser-suggest-next{width: 100%;}
+.local-browser-suggest-next[hidden]{display: none;}
+.local-browser-suggest-next-list{display: grid; grid-template-columns: repeat(3, minmax(0px, 1fr)); gap: 10px; width: 100%;}
+@keyframes browserSuggestGo { 
+  0% { transform: none; opacity: 1; }
+  45% { transform: translate(6px, -6px); opacity: 0; }
+  46% { transform: translate(-5px, 5px); opacity: 0; }
+  100% { transform: none; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce){
+.local-browser-home-logo circle, .local-browser-home-title{animation: auto ease 0s 1 normal none running none; opacity: 1; transform: none;}
+}
+@media (max-width: 640px){
+.local-browser-suggest-next-list{grid-template-columns: minmax(0px, 1fr);}
+}
+.local-browser-overlay, .local-browser-window{font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;}
+.native-browser-tabs-row{min-height: 52px; background: rgb(223, 227, 231); padding-top: 18px; align-items: flex-end;}
+.native-browser-tabs{gap: 0px; min-height: 34px; padding: 0px 8px; background: transparent; align-items: flex-end; overflow-y: hidden; scrollbar-width: none;}
+.native-browser-tabs::-webkit-scrollbar{display: none;}
+.mia-tab{position: relative; isolation: isolate; flex: 0 5 220px; min-width: 32px; container-type: inline-size; max-width: 240px; height: 34px; align-items: center; border-radius: 10px 10px 0px 0px; background: transparent; box-shadow: none;}
+.mia-tab:not(.active):hover::after{content: ""; position: absolute; inset: 4px 2px; z-index: -1; border-radius: 8px; background: rgba(0, 0, 0, 0.06); pointer-events: none;}
+.mia-tab.active{z-index: 1; background: rgb(255, 255, 255); box-shadow: none;}
+.mia-tab.active{flex-shrink: 1; min-width: 64px;}
+.mia-tab.active::before, .mia-tab.active::after{content: ""; position: absolute; bottom: 0px; width: 10px; height: 10px; pointer-events: none;}
+.mia-tab.active::before{left: -10px; background: radial-gradient(circle at 0px 0px, transparent 10px, rgb(255, 255, 255) 10.5px);}
+.mia-tab.active::after{right: -10px; background: radial-gradient(circle at 100% 0px, transparent 10px, rgb(255, 255, 255) 10.5px);}
+.mia-tab:not(.active):not(:hover) + .mia-tab:not(.active):not(:hover)::before{content: ""; position: absolute; left: 0px; top: 9px; bottom: 9px; width: 1px; background: rgb(168, 173, 179);}
+.mia-tab button, .native-browser-new-tab{color: rgb(31, 31, 31); font-family: inherit; font-size: 12px; line-height: 18px;}
+.mia-tab button[role="tab"]{gap: 8px; padding: 6px 6px 6px 12px;}
+.mia-tab:not(.active) button[role="tab"]{color: rgb(71, 71, 71);}
+.mia-tab-icon{width: 16px; height: 16px; border-radius: 2px;}
+.mia-tab button:hover{background: transparent;}
+.mia-tab button.mia-tab-close{width: 20px; height: 20px; padding: 0px; margin-right: 8px; border-radius: 50%; font-size: 15px; line-height: 20px; color: rgb(71, 71, 71); opacity: 0;}
+.mia-tab.active button.mia-tab-close, .mia-tab:hover button.mia-tab-close{opacity: 1;}
+.mia-tab button.mia-tab-close:hover{background: rgba(0, 0, 0, 0.1); border-radius: 50%;}
+.mia-tab button.native-browser-bot-tabs{flex: 0 0 auto; height: 18px; margin-right: 4px; padding: 0px 6px; border: 1px solid var(--tab-group-color,#474747); border-radius: 9px; font-size: 11px; line-height: 16px; color: var(--tab-group-color,#474747); background: transparent; cursor: pointer;}
+.mia-tab button.native-browser-bot-tabs:hover{background: color-mix(in srgb,var(--tab-group-color,#474747) 12%,transparent);}
+.mia-tab button.native-browser-bot-tabs.working::after{content: ""; display: inline-block; width: 5px; height: 5px; margin-left: 4px; border-radius: 50%; background: currentcolor; vertical-align: 1px;}
+@keyframes native-browser-bot-tabs-open { 
+  0% { opacity: 0; transform: scaleY(0.92); }
+  100% { opacity: 1; transform: none; }
+}
+.native-browser-new-tab{width: 28px; height: 28px; padding: 0px; margin: 0px 0px 3px 4px; border-radius: 50%; font-size: 18px; line-height: 28px; color: rgb(71, 71, 71);}
+.native-browser-new-tab:hover{background: rgba(0, 0, 0, 0.1); border-radius: 50%;}
+[data-group-color="blue"]{--tab-group-color: #1a73e8;}
+[data-group-color="mia"]{--tab-group-color: #000;}
+.native-browser-group-head{flex: 0 1 auto; min-width: 36px; align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; max-width: 200px; height: 34px; margin-left: 8px; padding: 0px 6px 0px 2px; box-shadow: inset 0 -2px 0 var(--tab-group-color); app-region: no-drag;}
+.native-browser-group{appearance: none; flex: 0 1 auto; min-width: 0px; height: 22px; padding: 0px 9px; border: 0px; border-radius: 6px; background: var(--tab-group-color); color: rgb(255, 255, 255); font: 600 12px / 22px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;}
+.native-browser-group:hover{filter: brightness(1.08);}
+.mia-tab-working{flex: 0 0 auto; margin-left: 6px;}
+.local-browser-bot-control{flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; margin-left: 8px; padding: 3px 3px 3px 10px; border-radius: 999px; background: transparent; box-shadow: none; font-size: 12.5px; color: rgb(58, 58, 56); white-space: nowrap; app-region: no-drag;}
+.local-browser-bot-control strong{font-weight: 600; color: rgb(26, 26, 25);}
+.local-browser-bot-control::before{content: ""; width: 8px; height: 8px; margin-right: -2px; border-radius: 2px; background: var(--mia-gold,#C9962B); animation: 1.1s steps(2, start) 0s infinite normal none running native-browser-bot-blink;}
+@keyframes native-browser-bot-blink { 
+  100% { visibility: hidden; }
+}
+.local-browser-take-over{appearance: none; border: 0px; border-radius: 999px; padding: 4px 11px; background: rgb(26, 26, 25); color: rgb(255, 255, 255); font-style: inherit; font-variant: inherit; font-stretch: inherit; font-size: inherit; line-height: inherit; font-family: inherit; font-optical-sizing: inherit; font-size-adjust: inherit; font-kerning: inherit; font-feature-settings: inherit; font-variation-settings: inherit; font-language-override: inherit; font-weight: 600; cursor: pointer;}
+.local-browser-take-over:hover{background: rgb(0, 0, 0);}
+.local-browser-follow{appearance: none; border: 1px solid rgb(201, 201, 198); border-radius: 999px; padding: 3px 10px; background: rgb(255, 255, 255); color: rgb(26, 26, 25); font-style: inherit; font-variant: inherit; font-stretch: inherit; font-size: inherit; line-height: inherit; font-family: inherit; font-optical-sizing: inherit; font-size-adjust: inherit; font-kerning: inherit; font-feature-settings: inherit; font-variation-settings: inherit; font-language-override: inherit; font-weight: 600; cursor: pointer;}
+.local-browser-follow:hover{background: rgb(242, 242, 240);}
+@media (prefers-reduced-motion: reduce){
+.local-browser-bot-control::before{animation: auto ease 0s 1 normal none running none;}
+}
+.native-browser-group-owner{appearance: none; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0px; padding: 0px; border: 0px; border-radius: 50%; background: transparent; cursor: pointer;}
+.native-browser-group-owner img{width: 26px; height: 27px; display: block; object-fit: contain;}
+.native-browser-group-owner.mia img{width: 18px; height: 18px;}
+.native-browser-group-name{flex: 0 0 auto; align-self: center; width: 130px; height: 22px; margin: 0px; padding: 0px 8px; border: 2px solid var(--tab-group-color); border-radius: 6px; background: rgb(255, 255, 255); color: rgb(31, 31, 31); font: 12px / 18px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; outline: none; app-region: no-drag;}
+.mia-tab.in-group{box-shadow: inset 0 -2px 0 var(--tab-group-color);}
+.mia-tab.in-group.active{box-shadow: none;}
+.mia-tab-group-ring{position: absolute; inset: 0px 0px 12px; z-index: 1; border-bottom: 0px; border-radius: 10px 10px 0px 0px; pointer-events: none;}
+.mia-tab-group-ring::before, .mia-tab-group-ring::after{content: ""; position: absolute; bottom: -12px; width: 12px; height: 12px; box-sizing: border-box; border: 0 solid var(--tab-group-color);}
+.mia-tab-group-ring::before{left: -12px; border-width: 0px 2px 2px 0px; border-bottom-right-radius: 12px;}
+.mia-tab-group-ring::after{right: -12px; border-width: 0px 0px 2px 2px; border-bottom-left-radius: 12px;}
+.native-browser-group-head{position: relative;}
+.native-browser-tabs-row .local-browser-btn{margin-bottom: 3px; border-radius: 50%;}
+.native-browser-tabs-row .local-browser-close-btn{align-self: center; width: 32px; height: 32px; margin: 0px 8px 0px 0px; color: rgb(71, 71, 71);}
+.native-browser-tabs .native-browser-new-tab{align-self: center; flex: 0 0 auto; position: sticky; right: 0px; display: grid; place-items: center; width: 32px; height: 32px; margin: 0px 0px 0px 4px; padding: 0px; background: rgb(223, 227, 231); app-region: no-drag;}
+.native-browser-tabs .native-browser-new-tab:hover{background: rgb(207, 212, 217);}
+.native-browser-tabs .native-browser-new-tab svg{width: 18px; height: 18px; fill: none; stroke: currentcolor; stroke-width: 2; stroke-linecap: round;}
+.native-browser-tabs-row .local-browser-close-btn:hover{background: rgba(0, 0, 0, 0.06); color: rgb(31, 31, 31);}
+.native-browser-tabs-row .local-browser-close-btn svg{width: 18px; height: 18px; stroke-width: 2;}
+.local-browser-toolbar{position: relative; height: 42px; min-height: 42px; gap: 2px; padding: 4px 8px; background: rgb(255, 255, 255); border-bottom: 1px solid rgb(227, 227, 227);}
+.local-browser-toolbar .local-browser-dot{display: none;}
+.local-browser-toolbar .local-browser-btn{width: 32px; height: 32px; border-radius: 50%; color: rgb(71, 71, 71);}
+.local-browser-toolbar .local-browser-btn:hover:not(:disabled){background: rgba(0, 0, 0, 0.06); color: rgb(31, 31, 31);}
+.local-browser-toolbar .local-browser-btn svg{width: 18px; height: 18px; stroke-width: 2;}
+.local-browser-url-wrap{align-items: center; height: 34px; margin: 0px 6px; border-radius: 17px; background: rgb(237, 242, 250); transition: background 0.12s;}
+.local-browser-url-wrap:hover{background: rgb(227, 232, 239);}
+.local-browser-search-engine{height: 26px; margin-left: 4px; padding: 0px; gap: 0px; border: 0px; border-radius: 13px; background: transparent;}
+.local-browser-search-engine-btn{width: 26px; height: 26px; padding: 5px; border-radius: 50%; opacity: 0.45;}
+.local-browser-search-engine-btn[aria-pressed="true"]{background: transparent; box-shadow: none; opacity: 1;}
+.local-browser-search-engine-btn:hover{background: rgba(0, 0, 0, 0.06); opacity: 1;}
+.local-browser-toolbar input{height: 34px; margin: 0px; padding: 0px 14px 0px 6px; border: 0px; border-radius: 0px 17px 17px 0px; background: transparent; color: rgb(31, 31, 31); font-family: inherit; font-size: 15px; line-height: 1.2; -webkit-font-smoothing: auto;}
+.local-browser-toolbar input:focus{border: 0px; box-shadow: none;}
+.local-browser-go-btn, .local-browser-share-btn{display: none;}
+@keyframes local-browser-loading { 
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+.local-browser-mia-resize{display: none;}
+body.browser-collab-mode .local-browser-mia-resize{display: block; position: fixed; z-index: 125; top: 0px; bottom: 0px; right: calc(var(--browser-mia-pane-width) - 7px); width: 7px; cursor: col-resize; app-region: no-drag;}
+body.browser-collab-mode .local-browser-mia-resize::after{content: ""; position: absolute; top: 0px; bottom: 0px; left: 0px; width: 2px; background: transparent; transition: background 0.12s;}
+body.browser-collab-mode .local-browser-mia-resize:hover::after{background: rgb(11, 87, 208);}
+.local-browser-mia-toggle[aria-pressed="true"]{color: rgb(11, 87, 208) !important;}
+.local-browser-sidebar-btn{display: none;}
+body.browser-collab-mode .local-browser-sidebar-btn{display: inline-flex;}
+body.browser-collab-mode{--browser-mia-pane-width: calc(var(--sand-sidebar-width) + var(--workspace-rail-width)); --chat-compact-preview-lines: 3; --chat-compact-preview-line-height: 20px;}
+body.browser-collab-mode .local-browser-overlay.open{right: var(--browser-mia-pane-width);}
+body.browser-collab-mode .chat-app{z-index: 121; inset: 0px 0px 0px auto; width: var(--browser-mia-pane-width); border-left: 1px solid var(--sand-border-default); background: var(--sand-bg-base); position: fixed !important; display: flex !important;}
+body.browser-collab-mode .chat-main-col{display: flex; flex: 1 1 auto; min-width: 0px;}
+body.styled-skin.browser-collab-mode .chat-msg-row.is-direct{padding-right: 5%;}
+body.styled-skin.browser-collab-mode .chat-msg-row.is-direct.is-you{padding-left: 5%; padding-right: 0px;}
+body.styled-skin.browser-collab-mode .chat-msg-row.is-direct .chat-msg-body{flex: 1 1 auto; max-width: 100%;}
+body.styled-skin.browser-collab-mode .chat-msg-row.is-direct .chat-msg-text{max-width: 100%;}
+body.styled-skin .styled-btn-secondary{height: 32px; font-size: 13px;}
+@media (max-width: 1100px){
+body.styled-skin .chat-app{position: relative;}
+}
+body.styled-skin .cc-input:disabled{cursor: default;}
+body.styled-skin .automation-proposal-answered{margin-top: 8px; padding: 10px 12px; border: 1px solid var(--sand-border-default); border-radius: 12px; background: var(--sand-fill-secondary); font-size: 13px; line-height: 1.45; color: var(--sand-text-primary);}
+body.styled-skin .automation-proposal-open{margin-left: 6px; padding: 0px; border: 0px; background: none; color: var(--sand-text-primary); font: inherit; text-decoration: underline; cursor: pointer;}
+@media (max-width: 1100px){
+body.styled-skin .chat-layout{grid-template-columns: calc(var(--sand-sidebar-width) + var(--workspace-rail-width)) minmax(0,1fr) !important;}
+body.styled-skin .chat-expandable-preview{max-height: clamp(64px, -44px + 25vh, 176px); overflow: hidden; mask-image: linear-gradient(rgb(0, 0, 0) 0px, rgb(0, 0, 0) calc(100% - 22px), transparent 100%); mask-repeat: no-repeat;}
+}
+@media (max-width: 760px){
+body.styled-skin .app-shell{height: var(--mia-mobile-viewport-height,100dvh); min-height: var(--mia-mobile-viewport-height,100dvh); max-height: var(--mia-mobile-viewport-height,100dvh); overflow: hidden;}
+body.styled-skin .chat-layout{grid-template-columns: 1fr !important;}
+body.styled-skin .chat-app{display: none;}
+body.styled-skin.chat-room-open .chat-app{display: flex;}
+body.styled-skin .ch-left{min-width: 0px;}
+body.styled-skin .channel-header{padding-left: 8px;}
+body.styled-skin .chat-msg-row.is-direct{padding-right: 8%;}
+body.styled-skin .chat-msg-row.is-direct.is-you{padding-right: 0px; padding-left: 8%;}
+body.styled-skin .chat-msg-row.is-direct .chat-msg-body{max-width: 92%;}
+body.styled-skin .chat-msg-text{max-width: 100%;}
+body.styled-skin .chat-composer-wrap{padding-bottom: calc(10px + env(safe-area-inset-bottom,0px));}
+}
+.chat-composer-wrap{position: relative;}
+body.styled-skin .channel-header, .native-browser-tabs-row, .automations-tabs-row{background: var(--mia-canvas);}
+.native-browser-tabs-row, .automations-tabs-row{box-shadow: inset 0 -1px 0 var(--sand-border-subtle);}
+.native-browser-tabs-row, .automations-tabs-row{min-height: 37px; padding-top: 3px;}
+body.styled-skin .channel-header{height: 37px; min-height: 37px; box-sizing: border-box; padding-top: 3px;}
+span.mia-tab-icon{display: inline-grid; place-items: center;}
+.mia-tab-icon > svg{width: 100%; height: 100%; fill: none; stroke: currentcolor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0.75;}
+body.browser-collab-mode .automations-overlay.open, body.browser-collab-mode .local-browser-overlay.open{border-right: 1px solid var(--sand-border-default);}
+.automations-tabs-row{padding-left: 0px;}
+.automations-tabs{display: flex; align-items: flex-end; flex: 1 1 0%; min-width: 0px; align-self: stretch;}
+ .automations-tabs .mia-tab-icon, .mia-tab.mix-foreign .mia-tab-icon{display: grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; overflow: hidden;}
+ .automations-tabs .mia-tab-icon > svg, .mia-tab.mix-foreign .mia-tab-icon > svg{width: 16px; height: 16px; fill: none; stroke: rgb(71, 71, 71); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;}
+ .automations-tabs .mia-tab-icon img, .mia-tab.mix-foreign .mia-tab-icon img{width: 18px !important; height: 18px !important;}
+.local-browser-view-tools{display: flex; align-items: center; gap: 4px; flex: 0 0 auto; min-width: 0px;}
+.local-browser-view-tools > .ch-right{position: relative; gap: 4px;}
+.local-browser-view-tools > *{position: static; height: auto; min-height: 0px; margin: 0px; padding: 0px; border: 0px; background: transparent; box-shadow: none;}
+ .local-browser-toolbar[data-view="automations"]{flex: 0 0 auto;}
+body:not(.browser-collab-mode).left-pane-closed .chat-layout{grid-template-columns: minmax(0px, 1fr) !important;}
+.local-browser-view-tools #automationsSidebarBtn{display: none;}
+.local-browser-sidebar-btn{position: relative;}
+ .local-browser-view-tools .ch-right{background: transparent !important;}
+.conv-more{position: relative; display: flex; align-items: center;}
+.conv-more-btn{width: 32px !important; height: 32px !important; border-radius: 50% !important; color: rgb(71, 71, 71) !important;}
+.conv-more-btn:hover{background: rgba(0, 0, 0, 0.06) !important; color: rgb(31, 31, 31) !important;}
+.conv-more-btn svg{width: 18px; height: 18px; fill: currentcolor; stroke: none;}
+.conv-more-menu.channel-menu{top: calc(100% + 6px); left: auto; right: 0px; min-width: 260px; padding: 6px 0px; background: rgb(255, 255, 255); border: 0px; border-radius: 12px; box-shadow: rgba(0, 0, 0, 0.12) 0px 2px 6px, rgba(0, 0, 0, 0.16) 0px 8px 24px; z-index: 140;}
+
+/* The active grouped tab's outline: Chrome drops this border when it copies a rule that mixes var() with border-bottom:0. */
+.mia-tab-group-ring{border:2px solid var(--tab-group-color);border-bottom:0;}
+/* demo only */
+html,body{overflow:hidden;}
+.demo-in{animation:demoIn .28s ease-out both;}
+@keyframes demoIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+.demo-hide{display:none !important;}
+.demo-press{transform:scale(.94);transition:transform .12s;}
+.local-browser-bot-control[hidden],.demo-pages[hidden]{display:none !important;}
+.demo-ch-mia{width:22px;height:22px;display:block;}
+.local-browser-search-engine-btn .demo-search-icon{width:16px;height:16px;fill:none;stroke:#5b6470;stroke-width:2;stroke-linecap:round;}
+.demo-cursor{position:fixed;left:0;top:0;width:22px;height:22px;z-index:900;pointer-events:none;opacity:0;transition:transform .75s cubic-bezier(.4,0,.2,1),opacity .25s;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35));}
+.demo-cursor.on{opacity:1;}
+.demo-cursor::after{content:"";position:absolute;left:-9px;top:-9px;width:18px;height:18px;border-radius:50%;background:rgba(52,120,212,.35);transform:scale(0);opacity:0;}
+.demo-cursor.click::after{animation:demoClick .45s ease-out;}
+@keyframes demoClick{0%{transform:scale(.2);opacity:1;}100%{transform:scale(2.2);opacity:0;}}
+/* A macOS-style context menu, like the app's native menus. */
+.demo-menu{position:fixed;z-index:800;min-width:210px;padding:5px;border-radius:9px;background:rgba(242,242,242,.96);box-shadow:0 0 0 .5px rgba(0,0,0,.22),0 10px 30px rgba(0,0,0,.22);font:13px/1 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#1d1d1f;animation:demoMenu .12s ease-out;}
+@keyframes demoMenu{from{opacity:0;transform:scale(.97);}to{opacity:1;transform:none;}}
+.demo-menu div{display:flex;align-items:center;gap:6px;height:22px;padding:0 12px 0 22px;border-radius:4px;position:relative;white-space:nowrap;}
+.demo-menu div.off{color:#a8a8ac;}
+.demo-menu div.hi{background:#0a64d8;color:#fff;}
+.demo-menu div i{position:absolute;left:7px;font-style:normal;font-size:12px;}
+.demo-menu div img{width:15px;height:15px;}
+.demo-menu hr{border:0;border-top:1px solid rgba(0,0,0,.12);margin:5px 10px;}
+/* Pages shown in the browser viewport. */
+.demo-pages{position:absolute;inset:0;background:#fff;overflow:hidden;}
+.demo-page{position:absolute;inset:0;overflow:hidden;font:14px/1.5 "Instrument Sans",system-ui,sans-serif;color:#1d1d1f;background:#fff;}
+.demo-page.demo-in{animation:demoFade .25s ease-out both;}
+@keyframes demoFade{from{opacity:0;}to{opacity:1;}}
+.ws-top{display:flex;align-items:center;gap:22px;padding:22px 32px 0;}
+.ws-logo{font-weight:700;font-size:18px;letter-spacing:-.01em;color:#2b3440;}
+.ws-box{flex:0 1 560px;display:flex;align-items:center;gap:10px;height:42px;padding:0 16px;border:1px solid #d9dde3;border-radius:21px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+.ws-box .demo-search-icon{width:18px;height:18px;fill:none;stroke:#6b7480;stroke-width:2;stroke-linecap:round;flex:none;}
+.ws-q{font-size:15px;white-space:nowrap;}
+.ws-q.typing::after{content:"";display:inline-block;width:1px;height:17px;background:#1d1d1f;margin-left:1px;vertical-align:-3px;animation:demoBlink 1s steps(1) infinite;}
+@keyframes demoBlink{50%{opacity:0;}}
+.ws-tabs{display:flex;gap:22px;padding:14px 0 0 172px;border-bottom:1px solid #eceef1;font-size:13px;color:#5b6470;}
+.ws-tabs span{padding-bottom:9px;}
+.ws-tabs .on{color:#1d1d1f;border-bottom:2px solid #2b3440;font-weight:600;}
+.ws-body{padding:10px 0 0 172px;max-width:600px;}
+.ws-count{font-size:12.5px;color:#7a828c;margin-bottom:10px;}
+.ws-result{margin-bottom:16px;}
+.ws-site{display:flex;align-items:center;gap:7px;font-size:12px;color:#4a525c;}
+.ws-site img{width:16px;height:16px;}
+.ws-title{display:block;font-size:17px;color:#1a4fb5;margin:2px 0 1px;cursor:default;}
+.ws-result p{margin:0;font-size:13px;color:#4a525c;}
+.ws-result.read .ws-title{color:#6a3fb0;}
+.co-nav{display:flex;align-items:center;gap:10px;padding:18px 40px;border-bottom:1px solid #eee;}
+.co-logo{width:28px;height:28px;border-radius:7px;background:var(--co);color:#fff;display:grid;place-items:center;font-weight:700;}
+.co-links{margin-left:auto;display:flex;gap:24px;font-size:13px;color:#555;}
+.co-hero{margin:28px 40px 0;padding:52px 48px;border-radius:16px;background:linear-gradient(135deg,var(--co),color-mix(in srgb,var(--co) 60%,#000));color:#fff;}
+.co-hero h1{margin:0 0 10px;font-size:34px;line-height:1.15;letter-spacing:-.02em;max-width:560px;}
+.co-hero p{margin:0 0 22px;opacity:.85;font-size:16px;}
+.co-cta{display:inline-block;background:#fff;color:#1d1d1f;border-radius:999px;padding:9px 18px;font-weight:600;font-size:14px;}
+.co-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 40px;}
+.co-cards div{border:1px solid #ececec;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:4px;font-size:13px;color:#555;}
+.co-cards b{color:#1d1d1f;font-size:14px;}
+.rp{background:#f6f6f4;}
+.rp-in{margin:26px auto;max-width:820px;background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:28px 32px;}
+.rp h1{margin:0;font-size:24px;letter-spacing:-.01em;}
+.rp-sub{margin:4px 0 18px;color:#6b6b6f;font-size:13px;}
+.rp table{width:100%;border-collapse:collapse;font-size:12.5px;}
+.rp th,.rp td{text-align:left;padding:7px 8px;border-bottom:1px solid #eeeeef;vertical-align:top;}
+.rp th{color:#6b6b6f;font-weight:600;font-size:11.5px;}
+.rp td small{display:block;color:#8a8a90;font-size:11px;}
+.rp .n{text-align:right;font-variant-numeric:tabular-nums;}
+.rp td small,.rp td:nth-child(3){white-space:nowrap;}
+.chat-msg-text .chat-artifact-card{margin:4px 0 10px;}
+.rp-foot{margin:14px 0 0;color:#8a8a90;font-size:11.5px;}
+.demo-ch-bot{display:block;}
+@media (prefers-reduced-motion: reduce){.demo-in,.demo-page.demo-in{animation:none;}.chat-thinking-shimmer{animation:none;}.demo-cursor{transition:none;}}
+</style></head><body class="styled-skin chat-room-open browser-collab-mode left-pane-closed">
+<div class="app-shell visible" id="appShell">
+  <div class="shell">
+    <main class="content chat-mode" id="mainContent">
+      <section class="panel active" id="panel-chat">
+        <div class="chat-layout" data-shell="">
+          <main class="chat-app">
+            <div class="chat-main-col">
+              <header class="channel-header" id="channelHeader" style="display: flex;"><div class="ch-left"><div class="ch-title-row"><button type="button" class="ch-title-btn" id="channelTitleBtn" aria-haspopup="menu" aria-controls="channelMenu" aria-expanded="false"><span class="ch-mark dm"><img src="assets/favicon.svg" alt="" class="demo-ch-mia"></span><span class="channel-header-title" role="heading" aria-level="1">Mia</span></button></div></div></header>
+              <div class="chat-thread" id="chatThread" data-artifact-preview-wired="1"></div>
+              <div class="chat-composer-wrap" aria-disabled="false">
+                <div class="chat-composer">
+                  <div class="cc-input-row">
+                    <div class="cc-inline-suggestion" id="ccInlineSuggestion" aria-hidden="false"><em class="cc-inline-suggestion-tab">Tab</em><span></span></div>
+                    <textarea class="cc-input" id="ccInput" rows="1" placeholder="" autocomplete="off" data-form-type="other" data-lpignore="true" data-1p-ignore="true" style=""></textarea>
+                  </div>
+                  <div class="cc-bottom-row">
+                    <button type="button" class="cc-plus-btn" id="ccPlusBtn" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">+</button>
+                    <div class="cc-model-select" id="ccModelSelect">
+                      <button type="button" class="cc-model-btn" id="ccModelBtn" aria-haspopup="dialog" aria-expanded="false" aria-label="Choose model">
+                        <svg class="cc-model-bolt" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9 1.5 3 9h4.2L7 14.5 13 7H8.8L9 1.5z"></path></svg><span class="cc-model-tags" id="ccModelTags"><span class="cc-model-placeholder">Model</span></span><span class="caret" aria-hidden="true">›</span>
+                      </button>
+                    </div>
+                    <div class="cc-right-cluster">
+                      <button type="button" class="cc-icon-btn" id="ccMicBtn" title="Dictate" aria-label="Dictate">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line><line x1="8" y1="22" x2="16" y2="22"></line></svg>
+                      </button>
+                      <button type="button" class="cc-send" id="ccSend" title="Send" aria-label="Send" data-stop-task-id=""><svg class="cc-send-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V5M6.5 10.5 12 5l5.5 5.5"></path></svg></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="local-browser-overlay open" id="localBrowserOverlay" aria-hidden="false" data-loading="false">
+  <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
+    <div class="native-browser-tabs-row" id="localBrowserTabsRow">
+      <div class="native-browser-tabs" role="tablist" aria-label="Browser tabs"><div class="mia-tab active" data-tab-id="2" draggable="true"><button type="button" title="New tab" role="tab" aria-selected="true"><span class="mia-tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg></span><span class="mia-tab-label">New tab</span></button><button type="button" class="mia-tab-close" title="Close tab" aria-label="Close tab New tab">×</button></div><button type="button" class="native-browser-new-tab" title="New tab" aria-label="New browser tab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button></div><button type="button" class="local-browser-btn local-browser-close-btn" id="localBrowserCloseBtn" title="Close browser" aria-label="Close browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+    </div>
+    <form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off" data-view="browser">
+      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M9.5 4.5v15"></path></svg>
+      </button>
+      <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled=""><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m0 0 6-6m-6 6 6 6"></path></svg></button>
+      <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled=""><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m0 0-6-6m6 6-6 6"></path></svg></button>
+      <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled=""><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"></path></svg></button>
+      <div class="local-browser-url-wrap">
+        <div class="local-browser-search-engine" id="localBrowserSearchEngine" role="group" aria-label="Search engine">
+          <button type="button" class="local-browser-search-engine-btn" data-search-engine="google" aria-label="Search" title="Search" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true" class="demo-search-icon"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5 20 20"></path></svg></button>
+        </div>
+        <input type="text" id="localBrowserUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search everywhere: your computer, Mia app, web search or type web address" aria-label="Search everywhere or type a web address" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="localBrowserUrlSuggest" aria-invalid="false" class="" style="">
+      </div><div class="local-browser-bot-control" role="status" hidden=""><span><strong>Outreach Bot</strong> has control</span><button type="button" class="local-browser-follow" aria-pressed="false" title="Show the page Outreach Bot works on as it moves between tabs">Follow</button><button type="button" class="local-browser-take-over">Take over</button></div>
+      <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads" data-active="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
+      </button>
+      <button type="button" class="local-browser-btn local-browser-mia-toggle" id="localBrowserMiaToggle" title="Hide Mia" aria-label="Hide Mia" aria-pressed="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M14.5 4.5v15"></path></svg>
+      </button><div class="local-browser-view-tools"><div class="ch-right"><div class="conversation-header-actions conv-more" role="group" aria-label="Conversation actions"><button type="button" class="ch-icon-btn conv-more-btn" id="chatMoreBtn" title="More" aria-label="More" aria-haspopup="menu" aria-controls="channelMenu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg></button></div></div></div>
+    </form>
+    <div class="local-browser-screen" id="localBrowserScreen">
+      <img class="local-browser-snapshot" id="localBrowserSnapshot" alt="" aria-hidden="true" hidden="">
+      <section class="local-browser-downloads" id="localBrowserDownloads" role="dialog" aria-label="Downloads" hidden="">
+        <header class="local-browser-downloads-head">
+          <h2>Downloads</h2>
+          <button type="button" class="local-browser-downloads-clear" id="localBrowserDownloadsClear" title="Clears the list. Your files stay where they are." disabled="">Clear all</button>
+          <button type="button" class="local-browser-downloads-icon-btn" id="localBrowserDownloadsClose" title="Close downloads" aria-label="Close downloads">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+          </button>
+        </header>
+        <label class="local-browser-downloads-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
+          <input type="search" id="localBrowserDownloadsSearch" placeholder="Search downloads" aria-label="Search downloads" autocomplete="off" spellcheck="false" style="">
+        </label>
+        <div class="local-browser-downloads-list" id="localBrowserDownloadsList"></div>
+        <p class="local-browser-downloads-empty" id="localBrowserDownloadsEmpty">Files you download in Mia's browser appear here.</p>
+      </section>
+      <div class="local-browser-empty" id="localBrowserEmpty">
+        <div class="local-browser-home" id="localBrowserHome">
+          <span class="local-browser-home-logo" id="localBrowserHomeLogo" aria-hidden="true"><svg viewBox="0 0 96 96"><circle cx="48" cy="8" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="38" cy="18" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="48" cy="18" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="58" cy="18" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="28" cy="28" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="38" cy="28" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="48" cy="28" r="2.6" fill="currentColor" style="animation-delay:0.1s"></circle><circle cx="58" cy="28" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="68" cy="28" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="18" cy="38" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="28" cy="38" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="38" cy="38" r="2.6" fill="currentColor" style="animation-delay:0.1s"></circle><circle cx="48" cy="38" r="2.6" fill="currentColor" style="animation-delay:0.05s"></circle><circle cx="58" cy="38" r="2.6" fill="currentColor" style="animation-delay:0.1s"></circle><circle cx="68" cy="38" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="78" cy="38" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="8" cy="48" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="18" cy="48" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="28" cy="48" r="2.6" fill="currentColor" style="animation-delay:0.1s"></circle><circle cx="38" cy="48" r="2.6" fill="currentColor" style="animation-delay:0.05s"></circle><circle cx="48" cy="48" r="2.6" fill="currentColor" style="animation-delay:0s"></circle><circle cx="58" cy="48" r="2.6" fill="currentColor" style="animation-delay:0.05s"></circle><circle cx="68" cy="48" r="2.6" fill="currentColor" style="animation-delay:0.1s"></circle><circle cx="78" cy="48" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="88" cy="48" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="18" cy="58" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="28" cy="58" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="38" cy="58" r="2.6" fill="currentColor" style="animation-delay:0.1s"></circle><circle cx="48" cy="58" r="2.6" fill="currentColor" style="animation-delay:0.05s"></circle><circle cx="58" cy="58" r="2.6" fill="currentColor" style="animation-delay:0.1s"></circle><circle cx="68" cy="58" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="78" cy="58" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="28" cy="68" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="38" cy="68" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="48" cy="68" r="2.6" fill="currentColor" style="animation-delay:0.1s"></circle><circle cx="58" cy="68" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="68" cy="68" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="38" cy="78" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="48" cy="78" r="2.6" fill="currentColor" style="animation-delay:0.15000000000000002s"></circle><circle cx="58" cy="78" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle><circle cx="48" cy="88" r="2.6" fill="currentColor" style="animation-delay:0.2s"></circle></svg></span>
+          <h1 class="local-browser-home-title"><span>Mia</span> Browser</h1>
+          <section class="local-browser-suggest-next" id="localBrowserSuggestNext" aria-label="Mia suggests" hidden="">
+            <div class="local-browser-suggest-next-list" id="localBrowserSuggestNextList"></div>
+          </section>
+        </div>
+      </div>
+      <div class="local-browser-blocked" id="localBrowserBlocked" hidden="">
+        <span class="local-browser-empty-title" id="localBrowserBlockedTitle">This page could not be loaded</span>
+        <span id="localBrowserBlockedMessage">The browser reported an error loading this page.</span>
+        <a id="localBrowserBlockedLink" href="#" target="_blank" rel="noopener" hidden="">Open in a browser tab</a>
+      </div>
+    </div>
+  </section>
+</div>
+    <div class="local-browser-mia-resize" role="separator" aria-orientation="vertical" aria-label="Resize Mia panel" title="Drag to resize. Double-click to reset."></div>
+<div class="automations-overlay" id="automationsOverlay" aria-hidden="true" hidden="">
+  <section class="automations-window" aria-label="Automations">
+    <div class="automations-tabs-row">
+      <div class="automations-tabs" id="automationsTabs"><div class="native-browser-tabs" role="tablist" aria-label="Browser tabs"><div class="mia-tab mix-foreign mix-automations" data-tab-id="automations:board" draggable="true"><button type="button" title="Automations" role="tab" aria-selected="false"><span class="mia-tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg></span><span class="mia-tab-label">Automations</span></button><button type="button" class="mia-tab-close" title="Close tab" aria-label="Close tab Automations">×</button></div><div class="mia-tab active mix-foreign mix-automations" data-tab-id="automations:outreach|a1" draggable="true"><button type="button" title="Outreach Bot · Weekly outreach shortlist" role="tab" aria-selected="true"><span class="mia-tab-icon"><img src="assets/mote-outreach.png" alt="" class="mote-avatar-img mote-avatar-img--sales" style="filter:hue-rotate(-30deg) saturate(1.08)" draggable="false"></span><span class="mia-tab-label">Weekly outreach shortlist</span></button><button type="button" class="mia-tab-close" title="Close tab" aria-label="Close tab Weekly outreach shortlist">×</button></div></div></div>
+      <button type="button" class="local-browser-btn automations-bar-btn" id="automationsCloseBtn" title="Close automations" aria-label="Close automations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+    </div><form class="local-browser-toolbar" id="localBrowserForm" autocomplete="off" data-view="automations">
+      <span class="local-browser-dot" id="localBrowserDot" aria-hidden="true" title="Connected" data-status="connected"></span>
+      <button type="button" class="local-browser-btn local-browser-sidebar-btn" id="localBrowserSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M9.5 4.5v15"></path></svg>
+      </button>
+      <button type="button" class="local-browser-btn" id="localBrowserBackBtn" title="Back" aria-label="Back" disabled=""><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m0 0 6-6m-6 6 6 6"></path></svg></button>
+      <button type="button" class="local-browser-btn" id="localBrowserForwardBtn" title="Forward" aria-label="Forward" disabled=""><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m0 0-6-6m6 6-6 6"></path></svg></button>
+      <button type="button" class="local-browser-btn" id="localBrowserReloadBtn" title="Reload" aria-label="Reload" disabled=""><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"></path></svg></button>
+      <div class="local-browser-url-wrap">
+        <div class="local-browser-search-engine" id="localBrowserSearchEngine" role="group" aria-label="Search engine">
+          <button type="button" class="local-browser-search-engine-btn" data-search-engine="google" aria-label="Search" title="Search" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true" class="demo-search-icon"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M15.5 15.5 20 20"></path></svg></button>
+        </div>
+        <input type="text" id="localBrowserUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search everywhere: your computer, Mia app, web search or type web address" aria-label="Search everywhere or type a web address" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="localBrowserUrlSuggest" aria-invalid="false" class="" style="">
+      </div>
+      <button type="submit" class="local-browser-go-btn">Go</button>
+      <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads" data-active="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
+      </button>
+      <button type="button" class="local-browser-btn local-browser-mia-toggle" id="localBrowserMiaToggle" title="Hide Mia" aria-label="Hide Mia" aria-pressed="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M14.5 4.5v15"></path></svg>
+      </button><div class="local-browser-view-tools"><header class="automations-bar">
+      <button type="button" class="local-browser-btn automations-bar-btn" id="automationsSidebarBtn" title="Your bots" aria-label="Open your bots" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M9.5 4.5v15"></path></svg>
+      </button>
+      <span class="automations-summary" id="automationsSummary">1 scheduled</span>
+      <div class="automations-add-wrap">
+        <button type="button" class="local-browser-btn automations-bar-btn" id="automationsAddBtn" title="New automation" aria-label="New automation" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
+      </div>
+    </header><div class="ch-right"><div class="conversation-header-actions conv-more" role="group" aria-label="Conversation actions"><button type="button" class="ch-icon-btn conv-more-btn" id="chatMoreBtn" title="More" aria-label="More" aria-haspopup="menu" aria-controls="channelMenu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg></button><div class="channel-menu conv-more-menu" id="channelMenu" role="menu"></div></div></div></div>
+      <button type="button" class="local-browser-share-btn" id="localBrowserShareBtn" title="Share — coming soon" aria-label="Share — coming soon" disabled="">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
+      </button>
+    </form>
+    <div class="automations-body" id="automationsBody"><div class="automations-content"><div class="automations-detail-head"><div><div class="automations-detail-title">Weekly outreach shortlist</div><div class="automations-detail-sub">Every Monday at 09:00 · Outreach Bot</div></div><span class="automations-row-side"></span></div><ol class="automations-steps"><li class="automations-step" data-state=""><span class="automations-step-n">1</span><span>Search the web for Texas logistics companies with 50 to 200 people</span></li><li class="automations-step" data-state=""><span class="automations-step-n">2</span><span>Open the top results in the Outreach research group</span></li><li class="automations-step" data-state=""><span class="automations-step-n">3</span><span>Skip companies already on earlier lists</span></li><li class="automations-step" data-state=""><span class="automations-step-n">4</span><span>Write outreach-shortlist.html with why each one fits</span></li></ol><div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">Edit</button></div></div></div>
+  </section>
+</div><script>
+(function(){
+  var T = {"you": "<div class=\"chat-msg-row is-direct is-you\" data-can-thread=\"1\" data-can-delete=\"1\" data-can-edit=\"1\"><span class=\"chat-msg-mark\"><span class=\"human-avatar-initials human-avatar-tone-0\">ME</span></span><div class=\"chat-msg-body\"><div class=\"chat-msg-head\"><span class=\"chat-msg-name\">You</span><span class=\"chat-msg-time\">10h ago</span></div><div class=\"chat-msg-text\"><p class=\"chat-md-p\">Can you turn my notes from this week into a short update for the team?</p></div></div></div>", "mia": "<div class=\"chat-msg-row is-direct\" data-can-thread=\"1\" data-can-delete=\"1\" data-can-edit=\"\"><span class=\"chat-msg-mark agent mia-mark-host\"><span class=\"mia-avatar-mark mia-avatar-mark--static\" style=\"width:28px;height:28px\" aria-hidden=\"true\"><span data-mia-mark=\"28\" data-mia-mark-mode=\"static\"><svg class=\"mia-mark\" viewBox=\"-60 -60 120 120\" width=\"28\" height=\"28\" aria-hidden=\"true\"><circle cx=\"0\" cy=\"-48\" r=\"7.8\"></circle><circle cx=\"-24\" cy=\"-24\" r=\"11.7\" class=\"gold\"></circle><circle cx=\"0\" cy=\"-24\" r=\"7.8\"></circle><circle cx=\"24\" cy=\"-24\" r=\"7.8\"></circle><circle cx=\"-48\" cy=\"0\" r=\"7.8\"></circle><circle cx=\"-24\" cy=\"0\" r=\"7.8\"></circle><circle cx=\"0\" cy=\"0\" r=\"11.7\" class=\"gold\"></circle><circle cx=\"24\" cy=\"0\" r=\"7.8\"></circle><circle cx=\"48\" cy=\"0\" r=\"7.8\"></circle><circle cx=\"-24\" cy=\"24\" r=\"7.8\"></circle><circle cx=\"0\" cy=\"24\" r=\"7.8\"></circle><circle cx=\"24\" cy=\"24\" r=\"11.7\" class=\"gold\"></circle><circle cx=\"0\" cy=\"48\" r=\"7.8\"></circle></svg></span></span></span><div class=\"chat-msg-body\"><div class=\"chat-msg-head\"><span class=\"chat-msg-name\">Mia</span><span class=\"chat-msg-tag\">Agent</span><span class=\"chat-msg-time\">10h ago</span></div><div class=\"chat-msg-text\"><p class=\"chat-md-p\">Here's a draft:</p><p class=\"chat-md-p\"><strong>Weekly update \u2014 Oct 27</strong></p><ul class=\"chat-md-list\"><li><strong>Shipped:</strong> new onboarding flow is live for all new signups.</li><li><strong>In progress:</strong> pricing page refresh, due Thursday.</li><li><strong>Blocked:</strong> waiting on final copy for the help center.</li></ul><p class=\"chat-md-p\">Want me to make it shorter or add next week's priorities?</p></div></div></div>", "div": "<div class=\"chat-date-divider\">Today 9:01 AM</div>", "bot": "<div class=\"chat-msg-row is-direct\" data-can-thread=\"1\" data-can-delete=\"1\" data-can-edit=\"\"><span class=\"chat-msg-mark agent\"><img src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" role=\"button\" tabindex=\"0\" aria-label=\"Open Outreach Bot details\" draggable=\"false\"></span><div class=\"chat-msg-body\"><div class=\"chat-msg-head\"><span class=\"chat-msg-name\">Outreach Bot</span><span class=\"chat-msg-tag\">Agent</span><span class=\"chat-msg-time\">10h ago</span></div><div class=\"chat-msg-text\"><p class=\"chat-md-p\">Here's a draft:</p><p class=\"chat-md-p\"><strong>Weekly update \u2014 Oct 27</strong></p><ul class=\"chat-md-list\"><li><strong>Shipped:</strong> new onboarding flow is live for all new signups.</li><li><strong>In progress:</strong> pricing page refresh, due Thursday.</li><li><strong>Blocked:</strong> waiting on final copy for the help center.</li></ul><p class=\"chat-md-p\">Want me to make it shorter or add next week's priorities?</p></div></div></div>"}, S = {"new": "<div class=\"mia-tab active\" data-tab-id=\"2\" draggable=\"true\"><button type=\"button\" title=\"New tab\" role=\"tab\" aria-selected=\"true\"><span class=\"mia-tab-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"></circle><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"></path><path d=\"M2 12h20\"></path></svg></span><span class=\"mia-tab-label\">New tab</span></button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab New tab\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "group_unnamed": "<span class=\"native-browser-group-head unnamed\" data-group-color=\"mia\"><button type=\"button\" class=\"native-browser-group-owner mia\" data-group-color=\"mia\" aria-label=\"Mia works in this group. Click to choose a bot.\"><img src=\"assets/favicon.svg\" alt=\"\"></button><button type=\"button\" class=\"native-browser-group unnamed\" data-group-color=\"mia\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Unnamed group\"></button></span><div class=\"mia-tab active in-group\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"mia\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"New tab\" role=\"tab\" aria-selected=\"true\"><span class=\"mia-tab-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"></circle><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"></path><path d=\"M2 12h20\"></path></svg></span><span class=\"mia-tab-label\">New tab</span></button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab New tab\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "group": "<span class=\"native-browser-group-head\" data-group-color=\"mia\"><button type=\"button\" class=\"native-browser-group-owner mia\" data-group-color=\"mia\" aria-label=\"Mia works in this group. Click to choose a bot.\"><img src=\"assets/favicon.svg\" alt=\"\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"mia\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\">Outreach research</button></span><div class=\"mia-tab active in-group\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"mia\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"New tab\" role=\"tab\" aria-selected=\"true\"><span class=\"mia-tab-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"></circle><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"></path><path d=\"M2 12h20\"></path></svg></span><span class=\"mia-tab-label\">New tab</span></button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab New tab\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "group_owned": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"New tab\" role=\"tab\" aria-selected=\"true\"><span class=\"mia-tab-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"></circle><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"></path><path d=\"M2 12h20\"></path></svg></span><span class=\"mia-tab-label\">New tab</span></button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab New tab\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "search": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open1": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"1 more tab in this group\" aria-label=\"Show 1 more tab in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+1</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open2": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"2 more tabs in this group\" aria-label=\"Show 2 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+2</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open3": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"3 more tabs in this group\" aria-label=\"Show 3 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+3</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open4": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"4 more tabs in this group\" aria-label=\"Show 4 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+4</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open5": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"5 more tabs in this group\" aria-label=\"Show 5 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+5</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open6": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"6 more tabs in this group\" aria-label=\"Show 6 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+6</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open7": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"7 more tabs in this group\" aria-label=\"Show 7 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+7</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open8": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"8 more tabs in this group\" aria-label=\"Show 8 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+8</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open9": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"9 more tabs in this group\" aria-label=\"Show 9 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+9</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "open10": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Web search\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.6' fill='none' stroke='%235b6470' stroke-width='2'/%3E%3Cpath d='M10.3 10.3l4 4' stroke='%235b6470' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Web search</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Web search\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read0": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"10\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Harborline Freight\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231f6fb2'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Harborline Freight</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Harborline Freight\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read1": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"11\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Lone Mesa Logistics\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23c0602b'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Lone Mesa Logistics</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Lone Mesa Logistics\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read2": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"12\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Bluebonnet Cold Chain\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%234b5fc9'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EB%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Bluebonnet Cold Chain</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Bluebonnet Cold Chain\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read3": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"13\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Gulfway Drayage\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230f8a7a'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Gulfway Drayage</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Gulfway Drayage\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read4": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"14\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Prairie Dock Systems\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%237a4bb5'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Prairie Dock Systems</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Prairie Dock Systems\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read5": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"15\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Cedar Ridge Carriers\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%233d7d3a'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Cedar Ridge Carriers</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Cedar Ridge Carriers\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read6": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"16\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Riverbend Fulfillment\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23b23a5b'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Riverbend Fulfillment</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Riverbend Fulfillment\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read7": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"17\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Copperline Transport\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23a8741a'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Copperline Transport</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Copperline Transport\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read8": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"18\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Saltgrass Warehousing\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a7fa8'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Saltgrass Warehousing</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Saltgrass Warehousing\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "read9": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group bot-working\" data-tab-id=\"19\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"Northgate Crossdock\" role=\"tab\" aria-selected=\"true\"><img class=\"mia-tab-icon\" src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%235b6470'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EN%3C/text%3E%3C/svg%3E\" alt=\"\"><span class=\"mia-tab-label\">Northgate Crossdock</span><span class=\"chat-task-dot mia-tab-working\" title=\"Outreach Bot is working here\"></span></button><button type=\"button\" class=\"native-browser-bot-tabs working\" data-group-color=\"blue\" title=\"10 more tabs in this group\" aria-label=\"Show 10 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+10</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab Northgate Crossdock\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "report": "<span class=\"native-browser-group-head\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><button type=\"button\" class=\"native-browser-group-owner\" data-group-color=\"blue\" aria-label=\"Outreach Bot works in this group. Click to change.\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" draggable=\"false\"></button><button type=\"button\" class=\"native-browser-group\" data-group-color=\"blue\" data-group-id=\"g1\" aria-expanded=\"true\" title=\"Outreach research\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">Outreach research</button></span><div class=\"mia-tab active in-group\" data-tab-id=\"30\" draggable=\"true\" data-group-color=\"blue\" style=\"--tab-group-color: hsl(328, 72%, 52%);\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"outreach-shortlist.html\" role=\"tab\" aria-selected=\"true\"><span class=\"mia-tab-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect width=\"7\" height=\"7\" x=\"14\" y=\"3\" rx=\"1\"></rect><path d=\"M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3\"></path></svg></span><span class=\"mia-tab-label\">outreach-shortlist.html</span></button><button type=\"button\" class=\"native-browser-bot-tabs\" data-group-color=\"blue\" title=\"11 more tabs in this group\" aria-label=\"Show 11 more tabs in this group\" aria-haspopup=\"true\" aria-expanded=\"false\" style=\"--tab-group-color: hsl(328, 72%, 52%);\">+11</button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab outreach-shortlist.html\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>", "group_edit": "<span class=\"native-browser-group-head unnamed\" data-group-color=\"mia\"><button type=\"button\" class=\"native-browser-group-owner mia\" data-group-color=\"mia\" aria-label=\"Mia works in this group. Click to choose a bot.\"><img src=\"assets/favicon.svg\" alt=\"\"></button><input type=\"text\" class=\"native-browser-group-name\" maxlength=\"80\" placeholder=\"Name this group\" aria-label=\"Group name\" data-group-color=\"mia\"></span><div class=\"mia-tab active in-group\" data-tab-id=\"2\" draggable=\"true\" data-group-color=\"mia\"><span class=\"mia-tab-group-ring\"></span><button type=\"button\" title=\"New tab\" role=\"tab\" aria-selected=\"true\"><span class=\"mia-tab-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"></circle><path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"></path><path d=\"M2 12h20\"></path></svg></span><span class=\"mia-tab-label\">New tab</span></button><button type=\"button\" class=\"mia-tab-close\" title=\"Close tab\" aria-label=\"Close tab New tab\">\u00d7</button></div><button type=\"button\" class=\"native-browser-new-tab\" title=\"New tab\" aria-label=\"New browser tab\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"></path></svg></button>"}, C = [{"name": "Harborline Freight", "domain": "harborline-freight.example"}, {"name": "Lone Mesa Logistics", "domain": "lonemesa.example"}, {"name": "Bluebonnet Cold Chain", "domain": "bluebonnet-coldchain.example"}, {"name": "Gulfway Drayage", "domain": "gulfway.example"}, {"name": "Prairie Dock Systems", "domain": "prairiedock.example"}, {"name": "Cedar Ridge Carriers", "domain": "cedarridge-carriers.example"}, {"name": "Riverbend Fulfillment", "domain": "riverbend-fulfillment.example"}, {"name": "Copperline Transport", "domain": "copperline.example"}, {"name": "Saltgrass Warehousing", "domain": "saltgrass.example"}, {"name": "Northgate Crossdock", "domain": "northgate-crossdock.example"}], PAGES = {"search": "<div class=\"demo-page ws\" data-page=\"search\"><div class=\"ws-top\"><span class=\"ws-logo\">Web search</span><div class=\"ws-box\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" class=\"demo-search-icon\"><circle cx=\"10.5\" cy=\"10.5\" r=\"6.5\"></circle><path d=\"M15.5 15.5 20 20\"></path></svg><span class=\"ws-q\"></span></div></div><div class=\"ws-tabs\"><span class=\"on\">All</span><span>News</span><span>Maps</span><span>Images</span></div><div class=\"ws-body\"><div class=\"ws-count\">About 2,340 results</div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231f6fb2'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E\" alt=\"\"><span>harborline-freight.example</span></div><a class=\"ws-title\">Harborline Freight \u00b7 Drayage and port freight out of the Port of Houston</a><p>Drayage and port freight out of the Port of Houston. Based in Houston, Texas, with about 140 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23c0602b'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E\" alt=\"\"><span>lonemesa.example</span></div><a class=\"ws-title\">Lone Mesa Logistics \u00b7 Regional LTL carrier</a><p>Regional LTL carrier across South Texas. Based in San Antonio, Texas, with about 85 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%234b5fc9'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EB%3C/text%3E%3C/svg%3E\" alt=\"\"><span>bluebonnet-coldchain.example</span></div><a class=\"ws-title\">Bluebonnet Cold Chain \u00b7 Refrigerated transport</a><p>Refrigerated transport for grocers and restaurants. Based in Austin, Texas, with about 60 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230f8a7a'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E\" alt=\"\"><span>gulfway.example</span></div><a class=\"ws-title\">Gulfway Drayage \u00b7 Container drayage and transloading</a><p>Container drayage and transloading. Based in Houston, Texas, with about 180 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%237a4bb5'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E\" alt=\"\"><span>prairiedock.example</span></div><a class=\"ws-title\">Prairie Dock Systems \u00b7 Cross-dock and warehouse operations</a><p>Cross-dock and warehouse operations for retailers. Based in Dallas, Texas, with about 120 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%233d7d3a'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E\" alt=\"\"><span>cedarridge-carriers.example</span></div><a class=\"ws-title\">Cedar Ridge Carriers \u00b7 Flatbed and heavy haul carrier</a><p>Flatbed and heavy haul carrier. Based in Fort Worth, Texas, with about 95 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23b23a5b'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E\" alt=\"\"><span>riverbend-fulfillment.example</span></div><a class=\"ws-title\">Riverbend Fulfillment \u00b7 Cross-border e-commerce fulfillment</a><p>Cross-border e-commerce fulfillment. Based in El Paso, Texas, with about 150 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23a8741a'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E\" alt=\"\"><span>copperline.example</span></div><a class=\"ws-title\">Copperline Transport \u00b7 Agricultural and bulk freight</a><p>Agricultural and bulk freight. Based in Lubbock, Texas, with about 70 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a7fa8'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E\" alt=\"\"><span>saltgrass.example</span></div><a class=\"ws-title\">Saltgrass Warehousing \u00b7 Bonded warehousing near the port</a><p>Bonded warehousing near the port. Based in Corpus Christi, Texas, with about 110 people.</p></div><div class=\"ws-result\"><div class=\"ws-site\"><img src=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%235b6470'/%3E%3Ctext x='8' y='11.6' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='%23fff' text-anchor='middle'%3EN%3C/text%3E%3C/svg%3E\" alt=\"\"><span>northgate-crossdock.example</span></div><a class=\"ws-title\">Northgate Crossdock \u00b7 Cross-dock services at the Laredo border crossing</a><p>Cross-dock services at the Laredo border crossing. Based in Laredo, Texas, with about 160 people.</p></div></div></div>", "report": "<div class=\"demo-page rp\" data-page=\"report\"><div class=\"rp-in\"><h1>Outreach shortlist</h1><p class=\"rp-sub\">Mid-size logistics companies in Texas \u00b7 10 companies \u00b7 Oct 27, 2026</p><table><tr><th>#</th><th>Company</th><th>City</th><th class=\"n\">People</th><th>Why it fits</th></tr><tr><td>1</td><td><b>Harborline Freight</b><small>harborline-freight.example/contact</small></td><td>Houston</td><td class=\"n\">140</td><td>Runs 40+ daily port pickups coordinated by email and spreadsheets</td></tr><tr><td>2</td><td><b>Lone Mesa Logistics</b><small>lonemesa.example/contact</small></td><td>San Antonio</td><td class=\"n\">85</td><td>Hiring two dispatch coordinators this month</td></tr><tr><td>3</td><td><b>Bluebonnet Cold Chain</b><small>bluebonnet-coldchain.example/contact</small></td><td>Austin</td><td class=\"n\">60</td><td>Temperature reports still compiled by hand each week</td></tr><tr><td>4</td><td><b>Gulfway Drayage</b><small>gulfway.example/contact</small></td><td>Houston</td><td class=\"n\">180</td><td>Just opened a second yard and is adding staff</td></tr><tr><td>5</td><td><b>Prairie Dock Systems</b><small>prairiedock.example/contact</small></td><td>Dallas</td><td class=\"n\">120</td><td>Careers page lists an operations analyst for reporting</td></tr><tr><td>6</td><td><b>Cedar Ridge Carriers</b><small>cedarridge-carriers.example/contact</small></td><td>Fort Worth</td><td class=\"n\">95</td><td>Quotes are requested through a web form and answered manually</td></tr><tr><td>7</td><td><b>Riverbend Fulfillment</b><small>riverbend-fulfillment.example/contact</small></td><td>El Paso</td><td class=\"n\">150</td><td>Works in English and Spanish across U.S. and Mexico clients</td></tr><tr><td>8</td><td><b>Copperline Transport</b><small>copperline.example/contact</small></td><td>Lubbock</td><td class=\"n\">70</td><td>Seasonal peaks double their weekly paperwork</td></tr><tr><td>9</td><td><b>Saltgrass Warehousing</b><small>saltgrass.example/contact</small></td><td>Corpus Christi</td><td class=\"n\">110</td><td>Customs documents are tracked in shared folders</td></tr><tr><td>10</td><td><b>Northgate Crossdock</b><small>northgate-crossdock.example/contact</small></td><td>Laredo</td><td class=\"n\">160</td><td>Handles 300+ border shipments a week with a small office team</td></tr></table><p class=\"rp-foot\">Prepared by Outreach Bot from 10 company websites. Sizes are estimates from each site.</p></div></div>", "co0": "<div class=\"demo-page co\" data-page=\"co0\" style=\"--co:#1f6fb2\"><div class=\"co-nav\"><span class=\"co-logo\">H</span><b>Harborline Freight</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Drayage and port freight out of the Port of Houston</h1><p>Based in Houston, Texas. About 140 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>140 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>harborline-freight.example/contact</span></div></div></div>", "co1": "<div class=\"demo-page co\" data-page=\"co1\" style=\"--co:#c0602b\"><div class=\"co-nav\"><span class=\"co-logo\">L</span><b>Lone Mesa Logistics</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Regional LTL carrier across South Texas</h1><p>Based in San Antonio, Texas. About 85 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>85 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>lonemesa.example/contact</span></div></div></div>", "co2": "<div class=\"demo-page co\" data-page=\"co2\" style=\"--co:#4b5fc9\"><div class=\"co-nav\"><span class=\"co-logo\">B</span><b>Bluebonnet Cold Chain</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Refrigerated transport for grocers and restaurants</h1><p>Based in Austin, Texas. About 60 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>60 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>bluebonnet-coldchain.example/contact</span></div></div></div>", "co3": "<div class=\"demo-page co\" data-page=\"co3\" style=\"--co:#0f8a7a\"><div class=\"co-nav\"><span class=\"co-logo\">G</span><b>Gulfway Drayage</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Container drayage and transloading</h1><p>Based in Houston, Texas. About 180 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>180 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>gulfway.example/contact</span></div></div></div>", "co4": "<div class=\"demo-page co\" data-page=\"co4\" style=\"--co:#7a4bb5\"><div class=\"co-nav\"><span class=\"co-logo\">P</span><b>Prairie Dock Systems</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Cross-dock and warehouse operations for retailers</h1><p>Based in Dallas, Texas. About 120 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>120 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>prairiedock.example/contact</span></div></div></div>", "co5": "<div class=\"demo-page co\" data-page=\"co5\" style=\"--co:#3d7d3a\"><div class=\"co-nav\"><span class=\"co-logo\">C</span><b>Cedar Ridge Carriers</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Flatbed and heavy haul carrier</h1><p>Based in Fort Worth, Texas. About 95 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>95 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>cedarridge-carriers.example/contact</span></div></div></div>", "co6": "<div class=\"demo-page co\" data-page=\"co6\" style=\"--co:#b23a5b\"><div class=\"co-nav\"><span class=\"co-logo\">R</span><b>Riverbend Fulfillment</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Cross-border e-commerce fulfillment</h1><p>Based in El Paso, Texas. About 150 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>150 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>riverbend-fulfillment.example/contact</span></div></div></div>", "co7": "<div class=\"demo-page co\" data-page=\"co7\" style=\"--co:#a8741a\"><div class=\"co-nav\"><span class=\"co-logo\">C</span><b>Copperline Transport</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Agricultural and bulk freight</h1><p>Based in Lubbock, Texas. About 70 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>70 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>copperline.example/contact</span></div></div></div>", "co8": "<div class=\"demo-page co\" data-page=\"co8\" style=\"--co:#2a7fa8\"><div class=\"co-nav\"><span class=\"co-logo\">S</span><b>Saltgrass Warehousing</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Bonded warehousing near the port</h1><p>Based in Corpus Christi, Texas. About 110 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>110 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>saltgrass.example/contact</span></div></div></div>", "co9": "<div class=\"demo-page co\" data-page=\"co9\" style=\"--co:#5b6470\"><div class=\"co-nav\"><span class=\"co-logo\">N</span><b>Northgate Crossdock</b><span class=\"co-links\"><span>Services</span><span>About</span><span>Careers</span><span>Contact</span></span></div><div class=\"co-hero\"><h1>Cross-dock services at the Laredo border crossing</h1><p>Based in Laredo, Texas. About 160 people.</p><span class=\"co-cta\">Request a quote</span></div><div class=\"co-cards\"><div><b>Coverage</b><span>Texas and neighboring states, with weekly lanes into Mexico.</span></div><div><b>Team</b><span>160 people across dispatch, operations and the office.</span></div><div><b>Contact</b><span>northgate-crossdock.example/contact</span></div></div></div>"}, BOT = {"mark": "<img src=\"assets/mote-outreach.png\" data-mote-static-src=\"assets/mote-outreach.png\" data-mote-animated-src=\"assets/mote-outreach.png\" alt=\"\" class=\"mote-avatar-img mote-avatar-img--sales\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" data-agent-profile-id=\"outreach\" data-agent-profile-name=\"Outreach Bot\" role=\"button\" tabindex=\"0\" aria-label=\"Open Outreach Bot details\" draggable=\"false\">", "hero": "<div class=\"chat-empty-hero\"><img src=\"assets/mote-outreach.png\" alt=\"\" class=\"chat-empty-hero-mote\" style=\"filter:hue-rotate(-30deg) saturate(1.08)\" draggable=\"false\"><div class=\"chat-empty-hero-text\">No messages yet \u2014 say hello.</div></div>", "icon": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAJW0lEQVR4AaRWW4xdVRn+1tr7nDNnptPODJ0y0w600IsFiQ1XxWCcKtEmKIYgCAEJFrSJsYqmCYkvnAcVFB980IgCYlvRpDU+iCEhgVJokRBokULptJR2Sqed6VzPdV/WXhe/taFTrm0TTs5/1trr8v3f//3/WvtInOXHAcKh8oH1h5c81vbfgZ+W8Sk+HwA8Hc6Rqx5c8sYluOzkGnfTlqBe2j9oA/OF2bHbnpzrfrhl2YeJnpz/uPasCFQAqdLapSppXjMLsneiHAbieqfM8pNjmR5b1jpWv3t4SXXuybEztWdF4L7BihRCfkZn+rwn8IN2DzpZrnYWwsK1YRjM4bOgoVVLF0+NjX9zxohl/vls7IwEnh2shNM9i/o6+rsuWHTJ+d/50i2X7arf/vDR0uf6ds+/YunSpatX3VBbv/m7U+sfHjCloD+J1ZASso3Oc1JsT/s9LYHJOzYuWtU1//vFNP5Pp5J3dzfdosJoa2VwrD4QHKn1lY7NyI7p6JpgrLmx2JCvFM8tXrrg6gsfv3jN5UP06mhn/H4igbfv+P0KU6/d72biBzHaWCUmWwL1BGhlQGKAlMbWxRqopgjGW+fS7grr8Z9g4odr6zdf55w7owofS+CNO//QV4hEBWPNW+RU3IGITpSBMw7OWsAyuEAA75nwLcdcYoSopvODyeT6YCre3Fi/6TfHK0/kNfNJUnyEQKVSkSUdrnPjzVsYfcEmGoLgOYAQ8E5dQcIVA1oIlEK4tgJsuQC0BYAft06iobrlRHzPnNGpx6d/vPF8UhY5xod+PkLg22MDV7vJaIOdaAjHqC0jtu8RELyKEEr4iAVbFCVAMigQuxQA7SHQUUBufj7KQirxjULT/La+7rGPPRny/YR2rn2001azX5jRmTkuyUDW8E4t8X02nWTHbxBsfT/gdt9nVsAhF1CVAo1qOE/Ez8cmlNXkW0Fi73OVLUW//f1GhFOPHUp+1UzUrtTNGJb5hnMQgshcZUEvZOFF8DXw9+oe/OrAk/AqOcM5bSHYjtansOmtHVCBQ64I68NFuiiqyc2NkdZPTnl7t0fodzvP3llpg47ucFNRWSiCUXpWMTTlt+x7Qtb3ScpS3ueLJ/DI+EvI4hQi1chPhdL4d30fHqq9gm3Dr8FJSSM+97iWKgTV5JfVtZuu4Mjsd5ZABxautNX4ItdKpI8EjNb5ZRSAXbD+KYgFf/L+sbcPI4pj6FQBVEtkPJYkns40MTIygkYrQk6MpAV35JjVuCCb0c/dhgc7PLS3nAAdiUJmrnSNtF9kmoUu4FMMfjjn8WGZCq+AziwEi3Pdwmvwu5U3or1YhE+J01zJFHxtwcX4ctcyXNW3HCAhcIwCEElwn0XQyj5fm+iefYHlBF667W+dOkpW6Siam6YZ93AhGQQynwYE4M2nRDib5/268nLc2rUKMKD8TAGLFlGGlfIcbL78e1gSzuO4gSBhUCGQCIUAEt0bRvrrbv36EndC+p8wbPVaZZbpWAkeJCidIcl44zFqSRLCe+dCw1A0gTLmWjdTZA0FG2cwdGJYhM7XQi2BHI/g6ikQKTjeI2B6HFPhjQQKphavqo1fMkDIdwkIYxbaVK/QEUHpOBQBpJBUMONeRgeLPPeM3qfB0plmqgzV0iTjWz9m6IiB8CZmXfDKdnwmAFjJAIkbquTX8ICsCJW78CQBYTO7yKis3xLUszTG8BhSPh85L5rYaWTaAFQkJ8Jocock4gEN5yzJOLaOew1z7/vesT+ilspkiYI/PbyuIBLNWlNLXKUi5ZabbpLa2cUuViW/Gfw4mmG0msXm+NIpygJ0SSBOKCudexJeCQ/uCYM59q1hKhxJufzYGjiuZVqhlILkBRUmDMK/V1Jb1Mot3LsXobyw+1qJzC40SgsKTbEdi9rS2PpoqErG1BSoatBRQkMl0FpDcnG+gdJ6IpbRCzq03EPPMCSi4gSKKS3IAK6u8nrx65w1TLDo+Ww3CYwfTaVxbp7lBuuZM3JD0wQ2fM7YaoIqSiibGY9dCTGLNFIxUrbOlzaL09Hy/VQj4dqEarGLYkD1ooyENDyOJV7uy9hwFP2QVBtOG2ms8V0qIKAJammegAc1fhPJGKphWNntBA0YVeIUqnHEU6Nz8JSXUrPVYkYcQr4XBO+GLFYwxtAcS8JCOwPtlYJJzEzLyeacaWetaziKYknHCgcrQBIWGTXOSTA6T0KTpAfTiieDirXLIkp8FVezCJONGpVRfG5DyLgMizJTjJzkNdNjuNcSJ6NzHcImAqMHJ+oZXe41RruDCJhVKfN7RZNA5s1ZKDK2PnpvBMvYpsxrxjrwle0ig66wjL7uHrQX+DohOUXTdOr3scCJ6aDoOCMJxaAyKSYY5IHV2yta3rx1qyHP11AMRwRlIxHwfw0ypoBx5kqkMMgoozcPnKtBBRTNP0d8ITVqLSRs80vKaNY1yZ/cw2evnvIEpHNRiJcbbfZ1n3Ppf4qlwh4VyqdsKdSOZ93RuT+K/lx4In5j4jS8pb617NNSUle0jA58QSqq4s0/Kz9GhwnbiER8EAm9paVwOmkvbBlttI563xwCVj+xYdIW5UNpW+FAUhB0YVlIJi+WDBaKpkkq8ykhqGJaFAko32dKlDfOpRxPqVnC8dxIKPHG8YieknKAdH7HXxtx4Z9e/lkCvnP9jsrumXL72ulSsGcGWdK0ysWMLiVYRksZifKR0JHyRkIpic2S4VxCUolvuTZlP2XqUmGQBC5T5cKJpHfuhoO9u+/94os/i71Pb+QF8M9a6WL0zvnLro0HttVev3W/qz/6Jhr73gxUst9EOJI2cFzVcYI2yf5U0sBU0sR02sSE8hZhUrUwwbETaR3HswaGdYSDrOtD84rJsXb79Ihu3PXGziN/xFbv9pTlBFhsYiE6gw6ItpmpQ/qZqf9t2pEdfWBXb/kfu1Ys3rl96bm7tw/Me3PbguLQti439MxcNbS9MxnaMTcb2tnt9u3s0q8+15Ptfv4c9/LOHvnciwvannx5cc+/9i3t23RwoPvXQ+3q/sOH9rx6yu2pXk5gGEiexqHaUzgyVsbIoQiHXz3QemXLjInviZdfcMPYecvXHD+/9ytDnaXB4R4xeLhcGHyL9k5JDh6ZV169vy1cc3h+ec3w/OJ1B/vljcf6e29/Z8FFa3Vv+48chh+wex554V68MLoOf45uxlZzyj3wfwAAAP//d4tUvQAAAAZJREFUAwDIT3WfTKVkHAAAAABJRU5ErkJggg==", "miaIcon": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAE70lEQVR4AcSWXWwUVRiGz5np1mJL/2sUiFFptWxVUtN01yaYEBNbxQulimigEiUptkYlXkACEjQE9MIolbZywQUlRiBINPGncNNEjd01pURTl2IFjNpqbHdL166p3Z/j+05ny5Tu7Gbnhs08nW/e8/fOzPfNqSZu8M+xgbKysk1g2GST0/twbAAL7pZS3kMYA0eHIwO462pzYWNRxtSMiyz/ODIQDAaHsc77au6XYGxqCLM7HBngEhMTE9tx5ytmZmaWM6bmhLQG+vaKHH93TaO/q2aHv3vVk0Od7gLrIlh4LBKJ/GXVso1tDYx0VN60pMI9KJToxaRvC6WdjkhxZeCw+3Zci4qKioKSkpKNhDE1E1laWvogcuLloqKilaZme7I1MKm7nsAjvm/hSFkei4mXqOH1f67r+sckkUicokZg6BlN077D2A9ycnJGCgsLq6jbYWtASa021SBMXFtQUHALDDxkaV+bn59/K6+x+EaeCfpKl8vVzNgOWwNSJc6nGoSFz09PT/+Nyb+2tPclcwFP43hSR18Vi8VOJq9TnW0NlMSjnwqhLi4YpFRYE1oXtdnZ2fVYYB+JRqPPUSOTk5MnoTWDozBZPzU1dZm6HbYGql755b94rmiAif1CqV5M2KF0VVffPvQ7JwuHwyHU/huEMTWTBLTTYAuqZMDUbE+2BjiiYWsg5GkL7PK0Bx71tgde9W67MEJ94PC9K/2d7hNgwuREf3f1HWzLFsNAeXn5WpSND4wifssyiQtaD5gAvcXFxcYi8bjqEVJuAGUmGzSlfyTwQ+ndib5nAMf0QMoFxsG5oY8CH6plDUXDAB7vDrwvD1iGeHcyo9FxHbTNoAw0oqy2/NBzfz5eiZeDrSihPL6OykJk/fPo+wjgmM2Y4zH2g7G7ODf0ZcCDanmdumGAgRV04PfdKs3HiWDYhbteNE4qIZcU3xyf73hdgGr49zrJuDQmwoLvwJ0fjCHexzJjKxLpS2jHwFVwFiV2pHb7r1eRmD62L0BK3+qWHyOoiKPoewYEwTHM8QX7sUw5N7Qx4Mdc71I3DCBb+9DRC7ix7GGDySy0FlACGkOhkFEBSlMteORGQrIfY12XLYxRdlfQtwmUA2pR6gTr7IG2HHhRrt9QMwwwyAZWg7ctcLen7SdJGNe1Dl3iHL6uVV5fV80hVMdXvk73gXOd7krqdmQywI3lBSTSKbATm0xhciIk1QO4/pAwpv79IffDUmj9Uoh25EkTHvnOqBSDgx2VFcLml9YAym41svUIJmoGB8D65DyoiC60tRLG1JUUT/NsRQq5NKbnrrNq1jitAex0TdbOMGBco55vg14Pkkc9nsQKIUV1UrCelRDG90Ok+KU1gIz+BBmL8XMjERsbDZLpT5ixbkZnkaB/oNc5sOiQQl1YJJpCWgP4xo+gfqtQMq+BBmTvZ+Y4AQOPx+PxZwlew1PUdV0cxEcqzPga6uLcxnZNsUZpDbAjyuoS7u4g6Mf1/NMYHx+fRikdJ4zRJupaA7/pOTEPTLxpINQubmjc2NieiowGUg1Kavxkk+Q1z3WtPw9j89pr0BbYzw2Nuh2ODSAR38vLyxsljO0WyKQ7MmD+E7oVeaARJOeLMLE002Kp2h0ZMN+58eXjpDBxGZXxD+NscWSAi6AqtuH8LTFjhNkfjg2gKny46zWEsd3SmfT/AQAA//+I+qUKAAAABklEQVQDAAVlRl+SVzZxAAAAAElFTkSuQmCC"};
+  var REPORT_URL = 'file:///Users/you/Mia/outreach-shortlist.html';
+  var QUERY = "mid-size logistics companies in Texas";
+  var ASK1 = 'Find 10 mid-size logistics companies in Texas we could reach out to';
+  var ASK2 = 'Yes, every Monday at 9 AM';
+  var FREE = '<p class="chat-md-p">This is a scripted preview, so I can’t browse here.</p><p class="chat-md-p">Download Mia and your bots run on your own computer, in your own browser, with the AI you choose.</p>';
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var $ = function(s){ return document.querySelector(s); };
+  var thread = $('#chatThread'), input = $('#ccInput'), sugg = $('#ccInlineSuggestion'), send = $('#ccSend');
+  var suggText = sugg.querySelector('span');
+  var strip = $('.native-browser-tabs'), url = $('#localBrowserUrl'), reload = $('#localBrowserReloadBtn');
+  var home = $('#localBrowserEmpty'), screen = $('#localBrowserScreen');
+  var ctl = $('.local-browser-bot-control'), follow = ctl.querySelector('.local-browser-follow');
+  var pages = document.createElement('div'); pages.className = 'demo-pages'; pages.hidden = true; screen.appendChild(pages);
+  var cursor = document.createElement('div');
+  cursor.className = 'demo-cursor';
+  cursor.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 2l15 11-6.5 1.2L16 21l-2.6 1.1-3.3-6.8L5 19z" fill="#111" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>';
+  document.body.appendChild(cursor);
+  var chMark = $('#channelTitleBtn .ch-mark'), chTitle = $('#channelTitleBtn .channel-header-title');
+  var autoPage = $('#automationsOverlay');
+  var who = 'mia';
+
+  var run = 0, step = 0, busy = false, started = false, skip = null, menu = null;
+
+  function el(html){ var x = document.createElement('template'); x.innerHTML = html.trim(); return x.content.firstElementChild; }
+  function wait(ms){ return new Promise(function(r){ var id = setTimeout(r, reduce ? 0 : ms); skip = function(){ clearTimeout(id); r(); }; }); }
+  function bottom(){ thread.scrollTop = thread.scrollHeight; }
+  function resize(){ input.style.height = 'auto'; input.style.height = input.scrollHeight + 'px'; }
+  function suggest(text){ suggText.textContent = text || ''; sugg.style.visibility = text && !input.value ? 'visible' : 'hidden'; }
+  function stamp(row){ var tm = row.querySelector('.chat-msg-time'); if (tm) tm.textContent = 'now'; return row; }
+
+  // Browser chrome: the tab strip is the app's own markup for each state.
+  function tabs(key){ strip.innerHTML = S[key]; }
+  function page(key, address){
+    url.value = address || '';
+    reload.disabled = !address;
+    home.hidden = !!address;
+    pages.hidden = !address;
+    pages.innerHTML = '';
+    if (key) { var p = el(PAGES[key]); pages.appendChild(p); return p; }
+    return null;
+  }
+  function control(on, following){
+    ctl.hidden = !on;
+    if (!on) return;
+    ctl.querySelector('span').innerHTML = '<strong>Outreach Bot</strong> has control';
+    follow.textContent = following ? 'Unfollow' : 'Follow';
+    follow.setAttribute('aria-pressed', following ? 'true' : 'false');
+  }
+
+  // The docked chat follows the group's owner, like the app: Mia, then Outreach Bot.
+  function chatWith(bot){
+    who = bot ? 'bot' : 'mia';
+    chMark.innerHTML = bot ? BOT.mark : '<img src="assets/favicon.svg" alt="" class="demo-ch-mia">';
+    chTitle.textContent = bot ? 'Outreach Bot' : 'Mia';
+    thread.innerHTML = '';
+    if (bot) thread.innerHTML = BOT.hero;
+    else if (T.div) { var d = el(T.div); d.textContent = 'Today'; thread.appendChild(d); }
+  }
+  function automations(on){
+    autoPage.hidden = !on; autoPage.classList.toggle('open', on); autoPage.setAttribute('aria-hidden', on ? 'false' : 'true');
+    document.body.classList.toggle('automations-mode', on);
+  }
+
+  function youRow(text){
+    var row = stamp(el(T.you)); var body = row.querySelector('.chat-msg-text');
+    body.innerHTML = '<p class="chat-md-p"></p>'; body.firstChild.textContent = text;
+    row.classList.add('demo-in'); return row;
+  }
+  function miaRow(html){
+    var row = stamp(el(T[who])); row.querySelector('.chat-msg-text').innerHTML = html;
+    row.classList.add('demo-in'); return row;
+  }
+  function thinkingRow(text){
+    var row = el(T[who]); var tm = row.querySelector('.chat-msg-time'); if (tm) tm.remove();
+    var body = row.querySelector('.chat-msg-text');
+    body.className = 'chat-msg-text chat-msg-thinking chat-msg-thinking-local';
+    body.innerHTML = '<span class="chat-thinking-shimmer"></span>'; body.firstChild.textContent = text;
+    row.classList.add('demo-in'); return row;
+  }
+  async function reveal(row, myRun){
+    var blocks = [].slice.call(row.querySelector('.chat-msg-text').children);
+    blocks.slice(1).forEach(function(b){ b.classList.add('demo-hide'); });
+    bottom();
+    for (var j = 1; j < blocks.length; j++){ await wait(320); if (myRun !== run) return false; blocks[j].classList.remove('demo-hide'); blocks[j].classList.add('demo-in'); bottom(); }
+    return true;
+  }
+
+  // Cursor moves in page coordinates (the demo is a 1280x800 page).
+  function at(node, dx){ var r = node.getBoundingClientRect(); return [r.left + (dx != null ? dx : Math.min(r.width * 0.45, 60)), r.top + r.height * 0.55]; }
+  async function moveTo(node, myRun, dx){
+    var xy = at(node, dx);
+    if (!cursor.classList.contains('on')){ cursor.style.transition = 'none'; cursor.style.transform = 'translate(' + (xy[0] + 160) + 'px,' + (xy[1] + 140) + 'px)'; cursor.offsetWidth; cursor.style.transition = ''; cursor.classList.add('on'); await wait(120); }
+    cursor.style.transform = 'translate(' + xy[0] + 'px,' + xy[1] + 'px)';
+    await wait(850); return myRun === run;
+  }
+  async function clickAt(node, myRun, dx){
+    if (!(await moveTo(node, myRun, dx))) return false;
+    cursor.classList.remove('click'); cursor.offsetWidth; cursor.classList.add('click');
+    node.classList.add('demo-press'); await wait(160); node.classList.remove('demo-press');
+    return myRun === run;
+  }
+  function hideCursor(){ cursor.classList.remove('on'); }
+
+  // Native-style menus (the app uses the system menu for these).
+  function openMenu(items, node){
+    closeMenu();
+    var r = node.getBoundingClientRect();
+    menu = el('<div class="demo-menu" role="menu"></div>');
+    items.forEach(function(it){
+      if (it === '-') { menu.appendChild(document.createElement('hr')); return; }
+      var d = document.createElement('div'); d.setAttribute('role', 'menuitem');
+      d.innerHTML = (it.check ? '<i>✓</i>' : '') + (it.icon || '') + '<span></span>';
+      d.querySelector('span').textContent = it.label;
+      if (it.off) d.className = 'off';
+      if (it.key) d.setAttribute('data-key', it.key);
+      menu.appendChild(d);
+    });
+    menu.style.left = (r.left + 18) + 'px'; menu.style.top = (r.bottom - 4) + 'px';
+    document.body.appendChild(menu);
+    return menu;
+  }
+  function closeMenu(){ if (menu) { menu.remove(); menu = null; } }
+  async function pick(key, myRun){
+    var item = menu.querySelector('[data-key="' + key + '"]');
+    if (!(await moveTo(item, myRun, 40))) return false;
+    item.classList.add('hi'); await wait(220); if (myRun !== run) return false;
+    cursor.classList.remove('click'); cursor.offsetWidth; cursor.classList.add('click');
+    await wait(160); closeMenu(); return myRun === run;
+  }
+
+  async function think(steps, myRun, each, during){
+    var th = thinkingRow(steps[0]); thread.appendChild(th); bottom();
+    var shim = th.querySelector('.chat-thinking-shimmer');
+    for (var i = 0; i < steps.length; i++){
+      shim.textContent = steps[i];
+      if (during && during[i]) { if (!(await during[i](myRun))) return null; }
+      else { await wait(each || 1000); if (myRun !== run) return null; }
+    }
+    await wait(500); if (myRun !== run) return null;
+    return th;
+  }
+
+  async function type(text, myRun){
+    for (var i = 1; i <= text.length; i++){
+      input.value = text.slice(0, i); resize();
+      await wait(26 + Math.random() * 28); if (myRun !== run) return false;
+    }
+    await wait(350); return myRun === run;
+  }
+  async function say(text, myRun){
+    input.value = ''; resize(); suggest('');
+    send.classList.add('demo-press'); setTimeout(function(){ send.classList.remove('demo-press'); }, 140);
+    var hero = thread.querySelector('.chat-empty-hero'); if (hero) hero.remove();
+    thread.appendChild(youRow(text)); bottom();
+    await wait(450); return myRun === run;
+  }
+  // Waits on the suggestion like the Solo demo; false if the visitor took over.
+  async function prompt(text, myRun){
+    suggest(text);
+    await wait(1300); if (myRun !== run) return false;
+    if (input.value) return false;
+    suggest(''); busy = true;
+    if (!(await type(text, myRun))) return false;
+    return say(text, myRun);
+  }
+
+  // 1-3: a group for the work, owned by Outreach Bot.
+  async function setup(myRun){
+    await wait(700); if (myRun !== run) return false;
+    var tab = strip.querySelector('.mia-tab');
+    if (!(await moveTo(tab, myRun))) return false;
+    cursor.classList.remove('click'); cursor.offsetWidth; cursor.classList.add('click');
+    openMenu([{ label: 'New Tab to the Right' }, '-', { label: 'Add Tab to New Group', key: 'group' }, '-',
+      { label: 'Reload', off: true }, { label: 'Duplicate', off: true }, '-', { label: 'Close' }, { label: 'Close Other Tabs', off: true }, { label: 'Close Tabs to the Right', off: true }], tab);
+    await wait(500); if (myRun !== run) return false;
+    if (!(await pick('group', myRun))) return false;
+    tabs('group_edit');
+    var field = strip.querySelector('.native-browser-group-name');
+    await wait(450); if (myRun !== run) return false;
+    var name = 'Outreach research';
+    for (var i = 1; i <= name.length; i++){ field.value = name.slice(0, i); await wait(45 + Math.random() * 35); if (myRun !== run) return false; }
+    await wait(450); if (myRun !== run) return false;
+    tabs('group');
+    await wait(700); if (myRun !== run) return false;
+    var owner = strip.querySelector('.native-browser-group-owner');
+    if (!(await clickAt(owner, myRun, 12))) return false;
+    // The app's group-owner menu: Mia, "+ New bot", then your bots.
+    openMenu([{ label: 'Mia', check: true, icon: '<img src="' + BOT.miaIcon + '" alt="">' }, { label: '+ New bot' }, '-',
+      { label: 'Outreach Bot', icon: '<img src="' + BOT.icon + '" alt="">', key: 'bot' }], owner);
+    await wait(700); if (myRun !== run) return false;
+    if (!(await pick('bot', myRun))) return false;
+    tabs('group_owned'); chatWith(true);
+    await wait(500); if (myRun !== run) return false;
+    hideCursor();
+    return true;
+  }
+
+  // 5-7: search, ten tabs, the report.
+  async function searchStep(myRun){
+    tabs('search'); control(true, false);
+    var p = page('search', 'search.example');
+    var q = p.querySelector('.ws-q'); q.classList.add('typing');
+    p.querySelector('.ws-body').style.visibility = 'hidden';
+    for (var i = 1; i <= QUERY.length; i++){ q.textContent = QUERY.slice(0, i); await wait(32); if (myRun !== run) return false; }
+    q.classList.remove('typing');
+    url.value = 'search.example/?q=' + QUERY.replace(/ /g, '+');
+    await wait(350); if (myRun !== run) return false;
+    p.querySelector('.ws-body').style.visibility = '';
+    await wait(1100); return myRun === run;
+  }
+  async function openStep(myRun){
+    var results = pages.querySelectorAll('.ws-result');
+    for (var n = 1; n <= 10; n++){
+      results[n - 1].classList.add('read');
+      // The view stays on the search page while the tabs open.
+      tabs('open' + n);
+      await wait(170); if (myRun !== run) return false;
+    }
+    await wait(500); return myRun === run;
+  }
+  async function readStep(myRun){
+    // Follow: the view moves with Mia from page to page.
+    if (!(await clickAt(follow, myRun, 20))) return false;
+    control(true, true); hideCursor();
+    for (var i = 0; i < 10; i++){
+      tabs('read' + i);
+      page('co' + i, C[i].domain);
+      await wait(i < 3 ? 900 : 380); if (myRun !== run) return false;
+    }
+    return true;
+  }
+  async function reportStep(myRun){
+    await wait(700); if (myRun !== run) return false;
+    tabs('report'); control(false);
+    page('report', REPORT_URL);
+    return true;
+  }
+
+  async function play(myRun){
+    if (step === 0){
+      if (!(await setup(myRun))) return;
+      step = 1;
+    }
+    if (step === 1){
+      if (!(await prompt(ASK1, myRun))) return;
+      step = 2;
+      var th = await think(['Searching the web', 'Opening 10 results', 'Reading company pages', 'Writing the shortlist'], myRun, 900,
+        [searchStep, openStep, readStep, reportStep]);
+      if (!th) return;
+      var row = miaRow('<p class="chat-md-p">Done. I read 10 company sites and saved the shortlist as <strong>outreach-shortlist.html</strong>. It’s open in your Outreach research group.</p>'
+        + '<p class="chat-md-p">Each company has its city, size and why it fits. Harborline Freight and Gulfway Drayage look like the strongest fits.</p>'
+        + "<div class=\"chat-artifact-card\"><span class=\"chat-artifact-icon\" aria-hidden=\"true\">&#128196;</span><div class=\"chat-artifact-copy\"><div class=\"chat-artifact-name\" data-demo-report>outreach-shortlist.html</div><div class=\"chat-artifact-type\">text/html</div><div class=\"chat-artifact-actions\"><button type=\"button\" class=\"chat-artifact-preview\" data-demo-report>Preview</button><a class=\"chat-artifact-download\" href=\"#\" data-demo-report>Download</a></div></div></div>"
+        + '<p class="chat-md-p">Should I make this an automation, so you get 10 new companies every week?</p>');
+      th.replaceWith(row);
+      if (!(await reveal(row, myRun))) return;
+      busy = false;
+    }
+    if (step === 2){
+      if (!(await prompt(ASK2, myRun))) return;
+      step = 3;
+      var th2 = await think(['Building the automation'], myRun, 1800); if (!th2) return;
+      var done = miaRow('<p class="chat-md-p">Done. Every Monday at 9 AM I’ll find 10 new companies and skip the ones from earlier lists.</p>' + "<div class=\"automation-proposal-answered\">Turned on: Weekly outreach shortlist \u00b7 Every Monday at 09:00 \u00b7 America/Chicago. <button type=\"button\" class=\"automation-proposal-open\" data-automation-bot=\"outreach\" data-automation-open=\"a1\">Open in Automations</button></div>");
+      th2.replaceWith(done);
+      if (!(await reveal(done, myRun))) return;
+      await wait(900); if (myRun !== run) return;
+      // "Open in Automations" opens the automation's own page.
+      if (!(await clickAt(done.querySelector('.automation-proposal-open'), myRun))) return;
+      hideCursor(); automations(true);
+      busy = false;
+    }
+    suggest('');
+    input.placeholder = who === 'bot' ? 'What should I ask Outreach Bot?' : 'Ask Mia to browse with you';
+  }
+
+  function reset(){
+    run++; step = 0; busy = false;
+    closeMenu(); hideCursor();
+    chatWith(false); automations(false);
+    tabs('new'); page(null, ''); control(false);
+    input.value = ''; resize(); input.placeholder = ''; suggest('');
+  }
+
+  function start(){ if (started) return; started = true; reset(); play(run); }
+  function replay(){ started = true; reset(); play(run); }
+
+  async function submitOwn(){
+    var text = input.value.trim(); if (!text || busy) return;
+    run++; busy = true; var myRun = run; hideCursor(); closeMenu();
+    if (!(await say(text, myRun))) return;
+    var th = await think(['Thinking through this'], myRun); if (!th) return;
+    th.replaceWith(miaRow(FREE)); bottom();
+    busy = false;
+  }
+
+  input.addEventListener('input', function(){ if (!busy) { resize(); suggest(input.value ? '' : suggText.textContent); } });
+  input.addEventListener('keydown', function(e){
+    if (e.key === 'Tab' && !input.value && suggText.textContent){ e.preventDefault(); if (skip) skip(); }
+    else if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); if (!busy) submitOwn(); }
+  });
+  send.addEventListener('click', function(){ if (busy) return; if (input.value.trim()) submitOwn(); else if (skip) skip(); });
+  // The visitor can open the shortlist from its card.
+  document.addEventListener('click', function(e){
+    if (e.target.closest('[data-demo-report]')) { e.preventDefault(); if (!busy) { tabs('report'); control(false); page('report', REPORT_URL); } return; }
+    if (e.target.closest('.automation-proposal-open')) { e.preventDefault(); if (!busy) automations(true); return; }
+    if (!e.target.closest('#ccSend, #ccInput')) e.preventDefault();
+  }, true);
+
+  reset();
+  window.miaDemo = { start: start, replay: replay };
+  if (window.top === window) start();
+})();
+</script><script src="../ran.js" data-who="my"></script></body></html>

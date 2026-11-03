@@ -872,6 +872,8 @@ function createConversationRepository(db) {
     const now = timestamp(createdAt, 'createdAt');
     const title = optionalString(name, 'name');
     const requestedMetadata = { ...(metadata && typeof metadata === 'object' ? metadata : {}), botId: normalizedBotId };
+    // A bot has one main chat in Solo and one per team workspace.
+    const teamWorkspace = typeof requestedMetadata.teamWorkspace === 'string' ? requestedMetadata.teamWorkspace : '';
     let ownerRecord = null;
     if (owner !== null && owner !== undefined) {
       requiredString(owner.principalId, 'owner.principalId');
@@ -892,9 +894,10 @@ function createConversationRepository(db) {
             AND c.deleted_at IS NULL
             AND json_extract(c.metadata, '$.botId') = ?
             AND coalesce(json_extract(c.metadata, '$.conversationMode'), '') <> 'fresh'
+            AND coalesce(json_extract(c.metadata, '$.teamWorkspace'), '') = ?
           ORDER BY c.created_at ASC, c.id ASC
           LIMIT 1`
-      ).get(normalizedCompanyId, normalizedCreatedBy, normalizedBotId);
+      ).get(normalizedCompanyId, normalizedCreatedBy, normalizedBotId, teamWorkspace);
       if (existing) {
         const canonicalMetadata = { ...fromJson(existing.metadata, 'conversation.metadata'), ...requestedMetadata, botId: normalizedBotId };
         const nextName = title || existing.name;

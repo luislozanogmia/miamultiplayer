@@ -119,6 +119,38 @@ test('new-message notice only tracks newly appended visible rows while scrolled 
   assert.equal(state.newVisibleMessages, false, 'reaching bottom clears the notice');
 });
 
+test('a new approval request brings a scrolled-up reader to the latest message once', () => {
+  const view = new FakeTimeline(layout([100, 100, 100]));
+  const state = { followLatest: true };
+  view.scrollTop = 100;
+  scroll.capture(view, state);
+  assert.equal(state.followLatest, false);
+
+  view.nextLayout = layout([100, 100, 100, 100]);
+  assert.equal(scroll.revealRequest(state, 'request-1'), true);
+  scroll.replace(view, '<div data-event-id="m4">card</div>', state);
+  assert.equal(view.scrollTop, view.scrollHeight, 'the card is on screen');
+  assert.equal(state.newVisibleMessages, false);
+
+  view.scrollTop = 50;
+  scroll.capture(view, state);
+  assert.equal(scroll.revealRequest(state, 'request-1'), false, 'the same request never moves the reader again');
+  scroll.replace(view, '<div data-event-id="m4">card</div>', state);
+  assert.equal(view.scrollTop, 50, 'scrolling away is respected while the card waits');
+
+  assert.equal(scroll.revealRequest(state, 'request-2'), true, 'a later request is revealed too');
+  assert.equal(scroll.revealRequest(state, ''), false);
+});
+
+test('rendering a chat with an open approval request reveals it before the timeline is replaced', () => {
+  const render = appSource.slice(appSource.indexOf('function renderChatThread(options)'));
+  const capture = render.indexOf('captureRenderedChatScroll(thread)');
+  const reveal = render.indexOf('MiaChatScroll.revealRequest(state, openApproval.id)');
+  const replace = render.indexOf('replaceChatTimeline(thread, roomId, state,');
+  assert.ok(capture >= 0 && capture < reveal && reveal < replace, 'capture, then reveal, then replace');
+  assert.match(render.slice(0, reveal), /var openApproval = openAskBeforeDoRequest\(roomId\);/);
+});
+
 test('room switches restore independent anchors instead of sharing one scroll position', () => {
   const view = new FakeTimeline(layout([80, 80, 80, 80]));
   const roomA = { followLatest: true };

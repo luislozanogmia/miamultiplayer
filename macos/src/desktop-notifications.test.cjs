@@ -57,3 +57,15 @@ test("only the main window may show notifications or open System Settings", asyn
   assert.equal(await handlers["miaos-notification-settings"]({ trusted: true }), true);
   assert.deepEqual(opened, [MAC_NOTIFICATION_SETTINGS]);
 });
+
+test("the Dock count comes only from the main window and is a whole number", async () => {
+  const counts = [];
+  const handlers = {};
+  createDesktopNotifications({ Notification: fakeNotification("show").FakeNotification, isTrustedSender: event => event.trusted, activate() {}, openExternal() {}, setBadgeCount: count => counts.push(count) })
+    .register({ handle: (channel, fn) => { handlers[channel] = fn; } });
+  assert.equal(await handlers["miaos-notification-badge"]({ trusted: false }, 5), "refused");
+  assert.equal(await handlers["miaos-notification-badge"]({ trusted: true }, 3), 3);
+  assert.equal(await handlers["miaos-notification-badge"]({ trusted: true }, -2), 0);
+  assert.equal(await handlers["miaos-notification-badge"]({ trusted: true }, "x"), 0);
+  assert.deepEqual(counts, [3, 0, 0]);
+});

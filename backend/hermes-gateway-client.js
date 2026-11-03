@@ -994,6 +994,16 @@ class HermesGatewayClient {
     });
   }
 
+  // Reaches the model sooner than steer: a model request in progress is
+  // retried with this text, and a tool in progress is asked to yield. Work
+  // already done is kept.
+  async redirect(sessionId, text) {
+    return this.request('session.redirect', {
+      session_id: String(sessionId || ''),
+      text: String(text || ''),
+    });
+  }
+
   startOperation(signal) {
     if (signal && signal.aborted) throw turnAbortError();
     const operation = { signal, sessionId: null, submitted: false, cancelPending: null, cancelAccepted: false };

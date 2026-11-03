@@ -9,6 +9,7 @@
 const SHOW_CHANNEL = "miaos-notification-show";
 const SETTINGS_CHANNEL = "miaos-notification-settings";
 const CLICK_CHANNEL = "miaos-notification-click";
+const BADGE_CHANNEL = "miaos-notification-badge";
 const MAC_NOTIFICATION_SETTINGS = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
 // UNErrorCodeNotificationsNotAllowed: the user said no, or the app can't ask.
 const NOT_ALLOWED = /UNErrorDomain error 1\b/;
@@ -18,7 +19,7 @@ function clip(value, max) {
   return String(value == null ? "" : value).replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-function createDesktopNotifications({ Notification, isTrustedSender, activate, openExternal, platform = process.platform, log = () => {} }) {
+function createDesktopNotifications({ Notification, isTrustedSender, activate, openExternal, setBadgeCount, platform = process.platform, log = () => {} }) {
   // Electron drops click handlers once a notification is garbage collected,
   // so each one is held until it is clicked or closed.
   const live = new Set();
@@ -65,15 +66,24 @@ function createDesktopNotifications({ Notification, isTrustedSender, activate, o
     return Promise.resolve(openExternal(MAC_NOTIFICATION_SETTINGS)).then(() => true, () => false);
   }
 
+  // The count on the Dock icon: what is waiting for this person.
+  function setBadge(count) {
+    const value = Math.max(0, Math.floor(Number(count)) || 0);
+    if (setBadgeCount) setBadgeCount(value);
+    return value;
+  }
+
   function register(ipcMain) {
     ipcMain.handle(SHOW_CHANNEL, (event, payload) => (isTrustedSender(event) ? show(payload, event.sender) : "refused"));
+    ipcMain.handle(BADGE_CHANNEL, (event, count) => (isTrustedSender(event) ? setBadge(count) : "refused"));
     ipcMain.handle(SETTINGS_CHANNEL, (event) => (isTrustedSender(event) ? openSettings() : false));
   }
 
-  return { show, openSettings, register, liveCount: () => live.size };
+  return { show, openSettings, setBadge, register, liveCount: () => live.size };
 }
 
 module.exports = {
+  BADGE_CHANNEL,
   CLICK_CHANNEL,
   SETTINGS_CHANNEL,
   SHOW_CHANNEL,

@@ -33,6 +33,8 @@ function harness({ roomId = 'mia', kind = 'agent', messages = [] } = {}) {
   const chip = { hidden: true, innerHTML: '' };
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Object,
     Promise,
     chatWs: { activeRoomId: roomId, activeKind: kind, activeLabel: 'Mia', configured: true, nativeConversations: conversations },
@@ -49,6 +51,7 @@ function harness({ roomId = 'mia', kind = 'agent', messages = [] } = {}) {
     createFreshConversationForActiveBot: () => { freshRequests += 1; return Promise.resolve({ id: 'new' }); },
     showBenchToast: (message) => toasts.push(message),
     isMiaOrchestrator: () => false,
+    openAskBeforeDoRequest: () => null,
   });
   vm.runInContext(constant('COMPOSER_SLASH_COMMANDS') + constant('HERMES_SLASH_COMMAND_NAMES'), context);
   for (const name of [

@@ -5,13 +5,32 @@ const {CLERK_INSTANCES}=require('./clerk-config');
 
 // The Hub stores at most 16,000 UTF-8 bytes per message. A longer reply is
 // cut at a character boundary rather than lost.
+// A definition holds long instructions and up to ten skills.
+const RESPONSE_BYTES=12*1024*1024;
 const REPLY_BYTES=16000, CUT_NOTE='\n\n[Reply shortened to fit the channel.]';
-function fitReply(text) {
-  if(typeof text!=='string' || Buffer.byteLength(text)<=REPLY_BYTES) return text;
-  const room=REPLY_BYTES-Buffer.byteLength(CUT_NOTE);
+function fitReply(text,limit=REPLY_BYTES) {
+  if(typeof text!=='string' || Buffer.byteLength(text)<=limit) return text;
+  const room=limit-Buffer.byteLength(CUT_NOTE);
   let cut=Buffer.from(text).subarray(0,room).toString('utf8');
   if(cut.endsWith('\uFFFD')) cut=cut.slice(0,-1);
   return cut.trimEnd()+CUT_NOTE;
+}
+// A reply ends with one line saying where it ran, such as "Grok · Ran on Tom's
+// Mia". The invisible mark lets Mia show it as a label and leave it out of what
+// bots read; an app that doesn't know the mark just shows the readable line.
+const RUN_LABEL_MARK='\n\n\u2063';
+function runLabel(provider,memberName) {
+  const first=String(memberName||'').trim().split(/\s+/)[0];
+  return [provider,'Ran on '+(first?first+'’s':'a teammate’s')+' Mia'].filter(Boolean).join(' · ');
+}
+function withRunLabel(text,label) {
+  if(typeof text!=='string' || !text.trim()) return fitReply(text);
+  const clean=text.replace(/\u2063/g,''),tail=RUN_LABEL_MARK+label;
+  return fitReply(clean,REPLY_BYTES-Buffer.byteLength(tail))+tail;
+}
+function withoutRunLabel(body) {
+  const at=typeof body==='string'?body.lastIndexOf(RUN_LABEL_MARK):-1;
+  return at<0?body:body.slice(0,at);
 }
 function failure(status,code) { return Object.assign(new Error(code),{status,code}); }
 async function requestHub(origin,token,method,path,body,fetcher=fetch) {
@@ -19,12 +38,16 @@ async function requestHub(origin,token,method,path,body,fetcher=fetch) {
   const response=await fetcher(origin+path,{method,redirect:'error',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
     body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
   const chunks=[];let length=0;
-  for await(const chunk of response.body) {length+=chunk.length;if(length>131072) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
+  for await(const chunk of response.body) {length+=chunk.length;if(length>RESPONSE_BYTES) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
   const result=JSON.parse(Buffer.concat(chunks));
-  if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','invalid_claim'].includes(result.error)?result.error:'hub_request_failed');
+  if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','invalid_claim','bot_storage_limit'].includes(result.error)?result.error:'hub_request_failed');
   return result;
 }
-function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getAccountIdentity,runBot,checkIntervalMs=15000,fetcher=fetch}) {
+function sharedSkills(value) {
+  return (Array.isArray(value)?value:[]).filter(skill=>skill && typeof skill.name==='string' && typeof skill.body==='string' && skill.body.trim())
+    .map(skill=>({name:skill.name,description:typeof skill.description==='string'?skill.description:'',body:skill.body}));
+}
+function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,checkIntervalMs=15000,fetcher=fetch}) {
   const journal=createHubBotJournal(db);
   const inFlight=new Map(), freshTokens=new Map(), selections=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
@@ -79,7 +102,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
       const history=[];let after=Math.max(0,claim.triggerSequence-40);
       for(let page=0;page<3 && after<claim.triggerSequence;page++) {
         const result=await requestHub(s.origin,token(),'GET',base(s)+'/messages/after/'+after,undefined,fetcher);
-        history.push(...(result.messages||[]).filter(row=>row.sequence<=claim.triggerSequence));
+        history.push(...(result.messages||[]).filter(row=>row.sequence<=claim.triggerSequence)
+          .map(row=>row.author_type==='bot'?{...row,body:withoutRunLabel(row.body)}:row));
         if(!result.next || result.next<=after) break;
         after=result.next;
       }
@@ -87,11 +111,11 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
       // Recheck revocation immediately before invoking the existing runtime.
       await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
       if(!localIdentityValid(s) || controller.signal.aborted) throw new Error('owner_changed');
-      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions};
+      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
         channel:{teamId:s.teamId,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null});
       if(controller.signal.aborted) throw new Error('cancelled');
-      journal.saveReply(s,run.job_id,fitReply(typeof reply==='string'?reply:reply && reply.text));
+      journal.saveReply(s,run.job_id,withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName)));
     } catch {
       journal.saveReply(s,run.job_id,'This bot could not complete the request. Please send a new message to try again.');
     } finally {clearTimeout(timeout);clearInterval(check);}
@@ -119,7 +143,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
     if(!isOwnerActive(owner) || !current || current.subject!==identity.subject || current.issuer!==identity.issuer || current.email!==identity.email) throw failure(403,'account_changed');
     const team=(me.teams||[]).find(team=>team.teamId===input.teamId && team.membership);
     if(!team || typeof team.membership.clerk_user_id!=='string' || team.membership.clerk_user_id!==identity.subject || String(team.membership.email||'').trim().toLowerCase()!==String(identity.email).trim().toLowerCase()) throw failure(403,'account_mismatch');
-    return {origin,owner,teamId:input.teamId,channelId:input.channelId,subject:team.membership.clerk_user_id};
+    return {origin,owner,teamId:input.teamId,channelId:input.channelId,subject:team.membership.clerk_user_id,
+      memberName:team.membership.display_name||current.displayName||''};
   }
   return {
     journal,
@@ -166,16 +191,12 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
       if(!isOwnerActive(owner)) throw failure(403,'account_unavailable');
       return {bots:listBots(owner).map(bot=>({id:String(bot.id),name:bot.name}))};
     },
-    async sync(owner,input,token) {
-      const scope=await context(owner,input,token);
-      const binding=journal.bindings(scope).find(b=>b.registration_id===input.botId);
-      const bot=binding && getBot(binding.local_bot_id,scope.owner);
-      if (!bot) throw failure(404,'bot_not_found');
-      return requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
-        {instructions:bot.instructions || bot.role || bot.output || '',source:'solo'},fetcher);
-    },
+    // Sharing forks the bot: the team gets its own copy of the instructions
+    // and of its skills' text, no longer tied to the Solo bot or the library.
+    // Automations and memories stay in Solo.
     async share(owner,input,token) {
-      if (!['linked','fork'].includes(input.mode)) throw failure(400,'sharing_mode_required');
+      // Personal agents are private to their owner and never leave the machine.
+      if(isPrivateAgent(String(input.localBotId||''))) throw failure(403,'agent_not_shareable');
       const scope=await context(owner,input,token);
       const bot=getBot(String(input.localBotId||''),scope.owner);
       if(!bot) throw failure(404,'bot_not_found');
@@ -183,8 +204,11 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,isOwnerActive,getA
       const result=await requestHub(scope.origin,token,'POST',`/v1/teams/${scope.teamId}/channels/${scope.channelId}/bots`,
         {id:binding.registration_id,name:binding.public_name},fetcher);
       if(!result.bot || result.bot.owner_id!==scope.subject || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
+      const skills=bundleSkills(bot);
+      // A Hub that has not been updated refuses skills and long instructions.
       const proposed=await requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
-        {mode:input.mode,instructions:bot.instructions || bot.role || bot.output || '',source:'manual'},fetcher);
+        {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual',...(skills.length?{skills}:{})},fetcher)
+        .catch(error=>{throw error.code!=='bot_storage_limit' && (error.status===400 || error.status===413)?failure(413,'bot_too_large_for_team'):error;});
       return {bot:result.bot,proposal:proposed.proposal};
     },
   };
@@ -198,8 +222,7 @@ function createHubBotRouter(options) {
   router.get('/available',handle(req=>client.available(req.userEmail)));
   router.post('/poll',handle(req=>client.poll(req.userEmail,req.body,req.get('x-hub-token'))));
   router.post('/run',handle(req=>client.run(req.userEmail,req.body,req.get('x-hub-token'))));
-  router.post('/sync',handle(req=>client.sync(req.userEmail,req.body,req.get('x-hub-token'))));
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
-module.exports={createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES};
+module.exports={sharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};

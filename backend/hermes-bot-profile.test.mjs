@@ -16,12 +16,27 @@ const {
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   GHOST_FIRST_PLUGIN,
+  ASK_BEFORE_DO_PLUGIN,
   GOOGLE_WORKSPACE_MCP_SERVER,
   GOOGLE_WORKSPACE_MCP_TOOLS,
   googleWorkspaceToolsConfigured,
   provisionHermesRuntimeProfiles,
   setHermesProfileModel,
 } = require('./hermes-bot-profile');
+
+test('the scheduler home gets the Claude provider too, since scheduled jobs run from it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-scheduler-plugin-'));
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot: path.join(root, 'profiles') });
+    const installed = path.join(root, 'plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
+    assert.equal(
+      fs.readFileSync(path.join(installed, 'plugin.yaml'), 'utf8'),
+      fs.readFileSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, 'plugin.yaml'), 'utf8')
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('Claude DirectSDK is provisioned unchanged for agent, Google-agent, and bot profiles', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-claude-plugin-'));
@@ -363,7 +378,8 @@ test('full workspace profiles all receive the Ghost-first plugin; search-only pr
       for (const profile of profiles) {
         const config = YAML.parse(fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8'));
         assert.equal(config.terminal, undefined, profile);
-        assert.equal(config.plugins, undefined, profile);
+        assert.deepEqual(config.plugins.enabled, [ASK_BEFORE_DO_PLUGIN], profile);
+        assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', ASK_BEFORE_DO_PLUGIN, '__init__.py')), true, profile);
         assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN)), false, profile);
       }
     }

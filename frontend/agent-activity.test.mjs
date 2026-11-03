@@ -132,3 +132,11 @@ test('the status panel is wired into the page', () => {
   assert.match(css, /\.chat-activity-panel\{/);
   assert.match(css, /@media \(max-width:1279px\)\{[^}]*\.chat-activity-panel\{display:none/);
 });
+
+test('the Working now panel shows only with detailed output', async () => {
+  const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('  function renderChatActivityPanel(){');
+  const body = source.slice(start, source.indexOf('\n  function tickChatActivityElapsed', start));
+  assert.match(body, /if\(chatOutputMode !== 'verbose' \|\| \(!live && !files\.length\)\)\{\n\s*panel\.hidden = true;/);
+  assert.match(source, /function renderOutputSetting\(mode\)\{\n\s*chatOutputMode = mode;\n\s*renderChatActivityPanel\(\);/, 'changing the setting applies at once');
+});

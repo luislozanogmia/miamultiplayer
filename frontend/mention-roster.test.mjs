@@ -6,7 +6,7 @@ const appUrl = new URL('./app.js', import.meta.url);
 
 test('mentions project the canonical private Mia separately from shared membership', async () => {
   const source = await readFile(appUrl, 'utf8');
-  const loadStart = source.indexOf('function loadMentionRoster(roomId){');
+  const loadStart = source.indexOf('function loadMentionRoster(roomId, refresh){');
   const loadEnd = source.indexOf('\n  // #17 calls this', loadStart);
   const renderStart = source.indexOf('function renderMentionPopover(){');
   const renderEnd = source.indexOf('\n  // NOT IN CHAT entries', renderStart);

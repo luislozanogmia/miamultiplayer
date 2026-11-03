@@ -7,7 +7,7 @@
 
 const SCHEMA_VERSION = 1;
 const TAG = /<MIA_BOT_SETUP>([\s\S]*?)<\/MIA_BOT_SETUP>/gi;
-const MAX_REQUEST = 2000;
+const MAX_REQUEST = 100000;
 
 function stripBotSetupBlocks(text) {
   let clean = String(text || '').replace(TAG, '');
@@ -29,7 +29,7 @@ function extractBotSetupRequest(text) {
   try { parsed = JSON.parse(matches[0][1]); } catch (_) { return { text: clean, request: null, error: 'invalid_json' }; }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { text: clean, request: null, error: 'invalid_json' };
   if (parsed.schemaVersion !== SCHEMA_VERSION) return { text: clean, request: null, error: 'unsupported_schema' };
-  const request = String(parsed.request || '').replace(/\s+/g, ' ').trim().slice(0, MAX_REQUEST);
+  const request = String(parsed.request || '').replace(/\r\n/g, '\n').trim().slice(0, MAX_REQUEST);
   if (!request) return { text: clean, request: null, error: 'missing_request' };
   return { text: clean, request: { request }, error: null };
 }
@@ -41,7 +41,7 @@ function botSetupInstruction() {
     'If you do not yet know what the bot should do, ask in plain words first and do not add the block.',
     'Once you know, end your reply with exactly one block and say in one short sentence that the draft is below for them to review:',
     '<MIA_BOT_SETUP>{"schemaVersion":1,"request":"A bot that finds the top five AI stories and posts them here every weekday at 8:00"}</MIA_BOT_SETUP>',
-    '- request: what the bot should do and produce, in the user\'s words, including any schedule they asked for. Do not add a schedule they did not ask for.',
+    '- request: what the bot should do and produce, in the user\'s words, including any schedule they asked for. If they gave a long brief, include all of it word for word. Do not add a schedule they did not ask for.',
     'Nothing is created until the user accepts the card, so do not say the bot exists.',
   ].join('\n');
 }

@@ -8,14 +8,19 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 engineering_root="$(cd -- "$script_dir/.." && pwd)"
 macos_root="$engineering_root/macos"
 user_home="${HOME:?HOME is required}"
-mia_data_root="${MIA_DEV_DATA_ROOT:-$user_home/Library/Application Support/Mia}"
+if [[ "$(uname -s)" == "Linux" ]]; then
+  default_data_root="$user_home/.miaos-dev"
+else
+  default_data_root="$user_home/Library/Application Support/Mia"
+fi
+mia_data_root="${MIA_DEV_DATA_ROOT:-$default_data_root}"
 # The Electron main process keys dev-mode isolation off this variable: with it
 # set, the dev app keeps its userData (renderer state, cookies, the browser
 # bridge) under <data root>/desktop instead of sharing the installed bundle's
 # profile. Export it even when the caller relied on the default.
 export MIA_DEV_DATA_ROOT="$mia_data_root"
 # The Hermes and Ghost programs can come from another, already installed data
-# root (dev_mode.sh points this at the installed Mia), while Hermes' own data
+# root (dev_mode.sh points this at its own dev runtime), while Hermes' own data
 # (keys, sessions, profiles) always stays under this data root.
 runtime_root="${MIA_DEV_RUNTIME_ROOT:-$mia_data_root}"
 hermes_home="$mia_data_root/hermes"
@@ -27,8 +32,8 @@ hermes_python="$hermes_install/venv/bin/python"
 ghost_home="$runtime_root/ghost-cli"
 [[ -d "$ghost_home" ]] || ghost_home="$runtime_root/runtime/ghost-cli"
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "This launcher is for macOS local testing." >&2
+if [[ "$(uname -s)" != "Darwin" && "$(uname -s)" != "Linux" ]]; then
+  echo "This launcher is for macOS and Linux local testing." >&2
   exit 1
 fi
 
@@ -62,6 +67,9 @@ fi
 gws_bin="${MIA_DEV_GWS_BIN:-}"
 if [[ -z "$gws_bin" ]] && command -v gws >/dev/null 2>&1; then
   gws_bin="$(command -v gws)"
+fi
+if [[ -z "$gws_bin" && -x "$runtime_root/gws/gws" ]]; then
+  gws_bin="$runtime_root/gws/gws"
 fi
 if [[ -z "$gws_bin" && -x "$user_home/.npm-global/bin/gws" ]]; then
   gws_bin="$user_home/.npm-global/bin/gws"
@@ -103,6 +111,12 @@ if [[ "${1:-}" == "--check" ]]; then
   exit 0
 fi
 [[ "$#" -eq 0 ]] || { echo "Usage: $0 [--check]" >&2; exit 2; }
+
+if [[ "$(uname -s)" == "Linux" ]]; then
+  display_exports="$(bash "$script_dir/linux-dev-display.sh")"
+  eval "$display_exports"
+  echo "Opening Mia on remote desktop display $DISPLAY."
+fi
 
 cd "$macos_root"
 exec npm run dev

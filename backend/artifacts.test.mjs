@@ -110,6 +110,25 @@ test('deleting a listed file moves it to the Trash with a free name, and refuses
   assert.equal(fs.existsSync(path.join(root, 'notes.txt')), true);
 });
 
+test('a folder on another disk is copied whole before the original goes', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-move-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const from = path.join(root, 'from');
+  const to = path.join(root, 'to');
+  fs.mkdirSync(path.join(from, 'inner'), { recursive: true });
+  fs.writeFileSync(path.join(from, 'inner', 'note.md'), 'x');
+  t.mock.method(fs, 'renameSync', () => { throw Object.assign(new Error('cross-device'), { code: 'EXDEV' }); });
+  artifacts.moveFile(from, to);
+  assert.equal(fs.readFileSync(path.join(to, 'inner', 'note.md'), 'utf8'), 'x');
+  assert.ok(!fs.existsSync(from));
+});
+
+test('the Windows Recycle Bin call covers folders as well as files', () => {
+  const source = fs.readFileSync(new URL('./artifacts.js', import.meta.url), 'utf8');
+  assert.match(source, /Test-Path -LiteralPath \$env:MIA_TRASH_PATH -PathType Container/);
+  assert.match(source, /::DeleteDirectory\(\$env:MIA_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin'\)/);
+});
+
 test('on Windows the file goes to the Recycle Bin through PowerShell, and on Linux to the freedesktop Trash', () => {
   const root = tempDir();
   fs.writeFileSync(path.join(root, 'a.pdf'), 'x');

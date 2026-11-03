@@ -17,7 +17,7 @@ test('the header holds the views; managing bots sits on the Bots section', async
 
   assert.ok(menuStart >= 0, 'account menu is present');
   assert.ok(html.indexOf('id="chatSidebarDeveloperBtn"', toolbarStart) > toolbarStart, 'developer toolbar control is present');
-  assert.deepEqual([...html.slice(viewsStart, html.indexOf('</div>', viewsStart)).matchAll(/data-sidebar-view="(\w+)"/g)].map((m) => m[1]), ['chat', 'automations', 'artifacts', 'browser']);
+  assert.deepEqual([...html.slice(viewsStart, html.indexOf('</div>', viewsStart)).matchAll(/data-sidebar-view="(\w+)"/g)].map((m) => m[1]), ['chat', 'automations', 'artifacts', 'browser', 'apps']);
   assert.ok(html.indexOf('id="chatSidebarManageAgentsBtn"') > botsStart, 'people/agents control is on the Bots section');
   assert.doesNotMatch(html, /id="chatSidebarToolsBtn"|id="chatToolsMenu"|id="chatSidebarPins"/, 'the tools menu is gone');
   assert.equal(html.indexOf('id="chatAcctManageAgents"', menuStart), -1, 'Manage Agents was removed from the account menu');
@@ -31,8 +31,8 @@ test('each creation and utility action has one control, all routed through runTo
   for (const action of ['new-chat', 'new-bot', 'new-agent', 'bot-store', 'automations', 'artifacts', 'connected-apps', 'web-browser']) {
     assert.equal((html.match(new RegExp(`data-tools-action="${action}"`, 'g')) || []).length, 1, `${action} appears once`);
   }
-  assert.match(html, /data-tools-action="new-agent" aria-disabled="true"/, 'New agent stays visible but unavailable');
-  assert.match(source, /function runToolsAction\(action\)\{[\s\S]*action === 'new-chat'\) openDmCompose\(\)[\s\S]*action === 'new-bot'\) startAgentSetupChat\(\)[\s\S]*action === 'new-agent'\) openHarnessAgentSetup\(\)[\s\S]*action === 'new-channel'\) openNewChannelFlow\(\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
+  assert.match(html, /data-tools-action="new-agent"><span/, 'New agent is an enabled control');
+  assert.match(source, /function runToolsAction\(action\)\{[\s\S]*action === 'new-chat'\) openDmCompose\(\)[\s\S]*action === 'new-bot'\) startAgentSetupChat\(\)[\s\S]*action === 'new-agent'\)\{ if\(window\.miaPrivateAgents\) window\.miaPrivateAgents\.create\(\); \}[\s\S]*action === 'new-channel'\) openNewChannelFlow\(\)[\s\S]*action === 'connected-apps'\) openPluginPane\(\)/);
   assert.match(source, /\['New direct message', openChatDmAddPopover\], \['New channel', openNewChannelFlow\]/, 'outside teams New channel is on the conversations +');
   assert.match(source, /function openHarnessAgentSetup\(\)[\s\S]*loadHarnessSettings\(false\)[\s\S]*openHarnessOnboarding\(settings\)/);
 });
@@ -40,7 +40,7 @@ test('each creation and utility action has one control, all routed through runTo
 test('every action control uses one canonical Lucide icon system', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const controls = [...html.matchAll(/<button[^>]*data-tools-action="[^"]+"[\s\S]*?<\/button>/g)].map((m) => m[0]).filter((b) => !b.includes('chat-dm-add-btn'));
-  assert.equal(controls.length, 7, 'rail, view, New chat and New agent controls');
+  assert.equal(controls.length, 8, 'rail, view, New chat and New agent controls');
   for (const control of controls) {
     assert.match(control, /data-icon-set="lucide"/);
     assert.doesNotMatch(control, /<img|data-mia-mark|stroke-width=/, 'legacy and one-off icon treatments are removed');
@@ -163,7 +163,7 @@ test('automation panel renders durable bot schedules separately from running wor
   assert.match(pane, /var automationBots = automationBotsForPanel\(isMia, agent\)/);
   assert.match(pane, /var automationRuns = activeAutomationRunsForPanel\(isMia, agent\)/);
   assert.match(pane, /<span class="cip-routines-title">Automations<\/span>/);
-  assert.match(pane, /<span class="cip-routines-title">Running now<\/span>/);
+  assert.ok(pane.indexOf('+ running + routines +') > 0, 'running automations are listed before scheduled ones');
   assert.doesNotMatch(pane, /var routines = tasks\.length/);
   assert.doesNotMatch(pane, /var running = tasks\.length/);
   assert.match(pane, /data-automation-id="/);
@@ -336,7 +336,7 @@ test('normal assistant info moves Automations up while browser collaboration int
 
   assert.ok(paneStart >= 0 && paneEnd > paneStart, 'assistant information pane exists');
   assert.doesNotMatch(pane, /Local(?:'s|&apos;s) computer|cip-computer/i);
-  assert.match(pane, /<div class="cip-routines">/);
+  assert.match(pane, /<div class="cip-details">/);
   assert.match(pane, /<span class="cip-routines-title">Automations<\/span>/);
   assert.match(browser, /document\.body\.classList\.add\('browser-collab-mode'\)/);
   assert.match(browser, /chatInfo\.mode = 'automations';\s*chatInfo\.open = false;/);
@@ -482,7 +482,7 @@ test('styled chat bot avatars open the selected bot in the right profile panel',
   assert.match(source, /id="styledAgentEditSave"/);
   assert.match(source, /id="styledAgentEditDelete"/);
   assert.match(source, /if\(remove\) remove\.addEventListener\('click', deleteEditCinemaAgent\)/);
-  assert.match(source, /function appConfirm\(message, confirmLabel\)[\s\S]*app-confirm-overlay open[\s\S]*confirm\.addEventListener\('click',[\s\S]*finish\(true\)/);
+  assert.match(source, /function appConfirm\(message, confirmLabel, options\)[\s\S]*app-confirm-overlay open[\s\S]*confirm\.addEventListener\('click',[\s\S]*finish\(true\)/);
   assert.match(source, /function deleteBenchAgent\(a, onDeleted\)[\s\S]*appConfirm\('Archive ' \+ a\.name \+ '\? [\s\S]*method:'DELETE'/);
   assert.match(source, /function removeDeletedBotChatState\(botId\)[\s\S]*metadata\.botId[\s\S]*var wasActive = deletedRoomIds\.indexOf\(String\(chatWs\.activeRoomId \|\| ''\)\) !== -1/);
   assert.match(source, /function removeDeletedBotChatState\(botId\)[\s\S]*if\(wasActive\)\{[\s\S]*chatWs\.activeRoomId = null[\s\S]*saveActiveChatLocation\(null\)[\s\S]*refreshChatMain\(\)/);
@@ -554,11 +554,11 @@ test('theme migration owns the legacy developer mode and diagnostics stay availa
 test('New Bot uses a chat-native review and explicit activation flow', async () => {
   const source = await readFile(appUrl, 'utf8');
 
-  assert.match(source, /function startAgentSetupChat\(\)/);
+  assert.match(source, /function startAgentSetupChat\(template\)/);
   assert.match(source, /chatWs\.activeKind === 'agent-setup'\)\{\s*setComposerBoundState\(true\)/);
-  assert.match(source, /Let’s set me up\. Tell me in a few words what you want me to do\?/);
+  assert.match(source, /Let’s set me up\. Tell me what you want me to do\. A few words or a full brief both work\./);
   assert.match(source, /api\('\/api\/bots\/interpret'/);
-  assert.match(source, /var modelSelection = chatModelSelectionMetadata\(\);[\s\S]*?intent: agentSetup\.intent,[\s\S]*?modelSelection:modelSelection/);
+  assert.match(source, /var modelSelection = chatModelSelectionMetadata\(\);[\s\S]*?intent: flow\.intent,[\s\S]*?modelSelection:modelSelection/);
   assert.match(source, /Nothing is created or scheduled until you confirm\./);
   assert.match(source, /Yes, activate bot/);
   // Setup creates only the bot. A schedule request is handed to the new bot,
@@ -568,7 +568,7 @@ test('New Bot uses a chat-native review and explicit activation flow', async () 
   assert.match(source, /automations: \[\],/);
   assert.match(source, /function handOffAgentSetupAutomation\(conversationId, draft\)\{[\s\S]*?api\(nativeConversationPath\(conversationId, '\/events'\)[\s\S]*?'Set up an automation for this request: ' \+ request[\s\S]*?clientIdempotencyKey: 'bot-setup-automation-' \+ conversationId/);
   assert.match(source, /Add the steps or the task prompt this automation should run\./);
-  assert.match(source, /agentAvatarHtml\('New Bot', AGENT_SETUP_ROOM_ID, 28\)/);
+  assert.match(source, /function agentSetupAvatarHtml\(size, markMode, profileInteractive\)/);
   assert.match(source, /status: 'running'/);
   assert.match(source, /createdBotRecords\.push\(created\);[\s\S]*?syncChatBotRecords\(createdBotRecords\);[\s\S]*?applyNativeConversationList/);
   assert.match(source, /I’m active\. What should I work on first\?/);
@@ -691,6 +691,13 @@ test('agent editor exposes a persisted avatar color with an automatic fallback',
   assert.match(html, /id="benchEditColorOptions"/);
   assert.match(styles, /\.bench-agent-color-swatch\.selected/);
   assert.match(styles, /\.bench-agent-color-custom input/);
+  // The custom-color control is a rainbow whatever its value, on every surface.
+  for (const prefix of ['bench', 'styled', 'manage']) {
+    assert.match(styles, new RegExp(`\\.${prefix}-agent-color-custom input\\{[^}]*background:var\\(--agent-color-rainbow\\)`));
+    assert.match(styles, new RegExp(`\\.${prefix}-agent-color-custom input::-webkit-color-swatch\\{[^}]*opacity:0`));
+    assert.match(styles, new RegExp(`\\.${prefix}-agent-color-custom\\.selected input`));
+  }
+  assert.match(source, /'-custom' \+ \(custom \? ' selected' : ''\)/);
   assert.match(styles, /\.mote-avatar-img\[role="button"\]/);
 });
 
@@ -826,8 +833,8 @@ test('bot creation has a bounded request with cancel, timeout, and retry recover
 test('chat-native bot setup can cancel or retry bounded interpretation and activation', async () => {
   const [source, styles] = await Promise.all([readFile(appUrl, 'utf8'), readFile(stylesUrl, 'utf8')]);
   assert.match(source, /var AGENT_SETUP_TIMEOUT_MS = 30000/);
-  assert.match(source, /function clearAgentSetupRequest\(abort\)/);
-  assert.match(source, /function finishAgentSetupFailure\(attempt, operation, timedOut, message\)/);
+  assert.match(source, /function clearAgentSetupRequest\(abort, flow\)/);
+  assert.match(source, /function finishAgentSetupFailure\(attempt, operation, timedOut, message, flow\)/);
   assert.match(source, /function cancelAgentSetupFlow\(\)/);
   assert.match(source, /id="agentSetupCancel"/);
   assert.match(source, /id="agentSetupRetry"/);
@@ -963,4 +970,18 @@ test('the address bar hands local files to the browser instead of refusing them'
   assert.equal(normalize('/Users/me/Documents/mia/dummy.pdf', 'google'), '/Users/me/Documents/mia/dummy.pdf');
   assert.equal(normalize('example.com', 'google'), 'https://example.com/');
   assert.throws(() => normalize('javascript://x', 'google'), /Only web addresses/);
+});
+
+test('the Theme choice is hidden and everyone gets the light theme', async () => {
+  const [source, html, styles] = await Promise.all([readFile(appUrl, 'utf8'), readFile(htmlUrl, 'utf8'), readFile(stylesUrl, 'utf8')]);
+  assert.match(html, /<div class="styled-settings-row" id="settingsThemeRow" hidden>/);
+  assert.match(styles, /\.styled-settings-row\[hidden\]\{display:none;\}/, 'the row layout must not override hidden');
+  assert.match(source, /var THEME_CHOICE_AVAILABLE = false;\s*function developerModeEnabled\(\)\{\s*if\(!THEME_CHOICE_AVAILABLE\) return false;/);
+});
+
+test('a shared session keeps the sidebar closed, even when the browser reopens after a restart', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /function browserSidebarWanted\(\)\{\s*\/\/[^\n]*\n\s*if\(document\.body\.classList\.contains\('mia-session-mode'\) && document\.body\.classList\.contains\('browser-collab-mode'\)\) return false;/);
+  // The open path sets the browser's mode first, so a reopen counts as in the call.
+  assert.match(source, /classList\.add\('browser-collab-mode'\);\s*setBrowserSidebarOpen\(browserSidebarWanted\(\)\);/);
 });

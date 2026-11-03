@@ -202,6 +202,14 @@ test('startup and workspace switching keep credentials behind a dedicated loadin
   assert.ok(loadingIndex >= 0 && loadingIndex < loginIndex, 'loading overlay is the first painted gate');
   assert.match(html, /id="appLoadingOverlay"[\s\S]*assets\/favicon\.svg[\s\S]*<span>Loading<\/span>/);
   assert.match(styles, /\.app-loading-overlay\{[^}]*z-index:10000;[^}]*display:flex;/);
+  // Sign-in never shows to a signed-in user on a full page load: it starts
+  // hidden, does not fade, and only the signed-out paths reveal it.
+  assert.match(html, /<div class="login-wall hidden" id="loginWall">/);
+  assert.doesNotMatch(styles, /\.login-wall\{[^}]*transition:/);
+  for (const name of ['showResolvedClerkSignIn', 'hideApp']) {
+    const start = source.indexOf(`function ${name}()`);
+    assert.match(source.slice(start, start + 1200), /el\('#loginWall'\)\.classList\.remove\('hidden'\)/, `${name} reveals sign-in`);
+  }
   assert.match(source, /function setAppLoading\(loading\)/);
 
   const showStart = source.indexOf('function showApp(email');
@@ -263,7 +271,7 @@ test('a workspace handoff paints the shell from the first frame only while fresh
   assert.equal(run({ to: 'solo', at: 1000 }, 40000), false, 'a stale handoff shows the normal start');
   assert.equal(run(null, 2000), false);
   assert.ok(html.indexOf('assets/workspace-handoff.js') < html.indexOf('styles.css'), 'runs before the first paint');
-  assert.match(styles, /html\.workspace-handoff \.app-loading-overlay,html\.workspace-handoff \.login-wall\{display:none;\}/);
+  assert.match(styles, /html\.workspace-handoff \.app-loading-overlay\{display:none;\}/);
   assert.match(styles, /html\.workspace-handoff \.app-shell\{display:flex;pointer-events:none;\}/);
 });
 
@@ -362,7 +370,7 @@ test('a shared channel still loading its history shows bars instead of "Loading 
   assert.equal((thread.innerHTML.match(/chat-placeholder-msg/g) || []).length, 4);
   assert.doesNotMatch(source, /Loading messages&hellip;/);
   const render = source.slice(source.indexOf('  function renderChatThread('), source.indexOf('    // Consecutive turns from the SAME human'));
-  assert.match(render, /if\(hubWorkspace\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);/);
+  assert.match(render, /if\(inHubRoom\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);/);
   assert.match(render, /if\(thread\.hasAttribute\('data-placeholder'\)\)\{\n\s+thread\.removeAttribute\('data-placeholder'\);\n\s+Promise\.resolve\(\)\.then\(function\(\)\{ if\(!thread\.hasAttribute\('data-placeholder'\)\) revealLoaded\(thread\); \}\);/);
 });
 

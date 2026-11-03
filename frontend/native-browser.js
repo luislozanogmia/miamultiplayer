@@ -29,15 +29,19 @@
   var add = document.createElement('button');
   add.type = 'button'; add.className = 'native-browser-new-tab';
   add.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
-  add.title = 'New tab'; add.setAttribute('aria-label', 'New browser tab');
-  // The new-tab button opens a tab in the view the strip is in; where that
-  // view has no new tab (Automations), it opens a browser tab.
+  add.title = 'Search or start something'; add.setAttribute('aria-label', 'Search or start something');
+  // The same in every view: the bar opens with its ways to start something.
+  // The browser needs a tab for the address to open in, so it makes one first.
   add.onclick = function () {
-    var provider = window.MiaTabStrip.mix.provider(docked);
-    if (docked !== 'browser' && provider.newTab) { provider.newTab(); return; }
-    if (docked !== 'browser') window.MiaTabStrip.mix.open('browser');
-    command('new').then(focusLocation);
+    var open = function () { focusLocation(); window.miaOpenStartRows(); };
+    (docked === 'browser' ? command('new') : Promise.resolve()).then(open);
   };
+  // In a session, right-click + for a tab the team doesn't get.
+  add.addEventListener('contextmenu', function (event) {
+    if (!window.MiaSpaceUI || window.MiaSpaceUI.sessionGroup() === null) return;
+    event.preventDefault();
+    command('privateTabMenu');
+  });
   strip.append(add);
   // » lists the groups a crowded strip had no room for. It sits outside the
   // scrolling strip so it is always in reach.
@@ -106,6 +110,11 @@
     miaToggle.setAttribute('aria-label', miaToggle.title);
     miaToggle.setAttribute('aria-pressed', String(open));
   }
+  // The pane also opens and closes from inside the app (its own button, the
+  // bot editor), and the app loads after this file: both must reach the toggle.
+  window.miaSyncRightToggle = syncRightToggle;
+  var detailsPane = document.getElementById('chatInfoPane');
+  if (detailsPane) new MutationObserver(syncRightToggle).observe(detailsPane, { attributes: true, attributeFilter: ['class'] });
   if (miaToggle) miaToggle.onclick = function () {
     if (chatRightPane()) { chatRightPane().toggle(); syncRightToggle(); return; }
     miaPane.collapsed = !miaPane.collapsed; applyMiaPane(); saveMiaPane();
@@ -175,25 +184,41 @@
   // too, holding their own tabs; mixed, it holds every view's tabs. It sits
   // in the row of whichever view is showing.
   var docked = 'browser';
-  var DOCKS = { chat: 'chatTabsRow', automations: 'automationsTabs' };
+  var DOCKS = { chat: 'chatTabsRow', automations: 'automationsTabs', artifacts: 'artifactsTabs', apps: 'appsTabs' };
   function showingView() {
     // Automations also sets the browser's mode class, so it is checked first.
     var classes = document.body.classList;
     if (classes.contains('automations-mode')) return 'automations';
+    if (classes.contains('artifacts-mode')) return 'artifacts';
+    if (classes.contains('apps-mode')) return 'apps';
     return open || classes.contains('browser-collab-mode') ? 'browser' : 'chat';
   }
-  // The address bar goes with the tabs: under them in every view. The
-  // view's own buttons (the chat header's, the Automations bar) sit at its
-  // right end; Back, Forward and Reload only act in the browser.
+  // The address bar goes with the tabs: under them in every view. Every
+  // view's bar holds the same few things: the left pane button, the search,
+  // the right pane toggle and the chat's "more" dots. Back, Forward, Reload
+  // and Downloads only show in the browser; the Automations bar stays in
+  // its page.
   var bar = document.getElementById('localBrowserForm');
   var barHome = bar && bar.nextSibling;
   var viewTools = document.createElement('div');
   viewTools.className = 'local-browser-view-tools';
-  // The right pane's toggle comes first so the view's buttons, ending with
-  // its "more" dots, close the row.
+  // The right pane's toggle sits just before the "more" dots that end the row.
   if (bar) miaToggle && miaToggle.parentNode === bar ? miaToggle.after(viewTools) : bar.append(viewTools);
-  var BAR_AFTER = { chat: '#chatTabsRow', automations: '.automations-tabs-row' };
-  var VIEW_TOOLS = { chat: '#channelHeader', automations: '.automations-bar' };
+  // The dots that end the row are the open tab's menu, the same as right-clicking it.
+  var tabMenuBtn = document.createElement('button');
+  tabMenuBtn.type = 'button';
+  tabMenuBtn.className = 'ch-icon-btn conv-more-btn';
+  tabMenuBtn.id = 'localBrowserTabMenuBtn';
+  tabMenuBtn.title = 'Tab options';
+  tabMenuBtn.setAttribute('aria-label', 'Tab options');
+  tabMenuBtn.setAttribute('aria-haspopup', 'menu');
+  tabMenuBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg>';
+  tabMenuBtn.addEventListener('click', function () {
+    if (state && state.activeId) command('tabMenu', { id: state.activeId });
+  });
+  if (bar) viewTools.after(tabMenuBtn);
+  var BAR_AFTER = { chat: '#chatTabsRow', automations: '#automationsOverlay .automations-tabs-row', artifacts: '#artifactsOverlay .automations-tabs-row', apps: '#appsOverlay .automations-tabs-row' };
+  var VIEW_TOOLS = { chat: '#channelHeader' };
   var toolsHome = null;
   function dockBar(view) {
     if (!bar) return;
@@ -201,6 +226,8 @@
     if (after && after.nextSibling !== bar) after.after(bar);
     if (!after && view === 'browser' && bar.nextSibling !== barHome) barHome.before(bar);
     var tools = view === 'browser' ? null : document.querySelector(VIEW_TOOLS[view]);
+    // A team chat keeps its own header, with its name and who is in it.
+    if (tools && tools.querySelector('.ch-stays')) tools = null;
     if (toolsHome && toolsHome.node !== tools) {
       toolsHome.next ? toolsHome.next.before(toolsHome.node) : toolsHome.parent.append(toolsHome.node);
       toolsHome = null;
@@ -217,16 +244,29 @@
     if (view === 'browser' && was && was !== 'browser') {
       var tab = selected();
       showUrl(tab && tab.url || '');
-      document.getElementById('localBrowserBackBtn').disabled = !tab || !tab.canGoBack;
-      document.getElementById('localBrowserForwardBtn').disabled = !tab || !tab.canGoForward;
-      document.getElementById('localBrowserReloadBtn').disabled = !(tab && tab.url);
     }
-    if (view !== 'browser') {
-      ['localBrowserBackBtn', 'localBrowserForwardBtn', 'localBrowserReloadBtn'].forEach(function (id) { document.getElementById(id).disabled = true; });
-      if (document.activeElement !== input) { input.value = ''; input.classList.remove('is-display-url'); }
-    }
+    syncPageNav();
+    if (view !== 'browser' && document.activeElement !== input) { input.value = ''; input.classList.remove('is-display-url'); }
   }
-  // Every view keeps the chat's buttons in this bar, last, so its "more"
+  // Back, Forward and Reload act on the page in the browser; in every other
+  // view Mia's own history drives them (app.js).
+  function syncPageNav() {
+    var reload = document.getElementById('localBrowserReloadBtn');
+    if (window.miaAppNav && window.miaAppNav.owns()) {
+      if (RELOAD_ICON) reload.innerHTML = RELOAD_ICON;
+      window.miaAppNav.sync();
+      return;
+    }
+    var tab = state ? selected() : null;
+    var url = tab && tab.url || '';
+    document.getElementById('localBrowserBackBtn').disabled = !tab || !tab.canGoBack;
+    document.getElementById('localBrowserForwardBtn').disabled = !tab || !tab.canGoForward;
+    reload.disabled = !url;
+    reload.innerHTML = tab && tab.loading ? STOP_ICON : RELOAD_ICON;
+    reload.title = tab && tab.loading ? 'Stop loading' : 'Reload';
+    reload.setAttribute('aria-label', reload.title);
+  }
+  // Every view keeps a bot chat's buttons in this bar, last, so its "more"
   // dots end the row. In the chat the whole header moves here; elsewhere the
   // header stays over the conversation pane and only its buttons move. The
   // header redraws itself, so its new buttons are moved again each time.
@@ -236,17 +276,24 @@
     var header = document.getElementById('channelHeader');
     if (!header) return;
     if (!chatHeaderWatch) {
-      chatHeaderWatch = new MutationObserver(function () { dockChatActions(bar.getAttribute('data-view') || docked); });
+      chatHeaderWatch = new MutationObserver(function () { dockBar(bar.getAttribute('data-view') || docked); });
       chatHeaderWatch.observe(header, { childList: true });
     }
-    // Artifacts has its own bar in place of the address bar.
-    var home = document.body.classList.contains('artifacts-mode') && document.querySelector('.artifacts-bar') || viewTools;
-    // The pane toggle goes along, just before the chat buttons.
+    var home = viewTools;
+    tabMenuBtn.hidden = view !== 'browser';
+    if (tabMenuBtn.previousSibling !== viewTools) viewTools.after(tabMenuBtn);
+    syncPageNav();
+    // The pane toggle sits just before the chat buttons.
     if (miaToggle && bar) {
-      if (home !== viewTools) { if (miaToggle.parentNode !== home) home.append(miaToggle); }
-      else if (miaToggle.nextSibling !== viewTools) viewTools.before(miaToggle);
+      if (miaToggle.nextSibling !== viewTools) viewTools.before(miaToggle);
     }
     var parked = chatActions && chatActions.parentNode && chatActions.parentNode !== header ? chatActions : null;
+    header.classList.toggle('is-side-pane', view !== 'chat');
+    if (header.querySelector(':scope > .ch-stays')) {
+      if (parked) parked.remove();
+      chatActions = null;
+      return;
+    }
     if (view === 'chat') {
       if (parked) header.querySelector(':scope > .ch-right') ? parked.remove() : header.append(parked);
       chatActions = null;
@@ -285,9 +332,12 @@
   function tabTypeIcon(url) {
     return /^(file:|https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$))/i.test(String(url || '')) ? BLOCKS_ICON : GLOBE_ICON;
   }
+  function restingBlank() { return state.tabs.length === 1 && !state.tabs[0].url && !state.tabs[0].groupId; }
   // Mixed tabs (tab-strip.js): the browser's tabs, shown in the other strips.
   window.MiaTabStrip.mix.register('browser', {
-    tabs: function () { return state.tabs.map(function (t) { return { id: t.id, label: t.title || 'New tab', iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url), groupId: t.groupId || null }; }); },
+    // The blank tab left after the last one closes is the browser at rest, not
+    // a tab you opened, so the other views don't list it.
+    tabs: function () { return restingBlank() ? [] : state.tabs.map(function (t) { return { id: t.id, label: t.title || 'New tab', iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url), groupId: t.groupId || null }; }); },
     select: function (id) { command('select', { id: id }); },
     render: function () { if (state) render(state); },
   });
@@ -331,15 +381,37 @@
   var botControlLabel = document.createElement('span');
   var takeOver = document.createElement('button');
   takeOver.type = 'button'; takeOver.className = 'local-browser-take-over'; takeOver.textContent = 'Take over';
-  // Follow keeps the page the bot works on in front, so you watch it move
-  // from tab to tab; Unfollow leaves you where you are.
+  // Follow is a switch. On keeps the page the bot works on in front, so you
+  // watch it move from tab to tab; off leaves you where you are.
   var followButton = document.createElement('button');
   followButton.type = 'button'; followButton.className = 'local-browser-follow';
+  followButton.setAttribute('role', 'switch');
+  followButton.innerHTML = '<span class="local-browser-follow-track" aria-hidden="true"></span>Follow';
   followButton.onclick = function () {
     var botId = botControl.getAttribute('data-bot-id');
     if (followingBot()) follow = null; else if (botId) startFollow(botId);
     render(state);
   };
+  // In a call the bar across the window holds who you follow: the name picks
+  // the person, the switch turns it on. shared-space-ui.js places this in the bar.
+  var callFollow = document.createElement('div');
+  callFollow.className = 'mia-space-call-follow'; callFollow.hidden = true;
+  var callFollowLabel = document.createElement('span');
+  callFollowLabel.className = 'mia-space-call-follow-label';
+  var callFollowSwitch = document.createElement('button');
+  callFollowSwitch.type = 'button'; callFollowSwitch.className = 'local-browser-follow';
+  callFollowSwitch.setAttribute('role', 'switch');
+  callFollowSwitch.innerHTML = '<span class="local-browser-follow-track" aria-hidden="true"></span>Follow';
+  callFollowSwitch.onclick = function () {
+    if (window.MiaSpaceUI) window.MiaSpaceUI.followWorker();
+    render(state);
+  };
+  var followWho = document.createElement('button');
+  followWho.type = 'button'; followWho.className = 'local-browser-follow-who'; followWho.hidden = true;
+  followWho.setAttribute('aria-haspopup', 'menu'); followWho.setAttribute('aria-expanded', 'false');
+  followWho.title = 'Choose who to follow';
+  followWho.onclick = function () { setFollowMenuOpen(!followMenuOpen); };
+  callFollow.append(callFollowLabel, followWho, callFollowSwitch);
   botControl.append(botControlLabel, followButton, takeOver);
   var urlWrap = overlay.querySelector('.local-browser-url-wrap');
   if (urlWrap) urlWrap.after(botControl);
@@ -426,18 +498,104 @@
     // Recheck after the reply may have ended; render() reschedules.
     botHoldTimer = setTimeout(function () { render(state); }, 1000);
   }
+  var followMenuOpen = false;
+  var followMenuRequested = false;
+  var followMenuToken = 0;
+  var followMenu = document.createElement('div');
+  followMenu.className = 'local-browser-follow-menu'; followMenu.hidden = true;
+  followMenu.setAttribute('role', 'menu'); followMenu.setAttribute('aria-label', 'Who to follow');
+  // Hangs from the call bar, over the tabs and the still of the page.
+  document.body.append(followMenu);
+  function renderFollowMenu() {
+    followMenu.replaceChildren();
+    window.MiaSpaceUI.followPeople().forEach(function (person) {
+      var row = document.createElement('button');
+      row.type = 'button'; row.className = 'local-browser-follow-person';
+      row.setAttribute('role', 'menuitemradio');
+      row.setAttribute('aria-checked', person.following ? 'true' : 'false');
+      var face = document.createElement('span');
+      face.className = 'local-browser-follow-face'; face.style.background = person.color;
+      face.textContent = person.name.split(/\s+/).map(function (part) { return part.charAt(0); }).join('').slice(0, 2).toUpperCase();
+      var text = document.createElement('span');
+      text.className = 'local-browser-follow-text';
+      var who = document.createElement('strong'); who.textContent = person.name + (person.host ? ' (host)' : '');
+      text.append(who);
+      if (person.where) { var where = document.createElement('small'); where.textContent = 'On ' + person.where; text.append(where); }
+      row.append(face, text);
+      row.onclick = function () {
+        setFollowMenuOpen(false);
+        window.MiaSpaceUI.followPerson(person.id);
+        render(state);
+      };
+      followMenu.append(row);
+    });
+  }
+  function setFollowMenuOpen(next) {
+    var token = ++followMenuToken;
+    followMenuRequested = next;
+    followWho.setAttribute('aria-expanded', next ? 'true' : 'false');
+    if (!next) {
+      followMenuOpen = false;
+      followMenu.hidden = true;
+      layout();
+      hideStill();
+      return Promise.resolve();
+    }
+    return showStill().then(function (ready) {
+      if (token !== followMenuToken) return;
+      if (!ready) return followMenuRequested ? setFollowMenuOpen(true) : undefined;
+      var screenBox = screen.getBoundingClientRect();
+      // The name can be past the page, over the chat; the list stays over the page.
+      followMenu.style.left = Math.max(8, Math.min(screenBox.left + screenBox.width - 268, Math.round(followWho.getBoundingClientRect().left))) + 'px';
+      renderFollowMenu();
+      followMenuOpen = true;
+      followMenu.hidden = false;
+      layout();
+    });
+  }
+  // A click anywhere else or Escape closes the list.
+  document.addEventListener('mousedown', function (event) {
+    if (!followMenuOpen || followMenu.contains(event.target) || followWho.contains(event.target)) return;
+    setFollowMenuOpen(false);
+  }, true);
+  document.addEventListener('keydown', function (event) {
+    if (followMenuOpen && event.key === 'Escape') setFollowMenuOpen(false);
+  });
+  function renderCallFollow() {
+    var ui = window.MiaSpaceUI, session = ui ? ui.sessionGroup() : null;
+    var shared = session !== null ? ui.activity({ groupId: session }) : null;
+    callFollow.hidden = !shared;
+    if (!shared) { if (followMenuOpen) setFollowMenuOpen(false); return; }
+    callFollowSwitch.hidden = !shared.canFollow;
+    var name = document.createElement('strong');
+    name.textContent = shared.lead;
+    var line = [name, document.createTextNode(shared.rest)];
+    var picking = shared.canFollow && ui.followPeople().length > 0;
+    followWho.hidden = !picking; callFollowLabel.hidden = picking;
+    if (picking) {
+      var caret = document.createElement('span');
+      caret.className = 'local-browser-follow-caret'; caret.setAttribute('aria-hidden', 'true');
+      followWho.replaceChildren(line[0], line[1], caret);
+    } else {
+      callFollowLabel.replaceChildren(line[0], line[1]);
+      if (followMenuOpen) setFollowMenuOpen(false);
+    }
+    callFollowSwitch.setAttribute('aria-checked', shared.following ? 'true' : 'false');
+    callFollowSwitch.title = shared.following ? 'Stop following' : 'Show the tab they work on as they move';
+  }
   function renderBotControl(tab) {
+    renderCallFollow();
     var activity = tab && botWorking(tab);
     botControl.hidden = !activity;
-
     if (!activity) { botControl.removeAttribute('data-bot-id'); return; }
-    botControl.setAttribute('data-bot-id', activity.botId);
+    takeOver.hidden = false;
+    followButton.hidden = false;
     var name = document.createElement('strong');
     name.textContent = activity.name || 'A bot';
     botControlLabel.replaceChildren(name, document.createTextNode(' has control'));
+    botControl.setAttribute('data-bot-id', activity.botId);
     var following = followingBot() === activity.botId;
-    followButton.textContent = following ? 'Unfollow' : 'Follow';
-    followButton.setAttribute('aria-pressed', following ? 'true' : 'false');
+    followButton.setAttribute('aria-checked', following ? 'true' : 'false');
     followButton.title = following ? 'Stay on this page when ' + (activity.name || 'the bot') + ' moves on'
       : 'Show the page ' + (activity.name || 'the bot') + ' works on as it moves between tabs';
   }
@@ -449,14 +607,15 @@
       var rect = screen.getBoundingClientRect();
       // Native views sit above HTML; hide them while something covers the page.
       // The docked "Your bots" panel doesn't: it narrows the screen instead.
-      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen &&
+      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered &&
         !document.body.classList.contains('native-browser-occluded-about') &&
-        !document.body.classList.contains('native-browser-occluded-conversation');
+        !document.body.classList.contains('native-browser-occluded-conversation') &&
+        !document.querySelector('.app-prompt-overlay.open');
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view
       // steps aside without pausing what it plays.
-      if (downloadsOpen || suggestCovered || tabsListOpen) payload.menu = true;
+      if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered) payload.menu = true;
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
@@ -470,14 +629,8 @@
     if (changedTab || document.activeElement !== input) showUrl(url);
     if (changedTab) { findBar.hidden = true; findResult.textContent = ''; }
     input.setAttribute('aria-invalid', tab && tab.error ? 'true' : 'false');
-    document.getElementById('localBrowserBackBtn').disabled = !tab || !tab.canGoBack;
-    document.getElementById('localBrowserForwardBtn').disabled = !tab || !tab.canGoForward;
-    var reload = document.getElementById('localBrowserReloadBtn');
-    reload.disabled = !url;
-    reload.innerHTML = tab && tab.loading ? STOP_ICON : RELOAD_ICON;
+    syncPageNav();
     overlay.setAttribute('data-loading', tab && tab.loading ? 'true' : 'false');
-    reload.title = tab && tab.loading ? 'Stop loading' : 'Reload';
-    reload.setAttribute('aria-label', reload.title);
     document.getElementById('localBrowserEmpty').hidden = !!url;
     var blocked = document.getElementById('localBrowserBlocked');
     blocked.hidden = !(tab && tab.error);
@@ -519,17 +672,27 @@
     // Mixed tabs: the other views fold before any of the browser's groups,
     // then the groups fold in what is left.
     var mix = window.MiaTabStrip.mix;
-    mix.notify('browser', JSON.stringify(state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId]; })));
+    mix.notify('browser', JSON.stringify(state.tabs.map(function (t) { return [t.id, t.title, t.favicon, t.groupId, !!t.url]; })));
     dock(showingView());
     var here = docked === 'browser';
     var hostTabs = here ? state.tabs : (mix.provider(docked).tabs ? mix.provider(docked).tabs() || [] : []);
-    add.hidden = !here && !mix.provider(docked).newTab && !mix.on();
     var items = mix.arrange(docked, hostTabs, tabStrip.room((here ? stripNeeded(groups) : hostTabs.length * TAB_MIN_WIDTH) + (add.offsetWidth || 0)));
     var byId = {};
     state.tabs.forEach(function (t) { byId[t.id] = t; });
     var reserved = items.reduce(function (sum, item) { return item.view === 'browser' ? sum : sum + (item.head ? MIX_HEAD_WIDTH : TAB_MIN_WIDTH); }, 0);
     var crowd = crowdedStrip(groups, working, reserved);
-    var signature = JSON.stringify([state.activeId, state.groups, owners, crowd, front, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, tabTypeIcon(t.url), t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
+    // In a session the strip is the session: its tabs, all showing, and your private ones.
+    var session = window.MiaSpaceUI ? window.MiaSpaceUI.sessionGroup() : null;
+    if (session !== null) {
+      crowd = { hidden: [], folded: [] };
+      front = {};
+      items = items.filter(function (item) {
+        if (item.head || item.view !== 'browser') return false;
+        var member = byId[item.tab.id];
+        return !!member && (member.groupId === session || member.private);
+      });
+    }
+    var signature = JSON.stringify([session, state.activeId, state.groups, owners, crowd, front, setupGroupPending(groups[setupGroupId]) ? setupGroupId : null, state.tabs.map(function (t) { return [t.id, t.title, t.favicon, tabTypeIcon(t.url), t.groupId, working[t.id] ? working[t.id].botId : '']; })]);
     // A redraw mid-rename would drop what the user is typing; catch up once
     // it ends. The tab strip itself waits out a drag.
     signature += JSON.stringify([docked, items.map(function (item) {
@@ -554,12 +717,13 @@
         var folded = tabGroup && crowd.folded.indexOf(tabGroup.id) >= 0;
         if (tabGroup && t.groupId !== previousGroupId) strip.append(groupHead(tabGroup, index, folded));
         previousGroupId = t.groupId || null;
-        if (tabGroup && (tabGroup.collapsed || folded)) return;
+        if (tabGroup && (tabGroup.collapsed || folded) && session === null) return;
         if (tabGroup && front[tabGroup.id] && front[tabGroup.id].id !== t.id) return;
         var group = tabStrip.tab({
-          id: t.id, label: t.title, active: here && t.id === state.activeId, iconUrl: t.favicon, iconHtml: tabTypeIcon(t.url),
+          id: t.id, label: t.private ? 'Private · ' + t.title : t.title, active: here && t.id === state.activeId,
+          iconUrl: t.private ? null : t.favicon, iconHtml: t.private ? PRIVATE_ICON : tabTypeIcon(t.url),
           index: index, groupId: t.groupId || null,
-          className: (tabGroup ? 'in-group' : '') + (working[t.id] ? ' bot-working' : ''),
+          className: (tabGroup ? 'in-group' : '') + (working[t.id] ? ' bot-working' : '') + (t.private ? ' private' : ''),
         });
         if (tabGroup) {
           paintGroup(group, tabGroup);
@@ -610,7 +774,9 @@
     var head = document.createElement('span');
     head.className = 'native-browser-group-head' + (g.name ? '' : ' unnamed') + (g.collapsed || folded ? ' collapsed' : '');
     paintGroup(head, g);
-    head.append(groupOwner(g), groupChip(g, index, folded));
+    // In a call the bar across the window names the group.
+    head.append(groupOwner(g));
+    if (!(window.MiaSpaceUI && window.MiaSpaceUI.isSharedGroup(g.id))) head.append(groupChip(g, index, folded));
     return head;
   }
   // When every tab would shrink past readable, idle groups fold to their
@@ -811,6 +977,13 @@
   });
   // A group's label sits before its tabs. Click collapses or expands it;
   // right-click opens the group menu; dropping a tab on it joins the group.
+  // The page last in front, or its last tab if none has been this session.
+  function latestGroupTab(tabs, groupId) {
+    return tabs.filter(function (t) { return t.groupId === groupId; }).reduce(function (latest, t) {
+      return !latest || (t.lastActiveAt || 0) >= (latest.lastActiveAt || 0) ? t : latest;
+    }, null);
+  }
+  var PRIVATE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>';
   function groupChip(g, index, folded) {
     var chip = document.createElement('button');
     chip.type = 'button';
@@ -821,10 +994,14 @@
     chip.title = (g.name || 'Unnamed group') + (g.collapsed ? ' (collapsed)' : folded ? ' (folded to make room)' : '');
     chip.textContent = g.name;
     chip.onclick = function () {
-      // A folded group opens by bringing its last tab to the front.
-      var last = folded && state.tabs.filter(function (t) { return t.groupId === g.id; }).pop();
-      if (last) command('select', { id: last.id });
-      else command('groupUpdate', { groupId: g.id, collapsed: !g.collapsed });
+      // A group already in front folds or unfolds. Otherwise the chip opens
+      // the group's latest page, from any view.
+      var inFront = docked === 'browser' && !folded && state.tabs.some(function (t) { return t.groupId === g.id && t.id === state.activeId; });
+      if (inFront) { command('groupUpdate', { groupId: g.id, collapsed: !g.collapsed }); return; }
+      var latest = latestGroupTab(state.tabs, g.id);
+      if (!latest) command('groupUpdate', { groupId: g.id, collapsed: !g.collapsed });
+      else if (docked !== 'browser') window.MiaTabStrip.mix.open('browser', latest.id);
+      else command('select', { id: latest.id });
     };
     chip.addEventListener('contextmenu', function (event) {
       event.preventDefault();
@@ -1110,6 +1287,20 @@
       group.append(downloadRow(item));
     });
   }
+  // The call bar's Invite and More lists hang over the page, which draws above
+  // any HTML, so a still of the page stands in while one is open.
+  var callMenuCovered = false, callMenuRequested = false, callMenuToken = 0;
+  function coverPage(next) {
+    var token = ++callMenuToken;
+    callMenuRequested = next;
+    if (!next) { callMenuCovered = false; layout(); hideStill(); return; }
+    if (!open) return;
+    showStill().then(function (ready) {
+      if (token !== callMenuToken || !ready) return;
+      callMenuCovered = true;
+      layout();
+    });
+  }
   var snapshot = document.getElementById('localBrowserSnapshot');
   var downloadsToken = 0;
   var snapshotTimer = null;
@@ -1147,15 +1338,15 @@
   function showStill() {
     clearTimeout(snapshotTimer);
     syncStillPage();
-    if (!snapshot.hidden && (suggestCovered || downloadsOpen || tabsListOpen)) return Promise.resolve(true);
-    if (!suggestCovered && !downloadsOpen && !tabsListOpen) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
+    if (!snapshot.hidden && (suggestCovered || downloadsOpen || tabsListOpen || followMenuOpen || callMenuCovered)) return Promise.resolve(true);
+    if (!suggestCovered && !downloadsOpen && !tabsListOpen && !followMenuOpen && !callMenuCovered) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
     if (stillPending) return stillPending;
     if (!pageShowing()) return Promise.resolve(true);
     var generation = stillGeneration;
     var key = stillPage;
     function current() {
       return generation === stillGeneration && key === stillPageKey() &&
-        (suggestRequested || downloadsRequested || tabsListRequested);
+        (suggestRequested || downloadsRequested || tabsListRequested || followMenuRequested || callMenuRequested);
     }
     var pending = command('snapshot').then(function (result) {
       if (!current()) return false;
@@ -1176,7 +1367,7 @@
     return pending;
   }
   function hideStill() {
-    if (downloadsRequested || suggestRequested || tabsListRequested) return;
+    if (downloadsRequested || suggestRequested || tabsListRequested || followMenuRequested || callMenuRequested) return;
     // Invalidate capture/decode immediately, even before either menu has
     // committed its cover. Keep only an already visible still for the
     // native view's short return transition; a reopen always captures anew.
@@ -1247,7 +1438,8 @@
     downloadsBtn.focus({ preventScroll: true });
   });
   new ResizeObserver(layout).observe(screen);
-  new MutationObserver(layout).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  // Dialogs are added to the body directly.
+  new MutationObserver(layout).observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
   function syncNativeTheme() {
     render(state);
     return command('theme', { dark: developerModeEnabled() });
@@ -1289,6 +1481,10 @@
     if (event.key === 'Escape') { input.value = selected() && selected().url || ''; input.blur(); }
   });
   window.miaNativeBrowser = {
+    refresh: function () { render(state); },
+    // The shared call's follow controls, and the still under its menus.
+    callFollow: callFollow,
+    coverPage: coverPage,
     // Counts only (feedback report); never URLs or titles.
     counts: function () { return { tabs: (state.tabs || []).length, groups: (state.groups || []).length }; },
     render: function (visible) {

@@ -28,6 +28,8 @@ test('older history advances through hidden pages, deduplicates, and stops only 
   };
   const context = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Promise,
     activeWorkspaceKey: 'solo',
     chatWs: { activeRoomId: 'room-a', byRoom: { 'room-a': state } },
@@ -61,6 +63,8 @@ test('failed older page keeps its cursor and never enters an automatic retry loo
   const scheduled = [];
   const context = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Promise, activeWorkspaceKey: 'solo', chatWs: { activeRoomId: 'room-a', byRoom: { 'room-a': state } },
     api() {
       calls += 1;
@@ -87,12 +91,15 @@ function loadRoomContext({ state, api }) {
   const loadRoom = functionSlice('loadChatRoom', '\n\n  function selectHomeRoom');
   let socketConnections = 0;
   const context = {
+    chatTabStaysClosed: false, reopenChatTab() {},
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Promise, Date, Number, activeWorkspaceKey: 'solo', AGENT_SETUP_ROOM_ID: '__setup__',
     chatRoster: {},
     chatWs: { native: false, nativeSocketConversationId: null, activeRoomId: null, configured: true, byRoom: { 'room-a': state } },
-    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {}, swapChatDraft() {},
-    chatModelPicker: null, saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
+    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttachmentError() {}, clearChatAttention() {}, closeNativeChatSocket() {}, swapChatDraft() {},
+    chatModelPicker: null, saveActiveChatLocation() {}, rememberAgentChat() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     chatRoomState(roomId) { return context.chatWs.byRoom[roomId]; }, api,
     nativeEventsUrl() { return '/events'; },
     nativeEventsToMessages(events) {
@@ -144,6 +151,8 @@ test('history filter defaults by stable identity, supports All, and resets acros
   const end = source.indexOf('\n\n  function renderConversationHeaderActions', start);
   const context = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     activeWorkspaceKey: 'solo',
     chatWs: {
       activeRoomId: 'room-a',
@@ -206,18 +215,29 @@ test('native browser visibility owner occludes and restores the live view withou
   const end = nativeBrowserSource.indexOf('\n  function render(next)', start);
   const commands = [];
   const classes = new Set();
+  let dialog = null;
   const context = {
     hubWorkspace: () => false,
-    scheduled: false, open: true, lastLayout: '', downloadsOpen: false, suggestCovered: false, tabsListOpen: false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
+    scheduled: false, open: true, lastLayout: '', downloadsOpen: false, suggestCovered: false, tabsListOpen: false, followMenuOpen: false, callMenuCovered: false,
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
     overlay: { hidden: false },
-    document: { body: { classList: { contains(name) { return classes.has(name); } } } },
+    document: { querySelector: () => dialog, body: { classList: { contains(name) { return classes.has(name); } } } },
     bridge: { command(payload) { commands.push(payload); return Promise.resolve(); } },
     JSON,
   };
   vm.createContext(context);
   vm.runInContext(nativeBrowserSource.slice(start, end), context);
+  context.layout();
+  assert.equal(commands.at(-1).visible, true);
+  dialog = {};
+  context.lastLayout = '';
+  context.layout();
+  assert.equal(commands.at(-1).visible, false, 'an open dialog hides the page that would cover it');
+  dialog = null;
+  context.lastLayout = '';
   context.layout();
   assert.equal(commands.at(-1).visible, true);
   context.downloadsOpen = true;
@@ -257,7 +277,7 @@ test('native browser visibility owner occludes and restores the live view withou
 test('conversation drawer toggles native occlusion and row avatars retain bookmark markup', () => {
   assert.match(source, /function openConversationDrawer\(mode\)[\s\S]*classList\.add\('native-browser-occluded-conversation'\)/);
   assert.match(source, /function closeDmCompose\(\)[\s\S]*classList\.remove\('native-browser-occluded-conversation'\)/);
-  assert.match(nativeBrowserSource, /MutationObserver\(layout\)\.observe\(document\.body, \{ attributes: true, attributeFilter: \['class'\] \}\)/);
+  assert.match(nativeBrowserSource, /MutationObserver\(layout\)\.observe\(document\.body, \{ attributes: true, attributeFilter: \['class'\], childList: true \}\)/);
   assert.match(source, /conversation-history-bookmark[\s\S]*conversation-history-row-agent/);
 });
 

@@ -15,6 +15,7 @@ function fixture(t,localOwner=owner) {
   let memberEmail=owner, active=true, fail=false;
   let identity={email:owner,subject:'user_owner',issuer:'https://clerk.miamultiplayer.com'};
   const bot={id:'local-private-id',name:'Helper',instructions:'Private instructions stay local',owner};
+  let versionAnswer=null;
   const client=createHubBotClient({db,dataDirectory,isOwnerActive:()=>active,
     getAccountIdentity:()=>identity,
     getBot:(id,email)=>id===bot.id && email===localOwner?bot:null,listBots:email=>email===localOwner?[bot]:[],
@@ -23,10 +24,10 @@ function fixture(t,localOwner=owner) {
       if(url.endsWith('/v1/me')) return new Response(JSON.stringify({teams:[{teamId,membership:{clerk_user_id:'user_owner',email:memberEmail}}]}));
       if(fail) throw new Error('connection interrupted');
       const body=JSON.parse(options.body);
-      if(url.endsWith('/versions')) return new Response(JSON.stringify({proposal:{version:1}}));
+      if(url.endsWith('/versions')) return versionAnswer?versionAnswer():new Response(JSON.stringify({proposal:{version:1}}));
       return new Response(JSON.stringify({bot:{...body,owner_id:'user_owner'}}));
     }});
-  return {client,requests,input:{teamId,channelId,localBotId:bot.id,mode:'linked'},setIdentity:value=>identity=value,setEmail:value=>memberEmail=value,setActive:value=>active=value,setFail:value=>fail=value};
+  return {client,requests,setVersionAnswer:value=>versionAnswer=value,input:{teamId,channelId,localBotId:bot.id},setIdentity:value=>identity=value,setEmail:value=>memberEmail=value,setActive:value=>active=value,setFail:value=>fail=value};
 }
 
 test('sharing binds the same local and Hub account, publishes explicitly shared instructions without local identifiers, and retries one registration',async t=>{
@@ -41,6 +42,16 @@ test('sharing binds the same local and Hub account, publishes explicitly shared 
   assert.equal(JSON.stringify(first).includes('Private'),false);
   assert.equal(JSON.stringify(first).includes('local-private-id'),false);
   assert.deepEqual(f.client.available(owner),{bots:[{id:'local-private-id',name:'Helper'}]});
+});
+
+test('sharing always forks and sends only the instructions, even when asked for a linked copy',async t=>{
+  const f=fixture(t);
+  await f.client.share(owner,{...f.input,mode:'linked'},'fixture.token');
+  const version=f.requests.filter(r=>r.options.method==='POST' && r.url.endsWith('/versions')).map(r=>JSON.parse(r.options.body));
+  assert.equal(version.length,1);
+  assert.deepEqual(Object.keys(version[0]).sort(),['instructions','mode','source']);
+  assert.equal(version[0].mode,'fork');
+  assert.equal(typeof f.client.sync,'undefined');
 });
 
 test('different Hub identity, disabled account, unknown local bot and invalid scope fail closed',async t=>{
@@ -67,4 +78,12 @@ test('Clerk local-profile alias uses linked external identity while preserving l
     f.setIdentity(identity);
     await assert.rejects(f.client.share(localOwner,f.input,'fixture.token'));
   }
+});
+
+test('a full team storage allowance is reported as itself, not as an oversized bot',async t=>{
+  const f=fixture(t);
+  f.setVersionAnswer(()=>new Response(JSON.stringify({error:'bot_storage_limit'}),{status:413}));
+  await assert.rejects(f.client.share(owner,f.input,'fixture.token'),{status:413,code:'bot_storage_limit'});
+  f.setVersionAnswer(()=>new Response(JSON.stringify({error:'body_too_large'}),{status:413}));
+  await assert.rejects(f.client.share(owner,f.input,'fixture.token'),{status:413,code:'bot_too_large_for_team'});
 });

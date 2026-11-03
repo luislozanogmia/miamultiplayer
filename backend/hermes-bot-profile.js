@@ -20,6 +20,8 @@ const CLAUDE_SUBSCRIPTION_PLUGIN = 'claude-subscription-directsdk-experimental';
 const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
 // Refuses Hermes' own browser tools until the session has tried ghost-cli.
 const GHOST_FIRST_PLUGIN = 'mia-ghost-first';
+const ASK_BEFORE_DO_PLUGIN = 'mia-ask-before-do';
+const ASK_BEFORE_DO_TOOLSET = 'mia_ask_before_do';
 // These top-level lists describe profile intent; the pinned gateway uses its
 // full CLI defaults because Mia does not set platform_toolsets.cli. Google
 // MCP tools are additive, not a confinement boundary for other runtime tools.
@@ -203,6 +205,7 @@ function runtimeProfileConfig({
     ...profileModelBlock(model),
     'toolsets:',
     ...toolsets.map((name) => `  - ${name}`),
+    `  - ${ASK_BEFORE_DO_TOOLSET}`,
     'agent:',
     `  max_turns: ${maxTurns}`,
     '  coding_context: off',
@@ -241,15 +244,14 @@ function runtimeProfileConfig({
       `  auto_source_bashrc: ${terminal.autoSourceBashrc === true ? 'true' : 'false'}`,
     );
   }
-  if (terminal && terminal.cwd) {
-    // Only profiles with a terminal can run ghost-cli, so only they get the
-    // ghost-first guard; elsewhere it would lock the browser fallback away.
-    lines.push(
-      'plugins:',
-      '  enabled:',
-      `    - ${GHOST_FIRST_PLUGIN}`,
-    );
-  }
+  // Only profiles with a terminal can run ghost-cli, so only they get the
+  // ghost-first guard; elsewhere it would lock the browser fallback away.
+  lines.push(
+    'plugins:',
+    '  enabled:',
+    `    - ${ASK_BEFORE_DO_PLUGIN}`,
+    ...(terminal && terminal.cwd ? [`    - ${GHOST_FIRST_PLUGIN}`] : []),
+  );
   if (googleWorkspace) lines.push(...googleWorkspaceMcpConfig());
   lines.push('');
   return lines.join('\n');
@@ -314,6 +316,7 @@ function provisionRuntimeProfile({
   fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(profileDir, 0o700);
   provisionBundledPlugin(profileDir, CLAUDE_SUBSCRIPTION_PLUGIN);
+  provisionBundledPlugin(profileDir, ASK_BEFORE_DO_PLUGIN);
   if (terminal && terminal.cwd) provisionBundledPlugin(profileDir, GHOST_FIRST_PLUGIN);
   for (const name of ['sessions', 'memories', 'skills', 'cron']) {
     fs.mkdirSync(path.join(profileDir, name), { recursive: true, mode: 0o700 });
@@ -452,7 +455,51 @@ function provisionHermesGoogleAgentProfile({
   });
 }
 
+// Personal agents (see private-agents.js) each get their own pair of Hermes
+// profiles, so memory, sessions and skills are separate from Mia's and from
+// every other agent. The names are derived from the agent id and can never
+// equal one of the four fixed profiles above.
+const PRIVATE_AGENT_ID_PATTERN = /^agent_[a-f0-9]{24}$/;
+const PRIVATE_AGENT_PROFILE_PATTERN = /^miaos-agent-[a-f0-9]{24}(-google)?$/;
+
+function privateAgentProfileName(agentId, google = false) {
+  if (!PRIVATE_AGENT_ID_PATTERN.test(String(agentId || ''))) {
+    throw new Error('invalid personal agent id');
+  }
+  return 'miaos-' + String(agentId).replace(/_/g, '-') + (google ? '-google' : '');
+}
+
+// Same posture as Mia's own agent profiles (full tools, the shared guarded
+// workspace terminal, background review on) except that a personal agent does
+// not edit bots, so the instruction-file guard stays on. It reads the same
+// toolset lists as Mia; platform_toolsets is deliberately not set.
+function provisionHermesPrivateAgentProfile({
+  agentId,
+  google = false,
+  profilesRoot = path.join(hermesHome(), 'profiles'),
+  searchOnly = MIAOS_AGENT_SEARCH_ONLY,
+  workspaceDir,
+} = {}) {
+  if (typeof searchOnly !== 'boolean') throw new Error('Mia agent profile searchOnly must be a boolean');
+  if (MIAOS_AGENT_SEARCH_ONLY && !searchOnly) {
+    throw new Error(`Mia release profile ${MIAOS_RELEASE_PROFILE} cannot disable search-only agent confinement`);
+  }
+  return provisionRuntimeProfile({
+    profilesRoot,
+    profile: privateAgentProfileName(agentId, google),
+    toolsets: searchOnly ? SEARCH_ONLY_TOOLSETS : FULL_AGENT_TOOLSETS,
+    maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
+    terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
+    googleWorkspace: google === true,
+    backgroundReview: backgroundReviewEnabledForGateway(),
+    editsBots: false,
+  });
+}
+
 function provisionHermesRuntimeProfiles(options = {}) {
+  // Scheduled jobs run from the Hermes home itself, not from a profile, so a
+  // job pinned to the Claude subscription needs the provider there as well.
+  provisionBundledPlugin(options.profilesRoot ? path.dirname(options.profilesRoot) : hermesHome(), CLAUDE_SUBSCRIPTION_PLUGIN);
   const agent = provisionHermesAgentProfile(options);
   const googleAgent = provisionHermesGoogleAgentProfile(options);
   const bot = provisionHermesBotProfile(options);
@@ -485,10 +532,14 @@ module.exports = {
   runtimeProfileConfig,
   setHermesProfileModel,
   GHOST_FIRST_PLUGIN,
+  ASK_BEFORE_DO_PLUGIN,
   provisionBundledPlugin,
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,
   provisionHermesBotProfile,
   provisionHermesGoogleBotProfile,
   provisionHermesRuntimeProfiles,
+  PRIVATE_AGENT_PROFILE_PATTERN,
+  privateAgentProfileName,
+  provisionHermesPrivateAgentProfile,
 };

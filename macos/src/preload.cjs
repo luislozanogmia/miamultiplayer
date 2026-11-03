@@ -6,6 +6,11 @@ const { contextBridge, ipcRenderer } = require("electron");
 // Node.js access and no raw IPC object; it can only ask the main process to
 // retry the local connection when the backend was unavailable at startup.
 contextBridge.exposeInMainWorld("miaDesktop", {
+  onOpenSettings: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("miaos-open-settings", listener);
+    return () => ipcRenderer.removeListener("miaos-open-settings", listener);
+  },
   version: () => ipcRenderer.sendSync("mia-version"),
   ready: () => ipcRenderer.send("miaos-renderer-ready"),
   hydrated: () => ipcRenderer.send("miaos-renderer-hydrated"),
@@ -32,11 +37,24 @@ contextBridge.exposeInMainWorld("miaDesktop", {
   artifact: {
     open: (url) => ipcRenderer.invoke("miaos-artifact-open", url),
   },
+  // Apps run in a sandboxed native view over the page's pane (app-sandbox.cjs).
+  apps: {
+    open: (source) => ipcRenderer.invoke("miaos-app-pane", { ...source, action: "open" }),
+    layout: (key, bounds) => ipcRenderer.invoke("miaos-app-pane", { action: "layout", key, bounds }),
+    reload: (key) => ipcRenderer.invoke("miaos-app-pane", { action: "reload", key }),
+    close: (key) => ipcRenderer.invoke("miaos-app-pane", { action: "close", key }),
+    onState: (callback) => {
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on("miaos-app-state", listener);
+      return () => ipcRenderer.removeListener("miaos-app-state", listener);
+    },
+  },
   notifications: {
     // Resolves "shown", "blocked" (macOS said no), "pending" (still asking),
     // "failed" or "unsupported".
     show: (payload) => ipcRenderer.invoke("miaos-notification-show", payload),
     openSettings: () => ipcRenderer.invoke("miaos-notification-settings"),
+    setBadge: (count) => ipcRenderer.invoke("miaos-notification-badge", count),
     onClick: (callback) => {
       const listener = (_event, tag) => callback(tag);
       ipcRenderer.on("miaos-notification-click", listener);

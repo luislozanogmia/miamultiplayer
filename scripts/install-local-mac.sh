@@ -39,64 +39,17 @@ done
 
 mkdir -p "$miaos_home/downloads" "$local_bin"
 
-pinned_clone() {
-  local url="$1" commit="$2" destination="$3"
-  rm -rf -- "$destination"
-  git init --quiet "$destination"
-  git -C "$destination" remote add origin "$url"
-  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false \
-    git -c credential.helper= -c core.askPass=/bin/false -C "$destination" \
-      fetch --quiet --depth 1 origin "$commit"
-  git -C "$destination" checkout --quiet --detach FETCH_HEAD
-  local actual
-  actual="$(git -C "$destination" rev-parse HEAD)"
-  [[ "$actual" == "$commit" ]] || { echo "Commit mismatch in $destination: expected $commit, got $actual" >&2; exit 1; }
-  rm -rf -- "$destination/.git"
-}
+# shellcheck source=pinned-runtime.sh
+source "$script_dir/pinned-runtime.sh"
 
 echo "[1/9] Downloading pinned Hermes ${HERMES_TAG} (${HERMES_VERSION})"
-  extract_root="$miaos_home/downloads/hermes-source"
-  pinned_clone "$HERMES_SOURCE_URL" "$HERMES_COMMIT" "$extract_root"
-  (cd "$extract_root" && git apply "$script_dir/hermes-noninteractive.patch")
-  (cd "$extract_root" && git apply "$script_dir/hermes-profile-picker.patch")
-  (cd "$extract_root" && git apply "$script_dir/hermes-model-switch-history.patch")
-  (cd "$extract_root" && git apply "$script_dir/hermes-gpt6-tiers.patch")
-  (cd "$extract_root" && git apply "$script_dir/hermes-mia-browser-worker-scheduler.patch")
-  (cd "$extract_root" && git apply "$script_dir/hermes-process-secrets.patch")
+echo "[2/9] Installing the pinned Hermes runtime (no provider setup, no skills)"
+hermes_install_dir="$hermes_home/hermes-agent"
+provision_hermes "$hermes_home" "$miaos_home/downloads" "$script_dir"
 
-  echo "[2/9] Installing the pinned Hermes runtime (no provider setup, no skills)"
-  hermes_install_dir="$hermes_home/hermes-agent"
-  rm -rf -- "$hermes_install_dir"
-  mkdir -p "$hermes_home"
-  mv "$extract_root" "$hermes_install_dir"
-  printf '%s\n' "$HERMES_COMMIT" > "$hermes_install_dir/.miaos-source-commit"
-  for stage in venv python-deps node-deps config complete; do
-    GIT_TERMINAL_PROMPT=0 HERMES_HOME="$hermes_home" \
-      bash "$hermes_install_dir/scripts/install.sh" \
-        --stage "$stage" \
-        --skip-setup \
-        --skip-browser \
-        --skip-computer-use \
-        --no-skills \
-        --non-interactive \
-        --dir "$hermes_install_dir"
-  done
-  "$hermes_home/bin/uv" pip install --quiet --python "$hermes_install_dir/venv/bin/python" \
-    'boto3==1.42.89' \
-    'edge-tts==7.2.7'
-  printf '%s\n' "miaos-bundle" > "$hermes_install_dir/.install_method"
-
-  echo "[3/9] Downloading pinned Ghost CLI ${GHOST_VERSION}"
-  ghost_extract_root="$miaos_home/downloads/ghost-cli-source"
-  ghost_install_dir="$miaos_home/ghost-cli"
-  pinned_clone "$GHOST_SOURCE_URL" "$GHOST_COMMIT" "$ghost_extract_root"
-  [[ -f "$ghost_extract_root/in_app_browser_transport.py" ]] || {
-    echo "Pinned Ghost CLI does not contain the in-app browser connector." >&2
-    exit 1
-  }
-  rm -rf -- "$ghost_install_dir"
-  mv "$ghost_extract_root" "$ghost_install_dir"
-  printf '%s\n' "$GHOST_COMMIT" > "$ghost_install_dir/.miaos-source-commit"
+echo "[3/9] Downloading pinned Ghost CLI ${GHOST_VERSION}"
+ghost_install_dir="$miaos_home/ghost-cli"
+provision_ghost "$ghost_install_dir" "$miaos_home/downloads"
 
 echo "[4/9] Downloading pinned Google Workspace CLI ${GWS_VERSION}"
 gws_install_dir="$miaos_home/downloads/gws-${GWS_VERSION}-darwin-arm64"

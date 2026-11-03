@@ -25,3 +25,15 @@ test('review reads exact proposal and mode without publishing anything',async()=
  await api.decide({teamId:'t',channelId:'c'},request.id,1,'review');assert.equal(calls.length,2);assert.ok(calls.every(c=>c[0]==='GET'));
  const dialog=doc.body.children[0];assert.equal(dialog.open,true);assert.ok(dialog.children.some(c=>c.textContent==='Exact instructions'));assert.ok(dialog.children.some(c=>c.textContent==='Version 1 · linked'));
 });
+
+test('bot dialogs use the app\'s modal styling instead of browser defaults',()=>{
+  const fs=require('fs'),path=require('path');
+  const manager=fs.readFileSync(path.join(__dirname,'..','hub-bot-manager.js'),'utf8');
+  const css=fs.readFileSync(path.join(__dirname,'..','styles.css'),'utf8');
+  assert.equal((manager.match(/node\('dialog'\)/g)||[]).length,2);
+  assert.equal((manager.match(/className='hub-bot-dialog'/g)||[]).length,2,'both dialogs');
+  assert.doesNotMatch(manager,/#ddd|background:white|color:#222/,'no fixed colors, so dark themes work');
+  assert.match(css,/\.hub-bot-dialog\{[^}]*background:var\(--paper\)[^}]*color:var\(--ink\)[^}]*border-radius:16px[^}]*overflow:auto/);
+  assert.match(css,/\.hub-bot-dialog pre\{[^}]*font-family:inherit[^}]*white-space:pre-wrap/);
+  assert.match(css,/\.hub-bot-dialog\{[^}]*max-height:min\(85vh,calc\(100vh - 32px\)\)/,'scrolls at small sizes');
+});

@@ -18,10 +18,12 @@ function navigationHarness() {
   const a = { id: 'a', name: 'A' }, b = { id: 'b', name: 'B', roomId: 'room-b' };
   const ctx = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Promise, Event: class {}, chatRoster: {}, chatModelPicker: null, AGENT_SETUP_ROOM_ID: '__setup__', activeWorkspaceKey: 'solo',
     chatWs: { activeRoomId: 'room-b', configured: true, nativeConversations: [{ id: 'room-b', type: 'bot', metadata: { botId: 'b' } }], allAgents: [a, b], botRecords: [a, b], botRecordsLoaded: true },
     localBrowserState: { open: true }, document: { body: { classList: { contains: () => true } } }, window: {},
-    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttention() {}, closeNativeChatSocket() {}, saveActiveChatLocation() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
+    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttachmentError() {}, clearChatAttention() {}, closeNativeChatSocket() {}, saveActiveChatLocation() {}, rememberAgentChat() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     clearChatBack() {}, rememberChatBack() {}, clearChatActive() {},
     clearAgentSetupRequest() {}, closeManageAgentsPane() {}, chatInfo: {}, setTimeout() {},
     isNativeMiaConversation: c => c.type === 'agent', applyNativeConversationList() {},
@@ -34,8 +36,11 @@ function navigationHarness() {
     },
   };
   vm.createContext(ctx);
-  vm.runInContext("var browserFollowKey='', browserFollowState=null; var chatTextDrafts={};\n" +
-    ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat', 'startAgentSetupChat'].map(sourceFunction).join('\n'), ctx);
+  vm.runInContext("var browserFollowKey='', browserFollowState=null; var chatTextDrafts={}; var chatTabStaysClosed=false; function reopenChatTab(){}\n" +
+    "var agentSetupResume={}, AGENT_SETUP_UNFINISHED={intent:true, interpreting:true, review:true, activating:true}, FIRST_BOT_COLORS=['#3478d4'];\n" +
+    ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat',
+      'normalizeAgentAvatarColor', 'agentSetupKey', 'freshAgentSetup', 'agentSetupUnfinished', 'newSetupBotColor', 'agentSetupIdentity', 'parkAgentSetup', 'startAgentSetupChat'].map(sourceFunction).join('\n') +
+    "\nvar agentSetup = freshAgentSetup(null); agentSetup.phase = 'idle';", ctx);
   const follow = (id, botId) => ctx.followBrowserTab({ activeId: id, tabs: [{ id, groupId: 'g' + id }], groups: [{ id: 'g' + id, botId }] });
   function created(botId) {
     requests.get(botId).resolve({ status: 201, data: { conversation: { id: 'room-' + botId, type: 'bot', metadata: { botId } } } });
@@ -156,6 +161,8 @@ function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a' } =
   let handler = null, takeOvers = 0;
   const ctx = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     state: { activeId, tabs: [{ id: 1 }, { id: 2 }], groups: [] },
     window: { miaBrowserAgents: {} },
     botControl: { hidden: controlHidden, getAttribute: () => botId },
@@ -189,6 +196,8 @@ test('+ New bot makes a new tab and group, starts bot setup, and gives the new b
   let handler = null, onCreated = null; const sent = [];
   const ctx = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     Promise, state: { activeId: 1, tabs: [{ id: 1 }], groups: [] },
     window: { miaBrowserAgents: { startBotSetup(callback) { onCreated = callback; } } },
     botControl: { hidden: true, getAttribute: () => null }, takeOver: { onclick() {} },
@@ -295,6 +304,8 @@ test('the +N list draws the bot\'s other tabs as tabs and acts on them', async (
   const listeners = {};
   const ctx = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     document: { createElement: tag => new El(tag), addEventListener: (type, fn) => { listeners[type] = fn; } },
     screen: new El('div'), overlay: new El('div'), strip: new El('div'),
     paintGroup() {}, command: (action, payload) => { sent.push([action, payload]); return Promise.resolve(); },
@@ -348,6 +359,8 @@ test('following a bot moves the browser to the tab it works in next', () => {
   let running = true;
   const ctx = {
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     window: { miaBrowserAgents: { isRunning: () => running } },
     command: (action, payload) => { sent.push([action, payload]); return Promise.resolve(); },
     state: null,

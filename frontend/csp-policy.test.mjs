@@ -56,6 +56,7 @@ test('Mia page declares the exact fail-closed CSP and only Clerk authentication 
     'https://*.clerk-telemetry.com',
     'https://img.clerk.com',
     'https://*.protect.clerk.com:*',
+    'https://*.s3.us-east-1.amazonaws.com',
   ]);
   assert.deepEqual(directive('worker-src'), ["'self'", 'blob:']);
   assert.deepEqual(directive('img-src'), ["'self'", 'data:', 'blob:', 'https://img.clerk.com']);

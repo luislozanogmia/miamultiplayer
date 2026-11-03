@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const { execSync } = require('child_process');
 const express = require('express');
 const db = require('./db');
+const { localDateString } = require('./local-date');
 
 const MIN_PASSWORD_LENGTH = 10;
 const GATEWAY_AGENT_ID = 'gateway';
@@ -579,7 +580,7 @@ function createAdminRouter(deps) {
 
   router.get('/backup', (req, res) => {
     const backup = getBackupPayload();
-    res.setHeader('Content-Disposition', `attachment; filename="miaos-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+    res.setHeader('Content-Disposition', `attachment; filename="miaos-backup-${localDateString()}.json"`);
     res.setHeader('Content-Type', 'application/json');
     return res.status(200).send(JSON.stringify(backup, null, 2));
   });

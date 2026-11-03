@@ -12,6 +12,7 @@ const {
   safeStorage,
   WebContentsView,
   autoUpdater: nativeAutoUpdater,
+  protocol,
 } = require("electron");
 const http = require("node:http");
 const net = require("node:net");
@@ -23,7 +24,10 @@ const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
+const { APP_PARTITION_PREFIX, APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes, localAppRoot, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot } = require("./app-sandbox.cjs");
 const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
+const { mainWindowLinkAction } = require("./main-navigation.cjs");
+const { createExternalLinkQueue, isWebLink, webLinksFromArgv } = require("./external-links.cjs");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createGhostBridge } = require("./mia-ghost-bridge.cjs");
 const { createBrowserWorkBroker } = require("./browser-work-broker.cjs");
@@ -158,6 +162,8 @@ const MIA_MAC_ICON_PATH = app.isPackaged
   ? path.join(process.resourcesPath, "electron.icns")
   : path.join(__dirname, "..", "assets", "mia.icns");
 const PREFERRED_PORT = Number(process.env.MIAOS_PORT) || 4870;
+// Only before the app is ready, so at load: apps run under their own scheme.
+protocol.registerSchemesAsPrivileged([APP_SCHEME_PRIVILEGES]);
 // No persist: prefix is intentional: artifact previews must not retain cookies
 // or other browsing state between app launches.
 const ARTIFACT_PARTITION = "miaos-artifacts";
@@ -220,6 +226,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 let mainWindow = null;
+let startupComplete = false;
 let nativeBrowser = null;
 let browserWorkBroker = null;
 let browserWorkKey = null;
@@ -229,6 +236,7 @@ let backendUrl = null;
 let isQuitting = false;
 let ghostBridge = null;
 let googleWorkspaceBroker = null;
+let appPanes = null;
 let artifactToolbarView = null;
 let artifactView = null;
 let artifactPanelVisible = false;
@@ -268,7 +276,16 @@ function receiveAuthCallback(value) {
     if (accepted) activateMainWindow();
   }).catch(() => desktopLog("Native sign-in callback could not be completed"));
 }
-app.on("open-url", (event, value) => { event.preventDefault(); receiveAuthCallback(value); });
+const externalLinks = createExternalLinkQueue({ open: url => void openLinkInMiaBrowser(url) });
+// Windows and Linux pass the link on the command line of a cold start. macOS
+// sends it through open-url instead, and can do so before the app is ready.
+for (const url of webLinksFromArgv(process.argv.slice(1))) externalLinks.receive(url);
+app.on("open-url", (event, value) => {
+  event.preventDefault();
+  if (!isWebLink(value)) return receiveAuthCallback(value);
+  externalLinks.receive(value);
+  if (startupComplete) activateMainWindow();
+});
 
 const UPDATE_GITHUB_OWNER = "luislozanogmia";
 const UPDATE_GITHUB_REPO = "miamultiplayer";
@@ -407,7 +424,7 @@ function runtimeLogPath(name) {
 
 function isAllowedRendererStateKey(key) {
   const normalized = String(key || "");
-  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || normalized === "miaTabsMixed" || /^miaChatActive:[^\r\n]{1,500}$/.test(normalized);
+  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || normalized === "miaTabsMixed" || /^(miaChatActive|miaAgentChats):[^\r\n]{1,500}$/.test(normalized);
 }
 
 function readRendererState() {
@@ -936,6 +953,8 @@ async function startLocalBackend(exactPort = null) {
     [PROCESS_SECRETS_MARKER]: "1",
     HERMES_HOME: hermesHome,
     MIAOS_WORKSPACE_DIR: workspaceDir,
+    MIAOS_TEAM_APPS_DIR: path.join(dataDirectory, "team-apps"),
+    MIAOS_TEAM_APP_PREVIEWS_DIR: path.join(dataDirectory, "team-app-previews"),
     MIAOS_HERMES_GUARD_BIN: path.join(BACKEND_ROOT, "miaos-hermes-bin"),
     HERMES_BIN,
     MIAOS_HERMES_BIN: HERMES_BIN,
@@ -1440,11 +1459,13 @@ function isExternalArtifactHttpUrl(value) {
   }
 }
 
+// A web link in an artifact opens as a tab in Mia's own browser (its tabs
+// and sign-ins), never in the artifact pane's sandboxed session or another
+// browser. The pane closes so the tab is in front.
 function openExternalArtifactLink(value) {
   if (!isExternalArtifactHttpUrl(value)) return false;
-  Promise.resolve(shell.openExternal(String(value))).catch(error => {
-    desktopLog(`artifact external link failed: ${error.message}`);
-  });
+  setArtifactPanelVisible(false);
+  void openLinkInMiaBrowser(String(value), "browser");
   return true;
 }
 
@@ -1455,7 +1476,7 @@ function artifactNavigationAllowed(value) {
 function blockArtifactNavigation(event, value) {
   event.preventDefault();
   if (openExternalArtifactLink(value)) {
-    artifactLastError = "External links open in your normal browser.";
+    artifactLastError = "Web links open in Mia's browser.";
   } else {
     artifactLastError = "Only Mia attachment previews can be opened in this pane.";
   }
@@ -1575,6 +1596,21 @@ async function navigateArtifact(value) {
   }
 }
 
+// Opens a page as a normal tab in Mia's browser, the one with the person's
+// tabs and sign-ins, and brings the Browser view forward. An attachment
+// preview first gets its one-time grant (browser-attachment-auth.cjs).
+async function openLinkInMiaBrowser(target, kind = "browser") {
+  if (!nativeBrowser || typeof nativeBrowser.openLink !== "function" || !mainWindow || mainWindow.isDestroyed()) return false;
+  try {
+    if (kind === "attachment") await nativeBrowser.prepareAttachment(target, mainWindow.webContents.session);
+    nativeBrowser.openLink(target);
+    return true;
+  } catch (error) {
+    desktopLog(`open link in Mia browser failed: ${error.message}`);
+    return false;
+  }
+}
+
 function configureArtifactSession() {
   const artifactSession = session.fromPartition(ARTIFACT_PARTITION);
   if (artifactSessionConfigured) return artifactSession;
@@ -1594,7 +1630,7 @@ function configureArtifactContents(contents) {
     } else {
       openExternalArtifactLink(url);
       artifactLastError = isExternalArtifactHttpUrl(url)
-        ? "External links open in your normal browser."
+        ? "Web links open in Mia's browser."
         : "Only Mia attachment previews can be opened in this pane.";
       sendArtifactState();
     }
@@ -1766,18 +1802,24 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
       } : { action: "deny" };
     }
     const provider = harnessAuthRedirectProvider(url, expectedBackendUrl);
-    if (isLocal(url)) return provider ? {
+    if (isLocal(url) && provider) return {
       action: "allow",
       // System-browser providers hand off before the page draws, so their
       // pop-up starts hidden instead of flashing on screen.
       overrideBrowserWindowOptions: harnessAuthPopupOptions(window, !SYSTEM_BROWSER_AUTH_PROVIDERS.has(provider)),
-    } : { action: "allow" };
+    };
     // Desktop login uses the native client and system browser; never revive
     // the cookie-backed embedded Google flow from an old renderer.
     if (isClerkGoogleOAuthUrl(url)) return { action: "deny" };
     if (isAllowedExternalUrl(url)) {
       shell.openExternal(url);
+      return { action: "deny" };
     }
+    // An artifact, attachment or web page never becomes a second app
+    // window: it opens as a tab in Mia's browser, with its sign-ins.
+    const link = mainWindowLinkAction(url, expectedBackendUrl || backendUrl);
+    if (link.action === "allow") return { action: "allow" };
+    if (link.action === "attachment" || link.action === "browser") void openLinkInMiaBrowser(link.url, link.action);
     return { action: "deny" };
   });
   window.webContents.on("did-create-window", (child, details) => {
@@ -1821,14 +1863,20 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
       event.preventDefault();
       return;
     }
-    if (isLocal(url)) return;
     if (isClerkGoogleOAuthUrl(url)) { event.preventDefault(); return; }
     if (isAllowedExternalUrl(url)) {
       event.preventDefault();
       shell.openExternal(url);
       return;
     }
+    // Mia's window only ever shows Mia. A link to an artifact, attachment or
+    // web page (from a chat message, an artifact card, a sign-in button)
+    // opens a Mia browser tab instead of replacing the app; Mia's API is
+    // never a page of its own.
+    const link = mainWindowLinkAction(url, expectedBackendUrl || backendUrl);
+    if (link.action === "allow") return;
     event.preventDefault();
+    if (link.action === "attachment" || link.action === "browser") void openLinkInMiaBrowser(link.url, link.action);
   };
   window.webContents.on("will-navigate", guardNavigation);
   if (harnessAuthProvider) window.webContents.on("will-redirect", guardNavigation);
@@ -1904,10 +1952,35 @@ function createApplicationMenuTemplate() {
   // The application-name menu (role "appMenu") exists only on macOS and
   // throws when built elsewhere; Windows and Linux get their quit affordance
   // in the File menu instead.
+  const settingsItem = {
+    label: "Settings…",
+    accelerator: "CommandOrControl+,",
+    click: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.show();
+      mainWindow.webContents.send("miaos-open-settings");
+    },
+  };
   const fileItems = [{ label: "Close Window", click: () => mainWindow?.close() }];
+  if (process.platform !== "darwin") fileItems.unshift(settingsItem, { type: "separator" });
   if (process.platform !== "darwin") fileItems.push({ type: "separator" }, { role: "quit" });
   const template = [
-    ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
+    ...(process.platform === "darwin" ? [{
+      role: "appMenu",
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        settingsItem,
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    }] : []),
     { label: "File", submenu: fileItems },
     { role: "editMenu" },
     { label: "View", submenu: viewItems },
@@ -1946,8 +2019,8 @@ function installBrowserMenu() {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       // Browser menu actions must never fall through to shell/window actions.
       // Focus Address and New Tab can also serve as browser entry points when
-      // the browser surface is currently closed; in the chat view New Tab and
-      // Close Tab act on the chat tabs instead.
+      // the browser surface is currently closed; in the chat view New Tab opens
+      // a new chat and Close Tab does nothing.
       if (["l", "t", "w"].includes(key) && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("miaos-browser-open", key);
       }
@@ -2022,9 +2095,21 @@ function createWindow() {
         log: desktopLog,
       }),
       resolveActor: sessionId => resolveBrowserActor(window, sessionId),
+      appRequest: (pathname, request) => desktopAppRequest(window, pathname, request),
     },
   );
   const windowNativeBrowser = nativeBrowser;
+  // Apps in the page's pane (app-sandbox.cjs). A reload of Mia's own page
+  // forgets its tabs, so the apps they showed close with it.
+  const windowAppPanes = appPanes = createAppPanes({
+    window,
+    session,
+    WebContentsView,
+    openWebLink: url => { void openLinkInMiaBrowser(url); },
+    onState: payload => { if (!window.isDestroyed()) window.webContents.send("miaos-app-state", payload); },
+    onLinkBlocked: payload => { if (!window.isDestroyed()) window.webContents.send("miaos-app-state", { key: payload.key, blockedLink: payload }); },
+  });
+  window.webContents.on("did-start-loading", () => windowAppPanes.closeAll());
   createArtifactPanel();
   const windowArtifactToolbarView = artifactToolbarView;
   const windowArtifactView = artifactView;
@@ -2046,8 +2131,22 @@ function createWindow() {
       desktopLog(`renderer console level=${level} line=${lineNumber} message=${message}`);
     });
   }
+  // A gone renderer leaves an empty (black in dark mode) window that never
+  // recovers on its own. Load Mia again; a crash loop stops after a few
+  // tries a minute so it cannot spin.
+  let rendererRecoveries = [];
   window.webContents.on("render-process-gone", (_event, details) => {
-    desktopLog(`renderer process gone reason=${details && details.reason || "unknown"}`);
+    const reason = details && details.reason || "unknown";
+    desktopLog(`renderer process gone reason=${reason}`);
+    if (reason === "clean-exit" || window.isDestroyed()) return;
+    const now = Date.now();
+    rendererRecoveries = rendererRecoveries.filter(at => now - at < 60000);
+    if (rendererRecoveries.length >= 3) return;
+    rendererRecoveries.push(now);
+    setTimeout(() => {
+      if (window.isDestroyed() || !backendUrl) return;
+      window.webContents.loadURL(backendUrl).catch(error => desktopLog(`renderer recovery failed: ${error.message}`));
+    }, 300);
   });
   window.webContents.on("context-menu", (_event, params) => {
     const items = params.isEditable
@@ -2080,6 +2179,9 @@ function createWindow() {
   });
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
+    if (!mainWindow) externalLinks.setReady(false);
+    windowAppPanes.closeAll();
+    if (appPanes === windowAppPanes) appPanes = null;
     if (artifactToolbarView === windowArtifactToolbarView) artifactToolbarView = null;
     if (artifactView === windowArtifactView) artifactView = null;
     if (!mainWindow) {
@@ -2142,6 +2244,21 @@ async function loadMiaOS() {
 
 // Hermes session id -> { actor, at }. A bot's browser calls arrive in bursts
 // from one session, so a short cache keeps each call off the backend.
+// A call Mia's own Ghost session asked for, sent as the signed-in person. Only
+// the host decides which paths those are; nothing here takes a path from Mia.
+async function desktopAppRequest(window, pathname, { method = "GET", body, timeoutMs = 15000 } = {}) {
+  if (!backendUrl || !window || window.isDestroyed()) throw Object.assign(new Error("The Mia app connection is unavailable."), { code: "APP_UNAVAILABLE" });
+  const response = await window.webContents.session.fetch(new URL(pathname, backendUrl).href, {
+    method, credentials: "include", redirect: "error",
+    headers: { Origin: new URL(backendUrl).origin, ...(body ? { "Content-Type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(data.error || "The Mia app could not do that."), { code: "APP_REQUEST_FAILED" });
+  return data;
+}
+
 const browserActorCache = new Map();
 const BROWSER_ACTOR_TTL_MS = 60_000;
 
@@ -2208,6 +2325,10 @@ createDesktopNotifications({
     activateMainWindow();
   },
   openExternal: url => shell.openExternal(url),
+  setBadgeCount: count => {
+    if (app.dock) app.dock.setBadge(count ? String(count) : "");
+    else app.setBadgeCount(count);
+  },
   log: message => desktopLog(message),
 }).register(ipcMain);
 
@@ -2242,7 +2363,7 @@ function notifyClaudeMaintenanceFailure(status) {
     type: "warning",
     title: "Claude update needs attention",
     message: "Mia couldn’t update Claude Code.",
-    detail: "Open Initial setup from your account menu and choose Update Claude Code to retry. You can continue using other connections.",
+    detail: "Open Models & Subscriptions from your account menu and choose Update Claude Code to retry. You can continue using other connections.",
     buttons: ["OK"],
     noLink: true,
   });
@@ -2303,6 +2424,13 @@ ipcMain.handle("miaos-reset-relaunch", async (event) => {
   const storages = [mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.session : null];
   try { storages.push(session.fromPartition(ARTIFACT_PARTITION)); } catch (_) { /* no artifact partition yet */ }
   try { storages.push(session.fromPartition(BROWSER_PARTITION)); } catch (_) { /* no browser partition yet */ }
+  // Every app's own storage: the partition folders are the only list of them.
+  if (appPanes) appPanes.closeAll();
+  try {
+    const partitions = fs.readdirSync(path.join(userData, "Partitions"));
+    const prefix = APP_PARTITION_PREFIX.slice("persist:".length);
+    for (const name of partitions) if (name.startsWith(prefix)) storages.push(session.fromPartition(`persist:${name}`));
+  } catch (_) { /* no app has run yet */ }
   for (const storage of storages) {
     if (!storage || typeof storage.clearStorageData !== "function") continue;
     try {
@@ -2360,6 +2488,7 @@ ipcMain.on("miaos-renderer-ready", (event) => {
 ipcMain.on("miaos-renderer-hydrated", (event) => {
   if (!isMainWindowSender(event)) return;
   desktopLog("renderer hydration received");
+  externalLinks.setReady(true);
   repaintDevelopmentUi(mainWindow);
 });
 
@@ -2408,6 +2537,33 @@ function isMainWindowSender(event) {
     && event.sender === mainWindow.webContents
     && isTrustedMainWindowUrl(ipcSenderUrl(event));
 }
+
+// Which folder an app runs from is decided here from its id; the page never
+// names a path.
+ipcMain.handle("miaos-app-pane", (event, command = {}) => {
+  if (!isMainWindowSender(event) || !appPanes) return { ok: false, error: "Not authorized." };
+  try {
+    if (command.action === "layout") { appPanes.layout(command.key, command.bounds); return { ok: true }; }
+    if (command.action === "close") { appPanes.close(command.key); return { ok: true }; }
+    if (command.action === "reload") return { ok: appPanes.reload(command.key) };
+    if (command.action !== "open") return { ok: false, error: "Not authorized." };
+    if (command.kind === "team") {
+      const root = teamAppRoot(path.join(app.getPath("userData"), "team-apps"), command);
+      return { ok: true, key: appPanes.open(teamAppIdentity(command.teamId, command.appId), root) };
+    }
+    if (command.kind === "preview") {
+      const root = teamAppRoot(path.join(app.getPath("userData"), "team-app-previews"), command);
+      return { ok: true, key: appPanes.open(teamAppPreviewIdentity(command.teamId, command.appId), root) };
+    }
+    if (command.kind === "local") {
+      const { root, source } = localAppRoot(miaosWorkspacePath(), command.id);
+      return { ok: true, key: appPanes.open(appIdentity(source), root) };
+    }
+    return { ok: false, error: "That app could not be found." };
+  } catch (_) {
+    return { ok: false, error: "That app could not be opened." };
+  }
+});
 
 ipcMain.handle("miaos-google-workspace-auth-open", async (event, value) => {
   if (!isMainWindowSender(event)) return { ok: false };
@@ -2515,6 +2671,7 @@ function activateMainWindow() {
 
 app.on("second-instance", (_event, argv) => {
   for (const value of argv || []) if (typeof value === "string" && value.startsWith("miamultiplayer:")) receiveAuthCallback(value);
+  for (const url of webLinksFromArgv(argv)) externalLinks.receive(url);
   activateMainWindow();
 });
 
@@ -2617,6 +2774,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   }
   if (runtimeReady && process.env.MIAOS_ARTIFACT_URL) await navigateArtifact(process.env.MIAOS_ARTIFACT_URL);
 
+  startupComplete = true;
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) activateMainWindow();
   });

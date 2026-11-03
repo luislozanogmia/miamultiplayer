@@ -7,6 +7,7 @@ const { fileURLToPath, pathToFileURL } = require("node:url");
 const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
+const { PAGE_HELPERS, cleanAnchor, readScript, scrollScript } = require("./space-anchor.cjs");
 
 const { createActorRuntime } = require("./browser-actors.cjs");
 const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
@@ -133,6 +134,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const tabs = new Map();
   const shellContents = window.webContents;
   let workProposal = null;
+  const workStarts = new Map();
+  let miaPageRead = null;
+  let workspaceChangedAt = null;
   const actorCapability = Symbol("trusted-browser-actor");
   const actorRuntime = createActorRuntime({
     getTab: id => tabs.get(id),
@@ -169,6 +173,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     ? path.resolve(options.workspaceRoot)
     : "";
   let activeId = null;
+  let lastActiveCounter = 0;
   // Tab groups are a named, colored run of adjacent tabs. A tab
   // belongs to at most one group (tab.groupId); a group with no tabs is gone.
   const groups = new Map();
@@ -637,6 +642,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         title: tab.title,
         media: tab.media || null,
         groupId: tab.groupId || null,
+        private: tab.private === true,
       })),
     };
     const temporaryPath = `${statePath}.${process.pid}.tmp`;
@@ -796,9 +802,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Counts the times the user closed the last tab; the app leaves browser
   // mode when it goes up. A blank tab still replaces the closed one.
   let lastTabCloses = 0;
-  const state = () => ({ groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  let sessionGroupId = null;
+  const state = () => ({ workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
+    private: tab.private === true,
+    lastActiveAt: tab.lastActiveAt || 0,
     active: tab.id === activeId,
     loading: tab.view.webContents.isLoading(), timing: tab.timing,
     canGoBack: tab.view.webContents.navigationHistory.canGoBack(),
@@ -894,6 +903,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function activateTab(id) {
     if (fullscreenId !== null && fullscreenId !== id) exitPageFullscreen();
     activeId = id;
+    if (tabs.has(id)) tabs.get(id).lastActiveAt = ++lastActiveCounter;
     // The tab in front is never hidden inside a collapsed group.
     const group = groups.get(tabs.get(id)?.groupId);
     if (group) group.collapsed = false;
@@ -1034,6 +1044,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!window.webContents.isDestroyed()) window.webContents.send("miaos-browser-open", "web-browser");
   }
 
+  // A link from Mia's own window (an artifact, a chat card) opens as the
+  // person's tab, in front, and the Browser view shows it.
+  function openLink(value) {
+    const tab = newTab(value, { activate: true });
+    openBrowserSurface();
+    return tab.id;
+  }
+
   function protocolError(code, message) {
     const error = new Error(message);
     error.code = code;
@@ -1061,6 +1079,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const botId = tab && groups.get(tab.groupId)?.botId;
     return botId ? { kind: "bot", botId } : { kind: "mia" };
   }
+  function botWorkPending(tab) {
+    return Boolean(tab && ((tab.botWork || 0) > 0 || tab.actorOperationCount > 0));
+  }
   function browserWorkPending(tab) {
     return Boolean(tab && ((tab.botWork || 0) > 0
       || pendingBrowserOperations.get(tab.view.webContents)?.size
@@ -1074,8 +1095,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function protocolScript(tab, script, isolated = false) {
     return executeProtocolScript(tab.view.webContents, script, isolated, () => browserWorkSettled(tab));
   }
-  function requireGroupIdle(groupId) {
-    if (groupId && groupTabs(groupId).some(browserWorkPending)) {
+  // A page that is only loading doesn't stop a tab joining its group when
+  // `pagesMayLoad` is set; bot work always does.
+  function requireGroupIdle(groupId, pagesMayLoad = false) {
+    if (groupId && groupTabs(groupId).some(pagesMayLoad ? botWorkPending : browserWorkPending)) {
       throw protocolError("BROWSER_BUSY", "This group still has browser work in progress. Wait for it to finish before changing its controller or tabs.");
     }
   }
@@ -1681,6 +1704,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Mia's personal agent arranges groups and suggests bot assignments through
   // the bridge it already browses with. A suggestion only prefills the
   // person's browser-work form: starting work and every approval stay theirs.
+  // Switching workspace swaps every tab out, so Mia can tell "my tabs moved"
+  // from "my tabs were closed".
+  const workspaceFields = () => ({ workspace: workspaceKey, ...(workspaceChangedAt ? { workspace_changed_at: workspaceChangedAt } : {}) });
   function protocolGroupList() {
     const owners = actorRuntime.list();
     const selected = tabs.get(activeId)?.groupId || null;
@@ -1692,6 +1718,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return { ...protocolTabResult(tab), active: tab.id === activeId, ...(bot ? { bot } : {}) };
     };
     return {
+      ...workspaceFields(),
       selected_group_id: selected,
       groups: groupList().map(group => ({
         group_id: group.id, name: group.name, selected: group.id === selected,
@@ -1701,7 +1728,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       ungrouped_tabs: [...tabs.values()].filter(tab => !tab.groupId).map(tabEntry),
     };
   }
-  function protocolGroupCommand(method, params) {
+  function recentPageRead(actorSession) {
+    return !!(actorSession && miaPageRead && miaPageRead.session === actorSession && Date.now() - miaPageRead.at < 600000);
+  }
+  function protocolGroupCommand(method, params, actorSession) {
     if (method === "group_list") return protocolGroupList();
     const invalid = message => protocolError("INVALID_PARAMS", message);
     const groupOf = id => {
@@ -1735,10 +1765,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       });
       if (new Set(assignments.map(item => item.tabId)).size !== assignments.length) throw invalid("Assign each tab once.");
       if (new Set(assignments.map(item => item.bot.toLowerCase())).size !== assignments.length) throw invalid("Each bot can own one tab.");
-      workProposal = { id: randomUUID(), groupId: group.id, goal, assignments, createdAt: Date.now() };
+      const replaced = workProposal;
+      workProposal = { id: randomUUID(), groupId: group.id, goal, assignments, createdAt: Date.now(),
+        requiresConfirmation: recentPageRead(actorSession), ...(replaced ? { replacedProposalId: replaced.id } : {}) };
       publish();
-      return { proposed: true, proposal_id: workProposal.id, group_id: group.id,
-        next: "Shown to the person in the Browser work panel. Work starts only after they confirm it there." };
+      return { proposed: true, proposal_id: workProposal.id, group_id: group.id, ...(replaced ? { replaced_proposal_id: replaced.id } : {}),
+        next: "Shown to the person in the Browser work panel. Call ghost_work_start to ask them to start it; nothing runs until they confirm." };
     }
     let created = null;
     if (method === "group_create") {
@@ -1757,6 +1789,114 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     else throw protocolError("UNKNOWN_METHOD", `Unknown browser method: ${method}`);
     layout(); persistTabs(); publish();
     return { ...(created ? { group_id: created } : {}), ...protocolGroupList() };
+  }
+  const workStartResult = (id, start) => ({ proposal_id: id, status: start.status, ...(start.workId ? { work_id: start.workId } : {}), ...(start.error ? { error: start.error } : {}) });
+  function appRequest(pathname, request) {
+    if (typeof options.appRequest !== "function") throw protocolError("APP_UNAVAILABLE", "The Mia app connection is unavailable.");
+    return options.appRequest(pathname, request);
+  }
+  // The person already confirmed, or switched this on themselves. Runs through
+  // the same plan and start as the panel's Start button, under their session.
+  async function launchWorkProposal(proposal, start, selection) {
+    const group = groups.get(proposal.groupId);
+    start.status = "starting";
+    proposal.starting = true;
+    publish();
+    try {
+      if (!group) throw new Error("This tab group is no longer available.");
+      const { work } = await appRequest("/api/browser-work/proposal/start", { method: "POST", timeoutMs: 300000, body: {
+        groupId: group.id, goal: proposal.goal, assignments: proposal.assignments, ...selection,
+        context: { groupName: group.name, tabs: groupTabs(group.id).map(tab => ({ id: tab.id, title: tab.title, origin: tabOrigin(tab) })) },
+      } });
+      start.status = work.status === "queued" ? "queued" : "running";
+      start.workId = work.id;
+      if (workProposal?.id === proposal.id) workProposal = null;
+    } catch (error) {
+      // The suggestion stays in the panel so the person can start it by hand.
+      start.status = "failed";
+      start.error = String(error?.message || "Browser work could not start.").slice(0, 400);
+      delete proposal.starting;
+    }
+    publish();
+  }
+  function tabOrigin(tab) {
+    try { const url = new URL(tab.url); return ["https:", "http:"].includes(url.protocol) ? url.origin : ""; } catch (_) { return ""; }
+  }
+  function confirmWorkProposal(proposal) {
+    const rows = proposal.assignments.map(item => `${item.bot} → Tab ${item.tabId}${tabOrigin(tabs.get(item.tabId)) ? ` · ${tabOrigin(tabs.get(item.tabId))}` : ""}`);
+    const count = proposal.assignments.length;
+    return dialog.showMessageBox(window, {
+      type: "question", title: "Browser work",
+      message: `Mia wants to start ${count} ${count === 1 ? "bot" : "bots"} on ${count === 1 ? "tab" : "tabs"} ${proposal.assignments.map(item => item.tabId).join(", ")}`,
+      detail: `${proposal.goal}\n\n${rows.join("\n")}`,
+      buttons: ["Start", "Cancel"], defaultId: 1, cancelId: 1,
+    }).then(result => result && result.response === 0, () => false);
+  }
+  async function protocolWorkCommand(method, params, actorSession) {
+    const invalid = message => protocolError("INVALID_PARAMS", message);
+    if (method === "work_start") {
+      const id = typeof params.proposal_id === "string" ? params.proposal_id : "";
+      if (workStarts.has(id)) return workStartResult(id, workStarts.get(id));
+      if (!workProposal || workProposal.id !== id) throw invalid("This suggestion is no longer pending. Call ghost_work_propose again.");
+      const selection = {
+        ...(params.models && typeof params.models === "object" && !Array.isArray(params.models) ? { models: params.models } : {}),
+        ...(params.personal_model && typeof params.personal_model === "object" ? { personalSelection: params.personal_model } : {}),
+      };
+      const proposal = workProposal;
+      const start = { status: "awaiting_confirmation" };
+      workStarts.set(id, start);
+      if (workStarts.size > 32) workStarts.delete(workStarts.keys().next().value);
+      const trust = await appRequest("/api/mia-app/trust", { timeoutMs: 3000 }).catch(() => null);
+      if (trust?.trust?.browserWork === true && !proposal.requiresConfirmation && !recentPageRead(actorSession)) launchWorkProposal(proposal, start, selection);
+      else {
+        // A native dialog: page content can neither draw it nor click it.
+        const approvedTabs = proposal.assignments.map(item => {
+          const tab = tabs.get(item.tabId);
+          return { id: item.tabId, groupId: tab?.groupId, url: tab?.url };
+        });
+        confirmWorkProposal(proposal).then(accepted => {
+          if (workProposal?.id !== proposal.id) { start.status = "replaced"; return; }
+          if (accepted) {
+            const changed = approvedTabs.some(saved => {
+              const tab = tabs.get(saved.id);
+              return !tab || tab.groupId !== proposal.groupId || tab.groupId !== saved.groupId || tab.url !== saved.url;
+            });
+            if (!changed) return launchWorkProposal(proposal, start, selection);
+            start.status = "failed";
+            start.error = "A tab changed while you were deciding. Ask Mia to suggest the work again.";
+            workProposal = null;
+            publish();
+            return;
+          }
+          start.status = "declined";
+          workProposal = null;
+          publish();
+        });
+      }
+      return workStartResult(id, start);
+    }
+    const id = typeof params.proposal_id === "string" ? params.proposal_id : "";
+    if (id && !workStarts.has(id)) throw invalid("Unknown suggestion. Call ghost_work_start first.");
+    const start = id ? workStarts.get(id) : null;
+    const workId = typeof params.work_id === "string" && params.work_id ? params.work_id : start?.workId;
+    if (start && !workId) return workStartResult(id, start);
+    if (method === "work_results" && !workId) throw invalid("work_id is required.");
+    const { result } = await appRequest("/api/mia-app/call", { method: "POST", body: {
+      tool: method === "work_status" ? "browser_work_status" : "browser_work_results",
+      arguments: workId ? { work_id: workId } : {},
+    } });
+    return start ? { ...workStartResult(id, start), ...result } : result;
+  }
+  // Mia's `mia-app` calls. The backend picks the routes; the host adds what only
+  // it knows: which session asks, and which page Mia just read.
+  async function protocolAppCall(params, session) {
+    const tool = typeof params.tool === "string" ? params.tool : "";
+    const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments) ? params.arguments : {};
+    if (!session) throw protocolError("FORBIDDEN_FOR_ACTOR", "mia-app only runs inside a Mia chat turn.");
+    if (tool === "browser_work_start") return protocolWorkCommand("work_start", args, session);
+    const reading = recentPageRead(session) ? { url: miaPageRead.url, title: miaPageRead.title } : null;
+    const { result } = await appRequest("/api/mia-app/call", { method: "POST", timeoutMs: 170000, body: { tool, arguments: args, turn: session, ...(reading ? { reading } : {}) } });
+    return result;
   }
   async function protocolCommand(method, params = {}) {
     if (params && Object.hasOwn(params, "actor_id") && params[actorCapability] !== true) throw protocolError("TRUSTED_ACTOR_REQUIRED", "Actor identity must come from trusted coordinator dispatch.");
@@ -1787,6 +1927,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     };
     try {
       const result = await runProtocolCommand(method, params, actor, touch);
+      // The spot a bot just clicked or typed in, for the shared minimap.
+      const target = result && result.target, worked = [...touched].at(-1);
+      if (worked && target) worked.botPoint = { x: target.x + target.width / 2, y: target.y + target.height / 2, at: Date.now() };
       if (actor && [...touched].some(tab => !tabs.has(tab.id) || !botOwnsTab(actor, tab))
           && method !== "tab_close") {
         throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
@@ -1809,7 +1952,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
 
   async function runProtocolCommand(method, params, actor, touch) {
     params = { ...params };
+    const actorSession = params.actor_session;
     delete params.actor_session;
+    if (method === "app_call") {
+      if (actor || params[actorCapability] === true) throw protocolError("FORBIDDEN_FOR_ACTOR", "Only Mia can use mia-app.");
+      return protocolAppCall(params, actorSession);
+    }
+    if (!actor && ["read", "vacuum", "eval", "screenshot"].includes(method)) {
+      const page = (params.tab_id && tabs.get(params.tab_id)) || active();
+      if (page && /^https?:/i.test(page.url || "")) miaPageRead = { session: actorSession, url: page.url, title: page.title || "", at: Date.now() };
+    }
+    if (method.startsWith("work_") && actor) throw protocolError("FORBIDDEN_FOR_ACTOR", "Only Mia can suggest or start browser work.");
     if (method === "status") {
       const ownedTabs = actor ? [...tabs.values()].filter(tab => botOwnsTab(actor, tab)) : [...tabs.values()];
       const foreground = active();
@@ -1825,6 +1978,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         active_title: current ? (current.title || current.url || "New tab") : "",
       };
       if (actor) status.your_tabs = ownedTabs.length;
+      else Object.assign(status, workspaceFields());
       return status;
     }
     if (method === "tab_list") {
@@ -1916,7 +2070,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return protocolTabResult(tab);
     }
 
-    if (method.startsWith("group_") || method === "work_propose") return protocolGroupCommand(method, params);
+    if (method.startsWith("group_") || method === "work_propose") return protocolGroupCommand(method, params, actorSession);
+    if (["work_start", "work_status", "work_results"].includes(method)) return protocolWorkCommand(method, params, actorSession);
 
     const supportedTabMethod = [
       "navigate", "read", "vacuum", "click", "fill", "eval", "key",
@@ -2099,7 +2254,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!panelOpen || disposed) return false;
     if (key === "l") focusLocation();
     else if (key === "f") { window.webContents.focus(); window.webContents.send("miaos-browser-find"); }
-    else if (key === "t") { newTab(); focusLocation(); }
+    else if (key === "t") { newSessionOrPlainTab(); focusLocation(); }
     else if (key === "w") closeTabByPerson(activeId);
     else if (key === "r") active()?.view.webContents.reloadIgnoringCache();
     else if (active()) {
@@ -2139,11 +2294,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     for (const item of order) tabs.set(item.id, item);
     return true;
   }
+  // In a shared session a new tab belongs to the session.
+  function newSessionOrPlainTab() {
+    if (!sessionGroupId || !groups.has(sessionGroupId)) return newTab();
+    const members = groupTabs(sessionGroupId);
+    const blank = members.find(item => !item.url);
+    if (blank) { activateTab(blank.id); layout(); persistTabs(); return blank; }
+    return newTab(undefined, { after: members.at(-1)?.id, groupId: sessionGroupId });
+  }
   function newTab(value, options = {}) {
     if (value) normalizeStoredTarget(value);
     const groupId = groups.has(options.groupId) ? options.groupId
       : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null;
-    if (!restoring) requireGroupIdle(groupId);
+    if (!restoring) requireGroupIdle(groupId, options.pagesMayLoad === true);
     const view = new WebContentsView({ webPreferences: {
       session: profile, sandbox: true, contextIsolation: true, nodeIntegration: false,
       webSecurity: true, allowRunningInsecureContent: false,
@@ -2161,6 +2324,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         ? options.title.slice(0, 500) : "New tab", error: "", favicon: null, faviconPending: false,
       faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [], snapshots: new Map(), crashed: false,
       media: options.media || null,
+      // Stays on this computer during a shared session; what it opens does too.
+      private: options.private === true || tabs.get(options.after)?.private === true,
       // A tab opened from a grouped tab (a link, New Tab to the Right,
       // Duplicate) joins its opener's group.
       groupId,
@@ -2182,6 +2347,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // pressing Take over, so the person and the bot never type on one page.
     // Bots never send mouse events, so this is always the person.
     wc.on("before-mouse-event", (_event, mouse) => {
+      // Where this person's pointer is, for teammates in a shared session.
+      if (mouse.type === "mouseMove" || mouse.type === "mouseDown") tab.pointer = { x: mouse.x, y: mouse.y, at: Date.now() };
       if (mouse.type !== "mouseDown" || tab.id !== activeId) return;
       if (heldByRenderer.has(tab.id) || (tab.botWork || 0) > 0 || tab.actorOperationCount > 0) {
         groupBotEvent({ action: "page-click", tabId: tab.id });
@@ -2363,6 +2530,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("context-menu", (_event, params) => {
       const items = [];
       if (/^https?:\/\//i.test(params.linkURL)) items.push({ label: "Open link in new tab", click: menuAction(() => newTab(params.linkURL, { activate: false, after: tab.id })) });
+      if (sessionGroupId && /^https?:\/\//i.test(params.linkURL) && !tab.private) items.push({ label: "Open link in private tab", click: menuAction(() => newTab(params.linkURL, { groupId: null, private: true })) });
+      if (sessionGroupId) items.push({ label: "New private tab", click: menuAction(() => newTab(undefined, { groupId: null, private: true })) });
       const imageURL = params.mediaType === "image" && typeof params.srcURL === "string"
         && (/^https?:\/\//i.test(params.srcURL) || /^blob:https?:\/\//i.test(params.srcURL) || /^data:image\//i.test(params.srcURL))
         ? params.srcURL
@@ -2406,14 +2575,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function groupTabs(groupId) {
     return [...tabs.values()].filter(tab => tab.groupId === groupId);
   }
+  // An empty group lives only until a tab joins it; normalizeGroups drops it.
+  function addGroup(name = "") {
+    const used = new Set([...groups.values()].map(group => group.color));
+    const color = GROUP_COLORS.find(item => !used.has(item)) || GROUP_COLORS[groups.size % GROUP_COLORS.length];
+    const group = { id: `g${nextGroupNumber++}`, name, color, collapsed: false, botId: null };
+    groups.set(group.id, group);
+    return group;
+  }
   function createGroup(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return null;
     requireMembershipIdle(tab);
-    const used = new Set([...groups.values()].map(group => group.color));
-    const color = GROUP_COLORS.find(item => !used.has(item)) || GROUP_COLORS[groups.size % GROUP_COLORS.length];
-    const group = { id: `g${nextGroupNumber++}`, name: "", color, collapsed: false, botId: null };
-    groups.set(group.id, group);
+    const group = addGroup();
     tab.groupId = group.id;
     normalizeGroups();
     return group;
@@ -2855,7 +3029,129 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (typeof command.url === "string") removeVisit(command.url);
         return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       }
-      if (command.action === "new") { newTab(); return state(); }
+      if (command.action === "new") { newSessionOrPlainTab(); return state(); }
+      if (command.action === "spaceSession") {
+        sessionGroupId = typeof command.groupId === "string" || Number.isInteger(command.groupId) ? command.groupId : null;
+        return state();
+      }
+      if (command.action === "privateTabMenu") {
+        Menu.buildFromTemplate([{ label: "New private tab", click: menuAction(() => newTab(undefined, { groupId: null, private: true })) }]).popup({ window });
+        return state();
+      }
+      // A shared space opens a teammate's tab in the background, so it never
+      // takes over the page this person is reading. Only web pages open this
+      // way: a teammate can never open a local file here.
+      // Low-rate stills of shared tabs for the live minimap. Tabs not in front
+      // are captured without showing them or changing the person's selection.
+      if (command.action === "spaceFrames") {
+        const ids = Array.isArray(command.ids) ? command.ids.slice(0, 24) : [];
+        const width = boundedInteger(command.width, 360, 120, 640);
+        return Promise.all(ids.map(async id => {
+          const item = tabs.get(id);
+          if (!item || !item.url || item.view.webContents.isDestroyed()) return null;
+          try {
+            const image = visible && activeId === id ? await item.view.webContents.capturePage() : await captureHiddenPage(item);
+            if (!image || image.isEmpty()) return null;
+            const small = image.resize({ width: Math.min(width, image.getSize().width), quality: "good" });
+            return { id, dataUrl: `data:image/jpeg;base64,${small.toJPEG(55).toString("base64")}` };
+          } catch (_) { return null; }
+        })).then(frames => ({ frames: frames.filter(Boolean) }));
+      }
+      if (command.action === "spacePointers") {
+        const pointers = {};
+        const fallback = active()?.view.getBounds();
+        for (const id of Array.isArray(command.ids) ? command.ids.slice(0, 24) : []) {
+          const item = tabs.get(id);
+          if (!item) continue;
+          let box = item.view.getBounds();
+          if (!box.width || !box.height) box = fallback;
+          if (!box || !box.width || !box.height) continue;
+          const place = point => point ? { x: Math.min(1, Math.max(0, point.x / box.width)), y: Math.min(1, Math.max(0, point.y / box.height)), at: point.at } : null;
+          pointers[id] = { pointer: place(item.pointer), bot: place(item.botPoint) };
+        }
+        // The page in front also says what the pointer is over and what is in view.
+        const front = pointers[activeId] && tabs.get(activeId);
+        if (!front || !front.url || front.view.webContents.isDestroyed()) return { pointers };
+        return executeProtocolScript(front.view.webContents, readScript(front.pointer), true).then(read => {
+          if (read && read.pointer && pointers[activeId].pointer) pointers[activeId].pointer.a = cleanAnchor(read.pointer);
+          if (read && read.view) pointers[activeId].view = { a: cleanAnchor(read.view.a), top: read.view.top === true };
+          return { pointers };
+        }).catch(() => ({ pointers }));
+      }
+      // Following someone: show the part of the page they are reading.
+      if (command.action === "spaceScroll") {
+        const item = tabs.get(command.id);
+        const script = scrollScript(command.view);
+        if (!item || !item.url || !script || item.view.webContents.isDestroyed()) return {};
+        return executeProtocolScript(item.view.webContents, script, true).catch(() => {}).then(() => ({}));
+      }
+      // Teammates' pointers over the page. Native views cover the shell DOM, so
+      // like bot presence these live in the page: click-through and out of its reach.
+      if (command.action === "spaceCursors") {
+        const item = tabs.get(command.id);
+        if (!item || !item.url || item.view.webContents.isDestroyed()) return {};
+        const list = (Array.isArray(command.cursors) ? command.cursors : []).slice(0, 12).map(cursor => ({
+          id: String(cursor.id || "").slice(0, 120), label: String(cursor.label || "").slice(0, 60),
+          x: Math.min(1, Math.max(0, Number(cursor.x) || 0)), y: Math.min(1, Math.max(0, Number(cursor.y) || 0)), a: cleanAnchor(cursor.a),
+          color: /^(#[0-9a-f]{6}|hsl\(\d+, ?\d+%, ?\d+%\))$/i.test(cursor.color || "") ? cursor.color : "#5b3fd6",
+        }));
+        return executeProtocolScript(item.view.webContents, `(() => {${PAGE_HELPERS}
+          const list = ${JSON.stringify(list)};
+          let host = globalThis.__miaSpaceCursors;
+          if (!list.length) { host?.el.remove(); globalThis.__miaSpaceCursors = null; return; }
+          if (!host || !host.el.isConnected) {
+            const el = document.createElement('div');
+            el.style.cssText = 'all:initial;position:fixed;inset:0;overflow:hidden;z-index:2147483647;pointer-events:none;';
+            const root = el.attachShadow({ mode: 'closed' });
+            const style = document.createElement('style');
+            style.textContent = '.c{position:absolute;display:flex;align-items:flex-start;transition:left .3s linear,top .3s linear;font:600 11px/1.2 system-ui,sans-serif}svg{width:16px;height:16px;flex:none}span{margin:12px 0 0 -4px;padding:2px 7px;border-radius:999px;color:#fff;white-space:nowrap}@media (prefers-reduced-motion:reduce){.c{transition:none}}';
+            root.append(style);
+            document.documentElement.append(el);
+            host = globalThis.__miaSpaceCursors = { el, root, marks: new Map() };
+            // A pointer stays on its spot while this person scrolls the page under it.
+            host.place = (mark, instant) => {
+              const spot = mark.cursor.a ? findAnchor(mark.cursor.a) : { x: mark.cursor.x * innerWidth, y: mark.cursor.y * innerHeight };
+              mark.style.transition = instant ? 'none' : '';
+              mark.style.left = spot.x + 'px';
+              mark.style.top = spot.y + 'px';
+            };
+            const replace = () => { const live = globalThis.__miaSpaceCursors; if (live) for (const mark of live.marks.values()) live.place(mark, true); };
+            addEventListener('scroll', replace, { capture: true, passive: true });
+            addEventListener('resize', replace, { passive: true });
+          }
+          const seen = new Set();
+          for (const cursor of list) {
+            seen.add(cursor.id);
+            let mark = host.marks.get(cursor.id);
+            if (!mark) {
+              mark = document.createElement('div');
+              mark.className = 'c';
+              mark.innerHTML = '<svg viewBox="0 0 16 16"><path d="M2 1l11 6-5 1.5L6 14z" stroke="#fff" stroke-width="1"/></svg><span></span>';
+              host.root.append(mark);
+              host.marks.set(cursor.id, mark);
+            }
+            mark.querySelector('span').textContent = cursor.label;
+            mark.querySelector('span').style.background = cursor.color;
+            mark.querySelector('path').style.fill = cursor.color;
+            mark.cursor = cursor;
+            host.place(mark);
+          }
+          for (const [id, mark] of host.marks) if (!seen.has(id)) { mark.remove(); host.marks.delete(id); }
+        })()`, true).catch(() => {}).then(() => ({}));
+      }
+      if (command.action === "spaceOpenTab") {
+        const url = typeof command.url === "string" ? command.url.trim() : "";
+        if (!/^https?:\/\/\S+$/i.test(url) || url.length > 4096) return { error: "Only web pages can be shared." };
+        // The group exists before the tab: a tab still loading its page can't
+        // be moved into a group afterwards.
+        const groupId = groups.has(command.groupId) ? command.groupId : addGroup(String(command.name || "").slice(0, 80)).id;
+        let tab;
+        try {
+          tab = newTab(url, { groupId, after: groupTabs(groupId).at(-1)?.id, activate: command.activate === true, pagesMayLoad: true });
+        } finally { normalizeGroups(); }
+        persistTabs(); publish();
+        return { ...state(), openedId: tab.id, groupId };
+      }
       if (command.action === "downloadShow") {
         const entry = downloadEntries.find(item => item.id === command.id);
         if (!entry || entry.state !== "completed" || !entry.path || !fs.existsSync(entry.path)) {
@@ -3010,7 +3306,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
     for (const savedTab of restored.tabs) {
       newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false,
-        groupId: savedTab.groupId });
+        groupId: savedTab.groupId, private: savedTab.private === true });
     }
     normalizeGroups();
     activateTab(tabs.has(restored.activeId) ? restored.activeId : [...tabs.keys()].at(-1));
@@ -3045,6 +3341,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     activeId = null;
     workProposal = null;
     workspaceKey = key;
+    workspaceChangedAt = Date.now();
     statePath = workspaceStatePath(key);
     historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
     loadHistory();
@@ -3060,7 +3357,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     shortcut: runShortcut, protocol: protocolCommand, persist: persistTabs,
     actors: publicActors,
     prepareToClose: captureMediaState, clearData,
-    prepareAttachment: attachmentAccess.prepare,
+    prepareAttachment: attachmentAccess.prepare, openLink,
     clearLegacyAttachmentCookie: attachmentAccess.removeLegacyBrowserCookie,
   };
 }

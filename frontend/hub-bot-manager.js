@@ -1,14 +1,16 @@
 (function(root){
   'use strict';
   function node(tag,text,parent){var n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(parent)parent.append(n);return n;}
+  // Skills are part of what an administrator approves, so their full text shows.
+  function showSkills(skills,parent){(skills||[]).forEach(function(skill){var item=node('details',undefined,parent);node('summary','Skill: '+skill.name,item);if(skill.description)node('p',skill.description,item);node('pre',skill.body,item).style.whiteSpace='pre-wrap';});}
   async function open(scope){
     var old=document.querySelector('#hubBotManager');if(old)old.remove();
-    var dialog=node('dialog');dialog.id='hubBotManager';dialog.style.cssText='width:min(650px,90vw);max-height:85vh;padding:24px;border:1px solid #ddd;border-radius:14px;background:white;color:#222;font:14px system-ui;overflow:auto';
-    document.body.append(dialog);node('h2','Shared bot versions and local runs',dialog).style.fontSize='20px';
+    var dialog=node('dialog');dialog.id='hubBotManager';dialog.className='hub-bot-dialog';
+    document.body.append(dialog);node('h2','Shared bot versions and local runs',dialog);
     node('p','Runs use this account’s subscriptions and tools on this computer. Files and thinking traces are not stored in the shared space.',dialog);
     var status=node('p','',dialog),content=node('div',undefined,dialog);
     var base='/v1/teams/'+scope.teamId+'/channels/'+scope.channelId;
-    function button(parent,label,action){var b=node('button',label,parent);b.type='button';b.style.cssText='margin:6px 8px 6px 0;padding:7px 10px';b.onclick=async function(){b.disabled=true;try{await action();status.textContent='Saved.';await render();await scope.refresh();}catch(e){status.textContent=e.message;}finally{b.disabled=false;}};return b;}
+    function button(parent,label,action){var b=node('button',label,parent);b.type='button';b.className='btn small';b.onclick=async function(){b.disabled=true;try{await action();status.textContent='Saved.';await render();await scope.refresh();}catch(e){status.textContent=e.message;}finally{b.disabled=false;}};return b;}
     button(dialog,'Close',async function(){dialog.close();dialog.remove();});
     async function render(){
       if(!dialog.isConnected)return;
@@ -31,16 +33,16 @@
     }
     async function definitionCard(bot,api){
       var path=base+'/bots/'+bot.id,details=await api.call('GET',path+'/definition');
-      var card=node('section',undefined,content);card.style.cssText='border-top:1px solid #ddd;margin-top:16px;padding-top:12px';
+      var card=node('section',undefined,content);card.className='hub-bot-dialog-card';
       node('h3',bot.name,card);node('p',(details.mode||'No definition')+' · '+(details.definition?'published version '+details.definition.version:'administrator approval required'),card);
       if(details.canEdit){
-        var textarea=node('textarea',undefined,card);textarea.setAttribute('aria-label',bot.name+' shared instructions');textarea.value=details.definition?details.definition.instructions:'';textarea.style.cssText='width:100%;min-height:100px';textarea.maxLength=6000;
-        button(card,'Propose edited version',function(){return api.call('POST',path+'/versions',{instructions:textarea.value,source:'manual'});});
+        var textarea=node('textarea',undefined,card);textarea.setAttribute('aria-label',bot.name+' shared instructions');textarea.value=details.definition?details.definition.instructions:'';textarea.maxLength=100000;
+        button(card,'Propose edited version',function(){var skills=details.definition&&details.definition.skills||[];return api.call('POST',path+'/versions',Object.assign({instructions:textarea.value,source:'manual'},skills.length?{skills:skills}:{}));});
         if(details.mode==='linked' && details.isOwner)button(card,'Propose latest solo instructions',function(){return api.localCall('POST','/sync',Object.assign({},scope,{botId:bot.id}));});
       }
       if(details.canEdit || details.isAdmin){
         var versions=await api.call('GET',path+'/versions');
-        versions.versions.forEach(function(v){var item=node('details',undefined,card);node('summary','Version '+v.version+(v.approved_by?' · approved':v.rejected_by?' · rejected':' · awaiting approval'),item);node('pre',v.instructions,item).style.whiteSpace='pre-wrap';
+        versions.versions.forEach(function(v){var item=node('details',undefined,card);node('summary','Version '+v.version+(v.approved_by?' · approved':v.rejected_by?' · rejected':' · awaiting approval'),item);node('pre',v.instructions,item).style.whiteSpace='pre-wrap';showSkills(v.skills,item);
           if(details.isAdmin && !v.rejected_by && (!details.definition || details.definition.version!==v.version))button(card,'Approve version '+v.version,function(){return api.call('POST',path+'/versions/'+v.version+'/approve',{});});
         });
       }
@@ -73,10 +75,10 @@
         var proposal=result.versions.find(function(v){return v.version===version;});
         if(!proposal)throw new Error('This proposal is no longer available. Refresh the chat.');
         var definition=await api.call('GET',base+'/definition');
-        var dialog=node('dialog');dialog.style.cssText='width:min(650px,90vw);max-height:80vh;padding:24px;overflow:auto';document.body.append(dialog);
+        var dialog=node('dialog');dialog.className='hub-bot-dialog';document.body.append(dialog);
         node('h2',definition.bot.name,dialog);node('p','Version '+version+' · '+definition.mode,dialog);
-        node('pre',proposal.instructions,dialog).style.whiteSpace='pre-wrap';
-        ['Accept','Reject','Close'].forEach(function(label){var control=node('button',label,dialog);control.type='button';control.style.cssText='margin:6px;padding:7px 10px';control.onclick=async function(){
+        node('pre',proposal.instructions,dialog).style.whiteSpace='pre-wrap';showSkills(proposal.skills,dialog);
+        ['Accept','Reject','Close'].forEach(function(label){var control=node('button',label,dialog);control.type='button';control.className='btn small';control.onclick=async function(){
           if(label==='Close'){dialog.close();dialog.remove();return;}
           control.disabled=true;
           try{await api.call('POST',base+'/versions/'+version+'/'+(label==='Accept'?'approve':'reject'),{});await scope.refresh();dialog.close();dialog.remove();}

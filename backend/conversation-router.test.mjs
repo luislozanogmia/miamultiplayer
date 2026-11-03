@@ -398,6 +398,49 @@ test('native HTTP contract adds a bot member and persists mention routing withou
   }
 });
 
+test('stop clears every message waiting on the same agent and posts one notice', async () => {
+  const app = await startApp({
+    ensureMembers: ({ conversation, repository }) => repository.addMember({
+      companyId: conversation.companyId,
+      conversationId: conversation.id,
+      principalId: 'gateway',
+      principalType: 'agent',
+      role: 'agent',
+      metadata: { name: 'Mia', manager: true },
+    }),
+  });
+  try {
+    let result = await app.request('/conversations', {
+      method: 'POST',
+      body: { type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' } },
+    });
+    const conversationId = result.payload.conversation.id;
+    const ids = [];
+    for (const text of ['check the posts', 'what is the status?', 'how do we start over?']) {
+      result = await app.request(`/conversations/${conversationId}/events`, {
+        method: 'POST',
+        body: { content: { text }, clientIdempotencyKey: `stop-all-${ids.length}` },
+      });
+      ids.push(result.payload.dispatch.dispatches[0].id);
+    }
+    // The first message is the run in progress; the others wait behind it.
+    app.repository.claimDispatch({ companyId: 'acme', id: ids[0], claimToken: 'running' });
+
+    result = await app.request(`/conversations/${conversationId}/dispatches/${ids[0]}/stop`, { method: 'POST', body: {} });
+    assert.equal(result.response.status, 200);
+    assert.deepEqual([...result.payload.stoppedDispatchIds].sort(), [...ids].sort());
+
+    result = await app.request(`/conversations/${conversationId}/dispatches/active`);
+    assert.deepEqual(result.payload.dispatches, []);
+    result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=20`);
+    const notices = result.payload.events.filter((event) => event.metadata && event.metadata.status === 'stopped');
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].metadata.dispatchId, ids[0]);
+  } finally {
+    await app.close();
+  }
+});
+
 test('native HTTP stop exposes active work, cancels it durably, and prevents a queued dispatch from running', async () => {
   const app = await startApp({
     ensureMembers: ({ conversation, repository }) => repository.addMember({

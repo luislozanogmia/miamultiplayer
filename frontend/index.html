@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; script-src-elem 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https://img.clerk.com; font-src 'self'; media-src 'self' blob:; connect-src 'self' https://*.clerk.accounts.dev https://clerk-telemetry.com https://*.clerk-telemetry.com https://img.clerk.com https://*.protect.clerk.com:*; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; manifest-src 'self'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; script-src-elem 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; script-src-attr 'none'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https://img.clerk.com; font-src 'self'; media-src 'self' blob:; connect-src 'self' https://*.clerk.accounts.dev https://clerk-telemetry.com https://*.clerk-telemetry.com https://img.clerk.com https://*.protect.clerk.com:* https://*.s3.us-east-1.amazonaws.com; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' https://challenges.cloudflare.com https://*.protect.clerk.com; manifest-src 'self'" />
 <title>Mia - Solo</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg?v=20260822-1" />
 <link rel="alternate icon" type="image/png" href="assets/favicon.png?v=20260822-1" />
@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <script src="assets/workspace-handoff.js?v=20261024-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261026-invited-1" />
+<link rel="stylesheet" href="styles.css?v=20261103-multiplayer-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -40,7 +40,8 @@
   <button type="button" id="miaRouterBannerDismiss">Dismiss</button>
 </div>
 
-<div class="login-wall" id="loginWall">
+<!-- Hidden until Mia confirms nobody is signed in. -->
+<div class="login-wall hidden" id="loginWall">
   <div class="login-split">
     <div class="login-main">
       <div class="login-center">
@@ -79,6 +80,10 @@
   </div>
 </div>
 
+<!-- Mac: the window has no title bar, so while the sign-in page, loading
+     screen or a dialog covers the app's top row, this strip keeps the top of
+     the window draggable (see .window-drag-strip in styles.css). -->
+<div class="window-drag-strip" aria-hidden="true"></div>
 <div class="app-shell" id="appShell">
   <div class="topbar-wrap">
     <header class="topbar">
@@ -365,9 +370,12 @@
                 <span class="workspace-rail-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"></circle><path d="M5 20a7 7 0 0 1 14 0"></path></svg></span><strong class="workspace-rail-name">Solo</strong>
               </button>
               <div class="workspace-rail-sep" role="separator"></div>
-              <button type="button" class="workspace-rail-tile" data-workspace-key="multiplayer_test" aria-label="Multiplayer Test">
+              <button type="button" class="workspace-rail-tile" data-workspace-key="multiplayer_test" aria-label="Multiplayer Test" hidden>
                 <span class="workspace-rail-mark" aria-hidden="true">MT</span><strong class="workspace-rail-name">Multiplayer Test</strong>
               </button>
+              <a class="workspace-rail-tile workspace-rail-demo" id="workspaceRailDemo" href="/multiplayer-demo/" aria-label="Multiplayer Demo">
+                <span class="workspace-rail-mark" aria-hidden="true">MD</span><strong class="workspace-rail-name">Multiplayer Demo</strong>
+              </a>
               <button type="button" class="workspace-rail-tile workspace-rail-add" id="workspaceRailAdd" aria-label="Add a workspace">
                 <span class="workspace-rail-mark" aria-hidden="true">+</span><strong class="workspace-rail-name">Add a workspace</strong>
               </button>
@@ -389,7 +397,7 @@
                   <span class="cami" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg></span><span>Admin Center</span>
                 </button>
                 <button type="button" class="chat-acct-menu-item" id="chatAcctSetup" role="menuitem">
-                  <span class="cami" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"></path><path d="m14 7 3 3"></path><path d="M5 6v4"></path><path d="M19 14v4"></path><path d="M10 2v2"></path><path d="M7 8H3"></path><path d="M21 16h-4"></path><path d="M11 3H9"></path></svg></span><span>Initial setup</span>
+                  <span class="cami" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24"><rect width="16" height="16" x="4" y="4" rx="2"></rect><rect width="6" height="6" x="9" y="9" rx="1"></rect><path d="M15 2v2"></path><path d="M15 20v2"></path><path d="M2 15h2"></path><path d="M2 9h2"></path><path d="M20 15h2"></path><path d="M20 9h2"></path><path d="M9 2v2"></path><path d="M9 20v2"></path></svg></span><span>Models &amp; Subscriptions</span>
                 </button>
                 <button type="button" class="chat-acct-menu-item" id="chatAcctSettings" role="menuitem">
                   <span class="cami" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></span><span>Settings</span>
@@ -408,7 +416,8 @@
               </div>
               <div class="rail-notifications" id="railNotificationsPanel" role="dialog" aria-label="Notifications" hidden>
                 <div class="rail-notifications-title">Notifications</div>
-                <div class="rail-notifications-empty">You're all caught up. Requests that need you will show up here.</div>
+                <div class="rail-notifications-list" id="railNotificationsList" hidden></div>
+                <div class="rail-notifications-empty" id="railNotificationsEmpty">You're all caught up. Requests that need you will show up here.</div>
               </div>
             </nav>
             <div class="chat-new-btn-wrap">
@@ -416,12 +425,13 @@
                 <span class="mia-company-name" id="miaCompanyName">Multiplayer Test</span>
               </div>
               <div class="sidebar-views" role="group" aria-label="Views" data-rail-hide>
-                <button type="button" class="sidebar-view-btn" data-sidebar-view="chat" aria-label="Chat" title="Chat"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path></svg><span class="sidebar-view-label">Chat</span></button>
-                <button type="button" class="sidebar-view-btn" data-sidebar-view="automations" data-tools-action="automations" aria-label="Automations" title="Automations"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6h4"></path><circle cx="12" cy="12" r="10"></circle></svg><span class="sidebar-view-label">Automations</span></button>
-                <button type="button" class="sidebar-view-btn" data-sidebar-view="artifacts" data-tools-action="artifacts" aria-label="Artifacts" title="Artifacts"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg><span class="sidebar-view-label">Artifacts</span></button>
-                <button type="button" class="sidebar-view-btn" data-sidebar-view="browser" data-tools-action="web-browser" aria-label="Browser" title="Browser"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg><span class="sidebar-view-label">Browser</span></button>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="chat" aria-label="Chat" data-tip="Chat"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path></svg><span class="sidebar-view-label">Chat</span></button>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="automations" data-tools-action="automations" aria-label="Automations" data-tip="Automations"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6h4"></path><circle cx="12" cy="12" r="10"></circle></svg><span class="sidebar-view-label">Automations</span></button>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="artifacts" data-tools-action="artifacts" aria-label="Artifacts" data-tip="Artifacts"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg><span class="sidebar-view-label">Artifacts</span></button>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="browser" data-tools-action="web-browser" aria-label="Browser" data-tip="Browser"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg><span class="sidebar-view-label">Browser</span></button>
+                <button type="button" class="sidebar-view-btn" data-sidebar-view="apps" data-tools-action="apps" aria-label="Apps" data-tip="Apps"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg></button>
                 <!-- Mix: one strip with every chat, automation and browser tab. -->
-                <button type="button" class="sidebar-view-btn sidebar-mix-btn" id="sidebarMixBtn" aria-label="Mix all tabs" title="Mix all tabs" aria-pressed="false"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m18 14 4 4-4 4"></path><path d="m18 2 4 4-4 4"></path><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"></path><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"></path><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"></path></svg></button>
+                <button type="button" class="sidebar-view-btn sidebar-mix-btn" id="sidebarMixBtn" aria-label="Mix all tabs" data-tip="Mix all tabs" aria-pressed="false"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="m18 14 4 4-4 4"></path><path d="m18 2 4 4-4 4"></path><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"></path><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"></path><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"></path></svg></button>
               </div>
               <script src="assets/workspace-rail-paint.js?v=20261025-1"></script>
               <button type="button" class="chat-sidebar-tool-btn chat-sidebar-developer-btn" id="chatSidebarDeveloperBtn" aria-label="Open developer menu" title="Developer tools" aria-haspopup="menu" aria-expanded="false" hidden>&lt;/&gt;</button>
@@ -458,7 +468,8 @@
                   <button type="button" class="chat-dm-add-btn" data-tools-action="new-bot" title="New bot" aria-label="New bot">+</button>
                 </div>
                 <div class="chat-recents" id="chatBots"></div>
-                <button type="button" class="sidebar-upcoming-row" data-tools-action="new-agent" aria-disabled="true" title="Coming soon"><span class="sidebar-upcoming-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg></span><span class="row-text"><span class="row-label">New agent</span><span class="row-preview">Coming soon</span></span></button>
+                <div class="chat-recents private-agents-list" id="chatPrivateAgents"></div>
+                <button type="button" class="sidebar-upcoming-row" data-tools-action="new-agent"><span class="sidebar-upcoming-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg></span><span class="row-text"><span class="row-label">New agent</span><span class="row-preview">Your own private agent</span></span></button>
               </div>
               <div class="chat-recents-group chat-starter-group" id="chatStarterBotsGroup">
                 <div class="chat-recents-head" data-rail-hide><span class="chat-recents-title">Starter bots</span></div>
@@ -479,6 +490,7 @@
             <div class="chat-main-col">
               <div class="chat-tabs-row" id="chatTabsRow" hidden></div>
               <header class="channel-header" id="channelHeader" style="display:none;"></header>
+              <div class="mia-space-chat-invites" id="miaSpaceChatInvites" hidden></div>
               <div class="chat-thread" id="chatThread" data-placeholder><div class="chat-thread-placeholder" aria-hidden="true"><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:38%"></span><span class="mia-placeholder" style="width:72%"></span><span class="mia-placeholder" style="width:54%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:30%"></span><span class="mia-placeholder" style="width:64%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:44%"></span><span class="mia-placeholder" style="width:80%"></span><span class="mia-placeholder" style="width:46%"></span></span></div><div class="chat-placeholder-msg"><span class="mia-placeholder chat-placeholder-avatar"></span><span class="chat-placeholder-lines"><span class="mia-placeholder" style="width:34%"></span><span class="mia-placeholder" style="width:58%"></span></span></div></div></div>
               <button type="button" class="chat-jump-latest" id="chatJumpLatest" aria-label="Jump to latest message" title="Jump to latest message" aria-hidden="true" hidden>
                 <span class="chat-jump-latest-label" aria-hidden="true"></span>
@@ -512,7 +524,7 @@
                 <div class="cc-blocked" id="ccBlocked" role="status" hidden></div>
                 <div class="chat-composer">
                   <div class="cc-input-row">
-                    <div class="cc-inline-suggestion" id="ccInlineSuggestion" hidden aria-hidden="true"><em class="cc-inline-suggestion-tab">Tab</em><span>Can we create a newsletter bot?</span></div>
+                    <div class="cc-inline-suggestion" id="ccInlineSuggestion" hidden aria-hidden="true"><em class="cc-inline-suggestion-tab">Tab</em><span></span></div>
                     <textarea class="cc-input" id="ccInput" rows="1" placeholder="" autocomplete="off" data-form-type="other" data-lpignore="true" data-1p-ignore="true"></textarea>
                   </div>
                   <div class="cc-bottom-row">
@@ -548,7 +560,7 @@
                 </div>
               </div>
             </div>
-            <aside class="chat-info-pane" id="chatInfoPane" aria-label="Automations"></aside>
+            <aside class="chat-info-pane" id="chatInfoPane" aria-label="Details"></aside>
             <aside class="chat-thread-panel" id="chatThreadPanel" hidden>
               <div class="ctp-resize" data-ctp-resize title="Drag to resize"></div>
               <div class="ctp-header cip-pane-head">
@@ -660,19 +672,39 @@
   </section>
 </div>
 
+<!-- Apps: small web apps people build and share. Same frame as Artifacts; a
+     running app is a sandboxed native view placed over appsPaneHost. -->
+<div class="automations-overlay artifacts-overlay apps-overlay" id="appsOverlay" hidden aria-hidden="true">
+  <section class="automations-window" aria-label="Apps">
+    <div class="automations-tabs-row">
+      <div class="automations-tabs" id="appsTabs"></div>
+      <button type="button" class="local-browser-btn automations-bar-btn" id="appsCloseBtn" title="Close apps" aria-label="Close apps"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+    </div>
+    <div class="artifacts-filter-row" id="appsFilterRow">
+      <input type="search" class="artifacts-search" id="appsSearch" placeholder="Filter apps" aria-label="Filter apps">
+      <button type="button" class="artifacts-bar-text-btn" data-app-add-link>+ Link</button>
+      <button type="button" class="artifacts-bar-text-btn primary" data-app-build>Build with a bot</button>
+    </div>
+    <div class="automations-body artifacts-body" id="appsBody"></div>
+    <div class="apps-pane-note" id="appsPaneNote" role="status" hidden></div>
+    <div class="apps-pane-host" id="appsPaneHost" hidden></div>
+  </section>
+</div>
+
 <!-- Artifacts: pages, documents and live apps you or your bots made. Same
      frame as Automations; each one opens in Mia's browser. -->
 <div class="automations-overlay artifacts-overlay" id="artifactsOverlay" hidden aria-hidden="true">
   <section class="automations-window" aria-label="Artifacts">
     <div class="automations-tabs-row">
-      <span class="artifacts-title">Artifacts</span>
+      <!-- Its one tab, drawn by the browser's tab strip, as in Automations. -->
+      <div class="automations-tabs" id="artifactsTabs"></div>
       <button type="button" class="local-browser-btn automations-bar-btn" id="artifactsCloseBtn" title="Close artifacts" aria-label="Close artifacts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
     </div>
-    <header class="automations-bar artifacts-bar">
-      <input type="search" class="artifacts-search" id="artifactsSearch" placeholder="Search" aria-label="Search artifacts">
+    <div class="artifacts-filter-row">
       <div class="artifacts-chips" id="artifactsChips" role="group" aria-label="Show"></div>
+      <input type="search" class="artifacts-search" id="artifactsSearch" placeholder="Filter artifacts" aria-label="Filter artifacts">
       <button type="button" class="artifacts-bar-text-btn" id="artifactsAddBtn" data-artifacts-add>+ Live app</button>
-    </header>
+    </div>
     <form class="artifacts-add-form" id="artifactsAddForm" hidden autocomplete="off">
       <input type="text" id="artifactsAddUrl" placeholder="http://localhost:3000" aria-label="App address" required>
       <input type="text" id="artifactsAddName" placeholder="Name (optional)" aria-label="App name" maxlength="120">
@@ -685,6 +717,7 @@
 </div>
 
 <!-- Local browser surface. -->
+<div class="mia-space-call" id="miaSpaceCall" hidden></div>
 <div class="local-browser-overlay" id="localBrowserOverlay" hidden aria-hidden="true">
   <section class="local-browser-window" id="localBrowserWindow" aria-label="Web browser">
     <div class="native-browser-tabs-row" id="localBrowserTabsRow">
@@ -707,6 +740,7 @@
         <div class="local-browser-suggest" id="localBrowserUrlSuggest" role="listbox" hidden></div>
       </div>
       <button type="submit" class="local-browser-go-btn">Go</button>
+      <button type="button" class="mia-space-invite-btn" id="localBrowserInviteBtn" title="Browse together: invite people to these tabs" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"></path><path d="M18 8v6M15 11h6"></path></svg>Invite</button>
       <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
       </button>
@@ -717,6 +751,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
       </button>
     </form>
+    <div class="mia-space-pagehead" id="miaSpacePageHead" hidden></div>
     <div class="local-browser-screen" id="localBrowserScreen">
       <img class="local-browser-snapshot" id="localBrowserSnapshot" alt="" aria-hidden="true" hidden />
       <section class="local-browser-downloads" id="localBrowserDownloads" role="dialog" aria-label="Downloads" hidden>
@@ -749,6 +784,8 @@
         <a id="localBrowserBlockedLink" href="#" target="_blank" rel="noopener" hidden>Open in a browser tab</a>
       </div>
     </div>
+    <!-- A tab group shared with teammates: its live minimap, follow and join. -->
+    <div class="mia-space-bar" id="miaSpaceBar" hidden></div>
     <footer class="local-browser-foot" hidden>Local browser · Mia is available on the right</footer>
   </section>
 </div>
@@ -836,12 +873,35 @@
   <nav class="styled-settings-nav" id="settingsNav">
     <button class="styled-settings-nav-item active" data-pane="general"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg>General</button>
     <button class="styled-settings-nav-item" data-pane="instructions"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h10v11H3z"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>Instructions</button>
+    <button class="styled-settings-nav-item" data-pane="skills">Skills</button>
     <button class="styled-settings-nav-item" data-pane="model"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h6M12 8v2.5M14.5 8v1.8"/></svg>Access</button>
     <button class="styled-settings-nav-item" data-pane="security"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l5 2v4.2c0 3-2.2 5.3-5 6.2-2.8-.9-5-3.2-5-6.2V3.8l5-2z"/><path d="M5.8 8l1.5 1.5L10.3 6.5"/></svg>Security</button>
     <button class="styled-settings-nav-item" data-pane="backups"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v8.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8M2.8 8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2"/></svg>Backups</button>
     <button class="styled-settings-nav-item" data-pane="teams">Teams</button>
+    <button class="styled-settings-nav-item" data-pane="mia">Mia</button>
   </nav>
   <div class="styled-settings-content" id="settingsContent">
+    <section class="styled-settings-pane" data-pane="mia">
+      <h1 class="styled-settings-h1">Mia</h1>
+      <div class="styled-settings-group-label">Let Mia do these without asking</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Create and change automations</div><div class="styled-settings-row-desc">Otherwise Mia shows you a card first</div></div>
+          <label class="styled-toggle"><input type="checkbox" data-mia-trust="automations" /><span class="gt-track"></span></label>
+        </div>
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Create and archive bots</div><div class="styled-settings-row-desc">Otherwise Mia shows you a card first</div></div>
+          <label class="styled-toggle"><input type="checkbox" data-mia-trust="bots" /><span class="gt-track"></span></label>
+        </div>
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Start browser bot work</div><div class="styled-settings-row-desc">Otherwise Mia asks you in a dialog first</div></div>
+          <label class="styled-toggle"><input type="checkbox" data-mia-trust="browserWork" /><span class="gt-track"></span></label>
+        </div>
+      </div>
+      <div class="styled-settings-row-desc">Mia always asks before anything reaches other people, or after reading a web page.</div>
+      <div class="styled-settings-group-label">What Mia did</div>
+      <div class="styled-settings-card" id="miaActivityList"></div>
+    </section>
     <section class="styled-settings-pane" data-pane="teams" id="hubTeamsPane">
       <h1 class="styled-settings-h1">Teams</h1>
       <p>Request a team, invite people, and manage your memberships.</p>
@@ -888,6 +948,10 @@
       <div class="styled-settings-group-label">Assistant</div>
       <div class="styled-settings-card">
         <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Ask-before-do</div><div class="styled-settings-row-desc">Mia and the bots will ask you before doing any irreversible action, deleting, sending a message, posting.</div></div>
+          <label class="styled-toggle"><input type="checkbox" id="settingsAskBeforeDo" checked /><span class="gt-track"></span></label>
+        </div>
+        <div class="styled-settings-row">
           <div><div class="styled-settings-row-label">Prompt suggestions</div><div class="styled-settings-row-desc">Show one inline suggestion in the chat composer</div></div>
           <label class="styled-toggle"><input type="checkbox" id="settingsAgentSuggestions" /><span class="gt-track"></span></label>
         </div>
@@ -896,13 +960,17 @@
           <button class="styled-settings-pill-btn" id="settingsReplayTour">Replay</button>
         </div>
         <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">View tips</div><div class="styled-settings-row-desc">Show the tips for Chat, Automations, Artifacts and Browser again</div></div>
+          <button class="styled-settings-pill-btn" id="settingsReplayViewTips">Replay</button>
+        </div>
+        <div class="styled-settings-row">
           <div><div class="styled-settings-row-label">Output</div><div class="styled-settings-row-desc" id="settingsOutputNote">Concise is selected — replies show only the final answer.</div></div>
           <select class="styled-settings-field styled-settings-select" id="settingsOutputMode" aria-label="Chat output detail">
             <option value="concise">Concise</option>
             <option value="verbose">Verbose</option>
           </select>
         </div>
-        <div class="styled-settings-row">
+        <div class="styled-settings-row" id="settingsThemeRow" hidden>
           <div><div class="styled-settings-row-label">Theme</div><div class="styled-settings-row-desc">Light or dark appearance</div></div>
           <select class="styled-settings-field styled-settings-select" id="settingsThemeMode" aria-label="Theme">
             <option value="light">Light</option>
@@ -962,6 +1030,19 @@
       <div class="styled-settings-row styled-settings-row-actions styled-settings-instructions-actions">
         <span class="styled-settings-form-note" id="settingsInstructionsSaved">Saved</span>
         <button class="styled-settings-pill-btn" id="settingsInstructionsSave">Save instructions</button>
+      </div>
+    </section>
+
+    <section class="styled-settings-pane" data-pane="skills">
+      <h1 class="styled-settings-h1">Skills</h1>
+      <div class="styled-settings-card" id="settingsSkillsList"></div>
+      <div class="styled-settings-row styled-settings-row-actions"><button class="styled-settings-pill-btn" id="settingsSkillNew">New skill</button></div>
+      <div class="styled-settings-card styled-settings-instructions-card" id="settingsSkillForm" hidden>
+        <input class="styled-settings-field skill-form-field" id="settingsSkillName" aria-label="Skill name" placeholder="Name" maxlength="64">
+        <input class="styled-settings-field skill-form-field" id="settingsSkillDescription" aria-label="When to use this skill" placeholder="When to use it" maxlength="500">
+        <textarea class="styled-settings-field styled-settings-instructions-text" id="settingsSkillBody" aria-label="Skill instructions" placeholder="How to do the job, step by step" maxlength="20000"></textarea>
+        <div class="agent-setup-error" id="settingsSkillError" role="alert"></div>
+        <div class="styled-settings-row styled-settings-row-actions"><button class="styled-settings-pill-btn" id="settingsSkillCancel">Cancel</button><button class="styled-settings-pill-btn" id="settingsSkillSave">Save skill</button></div>
       </div>
     </section>
 
@@ -1186,9 +1267,9 @@
 <section class="drawer styled-channel-drawer" id="channelNameDrawer" role="dialog" aria-modal="true" aria-labelledby="channelNameTitle">
   <div class="drawer-head styled-channel-head">
     <div>
-      <div class="styled-channel-kicker">Shared space</div>
+      <div class="styled-channel-kicker" id="channelNameKicker">Solo</div>
       <h2 id="channelNameTitle">New channel</h2>
-      <p id="channelNameIntro">Start an official conversation for everyone in this space.</p>
+      <p id="channelNameIntro">Start a conversation with your bots.</p>
     </div>
     <button class="drawer-close styled-channel-close" id="channelNameClose" aria-label="Close">&times;</button>
   </div>
@@ -1197,7 +1278,7 @@
     <div class="form-field styled-channel-field">
       <label for="channelNameInput">Channel name</label>
       <input type="text" id="channelNameInput" placeholder="e.g. product, launch, or friends" autocomplete="off" maxlength="80" />
-      <small id="channelNameHint">Official channels are shared team conversations. Shared bots can be added here.</small>
+      <small id="channelNameHint">Only you and your bots can see it. Type @ to add a bot.</small>
     </div>
     <label class="styled-channel-private" id="channelPrivateRow" hidden>
       <input type="checkbox" id="channelPrivateInput" />
@@ -1250,23 +1331,39 @@
 </section>
 
 <script src="assets/mia-mark.js"></script>
+<script src="mia-tooltip.js?v=20261030-tip-1"></script>
+<script src="view-tips.js?v=20261030-tips-1"></script>
 <script src="chat-security.js"></script>
 <script src="feedback-report.js?v=20261022-feedback-1"></script>
 <script src="hermes-connectors.js?v=20260904-google-g"></script>
-<script src="chat-scroll.js?v=20260921-scroll-follow-1"></script>
+<script src="chat-scroll.js?v=20261101-approval-reveal-1"></script>
 <script src="dictation.js?v=20261026-dictation-1"></script>
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
     <script src="browser-work.js"></script>
     <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
     <script src="automations-board.js?v=20261019-automations-1"></script>
-    <script src="artifacts-page.js?v=20261026-artifacts-1"></script>
+    <script src="needs-you.js?v=20261102-1"></script>
+    <script src="artifacts-page.js?v=20261103-artifacts-2"></script>
+    <script src="apps-page.js?v=20261102-apps-3"></script>
+    <script src="view-shelf.js?v=20261027-shelf-1"></script>
     <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
-    <script src="tab-strip.js?v=20261026-count-2"></script>
-    <script src="native-browser.js?v=20261026-icon-1"></script>
+    <script src="mia-app-card.js?v=20261102-mia-app-1"></script>
+    <script src="tab-strip.js?v=20261102-apps-3"></script>
+    <script src="native-browser.js?v=20261103-call-1"></script>
     <script src="hub-bot-manager.js"></script>
     <script src="hub-chat.js"></script>
-    <script src="app.js?v=20261026-artifacts-2"></script>
+    <script src="safe-page-url.js?v=20261102-space-1"></script>
+    <script src="shared-space.js?v=20261103-space-6"></script>
+    <script src="team-files.js?v=20261102-team-files-2"></script>
+    <script src="team-files-ui.js?v=20261102-team-files-1"></script>
+    <script src="step-report.js?v=20261102-step-report-1"></script>
+    <script src="team-workflows.js?v=20261102-team-workflows-2"></script>
+    <script src="team-workflows-ui.js?v=20261102-team-workflows-2"></script>
+    <script src="private-agents-ui.js?v=20261102-agents-1"></script>
+    <script src="app.js?v=20261103-multiplayer-1"></script>
+    <script src="shared-space-live.js?v=20261103-space-1"></script>
+    <script src="shared-space-ui.js?v=20261103-space-8"></script>
     <script src="hub-teams.js"></script>
 </body>
 </html>

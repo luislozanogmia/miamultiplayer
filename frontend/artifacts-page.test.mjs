@@ -42,8 +42,24 @@ test('an empty Mia folder invites you to add a live app', () => {
 
 test('Artifacts, Automations and Browser open the same way in Solo and in a team', () => {
   const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /var sharedView = action === 'automations' \|\| action === 'artifacts' \|\| action === 'web-browser';/);
+  assert.match(app, /var sharedView = action === 'automations' \|\| action === 'artifacts' \|\| action === 'apps' \|\| action === 'web-browser';/);
   assert.match(app, /if\(hubWorkspace\(\) && !sharedView\)/);
   const html = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   assert.match(html, /data-sidebar-view="artifacts" data-tools-action="artifacts"/);
+});
+
+test('recently opened comes first on the unfiltered list, and artifacts that are gone drop out', () => {
+  const items = [{ id: 'a', kind: 'page', type: 'HTML', name: 'report.html', modifiedAt: 5 }, { id: 'b', kind: 'page', type: 'HTML', name: 'notes.html', modifiedAt: 4 }];
+  const html = page.bodyHtml({ items, filter: 'all', query: '', recentIds: ['b', 'missing'] }, esc, now);
+  assert.ok(html.indexOf('Recently opened') >= 0 && html.indexOf('Recently opened') < html.indexOf('notes.html'));
+  assert.doesNotMatch(html, /missing/);
+  assert.doesNotMatch(page.bodyHtml({ items, filter: 'all', query: 'report', recentIds: ['b'] }, esc, now), /Recently opened/);
+});
+
+test('the start menu creates an artifact by drafting the request in chat', () => {
+  const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(app, /\{id:'new-artifact', name:'Create an artifact'\}/);
+  assert.match(app, /id === 'new-artifact'\)\{\n\s+draftInChat\(window\.MiaArtifactsPage\.CREATE_PROMPT\)/);
+  assert.doesNotMatch(app, /Add a live app/);
+  assert.match(page.CREATE_PROMPT, /\[say what it should do\]/);
 });

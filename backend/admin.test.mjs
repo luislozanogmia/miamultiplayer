@@ -1421,6 +1421,20 @@ test('bearer keys cannot reach administrative exports, policy writes, or credent
   }
 });
 
+test('the backup file is named with the local date, not the UTC date', async () => {
+  // Whichever of these is on a different calendar day from UTC right now.
+  const timeZone = new Date().getUTCHours() < 11 ? 'Pacific/Pago_Pago' : 'Pacific/Kiritimati';
+  const server = await startServer({ extraEnv: { TZ: timeZone } });
+  try {
+    const response = await fetch(`${server.origin}/api/backup`, { headers: { cookie: await loginAsBootAdmin(server) } });
+    assert.equal(response.status, 200);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone }).format(new Date());
+    assert.match(response.headers.get('content-disposition'), new RegExp(`miaos-backup-${today}\\.json`));
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('interactive controls reject cross-origin browser requests', async () => {
   const server = await startServer({});
   try {

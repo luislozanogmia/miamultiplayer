@@ -48,8 +48,11 @@
     reserved_bot_name:'That bot name is reserved. Rename the bot first.', bot_name_conflict:'This channel already has a bot with that name.',
     bot_limit:'This channel has reached its bot limit.', invalid_bot:'That bot is no longer available.',
     sharing_mode_required:'Choose linked or independent fork.', sharing_mode_immutable:'This bot’s sharing mode can’t be changed.',
-    fork_has_no_solo_sync:'An independent fork doesn’t sync from Solo.', invalid_definition:'Bot instructions must be 1 to 6,000 characters.',
+    fork_has_no_solo_sync:'An independent fork doesn’t sync from Solo.', invalid_definition:'Bot instructions must be 1 to 100,000 characters, with at most 10 skills of up to 20,000 characters each.',
+    bot_too_large_for_team:'This bot is too large for this team’s Hub. Shorten its instructions or skills, or ask an admin to update the Hub.',
+    bot_storage_limit:'This team has used all 256 MB of its storage for bot instructions and skills. An admin can free space by approving or rejecting a waiting bot version, which removes older ones.',
     version_already_approved:'That version is already approved.', version_rejected:'That version was rejected.',
+    version_superseded:'That version is no longer available. Refresh to see the latest.',
     approval_in_progress:'Another admin is reviewing this bot. Refresh in a moment.',
     dispatch_claimed:'Another participant is already running this.', dispatch_completed:'This run has already finished.',
     dispatch_expired:'This request expired. Send a new message to try again.', invalid_job:'That run is no longer available.'
@@ -92,12 +95,16 @@
   // panel and message actions treat both the same way.
   function message(row){
     var deleted=!!row.deleted;
+    // A bot reply's last line says where it ran; see RUN_LABEL_MARK in
+    // backend/hub-bot-client.js.
+    var runAt=row.author_type==='bot' && !deleted && typeof row.body==='string' ? row.body.lastIndexOf('\n\n\u2063') : -1;
     var file=row.attachment && !deleted ? {id:row.attachment.id, filename:row.attachment.filename || 'image',
       mimeType:row.attachment.mime_type, size:row.attachment.size, channelId:row.channel_id || null} : null;
     return {id:'hub-sequence-'+row.sequence, hubMessageId:row.id, hubMessage:true, hubAuthorId:row.author_id || null,
-      hubBotRequest:row.author_type==='system' && row.author_id==='system:bot-request'?row.bot_request:null, system:row.author_type==='system',
+      hubBotRequest:row.author_type==='system' && row.author_id==='system:bot-request'?row.bot_request:null,
+      hubWorkflowApproval:row.author_type==='system' && row.author_id==='system:workflow-approval' && row.workflow_approval?row.workflow_approval:null, system:row.author_type==='system',
       sender:row.author_type==='bot'?'hub-bot:'+row.author_id:row.author_email, hubAuthor:row.author_type==='bot'||row.author_type==='system'?null:row.author_email,
-      nativeAgentName:row.author_type==='bot'?row.author_name:null, body:deleted ? 'Message deleted' : row.body, ts:row.created_at * 1000,
+      nativeAgentName:row.author_type==='bot'?row.author_name:null, body:deleted ? 'Message deleted' : (runAt<0 ? row.body : row.body.slice(0,runAt)), hubRunLabel:runAt<0 ? '' : row.body.slice(runAt+3), ts:row.created_at * 1000,
       threadRoot:row.thread_root_sequence ? 'hub-sequence-'+row.thread_root_sequence : null, deleted:deleted, pending:false,
       hubFile:file, attachments:[], nativeEvent:{sequence:row.sequence}};
   }
@@ -124,7 +131,7 @@
   // One live connection per team: the Hub holds each request until something
   // changes, so a quiet team costs one request about every 20 seconds.
   function feed(options){
-    var cursor=0, stopped=false, failures=0, timer=null;
+    var cursor=0, synced=false, stopped=false, failures=0, timer=null;
     function schedule(delay){ if(!stopped) timer=root.setTimeout(next, delay); }
     function next(){
       timer=null;
@@ -133,13 +140,16 @@
         if(stopped) return;
         failures=0;
         if(options.onStatus) options.onStatus('live');
-        var first=cursor===0;
+        // Cursor 0 returns no history, so a team's first events need a reload too.
+        var first=!synced || (cursor===0 && result.next>0);
+        synced=true;
         if(Number.isSafeInteger(result.next)) cursor=result.next;
         if(result.reset || first) options.onReset(!!result.reset);
         if(result.events && result.events.length) options.onEvents(result.events);
         if(options.onTyping) options.onTyping(result.typing || []);
         // A Hub that answered without holding the request is polled gently.
-        schedule(result.wait && !first ? 3000 : 0);
+        // So is a team with no events yet: cursor 0 never waits.
+        schedule(cursor===0 || (result.wait && !first) ? 3000 : 0);
       }).catch(function(error){
         if(stopped) return;
         failures++;
@@ -168,7 +178,33 @@
     });
     return null;
   }
-  var api = {id:id, teamId:teamId, call:call, localCall:localCall, message:message, merge:merge, validateText:validateText, feed:feed, fileUrl:fileUrl};
+  // A team's bots, grouped by the channel they were shared to:
+  // [{channel, bots}]. One team-wide read where the Hub has it; an older
+  // Hub answers 404 and the bots are read channel by channel instead.
+  function teamBots(teamId){
+    var base='/v1/teams/'+teamId;
+    return call('GET',base+'/bots').then(function(result){
+      var byChannel={}, list=[];
+      (result.bots||[]).forEach(function(bot){
+        var entry=byChannel[bot.channel_id];
+        if(!entry){
+          entry=byChannel[bot.channel_id]={channel:{id:bot.channel_id,name:bot.channel_name,kind:bot.channel_kind,visibility:bot.channel_visibility},bots:[]};
+          list.push(entry);
+        }
+        entry.bots.push(bot);
+      });
+      return list;
+    },function(error){
+      if(!error || error.status!==404) throw error;
+      return call('GET',base+'/channels').then(function(result){
+        return Promise.all((result.channels||[]).map(function(channel){
+          return call('GET',base+'/channels/'+channel.id+'/bots').then(function(bots){return {channel:channel,bots:bots.bots||[]};},
+            function(){return {channel:channel,bots:[]};});
+        }));
+      });
+    });
+  }
+  var api = {id:id, teamId:teamId, call:call, localCall:localCall, message:message, merge:merge, validateText:validateText, feed:feed, fileUrl:fileUrl, teamBots:teamBots};
   root.MiaHubChat = api;
   if(typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

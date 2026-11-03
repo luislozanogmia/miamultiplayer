@@ -43,7 +43,7 @@ test('there is one tab strip, the browser\'s, and it moves into the chat and Aut
   assert.match(html, /class="automations-tabs" id="automationsTabs"/);
   assert.doesNotMatch(html, /class="native-browser-tabs[^"]*" id="(chatTabsRow|automationsTabs)"/);
   assert.doesNotMatch(app, /MiaTabStrip\.create\(/);
-  assert.match(browser, /var DOCKS = \{ chat: 'chatTabsRow', automations: 'automationsTabs' \};/);
+  assert.match(browser, /var DOCKS = \{ chat: 'chatTabsRow', automations: 'automationsTabs', artifacts: 'artifactsTabs', apps: 'appsTabs' \};/);
   assert.match(browser, /dock\(showingView\(\)\);/);
 });
 
@@ -127,12 +127,118 @@ test('closing the Automations tab from another view only removes it, without ope
   assert.match(app, /automationsPage\.boardClosed = true;\s*\/\/[^\n]*\n\s*if\(!automationsPage\.open \|\| automationsPage\.automationId\)\{ renderAutomationsPage\(\); return; \}/);
 });
 
-test('each view button can show how many tabs that view has open', () => {
+test('the blank tab left after closing the last browser tab stays out of the other views\' strips', async () => {
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  assert.match(browser, /function restingBlank\(\) \{ return state\.tabs\.length === 1 && !state\.tabs\[0\]\.url && !state\.tabs\[0\]\.groupId; \}/);
+  assert.match(browser, /mix\.register\('browser', \{[\s\S]*?tabs: function \(\) \{ return restingBlank\(\) \? \[\] : state\.tabs\.map/);
+});
+
+test('a view badge counts what needs you, never how many tabs are open', () => {
   const { mix } = require('./tab-strip.js');
-  mix.register('chat', { tabs: () => [{ id: 'a' }, { id: 'b' }] });
-  mix.register('automations', { tabs: () => [{ id: 'x' }, { id: 'y' }, { id: 'z' }] });
-  mix.register('browser', { tabs: () => { throw new Error('not ready'); } });
-  assert.deepEqual(mix.counts(), { chat: 2, automations: 3, browser: 0 });
-  mix.register('automations', { count: () => 2 });
-  assert.equal(mix.counts().automations, 2, 'a view can leave its fixed page out of the count');
+  const badges = {}, attrs = {};
+  const button = (view) => ({
+    getAttribute: (n) => n === 'data-tip' ? view : null,
+    setAttribute: (n, v) => { attrs[view] = v; },
+    querySelector: () => badges[view] || null,
+    appendChild: (b) => { badges[view] = b; b.remove = () => { delete badges[view]; }; },
+  });
+  const previous = globalThis.document;
+  globalThis.document = {
+    querySelector: (q) => button(q.match(/view="(\w+)"/)[1]),
+    createElement: () => ({ setAttribute() {} }),
+  };
+  try {
+    mix.register('browser', { tabs: () => [{ id: 1 }, { id: 2 }], attention: undefined });
+    assert.equal(badges.browser, undefined, 'two open tabs are no badge');
+    assert.equal(attrs.browser, 'browser');
+    mix.register('chat', { tabs: () => [], attention: () => 2 });
+    assert.equal(badges.chat.textContent, '2');
+    assert.equal(attrs.chat, 'chat, 2 need you');
+    mix.register('chat', { attention: () => 0 });
+    assert.equal(badges.chat, undefined, 'it clears when nothing is left');
+    mix.register('automations', { attention: () => { throw new Error('not ready'); } });
+    assert.equal(badges.automations, undefined);
+  } finally { globalThis.document = previous; }
+});
+
+test('one list feeds the badges and the Notifications panel', () => {
+  const needsYou = require('./needs-you.js');
+  const list = needsYou.items({
+    rooms: [{ id: 'a', kind: 'agent', label: 'Compiler', pending: true }, { id: 'b', kind: 'group', label: 'Sales', pending: false }],
+    automations: [
+      { status: 'needs', botId: 'x', automationId: '1', botName: 'Compiler', name: 'Weekly', detail: 'Last run failed' },
+      { status: 'running', botId: 'x', automationId: '2', botName: 'Compiler', name: 'Daily' },
+    ],
+    appReviews: 1,
+  });
+  assert.deepEqual(list.map((item) => [item.view, item.title, item.detail]), [
+    ['chat', 'Compiler', 'Waiting for your OK'],
+    ['chat', 'Sales', 'New message'],
+    ['automations', 'Compiler · Weekly', 'Last run failed'],
+    ['apps', '1 app to review', 'Waiting for your review'],
+  ]);
+  assert.equal(needsYou.count(list, 'chat'), 2);
+  assert.equal(needsYou.count(list, 'browser'), 0);
+  assert.deepEqual(needsYou.items({}), []);
+});
+
+test('(+) opens the bar in every view, mixed or not', async () => {
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  assert.match(browser, /add\.onclick = function \(\) \{[^}]*miaOpenStartRows/, 'the (+) button opens the bar and its ways to start something');
+  assert.match(browser, /docked === 'browser' \? command\('new'\)/, 'only the browser opens a tab first');
+  assert.doesNotMatch(browser, /add\.hidden/, 'the (+) button shows in every view');
+});
+
+test('every way to start something shows its own icon, not a shared plus', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const items = app.slice(app.indexOf('function localBrowserStartItems'), app.indexOf('function runLocalBrowserStart'));
+  const ids = [...items.matchAll(/id:'([a-z-]+)'/g)].map((match) => match[1]);
+  assert.equal(ids.length, 7);
+  const icons = app.slice(app.indexOf('var LOCAL_BROWSER_SUGGEST_START_ICONS'), app.indexOf('function localBrowserSuggestRow'));
+  for (const id of ids) assert.ok(icons.includes(`'${id}':`), id);
+  // New bot is always the plain pink mote, whatever color the next bot gets.
+  assert.match(icons, /'new-bot': '<img src="assets\/mote\/mote-static\.svg"/);
+  assert.doesNotMatch(icons, /M12 5v14M5 12h14/);
+});
+
+test('a group chip opens the group\'s latest page, from any view', async () => {
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  const start = browser.indexOf('  function latestGroupTab(');
+  const latestGroupTab = new Function(`${browser.slice(start, browser.indexOf('  function groupChip(', start))}; return latestGroupTab;`)();
+  const tabs = [
+    { id: 1, groupId: 'g', lastActiveAt: 7 },
+    { id: 2, groupId: 'g', lastActiveAt: 3 },
+    { id: 3, groupId: 'other', lastActiveAt: 9 },
+  ];
+  assert.equal(latestGroupTab(tabs, 'g').id, 1);
+  assert.equal(latestGroupTab([{ id: 4, groupId: 'g' }, { id: 5, groupId: 'g' }], 'g').id, 5, 'falls back to the last tab');
+  assert.equal(latestGroupTab(tabs, 'none'), null);
+  const click = browser.slice(browser.indexOf('    chip.onclick = function () {'), browser.indexOf("    chip.addEventListener('contextmenu'"));
+  assert.match(click, /docked !== 'browser'\) window\.MiaTabStrip\.mix\.open\('browser', latest\.id\)/);
+});
+
+test('following a bot is a switch that keeps its name and shows on or off', async () => {
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(browser, /followButton\.setAttribute\('role', 'switch'\)/);
+  assert.match(browser, /followButton\.setAttribute\('aria-checked', following \? 'true' : 'false'\)/);
+  assert.doesNotMatch(browser, /'Unfollow'/);
+  assert.match(styles, /\.local-browser-follow\[aria-checked="true"\] \.local-browser-follow-track::after\{transform/);
+});
+
+test('an automation raises one OS notification each time it comes to need you', async () => {
+  const { automationAlerts, automationTag, automationFromTag } = require('./needs-you.js');
+  const row = (status) => ({ status, botId: 'bot', automationId: 'digest:daily', botName: 'Briefer', name: 'Digest' });
+  const first = automationAlerts([row('needs')], []);
+  assert.equal(first.alerts.length, 1);
+  assert.equal(automationAlerts([row('needs')], first.seen).alerts.length, 0, 'still waiting, no repeat');
+  assert.deepEqual(automationAlerts([], first.seen).seen, first.seen, 'rows still loading forget nothing');
+  const recovered = automationAlerts([row('ok')], first.seen);
+  assert.deepEqual(recovered.seen, []);
+  assert.equal(automationAlerts([row('needs')], recovered.seen).alerts.length, 1, 'needing help again notifies again');
+  assert.deepEqual(automationFromTag(automationTag(row('needs'))), { view: 'automations', botId: 'bot', automationId: 'digest:daily' });
+  assert.equal(automationFromTag('room-1'), null);
+  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(source, /native\.setBadge\(count\)/, 'the waiting count goes to the Dock icon');
+  assert.doesNotMatch(source, /bell\.append\(bubble\)/, 'the bell carries no count of its own');
 });

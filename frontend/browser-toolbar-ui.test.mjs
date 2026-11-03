@@ -48,7 +48,7 @@ test('a tab group opens with its bot, then its name chip, and one line runs from
   const js = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
 
   assert.match(js, /strip\.append\(groupHead\(tabGroup, index, folded\)\)/);
-  assert.match(js, /head\.append\(groupOwner\(g\), groupChip\(g, index, folded\)\)/, 'the bot leads, the name follows');
+  assert.match(js, /head\.append\(groupOwner\(g\)\);[\s\S]{0,120}head\.append\(groupChip\(g, index, folded\)\)/, 'the bot leads, the name follows');
   assert.match(css, /\.native-browser-group-head\{[^}]*box-shadow:inset 0 -2px 0 var\(--tab-group-color\);/, 'the line starts under the bot');
   assert.match(css, /\.native-browser-group-owner\{[^}]*background:transparent;/, 'no circle behind the bot');
   assert.match(css, /\.mia-tab\.in-group\{box-shadow:inset 0 -2px 0 var\(--tab-group-color\);\}/);
@@ -159,4 +159,83 @@ test('suggestion cards always show their bot-colored frame; hover only animates 
   const arrow = css.match(/\.local-browser-suggest-next-go\{[^}]*\}/)[0];
   assert.doesNotMatch(arrow, /opacity:0/, 'the arrow is always visible');
   assert.match(css, /\.local-browser-suggest-next-item:hover \.local-browser-suggest-next-go[^{]*\{animation:browserSuggestGo/);
+});
+
+test('every view bar holds the pane buttons, page navigation, the search and the more dots', async () => {
+  const [css, html, nav] = await Promise.all(['styles.css', 'index.html', 'native-browser.js']
+    .map((name) => readFile(new URL('./' + name, import.meta.url), 'utf8')));
+  // Back, Forward and Reload show in every view; Downloads only in the browser.
+  assert.match(css, /\.local-browser-toolbar:not\(\[data-view="browser"\]\) \.local-browser-downloads-btn\{display:none;\}/);
+  assert.doesNotMatch(css, /:not\(\[data-view="browser"\]\)[^{]*#localBrowserBackBtn/);
+  // The Automations controls stay in their page, so the right pane toggle
+  // sits right before the dots.
+  assert.match(nav, /var VIEW_TOOLS = \{ chat: '#channelHeader' \};/);
+  // Artifacts uses the same bar as every view, docked under its tab row;
+  // its filters and "+ Live app" sit in a row under the bar.
+  assert.match(nav, /artifacts: '#artifactsOverlay \.automations-tabs-row'/);
+  assert.doesNotMatch(html, /<header class="automations-bar artifacts-bar">/);
+  assert.match(html, /<div class="artifacts-filter-row">\s*<div class="artifacts-chips" id="artifactsChips"/);
+});
+
+test('outside the browser, Back and Forward step through the places opened in Mia', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('  var appNav = (function(){');
+  const source = app.slice(start, app.indexOf('  window.miaAppNav = appNav;', start));
+  const classes = new Set();
+  const buttons = {};
+  ['#localBrowserBackBtn', '#localBrowserForwardBtn', '#localBrowserReloadBtn'].forEach((id) => {
+    buttons[id] = { disabled: true, title: '', setAttribute() {} };
+  });
+  const calls = [];
+  const ctx = {
+    document: { body: { classList: { contains: (name) => classes.has(name) } } },
+    MutationObserver: class { observe() {} },
+    el: (selector) => buttons[selector],
+    activeWorkspaceKey: 'solo',
+    chatWs: { activeRoomId: 'mia', activeKind: 'agent', activeLabel: 'Mia' },
+    localBrowserState: { open: false },
+    runToolsAction: (action) => { calls.push(action); classes.clear(); classes.add('browser-collab-mode'); classes.add(action + '-mode'); },
+    closeBrowserSidebarDrawer() {}, closeLocalBrowser: () => classes.delete('browser-collab-mode'), openWebBrowserTool() {},
+    closeAutomationsPage: () => classes.delete('automations-mode'),
+    closeArtifactsPage: () => classes.delete('artifacts-mode'),
+    closeAppsPage: () => classes.delete('artifacts-mode'),
+    clearChatActive() {},
+    loadChatRoom: (roomId) => { calls.push('room:' + roomId); ctx.chatWs.activeRoomId = roomId; },
+    loadArtifacts: () => calls.push('reload:artifacts'),
+    loadAgents: () => Promise.resolve(), loadActiveAutomationRuns: () => Promise.resolve(), renderAutomationsPage() {},
+  };
+  const nav = vm.runInNewContext(source + '\nappNav;', ctx);
+  const back = buttons['#localBrowserBackBtn'], forward = buttons['#localBrowserForwardBtn'];
+  nav.record();
+  ctx.chatWs.activeRoomId = 'briefer';
+  nav.record();
+  classes.add('browser-collab-mode'); classes.add('automations-mode');
+  nav.record();
+  assert.equal(back.disabled, false);
+  assert.equal(forward.disabled, true);
+  nav.go(-1);
+  assert.deepEqual(calls, []);
+  assert.equal(classes.has('automations-mode'), false, 'Back leaves Automations for the chat');
+  nav.go(-1);
+  assert.deepEqual(calls, ['room:mia'], 'Back again reopens the chat before it');
+  assert.equal(back.disabled, true);
+  nav.go(1);
+  nav.go(1);
+  assert.deepEqual(calls, ['room:mia', 'room:briefer', 'automations']);
+  assert.equal(forward.disabled, true);
+  // A new place drops the forward steps, like a browser.
+  nav.go(-1);
+  classes.add('browser-collab-mode'); classes.add('artifacts-mode');
+  nav.record();
+  assert.equal(forward.disabled, true);
+  nav.reload();
+  assert.equal(calls.at(-1), 'reload:artifacts');
+  // In the browser the page owns the buttons.
+  classes.delete('artifacts-mode');
+  assert.equal(nav.owns(), false);
+});
+
+test('a closed sidebar leaves nothing poking out over the tab row', async () => {
+  const source = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(source, /body\.browser-collab-mode:not\(\.browser-sidebar-open\) \.chat-sidebar\{visibility:hidden;\}/);
 });

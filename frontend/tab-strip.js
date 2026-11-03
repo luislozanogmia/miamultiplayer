@@ -118,7 +118,7 @@
   // dragged since, so it reads the same from any view; a tab from another
   // view opens that view at that tab. Each view registers
   // { tabs(), select(id), show(), render() }.
-  var MIX_ORDER = ['chat', 'automations', 'browser'];
+  var MIX_ORDER = ['chat', 'automations', 'artifacts', 'browser', 'apps'];
   var MIX_KEY = 'miaTabsMixed', ORDER_KEY = 'miaTabsMixOrder';
   var root = typeof window !== 'undefined' ? window : globalThis;
   var views = {};
@@ -156,17 +156,8 @@
     },
     provider: function (view) { return views[view] || {}; },
     register: function (view, provider) { views[view] = Object.assign(views[view] || {}, provider); paintCounts(); },
-    // How many tabs each view has open, for the badges on the view buttons.
-  // A view whose strip holds a fixed page (the Automations board) counts
-  // only its other tabs with count().
-    counts: function () {
-      var out = {};
-      MIX_ORDER.forEach(function (view) {
-        var provider = views[view] || {};
-        try { out[view] = provider.count ? provider.count() : provider.tabs ? (provider.tabs() || []).length : 0; } catch (e) { out[view] = 0; }
-      });
-      return out;
-    },
+    // A view's waiting items changed, so its badge needs drawing again.
+    repaint: function () { paintCounts(); },
     changed: function () {
       MIX_ORDER.forEach(function (view) { if (views[view] && views[view].render) views[view].render(); });
     },
@@ -239,6 +230,24 @@
         return list;
       }, []);
     },
+    // Whether this view's tabs have company in the mixed strip. With tabs
+    // apart, each view's strip holds only its own.
+    hasOthers: function (view) {
+      return mixed && MIX_ORDER.some(function (v) {
+        return v !== view && views[v] && views[v].tabs && (views[v].tabs() || []).length > 0;
+      });
+    },
+    // The tab to move to when this one closes: the next one along that belongs
+    // to another view, else the one before it.
+    neighbor: function (view, id) {
+      if (!mix.hasOthers(view)) return null;
+      var items = mix.arrange(view, views[view] && views[view].tabs ? views[view].tabs() || [] : [], 0);
+      var at = -1, key = mixKey(view, id);
+      items.forEach(function (item, index) { if (item.key === key) at = index; });
+      for (var i = at + 1; i < items.length; i += 1) if (!items[i].own) return items[i];
+      for (var j = at - 1; j >= 0; j -= 1) if (!items[j].own) return items[j];
+      return null;
+    },
     // Drag one tab onto another, from any view: it takes that tab's place.
     move: function (fromKey, toKey) {
       var from = order.indexOf(fromKey), to = order.indexOf(toKey);
@@ -262,21 +271,25 @@
   var SECTIONS = {
     chat: { label: 'Chats', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path></svg>' },
     automations: { label: 'Automations', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6h4"></path><circle cx="12" cy="12" r="10"></circle></svg>' },
+    artifacts: { label: 'Artifacts', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>' },
     browser: { label: 'Browser', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>' },
+    apps: { label: 'Apps', icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>' },
   };
   // A chat or automation tab in the browser's strip. In its own view it is
   // that view's tab (active, closes, reorders); from another view it opens
   // its view there. Closing and moving go to its own view.
-  // The count badge on each view button (Chat 2, Automations 3, ...).
+  // The count badge on each view button: what is waiting for this person
+  // there, never how many tabs are open.
   function paintCounts() {
     if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
-    var counts = mix.counts();
     MIX_ORDER.forEach(function (view) {
       var button = document.querySelector('.sidebar-view-btn[data-sidebar-view="' + view + '"]');
       if (!button) return;
       var badge = button.querySelector('.sidebar-view-count');
-      var count = counts[view] || 0;
-      if (!count) { if (badge) badge.remove(); return; }
+      var name = button.getAttribute('data-tip') || button.getAttribute('title') || '';
+      var provider = views[view] || {}, count = 0;
+      try { count = provider.attention ? provider.attention() : 0; } catch (e) { count = 0; }
+      if (!count) { if (badge) badge.remove(); if (name) button.setAttribute('aria-label', name); return; }
       if (!badge) {
         badge = document.createElement('span');
         badge.className = 'sidebar-view-count';
@@ -284,7 +297,7 @@
         button.appendChild(badge);
       }
       badge.textContent = count > 99 ? '99+' : String(count);
-      button.setAttribute('aria-label', button.getAttribute('title') + ', ' + count + ' open');
+      button.setAttribute('aria-label', name + ', ' + count + ' need' + (count === 1 ? 's' : '') + ' you');
     });
   }
 
@@ -437,7 +450,7 @@
     // this view's own tabs it also moves it in the view's own order.
     // Another view's tab closes and reorders in that view.
     function routed(id) {
-      var m = typeof id === 'string' && /^(chat|automations|browser):(.*)$/.exec(id);
+      var m = typeof id === 'string' && /^(chat|automations|artifacts|browser|apps):(.*)$/.exec(id);
       return m && m[1] !== view ? { view: m[1], id: m[2] } : null;
     }
     var ownClose = handlers.close, ownMenu = handlers.menu;

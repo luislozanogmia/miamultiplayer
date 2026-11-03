@@ -443,6 +443,7 @@ function loadMain(environment = {}) {
       loadURL(url) { this.loadedUrls.push(url); }
       close() { this.closed = true; }
     },
+    protocol: { registerSchemesAsPrivileged() {} },
     dialog: { showMessageBox() { return Promise.resolve({ response: 1 }); } },
     ipcMain: { handle() {}, on() {}, removeHandler() {} },
     Menu: { setApplicationMenu() {}, buildFromTemplate(template) { return template; } },
@@ -514,12 +515,16 @@ test("application menu keeps macOS-only roles off Windows and adds a quit item t
 
   const macTemplate = withPlatform("darwin", () => main.createApplicationMenuTemplate());
   assert.equal(macTemplate[0].role, "appMenu");
+  const macSettings = macTemplate[0].submenu.find(item => item.label === "Settings…");
+  assert.equal(macSettings.accelerator, "CommandOrControl+,");
+  assert.equal(macTemplate[0].submenu.some(item => item.role === "quit"), true);
   assert.equal(macTemplate.some(item => item.label === "File" && item.submenu.some(entry => entry.role === "quit")), false);
 
   const winTemplate = withPlatform("win32", () => main.createApplicationMenuTemplate());
   assert.equal(winTemplate.some(item => item.role === "appMenu"), false);
   const winFile = winTemplate.find(item => item.label === "File");
   assert.equal(winFile.submenu.some(entry => entry.role === "quit"), true);
+  assert.equal(winFile.submenu[0].label, "Settings…");
   const help = winTemplate.find(item => item.role === "help");
   assert.equal(help.submenu[0].enabled, true);
 });
@@ -814,8 +819,13 @@ test("artifact preview controls cannot turn the pane into a general browser", ()
   const preload = fs.readFileSync(path.join(__dirname, "artifact-preload.cjs"), "utf8");
 
   assert.match(mainSource, /will-redirect/);
-  assert.match(mainSource, /External links open in your normal browser/);
-  assert.match(mainSource, /shell\.openExternal/);
+  assert.match(mainSource, /Web links open in Mia's browser/);
+  // A web link in an artifact opens a Mia browser tab, never the system
+  // browser or the pane's own sandboxed session.
+  const openExternal = mainSource.slice(mainSource.indexOf("function openExternalArtifactLink"), mainSource.indexOf("function artifactNavigationAllowed"));
+  assert.match(openExternal, /openLinkInMiaBrowser\(String\(value\), "browser"\)/);
+  assert.match(openExternal, /setArtifactPanelVisible\(false\)/);
+  assert.doesNotMatch(openExternal, /shell\.openExternal/);
   assert.doesNotMatch(mainSource, /miaos-artifact-navigate/);
   assert.match(toolbar, /readonly/);
   assert.match(toolbar, /Mia attachment preview URL/);
@@ -891,7 +901,7 @@ test("closing a window explicitly releases both artifact renderer views", () => 
 test("desktop state permits only scoped chat selection and browser-open state", () => {
   const source = fs.readFileSync(require.resolve("./main.cjs"), "utf8");
   assert.match(source, /normalized === "miaBrowserOpen"/);
-  assert.match(source, /\^miaChatActive:/);
+  assert.match(source, /\^\(miaChatActive\|miaAgentChats\):/);
   assert.match(source, /windowNativeBrowser\.prepareToClose\(\)/);
   assert.match(source, /new Promise\(resolve => setTimeout\(resolve, 1000\)\)/);
 });
@@ -964,4 +974,42 @@ test("Cmd+R reloads Mia and Shift+Cmd+R hard-reloads the browser page", () => {
   assert.doesNotMatch(source, /\["[^"]*", "CommandOrControl\+R", "r"\]/);
   assert.match(browserSource, /if \(key === "r" && !input\.shift\) return;/);
   assert.match(browserSource, /key === "r"\) active\(\)\?\.view\.webContents\.reloadIgnoringCache\(\)/);
+});
+
+test("an artifact, attachment or web link never replaces Mia's window or opens a second one", () => {
+  const { EventEmitter } = require("node:events");
+  const main = loadMain();
+  const opened = [];
+  main.__electron.shell.openExternal = url => { opened.push(url); return Promise.resolve(); };
+  const contents = new EventEmitter();
+  contents.setWindowOpenHandler = handler => { contents.popup = handler; };
+  main.configureNavigation({ webContents: contents }, "http://localhost:4871");
+  const navigate = url => {
+    let blocked = false;
+    contents.emit("will-navigate", { url, preventDefault() { blocked = true; } });
+    return blocked;
+  };
+  for (const url of [
+    "http://localhost:4871/api/conversations/room-1/attachments/linkedin.html?preview=true",
+    "http://localhost:4871/api/conversations/room-1/attachments/linkedin.html",
+    "http://localhost:4871/api/settings",
+    "https://www.linkedin.com/login",
+    "file:///etc/hosts",
+  ]) {
+    assert.equal(navigate(url), true, `${url} must not load in Mia's window`);
+    assert.deepEqual(contents.popup({ url }), { action: "deny" }, `${url} must not open a second app window`);
+  }
+  assert.deepEqual(opened, [], "web pages go to Mia's browser, not the system browser");
+  assert.equal(navigate("http://localhost:4871/"), false, "Mia's own pages still load");
+  assert.equal(navigate("http://localhost:4871/admin#/users"), false);
+  assert.equal(main.__electron.BrowserWindow.instances.length, 0);
+});
+
+test("a gone main renderer reloads Mia instead of leaving a black window", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const start = mainSource.indexOf('window.webContents.on("render-process-gone"');
+  const handler = mainSource.slice(start, mainSource.indexOf('window.webContents.on("context-menu"', start));
+  assert.match(handler, /reason === "clean-exit"/);
+  assert.match(handler, /loadURL\(backendUrl\)/);
+  assert.match(handler, /rendererRecoveries\.length >= 3/, "a crash loop stops retrying");
 });

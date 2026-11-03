@@ -264,5 +264,5 @@ test('failed existing-runtime startup maintenance surfaces in-app retry instruct
   for (const status of [null, {available:true, installed:true}, {available:false, installed:false}]) await context.notifyClaudeMaintenanceFailure(status);
   assert.equal(prompts.length, 0);
   await context.notifyClaudeMaintenanceFailure({available:false, installed:true, error:'Download failed.'});
-  assert.equal(prompts.length, 1); assert.match(prompts[0].detail, /Initial setup.*Update Claude Code/);
+  assert.equal(prompts.length, 1); assert.match(prompts[0].detail, /Models & Subscriptions.*Update Claude Code/);
 });

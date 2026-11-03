@@ -19,6 +19,14 @@ function conversationMetadata(type, metadata) {
   const result = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? { ...metadata }
     : {};
+  // Which personal agent a chat belongs to is decided by the server alone; a
+  // client can never attach one (that would let a chat borrow another profile).
+  if (result.privateAgentId !== undefined) invalidInput('privateAgentId is set by the server');
+  if (result.teamWorkspace !== undefined) {
+    if (type !== 'bot' || typeof result.teamWorkspace !== 'string' || !TEAM_WORKSPACE_PATTERN.test(result.teamWorkspace)) {
+      invalidInput('teamWorkspace must name a team workspace on a bot conversation');
+    }
+  }
   if (type !== 'channel') return result;
   const visibility = result.visibility === undefined ? 'public' : result.visibility;
   if (visibility !== 'public' && visibility !== 'private') {
@@ -34,9 +42,13 @@ function publicDispatch(dispatch) {
   return visible;
 }
 
+const TEAM_WORKSPACE_PATTERN = /^hub_[a-f0-9]{32}$/;
+
+// A bot's main Solo chat: not a "New conversation" and not a team's chat.
 function canonicalBotConversationCandidates(conversations) {
   return (conversations || []).filter((conversation) =>
-    conversation && (!conversation.metadata || conversation.metadata.conversationMode !== 'fresh')
+    conversation && (!conversation.metadata
+      || (conversation.metadata.conversationMode !== 'fresh' && !conversation.metadata.teamWorkspace))
   );
 }
 
@@ -246,14 +258,22 @@ function createConversationService({ repository, authorization, realtime = null,
     // clean model session, while every older chat stays in History.
     const miaSource = Boolean(source && source.type === 'agent' && sourceMetadata.agentId === 'gateway');
     const botSource = Boolean(source && source.type === 'bot' && typeof sourceMetadata.botId === 'string' && sourceMetadata.botId.trim());
-    if (!miaSource && !botSource) {
+    // A personal agent's chat is 'agent'-typed with privateAgentId and no agentId.
+    const privateSource = Boolean(source && source.type === 'agent' && !miaSource
+      && typeof sourceMetadata.privateAgentId === 'string' && sourceMetadata.privateAgentId);
+    if (!miaSource && !botSource && !privateSource) {
       invalidInput('a bot or Mia conversation is required');
     }
     const metadata = {
-      ...(miaSource ? { agentId: 'gateway' } : { botId: sourceMetadata.botId.trim() }),
+      ...(miaSource ? { agentId: 'gateway' }
+        : privateSource ? { privateAgentId: sourceMetadata.privateAgentId }
+          : { botId: sourceMetadata.botId.trim() }),
       ...(Array.isArray(sourceMetadata.departments) ? { departments: sourceMetadata.departments.slice() } : {}),
       ...(typeof sourceMetadata.workspaceId === 'string' && sourceMetadata.workspaceId.trim()
         ? { workspaceId: sourceMetadata.workspaceId.trim() }
+        : {}),
+      ...(typeof sourceMetadata.teamWorkspace === 'string' && TEAM_WORKSPACE_PATTERN.test(sourceMetadata.teamWorkspace)
+        ? { teamWorkspace: sourceMetadata.teamWorkspace }
         : {}),
       conversationMode: 'fresh',
       source: 'native-ui-new-conversation',
@@ -265,7 +285,7 @@ function createConversationService({ repository, authorization, realtime = null,
     };
     const conversation = repository.createConversation({
       companyId: normalizedCompanyId,
-      type: miaSource ? 'agent' : 'bot',
+      type: miaSource || privateSource ? 'agent' : 'bot',
       name: source.name,
       createdBy: owner.principalId,
       createdAt,
@@ -568,15 +588,30 @@ function createConversationService({ repository, authorization, realtime = null,
     // terminal row may have an in-memory runtime from an earlier stop attempt,
     // so let the runtime owner check it before returning idempotent success.
     if (dispatch && typeof dispatch.cancelRunning === 'function') await dispatch.cancelRunning(current);
-    const result = repository.cancelDispatch({
-      companyId,
-      conversationId,
-      id,
-    });
-    if (!result.idempotent) {
-      postStopNotice({ companyId, conversationId, stoppedDispatch: result.dispatch });
+    // Messages sent while the bot works wait behind it, so Stop clears this
+    // person's whole line to that bot. Stopping only the running one would just
+    // start the next. Only the run in progress gets a notice in the chat.
+    const requestedBy = current.metadata && current.metadata.requestedBy;
+    const waiting = ['claimed', 'pending'].flatMap((status) => repository.listDispatches({
+      companyId, conversationId, status, limit: 100,
+    })).filter((row) => row.id !== id && row.targetType === current.targetType && row.targetId === current.targetId
+      && (row.metadata && row.metadata.requestedBy) === requestedBy);
+    for (const row of waiting) {
+      if (dispatch && typeof dispatch.cancelRunning === 'function') await dispatch.cancelRunning(row);
     }
-    return { ...result, dispatch: publicDispatch(result.dispatch) };
+    const stopped = [current, ...waiting].map((row) => ({
+      running: row.status === 'claimed',
+      result: repository.cancelDispatch({ companyId, conversationId, id: row.id }),
+    }));
+    const newlyStopped = stopped.filter(({ result }) => !result.idempotent);
+    const noticed = newlyStopped.find(({ running }) => running) || newlyStopped[0];
+    if (noticed) postStopNotice({ companyId, conversationId, stoppedDispatch: noticed.result.dispatch });
+    const result = stopped[0].result;
+    return {
+      ...result,
+      dispatch: publicDispatch(result.dispatch),
+      stoppedDispatchIds: newlyStopped.map(({ result: stoppedResult }) => stoppedResult.dispatch.id),
+    };
   }
 
   function updateEvent({ companyId, conversationId, principal, eventId, ...input }) {

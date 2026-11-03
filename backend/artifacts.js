@@ -13,6 +13,7 @@ const http = require('http');
 const https = require('https');
 const os = require('os');
 const path = require('path');
+const { localDateTimeString } = require('./local-date');
 const { ARTIFACT_MAX_BYTES, artifactMimeTypeForFilename } = require('./artifact-policy');
 
 const FILE_KINDS = Object.freeze({
@@ -90,7 +91,8 @@ function readArtifactFile(root, id) {
 }
 
 // Deleting a listed file moves it to the system Trash (the Recycle Bin on
-// Windows), so it can be restored. Nothing is removed for good.
+// Windows), so it can be restored. Nothing is removed for good. Folders work too.
+// Returns where it went, except on Windows, where the Recycle Bin does not say.
 function freeName(dir, name) {
   const ext = path.extname(name);
   const stem = name.slice(0, name.length - ext.length);
@@ -103,18 +105,25 @@ function moveFile(from, to) {
   try { fs.renameSync(from, to); }
   catch (error) {
     if (error.code !== 'EXDEV') throw error;
-    fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
-    fs.unlinkSync(from);
+    // Another disk: copy first, so the original only goes once the copy is whole.
+    if (fs.statSync(from).isDirectory()) {
+      fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: true });
+      fs.rmSync(from, { recursive: true });
+    } else {
+      fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+      fs.unlinkSync(from);
+    }
   }
 }
 
 function moveToTrash(full, { platform = process.platform, home = os.homedir(), runPowerShell = defaultRunPowerShell } = {}) {
-  if (platform === 'win32') return runPowerShell(full);
+  if (platform === 'win32') { runPowerShell(full); return undefined; }
   if (platform === 'darwin') {
     const dir = path.join(home, '.Trash');
     fs.mkdirSync(dir, { recursive: true });
-    moveFile(full, path.join(dir, freeName(dir, path.basename(full))));
-    return;
+    const destination = path.join(dir, freeName(dir, path.basename(full)));
+    moveFile(full, destination);
+    return destination;
   }
   // Linux and others follow the freedesktop.org Trash layout.
   const base = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
@@ -123,15 +132,16 @@ function moveToTrash(full, { platform = process.platform, home = os.homedir(), r
   fs.mkdirSync(files, { recursive: true });
   fs.mkdirSync(info, { recursive: true });
   const name = freeName(files, path.basename(full));
-  fs.writeFileSync(path.join(info, `${name}.trashinfo`), `[Trash Info]\nPath=${encodeURI(full)}\nDeletionDate=${new Date().toISOString().slice(0, 19)}\n`);
+  fs.writeFileSync(path.join(info, `${name}.trashinfo`), `[Trash Info]\nPath=${encodeURI(full)}\nDeletionDate=${localDateTimeString()}\n`);
   moveFile(full, path.join(files, name));
+  return path.join(files, name);
 }
 
 // The path goes through an environment variable so it is never parsed as
 // PowerShell code.
 function defaultRunPowerShell(full) {
   const result = childProcess.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:MIA_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin')"],
+    "Add-Type -AssemblyName Microsoft.VisualBasic; if (Test-Path -LiteralPath $env:MIA_TRASH_PATH -PathType Container) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($env:MIA_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin') } else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:MIA_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin') }"],
   { env: { ...process.env, MIA_TRASH_PATH: full }, windowsHide: true, timeout: 15000 });
   if (result.status !== 0) throw new Error('The file could not be moved to the Recycle Bin.');
 }
@@ -226,4 +236,4 @@ async function listArtifacts({ workspaceDir, dataDir, workspaceId, probe = probe
   return { artifacts: [...links, ...listArtifactFiles(workspaceDir)], folder: workspaceDir };
 }
 
-module.exports = { FILE_KINDS, addLink, listArtifactFiles, listArtifacts, normalizeLinkUrl, probeLink, readArtifactFile, readLinks, removeLink, trashArtifactFile };
+module.exports = { FILE_KINDS, addLink, listArtifactFiles, listArtifacts, normalizeLinkUrl, probeLink, readArtifactFile, readLinks, removeLink, moveFile, moveToTrash, trashArtifactFile };

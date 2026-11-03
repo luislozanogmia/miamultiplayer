@@ -20,6 +20,8 @@ function setupContext(state, overrides = {}) {
   const started = [];
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     chatRoomState: () => state,
     currentUser: 'user@example.com',
     setTimeout: (fn) => fn(),
@@ -28,7 +30,7 @@ function setupContext(state, overrides = {}) {
   });
   load(context, 'pendingMiaBotSetupMessage');
   load(context, 'syncMiaBotSetupRequest');
-  vm.runInContext('var startedMiaBotSetupRequests = {};', context);
+  vm.runInContext('var startedMiaBotSetupRequests = {}; var MAX_BOT_BRIEF_CHARS = 100000;', context);
   return { context, started };
 }
 
@@ -82,9 +84,14 @@ test('a request opens the card once per session', () => {
 
 test('Mia review card offers one Accept action and no cancel button', () => {
   const context = vm.createContext({
+    MAX_BOT_BRIEF_CHARS: 100000, skillPickerHtml: () => '<div>Skills</div>',
+    agentSetupDraftInstructions: (draft) => draft.instructions || [draft.role, draft.output].filter(Boolean).join('\n\n'),
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     esc: value => String(value),
     agentAvatarHtml: () => '<svg></svg>',
+    agentSetupAvatarHtml: () => '<svg></svg>',
     automationIntervalParts: () => ({ value: 5, unit: 'minutes' }),
     AGENT_SETUP_ROOM_ID: 'new-bot',
   });
@@ -103,6 +110,8 @@ test('a new message closes an unsubmitted Mia draft and continues normal chat', 
   let delivered = '';
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     chatWs: { activeRoomId: 'mia-room', activeKind: 'agent', activeLabel: 'Mia', configured: true },
     chatRoomState: () => state,
     isMiaOrchestrator: () => true,
@@ -110,6 +119,7 @@ test('a new message closes an unsubmitted Mia draft and continues normal chat', 
     miaBotDraftBusy: () => false,
     cancelMiaBotDraft: () => { state.botDraft = null; },
     composerHermesCommand: () => null,
+    openAskBeforeDoRequest: () => null,
     sendNativeConversationEvent: text => { delivered = text; return Promise.resolve({ status: 201 }); },
   });
   load(context, 'sendActiveRoomMessage');
@@ -125,6 +135,8 @@ test('cancellation clears only an unsubmitted draft and dismisses Mia\'s request
   const answered = [];
   const context = vm.createContext({
     hubWorkspace: () => false,
+    inHubRoom: () => false,
+    teamBotRoom: () => false,
     chatRoomState: () => state,
     clearMiaBotDraftRequest: () => {},
     renderMiaBotDraftRoom: () => { renderCount += 1; },

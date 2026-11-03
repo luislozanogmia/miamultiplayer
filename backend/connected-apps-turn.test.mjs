@@ -129,7 +129,7 @@ test('busy Mia refreshes each follow-up and queues changed connections instead o
   let checks = 0, revision = 'connected-a';
   const messages = [], completed = [];
   const ctx = {
-    crypto, GATEWAY_AGENT_ID: 'gateway', nativeSlashCommand: () => false,
+    crypto, GATEWAY_AGENT_ID: 'gateway', MID_RUN_MESSAGE_RULE: 'Answer it now.', nativeSlashCommand: () => false,
     nativeEventText: event => event.text, cancelNativeDispatchForInactiveUser: () => false,
     googleWorkspaceAgentContextForOwner: async owner => { checks++; assert.equal(owner, base.ownerEmail); return { status: {} }; },
     connectedAppsForTurn: () => ({ revision, note: 'Current connections ' + revision }),
@@ -154,4 +154,114 @@ test('busy Mia refreshes each follow-up and queues changed connections instead o
   assert.equal(checks, 4);
   assert.equal(messages.length, 1, 'changed capabilities never enter the stale running session');
   assert.equal(completed.length, 1, 'queued follow-ups remain pending for normal dispatch');
+});
+
+test('a message sent while a bot works in its own chat reaches the running turn and gets its own reply', async () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const schedule = source.slice(source.indexOf('function scheduleNativeConversationDispatch('), source.indexOf('const nativeConversationDispatch = {'));
+  assert.match(schedule, /const activeGateway = nativeActiveGatewaySessions\.get\(key\) \|\| null;/, 'not only Mia');
+  assert.match(source, /activeBotRecord = \{ dispatchId: dispatch\.id, sessionId: session\.sessionId, capabilityRevision: connectionInventory\.revision, agentId: agent\.id \};/);
+
+  const start = source.indexOf('function postMidRunAnswer(');
+  const posted = [];
+  const ctx = {
+    redactHermesChatDetail: (text) => String(text || ''),
+    stripAgentActionBlocks: (text) => text,
+    cleanBotReplyText: (_name, text) => ({ text: String(text).trim() }),
+    nativeReplyParentEventId: () => null,
+    createNativeDispatchReplyEvent: (dispatch, _trigger, input) => { posted.push({ dispatchId: dispatch.id, ...input }); },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(source.slice(start, source.indexOf('\n}\n', start) + 3), ctx);
+  const agent = { name: 'Compiler' };
+  const dispatch = { id: 'question', targetType: 'bot' };
+  const active = { midRunMessage: { dispatch, trigger: { id: 'event' } } };
+
+  assert.equal(ctx.postMidRunAnswer({}, agent, 'still working'), false, 'no question, so progress chatter stays private');
+  assert.equal(ctx.postMidRunAnswer(active, agent, '   '), false, 'an empty note does not use up the answer');
+  assert.equal(ctx.postMidRunAnswer(active, agent, 'I can compare reach by topic.'), true);
+  assert.equal(ctx.postMidRunAnswer(active, agent, 'Next post.'), false, 'only the next words are the answer');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].dispatchId, 'question', 'its own dispatch, so the run keeps its working row');
+  assert.equal(posted[0].type, 'bot_message');
+  assert.equal(posted[0].content.text, 'I can compare reach by topic.');
+});
+
+test('a tool started before a mid-run answer is asked once to yield', async () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function nudgeMidRunAnswer(');
+  assert.notEqual(start, -1);
+  const steered = [];
+  const ctx = { MID_RUN_NUDGE: 'answer now', Promise, steerHermesGatewaySession: async (id, text) => { steered.push([id, text]); } };
+  vm.createContext(ctx);
+  vm.runInContext(source.slice(start, source.indexOf('\n}\n', start) + 3), ctx);
+  const active = { sessionId: 'run', midRunMessage: { dispatch: {}, trigger: {} }, midRunNudged: false };
+
+  assert.equal(ctx.nudgeMidRunAnswer({ sessionId: 'run' }), false, 'no question waiting, so tools run undisturbed');
+  assert.equal(ctx.nudgeMidRunAnswer(active), true);
+  assert.equal(ctx.nudgeMidRunAnswer(active), false, 'only one nudge per question');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(steered, [['run', 'answer now']]);
+});
+
+test('a mid-run message redirects the turn, and falls back to steer only when redirect is unsupported', async () => {
+  const { steerHermesGatewaySession } = require('./inference.js');
+  const calls = [];
+  const client = (redirect) => ({
+    redirect: async (...args) => { calls.push('redirect'); return redirect(...args); },
+    steer: async () => { calls.push('steer'); return { status: 'queued' }; },
+  });
+  assert.equal((await steerHermesGatewaySession('s', 'hi', client(() => ({ status: 'redirected' })))).status, 'queued');
+  assert.deepEqual(calls.splice(0), ['redirect']);
+  const unsupported = Object.assign(new Error('no'), { gatewayError: true, code: 4010 });
+  assert.equal((await steerHermesGatewaySession('s', 'hi', client(() => { throw unsupported; }))).status, 'queued');
+  assert.deepEqual(calls.splice(0), ['redirect', 'steer']);
+  await steerHermesGatewaySession('s', 'hi', client(() => ({ status: 'rejected' })));
+  assert.deepEqual(calls.splice(0), ['redirect', 'steer']);
+  await assert.rejects(steerHermesGatewaySession('s', 'hi', client(() => { throw new Error('socket closed'); })), /socket closed/);
+  assert.deepEqual(calls.splice(0), ['redirect'], 'a dead connection queues the message instead');
+});
+
+test('a message sent while the first turn is still starting waits, then reaches that turn', async () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function waitForNativeTurnStart(');
+  const end = source.indexOf('const nativeConversationDispatch = {', start);
+  const steered = [], queued = [];
+  const ctx = {
+    Promise, Map,
+    nativeDispatchChains: new Map(), nativeActiveGatewaySessions: new Map(), nativeTurnStartWaiters: new Map(),
+    nativeDispatchChainKey: () => 'chat',
+    trySteerNativeConversationDispatch: async (dispatch) => { steered.push(dispatch.id); return true; },
+    queueNativeConversationDispatch: async (dispatch) => { queued.push(dispatch.id); },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(`${source.slice(start, end)}\nthis.schedule = scheduleNativeConversationDispatch; this.started = markNativeTurnStarted;`, ctx);
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  let endFirstTurn;
+  ctx.nativeDispatchChains.set('chat', new Promise((resolve) => { endFirstTurn = resolve; }));
+  const first = { dispatchId: 'first', sessionId: 'run' };
+  ctx.nativeActiveGatewaySessions.set('chat', first);
+  const early = ctx.schedule({ id: 'early' });
+  await tick();
+  assert.deepEqual([steered, queued], [[], []], 'nothing is sent before the turn is running');
+  ctx.started('chat', first);
+  await early;
+  assert.deepEqual([steered, queued], [['early'], []]);
+
+  await ctx.schedule({ id: 'later' });
+  assert.deepEqual(steered, ['early', 'later'], 'a running turn takes the message at once');
+
+  ctx.nativeActiveGatewaySessions.clear();
+  const orphan = ctx.schedule({ id: 'orphan' });
+  await tick();
+  assert.deepEqual(queued, []);
+  endFirstTurn();
+  ctx.nativeDispatchChains.delete('chat');
+  await orphan;
+  assert.deepEqual(queued, ['orphan'], 'a turn that ends without starting lets the message run on its own');
+
+  await ctx.schedule({ id: 'idle' });
+  assert.deepEqual(queued, ['orphan', 'idle'], 'an idle chat runs the message right away');
 });
