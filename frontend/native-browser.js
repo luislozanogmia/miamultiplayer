@@ -796,13 +796,15 @@
     var members = {};
     state.tabs.forEach(function (t) {
       var g = groups[t.groupId];
-      if (g && g.botId) (members[g.id] = members[g.id] || []).push(t);
+      // Mia's groups stack the same way as a bot's.
+      if (g) (members[g.id] = members[g.id] || []).push(t);
     });
     var front = {};
     Object.keys(members).forEach(function (id) {
       var list = members[id];
       var busy = list.filter(function (t) { return working[t.id]; });
       if (busy.length) botLastTab[id] = busy[busy.length - 1].id;
+      else if (list.some(function (t) { return t.id === state.activeId; })) botLastTab[id] = state.activeId;
       var pick = list.filter(function (t) { return t.id === state.activeId; })[0] || busy[busy.length - 1]
         || list.filter(function (t) { return t.id === botLastTab[id]; })[0] || list[0];
       // A blank tab stays out of the list and its count: "New tab for this
@@ -837,8 +839,7 @@
     state.tabs.forEach(function (t) {
       var g = groups[t.groupId];
       if (!g) { total += TAB_MIN_WIDTH; return; }
-      if (!seen[g.id]) { seen[g.id] = true; total += GROUP_HEAD_WIDTH + (g.collapsed ? 0 : g.botId ? TAB_MIN_WIDTH : 0); }
-      if (!g.collapsed && !g.botId) total += TAB_MIN_WIDTH;
+      if (!seen[g.id]) { seen[g.id] = true; total += GROUP_HEAD_WIDTH + (g.collapsed ? 0 : TAB_MIN_WIDTH); }
     });
     return total;
   }
@@ -851,7 +852,7 @@
     var counts = {}, ungrouped = 0;
     state.tabs.forEach(function (t) {
       var g = groups[t.groupId];
-      if (g) counts[g.id] = g.botId ? 1 : (counts[g.id] || 0) + 1; else ungrouped += 1;
+      if (g) counts[g.id] = 1; else ungrouped += 1;
     });
     var ids = Object.keys(counts);
     ids.forEach(function (id) { if (!groupUsedAt[id]) groupUsedAt[id] = 0; });
@@ -937,7 +938,7 @@
     var add = document.createElement('button');
     add.type = 'button'; add.setAttribute('role', 'menuitem');
     add.className = 'native-browser-bot-tabs-new';
-    add.textContent = '+  New tab for this bot';
+    add.textContent = g.botId ? '+  New tab for this bot' : '+  New tab';
     add.onclick = function () { var id = g.id; setTabsList(null); command('groupNewTab', { groupId: id }); };
     tabsRows.append(add);
     info.others.forEach(function (id) {

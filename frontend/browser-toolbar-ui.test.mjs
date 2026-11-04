@@ -88,7 +88,7 @@ test('a crowded strip folds idle groups first, then moves the oldest into the »
   const roomy = await crowdPlanner(5000, tabs, groups, 'a0');
   assert.deepEqual(roomy.plan(), { folded: [], hidden: [] }, 'nothing folds while every tab fits');
 
-  const tight = await crowdPlanner(1500, tabs, groups, 'a0');
+  const tight = await crowdPlanner(700, tabs, groups, 'a0');
   tight.context.groupUsedAt.b = 3; tight.context.groupUsedAt.c = 1; tight.context.groupUsedAt.d = 2;
   const plan = tight.plan({ d1: { botId: 'bot-x' } });
   assert.ok(!plan.folded.includes('a'), 'the group in front stays open');
