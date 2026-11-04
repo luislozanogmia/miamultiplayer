@@ -657,6 +657,7 @@ async function preparePackagedRuntime() {
   process.env.MIAOS_HERMES_BIN = hermesLauncher;
   process.env.HERMES_PYTHON = venvPythonPath(venvRoot);
   process.env.HERMES_GWS_BIN = gwsLauncher;
+  process.env.MIA_WHISPER_BIN = nativeRuntimeBinaryPath(path.join(PACKAGED_RUNTIME_ROOT, "whisper"), "whisper-cli");
   process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(userData, "google-workspace");
   // Windows packaged builds cannot spawn the .cmd Hermes shim from Node
   // (CVE-2024-27980), so the backend receives the launcher as an argv

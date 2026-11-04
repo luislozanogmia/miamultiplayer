@@ -18740,7 +18740,7 @@
     if(e.key === 'Escape'){ closeChatThread(); closeChatTasksPanel(); if(chatCtxMenuClose) chatCtxMenuClose(); if(chatSidebarCtxMenuClose) chatSidebarCtxMenuClose(); }
   });
 
-  /* ============ CHAT: mic dictation (local whisper.cpp; audio never leaves this Mac) ============ */
+  /* ============ CHAT: mic dictation (local whisper.cpp; audio never leaves this computer) ============ */
   (function(){
     var micBtn = el('#ccMicBtn');
     var pill = el('#ccRecordingPill');
@@ -18789,10 +18789,10 @@
       return speechFetch('/api/speech/status').then(function(res){
         var s = res.data || {};
         if(!s.binaryReady){
-          throw new Error('Dictation needs whisper.cpp. In Terminal run: ' + (s.installHint || 'brew install whisper-cpp'));
+          throw new Error('Dictation is missing from this copy of Mia. Reinstall Mia to get it back.');
         }
         if(s.modelReady) return true;
-        if(!window.confirm('Dictation runs on this Mac with the whisper.cpp "' + s.model + '" speech model (about 142 MB).\n\nDownload it once from huggingface.co into your Mia data folder? Your audio is never uploaded anywhere.')){
+        if(!window.confirm('Dictation runs on this computer with the whisper.cpp "' + s.model + '" speech model (about 142 MB).\n\nDownload it once from huggingface.co into your Mia data folder? Your audio is never uploaded anywhere.')){
           return false;
         }
         show('Downloading speech model… (one time, about 142 MB)');
@@ -18818,7 +18818,7 @@
         });
       }).catch(function(error){
         var denied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
-        fail(denied ? 'Microphone access is blocked. Allow Mia in System Settings > Privacy & Security > Microphone.' : (error && error.message) || 'Could not start dictation.');
+        fail(denied ? 'Microphone access is blocked. Allow Mia to use the microphone in your computer\'s privacy settings.' : (error && error.message) || 'Could not start dictation.');
       });
     }
 

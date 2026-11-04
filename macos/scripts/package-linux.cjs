@@ -8,6 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
 const { stageGoogleOAuthClient } = require("./package-google-oauth.cjs");
+const { stageWhisperRuntime } = require("./whisper-runtime.cjs");
 const {
   assertNoPrivateBuildPaths,
   assertNoPrivateContent,
@@ -153,7 +154,7 @@ function removeLinuxPythonBuildState(root, originalRoot) {
   visit(root);
 }
 
-function writeReleaseMetadata(artifact, hermesCommit, ghostCommit, pythonBuild, googleWorkspace) {
+function writeReleaseMetadata(artifact, hermesCommit, ghostCommit, pythonBuild, googleWorkspace, whisper) {
   const digest = sha256(artifact);
   fs.writeFileSync(`${artifact}.sha256`, `${digest}  ${path.basename(artifact)}\n`);
   const sbom = {
@@ -171,8 +172,11 @@ function writeReleaseMetadata(artifact, hermesCommit, ghostCommit, pythonBuild, 
       { name: "Google Workspace CLI", SPDXID: "SPDXRef-Gws", versionInfo: googleWorkspace.version,
         downloadLocation: `https://github.com/googleworkspace/cli/releases/tag/v${googleWorkspace.version}`,
         checksums: [{ algorithm: "SHA256", checksumValue: googleWorkspace.sha256 }], filesAnalyzed: false },
+      { name: "whisper.cpp", SPDXID: "SPDXRef-Whisper", versionInfo: whisper.whisperVersion,
+        downloadLocation: `https://github.com/ggml-org/whisper.cpp/tree/${whisper.whisperCommit}`,
+        checksums: [{ algorithm: "SHA256", checksumValue: whisper.whisperSha256 }], filesAnalyzed: false },
     ],
-    relationships: ["SPDXRef-Hermes", "SPDXRef-Ghost", "SPDXRef-Python", "SPDXRef-Gws"].map(relatedSpdxElement => ({ spdxElementId: "SPDXRef-Mia", relationshipType: "DEPENDS_ON", relatedSpdxElement })),
+    relationships: ["SPDXRef-Hermes", "SPDXRef-Ghost", "SPDXRef-Python", "SPDXRef-Gws", "SPDXRef-Whisper"].map(relatedSpdxElement => ({ spdxElementId: "SPDXRef-Mia", relationshipType: "DEPENDS_ON", relatedSpdxElement })),
   };
   fs.writeFileSync(`${artifact}.spdx.json`, `${JSON.stringify(sbom, null, 2)}\n`);
 }
@@ -203,7 +207,7 @@ fi
 
 function linuxPackageControl() {
   // The pinned GNU gws binary requires glibc 2.39 (Ubuntu 24.04+).
-  return `Package: mia\nVersion: ${VERSION}\nArchitecture: amd64\nMaintainer: Mia contributors\nSection: utils\nPriority: optional\nDepends: libc6 (>= 2.39), libgtk-3-0t64 | libgtk-3-0, libnss3, libgbm1, libasound2t64 | libasound2, libsecret-1-0, xdg-utils\nDescription: Local AI workspace powered by Hermes Agent\n`;
+  return `Package: mia\nVersion: ${VERSION}\nArchitecture: amd64\nMaintainer: Mia contributors\nSection: utils\nPriority: optional\nDepends: libc6 (>= 2.39), libgtk-3-0t64 | libgtk-3-0, libnss3, libgbm1, libasound2t64 | libasound2, libsecret-1-0, libgomp1, xdg-utils\nDescription: Local AI workspace powered by Hermes Agent\n`;
 }
 
 async function buildLinuxPackage() {
@@ -220,6 +224,10 @@ async function buildLinuxPackage() {
   const installRoot = path.join(packageRoot, "opt", "miaos");
   try {
     const googleWorkspace = stageLinuxGoogleWorkspaceRuntime(installRoot);
+    const whisper = stageWhisperRuntime(installRoot, {
+      release: path.join(REPOSITORY_ROOT, "scripts", "whisper-release.env"),
+      binarySha256Key: "WHISPER_LINUX_X64_SHA256",
+    });
     const appSourceRoot = path.join(temporaryRoot, "app-source");
     copyTrackedArea("macos", appSourceRoot);
     const appSource = path.join(appSourceRoot, "macos");
@@ -333,7 +341,7 @@ exec "\${runtime_home}/hermes/hermes-agent/venv/bin/python" /opt/miaos/app/resou
     writeExecutable(path.join(packageRoot, "DEBIAN", "postinst"), linuxPostInstallScript());
     assertNoRuntimeState(installRoot);
     assertNoPrivateBuildPaths(packageRoot, [
-      os.homedir(), REPOSITORY_ROOT, temporaryRoot, hermesBundle, ghostBundle, pythonRuntime, process.env.GWS_BUNDLE_DIR,
+      os.homedir(), REPOSITORY_ROOT, temporaryRoot, hermesBundle, ghostBundle, pythonRuntime, process.env.GWS_BUNDLE_DIR, process.env.WHISPER_BUNDLE_DIR,
     ]);
     assertNoPrivateContent(packageRoot);
     fs.mkdirSync(DIST_ROOT, { recursive: true });
@@ -350,6 +358,7 @@ exec "\${runtime_home}/hermes/hermes-agent/venv/bin/python" /opt/miaos/app/resou
       releaseValue(ghostRelease, "GHOST_COMMIT"),
       releaseValue(pythonRelease, "PYTHON_BUILD"),
       googleWorkspace,
+      whisper,
     );
     return artifact;
   } finally {

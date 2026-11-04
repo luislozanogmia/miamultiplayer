@@ -8,6 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
 const { stageGoogleOAuthClient } = require("./package-google-oauth.cjs");
+const { stageWhisperRuntime } = require("./whisper-runtime.cjs");
 const { buildWindowsInstaller } = require("./windows-installer.cjs");
 const { buildWindowsIcon } = require("./build-windows-icon.cjs");
 const { pruneWindowsBackendDependencies } = require("./windows-backend-dependencies.cjs");
@@ -324,6 +325,11 @@ function stageWindowsBundledRuntime(temporaryRoot) {
   copyPortableRuntime(ghostBundle, stagedGhost);
   pruneGhostBundle(stagedGhost);
   const gws = stageGoogleWorkspaceRuntime(runtimeRoot);
+  const whisper = stageWhisperRuntime(runtimeRoot, {
+    release: path.join(REPOSITORY_ROOT, "scripts", "whisper-release.env"),
+    binaryName: "whisper-cli.exe",
+    binarySha256Key: "WHISPER_WINDOWS_X64_SHA256",
+  });
   writeWindowsLaunchers(runtimeRoot);
   assertNoRuntimeState(runtimeRoot);
 
@@ -343,6 +349,7 @@ function stageWindowsBundledRuntime(temporaryRoot) {
     ghostVersion: releaseValue(ghostRelease, "GHOST_VERSION"),
     ghostCommit: releaseValue(ghostRelease, "GHOST_COMMIT"),
     ...gws,
+    ...whisper,
     platform: "win32-x64",
     providerCredentials: "none",
   };

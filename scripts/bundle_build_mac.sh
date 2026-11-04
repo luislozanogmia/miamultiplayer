@@ -6,7 +6,7 @@
 # package-mac.cjs itself (not this wrapper) additionally requires:
 #   - a clean git checkout (no staged, unstaged, or untracked changes) —
 #     it refuses to package a dirty tree;
-#   - HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, GWS_BUNDLE_DIR, and
+#   - HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, GWS_BUNDLE_DIR, WHISPER_BUNDLE_DIR, and
 #     HERMES_PYTHON_RUNTIME_DIR pointing at the pinned runtime bundles
 #     (scripts/install-local-mac.sh shows how those are provisioned and
 #     which env vars it exports before calling `npm run package:mac`);

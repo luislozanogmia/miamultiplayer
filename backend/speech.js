@@ -5,8 +5,9 @@
 // (MIT) is built on; no OpenSuperWhisper code is copied.
 //
 // The model is a one-time download into the user's app data folder, started
-// only by an explicit click in the UI. The whisper.cpp binary is found on the
-// machine (Homebrew `whisper-cpp`) or in <data>/speech/bin; it is not bundled.
+// only by an explicit click in the UI. The whisper.cpp binary ships with Mia
+// (MIA_WHISPER_BIN, set at startup); a source checkout falls back to one on the
+// machine or in <data>/speech/bin.
 
 const fs = require('fs');
 const os = require('os');
@@ -18,8 +19,9 @@ const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/' +
 const MODEL_MIN_BYTES = 50 * 1024 * 1024; // guards against saving an error page
 const MAX_WAV_BYTES = 25 * 1024 * 1024; // ~13 min of 16 kHz mono PCM16
 const TRANSCRIBE_TIMEOUT_MS = 120000;
-const BINARY_NAMES = ['whisper-cli', 'whisper-cpp'];
+const BINARY_NAMES = process.platform === 'win32' ? ['whisper-cli.exe'] : ['whisper-cli', 'whisper-cpp'];
 const SYSTEM_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
+const ENGINE_MISSING = 'Dictation is missing from this copy of Mia. Reinstall Mia to get it back.';
 
 function speechRoot(dataDir) {
   return path.join(dataDir || path.join(os.homedir(), '.miaos'), 'speech');
@@ -68,7 +70,6 @@ function speechStatus({ dataDir, env = process.env } = {}) {
     ready: !!binary && modelReady,
     model: MODEL_FILE,
     modelUrl: MODEL_URL,
-    installHint: binary ? '' : 'brew install whisper-cpp',
   };
 }
 
@@ -140,7 +141,7 @@ async function transcribeWav(wav, { dataDir, env = process.env, spawnImpl, timeo
   const invalid = validateWav(wav);
   if (invalid) throw Object.assign(new Error(invalid), { status: 400 });
   const bin = findWhisperBinary({ dataDir, env });
-  if (!bin) throw Object.assign(new Error('whisper.cpp is not installed. Run: brew install whisper-cpp'), { status: 409, code: 'engine_missing' });
+  if (!bin) throw Object.assign(new Error(ENGINE_MISSING), { status: 409, code: 'engine_missing' });
   const model = resolveModel({ dataDir, env });
   if (!fs.existsSync(model)) throw Object.assign(new Error('The speech model has not been downloaded yet.'), { status: 409, code: 'model_missing' });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-dictation-'));

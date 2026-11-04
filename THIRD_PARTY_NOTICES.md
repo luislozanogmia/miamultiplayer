@@ -103,6 +103,6 @@ SOFTWARE.
 
 ## whisper.cpp and OpenAI Whisper (local dictation)
 
-Mia's composer dictation runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT, Copyright (c) 2023-2024 The ggml authors) with OpenAI Whisper model weights converted to ggml (MIT, Copyright (c) 2022 OpenAI). Mia does not bundle either: the `whisper-cli` binary comes from the user's machine (for example Homebrew `whisper-cpp`) and the model is downloaded once, on the user's explicit confirmation, into the Mia data folder. Audio is processed locally.
+Mia's composer dictation runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT, Copyright (c) 2023-2024 The ggml authors) with OpenAI Whisper model weights converted to ggml (MIT, Copyright (c) 2022 OpenAI). Mia bundles the pinned whisper.cpp engine with its license; on Windows the Microsoft Visual C++ runtime files it needs ship beside it. The model is not bundled: it is downloaded once, on the user's explicit confirmation, into the Mia data folder. Audio is processed locally.
 
 Both projects are licensed under the MIT License, whose text is reproduced under Hermes Agent above (with the respective copyright holders).

@@ -90,8 +90,7 @@ candidate acceptance gate.
   are OpenAI's Whisper weights — clean license chain, attribution via a
   NOTICE file only). UX built in-house in Electron (`globalShortcut` +
   hold/release), cross-platform; OpenSuperWhisper (MIT, Swift/macOS-only)
-  is UX inspiration, not a dependency. Status (2026-10-26): composer mic button is live via a locally installed `whisper-cli` + a runtime-downloaded model (`backend/speech.js`); hold-to-talk global shortcut and bundling the binary are still open. Known cost: bundled models add
-  ~100MB+ and need per-platform native builds.
+  is UX inspiration, not a dependency. Status (2026-10-26): composer mic button is live; every build ships the pinned `whisper-cli` and the model downloads once at runtime (`backend/speech.js`); the hold-to-talk global shortcut is still open.
 
 - **Post-alpha: delegate agent-runtime primitives to Hermes.** This is P1
   architectural cleanup after the alpha, not an alpha launch blocker. Mia
