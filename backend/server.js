@@ -82,6 +82,8 @@ const {
   closeHermesGatewayRuntime,
   HERMES_SUBSCRIPTION_MODEL_OPTIONS,
   HERMES_ALLOWED_MODELS_BY_PROVIDER,
+  hermesModelOptions,
+  rememberDiscoveredHermesModels,
   MANAGED_ROUTER_HERMES_PROVIDER,
   normalizeHermesModelSelection,
   isAllowedHermesModel,
@@ -4316,6 +4318,7 @@ function rememberNativeChatModelInventory(payload) {
   const providers = normalizeChatModelInventory(payload);
   nativeChatModelProviders = providers;
   return providers;
+  rememberDiscoveredHermesModels(providers);
 }
 
 async function chatModelSelectionForUser(rawSelection, email) {
@@ -4812,11 +4815,11 @@ app.post('/api/settings/managed-router/provision', requireGlobalSettingsAdmin, a
 
 app.get('/api/settings/harness/models', requireAuth, (req, res) => {
   return res.status(200).json({
-    providers: Object.fromEntries(Object.entries(HERMES_SUBSCRIPTION_MODEL_OPTIONS).map(([provider, options]) => [
+    providers: Object.fromEntries(Object.keys(HERMES_SUBSCRIPTION_MODEL_OPTIONS).map((provider) => [
       provider,
       {
         defaultModel: normalizeHermesModelSelection(provider, null, false).model,
-        options: options.map(({ id, model, label, fast }) => ({ id, model, label, fast: fast === true })),
+        options: hermesModelOptions(provider).map(({ id, model, label, fast }) => ({ id, model, label, fast: fast === true })),
       },
     ])),
   });

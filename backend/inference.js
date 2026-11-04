@@ -1,7 +1,7 @@
 'use strict';
 
 const { defaultLibrary: defaultSkillsLibrary } = require('./skills-library');
-const { currentHermesModel } = require('./retired-models');
+const { currentHermesModel, isRetiredHermesModel } = require('./retired-models');
 
 // v0 of a deterministic context-engineering layer for native conversation replies.
 // Structured as two swappable pieces on purpose: buildContext() decides what
@@ -333,12 +333,12 @@ const HERMES_SUBSCRIPTION_MODEL_OPTIONS = Object.freeze({
     Object.freeze({ id: 'fable', model: 'claude-fable-5-1[1m]', label: 'Fable 5.1', fast: false }),
   ]),
   'openai-codex': Object.freeze([
-    Object.freeze({ id: 'fast', model: 'gpt-5.6-luna', label: 'Fast', fast: true }),
+    Object.freeze({ id: 'fast', model: 'gpt-6-luna', label: 'Fast', fast: true }),
     Object.freeze({ id: 'gpt-6-astra', model: 'gpt-6-astra', label: 'GPT-6 Astra', fast: false }),
     Object.freeze({ id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', fast: false }),
-    Object.freeze({ id: 'gpt-5.6-sol', model: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', fast: false }),
-    Object.freeze({ id: 'gpt-5.6-terra', model: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', fast: false }),
-    Object.freeze({ id: 'gpt-5.6-luna', model: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', fast: false }),
+    Object.freeze({ id: 'gpt-6.1-terra', model: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', fast: false }),
+    Object.freeze({ id: 'gpt-6-sol', model: 'gpt-6-sol', label: 'GPT-6 Sol', fast: false }),
+    Object.freeze({ id: 'gpt-6-luna', model: 'gpt-6-luna', label: 'GPT-6 Luna', fast: false }),
   ]),
   'xai-oauth': Object.freeze([
     Object.freeze({ id: 'grok-4.6', model: 'grok-4.6', label: 'Grok 4.6', fast: false }),
@@ -361,7 +361,7 @@ const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
     'claude-fable-5-1[1m]',
   ]),
   'openai-codex': Object.freeze([
-    'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+    'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna',
   ]),
   'xai-oauth': Object.freeze([
     'grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-composer-2.5-fast',
@@ -374,9 +374,40 @@ const HERMES_ALLOWED_MODELS_BY_PROVIDER = Object.freeze({
 
 const HERMES_DEFAULT_MODEL_BY_PROVIDER = Object.freeze({
   'claude-subscription-directsdk-experimental': 'claude-sonnet-5-5[1m]',
-  'openai-codex': 'gpt-5.6-luna',
+  'openai-codex': 'gpt-6-luna',
   'xai-oauth': 'grok-4.6',
 });
+
+// ChatGPT lists each account's models live, and new ones arrive between Mia
+// releases. A model the account really lists is selectable even when the
+// lists above don't name it yet. The picker hides the same ones it always did.
+const DISCOVERED_MODEL_PROVIDERS = new Set(['openai-codex']);
+const CODEX_MODEL_NAME = /^gpt-[a-z0-9][a-z0-9.-]*$/;
+const discoveredHermesModels = new Map();
+
+function rememberDiscoveredHermesModels(providers) {
+  for (const provider of DISCOVERED_MODEL_PROVIDERS) {
+    const known = HERMES_ALLOWED_MODELS_BY_PROVIDER[provider] || [];
+    discoveredHermesModels.set(provider, ((providers && providers[provider] && providers[provider].models) || [])
+      .map((model) => String(model).trim().toLowerCase())
+      .filter((model) => CODEX_MODEL_NAME.test(model) && !/-900k$/.test(model)
+        && !known.includes(model) && !isRetiredHermesModel(provider, model)));
+  }
+}
+
+function discoveredModelLabel(model) {
+  return model.split('-').map((part, index) => {
+    if (index === 0) return part.toUpperCase();
+    return index === 1 ? `-${part}` : ` ${part.charAt(0).toUpperCase()}${part.slice(1)}`;
+  }).join('');
+}
+
+function hermesModelOptions(provider) {
+  return [
+    ...(HERMES_SUBSCRIPTION_MODEL_OPTIONS[provider] || []),
+    ...(discoveredHermesModels.get(provider) || []).map((model) => ({ id: model, model, label: discoveredModelLabel(model), fast: false })),
+  ];
+}
 
 function defaultHermesModel(provider) {
   return HERMES_DEFAULT_MODEL_BY_PROVIDER[provider] || '';
@@ -387,8 +418,18 @@ function normalizeHermesModelSelection(provider, requestedModel, fast) {
   const rawModel = currentHermesModel(normalizedProvider, requestedModel).toLowerCase();
   const options = HERMES_SUBSCRIPTION_MODEL_OPTIONS[normalizedProvider];
   if (options) {
-    const choice = options.find((entry) => entry.id === rawModel || entry.model === rawModel);
-    if (!choice) return { model: defaultHermesModel(normalizedProvider), fast: false };
+    // Fast shares a model with its plain option: only a request for fast gets fast.
+    const choice = options.find((entry) => fast === true && entry.fast === true && entry.model === rawModel)
+      || options.find((entry) => entry.id === rawModel)
+      || options.find((entry) => entry.fast !== true && entry.model === rawModel);
+    if (!choice) {
+      // A saved model the account listed stays chosen across a restart, before
+      // the first live list arrives. New choices are checked by isAllowedHermesModel.
+      if (DISCOVERED_MODEL_PROVIDERS.has(normalizedProvider) && CODEX_MODEL_NAME.test(rawModel) && !/-900k$/.test(rawModel)) {
+        return { model: rawModel, fast: false };
+      }
+      return { model: defaultHermesModel(normalizedProvider), fast: false };
+    }
     return {
       model: choice.model,
       fast: choice.fast === true && (fast === true || choice.id === 'fast'),
@@ -406,18 +447,19 @@ function isAllowedHermesModel(provider, requestedModel, fast) {
   const rawModel = currentHermesModel(normalizedProvider, requestedModel).toLowerCase();
   if (normalizedProvider === 'openai-codex' && rawModel === 'fast') return true;
   const allowed = HERMES_ALLOWED_MODELS_BY_PROVIDER[normalizedProvider] || [];
-  if (!allowed.includes(rawModel)) return false;
+  const discovered = discoveredHermesModels.get(normalizedProvider) || [];
+  if (!allowed.includes(rawModel) && !discovered.includes(rawModel)) return false;
   if (fast !== true) return true;
-  return normalizedProvider === 'openai-codex' && rawModel === 'gpt-5.6-luna';
+  return normalizedProvider === 'openai-codex' && rawModel === 'gpt-6-luna';
 }
 
 // Mia's authenticated OpenAI route keeps Luna as the compatibility default;
 // deployment overrides are accepted only when they are in the allowlist.
 const MIA_OPENAI_MODEL = normalizeHermesModelSelection(
   'openai-codex',
-  process.env.MIAOS_HERMES_OPENAI_MODEL || 'gpt-5.6-luna',
+  process.env.MIAOS_HERMES_OPENAI_MODEL || 'gpt-6-luna',
   false
-).model || 'gpt-5.6-luna';
+).model || 'gpt-6-luna';
 const MIA_XAI_MODEL = normalizeHermesModelSelection(
   'xai-oauth',
   process.env.MIAOS_HERMES_XAI_MODEL || 'grok-4.6',
@@ -1046,6 +1088,8 @@ module.exports = {
   MIA_OPENAI_MODEL,
   HERMES_SUBSCRIPTION_MODEL_OPTIONS,
   HERMES_ALLOWED_MODELS_BY_PROVIDER,
+  hermesModelOptions,
+  rememberDiscoveredHermesModels,
   MANAGED_ROUTER_HERMES_PROVIDER,
   normalizeHermesModelSelection,
   isAllowedHermesModel,
