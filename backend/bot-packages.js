@@ -131,6 +131,23 @@ function createBotPackageStore(rootDirectory) {
     }
   }
 
+  // Replaces one bot's AGENTS.md in place; the rest of its package is untouched.
+  function writeInstructions(record, instructions) {
+    const directory = findDirectory(safeBotId(record && record.id));
+    if (!directory) throw new BotPackageError('PACKAGE_MISSING', `bot package is missing for ${record.id}`);
+    const agentsPath = path.join(directory, 'AGENTS.md');
+    assertRegularFile(agentsPath, 'AGENTS.md');
+    const temporaryPath = `${agentsPath}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temporaryPath, instructions, { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(temporaryPath, agentsPath);
+    } catch (error) {
+      fs.rmSync(temporaryPath, { force: true });
+      throw new BotPackageError('PACKAGE_WRITE_FAILED', `could not save instructions for ${record.id}: ${error.message}`);
+    }
+    return { instructions, instructionRevision: instructionRevision(instructions) };
+  }
+
   function desiredDirectory(record) {
     const id = safeBotId(record && record.id);
     return path.join(root, `${readableSlug(record && record.name)}--${id}`);
@@ -372,7 +389,7 @@ function createBotPackageStore(rootDirectory) {
     };
   }
 
-  return { root, hydrate, prepare, prepareDelete, prepareArchive, prepareRestore, listArchived, findDirectory };
+  return { root, writeInstructions, readInstructions, hydrate, prepare, prepareDelete, prepareArchive, prepareRestore, listArchived, findDirectory };
 }
 
 module.exports = {

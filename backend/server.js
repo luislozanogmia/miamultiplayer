@@ -137,6 +137,7 @@ const googleWorkspace = require('./google-gmail');
 const googleWorkspaceContext = require('./google-workspace-context');
 const googleWorkspaceActions = require('./google-workspace-actions');
 const botAutomationActions = require('./bot-automation-actions');
+const botInstructionActions = require('./bot-instruction-actions');
 const { createGoogleAccountConnector, createOwnerBoundGoogleAccount } = require('./google-account-connector');
 const { stripTaskOpeningNotice, humanTaskStatus, shouldPostTaskStatus } = require('./background-status');
 const { providerWaitStatus } = require('./provider-wait-status');
@@ -7203,7 +7204,26 @@ function localTimezoneName() {
 // Action blocks are read by Mia, never shown: a bot's <MIA_AUTOMATION> and
 // Mia's own <MIA_BOT_SETUP>.
 function stripAgentActionBlocks(text) {
-  return miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text));
+  return botInstructionActions.stripInstructionBlocks(miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text)));
+}
+
+// Reads a bot's <MIA_INSTRUCTIONS> block in its owner's own chat and saves it.
+// The bot wrote its "done" before the save, so a failed save replaces that text.
+function nativeBotInstructionUpdate(agent, replyText, trigger) {
+  const extracted = botInstructionActions.extractInstructionUpdate(replyText);
+  if (!extracted.instructions && !extracted.error) return { text: extracted.text, metadata: null };
+  const failed = (reason) => ({
+    text: 'I couldn\u2019t save my new instructions, so nothing changed. Please ask me again.',
+    metadata: { instructionUpdateError: String(reason).slice(0, 200) },
+  });
+  if (extracted.error) return failed(extracted.error);
+  if (!sameOwner(agent, trigger.senderId)) return failed('not_owner');
+  try {
+    const saved = cronSync.writeBotInstructions(agent, extracted.instructions);
+    return { text: extracted.text || 'I updated my instructions.', metadata: { instructionRevision: saved.instructionRevision } };
+  } catch (error) {
+    return failed(error && error.code || 'save_failed');
+  }
 }
 
 // Reads Mia's <MIA_BOT_SETUP> block in her own chat: it becomes a pending
@@ -8013,6 +8033,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       platformContext ? `Current Mia platform state for this turn (authoritative):\n${String(platformContext).trim()}` : '',
       googleActionInstruction,
       slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName() }),
+      slashCommand ? '' : botInstructionActions.instructionActionInstruction(),
       nativePromptLine(trigger) || message,
       nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
       botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
@@ -8139,8 +8160,11 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   // Only the bot's own chat may act on its automations; anywhere else the
   // block is dropped unread.
   // Mia's block only counts in her own chat.
+  const instructionUpdate = privateBotChat
+    ? nativeBotInstructionUpdate(agent, actionReply, trigger)
+    : { text: actionReply, metadata: null };
   const automationAction = privateBotChat
-    ? await nativeBotAutomationAction(agent, miaBotSetupActions.stripBotSetupBlocks(actionReply), trigger)
+    ? await nativeBotAutomationAction(agent, miaBotSetupActions.stripBotSetupBlocks(instructionUpdate.text), trigger)
     : ownsMiaChat
       ? nativeMiaBotSetupRequest(botAutomationActions.stripAutomationBlocks(actionReply), senderLabel)
       : { text: stripAgentActionBlocks(actionReply), metadata: null };
@@ -8208,6 +8232,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       runtime: 'hermes',
       dispatchId: dispatch.id,
       agentName: agent.name,
+      ...(instructionUpdate.metadata || {}),
       ...(automationAction.metadata || {}),
       ...nextStepMetadata,
       ...(slashCommand ? { slashCommand: slashCommand.name } : {}),

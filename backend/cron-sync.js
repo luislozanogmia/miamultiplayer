@@ -272,6 +272,10 @@ function artifactWorkspaceForBot(bot) {
   return workspace;
 }
 
+function writeBotInstructions(bot, instructions) {
+  return BOT_PACKAGE_STORE.writeInstructions(bot, instructions);
+}
+
 function botPackageDirectoryFor(bot) {
   BOT_PACKAGE_STORE.hydrate(bot);
   const directory = BOT_PACKAGE_STORE.findDirectory(bot && bot.id);
@@ -1195,6 +1199,7 @@ module.exports = {
   readRunReports,
   artifactWorkspaceForBot,
   botPackageDirectoryFor,
+  writeBotInstructions,
   listSessionArtifacts,
   validateBotArtifacts,
   BOT_TOOLSETS,
