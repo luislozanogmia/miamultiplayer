@@ -5386,8 +5386,9 @@
       (result.bots||[]).forEach(function(bot){
         if(!bot.published || !bot.name)return;
         var key=String(bot.name).toLowerCase(), entry=byKey[key];
-        if(!entry){ entry=byKey[key]={key:key,name:bot.name,channels:[]}; list.push(entry); }
+        if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:bot.avatarColor||null,botIds:[],channels:[]}; list.push(entry); }
         if(entry.channels.indexOf(result.channel)<0)entry.channels.push(result.channel);
+        if(bot.id&&entry.botIds.indexOf(String(bot.id))<0)entry.botIds.push(String(bot.id));
       });
     });
     return list.sort(function(a,b){return a.name.localeCompare(b.name);});
@@ -9427,7 +9428,7 @@
     var messages = (state && state.messages || []).filter(function(m){ return m && m.id && !m.system && !m.deleted; }).map(function(m){
       var signed = m.hubAuthor ? {agent:m.hubAuthor, text:m.body} : parseSignedHumanBody(m.body);
       var email = signed.agent || '';
-      var author = m.nativeAgentName || (email ? (email.toLowerCase() === String(currentUser || '').toLowerCase() ? 'You' : displayNameForEmail(email)) : '');
+      var author = messageBotIdentity(m).name || (email ? (email.toLowerCase() === String(currentUser || '').toLowerCase() ? 'You' : displayNameForEmail(email)) : '');
       return {id:String(m.id), text:String(email ? signed.text : m.body || ''), author:author};
     }).reverse();
     return {roomId:chatWs.activeRoomId, name:chatWs.activeLabel || 'this chat', messages:messages};
@@ -10704,7 +10705,7 @@
     if((roomId === chatWs.activeRoomId && appInForeground()) || !desktopNotificationsEnabled()) return;
     if(message && message.hubMessage){
       var channel = hubChannel(roomId);
-      var sender = message.nativeAgentName || displayNameForEmail(message.hubAuthor || '') || 'Someone';
+      var sender = messageBotIdentity(message).name || displayNameForEmail(message.hubAuthor || '') || 'Someone';
       var drive = googleDriveMessageDisplay(message.body);
       var body = drive.text.trim() || (drive.files.length ? 'Shared a Google Drive file' : message.hubFile ? 'Sent an image' : '');
       showDesktopNotification(roomId, sender + (channel && !hubPrivateConversation(channel) && channel.name ? ' in #' + channel.name : ''), excerpt(body.replace(/\s+/g, ' '), 120) || 'New message');
@@ -11094,6 +11095,22 @@
   // "New Agent" while the live roster correctly says "Researcher X". Use
   // the current room roster only when there is exactly one non-Mia agent to
   // avoid guessing in a multi-agent department or home room.
+  // Who a bot's message is from. A message saves the bot's name as it was when sent, so
+  // its sender ID finds the bot as it is now. A bot that no longer exists keeps its saved
+  // name. Mia's replies are left as they are: her name depends on the conversation.
+  function messageBotRecords(){
+    var lists = [chatWs.allAgents, typeof benchAgents !== 'undefined' ? benchAgents : null, chatWs.myBotRecords, typeof hubChat !== 'undefined' ? hubChat.companyBots : null];
+    return lists.reduce(function(all, list){ return Array.isArray(list) ? all.concat(list) : all; }, []);
+  }
+  function messageBotIdentity(m){
+    var saved = (m && m.nativeAgentName) || null;
+    var sender = String((m && m.sender) || '').replace(/^hub-bot:/, '');
+    if(!sender || sender === 'gateway') return {name: saved, id: saved === 'Mia' ? 'gateway' : null, color: null};
+    var record = messageBotRecords().filter(function(item){
+      return item && item.name && ([item.id, item.agentId].some(function(id){ return id && String(id) === sender; }) || (item.botIds || []).indexOf(sender) >= 0);
+    })[0];
+    return record ? {name: record.name, id: sender, color: record.avatarColor || null} : {name: saved, id: null, color: null};
+  }
   function currentAgentDisplayNameForMessage(name){
     var parsed = canonicalAgentDisplayName(name);
     if(isMiaOrchestrator(parsed)) return 'Mia';
@@ -11715,7 +11732,8 @@
       // parseSignedBody's regex and pass through untouched.
       var signed = chatWs.activeKind === 'department' || chatWs.activeKind === 'dm' || chatWs.activeKind === 'agent' || chatWs.activeKind === 'home';
       var parsed = signed && !m.hubMessage ? parseSignedBody(botBody) : {agent: null, text: botBody};
-      name = m.nativeAgentName || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
+      var bot = messageBotIdentity(m);
+      name = bot.name || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
       mark = esc(benchMark(name));
       tag = agentTagFor(name);
       text = stripLegacyBackgroundStatus(parsed.text);
@@ -11727,7 +11745,7 @@
     var markCol = visuallyGrouped
       // The group header already shows the time; follow-ups only show a send status.
       ? '<span class="chat-msg-mark-time">' + (m.pending || m.sendFailed ? timeText : '') + '</span>'
-      : '<span class="chat-msg-mark' + (isHuman ? '' : ' agent') + (!isHuman && isMiaOrchestrator(name, name === 'Mia' ? 'gateway' : null) ? ' mia-mark-host' : '') + '">' + (isHuman ? mark : agentAvatarHtml(name, name === 'Mia' ? 'gateway' : null, 28, null, null, true)) + '</span>';
+      : '<span class="chat-msg-mark' + (isHuman ? '' : ' agent') + (!isHuman && isMiaOrchestrator(name, name === 'Mia' ? 'gateway' : null) ? ' mia-mark-host' : '') + '">' + (isHuman ? mark : agentAvatarHtml(name, name === 'Mia' ? 'gateway' : bot.id, 28, null, bot.color, true)) + '</span>';
     // Message actions use the shared context menu, which reads the row's
     // existing permission attributes instead of recomputing them on click.
     var showThreadAction = !opts.inThread && !m.pending && !m.sendFailed && !(m.hubMessage && (m.hubLocal || m.deleted));
@@ -14988,7 +15006,7 @@
     if(mentioned.length > 1) return 'Bots';
     if(threadRootId){
       var root = (state.messages || []).filter(function(message){ return message.id === threadRootId; })[0];
-      if(root && !isHumanSender(root.sender)) return root.nativeAgentName || chatWs.activeLabel || 'Agent';
+      if(root && !isHumanSender(root.sender)) return messageBotIdentity(root).name || chatWs.activeLabel || 'Agent';
     }
     return null;
   }
@@ -17078,7 +17096,7 @@
   function chatFileFrom(m){
     if(m.hubMessage) return m.hubAuthor || '';
     if(isHumanSender(m.sender)) return 'You';
-    return m.nativeAgentName || m.sender || '';
+    return messageBotIdentity(m).name || m.sender || '';
   }
   function chatFileRows(){
     if(!window.MiaViewShelf) return [];
