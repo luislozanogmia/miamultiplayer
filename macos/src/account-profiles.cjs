@@ -40,7 +40,7 @@ function createAccountProfiles({ rootDir, issuer }) {
       const profiles = saved && saved.profiles && typeof saved.profiles === "object" ? saved.profiles : {};
       const clean = { [DEFAULT_ID]: profiles[DEFAULT_ID] && typeof profiles[DEFAULT_ID] === "object" ? profiles[DEFAULT_ID] : {} };
       for (const [id, value] of Object.entries(profiles)) if (ID.test(id) && value && typeof value === "object") clean[id] = value;
-      return { active: clean[saved.active] ? saved.active : DEFAULT_ID, profiles: clean };
+      return { active: clean[saved.active] ? saved.active : DEFAULT_ID, profiles: clean, notice: text(saved.notice) };
     } catch (_) {
       return { active: DEFAULT_ID, profiles: { [DEFAULT_ID]: {} } };
     }
@@ -118,6 +118,19 @@ function createAccountProfiles({ rootDir, issuer }) {
       state.active = id;
       write(state);
       prepare(id);
+    },
+    // Said once after restarting, so a person who signed in as someone other
+    // than the account on screen knows why this one opened.
+    setNotice(id) {
+      const state = read();
+      state.notice = text(state.profiles[id]?.email);
+      write(state);
+    },
+    takeNotice() {
+      const state = read();
+      const notice = state.notice || "";
+      if (notice) { delete state.notice; write(state); }
+      return notice;
     },
     // The sign-in just made belongs to another account's folder, so it moves there.
     moveCredential(fromId, toId) {

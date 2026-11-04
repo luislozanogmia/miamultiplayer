@@ -89,3 +89,22 @@ test('clipboard failure leaves a selectable URL and cancellation erases it',asyn
   assert.equal(h.elements.get('#nativeClerkLink').value,'');
   assert.equal(h.elements.get('.native-clerk-browser-link').hidden,true);h.dispose();
 });
+
+test('a named account has no email field and its code goes only to that address',async()=>{
+  const sent=[];
+  const elements=new Map();
+  const element=()=>({hidden:false,disabled:false,value:'',textContent:'',handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},focus(){}});
+  const root=element();
+  root.querySelector=selector=>{if(!elements.has(selector))elements.set(selector,element());return elements.get(selector);};
+  const container={ownerDocument:{createElement:()=>root,defaultView:{navigator:{clipboard:{writeText:async()=>{}}}}},replaceChildren(){}};
+  const auth={status:async()=>({ok:true,result:{status:'signed_out'}}),startEmail:async value=>{sent.push(value);return {ok:true,result:{status:'needs_verification'}};},onState:()=>()=>{},cancel:async()=>({ok:true,result:{}})};
+  mount(container,auth,()=>{},{lockedEmail:'named@example.test'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(elements.get('.native-clerk-email').hidden,true);
+  assert.equal(elements.get('.native-clerk-submit').textContent,'Email a code to this address');
+  elements.get('#nativeClerkEmail').value='someone-else@example.test';
+  root.handlers.submit({preventDefault(){}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(sent,['named@example.test']);
+  assert.match(elements.get('.native-clerk-status').textContent,/named@example\.test/);
+});

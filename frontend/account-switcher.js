@@ -41,13 +41,82 @@
       };
       list.filter(function (account) { return !account.active; }).forEach(function (account) {
         button('Switch to ' + label(account), function () {
-          if (settings.skipConfirm || askToSwitch(account)) accounts.switchTo(account.id);
+          if (askToSwitch(account)) accounts.switchTo(account.id);
         });
       });
-      if (settings.withAdd !== false) button('Add another account', function () { accounts.add(); });
+      button('Add another account', function () { accounts.add(); });
       container.hidden = !container.children.length;
     }).catch(function () { container.hidden = true; });
   }
-  root.MiaAccounts = { route: route, confirmed: confirmed, openOther: openOther, render: render };
+  // Which sign-in screen an account folder opens on. A signed-out account signs
+  // in as itself, an added one starts empty, and a first install is unchanged.
+  function signInView(list) {
+    var active = (list || []).filter(function (account) { return account.active; })[0];
+    if (active && active.email) return { kind: 'named', email: active.email };
+    return (list || []).some(function (account) { return !account.active; }) ? { kind: 'add' } : { kind: 'welcome' };
+  }
+  function initials(text) {
+    return String(text).replace(/@.*/, '').slice(0, 2).toUpperCase();
+  }
+  // els: { title, subtitle, accounts, form }. mountForm(lockedEmail) puts the
+  // sign-in form in els.form.
+  function showSignIn(els, mountForm) {
+    var accounts = bridge();
+    var doc = root.document;
+    function button(className, onClick, text, badge) {
+      var item = doc.createElement('button');
+      item.type = 'button';
+      item.className = className;
+      if (badge) {
+        var mark = doc.createElement('span');
+        mark.className = 'login-account-mark';
+        mark.textContent = badge;
+        item.appendChild(mark);
+      }
+      item.appendChild(doc.createTextNode(text));
+      item.addEventListener('click', onClick);
+      els.accounts.appendChild(item);
+    }
+    function head(title, subtitle) {
+      els.title.textContent = title;
+      els.subtitle.textContent = subtitle;
+      els.accounts.textContent = '';
+      els.accounts.hidden = false;
+    }
+    function showForm(view, list) {
+      els.form.hidden = false;
+      if (view.kind === 'named') {
+        head('Sign in to your account', view.email);
+        button('login-account-link', function () { showChooser(view, list); }, 'Use another account');
+      } else {
+        head('Add a new account', 'Your other accounts stay signed in.');
+        button('login-account-link', function () { showChooser(view, list); }, 'Back to your accounts');
+      }
+    }
+    function showChooser(view, list) {
+      els.form.hidden = true;
+      head('Choose an account', 'Each one has its own bots, chats, and files.');
+      list.forEach(function (account) {
+        if (!account.email && !account.name) return;
+        var name = label(account);
+        button('login-account-btn', function () {
+          if (account.active) showForm(view, list); else accounts.switchTo(account.id);
+        }, name, initials(name));
+      });
+      button('login-account-btn', function () { accounts.add(); }, 'Add a new account', '+');
+    }
+    if (!accounts) { mountForm(''); return Promise.resolve(); }
+    return accounts.list().catch(function () { return []; }).then(function (list) {
+      var view = signInView(list);
+      mountForm(view.kind === 'named' ? view.email : '');
+      if (view.kind !== 'welcome') showForm(view, list);
+    });
+  }
+  // The account that opened when a sign-in turned out to be someone else's.
+  function takeOpenedNotice() {
+    var accounts = bridge();
+    return accounts && accounts.takeNotice ? accounts.takeNotice().catch(function () { return ''; }) : Promise.resolve('');
+  }
+  root.MiaAccounts = { route: route, confirmed: confirmed, openOther: openOther, render: render, signInView: signInView, showSignIn: showSignIn, takeOpenedNotice: takeOpenedNotice };
   if (typeof module !== 'undefined') module.exports = root.MiaAccounts;
 })(typeof window !== 'undefined' ? window : globalThis);

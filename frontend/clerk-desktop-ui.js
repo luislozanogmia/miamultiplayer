@@ -4,7 +4,11 @@
     if(!reply || !reply.ok) throw new Error(reply && reply.error || 'Sign-in is unavailable. Please try again.');
     return reply.result;
   }
-  function mount(container, auth, onSignedIn){
+  // options.lockedEmail: this screen signs in one named account, so the code can
+  // only go to that address and there is no email field to type another into.
+  function mount(container, auth, onSignedIn, options){
+    var lockedEmail = options && options.lockedEmail || '';
+    var emailLabel = lockedEmail ? 'Email a code to this address' : 'Continue with email';
     var doc = container.ownerDocument;
     var busy = false, disposed = false, expiryTimer = null, manualLink = false;
     var form = doc.createElement('form');
@@ -29,6 +33,12 @@
     var linkBox = form.querySelector('.native-clerk-browser-link');
     var link = form.querySelector('#nativeClerkLink');
     var copy = form.querySelector('.native-clerk-copy');
+    if(lockedEmail){
+      email.value = lockedEmail;
+      emailBox.hidden = true;
+      email.required = false;
+      form.querySelector('.native-clerk-divider').hidden = true;
+    }
     function controls(waiting){
       google.disabled = busy || (waiting && !manualLink);
       submit.disabled = busy || (waiting && !manualLink);
@@ -50,10 +60,10 @@
       if(!manualLink) google.innerHTML = '<img src="assets/connectors/google-g.svg" width="18" height="18" alt="">Continue with Google';
       var verifying = kind === 'needs_verification';
       codeBox.hidden = !verifying;
-      emailBox.hidden = verifying;
-      email.required = !verifying;
+      emailBox.hidden = verifying || !!lockedEmail;
+      email.required = !verifying && !lockedEmail;
       code.required = verifying;
-      submit.textContent = verifying ? 'Verify email' : 'Continue with email';
+      submit.textContent = verifying ? 'Verify email' : emailLabel;
       cancel.hidden = !waiting && !verifying && !manualLink;
       controls(waiting);
       status.textContent = '';
@@ -66,7 +76,7 @@
           }).catch(function(error){ busy = false; update({status:'error',error:error.message}); });
         }, Math.max(0, state.expiresAt - Date.now()));
       }
-      if(verifying){ status.textContent = 'Enter the code sent to your email.'; code.focus(); }
+      if(verifying){ status.textContent = 'Enter the code sent to ' + (lockedEmail || 'your email') + '.'; code.focus(); }
       if(kind === 'active'){ status.textContent = 'Opening Mia…'; onSignedIn(); }
       if(kind === 'expired') status.textContent = 'Sign-in expired. Please try again.';
       if(kind === 'error') status.textContent = state.error || 'Sign-in failed. Please try again.';
@@ -98,7 +108,7 @@
     });
     form.addEventListener('submit', function(event){
       event.preventDefault();
-      run(function(){ return codeBox.hidden ? auth.startEmail(email.value.trim()) : auth.verifyEmail(code.value.trim()); });
+      run(function(){ return codeBox.hidden ? auth.startEmail(lockedEmail || email.value.trim()) : auth.verifyEmail(code.value.trim()); });
     });
     cancel.addEventListener('click', function(){ code.value = ''; run(function(){ return auth.cancel(); }); });
     var unsubscribe = auth.onState(update);

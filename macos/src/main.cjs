@@ -2442,12 +2442,14 @@ ipcMain.handle(ACCOUNTS_CHANNEL, async (event, action, value = {}) => {
   const current = accountProfiles.active().id;
   const subject = tokenSubject(value.token);
   if (action === "list") return accountProfiles.list();
+  if (action === "notice") return accountProfiles.takeNotice();
   if (action === "add") return openAccountAndRelaunch(accountProfiles.addEmpty());
   if (action === "switch") return openAccountAndRelaunch(String(value.id || ""));
   if (action === "route") {
     const owner = subject ? accountProfiles.findBySubject(subject) : "";
     if (!owner || owner === current) return { switching: false };
     accountProfiles.moveCredential(current, owner);
+    accountProfiles.setNotice(owner);
     return openAccountAndRelaunch(owner);
   }
   if (action === "confirmed") {
@@ -2460,6 +2462,7 @@ ipcMain.handle(ACCOUNTS_CHANNEL, async (event, action, value = {}) => {
     if (linked.subject) accountProfiles.setOwner(current, linked);
     const target = accountProfiles.profileFor({ subject, email: value.email, name: value.name });
     accountProfiles.moveCredential(current, target);
+    accountProfiles.setNotice(target);
     return openAccountAndRelaunch(target);
   }
   throw new Error("Unknown account action.");

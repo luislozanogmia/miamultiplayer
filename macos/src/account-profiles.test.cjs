@@ -91,6 +91,14 @@ test("a leftover empty account folder goes on a later launch, but a used workspa
   assert.equal(fs.readFileSync(path.join(used, "my-report.pdf"), "utf8"), "mine");
 });
 
+test("the notice about which account opened is said once", () => {
+  const { profiles } = make();
+  const id = profiles.profileFor({ subject: "user_b", email: "b@example.test" });
+  profiles.setNotice(id);
+  assert.equal(profiles.takeNotice(), "b@example.test");
+  assert.equal(profiles.takeNotice(), "");
+});
+
 test("a damaged list or hostile id can't point outside the accounts folder", () => {
   const { dir, profiles } = make();
   fs.writeFileSync(path.join(dir, "accounts.json"), JSON.stringify({ active: "../../etc", profiles: { "../../etc": {} } }));

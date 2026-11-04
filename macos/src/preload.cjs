@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     list: () => ipcRenderer.invoke("miaos-accounts", "list"),
     add: () => ipcRenderer.invoke("miaos-accounts", "add"),
     switchTo: id => ipcRenderer.invoke("miaos-accounts", "switch", { id }),
+    takeNotice: () => ipcRenderer.invoke("miaos-accounts", "notice"),
     route: token => ipcRenderer.invoke("miaos-accounts", "route", { token }),
     confirmed: (token, profile) => ipcRenderer.invoke("miaos-accounts", "confirmed", { token, email: profile.email, name: profile.name }),
     openOther: (token, conflict) => ipcRenderer.invoke("miaos-accounts", "other", { token, ...conflict }),

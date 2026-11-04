@@ -386,7 +386,10 @@
   #avatarAccounts{display:flex;flex-direction:column;}
   .login-accounts{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
   .login-accounts[hidden],#avatarAccounts[hidden]{display:none;}
-  .login-account-btn{appearance:none;width:100%;padding:9px 12px;border:1px solid var(--sand-border-default,#ddd);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;text-align:left;cursor:pointer;}
+  .login-accounts{margin:12px 0 0;}
+  .login-account-mark{flex:none;display:grid;place-items:center;width:24px;height:24px;margin-right:10px;border-radius:50%;background:#F3F1ED;font-size:11px;}
+  .login-account-link{appearance:none;align-self:center;padding:6px 8px;border:0;background:none;color:inherit;font:inherit;font-size:13px;text-decoration:underline;cursor:pointer;}
+  .login-account-btn{display:flex;align-items:center;overflow-wrap:anywhere;appearance:none;width:100%;padding:9px 12px;border:1px solid var(--sand-border-default,#ddd);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;text-align:left;cursor:pointer;}
   .login-account-btn:hover{background:#F3F1ED;}
   .avatar-menu-item#logoutBtn:hover{background:var(--danger-tint);color:var(--danger);}
   .avatar-menu-label{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--light);padding:10px 12px 4px;}
@@ -2315,6 +2318,7 @@
   body.styled-skin .login-heading h1{font:600 34px/1.08 var(--styled-sans);letter-spacing:-.035em;color:#171717;}
   body.styled-skin .login-heading .subtitle{margin-top:10px;color:#747474;font:400 15px/22px var(--styled-sans);}
   body.styled-skin .clerk-sign-in{min-height:350px;justify-content:flex-start;}
+  body.styled-skin .clerk-sign-in:has(.native-clerk-form){min-height:0;}
   body.styled-skin .mia-clerk-root,
   body.styled-skin .mia-clerk-card-box{width:100%;max-width:none;box-shadow:none;}
   /* The embedded form has no outer card: remove Clerk's clipping and border offsets. */

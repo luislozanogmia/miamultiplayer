@@ -682,6 +682,9 @@
         showApp(meRes.data.email, meRes.data.accountEmail);
         return Promise.resolve(window.MiaAccounts.confirmed(sessionToken, {email:result.data.email, name:result.data.name})).catch(function(){}).then(function(){
           renderAccountMenus();
+          window.MiaAccounts.takeOpenedNotice().then(function(email){
+            if(email) showBenchToast('You signed in as ' + email + ', so Mia opened that account.');
+          });
           return true;
         });
       });
@@ -708,8 +711,6 @@
   }
   function showResolvedClerkSignIn(){
     endWorkspaceHandoff();
-    // No sign-in to lose here, so going back to another account needs no warning.
-    window.MiaAccounts.render(el('#loginAccounts'), {itemClass:'login-account-btn', role:'button', withAdd:false, skipConfirm:true});
     if(!AUTH_CONFIG) return hideApp();
     var form = el('#loginForm');
     var mount = el('#clerkSignIn');
@@ -728,7 +729,9 @@
     if(location.hash) history.replaceState(null, '', location.pathname + location.search);
     if(desktopClerkAuth()){
       if(nativeClerkViewDispose) nativeClerkViewDispose();
-      nativeClerkViewDispose = window.MiaClerkDesktop.mount(mount, desktopClerkAuth(), finishClerkLogin);
+      window.MiaAccounts.showSignIn({title:el('#loginTitle'), subtitle:el('#loginSubtitle'), accounts:el('#loginAccounts'), form:mount}, function(lockedEmail){
+        nativeClerkViewDispose = window.MiaClerkDesktop.mount(mount, desktopClerkAuth(), finishClerkLogin, {lockedEmail:lockedEmail});
+      });
       return;
     }
     ensureClerkLoaded().then(function(clerk){
