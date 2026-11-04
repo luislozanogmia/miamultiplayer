@@ -84,3 +84,21 @@ test('the sign-in code and link can always be copied, and the code copies itself
   assert.match(render, /auth\.userCode !== harnessAuthCopiedCode/);
   assert.match(render, /link\.hidden = !auth\.verificationUrl \|\| harnessAuthMiaIsDefault/);
 });
+
+test('a browser recommendation goes to the bot that proposed it and sends right away', async () => {
+  const start = source.indexOf('function askBotFromBrowserSuggestion(text, botId){');
+  const fn = source.slice(start, source.indexOf("document.addEventListener('click'", start));
+  const run = async (botId, agents, team = false) => {
+    const log = [], input = { dispatchEvent() {} };
+    const ask = new Function('hubWorkspace', 'chatWs', 'showBenchToast', 'navigateToAgentChat', 'el', 'submitComposerDraft', 'Event', fn + 'return askBotFromBrowserSuggestion;')(
+      () => team, { allAgents: agents, gatewayAgent: { id: 'gateway' } }, (text) => log.push(['toast', text]), (agent) => { log.push(['open', agent.id]); return Promise.resolve(); },
+      () => input, () => log.push(['send', input.value]), class {});
+    ask('Trash the caches', botId);
+    await new Promise((done) => setTimeout(done));
+    return log;
+  };
+  assert.deepEqual(await run('b2', [{ id: 'b1' }, { id: 'b2' }]), [['open', 'b2'], ['send', 'Trash the caches']]);
+  assert.deepEqual(await run(null, []), [['open', 'gateway'], ['send', 'Trash the caches']]);
+  assert.deepEqual(await run(null, [], true), [['toast', 'That bot is no longer here.']], 'never lands in the open team chat');
+  assert.deepEqual(await run('gone', [{ id: 'b1' }]), [['toast', 'That bot is no longer here.']], 'never sent to the wrong bot');
+});

@@ -7494,7 +7494,7 @@
 
   // The blank tab: the Mia dot logo, "Mia Browser", and "Mia suggests" cards,
   // three next things to ask built from the bots' latest replies, each credited
-  // to the bot it builds on. Clicking one puts it in Mia's composer to edit and send.
+  // to the bot it builds on. Clicking one sends it to that bot.
   var BROWSER_HOME_GO = '<svg class="local-browser-suggest-next-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>';
   // A diamond of dots; each dot's delay grows with its distance from the
   // center, so the logo fills in from the middle out.
@@ -7531,7 +7531,7 @@
         '</span>'
       : '';
     return '<button type="button" class="local-browser-suggest-next-item"' + (textColor ? ' style="--bot:' + esc(textColor) + '"' : '') +
-      ' data-browser-suggest-next="' + esc(item.text) + '" title="' + esc(item.text) + '">' +
+      ' data-browser-suggest-next="' + esc(item.text) + '"' + (item.botId ? ' data-browser-suggest-bot="' + esc(item.botId) + '"' : '') + ' title="' + esc(item.text) + '">' +
       who + '<span class="local-browser-suggest-next-text">' + esc(item.text) + '</span>' + BROWSER_HOME_GO + '</button>';
   }
   var browserSuggestNextRequest = 0;
@@ -7553,20 +7553,23 @@
       if(request === browserSuggestNextRequest) wrap.hidden = true;
     });
   }
-  function askMiaFromBrowserSuggestion(text){
-    var opened = chatWs.gatewayAgent ? navigateToAgentChat(chatWs.gatewayAgent, true) : null;
-    Promise.resolve(opened).then(function(){
+  // A card belongs to the bot that proposed it: open that bot's chat and send it there.
+  function askBotFromBrowserSuggestion(text, botId){
+    var agent = botId
+      ? (chatWs.allAgents || []).filter(function(item){ return item && String(item.id) === String(botId); })[0]
+      : (hubWorkspace() ? null : chatWs.gatewayAgent);
+    if(!agent){ showBenchToast('That bot is no longer here.'); return; }
+    Promise.resolve(navigateToAgentChat(agent, true)).then(function(){
       var input = el('#ccInput');
       if(!input) return;
       input.value = text;
       input.dispatchEvent(new Event('input', {bubbles:true}));
-      input.focus();
-      input.setSelectionRange(input.value.length, input.value.length);
+      submitComposerDraft();
     });
   }
   document.addEventListener('click', function(event){
     var button = event.target && event.target.closest ? event.target.closest('[data-browser-suggest-next]') : null;
-    if(button) askMiaFromBrowserSuggestion(button.getAttribute('data-browser-suggest-next'));
+    if(button) askBotFromBrowserSuggestion(button.getAttribute('data-browser-suggest-next'), button.getAttribute('data-browser-suggest-bot'));
   });
   // Refresh whenever the blank tab comes into view, however the browser got
   // there (opened, restored at startup, last page closed). The server caches
