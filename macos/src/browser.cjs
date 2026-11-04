@@ -2657,6 +2657,21 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }).catch(() => {});
     }
   };
+  function pageSaved(result) {
+    if (!disposed && !window.isDestroyed()) window.webContents.send("miaos-browser-page-saved", result);
+  }
+  // A copy of the page as it looks now, in the Mia folder where Artifacts lists
+  // it. The name never comes straight from the page, and nothing is replaced.
+  async function savePageCopy(tab) {
+    const { folder } = await appRequest("/api/artifacts", { timeoutMs: 5000 });
+    const directory = path.join(folder, "Saved pages");
+    await fs.promises.mkdir(directory, { recursive: true });
+    const base = String(tab.title || "").replace(/[^\p{L}\p{N} ._-]+/gu, " ").replace(/^[ .]+|[ .]+$/g, "").replace(/ +/g, " ").slice(0, 80) || "Saved page";
+    let name = `${base}.html`;
+    for (let copy = 2; fs.existsSync(path.join(directory, name)); copy += 1) name = `${base} ${copy}.html`;
+    await tab.view.webContents.savePage(path.join(directory, name), "HTMLComplete");
+    return name;
+  }
   function showTabMenu(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return;
@@ -2682,6 +2697,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       { type: "separator" },
       { label: "Reload", enabled: !!tab.url, click: menuAction(() => { tab.error = ""; tab.view.webContents.reload(); }) },
       { label: "Duplicate", enabled: !!tab.url, click: menuAction(() => newTab(tab.url, { after: tabId })) },
+      { type: "separator" },
+      { label: "Save Page as Artifact", enabled: /^https?:/i.test(tab.url || ""), click: menuAction(() => {
+        savePageCopy(tab).then(
+          name => pageSaved({ kind: "artifact", name }),
+          error => { log(`save page failed: ${error.message}`); pageSaved({ kind: "artifact", failed: true }); },
+        );
+      }) },
+      { label: "Save Page as App", enabled: /^https?:/i.test(tab.url || ""), click: menuAction(() => pageSaved({ kind: "app", url: tab.url, name: tab.title || "" })) },
       { type: "separator" },
       { label: "Close", click: menuAction(() => closeTab(tabId)) },
       { label: "Close Other Tabs", enabled: tabs.size > 1, click: menuAction(() => closeTabs(order.filter(id => id !== tabId))) },

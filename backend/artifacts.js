@@ -22,6 +22,8 @@ const FILE_KINDS = Object.freeze({
   '.gif': 'document', '.webp': 'document',
 });
 const SKIP_DIRS = new Set(['node_modules', 'hermes', '__pycache__', 'venv', '.venv']);
+// A saved page keeps its images and styles in a folder beside it.
+const SAVED_PAGE_FILES = /_files$/;
 const MAX_DEPTH = 4;
 const MAX_FILES = 300;
 const MAX_LINKS = 200;
@@ -40,7 +42,7 @@ function listArtifactFiles(root) {
       if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (depth < MAX_DEPTH && !SKIP_DIRS.has(entry.name)) walk(full, depth + 1);
+        if (depth < MAX_DEPTH && !SKIP_DIRS.has(entry.name) && !SAVED_PAGE_FILES.test(entry.name)) walk(full, depth + 1);
         continue;
       }
       const kind = entry.isFile() && FILE_KINDS[path.extname(entry.name).toLowerCase()];
@@ -194,6 +196,8 @@ function addLink(dataDir, workspaceId, input) {
   }
   const name = String(input.name || '').trim().slice(0, 120) || new URL(url).host;
   const links = readLinks(dataDir, workspaceId);
+  const saved = links.find(link => link.url === url);
+  if (saved) return saved;
   if (links.length >= MAX_LINKS) {
     const error = new Error('You have too many saved apps. Remove one first.');
     error.status = 409; error.code = 'too_many_links';

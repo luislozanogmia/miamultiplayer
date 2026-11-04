@@ -1366,7 +1366,7 @@ test("tab groups: right-click menu creates, fills, and leaves a group", () => {
   h.command("tabMenu", { id: a });
   const menu = h.menuTemplates.at(-1);
   assert.deepEqual(plain(menu.filter(item => item.label).map(item => item.label)), [
-    "New Tab to the Right", "Add Tab to New Group", "Reload", "Duplicate",
+    "New Tab to the Right", "Add Tab to New Group", "Reload", "Duplicate", "Save Page as Artifact", "Save Page as App",
     "Close", "Close Other Tabs", "Close Tabs to the Right",
   ]);
   menu.find(item => item.label === "Add Tab to New Group").click();
@@ -2524,4 +2524,39 @@ test("only Mia's own chat session reaches mia-app", async () => {
 
   assert.deepEqual(await h.controller.protocol("app_call", { actor_session: "s-mia", tool: "bots_list", arguments: { a: 1 } }), { ok: true });
   assert.equal(JSON.stringify(calls[0]), JSON.stringify({ pathname: "/api/mia-app/call", body: { tool: "bots_list", arguments: { a: 1 }, turn: "s-mia" } }));
+});
+
+test("tab menu saves a page as an artifact or an app, only for a web page", async () => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "mia-save-page-"));
+  const h = harness({ appRequest: async pathname => (pathname === "/api/artifacts" ? { folder } : {}) });
+  const id = h.command("new").activeId;
+  const item = label => { h.command("tabMenu", { id }); return h.menuTemplates.at(-1).find(entry => entry.label === label); };
+  assert.equal(item("Save Page as Artifact").enabled, false);
+  assert.equal(item("Save Page as App").enabled, false);
+
+  h.command("navigate", { value: "https://example.com/report" });
+  const view = h.views.at(-1).webContents;
+  const saved = [];
+  view.savePage = async (file, type) => { saved.push([path.basename(file), type]); fs.writeFileSync(file, "x"); };
+  view.emit("page-title-updated", {}, "Q3: report/final");
+  const notice = () => h.window.webContents.sent.filter(m => m.channel === "miaos-browser-page-saved").at(-1)?.payload;
+  const waitForSave = async count => { for (let i = 0; i < 50 && h.window.webContents.sent.filter(m => m.channel === "miaos-browser-page-saved").length < count; i++) await new Promise(r => setTimeout(r, 10)); };
+
+  item("Save Page as Artifact").click();
+  await waitForSave(1);
+  assert.deepEqual(saved[0], ["Q3 report final.html", "HTMLComplete"]);
+  assert.deepEqual(plain(notice()), { kind: "artifact", name: "Q3 report final.html" });
+
+  item("Save Page as Artifact").click();
+  await waitForSave(2);
+  assert.equal(saved[1][0], "Q3 report final 2.html", "an earlier copy is never replaced");
+
+  item("Save Page as App").click();
+  assert.deepEqual(plain(notice()), { kind: "app", url: "https://example.com/report", name: "Q3: report/final" });
+
+  view.savePage = async () => { throw new Error("no"); };
+  item("Save Page as Artifact").click();
+  await waitForSave(4);
+  assert.deepEqual(plain(notice()), { kind: "artifact", failed: true });
+  fs.rmSync(folder, { recursive: true, force: true });
 });

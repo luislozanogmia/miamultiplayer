@@ -54,6 +54,7 @@ test('live apps are saved per workspace, can be removed, and are checked when lo
   assert.equal(web.local, false);
   assert.equal(web.name, 'example.com');
   assert.throws(() => artifacts.addLink(data, 'solo', { url: 'file:///tmp/x' }), /http or https/);
+  assert.equal(artifacts.addLink(data, 'solo', { url: 'http://localhost:3000', name: 'Again' }).id, local.id, 'one address, one app');
 
   const probed = [];
   const listed = await artifacts.listArtifacts({ workspaceDir: tempDir(), dataDir: data, workspaceId: 'solo', probe: async url => { probed.push(url); return true; } });
@@ -143,4 +144,12 @@ test('on Windows the file goes to the Recycle Bin through PowerShell, and on Lin
   } finally { if (previous !== undefined) process.env.XDG_DATA_HOME = previous; }
   assert.equal(fs.readFileSync(path.join(home, '.local/share/Trash/files/a.pdf'), 'utf8'), 'x');
   assert.match(fs.readFileSync(path.join(home, '.local/share/Trash/info/a.pdf.trashinfo'), 'utf8'), /^\[Trash Info\]\nPath=.*a\.pdf\nDeletionDate=/);
+});
+
+test('a saved page is listed once, without the files beside it', () => {
+  const root = tempDir();
+  fs.mkdirSync(path.join(root, 'Saved pages', 'Report_files'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'Saved pages', 'Report.html'), '<h1>Report</h1>');
+  fs.writeFileSync(path.join(root, 'Saved pages', 'Report_files', 'frame.html'), '<p>inside</p>');
+  assert.deepEqual(artifacts.listArtifactFiles(root).map(item => item.name), ['Report.html']);
 });

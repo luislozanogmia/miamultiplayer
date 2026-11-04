@@ -8450,6 +8450,20 @@
         loadArtifacts();
       }).catch(function(){ error.textContent = 'That app could not be added.'; });
     });
+    // The browser tab menu's Save Page as Artifact and Save Page as App.
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(browser && browser.onPageSaved) browser.onPageSaved(function(saved){
+      if(saved.kind === 'artifact'){
+        showBenchToast(saved.failed ? 'That page could not be saved. Try again.' : 'Saved ' + saved.name + ' to Artifacts.');
+        if(!saved.failed) loadArtifacts();
+        return;
+      }
+      api('/api/artifacts/links', {method: 'POST', body: {url: saved.url, name: saved.name}}).then(function(res){
+        if(res.status !== 201) throw new Error('save_failed');
+        showBenchToast('Saved ' + res.data.artifact.name + ' to your apps.');
+        loadArtifacts();
+      }).catch(function(){ showBenchToast('That page could not be saved as an app. Try again.'); });
+    });
   })();
 
   // Apps page: small web apps people build and share. One page for Solo and a

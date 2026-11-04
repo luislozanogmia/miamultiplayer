@@ -124,6 +124,12 @@ contextBridge.exposeInMainWorld("miaDesktop", {
       ipcRenderer.on("miaos-browser-group-edit", listener);
       return () => ipcRenderer.removeListener("miaos-browser-group-edit", listener);
     },
+    // A tab's menu saved a page, or asks for its address to be saved as an app.
+    onPageSaved: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("miaos-browser-page-saved", listener);
+      return () => ipcRenderer.removeListener("miaos-browser-page-saved", listener);
+    },
     // { action: "choose", groupId } opens a group's bot picker;
     // { action: "stop", botId } stops a bot that just lost its group.
     onGroupBot: (callback) => {
