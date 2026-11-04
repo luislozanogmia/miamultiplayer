@@ -338,7 +338,7 @@
     var links = state.links.filter(function(item){ return matches([item.name, item.url], state.query); }).map(function(item){
       var existing = team ? publishedAs(state.catalog, item.name, state.me) : null;
       var running = item.running === true ? ' · <span class="artifacts-dot on">● running</span>' : item.running === false ? ' · <span class="artifacts-dot">○ off</span>' : '';
-      return row(esc, 'Link', item.name, esc(address(item.url)) + running, button(esc, 'Open', 'data-app-open-link="' + esc(item.id) + '"', true) + (team ? publishCell(esc, item, state, item.id, existing) : ''));
+      return row(esc, 'Link', item.name, esc(address(item.url)) + running, (item.running === true && item.local ? button(esc, 'Stop', 'data-app-stop-link="' + esc(item.id) + '"') : '') + button(esc, 'Open', 'data-app-open-link="' + esc(item.id) + '"', true) + (team ? publishCell(esc, item, state, item.id, existing) : ''));
     });
     return folders.concat(links);
   }

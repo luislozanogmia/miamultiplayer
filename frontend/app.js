@@ -8565,6 +8565,30 @@
     select: function(id){ appsPage.activeTab = id === 'page' || appsTabByKey(id) ? id : 'page'; if(id === 'page') appsPage.tabClosed = false; renderAppsPage(); },
     render: notifyAppsTabs,
   });
+  function stopLocalServer(id){
+    var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0];
+    if(!link) return;
+    var path = '/api/apps/links/' + encodeURIComponent(id);
+    var address = String(link.url).replace(/^https?:\/\//, '').replace(/\/$/, '');
+    api(path + '/server').then(function(res){
+      var server = res.data || {};
+      if(res.status !== 200) throw new Error('lookup');
+      if(server.protected){ showBenchToast('Mia needs ' + address + ' to run, so it can’t be stopped here.'); return; }
+      if(!server.found){ loadApps(); return; }
+      return appConfirm(server.name + ' is running ' + address + '. Stop it? Anything unsaved there may be lost.', 'Stop').then(function(ok){
+        if(!ok) return;
+        return api(path + '/stop', {method:'POST', body:{pids:server.pids}}).then(function(stop){
+          var result = stop.data || {};
+          if(stop.status !== 200) throw new Error('stop');
+          showBenchToast(result.stopped ? address + ' stopped.' : result.reason === 'denied'
+            ? 'Mia isn’t allowed to stop that program. Close it where it’s running.'
+            : result.reason === 'changed' ? 'A different program is using ' + address + ' now. Check it and try again.'
+            : address + ' is still running. Close it where it’s running.');
+          loadApps();
+        });
+      });
+    }).catch(function(){ showBenchToast('Could not stop ' + address + '. Try again.'); });
+  }
   function appsTabByKey(key){ return appsPage.tabs.filter(function(tab){ return tab.key === key; })[0] || null; }
   function closeAppTab(key){
     appsPage.activeTab = window.MiaAppsPage.nextTabAfterClose(appsPage, key);
@@ -8952,6 +8976,7 @@
       'data-app-archive': archiveTeamApp,
       'data-app-preview': previewTeamApp,
       'data-app-note-dismiss': function(key){ var tab = appsTabByKey(key); if(tab){ tab.note = ''; renderAppsPage(); } },
+      'data-app-stop-link': stopLocalServer,
       'data-app-open-link': function(id){ var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0]; if(link) openAppAddress(link.url); },
       'data-app-reload': function(key){ var tab = appsTabByKey(key), desktop = appsDesktop(); if(tab && desktop){ tab.status = 'loading'; desktop.reload(key).catch(function(){}); renderAppsPage(); } },
     };
