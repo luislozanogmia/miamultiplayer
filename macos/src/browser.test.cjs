@@ -1750,7 +1750,7 @@ async function pendingEvalFixture(options = {}) {
   };
   const pending = h.controller.protocol("eval", { script: "async () => 'changed page'", actor_session: "s-a" });
   while (!started) await new Promise(setImmediate);
-  return { h, outside, otherGroup, groupId, tabId: opened.tab_id, pending, sideEffects, finish: () => finish() };
+  return { h, page, outside, otherGroup, groupId, tabId: opened.tab_id, pending, sideEffects, finish: () => finish() };
 }
 
 test("pending page effects block direct controller changes, regrouping and dragging", async () => {
@@ -1842,7 +1842,7 @@ test("pending navigation retains its controller after a nonwaiting command retur
   h.window.emit("closed");
 });
 
-test("bot file open rejects a busy group before creating or activating a tab", async () => {
+test("bot file open works beside busy tabs without touching them or the foreground", async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "mia-busy-file-open-"));
   const file = path.join(workspace, "report.html");
   fs.writeFileSync(file, "<h1>Report</h1>");
@@ -1850,16 +1850,84 @@ test("bot file open rejects a busy group before creating or activating a tab", a
   f.h.command("select", { id: f.outside });
   const before = plain(f.h.command("state"));
   try {
-    await assert.rejects(f.h.controller.protocol("file_open", { actor_session: "s-a", path: file }), /work in progress/);
+    const opened = await f.h.controller.protocol("file_open", { actor_session: "s-a", path: file });
     const after = plain(f.h.command("state"));
-    assert.equal(after.tabs.length, before.tabs.length, "a blocked request creates no orphan tab");
-    assert.equal(after.activeId, before.activeId, "a blocked request preserves the foreground");
-    assert.deepEqual(after, before);
+    assert.equal(after.tabs.length, before.tabs.length + 1);
+    assert.equal(after.activeId, before.activeId, "the foreground stays");
+    assert.equal(after.tabs.find(tab => tab.id === opened.tab_id).groupId, f.groupId, "it opens in the bot's group");
+    assert.match(f.h.command("groupUngroup", { groupId: f.groupId }).error, /work in progress/, "changing the group stays blocked");
   } finally {
     f.finish();
     await f.pending;
     f.h.window.emit("closed");
   }
+});
+
+function busyTimers() {
+  const timers = new Map();
+  const fake = { unref() {} };
+  return {
+    fire: ms => { const list = timers.get(ms) || []; timers.delete(ms); for (const fn of list) fn(); return list.length; },
+    options: {
+      setTimeout: (fn, ms, ...args) => {
+        if (![10000, 60000, 180000].includes(ms)) return setTimeout(fn, ms, ...args);
+        timers.set(ms, [...(timers.get(ms) || []), fn]);
+        return fake;
+      },
+      clearTimeout: timer => { if (timer !== fake) clearTimeout(timer); },
+    },
+  };
+}
+
+test("a script whose page was replaced stops holding the group", async () => {
+  const timers = busyTimers();
+  const f = await pendingEvalFixture(timers.options);
+  const rejected = assert.rejects(f.pending, /timed out/);
+  timers.fire(10000);
+  await rejected;
+  const blocked = f.h.command("groupUngroup", { groupId: f.groupId }).error;
+  assert.match(blocked, new RegExp(`Tab ${f.tabId} .*page script`), "the error names the tab and the work");
+  // Electron never settles this script's promise once its document is gone.
+  f.page.emit("did-navigate", {}, "https://example.net/next");
+  assert.equal(f.h.command("groupUngroup", { groupId: f.groupId }).error, undefined);
+  f.h.window.emit("closed");
+});
+
+test("a page script in a live page is released at the hard limit, and not before", async () => {
+  const timers = busyTimers();
+  const f = await pendingEvalFixture(timers.options);
+  const rejected = assert.rejects(f.pending, /timed out/);
+  timers.fire(10000);
+  await rejected;
+  assert.match(f.h.command("groupUngroup", { groupId: f.groupId }).error, /page script/);
+  assert.ok(timers.fire(60000) >= 1);
+  assert.equal(f.h.command("groupUngroup", { groupId: f.groupId }).error, undefined);
+  f.h.window.emit("closed");
+});
+
+test("a bot command that never returns stops holding its tab at the hard limit", async () => {
+  const timers = busyTimers();
+  const f = await pendingEvalFixture(timers.options);
+  assert.match(f.h.command("groupUngroup", { groupId: f.groupId }).error, /bot command/);
+  assert.ok(timers.fire(180000) >= 1);
+  const after = f.h.command("groupUngroup", { groupId: f.groupId }).error;
+  assert.doesNotMatch(after, /bot command/);
+  assert.match(after, /page script/, "other pending work still counts");
+  f.finish();
+  await f.pending;
+  f.h.window.emit("closed");
+});
+
+test("replacing a page does not clear a page load in progress", async () => {
+  const timers = busyTimers();
+  const f = await pendingEvalFixture(timers.options);
+  f.finish();
+  await f.pending;
+  f.page.loadURL = () => new Promise(() => {});
+  await f.h.controller.protocol("navigate", { actor_session: "s-a", tab_id: f.tabId, url: "example.org", wait: "none" });
+  f.page.emit("did-navigate", {}, "https://example.org/");
+  assert.match(f.h.command("groupUngroup", { groupId: f.groupId }).error, /page load/);
+  f.h.window.emit("closed");
 });
 
 test("bot file open assigns its tab without changing the foreground", async () => {

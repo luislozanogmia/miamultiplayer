@@ -22,17 +22,40 @@ const MAX_PROTOCOL_ELEMENTS = 500;
 const PROTOCOL_SCRIPT_TIMEOUT_MS = 10000;
 const BROWSER_PARTITION = "persist:mia-browser";
 // A timeout only stops waiting for a page script; it does not cancel its
-// execution in Chromium. Keep the real operation locked until it settles.
+// execution in Chromium. Keep the real operation locked until it settles, its
+// document is gone, or the hard limit passes. Electron never settles the promise
+// of a script whose document was replaced, so settling alone can't be relied on.
+const BROWSER_OPERATION_LIMIT_MS = 60000;
 const pendingBrowserOperations = new WeakMap();
-function trackBrowserOperation(webContents, operation, onSettled) {
-  const pending = pendingBrowserOperations.get(webContents) || new Set();
+let reportClearedOperation = () => {};
+function pendingOperationsFor(webContents) {
+  let pending = pendingBrowserOperations.get(webContents);
+  if (pending) return pending;
+  pending = new Map();
   pendingBrowserOperations.set(webContents, pending);
+  const documentGone = reason => {
+    for (const [promise, entry] of [...pending]) if (entry.kind === "page script") entry.clear(promise, reason);
+  };
+  webContents.on?.("did-navigate", () => documentGone("its page was replaced"));
+  webContents.on?.("render-process-gone", () => documentGone("its page crashed"));
+  return pending;
+}
+function trackBrowserOperation(webContents, operation, onSettled, { kind = "page script", limitMs = BROWSER_OPERATION_LIMIT_MS } = {}) {
+  const pending = pendingOperationsFor(webContents);
   const promise = Promise.resolve(operation);
-  pending.add(promise);
+  let timer;
   const settled = () => {
-    pending.delete(promise);
+    if (!pending.delete(promise)) return;
+    clearTimeout(timer);
     onSettled?.();
   };
+  const entry = { kind, startedAt: Date.now(), clear: (_promise, reason) => {
+    reportClearedOperation(kind, reason);
+    settled();
+  } };
+  pending.set(promise, entry);
+  timer = setTimeout(() => entry.clear(promise, `it passed ${Math.round(limitMs / 1000)}s`), limitMs);
+  timer.unref?.();
   promise.then(settled, settled);
   return promise;
 }
@@ -822,6 +845,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // A tab shows its bot as working while a command runs on it and briefly
   // after, so a burst of quick commands reads as one stretch of work.
   const BOT_WORK_LINGER_MS = 2500;
+  const BOT_COMMAND_LIMIT_MS = options.botCommandLimitMs || 180000;
+  reportClearedOperation = (kind, reason) => log(`browser busy cleared: ${kind}, ${reason}`);
   // A download that starts this soon after a bot's command on that tab is
   // the bot's (a click often triggers it just after the command returns).
   const AGENT_DOWNLOAD_WINDOW_MS = 15000;
@@ -1034,7 +1059,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     persistTabs();
     // Do not hold the toolbar IPC open until every page resource has loaded.
     trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
-      () => browserWorkSettled(tab)).catch(error => reportLoadError(tab, target, error));
+      () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -1047,7 +1072,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     layout();
     persistTabs();
     trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
-      () => browserWorkSettled(tab)).catch(error => reportLoadError(tab, target, error));
+      () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -1110,14 +1135,28 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // A page that is only loading doesn't stop a tab joining its group when
   // `pagesMayLoad` is set; bot work always does.
   function requireGroupIdle(groupId, pagesMayLoad = false) {
-    if (groupId && groupTabs(groupId).some(pagesMayLoad ? botWorkPending : browserWorkPending)) {
-      throw protocolError("BROWSER_BUSY", "This group still has browser work in progress. Wait for it to finish before changing its controller or tabs.");
-    }
+    const busy = groupId && groupTabs(groupId).find(pagesMayLoad ? botWorkPending : browserWorkPending);
+    if (busy) throw browserBusyError(busy, "before changing its group's controller or tabs");
+  }
+  // What a tab is waiting on, so a busy error can say which tab and why.
+  function pendingWorkKinds(tab) {
+    const kinds = new Set();
+    if ((tab.botWork || 0) > 0) kinds.add("bot command");
+    if (tab.actorOperationCount > 0) kinds.add("actor operation");
+    for (const entry of pendingBrowserOperations.get(tab.view.webContents)?.values() || []) kinds.add(entry.kind);
+    if (tab.view.webContents.isLoading()) kinds.add("page loading");
+    return [...kinds];
+  }
+  function browserBusyError(tab, purpose) {
+    const kinds = pendingWorkKinds(tab);
+    log(`browser busy: tab ${tab.id} pending ${kinds.join(", ")}`);
+    const error = protocolError("BROWSER_BUSY", `Tab ${tab.id} ("${String(tab.title || "").slice(0, 80)}") still has work in progress: ${kinds.join(", ")}. Wait for it to finish ${purpose}.`);
+    error.tabId = tab.id;
+    error.pending = kinds;
+    return error;
   }
   function requireMembershipIdle(tab, nextGroupId = null) {
-    if (browserWorkPending(tab)) {
-      throw protocolError("BROWSER_BUSY", "This tab still has browser work in progress. Wait for it to finish before moving it.");
-    }
+    if (browserWorkPending(tab)) throw browserBusyError(tab, "before moving it");
     requireGroupIdle(tab?.groupId);
     requireGroupIdle(nextGroupId);
   }
@@ -1159,8 +1198,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // after the bot) the first time.
   function placeInBotGroup(tab, actor) {
     const existing = botGroup(actor.botId);
-    if (existing) addTabToGroup(tab.id, existing.id);
-    else {
+    if (existing) {
+      // A new tab changes nothing about the bot's other tabs, so it joins
+      // directly rather than through the idle-checked group moves.
+      const members = groupTabs(existing.id);
+      tab.groupId = existing.id;
+      moveTab(tab.id, [...tabs.keys()].filter(id => id !== tab.id).indexOf(members.at(-1).id) + 1);
+    } else {
       const group = createGroup(tab.id);
       if (group) Object.assign(group, { name: String(actor.name || "").trim().slice(0, 80), botId: actor.botId });
     }
@@ -1927,12 +1971,29 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // to one tab (actorRuntime); Ghost calls prove their bot session here.
     const actor = params[actorCapability] === true ? null : await protocolActor(params.actor_session);
     const touched = new Set();
+    // A command that never returns must not hold its tab forever. The longest
+    // bounded wait (the wait command) is 120s, so this only catches a stuck one.
+    const commandLimits = new Map();
+    const releaseBotWork = tab => {
+      if (!commandLimits.has(tab)) return;
+      clearTimeout(commandLimits.get(tab));
+      commandLimits.delete(tab);
+      tab.botWork = Math.max(0, (tab.botWork || 0) - 1);
+      tab.botWorkAt = Date.now();
+    };
     // As a command starts on a page, the tab shows who is working there
     // (Mia or a bot): the glow, the working dot and Take over.
     const touch = tab => {
       if (!tab || touched.has(tab)) return;
       touched.add(tab);
       tab.botWork = (tab.botWork || 0) + 1;
+      const hardLimit = setTimeout(() => {
+        log(`browser busy cleared: tab ${tab.id} bot command ${method} passed ${Math.round(BOT_COMMAND_LIMIT_MS / 1000)}s`);
+        releaseBotWork(tab);
+        publish();
+      }, BOT_COMMAND_LIMIT_MS);
+      hardLimit.unref?.();
+      commandLimits.set(tab, hardLimit);
       tab.botWorker = actor ? { botId: actor.botId, name: String(actor.name || "").slice(0, 80) } : { ...MIA_WORKER };
       syncBotGlow(tab);
       publish();
@@ -1949,8 +2010,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return result;
     } finally {
       for (const tab of touched) {
-        tab.botWork = Math.max(0, (tab.botWork || 0) - 1);
-        tab.botWorkAt = Date.now();
+        releaseBotWork(tab);
       }
       if (touched.size) {
         publish();
@@ -2016,8 +2076,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         touch(existing);
         return { ...protocolTabResult(existing), reused: true };
       }
-      // A bot's new tab opens behind, so it never takes the tab in front.
-      if (actor) requireGroupIdle(botGroup(actor.botId)?.id);
+      // A bot's new tab opens behind, so it never takes the tab in front, and it
+      // doesn't touch the bot's other tabs, so they don't need to be idle.
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
       touch(tab);
@@ -2070,7 +2130,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (typeof filePath !== "string" || !filePath.trim()) {
         throw protocolError("INVALID_PARAMS", "path is required.");
       }
-      if (actor) requireGroupIdle(botGroup(actor.botId)?.id);
       const target = normalizeLocalFileTarget(filePath, workspaceRoot);
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
@@ -3426,4 +3485,4 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   };
 }
 
-module.exports = { BROWSER_PARTITION, createBrowser, normalizeTarget, normalizeLocalFileTarget };
+module.exports = { BROWSER_PARTITION, createBrowser, trackBrowserOperation, pendingBrowserOperations, normalizeTarget, normalizeLocalFileTarget };
