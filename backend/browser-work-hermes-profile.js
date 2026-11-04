@@ -13,6 +13,7 @@ function provisionBrowserWorkProfile({ profilesRoot, worker, binding }) {
   fs.mkdirSync(plugin, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(plugin, '__init__.py'), fs.readFileSync(path.join(__dirname, 'browser-work-hermes-plugin.py')), { mode: 0o600 });
   fs.writeFileSync(path.join(plugin, 'plugin.yaml'), 'name: mia-browser-work\nversion: "0.1.0"\ndescription: "Bounded Mia browser workers"\nlicense: MIT\nhooks:\n  - pre_tool_call\n', { mode: 0o600 });
+  require('./hermes-bot-profile').provisionBundledPlugin(home, 'mia-provider-limits');
   fs.writeFileSync(path.join(home, 'config.yaml'), [
     '# Managed by Mia browser work. No credentials.',
     'platform_toolsets:', '  cli:', '    - mia_browser_work',
@@ -20,7 +21,7 @@ function provisionBrowserWorkProfile({ profilesRoot, worker, binding }) {
     // native name, while deferred tool_call wrappers remain sequential.
     'tools:', '  tool_search:', '    enabled: off',
     'agent:', '  coding_context: off', '  max_turns: 40',
-    'plugins:', '  enabled:', '    - mia-browser-work',
+    'plugins:', '  enabled:', '    - mia-browser-work', '    - mia-provider-limits',
     'mcp_servers: {}', ...require('./hermes-runtime-secret-source').runtimeSecretSourceLines(),
     'auxiliary:', '  background_review:', '    enabled: false',
     '',

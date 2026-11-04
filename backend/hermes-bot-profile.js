@@ -21,6 +21,7 @@ const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins',
 // Refuses Hermes' own browser tools until the session has tried ghost-cli.
 const GHOST_FIRST_PLUGIN = 'mia-ghost-first';
 const ASK_BEFORE_DO_PLUGIN = 'mia-ask-before-do';
+const PROVIDER_LIMITS_PLUGIN = 'mia-provider-limits';
 const ASK_BEFORE_DO_TOOLSET = 'mia_ask_before_do';
 // These top-level lists describe profile intent; the pinned gateway uses its
 // full CLI defaults because Mia does not set platform_toolsets.cli. Google
@@ -250,6 +251,7 @@ function runtimeProfileConfig({
     'plugins:',
     '  enabled:',
     `    - ${ASK_BEFORE_DO_PLUGIN}`,
+    `    - ${PROVIDER_LIMITS_PLUGIN}`,
     ...(terminal && terminal.cwd ? [`    - ${GHOST_FIRST_PLUGIN}`] : []),
   );
   if (googleWorkspace) lines.push(...googleWorkspaceMcpConfig());
@@ -317,6 +319,7 @@ function provisionRuntimeProfile({
   fs.chmodSync(profileDir, 0o700);
   provisionBundledPlugin(profileDir, CLAUDE_SUBSCRIPTION_PLUGIN);
   provisionBundledPlugin(profileDir, ASK_BEFORE_DO_PLUGIN);
+  provisionBundledPlugin(profileDir, PROVIDER_LIMITS_PLUGIN);
   if (terminal && terminal.cwd) provisionBundledPlugin(profileDir, GHOST_FIRST_PLUGIN);
   for (const name of ['sessions', 'memories', 'skills', 'cron']) {
     fs.mkdirSync(path.join(profileDir, name), { recursive: true, mode: 0o700 });
@@ -533,6 +536,7 @@ module.exports = {
   setHermesProfileModel,
   GHOST_FIRST_PLUGIN,
   ASK_BEFORE_DO_PLUGIN,
+  PROVIDER_LIMITS_PLUGIN,
   provisionBundledPlugin,
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,
