@@ -1357,6 +1357,24 @@ test("closing a tab a bot is working in asks the person first", async () => {
 // State crosses from the VM realm; compare it as plain JSON.
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test("a page a person closed comes back, a private or blank one does not", () => {
+  const h = harness();
+  h.command("new");
+  h.command("navigate", { value: "https://example.com/one" });
+  const first = h.command("state").activeId;
+  h.command("new");
+  h.command("close", { id: first });
+  assert.deepEqual(h.command("closedTabs").closed.map(entry => entry.url), ["https://example.com/one"]);
+  const blank = h.command("new").activeId;
+  h.command("close", { id: blank });
+  assert.equal(h.command("closedTabs").closed.length, 1);
+  const reopened = h.command("reopenClosed");
+  assert.equal(reopened.tabs.find(tab => tab.id === reopened.activeId).url, "https://example.com/one");
+  assert.equal(h.command("closedTabs").closed.length, 0);
+  const count = h.command("reopenClosed").tabs.length;
+  assert.equal(h.command("state").tabs.length, count, "an empty list opens nothing");
+});
+
 test("tab groups: right-click menu creates, fills, and leaves a group", () => {
   const h = harness();
   const ids = s => s.tabs.map(t => t.id);
@@ -1367,7 +1385,7 @@ test("tab groups: right-click menu creates, fills, and leaves a group", () => {
   const menu = h.menuTemplates.at(-1);
   assert.deepEqual(plain(menu.filter(item => item.label).map(item => item.label)), [
     "New Tab to the Right", "Add Tab to New Group", "Reload", "Duplicate", "Save Page as Artifact", "Save Page as App",
-    "Close", "Close Other Tabs", "Close Tabs to the Right",
+    "Close", "Close Other Tabs", "Close Tabs to the Right", "Reopen Closed Tab", "Recently Closed",
   ]);
   menu.find(item => item.label === "Add Tab to New Group").click();
   let state = h.command("state");

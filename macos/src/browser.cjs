@@ -10,6 +10,7 @@ const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs
 const { PAGE_HELPERS, cleanAnchor, readScript, scrollScript } = require("./space-anchor.cjs");
 
 const { createActorRuntime } = require("./browser-actors.cjs");
+const { createClosedTabs } = require("./closed-tabs.cjs");
 const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { randomUUID } = require("node:crypto");
 
@@ -302,6 +303,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // only, so the history file stays a few hundred KB at most.
   const HISTORY_ICON_MAX_CHARS = 32 * 1024;
   let historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
+  const closedTabsPathFor = file => file ? `${file.replace(/\.json$/, "")}-closed.json` : "";
+  const closedTabs = createClosedTabs({ log });
+  closedTabs.open(closedTabsPathFor(statePath));
   let historyEntries = [];
   let historyIcons = new Map();
   function loadHistory() {
@@ -2254,6 +2258,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!panelOpen || disposed) return false;
     if (key === "l") focusLocation();
     else if (key === "f") { window.webContents.focus(); window.webContents.send("miaos-browser-find"); }
+    else if (key === "T") reopenClosedTab();
     else if (key === "t") { newSessionOrPlainTab(); focusLocation(); }
     else if (key === "w") closeTabByPerson(activeId);
     else if (key === "r") active()?.view.webContents.reloadIgnoringCache();
@@ -2269,7 +2274,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // Plain Cmd+R reloads Mia through the app menu; Shift+Cmd+R hard-reloads the page.
     if (key === "r" && !input.shift) return;
     if ((input.meta || input.control) && ["l", "t", "w", "r", "f", "+", "=", "-", "0"].includes(key)) {
-      event.preventDefault(); runShortcut(key);
+      event.preventDefault(); runShortcut(key === "t" && input.shift ? "T" : key);
     } else if (key === "escape") active()?.view.webContents.stop();
   }
   // Tabs keep the Map's insertion order; reordering rebuilds it.
@@ -2640,7 +2645,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (typeof changes.collapsed === "boolean") setGroupCollapsed(groupId, changes.collapsed);
   }
   function closeTabs(ids) {
-    for (const id of ids) if (tabs.has(id)) closeTab(id);
+    for (const id of ids) if (tabs.has(id)) closeTab(id, { byUser: true });
   }
   function editGroupName(groupId) {
     if (!disposed && !window.isDestroyed()) window.webContents.send("miaos-browser-group-edit", { groupId });
@@ -2706,11 +2711,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }) },
       { label: "Save Page as App", enabled: /^https?:/i.test(tab.url || ""), click: menuAction(() => pageSaved({ kind: "app", url: tab.url, name: tab.title || "" })) },
       { type: "separator" },
-      { label: "Close", click: menuAction(() => closeTab(tabId)) },
+      { label: "Close", click: menuAction(() => closeTab(tabId, { byUser: true })) },
       { label: "Close Other Tabs", enabled: tabs.size > 1, click: menuAction(() => closeTabs(order.filter(id => id !== tabId))) },
       { label: "Close Tabs to the Right", enabled: order.indexOf(tabId) < order.length - 1,
         click: menuAction(() => closeTabs(order.slice(order.indexOf(tabId) + 1))) },
     );
+    items.push({ type: "separator" }, ...closedTabMenuItems());
     Menu.buildFromTemplate(items).popup({ window });
   }
   // Gives a group to a bot (or back to Mia with null). An unnamed group takes
@@ -2855,11 +2861,34 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       { label: "Close Group", click: menuAction(() => closeTabs(groupTabs(groupId).map(tab => tab.id))) },
     ]).popup({ window });
   }
+  // Back in its group and place when those still exist. A group whose bot is
+  // busy can't take a new tab, so the page opens on its own instead.
+  function reopenClosedTab(index = 0) {
+    const entry = closedTabs.take(index);
+    if (!entry) return null;
+    const after = tabs.has(entry.afterId) ? { after: entry.afterId } : {};
+    try {
+      return newTab(entry.url, { title: entry.title, groupId: groups.has(entry.groupId) ? entry.groupId : null, ...after });
+    } catch (_) {
+      return newTab(entry.url, { title: entry.title, groupId: null });
+    }
+  }
+  function closedTabMenuItems() {
+    const list = closedTabs.list();
+    return [
+      { label: "Reopen Closed Tab", accelerator: "CommandOrControl+Shift+T", enabled: list.length > 0, click: menuAction(() => reopenClosedTab()) },
+      { label: "Recently Closed", enabled: list.length > 0, submenu: list.map((entry, index) => ({
+        label: (entry.title || entry.url).slice(0, 60), click: menuAction(() => reopenClosedTab(index)),
+      })) },
+    ];
+  }
   function closeTab(id, { byUser = false } = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
     if (fullscreenId === id) exitPageFullscreen();
     actorRuntime.closeTab(id);
+    if (byUser && !tab.private) closedTabs.remember({ url: tab.url, title: tab.title, groupId: tab.groupId || null,
+      afterId: [...tabs.keys()][[...tabs.keys()].indexOf(id) - 1] ?? null, closedAt: Date.now() });
     // Closing the active tab lands on its neighbor, staying inside its group
     // when the group has other tabs, so a bot's work stays in view.
     const order = [...tabs.keys()];
@@ -2922,13 +2951,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     try { if (downloadsPath) fs.rmSync(downloadsPath, { force: true }); } catch (error) { log(`browser downloads cleanup failed: ${error.message}`); }
     try { if (statePath) fs.rmSync(statePath, { force: true }); } catch (error) { log(`browser state cleanup failed: ${error.message}`); }
     try { if (historyPath) fs.rmSync(historyPath, { force: true }); } catch (error) { log(`browser history cleanup failed: ${error.message}`); }
+    closedTabs.clear();
     // Every workspace's saved tabs and history go too.
     if (baseStatePath) {
       const base = path.basename(baseStatePath).replace(/\.json$/, "");
       const dir = path.dirname(baseStatePath);
       try {
         for (const name of fs.readdirSync(dir)) {
-          if (name === path.basename(baseStatePath) || name === `${base}-history.json` || name.startsWith(`${base}-ws-`)) fs.rmSync(path.join(dir, name), { force: true });
+          if (name === path.basename(baseStatePath) || name === `${base}-history.json` || name === `${base}-closed.json` || name.startsWith(`${base}-ws-`)) fs.rmSync(path.join(dir, name), { force: true });
         }
       } catch (error) { log(`browser workspace cleanup failed: ${error.message}`); }
     }
@@ -3053,12 +3083,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       }
       if (command.action === "new") { newSessionOrPlainTab(); return state(); }
+      if (command.action === "closedTabs") return { closed: closedTabs.list().map(({ url, title, closedAt }) => ({ url, title, closedAt })) };
+      if (command.action === "reopenClosed") { reopenClosedTab(boundedInteger(command.index, 0, 0, 24)); return state(); }
       if (command.action === "spaceSession") {
         sessionGroupId = typeof command.groupId === "string" || Number.isInteger(command.groupId) ? command.groupId : null;
         return state();
       }
       if (command.action === "privateTabMenu") {
-        Menu.buildFromTemplate([{ label: "New private tab", click: menuAction(() => newTab(undefined, { groupId: null, private: true })) }]).popup({ window });
+        Menu.buildFromTemplate([{ label: "New private tab", click: menuAction(() => newTab(undefined, { groupId: null, private: true })) }, ...closedTabMenuItems()]).popup({ window });
         return state();
       }
       // A shared space opens a teammate's tab in the background, so it never
@@ -3368,6 +3400,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     statePath = workspaceStatePath(key);
     historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
     loadHistory();
+    closedTabs.open(closedTabsPathFor(statePath));
     restoreSavedTabs();
     layout();
     publish();

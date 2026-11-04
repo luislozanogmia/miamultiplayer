@@ -2006,6 +2006,7 @@ function installBrowserMenu() {
   const definitions = [
     ["Focus Address", "CommandOrControl+L", "l"],
     ["New Tab", "CommandOrControl+T", "t"],
+    ["Reopen Closed Tab", "CommandOrControl+Shift+T", "T"],
     ["Close Tab", "CommandOrControl+W", "w"],
     // Cmd+R belongs to Mia (View > Reload Mia); the page gets the hard reload.
     ["Hard Reload Page", "CommandOrControl+Shift+R", "r"],
