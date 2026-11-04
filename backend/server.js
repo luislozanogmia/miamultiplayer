@@ -153,6 +153,7 @@ const {
 const { createConversationAuthorization } = require('./conversation-authorization');
 const { createConversationService, canonicalBotConversationCandidates } = require('./conversation-service');
 const { isRetiredHermesModel, currentHermesModel } = require('./retired-models');
+const { colorFromHue, botColorForName } = require('./bot-colors');
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
@@ -4317,8 +4318,8 @@ async function hermesConnectionStatuses(email) {
 function rememberNativeChatModelInventory(payload) {
   const providers = normalizeChatModelInventory(payload);
   nativeChatModelProviders = providers;
-  return providers;
   rememberDiscoveredHermesModels(providers);
+  return providers;
 }
 
 async function chatModelSelectionForUser(rawSelection, email) {
@@ -5747,13 +5748,7 @@ function newBotColor(bots, random = Math.random) {
   const taken = new Set(bots.map((bot) => normalizeAgentAvatarColor(bot.avatarColor)));
   const next = FIRST_BOT_COLORS.find((color) => !taken.has(color));
   if (bots.length < FIRST_BOT_COLORS.length && next) return next;
-  const hue = Math.floor(random() * 360), s = 0.72, l = 0.52;
-  const channel = (n) => {
-    const k = (n + hue / 30) % 12;
-    const value = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-    return Math.round(value * 255).toString(16).padStart(2, '0');
-  };
-  return `#${channel(0)}${channel(8)}${channel(4)}`;
+  return colorFromHue(Math.floor(random() * 360));
 }
 
 registerResource({
@@ -8595,6 +8590,11 @@ function migrateWorkspaceOwnership() {
         holder.model = currentHermesModel(holder.modelProvider, holder.model);
         touched = true;
       }
+    }
+    // A color lives on the record, so Solo, a team and a shared copy all agree.
+    if (!normalizeAgentAvatarColor(record.avatarColor)) {
+      record.avatarColor = botColorForName(record.name);
+      touched = true;
     }
     if (String(record.id || '').startsWith('builtin-') && !record.builtinSlug) {
       record.builtinSlug = String(record.id).slice('builtin-'.length);

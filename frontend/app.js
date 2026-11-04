@@ -2864,8 +2864,6 @@
     145, 169, 192, 211, 231, 252, 276, 305
   ];
   var MOTE_BASE_HUES = {general: 34, inbox: 337, research: 272, calendar: 24, sales: 358};
-  var moteColorSlots = Object.create(null);
-  var moteColorOwners = Object.create(null);
   var AGENT_COLOR_OPTIONS = [
     {label:'Rose', value:'#e83e9a'},
     {label:'Coral', value:'#ed6a5a'},
@@ -2883,22 +2881,25 @@
   function agentAvatarColorFor(name, agentId){
     var records = [];
     if(typeof benchAgents !== 'undefined' && Array.isArray(benchAgents)) records = records.concat(benchAgents);
-    if(typeof chatWs !== 'undefined' && chatWs && Array.isArray(chatWs.allAgents)) records = records.concat(chatWs.allAgents);
+    if(typeof chatWs !== 'undefined' && chatWs){
+      // A team's own list leaves out your Solo bots, which My Bots still shows.
+      [chatWs.allAgents, chatWs.botRecords, chatWs.myBotRecords].forEach(function(list){
+        if(Array.isArray(list)) records = records.concat(list);
+      });
+    }
+    if(typeof hubChat !== 'undefined' && hubChat && Array.isArray(hubChat.companyBots)) records = records.concat(hubChat.companyBots);
     var wantedId = String(agentId || '');
     var wantedName = String(name || '').trim().toLowerCase();
+    var byName = '';
     for(var i = 0; i < records.length; i++){
       var record = records[i];
       if(!record) continue;
-      var recordId = String(record.id || record.agentId || '');
-      var recordName = String(record.name || '').trim().toLowerCase();
-      if((wantedId && (recordId === wantedId || String(record.agentId || '') === wantedId)) ||
-         (!wantedId && wantedName && recordName === wantedName) ||
-         (wantedId && wantedName && recordName === wantedName)){
-        var color = normalizeAgentAvatarColor(record.avatarColor);
-        if(color) return color;
-      }
+      var color = normalizeAgentAvatarColor(record.avatarColor);
+      if(!color) continue;
+      if(wantedId && (String(record.id || '') === wantedId || String(record.agentId || '') === wantedId)) return color;
+      if(!byName && wantedName && String(record.name || '').trim().toLowerCase() === wantedName) byName = color;
     }
-    return '';
+    return byName;
   }
   function avatarColorHue(value){
     var color = normalizeAgentAvatarColor(value);
@@ -2916,19 +2917,10 @@
     return h < 0 ? h + 360 : h;
   }
   function moteColorSlotFor(name){
+    // Only the name decides, never what was drawn first, so a bot with no
+    // saved color matches in every view and on every computer.
     var key = String(name || '').trim().toLowerCase() || 'general';
-    if(moteColorSlots[key] !== undefined) return moteColorSlots[key];
-    var preferred = moteHash('color:' + key) % MOTE_COLOR_PALETTE.length;
-    var slot = preferred;
-    for(var step = 0; step < MOTE_COLOR_PALETTE.length; step++){
-      slot = (preferred + step) % MOTE_COLOR_PALETTE.length;
-      if(!moteColorOwners[slot] || moteColorOwners[slot] === key) break;
-    }
-    // Once there are more Motes than palette entries, a repeat is preferable
-    // to failing to render the avatar; normal rosters stay collision-free.
-    moteColorSlots[key] = slot;
-    moteColorOwners[slot] = key;
-    return slot;
+    return moteHash('color:' + key) % MOTE_COLOR_PALETTE.length;
   }
   function moteColorFilterFor(name, explicitColor){
     var variant = moteVariantFor(name);
@@ -5386,7 +5378,7 @@
       (result.bots||[]).forEach(function(bot){
         if(!bot.published || !bot.name)return;
         var key=String(bot.name).toLowerCase(), entry=byKey[key];
-        if(!entry){ entry=byKey[key]={key:key,name:bot.name,channels:[]}; list.push(entry); }
+        if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:normalizeAgentAvatarColor(bot.avatar_color),channels:[]}; list.push(entry); }
         if(entry.channels.indexOf(result.channel)<0)entry.channels.push(result.channel);
       });
     });
@@ -5447,7 +5439,7 @@
     button.className='chat-recent-row hub-channel-row';
     button.setAttribute('data-company-bot',bot.key);
     var where=bot.channels.map(companyBotWhere).join(', ');
-    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,null,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
+    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview">'+esc(where)+'</span></span>';
     button.addEventListener('click',function(){ openCompanyBot(bot); });
@@ -5466,7 +5458,7 @@
     var button=document.createElement('button'); button.type='button';
     button.className='chat-recent-row hub-channel-row'+(active?' active':'');
     button.setAttribute('data-team-bot-id',bot.id);
-    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,null,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
+    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
       +renderChatActivityIndicator(!!(state && state.thinking),false)
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview'+(preview?'':' empty')+'">'+(preview?esc(preview):'&nbsp;')+'</span></span>';
