@@ -67,7 +67,7 @@
     var share = '<button type="button" class="artifacts-row-share" data-artifact-share="' + esc(item.id) + '" title="Share in a chat" aria-label="Share ' + esc(item.name) + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 4H7a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-3"></path><path d="M9 15c0-4 3-7 7-7h5"></path><path d="m17 4 4 4-4 4"></path></svg></button>';
     return '<div class="artifacts-row" role="listitem">'
       + '<button type="button" class="artifacts-row-open" data-artifact-open="' + esc(item.id) + '" title="Open in Mia\'s browser">'
-      + '<span class="artifacts-thumb">' + esc(thumb) + '</span>'
+      + '<span class="artifacts-thumb"' + (item.kind === 'app' ? ' data-site-url="' + esc(item.url) + '"' : '') + '>' + esc(thumb) + '</span>'
       + '<span class="artifacts-row-text"><span class="artifacts-row-name">' + esc(item.name) + '</span>'
       + '<span class="artifacts-row-meta">' + meta + '</span></span></button>'
       + share + remove + '</div>';

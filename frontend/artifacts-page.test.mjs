@@ -22,6 +22,12 @@ test('live apps come first, then pages and documents; filters and search narrow 
   assert.deepEqual(page.counts(items), { all: 4, page: 1, document: 1, app: 2 });
 });
 
+test('a saved app asks for its site icon; files keep their type label', () => {
+  const html = page.bodyHtml({ items, filter: 'all', query: '' }, esc, now);
+  assert.match(html, /<span class="artifacts-thumb" data-site-url="http:\/\/localhost:3000\/">App<\/span>/);
+  assert.match(html, /<span class="artifacts-thumb">HTML<\/span>/);
+});
+
 test('rows show who made a file and when, whether an app is running, and escape names', () => {
   const html = page.bodyHtml({ items, filter: 'all', query: '' }, esc, now);
   assert.match(html, /localhost:3000 · <span class="artifacts-dot on">● running<\/span>/);

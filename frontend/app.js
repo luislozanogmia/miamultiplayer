@@ -7041,9 +7041,10 @@
       : (!shown.length ? 'Nothing matches.' : ''));
     list.innerHTML = shown.map(function(item){
       var meta = item.kind === 'app' ? appLinkHost(item.url) : (item.from ? item.from : 'You') + ' \u00b7 ' + window.MiaArtifactsPage.when(item.modifiedAt);
-      return '<button type="button" data-composer-artifact="' + esc(item.id) + '"><em>' + esc(item.kind === 'app' ? 'App' : item.type || '') + '</em>' +
+      return '<button type="button" data-composer-artifact="' + esc(item.id) + '"><em' + (item.kind === 'app' ? ' data-site-url="' + esc(item.url) + '"' : '') + '>' + esc(item.kind === 'app' ? 'App' : item.type || '') + '</em>' +
         '<span>' + esc(item.name) + '</span><small>' + esc(meta) + '</small></button>';
     }).join('');
+    fillSiteIcons(list);
   }
   function wireComposerPlusMenu(fileInput, staged){
     var menu = el('#ccPlusMenu'), picker = el('#ccArtifactsMenu');
@@ -8396,6 +8397,35 @@
     });
   }
 
+  // Your own saved apps show the icon their site has; the text label stays until one arrives.
+  var siteIcons = {}, siteIconRequests = {};
+  function showSiteIcon(thumb, icon){
+    var image = document.createElement('img');
+    image.alt = '';
+    image.src = icon;
+    thumb.textContent = '';
+    thumb.appendChild(image);
+    thumb.classList.add('has-site-icon');
+  }
+  function fillSiteIcons(root){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!root || !browser || !browser.command) return;
+    Array.prototype.forEach.call(root.querySelectorAll('[data-site-url]'), function(thumb){
+      var url = thumb.getAttribute('data-site-url');
+      if(siteIcons[url]){ showSiteIcon(thumb, siteIcons[url]); return; }
+      if(!siteIconRequests[url]){
+        siteIconRequests[url] = Promise.resolve(browser.command({action: 'siteIcon', url: url})).catch(function(){ return null; }).then(function(res){
+          var icon = res && /^data:image\//i.test(res.icon || '') ? res.icon : '';
+          if(icon) siteIcons[url] = icon;
+          // A site that was off or had no icon gets another try next time the list opens.
+          delete siteIconRequests[url];
+          return icon;
+        });
+      }
+      siteIconRequests[url].then(function(icon){ if(icon && thumb.isConnected) showSiteIcon(thumb, icon); });
+    });
+  }
+
   function renderArtifactsPage(){
     var overlay = el('#artifactsOverlay');
     if(!overlay) return;
@@ -8408,6 +8438,7 @@
     if(chips) chips.innerHTML = window.MiaArtifactsPage.chipsHtml(artifactsPage.items, artifactsPage.filter, esc);
     var body = el('#artifactsBody');
     if(body) body.innerHTML = window.MiaArtifactsPage.bodyHtml(Object.assign({}, artifactsPage, {recentIds: recentArtifactIds()}), esc);
+    fillSiteIcons(body);
   }
 
   // Files open from the Mia folder (the browser previews nothing outside
