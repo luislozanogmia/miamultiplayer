@@ -1877,7 +1877,26 @@ test("bot file open assigns its tab without changing the foreground", async () =
   h.window.emit("closed");
 });
 
-test("bot tab groups: the golden glow stays through a reply and comes back after a page load", async () => {
+test("a page a person loads in a tab a bot used earlier shows no bot work", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: knownActor(sessions) });
+  h.command("new");
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const botPage = h.views[h.views.length - 1].webContents;
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 2600));
+  await flush();
+  botPage.isLoading = () => true;
+  botPage.emit("dom-ready");
+  await flush();
+  const glowing = botPage.insertedCSS;
+  botPage.emit("dom-ready");
+  await flush();
+  assert.equal(botPage.insertedCSS, glowing, "loading adds no glow");
+  assert.equal(h.command("state").tabs.find(tab => tab.id === opened.tab_id).botActivity, null, "no working dot or Take over either");
+});
+
+test("bot tab groups: the glow stays through a reply and comes back after a page load", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
   const h = harness({ resolveActor: knownActor(sessions) });
   const mine = h.command("new").activeId;
@@ -1899,7 +1918,7 @@ test("bot tab groups: the golden glow stays through a reply and comes back after
   assert.ok(!userPage.insertedCSS, "Mia's tab is never lit as bot work");
 });
 
-test("bot tab groups: the glow is Mia gold for Mia and for every bot", async () => {
+test("bot tab groups: the glow takes the bot's color, and Mia's is gold", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
   const h = harness({ resolveActor: knownActor(sessions) });
   h.command("new");
@@ -1908,8 +1927,8 @@ test("bot tab groups: the glow is Mia gold for Mia and for every bot", async () 
   const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
   const botPage = h.views[h.views.length - 1].webContents;
   await flush();
-  assert.match(botPage.lastCSS, /rgba\(201,150,43,/, "a bot's page glows Mia gold, not the bot's own color");
-  assert.doesNotMatch(botPage.lastCSS, /hsla\(200,/);
+  assert.match(botPage.lastCSS, /hsla\(200,72%,52%,/, "a bot's page glows in the bot's own color");
+  assert.doesNotMatch(botPage.lastCSS, /rgba\(201,150,43,/);
   assert.doesNotMatch(botPage.lastCSS, /0 0 0 2px/, "no solid frame line, only the glow");
 
   // Mia's command lights the page in front with gold the moment it starts.

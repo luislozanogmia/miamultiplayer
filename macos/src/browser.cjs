@@ -828,11 +828,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Mia's own browser work is shown the same way as a bot's, under her name.
   const MIA_WORKER = { botId: "mia", name: "Mia" };
   // While Mia or a bot drives a tab, its page carries an edge glow that fades
-  // inward, like the glow around a screen under computer use. It is always
-  // Mia gold (#C9962B), whoever is working. It is a click-through stylesheet
-  // layer, added when a command starts on the page and removed when the work ends.
-  function botGlowCss() {
-    const tone = alpha => `rgba(201,150,43,${alpha})`;
+  // inward, like the glow around a screen under computer use. It takes the
+  // bot's own color, and Mia's is her gold (#C9962B). It is a click-through
+  // stylesheet layer, added when a command starts on the page and removed when
+  // the work ends.
+  function botGlowCss(botId) {
+    const hue = botHues.get(String(botId));
+    const tone = alpha => (botId === MIA_WORKER.botId || hue === undefined
+      ? `rgba(201,150,43,${alpha})` : `hsla(${hue},72%,52%,${alpha})`);
     return `html::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:2147483647;
     box-shadow:inset 0 0 18px 4px ${tone(.7)},inset 0 0 60px 12px ${tone(.22)};
     animation:mia-bot-glow 2.4s ease-in-out infinite;}
@@ -843,16 +846,21 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // knows each bot's color and whether a reply is still running.
   let botHues = new Map();
   let heldByRenderer = new Set();
+  // Only a bot's own commands count. A page loading says nothing about who
+  // asked for it: the tab may be one a bot used earlier and a person now.
+  function botDrivingTab(tab) {
+    return (tab.botWork || 0) > 0 || !!pendingBrowserOperations.get(tab.view.webContents)?.size
+      || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
+  }
   function glowWanted(tab) {
     if (!tab.botWorker) return null;
-    const working = browserWorkPending(tab) || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
-    return working || heldByRenderer.has(tab.id) ? { by: tab.botWorker.botId } : null;
+    return botDrivingTab(tab) || heldByRenderer.has(tab.id) ? { by: tab.botWorker.botId } : null;
   }
   function syncBotGlow(tab) {
     const wc = tab.view.webContents;
     if (wc.isDestroyed()) return;
     const wanted = glowWanted(tab);
-    const css = wanted ? botGlowCss() : null;
+    const css = wanted ? botGlowCss(wanted.by) : null;
     if (tab.botGlowPending || css === (tab.botGlowCss || null)) return;
     if (tab.botGlowKey) {
       Promise.resolve(wc.removeInsertedCSS(tab.botGlowKey)).catch(() => {});
@@ -870,7 +878,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   function botActivityFor(tab) {
     if (!tab.botWorker) return null;
-    if (browserWorkPending(tab) || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS) return { ...tab.botWorker };
+    if (botDrivingTab(tab)) return { ...tab.botWorker };
     return null;
   }
   function publish() {
