@@ -1357,6 +1357,24 @@ test("closing a tab a bot is working in asks the person first", async () => {
 // State crosses from the VM realm; compare it as plain JSON.
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test("closing the tab in front goes back to the tab used before it, not the next in order", () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  const third = h.command("new").activeId;
+  h.command("select", { id: first });
+  h.command("select", { id: second });
+  assert.equal(h.command("close", { id: second }).activeId, first, "the one used before, though the next in order is another");
+  assert.equal(h.command("close", { id: first }).activeId, third);
+});
+
+test("closing a tab behind the one in front keeps the one in front", () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  assert.equal(h.command("close", { id: first }).activeId, second);
+});
+
 test("a page a person closed comes back, a private or blank one does not", () => {
   const h = harness();
   h.command("new");
@@ -2083,7 +2101,7 @@ test("right-clicking Back or Forward lists that way's pages, nearest first, like
   h.window.emit("closed");
 });
 
-test("closing a grouped tab lands on the next tab in the same group", () => {
+test("closing a grouped tab goes back to the tab used before it, even outside the group", () => {
   const h = harness();
   const mine = h.command("new").activeId;
   const first = h.command("new").activeId;
@@ -2094,12 +2112,14 @@ test("closing a grouped tab lands on the next tab in the same group", () => {
   const after = h.command("new").activeId;
   h.command("select", { id: first });
   h.command("close", { id: first });
-  assert.equal(h.command("state").activeId, second, "stays in the bot's group");
+  assert.equal(h.command("state").activeId, after, "the tab used before, outside the bot's group");
+  h.command("select", { id: second });
   h.command("close", { id: second });
-  assert.equal(h.command("state").activeId, after, "an emptied group hands off to its right-hand neighbor");
+  assert.equal(h.command("state").activeId, after);
   assert.ok(mine);
   h.window.emit("closed");
 });
+
 
 test("closing the last tab counts a last-tab close and keeps one blank tab", () => {
   const h = harness();

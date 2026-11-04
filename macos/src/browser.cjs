@@ -2956,14 +2956,16 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     actorRuntime.closeTab(id);
     if (byUser && !tab.private) closedTabs.remember({ url: tab.url, title: tab.title, groupId: tab.groupId || null,
       afterId: [...tabs.keys()][[...tabs.keys()].indexOf(id) - 1] ?? null, closedAt: Date.now() });
-    // Closing the active tab lands on its neighbor, staying inside its group
-    // when the group has other tabs, so a bot's work stays in view.
+    // Closing the active tab goes back to the tab used before it. A tab never
+    // used yet, as after a restart, falls back to its neighbor in the same group.
     const order = [...tabs.keys()];
     const at = order.indexOf(id);
     const visible = other => other !== id && !groups.get(tabs.get(other).groupId)?.collapsed;
     const sameGroup = other => tab.groupId && tabs.get(other).groupId === tab.groupId;
     const neighbors = [...order.slice(at + 1), ...order.slice(0, at).reverse()].filter(visible);
-    const successor = neighbors.find(sameGroup) || order.slice(at + 1).find(visible) || order.slice(0, at).reverse().find(visible);
+    const lastUsed = neighbors.filter(other => tabs.get(other).lastActiveAt)
+      .sort((a, b) => tabs.get(b).lastActiveAt - tabs.get(a).lastActiveAt)[0];
+    const successor = lastUsed ?? neighbors.find(sameGroup) ?? order.slice(at + 1).find(visible) ?? order.slice(0, at).reverse().find(visible);
     tabs.delete(id);
     clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
