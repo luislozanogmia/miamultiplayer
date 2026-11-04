@@ -1891,6 +1891,23 @@
     });
   }
 
+  var harnessAuthLinks = {url: '', code: ''}, harnessAuthCopiedCode = '', harnessAuthMiaIsDefault = false;
+  function refreshHarnessAuthDefaultBrowser(){
+    var browser = window.miaDesktop && window.miaDesktop.defaultBrowser;
+    if(!browser) return Promise.resolve();
+    return Promise.resolve(browser.get()).then(function(state){
+      harnessAuthMiaIsDefault = !!(state && state.https);
+    }).catch(function(){});
+  }
+  function copyHarnessAuthText(button, text, done){
+    return copySidebarText(text).then(function(copied){
+      if(!copied || !button) return;
+      var label = button.getAttribute('data-label') || button.textContent;
+      button.setAttribute('data-label', label);
+      button.textContent = done;
+      setTimeout(function(){ button.textContent = label; }, 2500);
+    });
+  }
   function renderHarnessAuth(value){
     var panel = el('#harnessAuthPanel');
     var status = el('#harnessAuthStatus');
@@ -1927,15 +1944,27 @@
         : (auth.state === 'waiting'
           ? (auth.provider === 'claude-subscription-directsdk-experimental'
             ? 'Finish signing in to Claude in your browser, then paste the code it shows here.'
-            : 'Finish in the sign-in window and enter the code shown below.')
+            : (harnessAuthMiaIsDefault
+              ? 'Security keys don’t work in Mia’s browser. Copy the link and code into Chrome or Safari to finish signing in.'
+              : 'Finish in the sign-in window and enter the code shown below.'))
           : (auth.state === 'completing'
             ? 'Verifying sign-in…'
             : (auth.state === 'connected'
               ? authName + ' is connected.'
               : (auth.error || 'Sign-in could not be completed.'))));
     }
+    // A sign-in page must not cover the code: when Mia is the default browser,
+    // the plain link would open right over this panel.
+    harnessAuthLinks = {url: auth.verificationUrl || '', code: auth.userCode || ''};
+    var copyLink = el('#harnessAuthCopyLink'), openInMia = el('#harnessAuthOpenInMia');
+    if(copyLink) copyLink.hidden = !auth.verificationUrl;
+    if(openInMia) openInMia.hidden = !(auth.verificationUrl && harnessAuthMiaIsDefault && window.miaNativeBrowser);
+    if(auth.userCode && auth.userCode !== harnessAuthCopiedCode){
+      harnessAuthCopiedCode = auth.userCode;
+      copyHarnessAuthText(el('#harnessAuthCopyCode'), auth.userCode, 'Code copied');
+    }
     if(link){
-      link.hidden = !auth.verificationUrl;
+      link.hidden = !auth.verificationUrl || harnessAuthMiaIsDefault;
       link.textContent = 'Open ' + authName + ' sign-in';
       if(auth.verificationUrl) link.href = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(auth.provider || harnessOnboardingState.provider);
     }
@@ -2510,6 +2539,7 @@
     harnessAuthAwaitingSave = true;
     harnessConnectionPending = authProvider;
     renderHarnessConnectionActions();
+    refreshHarnessAuthDefaultBrowser();
     // Open a same-origin redirect from the user gesture. That route starts
     // the background harness flow and redirects this tab to the real provider
     // URL, avoiding popup blocking in the later polling callback.
@@ -2565,6 +2595,16 @@
       if(input) input.disabled = false;
       if(error) error.textContent = err.message || 'Could not submit Claude sign-in';
     });
+  });
+  el('#harnessAuthCopyCode').addEventListener('click', function(event){
+    copyHarnessAuthText(event.currentTarget, harnessAuthLinks.code, 'Code copied');
+  });
+  el('#harnessAuthCopyLink').addEventListener('click', function(event){
+    copyHarnessAuthText(event.currentTarget, harnessAuthLinks.url, 'Link copied');
+  });
+  el('#harnessAuthOpenInMia').addEventListener('click', function(){
+    openWebBrowserTool();
+    window.miaNativeBrowser.openTab(harnessAuthLinks.url);
   });
   el('#harnessAuthCancel').addEventListener('click', function(){
     void cancelHarnessAuthFlow(harnessOnboardingState.provider);

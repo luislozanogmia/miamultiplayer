@@ -74,3 +74,13 @@ test('view icons that do not fit move behind a chevron, and the current view sta
   assert.deepEqual(hide(6, 5, 20), [1, 2, 3, 4, 0], 'one icon always stays');
   assert.match(html, /id="sidebarViewsMore"[^>]*hidden><svg data-icon-set="lucide"/);
 });
+
+test('the sign-in code and link can always be copied, and the code copies itself', () => {
+  assert.match(html, /id="harnessAuthCopyCode"/);
+  assert.match(html, /id="harnessAuthCopyLink"/);
+  const start = source.indexOf('function renderHarnessAuth(value){');
+  const render = source.slice(start, source.indexOf('function pollHarnessAuth(){', start));
+  assert.match(render, /copyLink\.hidden = !auth\.verificationUrl/);
+  assert.match(render, /auth\.userCode !== harnessAuthCopiedCode/);
+  assert.match(render, /link\.hidden = !auth\.verificationUrl \|\| harnessAuthMiaIsDefault/);
+});

@@ -1013,3 +1013,24 @@ test("a gone main renderer reloads Mia instead of leaving a black window", () =>
   assert.match(handler, /loadURL\(backendUrl\)/);
   assert.match(handler, /rendererRecoveries\.length >= 3/, "a crash loop stops retrying");
 });
+
+test("a sign-in page never opens back inside Mia when Mia is the default browser", () => {
+  const { EventEmitter } = require("node:events");
+  const main = loadMain();
+  const opened = [];
+  main.__electron.shell.openExternal = url => { opened.push(url); return Promise.resolve(); };
+  main.__electron.app.isDefaultProtocolClient = scheme => scheme === "https";
+  const contents = new EventEmitter();
+  contents.session = { id: "main-session" };
+  contents.setWindowOpenHandler = handler => { contents.popup = handler; };
+  main.configureNavigation({ webContents: contents }, "http://localhost:4871");
+  const childContents = new EventEmitter();
+  childContents.setWindowOpenHandler = handler => { childContents.popup = handler; };
+  let closed = false;
+  contents.emit("did-create-window", { webContents: childContents, close() { closed = true; } }, { url: "http://localhost:4871/api/settings/harness/auth/redirect?provider=openai-codex" });
+  let blocked = false;
+  childContents.emit("will-redirect", { preventDefault() { blocked = true; } }, "https://auth.openai.com/codex/device");
+  assert.equal(blocked, true);
+  assert.deepEqual(opened, []);
+  assert.equal(closed, true, "the empty popup still closes and the sign-in panel stays");
+});
