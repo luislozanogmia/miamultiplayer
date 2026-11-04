@@ -241,9 +241,8 @@ test('subscription model selections stay inside the provider allowlist', () => {
   assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-6-astra', false), true);
   assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-6-astra', true), false);
   assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', 'gpt-6.1-sol', false), { model: 'gpt-6.1-sol', fast: false });
-  // Retired models keep working on their successor instead of failing.
-  for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
-    assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', model, false), { model: 'gpt-6.1-sol', fast: false });
+  for (const model of ['gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-daybreak-blue-latest']) {
+    assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', model, false), { model, fast: false });
     assert.equal(inference.isAllowedHermesModel('openai-codex', model, false), true);
   }
   assert.deepEqual(inference.normalizeHermesModelSelection('claude-subscription-directsdk-experimental', 'claude-sonnet-5[1m]', false), {

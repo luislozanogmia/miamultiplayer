@@ -5,10 +5,6 @@
 // on its successor instead of failing or dropping to the provider default.
 // Scoped by provider: another provider may still serve the same name.
 const RETIRED_HERMES_MODELS = Object.freeze({
-  'openai-codex': Object.freeze({
-    'gpt-6-sol': 'gpt-6.1-sol',
-    'gpt-6-luna': 'gpt-6.1-sol',
-  }),
   'claude-subscription-directsdk-experimental': Object.freeze({
     'claude-sonnet-5': 'claude-sonnet-5-5[1m]',
     'claude-sonnet-5[1m]': 'claude-sonnet-5-5[1m]',

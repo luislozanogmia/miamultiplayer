@@ -1239,11 +1239,15 @@
       defaultModel: 'gpt-5.6-luna',
       options: [
         {id:'fast', model:'gpt-5.6-luna', label:'Fast', fast:true},
-        {id:'gpt-6-astra', model:'gpt-6-astra', label:'GPT-6 Astra'},
         {id:'gpt-6.1-sol', model:'gpt-6.1-sol', label:'GPT-6.1 Sol'},
+        {id:'gpt-6-astra', model:'gpt-6-astra', label:'GPT-6 Astra'},
+        {id:'gpt-6.1-terra', model:'gpt-6.1-terra', label:'GPT-6.1 Terra'},
+        {id:'gpt-6-sol', model:'gpt-6-sol', label:'GPT-6 Sol'},
+        {id:'gpt-6-luna', model:'gpt-6-luna', label:'GPT-6 Luna'},
         {id:'gpt-5.6-sol', model:'gpt-5.6-sol', label:'GPT-5.6 Sol'},
         {id:'gpt-5.6-terra', model:'gpt-5.6-terra', label:'GPT-5.6 Terra'},
-        {id:'gpt-5.6-luna', model:'gpt-5.6-luna', label:'GPT-5.6 Luna'}
+        {id:'gpt-5.6-luna', model:'gpt-5.6-luna', label:'GPT-5.6 Luna'},
+        {id:'gpt-daybreak-blue-latest', model:'gpt-daybreak-blue-latest', label:'Daybreak Blue'}
       ]
     },
     'xai-oauth': {
@@ -1368,7 +1372,7 @@
     var raw = String(model || '').trim().toLowerCase();
     var match = /^gpt-(\d+(?:\.\d+)?)(?:-(.+))?$/.exec(raw);
     if(match) return {family:'GPT', variant:'GPT ' + match[1] + (match[2] ? ' ' + chatModelTitleCase(match[2]) : ''), familyKey:'gpt'};
-    if(raw.indexOf('gpt-') === 0) return {family:'GPT', variant:chatModelTitleCase(raw.replace(/-latest$/, '').replace(/-/g, ' ')), familyKey:'gpt'};
+    if(raw.indexOf('gpt-') === 0) return {family:'GPT', variant:chatModelTitleCase(raw.replace(/^gpt-/, '').replace(/-latest$/, '').replace(/-/g, ' ')), familyKey:'gpt'};
     match = /^grok-(\d+(?:\.\d+)?)(?:-(.+))?$/.exec(raw);
     if(match) return {family:'Grok', variant:match[1] + (match[2] ? ' ' + chatModelTitleCase(match[2]) : ''), familyKey:'grok'};
     // Claude route ids carry a version, an optional snapshot date, and the
