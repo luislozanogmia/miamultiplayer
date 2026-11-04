@@ -3568,6 +3568,8 @@ span.mia-tab-icon{display:inline-grid;place-items:center;}
 .sidebar-mix-btn[aria-pressed="true"],body.styled-skin .chat-new-btn-wrap .sidebar-mix-btn[aria-pressed="true"]{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
 /* The view icons sit at the right end of the top bar. */
 body.styled-skin .chat-new-btn-wrap .sidebar-views{margin-left:auto;container-type:normal;}
+body.styled-skin .chat-new-btn-wrap .mia-company-lockup{flex:0 1 auto;min-width:0;}
+.sidebar-view-btn.sidebar-view-overflowed,.sidebar-views-more[hidden]{display:none!important;}
 /* Search and New chat share one row; the compose icon lines up under the
    Browser icon above it. */
 body.styled-skin .chat-search-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:0 6px;padding-top:10px;}

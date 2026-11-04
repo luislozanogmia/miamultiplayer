@@ -64,3 +64,13 @@ test('Skills opens from the left rail and is gone from Settings', () => {
   assert.doesNotMatch(html, /data-pane="skills"/);
   assert.match(source, /action === 'skills'\) openSkillsPane\(\)/);
 });
+
+test('view icons that do not fit move behind a chevron, and the current view stays out', () => {
+  const start = source.indexOf('function sidebarViewsToHide(count, activeIndex, room){');
+  const hide = new Function(source.slice(start, source.indexOf('// A long workspace name shortens', start)) + 'return sidebarViewsToHide;')();
+  assert.deepEqual(hide(6, 0, 198), [], 'six icons fit exactly');
+  assert.deepEqual(hide(6, 0, 135), [3, 4, 5]);
+  assert.deepEqual(hide(6, 4, 135), [3, 2, 5], 'the current view swaps into the row');
+  assert.deepEqual(hide(6, 5, 20), [1, 2, 3, 4, 0], 'one icon always stays');
+  assert.match(html, /id="sidebarViewsMore"[^>]*hidden><svg data-icon-set="lucide"/);
+});

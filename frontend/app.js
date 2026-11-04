@@ -17035,7 +17035,49 @@
       button.classList.toggle('active', on);
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    fitSidebarViews();
   }
+
+  // Which view icons move behind the chevron when the header runs out of room.
+  // The one you are on always stays in the row.
+  function sidebarViewsToHide(count, activeIndex, room){
+    var ICON = 28, GAP = 6;
+    if(count * ICON + (count - 1) * GAP <= room) return [];
+    var keep = Math.max(1, Math.floor((room - ICON) / (ICON + GAP)));
+    var hidden = [];
+    for(var index = keep; index < count; index++) hidden.push(index);
+    if(activeIndex >= keep) hidden[hidden.indexOf(activeIndex)] = keep - 1;
+    return hidden;
+  }
+  // A long workspace name shortens to this much before it takes icons away.
+  var SIDEBAR_NAME_MIN_WIDTH = 90;
+  function fitSidebarViews(){
+    var wrap = el('.chat-new-btn-wrap'), views = el('.sidebar-views'), more = el('#sidebarViewsMore'), name = el('#miaCompanyName');
+    if(!wrap || !views || !more || !wrap.clientWidth) return;
+    var style = getComputedStyle(wrap), gap = parseFloat(style.columnGap) || 0;
+    var room = wrap.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - gap
+      - Math.min(name ? name.scrollWidth : 0, SIDEBAR_NAME_MIN_WIDTH);
+    var developer = el('#chatSidebarDeveloperBtn');
+    if(developer && !developer.hidden) room -= developer.offsetWidth + gap;
+    var buttons = els('.sidebar-view-btn', views).filter(function(button){ return button !== more && !button.hidden; });
+    var active = buttons.findIndex(function(button){ return button.classList.contains('active'); });
+    var hidden = sidebarViewsToHide(buttons.length, active, room);
+    buttons.forEach(function(button, index){ button.classList.toggle('sidebar-view-overflowed', hidden.indexOf(index) >= 0); });
+    more.hidden = !hidden.length;
+  }
+  (function(){
+    var wrap = el('.chat-new-btn-wrap'), more = el('#sidebarViewsMore'), name = el('#miaCompanyName');
+    if(!wrap || !more) return;
+    more.addEventListener('click', function(event){
+      event.stopPropagation();
+      openSidebarAddMenu(more, els('.sidebar-view-overflowed', wrap).map(function(button){
+        return [button.getAttribute('aria-label'), function(){ button.click(); }];
+      }));
+    });
+    if(typeof ResizeObserver === 'function') new ResizeObserver(fitSidebarViews).observe(wrap);
+    if(name && typeof MutationObserver === 'function') new MutationObserver(fitSidebarViews).observe(name, {childList: true, characterData: true, subtree: true});
+    fitSidebarViews();
+  })();
 
   // Back, Forward and Reload work in every view. Outside the browser they
   // step through the places you opened in Mia (a view, and the chat it
