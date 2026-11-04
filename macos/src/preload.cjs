@@ -20,6 +20,14 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     install: () => ipcRenderer.invoke("miaos-claude-code-install"),
   },
   openGoogleWorkspaceAuth: (url, proof) => ipcRenderer.invoke("miaos-google-workspace-auth-open", { url, proof }),
+  accounts: {
+    list: () => ipcRenderer.invoke("miaos-accounts", "list"),
+    add: () => ipcRenderer.invoke("miaos-accounts", "add"),
+    switchTo: id => ipcRenderer.invoke("miaos-accounts", "switch", { id }),
+    route: token => ipcRenderer.invoke("miaos-accounts", "route", { token }),
+    confirmed: (token, profile) => ipcRenderer.invoke("miaos-accounts", "confirmed", { token, email: profile.email, name: profile.name }),
+    openOther: (token, conflict) => ipcRenderer.invoke("miaos-accounts", "other", { token, ...conflict }),
+  },
   auth: {
     status: () => ipcRenderer.invoke("miaos-clerk-auth", "status"),
     startGoogle: () => ipcRenderer.invoke("miaos-clerk-auth", "google"),

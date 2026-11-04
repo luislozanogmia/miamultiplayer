@@ -36,7 +36,9 @@ const { createBrowserWorkDispatch } = require("./browser-work-dispatch.cjs");
 const { resolveMiaFolder } = require("./mia-folder.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
-const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
+const { isAuthSender, createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
+const { createAccountProfiles, profileEnvironment, tokenSubject } = require("./account-profiles.cjs");
+const ACCOUNTS_CHANNEL = "miaos-accounts";
 const { openClerkBrowser } = require("./clerk-browser-open.cjs");
 const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
 const { discoverClaudeCodeCommand, createClaudeCodeManager } = require("./claude-code.cjs");
@@ -224,6 +226,19 @@ const CLERK_OAUTH_CALLBACK_ORIGIN = CLERK_CONFIG.oauthCallbackOrigin;
 // renderer/GPU trees against that same profile.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
+
+// The lock above stays on the shared data folder, so only one account runs at a
+// time. Everything from here on uses the folder of the account that is open.
+const accountProfiles = createAccountProfiles({ rootDir: app.getPath("userData"), issuer: CLERK_ISSUER_ORIGIN });
+if (hasSingleInstanceLock) {
+  accountProfiles.prune({ documentsDir: app.getPath("documents") });
+  const openAccount = accountProfiles.active();
+  if (!openAccount.isDefault) {
+    fs.mkdirSync(openAccount.dir, { recursive: true, mode: 0o700 });
+    app.setPath("userData", openAccount.dir);
+    Object.assign(process.env, profileEnvironment(openAccount, { documentsDir: app.getPath("documents") }));
+  }
+}
 
 let mainWindow = null;
 let startupComplete = false;
@@ -2413,6 +2428,43 @@ ipcMain.handle("miaos-claude-code-install", async (event) => {
 // remember (localStorage, IndexedDB, cookies, caches, the renderer and
 // browser state files) plus every in-memory cache in the backend process.
 // Relaunching the app is the only way to reset the latter, so do both.
+function openAccountAndRelaunch(id) {
+  accountProfiles.setActive(id);
+  desktopLog("account switch: relaunching");
+  setImmediate(() => {
+    app.relaunch();
+    app.quit();
+  });
+  return { switching: true };
+}
+ipcMain.handle(ACCOUNTS_CHANNEL, async (event, action, value = {}) => {
+  if (!isAuthSender(event, mainWindow, backendUrl)) throw new Error("Not authorized.");
+  const current = accountProfiles.active().id;
+  const subject = tokenSubject(value.token);
+  if (action === "list") return accountProfiles.list();
+  if (action === "add") return openAccountAndRelaunch(accountProfiles.addEmpty());
+  if (action === "switch") return openAccountAndRelaunch(String(value.id || ""));
+  if (action === "route") {
+    const owner = subject ? accountProfiles.findBySubject(subject) : "";
+    if (!owner || owner === current) return { switching: false };
+    accountProfiles.moveCredential(current, owner);
+    return openAccountAndRelaunch(owner);
+  }
+  if (action === "confirmed") {
+    if (subject) accountProfiles.setOwner(current, { subject, email: value.email, name: value.name });
+    return { ok: true };
+  }
+  if (action === "other") {
+    if (!subject) return { switching: false };
+    const linked = value.linked || {};
+    if (linked.subject) accountProfiles.setOwner(current, linked);
+    const target = accountProfiles.profileFor({ subject, email: value.email, name: value.name });
+    accountProfiles.moveCredential(current, target);
+    return openAccountAndRelaunch(target);
+  }
+  throw new Error("Unknown account action.");
+});
+
 ipcMain.handle("miaos-reset-relaunch", async (event) => {
   if (!isMainWindowSender(event)) return false;
   await desktopAuth.clear().catch(() => {});

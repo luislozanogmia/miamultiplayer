@@ -648,18 +648,29 @@
     var errEl = el('#loginError');
     if(errEl) errEl.textContent = '';
     var getToken = nativeAuth ? nativeAuth.getSessionToken().then(window.MiaClerkDesktop.unwrap) : window.Clerk.session.getToken();
+    var sessionToken = null;
     return getToken.then(function(token){
       if(!token) throw new Error('Clerk did not return a session token');
+      sessionToken = token;
+      return window.MiaAccounts.route(token);
+    }).then(function(switching){
+      if(switching) return {status:0, switching:true};
       return fetch('/api/clerk/session', {
         method:'POST',
         credentials:'include',
-        headers:{'Accept':'application/json', 'Authorization':'Bearer ' + token}
+        headers:{'Accept':'application/json', 'Authorization':'Bearer ' + sessionToken}
+      }).then(function(response){
+        return response.json().catch(function(){ return {}; }).then(function(data){ return {status:response.status, data:data}; });
       });
-    }).then(function(response){
-      return response.json().catch(function(){ return {}; }).then(function(data){ return {status:response.status, data:data}; });
     }).then(function(result){
+      if(result.switching) return true;
+      if(result.status === 409){
+        return window.MiaAccounts.openOther(sessionToken, {email:result.data.email, name:result.data.name, linked:result.data.linked}).then(function(switching){
+          if(switching) return true;
+          throw new Error('This Mia installation is already linked to another account.');
+        });
+      }
       if(result.status !== 200){
-        if(result.status === 409) throw new Error('This Mia installation is already linked to another account.');
         if(result.status === 422) throw new Error('Mia needs the verified email claim enabled in Clerk.');
         throw new Error('Mia could not verify this Clerk session.');
       }
@@ -669,7 +680,10 @@
         mergeUserProfile(meRes.data.email, meRes.data);
         isAdmin = !!meRes.data.isAdmin;
         showApp(meRes.data.email, meRes.data.accountEmail);
-        return true;
+        return Promise.resolve(window.MiaAccounts.confirmed(sessionToken, {email:result.data.email, name:result.data.name})).catch(function(){}).then(function(){
+          renderAccountMenus();
+          return true;
+        });
       });
     }).catch(function(error){
       if(errEl) errEl.textContent = error && error.message ? error.message : 'Could not sign in. Try again.';
@@ -688,8 +702,14 @@
       return showResolvedClerkSignIn();
     },function(){return showResolvedClerkSignIn();});
   }
+  function renderAccountMenus(){
+    window.MiaAccounts.render(el('#chatAcctAccounts'), {itemClass:'chat-acct-menu-item'});
+    window.MiaAccounts.render(el('#avatarAccounts'), {itemClass:'avatar-menu-item'});
+  }
   function showResolvedClerkSignIn(){
     endWorkspaceHandoff();
+    // No sign-in to lose here, so going back to another account needs no warning.
+    window.MiaAccounts.render(el('#loginAccounts'), {itemClass:'login-account-btn', role:'button', withAdd:false, skipConfirm:true});
     if(!AUTH_CONFIG) return hideApp();
     var form = el('#loginForm');
     var mount = el('#clerkSignIn');

@@ -1516,7 +1516,9 @@ app.post('/api/clerk/session', async (req, res) => {
   const relink = Boolean(previous && previous.issuer !== CLERK_ISSUER);
   const linked = relink ? null : previous;
   if (linked && linked.subject !== claims.sub) {
-    return res.status(409).json({ error: 'clerk_installation_already_linked' });
+    // The desktop app opens this person's own Mia folder with these details.
+    return res.status(409).json({ error: 'clerk_installation_already_linked', email: primaryEmail, name: displayName || '',
+      linked: { subject: linked.subject, email: linked.email || '', name: linked.displayName || '' } });
   }
   if (!linked) db.setMeta(conn, CLERK_SUBJECT_META_KEY, claims.sub);
   db.setMeta(conn, CLERK_ISSUER_META_KEY, CLERK_ISSUER);
@@ -1553,7 +1555,7 @@ app.post('/api/clerk/session', async (req, res) => {
     void autoProvisionManagedRouter(primaryEmail, match[1]);
   }
 
-  return res.status(200).json({ ok: true, email: primaryEmail });
+  return res.status(200).json({ ok: true, email: primaryEmail, name: displayName || '' });
 });
 
 // ---------- auth routes ----------
