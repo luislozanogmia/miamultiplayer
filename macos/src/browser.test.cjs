@@ -1936,6 +1936,20 @@ test("a bot command that never returns stops holding its tab at the hard limit",
   f.h.window.emit("closed");
 });
 
+test("Mia's own page timing read never makes a tab busy", async () => {
+  const h = harness();
+  const id = h.command("new").activeId;
+  h.command("navigate", { value: "https://example.com" });
+  const page = h.views.at(-1).webContents;
+  const original = page.executeJavaScript.bind(page);
+  page.executeJavaScript = script => (script.includes("first-contentful-paint") ? new Promise(() => {}) : original(script));
+  page.emit("did-finish-load");
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+  assert.equal(h.command("groupCreate", { id }).error, undefined, "waiting for first paint must not block grouping");
+  h.window.emit("closed");
+});
+
 test("replacing a page does not clear a page load in progress", async () => {
   const timers = busyTimers();
   const f = await pendingEvalFixture(timers.options);

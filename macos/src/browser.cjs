@@ -66,11 +66,11 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Math.trunc(number)));
 }
 
-async function executeProtocolScript(webContents, script, isolated = false, onSettled) {
+async function executeProtocolScript(webContents, script, isolated = false, onSettled, { readOnly = false } = {}) {
   let timer;
   try {
     return await Promise.race([
-      trackBrowserOperation(webContents, isolated ? webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: script }], false) : webContents.executeJavaScript(script, false), onSettled),
+      readOnly ? isolated ? webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: script }], false) : webContents.executeJavaScript(script, false) : trackBrowserOperation(webContents, isolated ? webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: script }], false) : webContents.executeJavaScript(script, false), onSettled),
       new Promise((_, reject) => {
         timer = setTimeout(() => {
           const error = new Error(`Page script timed out after ${PROTOCOL_SCRIPT_TIMEOUT_MS}ms.`);
@@ -1131,6 +1131,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   function protocolScript(tab, script, isolated = false) {
     return executeProtocolScript(tab.view.webContents, script, isolated, () => browserWorkSettled(tab));
+  }
+  // Mia's own look at a page changes nothing on it, so it's no reason to call the tab busy.
+  function readOnlyScript(tab, script, isolated = false) {
+    return executeProtocolScript(tab.view.webContents, script, isolated, undefined, { readOnly: true });
   }
   // A page that is only loading doesn't stop a tab joining its group when
   // `pagesMayLoad` is set; bot work always does.
@@ -2295,7 +2299,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (tab.documentTimingValid === false) return;
     const sequence = tab.sequence;
     try {
-      const result = await protocolScript(tab, `(async () => {
+      const result = await readOnlyScript(tab, `(async () => {
         if (${waitForPaint} && !performance.getEntriesByName('first-contentful-paint').length) {
           await new Promise(resolve => {
             const observer = new PerformanceObserver(list => {
@@ -3196,7 +3200,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         // The page in front also says what the pointer is over and what is in view.
         const front = pointers[activeId] && tabs.get(activeId);
         if (!front || !front.url || front.view.webContents.isDestroyed()) return { pointers };
-        return executeProtocolScript(front.view.webContents, readScript(front.pointer), true).then(read => {
+        return readOnlyScript(front, readScript(front.pointer), true).then(read => {
           if (read && read.pointer && pointers[activeId].pointer) pointers[activeId].pointer.a = cleanAnchor(read.pointer);
           if (read && read.view) pointers[activeId].view = { a: cleanAnchor(read.view.a), top: read.view.top === true };
           return { pointers };
