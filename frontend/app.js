@@ -6423,6 +6423,7 @@
       nativeProgress: !!(event.metadata && event.metadata.progress === true),
       nativeDiagnostic: !!(event.metadata && event.metadata.diagnostic === true),
       askBeforeDo: event.metadata && event.metadata.askBeforeDo && typeof event.metadata.askBeforeDo === 'object' ? event.metadata.askBeforeDo : null,
+      reactions: event.metadata && event.metadata.reactions && typeof event.metadata.reactions === 'object' ? event.metadata.reactions : null,
       nativeEvent: event
     };
   }
@@ -11885,7 +11886,7 @@
       : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (opts.footerHtml || '') + '</div></div>';
+      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, currentUser, esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '') + '</div></div>';
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed
@@ -12891,6 +12892,96 @@
       sendActiveRoomMessage(result.text.trim());
     });
   }
+
+  // One emoji panel for the message box and for reactions. It sits on the page
+  // itself so it shows above the chat pane, and stays inside that pane so the
+  // browser view beside it can't cover it.
+  var emojiPicker = {node: null, anchor: null, onPick: null};
+  var EMOJI_RECENT_KEY = 'miaEmojiRecent';
+  function recentEmoji(){
+    try { var saved = JSON.parse(localStorage.getItem(EMOJI_RECENT_KEY) || '[]'); return Array.isArray(saved) ? saved : []; }
+    catch(_){ return []; }
+  }
+  function closeEmojiPicker(){
+    if(!emojiPicker.node) return;
+    emojiPicker.node.remove();
+    if(emojiPicker.anchor && emojiPicker.anchor.id === 'ccEmojiBtn') emojiPicker.anchor.setAttribute('aria-expanded', 'false');
+    emojiPicker = {node: null, anchor: null, onPick: null};
+  }
+  function openEmojiPicker(anchor, onPick, closeOnPick){
+    var same = emojiPicker.anchor === anchor;
+    closeEmojiPicker();
+    if(same) return;
+    var node = document.createElement('section');
+    node.className = 'mia-emoji-picker';
+    node.setAttribute('role', 'dialog');
+    node.setAttribute('aria-label', 'Choose an emoji');
+    node.innerHTML = '<input type="search" placeholder="Search emoji" aria-label="Search emoji"><div class="mia-emoji-list">' + window.MiaEmoji.listHtml('', recentEmoji(), esc) + '</div>';
+    document.body.appendChild(node);
+    var pane = (anchor.closest('.chat-app') || document.documentElement).getBoundingClientRect();
+    var spot = anchor.getBoundingClientRect();
+    var width = Math.min(node.offsetWidth, pane.width - 16);
+    node.style.width = width + 'px';
+    var height = node.offsetHeight;
+    node.style.left = Math.max(pane.left + 8, Math.min(spot.left, pane.right - width - 8)) + 'px';
+    node.style.top = (spot.top - height - 8 >= 8 ? spot.top - height - 8 : Math.min(spot.bottom + 8, window.innerHeight - height - 8)) + 'px';
+    emojiPicker = {node: node, anchor: anchor, onPick: onPick};
+    if(anchor.id === 'ccEmojiBtn') anchor.setAttribute('aria-expanded', 'true');
+    var search = node.querySelector('input'), list = node.querySelector('.mia-emoji-list');
+    search.addEventListener('input', function(){ list.innerHTML = window.MiaEmoji.listHtml(search.value, recentEmoji(), esc); });
+    search.addEventListener('keydown', function(event){ if(event.key === 'Escape'){ event.stopPropagation(); var from = anchor; closeEmojiPicker(); from.focus(); } });
+    list.addEventListener('click', function(event){
+      var button = event.target.closest('[data-emoji-pick]');
+      if(!button) return;
+      var emoji = button.getAttribute('data-emoji-pick');
+      try { localStorage.setItem(EMOJI_RECENT_KEY, JSON.stringify(window.MiaEmoji.remember(recentEmoji(), emoji))); } catch(_){}
+      if(closeOnPick) closeEmojiPicker();
+      onPick(emoji);
+    });
+    search.focus();
+  }
+  function insertComposerEmoji(emoji){
+    var input = el('#ccInput');
+    if(!input) return;
+    var start = input.selectionStart, end = input.selectionEnd;
+    input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+    input.selectionStart = input.selectionEnd = start + emoji.length;
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  }
+  // Shared channels keep their messages on the Hub, which has nowhere to store a reaction yet.
+  function canReactToMessage(m){
+    return !!(m && m.nativeEvent && m.nativeEvent.id && !m.pending && !m.deleted && !m.system && !m.nativeProgress);
+  }
+  function toggleMessageReaction(eventId, emoji){
+    var roomId = chatWs.activeRoomId;
+    api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId) + '/reactions'), {method: 'POST', body: {emoji: emoji}}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.event) throw new Error('reaction failed');
+      var message = chatRoomState(roomId).messages.filter(function(item){ return item.id === eventId; })[0];
+      if(message){
+        message.reactions = res.data.event.metadata && res.data.event.metadata.reactions || null;
+        message.nativeEvent = res.data.event;
+      }
+      if(chatWs.activeRoomId === roomId) renderChatThread();
+    }).catch(function(){ showBenchToast('That reaction could not be saved.'); });
+  }
+  document.addEventListener('click', function(event){
+    var target = event.target;
+    if(!target || !target.closest) return;
+    var composerButton = target.closest('#ccEmojiBtn');
+    var add = target.closest('[data-react-add]');
+    var chip = target.closest('[data-react-toggle]');
+    if(composerButton){ openEmojiPicker(composerButton, insertComposerEmoji, false); return; }
+    if(add || chip){
+      var row = target.closest('.chat-msg-row');
+      var eventId = row && row.getAttribute('data-event-id');
+      if(!eventId) return;
+      if(chip) toggleMessageReaction(eventId, chip.getAttribute('data-react-toggle'));
+      else openEmojiPicker(add, function(emoji){ toggleMessageReaction(eventId, emoji); }, true);
+      return;
+    }
+    if(emojiPicker.node && !emojiPicker.node.contains(target)) closeEmojiPicker();
+  });
+  document.addEventListener('keydown', function(event){ if(event.key === 'Escape') closeEmojiPicker(); });
 
   // A local-only confirmation line (@-mention add outcome) — never
   // sent to the server, just appended to this room's cached thread so it

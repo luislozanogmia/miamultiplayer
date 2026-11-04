@@ -292,6 +292,18 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
     res.status(200).json(result);
   }));
 
+  router.post('/conversations/:conversationId/events/:eventId/reactions', handle((req, res) => {
+    const { companyId, principal } = context(req);
+    const result = service.toggleEventReaction({
+      companyId,
+      conversationId: req.params.conversationId,
+      principal,
+      eventId: req.params.eventId,
+      emoji: requestBody(req).emoji,
+    });
+    res.status(200).json(result);
+  }));
+
   router.delete('/conversations/:conversationId/events/:eventId', handle((req, res) => {
     const { companyId, principal } = context(req);
     const result = service.deleteEvent({
