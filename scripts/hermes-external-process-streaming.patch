@@ -1,0 +1,19 @@
+diff --git a/agent/turn_api_call.py b/agent/turn_api_call.py
+index eea1a42..d86afdc 100644
+--- a/agent/turn_api_call.py
++++ b/agent/turn_api_call.py
+@@ -54,8 +54,13 @@ def _should_stream(agent: Any) -> bool:
+     _base = str(agent.base_url or "").lower()
+     from hermes_cli.runtime_provider_backends import _is_external_process_provider
+ 
+-    if _base.startswith(("acp://", "acp+tcp://")) or _is_external_process_provider(agent.provider):
++    if _base.startswith(("acp://", "acp+tcp://")):
+         return False
++    if _is_external_process_provider(agent.provider):
++        # A profile may declare that its client yields real stream chunks.
++        from providers import get_provider_profile
++        if not getattr(get_provider_profile(agent.provider), "streams_chunks", False):
++            return False
+     if not agent._has_stream_consumers():
+         if agent.provider == "moa":
+             return False
