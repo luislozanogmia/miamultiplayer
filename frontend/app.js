@@ -7308,6 +7308,9 @@
     var deleteLabel = el('#chatSidebarCtxDeleteLabel');
     var scroll = el('.chat-sidebar-scroll');
     if(!menu || !pinItem || !scroll) return;
+    // With the browser open the sidebar docks above the chat pane, so a menu left
+    // inside the pane opens underneath the sidebar it belongs to.
+    document.body.appendChild(menu);
     var openEntry = null;
 
     function item(action){ return el('[data-sidebar-action="' + action + '"]', menu); }

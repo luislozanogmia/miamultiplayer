@@ -67,7 +67,7 @@ test('right-click exposes conversation delete and keeps bot delete separate', as
   const deletedChats = [];
   const deletedBots = [];
   vm.runInNewContext(source.slice(start, end), {
-    el: node, document: { addEventListener() {} }, window: { innerWidth: 1200, innerHeight: 800 },
+    el: node, document: { addEventListener() {}, body: { appendChild() {} } }, window: { innerWidth: 1200, innerHeight: 800 },
     sidebarMenuLeft: (x) => x,
     isChatPinned: () => false, chatNeedsAttention: () => false,
     deleteNativeConversation: (entry) => deletedChats.push(entry.roomId),
@@ -158,4 +158,10 @@ test('sidebar context menu uses styled icons and human hide keys are accepted', 
   const app = await readFile(appUrl, 'utf8');
   assert.match(app, /chatWs\.hiddenChats/);
   assert.match(app, /e\.hideKey = e\.kind === 'agent' \? 'agent:' .*'human:'/);
+});
+
+test('the sidebar menu sits above the docked sidebar, not inside the chat pane', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  const setup = source.slice(source.indexOf("var menu = el('#chatSidebarCtxMenu');"));
+  assert.match(setup.slice(0, 700), /document\.body\.appendChild\(menu\)/);
 });
