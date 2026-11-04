@@ -159,6 +159,7 @@ const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
 const { extractToolActivity } = require('./agent-activity');
 const { createConversationAttachmentStore } = require('./conversation-attachments');
+const turnFiles = require('./turn-files');
 const { createConversationRouter } = require('./conversation-router');
 const { attachConversationWebSocketServer } = require('./conversation-websocket');
 const { createWorkspaceArtifactService } = require('./workspace-artifacts');
@@ -854,6 +855,8 @@ const nativeConversationService = createConversationService({
   resolveParticipants: resolveNativeConversationParticipants,
   ensureMembers: ensureNativeConversationMembers,
 });
+// Inside the attachment folder so a clean slate removes these copies too.
+const TURN_FILES_DIR = path.join(NATIVE_ATTACHMENT_DIR, 'for-bots');
 const nativeConversationAttachmentStore = createConversationAttachmentStore({
   repository: nativeConversationRepository,
   authorization: nativeConversationAuthorization,
@@ -1343,7 +1346,7 @@ app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-cl
   filesSupported: !MIAOS_AGENT_SEARCH_ONLY,
 }));
 
-async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection }) {
+async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection, files = [], unreadableFiles = [] }) {
     // The requester's composer model choice applies to the runs they start,
     // validated against their own connected inventory exactly like Solo.
     const selection = await chatModelSelectionForUser(modelSelection, owner);
@@ -1355,14 +1358,18 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
     const sharedBot = { id: bot.id, name: bot.name,
       instructions: bot.instructions || bot.role || bot.output || '', automations: [],
       bundledSkills: Array.isArray(bot.bundledSkills) ? bot.bundledSkills : [] };
-    const speaker = row => '[' + (row.author_name || row.author_email || row.author_id) + '] ' + row.body;
+    const stagedFiles = turnFiles.stageTurnFiles(TURN_FILES_DIR, files);
+    const filesNote = turnFiles.turnFilesNote(stagedFiles, unreadableFiles);
+    const imagePaths = turnFiles.turnImagePaths(stagedFiles);
+    const withAttachment = row => [row.body, turnFiles.attachedLabel(row.attachment ? [row.attachment.filename || 'image'] : [])].filter(Boolean).join(' ');
+    const speaker = row => '[' + (row.author_name || row.author_email || row.author_id) + '] ' + withAttachment(row);
     const workspace = await turnWorkspaceContext(owner, history.map(speaker), contextText === undefined ? trigger.body : contextText,
       { companyId: 'hub:' + channel.teamId, id: channel.channelId }, sharedBot);
     const turn = await runBotReplyTurn({
       agent: sharedBot,
       senderLabel: trigger.author_email,
       message: trigger.body,
-      promptLine: '[' + trigger.author_email + '] ' + trigger.body,
+      promptLine: '[' + trigger.author_email + '] ' + withAttachment(trigger),
       platformContext: [localDateLine(), workspace.workspaceContext,
         'This is a shared team channel. Distinguish each speaker. Reply to the current request; do not treat another bot reply as a new request. Keep the reply within 15,000 UTF-8 bytes.',
       ].filter(Boolean).join('\n\n'),
@@ -1375,9 +1382,10 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         content: speaker(row),
       }))),
       nextStepLine: false,
-      notes: [sharedBrowserNote()],
+      notes: [filesNote, sharedBrowserNote()],
       inferenceOptions: {
         ...userOptions,
+        ...(imagePaths.length ? { imagePaths } : {}),
         botWorker: true,
         maxTurns: MIAOS_BOT_MAX_TURNS,
         maxTokens: hermesTokenBudgetFromOptions(userOptions),
@@ -6532,8 +6540,37 @@ function isNativeProgressEvent(event) {
   return Boolean(event && event.metadata && event.metadata.progress === true);
 }
 
+function nativeEventAttachments(event) {
+  const list = event && event.content && event.content.attachments;
+  return Array.isArray(list) ? list.filter((attachment) => attachment && attachment.id) : [];
+}
+
+// The trigger's files, ready for its turn. A file that can't be read is named
+// in the note so the bot says so instead of claiming nothing was sent.
+async function nativeTurnFiles(dispatch, trigger) {
+  const files = [], unreadable = [];
+  for (const attachment of nativeEventAttachments(trigger)) {
+    try {
+      const read = await nativeConversationAttachmentStore.readAttachment({
+        companyId: dispatch.companyId,
+        conversationId: dispatch.conversationId,
+        principal: { principalId: trigger.senderId, principalType: 'user' },
+        id: attachment.id,
+      });
+      if (!read) throw new Error('attachment not found');
+      files.push({ id: attachment.id, filename: read.metadata.filename, mimeType: read.metadata.mimeType, bytes: read.bytes });
+    } catch (error) {
+      console.error('turn attachment unreadable', attachment.id, error && error.message);
+      unreadable.push(attachment.filename);
+    }
+  }
+  const staged = turnFiles.stageTurnFiles(TURN_FILES_DIR, files);
+  return { note: turnFiles.turnFilesNote(staged, unreadable), imagePaths: turnFiles.turnImagePaths(staged) };
+}
+
 function nativePromptLine(event) {
-  const body = nativeEventText(event);
+  const attached = turnFiles.attachedLabel(nativeEventAttachments(event).map((attachment) => attachment.filename));
+  const body = [nativeEventText(event), attached].filter(Boolean).join(' ');
   if (!body) return null;
   if (event.senderType === 'agent' || event.senderType === 'bot') {
     const bot = event.senderType === 'bot' ? db.loadOne(conn, 'bots', event.senderId) : null;
@@ -6818,7 +6855,7 @@ function nativeHermesGatewaySeedMessages(systemPrompt, events, triggerId) {
   const messages = [{ role: 'system', content: systemPrompt }];
   for (const event of events || []) {
     if (!event || event.id === triggerId || isNativeProgressEvent(event)) continue;
-    const body = nativeEventText(event);
+    const body = nativeEventText(event) || nativePromptLine(event);
     if (!body) continue;
     const role = event.senderType === 'agent' || event.senderType === 'bot'
       ? 'assistant'
@@ -7587,7 +7624,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   if (!trigger || trigger.senderType !== 'user') return;
   throwIfNativeDispatchUserInactive(dispatch, trigger);
   const isGatewayAgent = dispatch.targetType === 'gateway';
-  const message = nativeEventText(trigger);
+  const message = nativeEventText(trigger) || turnFiles.attachedLabel(nativeEventAttachments(trigger).map((attachment) => attachment.filename));
   const rawChatModelSelection = trigger.metadata && trigger.metadata.chatModelSelection;
   const chatModelSelection = await chatModelSelectionForUser(
     rawChatModelSelection,
@@ -7719,7 +7756,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     : googleGatewaySessionKey;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
+  const turnAttachments = await nativeTurnFiles(dispatch, trigger);
   const inferenceOptions = {
+    ...(turnAttachments.imagePaths.length ? { imagePaths: turnAttachments.imagePaths } : {}),
     ...userOptions,
     ...(chatModelSelection ? {
       provider: chatModelSelection.provider,
@@ -7904,7 +7943,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleWorkspaceWriteAuthorized && gatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE
         && !(privateAgent && googleProfileAuthorized),
       globalInstructions.agent
-    ), nativeBrowserContextNote(trigger, {
+    ), turnAttachments.note, nativeBrowserContextNote(trigger, {
       ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly,
     }),
     sharedBrowserNote(),
@@ -8012,6 +8051,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleActionInstruction,
       slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName() }),
       nativePromptLine(trigger) || message,
+      turnAttachments.note,
       nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
       botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
       sharedBrowserNote(),
@@ -8092,6 +8132,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       globalInstructions: globalInstructions.bot,
       seedMessages: (systemPrompt) => nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
       notes: [
+        turnAttachments.note,
         nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
         botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
         sharedBrowserNote(),

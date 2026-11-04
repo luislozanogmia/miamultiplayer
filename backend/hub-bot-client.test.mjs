@@ -87,3 +87,10 @@ test('a full team storage allowance is reported as itself, not as an oversized b
   f.setVersionAnswer(()=>new Response(JSON.stringify({error:'body_too_large'}),{status:413}));
   await assert.rejects(f.client.share(owner,f.input,'fixture.token'),{status:413,code:'bot_too_large_for_team'});
 });
+
+test('a shared bot turn receives the file on the message it answers',async()=>{
+  const source=require('node:fs').readFileSync(new URL('./hub-bot-client.js',import.meta.url),'utf8');
+  assert.match(source,/const attached=await triggerFile\(s,trigger,token\)/);
+  assert.match(source,/modelSelection:selections\.get\(runKey\(s,run\.job_id\)\)\|\|null,\.\.\.attached\}/);
+  assert.match(source,/unreadableFiles:\[item\.filename\|\|'image'\]/);
+});
