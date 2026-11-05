@@ -18,19 +18,28 @@ function cleanEntry(item) {
   };
 }
 
-function createClosedTabs({ log = () => {} } = {}) {
+function createClosedTabs({ log = () => {}, safeStorage, platform = process.platform } = {}) {
   let file = "";
   let entries = [];
+  const canEncrypt = () => safeStorage?.isEncryptionAvailable?.()
+    && !(platform === "linux" && ["basic_text", "unknown", undefined].includes(safeStorage.getSelectedStorageBackend?.()));
+  // The menu and renderer need a label, never a credential-bearing URL. The
+  // original URL stays private in entries so reopening lands on the same page.
+  const displayUrl = raw => {
+    try { return new URL(raw).origin + "/"; } catch (_) { return ""; }
+  };
   function save() {
     if (!file) return;
+    if (!canEncrypt()) return; // Keep the list in memory until the OS keyring is available.
     const temporary = `${file}.${process.pid}.tmp`;
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(temporary, JSON.stringify({ version: 1, entries }), { mode: 0o600 });
+      const encrypted = safeStorage.encryptString(JSON.stringify({ version: 2, entries }));
+      fs.writeFileSync(temporary, Buffer.concat([Buffer.from("MIACT2\n"), encrypted]), { mode: 0o600 });
       fs.renameSync(temporary, file);
     } catch (error) {
       try { fs.rmSync(temporary, { force: true }); } catch (_) { /* best effort cleanup */ }
-      log(`closed tabs save failed: ${error.message}`);
+      log("closed tabs save failed");
     }
   }
   return {
@@ -39,8 +48,13 @@ function createClosedTabs({ log = () => {} } = {}) {
       entries = [];
       if (!file) return;
       try {
-        const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+        const bytes = fs.readFileSync(file);
+        const encrypted = bytes.subarray(0, 7).toString() === "MIACT2\n";
+        const saved = JSON.parse(encrypted
+          ? (canEncrypt() ? safeStorage.decryptString(bytes.subarray(7)) : "{}")
+          : bytes.toString("utf8"));
         entries = (Array.isArray(saved.entries) ? saved.entries : []).map(cleanEntry).filter(Boolean).slice(0, CLOSED_TABS_MAX);
+        if (!encrypted && canEncrypt()) save(); // Migrate the old private JSON file in place.
       } catch (_) { /* no list yet */ }
     },
     remember(item) {
@@ -54,10 +68,10 @@ function createClosedTabs({ log = () => {} } = {}) {
       if (entry) save();
       return entry || null;
     },
-    list: () => entries.map(entry => ({ ...entry })),
+    list: () => entries.map(entry => ({ ...entry, url: displayUrl(entry.url) })),
     clear() {
       entries = [];
-      if (file) try { fs.rmSync(file, { force: true }); } catch (error) { log(`closed tabs cleanup failed: ${error.message}`); }
+      if (file) try { fs.rmSync(file, { force: true }); } catch (_) { log("closed tabs cleanup failed"); }
     },
   };
 }
