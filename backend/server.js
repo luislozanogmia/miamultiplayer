@@ -1387,6 +1387,15 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
     const speaker = row => '[' + (row.author_name || row.author_email || row.author_id) + '] ' + withAttachment(row);
     const workspace = await turnWorkspaceContext(owner, history.map(speaker), contextText === undefined ? trigger.body : contextText,
       { companyId: 'hub:' + channel.teamId, id: channel.channelId }, sharedBot);
+    // The run's Hermes session may use this computer's browser for its owner,
+    // the same as their own bot chats; see /api/browser/actor.
+    const runSessions = [];
+    const onSession = (session) => {
+      const id = String(session && session.sessionId || '');
+      if (!id) return;
+      runSessions.push(id);
+      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot') });
+    };
     const turn = await runBotReplyTurn({
       agent: sharedBot,
       senderLabel: trigger.author_email,
@@ -1412,9 +1421,10 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         maxTurns: MIAOS_BOT_MAX_TURNS,
         maxTokens: hermesTokenBudgetFromOptions(userOptions),
         profile: workspace.connectionInventory.googleToolsEnabled ? MIAOS_BOT_GOOGLE_HERMES_PROFILE : MIAOS_BOT_HERMES_PROFILE,
+        onSession,
       },
       signal,
-    });
+    }).finally(() => { runSessions.forEach((id) => sharedBotRunSessions.delete(id)); });
     return {
       text: cleanBotReplyText(sharedBot.name, turn.rawReply).text,
       provider: String(HERMES_AUTH_PROVIDER_LABELS[userOptions.provider] || '').replace(/\s+subscription$/i, ''),
@@ -6964,12 +6974,21 @@ function nativeBotSessionKey(profile, systemPrompt) {
 // /goal keeps working after a turn ends; those turns arrive with no dispatch
 // waiting, and this map is how they find their chat.
 const nativeGatewaySessionConversations = new Map();
+// Live Hermes session id -> a team bot running on this computer for its
+// owner, from a team channel or workflow. Kept only while the run lasts.
+const sharedBotRunSessions = new Map();
 
 // The desktop browser asks which bot a live Hermes session belongs to, so a
 // page a bot opens lands in that bot's tab group. Mia is an explicit verified
 // identity; unknown sessions and inaccessible conversations never become Mia.
 app.get('/api/browser/actor', requireAuth, (req, res) => {
   const sessionId = String(req.query.session || '').trim();
+  const shared = sessionId && sessionId.length <= 200 ? sharedBotRunSessions.get(sessionId) : null;
+  if (shared) {
+    // Only the person running it here: the bot uses their browser, as in Solo.
+    if (shared.owner !== String(req.userEmail || '').trim().toLowerCase()) return res.status(200).json({ actor: null });
+    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name } });
+  }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
   if (!target) return res.status(200).json({ actor: null });
   try {
