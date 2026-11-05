@@ -1004,6 +1004,51 @@ function listUndeliveredBotCronResults(conn) {
 // job is actually running. state.db is a transcript store and can legitimately
 // retain ended_at=NULL after a crash; using it for liveness made those orphaned
 // transcripts pulse in the sidebar long after the worker had stopped.
+// Runs cut off when Mia stopped: still marked running by a process that is gone,
+// or already marked unknown by Hermes when it found them after a restart.
+const INTERRUPTED_RUN_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+function listInterruptedBotCronRuns(conn) {
+  if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
+  const registry = readHermesJobs();
+  const Database = require('better-sqlite3');
+  const executions = new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true });
+  const ownerGone = (pid) => {
+    try { process.kill(Number(pid), 0); return false; } catch (error) { return error.code === 'ESRCH'; }
+  };
+  try {
+    if (!hasSqliteTable(executions, 'executions')) return [];
+    const latest = executions.prepare(
+      `SELECT id, status, pid, claimed_at AS claimedAt, started_at AS startedAt, finished_at AS finishedAt
+         FROM executions WHERE job_id = ? ORDER BY claimed_at DESC, id DESC LIMIT 1`
+    );
+    const results = [];
+    for (const bot of db.loadAll(conn, 'bots')) {
+      migrateBotAutomations(bot);
+      for (const automation of bot.automations) {
+        const jobId = bot.hermesCronJobIds[automation.id];
+        const row = jobId && latest.get(jobId);
+        if (!row) continue;
+        const recent = Date.now() - Date.parse(row.finishedAt || '') < INTERRUPTED_RUN_LOOKBACK_MS;
+        const cutOff = row.status === 'unknown' ? recent : (['claimed', 'running'].includes(row.status) && ownerGone(row.pid));
+        if (!cutOff || !jobOwnedByAutomation(registry.byId.get(jobId) || null, bot, automation, true)) continue;
+        const steps = Array.isArray(automation.steps) ? automation.steps.map((step) => String(step || '').trim()).filter(Boolean) : [];
+        let directory = null;
+        try {
+          BOT_PACKAGE_STORE.hydrate(bot);
+          directory = BOT_PACKAGE_STORE.findDirectory(bot.id);
+        } catch (_error) {
+          directory = null;
+        }
+        const list = steps.length ? automationChecklist(steps, readRunReports(directory, automation.id), row) : { done: 0, total: 0 };
+        results.push({ bot, automation, executionId: row.id, done: list.done || 0, total: list.total || steps.length });
+      }
+    }
+    return results;
+  } finally {
+    executions.close();
+  }
+}
+
 function listActiveBotCronRuns(conn) {
   if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
   const registry = readHermesJobs();
@@ -1190,6 +1235,7 @@ module.exports = {
   reconcileBotCrons,
   listUndeliveredBotCronResults,
   listActiveBotCronRuns,
+  listInterruptedBotCronRuns,
   listAutomationChecklists,
   automationChecklist,
   readRunReports,

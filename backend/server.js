@@ -1321,7 +1321,20 @@ function requireMiaAdmin(req, res, next) {
 }
 
 // Sharing requires both the local interactive session and matching Hub identity.
+// What was running when Mia last stopped, kept until the person answers for each piece.
+const interruptedWorkModule = require('./interrupted-work');
+const interruptedWork = interruptedWorkModule.createInterruptedWork({ db: conn });
+const hubBotJournal = require('./hub-bot-journal').createHubBotJournal(conn);
+const hubWorkflowJournal = require('./hub-workflow-journal').createHubWorkflowJournal(conn);
+interruptedWorkModule.registerInterruptedWorkRoutes(app, {
+  work: interruptedWork,
+  read: [requireAuth],
+  write: [requireAuth, requireInteractiveAuth],
+  ownerFromRequest: req => req.userEmail,
+});
 app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createHubBotRouter({
+  isHeld: (jobId) => interruptedWork.isOpen('team-bot', jobId),
+  isClosing: () => backendShutdownStarted,
   isPrivateAgent: (id) => require('./private-agents').isPrivateAgentId(id),
   db: conn,
   dataDirectory: path.dirname(path.resolve(DB_PATH)),
@@ -1337,6 +1350,7 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
 }));
 // Team workflow steps: the same bot turn, the owner's own account, one step at a time.
 app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-client').createHubWorkflowRouter({
+  isClosing: () => backendShutdownStarted,
   db: conn,
   dataDirectory: path.dirname(path.resolve(DB_PATH)),
   isOwnerActive: isActiveWorkspaceUser,
@@ -7898,6 +7912,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // verbose-diagnostics setting. Never persisted, never part of the transcript.
     const toolActivity = extractToolActivity(type, payload);
     if (toolActivity) {
+      // Kept with the turn: after a close, this says whether running it again could repeat something.
+      if (toolActivity.phase === 'start' && !dispatch.usedChangingTool && interruptedWorkModule.toolMayRepeat(toolActivity.tool)) {
+        dispatch.usedChangingTool = true;
+        try {
+          nativeConversationRepository.mergeDispatchMetadata({ companyId: dispatch.companyId, id: dispatch.id, metadata: { usedChangingTool: true } });
+        } catch (_) { /* never breaks a turn */ }
+      }
       try {
         nativeConversationRealtime.publishActivity(dispatch.conversationId, {
           dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), ...toolActivity,
@@ -8316,6 +8337,9 @@ async function executeNativeConversationDispatch(dispatch) {
       claimToken,
     });
   } catch (error) {
+    // Mia is closing, which ends every open stream. That isn't this turn failing:
+    // it stays claimed, and the person decides about it when Mia opens next.
+    if (backendShutdownStarted) return;
     const timedOut = timeoutError || (error && error.code === NATIVE_DISPATCH_TIMEOUT_CODE ? error : null);
     const budgetExceeded = budgetError || (error && error.code === NATIVE_DISPATCH_TOKEN_BUDGET_CODE ? error : null);
     let stopped = nativeDispatchWasStopped(dispatch);
@@ -8420,9 +8444,80 @@ function recoverNativeConversationDispatches() {
     "SELECT DISTINCT company_id AS companyId FROM conversation_dispatches WHERE status = 'claimed'"
   ).all().map((row) => row.companyId);
   if (!companyIds.includes(NATIVE_COMPANY_ID)) companyIds.push(NATIVE_COMPANY_ID);
-  const dispatches = companyIds.flatMap((companyId) => nativeConversationRepository.requeueClaimedDispatches({ companyId }));
-  for (const dispatch of dispatches) setImmediate(() => scheduleNativeConversationDispatch(dispatch).catch(() => {}));
-  if (dispatches.length) console.log(`native dispatch recovery: requeued ${dispatches.length} claimed dispatch(es)`);
+  const dispatches = companyIds.flatMap((companyId) => nativeConversationRepository.holdClaimedDispatches({
+    companyId, error: interruptedWorkModule.HELD_DISPATCH_ERROR,
+  }));
+  interruptedWork.record('chat', dispatches.map(interruptedChatEntry));
+  for (const dispatch of dispatches) removeNativeDispatchProgressEvent(dispatch);
+  if (dispatches.length) console.log(`native dispatch recovery: held ${dispatches.length} interrupted dispatch(es)`);
+}
+
+function interruptedChatEntry(dispatch) {
+  const trigger = nativeConversationRepository.getEvent({ companyId: dispatch.companyId, id: dispatch.eventId, includeDeleted: false });
+  const name = dispatch.targetType === 'gateway' ? 'Mia' : ((db.loadOne(conn, 'bots', dispatch.targetId) || {}).name || 'Bot');
+  const text = trigger ? interruptedWorkModule.shortText(nativeEventText(trigger), 70) : '';
+  const mayRepeat = !!(dispatch.metadata && dispatch.metadata.usedChangingTool);
+  return {
+    key: dispatch.id,
+    title: text ? `${name}: ${text}` : name,
+    detail: mayRepeat ? 'It may already have done some of this.' : 'Was answering this message.',
+    mayRepeat,
+    ref: { companyId: dispatch.companyId, dispatchId: dispatch.id },
+  };
+}
+
+interruptedWork.handle('chat', {
+  start({ ref }) {
+    const dispatch = nativeConversationRepository.requeueHeldDispatch({
+      companyId: ref.companyId, id: ref.dispatchId, error: interruptedWorkModule.HELD_DISPATCH_ERROR,
+    });
+    nativeConversationRepository.releaseDeletedEventKey({
+      companyId: dispatch.companyId, conversationId: dispatch.conversationId, clientIdempotencyKey: `native-dispatch-progress-${dispatch.id}`,
+    });
+    setImmediate(() => scheduleNativeConversationDispatch(dispatch).catch(() => {}));
+  },
+});
+interruptedWork.handle('automation', {
+  async start({ ref }) {
+    const bot = db.loadOne(conn, 'bots', ref.botId);
+    const result = bot ? await cronSync.runBotAutomationNow(bot, ref.automationId) : { status: 'missing' };
+    if (result.status !== 'started') throw new Error(`automation ${result.status}`);
+  },
+});
+interruptedWork.handle('team-bot', {
+  // The next poll of that channel picks it up; held until now, so it waited.
+  start({ ref }) { hubBotJournal.reopen(ref.jobId); },
+});
+
+// Everything else cut off by the last stop. Each was written down before it began.
+function recordInterruptedTeamAndAutomationWork() {
+  interruptedWork.record('team-bot', hubBotJournal.startedRuns().map((run) => ({
+    key: run.job_id,
+    owner: run.owner,
+    title: `${hubBotJournal.publicName(run) || 'Team bot'}: reply in a team channel`,
+    detail: 'It may already have done some of this.',
+    mayRepeat: true,
+    ref: { jobId: run.job_id, teamId: run.team_id, channelId: run.channel_id },
+  })));
+  interruptedWork.record('workflow', hubWorkflowJournal.startedSteps().map((step) => ({
+    key: `${step.run_id}:${step.n}:${step.claim_id}`,
+    owner: step.owner,
+    title: `${step.workflow_name || 'Workflow'}: step ${step.n}`,
+    detail: 'Some of it may already have happened. Left unticked, it waits on the workflows page.',
+    mayRepeat: true,
+    ref: { teamId: step.team_id, runId: step.run_id, n: step.n },
+  })));
+  try {
+    interruptedWork.record('automation', cronSync.listInterruptedBotCronRuns(conn).map((run) => ({
+      key: run.executionId,
+      title: `${run.bot.name || 'Bot'}: ${run.automation.name || 'Automation'}`,
+      detail: run.total ? `Automation, ${run.done} of ${run.total} steps done.` : 'Automation run.',
+      mayRepeat: run.done > 0,
+      ref: { botId: run.bot.id, automationId: run.automation.id },
+    })));
+  } catch (error) {
+    console.error('interrupted automation check failed', error.message);
+  }
 }
 
 // Native conversation event API and outbox.
@@ -8692,6 +8787,8 @@ let backendShutdownStarted = false;
 function shutdownBackend() {
   if (backendShutdownStarted) return;
   backendShutdownStarted = true;
+  interruptedWork.touch();
+  interruptedWork.stop();
   disconnectAllHermesAuth();
   browserWorkWorkerBroker?.stop().catch(() => {});
   askBeforeDoGate?.stop().catch(() => {});
@@ -8850,6 +8947,7 @@ async function initializeBrowserWork() {
     executeOperation: (...args) => coordinator.executeOperation(...args),
   });
   coordinator = createBrowserWorkCoordinator({ store, hermes, browser: desktop,
+    isClosing: () => backendShutdownStarted,
     async authorizeGroup(owner, groupId, tabId) {
       if (owner !== String(DEFAULT_OWNER).toLowerCase() || !isActiveWorkspaceUser(owner)) return false;
       const state = await desktop.getState();
@@ -8878,7 +8976,23 @@ async function initializeBrowserWork() {
       });
     },
   });
-  coordinator.recoverInterrupted();
+  interruptedWork.record('browser', coordinator.recoverInterrupted().map(work => {
+    const mayRepeat = work.operations.some(operation => operation.status === 'uncertain');
+    return {
+      key: `${work.id}:${work.epoch}`,
+      owner: work.ownerId,
+      title: `Browser work: ${work.goal || 'unfinished task'}`,
+      detail: mayRepeat ? 'A page action may have gone through, so check the page before running it again.' : 'Was working in your browser tabs.',
+      mayRepeat,
+      ref: { workId: work.id, ownerId: work.ownerId, workerIds: work.workers.filter(worker => worker.status === 'waiting_for_user').map(worker => worker.id) },
+    };
+  }));
+  interruptedWork.handle('browser', {
+    async start({ ref }) {
+      await coordinator.recover(ref.ownerId, ref.workId, ref.workerIds);
+      coordinator.start(ref.ownerId, ref.workId).catch(() => console.error('Browser work stopped before completion'));
+    },
+  });
   miaAppBrowserWork = coordinator;
   browserWorkRouter.use('/api/browser-work', requireAuth, (req, res, next) => req.method === 'GET' ? next() : requireInteractiveAuth(req, res, next), async (req, res, next) => {
     try {
@@ -9005,6 +9119,7 @@ async function onBackendListening() {
   }
   reconcileNativeMiaConversations();
   recoverNativeConversationDispatches();
+  recordInterruptedTeamAndAutomationWork();
   reconcileNativeBotConversations()
     // Conversation ownership must settle before cron reconciliation reads
     // bot records. Running these in parallel allowed a stale origin-chat

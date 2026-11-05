@@ -124,7 +124,7 @@ function nativeExecutionEvidence(work) {
   };
 }
 
-function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, resolveBot, personalOptions, resolvePersonalSession = async () => undefined, onChange = () => {}, now = Date.now }) {
+function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, resolveBot, personalOptions, resolvePersonalSession = async () => undefined, onChange = () => {}, now = Date.now, isClosing = () => false }) {
   if (!store || !hermes || !browser || typeof authorizeGroup !== 'function' || typeof resolveBot !== 'function') throw new Error('browser work dependencies required');
   async function checkedPersonalOptions(ownerId, selection) {
     // Root resolves credentials and validates the live connected inventory on
@@ -139,6 +139,9 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
   const replayContexts = new WeakSet(); // only validated runReusable can supply provenance
   const waiters = new Map();
   function save(work) {
+    // A closing app fails everything it was running. What was on disk before the
+    // close is the truth, so nothing is written over it now.
+    if (isClosing()) return clone(work);
     work.updatedAt = now();
     store.put(work); // Durable first; UI diagnostics cannot break dispatch.
     try { onChange(serializeBrowserWork(work)); } catch (_) { /* observer only */ }
@@ -543,8 +546,10 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     return saved;
   }
   function recoverInterrupted() {
+    const interrupted = [];
     for (const work of store.list()) {
       if (terminal.has(work.status)) continue;
+      interrupted.push(work.id);
       work.epoch++; work.synthesisEpoch = (work.synthesisEpoch || 0) + 1;
       work.status = 'waiting_for_user';
       if (work.synthesis?.incomplete) { work.synthesis.status = 'incomplete'; work.synthesis.verified = false; work.synthesis.interruptedBy = 'restart'; }
@@ -557,6 +562,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
       for (const approval of work.approvals) if (['pending', 'accepted'].includes(approval.status)) approval.status = 'revoked';
       save(work);
     }
+    return interrupted.map(id => clone(store.get(id)));
   }
   async function recover(ownerId, workId, workerIds) {
     const work = await get(ownerId, workId);

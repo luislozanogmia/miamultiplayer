@@ -646,6 +646,18 @@
   .app-confirm-msg{font-size:14.5px;line-height:1.5;color:var(--ink);}
   .app-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
   .app-confirm-actions .btn{height:36px;border-radius:10px;}
+  .interrupted-card{max-width:440px;}
+  .interrupted-title{font-size:16px;font-weight:600;color:var(--ink);}
+  .interrupted-sub{font-size:13px;color:var(--muted);margin:2px 0 10px;}
+  .interrupted-list{max-height:50vh;overflow-y:auto;}
+  .interrupted-row{display:flex;gap:10px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--rule);cursor:pointer;}
+  .interrupted-row input{margin-top:3px;flex:none;}
+  .interrupted-copy{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;}
+  .interrupted-name{font-size:14px;font-weight:500;line-height:1.35;color:var(--ink);overflow-wrap:anywhere;}
+  .interrupted-detail{font-size:12px;line-height:1.4;color:var(--muted);}
+  .interrupted-repeat{font-size:11px;padding:1px 6px;margin-top:2px;border-radius:6px;background:#FBF0D9;color:#7A5300;}
+  .interrupted-error{font-size:12px;color:#B3261E;min-height:0;}
+  .interrupted-error:not(:empty){margin-top:8px;}
   /* Removed from a team: the notice blocks everything; if that team is open it
      is also blurred, like the loading screen, until you acknowledge. */
   .hub-removed-overlay{position:fixed;inset:0;z-index:10001;display:grid;place-items:center;padding:24px;background:rgba(17,17,17,.32);animation:fadein .14s ease-out;}

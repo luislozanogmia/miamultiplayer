@@ -58,6 +58,15 @@ function createHubBotJournal(db) {
     published(s,jobId) {
       return db.prepare(`UPDATE hub_bot_runs SET state='published' WHERE ${where} AND job_id=? AND state='reply_ready'`).run(...scope(s),jobId).changes===1;
     },
+    // Every reply this computer had started, on any team, when it last stopped.
+    startedRuns() { return db.prepare("SELECT * FROM hub_bot_runs WHERE state='started'").all(); },
+    publicName(run) {
+      const row=db.prepare('SELECT public_name FROM hub_bot_bindings WHERE origin=? AND owner=? AND subject=? AND team_id=? AND channel_id=? AND registration_id=?')
+        .get(run.origin,run.owner,run.subject,run.team_id,run.channel_id,run.registration_id);
+      return row?row.public_name:'';
+    },
+    // The person chose to run it again: the next poll picks it up under the same claim.
+    reopen(jobId) { return db.prepare("UPDATE hub_bot_runs SET state='prepared' WHERE job_id=? AND state='started'").run(jobId).changes===1; },
     discard(s,jobId) { db.prepare(`UPDATE hub_bot_runs SET state='discarded',reply=NULL WHERE ${where} AND job_id=?`).run(...scope(s),jobId); },
     unfinished(s) { return db.prepare(`SELECT * FROM hub_bot_runs WHERE ${where} AND state IN ('prepared','started','reply_ready')`).all(...scope(s)); },
     getRun,

@@ -3047,6 +3047,7 @@
     var records = Array.isArray(apiAgents) ? apiAgents : [];
     if(typeof chatWs === 'undefined' || !chatWs) return records;
     var existing = Array.isArray(chatWs.allAgents) ? chatWs.allAgents : [];
+    var previousRecords = chatWs.botRecords || [];
     chatWs.botRecords = records.slice();
     scheduleNeedsYouRender();
     chatWs.botRecordsLoaded = true;
@@ -3061,7 +3062,24 @@
     });
     // The browser tab strip draws group owners from these records.
     try { window.dispatchEvent(new Event('mia-bots-changed')); } catch(_botsEventError) {}
+    showBotRenameInOpenChat(previousRecords, records);
     return chatWs.allAgents;
+  }
+  // The chat on screen still has the bot's old name in its header and on its messages.
+  function showBotRenameInOpenChat(previous, records){
+    if(chatWs.activeKind !== 'agent') return;
+    var renamed = records.filter(function(record){
+      return previous.some(function(old){ return String(old.id) === String(record.id) && old.name && old.name !== record.name && old.name === chatWs.activeLabel; });
+    })[0];
+    if(!renamed) return;
+    chatWs.activeLabel = renamed.name;
+    renderChatHeaderBar();
+    renderChatThread();
+  }
+  // Messages keep the name their bot had when it wrote them; a renamed bot goes by its name now.
+  function currentBotNameForSender(senderId){
+    var record = (chatWs.botRecords || []).filter(function(bot){ return String(bot.id) === String(senderId); })[0];
+    return record && record.name ? record.name : '';
   }
   function loadAgents(){
     return api('/api/bots').then(function(res){
@@ -11744,7 +11762,7 @@
       // parseSignedBody's regex and pass through untouched.
       var signed = chatWs.activeKind === 'department' || chatWs.activeKind === 'dm' || chatWs.activeKind === 'agent' || chatWs.activeKind === 'home';
       var parsed = signed && !m.hubMessage ? parseSignedBody(botBody) : {agent: null, text: botBody};
-      name = m.nativeAgentName || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
+      name = currentBotNameForSender(m.sender) || m.nativeAgentName || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
       mark = esc(benchMark(name));
       tag = agentTagFor(name);
       text = stripLegacyBackgroundStatus(parsed.text);
@@ -16623,6 +16641,7 @@
   }
 
   function initChatWorkspace(){
+    if(window.MiaInterruptedWork) window.MiaInterruptedWork.showOnce({api: api, toast: showBenchToast});
     if(hubWorkspace()) return initHubChat().then(openPendingPerson);
     return Promise.all([
       loadNativeConversations(),

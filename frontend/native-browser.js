@@ -5,6 +5,7 @@
   // leaves room for the window buttons and works as the drag handle.
   if (window.miaDesktop && /Mac/i.test(navigator.platform || '')) document.documentElement.classList.add('mac-inset-titlebar');
   var bridge = window.miaDesktop && window.miaDesktop.browser;
+  var botNamesSeen = {};
   if (!bridge) return;
   var screen = document.getElementById('localBrowserScreen');
   var overlay = document.getElementById('localBrowserOverlay');
@@ -659,6 +660,7 @@
     var groups = {};
     (state.groups || []).forEach(function (g) { groups[g.id] = g; });
     var owners = (state.groups || []).map(function (g) {
+      if (window.miaBrowserAgents && g.botId && !botNamesSeen[g.botId]) botNamesSeen[g.botId] = window.miaBrowserAgents.name(g.botId);
       return window.miaBrowserAgents && g.botId ? window.miaBrowserAgents.name(g.botId) + '|' + window.miaBrowserAgents.moteHtml(g.botId) : '';
     });
     var working = {};
@@ -1448,7 +1450,19 @@
   new MutationObserver(syncNativeTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   window.addEventListener('resize', function () { layout(); if (state) render(state); });
   bridge.onState(render);
-  window.addEventListener('mia-bots-changed', function () { render(state); });
+  // A group named after its bot follows the bot's new name. A name the person
+  // gave the group themself stays.
+  function followBotRenames() {
+    var agents = window.miaBrowserAgents;
+    if (!agents || !state) return;
+    (state.groups || []).forEach(function (g) {
+      if (!g.botId) return;
+      var name = agents.name(g.botId), seen = botNamesSeen[g.botId];
+      if (name && seen && name !== seen && g.name === seen) command('groupUpdate', { groupId: g.id, name: name });
+      if (name) botNamesSeen[g.botId] = name;
+    });
+  }
+  window.addEventListener('mia-bots-changed', function () { followBotRenames(); render(state); });
   bridge.onFocus(focusLocation);
   if (bridge.onLayoutRequest) bridge.onLayoutRequest(function () { lastLayout = ''; layout(); });
   if (bridge.onGroupBot) bridge.onGroupBot(function (payload) {
