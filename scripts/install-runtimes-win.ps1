@@ -7,7 +7,8 @@
 # desktop app; it ends by printing the four environment variables the Windows
 # packager needs (mirroring the mac script's step [6/9] exports):
 #
-#   HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, GWS_BUNDLE_DIR, HERMES_PYTHON_RUNTIME_DIR
+#   HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, GWS_BUNDLE_DIR, WHISPER_BUNDLE_DIR,
+#   HERMES_PYTHON_RUNTIME_DIR
 #
 # Everything is provisioned into %USERPROFILE%\.miaos, mirroring the mac layout:
 #   %USERPROFILE%\.miaos\hermes\hermes-agent   (pinned Hermes checkout + venv)
@@ -537,6 +538,41 @@ if ($pinnedBinarySha) {
 }
 
 # ----------------------------------------------------------------------------
+# Pinned whisper.cpp (Windows x64), the dictation engine
+# ----------------------------------------------------------------------------
+$whisperRelease = Read-ReleaseEnv (Join-Path $scriptDir "whisper-release.env")
+Write-Host "Downloading pinned whisper.cpp $($whisperRelease.WHISPER_VERSION)"
+$whisperInstallDir = Join-Path $downloadsDir "whisper-$($whisperRelease.WHISPER_VERSION)-windows-x64"
+$whisperArchive    = Join-Path $downloadsDir "whisper-bin-x64-$($whisperRelease.WHISPER_BUILD_TAG).zip"
+$whisperExtract    = Join-Path $downloadsDir "whisper-bin-x64-extract"
+Remove-Tree $whisperInstallDir
+Remove-Tree $whisperExtract
+if (Test-Path -LiteralPath $whisperArchive) { Remove-Item -LiteralPath $whisperArchive -Force }
+Invoke-WebRequest -Uri "https://github.com/ggml-org/whisper.cpp/releases/download/$($whisperRelease.WHISPER_BUILD_TAG)/whisper-bin-x64.zip" -OutFile $whisperArchive -UseBasicParsing
+if ((Get-Sha256 $whisperArchive) -ne $whisperRelease.WHISPER_WINDOWS_X64_ARCHIVE_SHA256) { throw "whisper.cpp archive checksum mismatch" }
+Expand-Archive -LiteralPath $whisperArchive -DestinationPath $whisperExtract -Force
+New-Item -ItemType Directory -Path $whisperInstallDir -Force | Out-Null
+$whisperBuilt = Join-Path $whisperExtract "Release"
+foreach ($file in @("whisper-cli.exe", "whisper.dll", "ggml.dll", "ggml-base.dll")) {
+    Copy-Item -LiteralPath (Join-Path $whisperBuilt $file) -Destination $whisperInstallDir
+}
+Copy-Item -Path (Join-Path $whisperBuilt "ggml-cpu-*.dll") -Destination $whisperInstallDir
+if ((Get-Sha256 (Join-Path $whisperInstallDir "whisper-cli.exe")) -ne $whisperRelease.WHISPER_WINDOWS_X64_SHA256) { throw "whisper-cli.exe checksum mismatch" }
+# The zip has no license file, so take the one from the pinned commit.
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ggml-org/whisper.cpp/$($whisperRelease.WHISPER_COMMIT)/LICENSE" -OutFile (Join-Path $whisperInstallDir "LICENSE") -UseBasicParsing
+if ((Get-Sha256 (Join-Path $whisperInstallDir "LICENSE")) -ne $whisperRelease.WHISPER_LICENSE_SHA256) { throw "whisper.cpp LICENSE checksum mismatch" }
+# A clean Windows may lack the Visual C++ runtime the official build links
+# against, so it ships beside the engine. Only Microsoft-signed copies qualify.
+foreach ($file in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll")) {
+    $source = Join-Path $env:WINDIR "System32\$file"
+    if (-not (Test-Path -LiteralPath $source)) { throw "Build machine is missing the Visual C++ runtime file $file" }
+    $signature = Get-AuthenticodeSignature -LiteralPath $source
+    if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "O=Microsoft Corporation") { throw "$file is not signed by Microsoft" }
+    Copy-Item -LiteralPath $source -Destination $whisperInstallDir
+}
+Remove-Tree $whisperExtract
+
+# ----------------------------------------------------------------------------
 # [5/6] Credential hygiene (install-local-mac.sh step [5/9])
 # ----------------------------------------------------------------------------
 
@@ -578,6 +614,7 @@ if ($normalizedVenvHome -ne $normalizedRuntime) {
 $env:HERMES_BUNDLE_DIR         = $hermesInstallDir
 $env:GHOST_BUNDLE_DIR          = $ghostInstallDir
 $env:GWS_BUNDLE_DIR            = $gwsInstallDir
+$env:WHISPER_BUNDLE_DIR        = $whisperInstallDir
 $env:HERMES_PYTHON_RUNTIME_DIR = $normalizedRuntime
 
 # GitHub Actions contract (see .github/workflows/windows-build.yml): hand the
@@ -586,6 +623,7 @@ if ($env:GITHUB_ENV) {
   Add-Content -Path $env:GITHUB_ENV -Value "HERMES_BUNDLE_DIR=$hermesInstallDir"
   Add-Content -Path $env:GITHUB_ENV -Value "GHOST_BUNDLE_DIR=$ghostInstallDir"
   Add-Content -Path $env:GITHUB_ENV -Value "GWS_BUNDLE_DIR=$gwsInstallDir"
+  Add-Content -Path $env:GITHUB_ENV -Value "WHISPER_BUNDLE_DIR=$whisperInstallDir"
   Add-Content -Path $env:GITHUB_ENV -Value "HERMES_PYTHON_RUNTIME_DIR=$normalizedRuntime"
 }
 
@@ -594,6 +632,7 @@ Write-Host "[6/6] Runtime provisioning complete. Packager environment:"
 Write-Host "HERMES_BUNDLE_DIR=$env:HERMES_BUNDLE_DIR"
 Write-Host "GHOST_BUNDLE_DIR=$env:GHOST_BUNDLE_DIR"
 Write-Host "GWS_BUNDLE_DIR=$env:GWS_BUNDLE_DIR"
+Write-Host "WHISPER_BUNDLE_DIR=$env:WHISPER_BUNDLE_DIR"
 Write-Host "HERMES_PYTHON_RUNTIME_DIR=$env:HERMES_PYTHON_RUNTIME_DIR"
 Write-Host ""
 Write-Host "Hermes: $($hermesRelease.HERMES_COMMIT) (no provider credentials configured)"

@@ -1,5 +1,5 @@
 /* Browser work UI consumes durable coordinator records and trusted browser state.
- * It does not grant approvals, execute page actions, or infer model progress. */
+ * It does not execute page actions, or infer model progress. */
 (function (root, factory) {
   var exports = factory();
   if (typeof module === 'object' && module.exports) module.exports = exports;
@@ -7,28 +7,23 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
   var browserState = { tabs: [] }, works = [], host, bridge, transport, loaded = false;
-  var requestGeneration = 0, timer, pending = new Set(), shownApprovals = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', mutationError = '', refreshFailed = false;
-  var labels = { idle: 'Idle', queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', needs_approval: 'Needs approval', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
-  var approvalDenialLabels = { STALE_SNAPSHOT: 'Page target is stale.', ELEMENT_NOT_FOUND: 'Page element is unavailable.', TAB_NAVIGATED: 'Page changed.', ACTOR_REVOKED: 'Bot access was revoked.', TAB_NOT_OWNED: 'Tab ownership changed.', TAB_CLOSED: 'Tab closed.', TAB_CRASHED: 'Tab became unavailable.', APPROVAL_REQUIRED: 'A current approval is required.', APPROVAL_TARGET_CHANGED: 'Approval target changed.', CANCELLED: 'Request cancelled.', WORKER_SESSION_REVOKED: 'Bot session was revoked.' };
+  var requestGeneration = 0, timer, pending = new Set(), getBots, getModels, modelInventory = [], personalSelection = null, lastWorkRender = '', mutationError = '', refreshFailed = false;
+  var labels = { idle: 'Idle', queued: 'Queued', working: 'Working', waiting_for_user: 'Waiting for you', done: 'Done', failed: 'Failed', cancelled: 'Stopped' };
   // Labels say what happened, not just the stored state: a task the person
-  // partly declined is not "Done", and a closed tab is not a bot failure.
-  function declinedCount(worker) { return worker && Number.isSafeInteger(worker.declinedActions) && worker.declinedActions > 0 ? worker.declinedActions : 0; }
+  // A closed tab is not a bot failure.
   function workerLabel(worker) {
-    var declined = declinedCount(worker);
-    if (worker.status === 'done' && declined) return 'Partly done · you rejected ' + declined + (declined === 1 ? ' action' : ' actions');
     if (worker.status === 'cancelled' && worker.stopReason === 'tab_closed') return 'Tab closed';
     return labels[worker.status] || 'Unknown state';
   }
   function workLabel(work) {
     var workers = Array.isArray(work.workers) ? work.workers : [];
-    if (work.status === 'done' && workers.some(declinedCount)) return 'Partly done';
     var stopped = workers.filter(function (worker) { return worker.status === 'cancelled'; });
     if (work.status === 'cancelled' && stopped.length && stopped.every(function (worker) { return worker.stopReason === 'tab_closed'; })) return 'Tab closed';
     return labels[work.status] || 'Unknown state';
   }
   // Whatever needs the person comes first, then running work, then the newest.
   function displayOrder(records) {
-    function rank(work) { return work.approvals.length ? 0 : work.terminal ? 2 : 1; }
+    function rank(work) { return work.terminal ? 2 : 1; }
     return records.map(function (work, index) { return { work: work, index: index }; }).sort(function (a, b) {
       return rank(a.work) - rank(b.work) || (b.work.createdAt || 0) - (a.work.createdAt || 0) || b.index - a.index;
     }).map(function (item) { return item.work; });
@@ -90,14 +85,6 @@
       terminal: ['done', 'failed', 'cancelled'].includes(work.status),
       workers: workers, preservedResponses: preserved,
       results: results.filter(function (result) { return result.incomplete !== true && !['stopped', 'incomplete'].includes(result.status); }),
-      approvals: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) { return a.status === 'pending'; }),
-      // Only the coordinator's predispatch failure marker supports this notice.
-      // Generic revocation, expiry and any linked dispatch remain separate states.
-      approvalFailures: (Array.isArray(work.approvals) ? work.approvals : []).filter(function (a) {
-        return a.status === 'revoked' && a.failurePhase === 'approval' && !(work.operations || []).some(function (op) { return op.approvalId === a.id; });
-      }).sort(function (a, b) { return (b.decidedAt || 0) - (a.decidedAt || 0); }).slice(0, 3).map(function (a) {
-        return { id: a.id, tabId: a.tabId, category: typeof a.denialCode === 'string' && Object.prototype.hasOwnProperty.call(approvalDenialLabels, a.denialCode) ? approvalDenialLabels[a.denialCode] : '' };
-      }),
       personalSelection: work.personalSelection || null, synthesis: work.synthesis && work.synthesis.incomplete !== true && !['stopped', 'incomplete'].includes(work.synthesis.status) ? work.synthesis : null, rawStatus: work.status, dependencies: work.dependencies || {}, operations: work.operations || [], reusable: work.reusable || [] };
   }
   function node(tag, className, text) {
@@ -225,8 +212,7 @@
   function renderWorks() {
     if (!host) return;
     var records = displayOrder(works.map(function (w) { return projection(w, browserState.selectedGroupId); }).filter(Boolean));
-    var expiredApprovals = records.map(function (w) { return w.approvals.map(function (a) { var expiry = typeof a.expiresAt === 'number' ? a.expiresAt : Date.parse(a.expiresAt); return Number.isFinite(expiry) && expiry <= Date.now(); }); });
-    var signature = JSON.stringify([records, loaded, !!transport, Array.from(pending), expiredApprovals]);
+    var signature = JSON.stringify([records, loaded, !!transport, Array.from(pending)]);
     if (signature === lastWorkRender) return; lastWorkRender = signature;
     var list = document.getElementById('browserWorkList');
     var viewport = host.querySelector('.browser-work-content');
@@ -259,17 +245,6 @@
         header.append(workButton('recover-task', null, 'Recover task with fresh page checks', function () { mutate('recover-task:' + work.id, function () { return transport.recover(work.id, taskRecovery.workerIds); }); }, pending.has('recover-task:' + work.id)));
       }
       card.append(header);
-      work.approvals.forEach(function (approval) {
-        var row = node('section', 'browser-work-approval'); row.append(node('strong', '', 'Approval required'), node('p', '', approval.description || (typeof approval.operation === 'string' ? approval.operation : JSON.stringify(approval.operation || {})) || 'Browser operation'), node('small', '', 'Tab ' + approval.tabId + ' · ' + (approval.actorId || 'Bot')));
-        if (approval.expectedUrl) row.append(node('p', 'browser-work-url', approval.expectedUrl));
-        var key = 'approval:' + approval.id;
-        var expiration = typeof approval.expiresAt === 'number' ? approval.expiresAt : Date.parse(approval.expiresAt);
-        var expired = Number.isFinite(expiration) && expiration <= Date.now();
-        ['Reject', 'Approve once'].forEach(function (label, i) {
-          row.append(workButton('approval-action', [approval.id, approval.actorId, approval.tabId, approval.documentGeneration, approval.expectedUrl, approval.operationHash, i], label, function () { mutate(key, function () { return transport.approval(work.id, approval, i === 1); }); }, !transport || work.terminal || !!expired || pending.has(key)));
-        });
-        if (expired) row.append(node('small', '', 'Expired · request a new approval.')); card.append(row);
-      });
       if (taskRecovery.eligible) card.append(node('p', 'browser-work-preserved-notice', 'Task recovery starts every bot in a fresh session. Earlier answers and Mia synthesis remain context; every page must be checked again before new completion.'));
       card.append(node('div', 'browser-work-coordinator', 'Mia · Personal agent · Planning and synthesis' + (work.personalSelection ? ' · ' + work.personalSelection.model + ' · ' + work.personalSelection.provider : '')));
       work.workers.forEach(function (worker) {
@@ -286,7 +261,7 @@
           row.append(workButton('recover-worker', [worker.id, worker.actorId], 'Restart bot and dependents', function () { mutate('recover:' + worker.id, function () { return transport.recover(work.id, [worker.id]); }); }, pending.has('recover:' + worker.id)));
         }
         var steps = work.operations.filter(function (op) { return op.workerId === worker.id; });
-        if (worker.status === 'done' && !declinedCount(worker) && steps.length && steps.every(function (op) { return op.status === 'done'; }) && !work.operations.some(function (op) { return op.status === 'uncertain'; }) && transport && transport.exportReusable) {
+        if (worker.status === 'done' && steps.length && steps.every(function (op) { return op.status === 'done'; }) && !work.operations.some(function (op) { return op.status === 'uncertain'; }) && transport && transport.exportReusable) {
           row.append(workButton('export-worker', [worker.id, worker.actorId], 'Save reusable steps', function () { mutate('export:' + worker.id, function () { return transport.exportReusable(work.id, worker.id); }); }, pending.has('export:' + worker.id)));
         }
         card.append(row);
@@ -295,12 +270,6 @@
         var section = node('section', 'browser-work-reusable'); section.append(node('strong', '', 'Saved steps · ' + saved.workerId), node('p', '', String((saved.proof || []).length) + ' recorded execution proofs · each new run checks its current target and requests approvals.'));
         section.append(workButton('choose-saved', saved.id, 'Choose tab for saved steps', function () { return chooseBots({ sourceWorkId: work.id, reusableId: saved.id }); }, !transport || !saved.proof || !saved.proof.length || work.operations.some(function (op) { return op.status === 'uncertain'; })));
         card.append(section);
-      });
-      work.approvalFailures.forEach(function (approval) {
-        var row = node('section', 'browser-work-approval browser-work-approval-failure');
-        row.append(node('strong', '', 'Approval failed'), node('small', '', 'Tab ' + approval.tabId));
-        if (approval.category) row.append(node('p', '', approval.category));
-        card.append(row);
       });
       work.preservedResponses.forEach(function (response) {
         var section = node('section', 'browser-work-preserved');
@@ -319,16 +288,6 @@
     Array.from(list.querySelectorAll('details[data-work-view-key]')).forEach(function (detail) { detail.open = openDetails.has(detail.getAttribute('data-work-view-key')); });
     // Expand first so restoring the viewport is not clamped by collapsed text.
     if (viewport) viewport.scrollTop = scrollTop;
-    // A request for permission expires; bring a new one into view once, then
-    // leave the person's scroll position alone.
-    var requested = [];
-    records.forEach(function (work) { work.approvals.forEach(function (approval) { requested.push(approval.id); }); });
-    if (requested.some(function (id) { return !shownApprovals.has(id); })) {
-      if (host.open === false) host.open = true;
-      var card = list.querySelector('.browser-work-approval:not(.browser-work-approval-failure)');
-      if (card && card.scrollIntoView) card.scrollIntoView({ block: 'nearest' });
-    }
-    shownApprovals = new Set(requested);
     if (focusKey) {
       var control = Array.from(list.querySelectorAll('[data-work-control-key]')).find(function (item) { return item.getAttribute('data-work-control-key') === focusKey; });
       if (control && !control.disabled && !control.hidden && control.getClientRects().length) control.focus({ preventScroll: true });

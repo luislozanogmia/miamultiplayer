@@ -52,6 +52,9 @@ function createHubWorkflowJournal(db) {
     open(s,runId,n) {
       return db.prepare(`SELECT * FROM hub_workflow_steps WHERE ${where} AND run_id=? AND n=? AND state IN (${inOpen})`).get(...scope(s),runId,n);
     },
+    // Every step this computer had started, on any team, when it last stopped.
+    // A row with a review already finished: it asks on its own card.
+    startedSteps() { return db.prepare("SELECT * FROM hub_workflow_steps WHERE state='started' AND review IS NULL").all(); },
     unfinished(s) { return db.prepare(`SELECT * FROM hub_workflow_steps WHERE ${where} AND state IN (${inOpen})`).all(...scope(s)); },
     // A fresh claim id for this step, or the open row that already has one.
     prepare(s,step,approved=false) {

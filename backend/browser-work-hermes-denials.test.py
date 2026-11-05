@@ -12,7 +12,7 @@ plugin = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plugin)
 GENERIC = {'error': "Bound browser operation denied or interrupted. Check Mia's task status; do not repeat uncertain writes."}
 CODES = ('STALE_SNAPSHOT', 'ELEMENT_NOT_FOUND', 'TAB_NAVIGATED', 'ACTOR_REVOKED', 'TAB_NOT_OWNED',
-         'TAB_CLOSED', 'TAB_CRASHED', 'APPROVAL_REQUIRED', 'APPROVAL_TARGET_CHANGED', 'CANCELLED', 'WORKER_SESSION_REVOKED')
+         'TAB_CLOSED', 'TAB_CRASHED', 'CANCELLED', 'WORKER_SESSION_REVOKED')
 LIMIT = 4096
 PRIVATE = 'synthetic-private-marker'
 
@@ -51,6 +51,7 @@ class DenialTests(unittest.TestCase):
         bodies = [
             {'error': {'code': PRIVATE, 'message': PRIVATE}},
             {'error': {'code': 'STALE_ELEMENT'}}, {'error': {'code': 'OUTCOME_UNKNOWN'}},
+            {'error': {'code': 'APPROVAL_REQUIRED'}}, {'error': {'code': 'APPROVAL_TARGET_CHANGED'}},
             {'error': {'code': 'ABORT_ERR'}}, {'error': {'code': 'WORKER_OPERATION_FAILED'}},
             {'error': {'code': None}}, {'error': {'code': ['STALE_SNAPSHOT', PRIVATE]}},
             {'error': {'code': {'STALE_SNAPSHOT': PRIVATE}}},

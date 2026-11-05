@@ -3,13 +3,13 @@ const { randomUUID, createHash } = require("node:crypto");
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const mutations = new Set(["navigate", "vacuum", "click", "fill", "eval", "key", "back", "forward", "reload", "stop", "scroll", "tab_close"]);
 function operationKey(method, params) {
-  const clean = Object.fromEntries(Object.keys(params).sort().filter(k => !["approval_id", "signal"].includes(k)).map(k => [k, params[k]]));
+  const clean = Object.fromEntries(Object.keys(params).sort().filter(k => k !== "signal").map(k => [k, params[k]]));
   return createHash("sha256").update(JSON.stringify([method, clean])).digest("hex");
 }
 // Main-process authority. Nothing in page content or protocol params can bind an actor
-// or mint approval. The authenticated coordinator/human UI owns these methods.
+// to a tab. The authenticated coordinator/human UI owns these methods.
 function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, emit = () => {} }) {
-  const bindings = new Map(), approvals = new Map(), queues = new Map();
+  const bindings = new Map(), queues = new Map();
   function bind(binding) {
     binding = { ...binding, taskId: binding?.taskId || binding?.workId };
     if (!binding || !/^[A-Za-z0-9_.:-]{1,128}$/.test(binding.actorId || "") || !binding.ownerId || !binding.taskId || !binding.botId || !Number.isInteger(binding.tabId)) throw fail("INVALID_BINDING", "Actor, owner, task, bot and tab are required.");
@@ -24,7 +24,6 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
   function revoke(actorId) {
     const binding = bindings.get(actorId);
     if (binding) { binding.cancelled = true; bindings.delete(actorId); emit({ type: "cancelled", actorId, tabId: binding.tabId, taskId: binding.taskId }); }
-    for (const [id, approval] of approvals) if (approval.actorId === actorId) approvals.delete(id);
   }
   function validate(params, binding) {
     if (!binding || binding.cancelled || bindings.get(params.actor_id) !== binding) throw fail("ACTOR_REVOKED", "Actor assignment was revoked or stopped.");
@@ -38,27 +37,12 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
     if (params.document_generation !== undefined && params.document_generation !== tab.sequence) throw fail("TAB_NAVIGATED", "Document generation no longer matches.");
     return tab;
   }
-  function approve({ actorId, ownerId, method, params, expiresAt = Date.now() + 60000 }) {
-    const binding = bindings.get(actorId);
-    const tab = validate(params, binding);
-    if (ownerId !== binding.ownerId || params.actor_id !== actorId) throw fail("APPROVAL_OWNER_MISMATCH", "Only the assignment owner can approve.");
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 300000) throw fail("INVALID_APPROVAL", "Approval expiry must be within five minutes.");
-    const id = randomUUID();
-    approvals.set(id, { actorId, token: binding.token, generation: tab.sequence, url: tab.url, key: operationKey(method, params), expiresAt });
-    return { approval_id: id, expires_at: expiresAt };
-  }
-  function reject(id) { approvals.delete(id); }
-  const needsApproval = (method, params, tab) => mutations.has(method) && (method !== "vacuum" || !!params.url) && (isHumanViewing(tab.id) || ["click", "fill", "navigate", "back", "forward", "reload", "key", "eval", "tab_close"].includes(method) || (method === "vacuum" && !!params.url) || params.consequential === true);
+  // A write that may have gone through even if it reports failure.
+  const isConsequential = (method, params, tab) => mutations.has(method) && (method !== "vacuum" || !!params.url) && (isHumanViewing(tab.id) || ["click", "fill", "navigate", "back", "forward", "reload", "key", "eval", "tab_close"].includes(method) || (method === "vacuum" && !!params.url) || params.consequential === true);
   function inspect(method, params) {
     const binding = bindings.get(params.actor_id);
     const tab = validate(params, binding);
-    return { tab_id: tab.id, actor_id: binding.actorId, document_generation: tab.sequence, url: tab.url, needs_approval: needsApproval(method, params, tab) };
-  }
-  function gate(method, params, binding, tab) {
-    const approval = approvals.get(params.approval_id);
-    if (!needsApproval(method, params, tab) && !params.approval_id) return;
-    if (!approval || approval.token !== binding.token || approval.generation !== tab.sequence || approval.url !== tab.url || approval.key !== operationKey(method, params) || approval.expiresAt <= Date.now()) throw fail("APPROVAL_REQUIRED", "Current operation-bound human approval is required.");
-    approvals.delete(params.approval_id); // one use, consumed before dispatch
+    return { tab_id: tab.id, actor_id: binding.actorId, document_generation: tab.sequence, url: tab.url, consequential: isConsequential(method, params, tab) };
   }
   async function run(method, params, execute) {
     if (!params || typeof params !== "object" || Array.isArray(params)) throw fail("INVALID_PARAMS", "params must be an object.");
@@ -70,7 +54,6 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
     const executeChecked = async () => {
       const current = validate(params, binding);
       if (params.signal?.aborted) throw fail("CANCELLED", "Operation was cancelled.");
-      gate(method, params, binding, current);
       const generation = current.sequence;
       binding.status = "working";
       emit({ type: "operation-start", actorId: binding.actorId, tabId: tab.id, taskId: binding.taskId, method, generation });
@@ -103,6 +86,6 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
     queues.set(tabId, pending);
     try { return await pending; } finally { if (queues.get(tabId) === pending) queues.delete(tabId); }
   }
-  return { serialize, bind, revoke, approve, reject, run, inspect, list: () => [...bindings.values()].map(({ token, cancelled, ...value }) => value), closeTab: id => { for (const binding of bindings.values()) if (binding.tabId === id) revoke(binding.actorId); }, dispose: () => { for (const id of bindings.keys()) revoke(id); approvals.clear(); } };
+  return { serialize, bind, revoke, run, inspect, list: () => [...bindings.values()].map(({ token, cancelled, ...value }) => value), closeTab: id => { for (const binding of bindings.values()) if (binding.tabId === id) revoke(binding.actorId); }, dispose: () => { for (const id of bindings.keys()) revoke(id); } };
 }
 module.exports = { createActorRuntime, operationKey };

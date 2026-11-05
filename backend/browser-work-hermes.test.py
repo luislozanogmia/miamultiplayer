@@ -58,6 +58,7 @@ try:
     for name in ('terminal', 'read_file', 'write_file', 'execute_code', 'delegate_task', 'browser_navigate', 'tool_call'):
         assert get_pre_tool_call_block_message(name, {}), f'worker bypass allowed: {name}'
     assert not get_pre_tool_call_block_message('mia_browser_work', {'method': 'read', 'params': {}})
+    assert not get_pre_tool_call_block_message('request_approval', {}), 'the worker may ask the person through Ask before do'
     assert get_pre_tool_call_block_message('mia_browser_work', {'method': 'read', 'params': {}, 'session_id': 'model-spoof'})
     assert 'GATEWAY_RELAY_MIA_BROWSER_WORK_TOKEN' not in hermes_subprocess_env(inherit_credentials=True)
     # Actual model regression: native scroll ignores deltaY and defaults to
@@ -80,7 +81,7 @@ try:
         ('run_reusable', {'sourceWorkId': 'source', 'reusableId': 'reference', 'expected_url': 'https://example.test/'}),
         ('read', {'script': 'untrusted-input-marker'}), ('screenshot', {'full_page': True}),
     ]
-    invalid_parameters += [('read', {field: 'untrusted-input-marker'}) for field in ('actor_id', 'tab_id', 'owner_id', 'group_id', 'human_ok', 'approval_id', 'approval', 'capability', 'signal')]
+    invalid_parameters += [('read', {field: 'untrusted-input-marker'}) for field in ('actor_id', 'tab_id', 'owner_id', 'group_id', 'human_ok', 'capability', 'signal')]
     for method, params in invalid_parameters:
         args = {'method': method, 'params': params}
         denied = json.loads(registry.dispatch('mia_browser_work', args, session_id='runtime-stored-session'))
@@ -159,7 +160,7 @@ try:
     # Actual pinned registry dispatch across loopback HTTPError: only static
     # emitted categories survive; all broker message/body fields stay private.
     generic = {'error': "Bound browser operation denied or interrupted. Check Mia's task status; do not repeat uncertain writes."}
-    safe_codes = ('STALE_SNAPSHOT', 'ELEMENT_NOT_FOUND', 'TAB_NAVIGATED', 'ACTOR_REVOKED', 'TAB_NOT_OWNED', 'TAB_CLOSED', 'TAB_CRASHED', 'APPROVAL_REQUIRED', 'APPROVAL_TARGET_CHANGED', 'CANCELLED', 'WORKER_SESSION_REVOKED')
+    safe_codes = ('STALE_SNAPSHOT', 'ELEMENT_NOT_FOUND', 'TAB_NAVIGATED', 'ACTOR_REVOKED', 'TAB_NOT_OWNED', 'TAB_CLOSED', 'TAB_CRASHED', 'CANCELLED', 'WORKER_SESSION_REVOKED')
     repo = Path(__file__).resolve().parent.parent
     native_code = '\n'.join((repo / relative).read_text() for relative in ('macos/src/browser.cjs', 'macos/src/browser-actors.cjs', 'backend/browser-work-worker-broker.js'))
     for code in safe_codes:
@@ -170,7 +171,7 @@ try:
         denied = json.loads(registry.dispatch('mia_browser_work', {'method': 'read', 'params': {}}, session_id='runtime-stored-session'))
         assert denied == {**generic, 'code': code}, 'registered worker dropped or leaked native denial'
         assert len(requests) == before + 1, 'error must not retry broker operation'
-    for payload in (b'{malformed', json.dumps({'error': {'code': 'synthetic-private-marker', 'message': 'synthetic-private-marker'}}).encode(), json.dumps({'error': {'code': 'STALE_ELEMENT'}}).encode(), json.dumps({'error': {'code': 'STALE_SNAPSHOT'}}).encode() + b' ' * 4097):
+    for payload in (b'{malformed', json.dumps({'error': {'code': 'synthetic-private-marker', 'message': 'synthetic-private-marker'}}).encode(), json.dumps({'error': {'code': 'STALE_ELEMENT'}}).encode(), json.dumps({'error': {'code': 'APPROVAL_REQUIRED'}}).encode(), json.dumps({'error': {'code': 'APPROVAL_TARGET_CHANGED'}}).encode(), json.dumps({'error': {'code': 'STALE_SNAPSHOT'}}).encode() + b' ' * 4097):
         reply_status = 409; reply_bytes = payload
         before = len(requests)
         denied = json.loads(registry.dispatch('mia_browser_work', {'method': 'read', 'params': {}}, session_id='runtime-stored-session'))

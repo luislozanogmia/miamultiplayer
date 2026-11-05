@@ -648,18 +648,29 @@
     var errEl = el('#loginError');
     if(errEl) errEl.textContent = '';
     var getToken = nativeAuth ? nativeAuth.getSessionToken().then(window.MiaClerkDesktop.unwrap) : window.Clerk.session.getToken();
+    var sessionToken = null;
     return getToken.then(function(token){
       if(!token) throw new Error('Clerk did not return a session token');
+      sessionToken = token;
+      return window.MiaAccounts.route(token);
+    }).then(function(switching){
+      if(switching) return {status:0, switching:true};
       return fetch('/api/clerk/session', {
         method:'POST',
         credentials:'include',
-        headers:{'Accept':'application/json', 'Authorization':'Bearer ' + token}
+        headers:{'Accept':'application/json', 'Authorization':'Bearer ' + sessionToken}
+      }).then(function(response){
+        return response.json().catch(function(){ return {}; }).then(function(data){ return {status:response.status, data:data}; });
       });
-    }).then(function(response){
-      return response.json().catch(function(){ return {}; }).then(function(data){ return {status:response.status, data:data}; });
     }).then(function(result){
+      if(result.switching) return true;
+      if(result.status === 409){
+        return window.MiaAccounts.openOther(sessionToken, {email:result.data.email, name:result.data.name, linked:result.data.linked}).then(function(switching){
+          if(switching) return true;
+          throw new Error('This Mia installation is already linked to another account.');
+        });
+      }
       if(result.status !== 200){
-        if(result.status === 409) throw new Error('This Mia installation is already linked to another account.');
         if(result.status === 422) throw new Error('Mia needs the verified email claim enabled in Clerk.');
         throw new Error('Mia could not verify this Clerk session.');
       }
@@ -669,7 +680,13 @@
         mergeUserProfile(meRes.data.email, meRes.data);
         isAdmin = !!meRes.data.isAdmin;
         showApp(meRes.data.email, meRes.data.accountEmail);
-        return true;
+        return Promise.resolve(window.MiaAccounts.confirmed(sessionToken, {email:result.data.email, name:result.data.name})).catch(function(){}).then(function(){
+          renderAccountMenus();
+          window.MiaAccounts.takeOpenedNotice().then(function(email){
+            if(email) showBenchToast('You signed in as ' + email + ', so Mia opened that account.');
+          });
+          return true;
+        });
       });
     }).catch(function(error){
       if(errEl) errEl.textContent = error && error.message ? error.message : 'Could not sign in. Try again.';
@@ -687,6 +704,10 @@
       if(state && state.status==='active')return finishClerkLogin().then(function(restored){if(!restored)return showResolvedClerkSignIn();});
       return showResolvedClerkSignIn();
     },function(){return showResolvedClerkSignIn();});
+  }
+  function renderAccountMenus(){
+    window.MiaAccounts.render(el('#chatAcctAccounts'), {itemClass:'chat-acct-menu-item'});
+    window.MiaAccounts.render(el('#avatarAccounts'), {itemClass:'avatar-menu-item'});
   }
   function showResolvedClerkSignIn(){
     endWorkspaceHandoff();
@@ -708,7 +729,9 @@
     if(location.hash) history.replaceState(null, '', location.pathname + location.search);
     if(desktopClerkAuth()){
       if(nativeClerkViewDispose) nativeClerkViewDispose();
-      nativeClerkViewDispose = window.MiaClerkDesktop.mount(mount, desktopClerkAuth(), finishClerkLogin);
+      window.MiaAccounts.showSignIn({title:el('#loginTitle'), subtitle:el('#loginSubtitle'), accounts:el('#loginAccounts'), form:mount}, function(lockedEmail){
+        nativeClerkViewDispose = window.MiaClerkDesktop.mount(mount, desktopClerkAuth(), finishClerkLogin, {lockedEmail:lockedEmail});
+      });
       return;
     }
     ensureClerkLoaded().then(function(clerk){
@@ -1236,14 +1259,14 @@
   };
   var harnessModelCatalog = {
     'openai-codex': {
-      defaultModel: 'gpt-5.6-luna',
+      defaultModel: 'gpt-6-luna',
       options: [
-        {id:'fast', model:'gpt-5.6-luna', label:'Fast', fast:true},
+        {id:'fast', model:'gpt-6-luna', label:'Fast', fast:true},
         {id:'gpt-6-astra', model:'gpt-6-astra', label:'GPT-6 Astra'},
         {id:'gpt-6.1-sol', model:'gpt-6.1-sol', label:'GPT-6.1 Sol'},
-        {id:'gpt-5.6-sol', model:'gpt-5.6-sol', label:'GPT-5.6 Sol'},
-        {id:'gpt-5.6-terra', model:'gpt-5.6-terra', label:'GPT-5.6 Terra'},
-        {id:'gpt-5.6-luna', model:'gpt-5.6-luna', label:'GPT-5.6 Luna'}
+        {id:'gpt-6.1-terra', model:'gpt-6.1-terra', label:'GPT-6.1 Terra'},
+        {id:'gpt-6-sol', model:'gpt-6-sol', label:'GPT-6 Sol'},
+        {id:'gpt-6-luna', model:'gpt-6-luna', label:'GPT-6 Luna'}
       ]
     },
     'xai-oauth': {
@@ -2864,8 +2887,6 @@
     145, 169, 192, 211, 231, 252, 276, 305
   ];
   var MOTE_BASE_HUES = {general: 34, inbox: 337, research: 272, calendar: 24, sales: 358};
-  var moteColorSlots = Object.create(null);
-  var moteColorOwners = Object.create(null);
   var AGENT_COLOR_OPTIONS = [
     {label:'Rose', value:'#e83e9a'},
     {label:'Coral', value:'#ed6a5a'},
@@ -2883,22 +2904,25 @@
   function agentAvatarColorFor(name, agentId){
     var records = [];
     if(typeof benchAgents !== 'undefined' && Array.isArray(benchAgents)) records = records.concat(benchAgents);
-    if(typeof chatWs !== 'undefined' && chatWs && Array.isArray(chatWs.allAgents)) records = records.concat(chatWs.allAgents);
+    if(typeof chatWs !== 'undefined' && chatWs){
+      // A team's own list leaves out your Solo bots, which My Bots still shows.
+      [chatWs.allAgents, chatWs.botRecords, chatWs.myBotRecords].forEach(function(list){
+        if(Array.isArray(list)) records = records.concat(list);
+      });
+    }
+    if(typeof hubChat !== 'undefined' && hubChat && Array.isArray(hubChat.companyBots)) records = records.concat(hubChat.companyBots);
     var wantedId = String(agentId || '');
     var wantedName = String(name || '').trim().toLowerCase();
+    var byName = '';
     for(var i = 0; i < records.length; i++){
       var record = records[i];
       if(!record) continue;
-      var recordId = String(record.id || record.agentId || '');
-      var recordName = String(record.name || '').trim().toLowerCase();
-      if((wantedId && (recordId === wantedId || String(record.agentId || '') === wantedId)) ||
-         (!wantedId && wantedName && recordName === wantedName) ||
-         (wantedId && wantedName && recordName === wantedName)){
-        var color = normalizeAgentAvatarColor(record.avatarColor);
-        if(color) return color;
-      }
+      var color = normalizeAgentAvatarColor(record.avatarColor);
+      if(!color) continue;
+      if(wantedId && (String(record.id || '') === wantedId || String(record.agentId || '') === wantedId)) return color;
+      if(!byName && wantedName && String(record.name || '').trim().toLowerCase() === wantedName) byName = color;
     }
-    return '';
+    return byName;
   }
   function avatarColorHue(value){
     var color = normalizeAgentAvatarColor(value);
@@ -2916,19 +2940,10 @@
     return h < 0 ? h + 360 : h;
   }
   function moteColorSlotFor(name){
+    // Only the name decides, never what was drawn first, so a bot with no
+    // saved color matches in every view and on every computer.
     var key = String(name || '').trim().toLowerCase() || 'general';
-    if(moteColorSlots[key] !== undefined) return moteColorSlots[key];
-    var preferred = moteHash('color:' + key) % MOTE_COLOR_PALETTE.length;
-    var slot = preferred;
-    for(var step = 0; step < MOTE_COLOR_PALETTE.length; step++){
-      slot = (preferred + step) % MOTE_COLOR_PALETTE.length;
-      if(!moteColorOwners[slot] || moteColorOwners[slot] === key) break;
-    }
-    // Once there are more Motes than palette entries, a repeat is preferable
-    // to failing to render the avatar; normal rosters stay collision-free.
-    moteColorSlots[key] = slot;
-    moteColorOwners[slot] = key;
-    return slot;
+    return moteHash('color:' + key) % MOTE_COLOR_PALETTE.length;
   }
   function moteColorFilterFor(name, explicitColor){
     var variant = moteVariantFor(name);
@@ -3032,6 +3047,7 @@
     var records = Array.isArray(apiAgents) ? apiAgents : [];
     if(typeof chatWs === 'undefined' || !chatWs) return records;
     var existing = Array.isArray(chatWs.allAgents) ? chatWs.allAgents : [];
+    var previousRecords = chatWs.botRecords || [];
     chatWs.botRecords = records.slice();
     scheduleNeedsYouRender();
     chatWs.botRecordsLoaded = true;
@@ -3046,7 +3062,24 @@
     });
     // The browser tab strip draws group owners from these records.
     try { window.dispatchEvent(new Event('mia-bots-changed')); } catch(_botsEventError) {}
+    showBotRenameInOpenChat(previousRecords, records);
     return chatWs.allAgents;
+  }
+  // The chat on screen still has the bot's old name in its header and on its messages.
+  function showBotRenameInOpenChat(previous, records){
+    if(chatWs.activeKind !== 'agent') return;
+    var renamed = records.filter(function(record){
+      return previous.some(function(old){ return String(old.id) === String(record.id) && old.name && old.name !== record.name && old.name === chatWs.activeLabel; });
+    })[0];
+    if(!renamed) return;
+    chatWs.activeLabel = renamed.name;
+    renderChatHeaderBar();
+    renderChatThread();
+  }
+  // Messages keep the name their bot had when it wrote them; a renamed bot goes by its name now.
+  function currentBotNameForSender(senderId){
+    var record = (chatWs.botRecords || []).filter(function(bot){ return String(bot.id) === String(senderId); })[0];
+    return record && record.name ? record.name : '';
   }
   function loadAgents(){
     return api('/api/bots').then(function(res){
@@ -5386,7 +5419,7 @@
       (result.bots||[]).forEach(function(bot){
         if(!bot.published || !bot.name)return;
         var key=String(bot.name).toLowerCase(), entry=byKey[key];
-        if(!entry){ entry=byKey[key]={key:key,name:bot.name,channels:[]}; list.push(entry); }
+        if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:normalizeAgentAvatarColor(bot.avatar_color),channels:[]}; list.push(entry); }
         if(entry.channels.indexOf(result.channel)<0)entry.channels.push(result.channel);
       });
     });
@@ -5447,7 +5480,7 @@
     button.className='chat-recent-row hub-channel-row';
     button.setAttribute('data-company-bot',bot.key);
     var where=bot.channels.map(companyBotWhere).join(', ');
-    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,null,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
+    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview">'+esc(where)+'</span></span>';
     button.addEventListener('click',function(){ openCompanyBot(bot); });
@@ -5466,7 +5499,7 @@
     var button=document.createElement('button'); button.type='button';
     button.className='chat-recent-row hub-channel-row'+(active?' active':'');
     button.setAttribute('data-team-bot-id',bot.id);
-    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,null,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
+    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
       +renderChatActivityIndicator(!!(state && state.thinking),false)
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview'+(preview?'':' empty')+'">'+(preview?esc(preview):'&nbsp;')+'</span></span>';
@@ -8458,6 +8491,20 @@
         loadArtifacts();
       }).catch(function(){ error.textContent = 'That app could not be added.'; });
     });
+    // The browser tab menu's Save Page as Artifact and Save Page as App.
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(browser && browser.onPageSaved) browser.onPageSaved(function(saved){
+      if(saved.kind === 'artifact'){
+        showBenchToast(saved.failed ? 'That page could not be saved. Try again.' : 'Saved ' + saved.name + ' to Artifacts.');
+        if(!saved.failed) loadArtifacts();
+        return;
+      }
+      api('/api/artifacts/links', {method: 'POST', body: {url: saved.url, name: saved.name}}).then(function(res){
+        if(res.status !== 201) throw new Error('save_failed');
+        showBenchToast('Saved ' + res.data.artifact.name + ' to your apps.');
+        loadArtifacts();
+      }).catch(function(){ showBenchToast('That page could not be saved as an app. Try again.'); });
+    });
   })();
 
   // Apps page: small web apps people build and share. One page for Solo and a
@@ -9717,7 +9764,6 @@
         list: function(groupId){ return request('?groupId=' + encodeURIComponent(groupId || '')).then(function(data){ return data.works; }); },
         plan: function(payload){ return request('/plan', {method:'POST', body:payload}).then(function(data){ return request('/' + encodeURIComponent(data.work.id) + '/start', {method:'POST', body:{}}); }); },
         cancel: function(id, workerId){ return request('/' + encodeURIComponent(id) + '/stop', {method:'POST', body:workerId ? {workerId:workerId} : {}}); },
-        approval: function(id, approval, accept){ return request('/' + encodeURIComponent(id) + '/approvals/' + encodeURIComponent(approval.id), {method:'POST', body:{accept:accept}}); }
       }
     });
   })();
@@ -11715,7 +11761,7 @@
       // parseSignedBody's regex and pass through untouched.
       var signed = chatWs.activeKind === 'department' || chatWs.activeKind === 'dm' || chatWs.activeKind === 'agent' || chatWs.activeKind === 'home';
       var parsed = signed && !m.hubMessage ? parseSignedBody(botBody) : {agent: null, text: botBody};
-      name = m.nativeAgentName || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
+      name = currentBotNameForSender(m.sender) || m.nativeAgentName || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
       mark = esc(benchMark(name));
       tag = agentTagFor(name);
       text = stripLegacyBackgroundStatus(parsed.text);
@@ -16594,6 +16640,7 @@
   }
 
   function initChatWorkspace(){
+    if(window.MiaInterruptedWork) window.MiaInterruptedWork.showOnce({api: api, toast: showBenchToast});
     if(hubWorkspace()) return initHubChat().then(openPendingPerson);
     return Promise.all([
       loadNativeConversations(),
@@ -18734,7 +18781,7 @@
     if(e.key === 'Escape'){ closeChatThread(); closeChatTasksPanel(); if(chatCtxMenuClose) chatCtxMenuClose(); if(chatSidebarCtxMenuClose) chatSidebarCtxMenuClose(); }
   });
 
-  /* ============ CHAT: mic dictation (local whisper.cpp; audio never leaves this Mac) ============ */
+  /* ============ CHAT: mic dictation (local whisper.cpp; audio never leaves this computer) ============ */
   (function(){
     var micBtn = el('#ccMicBtn');
     var pill = el('#ccRecordingPill');
@@ -18783,10 +18830,10 @@
       return speechFetch('/api/speech/status').then(function(res){
         var s = res.data || {};
         if(!s.binaryReady){
-          throw new Error('Dictation needs whisper.cpp. In Terminal run: ' + (s.installHint || 'brew install whisper-cpp'));
+          throw new Error('Dictation is missing from this copy of Mia. Reinstall Mia to get it back.');
         }
         if(s.modelReady) return true;
-        if(!window.confirm('Dictation runs on this Mac with the whisper.cpp "' + s.model + '" speech model (about 142 MB).\n\nDownload it once from huggingface.co into your Mia data folder? Your audio is never uploaded anywhere.')){
+        if(!window.confirm('Dictation runs on this computer with the whisper.cpp "' + s.model + '" speech model (about 142 MB).\n\nDownload it once from huggingface.co into your Mia data folder? Your audio is never uploaded anywhere.')){
           return false;
         }
         show('Downloading speech model… (one time, about 142 MB)');
@@ -18812,7 +18859,7 @@
         });
       }).catch(function(error){
         var denied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
-        fail(denied ? 'Microphone access is blocked. Allow Mia in System Settings > Privacy & Security > Microphone.' : (error && error.message) || 'Could not start dictation.');
+        fail(denied ? 'Microphone access is blocked. Allow Mia to use the microphone in your computer\'s privacy settings.' : (error && error.message) || 'Could not start dictation.');
       });
     }
 

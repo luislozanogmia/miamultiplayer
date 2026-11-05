@@ -219,7 +219,7 @@ test('subscription model selections stay inside the provider allowlist', () => {
   assert.equal(inference.isAllowedHermesModel('claude-subscription-directsdk-experimental', 'claude-opus-5', false), true);
   assert.deepEqual(inference.normalizeHermesModelSelection('claude-subscription-directsdk-experimental', 'claude-opus-5', false), { model: 'claude-opus-5-5[1m]', fast: false });
   assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', null, false), {
-    model: 'gpt-5.6-luna',
+    model: 'gpt-6-luna',
     fast: false,
   });
   assert.deepEqual(inference.normalizeHermesModelSelection('xai-oauth', null, false), {
@@ -227,7 +227,7 @@ test('subscription model selections stay inside the provider allowlist', () => {
     fast: false,
   });
   assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', 'fast', true), {
-    model: 'gpt-5.6-luna',
+    model: 'gpt-6-luna',
     fast: true,
   });
   assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', 'gpt-6-astra', false), {
@@ -242,10 +242,30 @@ test('subscription model selections stay inside the provider allowlist', () => {
   assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-6-astra', true), false);
   assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', 'gpt-6.1-sol', false), { model: 'gpt-6.1-sol', fast: false });
   // Retired models keep working on their successor instead of failing.
-  for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
-    assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', model, false), { model: 'gpt-6.1-sol', fast: false });
+  for (const [model, successor] of [['gpt-5.6-sol', 'gpt-6.1-sol'], ['gpt-5.6-terra', 'gpt-6.1-terra'], ['gpt-5.6-luna', 'gpt-6-luna'], ['gpt-5.5', 'gpt-6-luna']]) {
+    assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', model, false), { model: successor, fast: false });
     assert.equal(inference.isAllowedHermesModel('openai-codex', model, false), true);
   }
+  // Every GPT-6 and 6.1 model is a current choice.
+  for (const model of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna']) {
+    assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', model, false), { model, fast: false });
+    assert.equal(inference.isAllowedHermesModel('openai-codex', model, false), true);
+  }
+  assert.deepEqual(inference.normalizeHermesModelSelection('openai-codex', 'gpt-6-luna', true), { model: 'gpt-6-luna', fast: true });
+  assert.deepEqual(inference.HERMES_SUBSCRIPTION_MODEL_OPTIONS['openai-codex'].filter((option) => !option.fast).map((option) => option.model),
+    ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna']);
+  // A model this account's live list adds is selectable and offered; others are not.
+  assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-7-nova', false), false);
+  inference.rememberDiscoveredHermesModels({ 'openai-codex': { models: ['gpt-7-nova', 'gpt-7-nova-900k', 'gpt-5.6-luna', 'gpt-6.1-sol'] } });
+  assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-7-nova', false), true);
+  assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-7-nova', true), false);
+  assert.deepEqual(inference.hermesModelOptions('openai-codex').filter((option) => option.id === 'gpt-7-nova'),
+    [{ id: 'gpt-7-nova', model: 'gpt-7-nova', label: 'GPT-7 Nova', fast: false }]);
+  assert.equal(inference.hermesModelOptions('openai-codex').filter((option) => /900k|gpt-5/.test(option.id)).length, 0);
+  inference.rememberDiscoveredHermesModels({});
+  assert.equal(inference.isAllowedHermesModel('openai-codex', 'gpt-7-nova', false), false);
+  // A saved one survives a restart, before the first live list.
+  assert.equal(inference.normalizeHermesModelSelection('openai-codex', 'gpt-7-nova', false).model, 'gpt-7-nova');
   assert.deepEqual(inference.normalizeHermesModelSelection('claude-subscription-directsdk-experimental', 'claude-sonnet-5[1m]', false), {
     model: 'claude-sonnet-5-5[1m]',
     fast: false,

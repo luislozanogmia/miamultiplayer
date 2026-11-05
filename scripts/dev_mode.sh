@@ -108,6 +108,13 @@ if [[ "$(uname -s)" == "Linux" && "$runtime_root" == "$default_runtime_root" \
   bash "$script_dir/provision-dev-gws.sh" "$runtime_root"
 fi
 
+# The same pinned dictation engine the release ships.
+if [[ "$(uname -s)" == "Linux" && "$runtime_root" == "$default_runtime_root" \
+      && ! -x "$runtime_root/whisper/whisper-cli" ]]; then
+  echo "Installing the pinned whisper.cpp into $runtime_root (first run only)…"
+  bash "$script_dir/provision-whisper.sh" "$runtime_root/whisper"
+fi
+
 # Claim the root for this checkout so the next dev launch (from any checkout)
 # can tell whose state it is about to reuse.
 python3 - "$data_root/dev-mode.json" "$repo_root" <<'PY'

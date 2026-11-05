@@ -20,6 +20,15 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     install: () => ipcRenderer.invoke("miaos-claude-code-install"),
   },
   openGoogleWorkspaceAuth: (url, proof) => ipcRenderer.invoke("miaos-google-workspace-auth-open", { url, proof }),
+  accounts: {
+    list: () => ipcRenderer.invoke("miaos-accounts", "list"),
+    add: () => ipcRenderer.invoke("miaos-accounts", "add"),
+    switchTo: id => ipcRenderer.invoke("miaos-accounts", "switch", { id }),
+    takeNotice: () => ipcRenderer.invoke("miaos-accounts", "notice"),
+    route: token => ipcRenderer.invoke("miaos-accounts", "route", { token }),
+    confirmed: (token, profile) => ipcRenderer.invoke("miaos-accounts", "confirmed", { token, email: profile.email, name: profile.name }),
+    openOther: (token, conflict) => ipcRenderer.invoke("miaos-accounts", "other", { token, ...conflict }),
+  },
   auth: {
     status: () => ipcRenderer.invoke("miaos-clerk-auth", "status"),
     startGoogle: () => ipcRenderer.invoke("miaos-clerk-auth", "google"),
@@ -123,6 +132,12 @@ contextBridge.exposeInMainWorld("miaDesktop", {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on("miaos-browser-group-edit", listener);
       return () => ipcRenderer.removeListener("miaos-browser-group-edit", listener);
+    },
+    // A tab's menu saved a page, or asks for its address to be saved as an app.
+    onPageSaved: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("miaos-browser-page-saved", listener);
+      return () => ipcRenderer.removeListener("miaos-browser-page-saved", listener);
     },
     // { action: "choose", groupId } opens a group's bot picker;
     // { action: "stop", botId } stops a bot that just lost its group.

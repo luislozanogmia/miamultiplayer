@@ -27,11 +27,11 @@ Every row starts unknown; verifier records actual baseline and final evidence, i
 |5|Mia delegates dependent tasks and synthesizes actual stored worker results through Hermes.|unknown|
 |6|Separate tabs progress concurrently; same-tab mutations serialize and cancellation releases queue.|unknown|
 |7|Background read/click/fill/scroll/navigation operate on assigned tab without selecting human tab.|unknown|
-|8|Human typing/view remains intact; disruptive shared-tab operations require current approval.|unknown|
+|8|Human typing/view remains intact; actions that send or cannot be undone wait for a yes when Ask before do is on.|unknown|
 |9|Element snapshots isolated by actor/tab/document; replaced or stale snapshots fail closed.|unknown|
 |10|Hidden Electron tab screenshots are current and correct, never screenshots of active human tab.|unknown|
 |11|Real execution renders status, bot motes, ownership rings and target region without fabricated progress.|unknown|
-|12|Approval reject prevents execution; accept revalidates tab/target/identity/revocation before dispatch.|unknown|
+|12|Answering No in Ask before do prevents execution; execution revalidates tab/target/identity/revocation before dispatch.|unknown|
 |13|Stop cancels matching worker/group, preserves partial results, no stale post-stop reply or uncertain-write restart replay.|unknown|
 |14|Outputs are durable and group/owner authorized; validated reusable work preserves proof and uncertain-write holds.|unknown|
 |15|Actual Linux Mia UI: one human plus personal Mia coordinates two real bots across three tabs, combines results, preserves focus/groups through close/restart.|unknown|

@@ -162,7 +162,7 @@ function outboxHasFiles(folder) {
 }
 const NO_STORE={records:()=>[],isMine:()=>false,save(){},drop(){}};
 
-function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdentity,runBot,filesSupported=true,fetcher=fetch,progressMs=PROGRESS_MS,stepTimeoutMs=STEP_TIMEOUT_MS,scanWaitMs=SCAN_WAIT_MS,scanCheckMs=SCAN_CHECK_MS,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdentity,runBot,isClosing=()=>false,filesSupported=true,fetcher=fetch,progressMs=PROGRESS_MS,stepTimeoutMs=STEP_TIMEOUT_MS,scanWaitMs=SCAN_WAIT_MS,scanCheckMs=SCAN_CHECK_MS,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   const journal=createHubWorkflowJournal(db);
   const inFlight=new Map(),freshTokens=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId]);
@@ -457,6 +457,8 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     } catch {
       // The error text can carry private content, so it never becomes the note.
     } finally {clearTimeout(limit);await stopLease();}
+    // Mia is closing: the journal keeps this as started, and the person decides next time.
+    if(isClosing()) return;
     if(stopped) return finish(s,row);
     if(timedOut) saveFailure(s,row,'The bot did not finish within '+Math.round(stepTimeoutMs/60000)+' minutes.');
     else if(!read) saveFailure(s,row,FAILED_NOTE);

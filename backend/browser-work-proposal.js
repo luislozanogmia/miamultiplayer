@@ -32,21 +32,16 @@ async function resolveProposalCandidates({ assignments, bots, models, resolveSel
   return candidates;
 }
 
-const workerStatus = { queued: 'idle', working: 'working', waiting_for_user: 'working', needs_approval: 'working', done: 'done', failed: 'failed', cancelled: 'cancelled' };
-function pendingApprovals(work, worker) {
-  return (work.approvals || []).filter(approval => approval.status === 'pending' && (!worker || approval.workerId === worker.id))
-    .map(approval => ({ approval_id: approval.id, tab_id: approval.tabId, action: approval.operation?.method || 'browser action' }));
-}
+const workerStatus = { queued: 'idle', working: 'working', waiting_for_user: 'working', done: 'done', failed: 'failed', cancelled: 'cancelled' };
 function summarizeWork(work) {
   return {
     work_id: work.id, group_id: work.groupId, goal: work.goal, status: work.status,
     ...(work.error ? { error: work.error } : {}),
     workers: (work.workers || []).map(worker => {
-      const approvals = pendingApprovals(work, worker);
       return { worker_id: worker.id, bot: worker.botName || worker.botId, tab_id: worker.tabId,
         status: workerStatus[worker.status] || worker.status,
-        needs_you: approvals.length > 0 || worker.status === 'waiting_for_user',
-        pending_approvals: approvals, ...(worker.error ? { error: worker.error } : {}) };
+        needs_you: worker.status === 'waiting_for_user',
+        ...(worker.error ? { error: worker.error } : {}) };
     }),
   };
 }

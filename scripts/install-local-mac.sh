@@ -74,6 +74,8 @@ actual_gws_binary_sha="$(shasum -a 256 "$gws_install_dir/gws" | awk '{print $1}'
   echo "Google Workspace CLI binary checksum mismatch" >&2
   exit 1
 }
+whisper_install_dir="$miaos_home/downloads/whisper-darwin-arm64"
+bash "$script_dir/provision-whisper.sh" "$whisper_install_dir"
 echo "[5/9] Verifying the installation has no persisted provider credentials"
 for credential_file in "$hermes_home/auth.json" "$hermes_home/profiles/miaos-agent-runtime/.env" "$hermes_home/profiles/miaos-bot-worker/.env"; do
   [[ ! -e "$credential_file" ]] ||
@@ -97,6 +99,7 @@ HERMES_PYTHON_RUNTIME_DIR="$(cd -P -- "${python_bin_home%/bin}" && pwd)"
 export HERMES_BUNDLE_DIR="$hermes_install_dir"
 export GHOST_BUNDLE_DIR="$ghost_install_dir"
 export GWS_BUNDLE_DIR="$gws_install_dir"
+export WHISPER_BUNDLE_DIR="$whisper_install_dir"
 export HERMES_PYTHON_RUNTIME_DIR
 (cd "$macos_root" && npm ci --no-audit --no-fund && npm run package:mac)
 [[ -d "$packaged_app" ]] || { echo "Packaged app missing: $packaged_app" >&2; exit 1; }

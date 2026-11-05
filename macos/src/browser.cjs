@@ -10,6 +10,7 @@ const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs
 const { PAGE_HELPERS, cleanAnchor, readScript, scrollScript } = require("./space-anchor.cjs");
 
 const { createActorRuntime } = require("./browser-actors.cjs");
+const { createClosedTabs } = require("./closed-tabs.cjs");
 const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { randomUUID } = require("node:crypto");
 
@@ -21,17 +22,40 @@ const MAX_PROTOCOL_ELEMENTS = 500;
 const PROTOCOL_SCRIPT_TIMEOUT_MS = 10000;
 const BROWSER_PARTITION = "persist:mia-browser";
 // A timeout only stops waiting for a page script; it does not cancel its
-// execution in Chromium. Keep the real operation locked until it settles.
+// execution in Chromium. Keep the real operation locked until it settles, its
+// document is gone, or the hard limit passes. Electron never settles the promise
+// of a script whose document was replaced, so settling alone can't be relied on.
+const BROWSER_OPERATION_LIMIT_MS = 60000;
 const pendingBrowserOperations = new WeakMap();
-function trackBrowserOperation(webContents, operation, onSettled) {
-  const pending = pendingBrowserOperations.get(webContents) || new Set();
+let reportClearedOperation = () => {};
+function pendingOperationsFor(webContents) {
+  let pending = pendingBrowserOperations.get(webContents);
+  if (pending) return pending;
+  pending = new Map();
   pendingBrowserOperations.set(webContents, pending);
+  const documentGone = reason => {
+    for (const [promise, entry] of [...pending]) if (entry.kind === "page script") entry.clear(promise, reason);
+  };
+  webContents.on?.("did-navigate", () => documentGone("its page was replaced"));
+  webContents.on?.("render-process-gone", () => documentGone("its page crashed"));
+  return pending;
+}
+function trackBrowserOperation(webContents, operation, onSettled, { kind = "page script", limitMs = BROWSER_OPERATION_LIMIT_MS } = {}) {
+  const pending = pendingOperationsFor(webContents);
   const promise = Promise.resolve(operation);
-  pending.add(promise);
+  let timer;
   const settled = () => {
-    pending.delete(promise);
+    if (!pending.delete(promise)) return;
+    clearTimeout(timer);
     onSettled?.();
   };
+  const entry = { kind, startedAt: Date.now(), clear: (_promise, reason) => {
+    reportClearedOperation(kind, reason);
+    settled();
+  } };
+  pending.set(promise, entry);
+  timer = setTimeout(() => entry.clear(promise, `it passed ${Math.round(limitMs / 1000)}s`), limitMs);
+  timer.unref?.();
   promise.then(settled, settled);
   return promise;
 }
@@ -42,11 +66,11 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Math.trunc(number)));
 }
 
-async function executeProtocolScript(webContents, script, isolated = false, onSettled) {
+async function executeProtocolScript(webContents, script, isolated = false, onSettled, { readOnly = false } = {}) {
   let timer;
   try {
     return await Promise.race([
-      trackBrowserOperation(webContents, isolated ? webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: script }], false) : webContents.executeJavaScript(script, false), onSettled),
+      readOnly ? isolated ? webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: script }], false) : webContents.executeJavaScript(script, false) : trackBrowserOperation(webContents, isolated ? webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: script }], false) : webContents.executeJavaScript(script, false), onSettled),
       new Promise((_, reject) => {
         timer = setTimeout(() => {
           const error = new Error(`Page script timed out after ${PROTOCOL_SCRIPT_TIMEOUT_MS}ms.`);
@@ -302,6 +326,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // only, so the history file stays a few hundred KB at most.
   const HISTORY_ICON_MAX_CHARS = 32 * 1024;
   let historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
+  const closedTabsPathFor = file => file ? `${file.replace(/\.json$/, "")}-closed.json` : "";
+  const closedTabs = createClosedTabs({ log, safeStorage: options.safeStorage });
+  closedTabs.open(closedTabsPathFor(statePath));
   let historyEntries = [];
   let historyIcons = new Map();
   function loadHistory() {
@@ -818,17 +845,22 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // A tab shows its bot as working while a command runs on it and briefly
   // after, so a burst of quick commands reads as one stretch of work.
   const BOT_WORK_LINGER_MS = 2500;
+  const BOT_COMMAND_LIMIT_MS = options.botCommandLimitMs || 180000;
+  reportClearedOperation = (kind, reason) => log(`browser busy cleared: ${kind}, ${reason}`);
   // A download that starts this soon after a bot's command on that tab is
   // the bot's (a click often triggers it just after the command returns).
   const AGENT_DOWNLOAD_WINDOW_MS = 15000;
   // Mia's own browser work is shown the same way as a bot's, under her name.
   const MIA_WORKER = { botId: "mia", name: "Mia" };
   // While Mia or a bot drives a tab, its page carries an edge glow that fades
-  // inward, like the glow around a screen under computer use. It is always
-  // Mia gold (#C9962B), whoever is working. It is a click-through stylesheet
-  // layer, added when a command starts on the page and removed when the work ends.
-  function botGlowCss() {
-    const tone = alpha => `rgba(201,150,43,${alpha})`;
+  // inward, like the glow around a screen under computer use. It takes the
+  // bot's own color, and Mia's is her gold (#C9962B). It is a click-through
+  // stylesheet layer, added when a command starts on the page and removed when
+  // the work ends.
+  function botGlowCss(botId) {
+    const hue = botHues.get(String(botId));
+    const tone = alpha => (botId === MIA_WORKER.botId || hue === undefined
+      ? `rgba(201,150,43,${alpha})` : `hsla(${hue},72%,52%,${alpha})`);
     return `html::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:2147483647;
     box-shadow:inset 0 0 18px 4px ${tone(.7)},inset 0 0 60px 12px ${tone(.22)};
     animation:mia-bot-glow 2.4s ease-in-out infinite;}
@@ -839,16 +871,21 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // knows each bot's color and whether a reply is still running.
   let botHues = new Map();
   let heldByRenderer = new Set();
+  // Only a bot's own commands count. A page loading says nothing about who
+  // asked for it: the tab may be one a bot used earlier and a person now.
+  function botDrivingTab(tab) {
+    return (tab.botWork || 0) > 0 || !!pendingBrowserOperations.get(tab.view.webContents)?.size
+      || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
+  }
   function glowWanted(tab) {
     if (!tab.botWorker) return null;
-    const working = browserWorkPending(tab) || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
-    return working || heldByRenderer.has(tab.id) ? { by: tab.botWorker.botId } : null;
+    return botDrivingTab(tab) || heldByRenderer.has(tab.id) ? { by: tab.botWorker.botId } : null;
   }
   function syncBotGlow(tab) {
     const wc = tab.view.webContents;
     if (wc.isDestroyed()) return;
     const wanted = glowWanted(tab);
-    const css = wanted ? botGlowCss() : null;
+    const css = wanted ? botGlowCss(wanted.by) : null;
     if (tab.botGlowPending || css === (tab.botGlowCss || null)) return;
     if (tab.botGlowKey) {
       Promise.resolve(wc.removeInsertedCSS(tab.botGlowKey)).catch(() => {});
@@ -866,7 +903,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   function botActivityFor(tab) {
     if (!tab.botWorker) return null;
-    if (browserWorkPending(tab) || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS) return { ...tab.botWorker };
+    if (botDrivingTab(tab)) return { ...tab.botWorker };
     return null;
   }
   function publish() {
@@ -1022,7 +1059,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     persistTabs();
     // Do not hold the toolbar IPC open until every page resource has loaded.
     trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
-      () => browserWorkSettled(tab)).catch(error => reportLoadError(tab, target, error));
+      () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -1035,7 +1072,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     layout();
     persistTabs();
     trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
-      () => browserWorkSettled(tab)).catch(error => reportLoadError(tab, target, error));
+      () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -1095,17 +1132,35 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function protocolScript(tab, script, isolated = false) {
     return executeProtocolScript(tab.view.webContents, script, isolated, () => browserWorkSettled(tab));
   }
+  // Mia's own look at a page changes nothing on it, so it's no reason to call the tab busy.
+  function readOnlyScript(tab, script, isolated = false) {
+    return executeProtocolScript(tab.view.webContents, script, isolated, undefined, { readOnly: true });
+  }
   // A page that is only loading doesn't stop a tab joining its group when
   // `pagesMayLoad` is set; bot work always does.
   function requireGroupIdle(groupId, pagesMayLoad = false) {
-    if (groupId && groupTabs(groupId).some(pagesMayLoad ? botWorkPending : browserWorkPending)) {
-      throw protocolError("BROWSER_BUSY", "This group still has browser work in progress. Wait for it to finish before changing its controller or tabs.");
-    }
+    const busy = groupId && groupTabs(groupId).find(pagesMayLoad ? botWorkPending : browserWorkPending);
+    if (busy) throw browserBusyError(busy, "before changing its group's controller or tabs");
+  }
+  // What a tab is waiting on, so a busy error can say which tab and why.
+  function pendingWorkKinds(tab) {
+    const kinds = new Set();
+    if ((tab.botWork || 0) > 0) kinds.add("bot command");
+    if (tab.actorOperationCount > 0) kinds.add("actor operation");
+    for (const entry of pendingBrowserOperations.get(tab.view.webContents)?.values() || []) kinds.add(entry.kind);
+    if (tab.view.webContents.isLoading()) kinds.add("page loading");
+    return [...kinds];
+  }
+  function browserBusyError(tab, purpose) {
+    const kinds = pendingWorkKinds(tab);
+    log(`browser busy: tab ${tab.id} pending ${kinds.join(", ")}`);
+    const error = protocolError("BROWSER_BUSY", `Tab ${tab.id} ("${String(tab.title || "").slice(0, 80)}") still has work in progress: ${kinds.join(", ")}. Wait for it to finish ${purpose}.`);
+    error.tabId = tab.id;
+    error.pending = kinds;
+    return error;
   }
   function requireMembershipIdle(tab, nextGroupId = null) {
-    if (browserWorkPending(tab)) {
-      throw protocolError("BROWSER_BUSY", "This tab still has browser work in progress. Wait for it to finish before moving it.");
-    }
+    if (browserWorkPending(tab)) throw browserBusyError(tab, "before moving it");
     requireGroupIdle(tab?.groupId);
     requireGroupIdle(nextGroupId);
   }
@@ -1147,8 +1202,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // after the bot) the first time.
   function placeInBotGroup(tab, actor) {
     const existing = botGroup(actor.botId);
-    if (existing) addTabToGroup(tab.id, existing.id);
-    else {
+    if (existing) {
+      // A new tab changes nothing about the bot's other tabs, so it joins
+      // directly rather than through the idle-checked group moves.
+      const members = groupTabs(existing.id);
+      tab.groupId = existing.id;
+      moveTab(tab.id, [...tabs.keys()].filter(id => id !== tab.id).indexOf(members.at(-1).id) + 1);
+    } else {
       const group = createGroup(tab.id);
       if (group) Object.assign(group, { name: String(actor.name || "").trim().slice(0, 80), botId: actor.botId });
     }
@@ -1423,7 +1483,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   // Explicit snapshot IDs are target preconditions even for selector actions.
-  // Resolve/check in the isolated world both when approving and dispatching.
+  // Resolve/check in the isolated world when dispatching.
   function protocolTargetScript(element, actorId) {
     return `
       const snapshot = globalThis.__miaBrowserSnapshots?.get(${JSON.stringify(actorId || "legacy")});
@@ -1435,6 +1495,32 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (scoped && (!el?.isConnected || snapshotIndex < 0 || (numbered && document.querySelector(${JSON.stringify(element.selector)}) !== el))) return { error: 'Snapshot target was replaced.', code: 'STALE_SNAPSHOT' };
       if (scoped && snapshot.fingerprint(el) !== snapshot.fingerprints[snapshotIndex]) return { error: 'Snapshot target changed.', code: 'STALE_SNAPSHOT' };
     `;
+  }
+
+  async function inspectClickTarget(tab, params) {
+    const element = protocolElement(tab, params);
+    if (element.selector.length > MAX_PROTOCOL_SELECTOR) throw protocolError("INVALID_PARAMS", "selector is too long.");
+    const proof = randomUUID();
+    const generation = tab.sequence;
+    const url = tab.url;
+    const result = await readOnlyScript(tab, `(() => {
+      ${protocolTargetScript(element, params.actor_id)}
+      if (!el?.isConnected || el.disabled || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden') return { error: 'Target is unavailable.', code: 'ELEMENT_NOT_FOUND' };
+      const label = String(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+      const type = String(el.getAttribute('type') || '').toLowerCase();
+      const form = el.closest('form');
+      const action = /\\b(send|post|submit|buy|confirm|publish|pay|delete|remove|trash|order|purchase|save|share|invite|reply|forward|upload|enviar|publicar|comprar|confirmar|pagar|eliminar|borrar)\\b/i.exec(label)?.[0];
+      const risky = !!action || !label || type === 'submit' || !!form && String(form.method || '').toLowerCase() === 'post';
+      const store = globalThis.__miaClickProofs ||= new Map();
+      if (store.size > 100) store.delete(store.keys().next().value);
+      const fingerprint = node => JSON.stringify([node.outerHTML, node.innerText, node.value, node.getAttribute('aria-label'), node.getAttribute('title'), node.getAttribute('href'), node.getAttribute('type'), node.getAttribute('role'), node.closest('form')?.action, node.closest('form')?.method]);
+      store.set(${JSON.stringify(proof)}, { el, fingerprint: fingerprint(el), actor: ${JSON.stringify(params.actor_id)} });
+      return { action: action || (type === 'submit' || !!form && String(form.method || '').toLowerCase() === 'post' ? 'Submit form' : label ? 'control' : 'unlabelled control'), risky };
+    })()`, true);
+    if (result?.error) throw protocolError(result.code || "ELEMENT_NOT_FOUND", result.error);
+    if (tab.sequence !== generation || tab.url !== url) throw protocolError("TAB_NAVIGATED", "Document changed while resolving target.");
+    return { targetProof: proof, requiresApproval: !!result.risky,
+      actionSummary: `Click ${result.action} on ${new URL(url).origin}` };
   }
 
   async function protocolElementAction(tab, params, action) {
@@ -1450,14 +1536,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const value = action === "fill" ? params.value.slice(0, MAX_PROTOCOL_PAGE_TEXT) : "";
     const script = `(() => {
       ${protocolTargetScript(element, params.actor_id)}
-      if (el && (el.disabled || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden')) return { error: 'Target is unavailable.', code: 'ELEMENT_NOT_FOUND' };
-      const approvalId = ${JSON.stringify(params.approval_id || null)};
-      if (approvalId) {
-        const store = globalThis.__miaApprovedTargets;
-        const approved = store?.get(approvalId);
-        store?.delete(approvalId);
-        if (!approved || approved.el !== el || !el?.isConnected || approved.fingerprint(el) !== approved.value) return { error: 'Approval target changed.', code: 'APPROVAL_TARGET_CHANGED' };
+      if (${JSON.stringify(action)} === 'click' && ${JSON.stringify(!!params.actor_id)}) {
+        const proof = globalThis.__miaClickProofs?.get(${JSON.stringify(params.__mia_target_proof || null)});
+        globalThis.__miaClickProofs?.delete(${JSON.stringify(params.__mia_target_proof || null)});
+        const fingerprint = node => JSON.stringify([node.outerHTML, node.innerText, node.value, node.getAttribute('aria-label'), node.getAttribute('title'), node.getAttribute('href'), node.getAttribute('type'), node.getAttribute('role'), node.closest('form')?.action, node.closest('form')?.method]);
+        if (!proof || proof.actor !== ${JSON.stringify(params.actor_id)} || proof.el !== el || !el?.isConnected || proof.fingerprint !== fingerprint(el))
+          return { error: 'Approved target changed. Inspect the page and ask again.', code: 'STALE_TARGET' };
       }
+      if (el && (el.disabled || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden')) return { error: 'Target is unavailable.', code: 'ELEMENT_NOT_FOUND' };
       if (!el) return { error: 'Element is no longer present. Vacuum the page again.' };
       (globalThis.__miaActionTargets ||= new Map()).set(${JSON.stringify(targetKey)}, el);
       const currentTarget = () => {
@@ -1579,27 +1665,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return { waited_ms: timeout };
   }
 
-  async function approveActorOperation(request) {
-    const approval = actorRuntime.approve(request);
-    const tab = protocolTab(request.params.tab_id);
-    if (["click", "fill"].includes(request.method)) {
-      try {
-        const element = protocolElement(tab, request.params);
-        const result = await executeProtocolScript(tab.view.webContents, `(() => {
-          ${protocolTargetScript(element, request.params.actor_id)}
-          if (!el?.isConnected) return false;
-          const fingerprint = el => JSON.stringify([el.localName,el.getAttribute('role'),el.getAttribute('aria-label'),el.getAttribute('href'),el.innerText,el.value]);
-          const store = globalThis.__miaApprovedTargets ||= new Map();
-          store.set(${JSON.stringify(approval.approval_id)}, { el, fingerprint, value: fingerprint(el) });
-          return true;
-        })()`, true);
-        if (result?.error) throw protocolError(result.code, result.error);
-        if (!result) throw protocolError("ELEMENT_NOT_FOUND", "Approval target is unavailable.");
-      } catch (error) { actorRuntime.reject(approval.approval_id); throw error; }
-    }
-    return approval;
-  }
-  const publicActors = { bind: binding => bindActorWithDiagnostics(actorRuntime.bind, binding, options.onActorEvent), revoke: actorRuntime.revoke, approve: approveActorOperation, reject: actorRuntime.reject, list: actorRuntime.list };
+  const publicActors = { bind: binding => bindActorWithDiagnostics(actorRuntime.bind, binding, options.onActorEvent), revoke: actorRuntime.revoke, list: actorRuntime.list };
   function actorOperation(binding, operation, context = {}) {
     if (!binding || !operation || typeof operation.method !== "string") throw protocolError("INVALID_PARAMS", "Binding and browser operation are required.");
     binding = { ...binding, taskId: binding.taskId || binding.workId };
@@ -1608,15 +1674,18 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const supplied = operation.params || {};
     if ((supplied.actor_id !== undefined && supplied.actor_id !== bound.actorId) || (supplied.tab_id !== undefined && supplied.tab_id !== bound.tabId)) throw protocolError("TAB_NOT_OWNED", "Operation identity disagrees with assignment.");
     const params = { ...JSON.parse(JSON.stringify(supplied)), actor_id: bound.actorId, tab_id: bound.tabId };
-    if (context.approval) params.approval_id = typeof context.approval === "string" ? context.approval : context.approval.approval_id;
     if (context.signal) params.signal = context.signal;
     params[actorCapability] = true;
     return { method: operation.method, params };
   }
-  function validateActorOperation(binding, operation) {
+  async function validateActorOperation(binding, operation) {
     const call = actorOperation(binding, operation);
     const info = actorRuntime.inspect(call.method, call.params);
-    return { ...info, documentGeneration: info.document_generation, requiresApproval: info.needs_approval };
+    const target = call.method === 'click' ? await inspectClickTarget(tabs.get(call.params.tab_id), call.params) : {};
+    const requiresApproval = !!target.requiresApproval || ['eval', 'tab_close'].includes(call.method) || call.params.consequential === true;
+    return { ...info, ...target, documentGeneration: info.document_generation, requiresApproval,
+      actionSummary: target.actionSummary || (call.method === 'tab_close' ? `Close browser tab at ${new URL(info.url).origin}` :
+        call.method === 'eval' ? `Run page script at ${new URL(info.url).origin}` : `Browser ${call.method} at ${new URL(info.url).origin}`) };
   }
   async function executeActorOperation(binding, operation, context) {
     const call = actorOperation(binding, operation, context);
@@ -1703,7 +1772,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   // Mia's personal agent arranges groups and suggests bot assignments through
   // the bridge it already browses with. A suggestion only prefills the
-  // person's browser-work form: starting work and every approval stay theirs.
+  // person's browser-work form: starting work stays theirs.
   // Switching workspace swaps every tab out, so Mia can tell "my tabs moved"
   // from "my tabs were closed".
   const workspaceFields = () => ({ workspace: workspaceKey, ...(workspaceChangedAt ? { workspace_changed_at: workspaceChangedAt } : {}) });
@@ -1915,12 +1984,29 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // to one tab (actorRuntime); Ghost calls prove their bot session here.
     const actor = params[actorCapability] === true ? null : await protocolActor(params.actor_session);
     const touched = new Set();
+    // A command that never returns must not hold its tab forever. The longest
+    // bounded wait (the wait command) is 120s, so this only catches a stuck one.
+    const commandLimits = new Map();
+    const releaseBotWork = tab => {
+      if (!commandLimits.has(tab)) return;
+      clearTimeout(commandLimits.get(tab));
+      commandLimits.delete(tab);
+      tab.botWork = Math.max(0, (tab.botWork || 0) - 1);
+      tab.botWorkAt = Date.now();
+    };
     // As a command starts on a page, the tab shows who is working there
     // (Mia or a bot): the glow, the working dot and Take over.
     const touch = tab => {
       if (!tab || touched.has(tab)) return;
       touched.add(tab);
       tab.botWork = (tab.botWork || 0) + 1;
+      const hardLimit = setTimeout(() => {
+        log(`browser busy cleared: tab ${tab.id} bot command ${method} passed ${Math.round(BOT_COMMAND_LIMIT_MS / 1000)}s`);
+        releaseBotWork(tab);
+        publish();
+      }, BOT_COMMAND_LIMIT_MS);
+      hardLimit.unref?.();
+      commandLimits.set(tab, hardLimit);
       tab.botWorker = actor ? { botId: actor.botId, name: String(actor.name || "").slice(0, 80) } : { ...MIA_WORKER };
       syncBotGlow(tab);
       publish();
@@ -1937,8 +2023,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return result;
     } finally {
       for (const tab of touched) {
-        tab.botWork = Math.max(0, (tab.botWork || 0) - 1);
-        tab.botWorkAt = Date.now();
+        releaseBotWork(tab);
       }
       if (touched.size) {
         publish();
@@ -2004,8 +2089,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         touch(existing);
         return { ...protocolTabResult(existing), reused: true };
       }
-      // A bot's new tab opens behind, so it never takes the tab in front.
-      if (actor) requireGroupIdle(botGroup(actor.botId)?.id);
+      // A bot's new tab opens behind, so it never takes the tab in front, and it
+      // doesn't touch the bot's other tabs, so they don't need to be idle.
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
       touch(tab);
@@ -2058,7 +2143,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (typeof filePath !== "string" || !filePath.trim()) {
         throw protocolError("INVALID_PARAMS", "path is required.");
       }
-      if (actor) requireGroupIdle(botGroup(actor.botId)?.id);
       const target = normalizeLocalFileTarget(filePath, workspaceRoot);
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
@@ -2224,7 +2308,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (tab.documentTimingValid === false) return;
     const sequence = tab.sequence;
     try {
-      const result = await protocolScript(tab, `(async () => {
+      const result = await readOnlyScript(tab, `(async () => {
         if (${waitForPaint} && !performance.getEntriesByName('first-contentful-paint').length) {
           await new Promise(resolve => {
             const observer = new PerformanceObserver(list => {
@@ -2254,6 +2338,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (!panelOpen || disposed) return false;
     if (key === "l") focusLocation();
     else if (key === "f") { window.webContents.focus(); window.webContents.send("miaos-browser-find"); }
+    else if (key === "T") reopenClosedTab();
     else if (key === "t") { newSessionOrPlainTab(); focusLocation(); }
     else if (key === "w") closeTabByPerson(activeId);
     else if (key === "r") active()?.view.webContents.reloadIgnoringCache();
@@ -2269,7 +2354,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     // Plain Cmd+R reloads Mia through the app menu; Shift+Cmd+R hard-reloads the page.
     if (key === "r" && !input.shift) return;
     if ((input.meta || input.control) && ["l", "t", "w", "r", "f", "+", "=", "-", "0"].includes(key)) {
-      event.preventDefault(); runShortcut(key);
+      event.preventDefault(); runShortcut(key === "t" && input.shift ? "T" : key);
     } else if (key === "escape") active()?.view.webContents.stop();
   }
   // Tabs keep the Map's insertion order; reordering rebuilds it.
@@ -2640,7 +2725,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (typeof changes.collapsed === "boolean") setGroupCollapsed(groupId, changes.collapsed);
   }
   function closeTabs(ids) {
-    for (const id of ids) if (tabs.has(id)) closeTab(id);
+    for (const id of ids) if (tabs.has(id)) closeTab(id, { byUser: true });
   }
   function editGroupName(groupId) {
     if (!disposed && !window.isDestroyed()) window.webContents.send("miaos-browser-group-edit", { groupId });
@@ -2657,6 +2742,21 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }).catch(() => {});
     }
   };
+  function pageSaved(result) {
+    if (!disposed && !window.isDestroyed()) window.webContents.send("miaos-browser-page-saved", result);
+  }
+  // A copy of the page as it looks now, in the Mia folder where Artifacts lists
+  // it. The name never comes straight from the page, and nothing is replaced.
+  async function savePageCopy(tab) {
+    const { folder } = await appRequest("/api/artifacts", { timeoutMs: 5000 });
+    const directory = path.join(folder, "Saved pages");
+    await fs.promises.mkdir(directory, { recursive: true });
+    const base = String(tab.title || "").replace(/[^\p{L}\p{N} ._-]+/gu, " ").replace(/^[ .]+|[ .]+$/g, "").replace(/ +/g, " ").slice(0, 80) || "Saved page";
+    let name = `${base}.html`;
+    for (let copy = 2; fs.existsSync(path.join(directory, name)); copy += 1) name = `${base} ${copy}.html`;
+    await tab.view.webContents.savePage(path.join(directory, name), "HTMLComplete");
+    return name;
+  }
   function showTabMenu(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return;
@@ -2683,11 +2783,20 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       { label: "Reload", enabled: !!tab.url, click: menuAction(() => { tab.error = ""; tab.view.webContents.reload(); }) },
       { label: "Duplicate", enabled: !!tab.url, click: menuAction(() => newTab(tab.url, { after: tabId })) },
       { type: "separator" },
-      { label: "Close", click: menuAction(() => closeTab(tabId)) },
+      { label: "Save Page as Artifact", enabled: /^https?:/i.test(tab.url || ""), click: menuAction(() => {
+        savePageCopy(tab).then(
+          name => pageSaved({ kind: "artifact", name }),
+          error => { log(`save page failed: ${error.message}`); pageSaved({ kind: "artifact", failed: true }); },
+        );
+      }) },
+      { label: "Save Page as App", enabled: /^https?:/i.test(tab.url || ""), click: menuAction(() => pageSaved({ kind: "app", url: tab.url, name: tab.title || "" })) },
+      { type: "separator" },
+      { label: "Close", click: menuAction(() => closeTab(tabId, { byUser: true })) },
       { label: "Close Other Tabs", enabled: tabs.size > 1, click: menuAction(() => closeTabs(order.filter(id => id !== tabId))) },
       { label: "Close Tabs to the Right", enabled: order.indexOf(tabId) < order.length - 1,
         click: menuAction(() => closeTabs(order.slice(order.indexOf(tabId) + 1))) },
     );
+    items.push({ type: "separator" }, ...closedTabMenuItems());
     Menu.buildFromTemplate(items).popup({ window });
   }
   // Gives a group to a bot (or back to Mia with null). An unnamed group takes
@@ -2832,19 +2941,44 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       { label: "Close Group", click: menuAction(() => closeTabs(groupTabs(groupId).map(tab => tab.id))) },
     ]).popup({ window });
   }
+  // Back in its group and place when those still exist. A group whose bot is
+  // busy can't take a new tab, so the page opens on its own instead.
+  function reopenClosedTab(index = 0) {
+    const entry = closedTabs.take(index);
+    if (!entry) return null;
+    const after = tabs.has(entry.afterId) ? { after: entry.afterId } : {};
+    try {
+      return newTab(entry.url, { title: entry.title, groupId: groups.has(entry.groupId) ? entry.groupId : null, ...after });
+    } catch (_) {
+      return newTab(entry.url, { title: entry.title, groupId: null });
+    }
+  }
+  function closedTabMenuItems() {
+    const list = closedTabs.list();
+    return [
+      { label: "Reopen Closed Tab", accelerator: "CommandOrControl+Shift+T", enabled: list.length > 0, click: menuAction(() => reopenClosedTab()) },
+      { label: "Recently Closed", enabled: list.length > 0, submenu: list.map((entry, index) => ({
+        label: (entry.title || entry.url).slice(0, 60), click: menuAction(() => reopenClosedTab(index)),
+      })) },
+    ];
+  }
   function closeTab(id, { byUser = false } = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
     if (fullscreenId === id) exitPageFullscreen();
     actorRuntime.closeTab(id);
-    // Closing the active tab lands on its neighbor, staying inside its group
-    // when the group has other tabs, so a bot's work stays in view.
+    if (byUser && !tab.private) closedTabs.remember({ url: tab.url, title: tab.title, groupId: tab.groupId || null,
+      afterId: [...tabs.keys()][[...tabs.keys()].indexOf(id) - 1] ?? null, closedAt: Date.now() });
+    // Closing the active tab goes back to the tab used before it. A tab never
+    // used yet, as after a restart, falls back to its neighbor in the same group.
     const order = [...tabs.keys()];
     const at = order.indexOf(id);
     const visible = other => other !== id && !groups.get(tabs.get(other).groupId)?.collapsed;
     const sameGroup = other => tab.groupId && tabs.get(other).groupId === tab.groupId;
     const neighbors = [...order.slice(at + 1), ...order.slice(0, at).reverse()].filter(visible);
-    const successor = neighbors.find(sameGroup) || order.slice(at + 1).find(visible) || order.slice(0, at).reverse().find(visible);
+    const lastUsed = neighbors.filter(other => tabs.get(other).lastActiveAt)
+      .sort((a, b) => tabs.get(b).lastActiveAt - tabs.get(a).lastActiveAt)[0];
+    const successor = lastUsed ?? neighbors.find(sameGroup) ?? order.slice(at + 1).find(visible) ?? order.slice(0, at).reverse().find(visible);
     tabs.delete(id);
     clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
@@ -2899,13 +3033,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     try { if (downloadsPath) fs.rmSync(downloadsPath, { force: true }); } catch (error) { log(`browser downloads cleanup failed: ${error.message}`); }
     try { if (statePath) fs.rmSync(statePath, { force: true }); } catch (error) { log(`browser state cleanup failed: ${error.message}`); }
     try { if (historyPath) fs.rmSync(historyPath, { force: true }); } catch (error) { log(`browser history cleanup failed: ${error.message}`); }
+    closedTabs.clear();
     // Every workspace's saved tabs and history go too.
     if (baseStatePath) {
       const base = path.basename(baseStatePath).replace(/\.json$/, "");
       const dir = path.dirname(baseStatePath);
       try {
         for (const name of fs.readdirSync(dir)) {
-          if (name === path.basename(baseStatePath) || name === `${base}-history.json` || name.startsWith(`${base}-ws-`)) fs.rmSync(path.join(dir, name), { force: true });
+          if (name === path.basename(baseStatePath) || name === `${base}-history.json` || name === `${base}-closed.json` || name.startsWith(`${base}-ws-`)) fs.rmSync(path.join(dir, name), { force: true });
         }
       } catch (error) { log(`browser workspace cleanup failed: ${error.message}`); }
     }
@@ -3030,12 +3165,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
       }
       if (command.action === "new") { newSessionOrPlainTab(); return state(); }
+      if (command.action === "closedTabs") return { closed: closedTabs.list().map(({ url, title, closedAt }) => ({ url, title, closedAt })) };
+      if (command.action === "reopenClosed") { reopenClosedTab(boundedInteger(command.index, 0, 0, 24)); return state(); }
       if (command.action === "spaceSession") {
         sessionGroupId = typeof command.groupId === "string" || Number.isInteger(command.groupId) ? command.groupId : null;
         return state();
       }
       if (command.action === "privateTabMenu") {
-        Menu.buildFromTemplate([{ label: "New private tab", click: menuAction(() => newTab(undefined, { groupId: null, private: true })) }]).popup({ window });
+        Menu.buildFromTemplate([{ label: "New private tab", click: menuAction(() => newTab(undefined, { groupId: null, private: true })) }, ...closedTabMenuItems()]).popup({ window });
         return state();
       }
       // A shared space opens a teammate's tab in the background, so it never
@@ -3072,7 +3209,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         // The page in front also says what the pointer is over and what is in view.
         const front = pointers[activeId] && tabs.get(activeId);
         if (!front || !front.url || front.view.webContents.isDestroyed()) return { pointers };
-        return executeProtocolScript(front.view.webContents, readScript(front.pointer), true).then(read => {
+        return readOnlyScript(front, readScript(front.pointer), true).then(read => {
           if (read && read.pointer && pointers[activeId].pointer) pointers[activeId].pointer.a = cleanAnchor(read.pointer);
           if (read && read.view) pointers[activeId].view = { a: cleanAnchor(read.view.a), top: read.view.top === true };
           return { pointers };
@@ -3345,6 +3482,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     statePath = workspaceStatePath(key);
     historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
     loadHistory();
+    closedTabs.open(closedTabsPathFor(statePath));
     restoreSavedTabs();
     layout();
     publish();
@@ -3362,4 +3500,4 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   };
 }
 
-module.exports = { BROWSER_PARTITION, createBrowser, normalizeTarget, normalizeLocalFileTarget };
+module.exports = { BROWSER_PARTITION, createBrowser, trackBrowserOperation, pendingBrowserOperations, normalizeTarget, normalizeLocalFileTarget };

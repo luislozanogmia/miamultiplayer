@@ -82,6 +82,8 @@ const {
   closeHermesGatewayRuntime,
   HERMES_SUBSCRIPTION_MODEL_OPTIONS,
   HERMES_ALLOWED_MODELS_BY_PROVIDER,
+  hermesModelOptions,
+  rememberDiscoveredHermesModels,
   MANAGED_ROUTER_HERMES_PROVIDER,
   normalizeHermesModelSelection,
   isAllowedHermesModel,
@@ -151,11 +153,13 @@ const {
 const { createConversationAuthorization } = require('./conversation-authorization');
 const { createConversationService, canonicalBotConversationCandidates } = require('./conversation-service');
 const { isRetiredHermesModel, currentHermesModel } = require('./retired-models');
+const { colorFromHue, botColorForName } = require('./bot-colors');
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
 const { extractToolActivity } = require('./agent-activity');
 const { createConversationAttachmentStore } = require('./conversation-attachments');
+const turnFiles = require('./turn-files');
 const { createConversationRouter } = require('./conversation-router');
 const { attachConversationWebSocketServer } = require('./conversation-websocket');
 const { createWorkspaceArtifactService } = require('./workspace-artifacts');
@@ -851,6 +855,8 @@ const nativeConversationService = createConversationService({
   resolveParticipants: resolveNativeConversationParticipants,
   ensureMembers: ensureNativeConversationMembers,
 });
+// Inside the attachment folder so a clean slate removes these copies too.
+const TURN_FILES_DIR = path.join(NATIVE_ATTACHMENT_DIR, 'for-bots');
 const nativeConversationAttachmentStore = createConversationAttachmentStore({
   repository: nativeConversationRepository,
   authorization: nativeConversationAuthorization,
@@ -1315,7 +1321,20 @@ function requireMiaAdmin(req, res, next) {
 }
 
 // Sharing requires both the local interactive session and matching Hub identity.
+// What was running when Mia last stopped, kept until the person answers for each piece.
+const interruptedWorkModule = require('./interrupted-work');
+const interruptedWork = interruptedWorkModule.createInterruptedWork({ db: conn });
+const hubBotJournal = require('./hub-bot-journal').createHubBotJournal(conn);
+const hubWorkflowJournal = require('./hub-workflow-journal').createHubWorkflowJournal(conn);
+interruptedWorkModule.registerInterruptedWorkRoutes(app, {
+  work: interruptedWork,
+  read: [requireAuth],
+  write: [requireAuth, requireInteractiveAuth],
+  ownerFromRequest: req => req.userEmail,
+});
 app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createHubBotRouter({
+  isHeld: (jobId) => interruptedWork.isOpen('team-bot', jobId),
+  isClosing: () => backendShutdownStarted,
   isPrivateAgent: (id) => require('./private-agents').isPrivateAgentId(id),
   db: conn,
   dataDirectory: path.dirname(path.resolve(DB_PATH)),
@@ -1331,6 +1350,7 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
 }));
 // Team workflow steps: the same bot turn, the owner's own account, one step at a time.
 app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-client').createHubWorkflowRouter({
+  isClosing: () => backendShutdownStarted,
   db: conn,
   dataDirectory: path.dirname(path.resolve(DB_PATH)),
   isOwnerActive: isActiveWorkspaceUser,
@@ -1340,7 +1360,7 @@ app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-cl
   filesSupported: !MIAOS_AGENT_SEARCH_ONLY,
 }));
 
-async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection }) {
+async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection, files = [], unreadableFiles = [] }) {
     // The requester's composer model choice applies to the runs they start,
     // validated against their own connected inventory exactly like Solo.
     const selection = await chatModelSelectionForUser(modelSelection, owner);
@@ -1352,14 +1372,18 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
     const sharedBot = { id: bot.id, name: bot.name,
       instructions: bot.instructions || bot.role || bot.output || '', automations: [],
       bundledSkills: Array.isArray(bot.bundledSkills) ? bot.bundledSkills : [] };
-    const speaker = row => '[' + (row.author_name || row.author_email || row.author_id) + '] ' + row.body;
+    const stagedFiles = turnFiles.stageTurnFiles(TURN_FILES_DIR, files);
+    const filesNote = turnFiles.turnFilesNote(stagedFiles, unreadableFiles);
+    const imagePaths = turnFiles.turnImagePaths(stagedFiles);
+    const withAttachment = row => [row.body, turnFiles.attachedLabel(row.attachment ? [row.attachment.filename || 'image'] : [])].filter(Boolean).join(' ');
+    const speaker = row => '[' + (row.author_name || row.author_email || row.author_id) + '] ' + withAttachment(row);
     const workspace = await turnWorkspaceContext(owner, history.map(speaker), contextText === undefined ? trigger.body : contextText,
       { companyId: 'hub:' + channel.teamId, id: channel.channelId }, sharedBot);
     const turn = await runBotReplyTurn({
       agent: sharedBot,
       senderLabel: trigger.author_email,
       message: trigger.body,
-      promptLine: '[' + trigger.author_email + '] ' + trigger.body,
+      promptLine: '[' + trigger.author_email + '] ' + withAttachment(trigger),
       platformContext: [localDateLine(), workspace.workspaceContext,
         'This is a shared team channel. Distinguish each speaker. Reply to the current request; do not treat another bot reply as a new request. Keep the reply within 15,000 UTF-8 bytes.',
       ].filter(Boolean).join('\n\n'),
@@ -1372,9 +1396,10 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         content: speaker(row),
       }))),
       nextStepLine: false,
-      notes: [sharedBrowserNote()],
+      notes: [filesNote, sharedBrowserNote()],
       inferenceOptions: {
         ...userOptions,
+        ...(imagePaths.length ? { imagePaths } : {}),
         botWorker: true,
         maxTurns: MIAOS_BOT_MAX_TURNS,
         maxTokens: hermesTokenBudgetFromOptions(userOptions),
@@ -1505,7 +1530,9 @@ app.post('/api/clerk/session', async (req, res) => {
   const relink = Boolean(previous && previous.issuer !== CLERK_ISSUER);
   const linked = relink ? null : previous;
   if (linked && linked.subject !== claims.sub) {
-    return res.status(409).json({ error: 'clerk_installation_already_linked' });
+    // The desktop app opens this person's own Mia folder with these details.
+    return res.status(409).json({ error: 'clerk_installation_already_linked', email: primaryEmail, name: displayName || '',
+      linked: { subject: linked.subject, email: linked.email || '', name: linked.displayName || '' } });
   }
   if (!linked) db.setMeta(conn, CLERK_SUBJECT_META_KEY, claims.sub);
   db.setMeta(conn, CLERK_ISSUER_META_KEY, CLERK_ISSUER);
@@ -1542,7 +1569,7 @@ app.post('/api/clerk/session', async (req, res) => {
     void autoProvisionManagedRouter(primaryEmail, match[1]);
   }
 
-  return res.status(200).json({ ok: true, email: primaryEmail });
+  return res.status(200).json({ ok: true, email: primaryEmail, name: displayName || '' });
 });
 
 // ---------- auth routes ----------
@@ -4315,6 +4342,7 @@ async function hermesConnectionStatuses(email) {
 function rememberNativeChatModelInventory(payload) {
   const providers = normalizeChatModelInventory(payload);
   nativeChatModelProviders = providers;
+  rememberDiscoveredHermesModels(providers);
   return providers;
 }
 
@@ -4812,11 +4840,11 @@ app.post('/api/settings/managed-router/provision', requireGlobalSettingsAdmin, a
 
 app.get('/api/settings/harness/models', requireAuth, (req, res) => {
   return res.status(200).json({
-    providers: Object.fromEntries(Object.entries(HERMES_SUBSCRIPTION_MODEL_OPTIONS).map(([provider, options]) => [
+    providers: Object.fromEntries(Object.keys(HERMES_SUBSCRIPTION_MODEL_OPTIONS).map((provider) => [
       provider,
       {
         defaultModel: normalizeHermesModelSelection(provider, null, false).model,
-        options: options.map(({ id, model, label, fast }) => ({ id, model, label, fast: fast === true })),
+        options: hermesModelOptions(provider).map(({ id, model, label, fast }) => ({ id, model, label, fast: fast === true })),
       },
     ])),
   });
@@ -5744,13 +5772,7 @@ function newBotColor(bots, random = Math.random) {
   const taken = new Set(bots.map((bot) => normalizeAgentAvatarColor(bot.avatarColor)));
   const next = FIRST_BOT_COLORS.find((color) => !taken.has(color));
   if (bots.length < FIRST_BOT_COLORS.length && next) return next;
-  const hue = Math.floor(random() * 360), s = 0.72, l = 0.52;
-  const channel = (n) => {
-    const k = (n + hue / 30) % 12;
-    const value = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-    return Math.round(value * 255).toString(16).padStart(2, '0');
-  };
-  return `#${channel(0)}${channel(8)}${channel(4)}`;
+  return colorFromHue(Math.floor(random() * 360));
 }
 
 registerResource({
@@ -6534,8 +6556,37 @@ function isNativeProgressEvent(event) {
   return Boolean(event && event.metadata && event.metadata.progress === true);
 }
 
+function nativeEventAttachments(event) {
+  const list = event && event.content && event.content.attachments;
+  return Array.isArray(list) ? list.filter((attachment) => attachment && attachment.id) : [];
+}
+
+// The trigger's files, ready for its turn. A file that can't be read is named
+// in the note so the bot says so instead of claiming nothing was sent.
+async function nativeTurnFiles(dispatch, trigger) {
+  const files = [], unreadable = [];
+  for (const attachment of nativeEventAttachments(trigger)) {
+    try {
+      const read = await nativeConversationAttachmentStore.readAttachment({
+        companyId: dispatch.companyId,
+        conversationId: dispatch.conversationId,
+        principal: { principalId: trigger.senderId, principalType: 'user' },
+        id: attachment.id,
+      });
+      if (!read) throw new Error('attachment not found');
+      files.push({ id: attachment.id, filename: read.metadata.filename, mimeType: read.metadata.mimeType, bytes: read.bytes });
+    } catch {
+      console.error('turn attachment unreadable');
+      unreadable.push(attachment.filename);
+    }
+  }
+  const staged = turnFiles.stageTurnFiles(TURN_FILES_DIR, files);
+  return { note: turnFiles.turnFilesNote(staged, unreadable), imagePaths: turnFiles.turnImagePaths(staged) };
+}
+
 function nativePromptLine(event) {
-  const body = nativeEventText(event);
+  const attached = turnFiles.attachedLabel(nativeEventAttachments(event).map((attachment) => attachment.filename));
+  const body = [nativeEventText(event), attached].filter(Boolean).join(' ');
   if (!body) return null;
   if (event.senderType === 'agent' || event.senderType === 'bot') {
     const bot = event.senderType === 'bot' ? db.loadOne(conn, 'bots', event.senderId) : null;
@@ -6820,7 +6871,7 @@ function nativeHermesGatewaySeedMessages(systemPrompt, events, triggerId) {
   const messages = [{ role: 'system', content: systemPrompt }];
   for (const event of events || []) {
     if (!event || event.id === triggerId || isNativeProgressEvent(event)) continue;
-    const body = nativeEventText(event);
+    const body = nativeEventText(event) || nativePromptLine(event);
     if (!body) continue;
     const role = event.senderType === 'agent' || event.senderType === 'bot'
       ? 'assistant'
@@ -7589,7 +7640,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   if (!trigger || trigger.senderType !== 'user') return;
   throwIfNativeDispatchUserInactive(dispatch, trigger);
   const isGatewayAgent = dispatch.targetType === 'gateway';
-  const message = nativeEventText(trigger);
+  const message = nativeEventText(trigger) || turnFiles.attachedLabel(nativeEventAttachments(trigger).map((attachment) => attachment.filename));
   const rawChatModelSelection = trigger.metadata && trigger.metadata.chatModelSelection;
   const chatModelSelection = await chatModelSelectionForUser(
     rawChatModelSelection,
@@ -7721,7 +7772,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     : googleGatewaySessionKey;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
+  const turnAttachments = await nativeTurnFiles(dispatch, trigger);
   const inferenceOptions = {
+    ...(turnAttachments.imagePaths.length ? { imagePaths: turnAttachments.imagePaths } : {}),
     ...userOptions,
     ...(chatModelSelection ? {
       provider: chatModelSelection.provider,
@@ -7859,6 +7912,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // verbose-diagnostics setting. Never persisted, never part of the transcript.
     const toolActivity = extractToolActivity(type, payload);
     if (toolActivity) {
+      // Kept with the turn: after a close, this says whether running it again could repeat something.
+      if (toolActivity.phase === 'start' && !dispatch.usedChangingTool && interruptedWorkModule.toolMayRepeat(toolActivity.tool)) {
+        dispatch.usedChangingTool = true;
+        try {
+          nativeConversationRepository.mergeDispatchMetadata({ companyId: dispatch.companyId, id: dispatch.id, metadata: { usedChangingTool: true } });
+        } catch (_) { /* never breaks a turn */ }
+      }
       try {
         nativeConversationRealtime.publishActivity(dispatch.conversationId, {
           dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), ...toolActivity,
@@ -7906,7 +7966,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleWorkspaceWriteAuthorized && gatewayProfile !== MIAOS_AGENT_GOOGLE_HERMES_PROFILE
         && !(privateAgent && googleProfileAuthorized),
       globalInstructions.agent
-    ), nativeBrowserContextNote(trigger, {
+    ), turnAttachments.note, nativeBrowserContextNote(trigger, {
       ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly,
     }),
     sharedBrowserNote(),
@@ -8014,6 +8074,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       googleActionInstruction,
       slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName() }),
       nativePromptLine(trigger) || message,
+      turnAttachments.note,
       nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
       botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
       sharedBrowserNote(),
@@ -8094,6 +8155,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       globalInstructions: globalInstructions.bot,
       seedMessages: (systemPrompt) => nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
       notes: [
+        turnAttachments.note,
         nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
         botBrowserTabsNote({ ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
         sharedBrowserNote(),
@@ -8275,6 +8337,9 @@ async function executeNativeConversationDispatch(dispatch) {
       claimToken,
     });
   } catch (error) {
+    // Mia is closing, which ends every open stream. That isn't this turn failing:
+    // it stays claimed, and the person decides about it when Mia opens next.
+    if (backendShutdownStarted) return;
     const timedOut = timeoutError || (error && error.code === NATIVE_DISPATCH_TIMEOUT_CODE ? error : null);
     const budgetExceeded = budgetError || (error && error.code === NATIVE_DISPATCH_TOKEN_BUDGET_CODE ? error : null);
     let stopped = nativeDispatchWasStopped(dispatch);
@@ -8379,9 +8444,80 @@ function recoverNativeConversationDispatches() {
     "SELECT DISTINCT company_id AS companyId FROM conversation_dispatches WHERE status = 'claimed'"
   ).all().map((row) => row.companyId);
   if (!companyIds.includes(NATIVE_COMPANY_ID)) companyIds.push(NATIVE_COMPANY_ID);
-  const dispatches = companyIds.flatMap((companyId) => nativeConversationRepository.requeueClaimedDispatches({ companyId }));
-  for (const dispatch of dispatches) setImmediate(() => scheduleNativeConversationDispatch(dispatch).catch(() => {}));
-  if (dispatches.length) console.log(`native dispatch recovery: requeued ${dispatches.length} claimed dispatch(es)`);
+  const dispatches = companyIds.flatMap((companyId) => nativeConversationRepository.holdClaimedDispatches({
+    companyId, error: interruptedWorkModule.HELD_DISPATCH_ERROR,
+  }));
+  interruptedWork.record('chat', dispatches.map(interruptedChatEntry));
+  for (const dispatch of dispatches) removeNativeDispatchProgressEvent(dispatch);
+  if (dispatches.length) console.log(`native dispatch recovery: held ${dispatches.length} interrupted dispatch(es)`);
+}
+
+function interruptedChatEntry(dispatch) {
+  const trigger = nativeConversationRepository.getEvent({ companyId: dispatch.companyId, id: dispatch.eventId, includeDeleted: false });
+  const name = dispatch.targetType === 'gateway' ? 'Mia' : ((db.loadOne(conn, 'bots', dispatch.targetId) || {}).name || 'Bot');
+  const text = trigger ? interruptedWorkModule.shortText(nativeEventText(trigger), 70) : '';
+  const mayRepeat = !!(dispatch.metadata && dispatch.metadata.usedChangingTool);
+  return {
+    key: dispatch.id,
+    title: text ? `${name}: ${text}` : name,
+    detail: mayRepeat ? 'It may already have done some of this.' : 'Was answering this message.',
+    mayRepeat,
+    ref: { companyId: dispatch.companyId, dispatchId: dispatch.id },
+  };
+}
+
+interruptedWork.handle('chat', {
+  start({ ref }) {
+    const dispatch = nativeConversationRepository.requeueHeldDispatch({
+      companyId: ref.companyId, id: ref.dispatchId, error: interruptedWorkModule.HELD_DISPATCH_ERROR,
+    });
+    nativeConversationRepository.releaseDeletedEventKey({
+      companyId: dispatch.companyId, conversationId: dispatch.conversationId, clientIdempotencyKey: `native-dispatch-progress-${dispatch.id}`,
+    });
+    setImmediate(() => scheduleNativeConversationDispatch(dispatch).catch(() => {}));
+  },
+});
+interruptedWork.handle('automation', {
+  async start({ ref }) {
+    const bot = db.loadOne(conn, 'bots', ref.botId);
+    const result = bot ? await cronSync.runBotAutomationNow(bot, ref.automationId) : { status: 'missing' };
+    if (result.status !== 'started') throw new Error(`automation ${result.status}`);
+  },
+});
+interruptedWork.handle('team-bot', {
+  // The next poll of that channel picks it up; held until now, so it waited.
+  start({ ref }) { hubBotJournal.reopen(ref.jobId); },
+});
+
+// Everything else cut off by the last stop. Each was written down before it began.
+function recordInterruptedTeamAndAutomationWork() {
+  interruptedWork.record('team-bot', hubBotJournal.startedRuns().map((run) => ({
+    key: run.job_id,
+    owner: run.owner,
+    title: `${hubBotJournal.publicName(run) || 'Team bot'}: reply in a team channel`,
+    detail: 'It may already have done some of this.',
+    mayRepeat: true,
+    ref: { jobId: run.job_id, teamId: run.team_id, channelId: run.channel_id },
+  })));
+  interruptedWork.record('workflow', hubWorkflowJournal.startedSteps().map((step) => ({
+    key: `${step.run_id}:${step.n}:${step.claim_id}`,
+    owner: step.owner,
+    title: `${step.workflow_name || 'Workflow'}: step ${step.n}`,
+    detail: 'Some of it may already have happened. Left unticked, it waits on the workflows page.',
+    mayRepeat: true,
+    ref: { teamId: step.team_id, runId: step.run_id, n: step.n },
+  })));
+  try {
+    interruptedWork.record('automation', cronSync.listInterruptedBotCronRuns(conn).map((run) => ({
+      key: run.executionId,
+      title: `${run.bot.name || 'Bot'}: ${run.automation.name || 'Automation'}`,
+      detail: run.total ? `Automation, ${run.done} of ${run.total} steps done.` : 'Automation run.',
+      mayRepeat: run.done > 0,
+      ref: { botId: run.bot.id, automationId: run.automation.id },
+    })));
+  } catch (error) {
+    console.error('interrupted automation check failed', error.message);
+  }
 }
 
 // Native conversation event API and outbox.
@@ -8593,6 +8729,11 @@ function migrateWorkspaceOwnership() {
         touched = true;
       }
     }
+    // A color lives on the record, so Solo, a team and a shared copy all agree.
+    if (!normalizeAgentAvatarColor(record.avatarColor)) {
+      record.avatarColor = botColorForName(record.name);
+      touched = true;
+    }
     if (String(record.id || '').startsWith('builtin-') && !record.builtinSlug) {
       record.builtinSlug = String(record.id).slice('builtin-'.length);
       touched = true;
@@ -8646,6 +8787,8 @@ let backendShutdownStarted = false;
 function shutdownBackend() {
   if (backendShutdownStarted) return;
   backendShutdownStarted = true;
+  interruptedWork.touch();
+  interruptedWork.stop();
   disconnectAllHermesAuth();
   browserWorkWorkerBroker?.stop().catch(() => {});
   askBeforeDoGate?.stop().catch(() => {});
@@ -8777,6 +8920,43 @@ async function initializeAskBeforeDoGate() {
 }
 
 let miaAppBrowserWork = null;
+// A browser bot asks in its own chat, on the same card and setting as any other turn.
+async function bindBrowserWorkerAskBeforeDo(session, work, worker) {
+  const bot = db.loadOne(conn, 'bots', worker.botId);
+  const conversation = bot && await ensureNativeBotConversation(bot);
+  if (!conversation) return null;
+  askBeforeDoGate?.bindTurn(session, {
+    scope: `browser-work:${work.id}:${worker.id}`,
+    enabled: currentInstructionSettings(work.ownerId).askBeforeDo,
+    requester: work.ownerId,
+    conversationId: conversation.id,
+    present: async ({ id, summary, whatHappens, requester }) => {
+      const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput, whatHappens);
+      const metadata = { runtime: 'hermes', agentName: bot.name, askBeforeDo: { id, line: card.line, summary: card.summary, requester, status: 'pending' } };
+      const created = nativeConversationRepository.createEvent({
+        companyId: conversation.companyId,
+        conversationId: conversation.id,
+        senderId: bot.id,
+        senderType: 'bot',
+        type: 'bot_message',
+        content: { text: card.text },
+        clientIdempotencyKey: `ask-before-do-${id}`,
+        metadata,
+      });
+      try { nativeConversationRealtime.publish(created.event); } catch (_publishError) {}
+      return async (status) => {
+        const event = nativeConversationRepository.updateEvent({
+          companyId: conversation.companyId,
+          id: created.event.id,
+          metadata: { ...metadata, askBeforeDo: { ...metadata.askBeforeDo, status } },
+        });
+        try { nativeConversationRealtime.publish(event); } catch (_publishError) {}
+      };
+    },
+  });
+  // A finished or stopped bot takes its open request with it.
+  return () => askBeforeDoGate?.cancelConversation(conversation.id);
+}
 async function initializeBrowserWork() {
   if (!browserWorkDesktopConfig.url || !browserWorkDesktopConfig.token || !browserWorkDesktopConfig.key) return;
   const { createBrowserWorkDesktopClient } = require('./browser-work-desktop-client');
@@ -8798,12 +8978,19 @@ async function initializeBrowserWork() {
   delete client.env.HERMES_TUI_TOOLSETS;
   client.env.GATEWAY_RELAY_MIA_BROWSER_WORK_TOKEN = workerBroker.token;
   client.env.MIA_BROWSER_WORK_TOOL_URL = workerBroker.url;
+  if (askBeforeDoGate) {
+    client.env.GATEWAY_RELAY_MIA_ASK_BEFORE_DO_TOKEN = askBeforeDoGate.token;
+    client.env.MIA_ASK_BEFORE_DO_URL = askBeforeDoGate.url;
+  }
   const hermes = createBrowserWorkHermes({ client, bindSession: desktop.bindSession,
     registerSession: workerBroker.registerSession,
     prepareWorker: (worker, binding) => provisionBrowserWorkProfile({ profilesRoot: path.join(process.env.HERMES_HOME, 'profiles'), worker, binding }),
     executeOperation: (...args) => coordinator.executeOperation(...args),
+    bindAskBeforeDo: bindBrowserWorkerAskBeforeDo,
   });
   coordinator = createBrowserWorkCoordinator({ store, hermes, browser: desktop,
+    authorizeBrowser: args => askBeforeDoGate?.authorizeBrowser(args) || false,
+    isClosing: () => backendShutdownStarted,
     async authorizeGroup(owner, groupId, tabId) {
       if (owner !== String(DEFAULT_OWNER).toLowerCase() || !isActiveWorkspaceUser(owner)) return false;
       const state = await desktop.getState();
@@ -8832,7 +9019,23 @@ async function initializeBrowserWork() {
       });
     },
   });
-  coordinator.recoverInterrupted();
+  interruptedWork.record('browser', coordinator.recoverInterrupted().map(work => {
+    const mayRepeat = work.operations.some(operation => operation.status === 'uncertain');
+    return {
+      key: work.id,
+      owner: work.ownerId,
+      title: `Browser work: ${work.goal || 'unfinished task'}`,
+      detail: mayRepeat ? 'A page action may have gone through, so check the page before running it again.' : 'Was working in your browser tabs.',
+      mayRepeat,
+      ref: { workId: work.id, ownerId: work.ownerId, workerIds: work.workers.filter(worker => worker.status === 'waiting_for_user').map(worker => worker.id) },
+    };
+  }));
+  interruptedWork.handle('browser', {
+    async start({ ref }) {
+      await coordinator.recover(ref.ownerId, ref.workId, ref.workerIds);
+      coordinator.start(ref.ownerId, ref.workId).catch(() => console.error('Browser work stopped before completion'));
+    },
+  });
   miaAppBrowserWork = coordinator;
   browserWorkRouter.use('/api/browser-work', requireAuth, (req, res, next) => req.method === 'GET' ? next() : requireInteractiveAuth(req, res, next), async (req, res, next) => {
     try {
@@ -8959,6 +9162,7 @@ async function onBackendListening() {
   }
   reconcileNativeMiaConversations();
   recoverNativeConversationDispatches();
+  recordInterruptedTeamAndAutomationWork();
   reconcileNativeBotConversations()
     // Conversation ownership must settle before cron reconciliation reads
     // bot records. Running these in parallel allowed a stale origin-chat

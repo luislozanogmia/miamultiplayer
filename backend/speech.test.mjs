@@ -42,7 +42,7 @@ test('speechStatus reports missing engine and model, then ready', () => {
   assert.equal(empty.ready, false);
   assert.equal(empty.binaryReady, false);
   assert.equal(empty.modelReady, false);
-  assert.match(empty.installHint, /whisper-cpp/);
+  assert.equal('installHint' in empty, false);
   const bin = fakeBinary(dir, 'echo hi');
   const model = path.join(dir, 'model.bin');
   fs.writeFileSync(model, 'x');

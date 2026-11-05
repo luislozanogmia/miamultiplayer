@@ -28,7 +28,7 @@ SAFE_TOOLS = {
     "web_search", "web_extract", "x_search", "vision_analyze", "video_analyze",
     "image_generate", "video_generate", "text_to_speech", "skills_list", "skill_view",
     "skill_manage", "memory", "todo", "todo_list", "session_search", "clarify",
-    "delegate_task", "read_terminal", "close_terminal", "report_step", "mia_browser_work",
+    "delegate_task", "read_terminal", "close_terminal", "report_step",
     "browser_navigate", "browser_snapshot", "browser_scroll", "browser_back",
     "browser_press", "browser_type", "browser_console", "browser_get_images",
     "browser_vision", "browser_dialog",
@@ -124,6 +124,23 @@ def _click(session: str, browser: str, target: str, text: str) -> Optional[Tuple
     return ("send", "Click: " + _short(label or text))
 
 
+def _browser_work(args: Dict[str, Any], session: str) -> Optional[Tuple[str, str]]:
+    """A browser bot's call: the same rule as a click anywhere else. A page script
+    or saved steps can do anything, and a bot can say an action matters."""
+    method = str(args.get("method") or "").removeprefix("ghost_")
+    params = args.get("params") if isinstance(args.get("params"), dict) else {}
+    if method == "eval":
+        return ("change", "Run a script on the page: " + _short(params.get("script")))
+    if method == "run_reusable":
+        return ("change", "Run saved browser steps")
+    if params.get("consequential") is True:
+        return ("send", method + " " + _short(json.dumps(params, default=str)))
+    if method == "click":
+        target = str(params.get("choice") if params.get("choice") is not None else params.get("selector") or "")
+        return _click(session, "worker", target, json.dumps(params, default=str))
+    return None
+
+
 def classify(tool_name: str, args: Any, session: str = "") -> Optional[Tuple[str, str]]:
     """(category, what it does) when the call waits for a yes, else None."""
     args = args if isinstance(args, dict) else {}
@@ -143,6 +160,11 @@ def classify(tool_name: str, args: Any, session: str = "") -> Optional[Tuple[str
         return (category, "Run code: " + _short(code)) if category else None
     if name == "browser_click":
         return _click(session, "hermes", str(args.get("ref") or "").lstrip("@"), json.dumps(args, default=str))
+    if name == "mia_browser_work":
+        # The coordinator resolves the actual native DOM target before asking
+        # and holds this tool call open. A pre-tool guess based on model text or
+        # a stale vacuum label cannot authorize a browser mutation.
+        return None
     if name.startswith("mcp_"):
         lowered = name.lower()
         if "draft" not in lowered and WRITE_VERB.search(lowered):
@@ -204,6 +226,10 @@ def _on_post_tool_call(tool_name: str = "", args: Any = None, result: Any = None
     elif tool_name == "terminal" and "ghost_vacuum" in command:
         browser = "ghost"
         output = _from_result(result, "output")
+        labels = {**dict(GHOST_LINE.findall(output)), **dict(GHOST_ELEMENT.findall(output))}
+    elif tool_name == "mia_browser_work" and isinstance(args, dict) and str(args.get("method") or "").removeprefix("ghost_") == "vacuum":
+        browser = "worker"
+        output = str(result or "")
         labels = {**dict(GHOST_LINE.findall(output)), **dict(GHOST_ELEMENT.findall(output))}
     else:
         return

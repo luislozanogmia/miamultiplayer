@@ -83,10 +83,10 @@ test('selected group shows only its ordered live tabs, including an empty group'
   assert.deepEqual(visibleTabs({tabs:state.tabs}), state.tabs);
 });
 test('projection never invents progress; uses stored results and personal synthesis', () => {
-  const record = {id:'w', groupId:'g', goal:'Compare', status:'queued', workers:[{actorId:'a',status:'queued'}], results:{a:{text:'Evidence',model:'requested'}}, approvals:[{id:'1',status:'pending'},{id:'2',status:'rejected'}], synthesis:{text:'Combined'} };
+  const record = {id:'w', groupId:'g', goal:'Compare', status:'queued', workers:[{actorId:'a',status:'queued'}], results:{a:{text:'Evidence',model:'requested'}}, approvals:[{id:'1',status:'pending'}], synthesis:{text:'Combined'} };
   assert.equal(projection(record,'other'), null);
   const shown = projection(record,'g'); assert.equal(shown.status,'Queued'); assert.equal(shown.terminal,false);
-  assert.equal(shown.results[0].text,'Evidence'); assert.deepEqual(shown.synthesis,{text:'Combined'}); assert.equal(shown.approvals.length,1);
+  assert.equal(shown.results[0].text,'Evidence'); assert.deepEqual(shown.synthesis,{text:'Combined'}); assert.equal('approvals' in shown,false,'work has no approval step'); assert.equal('approvalFailures' in shown,false);
   record.results.a.verified = false; assert.equal(projection(record, 'g').results[0].title, 'Unverified bot response · a');
   record.status = 'cancelled'; assert.equal(projection(record,'g').terminal,true); assert.equal(projection(record,'g').results[0].text,'Evidence');
   record.status = 'unknown'; assert.equal(projection(record,'g').status,'Unknown state');
@@ -107,7 +107,7 @@ class Element {
   remove() { if(this.parent) this.parent.children=this.parent.children.filter(c=>c!==this); }
 }
 const flush = () => new Promise(resolve=>setImmediate(resolve));
-test('approval reject and Stop call matching IDs, wait for authoritative state, preserve partial results', async () => {
+test('Stop calls matching IDs, wait for authoritative state, preserve partial results', async () => {
   const nodes={};
   for(const id of ['browserWorkPanel','browserWorkError','browserGroupList','browserGroupName','browserMoveTabGroup','browserMoveTab','browserGroupEarlier','browserWorkList','browserWorkEmpty','browserWorkCandidates','browserGroupAdd','browserGroupNewName','browserGroupRename','browserGroupRemove','browserWorkAssignments','browserWorkCreate','browserWorkStart','browserWorkGoal','localBrowserOverlay']) nodes[id]=new Element();
   global.document={getElementById:id=>nodes[id] || nodes.browserWorkCandidates.children.flatMap(row=>row.children).find(child=>child.id===id),createElement:tag=>new Element(tag),activeElement:null,querySelectorAll:selector=>nodes.browserWorkCandidates.querySelectorAll(selector)};
@@ -116,25 +116,21 @@ test('approval reject and Stop call matching IDs, wait for authoritative state, 
   delete require.cache[require.resolve('./browser-work.js')]; const ui=require('./browser-work.js');
   const state={tabs:[{id:1}],activeId:1,groups:[{id:'g',name:'Work',tabIds:[1]}],selectedGroupId:'g'};
   let calls=[], refreshQueue=[], stopped=false, callback;
-  const record={id:'work',groupId:'g',goal:'Read',status:'needs_approval',workers:[{id:'worker',actorId:'actor',tabId:1,status:'working'}],approvals:[{id:'approval',status:'pending',tabId:1,actorId:'actor'}],results:{worker:{text:'Partial'}}};
+  const record={id:'work',groupId:'g',goal:'Read',status:'working',workers:[{id:'worker',actorId:'actor',tabId:1,status:'working'}],results:{worker:{text:'Partial'}}};
   const records=[record];
   ui.mount({browser:{onState:fn=>callback=fn,command:async()=>state},getBots:async()=>[{id:'bot',model:'chosen',modelProvider:'connected'}],getModels:async()=>[{id:'connected',models:['unrequested-pro','chosen']}],transport:{
     list:async()=>{ if(refreshQueue.length) return await refreshQueue.shift(); return records; },
-    approval:async(id,approval,accept)=>{calls.push(['approval',id,approval.id,accept]);},
     cancel:async(id,workerId)=>{calls.push(['stop',id,workerId]);stopped=true;record.status='cancelled';},
     recover:async(id,ids)=>{calls.push(['recover',id,ids]);record.workers[0].previousAttempts=[record.results.worker];delete record.results.worker;record.status='queued';record.workers[0].status='queued';},
     exportReusable:async(id,workerId)=>{calls.push(['export',id,workerId]);record.reusable=[{id:'saved',workerId:'worker',proof:[{operationId:'step'}]}];},
     plan:async(payload)=>{calls.push(['plan',payload]);}
   }});
   await flush(); await flush();
-  const buttons=nodes.browserWorkList.querySelectorAll('button');
-  buttons.find(b=>b.textContent==='Reject').listeners.click(); await flush();
-  assert.deepEqual(calls[0],['approval','work','approval',false]);
-  // A rejected API response alone cannot make the UI invent a rejected record.
-  assert.ok(nodes.browserWorkList.querySelectorAll('button').some(b=>b.textContent==='Approve once'));
+  const labelsOf=()=>nodes.browserWorkList.querySelectorAll('button').map(b=>b.textContent);
+  assert.ok(!labelsOf().includes('Reject')&&!labelsOf().includes('Approve once'),'there is no approval control');
   nodes.browserWorkList.querySelectorAll('button').find(b=>b.textContent==='Stop bot').listeners.click(); await flush();
-  assert.equal(stopped,true); assert.deepEqual(calls[1],['stop','work','worker']);
-  assert.equal(nodes.browserWorkList.querySelectorAll('button').length,3); // only authoritative pending approval remains
+  assert.equal(stopped,true); assert.deepEqual(calls[0],['stop','work','worker']);
+  assert.ok(!labelsOf().includes('Stop bot'),'the stop control goes once the authoritative record is stopped');
   assert.equal(ui.projection(record,'g').results[0].text,'Partial');
   await nodes.browserWorkAssignments.onclick();
   const candidate=nodes.browserWorkCandidates.children.find(row=>row.className==='browser-work-candidate'); const picks=candidate.querySelectorAll('select');

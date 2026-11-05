@@ -20,10 +20,10 @@ const inventory = normalizeChatModelInventory({
       slug: 'openai-codex',
       name: 'OpenAI Codex',
       authenticated: true,
-      models: ['gpt-5.6-luna', 'gpt-5.3-codex-spark'],
+      models: ['gpt-6-luna', 'gpt-6.1-sol'],
       capabilities: {
-        'gpt-5.6-luna': { fast: true, reasoning: true },
-        'gpt-5.3-codex-spark': { fast: false, reasoning: true },
+        'gpt-6-luna': { fast: true, reasoning: true },
+        'gpt-6.1-sol': { fast: false, reasoning: true },
       },
     },
     { slug: 'disconnected', authenticated: false, models: ['not-selectable'] },
@@ -35,12 +35,12 @@ test('normalizes only authenticated gateway providers and preserves model capabi
   assert.deepEqual(Object.keys(inventory), ['openai-codex']);
   assert.deepEqual(normalizeChatModelSelection({
     provider: 'openai-codex',
-    model: 'gpt-5.6-luna',
+    model: 'gpt-6-luna',
     reasoningEffort: 'high',
     speed: 'fast',
   }, inventory), {
     provider: 'openai-codex',
-    model: 'gpt-5.6-luna',
+    model: 'gpt-6-luna',
     reasoningEffort: 'high',
     speed: 'fast',
     fast: true,
@@ -53,7 +53,7 @@ test('rejects unavailable models and unsupported fast mode', () => {
     /not available/
   );
   assert.throws(
-    () => normalizeChatModelSelection({ provider: 'openai-codex', model: 'gpt-5.3-codex-spark', speed: 'fast' }, inventory),
+    () => normalizeChatModelSelection({ provider: 'openai-codex', model: 'gpt-6.1-sol', speed: 'fast' }, inventory),
     /fast response speed/
   );
 });
@@ -81,7 +81,7 @@ test('limits the product picker to explicitly selected providers and hides techn
       {
         slug: 'openai-codex',
         authenticated: true,
-        models: ['gpt-6-astra', 'gpt-6-astra-900k', 'gpt-5.6-luna'],
+        models: ['gpt-6-astra', 'gpt-6-astra-900k', 'gpt-6-luna'],
       },
       { slug: 'copilot', authenticated: true, models: ['claude-sonnet-5'] },
       { slug: 'opencode-free', authenticated: true, models: ['deepseek-v4-flash-free'] },
@@ -90,7 +90,7 @@ test('limits the product picker to explicitly selected providers and hides techn
 
   const visible = visibleChatModelInventory(allProviders, ['openai-codex']);
   assert.deepEqual(Object.keys(visible), ['openai-codex']);
-  assert.deepEqual(visible['openai-codex'].models, ['gpt-6-astra', 'gpt-5.6-luna']);
+  assert.deepEqual(visible['openai-codex'].models, ['gpt-6-astra', 'gpt-6-luna']);
   assert.equal(visible['openai-codex'].capabilities['gpt-6-astra-900k'], undefined);
 });
 

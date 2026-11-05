@@ -28,7 +28,7 @@ async function createBrowserWorkWorkerBroker({ executeOperation }) {
       if (!binding) return fail(403, 'WORKER_SESSION_REVOKED');
       // Ignore caller-supplied owner, actor, bot, work and tab identity. Only
       // root's pre-submit registration supplies the execution authority.
-      const result = await executeOperation(binding.ownerId, binding.workId, binding.workerId, body.operation);
+      const result = await executeOperation(binding.ownerId, binding.workId, binding.workerId, body.operation, undefined, { sessionId: body.sessionId });
       res.end(JSON.stringify({ result }));
     } catch (error) {
       if (!res.writableEnded) {
@@ -37,7 +37,8 @@ async function createBrowserWorkWorkerBroker({ executeOperation }) {
       }
     }
   });
-  server.requestTimeout = 30000;
+  // A browser action may stay open on the person's approval card for five minutes.
+  server.requestTimeout = 360000;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   return {
     url: `http://127.0.0.1:${server.address().port}/worker-operation`, token,

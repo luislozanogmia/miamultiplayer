@@ -1734,6 +1734,69 @@ function createConversationRepository(db) {
   // otherwise survives forever and the user's message has no path to retry.
   // Boot recovery resets only claimed rows for this company; pending and
   // completed history remains untouched, and attempts is retained for audit.
+  // Work cut off by a close waits for the person instead of running again by
+  // itself. `failed` with this error keeps it out of every queue until they answer.
+  function holdClaimedDispatches({ companyId, error, heldAt } = {}) {
+    const normalizedCompanyId = requiredString(companyId, 'companyId');
+    const reason = requiredString(error, 'error');
+    const now = timestamp(heldAt, 'heldAt');
+    return runImmediate(db, () => {
+      const claimed = db.prepare(
+        `SELECT id FROM conversation_dispatches
+          WHERE company_id = ? AND status = 'claimed'
+          ORDER BY created_at ASC, id ASC`
+      ).all(normalizedCompanyId);
+      if (!claimed.length) return [];
+      db.prepare(
+        `UPDATE conversation_dispatches
+            SET status = 'failed', claimed_at = NULL, claim_token = NULL, last_error = ?, updated_at = ?
+          WHERE company_id = ? AND status = 'claimed'`
+      ).run(reason, now, normalizedCompanyId);
+      return claimed.map((row) => dispatchRow(db.prepare(
+        'SELECT * FROM conversation_dispatches WHERE company_id = ? AND id = ?'
+      ).get(normalizedCompanyId, row.id)));
+    });
+  }
+
+  function requeueHeldDispatch({ companyId, id, error, availableAt } = {}) {
+    const normalizedCompanyId = requiredString(companyId, 'companyId');
+    const dispatchId = requiredString(id, 'id');
+    const reason = requiredString(error, 'error');
+    const now = timestamp(availableAt, 'availableAt');
+    return runImmediate(db, () => {
+      const changed = db.prepare(
+        `UPDATE conversation_dispatches
+            SET status = 'pending', available_at = ?, last_error = NULL, updated_at = ?
+          WHERE company_id = ? AND id = ? AND status = 'failed' AND last_error = ?`
+      ).run(now, now, normalizedCompanyId, dispatchId, reason).changes;
+      if (!changed) fail('CONFLICT', 'dispatch is not held');
+      return dispatchRow(db.prepare(
+        'SELECT * FROM conversation_dispatches WHERE company_id = ? AND id = ?'
+      ).get(normalizedCompanyId, dispatchId));
+    });
+  }
+
+  // A removed event keeps its key, which would stop a turn run again from posting
+  // the same kind of event. Only removed events give theirs up.
+  function releaseDeletedEventKey({ companyId, conversationId, clientIdempotencyKey } = {}) {
+    db.prepare(
+      `UPDATE events SET client_idempotency_key = NULL
+        WHERE company_id = ? AND conversation_id = ? AND client_idempotency_key = ? AND deleted_at IS NOT NULL`
+    ).run(requiredString(companyId, 'companyId'), requiredString(conversationId, 'conversationId'), requiredString(clientIdempotencyKey, 'clientIdempotencyKey'));
+  }
+
+  function mergeDispatchMetadata({ companyId, id, metadata } = {}) {
+    const normalizedCompanyId = requiredString(companyId, 'companyId');
+    const dispatchId = requiredString(id, 'id');
+    return runImmediate(db, () => {
+      const current = db.prepare('SELECT metadata FROM conversation_dispatches WHERE company_id = ? AND id = ?').get(normalizedCompanyId, dispatchId);
+      if (!current) fail('NOT_FOUND', 'dispatch not found');
+      db.prepare('UPDATE conversation_dispatches SET metadata = ? WHERE company_id = ? AND id = ?').run(
+        JSON.stringify({ ...fromJson(current.metadata, 'dispatch.metadata'), ...metadata }), normalizedCompanyId, dispatchId
+      );
+    });
+  }
+
   function requeueClaimedDispatches({ companyId, availableAt } = {}) {
     const normalizedCompanyId = requiredString(companyId, 'companyId');
     const now = timestamp(availableAt, 'availableAt');
@@ -2237,6 +2300,10 @@ function createConversationRepository(db) {
     enqueueDispatch,
     getDispatch,
     listDispatches,
+    holdClaimedDispatches,
+    mergeDispatchMetadata,
+    releaseDeletedEventKey,
+    requeueHeldDispatch,
     requeueClaimedDispatches,
     claimDispatch,
     completeDispatch,

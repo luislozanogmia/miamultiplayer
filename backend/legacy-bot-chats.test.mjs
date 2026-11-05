@@ -218,7 +218,7 @@ test('boot links older bot chats to their bot and keeps the most recent one as i
   assert.equal(busy.metadata.conversationMode, undefined, 'the chat with the newest message stays the main chat');
   assert.equal(busy.metadata.historyResetAt, '2026-01-01T00:00:00.000Z');
   const newest = (await (await request(server, data.aliceSession, `/api/conversations/${legacy.id}/events?limit=100`, { headers })).json()).events
-    .map((event) => event.createdAt).sort().pop();
+    .filter((event) => !event.deletedAt).map((event) => event.createdAt).sort().pop();
   assert.ok(newest >= latestMessage.createdAt);
   assert.equal(busy.lastEventAt, newest, 'History can date the chat by its newest message');
   assert.equal(newer.metadata.botId, bot.id);

@@ -48,11 +48,12 @@
         <div class="login-box">
           <div class="login-heading">
             <span class="login-kicker">Your workspace</span>
-            <h1>Welcome to Mia</h1>
-            <p class="subtitle">Sign in or create your account to continue.</p>
+            <h1 id="loginTitle">Welcome to Mia</h1>
+            <p class="subtitle" id="loginSubtitle">Sign in or create your account to continue.</p>
           </div>
           <div class="login-error" id="loginError"></div>
           <div id="clerkSignIn" class="clerk-sign-in" hidden></div>
+          <div class="login-accounts" id="loginAccounts" hidden></div>
           <form id="loginForm" autocomplete="on">
             <div class="login-field">
               <label for="loginEmail">Work email</label>
@@ -110,6 +111,7 @@
           <div class="avatar-menu" id="avatarMenu" role="menu">
             <div class="avatar-menu-email" id="avatarMenuEmail"></div>
             <div id="companySwitcher"></div>
+            <div id="avatarAccounts" hidden></div>
             <div class="avatar-menu-sep"></div>
             <button type="button" class="avatar-menu-item" id="openSettingsBtn" role="menuitem">Settings</button>
             <button type="button" class="avatar-menu-item" id="logoutBtn" role="menuitem">Sign out</button>
@@ -411,6 +413,7 @@
                 <button type="button" class="chat-acct-menu-item" id="chatAcctFeedback" role="menuitem">
                   <span class="cami" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24"><path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"></path><path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14"></path><path d="M8 6v8"></path></svg></span><span>Send Feedback</span>
                 </button>
+                <div id="chatAcctAccounts" hidden></div>
                 <div class="chat-acct-menu-sep"></div>
                 <button type="button" class="chat-acct-menu-item danger" id="chatAcctLogout" role="menuitem"><span class="cami" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24"><path d="m16 17 5-5-5-5"></path><path d="M21 12H9"></path><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path></svg></span><span>Log out</span></button>
               </div>
@@ -1340,6 +1343,7 @@
 <script src="dictation.js?v=20261026-dictation-1"></script>
 <script src="agent-activity.js?v=20261001-activity-1"></script>
 <script src="clerk-desktop-ui.js"></script>
+<script src="account-switcher.js"></script>
     <script src="browser-work.js"></script>
     <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
     <script src="automations-board.js?v=20261019-automations-1"></script>
@@ -1361,6 +1365,7 @@
     <script src="team-workflows.js?v=20261102-team-workflows-2"></script>
     <script src="team-workflows-ui.js?v=20261102-team-workflows-2"></script>
     <script src="private-agents-ui.js?v=20261102-agents-1"></script>
+    <script src="interrupted-work.js?v=20261104-interrupted-1"></script>
     <script src="app.js?v=20261103-space-control-1"></script>
     <script src="shared-space-live.js?v=20261103-space-1"></script>
     <script src="shared-space-ui.js?v=20261103-space-control-1"></script>

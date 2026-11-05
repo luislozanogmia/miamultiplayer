@@ -51,7 +51,7 @@ table row, safe to leave `DATA_DIR` set permanently).
 | `MIAOS_SINGLE_USER_EMAIL` | *(unset)* | Exact owner identity for a single-user Internet release. Other user rows, sessions, and API keys cannot authenticate. On an empty database, the owner can bootstrap its durable admin row with `INSTANCE_PASSWORD`. Requires absolute `MIAOS_ARTIFACT_DIR` and `MIAOS_ATTACHMENT_DIR` paths outside the source tree |
 | `MIAOS_BIND_HOST` | single-user: `127.0.0.1`; otherwise all interfaces | Backend listener address. Keep the single-user release on loopback behind the same-host TLS proxy |
 | `MIAOS_AGENT_SEARCH_ONLY` | enabled automatically by `MIAOS_SINGLE_USER_EMAIL` | Hosted-safe agent profile: brokered web search plus todo/clarify, without host files, terminal, memory, session search, or browser automation |
-| `MIAOS_HERMES_OPENAI_MODEL` | `gpt-5.5` | Hermes model used with the ChatGPT/OpenAI provider selected in Mia |
+| `MIAOS_HERMES_OPENAI_MODEL` | `gpt-6-luna` | Hermes model used with the ChatGPT/OpenAI provider selected in Mia |
 | `MIAOS_HERMES_XAI_MODEL` | `grok-4.6` | Hermes model used with the Grok/xAI provider selected in Mia |
 | `MIAOS_GOOGLE_ACCOUNT_OWNER` | first configured admin | Sole Mia identity allowed to use the process-scoped Hermes/gws Google profile |
 | `MIAOS_ARTIFACT_DIR` | `./workspace-artifacts` | Server-owned storage root for immutable workspace artifact bytes |

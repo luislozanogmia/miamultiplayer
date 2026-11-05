@@ -8,6 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { packager } = require("@electron/packager");
 const { rebuild } = require("@electron/rebuild");
 const { stageGoogleOAuthClient } = require("./package-google-oauth.cjs");
+const { stageWhisperRuntime } = require("./whisper-runtime.cjs");
 const { createDmg, copyAppBundleForDmg, assertNoMountedMiaVolume } = require("./create-dmg.cjs");
 
 const MACOS_ROOT = path.resolve(__dirname, "..");
@@ -600,6 +601,7 @@ function stageBundledRuntime(temporaryRoot) {
   const pythonRuntime = requiredPythonRuntime();
   const runtimeRoot = path.join(temporaryRoot, "runtime");
   const googleWorkspace = stageGoogleWorkspaceRuntime(runtimeRoot);
+  const whisper = stageWhisperRuntime(runtimeRoot, { release: path.join(REPOSITORY_ROOT, "scripts", "whisper-release.env") });
   const stagedHermes = path.join(runtimeRoot, "hermes");
 
   copyPortableRuntime(hermesBundle, stagedHermes, {
@@ -650,6 +652,7 @@ exec "$runtime_root/python/bin/python3.11" "$@"
 
   const manifest = {
     ...googleWorkspace,
+    ...whisper,
     miaosVersion: VERSION,
     hermesVersion: releaseValue(hermesRelease, "HERMES_VERSION"),
     hermesCommit: releaseValue(hermesRelease, "HERMES_COMMIT"),

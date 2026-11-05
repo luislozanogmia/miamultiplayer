@@ -12,6 +12,7 @@
 #   scripts/install-runtimes-win.ps1   → HERMES_BUNDLE_DIR=<abs path>
 #                                        GHOST_BUNDLE_DIR=<abs path>
 #                                        GWS_BUNDLE_DIR=<abs path>
+#                                        WHISPER_BUNDLE_DIR=<abs path>
 #
 # Example (PowerShell):
 #   Add-Content -Path $env:GITHUB_ENV -Value "HERMES_BUNDLE_DIR=$hermesDir"
@@ -87,6 +88,7 @@ jobs:
             "HERMES_BUNDLE_DIR",
             "GHOST_BUNDLE_DIR",
             "GWS_BUNDLE_DIR",
+            "WHISPER_BUNDLE_DIR",
             "HERMES_PYTHON_RUNTIME_DIR"
           )
           $missing = $required | Where-Object {

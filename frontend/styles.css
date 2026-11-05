@@ -383,6 +383,14 @@
   .avatar-menu-email{font-family:var(--mono);font-size:10.5px;color:var(--faint);padding:8px 12px 10px;border-bottom:1px solid var(--rule);margin-bottom:4px;word-break:break-all;}
   .avatar-menu-item{appearance:none;-webkit-appearance:none;font-family:var(--mono);font-size:12px;letter-spacing:.04em;text-align:left;padding:9px 12px;border-radius:8px;border:none;background:transparent;color:var(--ink-soft);cursor:pointer;transition:background .14s ease,color .14s ease;}
   .avatar-menu-item:hover{background:#F3F1ED;color:#111111;}
+  #avatarAccounts{display:flex;flex-direction:column;}
+  .login-accounts{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+  .login-accounts[hidden],#avatarAccounts[hidden]{display:none;}
+  .login-accounts{margin:12px 0 0;}
+  .login-account-mark{flex:none;display:grid;place-items:center;width:24px;height:24px;margin-right:10px;border-radius:50%;background:#F3F1ED;font-size:11px;}
+  .login-account-link{appearance:none;align-self:center;padding:6px 8px;border:0;background:none;color:inherit;font:inherit;font-size:13px;text-decoration:underline;cursor:pointer;}
+  .login-account-btn{display:flex;align-items:center;overflow-wrap:anywhere;appearance:none;width:100%;padding:9px 12px;border:1px solid var(--sand-border-default,#ddd);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;text-align:left;cursor:pointer;}
+  .login-account-btn:hover{background:#F3F1ED;}
   .avatar-menu-item#logoutBtn:hover{background:var(--danger-tint);color:var(--danger);}
   .avatar-menu-label{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--light);padding:10px 12px 4px;}
   .avatar-menu-company{display:flex;align-items:center;justify-content:space-between;gap:8px;}
@@ -638,6 +646,18 @@
   .app-confirm-msg{font-size:14.5px;line-height:1.5;color:var(--ink);}
   .app-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
   .app-confirm-actions .btn{height:36px;border-radius:10px;}
+  .interrupted-card{max-width:440px;}
+  .interrupted-title{font-size:16px;font-weight:600;color:var(--ink);}
+  .interrupted-sub{font-size:13px;color:var(--muted);margin:2px 0 10px;}
+  .interrupted-list{max-height:50vh;overflow-y:auto;}
+  .interrupted-row{display:flex;gap:10px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--rule);cursor:pointer;}
+  .interrupted-row input{margin-top:3px;flex:none;}
+  .interrupted-copy{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;}
+  .interrupted-name{font-size:14px;font-weight:500;line-height:1.35;color:var(--ink);overflow-wrap:anywhere;}
+  .interrupted-detail{font-size:12px;line-height:1.4;color:var(--muted);}
+  .interrupted-repeat{font-size:11px;padding:1px 6px;margin-top:2px;border-radius:6px;background:#FBF0D9;color:#7A5300;}
+  .interrupted-error{font-size:12px;color:#B3261E;min-height:0;}
+  .interrupted-error:not(:empty){margin-top:8px;}
   /* Removed from a team: the notice blocks everything; if that team is open it
      is also blurred, like the loading screen, until you acknowledge. */
   .hub-removed-overlay{position:fixed;inset:0;z-index:10001;display:grid;place-items:center;padding:24px;background:rgba(17,17,17,.32);animation:fadein .14s ease-out;}
@@ -2310,6 +2330,7 @@
   body.styled-skin .login-heading h1{font:600 34px/1.08 var(--styled-sans);letter-spacing:-.035em;color:#171717;}
   body.styled-skin .login-heading .subtitle{margin-top:10px;color:#747474;font:400 15px/22px var(--styled-sans);}
   body.styled-skin .clerk-sign-in{min-height:350px;justify-content:flex-start;}
+  body.styled-skin .clerk-sign-in:has(.native-clerk-form){min-height:0;}
   body.styled-skin .mia-clerk-root,
   body.styled-skin .mia-clerk-card-box{width:100%;max-width:none;box-shadow:none;}
   /* The embedded form has no outer card: remove Clerk's clipping and border offsets. */
@@ -3112,6 +3133,9 @@
   .mia-tab button.native-browser-bot-tabs{flex:none;height:18px;margin-right:4px;padding:0 6px;border:1px solid var(--tab-group-color,#474747);border-radius:9px;font-size:11px;line-height:16px;color:var(--tab-group-color,#474747);background:transparent;cursor:pointer;}
   .mia-tab button.native-browser-bot-tabs:hover{background:color-mix(in srgb,var(--tab-group-color,#474747) 12%,transparent);}
   .mia-tab button.native-browser-bot-tabs.working::after{content:"";display:inline-block;width:5px;height:5px;margin-left:4px;border-radius:50%;background:currentColor;vertical-align:1px;}
+  /* The +N never shrinks, so a narrow tab keeps room beside it for the icon and working dot. */
+  .mia-tab:has(.native-browser-bot-tabs){min-width:80px;}
+  .mia-tab.active:has(.native-browser-bot-tabs){min-width:132px;}
   /* The +N list: the bot's other tabs, drawn like tabs and stacked. */
   .native-browser-bot-tabs-list{position:fixed;z-index:30;box-sizing:border-box;background:#fff;border:2px solid var(--tab-group-color,#474747);border-top:0;border-radius:0 0 10px 10px;box-shadow:0 14px 24px -14px rgba(0,0,0,.28);transform-origin:top center;animation:native-browser-bot-tabs-open .16s ease-out;font:13px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;color:#1f1f1f;}
   /* The tab's feet, mirrored: they leave the tab line and curve down into
@@ -3142,6 +3166,13 @@
     .mia-tab.active button.mia-tab-close{margin-right:6px;}
     .mia-tab:not(.active) button.mia-tab-close{display:none;}
     .mia-tab-label{display:none;}
+    .mia-tab-working{margin-left:0;}
+  }
+  @container (max-width:130px){
+    .mia-tab:has(.native-browser-bot-tabs) button[role="tab"]{padding:6px 0;justify-content:center;}
+    .mia-tab:has(.native-browser-bot-tabs):not(.active) button.mia-tab-close{display:none;}
+    .mia-tab:has(.native-browser-bot-tabs) .mia-tab-label{display:none;}
+    .mia-tab:has(.native-browser-bot-tabs) .mia-tab-working{margin-left:0;}
   }
   .native-browser-new-tab{width:28px;height:28px;padding:0;margin:0 0 3px 4px;border-radius:50%;font-size:18px;line-height:28px;color:#474747;}
   .native-browser-new-tab:hover{background:#0000001a;border-radius:50%;}

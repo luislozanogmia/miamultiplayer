@@ -1,14 +1,15 @@
 {
   "managedBy": "Mia",
-  "upstream": "NousResearch/hermes-plugin-claude-subscription-directsdk",
-  "version": "0.3.0",
-  "commit": "c92c27c9f919178a58974a72333b473c6cb2e71d",
+  "upstream": "NousResearch/hermes-official-plugins (claude-subscription-directsdk)",
+  "version": "0.3.4",
+  "commit": "83f0a896b3518c7131181838e340c9a80c79524d",
   "localModifications": [
     "model_catalog.py advertises Mia context budgets of 250000 tokens for the offered 1M-capable models while retaining native route IDs",
     "model_catalog.py lists claude-opus-5-5 so the account picker's Opus 5.5 route is not filtered out",
     "model_catalog.py lists claude-sonnet-5-5 in place of claude-sonnet-5 (the sonnet alias and saved claude-sonnet-5 choices resolve to it), and __init__.py uses it as the default auxiliary model",
     "model_catalog.py offers Haiku 5.5 through its plain native route (1M context by default in Claude Code 2.1.293+); retired Haiku 4.5 and Opus 5/4.8 aliases resolve to their 5.5 successors",
     "directsdk_setup.py preserves successful empty discovery, __init__.py preserves that result and removes curated fallback_models so account-only retired rows cannot advertise unreported successor models",
-    "admission.py treats a tool call's empty streamed arguments as an empty object, so a no-argument tool call no longer cuts the response and triggers a refused retry"
+    "directsdk_setup.py and plugin.yaml default the claude_code_telemetry setting to off, keeping Claude Code quiet as Mia always has",
+    "model_catalog.py omits Mythos 5.1, which Mia does not offer"
   ]
 }

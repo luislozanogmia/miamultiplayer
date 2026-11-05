@@ -15,6 +15,8 @@ release containing `gws` and `LICENSE`. Verify the downloaded archive against
 `GWS_LINUX_X64_ARCHIVE_SHA256` in `scripts/gws-release.env` before extraction.
 The packager separately verifies the executable against
 `GWS_LINUX_X64_SHA256`, stages its license, and records its checksum in the SBOM.
+Set `WHISPER_BUNDLE_DIR` to a folder made by `scripts/provision-whisper.sh`; it
+holds the dictation engine, pinned in `scripts/whisper-release.env`.
 Prefer a disk-backed `TMPDIR` with several GB free over a small `/tmp` tmpfs.
 
 Official builds inject the Desktop OAuth registration in-process through the

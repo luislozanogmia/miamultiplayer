@@ -47,12 +47,23 @@ function sharedSkills(value) {
   return (Array.isArray(value)?value:[]).filter(skill=>skill && typeof skill.name==='string' && typeof skill.body==='string' && skill.body.trim())
     .map(skill=>({name:skill.name,description:typeof skill.description==='string'?skill.description:'',body:skill.body}));
 }
-function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,checkIntervalMs=15000,fetcher=fetch}) {
+function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,isHeld=()=>false,isClosing=()=>false,checkIntervalMs=15000,fetcher=fetch}) {
   const journal=createHubBotJournal(db);
   const inFlight=new Map(), freshTokens=new Map(), selections=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
   const runKey=(s,id)=>scopeKey(s)+':'+id;
   const base=s=>`/v1/teams/${s.teamId}/channels/${s.channelId}`;
+  // The file on the message being answered. A file that can't be fetched is still named to the bot.
+  const triggerFile=async(s,trigger,token)=>{
+    const item=trigger.attachment;
+    if(!item || !item.id) return {};
+    try {
+      const {file}=await requestHub(s.origin,token(),'GET',base(s)+'/files/'+item.id,undefined,fetcher);
+      return {files:[{id:item.id,filename:item.filename||file.filename||'image',mimeType:item.mime_type||file.mime_type,bytes:Buffer.from(file.contentBase64,'base64')}]};
+    } catch {
+      return {unreadableFiles:[item.filename||'image']};
+    }
+  };
   function localIdentityValid(s) {
     const identity=getAccountIdentity(s.owner);
     return isOwnerActive(s.owner) && identity && identity.subject===s.subject
@@ -112,11 +123,14 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
       if(!localIdentityValid(s) || controller.signal.aborted) throw new Error('owner_changed');
       const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
+      const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
-        channel:{teamId:s.teamId,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null});
+        channel:{teamId:s.teamId,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
       if(controller.signal.aborted) throw new Error('cancelled');
       journal.saveReply(s,run.job_id,withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName)));
     } catch {
+      // Mia is closing: the journal keeps this as started, and the person decides next time.
+      if(isClosing()) return;
       journal.saveReply(s,run.job_id,'This bot could not complete the request. Please send a new message to try again.');
     } finally {clearTimeout(timeout);clearInterval(check);}
     await publish(s,journal.getRun(s,run.job_id),token());
@@ -160,6 +174,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
         if(!allowed.has(run.registration_id)) {journal.discard(scope,run.job_id);continue;}
         if(inFlight.has(runKey(scope,run.job_id))) continue;
         if(run.state==='started') {
+          if(isHeld(run.job_id)) continue;
           journal.saveReply(scope,run.job_id,'This bot was interrupted before its reply was saved. Send a new message to try again.');
           await publish(scope,journal.getRun(scope,run.job_id),token);
         } else if(run.state==='reply_ready') await publish(scope,run,token);

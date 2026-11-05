@@ -71,7 +71,7 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
         }
       }
       if (action === "google") {
-        if (!canOpenGoogle()) throw new Error("protocol_unavailable");
+        if (!canOpenGoogle()) throw Object.assign(new Error("protocol_unavailable"), { code: "protocol_unavailable" });
         result = await flow.startGoogle();
       }
       if (action === "email") {

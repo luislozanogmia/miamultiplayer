@@ -237,3 +237,45 @@ test('native dispatch rejects a company-scoped event mismatch before writing an 
     fixture.db.close();
   }
 });
+
+test('a turn cut off by a close waits for the person instead of running again', () => {
+  const fixture = durableFixture();
+  try {
+    const service = createConversationDispatchService({ repository: fixture.repository });
+    const { dispatches } = service.planAndEnqueue({
+      companyId: 'company-a',
+      event: fixture.event,
+      conversation: fixture.conversation,
+      participants: [mia, worker, otherWorker],
+      availableAt: '2026-09-03T00:00:00.000Z',
+    });
+    const dispatchId = dispatches[0].id;
+    const scope = { companyId: 'company-a', error: 'held' };
+    fixture.repository.claimDispatch({ companyId: 'company-a', id: dispatchId, claimToken: 'claim-1', claimedAt: '2026-09-03T00:00:01.000Z' });
+
+    const held = fixture.repository.holdClaimedDispatches(scope);
+    assert.deepEqual(held.map(row => [row.id, row.status, row.claimToken]), [[dispatchId, 'failed', null]]);
+    assert.deepEqual(fixture.repository.requeueClaimedDispatches({ companyId: 'company-a' }), []);
+
+    assert.equal(fixture.repository.requeueHeldDispatch({ ...scope, id: dispatchId }).status, 'pending');
+    assert.throws(() => fixture.repository.requeueHeldDispatch({ ...scope, id: dispatchId }));
+  } finally {
+    fixture.db.close();
+  }
+});
+
+test('a removed working row gives up its key so a turn run again can post one', () => {
+  const fixture = durableFixture();
+  try {
+    const key = { companyId: 'company-a', conversationId: 'conv-1', clientIdempotencyKey: 'progress-1' };
+    const post = text => fixture.repository.createEvent({ ...key, senderId: 'gateway', senderType: 'agent', type: 'agent_message', content: { text } });
+    const first = post('Working');
+    fixture.repository.releaseDeletedEventKey(key);
+    assert.equal(post('Working').event.id, first.event.id);
+    fixture.repository.deleteEvent({ companyId: 'company-a', id: first.event.id });
+    fixture.repository.releaseDeletedEventKey(key);
+    assert.notEqual(post('Working').event.id, first.event.id);
+  } finally {
+    fixture.db.close();
+  }
+});

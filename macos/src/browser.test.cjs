@@ -86,7 +86,6 @@ function harness(options = {}) {
       if (script.includes('document.querySelector("video")') && script.includes("return { currentTime")) {
         return Promise.resolve(options.mediaCapture || null);
       }
-      if (script.includes("__miaApprovedTargets") && script.includes("return true;")) return Promise.resolve(true);
       if (script.includes("__miaActionTargets?.get")) return Promise.resolve({ x: 10, y: 20, width: 100, height: 30 });
       if (script.includes("const nodes =")) {
         return Promise.resolve({
@@ -1148,12 +1147,10 @@ test("trusted actor execution targets its tab without human selection or focus",
   const result = await h.controller.execute(binding, { method: "read", params: {} });
   assert.equal(result.tab_id, first.tab_id);
   const fill = { method: "fill", params: { selector: "input", value: "hello", wait: "none" } };
-  const fillApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: fill.method, params: { ...fill.params, actor_id: binding.actorId, tab_id: binding.tabId } });
-  await h.controller.execute(binding, fill, { approval: fillApproval.approval_id });
+  await h.controller.execute(binding, fill);
   await h.controller.execute(binding, { method: "scroll", params: {} });
   const navigate = { method: "navigate", params: { url: "https://example.com/next", wait: "none" } };
-  const navigateApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: navigate.method, params: { ...navigate.params, actor_id: binding.actorId, tab_id: binding.tabId } });
-  await h.controller.execute(binding, navigate, { approval: navigateApproval.approval_id });
+  await h.controller.execute(binding, navigate);
   assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), before);
   assert.equal(h.command("state").activeId, 2);
   await assert.rejects(h.controller.execute(binding, { method: "read", params: { tab_id: 2 } }), { code: "TAB_NOT_OWNED" });
@@ -1170,15 +1167,14 @@ test("numbered snapshots are isolated, replaced snapshots and navigation fail cl
   const snapshot = await h.controller.execute(binding, { method: "vacuum", params: {} });
   await h.controller.execute(second, { method: "vacuum", params: {} });
   const op = { method: "fill", params: { choice: 2, snapshot_id: snapshot.snapshot_id, value: "hello", wait: "none" } };
-  const approval = await h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
-  await h.controller.execute(binding, op, { approval: approval.approval_id });
+  await h.controller.execute(binding, op);
   await h.controller.execute(binding, { method: "vacuum", params: {} });
-  const approve = () => h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
-  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+  const run = () => h.controller.execute(binding, op);
+  await assert.rejects(run(), { code: "STALE_SNAPSHOT" });
   const current = await h.controller.execute(binding, { method: "vacuum", params: {} });
   h.views[0].webContents.emit("did-start-navigation", {}, "https://example.com/", false, true);
   op.params.snapshot_id = current.snapshot_id;
-  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+  await assert.rejects(run(), { code: "STALE_SNAPSHOT" });
 });
 
 test("Mia's bridge lists and arranges groups and suggests bot assignments without starting work", async () => {
@@ -1357,6 +1353,42 @@ test("closing a tab a bot is working in asks the person first", async () => {
 // State crosses from the VM realm; compare it as plain JSON.
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test("closing the tab in front goes back to the tab used before it, not the next in order", () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  const third = h.command("new").activeId;
+  h.command("select", { id: first });
+  h.command("select", { id: second });
+  assert.equal(h.command("close", { id: second }).activeId, first, "the one used before, though the next in order is another");
+  assert.equal(h.command("close", { id: first }).activeId, third);
+});
+
+test("closing a tab behind the one in front keeps the one in front", () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  const second = h.command("new").activeId;
+  assert.equal(h.command("close", { id: first }).activeId, second);
+});
+
+test("a page a person closed comes back, a private or blank one does not", () => {
+  const h = harness();
+  h.command("new");
+  h.command("navigate", { value: "https://example.com/one" });
+  const first = h.command("state").activeId;
+  h.command("new");
+  h.command("close", { id: first });
+  assert.deepEqual(h.command("closedTabs").closed.map(entry => entry.url), ["https://example.com/"]);
+  const blank = h.command("new").activeId;
+  h.command("close", { id: blank });
+  assert.equal(h.command("closedTabs").closed.length, 1);
+  const reopened = h.command("reopenClosed");
+  assert.equal(reopened.tabs.find(tab => tab.id === reopened.activeId).url, "https://example.com/one");
+  assert.equal(h.command("closedTabs").closed.length, 0);
+  const count = h.command("reopenClosed").tabs.length;
+  assert.equal(h.command("state").tabs.length, count, "an empty list opens nothing");
+});
+
 test("tab groups: right-click menu creates, fills, and leaves a group", () => {
   const h = harness();
   const ids = s => s.tabs.map(t => t.id);
@@ -1366,8 +1398,8 @@ test("tab groups: right-click menu creates, fills, and leaves a group", () => {
   h.command("tabMenu", { id: a });
   const menu = h.menuTemplates.at(-1);
   assert.deepEqual(plain(menu.filter(item => item.label).map(item => item.label)), [
-    "New Tab to the Right", "Add Tab to New Group", "Reload", "Duplicate",
-    "Close", "Close Other Tabs", "Close Tabs to the Right",
+    "New Tab to the Right", "Add Tab to New Group", "Reload", "Duplicate", "Save Page as Artifact", "Save Page as App",
+    "Close", "Close Other Tabs", "Close Tabs to the Right", "Reopen Closed Tab", "Recently Closed",
   ]);
   menu.find(item => item.label === "Add Tab to New Group").click();
   let state = h.command("state");
@@ -1732,7 +1764,7 @@ async function pendingEvalFixture(options = {}) {
   };
   const pending = h.controller.protocol("eval", { script: "async () => 'changed page'", actor_session: "s-a" });
   while (!started) await new Promise(setImmediate);
-  return { h, outside, otherGroup, groupId, tabId: opened.tab_id, pending, sideEffects, finish: () => finish() };
+  return { h, page, outside, otherGroup, groupId, tabId: opened.tab_id, pending, sideEffects, finish: () => finish() };
 }
 
 test("pending page effects block direct controller changes, regrouping and dragging", async () => {
@@ -1824,7 +1856,7 @@ test("pending navigation retains its controller after a nonwaiting command retur
   h.window.emit("closed");
 });
 
-test("bot file open rejects a busy group before creating or activating a tab", async () => {
+test("bot file open works beside busy tabs without touching them or the foreground", async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "mia-busy-file-open-"));
   const file = path.join(workspace, "report.html");
   fs.writeFileSync(file, "<h1>Report</h1>");
@@ -1832,16 +1864,98 @@ test("bot file open rejects a busy group before creating or activating a tab", a
   f.h.command("select", { id: f.outside });
   const before = plain(f.h.command("state"));
   try {
-    await assert.rejects(f.h.controller.protocol("file_open", { actor_session: "s-a", path: file }), /work in progress/);
+    const opened = await f.h.controller.protocol("file_open", { actor_session: "s-a", path: file });
     const after = plain(f.h.command("state"));
-    assert.equal(after.tabs.length, before.tabs.length, "a blocked request creates no orphan tab");
-    assert.equal(after.activeId, before.activeId, "a blocked request preserves the foreground");
-    assert.deepEqual(after, before);
+    assert.equal(after.tabs.length, before.tabs.length + 1);
+    assert.equal(after.activeId, before.activeId, "the foreground stays");
+    assert.equal(after.tabs.find(tab => tab.id === opened.tab_id).groupId, f.groupId, "it opens in the bot's group");
+    assert.match(f.h.command("groupUngroup", { groupId: f.groupId }).error, /work in progress/, "changing the group stays blocked");
   } finally {
     f.finish();
     await f.pending;
     f.h.window.emit("closed");
   }
+});
+
+function busyTimers() {
+  const timers = new Map();
+  const fake = { unref() {} };
+  return {
+    fire: ms => { const list = timers.get(ms) || []; timers.delete(ms); for (const fn of list) fn(); return list.length; },
+    options: {
+      setTimeout: (fn, ms, ...args) => {
+        if (![10000, 60000, 180000].includes(ms)) return setTimeout(fn, ms, ...args);
+        timers.set(ms, [...(timers.get(ms) || []), fn]);
+        return fake;
+      },
+      clearTimeout: timer => { if (timer !== fake) clearTimeout(timer); },
+    },
+  };
+}
+
+test("a script whose page was replaced stops holding the group", async () => {
+  const timers = busyTimers();
+  const f = await pendingEvalFixture(timers.options);
+  const rejected = assert.rejects(f.pending, /timed out/);
+  timers.fire(10000);
+  await rejected;
+  const blocked = f.h.command("groupUngroup", { groupId: f.groupId }).error;
+  assert.match(blocked, new RegExp(`Tab ${f.tabId} .*page script`), "the error names the tab and the work");
+  // Electron never settles this script's promise once its document is gone.
+  f.page.emit("did-navigate", {}, "https://example.net/next");
+  assert.equal(f.h.command("groupUngroup", { groupId: f.groupId }).error, undefined);
+  f.h.window.emit("closed");
+});
+
+test("a page script in a live page is released at the hard limit, and not before", async () => {
+  const timers = busyTimers();
+  const f = await pendingEvalFixture(timers.options);
+  const rejected = assert.rejects(f.pending, /timed out/);
+  timers.fire(10000);
+  await rejected;
+  assert.match(f.h.command("groupUngroup", { groupId: f.groupId }).error, /page script/);
+  assert.ok(timers.fire(60000) >= 1);
+  assert.equal(f.h.command("groupUngroup", { groupId: f.groupId }).error, undefined);
+  f.h.window.emit("closed");
+});
+
+test("a bot command that never returns stops holding its tab at the hard limit", async () => {
+  const timers = busyTimers();
+  const f = await pendingEvalFixture(timers.options);
+  assert.match(f.h.command("groupUngroup", { groupId: f.groupId }).error, /bot command/);
+  assert.ok(timers.fire(180000) >= 1);
+  const after = f.h.command("groupUngroup", { groupId: f.groupId }).error;
+  assert.doesNotMatch(after, /bot command/);
+  assert.match(after, /page script/, "other pending work still counts");
+  f.finish();
+  await f.pending;
+  f.h.window.emit("closed");
+});
+
+test("Mia's own page timing read never makes a tab busy", async () => {
+  const h = harness();
+  const id = h.command("new").activeId;
+  h.command("navigate", { value: "https://example.com" });
+  const page = h.views.at(-1).webContents;
+  const original = page.executeJavaScript.bind(page);
+  page.executeJavaScript = script => (script.includes("first-contentful-paint") ? new Promise(() => {}) : original(script));
+  page.emit("did-finish-load");
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+  assert.equal(h.command("groupCreate", { id }).error, undefined, "waiting for first paint must not block grouping");
+  h.window.emit("closed");
+});
+
+test("replacing a page does not clear a page load in progress", async () => {
+  const timers = busyTimers();
+  const f = await pendingEvalFixture(timers.options);
+  f.finish();
+  await f.pending;
+  f.page.loadURL = () => new Promise(() => {});
+  await f.h.controller.protocol("navigate", { actor_session: "s-a", tab_id: f.tabId, url: "example.org", wait: "none" });
+  f.page.emit("did-navigate", {}, "https://example.org/");
+  assert.match(f.h.command("groupUngroup", { groupId: f.groupId }).error, /page load/);
+  f.h.window.emit("closed");
 });
 
 test("bot file open assigns its tab without changing the foreground", async () => {
@@ -1859,7 +1973,26 @@ test("bot file open assigns its tab without changing the foreground", async () =
   h.window.emit("closed");
 });
 
-test("bot tab groups: the golden glow stays through a reply and comes back after a page load", async () => {
+test("a page a person loads in a tab a bot used earlier shows no bot work", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: knownActor(sessions) });
+  h.command("new");
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const botPage = h.views[h.views.length - 1].webContents;
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 2600));
+  await flush();
+  botPage.isLoading = () => true;
+  botPage.emit("dom-ready");
+  await flush();
+  const glowing = botPage.insertedCSS;
+  botPage.emit("dom-ready");
+  await flush();
+  assert.equal(botPage.insertedCSS, glowing, "loading adds no glow");
+  assert.equal(h.command("state").tabs.find(tab => tab.id === opened.tab_id).botActivity, null, "no working dot or Take over either");
+});
+
+test("bot tab groups: the glow stays through a reply and comes back after a page load", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
   const h = harness({ resolveActor: knownActor(sessions) });
   const mine = h.command("new").activeId;
@@ -1881,7 +2014,7 @@ test("bot tab groups: the golden glow stays through a reply and comes back after
   assert.ok(!userPage.insertedCSS, "Mia's tab is never lit as bot work");
 });
 
-test("bot tab groups: the glow is Mia gold for Mia and for every bot", async () => {
+test("bot tab groups: the glow takes the bot's color, and Mia's is gold", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
   const h = harness({ resolveActor: knownActor(sessions) });
   h.command("new");
@@ -1890,8 +2023,8 @@ test("bot tab groups: the glow is Mia gold for Mia and for every bot", async () 
   const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
   const botPage = h.views[h.views.length - 1].webContents;
   await flush();
-  assert.match(botPage.lastCSS, /rgba\(201,150,43,/, "a bot's page glows Mia gold, not the bot's own color");
-  assert.doesNotMatch(botPage.lastCSS, /hsla\(200,/);
+  assert.match(botPage.lastCSS, /hsla\(200,72%,52%,/, "a bot's page glows in the bot's own color");
+  assert.doesNotMatch(botPage.lastCSS, /rgba\(201,150,43,/);
   assert.doesNotMatch(botPage.lastCSS, /0 0 0 2px/, "no solid frame line, only the glow");
 
   // Mia's command lights the page in front with gold the moment it starts.
@@ -1978,7 +2111,7 @@ test("right-clicking Back or Forward lists that way's pages, nearest first, like
   h.window.emit("closed");
 });
 
-test("closing a grouped tab lands on the next tab in the same group", () => {
+test("closing a grouped tab goes back to the tab used before it, even outside the group", () => {
   const h = harness();
   const mine = h.command("new").activeId;
   const first = h.command("new").activeId;
@@ -1989,12 +2122,14 @@ test("closing a grouped tab lands on the next tab in the same group", () => {
   const after = h.command("new").activeId;
   h.command("select", { id: first });
   h.command("close", { id: first });
-  assert.equal(h.command("state").activeId, second, "stays in the bot's group");
+  assert.equal(h.command("state").activeId, after, "the tab used before, outside the bot's group");
+  h.command("select", { id: second });
   h.command("close", { id: second });
-  assert.equal(h.command("state").activeId, after, "an emptied group hands off to its right-hand neighbor");
+  assert.equal(h.command("state").activeId, after);
   assert.ok(mine);
   h.window.emit("closed");
 });
+
 
 test("closing the last tab counts a last-tab close and keeps one blank tab", () => {
   const h = harness();
@@ -2258,7 +2393,7 @@ test("a popup from a bot's click opens behind, in the bot's group", async () => 
   assert.ok(JSON.stringify(list).includes(String(popup.id)), "the bot can find and use it");
 });
 
-test("a popup from a bound worker's approved click follows in its own tab", async () => {
+test("a popup from a bound worker's click follows in its own tab", async () => {
   const h = harness();
   const first = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://flights.example/", wait: "none" });
   const binding = { actorId: "bot", botId: "bot", tabId: first.tab_id, groupId: groupFor(h, first.tab_id), ownerId: "owner", taskId: "task" };
@@ -2271,11 +2406,52 @@ test("a popup from a bound worker's approved click follows in its own tab", asyn
     return original(script);
   };
   const click = { method: "click", params: { selector: "button", wait: "none" } };
-  const approval = await h.controller.actors.approve({ actorId: "bot", ownerId: "owner", method: click.method, params: { ...click.params, actor_id: "bot", tab_id: first.tab_id } });
-  await h.controller.execute(binding, click, { approval: approval.approval_id });
+  await h.controller.execute(binding, click);
   assert.equal(popupResult.action, "deny", "no window opens");
   assert.equal(h.command("state").tabs.length, 1, "no tab outside the worker's");
   assert.equal(page.loads.at(-1), "https://airline.example/book");
+});
+
+test("worker selector click resolves Send before approval and consumes the exact DOM target proof", async () => {
+  const h = harness();
+  const opened = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.test/compose", wait: "none" });
+  const binding = { actorId: "worker", botId: "worker", tabId: opened.tab_id, groupId: groupFor(h, opened.tab_id), ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const page = h.views[0].webContents;
+  let clicks = 0;
+  const element = () => ({ isConnected: true, disabled: false, innerText: "Send", outerHTML: '<button id="action">Send</button>',
+    localName: "button", value: "", getAttribute: () => null, closest: () => null,
+    getBoundingClientRect: () => ({ x: 1, y: 2, width: 20, height: 10 }), click: () => { clicks++; } });
+  let target = element();
+  const context = vm.createContext({ document: { querySelector: () => target }, getComputedStyle: () => ({ display: "block", visibility: "visible" }) });
+  const original = page.executeJavaScript.bind(page);
+  page.executeJavaScript = script => {
+    if (script.includes('const store = globalThis.__miaClickProofs') || script.includes('const proof = globalThis.__miaClickProofs'))
+      return Promise.resolve(vm.runInContext(script, context));
+    return original(script);
+  };
+  const click = { method: "click", params: { selector: "#action", wait: "none" } };
+  const checked = await h.controller.validate(binding, click);
+  assert.equal(checked.requiresApproval, true);
+  assert.equal(checked.actionSummary, "Click Send on https://example.test");
+  const approved = { ...click, params: { ...click.params, __mia_target_proof: checked.targetProof,
+    expected_url: checked.url, document_generation: checked.documentGeneration } };
+  await h.controller.execute(binding, approved);
+  assert.equal(clicks, 1);
+  await assert.rejects(h.controller.execute(binding, approved), { code: "STALE_TARGET" });
+  assert.equal(clicks, 1, "a proof authorizes one click only");
+  const replacementProof = await h.controller.validate(binding, click);
+  target = element();
+  await assert.rejects(h.controller.execute(binding, { ...click, params: { ...approved.params, __mia_target_proof: replacementProof.targetProof } }), { code: "STALE_TARGET" });
+  assert.equal(clicks, 1, "a same-selector replacement is denied");
+  const changedValueProof = await h.controller.validate(binding, click);
+  target.value = "Delete"; // Property changes need not change outerHTML.
+  await assert.rejects(h.controller.execute(binding, { ...click, params: { ...approved.params, __mia_target_proof: changedValueProof.targetProof } }), { code: "STALE_TARGET" });
+  assert.equal(clicks, 1, "a changed live target property is denied");
+  const navigationProof = await h.controller.validate(binding, click);
+  await h.controller.execute(binding, { method: "navigate", params: { url: "https://example.test/elsewhere", wait: "none" } });
+  await assert.rejects(h.controller.execute(binding, { ...click, params: { ...approved.params, __mia_target_proof: navigationProof.targetProof } }), { code: "TAB_NAVIGATED" });
+  assert.equal(clicks, 1);
 });
 
 test("pressing the mouse in the front tab a bot is working on asks to take over", async () => {
@@ -2524,4 +2700,39 @@ test("only Mia's own chat session reaches mia-app", async () => {
 
   assert.deepEqual(await h.controller.protocol("app_call", { actor_session: "s-mia", tool: "bots_list", arguments: { a: 1 } }), { ok: true });
   assert.equal(JSON.stringify(calls[0]), JSON.stringify({ pathname: "/api/mia-app/call", body: { tool: "bots_list", arguments: { a: 1 }, turn: "s-mia" } }));
+});
+
+test("tab menu saves a page as an artifact or an app, only for a web page", async () => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "mia-save-page-"));
+  const h = harness({ appRequest: async pathname => (pathname === "/api/artifacts" ? { folder } : {}) });
+  const id = h.command("new").activeId;
+  const item = label => { h.command("tabMenu", { id }); return h.menuTemplates.at(-1).find(entry => entry.label === label); };
+  assert.equal(item("Save Page as Artifact").enabled, false);
+  assert.equal(item("Save Page as App").enabled, false);
+
+  h.command("navigate", { value: "https://example.com/report" });
+  const view = h.views.at(-1).webContents;
+  const saved = [];
+  view.savePage = async (file, type) => { saved.push([path.basename(file), type]); fs.writeFileSync(file, "x"); };
+  view.emit("page-title-updated", {}, "Q3: report/final");
+  const notice = () => h.window.webContents.sent.filter(m => m.channel === "miaos-browser-page-saved").at(-1)?.payload;
+  const waitForSave = async count => { for (let i = 0; i < 50 && h.window.webContents.sent.filter(m => m.channel === "miaos-browser-page-saved").length < count; i++) await new Promise(r => setTimeout(r, 10)); };
+
+  item("Save Page as Artifact").click();
+  await waitForSave(1);
+  assert.deepEqual(saved[0], ["Q3 report final.html", "HTMLComplete"]);
+  assert.deepEqual(plain(notice()), { kind: "artifact", name: "Q3 report final.html" });
+
+  item("Save Page as Artifact").click();
+  await waitForSave(2);
+  assert.equal(saved[1][0], "Q3 report final 2.html", "an earlier copy is never replaced");
+
+  item("Save Page as App").click();
+  assert.deepEqual(plain(notice()), { kind: "app", url: "https://example.com/report", name: "Q3: report/final" });
+
+  view.savePage = async () => { throw new Error("no"); };
+  item("Save Page as Artifact").click();
+  await waitForSave(4);
+  assert.deepEqual(plain(notice()), { kind: "artifact", failed: true });
+  fs.rmSync(folder, { recursive: true, force: true });
 });

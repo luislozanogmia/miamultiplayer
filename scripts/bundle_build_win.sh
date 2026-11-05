@@ -12,7 +12,7 @@
 #
 # package-win.cjs also requires the same pinned runtime bundle env vars as
 # package-mac.cjs (HERMES_BUNDLE_DIR, GHOST_BUNDLE_DIR, GWS_BUNDLE_DIR,
-# HERMES_PYTHON_RUNTIME_DIR — see scripts/install-local-mac.sh) plus a clean
+# WHISPER_BUNDLE_DIR, HERMES_PYTHON_RUNTIME_DIR — see scripts/install-local-mac.sh) plus a clean
 # git checkout.
 # Official builds additionally set MIA_REQUIRE_GOOGLE_OAUTH=1 and inject the
 # MIA_GOOGLE_OAUTH_CLIENT_ID and MIA_GOOGLE_OAUTH_CLIENT_SECRET. Forks may ship Google

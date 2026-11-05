@@ -9,6 +9,24 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-11-05
+
+### Added
+- After an interrupted close or crash, Mia shows a checklist of chats, bot replies, workflows, automations, and browser work that can be started again. Work that could repeat an action starts unchecked.
+- Several Mia accounts can be used on one computer, with clearer account names during sign-in.
+- Dictation works with the engine included in the desktop installers. Bots can read files attached to their messages.
+- Recently closed browser tabs can be reopened, and a tab can be saved as an Artifact or app.
+
+### Changed
+- Browser work uses the bot chat's Ask before do setting and approval card. Approval for a consequential click applies once to the inspected button on the same page.
+- Renaming a bot updates its open chat, earlier messages, and browser group. Claude conversations use the updated prompt cache; ChatGPT sign-in offers GPT-6 and GPT-6.1.
+- Browser tab groups stack behind a count, and closing the active tab returns to the last used one.
+
+### Fixed
+- A second restart no longer loses interrupted work, and repeated opens do not duplicate the browser item.
+- Native error diagnostics and recently closed tab storage no longer expose credential-bearing URLs. Signed image links are not passed to Claude as prompt text; attach the image instead.
+- Browser clicks that submit or send are checked against the actual target, including selector clicks; old approval cards cannot authorize a new turn.
+
 ## [0.3.0] — Multiplayer
 
 Version 0.2.22 was used for unpublished previews. The preceding public release

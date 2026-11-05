@@ -115,7 +115,7 @@ test('native bot dispatch loads every conversation page and delegates context ma
   assert.match(reply, /seedMessages: nativeHermesGatewaySeedMessages\(systemPrompt, historyEvents, trigger\.id\)/);
   // Group and direct chat bot replies run through the turn shared with team channels.
   assert.match(reply, /seedMessages: \(systemPrompt\) => nativeHermesGatewaySeedMessages\(systemPrompt, historyEvents, trigger\.id\)/);
-  assert.match(reply, /runBotReplyTurn\(\{[\s\S]*promptLine: nativePromptLine\(trigger\)[\s\S]*notes: \[\s*nativeBrowserContextNote\(trigger/);
+  assert.match(reply, /runBotReplyTurn\(\{[\s\S]*promptLine: nativePromptLine\(trigger\)[\s\S]*notes: \[\s*turnAttachments\.note,\s*nativeBrowserContextNote\(trigger/);
   const turnStart = source.indexOf('async function runBotReplyTurn(');
   const turn = source.slice(turnStart, source.indexOf('\nfunction cleanBotReplyText(', turnStart));
   assert.match(turn, /const replyPrompt = \[promptLine \|\| message, \.\.\.notes/);

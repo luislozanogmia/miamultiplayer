@@ -36,7 +36,9 @@ const { createBrowserWorkDispatch } = require("./browser-work-dispatch.cjs");
 const { resolveMiaFolder } = require("./mia-folder.cjs");
 const { createClerkCredentialStore } = require("./clerk-credential-store.cjs");
 const { createGoogleWorkspaceBroker } = require("./google-workspace-broker.cjs");
-const { createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
+const { isAuthSender, createDesktopAuth, registerAuthProtocol } = require("./clerk-desktop-ipc.cjs");
+const { createAccountProfiles, profileEnvironment, tokenSubject } = require("./account-profiles.cjs");
+const ACCOUNTS_CHANNEL = "miaos-accounts";
 const { openClerkBrowser } = require("./clerk-browser-open.cjs");
 const { attachUpdateReadiness, scheduleUpdateChecks } = require("./update-readiness.cjs");
 const { discoverClaudeCodeCommand, createClaudeCodeManager } = require("./claude-code.cjs");
@@ -224,6 +226,19 @@ const CLERK_OAUTH_CALLBACK_ORIGIN = CLERK_CONFIG.oauthCallbackOrigin;
 // renderer/GPU trees against that same profile.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
+
+// The lock above stays on the shared data folder, so only one account runs at a
+// time. Everything from here on uses the folder of the account that is open.
+const accountProfiles = createAccountProfiles({ rootDir: app.getPath("userData"), issuer: CLERK_ISSUER_ORIGIN });
+if (hasSingleInstanceLock) {
+  accountProfiles.prune({ documentsDir: app.getPath("documents") });
+  const openAccount = accountProfiles.active();
+  if (!openAccount.isDefault) {
+    fs.mkdirSync(openAccount.dir, { recursive: true, mode: 0o700 });
+    app.setPath("userData", openAccount.dir);
+    Object.assign(process.env, profileEnvironment(openAccount, { documentsDir: app.getPath("documents") }));
+  }
+}
 
 let mainWindow = null;
 let startupComplete = false;
@@ -657,6 +672,7 @@ async function preparePackagedRuntime() {
   process.env.MIAOS_HERMES_BIN = hermesLauncher;
   process.env.HERMES_PYTHON = venvPythonPath(venvRoot);
   process.env.HERMES_GWS_BIN = gwsLauncher;
+  process.env.MIA_WHISPER_BIN = nativeRuntimeBinaryPath(path.join(PACKAGED_RUNTIME_ROOT, "whisper"), "whisper-cli");
   process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(userData, "google-workspace");
   // Windows packaged builds cannot spawn the .cmd Hermes shim from Node
   // (CVE-2024-27980), so the backend receives the launcher as an argv
@@ -2005,6 +2021,7 @@ function installBrowserMenu() {
   const definitions = [
     ["Focus Address", "CommandOrControl+L", "l"],
     ["New Tab", "CommandOrControl+T", "t"],
+    ["Reopen Closed Tab", "CommandOrControl+Shift+T", "T"],
     ["Close Tab", "CommandOrControl+W", "w"],
     // Cmd+R belongs to Mia (View > Reload Mia); the page gets the hard reload.
     ["Hard Reload Page", "CommandOrControl+Shift+R", "r"],
@@ -2089,6 +2106,7 @@ function createWindow() {
     desktopLog,
     {
       statePath: path.join(app.getPath("userData"), "miaos-browser-state.json"),
+      safeStorage,
       workspaceRoot: miaosWorkspacePath(),
       onActorEvent: createActorDiagnostics({
         enabled: !app.isPackaged && process.env.MIAOS_LOCAL_PROFILE === "1" && process.env.MIAOS_BROWSER_ACTOR_DIAGNOSTICS === "1",
@@ -2411,6 +2429,46 @@ ipcMain.handle("miaos-claude-code-install", async (event) => {
 // remember (localStorage, IndexedDB, cookies, caches, the renderer and
 // browser state files) plus every in-memory cache in the backend process.
 // Relaunching the app is the only way to reset the latter, so do both.
+function openAccountAndRelaunch(id) {
+  accountProfiles.setActive(id);
+  desktopLog("account switch: relaunching");
+  setImmediate(() => {
+    app.relaunch();
+    app.quit();
+  });
+  return { switching: true };
+}
+ipcMain.handle(ACCOUNTS_CHANNEL, async (event, action, value = {}) => {
+  if (!isAuthSender(event, mainWindow, backendUrl)) throw new Error("Not authorized.");
+  const current = accountProfiles.active().id;
+  const subject = tokenSubject(value.token);
+  if (action === "list") return accountProfiles.list();
+  if (action === "notice") return accountProfiles.takeNotice();
+  if (action === "add") return openAccountAndRelaunch(accountProfiles.addEmpty());
+  if (action === "switch") return openAccountAndRelaunch(String(value.id || ""));
+  if (action === "route") {
+    const owner = subject ? accountProfiles.findBySubject(subject) : "";
+    if (!owner || owner === current) return { switching: false };
+    accountProfiles.moveCredential(current, owner);
+    accountProfiles.setNotice(owner);
+    return openAccountAndRelaunch(owner);
+  }
+  if (action === "confirmed") {
+    if (subject) accountProfiles.setOwner(current, { subject, email: value.email, name: value.name });
+    return { ok: true };
+  }
+  if (action === "other") {
+    if (!subject) return { switching: false };
+    const linked = value.linked || {};
+    if (linked.subject) accountProfiles.setOwner(current, linked);
+    const target = accountProfiles.profileFor({ subject, email: value.email, name: value.name });
+    accountProfiles.moveCredential(current, target);
+    accountProfiles.setNotice(target);
+    return openAccountAndRelaunch(target);
+  }
+  throw new Error("Unknown account action.");
+});
+
 ipcMain.handle("miaos-reset-relaunch", async (event) => {
   if (!isMainWindowSender(event)) return false;
   await desktopAuth.clear().catch(() => {});

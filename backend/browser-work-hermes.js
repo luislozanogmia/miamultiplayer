@@ -3,7 +3,7 @@
 // The pinned Hermes owns all reasoning/tool loops. This adapter opens its
 // supported persistent session, binds it before prompt.submit, and records the
 // actual session IDs. No actor permission is conveyed by prompt text.
-function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOperation, registerSession }) {
+function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOperation, registerSession, bindAskBeforeDo }) {
   if (!client || typeof client.createOrResumeSession !== 'function' || typeof client.submitTurn !== 'function') throw new Error('Hermes gateway client required');
   const bindings = new Map();
   async function run({ work, worker, message, signal, onSession, onEvent, options }) {
@@ -17,6 +17,7 @@ function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOp
     const session = await client.createOrResumeSession({ storedSessionId: worker ? worker.storedSessionId : work.personalStoredSessionId, title: worker ? `Browser: ${worker.goal}` : `Mia: ${work.goal}`, options });
     let release;
     let unregister;
+    let endAskBeforeDo;
     try {
       if (signal?.aborted) throw new Error('Browser work stopped');
       if (worker) {
@@ -27,6 +28,7 @@ function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOp
           if (typeof unregister !== 'function') throw new Error('worker broker binding unavailable');
         }
         for (const sessionId of [session.sessionId, session.storedSessionId]) bindings.set(sessionId, binding);
+        if (bindAskBeforeDo) endAskBeforeDo = await bindAskBeforeDo(session, work, worker);
       }
       onSession?.(session);
       if (signal?.aborted) throw new Error('Browser work stopped');
@@ -35,6 +37,7 @@ function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOp
       return { ...result, storedSessionId: session.storedSessionId };
     } finally {
       for (const sessionId of [session.sessionId, session.storedSessionId]) bindings.delete(sessionId);
+      if (endAskBeforeDo) endAskBeforeDo();
       if (unregister) await unregister();
       if (release) await release();
     }
@@ -45,7 +48,7 @@ function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOp
     async dispatchWorkerTool(sessionId, operation) {
       const binding = bindings.get(sessionId);
       if (!binding || typeof executeOperation !== 'function') throw new Error('worker session is not bound');
-      return executeOperation(binding.ownerId, binding.workId, binding.workerId, operation);
+      return executeOperation(binding.ownerId, binding.workId, binding.workerId, operation, undefined, { sessionId });
     },
   };
 }

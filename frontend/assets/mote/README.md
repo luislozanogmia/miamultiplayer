@@ -36,9 +36,9 @@ joint) into the plate, so the SVG is just one WebP + the vector eyes. viewBox is
 `0 0 620 640` (60px headroom).
 
 The motif and body color are separate signals in the UI: `moteVariantFor(name)`
-keeps the department motif, while `moteColorSlotFor(name)` assigns each Mote a
-stable slot in a 16-color palette. Hash collisions are resolved so visible Motes
-do not repeat a color until the palette is exhausted; the color is applied as a
+keeps the department motif, and a bot's color is saved on its record. A Mote with
+no saved color gets `moteColorSlotFor(name)`, a slot in a 16-color palette decided
+by its name alone, so it matches in every view; the color is applied as a
 small hue adjustment to the existing asset, preserving its clay lighting.
 
 ### Smile sizes
