@@ -1483,7 +1483,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   // Explicit snapshot IDs are target preconditions even for selector actions.
-  // Resolve/check in the isolated world both when approving and dispatching.
+  // Resolve/check in the isolated world when dispatching.
   function protocolTargetScript(element, actorId) {
     return `
       const snapshot = globalThis.__miaBrowserSnapshots?.get(${JSON.stringify(actorId || "legacy")});
@@ -1511,13 +1511,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const script = `(() => {
       ${protocolTargetScript(element, params.actor_id)}
       if (el && (el.disabled || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden')) return { error: 'Target is unavailable.', code: 'ELEMENT_NOT_FOUND' };
-      const approvalId = ${JSON.stringify(params.approval_id || null)};
-      if (approvalId) {
-        const store = globalThis.__miaApprovedTargets;
-        const approved = store?.get(approvalId);
-        store?.delete(approvalId);
-        if (!approved || approved.el !== el || !el?.isConnected || approved.fingerprint(el) !== approved.value) return { error: 'Approval target changed.', code: 'APPROVAL_TARGET_CHANGED' };
-      }
       if (!el) return { error: 'Element is no longer present. Vacuum the page again.' };
       (globalThis.__miaActionTargets ||= new Map()).set(${JSON.stringify(targetKey)}, el);
       const currentTarget = () => {
@@ -1639,27 +1632,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return { waited_ms: timeout };
   }
 
-  async function approveActorOperation(request) {
-    const approval = actorRuntime.approve(request);
-    const tab = protocolTab(request.params.tab_id);
-    if (["click", "fill"].includes(request.method)) {
-      try {
-        const element = protocolElement(tab, request.params);
-        const result = await executeProtocolScript(tab.view.webContents, `(() => {
-          ${protocolTargetScript(element, request.params.actor_id)}
-          if (!el?.isConnected) return false;
-          const fingerprint = el => JSON.stringify([el.localName,el.getAttribute('role'),el.getAttribute('aria-label'),el.getAttribute('href'),el.innerText,el.value]);
-          const store = globalThis.__miaApprovedTargets ||= new Map();
-          store.set(${JSON.stringify(approval.approval_id)}, { el, fingerprint, value: fingerprint(el) });
-          return true;
-        })()`, true);
-        if (result?.error) throw protocolError(result.code, result.error);
-        if (!result) throw protocolError("ELEMENT_NOT_FOUND", "Approval target is unavailable.");
-      } catch (error) { actorRuntime.reject(approval.approval_id); throw error; }
-    }
-    return approval;
-  }
-  const publicActors = { bind: binding => bindActorWithDiagnostics(actorRuntime.bind, binding, options.onActorEvent), revoke: actorRuntime.revoke, approve: approveActorOperation, reject: actorRuntime.reject, list: actorRuntime.list };
+  const publicActors = { bind: binding => bindActorWithDiagnostics(actorRuntime.bind, binding, options.onActorEvent), revoke: actorRuntime.revoke, list: actorRuntime.list };
   function actorOperation(binding, operation, context = {}) {
     if (!binding || !operation || typeof operation.method !== "string") throw protocolError("INVALID_PARAMS", "Binding and browser operation are required.");
     binding = { ...binding, taskId: binding.taskId || binding.workId };
@@ -1668,7 +1641,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const supplied = operation.params || {};
     if ((supplied.actor_id !== undefined && supplied.actor_id !== bound.actorId) || (supplied.tab_id !== undefined && supplied.tab_id !== bound.tabId)) throw protocolError("TAB_NOT_OWNED", "Operation identity disagrees with assignment.");
     const params = { ...JSON.parse(JSON.stringify(supplied)), actor_id: bound.actorId, tab_id: bound.tabId };
-    if (context.approval) params.approval_id = typeof context.approval === "string" ? context.approval : context.approval.approval_id;
     if (context.signal) params.signal = context.signal;
     params[actorCapability] = true;
     return { method: operation.method, params };
@@ -1676,7 +1648,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function validateActorOperation(binding, operation) {
     const call = actorOperation(binding, operation);
     const info = actorRuntime.inspect(call.method, call.params);
-    return { ...info, documentGeneration: info.document_generation, requiresApproval: info.needs_approval };
+    return { ...info, documentGeneration: info.document_generation };
   }
   async function executeActorOperation(binding, operation, context) {
     const call = actorOperation(binding, operation, context);
@@ -1763,7 +1735,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   // Mia's personal agent arranges groups and suggests bot assignments through
   // the bridge it already browses with. A suggestion only prefills the
-  // person's browser-work form: starting work and every approval stay theirs.
+  // person's browser-work form: starting work stays theirs.
   // Switching workspace swaps every tab out, so Mia can tell "my tabs moved"
   // from "my tabs were closed".
   const workspaceFields = () => ({ workspace: workspaceKey, ...(workspaceChangedAt ? { workspace_changed_at: workspaceChangedAt } : {}) });

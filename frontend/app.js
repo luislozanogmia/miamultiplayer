@@ -9764,7 +9764,6 @@
         list: function(groupId){ return request('?groupId=' + encodeURIComponent(groupId || '')).then(function(data){ return data.works; }); },
         plan: function(payload){ return request('/plan', {method:'POST', body:payload}).then(function(data){ return request('/' + encodeURIComponent(data.work.id) + '/start', {method:'POST', body:{}}); }); },
         cancel: function(id, workerId){ return request('/' + encodeURIComponent(id) + '/stop', {method:'POST', body:workerId ? {workerId:workerId} : {}}); },
-        approval: function(id, approval, accept){ return request('/' + encodeURIComponent(id) + '/approvals/' + encodeURIComponent(approval.id), {method:'POST', body:{accept:accept}}); }
       }
     });
   })();

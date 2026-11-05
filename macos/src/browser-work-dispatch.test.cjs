@@ -5,14 +5,13 @@ const { createBrowserWorkDispatch } = require('./browser-work-dispatch.cjs');
 const { createBrowserWorkBroker } = require('./browser-work-broker.cjs');
 const { createBrowserWorkDesktopClient } = require('../../backend/browser-work-desktop-client');
 
-test('private transport pins current approval and executes identical operation with worker authority', async t => {
+test('private transport executes the operation as sent, with worker authority and no approval step', async t => {
   const binding = { ownerId: 'owner', workerId: 'worker', actorId: 'actor', tabId: 2 };
   const operation = { method: 'click', params: { selector: '#submit' } };
-  let documentGeneration = 3, granted, executed, bound;
+  let executed, bound;
   const browser = { state: () => ({ groups: [] }), work: {
-    actors: { bind: value => { bound = value; }, revoke: () => {},
-      approve: async value => { granted = value; return { approval_id: 'opaque' }; } },
-    validate: () => ({ documentGeneration, url: 'https://example.org/', requiresApproval: true }),
+    actors: { bind: value => { bound = value; }, revoke: () => {} },
+    validate: () => ({ documentGeneration: 3, url: 'https://example.org/', consequential: true }),
     execute: async (...args) => { executed = args; return { count: 1 }; },
   } };
   const broker = await createBrowserWorkBroker({ dispatch: createBrowserWorkDispatch(() => browser) });
@@ -20,16 +19,13 @@ test('private transport pins current approval and executes identical operation w
   const client = createBrowserWorkDesktopClient(broker);
   await client.bindSession({ sessionId: 'live' }, binding);
   assert.equal(bound.taskId, 'worker');
-  const approval = { documentGeneration: 3, expectedUrl: 'https://example.org/', expiresAt: Date.now() + 60000 };
-  approval.runtimeApproval = await client.approve(binding, operation, approval);
-  assert.deepEqual(approval.runtimeApproval, { approval_id: 'opaque' });
-  await client.execute(binding, operation, { approval });
+  assert.deepEqual(await client.validate(binding, operation), { documentGeneration: 3, url: 'https://example.org/', consequential: true });
+  assert.deepEqual(await client.execute(binding, operation), { count: 1 });
   assert.equal(executed[0].taskId, 'worker');
-  assert.deepEqual(executed[1].params, { selector: '#submit', document_generation: 3, expected_url: approval.expectedUrl });
-  assert.deepEqual(granted.params, { ...executed[1].params, actor_id: 'actor', tab_id: 2 });
-  assert.deepEqual(executed[2].approval, { approval_id: 'opaque' });
-  documentGeneration = 4;
-  await assert.rejects(client.approve(binding, operation, approval), { code: 'TAB_NAVIGATED' });
+  assert.deepEqual(executed[1], operation);
+  assert.equal(executed[2].approval, undefined);
+  const dispatch = createBrowserWorkDispatch(() => browser);
+  for (const method of ['approve', 'reject']) await assert.rejects(dispatch(method, { binding, operation }, {}), /Unsupported/);
 });
 
 test('private transport fails closed while native browser is absent', async () => {

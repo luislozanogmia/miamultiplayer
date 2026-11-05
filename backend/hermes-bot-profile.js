@@ -533,6 +533,7 @@ module.exports = {
   setHermesProfileModel,
   GHOST_FIRST_PLUGIN,
   ASK_BEFORE_DO_PLUGIN,
+  ASK_BEFORE_DO_TOOLSET,
   provisionBundledPlugin,
   provisionHermesAgentProfile,
   provisionHermesGoogleAgentProfile,

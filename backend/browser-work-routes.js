@@ -28,7 +28,6 @@ function registerBrowserWorkRoutes(app, { coordinator, ownerFromRequest, prefix 
     response(res.status(202), { work });
   }));
   app.post(`${prefix}/:id/stop`, route(async (req, res, owner) => response(res, { work: await coordinator.stop(owner, req.params.id, req.body?.workerId) })));
-  app.post(`${prefix}/:id/approvals/:approvalId`, route(async (req, res, owner) => response(res, { work: await coordinator.decideApproval(owner, req.params.id, req.params.approvalId, req.body?.accept) })));
   app.post(`${prefix}/:id/recover`, route(async (req, res, owner) => response(res, { work: await coordinator.recover(owner, req.params.id, req.body?.workerIds) })));
   app.post(`${prefix}/group/:groupId/stop`, route(async (req, res, owner) => response(res, { works: await coordinator.stopGroup(owner, req.params.groupId) })));
   app.post(`${prefix}/:id/reusable/:reusableId/run`, route(async (req, res, owner) => res.json({ results: await coordinator.runReusable(owner, req.body?.sourceWorkId, req.params.reusableId, req.params.id, req.body?.workerId) })));

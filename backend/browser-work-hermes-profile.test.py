@@ -49,15 +49,16 @@ class WorkerSchema(unittest.TestCase):
             tools = load_config_readonly()['platform_toolsets']['cli']
             return get_tool_definitions(enabled_toolsets=tools, quiet_mode=True)
 
-    def test_provisioned_worker_model_sees_only_direct_registered_schema(self):
+    def test_provisioned_worker_model_sees_only_direct_schemas_and_request_approval(self):
         with fixture['scope'](self.worker):
             tools = load_config_readonly()['platform_toolsets']['cli']
-            self.assertEqual(tools, ['mia_browser_work'])
+            self.assertEqual(tools, ['mia_browser_work', 'mia_ask_before_do'])
             self.assertEqual(search_config().enabled, 'off')
             definitions = get_tool_definitions(enabled_toolsets=tools, quiet_mode=True)
             raw = get_tool_definitions(enabled_toolsets=tools, quiet_mode=True,
                                        skip_tool_search_assembly=True)
-            self.assertEqual([d['function']['name'] for d in definitions], ['mia_browser_work'])
+            # The bound browser tool plus Ask before do's request_approval, nothing else.
+            self.assertCountEqual([d['function']['name'] for d in definitions], ['mia_browser_work', 'request_approval'])
             self.assertEqual(definitions, raw)
             schema = get_plugin_manager()._plugins['mia-browser-work'].module.SCHEMA
             self.assertEqual(definitions[0]['function']['parameters']['properties']['method'],
@@ -70,7 +71,7 @@ class WorkerSchema(unittest.TestCase):
     def test_default_scope_and_cache_are_unchanged_by_worker_optout(self):
         for home in (self.default, self.worker, self.default, self.worker):
             names = [d['function']['name'] for d in self.definitions(home)]
-            expected = ['mia_browser_work'] if home == self.worker else [
+            expected = ['mia_browser_work', 'request_approval'] if home == self.worker else [
                 'tool_search', 'tool_describe', 'tool_call']
             self.assertCountEqual(names, expected)
 

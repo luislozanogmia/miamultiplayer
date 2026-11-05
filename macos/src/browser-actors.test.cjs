@@ -41,23 +41,17 @@ test("Stop rejects queued and stale completed work; fresh assignment can progres
   await assert.rejects(running, { code: "ACTOR_REVOKED" }); await assert.rejects(queued, { code: "ACTOR_REVOKED" });
   bind("a", 1); assert.equal(await runtime.run("scroll", params(), () => "fresh"), "fresh");
 });
-test("human-view mutation requires one-use exact operation approval", async () => {
-  const { runtime, viewing } = fixture(); viewing(1);
-  const p = { ...params(), selector: "input", value: "approved" };
-  await assert.rejects(runtime.run("fill", { ...p, human_ok: true }, () => assert.fail()), { code: "APPROVAL_REQUIRED" });
-  assert.throws(() => runtime.approve({ actorId: "a", ownerId: "intruder", method: "fill", params: p }), { code: "APPROVAL_OWNER_MISMATCH" });
-  const approval = runtime.approve({ actorId: "a", ownerId: "owner", method: "fill", params: p });
-  await assert.rejects(runtime.run("fill", { ...p, value: "changed", approval_id: approval.approval_id }, () => assert.fail()), { code: "APPROVAL_REQUIRED" });
-  assert.equal(await runtime.run("fill", { ...p, approval_id: approval.approval_id }, () => "written"), "written");
-  await assert.rejects(runtime.run("fill", { ...p, approval_id: approval.approval_id }, () => assert.fail()), { code: "APPROVAL_REQUIRED" });
-});
-test("rejected, expired and navigation-invalidated approvals cannot execute", async () => {
-  const { runtime, tabs } = fixture(); const p = params();
-  for (const change of [a => runtime.reject(a.approval_id), () => { tabs.get(1).sequence++; }]) {
-    const a = runtime.approve({ actorId: "a", ownerId: "owner", method: "click", params: p }); change(a);
-    await assert.rejects(runtime.run("click", { ...p, approval_id: a.approval_id }, () => assert.fail()), { code: "APPROVAL_REQUIRED" });
-  }
-  assert.throws(() => runtime.approve({ actorId: "a", ownerId: "owner", method: "click", params: p, expiresAt: Date.now() - 1 }), { code: "INVALID_APPROVAL" });
+test("a click on a bound actor runs with no approval and inspect reports it consequential", async () => {
+  const { runtime, viewing } = fixture(); const p = { ...params(), selector: "a" };
+  assert.equal(runtime.inspect("click", p).consequential, true);
+  assert.equal(runtime.inspect("click", p).needs_approval, undefined);
+  assert.equal(await runtime.run("click", p, () => "clicked"), "clicked");
+  viewing(1);
+  const f = { ...params(), selector: "input", value: "hello" };
+  assert.equal(runtime.inspect("fill", f).consequential, true);
+  assert.equal(await runtime.run("fill", f, () => "written"), "written");
+  assert.equal(await runtime.run("fill", f, () => "written again"), "written again", "no one-use grant is consumed");
+  for (const gone of ["approve", "reject"]) assert.equal(runtime[gone], undefined);
 });
 test("closed/crashed/navigation lifecycle and abort errors are typed", async () => {
   const { runtime, tabs } = fixture(); tabs.get(1).crashed = true;
@@ -85,22 +79,17 @@ test("background fill and navigation never trust a model's consequence assessmen
   let writes = 0;
   for (const method of ["fill", "navigate", "back", "forward", "reload", "vacuum"]) {
     const p = { ...params(), consequential: false, ...(method === "vacuum" ? { url: "https://example.com/new" } : {}) };
-    assert.equal(runtime.inspect(method, p).needs_approval, true, method + " needs owner approval");
-    await assert.rejects(runtime.run(method, p, () => { writes++; }), { code: "APPROVAL_REQUIRED" });
-    assert.equal(writes, 0);
+    assert.equal(runtime.inspect(method, p).consequential, true, method + " is consequential");
+    await runtime.run(method, p, () => { writes++; });
   }
-  const p = { ...params(), selector: "#autosave", value: "approved" };
-  const approval = runtime.approve({ actorId: "a", ownerId: "owner", method: "fill", params: p });
-  await runtime.run("fill", { ...p, approval_id: approval.approval_id }, () => { writes++; });
-  assert.equal(writes, 1);
-  assert.equal(runtime.inspect("vacuum", params()).needs_approval, false);
+  assert.equal(writes, 6);
+  assert.equal(runtime.inspect("vacuum", params()).consequential, false);
 });
 
 
 test("target event retains operation origin generation after click navigation", async () => {
   const { runtime, tabs, events } = fixture(); const p = { ...params(), selector: "a" };
-  const grant = runtime.approve({ actorId: "a", ownerId: "owner", method: "click", params: p });
-  await runtime.run("click", { ...p, approval_id: grant.approval_id }, () => {
+  await runtime.run("click", p, () => {
     tabs.get(1).sequence++;
     return { clicked: true, target: { x: 1, y: 2, width: 3, height: 4 } };
   });

@@ -86,7 +86,6 @@ function harness(options = {}) {
       if (script.includes('document.querySelector("video")') && script.includes("return { currentTime")) {
         return Promise.resolve(options.mediaCapture || null);
       }
-      if (script.includes("__miaApprovedTargets") && script.includes("return true;")) return Promise.resolve(true);
       if (script.includes("__miaActionTargets?.get")) return Promise.resolve({ x: 10, y: 20, width: 100, height: 30 });
       if (script.includes("const nodes =")) {
         return Promise.resolve({
@@ -1148,12 +1147,10 @@ test("trusted actor execution targets its tab without human selection or focus",
   const result = await h.controller.execute(binding, { method: "read", params: {} });
   assert.equal(result.tab_id, first.tab_id);
   const fill = { method: "fill", params: { selector: "input", value: "hello", wait: "none" } };
-  const fillApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: fill.method, params: { ...fill.params, actor_id: binding.actorId, tab_id: binding.tabId } });
-  await h.controller.execute(binding, fill, { approval: fillApproval.approval_id });
+  await h.controller.execute(binding, fill);
   await h.controller.execute(binding, { method: "scroll", params: {} });
   const navigate = { method: "navigate", params: { url: "https://example.com/next", wait: "none" } };
-  const navigateApproval = await h.controller.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: navigate.method, params: { ...navigate.params, actor_id: binding.actorId, tab_id: binding.tabId } });
-  await h.controller.execute(binding, navigate, { approval: navigateApproval.approval_id });
+  await h.controller.execute(binding, navigate);
   assert.deepEqual(h.views.map(view => view.webContents.focusCalls || 0), before);
   assert.equal(h.command("state").activeId, 2);
   await assert.rejects(h.controller.execute(binding, { method: "read", params: { tab_id: 2 } }), { code: "TAB_NOT_OWNED" });
@@ -1170,15 +1167,14 @@ test("numbered snapshots are isolated, replaced snapshots and navigation fail cl
   const snapshot = await h.controller.execute(binding, { method: "vacuum", params: {} });
   await h.controller.execute(second, { method: "vacuum", params: {} });
   const op = { method: "fill", params: { choice: 2, snapshot_id: snapshot.snapshot_id, value: "hello", wait: "none" } };
-  const approval = await h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
-  await h.controller.execute(binding, op, { approval: approval.approval_id });
+  await h.controller.execute(binding, op);
   await h.controller.execute(binding, { method: "vacuum", params: {} });
-  const approve = () => h.controller.actors.approve({ actorId: "a", ownerId: "owner", method: op.method, params: { ...op.params, actor_id: "a", tab_id: tab.tab_id } });
-  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+  const run = () => h.controller.execute(binding, op);
+  await assert.rejects(run(), { code: "STALE_SNAPSHOT" });
   const current = await h.controller.execute(binding, { method: "vacuum", params: {} });
   h.views[0].webContents.emit("did-start-navigation", {}, "https://example.com/", false, true);
   op.params.snapshot_id = current.snapshot_id;
-  await assert.rejects(approve(), { code: "STALE_SNAPSHOT" });
+  await assert.rejects(run(), { code: "STALE_SNAPSHOT" });
 });
 
 test("Mia's bridge lists and arranges groups and suggests bot assignments without starting work", async () => {
@@ -2397,7 +2393,7 @@ test("a popup from a bot's click opens behind, in the bot's group", async () => 
   assert.ok(JSON.stringify(list).includes(String(popup.id)), "the bot can find and use it");
 });
 
-test("a popup from a bound worker's approved click follows in its own tab", async () => {
+test("a popup from a bound worker's click follows in its own tab", async () => {
   const h = harness();
   const first = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://flights.example/", wait: "none" });
   const binding = { actorId: "bot", botId: "bot", tabId: first.tab_id, groupId: groupFor(h, first.tab_id), ownerId: "owner", taskId: "task" };
@@ -2410,8 +2406,7 @@ test("a popup from a bound worker's approved click follows in its own tab", asyn
     return original(script);
   };
   const click = { method: "click", params: { selector: "button", wait: "none" } };
-  const approval = await h.controller.actors.approve({ actorId: "bot", ownerId: "owner", method: click.method, params: { ...click.params, actor_id: "bot", tab_id: first.tab_id } });
-  await h.controller.execute(binding, click, { approval: approval.approval_id });
+  await h.controller.execute(binding, click);
   assert.equal(popupResult.action, "deny", "no window opens");
   assert.equal(h.command("state").tabs.length, 1, "no tab outside the worker's");
   assert.equal(page.loads.at(-1), "https://airline.example/book");

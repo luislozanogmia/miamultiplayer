@@ -238,6 +238,49 @@ print(json.dumps({
   assert.deepEqual(out.summary, ['send', 'Click: Send']);
 });
 
+test('a browser bot\'s call follows the same rule as a click anywhere else', () => {
+  const script = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1] + "/__init__.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn): hooks[name] = fn
+    def register_tool(self, name, toolset, schema, handler): hooks[name] = handler
+m.register(Ctx())
+page = json.dumps({"untrusted_page_data": {"elements": [{"number": 1, "role": "button", "name": "Send message"}, {"number": 2, "role": "link", "name": "More details"}]}})
+hooks["post_tool_call"](tool_name="mia_browser_work", args={"method": "vacuum", "params": {}}, result=page, session_id="w1")
+work = lambda method, **params: m.classify("mia_browser_work", {"method": method, "params": params}, "w1")
+print(json.dumps({
+  "send": work("click", choice=1, snapshot_id="a"),
+  "details": work("click", choice=2, snapshot_id="a"),
+  "selector": work("click", selector="#send"),
+  "plain": work("click", selector="#more"),
+  "otherBot": m.classify("mia_browser_work", {"method": "click", "params": {"choice": 1}}, "w2"),
+  "marked": work("fill", selector="#a", value="x", consequential=True),
+  "script": work("eval", script="1+1"),
+  "saved": work("run_reusable", sourceWorkId="a", reusableId="b"),
+  "navigate": work("navigate", url="https://example.com/"),
+  "fill": work("fill", selector="#a", value="send it"),
+  "read": work("read"),
+}))
+`;
+  return promisify(execFile)('python3', ['-c', script, pluginDir]).then(({ stdout }) => {
+    const out = JSON.parse(stdout);
+    assert.deepEqual(out.send, ['send', 'Click: Send message']);
+    assert.equal(out.details, null);
+    assert.equal(out.selector[0], 'send');
+    assert.equal(out.plain, null);
+    assert.equal(out.otherBot, null);
+    assert.equal(out.marked[0], 'send');
+    assert.equal(out.script[0], 'change');
+    assert.equal(out.saved[0], 'change');
+    assert.equal(out.navigate, null);
+    assert.equal(out.fill, null);
+    assert.equal(out.read, null);
+  });
+});
+
 test('the gate answers only with its token', async (t) => {
   const gate = await createAskBeforeDoGate();
   t.after(() => gate.stop());

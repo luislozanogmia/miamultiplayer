@@ -8920,6 +8920,43 @@ async function initializeAskBeforeDoGate() {
 }
 
 let miaAppBrowserWork = null;
+// A browser bot asks in its own chat, on the same card and setting as any other turn.
+async function bindBrowserWorkerAskBeforeDo(session, work, worker) {
+  const bot = db.loadOne(conn, 'bots', worker.botId);
+  const conversation = bot && await ensureNativeBotConversation(bot);
+  if (!conversation) return null;
+  askBeforeDoGate?.bindTurn(session, {
+    scope: `browser-work:${work.id}:${worker.id}`,
+    enabled: currentInstructionSettings(work.ownerId).askBeforeDo,
+    requester: work.ownerId,
+    conversationId: conversation.id,
+    present: async ({ id, summary, whatHappens, requester }) => {
+      const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput, whatHappens);
+      const metadata = { runtime: 'hermes', agentName: bot.name, askBeforeDo: { id, line: card.line, summary: card.summary, requester, status: 'pending' } };
+      const created = nativeConversationRepository.createEvent({
+        companyId: conversation.companyId,
+        conversationId: conversation.id,
+        senderId: bot.id,
+        senderType: 'bot',
+        type: 'bot_message',
+        content: { text: card.text },
+        clientIdempotencyKey: `ask-before-do-${id}`,
+        metadata,
+      });
+      try { nativeConversationRealtime.publish(created.event); } catch (_publishError) {}
+      return async (status) => {
+        const event = nativeConversationRepository.updateEvent({
+          companyId: conversation.companyId,
+          id: created.event.id,
+          metadata: { ...metadata, askBeforeDo: { ...metadata.askBeforeDo, status } },
+        });
+        try { nativeConversationRealtime.publish(event); } catch (_publishError) {}
+      };
+    },
+  });
+  // A finished or stopped bot takes its open request with it.
+  return () => askBeforeDoGate?.cancelConversation(conversation.id);
+}
 async function initializeBrowserWork() {
   if (!browserWorkDesktopConfig.url || !browserWorkDesktopConfig.token || !browserWorkDesktopConfig.key) return;
   const { createBrowserWorkDesktopClient } = require('./browser-work-desktop-client');
@@ -8941,10 +8978,15 @@ async function initializeBrowserWork() {
   delete client.env.HERMES_TUI_TOOLSETS;
   client.env.GATEWAY_RELAY_MIA_BROWSER_WORK_TOKEN = workerBroker.token;
   client.env.MIA_BROWSER_WORK_TOOL_URL = workerBroker.url;
+  if (askBeforeDoGate) {
+    client.env.GATEWAY_RELAY_MIA_ASK_BEFORE_DO_TOKEN = askBeforeDoGate.token;
+    client.env.MIA_ASK_BEFORE_DO_URL = askBeforeDoGate.url;
+  }
   const hermes = createBrowserWorkHermes({ client, bindSession: desktop.bindSession,
     registerSession: workerBroker.registerSession,
     prepareWorker: (worker, binding) => provisionBrowserWorkProfile({ profilesRoot: path.join(process.env.HERMES_HOME, 'profiles'), worker, binding }),
     executeOperation: (...args) => coordinator.executeOperation(...args),
+    bindAskBeforeDo: bindBrowserWorkerAskBeforeDo,
   });
   coordinator = createBrowserWorkCoordinator({ store, hermes, browser: desktop,
     isClosing: () => backendShutdownStarted,

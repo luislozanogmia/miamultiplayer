@@ -34,8 +34,7 @@ app.whenReady().then(async () => {
   const setup = script => contents(aTab).executeJavaScript(script);
   const snap = (binding = a, params = {}) => browser.execute(binding, { method: 'vacuum', params });
   const op = params => ({ method: 'click', params: { wait: 'none', ...params } });
-  const grant = async (binding, operation) => browser.actors.approve({ actorId: binding.actorId, ownerId: binding.ownerId, method: operation.method, params: { ...operation.params, actor_id: binding.actorId, tab_id: binding.tabId } });
-  const act = async (binding, operation) => browser.execute(binding, operation, { approval: await grant(binding, operation) });
+  const act = async (binding, operation) => browser.execute(binding, operation);
   async function denied(call, code = 'STALE_SNAPSHOT', tab = aTab) {
     const before = await observe(tab);
     await assert.rejects(call, error => error.code === code);
@@ -60,12 +59,6 @@ app.whenReady().then(async () => {
   await check('plain actor read invalidates explicit selector snapshot', async () => {
     const old = await snap(); await browser.execute(a, { method: 'read', params: {} });
     await denied(() => act(a, op({ selector: '#local', snapshot_id: old.snapshot_id })));
-  });
-  await check('plain actor read revalidates previously approved snapshot', async () => {
-    const old = await snap(); const operation = op({ choice: old.elements.find(e => e.selector === '#local').number, snapshot_id: old.snapshot_id });
-    const approval = await grant(a, operation);
-    await browser.execute(a, { method: 'read', params: {} });
-    await denied(() => browser.execute(a, operation, { approval }));
   });
   await check('plain actor read permits fresh vacuum positive control', async () => {
     await snap(); await browser.execute(a, { method: 'read', params: {} });
@@ -174,14 +167,9 @@ app.whenReady().then(async () => {
     const old = await snap(); const choice = old.elements.find(e => e.selector === '#local').number; await snap();
     await denied(() => act(a, op({ choice, snapshot_id: old.snapshot_id })));
   });
-  await check('approved explicit snapshot rechecked at execution', async () => {
-    const current = await snap(); const operation = op({ selector: '#local', snapshot_id: current.snapshot_id }); const approval = await grant(a, operation);
-    await snap(); await denied(() => browser.execute(a, operation, { approval }));
-  });
-  await check('approved selector target guard retained without snapshot', async () => {
-    const operation = op({ selector: '#local' }); const approval = await grant(a, operation);
-    await setup('document.querySelector("#local").replaceWith(document.querySelector("#local").cloneNode(true))');
-    await denied(() => browser.execute(a, operation, { approval }), 'APPROVAL_TARGET_CHANGED');
+  await check('explicit snapshot rechecked at execution', async () => {
+    const current = await snap(); const operation = op({ selector: '#local', snapshot_id: current.snapshot_id });
+    await snap(); await denied(() => browser.execute(a, operation));
   });
   await check('current explicit snapshot selector fill succeeds', async () => {
     const current = await snap(); await act(a, { method: 'fill', params: { selector: '#draft', snapshot_id: current.snapshot_id, value: 'exact native fill', wait: 'none' } });
