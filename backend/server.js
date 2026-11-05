@@ -7722,8 +7722,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     requester: trigger.senderId,
     conversationId: conversation.id,
     // No dispatchId: a request is not the reply, so the task keeps running.
-    present: async ({ id, summary, whatHappens, requester }) => {
-      const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput, whatHappens);
+    present: async ({ id, summary, whatHappens, repeatable, requester }) => {
+      const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput, whatHappens, repeatable);
       const metadata = { runtime: 'hermes', agentName: agent.name, askBeforeDo: { id, line: card.line, summary: card.summary, requester, status: 'pending' } };
       const created = await createNativeDispatchReplyEvent(dispatch, trigger, {
         type: replyEventType,
@@ -9007,8 +9007,8 @@ async function bindBrowserWorkerAskBeforeDo(session, work, worker) {
     enabled: currentInstructionSettings(work.ownerId).askBeforeDo,
     requester: work.ownerId,
     conversationId: conversation.id,
-    present: async ({ id, summary, whatHappens, requester }) => {
-      const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput, whatHappens);
+    present: async ({ id, summary, whatHappens, repeatable, requester }) => {
+      const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput, whatHappens, repeatable);
       const metadata = { runtime: 'hermes', agentName: bot.name, askBeforeDo: { id, line: card.line, summary: card.summary, requester, status: 'pending' } };
       const created = nativeConversationRepository.createEvent({
         companyId: conversation.companyId,

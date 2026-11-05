@@ -339,3 +339,46 @@ test('the approval line says in plain words what the command will do, never the 
   assert.equal(line('rm ghp_abcdefghijklmnopqrstuvwxyz0123456789ab'), 'Delete files', 'a value that looks secret is never shown');
   for (const summary of ['rm a.txt', 'git push origin main', 'curl -d x https://a.example.test']) assert.doesNotMatch(line(summary), /^Run (rm|git|curl)\b/);
 });
+
+test('a yes to editing one document covers more edits to it in the same reply, and nothing else', async () => {
+  const context = bound();
+  const { gate, turn, shown } = context;
+  turn();
+  const docA = 'a'.repeat(64), docB = 'b'.repeat(64);
+  const edit = (fingerprint, repeatKey) => gate.decide({ sessionId: 'stored', category: 'change', summary: 'mcp__google__google_docs_append {}', fingerprint, repeatKey });
+  const first = edit('append-1', docA);
+  assert.equal(first.allow, false);
+  const answer = await asking(context, first.message, (request) => gate.answer({ id: request.id, requester: 'a@example.com', approved: true }));
+  assert.equal(answer.approved, true);
+  assert.equal(shown[0].repeatable, true, 'the card says it covers more edits');
+  assert.equal(edit('append-1', docA).allow, true, 'the approved call');
+  assert.equal(edit('append-2', docA).allow, true, 'more text to the same document');
+  assert.equal(edit('append-3', docA).allow, true);
+  assert.equal(edit('append-4', docB).allow, false, 'another document asks');
+  assert.equal(gate.decide({ sessionId: 'stored', category: 'send', summary: 'send', fingerprint: 'send-1' }).allow, false, 'sending still asks');
+  turn();
+  assert.equal(edit('append-5', docA).allow, false, 'a new reply asks again');
+});
+
+test('only edits to a named item can be covered; sending, deleting and creating cannot', async () => {
+  const script = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1] + "/__init__.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+k = m._repeat_key
+print(json.dumps({
+  "append": bool(k("mcp__google__google_docs_append", {"documentId": "d1", "text": "a"})),
+  "sameDoc": k("mcp__google__google_docs_append", {"documentId": "d1", "text": "a"}) == k("mcp__google__google_docs_append", {"documentId": "d1", "text": "b"}),
+  "otherDoc": k("mcp__google__google_docs_append", {"documentId": "d1"}) == k("mcp__google__google_docs_append", {"documentId": "d2"}),
+  "sheet": bool(k("mcp__google__google_sheets_update_values", {"spreadsheetId": "s1", "values": []})),
+  "noTarget": bool(k("mcp__google__google_docs_append", {"text": "a"})),
+  "create": bool(k("mcp__google__google_docs_create", {"documentId": "d1"})),
+  "send": bool(k("mcp__google__google_gmail_send", {"fileId": "f"})),
+  "delete": bool(k("mcp__google__google_drive_delete_file", {"fileId": "f"})),
+  "terminal": bool(k("terminal", {"command": "rm a"})),
+}))
+`;
+  const { stdout } = await promisify(execFile)('python3', ['-c', script, pluginDir]);
+  assert.deepEqual(JSON.parse(stdout), { append: true, sameDoc: true, otherDoc: false, sheet: true, noTarget: false, create: false, send: false, delete: false, terminal: false });
+  assert.equal(approvalCard('mcp__google__google_docs_append {"documentId":"d1"}', 'concise', '', true).line, 'Add to a document in Google Docs, and keep editing it in this reply');
+});

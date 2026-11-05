@@ -78,7 +78,7 @@ const CONNECTOR_APPS = { gmail: 'Gmail', drive: 'Google Drive', calendar: 'Googl
 const CONNECTOR_THINGS = { gmail: 'an email', docs: 'a document', sheets: 'a spreadsheet', slides: 'a presentation',
   calendar: 'an event', drive: 'a file', slack: 'a message', linear: 'an issue', jira: 'an issue', notion: 'a page', asana: 'a task' };
 const CONNECTOR_VERBS = { send: 'Send', delete: 'Delete', remove: 'Remove', trash: 'Delete', create: 'Create', add: 'Add',
-  append: 'Add', insert: 'Add', update: 'Change', edit: 'Change', modify: 'Change', set: 'Change', post: 'Post',
+  append: 'Add to', insert: 'Add to', update: 'Change', edit: 'Change', modify: 'Change', set: 'Change', post: 'Post',
   publish: 'Publish', share: 'Share', move: 'Move', reply: 'Reply to', forward: 'Forward', invite: 'Invite people to',
   write: 'Write', upload: 'Upload', copy: 'Copy', rename: 'Rename' };
 function describeConnectorCall(raw) {
@@ -93,6 +93,8 @@ function describeConnectorCall(raw) {
   const verbAt = words.findIndex((word) => CONNECTOR_VERBS[word]);
   if (verbAt < 0) return `Make a change in ${app}`;
   const rest = words.slice(verbAt + 1).filter((word) => !CONNECTOR_APPS[word] && word !== 'google' && word !== 'workspace');
+  // Adding to a document or sheet names the document, not the rows or text being added.
+  if (['append', 'insert'].includes(words[verbAt]) && rest.every((word) => ['values', 'rows', 'row', 'text', 'content', 'paragraph', 'cells'].includes(word))) rest.length = 0;
   const noun = rest.join(' ');
   let thing = !noun || ['message', 'email'].includes(noun) ? (CONNECTOR_THINGS[appKey] || (noun ? `a ${noun}` : 'an item'))
     : / /.test(noun) || noun.endsWith('s') ? noun : `${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}`;
@@ -149,8 +151,8 @@ function describeSegment(segment) {
   return tool ? `Run the command ${plainName(tool) || 'shown'}` : 'Do this action';
 }
 
-function approvalCard(summary, chatOutput, whatHappens) {
-  const line = actionLine(summary);
+function approvalCard(summary, chatOutput, whatHappens, repeatable = false) {
+  const line = actionLine(summary) + (repeatable ? ', and keep editing it in this reply' : '');
   const text = `Do you approve?\n\n${line}`;
   if (chatOutput !== 'verbose') return { text, line };
   return { text: `${text}\n\n${summary}`, line, summary };
@@ -179,11 +181,11 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
     approval.finish(status);
   }
 
-  async function showApproval(state, summary, whatHappens = '') {
+  async function showApproval(state, summary, whatHappens = '', repeatable = false) {
     const id = crypto.randomUUID();
     const epoch = state.epoch;
     let record;
-    try { record = await state.present({ id, summary, whatHappens, requester: state.requester }); }
+    try { record = await state.present({ id, summary, whatHappens, repeatable, requester: state.requester }); }
     catch (_) { return 'declined'; }
     if (state.epoch !== epoch || scopes.get(state.scope) !== state) {
       await record('declined');
@@ -201,10 +203,11 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
   return {
     // Called once per user turn, before the turn is submitted.
     bindTurn(session, { scope, conversationId, enabled, requester, present }) {
-      const state = scopes.get(scope) || { blocked: new Map(), unlocked: new Set() };
+      const state = scopes.get(scope) || { blocked: new Map(), unlocked: new Set(), repeatable: new Set() };
       for (const approval of [...open.values()]) if (approval.scope === scope) settle(approval, 'declined');
       dropRequests(state);
       state.unlocked.clear();
+      state.repeatable = new Set();
       Object.assign(state, { scope, epoch: (state.epoch || 0) + 1, conversationId, enabled: enabled !== false, requester, present });
       scopes.set(scope, state);
       for (const [id, assigned] of sessions) if (assigned === scope) sessions.delete(id);
@@ -225,7 +228,7 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
       const status = await showApproval(state, String(summary || 'this browser action'));
       return status === 'approved' && scopes.get(state.scope) === state && state.epoch === epoch;
     },
-    decide({ sessionId, summary, fingerprint }) {
+    decide({ sessionId, summary, fingerprint, repeatKey }) {
       const id = String(sessionId || '');
       if (id.startsWith('cron_')) return { allow: true };
       const what = String(summary || 'this action').slice(0, 1200);
@@ -234,10 +237,13 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
       if (!state) return { allow: false, message: noUserMessage(what) };
       if (!state.enabled) return { allow: true };
       const key = String(fingerprint || '');
+      const repeat = /^[a-f0-9]{64}$/.test(String(repeatKey || '')) ? String(repeatKey) : '';
       if (key && state.unlocked.delete(key)) return { allow: true };
+      // More edits to an item the person already said yes to, in this same reply.
+      if (repeat && state.repeatable.has(repeat)) return { allow: true };
       let request = state.blocked.get(key);
       if (!request) {
-        request = { id: crypto.randomUUID(), key, summary: what, state };
+        request = { id: crypto.randomUUID(), key, repeat, summary: what, state };
         state.blocked.set(key, request);
         requests.set(request.id, request);
       }
@@ -251,11 +257,12 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
       request.answer = (async () => {
         const { state } = request;
         const epoch = state.epoch;
-        const status = await showApproval(state, request.summary, whatHappens);
+        const status = await showApproval(state, request.summary, whatHappens, !!request.repeat);
         requests.delete(request.id);
         if (state.blocked.get(request.key) === request) state.blocked.delete(request.key);
         const approved = status === 'approved' && state.epoch === epoch;
         if (approved) state.unlocked.add(request.key);
+        if (approved && request.repeat) state.repeatable.add(request.repeat);
         return { approved, message: ANSWERS[approved ? 'approved' : status === 'approved' ? 'declined' : status] };
       })().catch(() => {
         requests.delete(request.id);

@@ -105,6 +105,24 @@ def _short(text: Any, limit: int = SUMMARY_LIMIT) -> str:
     return flat if len(flat) <= limit else flat[:limit] + " ...(cut short)"
 
 
+# An edit to one named document, sheet or file. A yes to it also covers later
+# edits to that same item in the same reply. Sending, deleting, publishing and
+# creating are never covered this way: each of those asks again.
+EDIT_VERB = re.compile(r"(^|_)(append|update|edit|modify|insert|write|replace|format|batch_update)(_|$)")
+NOT_REPEATABLE = re.compile(r"(^|_)(send|delete|remove|trash|create|post|publish|share|move|reply|forward|invite)(_|$)")
+TARGET_KEY = re.compile(r"^(document|doc|spreadsheet|sheet|file|presentation|page|event|calendar)_?id$", re.I)
+
+
+def _repeat_key(tool_name: str, args: Any) -> str:
+    name = str(tool_name or "").lower()
+    if not name.startswith("mcp_") or not EDIT_VERB.search(name) or NOT_REPEATABLE.search(name) or not isinstance(args, dict):
+        return ""
+    targets = sorted((key.lower(), str(value)) for key, value in args.items() if TARGET_KEY.match(str(key)) and value)
+    if not targets:
+        return ""
+    return hashlib.sha256(json.dumps([name, targets]).encode()).hexdigest()
+
+
 def _fingerprint(tool_name: str, args: Any) -> str:
     exact = json.dumps([tool_name, args], sort_keys=True, default=str)
     return hashlib.sha256(exact.encode()).hexdigest()
@@ -203,7 +221,7 @@ def _on_pre_tool_call(tool_name: str = "", args: Any = None, session_id: str = "
         return None
     decision = _post("/decide", {
         "sessionId": session, "category": found[0], "summary": found[1],
-        "fingerprint": _fingerprint(tool_name, args),
+        "fingerprint": _fingerprint(tool_name, args), "repeatKey": _repeat_key(tool_name, args),
     }, 10)
     if decision and decision.get("allow") is True:
         return None
