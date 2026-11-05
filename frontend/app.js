@@ -20345,6 +20345,11 @@
   // First-run tips for each view (view-tips.js). They wait while anything
   // sits on top of the view: sign-in, loading, a dialog or the guided tour.
   var viewTips = window.MiaViewTips ? window.MiaViewTips.install(document, {
+    // The browser draws its page above the app, so its tips need a still in its place.
+    onShown: function(view){
+      var browser = window.miaNativeBrowser;
+      if(browser && browser.coverForTips) browser.coverForTips(view === 'browser');
+    },
     view: function(){
       var classes = document.body.classList;
       if(window.MiaTabStrip && window.MiaTabStrip.mix.on()) return null;
