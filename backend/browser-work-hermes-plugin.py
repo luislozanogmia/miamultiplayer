@@ -174,7 +174,7 @@ def _execute(args, task_id=None, session_id=None, **kwargs):
         body = json.dumps({"sessionId": runtime_id, "operation": operation}).encode()
         request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer " + token}, method="POST")
         # No retries: a disconnected write may already have executed.
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with urllib.request.urlopen(request, timeout=360) as response:
             result = json.loads(response.read(8 * 1024 * 1024 + 1))
         return json.dumps({"untrusted_page_data": result.get("result")})
     except urllib.error.HTTPError as error:

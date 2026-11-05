@@ -327,7 +327,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const HISTORY_ICON_MAX_CHARS = 32 * 1024;
   let historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
   const closedTabsPathFor = file => file ? `${file.replace(/\.json$/, "")}-closed.json` : "";
-  const closedTabs = createClosedTabs({ log });
+  const closedTabs = createClosedTabs({ log, safeStorage: options.safeStorage });
   closedTabs.open(closedTabsPathFor(statePath));
   let historyEntries = [];
   let historyIcons = new Map();
@@ -1497,6 +1497,32 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     `;
   }
 
+  async function inspectClickTarget(tab, params) {
+    const element = protocolElement(tab, params);
+    if (element.selector.length > MAX_PROTOCOL_SELECTOR) throw protocolError("INVALID_PARAMS", "selector is too long.");
+    const proof = randomUUID();
+    const generation = tab.sequence;
+    const url = tab.url;
+    const result = await readOnlyScript(tab, `(() => {
+      ${protocolTargetScript(element, params.actor_id)}
+      if (!el?.isConnected || el.disabled || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden') return { error: 'Target is unavailable.', code: 'ELEMENT_NOT_FOUND' };
+      const label = String(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+      const type = String(el.getAttribute('type') || '').toLowerCase();
+      const form = el.closest('form');
+      const action = /\\b(send|post|submit|buy|confirm|publish|pay|delete|remove|trash|order|purchase|save|share|invite|reply|forward|upload|enviar|publicar|comprar|confirmar|pagar|eliminar|borrar)\\b/i.exec(label)?.[0];
+      const risky = !!action || !label || type === 'submit' || !!form && String(form.method || '').toLowerCase() === 'post';
+      const store = globalThis.__miaClickProofs ||= new Map();
+      if (store.size > 100) store.delete(store.keys().next().value);
+      const fingerprint = node => JSON.stringify([node.outerHTML, node.innerText, node.value, node.getAttribute('aria-label'), node.getAttribute('title'), node.getAttribute('href'), node.getAttribute('type'), node.getAttribute('role'), node.closest('form')?.action, node.closest('form')?.method]);
+      store.set(${JSON.stringify(proof)}, { el, fingerprint: fingerprint(el), actor: ${JSON.stringify(params.actor_id)} });
+      return { action: action || (type === 'submit' || !!form && String(form.method || '').toLowerCase() === 'post' ? 'Submit form' : label ? 'control' : 'unlabelled control'), risky };
+    })()`, true);
+    if (result?.error) throw protocolError(result.code || "ELEMENT_NOT_FOUND", result.error);
+    if (tab.sequence !== generation || tab.url !== url) throw protocolError("TAB_NAVIGATED", "Document changed while resolving target.");
+    return { targetProof: proof, requiresApproval: !!result.risky,
+      actionSummary: `Click ${result.action} on ${new URL(url).origin}` };
+  }
+
   async function protocolElementAction(tab, params, action) {
     const element = protocolElement(tab, params);
     if (element.selector.length > MAX_PROTOCOL_SELECTOR) {
@@ -1510,6 +1536,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const value = action === "fill" ? params.value.slice(0, MAX_PROTOCOL_PAGE_TEXT) : "";
     const script = `(() => {
       ${protocolTargetScript(element, params.actor_id)}
+      if (${JSON.stringify(action)} === 'click' && ${JSON.stringify(!!params.actor_id)}) {
+        const proof = globalThis.__miaClickProofs?.get(${JSON.stringify(params.__mia_target_proof || null)});
+        globalThis.__miaClickProofs?.delete(${JSON.stringify(params.__mia_target_proof || null)});
+        const fingerprint = node => JSON.stringify([node.outerHTML, node.innerText, node.value, node.getAttribute('aria-label'), node.getAttribute('title'), node.getAttribute('href'), node.getAttribute('type'), node.getAttribute('role'), node.closest('form')?.action, node.closest('form')?.method]);
+        if (!proof || proof.actor !== ${JSON.stringify(params.actor_id)} || proof.el !== el || !el?.isConnected || proof.fingerprint !== fingerprint(el))
+          return { error: 'Approved target changed. Inspect the page and ask again.', code: 'STALE_TARGET' };
+      }
       if (el && (el.disabled || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden')) return { error: 'Target is unavailable.', code: 'ELEMENT_NOT_FOUND' };
       if (!el) return { error: 'Element is no longer present. Vacuum the page again.' };
       (globalThis.__miaActionTargets ||= new Map()).set(${JSON.stringify(targetKey)}, el);
@@ -1645,10 +1678,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     params[actorCapability] = true;
     return { method: operation.method, params };
   }
-  function validateActorOperation(binding, operation) {
+  async function validateActorOperation(binding, operation) {
     const call = actorOperation(binding, operation);
     const info = actorRuntime.inspect(call.method, call.params);
-    return { ...info, documentGeneration: info.document_generation };
+    const target = call.method === 'click' ? await inspectClickTarget(tabs.get(call.params.tab_id), call.params) : {};
+    const requiresApproval = !!target.requiresApproval || ['eval', 'tab_close'].includes(call.method) || call.params.consequential === true;
+    return { ...info, ...target, documentGeneration: info.document_generation, requiresApproval,
+      actionSummary: target.actionSummary || (call.method === 'tab_close' ? `Close browser tab at ${new URL(info.url).origin}` :
+        call.method === 'eval' ? `Run page script at ${new URL(info.url).origin}` : `Browser ${call.method} at ${new URL(info.url).origin}`) };
   }
   async function executeActorOperation(binding, operation, context) {
     const call = actorOperation(binding, operation, context);

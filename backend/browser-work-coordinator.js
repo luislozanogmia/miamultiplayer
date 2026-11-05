@@ -109,7 +109,7 @@ function nativeExecutionEvidence(work) {
   };
 }
 
-function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, resolveBot, personalOptions, resolvePersonalSession = async () => undefined, onChange = () => {}, now = Date.now, isClosing = () => false }) {
+function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, resolveBot, personalOptions, resolvePersonalSession = async () => undefined, onChange = () => {}, now = Date.now, isClosing = () => false, authorizeBrowser = async () => false }) {
   if (!store || !hermes || !browser || typeof authorizeGroup !== 'function' || typeof resolveBot !== 'function') throw new Error('browser work dependencies required');
   async function checkedPersonalOptions(ownerId, selection) {
     // Root resolves credentials and validates the live connected inventory on
@@ -407,14 +407,14 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     if (revoked.some(result => result.status === 'rejected')) throw failure('Stop recorded; native worker revocation failed', 503);
     return stopped;
   }
-  async function executeOperation(ownerId, workId, workerId, operation, replayContext) {
+  async function executeOperation(ownerId, workId, workerId, operation, replayContext, workerContext) {
     if (replayContext && !replayContexts.has(replayContext)) throw failure('untrusted replay provenance', 403);
     let work = await get(ownerId, workId);
     const worker = work.workers.find(item => item.id === workerId);
     if (!worker || worker.status !== 'working' || terminal.has(work.status)) throw failure('worker is not executing', 409);
     if (!operation || typeof operation.method !== 'string' || !operation.params || typeof operation.params !== 'object' || Array.isArray(operation.params)) throw failure('invalid operation');
     // Reject permission/identity overrides rather than silently normalizing them.
-    for (const field of ['actor_id', 'tab_id', 'owner_id', 'group_id', 'human_ok', 'capability']) if (field in operation.params) throw failure('model cannot provide execution identity', 403);
+    for (const field of ['actor_id', 'tab_id', 'owner_id', 'group_id', 'human_ok', 'capability', '__mia_target_proof']) if (field in operation.params) throw failure('model cannot provide execution identity', 403);
     operation = clone(operation);
     operation.method = operation.method.replace(/^ghost_/, '');
     const bound = await binding(work, worker);
@@ -425,18 +425,24 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     };
     if (operation.method === 'run_reusable') {
       if (!worker.reusable || operation.params.sourceWorkId !== worker.reusable.sourceWorkId || operation.params.reusableId !== worker.reusable.reusableId || Object.keys(operation.params).some(key => !['sourceWorkId', 'reusableId'].includes(key))) throw failure('reusable task binding mismatch', 403);
-      return runReusable(ownerId, operation.params.sourceWorkId, operation.params.reusableId, workId, workerId);
+      return runReusable(ownerId, operation.params.sourceWorkId, operation.params.reusableId, workId, workerId, workerContext);
     }
     const checked = await browser.validate(bound, operation);
     if (!checked || checked.documentGeneration === undefined || typeof checked.url !== 'string' || typeof checked.consequential !== 'boolean') throw failure('runtime did not validate operation', 409);
     if (!current()) throw failure('work stopped', 409);
+    if (operation.method === 'click' && !checked.targetProof) throw failure('native click target proof unavailable', 409);
+    if (checked.requiresApproval || ['eval', 'tab_close'].includes(operation.method) || operation.params.consequential === true) {
+      const approved = await authorizeBrowser({ sessionId: workerContext?.sessionId, summary: checked.actionSummary, ownerId, workId, workerId });
+      if (!approved || !current()) throw failure('browser action was not approved', 403);
+    }
     const record = { id: id(), workerId, workEpoch: epoch, workerEpoch, operation, operationHash: digest(operation), documentGeneration: checked.documentGeneration, expectedUrl: checked.url, consequential: checked.consequential, ...(replayContext ? { reusableRunId: replayContext.runId, reusableStepIndex: replayContext.stepIndex } : {}), status: 'dispatching', at: now() };
     update(workId, saved => { saved.operations.push(record); });
     try {
       // Runtime MUST repeat identity/document checks atomically with
       // dispatch. Backend validation cannot close native-navigation races.
       // A write lands only on the document it was checked against.
-      const dispatched = record.consequential ? { ...operation, params: { ...operation.params, document_generation: checked.documentGeneration, expected_url: checked.url } } : operation;
+      const dispatched = { ...operation, params: { ...operation.params, document_generation: checked.documentGeneration, expected_url: checked.url,
+        ...(operation.method === 'click' ? { __mia_target_proof: checked.targetProof } : {}) } };
       const result = await browser.execute(bound, dispatched, { signal: aborts.get(`${workId}:${workerId}`)?.signal });
       if (!current()) throw failure('work stopped during operation', 409);
       if (result && typeof result === 'object' && (result.error || result.ok === false || result.success === false)) throw failure('native browser operation failed', 409);
@@ -526,7 +532,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     if (!reusableProofAvailable(work, reusable, ownerId, work.groupId)) throw failure('completed execution proof required', 409);
     return update(workId, saved => { (saved.reusable ||= []).push(reusable); }).reusable.at(-1);
   }
-  async function runReusable(ownerId, sourceWorkId, reusableId, workId, workerId) {
+  async function runReusable(ownerId, sourceWorkId, reusableId, workId, workerId, workerContext) {
     const source = await get(ownerId, sourceWorkId);
     const reusable = source.reusable?.find(item => item.id === reusableId);
     const target = await get(ownerId, workId);
@@ -540,7 +546,7 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     try {
       for (let stepIndex = 0; stepIndex < reusable.operations.length; stepIndex++) {
         const context = { runId: run.id, stepIndex }; replayContexts.add(context);
-        try { results.push(await executeOperation(ownerId, workId, workerId, reusable.operations[stepIndex], context)); }
+        try { results.push(await executeOperation(ownerId, workId, workerId, reusable.operations[stepIndex], context, workerContext)); }
         finally { replayContexts.delete(context); }
       }
       update(workId, saved => { saved.reusableRuns.find(item => item.id === run.id).status = 'done'; });

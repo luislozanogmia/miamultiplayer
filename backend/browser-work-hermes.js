@@ -48,7 +48,7 @@ function createBrowserWorkHermes({ client, bindSession, prepareWorker, executeOp
     async dispatchWorkerTool(sessionId, operation) {
       const binding = bindings.get(sessionId);
       if (!binding || typeof executeOperation !== 'function') throw new Error('worker session is not bound');
-      return executeOperation(binding.ownerId, binding.workId, binding.workerId, operation);
+      return executeOperation(binding.ownerId, binding.workId, binding.workerId, operation, undefined, { sessionId });
     },
   };
 }

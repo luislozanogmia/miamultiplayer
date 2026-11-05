@@ -2412,6 +2412,48 @@ test("a popup from a bound worker's click follows in its own tab", async () => {
   assert.equal(page.loads.at(-1), "https://airline.example/book");
 });
 
+test("worker selector click resolves Send before approval and consumes the exact DOM target proof", async () => {
+  const h = harness();
+  const opened = await h.controller.protocol("tab_open", { actor_session: "s-mia", url: "https://example.test/compose", wait: "none" });
+  const binding = { actorId: "worker", botId: "worker", tabId: opened.tab_id, groupId: groupFor(h, opened.tab_id), ownerId: "owner", taskId: "task" };
+  h.controller.actors.bind(binding);
+  const page = h.views[0].webContents;
+  let clicks = 0;
+  const element = () => ({ isConnected: true, disabled: false, innerText: "Send", outerHTML: '<button id="action">Send</button>',
+    localName: "button", value: "", getAttribute: () => null, closest: () => null,
+    getBoundingClientRect: () => ({ x: 1, y: 2, width: 20, height: 10 }), click: () => { clicks++; } });
+  let target = element();
+  const context = vm.createContext({ document: { querySelector: () => target }, getComputedStyle: () => ({ display: "block", visibility: "visible" }) });
+  const original = page.executeJavaScript.bind(page);
+  page.executeJavaScript = script => {
+    if (script.includes('const store = globalThis.__miaClickProofs') || script.includes('const proof = globalThis.__miaClickProofs'))
+      return Promise.resolve(vm.runInContext(script, context));
+    return original(script);
+  };
+  const click = { method: "click", params: { selector: "#action", wait: "none" } };
+  const checked = await h.controller.validate(binding, click);
+  assert.equal(checked.requiresApproval, true);
+  assert.equal(checked.actionSummary, "Click Send on https://example.test");
+  const approved = { ...click, params: { ...click.params, __mia_target_proof: checked.targetProof,
+    expected_url: checked.url, document_generation: checked.documentGeneration } };
+  await h.controller.execute(binding, approved);
+  assert.equal(clicks, 1);
+  await assert.rejects(h.controller.execute(binding, approved), { code: "STALE_TARGET" });
+  assert.equal(clicks, 1, "a proof authorizes one click only");
+  const replacementProof = await h.controller.validate(binding, click);
+  target = element();
+  await assert.rejects(h.controller.execute(binding, { ...click, params: { ...approved.params, __mia_target_proof: replacementProof.targetProof } }), { code: "STALE_TARGET" });
+  assert.equal(clicks, 1, "a same-selector replacement is denied");
+  const changedValueProof = await h.controller.validate(binding, click);
+  target.value = "Delete"; // Property changes need not change outerHTML.
+  await assert.rejects(h.controller.execute(binding, { ...click, params: { ...approved.params, __mia_target_proof: changedValueProof.targetProof } }), { code: "STALE_TARGET" });
+  assert.equal(clicks, 1, "a changed live target property is denied");
+  const navigationProof = await h.controller.validate(binding, click);
+  await h.controller.execute(binding, { method: "navigate", params: { url: "https://example.test/elsewhere", wait: "none" } });
+  await assert.rejects(h.controller.execute(binding, { ...click, params: { ...approved.params, __mia_target_proof: navigationProof.targetProof } }), { code: "TAB_NAVIGATED" });
+  assert.equal(clicks, 1);
+});
+
 test("pressing the mouse in the front tab a bot is working on asks to take over", async () => {
   const h = harness({ resolveActor: knownActor({ "s-a": { botId: "bot-a", name: "Scout" } }) });
   h.command("new");

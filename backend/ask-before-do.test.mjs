@@ -90,6 +90,21 @@ test('an unlock and open requests end with the turn', async () => {
   assert.equal(late.approved, false);
 });
 
+test('a pending browser approval cannot authorize a later turn', async () => {
+  const context = bound();
+  context.turn();
+  const pending = context.gate.authorizeBrowser({ sessionId: 'live', summary: 'Click Send on https://example.test' });
+  await new Promise(resolve => setImmediate(resolve));
+  const old = context.shown.at(-1);
+  context.turn();
+  assert.equal(context.gate.answer({ id: old.id, requester: 'a@example.com', approved: true }), 'gone');
+  assert.equal(await pending, false);
+  assert.deepEqual(context.recorded, ['declined']);
+  context.gate.bindTurn({ sessionId: 'replacement' }, { scope: 'c1:bot', conversationId: 'c1', enabled: true,
+    requester: 'a@example.com', present: async () => async () => {} });
+  assert.equal(await context.gate.authorizeBrowser({ sessionId: 'live', summary: 'Click Send' }), false);
+});
+
 test('in a shared conversation only the person who asked can answer', async () => {
   const context = bound();
   const { gate, turn, call } = context;
@@ -238,7 +253,7 @@ print(json.dumps({
   assert.deepEqual(out.summary, ['send', 'Click: Send']);
 });
 
-test('a browser bot\'s call follows the same rule as a click anywhere else', () => {
+test('browser bot calls defer to native target inspection, including selector clicks and tab close', () => {
   const script = `
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("gate", sys.argv[1] + "/__init__.py")
@@ -260,6 +275,7 @@ print(json.dumps({
   "marked": work("fill", selector="#a", value="x", consequential=True),
   "script": work("eval", script="1+1"),
   "saved": work("run_reusable", sourceWorkId="a", reusableId="b"),
+  "close": work("tab_close"),
   "navigate": work("navigate", url="https://example.com/"),
   "fill": work("fill", selector="#a", value="send it"),
   "read": work("read"),
@@ -267,14 +283,15 @@ print(json.dumps({
 `;
   return promisify(execFile)('python3', ['-c', script, pluginDir]).then(({ stdout }) => {
     const out = JSON.parse(stdout);
-    assert.deepEqual(out.send, ['send', 'Click: Send message']);
+    assert.equal(out.send, null);
     assert.equal(out.details, null);
-    assert.equal(out.selector[0], 'send');
+    assert.equal(out.selector, null);
     assert.equal(out.plain, null);
     assert.equal(out.otherBot, null);
-    assert.equal(out.marked[0], 'send');
-    assert.equal(out.script[0], 'change');
-    assert.equal(out.saved[0], 'change');
+    assert.equal(out.marked, null);
+    assert.equal(out.script, null);
+    assert.equal(out.saved, null);
+    assert.equal(out.close, null);
     assert.equal(out.navigate, null);
     assert.equal(out.fill, null);
     assert.equal(out.read, null);
@@ -290,14 +307,14 @@ test('the gate answers only with its token', async (t) => {
   assert.deepEqual(await (await post({ Authorization: `Bearer ${gate.token}` })).json(), { allow: true });
 });
 
-test('the approval shows the action only in verbose output', () => {
-  const line = 'This deletes a.txt.';
-  assert.deepEqual(approvalCard('rm a.txt', 'concise', line), { text: `Do you approve?\n\n${line}`, line });
-  assert.deepEqual(approvalCard('rm a.txt', undefined), { text: 'Do you approve?', line: '' });
-  assert.deepEqual(approvalCard('rm a.txt', 'verbose', line), { text: `Do you approve?\n\n${line}\n\nrm a.txt`, line, summary: 'rm a.txt' });
+test('the concise approval line comes from the operation, not model wording', () => {
+  const line = 'Run rm';
+  assert.deepEqual(approvalCard('rm a.txt', 'concise', 'This deletes another file.'), { text: `Do you approve?\n\n${line}`, line });
+  assert.deepEqual(approvalCard('rm a.txt', undefined), { text: `Do you approve?\n\n${line}`, line });
+  assert.deepEqual(approvalCard('rm a.txt', 'verbose', 'different wording'), { text: `Do you approve?\n\n${line}\n\nrm a.txt`, line, summary: 'rm a.txt' });
 });
 
-test('the line on the approval stays one short line', () => {
-  assert.equal(approvalCard('rm a.txt', 'concise', '  This\n deletes   a.txt. ').line, 'This deletes a.txt.');
-  assert.equal(approvalCard('rm a.txt', 'concise', 'x'.repeat(500)).line.length, 203);
+test('the actual browser action line is short and drops URL credentials', () => {
+  assert.equal(approvalCard('Click Send on https://example.test/reset?token=secret', 'concise', 'This is harmless').line, 'Click Send on https://example.test');
+  assert.equal(approvalCard('Click ' + 'x'.repeat(500), 'concise').line, 'Click [value]');
 });

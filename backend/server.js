@@ -8989,6 +8989,7 @@ async function initializeBrowserWork() {
     bindAskBeforeDo: bindBrowserWorkerAskBeforeDo,
   });
   coordinator = createBrowserWorkCoordinator({ store, hermes, browser: desktop,
+    authorizeBrowser: args => askBeforeDoGate?.authorizeBrowser(args) || false,
     isClosing: () => backendShutdownStarted,
     async authorizeGroup(owner, groupId, tabId) {
       if (owner !== String(DEFAULT_OWNER).toLowerCase() || !isActiveWorkspaceUser(owner)) return false;

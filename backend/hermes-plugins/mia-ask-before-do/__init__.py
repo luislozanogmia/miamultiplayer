@@ -161,7 +161,10 @@ def classify(tool_name: str, args: Any, session: str = "") -> Optional[Tuple[str
     if name == "browser_click":
         return _click(session, "hermes", str(args.get("ref") or "").lstrip("@"), json.dumps(args, default=str))
     if name == "mia_browser_work":
-        return _browser_work(args, session)
+        # The coordinator resolves the actual native DOM target before asking
+        # and holds this tool call open. A pre-tool guess based on model text or
+        # a stale vacuum label cannot authorize a browser mutation.
+        return None
     if name.startswith("mcp_"):
         lowered = name.lower()
         if "draft" not in lowered and WRITE_VERB.search(lowered):

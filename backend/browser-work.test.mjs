@@ -24,7 +24,8 @@ function fixture(t, overrides = {}) {
     async interrupt() {},
     async plan() { return { text: JSON.stringify({ workers: [{ id: '0', tabId: 1, goal: 'read first', needs: [] }, { id: '1', tabId: 2, goal: 'compare', needs: ['0'] }] }), storedSessionId: 'personal-mia' }; },
   };
-  const browser = { async revoke() {}, async validate() { return { documentGeneration: 1, url: 'https://example.test/', consequential: false }; }, async execute() { return { text: 'page evidence' }; } };
+  const browser = { async revoke() {}, async validate(_bound, operation) { return { documentGeneration: 1, url: 'https://example.test/', consequential: false,
+    ...(operation.method === 'click' ? { targetProof: 'native-fixture-proof', requiresApproval: false } : {}) }; }, async execute() { return { text: 'page evidence' }; } };
   const options = { store, hermes, browser, authorizeGroup: async (owner, group, tab) => owner === 'owner' && group === 'group' && (tab === undefined || [1, 2].includes(tab)), resolveBot: async (owner, bot) => ({ ownerId: owner, profile: `bot-${bot}`, color: '#12ab34' }), personalOptions: async () => ({ profile: 'personal-mia', model: 'personal-model', provider: 'personal-provider' }), ...overrides };
   const coordinator = createBrowserWorkCoordinator(options);
   const input = { groupId: 'group', goal: 'compare pages', context: { groupName: 'Research' }, workers: [{ id: 'first', botId: 'bot1', tabId: 1, goal: 'read', model: 'model-a', provider: 'provider-a', needs: [] }, { id: 'second', botId: 'bot2', tabId: 2, goal: 'compare', model: 'model-b', provider: 'provider-b', needs: ['first'] }] };
@@ -289,7 +290,8 @@ test('synthesis read-only evidence lists current completed nonconsequential oper
 
 test('synthesis receives the completed native click, marked consequential, separately from worker text', async t => {
   const f = fixture(t);
-  f.browser.validate = async (binding, operation) => ({ documentGeneration: 1, url: 'https://example.test/', consequential: operation.method === 'click' });
+  f.browser.validate = async (binding, operation) => ({ documentGeneration: 1, url: 'https://example.test/', consequential: operation.method === 'click',
+    ...(operation.method === 'click' ? { targetProof: 'native-fixture-proof', requiresApproval: false } : {}) });
   f.hermes.worker = async args => {
     await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'read', params: {} });
     await f.coordinator.executeOperation('owner', args.work.id, args.worker.id, { method: 'click', params: { selector: '#write' } });
@@ -399,16 +401,70 @@ test('Stop suppresses late worker output, preserves partial results and interrup
 });
 
 // A work record whose one worker stays live so tests can call executeOperation as its bound tool.
-async function liveFixture(t) {
+async function liveFixture(t, overrides = {}) {
   let release;
-  const f = fixture(t);
+  const f = fixture(t, overrides);
   f.hermes.worker = async args => { args.onSession({ sessionId: 'live', storedSessionId: 'stored' }); return new Promise(resolve => { release = () => resolve({ text: 'worker done', storedSessionId: 'stored' }); }); };
-  f.browser.validate = async () => ({ documentGeneration: 1, url: 'https://example.test/', consequential: true });
+  f.browser.validate = async (_bound, operation) => ({ documentGeneration: 1, url: 'https://example.test/', consequential: true,
+    ...(operation.method.replace(/^ghost_/, '') === 'click' ? { targetProof: 'native-fixture-proof', requiresApproval: false } : {}) });
   const work = await f.coordinator.create('owner', { ...f.input, workers: [f.input.workers[0]] });
   const running = f.coordinator.start('owner', work.id); await until(() => release);
   t.after(async () => { await f.coordinator.stop('owner', work.id); release(); await running; });
   return { ...f, work };
 }
+
+test('selector Send click and tab close use one native-bound chat approval each', async t => {
+  const { createGateState } = require('./ask-before-do');
+  const gate = createGateState();
+  const shown = [], completed = [], executed = [];
+  const f = await liveFixture(t, { authorizeBrowser: args => gate.authorizeBrowser(args) });
+  gate.bindTurn({ sessionId: 'live' }, { scope: 'worker', conversationId: 'chat', enabled: true,
+    requester: 'owner', present: async card => { shown.push(card); return async status => completed.push(status); } });
+  let proof = 0;
+  f.browser.validate = async (_bound, operation) => ({ documentGeneration: 7, url: 'https://example.test/compose', consequential: true,
+    requiresApproval: ['click', 'tab_close'].includes(operation.method),
+    actionSummary: operation.method === 'click' ? 'Click Send on https://example.test' : 'Close browser tab at https://example.test',
+    ...(operation.method === 'click' ? { targetProof: `native-proof-${++proof}` } : {}) });
+  f.browser.execute = async (_bound, operation) => { executed.push(operation); return { ok: true }; };
+  const click = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'click', params: { selector: '#send' } }, undefined, { sessionId: 'live' });
+  await until(() => shown.length === 1);
+  assert.equal(executed.length, 0);
+  assert.equal(shown[0].summary, 'Click Send on https://example.test');
+  gate.answer({ id: shown[0].id, requester: 'owner', approved: true });
+  await click;
+  assert.equal(executed[0].params.__mia_target_proof, 'native-proof-1');
+  assert.equal(executed[0].params.expected_url, 'https://example.test/compose');
+  assert.equal(executed[0].params.document_generation, 7);
+  const close = f.coordinator.executeOperation('owner', f.work.id, 'first', { method: 'tab_close', params: {} }, undefined, { sessionId: 'live' });
+  await until(() => shown.length === 2);
+  assert.equal(executed.length, 1);
+  gate.answer({ id: shown[1].id, requester: 'owner', approved: false });
+  await assert.rejects(close, /not approved/);
+  assert.equal(executed.length, 1);
+  assert.deepEqual(completed, ['approved', 'declined']);
+});
+
+test('worker HTTP broker preserves session identity through the approval and native dispatch', async t => {
+  const { createGateState } = require('./ask-before-do');
+  const { createBrowserWorkWorkerBroker } = require('./browser-work-worker-broker');
+  const gate = createGateState(), shown = [], executed = [];
+  const f = await liveFixture(t, { authorizeBrowser: args => gate.authorizeBrowser(args) });
+  gate.bindTurn({ sessionId: 'bound-live' }, { scope: 'worker-http', conversationId: 'bot-chat', enabled: true,
+    requester: 'owner', present: async card => { shown.push(card); return async () => {}; } });
+  f.browser.validate = async () => ({ documentGeneration: 9, url: 'https://example.test/send', consequential: true,
+    requiresApproval: true, targetProof: 'native-http-proof', actionSummary: 'Click Send on https://example.test' });
+  f.browser.execute = async (_bound, operation) => { executed.push(operation); return { clicked: true }; };
+  const broker = await createBrowserWorkWorkerBroker({ executeOperation: f.coordinator.executeOperation });
+  t.after(() => broker.stop());
+  broker.registerSession({ sessionId: 'bound-live' }, { ownerId: 'owner', workId: f.work.id, workerId: 'first' });
+  const response = fetch(broker.url, { method: 'POST', headers: { Authorization: `Bearer ${broker.token}` },
+    body: JSON.stringify({ sessionId: 'bound-live', operation: { method: 'click', params: { selector: '#send' } } }) });
+  await until(() => shown.length === 1);
+  assert.equal(executed.length, 0);
+  gate.answer({ id: shown[0].id, requester: 'owner', approved: true });
+  assert.equal((await response).status, 200);
+  assert.equal(executed[0].params.__mia_target_proof, 'native-http-proof');
+});
 
 test('a consequential fill runs at once with no approval record, and the operation is marked consequential', async t => {
   const f = await liveFixture(t); const executed = [];

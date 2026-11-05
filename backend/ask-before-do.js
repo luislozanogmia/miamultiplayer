@@ -26,13 +26,28 @@ function noUserMessage(summary) {
   return `BLOCKED by ask-before-do, nothing ran: ${summary}. Nobody can approve this here. Report it as waiting for the user.`;
 }
 
-// The approval as chat stores it: the question and one line on what will
-// happen. The action itself appears only in verbose output, so a command and
-// anything in it stays out of a concise chat.
+// The actual operation, rather than the agent's proposed explanation, is the
+// authority for the card. Never place command arguments or URL credentials in
+// a concise card.
+function actionLine(summary) {
+  const raw = String(summary || 'this action');
+  const browser = /^(?:Click |Close browser tab |Run page script |Browser )/.test(raw);
+  if (!browser) {
+    const category = /^(Send a message|Run code|Run a script|Run saved browser steps|Click)/.exec(raw)?.[1];
+    if (category) return category;
+    const command = /^([a-z][\w-]*)(?:\s+([a-z][\w-]*))?/i.exec(raw);
+    return command ? `Run ${command[1]}${['git', 'gh', 'npm', 'pnpm', 'yarn', 'docker'].includes(command[1]) && command[2] ? ` ${command[2]}` : ''}` : 'Perform requested action';
+  }
+  const source = raw.replace(/https?:\/\/\S+/gi, value => {
+    try { return new URL(value).origin; } catch (_) { return '[link]'; }
+  }).replace(/\b(?:sk-|ghp_|xoxb-|AKIA)[A-Za-z0-9_-]+\b/g, '[secret]')
+    .replace(/\b[A-Za-z0-9_-]{40,}\b/g, '[value]');
+  const flat = source.split(/\s+/).filter(Boolean).join(' ');
+  return flat.length > MAX_LINE ? `${flat.slice(0, MAX_LINE)}...` : flat;
+}
 function approvalCard(summary, chatOutput, whatHappens) {
-  const flat = String(whatHappens || '').split(/\s+/).filter(Boolean).join(' ');
-  const line = flat.length > MAX_LINE ? `${flat.slice(0, MAX_LINE)}...` : flat;
-  const text = line ? `Do you approve?\n\n${line}` : 'Do you approve?';
+  const line = actionLine(summary);
+  const text = `Do you approve?\n\n${line}`;
   if (chatOutput !== 'verbose') return { text, line };
   return { text: `${text}\n\n${summary}`, line, summary };
 }
@@ -60,20 +75,51 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
     approval.finish(status);
   }
 
+  async function showApproval(state, summary, whatHappens = '') {
+    const id = crypto.randomUUID();
+    const epoch = state.epoch;
+    let record;
+    try { record = await state.present({ id, summary, whatHappens, requester: state.requester }); }
+    catch (_) { return 'declined'; }
+    if (state.epoch !== epoch || scopes.get(state.scope) !== state) {
+      await record('declined');
+      return 'declined';
+    }
+    const status = await new Promise(finish => {
+      const approval = { id, requester: state.requester, conversationId: state.conversationId, scope: state.scope, epoch, finish };
+      approval.timer = setTimeout(() => settle(approval, 'expired'), answerWindowMs);
+      open.set(id, approval);
+    });
+    await record(status);
+    return status;
+  }
+
   return {
     // Called once per user turn, before the turn is submitted.
     bindTurn(session, { scope, conversationId, enabled, requester, present }) {
       const state = scopes.get(scope) || { blocked: new Map(), unlocked: new Set() };
+      for (const approval of [...open.values()]) if (approval.scope === scope) settle(approval, 'declined');
       dropRequests(state);
       state.unlocked.clear();
-      Object.assign(state, { conversationId, enabled: enabled !== false, requester, present });
+      Object.assign(state, { scope, epoch: (state.epoch || 0) + 1, conversationId, enabled: enabled !== false, requester, present });
       scopes.set(scope, state);
+      for (const [id, assigned] of sessions) if (assigned === scope) sessions.delete(id);
       for (const id of [session.sessionId, session.storedSessionId]) {
         if (typeof id !== 'string' || !id) continue;
         sessions.delete(id);
         sessions.set(id, scope);
       }
       while (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
+    },
+    // Browser work has already resolved the real native target. Keep the tool
+    // call suspended and consume this answer for this operation only.
+    async authorizeBrowser({ sessionId, summary }) {
+      const state = scopes.get(sessions.get(String(sessionId || '')));
+      if (!state) return false;
+      if (!state.enabled) return true;
+      const epoch = state.epoch;
+      const status = await showApproval(state, String(summary || 'this browser action'));
+      return status === 'approved' && scopes.get(state.scope) === state && state.epoch === epoch;
     },
     decide({ sessionId, summary, fingerprint }) {
       const id = String(sessionId || '');
@@ -100,21 +146,16 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
       if (request.answer) return request.answer;
       request.answer = (async () => {
         const { state } = request;
-        const id = crypto.randomUUID();
-        const record = await state.present({ id, summary: request.summary, whatHappens, requester: state.requester });
-        const status = await new Promise((finish) => {
-          const approval = { id, requester: state.requester, conversationId: state.conversationId, finish };
-          approval.timer = setTimeout(() => settle(approval, 'expired'), answerWindowMs);
-          open.set(id, approval);
-        });
-        await record(status);
+        const epoch = state.epoch;
+        const status = await showApproval(state, request.summary, whatHappens);
         requests.delete(request.id);
-        state.blocked.delete(request.key);
-        if (status === 'approved') state.unlocked.add(request.key);
-        return { approved: status === 'approved', message: ANSWERS[status] };
+        if (state.blocked.get(request.key) === request) state.blocked.delete(request.key);
+        const approved = status === 'approved' && state.epoch === epoch;
+        if (approved) state.unlocked.add(request.key);
+        return { approved, message: ANSWERS[approved ? 'approved' : status === 'approved' ? 'declined' : status] };
       })().catch(() => {
         requests.delete(request.id);
-        request.state.blocked.delete(request.key);
+        if (request.state.blocked.get(request.key) === request) request.state.blocked.delete(request.key);
         return { approved: false, message: 'The request could not be shown, so nothing ran. Tell the user what is waiting.' };
       });
       return request.answer;
@@ -168,6 +209,7 @@ async function createAskBeforeDoGate(options) {
     url: `http://127.0.0.1:${server.address().port}`,
     token,
     bindTurn: state.bindTurn,
+    authorizeBrowser: state.authorizeBrowser,
     answer: state.answer,
     cancelConversation: state.cancelConversation,
     async stop() { server.closeAllConnections?.(); await new Promise((resolve) => server.close(resolve)); },
