@@ -308,7 +308,7 @@ test('the gate answers only with its token', async (t) => {
 });
 
 test('the concise approval line comes from the operation, not model wording', () => {
-  const line = 'Run rm';
+  const line = 'Delete a.txt';
   assert.deepEqual(approvalCard('rm a.txt', 'concise', 'This deletes another file.'), { text: `Do you approve?\n\n${line}`, line });
   assert.deepEqual(approvalCard('rm a.txt', undefined), { text: `Do you approve?\n\n${line}`, line });
   assert.deepEqual(approvalCard('rm a.txt', 'verbose', 'different wording'), { text: `Do you approve?\n\n${line}\n\nrm a.txt`, line, summary: 'rm a.txt' });
@@ -317,4 +317,20 @@ test('the concise approval line comes from the operation, not model wording', ()
 test('the actual browser action line is short and drops URL credentials', () => {
   assert.equal(approvalCard('Click Send on https://example.test/reset?token=secret', 'concise', 'This is harmless').line, 'Click Send on https://example.test');
   assert.equal(approvalCard('Click ' + 'x'.repeat(500), 'concise').line, 'Click [value]');
+});
+
+test('the approval line says in plain words what the command will do, never the command', () => {
+  const line = (summary) => approvalCard(summary, 'concise').line;
+  assert.equal(line('rm -rf build dist node_modules old'), 'Delete build, dist and 2 more');
+  assert.equal(line('cd x && rm notes.txt'), 'Delete notes.txt');
+  assert.equal(line('ls -la /tmp/notes.txt && rm /tmp/notes.txt'), 'Delete notes.txt', 'the risky part of a combined command');
+  assert.equal(line('mv a.txt b.pdf ~/.Trash/'), 'Move a.txt and b.pdf to the Trash');
+  assert.equal(line('find . -name x -delete'), 'Delete files found in this folder');
+  assert.equal(line('git push origin main'), 'Push your changes to origin/main');
+  assert.equal(line('gh pr create --title x'), 'Open a pull request on GitHub');
+  assert.equal(line('curl -X POST https://api.example.test/v1?token=abc -d {}'), 'Send data to api.example.test');
+  assert.equal(line('mcp_google_workspace_gmail_send {"to":"a"}'), 'Send an email with Gmail');
+  assert.equal(line('Run code: os.remove("a")'), 'Run code that can change or delete files');
+  assert.equal(line('rm ghp_abcdefghijklmnopqrstuvwxyz0123456789ab'), 'Delete files', 'a value that looks secret is never shown');
+  for (const summary of ['rm a.txt', 'git push origin main', 'curl -d x https://a.example.test']) assert.doesNotMatch(line(summary), /^Run (rm|git|curl)\b/);
 });
