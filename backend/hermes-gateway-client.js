@@ -19,6 +19,10 @@ const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require('./process-secret
 
 const DEFAULT_PORT = 9121;
 const CONNECT_TIMEOUT_MS = 30000;
+// The first start on a busy computer can take minutes: security software scans
+// each Python file Hermes loads. Only a runtime this process started gets this
+// long, and one that exits is noticed at once.
+const GATEWAY_START_TIMEOUT_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 600000;
 const INTERRUPT_TIMEOUT_MS = 10000;
 const MODEL_OPTIONS_TIMEOUT_MS = 30000;
@@ -494,9 +498,11 @@ class HermesGatewayClient {
     if (this.readyPromise) return this.readyPromise;
     this.readyPromise = (async () => {
       await this.ensureGateway();
-      const deadline = this.now() + CONNECT_TIMEOUT_MS;
+      const startedHere = this.child;
+      const deadline = this.now() + (startedHere ? GATEWAY_START_TIMEOUT_MS : CONNECT_TIMEOUT_MS);
       let lastError = null;
       while (!this.shutdownRequested && this.now() < deadline) {
+        if (startedHere && this.child !== startedHere) throw new Error('Hermes gateway exited before it was ready');
         try {
           await new Promise((resolve, reject) => {
             let socket;

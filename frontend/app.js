@@ -2279,12 +2279,15 @@
       : harnessOnboardingState.provider;
     api('/api/settings/harness/connected', {method:'POST', body:{provider:provider}}).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.ok) throw new Error((res.data && res.data.error) || 'Could not connect that provider');
+      clearTimeout(harnessSetupHintTimer);
       harnessAuthAwaitingSave = false;
       harnessAuthSaveInProgress = false;
       renderHarnessAuth(null);
       closeHarnessOnboarding();
       if(chatModelPicker.ensureLoaded) chatModelPicker.ensureLoaded();
     }).catch(function(err){
+      clearTimeout(harnessSetupHintTimer);
+      if(error) error.classList.remove('is-progress');
       harnessAuthSaveInProgress = false;
       harnessAuthAwaitingSave = false;
       if(error) error.textContent = err.message || 'Could not connect that provider';
@@ -2430,14 +2433,30 @@
       }
     });
   })();
+  // Mia Router's first start runs Mia's whole local runtime, which can take minutes.
+  var harnessSetupHintTimer = null;
+  function showHarnessSetupProgress(button, error){
+    clearTimeout(harnessSetupHintTimer);
+    if(error) error.classList.remove('is-progress');
+    if(harnessOnboardingState.provider !== 'managed-router'){
+      setHarnessActionLabel(button, 'Loading…');
+      return;
+    }
+    setHarnessActionLabel(button, 'Setting you up…');
+    harnessSetupHintTimer = setTimeout(function(){
+      if(!error || !harnessAuthSaveInProgress) return;
+      error.classList.add('is-progress');
+      error.textContent = 'Setting you up. The first time can take a few minutes on some computers.';
+    }, 8000);
+  }
   function saveHarnessSelection(){
     if(harnessAuthSaveInProgress) return;
     var button = el('#harnessOnboardingContinue');
     var error = el('#harnessOnboardingError');
     harnessAuthSaveInProgress = true;
     button.disabled = true;
-    setHarnessActionLabel(button, 'Loading…');
     if(error) error.textContent = '';
+    showHarnessSetupProgress(button, error);
     if(harnessConnectOnly){
       finishConnectOnly(button, error);
       return;
@@ -2477,6 +2496,8 @@
       setAppLoading(true);
       location.reload();
     }).catch(function(err){
+      clearTimeout(harnessSetupHintTimer);
+      if(error) error.classList.remove('is-progress');
       harnessAuthSaveInProgress = false;
       harnessAuthAwaitingSave = false;
       if(error) error.textContent = err.message || 'Could not save setup';

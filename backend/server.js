@@ -4756,8 +4756,14 @@ app.post('/api/settings/harness/connected', requireAuth, async (req, res) => {
   if (hermesDisconnectedProviders.has(provider) || harnessProviderDisconnectedForUser(settings, owner, provider)) {
     return notConnected();
   }
-  if (provider === MANAGED_ROUTER_HERMES_PROVIDER && managedRouterError(routerEmail)?.code === 'runtime_unavailable') {
-    return notConnected();
+  if (provider === MANAGED_ROUTER_HERMES_PROVIDER) {
+    // Setup started at sign-in may still be running: its answer is this answer.
+    await credentialOperations.activeProvision(routerEmail)?.catch(() => {});
+    // The saved key is fine, so trying again only retries starting the runtime.
+    if (managedRouterError(routerEmail)?.code === 'runtime_unavailable') {
+      await autoProvisionManagedRouter(routerEmail, null, { force: false }).catch(() => {});
+    }
+    if (managedRouterError(routerEmail)?.code === 'runtime_unavailable') return notConnected();
   }
   const connected = provider === CLAUDE_SUBSCRIPTION_PROVIDER
     ? (await runClaudeSubscriptionStatus()).loggedIn

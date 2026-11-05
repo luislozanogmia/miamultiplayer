@@ -1366,3 +1366,46 @@ test('a failed turn keeps the provider error beside the Hermes summary', async (
     return true;
   });
 });
+
+function connectFixture({ exitAfterMs, openAfterMs }) {
+  const child = { once(name, listener) { if (name === 'exit' && exitAfterMs !== undefined) setTimeout(listener, exitAfterMs); } };
+  class SlowSocket {
+    constructor() {
+      setTimeout(() => {
+        if (Date.now() - started >= openAfterMs) this.onopen?.();
+        else this.onerror?.(new Error('connection refused'));
+        if (Date.now() - started < openAfterMs) this.onclose?.({ code: 1006 });
+      }, 1);
+    }
+    close() {}
+  }
+  const started = Date.now();
+  let clock = started;
+  const client = new HermesGatewayClient({
+    binary: '/tmp/hermes', env: {}, port: 9177,
+    tokenFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mia-gateway-slow-')), 'gateway.token'),
+    WebSocketImpl: SlowSocket, probePortImpl: async () => false, spawnImpl: () => child,
+    stopExternalGatewayImpl: async () => {}, now: () => { clock += 5000; return clock; },
+  });
+  return client;
+}
+
+test('a runtime Mia started can take longer than the old 30 seconds to open', async () => {
+  const client = connectFixture({ openAfterMs: 1500 });
+  client.attachSocket = function (socket, resolve, reject) {
+    socket.onopen = resolve;
+    socket.onerror = reject;
+  };
+  await client.connect();
+  client.close();
+});
+
+test('a runtime that exits while starting fails at once instead of waiting out the limit', async () => {
+  const client = connectFixture({ exitAfterMs: 50, openAfterMs: 60 * 60 * 1000 });
+  client.attachSocket = function (socket, resolve, reject) {
+    socket.onopen = resolve;
+    socket.onerror = reject;
+  };
+  await assert.rejects(client.connect(), /exited before it was ready/);
+  client.close();
+});
