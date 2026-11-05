@@ -3956,7 +3956,10 @@ html.mac-inset-titlebar body.mia-call-zoomed .local-browser-overlay .native-brow
 .mia-space-invitee-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 .mia-space-chat-invites{flex:none;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-bottom:1px solid var(--sand-border-subtle);}
 .mia-space-invite{flex-wrap:wrap;}
-.mia-space-invite.ringing{border-color:#2f9e44;background:#f2fbf5;}
+/* Browsing together is live, invited or not: the card and its Join are green. */
+.mia-space-invite{border-color:#2f9e44;background:#f2fbf5;}
+.mia-space-invite .mia-space-btn.primary{background:#2f9e44;color:#FFFFFF;}
+.mia-space-invite .mia-space-btn.primary:hover{background:#278a3b;}
 .mia-space-invite-btn{flex:none;display:inline-flex;align-items:center;gap:5px;height:28px;margin:0 2px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:999px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;app-region:no-drag;}
 .mia-space-invite-btn:hover{background:var(--sand-fill-ghost-hover);}
 .mia-space-invite-btn[hidden]{display:none;}
