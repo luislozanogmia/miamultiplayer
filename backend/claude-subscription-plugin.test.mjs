@@ -146,6 +146,23 @@ print('redacted')
   assert.equal(result.stdout.trim(), 'redacted');
 });
 
+test('Claude remote image hints omit credential-bearing URLs but keep public image URLs', () => {
+  const result = runPython(`
+import sys
+sys.path.insert(0, sys.argv[1])
+from directsdk import content_blocks
+private = 'https://example.test/image.png?X-Amz-Signature=fake-secret-value'
+public = 'https://example.test/image.png?size=large'
+hint = content_blocks([{'type':'image_url','image_url':{'url':private}}])[0]['text']
+assert private not in hint and 'attach the image' in hint
+hint = content_blocks([{'type':'image_url','image_url':{'url':public}}])[0]['text']
+assert public in hint and 'vision_analyze' in hint
+print('safe')
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'safe');
+});
+
 test('a tool called with no arguments does not break the stream reader', () => {
   const result = runPython(`
 import json, sys

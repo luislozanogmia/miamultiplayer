@@ -25,6 +25,7 @@ import time
 import uuid
 import weakref
 from types import SimpleNamespace
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 try:
     from .admission import Admission
@@ -75,6 +76,35 @@ CARRIER = 'claude-subscription-directsdk-experimental.native_assistant'
 PREFIX = 'mcp__hermes__'
 
 
+_SENSITIVE_URL_NAME = re.compile(r'(?:^|[_.-])(?:code|key|state|sid|sig|pass|pwd|otp|nonce|ticket|auth|assertion)$|session|token|secret|passw|signature|credential|apikey|api[_-]?key|jwt|saml|^x-(?:amz|goog)-', re.I)
+_SENSITIVE_URL_PATH = re.compile(r'^(?:reset|recover|recovery|verify|verification|invite|invitation|magic|activate|activation|confirm|confirmation|login|sign-?in|auth|oauth|sso|token)(?:[-_].*)?$', re.I)
+
+
+def _remote_image_url_safe_to_share(url):
+    """Only put a public-looking image address in a model-visible hint."""
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            return False
+        path = parsed.path
+        query = parsed.query
+        for _ in range(3):
+            decoded_path, decoded_query = unquote(path), unquote(query)
+            if (decoded_path, decoded_query) == (path, query):
+                break
+            path, query = decoded_path, decoded_query
+        if '%' in path or '%' in query:
+            return False
+        if any(_SENSITIVE_URL_PATH.match(part) or re.fullmatch(r'[A-Za-z0-9_\-+/=]{40,}', part) for part in path.split('/') if part):
+            return False
+        for name, value in parse_qsl(query, keep_blank_values=True):
+            if _SENSITIVE_URL_NAME.search(name) or re.match(r'eyJ[\w-]+\.[\w-]+\.', value) or re.fullmatch(r'[A-Za-z0-9_\-+/=.~]{40,}', value):
+                return False
+        return len(url) <= 2000
+    except (ValueError, TypeError):
+        return False
+
+
 class Object(SimpleNamespace):
     def model_dump(self, **_):
         def unpack(v):
@@ -119,8 +149,11 @@ def content_blocks(content):
             if url[:8].lower().startswith(('http://', 'https://')):
                 # Native routing passes remote URLs through; the transport never fetches. A hint
                 # keeps the turn alive where an error would fail every retry of the same history.
-                result.append({'type': 'text', 'text': f'[Image not attached: remote URL {url}. '
-                               'Call vision_analyze with this URL to see it.]'})
+                if _remote_image_url_safe_to_share(url):
+                    result.append({'type': 'text', 'text': f'[Image not attached: remote URL {url}. '
+                                   'Call vision_analyze with this URL to see it.]'})
+                else:
+                    result.append({'type': 'text', 'text': '[Image not attached: this link may contain private access data. Ask the user to attach the image.]'})
                 continue
             if not url.startswith('data:') or ';base64,' not in url:
                 raise ValueError('Only base64 data image_url inputs are supported')
