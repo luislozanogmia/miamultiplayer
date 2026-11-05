@@ -1,4 +1,6 @@
 (function () {
+  // Inside Mia the workspace rail is right there; alone, the page needs its way back.
+  if (window.top !== window) document.getElementById('mpdBack').hidden = true;
   // Each demo is a self-contained page in demos/, drawn at 1280x800.
   var DEMOS = [
     { id: 'solo', group: 'soloList', name: 'Chat', title: 'Mia builds you a bot', seconds: 40, text: 'Mia sets up a bot that consolidates your U.S. and Mexico accounts every Friday. Ask it for the report and get a PDF.' },

@@ -115,6 +115,35 @@
     var code = words.length > 1 ? words[0].charAt(0) + words[1].charAt(0) : words[0].slice(0, 2);
     return code.toUpperCase();
   }
+  // The demo opens beside the workspace rail, so its tiles stay in reach. Any of
+  // them closes it; plain navigation still works when this page isn't running.
+  function setDemoViewOpen(open){
+    var view = el('#workspaceDemoView'), tile = el('#workspaceRailDemo');
+    if(!view || !tile) return;
+    if(open){
+      if(typeof closeLocalBrowser === 'function') closeLocalBrowser();
+      if(!view.firstChild){
+        var frame = document.createElement('iframe');
+        frame.src = tile.getAttribute('href');
+        frame.title = 'Multiplayer Demo';
+        frame.setAttribute('allow', 'fullscreen');
+        view.appendChild(frame);
+      }
+    }
+    view.hidden = !open;
+    tile.classList.toggle('active', open);
+    document.body.classList.toggle('workspace-demo-open', open);
+  }
+  function wireDemoView(){
+    var rail = el('#workspaceSwitcherMenu');
+    if(!rail) return;
+    rail.addEventListener('click', function(event){
+      var target = event.target.closest('a,button');
+      if(!target) return;
+      if(target.id === 'workspaceRailDemo'){ event.preventDefault(); setDemoViewOpen(true); return; }
+      setDemoViewOpen(false);
+    }, true);
+  }
   function renderWorkspaceSwitcher(){
     var companyName = el('#miaCompanyName');
     var workspace = WORKSPACE_OPTIONS[activeWorkspaceKey] || WORKSPACE_OPTIONS.solo;
@@ -16928,6 +16957,7 @@
      (an agent built elsewhere may now exist) without discarding whatever's
      cached per-room in chatWs.byRoom or resetting the active thread. */
   function renderChatWorkspace(){
+    wireDemoView();
     var ready = initChatWorkspace();
     startChatPolling();
     return ready;

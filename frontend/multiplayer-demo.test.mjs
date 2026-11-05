@@ -50,7 +50,7 @@ test('the library and its demos are local: no network, no Mia API, no Hub', () =
 
 test('the demo says it is a demo and leads back to Mia', () => {
   assert.match(demoHtml, /<strong class="mpd-title">Multiplayer<\/strong>\s*<span class="mpd-badge">Demo<\/span>/);
-  assert.match(demoHtml, /<a class="mpd-back" href="\/#\/chat">Back to Mia<\/a>/);
+  assert.match(demoHtml, /<a class="mpd-back" id="mpdBack" href="\/#\/chat">Back to Mia<\/a>/);
   assert.match(libraryCss, /\.mpd-banner\{[^}]*-webkit-app-region:drag/);
   assert.match(libraryCss, /\.mpd-back\{[^}]*-webkit-app-region:no-drag/);
 });
