@@ -478,6 +478,21 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     historyIcons.set(host, icon);
     persistHistory();
   }
+  // The icon a saved app's site has. Hosts share one remembered icon whatever
+  // the port, so local apps always ask their own address.
+  const SITE_ICON_TIMEOUT_MS = 4000;
+  async function siteIcon(url) {
+    let page;
+    try { page = new URL(url); } catch (_) { return ""; }
+    if (!["https:", "http:"].includes(page.protocol)) return "";
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(page.hostname);
+    const known = local ? "" : historyIcons.get(historyHost(url));
+    if (known) return known;
+    if (typeof profile.fetch !== "function") return "";
+    const timeout = new Promise(resolve => setTimeout(resolve, SITE_ICON_TIMEOUT_MS, null));
+    const fetched = faviconDataUri(new URL("/favicon.ico", page.origin).toString()).catch(() => null);
+    return (await Promise.race([fetched, timeout])) || "";
+  }
   function removeVisit(url) {
     const before = historyEntries.length;
     historyEntries = historyEntries.filter(entry => entry.url !== url);
@@ -3160,6 +3175,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       }
       if (command.action === "workspace") return setWorkspace(command.key);
       if (command.action === "history") return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };
+      if (command.action === "siteIcon") return siteIcon(command.url).then(icon => ({ icon }));
       if (command.action === "historyRemove") {
         if (typeof command.url === "string") removeVisit(command.url);
         return { history: topHistory(boundedInteger(command.limit, 20, 1, 200)) };

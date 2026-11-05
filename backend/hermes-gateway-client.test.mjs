@@ -55,6 +55,21 @@ test('an acknowledged selection that leaves the wrong live model never submits a
   client.close();
 });
 
+test('choosing a model confirms the switch, so a large chat is not held back by Hermes', async () => {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
+  client.sessionInfo.set('live', { model: 'grok-4', provider: 'xai' });
+  // Hermes writes nothing and asks again unless the request carries the flag.
+  client.request = async (method, params) => {
+    assert.equal(method, 'config.set');
+    if (!params.confirm_expensive_model) return { value: params.value, confirm_required: true, confirm_message: '!!! LARGE CONTEXT MODEL SWITCH !!!' };
+    client.sessionInfo.set('live', { model: 'deepseek-flash', provider: 'deepseek' });
+    return { value: 'deepseek-flash', confirm_required: false };
+  };
+  await client.applySessionSelection('live', { model: 'deepseek-flash', provider: 'deepseek' }, { model: 'grok-4', provider: 'xai' });
+  assert.equal(client.sessionInfo.get('live').model, 'deepseek-flash');
+  client.close();
+});
+
 test('Hermes gateway credentials are confined to loopback and cannot be embedded in configuration URLs', () => {
   assert.throws(() => new HermesGatewayClient({
     url: 'wss://gateway.example.com/api/ws', token: 'secret', WebSocketImpl: class {}, env: {},
@@ -180,9 +195,9 @@ test('Hermes gateway client creates, streams, and resumes a persistent session',
   // Both fresh profile-backed sessions and resumed sessions are explicitly
   // pinned before their prompt so a profile default cannot replace the picker.
   assert.deepEqual(calls.filter((call) => call.method === 'config.set').map((call) => call.params), [
-    { session_id: 'live-1', key: 'model', value: 'gpt-5.6-luna --provider openai-codex' },
+    { session_id: 'live-1', key: 'model', value: 'gpt-5.6-luna --provider openai-codex', confirm_expensive_model: true },
     { session_id: 'live-1', key: 'fast', value: 'fast' },
-    { session_id: 'live-resumed', key: 'model', value: 'deepseek-chat --provider deepseek' },
+    { session_id: 'live-resumed', key: 'model', value: 'deepseek-chat --provider deepseek', confirm_expensive_model: true },
     { session_id: 'live-resumed', key: 'fast', value: 'normal' },
     { session_id: 'live-resumed', key: 'reasoning', value: 'high' },
   ]);

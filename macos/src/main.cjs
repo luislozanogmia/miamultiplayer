@@ -1357,6 +1357,10 @@ function isClerkGoogleOAuthUrl(value) {
 // one-time code that the user pastes back into Mia.
 const SYSTEM_BROWSER_AUTH_PROVIDERS = new Set(["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"]);
 
+function miaIsDefaultBrowser() {
+  try { return app.isDefaultProtocolClient("https") === true; } catch (_) { return false; }
+}
+
 function harnessAuthRedirectProvider(value, expectedBackendUrl = backendUrl) {
   try {
     const url = new URL(value);
@@ -1865,8 +1869,11 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
       && harnessAuthRedirectProvider(url, expectedBackendUrl) === harnessAuthProvider) return;
     if (SYSTEM_BROWSER_AUTH_PROVIDERS.has(harnessAuthProvider) && isBoundHarnessAuthNavigation(url)) {
       // Hand the page to the user's own browser; Mia finishes from the code.
+      // When Mia is the default browser that would land back in Mia, on top of
+      // the code and without USB security keys, so the sign-in panel offers
+      // the link and the code to copy instead.
       event.preventDefault();
-      shell.openExternal(url);
+      if (!miaIsDefaultBrowser()) shell.openExternal(url);
       try { window.close(); } catch (_) { /* already closed */ }
       return;
     }
@@ -2036,8 +2043,7 @@ function installBrowserMenu() {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       // Browser menu actions must never fall through to shell/window actions.
       // Focus Address and New Tab can also serve as browser entry points when
-      // the browser surface is currently closed; in the chat view New Tab opens
-      // a new chat and Close Tab does nothing.
+      // the browser surface is currently closed; Close Tab does nothing there.
       if (["l", "t", "w"].includes(key) && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("miaos-browser-open", key);
       }

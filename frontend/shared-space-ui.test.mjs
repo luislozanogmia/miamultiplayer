@@ -32,7 +32,7 @@ async function sharedBar({ stored = new Map(), browserState = null, selfId = 'me
   const click = (attribute, value = '') => listeners.click({ target: { closest: () => ({ hasAttribute: (name) => name === attribute, getAttribute: () => value }) } });
   const model = window.MiaSharedSpace, ui = window.MiaSpaceUI;
   const spaceId = () => model.decode(sent[0]).space;
-  return { window, bar, sent, toasts, announced, commands, click, model, ui, spaceId, call, body: bodyClasses, sharing: () => /data-space-leave/.test(call.innerHTML), stored, publish: (next) => { state = next; publish(next); } };
+  return { window, bar, sent, toasts, announced, commands, click, model, ui, spaceId, call, body: bodyClasses, sharing: () => /data-space-leave/.test(call.innerHTML), stored, publish: (next) => { state = next; publish(next); }, get state() { return state; } };
 }
 
 test('a spoofed end message from a teammate leaves the session open', async () => {
@@ -540,4 +540,30 @@ test('only the person you follow moves your page', async () => {
   live.onMessage('user_ana', view);
   assert.equal(scrolls().length, 1);
   assert.equal(scrolls()[0].id, 't1');
+});
+
+test('a call can start from any chat that offers Browse together, direct messages included', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const host = app.slice(app.indexOf('window.MiaSpaceHost={'), app.indexOf('activeChannelId:function()', app.indexOf('window.MiaSpaceHost={')));
+  assert.match(host, /channels:function\(\)\{\s*return hubChat\.channels\.map\(/);
+});
+
+test('a call in a private chat goes by the name this person knows that chat by', async () => {
+  const page = await sharedBar();
+  page.body.add('browser-mia-collapsed');
+  page.window.MiaSpaceHost.channels = () => [{ id: CHANNEL, name: 'Ana', private: true }];
+  const tabs = [{ k: 'abcdef', url: 'https://example.com/', title: 'Example' }];
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'space', space: 'callone', name: 'Me', rev: 1, host: 'user_ana', tabs, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user', author_name: 'Ana' });
+  assert.match(page.bar.innerHTML, /Ana · 1 tab/);
+  assert.doesNotMatch(page.bar.innerHTML, /Me · 1 tab/);
+});
+
+test('a person is shown on the title their tab has now, not the one it had when it opened', async () => {
+  const page = await sharedBar();
+  page.click('data-space-share');
+  const tab = page.model.decode(page.sent[0]).tabs[0];
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'join', space: page.spaceId() }), author_id: 'user_ana', author_type: 'user', author_name: 'Ana' });
+  page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: tab.k, url: tab.url, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user' });
+  page.publish({ ...page.state, tabs: page.state.tabs.map((item) => ({ ...item, title: 'The page title' })) });
+  assert.equal(page.ui.followPeople()[0].where, 'The page title');
 });

@@ -40,7 +40,7 @@ test('each creation and utility action has one control, all routed through runTo
 test('every action control uses one canonical Lucide icon system', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const controls = [...html.matchAll(/<button[^>]*data-tools-action="[^"]+"[\s\S]*?<\/button>/g)].map((m) => m[0]).filter((b) => !b.includes('chat-dm-add-btn'));
-  assert.equal(controls.length, 8, 'rail, view, New chat and New agent controls');
+  assert.equal(controls.length, 9, 'rail, view, New chat and New agent controls');
   for (const control of controls) {
     assert.match(control, /data-icon-set="lucide"/);
     assert.doesNotMatch(control, /<img|data-mia-mark|stroke-width=/, 'legacy and one-off icon treatments are removed');
@@ -856,7 +856,7 @@ test('creating a bot from the tools menu does not close browser mode, but every 
   // Bot store joins new-bot in this exception: it renders into the same
   // side chat pane too, so opening it shouldn't kill browser mode either.
   assert.match(source, /function closeBrowserSidebarDrawer\(\)[\s\S]*classList\.remove\('browser-sidebar-open'\)/);
-  assert.match(source, /function runToolsAction\(action\)[\s\S]*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
+  assert.match(source, /function runToolsAction\(action\)[\s\S]*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store' && action !== 'skills'\) closeLocalBrowser\(\);/);
 });
 
 test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {

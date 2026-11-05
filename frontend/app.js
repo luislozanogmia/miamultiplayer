@@ -1391,7 +1391,7 @@
     var raw = String(model || '').trim().toLowerCase();
     var match = /^gpt-(\d+(?:\.\d+)?)(?:-(.+))?$/.exec(raw);
     if(match) return {family:'GPT', variant:'GPT ' + match[1] + (match[2] ? ' ' + chatModelTitleCase(match[2]) : ''), familyKey:'gpt'};
-    if(raw.indexOf('gpt-') === 0) return {family:'GPT', variant:chatModelTitleCase(raw.replace(/-latest$/, '').replace(/-/g, ' ')), familyKey:'gpt'};
+    if(raw.indexOf('gpt-') === 0) return {family:'GPT', variant:chatModelTitleCase(raw.replace(/^gpt-/, '').replace(/-latest$/, '').replace(/-/g, ' ')), familyKey:'gpt'};
     match = /^grok-(\d+(?:\.\d+)?)(?:-(.+))?$/.exec(raw);
     if(match) return {family:'Grok', variant:match[1] + (match[2] ? ' ' + chatModelTitleCase(match[2]) : ''), familyKey:'grok'};
     // Claude route ids carry a version, an optional snapshot date, and the
@@ -1771,7 +1771,6 @@
   // client-side only; every field keeps its id so the save handlers below
   // are untouched by the layout.
   function showSettingsPane(name){
-    if(name === 'skills') refreshSkillsPane();
     if(name === 'mia') loadMiaAppPane();
     els('#settingsNav .styled-settings-nav-item').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-pane') === name);
@@ -1915,6 +1914,23 @@
     });
   }
 
+  var harnessAuthLinks = {url: '', code: ''}, harnessAuthCopiedCode = '', harnessAuthMiaIsDefault = false;
+  function refreshHarnessAuthDefaultBrowser(){
+    var browser = window.miaDesktop && window.miaDesktop.defaultBrowser;
+    if(!browser) return Promise.resolve();
+    return Promise.resolve(browser.get()).then(function(state){
+      harnessAuthMiaIsDefault = !!(state && state.https);
+    }).catch(function(){});
+  }
+  function copyHarnessAuthText(button, text, done){
+    return copySidebarText(text).then(function(copied){
+      if(!copied || !button) return;
+      var label = button.getAttribute('data-label') || button.textContent;
+      button.setAttribute('data-label', label);
+      button.textContent = done;
+      setTimeout(function(){ button.textContent = label; }, 2500);
+    });
+  }
   function renderHarnessAuth(value){
     var panel = el('#harnessAuthPanel');
     var status = el('#harnessAuthStatus');
@@ -1951,15 +1967,27 @@
         : (auth.state === 'waiting'
           ? (auth.provider === 'claude-subscription-directsdk-experimental'
             ? 'Finish signing in to Claude in your browser, then paste the code it shows here.'
-            : 'Finish in the sign-in window and enter the code shown below.')
+            : (harnessAuthMiaIsDefault
+              ? 'Security keys don’t work in Mia’s browser. Copy the link and code into Chrome or Safari to finish signing in.'
+              : 'Finish in the sign-in window and enter the code shown below.'))
           : (auth.state === 'completing'
             ? 'Verifying sign-in…'
             : (auth.state === 'connected'
               ? authName + ' is connected.'
               : (auth.error || 'Sign-in could not be completed.'))));
     }
+    // A sign-in page must not cover the code: when Mia is the default browser,
+    // the plain link would open right over this panel.
+    harnessAuthLinks = {url: auth.verificationUrl || '', code: auth.userCode || ''};
+    var copyLink = el('#harnessAuthCopyLink'), openInMia = el('#harnessAuthOpenInMia');
+    if(copyLink) copyLink.hidden = !auth.verificationUrl;
+    if(openInMia) openInMia.hidden = !(auth.verificationUrl && harnessAuthMiaIsDefault && window.miaNativeBrowser);
+    if(auth.userCode && auth.userCode !== harnessAuthCopiedCode){
+      harnessAuthCopiedCode = auth.userCode;
+      copyHarnessAuthText(el('#harnessAuthCopyCode'), auth.userCode, 'Code copied');
+    }
     if(link){
-      link.hidden = !auth.verificationUrl;
+      link.hidden = !auth.verificationUrl || harnessAuthMiaIsDefault;
       link.textContent = 'Open ' + authName + ' sign-in';
       if(auth.verificationUrl) link.href = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(auth.provider || harnessOnboardingState.provider);
     }
@@ -2534,6 +2562,7 @@
     harnessAuthAwaitingSave = true;
     harnessConnectionPending = authProvider;
     renderHarnessConnectionActions();
+    refreshHarnessAuthDefaultBrowser();
     // Open a same-origin redirect from the user gesture. That route starts
     // the background harness flow and redirects this tab to the real provider
     // URL, avoiding popup blocking in the later polling callback.
@@ -2589,6 +2618,16 @@
       if(input) input.disabled = false;
       if(error) error.textContent = err.message || 'Could not submit Claude sign-in';
     });
+  });
+  el('#harnessAuthCopyCode').addEventListener('click', function(event){
+    copyHarnessAuthText(event.currentTarget, harnessAuthLinks.code, 'Code copied');
+  });
+  el('#harnessAuthCopyLink').addEventListener('click', function(event){
+    copyHarnessAuthText(event.currentTarget, harnessAuthLinks.url, 'Link copied');
+  });
+  el('#harnessAuthOpenInMia').addEventListener('click', function(){
+    openWebBrowserTool();
+    window.miaNativeBrowser.openTab(harnessAuthLinks.url);
   });
   el('#harnessAuthCancel').addEventListener('click', function(){
     void cancelHarnessAuthFlow(harnessOnboardingState.provider);
@@ -5514,6 +5553,13 @@
     openSidebarAddMenu(anchor,[['New channel',openNewChannelFlow],['Browse channels',openHubBrowseChannels]]);
   }
   // A section's + menu: each item is [label, run].
+  // The browser's page is a native view drawn over the app, so a sidebar menu
+  // that reached past the sidebar would be hidden behind it.
+  function sidebarMenuLeft(x,width){
+    var sidebar=document.body.classList.contains('browser-collab-mode')&&el('.chat-sidebar');
+    var limit=sidebar?sidebar.getBoundingClientRect().right:window.innerWidth;
+    return Math.max(8,Math.min(x,limit-width-8));
+  }
   function openSidebarAddMenu(anchor,items){
     closeHubChannelMenu();
     var menu=document.createElement('div');
@@ -5521,7 +5567,7 @@
     menu.innerHTML=items.map(function(item,index){return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item" data-sidebar-add="'+index+'">'+esc(item[0])+'</button>';}).join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
     var box=anchor.getBoundingClientRect();
-    menu.style.left=Math.max(8,Math.min(box.left,window.innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.left=sidebarMenuLeft(box.left,menu.offsetWidth)+'px';
     menu.style.top=Math.max(8,Math.min(box.bottom+4,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
       var button=event.target.closest('[data-sidebar-add]');
@@ -5582,7 +5628,7 @@
       return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item'+(item.danger?' chat-sidebar-ctx-item-danger':'')+'" data-hub-channel-action="'+item.id+'">'+esc(item.label)+'</button>';
     }).join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
-    menu.style.left=Math.max(8,Math.min(x,window.innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.left=sidebarMenuLeft(x,menu.offsetWidth)+'px';
     menu.style.top=Math.max(8,Math.min(y,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
       var button=event.target.closest('[data-hub-channel-action]');
@@ -5983,7 +6029,7 @@
       return membership ? {id:membership.clerk_user_id,name:displayNameForEmail(membership.email || currentUser) || membership.email || 'You'} : null;
     },
     channels:function(){
-      return hubChat.channels.filter(function(channel){return channel.kind!=='dm';}).map(function(channel){return {id:channel.id,name:hubChannelTitle(channel)};});
+      return hubChat.channels.map(function(channel){return {id:channel.id,name:hubChannelTitle(channel),private:hubPrivateConversation(channel)};});
     },
     activeChannelId:function(){ return hubChannel(chatWs.activeRoomId) ? chatWs.activeRoomId : null; },
     toast:function(text){ showBenchToast(text); },
@@ -6406,6 +6452,7 @@
       nativeProgress: !!(event.metadata && event.metadata.progress === true),
       nativeDiagnostic: !!(event.metadata && event.metadata.diagnostic === true),
       askBeforeDo: event.metadata && event.metadata.askBeforeDo && typeof event.metadata.askBeforeDo === 'object' ? event.metadata.askBeforeDo : null,
+      reactions: event.metadata && event.metadata.reactions && typeof event.metadata.reactions === 'object' ? event.metadata.reactions : null,
       nativeEvent: event
     };
   }
@@ -7024,9 +7071,10 @@
       : (!shown.length ? 'Nothing matches.' : ''));
     list.innerHTML = shown.map(function(item){
       var meta = item.kind === 'app' ? appLinkHost(item.url) : (item.from ? item.from : 'You') + ' \u00b7 ' + window.MiaArtifactsPage.when(item.modifiedAt);
-      return '<button type="button" data-composer-artifact="' + esc(item.id) + '"><em>' + esc(item.kind === 'app' ? 'App' : item.type || '') + '</em>' +
+      return '<button type="button" data-composer-artifact="' + esc(item.id) + '"><em' + (item.kind === 'app' ? ' data-site-url="' + esc(item.url) + '"' : '') + '>' + esc(item.kind === 'app' ? 'App' : item.type || '') + '</em>' +
         '<span>' + esc(item.name) + '</span><small>' + esc(meta) + '</small></button>';
     }).join('');
+    fillSiteIcons(list);
   }
   function wireComposerPlusMenu(fileInput, staged){
     var menu = el('#ccPlusMenu'), picker = el('#ccArtifactsMenu');
@@ -7291,6 +7339,9 @@
     var deleteLabel = el('#chatSidebarCtxDeleteLabel');
     var scroll = el('.chat-sidebar-scroll');
     if(!menu || !pinItem || !scroll) return;
+    // With the browser open the sidebar docks above the chat pane, so a menu left
+    // inside the pane opens underneath the sidebar it belongs to.
+    document.body.appendChild(menu);
     var openEntry = null;
 
     function item(action){ return el('[data-sidebar-action="' + action + '"]', menu); }
@@ -7340,7 +7391,7 @@
       setSeparator('hide', hasCopy && hasHide);
       menu.hidden = false;
       var w = menu.offsetWidth, h = menu.offsetHeight;
-      menu.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + 'px';
+      menu.style.left = sidebarMenuLeft(x, w) + 'px';
       menu.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + 'px';
     }
 
@@ -7477,7 +7528,7 @@
 
   // The blank tab: the Mia dot logo, "Mia Browser", and "Mia suggests" cards,
   // three next things to ask built from the bots' latest replies, each credited
-  // to the bot it builds on. Clicking one puts it in Mia's composer to edit and send.
+  // to the bot it builds on. Clicking one sends it to that bot.
   var BROWSER_HOME_GO = '<svg class="local-browser-suggest-next-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>';
   // A diamond of dots; each dot's delay grows with its distance from the
   // center, so the logo fills in from the middle out.
@@ -7514,7 +7565,7 @@
         '</span>'
       : '';
     return '<button type="button" class="local-browser-suggest-next-item"' + (textColor ? ' style="--bot:' + esc(textColor) + '"' : '') +
-      ' data-browser-suggest-next="' + esc(item.text) + '" title="' + esc(item.text) + '">' +
+      ' data-browser-suggest-next="' + esc(item.text) + '"' + (item.botId ? ' data-browser-suggest-bot="' + esc(item.botId) + '"' : '') + ' title="' + esc(item.text) + '">' +
       who + '<span class="local-browser-suggest-next-text">' + esc(item.text) + '</span>' + BROWSER_HOME_GO + '</button>';
   }
   var browserSuggestNextRequest = 0;
@@ -7536,20 +7587,23 @@
       if(request === browserSuggestNextRequest) wrap.hidden = true;
     });
   }
-  function askMiaFromBrowserSuggestion(text){
-    var opened = chatWs.gatewayAgent ? navigateToAgentChat(chatWs.gatewayAgent, true) : null;
-    Promise.resolve(opened).then(function(){
+  // A card belongs to the bot that proposed it: open that bot's chat and send it there.
+  function askBotFromBrowserSuggestion(text, botId){
+    var agent = botId
+      ? (chatWs.allAgents || []).filter(function(item){ return item && String(item.id) === String(botId); })[0]
+      : (hubWorkspace() ? null : chatWs.gatewayAgent);
+    if(!agent){ showBenchToast('That bot is no longer here.'); return; }
+    Promise.resolve(navigateToAgentChat(agent, true)).then(function(){
       var input = el('#ccInput');
       if(!input) return;
       input.value = text;
       input.dispatchEvent(new Event('input', {bubbles:true}));
-      input.focus();
-      input.setSelectionRange(input.value.length, input.value.length);
+      submitComposerDraft();
     });
   }
   document.addEventListener('click', function(event){
     var button = event.target && event.target.closest ? event.target.closest('[data-browser-suggest-next]') : null;
-    if(button) askMiaFromBrowserSuggestion(button.getAttribute('data-browser-suggest-next'));
+    if(button) askBotFromBrowserSuggestion(button.getAttribute('data-browser-suggest-next'), button.getAttribute('data-browser-suggest-bot'));
   });
   // Refresh whenever the blank tab comes into view, however the browser got
   // there (opened, restored at startup, last page closed). The server caches
@@ -8373,6 +8427,35 @@
     });
   }
 
+  // Your own saved apps show the icon their site has; the text label stays until one arrives.
+  var siteIcons = {}, siteIconRequests = {};
+  function showSiteIcon(thumb, icon){
+    var image = document.createElement('img');
+    image.alt = '';
+    image.src = icon;
+    thumb.textContent = '';
+    thumb.appendChild(image);
+    thumb.classList.add('has-site-icon');
+  }
+  function fillSiteIcons(root){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!root || !browser || !browser.command) return;
+    Array.prototype.forEach.call(root.querySelectorAll('[data-site-url]'), function(thumb){
+      var url = thumb.getAttribute('data-site-url');
+      if(siteIcons[url]){ showSiteIcon(thumb, siteIcons[url]); return; }
+      if(!siteIconRequests[url]){
+        siteIconRequests[url] = Promise.resolve(browser.command({action: 'siteIcon', url: url})).catch(function(){ return null; }).then(function(res){
+          var icon = res && /^data:image\//i.test(res.icon || '') ? res.icon : '';
+          if(icon) siteIcons[url] = icon;
+          // A site that was off or had no icon gets another try next time the list opens.
+          delete siteIconRequests[url];
+          return icon;
+        });
+      }
+      siteIconRequests[url].then(function(icon){ if(icon && thumb.isConnected) showSiteIcon(thumb, icon); });
+    });
+  }
+
   function renderArtifactsPage(){
     var overlay = el('#artifactsOverlay');
     if(!overlay) return;
@@ -8385,6 +8468,7 @@
     if(chips) chips.innerHTML = window.MiaArtifactsPage.chipsHtml(artifactsPage.items, artifactsPage.filter, esc);
     var body = el('#artifactsBody');
     if(body) body.innerHTML = window.MiaArtifactsPage.bodyHtml(Object.assign({}, artifactsPage, {recentIds: recentArtifactIds()}), esc);
+    fillSiteIcons(body);
   }
 
   // Files open from the Mia folder (the browser previews nothing outside
@@ -8566,6 +8650,30 @@
     select: function(id){ appsPage.activeTab = id === 'page' || appsTabByKey(id) ? id : 'page'; if(id === 'page') appsPage.tabClosed = false; renderAppsPage(); },
     render: notifyAppsTabs,
   });
+  function stopLocalServer(id){
+    var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0];
+    if(!link) return;
+    var path = '/api/apps/links/' + encodeURIComponent(id);
+    var address = String(link.url).replace(/^https?:\/\//, '').replace(/\/$/, '');
+    api(path + '/server').then(function(res){
+      var server = res.data || {};
+      if(res.status !== 200) throw new Error('lookup');
+      if(server.protected){ showBenchToast('Mia needs ' + address + ' to run, so it can’t be stopped here.'); return; }
+      if(!server.found){ loadApps(); return; }
+      return appConfirm(server.name + ' is running ' + address + '. Stop it? Anything unsaved there may be lost.', 'Stop').then(function(ok){
+        if(!ok) return;
+        return api(path + '/stop', {method:'POST', body:{pids:server.pids}}).then(function(stop){
+          var result = stop.data || {};
+          if(stop.status !== 200) throw new Error('stop');
+          showBenchToast(result.stopped ? address + ' stopped.' : result.reason === 'denied'
+            ? 'Mia isn’t allowed to stop that program. Close it where it’s running.'
+            : result.reason === 'changed' ? 'A different program is using ' + address + ' now. Check it and try again.'
+            : address + ' is still running. Close it where it’s running.');
+          loadApps();
+        });
+      });
+    }).catch(function(){ showBenchToast('Could not stop ' + address + '. Try again.'); });
+  }
   function appsTabByKey(key){ return appsPage.tabs.filter(function(tab){ return tab.key === key; })[0] || null; }
   function closeAppTab(key){
     appsPage.activeTab = window.MiaAppsPage.nextTabAfterClose(appsPage, key);
@@ -8953,6 +9061,7 @@
       'data-app-archive': archiveTeamApp,
       'data-app-preview': previewTeamApp,
       'data-app-note-dismiss': function(key){ var tab = appsTabByKey(key); if(tab){ tab.note = ''; renderAppsPage(); } },
+      'data-app-stop-link': stopLocalServer,
       'data-app-open-link': function(id){ var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0]; if(link) openAppAddress(link.url); },
       'data-app-reload': function(key){ var tab = appsTabByKey(key), desktop = appsDesktop(); if(tab && desktop){ tab.status = 'loading'; desktop.reload(key).catch(function(){}); renderAppsPage(); } },
     };
@@ -9388,7 +9497,19 @@
       .concat([{id:'new-app', name:'New app'}, {id:'new-artifact', name:'Create an artifact'}])
       .concat(browser && browser.command ? [{id:'new-tab', name:'New browser tab'}] : []);
   }
+  // The "Start something" list opens from a blank tab: a new browser tab reuses it,
+  // and anything else leaves it behind, so picking never adds a second empty tab.
   function runLocalBrowserStart(id){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!browser || !browser.command) return startFromBrowser(id, false);
+    Promise.resolve(browser.command({action:'state'})).catch(function(){ return null; }).then(function(state){
+      var tabs = state && state.tabs || [];
+      var blank = tabs.filter(function(tab){ return tab.id === state.activeId && !tab.url && !tab.groupId; })[0];
+      if(blank && id !== 'new-tab' && tabs.length > 1) browser.command({action:'close', id:blank.id}).catch(function(){});
+      startFromBrowser(id, !!blank);
+    });
+  }
+  function startFromBrowser(id, onBlankTab){
     if(id === 'new-automation'){
       runToolsAction('automations');
       // After this click finishes, or it would close the menu the button opens.
@@ -9399,8 +9520,8 @@
       draftInChat(window.MiaArtifactsPage.CREATE_PROMPT);
     } else if(id === 'new-tab'){
       openWebBrowserTool();
-      window.miaDesktop.browser.command({action:'new'}).then(function(state){
-        followBrowserTab(state && !state.error ? state : null);
+      (onBlankTab ? Promise.resolve(null) : window.miaDesktop.browser.command({action:'new'})).then(function(state){
+        if(state) followBrowserTab(state.error ? null : state);
         var input = el('#localBrowserUrl');
         if(input) input.focus();
       }).catch(function(){});
@@ -9627,12 +9748,8 @@
     }
     if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onOpen){
       window.miaDesktop.browser.onOpen(function(action){
-        // In the chat view, Cmd/Ctrl+T opens a new chat. A chat has no tab, so
+        // Cmd/Ctrl+T opens a browser tab from anywhere. A chat has no tab, so
         // Cmd/Ctrl+W has nothing to close there.
-        if(chatViewShowing() && action === 't'){
-          runToolsAction('new-chat');
-          return;
-        }
         if(action === 'w') return;
         openWebBrowserTool();
         window.setTimeout(function(){
@@ -11811,7 +11928,7 @@
       : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (opts.footerHtml || '') + '</div></div>';
+      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, currentUser, esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '') + '</div></div>';
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed
@@ -11895,7 +12012,7 @@
     return [draft.role, draft.output].filter(Boolean).join('\n\n');
   }
 
-  // The skills library, shared by the setup card, the bot editor and Settings.
+  // The skills library, shared by the setup card, the bot editor and the Skills pane.
   var skillsLibrary = null;
   function loadSkillsLibrary(){
     return api('/api/skills').then(function(res){
@@ -11907,7 +12024,7 @@
   }
   function skillPickerRowsHtml(selected){
     var skills = skillsLibrary ? skillsLibrary.skills : [];
-    if(!skills.length) return '<div class="skill-picker-empty">' + (skillsLibrary ? 'No skills yet. Add them in Settings, under Skills.' : 'Loading skills…') + '</div>';
+    if(!skills.length) return '<div class="skill-picker-empty">' + (skillsLibrary ? 'No skills yet. Add them from Skills in the left bar.' : 'Loading skills…') + '</div>';
     return skills.map(function(skill){
       return '<label class="skill-picker-row"><input type="checkbox" value="' + esc(skill.id) + '"' + (selected.indexOf(skill.id) !== -1 ? ' checked' : '') + '>' +
         '<span><span class="skill-picker-name">' + esc(skill.name) + '</span>' + (skill.description ? '<span class="skill-picker-desc">' + esc(skill.description) + '</span>' : '') + '</span></label>';
@@ -12818,6 +12935,96 @@
     });
   }
 
+  // One emoji panel for the message box and for reactions. It sits on the page
+  // itself so it shows above the chat pane, and stays inside that pane so the
+  // browser view beside it can't cover it.
+  var emojiPicker = {node: null, anchor: null, onPick: null};
+  var EMOJI_RECENT_KEY = 'miaEmojiRecent';
+  function recentEmoji(){
+    try { var saved = JSON.parse(localStorage.getItem(EMOJI_RECENT_KEY) || '[]'); return Array.isArray(saved) ? saved : []; }
+    catch(_){ return []; }
+  }
+  function closeEmojiPicker(){
+    if(!emojiPicker.node) return;
+    emojiPicker.node.remove();
+    if(emojiPicker.anchor && emojiPicker.anchor.id === 'ccEmojiBtn') emojiPicker.anchor.setAttribute('aria-expanded', 'false');
+    emojiPicker = {node: null, anchor: null, onPick: null};
+  }
+  function openEmojiPicker(anchor, onPick, closeOnPick){
+    var same = emojiPicker.anchor === anchor;
+    closeEmojiPicker();
+    if(same) return;
+    var node = document.createElement('section');
+    node.className = 'mia-emoji-picker';
+    node.setAttribute('role', 'dialog');
+    node.setAttribute('aria-label', 'Choose an emoji');
+    node.innerHTML = '<input type="search" placeholder="Search emoji" aria-label="Search emoji"><div class="mia-emoji-list">' + window.MiaEmoji.listHtml('', recentEmoji(), esc) + '</div>';
+    document.body.appendChild(node);
+    var pane = (anchor.closest('.chat-app') || document.documentElement).getBoundingClientRect();
+    var spot = anchor.getBoundingClientRect();
+    var width = Math.min(node.offsetWidth, pane.width - 16);
+    node.style.width = width + 'px';
+    var height = node.offsetHeight;
+    node.style.left = Math.max(pane.left + 8, Math.min(spot.left, pane.right - width - 8)) + 'px';
+    node.style.top = (spot.top - height - 8 >= 8 ? spot.top - height - 8 : Math.min(spot.bottom + 8, window.innerHeight - height - 8)) + 'px';
+    emojiPicker = {node: node, anchor: anchor, onPick: onPick};
+    if(anchor.id === 'ccEmojiBtn') anchor.setAttribute('aria-expanded', 'true');
+    var search = node.querySelector('input'), list = node.querySelector('.mia-emoji-list');
+    search.addEventListener('input', function(){ list.innerHTML = window.MiaEmoji.listHtml(search.value, recentEmoji(), esc); });
+    search.addEventListener('keydown', function(event){ if(event.key === 'Escape'){ event.stopPropagation(); var from = anchor; closeEmojiPicker(); from.focus(); } });
+    list.addEventListener('click', function(event){
+      var button = event.target.closest('[data-emoji-pick]');
+      if(!button) return;
+      var emoji = button.getAttribute('data-emoji-pick');
+      try { localStorage.setItem(EMOJI_RECENT_KEY, JSON.stringify(window.MiaEmoji.remember(recentEmoji(), emoji))); } catch(_){}
+      if(closeOnPick) closeEmojiPicker();
+      onPick(emoji);
+    });
+    search.focus();
+  }
+  function insertComposerEmoji(emoji){
+    var input = el('#ccInput');
+    if(!input) return;
+    var start = input.selectionStart, end = input.selectionEnd;
+    input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+    input.selectionStart = input.selectionEnd = start + emoji.length;
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  }
+  // Shared channels keep their messages on the Hub, which has nowhere to store a reaction yet.
+  function canReactToMessage(m){
+    return !!(m && m.nativeEvent && m.nativeEvent.id && !m.pending && !m.deleted && !m.system && !m.nativeProgress);
+  }
+  function toggleMessageReaction(eventId, emoji){
+    var roomId = chatWs.activeRoomId;
+    api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId) + '/reactions'), {method: 'POST', body: {emoji: emoji}}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.event) throw new Error('reaction failed');
+      var message = chatRoomState(roomId).messages.filter(function(item){ return item.id === eventId; })[0];
+      if(message){
+        message.reactions = res.data.event.metadata && res.data.event.metadata.reactions || null;
+        message.nativeEvent = res.data.event;
+      }
+      if(chatWs.activeRoomId === roomId) renderChatThread();
+    }).catch(function(){ showBenchToast('That reaction could not be saved.'); });
+  }
+  document.addEventListener('click', function(event){
+    var target = event.target;
+    if(!target || !target.closest) return;
+    var composerButton = target.closest('#ccEmojiBtn');
+    var add = target.closest('[data-react-add]');
+    var chip = target.closest('[data-react-toggle]');
+    if(composerButton){ openEmojiPicker(composerButton, insertComposerEmoji, false); return; }
+    if(add || chip){
+      var row = target.closest('.chat-msg-row');
+      var eventId = row && row.getAttribute('data-event-id');
+      if(!eventId) return;
+      if(chip) toggleMessageReaction(eventId, chip.getAttribute('data-react-toggle'));
+      else openEmojiPicker(add, function(emoji){ toggleMessageReaction(eventId, emoji); }, true);
+      return;
+    }
+    if(emojiPicker.node && !emojiPicker.node.contains(target)) closeEmojiPicker();
+  });
+  document.addEventListener('keydown', function(event){ if(event.key === 'Escape') closeEmojiPicker(); });
+
   // A local-only confirmation line (@-mention add outcome) — never
   // sent to the server, just appended to this room's cached thread so it
   // persists like any other message until the room's next fresh load.
@@ -13633,6 +13840,34 @@
     syncSidebarToolButtons();
   }
 
+  // The skills form keeps living in one element, so its handlers survive the pane redrawing.
+  var skillsShell = el('#skillsShell');
+  function renderSkillsUtilityPane(pane){
+    pane.setAttribute('aria-label', 'Skills');
+    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open');
+    pane.classList.add('open', 'bot-store-open');
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Skills</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="skillsPaneClose" aria-label="Close Skills" title="Close Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div></div>';
+    var body = document.createElement('div');
+    body.className = 'bot-store-body';
+    if(skillsShell) body.appendChild(skillsShell);
+    pane.appendChild(body);
+    el('#skillsPaneClose', pane).addEventListener('click', closeSkillsPane);
+  }
+  function openSkillsPane(){
+    if(!STYLED_SKIN) return;
+    prepareChatUtilityPane('skills');
+    renderChatInfoPane();
+    refreshSkillsPane();
+  }
+  function closeSkillsPane(){
+    if(chatInfo.mode !== 'skills') return;
+    chatInfo.mode = 'automations';
+    chatInfo.open = false;
+    renderChatInfoPane();
+    syncSidebarToolButtons();
+  }
+
   function openBotStorePane(){
     if(!STYLED_SKIN) return;
     prepareChatUtilityPane('bot-store');
@@ -13845,8 +14080,8 @@
       restorePluginShell();
       chatInfo.mode = 'automations';
     }
-    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-store';
-    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'bot-store') || (!specialMode && !isInfoPaneAvailable())){
+    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-store' || chatInfo.mode === 'skills';
+    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'bot-store' && chatInfo.mode !== 'skills') || (!specialMode && !isInfoPaneAvailable())){
       restorePluginShell();
       pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open', 'bot-store-open');
       pane.innerHTML = '';
@@ -13875,6 +14110,10 @@
     }
     if(chatInfo.mode === 'agents'){
       renderManageAgentsPane(pane);
+      return;
+    }
+    if(chatInfo.mode === 'skills'){
+      renderSkillsUtilityPane(pane);
       return;
     }
     if(chatInfo.mode === 'plugins'){
@@ -14112,10 +14351,6 @@
     if(e.key === 'Escape' && channelMenu.open) closeChannelMenu();
   });
 
-  function chatViewShowing(){
-    var classes = document.body.classList;
-    return !classes.contains('automations-mode') && !classes.contains('artifacts-mode') && !classes.contains('apps-mode') && !classes.contains('browser-collab-mode');
-  }
   // Chats and channels are picked from the sidebar and never get a tab. The
   // strip in the chat's row (native-browser.js) holds the other views' tabs.
   function renderChatTabs(){
@@ -16968,13 +17203,13 @@
   function runToolsAction(action){
     // Views (Automations, Artifacts, Browser) are the same in Solo and a
     // team; only creating chats and bots differs.
-    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser';
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills';
     if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
     // layout back — closing the browser here would kill browser mode for no
     // reason. Every other tools-menu action still needs the full layout.
-    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store') closeLocalBrowser();
+    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store' && action !== 'skills') closeLocalBrowser();
     if(automationsPage.open && action !== 'automations' && action !== 'new-bot' && action !== 'bot-store') closeAutomationsPage();
     if(artifactsPage.open && action !== 'artifacts' && action !== 'new-bot' && action !== 'bot-store') closeArtifactsPage();
     if(appsPage.open && action !== 'apps' && action !== 'new-bot' && action !== 'bot-store') closeAppsPage();
@@ -16983,6 +17218,7 @@
     else if(action === 'new-agent'){ if(window.miaPrivateAgents) window.miaPrivateAgents.create(); }
     else if(action === 'new-channel') openNewChannelFlow();
     else if(action === 'bot-store') openBotStorePane();
+    else if(action === 'skills') openSkillsPane();
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsPage();
     else if(action === 'artifacts') openArtifactsPage();
@@ -17039,7 +17275,49 @@
       button.classList.toggle('active', on);
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    fitSidebarViews();
   }
+
+  // Which view icons move behind the chevron when the header runs out of room.
+  // The one you are on always stays in the row.
+  function sidebarViewsToHide(count, activeIndex, room){
+    var ICON = 28, GAP = 6;
+    if(count * ICON + (count - 1) * GAP <= room) return [];
+    var keep = Math.max(1, Math.floor((room - ICON) / (ICON + GAP)));
+    var hidden = [];
+    for(var index = keep; index < count; index++) hidden.push(index);
+    if(activeIndex >= keep) hidden[hidden.indexOf(activeIndex)] = keep - 1;
+    return hidden;
+  }
+  // A long workspace name shortens to this much before it takes icons away.
+  var SIDEBAR_NAME_MIN_WIDTH = 90;
+  function fitSidebarViews(){
+    var wrap = el('.chat-new-btn-wrap'), views = el('.sidebar-views'), more = el('#sidebarViewsMore'), name = el('#miaCompanyName');
+    if(!wrap || !views || !more || !wrap.clientWidth) return;
+    var style = getComputedStyle(wrap), gap = parseFloat(style.columnGap) || 0;
+    var room = wrap.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - gap
+      - Math.min(name ? name.scrollWidth : 0, SIDEBAR_NAME_MIN_WIDTH);
+    var developer = el('#chatSidebarDeveloperBtn');
+    if(developer && !developer.hidden) room -= developer.offsetWidth + gap;
+    var buttons = els('.sidebar-view-btn', views).filter(function(button){ return button !== more && !button.hidden; });
+    var active = buttons.findIndex(function(button){ return button.classList.contains('active'); });
+    var hidden = sidebarViewsToHide(buttons.length, active, room);
+    buttons.forEach(function(button, index){ button.classList.toggle('sidebar-view-overflowed', hidden.indexOf(index) >= 0); });
+    more.hidden = !hidden.length;
+  }
+  (function(){
+    var wrap = el('.chat-new-btn-wrap'), more = el('#sidebarViewsMore'), name = el('#miaCompanyName');
+    if(!wrap || !more) return;
+    more.addEventListener('click', function(event){
+      event.stopPropagation();
+      openSidebarAddMenu(more, els('.sidebar-view-overflowed', wrap).map(function(button){
+        return [button.getAttribute('aria-label'), function(){ button.click(); }];
+      }));
+    });
+    if(typeof ResizeObserver === 'function') new ResizeObserver(fitSidebarViews).observe(wrap);
+    if(name && typeof MutationObserver === 'function') new MutationObserver(fitSidebarViews).observe(name, {childList: true, characterData: true, subtree: true});
+    fitSidebarViews();
+  })();
 
   // Back, Forward and Reload work in every view. Outside the browser they
   // step through the places you opened in Mia (a view, and the chat it

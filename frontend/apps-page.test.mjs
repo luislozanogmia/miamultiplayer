@@ -177,6 +177,11 @@ test('Solo shows local apps and no publishing; a team adds the catalog and Publi
   const solo = page.bodyHtml(state({ local, links }), esc);
   assert.match(solo, /On this computer/);
   assert.match(solo, /data-app-open-local="folder:apps\/r"/);
+  assert.match(solo, /data-app-stop-link="l1"/, 'a running localhost server can be stopped');
+  const off = page.bodyHtml(state({ local, links: [{ ...links[0], running: false }] }), esc);
+  assert.doesNotMatch(off, /data-app-stop-link/);
+  const remote = page.bodyHtml(state({ local, links: [{ ...links[0], local: false, running: null }] }), esc);
+  assert.doesNotMatch(remote, /data-app-stop-link/);
   assert.doesNotMatch(solo, /Your team|data-app-publish/);
   const team = page.bodyHtml(state({ local, links, teamId: TEAM, catalog: [catalogApp({ id: APP, name: 'Shared', live: bundle({ state: 'approved' }) })] }), esc);
   assert.ok(team.indexOf('Your team') < team.indexOf('On this computer'));

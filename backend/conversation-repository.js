@@ -12,6 +12,9 @@ const CONVERSATION_TYPES = new Set(['home', 'channel', 'department', 'agent', 'b
 const PRINCIPAL_TYPES = new Set(['user', 'agent', 'bot', 'system']);
 const MEMBER_ROLES = new Set(['owner', 'admin', 'member', 'viewer', 'agent', 'bot']);
 const MEMBER_STATES = new Set(['active', 'invited', 'removed']);
+const REACTION_PATTERN = /^\p{Extended_Pictographic}[\p{Extended_Pictographic}\p{Emoji_Modifier}\u200d\ufe0f]*$/u;
+const MAX_REACTION_LENGTH = 16;
+const MAX_REACTIONS_PER_EVENT = 20;
 const EVENT_TYPES = new Set(['message', 'system', 'agent_message', 'bot_message', 'file', 'image', 'reaction']);
 const DISPATCH_TARGET_TYPES = new Set(['bot', 'gateway']);
 const DISPATCH_STATUSES = new Set(['pending', 'claimed', 'failed', 'completed']);
@@ -1514,6 +1517,36 @@ function createConversationRepository(db) {
     return eventRow(getEventRow(normalizedCompanyId, eventId));
   }
 
+  // Adds this person's reaction, or takes it back if it is already there. A
+  // reaction is not an edit: the message keeps its text and its edited time.
+  function toggleEventReaction({ companyId, conversationId, id, emoji, principalId }) {
+    const normalizedCompanyId = requiredString(companyId, 'companyId');
+    const eventId = requiredString(id, 'id');
+    const who = requiredString(principalId, 'principalId');
+    if (typeof emoji !== 'string' || emoji.length > MAX_REACTION_LENGTH || !REACTION_PATTERN.test(emoji)) {
+      fail('INVALID_INPUT', 'a reaction must be one emoji');
+    }
+    return runImmediate(db, () => {
+      const current = getEventRow(normalizedCompanyId, eventId);
+      if (!current || current.conversation_id !== conversationId) fail('NOT_FOUND', 'event not found');
+      if (current.deleted_at !== null) fail('CONFLICT', 'deleted events cannot be reacted to');
+      const metadata = JSON.parse(current.metadata || '{}');
+      const reactions = { ...(metadata.reactions || {}) };
+      const people = Array.isArray(reactions[emoji]) ? reactions[emoji] : [];
+      if (people.includes(who)) {
+        const remaining = people.filter(person => person !== who);
+        if (remaining.length) reactions[emoji] = remaining;
+        else delete reactions[emoji];
+      } else {
+        if (!people.length && Object.keys(reactions).length >= MAX_REACTIONS_PER_EVENT) fail('INVALID_INPUT', 'this message has too many reactions');
+        reactions[emoji] = [...people, who];
+      }
+      db.prepare('UPDATE events SET metadata = ? WHERE company_id = ? AND id = ?')
+        .run(jsonText({ ...metadata, reactions }, 'metadata', {}), normalizedCompanyId, eventId);
+      return eventRow(getEventRow(normalizedCompanyId, eventId));
+    });
+  }
+
   function deleteEvent({ companyId, id, deletedAt }) {
     const normalizedCompanyId = requiredString(companyId, 'companyId');
     const eventId = requiredString(id, 'id');
@@ -2287,6 +2320,7 @@ function createConversationRepository(db) {
     getEvent,
     listEvents,
     updateEvent,
+    toggleEventReaction,
     deleteEvent,
     getThread,
     createAttachment,

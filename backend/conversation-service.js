@@ -620,6 +620,14 @@ function createConversationService({ repository, authorization, realtime = null,
     return { event, delivery: delivery(event) };
   }
 
+  // Anyone who can post in the chat can react, on any message in it. Nothing is
+  // dispatched or broadcast: a reaction never asks a bot for a reply.
+  function toggleEventReaction({ companyId, conversationId, principal, eventId, emoji }) {
+    authorization.authorize(callerPrincipal(principal, companyId, conversationId, 'send'));
+    const event = repository.toggleEventReaction({ companyId, conversationId, id: eventId, emoji, principalId: principal.principalId });
+    return { event };
+  }
+
   function deleteEvent({ companyId, conversationId, principal, eventId, deletedAt }) {
     authorization.authorizeEvent({ ...callerPrincipal(principal, companyId, conversationId, 'delete'), eventId });
     const event = repository.deleteEvent({ companyId, id: eventId, deletedAt });
@@ -668,6 +676,7 @@ function createConversationService({ repository, authorization, realtime = null,
     listActiveDispatches,
     stopDispatch,
     updateEvent,
+    toggleEventReaction,
     deleteEvent,
     getThread,
     updateState,

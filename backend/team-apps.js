@@ -14,6 +14,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const artifacts = require('./artifacts');
+const localServer = require('./local-server');
 
 const BUNDLE_FORMAT = 1;
 const ENTRY = 'index.html';
@@ -331,6 +332,19 @@ function registerAppRoutes(app, { express, requireAuth, workspaceDir, dataDir, a
   app.get('/api/apps/local', requireAuth, async (req, res) => {
     try { res.json(await listLocal({ workspaceDir: workspaceDir(), dataDir: dataDir(), workspaceId: workspaceId(req) })); }
     catch (error) { send(res, error); }
+  });
+  // Only a saved localhost link can be stopped, never an address the page sends.
+  const localLink = req => artifacts.readLinks(dataDir(), workspaceId(req)).filter(link => link.id === req.params.id && link.local)[0];
+  app.get('/api/apps/links/:id/server', requireAuth, async (req, res) => {
+    const link = localLink(req);
+    if (!link) return res.status(404).json({ error: 'link_not_found', message: 'That address is no longer on this computer.' });
+    try { res.json(await localServer.serverBehind(link.url)); } catch (error) { send(res, error); }
+  });
+  app.post('/api/apps/links/:id/stop', requireAuth, express.json({ limit: '8kb' }), async (req, res) => {
+    const link = localLink(req);
+    if (!link) return res.status(404).json({ error: 'link_not_found', message: 'That address is no longer on this computer.' });
+    const pids = Array.isArray(req.body && req.body.pids) ? req.body.pids.filter(Number.isInteger) : [];
+    try { res.json(await localServer.stopServer(link.url, pids)); } catch (error) { send(res, error); }
   });
   // Preview the exact file list and digest before any bytes go to the team.
   app.post('/api/apps/local/preview', requireAuth, express.json({ limit: '8kb' }), (req, res) => {

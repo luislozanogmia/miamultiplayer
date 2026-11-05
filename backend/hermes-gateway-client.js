@@ -723,10 +723,13 @@ class HermesGatewayClient {
       || String(current.provider || '').toLowerCase() === String(base.provider).toLowerCase());
     if (base.model && !(sameModel && sameProvider)) {
       // config.set model without --global/--session pins the pick to this session only.
+      // Choosing the model in the picker is the confirmation: Mia has no second prompt,
+      // so without the flag Hermes holds back the switch and every retry fails the same way.
       const selected = await this.request('config.set', {
         session_id: sessionId,
         key: 'model',
         value: base.provider ? `${base.model} --provider ${base.provider}` : base.model,
+        confirm_expensive_model: true,
       });
       if (selected.confirm_required) throw new Error(selected.confirm_message || selected.warning || 'Model selection requires confirmation');
     }

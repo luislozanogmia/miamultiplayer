@@ -13,11 +13,10 @@ test('chats and channels never get a tab', () => {
   }
 });
 
-test('Cmd/Ctrl+T opens a new chat in the chat view and Cmd/Ctrl+W closes nothing there', () => {
+test('Cmd/Ctrl+T opens a browser tab from the chat view and Cmd/Ctrl+W closes nothing there', () => {
   const start = source.indexOf('window.miaDesktop.browser.onOpen(function(action){');
   const handler = source.slice(start, source.indexOf('openWebBrowserTool();', start));
-  assert.match(handler, /chatViewShowing\(\) && action === 't'/);
-  assert.match(handler, /runToolsAction\('new-chat'\)/);
+  assert.doesNotMatch(handler, /new-chat/);
   assert.match(handler, /if\(action === 'w'\) return;/);
 });
 
@@ -40,4 +39,66 @@ test('the Mac titlebar offset leaves the centered connection dialog inside the w
   // A fixed top plus the dialog's translate(-50%,-50%) pushed its upper half off screen.
   assert.match(css, /html\.mac-inset-titlebar \.styled-sheet:not\(\.styled-onboarding-sheet\)/);
   assert.match(css, /html\.mac-inset-titlebar \.styled-onboarding-sheet\{top:calc\(50% \+ 22px\);max-height:calc\(100vh - 76px\);\}/);
+});
+
+test('picking from the Start something list reuses the blank tab or closes it, never adding a second', () => {
+  const start = source.indexOf('function runLocalBrowserStart(id){');
+  const handler = source.slice(start, source.indexOf('function startFromBrowser(id, onBlankTab){', start));
+  assert.match(handler, /!tab\.url && !tab\.groupId/);
+  assert.match(handler, /blank && id !== 'new-tab' && tabs\.length > 1\) browser\.command\(\{action:'close', id:blank\.id\}\)/);
+  assert.match(source, /onBlankTab \? Promise\.resolve\(null\) : window\.miaDesktop\.browser\.command\(\{action:'new'\}\)/);
+});
+
+test('a sidebar menu stays clear of the page drawn over the app while the browser is open', () => {
+  const start = source.indexOf('function sidebarMenuLeft(x,width){');
+  const left = new Function('document', 'el', 'window', source.slice(start, source.indexOf('function openSidebarAddMenu', start)) + 'return sidebarMenuLeft;');
+  const body = open => ({ body: { classList: { contains: () => open } } });
+  const sidebar = () => ({ getBoundingClientRect: () => ({ right: 330 }) });
+  assert.equal(left(body(true), sidebar, { innerWidth: 1280 })(209, 248), 74);
+  assert.equal(left(body(false), sidebar, { innerWidth: 1280 })(209, 248), 209);
+});
+
+test('Skills opens from the left rail and is gone from Settings', () => {
+  const rail = html.slice(html.indexOf('id="workspaceSwitcherMenu"'), html.indexOf('id="railNotificationsBtn"'));
+  assert.match(rail, /data-tools-action="skills" aria-label="Skills"/);
+  assert.doesNotMatch(html, /data-pane="skills"/);
+  assert.match(source, /action === 'skills'\) openSkillsPane\(\)/);
+});
+
+test('view icons that do not fit move behind a chevron, and the current view stays out', () => {
+  const start = source.indexOf('function sidebarViewsToHide(count, activeIndex, room){');
+  const hide = new Function(source.slice(start, source.indexOf('// A long workspace name shortens', start)) + 'return sidebarViewsToHide;')();
+  assert.deepEqual(hide(6, 0, 198), [], 'six icons fit exactly');
+  assert.deepEqual(hide(6, 0, 135), [3, 4, 5]);
+  assert.deepEqual(hide(6, 4, 135), [3, 2, 5], 'the current view swaps into the row');
+  assert.deepEqual(hide(6, 5, 20), [1, 2, 3, 4, 0], 'one icon always stays');
+  assert.match(html, /id="sidebarViewsMore"[^>]*hidden><svg data-icon-set="lucide"/);
+});
+
+test('the sign-in code and link can always be copied, and the code copies itself', () => {
+  assert.match(html, /id="harnessAuthCopyCode"/);
+  assert.match(html, /id="harnessAuthCopyLink"/);
+  const start = source.indexOf('function renderHarnessAuth(value){');
+  const render = source.slice(start, source.indexOf('function pollHarnessAuth(){', start));
+  assert.match(render, /copyLink\.hidden = !auth\.verificationUrl/);
+  assert.match(render, /auth\.userCode !== harnessAuthCopiedCode/);
+  assert.match(render, /link\.hidden = !auth\.verificationUrl \|\| harnessAuthMiaIsDefault/);
+});
+
+test('a browser recommendation goes to the bot that proposed it and sends right away', async () => {
+  const start = source.indexOf('function askBotFromBrowserSuggestion(text, botId){');
+  const fn = source.slice(start, source.indexOf("document.addEventListener('click'", start));
+  const run = async (botId, agents, team = false) => {
+    const log = [], input = { dispatchEvent() {} };
+    const ask = new Function('hubWorkspace', 'chatWs', 'showBenchToast', 'navigateToAgentChat', 'el', 'submitComposerDraft', 'Event', fn + 'return askBotFromBrowserSuggestion;')(
+      () => team, { allAgents: agents, gatewayAgent: { id: 'gateway' } }, (text) => log.push(['toast', text]), (agent) => { log.push(['open', agent.id]); return Promise.resolve(); },
+      () => input, () => log.push(['send', input.value]), class {});
+    ask('Trash the caches', botId);
+    await new Promise((done) => setTimeout(done));
+    return log;
+  };
+  assert.deepEqual(await run('b2', [{ id: 'b1' }, { id: 'b2' }]), [['open', 'b2'], ['send', 'Trash the caches']]);
+  assert.deepEqual(await run(null, []), [['open', 'gateway'], ['send', 'Trash the caches']]);
+  assert.deepEqual(await run(null, [], true), [['toast', 'That bot is no longer here.']], 'never lands in the open team chat');
+  assert.deepEqual(await run('gone', [{ id: 'b1' }]), [['toast', 'That bot is no longer here.']], 'never sent to the wrong bot');
 });

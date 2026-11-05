@@ -216,3 +216,8 @@ test('switching chats refreshes the picker to that chat\'s choice', async () => 
   assert.match(list, /chatModelPicker\.showChatSelection\(\)/);
   assert.match(source, /picker\.showChatSelection = function\(\)\{[\s\S]*?if\(scope === shownScope\) return;[\s\S]*?hydrateSelection\(\);/);
 });
+
+test('an unversioned GPT model is named without the word Gpt', async () => {
+  const appSource = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(appSource, /variant:chatModelTitleCase\(raw\.replace\(\/\^gpt-\/, ''\)\.replace\(\/-latest\$\/, ''\)/);
+});
