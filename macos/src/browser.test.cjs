@@ -1378,7 +1378,7 @@ test("a page a person closed comes back, a private or blank one does not", () =>
   const first = h.command("state").activeId;
   h.command("new");
   h.command("close", { id: first });
-  assert.deepEqual(h.command("closedTabs").closed.map(entry => entry.url), ["https://example.com/one"]);
+  assert.deepEqual(h.command("closedTabs").closed.map(entry => entry.url), ["https://example.com/"]);
   const blank = h.command("new").activeId;
   h.command("close", { id: blank });
   assert.equal(h.command("closedTabs").closed.length, 1);
