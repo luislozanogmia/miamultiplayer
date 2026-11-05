@@ -5393,12 +5393,19 @@
   function hubUnreachable(error){
     return !!error && (!error.status || error.status>=500 || ['hub_unavailable','service_unavailable','lifecycle_unavailable'].indexOf(error.code)>=0);
   }
+  // A Hub that is limiting requests answers again shortly. Opening waits and
+  // tries again on its own, with longer gaps, instead of leaving the team
+  // without its channels until it is reopened.
+  function hubRateLimited(error){
+    return !!error && (error.status===429 || error.code==='rate_limit' || error.code==='rate_limited');
+  }
   function retryHubChat(error){
-    hubFeedback(error);
+    var limited=hubRateLimited(error);
+    hubFeedback(limited ? {message:'The shared team is busy. Trying again shortly…'} : error);
     clearTimeout(hubChat.retryTimer);
-    if(!hubUnreachable(error) || !hubWorkspace())return;
+    if(!(limited || hubUnreachable(error)) || !hubWorkspace())return;
     var workspace=activeWorkspaceKey;
-    hubChat.retryWait=Math.min(60000,(hubChat.retryWait||2500)*2);
+    hubChat.retryWait=Math.min(60000,Math.max(limited ? 10000 : 0,(hubChat.retryWait||2500)*2));
     hubChat.retryTimer=setTimeout(function(){
       hubChat.retryTimer=null;
       if(workspace===activeWorkspaceKey && hubWorkspace())initHubChat();
