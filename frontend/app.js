@@ -5488,8 +5488,8 @@
     renderChatSidebar();
   }
   // A bot row's ⋯ and right-click both offer Pin or Unpin.
-  function wireTeamBotPin(button,key,pinned){
-    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){toggleTeamBotPin(activeWorkspaceKey,key);}]]); }
+  function wireTeamBotPin(button,key,pinned,extraItems){
+    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){toggleTeamBotPin(activeWorkspaceKey,key);}]].concat(extraItems||[])); }
     button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();open(button);});
     var more=el('.hub-channel-more',button);
     if(more)more.addEventListener('click',function(event){event.stopPropagation();open(more);});
@@ -5502,8 +5502,9 @@
       (result.bots||[]).forEach(function(bot){
         if(!bot.published || !bot.name)return;
         var key=String(bot.name).toLowerCase(), entry=byKey[key];
-        if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:normalizeAgentAvatarColor(bot.avatar_color),botIds:[],channels:[]}; list.push(entry); }
+        if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:normalizeAgentAvatarColor(bot.avatar_color),botIds:[],channels:[],places:[]}; list.push(entry); }
         if(entry.channels.indexOf(result.channel)<0)entry.channels.push(result.channel);
+        if(bot.id && result.channel && result.channel.id)entry.places.push({channelId:result.channel.id,botId:String(bot.id),ownerId:bot.owner_id});
         if(bot.id&&entry.botIds.indexOf(String(bot.id))<0)entry.botIds.push(String(bot.id));
       });
     });
@@ -5557,6 +5558,29 @@
         .catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t join. Try again.'));});
     });
   }
+  // Admins, and whoever added the bot, can take it out of every channel at once:
+  // the same removal the channel's bot panel does, once per channel.
+  function companyBotCanRemove(bot){
+    var me=hubChat.membership||{};
+    if(!bot.places || !bot.places.length)return false;
+    return me.role==='admin' || bot.places.every(function(place){ return place.ownerId && place.ownerId===me.clerk_user_id; });
+  }
+  function removeCompanyBot(bot){
+    var count=bot.places.length;
+    return appConfirm('Remove '+bot.name+' from the team? It leaves '+(count===1?'its channel':'all '+count+' channels it is in')+', and nobody here can use it until it is added again.','Remove').then(function(ok){
+      if(!ok)return;
+      var workspace=activeWorkspaceKey;
+      return Promise.all(bot.places.map(function(place){
+        return hubCall('DELETE',hubPath()+'/channels/'+place.channelId+'/bots/'+place.botId).then(function(){return true;},function(){return false;});
+      })).then(function(results){
+        if(workspace!==activeWorkspaceKey)return;
+        var failed=results.filter(function(done){return !done;}).length;
+        refreshCompanyBots();
+        bot.places.forEach(function(place){ refreshHubBotState(place.channelId,true); });
+        showBenchToast(failed ? 'Couldn\'t remove '+bot.name+' from '+failed+' of '+count+' channels. Try again.' : bot.name+' was removed from the team.');
+      });
+    });
+  }
   // A company bot is used in the channels it was shared to; its row opens
   // one of them so you can mention it there.
   function companyBotRow(bot,pinned){
@@ -5568,7 +5592,7 @@
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview">'+esc(where)+'</span></span>';
     button.addEventListener('click',function(){ openCompanyBot(bot); });
-    wireTeamBotPin(button,'company:'+bot.key,!!pinned);
+    wireTeamBotPin(button,'company:'+bot.key,!!pinned,companyBotCanRemove(bot)?[['Remove from team',function(){ removeCompanyBot(bot); }]]:null);
     return button;
   }
   // A bot row in a team opens your private chat with it for this team.

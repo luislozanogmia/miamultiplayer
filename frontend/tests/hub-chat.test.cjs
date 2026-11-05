@@ -858,3 +858,19 @@ test('the demo link reads MP with demo below it',()=>{
   const html=require('fs').readFileSync(require('path').join(__dirname,'..','index.html'),'utf8');
   assert.match(html,/id="workspaceRailDemo"[^>]*>\s*<span class="workspace-rail-mark" aria-hidden="true">MP<\/span><small class="workspace-rail-note">demo<\/small>/);
 });
+test('an admin can remove a company bot from every channel it is in, from its row',async()=>{
+  const merge=new Function('normalizeAgentAvatarColor',source.slice(source.indexOf('  function companyBotsFromChannels('),source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null);
+  const [bot]=merge([{channel:{id:'c1'},bots:[{id:'b1',name:'Disk Manager',published:true,owner_id:'u_owner'}]},{channel:{id:'c2'},bots:[{id:'b2',name:'Disk Manager',published:true,owner_id:'u_owner'}]}]);
+  assert.deepEqual(bot.places,[{channelId:'c1',botId:'b1',ownerId:'u_owner'},{channelId:'c2',botId:'b2',ownerId:'u_owner'}]);
+  const can=me=>appFunction('companyBotCanRemove',{hubChat:{membership:me}})(bot);
+  assert.equal(can({role:'admin',clerk_user_id:'u_admin'}),true);
+  assert.equal(can({role:'member',clerk_user_id:'u_owner'}),true,'whoever added it');
+  assert.equal(can({role:'member',clerk_user_id:'u_other'}),false);
+  const calls=[],toasts=[];
+  const remove=appFunction('removeCompanyBot',{appConfirm:()=>Promise.resolve(true),activeWorkspaceKey:'hub_t',hubPath:()=>'/v1/teams/t',
+    hubCall:(method,path)=>{calls.push(method+' '+path);return Promise.resolve({});},refreshCompanyBots:()=>calls.push('refresh'),refreshHubBotState:()=>{},showBenchToast:t=>toasts.push(t),Promise});
+  await remove(bot);
+  assert.deepEqual(calls,['DELETE /v1/teams/t/channels/c1/bots/b1','DELETE /v1/teams/t/channels/c2/bots/b2','refresh']);
+  assert.deepEqual(toasts,['Disk Manager was removed from the team.']);
+  assert.match(source,/companyBotCanRemove\(bot\)\?\[\['Remove from team'/);
+});
