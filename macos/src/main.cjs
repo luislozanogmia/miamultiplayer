@@ -150,6 +150,7 @@ function findEngineeringRoot() {
 const ENGINEERING_ROOT = findEngineeringRoot();
 const BACKEND_ROOT = path.join(ENGINEERING_ROOT, "backend");
 const BACKEND_ENTRYPOINT = path.join(BACKEND_ROOT, "server.js");
+const BACKEND_START_TIMEOUT_MS = 180000;
 const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require(path.join(BACKEND_ROOT, "process-secrets.js"));
 const { resolveClerkConfig } = require(path.join(BACKEND_ROOT, "clerk-config.js"));
 const requireBackendDependency = createRequire(BACKEND_ENTRYPOINT);
@@ -1091,11 +1092,19 @@ async function startLocalBackend(exactPort = null) {
     clearBackendLease(child.pid);
   });
 
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (await isMiaBackendReady(url)) return url;
+  // A first launch on a busy computer is slow: security software scans every new
+  // file and updates compete for the disk. A server that dies is noticed at once,
+  // so waiting longer only helps one that is still starting.
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < BACKEND_START_TIMEOUT_MS) {
+    if (await isMiaBackendReady(url)) {
+      desktopLog(`backend ready after ${Date.now() - startedAt}ms`);
+      return url;
+    }
     if (backendProcess !== child) return null;
     await delay(250);
   }
+  desktopLog(`backend not ready after ${BACKEND_START_TIMEOUT_MS}ms, stopping it`);
   await stopBackend(child);
   return null;
 }
