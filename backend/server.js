@@ -1323,6 +1323,8 @@ function requireMiaAdmin(req, res, next) {
 
 // Sharing requires both the local interactive session and matching Hub identity.
 // What was running when Mia last stopped, kept until the person answers for each piece.
+const conversationTitles = require('./conversation-titles');
+const CONVERSATION_TITLE_DELAY_MS = 20000;
 const interruptedWorkModule = require('./interrupted-work');
 const interruptedWork = interruptedWorkModule.createInterruptedWork({ db: conn });
 const hubBotJournal = require('./hub-bot-journal').createHubBotJournal(conn);
@@ -8364,6 +8366,9 @@ async function executeNativeConversationDispatch(dispatch) {
       id: dispatch.id,
       claimToken,
     });
+    refreshNativeConversationTitle(dispatch).catch((error) => {
+      console.error('conversation title failed', dispatch.conversationId, error && error.message);
+    });
   } catch (error) {
     // Mia is closing, which ends every open stream. That isn't this turn failing:
     // it stays claimed, and the person decides about it when Mia opens next.
@@ -8478,6 +8483,46 @@ function recoverNativeConversationDispatches() {
   interruptedWork.record('chat', dispatches.map(interruptedChatEntry));
   for (const dispatch of dispatches) removeNativeDispatchProgressEvent(dispatch);
   if (dispatches.length) console.log(`native dispatch recovery: held ${dispatches.length} interrupted dispatch(es)`);
+}
+
+// History's one line for a chat. It costs a small model call on the first turn
+// and every tenth, at suggestion priority, so it never slows a real reply. The
+// opening words stand in first, and stay if the model can't answer.
+async function refreshNativeConversationTitle(dispatch) {
+  const lookup = { companyId: dispatch.companyId, id: dispatch.conversationId };
+  const events = allNativeConversationEvents({ companyId: dispatch.companyId, conversationId: dispatch.conversationId });
+  // Slash commands steer the agent; they aren't what the chat is about.
+  const trigger = events.find((event) => event.id === dispatch.eventId);
+  if (!trigger || trigger.senderType !== 'user' || nativeSlashCommand(trigger)) return;
+  const said = events.filter((event) => ['user', 'agent', 'bot'].includes(event.senderType)
+    && nativeEventText(event) && !nativeSlashCommand(event) && !event.metadata?.goalStatus);
+  const people = said.filter((event) => event.senderType === 'user');
+  const conversation = nativeConversationRepository.getConversation(lookup);
+  if (!conversation || !conversationTitles.shouldRetitle(people.length, conversation.metadata)) return;
+  const save = (historyTitle) => {
+    const latest = nativeConversationRepository.getConversation(lookup);
+    if (!latest || !historyTitle) return;
+    nativeConversationRepository.updateConversation({
+      ...lookup,
+      metadata: { ...latest.metadata, historyTitle, historyTitleTurn: people.length },
+    });
+  };
+  if (!conversation.metadata?.historyTitle) save(conversationTitles.titleFromText(nativeEventText(people[0])));
+  // Later, so it never competes with the message someone is typing next.
+  const timer = setTimeout(async () => {
+    if (backendShutdownStarted) return;
+    try {
+      const reply = await scheduleInference(
+        conversationTitles.titlePrompt(said.map((event) => nativeEventText(event))),
+        'suggestion',
+        await inferenceOptionsForUser(people[people.length - 1].senderId)
+      );
+      save(conversationTitles.titleFromText(reply));
+    } catch (error) {
+      console.error('conversation title failed', dispatch.conversationId, error && error.message);
+    }
+  }, CONVERSATION_TITLE_DELAY_MS);
+  if (timer.unref) timer.unref();
 }
 
 function interruptedChatEntry(dispatch) {

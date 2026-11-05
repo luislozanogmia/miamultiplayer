@@ -18309,6 +18309,32 @@
     return room.kind === 'dm' || room.kind === 'group' ? dmLabel(room) : room.name;
   }
 
+  // A chat's own title when it has one. Rows only: the chat itself keeps its bot's name.
+  function conversationHistoryTitle(conversation){
+    var title = conversation && conversation.metadata && conversation.metadata.historyTitle;
+    return typeof title === 'string' && title.trim() ? title.trim() : conversationHistoryLabel(conversation);
+  }
+  // Mia and each bot always keep one chat to open, so their last one stays.
+  function historyChatCanDelete(conversation){
+    var owner = function(item){ return (item.metadata && item.metadata.botId) || item.type; };
+    return (chatWs.nativeConversations || []).filter(function(item){ return owner(item) === owner(conversation); }).length > 1;
+  }
+  function deleteHistoryConversation(id){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === id; })[0];
+    if(!conversation) return;
+    appConfirm('Delete "' + conversationHistoryTitle(conversation) + '"?', 'Delete').then(function(confirmed){
+      if(!confirmed) return null;
+      return api(nativeConversationPath(id), {method:'DELETE'}).then(function(res){
+        if(res.status !== 200) throw new Error('delete failed');
+        var wasOpen = chatWs.activeRoomId === id;
+        chatWs.nativeConversations = chatWs.nativeConversations.filter(function(item){ return item.id !== id; });
+        if(wasOpen) return location.reload();
+        applyNativeConversationList(chatWs.nativeConversations);
+        renderConversationHistory();
+      });
+    }).catch(function(){ showBenchToast('Couldn\'t delete that chat. Try again.'); });
+  }
+
   function conversationHistoryTimestamp(conversation){
     var state = conversation && chatWs.byRoom[conversation.id];
     // A chat is as recent as its newest message; updatedAt only tracks
@@ -18381,12 +18407,18 @@
         var bookmarked = isChatPinned('room:' + conversation.id);
         var rowAgent = conversationHistoryRowAgent(conversation, agentId);
         return heading + '<button type="button" class="conversation-history-row' + (active ? ' active' : '') + '" data-history-room-id="' + esc(conversation.id) + '">' +
-          '<span class="conversation-history-name">' + esc(conversationHistoryLabel(conversation)) + '</span>' +
+          '<span class="conversation-history-name">' + esc(conversationHistoryTitle(conversation)) + '</span>' +
           (bookmarked ? '<svg class="conversation-history-bookmark" viewBox="0 0 24 24" aria-label="Bookmarked"><path d="M6.5 4.5h11v15l-5.5-3.5-5.5 3.5z"></path></svg>' : '') +
           (rowAgent ? '<span class="conversation-history-row-agent" title="' + esc(rowAgent.name) + '">' + agentAvatarHtml(rowAgent.name, rowAgent.id, 26, null, null, false) + '</span>' : '') +
+        (historyChatCanDelete(conversation) ? '<span class="conversation-history-delete" role="button" tabindex="0" data-history-delete="' + esc(conversation.id) + '" title="Delete chat" aria-label="Delete chat">&times;</span>' : '') +
         '</button>';
       }).join('') : '<div class="conversation-history-empty">' + conversationHistoryEmpty(tab) + '</div>';
     }
+    els('[data-history-delete]', list).forEach(function(control){
+      function remove(event){ event.preventDefault(); event.stopPropagation(); deleteHistoryConversation(control.getAttribute('data-history-delete')); }
+      control.addEventListener('click', remove);
+      control.addEventListener('keydown', function(event){ if(event.key === 'Enter' || event.key === ' ') remove(event); });
+    });
     els('[data-history-room-id]', list).forEach(function(row){
       row.addEventListener('click', function(){
         var id = row.getAttribute('data-history-room-id');
