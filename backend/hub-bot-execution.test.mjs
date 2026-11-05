@@ -115,7 +115,7 @@ test('long shared-channel replies are published, and over-limit replies are shor
   await f.client.share(owner,f.input,'fixture.token');
   await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();
   assert.equal(withoutRunLabel(f.reply()),long);
-  assert.deepEqual(f.received[0].channel,{teamId,channelId});
+  assert.deepEqual(f.received[0].channel,{teamId,teamName:'',channelId});
 
   const huge='é'.repeat(9000);
   const g=fixture(t,{ownRequest:true,replyText:huge});

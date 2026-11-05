@@ -1121,3 +1121,18 @@ test('an existing job without the step-report context is edited to get it', asyn
   await cronSync.syncBotAutomation(bot);
   assert.equal(readCommands().filter((args) => args[2] === 'edit').length, 0, 'current context means nothing to edit');
 });
+
+test('a team bot works in its team folder beside bots/, found again after renames', () => {
+  const teamsRoot = path.join(path.dirname(artifactRoot), 'teams');
+  const team = { teamId: 'a'.repeat(32), teamName: 'Acme Ops' };
+  const folder = cronSync.teamBotWorkspace(team, { registrationId: 'reg1', name: 'LinkedIn' });
+  assert.equal(folder, path.join(teamsRoot, 'Acme Ops', 'LinkedIn'));
+  assert.equal(cronSync.teamBotWorkspace({ ...team, teamName: 'Acme Renamed' }, { registrationId: 'reg1', name: 'LinkedIn Helper' }), folder,
+    'the marker keeps the same folder when the team or bot is renamed');
+  const other = cronSync.teamBotWorkspace(team, { registrationId: 'reg2', name: 'LinkedIn' });
+  assert.equal(other, path.join(teamsRoot, 'Acme Ops', 'LinkedIn-2'), 'two bots with one name get their own folders');
+  const otherTeam = cronSync.teamBotWorkspace({ teamId: 'b'.repeat(32), teamName: 'Acme Ops' }, { registrationId: 'reg1', name: 'LinkedIn' });
+  assert.equal(otherTeam, path.join(teamsRoot, 'Acme Ops-2', 'LinkedIn'), 'another team never shares a folder');
+  assert.ok(!folder.startsWith(artifactRoot + path.sep), 'never inside the Solo bot folders');
+  assert.throws(() => cronSync.teamBotWorkspace({ teamId: '../x', teamName: 'x' }, { registrationId: 'reg1', name: 'x' }));
+});

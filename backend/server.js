@@ -174,7 +174,7 @@ const {
   NATIVE_DISPATCH_TOKEN_BUDGET_CODE,
   createNativeDispatchTokenBudgetTracker,
 } = require('./native-dispatch-runtime');
-const { miaosWorkspacePromptContext, PAGE_ICON_RULE, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
+const { miaosWorkspacePromptContext, PAGE_ICON_RULE, provisionMiaosWorkspace, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
 const {
   DEFAULT_WORKSPACE_ID,
   departmentsMetaKey,
@@ -1396,6 +1396,21 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       runSessions.push(id);
       sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot') });
     };
+    // A bot asked in a team channel works in that team's folder on this
+    // computer (<Mia folder>/teams/<team>/<bot>), not in the person's Solo Mia
+    // folder. The folder carries the same workspace instructions. A workflow
+    // step has its own step folder instead.
+    let teamFolder = null;
+    if (bot.registrationId && channel.teamName !== undefined && !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly
+      && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) {
+      try {
+        teamFolder = cronSync.teamBotWorkspace(channel, { registrationId: bot.registrationId, name: bot.name });
+        provisionMiaosWorkspace({ workspaceDir: teamFolder });
+      } catch (error) {
+        teamFolder = null;
+        console.error('team bot folder unavailable', error && error.message);
+      }
+    }
     const turn = await runBotReplyTurn({
       agent: sharedBot,
       senderLabel: trigger.author_email,
@@ -1421,6 +1436,7 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         maxTurns: MIAOS_BOT_MAX_TURNS,
         maxTokens: hermesTokenBudgetFromOptions(userOptions),
         profile: workspace.connectionInventory.googleToolsEnabled ? MIAOS_BOT_GOOGLE_HERMES_PROFILE : MIAOS_BOT_HERMES_PROFILE,
+        ...(teamFolder ? { workspaceDir: teamFolder } : {}),
         onSession,
       },
       signal,

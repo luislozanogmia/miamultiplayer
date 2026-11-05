@@ -49,6 +49,9 @@ const ARTIFACT_ROOT = requiredConfiguredPath(
   process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
 );
 const ARTIFACT_MARKER = '.miaos-artifact-scope.json';
+// Team bots work in <Mia folder>/teams/<team name>/<bot name>, beside bots/.
+const TEAM_ARTIFACT_ROOT = path.resolve(String(process.env.MIAOS_TEAM_ARTIFACT_DIR || '').trim()
+  || path.join(path.dirname(ARTIFACT_ROOT), 'teams'));
 const ARTIFACT_MANIFEST = '.miaos-artifacts.jsonl';
 const ARTIFACT_MANIFEST_MAX_BYTES = 1 * 1024 * 1024;
 const CRON_JOBS_FILE = process.env.HERMES_CRON_JOBS_FILE
@@ -271,6 +274,54 @@ function artifactWorkspaceForBot(bot) {
   fs.chmodSync(markerPath, 0o600);
   migrateLegacyArtifacts(botId, workspace);
   return workspace;
+}
+
+// A folder under root bound to one key by a marker file, named readably and
+// found again by its marker after a rename. Creates it on first use.
+function markedFolder(root, marker, name) {
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const rootStat = fs.lstatSync(root);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('team folder root must be a real directory');
+  const matches = (folder) => {
+    try {
+      const stat = fs.lstatSync(path.join(folder, ARTIFACT_MARKER));
+      if (stat.isSymbolicLink() || !stat.isFile()) return false;
+      const stored = JSON.parse(fs.readFileSync(path.join(folder, ARTIFACT_MARKER), 'utf8'));
+      return Object.keys(marker).every((key) => stored[key] === marker[key]);
+    } catch (_) {
+      return false;
+    }
+  };
+  for (const entry of fs.readdirSync(root)) {
+    const candidate = path.join(root, entry);
+    if (isRealDirectory(candidate) && matches(candidate)) return candidate;
+  }
+  const base = botFolderBaseName({ name });
+  for (let index = 1; index < 10000; index += 1) {
+    const folder = path.join(root, index === 1 ? base : `${base}-${index}`);
+    try {
+      fs.mkdirSync(folder, { mode: 0o700 });
+    } catch (error) {
+      if (error.code === 'EEXIST') continue;
+      throw error;
+    }
+    fs.writeFileSync(path.join(folder, ARTIFACT_MARKER), JSON.stringify(marker), { flag: 'wx', mode: 0o600 });
+    return folder;
+  }
+  throw new Error('no free team folder name');
+}
+
+// Where a team's bot works on this computer: one folder per team, one per bot
+// inside it, kept apart from the person's Solo bots. A bot is keyed by its
+// team registration, so every approved version uses the same folder.
+function teamBotWorkspace(team, bot) {
+  const teamId = String(team && team.teamId || '');
+  const registrationId = String(bot && bot.registrationId || '');
+  if (!/^[a-f0-9]{32}$/.test(teamId) || !/^[A-Za-z0-9_-]{1,120}$/.test(registrationId)) {
+    throw new Error('team and bot ids are required for a team bot folder');
+  }
+  const teamFolder = markedFolder(TEAM_ARTIFACT_ROOT, { kind: 'miaos-team-workspace', teamId }, team.teamName || 'Team');
+  return markedFolder(teamFolder, { kind: 'miaos-bot-artifact-workspace', botId: `team-${registrationId}` }, bot.name || 'Bot');
 }
 
 function writeBotInstructions(bot, instructions) {
@@ -1246,6 +1297,7 @@ module.exports = {
   automationChecklist,
   readRunReports,
   artifactWorkspaceForBot,
+  teamBotWorkspace,
   botPackageDirectoryFor,
   writeBotInstructions,
   listSessionArtifacts,

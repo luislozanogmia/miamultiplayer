@@ -122,10 +122,10 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       // Recheck revocation immediately before invoking the existing runtime.
       await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
       if(!localIdentityValid(s) || controller.signal.aborted) throw new Error('owner_changed');
-      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
+      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, registrationId:run.registration_id, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
-        channel:{teamId:s.teamId,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
+        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
       if(controller.signal.aborted) throw new Error('cancelled');
       journal.saveReply(s,run.job_id,withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName)));
     } catch {
@@ -157,7 +157,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     if(!isOwnerActive(owner) || !current || current.subject!==identity.subject || current.issuer!==identity.issuer || current.email!==identity.email) throw failure(403,'account_changed');
     const team=(me.teams||[]).find(team=>team.teamId===input.teamId && team.membership);
     if(!team || typeof team.membership.clerk_user_id!=='string' || team.membership.clerk_user_id!==identity.subject || String(team.membership.email||'').trim().toLowerCase()!==String(identity.email).trim().toLowerCase()) throw failure(403,'account_mismatch');
-    return {origin,owner,teamId:input.teamId,channelId:input.channelId,subject:team.membership.clerk_user_id,
+    return {origin,owner,teamId:input.teamId,teamName:String(team.name||''),channelId:input.channelId,subject:team.membership.clerk_user_id,
       memberName:team.membership.display_name||current.displayName||''};
   }
   return {
