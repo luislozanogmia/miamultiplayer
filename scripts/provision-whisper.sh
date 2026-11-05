@@ -13,7 +13,15 @@ source "$script_dir/whisper-release.env"
 destination="${1:?Usage: provision-whisper.sh <install folder>}"
 destination="${destination%/}"
 mkdir -p "$(dirname "$destination")"
-staging="$(mktemp -d "${destination}.staging.XXXXXX")"
+# CMake embeds its source path in the macOS binary. A destination beneath a
+# person's home would disclose that private path in the public installer and
+# fail the bundle privacy audit. Build from a neutral temporary directory;
+# the verified output still moves to the requested destination afterward.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  staging="$(mktemp -d /tmp/mia-whisper-build.XXXXXX)"
+else
+  staging="$(mktemp -d "${destination}.staging.XXXXXX")"
+fi
 trap 'rm -rf -- "$staging"' EXIT
 mkdir "$staging/out"
 
