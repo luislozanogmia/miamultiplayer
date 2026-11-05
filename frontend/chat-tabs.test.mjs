@@ -103,3 +103,10 @@ test('a browser recommendation goes to the bot that proposed it and sends right 
   assert.deepEqual(await run(null, [], true), [['toast', 'That bot is no longer here.']], 'never lands in the open team chat');
   assert.deepEqual(await run('gone', [{ id: 'b1' }]), [['toast', 'That bot is no longer here.']], 'never sent to the wrong bot');
 });
+
+test('message times in an open chat keep up, like the sidebar ones', () => {
+  assert.match(source, /'<span class="chat-msg-time"' \+ \(m\.pending \|\| m\.sendFailed \|\| !m\.ts \? '' : ' data-ts="' \+ Number\(m\.ts\) \+ '"'\)/);
+  assert.match(source, /els\('#panel-chat \.chat-dm-time\[data-ts\], #panel-chat \.chat-msg-time\[data-ts\]'\)/);
+  // Hidden, the timer skips them, so they catch up as soon as Mia is back in view.
+  assert.match(source, /setInterval\(refreshChatTimes, 60000\);\n\s*document\.addEventListener\('visibilitychange', refreshChatTimes\);/);
+});

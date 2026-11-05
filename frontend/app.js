@@ -12149,7 +12149,7 @@
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
     var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
       (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
-      '<span class="chat-msg-time">' + timeText + '</span></div>';
+      '<span class="chat-msg-time"' + (m.pending || m.sendFailed || !m.ts ? '' : ' data-ts="' + Number(m.ts) + '"') + '>' + timeText + '</span></div>';
     // A background task's live activity line ("✓ research done, building
     // table") — muted so a thread of them reads as a progress feed, not a
     // stack of full agent messages.
@@ -17931,14 +17931,17 @@
       if(account) account.setAttribute('aria-expanded', 'false');
       openSettingsDrawer();
     });
-    // Sidebar times would otherwise stay at "just now" until the next render.
-    setInterval(function(){
+    // Sidebar and message times would otherwise stay at "just now" until the
+    // next render, which an open chat may not get for hours.
+    function refreshChatTimes(){
       if(document.hidden) return;
-      els('#panel-chat .chat-dm-time[data-ts]').forEach(function(node){
+      els('#panel-chat .chat-dm-time[data-ts], #panel-chat .chat-msg-time[data-ts]').forEach(function(node){
         var text = chatRelTime(Number(node.getAttribute('data-ts')) || 0);
         if(node.textContent !== text) node.textContent = text;
       });
-    }, 60000);
+    }
+    setInterval(refreshChatTimes, 60000);
+    document.addEventListener('visibilitychange', refreshChatTimes);
     var nativeNotifications = nativeDesktopNotifications();
     if(nativeNotifications && typeof nativeNotifications.onClick === 'function') nativeNotifications.onClick(function(roomId){
       var reviewApp = window.MiaAppsPage && window.MiaAppsPage.reviewTagApp(roomId);
