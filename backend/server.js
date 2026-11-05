@@ -9281,7 +9281,12 @@ function localOAuthCallbackPort() {
 
 const oauthCallbackPort = localOAuthCallbackPort();
 if (oauthCallbackPort) {
-  app.listen(oauthCallbackPort, '127.0.0.1', () => {
+  const callbackServer = app.listen(oauthCallbackPort, '127.0.0.1', () => {
     console.log(`Mia OAuth callback listening on port ${oauthCallbackPort}`);
+  });
+  // Another local copy may already hold the callback port. Mia still works
+  // without this listener, so say so instead of crashing.
+  callbackServer.on('error', (err) => {
+    console.warn(`Mia OAuth callback port ${oauthCallbackPort} unavailable: ${err.code || err.message}`);
   });
 }
