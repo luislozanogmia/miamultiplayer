@@ -776,7 +776,7 @@ test('a bot reply shows its run label apart from the text; people cannot post on
 function companyRowEnv(activeRoomId){
   return {document:{createElement:()=>({className:'',innerHTML:'',setAttribute(){},addEventListener(){}})},
     companyBotPlace:()=>({action:'open',channel:{id:'c1'}}),hubChannel:()=>({id:'c1'}),chatWs:{activeRoomId},
-    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){}};
+    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){},companyBotCanRemove:()=>false};
 }
 test('a company bot row never lights up: the open channel is the channel row\'s to show',()=>{
   const row=appFunction('companyBotRow',companyRowEnv('c1'));
