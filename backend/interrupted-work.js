@@ -46,9 +46,14 @@ function createInterruptedWork({ db, now = () => new Date().toISOString() }) {
   const clock = setInterval(touch, CLOCK_INTERVAL_MS);
   if (clock.unref) clock.unref();
 
-  const insert = db.prepare(`INSERT OR IGNORE INTO interrupted_work
+  const insert = db.prepare(`INSERT INTO interrupted_work
     (id, kind, ref, owner, title, detail, may_repeat, stopped_at, state)
-    VALUES (@id, @kind, @ref, @owner, @title, @detail, @mayRepeat, @stoppedAt, 'open')`);
+    VALUES (@id, @kind, @ref, @owner, @title, @detail, @mayRepeat, @stoppedAt, 'open')
+    ON CONFLICT(id) DO UPDATE SET
+      ref = excluded.ref, owner = excluded.owner, title = excluded.title,
+      detail = excluded.detail, may_repeat = excluded.may_repeat,
+      stopped_at = excluded.stopped_at, state = 'open'
+    WHERE interrupted_work.state IN ('started', 'failed')`);
   const openRow = db.prepare("SELECT * FROM interrupted_work WHERE id = ? AND state = 'open'");
   const setState = db.prepare("UPDATE interrupted_work SET state = ? WHERE id = ? AND state = 'open'");
   const idOf = (kind, key) => `${kind}:${key}`;
@@ -62,7 +67,8 @@ function createInterruptedWork({ db, now = () => new Date().toISOString() }) {
     touch,
     stop() { clearInterval(clock); },
     handle(kind, handler) { handlers.set(kind, handler); },
-    // A row already seen keeps its first answer, so a restart never asks twice.
+    // An unanswered or dismissed row keeps its state. Work that was restarted
+    // and then interrupted again receives a new chance to recover.
     record(kind, entries) {
       for (const entry of entries) {
         insert.run({

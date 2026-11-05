@@ -6575,8 +6575,8 @@ async function nativeTurnFiles(dispatch, trigger) {
       });
       if (!read) throw new Error('attachment not found');
       files.push({ id: attachment.id, filename: read.metadata.filename, mimeType: read.metadata.mimeType, bytes: read.bytes });
-    } catch (error) {
-      console.error('turn attachment unreadable', attachment.id, error && error.message);
+    } catch {
+      console.error('turn attachment unreadable');
       unreadable.push(attachment.filename);
     }
   }
@@ -9021,7 +9021,7 @@ async function initializeBrowserWork() {
   interruptedWork.record('browser', coordinator.recoverInterrupted().map(work => {
     const mayRepeat = work.operations.some(operation => operation.status === 'uncertain');
     return {
-      key: `${work.id}:${work.epoch}`,
+      key: work.id,
       owner: work.ownerId,
       title: `Browser work: ${work.goal || 'unfinished task'}`,
       detail: mayRepeat ? 'A page action may have gone through, so check the page before running it again.' : 'Was working in your browser tabs.',

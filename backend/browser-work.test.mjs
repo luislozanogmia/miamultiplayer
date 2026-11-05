@@ -510,6 +510,19 @@ test('restart preserves partial outputs and holds active writes', async t => {
   await assert.rejects(f.coordinator.recover('owner', work.id, ['second']), /uncertain/);
 });
 
+test('unanswered browser recovery survives repeated launches without a new epoch', async t => {
+  const f = fixture(t); const work = await f.coordinator.create('owner', f.input);
+  work.status = 'working'; work.workers[0].status = 'working';
+  f.store.put(work);
+  f.coordinator.recoverInterrupted();
+  const first = f.store.get(work.id);
+  f.coordinator.recoverInterrupted();
+  const second = f.store.get(work.id);
+  assert.equal(second.status, 'waiting_for_user');
+  assert.equal(second.epoch, first.epoch);
+  assert.equal(second.workers[0].epoch, first.workers[0].epoch);
+});
+
 async function uncertainPrerequisiteFixture(t, { sharedDescendant = false, uncertainWorker = 'first' } = {}) {
   const f = fixture(t, { authorizeGroup: async (owner, group, tab) => owner === 'owner' && group === 'group' && (tab === undefined || [1, 2, 3, 4, 5].includes(tab)) });
   const workers = [

@@ -526,11 +526,12 @@ def _with_login_identity(env):
 
 
 def _stderr_tail(native_stderr):
-    """The first native stderr lines, for the raised error - a gateway-only failure with
-    stderr sent to DEVNULL is undiagnosable (#44): the reporter had to patch the plugin to
-    learn the stream was empty."""
-    text = ' '.join(line.strip() for line in native_stderr if line.strip())
-    return f' (native stderr: {text[:400]})' if text else ''
+    """Keep evidence that stderr existed without copying provider or local data to logs."""
+    return ' (native stderr present)' if any(line.strip() for line in native_stderr) else ''
+
+
+def _safe_native_error_code(code):
+    return code if isinstance(code, str) and code in NATIVE_ERROR_STATUS else 'unknown'
 
 
 class Stream:
@@ -888,8 +889,7 @@ class Client:
                         except queue.Empty:
                             continue
                         if isinstance(event, Exception):
-                            # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
-                            raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(native_stderr)) from event
+                            raise RuntimeError('Invalid native stream-json output' + _stderr_tail(native_stderr)) from None
                         deadline = time.monotonic() + timeout
                         return event
                 def send(data):
@@ -979,12 +979,10 @@ class Client:
                 if admission.used:
                     if admission.status != 200 or not admission.capture.complete:
                         # Native's last error is the admission denial; name the first attempt's outcome so reports are diagnosable.
-                        first = f'first upstream attempt: status {admission.status}, capture ' + ('complete' if admission.capture.complete else 'incomplete') + (f', relay failure {admission.failure}' if admission.failure else '') + f', native retries denied: {admission.denied}'
-                        if admission.error_text():
-                            first += ', upstream said: ' + admission.error_text()[:500]
+                        first = f'first upstream attempt: status {admission.status}, capture ' + ('complete' if admission.capture.complete else 'incomplete') + (', relay failure present' if admission.failure else '') + f', native retries denied: {admission.denied}'
                         # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                         status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
-                        raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
+                        raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (f'; native error {_safe_native_error_code(native_error_code)}' if native_error else ''),
                                              status, request_id=admission.request_id)
                     assistants = [admission.capture.message]
                     stopped = True
@@ -992,8 +990,8 @@ class Client:
                 if native_error and not native_failure_handled:
                     if native_error_code == 'authentication_failed' and not admission.used:
                         # No usable login where Hermes runs native: it refuses before any upstream request; only its /api/hello pre-flight reaches the relay.
-                        raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT} (native: {native_error}){_stderr_tail(native_stderr)}')
-                    raise ClaudeAPIError('Native API error: ' + native_error, NATIVE_ERROR_STATUS.get(str(native_error_code)))
+                        raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT}{_stderr_tail(native_stderr)}')
+                    raise ClaudeAPIError('Native API error: ' + _safe_native_error_code(native_error_code), NATIVE_ERROR_STATUS.get(str(native_error_code)))
                 if len(results) != 1 or not assistants or not stopped:
                     raise RuntimeError('Incomplete native response: assistant, message_stop and one result required')
                 final = results[0]
@@ -1013,7 +1011,7 @@ class Client:
                         calls.append({'id': block['id'], 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(block['input'], separators=(',', ':'), allow_nan=False)}})
                 boundary = bool(calls) and final.get('subtype') == 'error_max_turns' and (fast or proc_returncode == 1)
                 if not boundary and not native_failure_handled and ((not fast and proc_returncode != 0) or final.get('is_error') or final.get('subtype') != 'success'):
-                    raise RuntimeError('Native request failed: ' + str(final.get('subtype')) + _stderr_tail(native_stderr))
+                    raise RuntimeError('Native request failed' + _stderr_tail(native_stderr))
                 usage = assistants[0]['usage'] if admission.used else final.get('usage')
                 if not isinstance(usage, dict) or not all(isinstance(usage.get(k), (int, float)) for k in ('input_tokens', 'output_tokens')):
                     raise RuntimeError('Native result missing complete token usage')

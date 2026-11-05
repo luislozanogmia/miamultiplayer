@@ -452,6 +452,9 @@ function createBrowserWorkCoordinator({ store, hermes, browser, authorizeGroup, 
     for (const work of store.list()) {
       if (terminal.has(work.status)) continue;
       interrupted.push(work.id);
+      // A prior launch already held this work for the person's answer.
+      // Opening Mia again must not turn one interruption into a new epoch.
+      if (work.status === 'waiting_for_user') continue;
       work.epoch++; work.synthesisEpoch = (work.synthesisEpoch || 0) + 1;
       work.status = 'waiting_for_user';
       if (work.synthesis?.incomplete) { work.synthesis.status = 'incomplete'; work.synthesis.verified = false; work.synthesis.interruptedBy = 'restart'; }

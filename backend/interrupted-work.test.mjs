@@ -38,6 +38,20 @@ test('an answered item never comes back, even if its record is seen again', asyn
   work.stop();
 });
 
+test('work started after one crash is offered again if it crashes a second time', async () => {
+  const { open, clock } = fixture();
+  const first = open();
+  first.record('chat', [entry('same-dispatch')]);
+  await first.resolve('me', { start: ['chat:same-dispatch'] });
+  first.stop();
+  clock.now = '2026-11-04T10:00:00.000Z';
+  const second = open();
+  second.record('chat', [entry('same-dispatch', { detail: 'Interrupted again.' })]);
+  assert.equal(second.list('me').length, 1);
+  assert.equal(second.list('me')[0].detail, 'Interrupted again.');
+  second.stop();
+});
+
 test('an unanswered item stays for the next time Mia opens', () => {
   const { open } = fixture();
   const first = open();

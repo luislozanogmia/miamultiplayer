@@ -130,6 +130,22 @@ test('upstream runtime rejects inherited paid-API and custom-endpoint overrides 
   assert.equal(result.stdout.trim(), 'refused');
 });
 
+test('Claude native diagnostics never echo stderr or untrusted error codes', () => {
+  const result = runPython(`
+import sys
+sys.path.insert(0, sys.argv[1])
+from directsdk import _stderr_tail, _safe_native_error_code
+private = 'https://example.test/callback?token=fake-secret-value'
+assert private not in _stderr_tail([private])
+assert _stderr_tail([private]) == ' (native stderr present)'
+assert _safe_native_error_code(private) == 'unknown'
+assert _safe_native_error_code('rate_limit') == 'rate_limit'
+print('redacted')
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'redacted');
+});
+
 test('a tool called with no arguments does not break the stream reader', () => {
   const result = runPython(`
 import json, sys
