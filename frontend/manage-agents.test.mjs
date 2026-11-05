@@ -752,7 +752,7 @@ test('sidebar collapses activity and unread state into one orange dot', async ()
   assert.doesNotMatch(indicator, /for\s*\(|&times;|tasks\.length/);
   assert.match(sidebarActivity, /activeAutomationRunsForRoom\(entry\.roomId\)\.length > 0/);
   assert.doesNotMatch(sidebarActivity, /workIndicatorsForAgent|activeAutomationRunsForAgent/);
-  assert.match(sidebarActivity, /roomHasLocalTypingActivity\(entry\.roomId\)/);
+  assert.doesNotMatch(sidebarActivity, /Typing/, 'typing a message is not the bot working');
   assert.match(source, /renderChatActivityIndicator\(hasActivity, chatNeedsAttention\(roomId\)\)/);
   assert.doesNotMatch(source, /chat-task-count/);
   assert.match(styles, /\.chat-activity-dot\{[^}]*background:oklch\(0\.72 0\.16 60\)/);

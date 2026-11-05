@@ -4848,7 +4848,6 @@
     watchReconnectTimer: null,
     lastNotifiedAt: {}         // conversationId -> ms, so an automation finish doesn't double-notify its reply
   };
-  var localChatTyping = {roomId: null, active: false, timer: null};
   var chatSearchDirectory = {humans: [], agents: [], loaded: false, loading: false, request: null};
 
   // Hub rooms use the same timeline and composer but a separate authenticated
@@ -10552,29 +10551,6 @@
     return agentHasLiveWork(agent) ? [{title: 'Preparing a response', transient: true}] : [];
   }
 
-  function roomHasLocalTypingActivity(roomId){
-    return !!(roomId && localChatTyping.active && localChatTyping.roomId === roomId);
-  }
-
-  function setLocalChatTypingActivity(active){
-    if(inHubRoom()){ if(active) sendHubTyping(); return; }
-    if(localChatTyping.timer){
-      clearTimeout(localChatTyping.timer);
-      localChatTyping.timer = null;
-    }
-    var nextRoomId = active ? chatWs.activeRoomId : null;
-    var changed = localChatTyping.active !== !!active || localChatTyping.roomId !== nextRoomId;
-    localChatTyping.active = !!active;
-    localChatTyping.roomId = nextRoomId;
-    if(active){
-      localChatTyping.timer = setTimeout(function(){
-        localChatTyping.timer = null;
-        setLocalChatTypingActivity(false);
-      }, 2500);
-    }
-    if(changed) renderChatSidebar();
-  }
-
   function roomHasModelResponseActivity(roomId){
     if(!roomId) return false;
     var state = chatWs.byRoom && chatWs.byRoom[roomId];
@@ -10583,7 +10559,6 @@
 
   function sidebarEntryHasActivity(entry){
     if(!entry) return false;
-    if(roomHasLocalTypingActivity(entry.roomId)) return true;
     if(roomHasModelResponseActivity(entry.roomId)) return true;
     return activeAutomationRunsForRoom(entry.roomId).length > 0;
   }
@@ -15156,7 +15131,6 @@
     // A saved tab's name can be stale (a DM partner learned later); the Hub's is current.
     if(inHubRoom(roomId))label=hubChannelTitle(hubChannel(roomId));
     chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
-    setLocalChatTypingActivity(false);
     closeMentionPopover();
     clearChatAttachmentError();
     chatRoster.open = null;
@@ -18673,7 +18647,6 @@
       var app = chatAttachment.app;
       if(app) text = (text ? text + '\n\n' : '') + app.name + ': ' + app.url;
       if((!text && !file) || chatAttachment.busy) return;
-      setLocalChatTypingActivity(false);
       function reallySend(){
         closeMentionPopover();
         if(!file){
@@ -18738,7 +18711,6 @@
       if(hint) hint.textContent = hasDraft ? 'Enter to send' : defaultHint;
       syncInlineChatSuggestion();
       renderComposerTaskControl();
-      setLocalChatTypingActivity(!!input.value.trim() && document.activeElement === input);
     }
     if(plusBtn && fileInput){
       plusBtn.addEventListener('click', function(e){
@@ -18772,7 +18744,6 @@
     });
     input.addEventListener('input', syncDraftState);
     input.addEventListener('focus', syncDraftState);
-    input.addEventListener('blur', function(){ setLocalChatTypingActivity(false); });
     sendBtn.addEventListener('click', function(){
       var taskId = sendBtn.getAttribute('data-stop-task-id');
       if(taskId){ stopTaskFromComposer(taskId); return; }

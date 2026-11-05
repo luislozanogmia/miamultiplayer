@@ -15,6 +15,7 @@ async function save({ onboardingComplete }) {
     'renderHarnessAuth', 'closeHarnessOnboarding', 'setAppLoading', 'location', 'localStorage', 'chatModelPicker',
     'showBenchToast', 'harnessProviderDisplayName', 'renderHarnessOnboarding', 'finishConnectOnly', 'cache',
     `var harnessAuthSaveInProgress = false, harnessAuthAwaitingSave = true, harnessConnectOnly = false;
+     var harnessSetupHintTimer = null, showHarnessSetupProgress = function(){};
      var harnessOnboardingState = state, harnessSettingsCache = cache;
      renderHarnessSettings = (function(inner){ return function(value){ harnessSettingsCache = value; inner(value); }; })(renderHarnessSettings);
      ${body}; saveHarnessSelection();`);
