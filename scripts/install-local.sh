@@ -55,6 +55,7 @@ git -C "$extract_root" apply "$script_dir/hermes-model-switch-history.patch"
 git -C "$extract_root" apply "$script_dir/hermes-gpt6-tiers.patch"
 git -C "$extract_root" apply "$script_dir/hermes-mia-browser-worker-scheduler.patch"
 git -C "$extract_root" apply "$script_dir/hermes-process-secrets.patch"
+git -C "$extract_root" apply "$script_dir/hermes-external-process-streaming.patch"
 rm -rf -- "$extract_root/.git"
 
 echo "[2/7] Installing the pinned Hermes runtime with no provider setup or seeded skills"

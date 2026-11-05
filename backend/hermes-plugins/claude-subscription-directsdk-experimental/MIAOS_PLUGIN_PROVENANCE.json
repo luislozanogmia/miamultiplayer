@@ -10,6 +10,7 @@
     "model_catalog.py offers Haiku 5.5 through its plain native route (1M context by default in Claude Code 2.1.293+); retired Haiku 4.5 and Opus 5/4.8 aliases resolve to their 5.5 successors",
     "directsdk_setup.py preserves successful empty discovery, __init__.py preserves that result and removes curated fallback_models so account-only retired rows cannot advertise unreported successor models",
     "directsdk_setup.py and plugin.yaml default the claude_code_telemetry setting to off, keeping Claude Code quiet as Mia always has",
-    "model_catalog.py omits Mythos 5.1, which Mia does not offer"
+    "model_catalog.py omits Mythos 5.1, which Mia does not offer",
+    "directsdk.py sends an empty activity chunk at most once a second while a content block is open and the API is sending pings or deltas, and __init__.py declares streams_chunks so Hermes uses its streaming path (scripts/hermes-external-process-streaming.patch), which times silence rather than the whole call"
   ]
 }

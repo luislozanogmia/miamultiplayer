@@ -799,6 +799,9 @@ def process_workdir():
         return _process_cwd
 
 
+BLOCK_ACTIVITY_INTERVAL = 1.0  # seconds between activity chunks while a content block is open
+
+
 class Client:
     HERMES_SKIP_TRANSPORT_WRAP = True
     HERMES_SKIP_ASYNC_WRAP = True
@@ -1055,6 +1058,7 @@ class Client:
                 assistants, results, stopped, emitted = [], [], False, ''
                 native_error = native_error_code = None
                 fast = False
+                last_activity, block_open = 0.0, False
                 while True:
                     event = receive()
                     if event is None:
@@ -1075,12 +1079,22 @@ class Client:
                         native = event['event']
                         if native['type'] == 'message_stop':
                             stopped = True
+                        elif native['type'] == 'content_block_start':
+                            block_open = True
+                        elif native['type'] == 'content_block_stop':
+                            block_open = False
                         delta = native.get('delta', {})
                         if delta.get('type') == 'text_delta':
                             emitted += delta['text']
                             yield self._chunk(kwargs['model'], {'content': delta['text']})
                         elif delta.get('type') == 'thinking_delta':
                             yield self._chunk(kwargs['model'], {'reasoning_content': delta['thinking']})
+                        elif block_open and native['type'] in ('ping', 'content_block_delta') and time.monotonic() - last_activity >= BLOCK_ACTIVITY_INTERVAL:
+                            # The API holds back a long tool argument and sends only pings until it is
+                            # complete. An empty chunk tells Hermes the model is working; the finished
+                            # call still arrives once, whole. Pings outside a block prove nothing.
+                            last_activity = time.monotonic()
+                            yield self._chunk(kwargs['model'], {})
                 if fast:
                     with request.lock:
                         admission = request.admission

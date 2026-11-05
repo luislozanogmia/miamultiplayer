@@ -18,7 +18,7 @@ test("Windows autocrlf checkout preserves runtime patch bytes", () => {
     run(["init", "--quiet"]);
     run(["config", "core.autocrlf", "true"]);
     fs.copyFileSync(path.join(root, ".gitattributes"), path.join(fixture, ".gitattributes"));
-    const names = ["hermes-noninteractive.patch", "hermes-process-secrets.patch"];
+    const names = ["hermes-noninteractive.patch", "hermes-process-secrets.patch", "hermes-external-process-streaming.patch"];
     for (const name of names) {
       const patch = fs.readFileSync(path.join(root, "scripts", name));
       fs.writeFileSync(path.join(fixture, name), patch);
