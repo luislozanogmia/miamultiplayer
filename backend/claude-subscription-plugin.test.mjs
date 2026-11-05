@@ -55,10 +55,21 @@ test('account model discovery retains Sonnet and Haiku 5.5 without granting unkn
     'with patch.object(setup,"_resolve",return_value=["test-claude"]), patch.object(setup,"setup_status",return_value={"logged_in":True}), patch.object(setup,"Admission",return_value=gate), patch.object(setup.subprocess,"run",return_value=SimpleNamespace(stdout=json.dumps(reply))):',
     ' rows=setup.discover_models(env={})',
     ' assert [r["id"] for r in rows] == ["claude-sonnet-5-5[1m]", "claude-haiku-5-5", "claude-opus-5-5[1m]"], rows',
-    ' assert all(r["upstream_requests"] == 0 for r in rows)',
+    ' assert all(r["upstream_requests"] is None for r in rows)',
     ' reply["response"]["response"]["models"] = [{"resolvedModel":m} for m in ["claude-haiku-4-5-20251001", "claude-opus-5", "claude-opus-4-8"]]',
     ' with patch.object(setup.subprocess,"run",return_value=SimpleNamespace(stdout=json.dumps(reply))):',
     '  assert setup.discover_models(env={}) == []',
+  ].join('\n'));
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('every Claude request runs from one folder so its path cannot break the prompt cache', () => {
+  const result = runPython([
+    'import sys',
+    'sys.path.insert(0,sys.argv[1])',
+    'import directsdk',
+    'first=directsdk.Client(env={})._workdir()',
+    'assert first and first == directsdk.Client(env={})._workdir()',
   ].join('\n'));
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });

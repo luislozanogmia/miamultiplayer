@@ -1,8 +1,11 @@
 """Setup-time probes of the user's Claude CLI: login state and its own model picker.
 
-Both are offline with respect to Anthropic: ``auth status`` reads the local credential store, and
-the ``initialize`` handshake enumerates the picker without a Messages request (the admission relay
-proves it by counting upstream calls). Anything unexpected returns ``None``/``False`` so callers
+Neither sends a Messages request: ``auth status`` reads the local credential store, and the
+``initialize`` handshake enumerates the picker without one: it writes only ``initialize`` and no
+user turn. The handshake runs first-party, because Claude Code serves the account's own picker only
+then, so no relay counts its upstream calls and each row's ``upstream_requests`` is ``None``
+(unobserved). With an inherited auth/backend override it stays behind the relay, which counts them. With the ``claude_code_telemetry`` setting on (the default) the CLI
+fetches its feature flags for the handshake, which is what makes its picker list every model. Anything unexpected returns ``None``/``False`` so callers
 fall back to the pinned catalog rather than failing setup.
 """
 import json
@@ -10,33 +13,128 @@ import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Mapping
 
 try:
     from .admission import Admission
-    from .model_catalog import CONTEXT_WINDOWS, native_model
+    from .model_catalog import CONTEXT_WINDOWS, MODEL_METADATA, native_model
 except ImportError:
     from admission import Admission
-    from model_catalog import CONTEXT_WINDOWS, native_model
+    from model_catalog import CONTEXT_WINDOWS, MODEL_METADATA, native_model
 
 INSTALL_HINT = ("Mia couldn't find the Claude Code command. Claude Desktop alone does not install the Claude Code command. "
                 "Install Claude Code from https://code.claude.com/docs/en/setup, then restart Mia and try again.")
 LOGIN_HINT = "Claude Code is installed but not logged in. Run `claude auth login`, then select this provider again."
+LOGGED_OUT_HINT = ("Claude Code is installed but has no usable login in the environment Hermes runs it in. Run `claude auth login` "
+                   "as the user Hermes runs as, set CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) in Hermes' environment, "
+                   "or point the claude_config_dir plugin setting (or CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR) "
+                   "at a logged-in config directory, then try again.")
+
+
+# Install prefixes probed after PATH, as core's anthropic_adapter does: a service or GUI launch (macOS
+# LaunchAgent, Desktop-spawned backend) inherits a bare PATH that carries none of them.
+_HOME_PREFIXES = (".local/bin", ".claude/local", "bin", ".npm-global/bin", ".bun/bin", ".volta/bin")
+_SYSTEM_PREFIXES = ("/opt/homebrew/bin", "/usr/local/bin")
+
+
+def _install_prefixes(env):
+    home = env.get("USERPROFILE" if os.name == "nt" else "HOME")
+    prefixes = [os.path.join(home, prefix) for prefix in _HOME_PREFIXES] if home else []
+    return prefixes + ([] if os.name == "nt" else list(_SYSTEM_PREFIXES))
 
 
 def _resolve(command, env):
     command = list(command) if command else [env.get("CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND") or "claude"]
     head = command[0]
-    exe = head if os.path.isabs(head) and os.access(head, os.X_OK) else shutil.which(head)
+    exe = head if os.path.isabs(head) and os.access(head, os.X_OK) else shutil.which(head, path=env.get("PATH") or os.defpath)
+    if not exe and head == "claude":
+        # Only the default bare name: an explicit command or override is the user's choice, never second-guessed.
+        exe = shutil.which(head, path=os.pathsep.join(_install_prefixes(env)))
     return ([exe] + command[1:]) if exe else None
+
+
+# The plugin's settings live at plugins.entries.<manifest name>.settings in the active profile's
+# config.yaml (plugin.yaml `config_schema`; Desktop → Capabilities → Plugins, or `hermes config set`).
+PLUGIN_ID = "claude-subscription-directsdk-experimental"
+TELEMETRY_SETTING = "claude_code_telemetry"
+CONFIG_DIR_SETTING = "claude_config_dir"
+# Any one of these turns off Claude Code's feature-flag fetch, and with it every model its picker
+# only offers through a flag (#86: 11 models become 5). Off only when the user turns the setting off.
+QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"}
+# Never wanted from a child the plugin starts, setting or not: a background self-update of the
+# user's CLI mid-session, and the feedback path (/feedback, /bug, /share, Claude-drafted feedback)
+# that uploads a session to Anthropic. Neither gates feature flags. DISABLE_FEEDBACK_COMMAND is the
+# current name of DISABLE_BUG_COMMAND, which the CLI still accepts. CLAUDE_CODE_DISABLE_TERMINAL_TITLE
+# also stops native's own session-title request (#116): under an inherited Agent SDK or non-CLI
+# entrypoint, or a server flag, it races the turn for the one upstream request the relay admits.
+ALWAYS_QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_FEEDBACK_COMMAND": "1", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
+# Native names its caller on every request (`cc_entrypoint` in the billing header, the user agent).
+# Under `-p` it defaults to `sdk-cli`, and subscriptions draw the 5-hour window about 2x faster per
+# token for `sdk-*` callers than for the interactive CLI or a client's own name (anthropics/claude-code#97074).
+# An inherited host name (`sdk-py`, `claude-desktop`) would reach the child too, so it is overwritten.
+# Off the `sdk-*` names native offers its artifact tool and adds a scratchpad line to every request;
+# CLAUDE_CODE_DISABLE_ARTIFACT keeps the request identical to the `sdk-cli` one apart from the name.
+CALLER_IDENTITY = {"CLAUDE_CODE_ENTRYPOINT": "hermes-agent", "CLAUDE_CODE_DISABLE_ARTIFACT": "1"}
+_OFF = ("false", "0", "no", "off")
+# Inherited auth/backend overrides the request path refuses (directsdk.Client); discovery treats them alike.
+BACKEND_OVERRIDES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_FOUNDRY_API_KEY")
+BACKEND_SWITCHES = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+
+
+def _setting(key, default=None):
+    """Read one plugin setting, with unreadable config or missing keys treated as not set.
+
+    Read from the active profile's config on every call (``load_config_readonly`` resolves
+    ``get_hermes_home()`` per call and caches on the file signature), so a multi-profile gateway
+    honors each profile's choice and a change applies to the next spawn without a restart.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+        value = load_config_readonly()
+    except Exception:
+        return default
+    for segment in ("plugins", "entries", PLUGIN_ID, "settings", key):
+        if not isinstance(value, Mapping) or segment not in value:
+            return default
+        value = value[segment]
+    return value
+
+
+def telemetry_enabled():
+    """The active profile's ``claude_code_telemetry`` plugin setting, default off in Mia."""
+    value = _setting(TELEMETRY_SETTING, False)
+    if isinstance(value, str):
+        return value.strip().lower() not in _OFF
+    return value is not False and value != 0
+
+
+def apply_config_dir(env):
+    """Select the active profile's Claude config directory on a child env, in place."""
+    override = env.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)
+    setting = _setting(CONFIG_DIR_SETTING)
+    config = (setting.strip() if isinstance(setting, str) else "") or override or env.get("CLAUDE_CONFIG_DIR")
+    if config:
+        env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(config)
+    return env
+
+
+def apply_traffic_policy(env, telemetry=None):
+    """Set the plugin's Claude Code traffic flags on a child ``env`` (in place) and return it.
+
+    Never removes anything: a flag the user exported in Hermes' own environment
+    (``DISABLE_TELEMETRY``, ``DO_NOT_TRACK``, ...) still reaches the child with the setting on.
+    The caller name is the one value replaced, whatever the parent set.
+    """
+    env.update(ALWAYS_QUIET, **CALLER_IDENTITY)
+    if not (telemetry_enabled() if telemetry is None else telemetry):
+        env.update(QUIET_TRAFFIC)
+    return env
 
 
 def _child_env(env):
     child = dict(env)
-    config = child.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)
-    if config:
-        child["CLAUDE_CONFIG_DIR"] = config
-    child.update(CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_TELEMETRY="1", DISABLE_ERROR_REPORTING="1")
-    return child
+    apply_config_dir(child)
+    return apply_traffic_policy(child)
 
 
 def _plan_label(raw):
@@ -67,6 +165,12 @@ def setup_status(command=None, env=None, timeout=20):
             "login_command": login_command}
 
 
+def _first_party(env):
+    """No inherited auth or backend override: native talks to Anthropic with the CLI's own login."""
+    return (not any(env.get(key) for key in BACKEND_OVERRIDES)
+            and all(str(env.get(key, "")).strip().lower() in (*_OFF, "") for key in BACKEND_SWITCHES))
+
+
 def discover_models(command=None, env=None, timeout=40):
     """The account's live picker as ``[{id, label, note, upstream_requests}]`` in Hermes route ids,
     or ``None`` when the CLI is missing, logged out, or the handshake fails."""
@@ -77,9 +181,17 @@ def discover_models(command=None, env=None, timeout=40):
     if resolved is None or not setup_status(command=resolved, env=env, timeout=timeout)["logged_in"]:
         return None
     child = _child_env(env)
-    gate = Admission("https://api.anthropic.com", timeout)
+    # The account's own picker (entitlement-gated models such as Mythos, older models it still runs) is
+    # native's served catalog, and native serves it only first-party: behind any ANTHROPIC_BASE_URL,
+    # our relay included, it logs `[servedCatalog] off (not_first_party)` and answers a generic list.
+    # The handshake therefore talks to Anthropic directly. It writes only `initialize` and closes
+    # stdin, so native has no user turn to query; its debug log shows bootstrap, MCP-directory and
+    # telemetry fetches and no Messages request. An inherited auth/backend override keeps the relay,
+    # since the request path refuses those environments anyway and the bearer must not leave for them.
+    gate = None if _first_party(child) else Admission("https://api.anthropic.com", timeout)
     try:
-        child["ANTHROPIC_BASE_URL"] = gate.url
+        if gate is not None:
+            child["ANTHROPIC_BASE_URL"] = gate.url
         argv = resolved + ["-p", "--model", "sonnet", "--input-format", "stream-json", "--output-format", "stream-json",
                            "--verbose", "--tools", "", "--setting-sources", "", "--strict-mcp-config",
                            "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-session-persistence"]
@@ -91,26 +203,117 @@ def discover_models(command=None, env=None, timeout=40):
         rows = [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
         response = next(r["response"] for r in rows if r.get("type") == "control_response")
         native = response.get("response", {}).get("models") or []
-        upstream = int(bool(gate.used))
+        # Counted only behind the relay; first-party nothing observes the CLI's traffic, so say so.
+        upstream = None if gate is None else int(bool(gate.used))
     except (OSError, ValueError, StopIteration, KeyError, subprocess.SubprocessError):
         return None
     finally:
-        gate.close()
+        if gate is not None:
+            gate.close()
     if upstream:
         return None
-    # Pro / Team-standard seats bill Fable to usage credits from the first request; the CLI only
-    # says so at request time, so apply the documented plan rule here.
+    # Fable 5 and 5.1 are a standard part of Max and Ultra and of premium Team/Enterprise seats; Pro and
+    # standard seats bill both to usage credits from the first request, and under -p Claude Code bills
+    # without asking. The CLI says so only at request time, so apply the documented rule here
+    # (https://support.claude.com/en/articles/15424964). The handshake names the plan, not the seat
+    # tier, so a Team/Enterprise row says the rule applies to standard seats instead of guessing.
     plan = str((response.get("response", {}).get("account") or {}).get("subscriptionType") or "").lower()
-    credit_billed_on_plan = {"claude-fable-5-1"} if plan and "max" not in plan else set()
+    fable = {"claude-fable-5", "claude-fable-5-1"}
+    if "pro" in plan:
+        credit_billed_on_plan, credit_note = fable, "usage credits"
+    elif "team" in plan or "enterprise" in plan:
+        credit_billed_on_plan, credit_note = fable, "usage credits on standard seats"
+    else:
+        credit_billed_on_plan, credit_note = set(), "usage credits"
+    # The pinned table adds metadata (1M route, window, aliases) to the models it knows; it never
+    # decides visibility, so a model the CLI ships before the table does is listed the same day.
+    announced = [str(row.get("resolvedModel") or row.get("value") or "") for row in native]
+    # An unpinned model gets [1m] only from the CLI itself; offered both ways it collapses onto [1m]
+    # like the pinned 1M models (behind the relay the suffix is the client-side window selection, #8).
+    long_context = {model.removesuffix("[1m]") for model in announced if model.endswith("[1m]")}
     routes = {}
-    for row in native:
-        base = str(row.get("resolvedModel") or row.get("value") or "").removesuffix("[1m]")
+    for row, model in zip(native, announced):
+        base = model.removesuffix("[1m]")
+        # Mia offers only its own catalog: retired and unknown account rows stay out.
         if base not in CONTEXT_WINDOWS:
             continue
         route = native_model(base)
-        # Model names, not the native "Default (recommended)" alias row.
-        label = str(row.get("description") or "").split("·")[0].strip() or route
-        entry = routes.setdefault(route, {"id": route, "label": label, "note": "", "upstream_requests": upstream})
-        if "usage credit" in str(row.get("description") or "").lower() or base in credit_billed_on_plan:
-            entry["note"] = "usage credits"
+        pinned = route in MODEL_METADATA
+        if not pinned:
+            # A `value` the CLI did not resolve (`default`, `best`) is an alias row, not a model.
+            if not row.get("resolvedModel"):
+                continue
+            if base in long_context:
+                route = base + "[1m]"
+        # A model name, never the "Default (recommended)" alias label. The served (first-party) catalog
+        # names the model in displayName ("Opus 5.5"); the generic list names only the family there
+        # ("Opus") and the model before the "·" in its description ("Opus 5.5 · Best for ...").
+        display = str(row.get("displayName") or "").strip()
+        # The version precedes any "(...)": "Opus (1M context)" names only the family.
+        named = display if any(c.isdigit() for c in display.split("(")[0]) and not display.lower().startswith("default") else ""
+        label = named or str(row.get("description") or "").split("·")[0].strip() or route
+        entry = routes.setdefault(route, {"id": route, "label": label, "note": "" if pinned else "unpinned",
+                                          "upstream_requests": upstream})
+        described = "usage credit" in str(row.get("description") or "").lower()
+        if described or base in credit_billed_on_plan:
+            # The billing warning reads first; an unpinned row keeps its marker after it. The CLI's own
+            # wording is about this account, so it beats the seat-tier caveat.
+            warning = "usage credits" if described else credit_note
+            entry["note"] = warning if pinned else warning + " · unpinned"
     return list(routes.values())
+
+
+def fetch_usage(command=None, env=None, timeout=8):
+    """``(rate_limits, None)`` from Claude Code's own ``get_usage`` control request, else ``(None, reason)``.
+
+    The CLI fetches the plan limits with the login it already holds, so the plugin never reads or
+    sends that token (catalog rule 11) and ``auth.adopt_external_logins: false`` keeps meaning what
+    it says. It follows the same per-profile config dir as every native spawn, runs behind an unused
+    admission gate (zero inference), and fits under core's 10 s ``/usage`` hook deadline.
+    """
+    env = dict(env if env is not None else os.environ)
+    resolved = _resolve(command, env)
+    if resolved is None:
+        return None, INSTALL_HINT
+    child = _child_env(env)
+    gate = Admission("https://api.anthropic.com", timeout)
+    try:
+        child["ANTHROPIC_BASE_URL"] = gate.url
+        argv = resolved + ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                           "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--mcp-config",
+                           '{"mcpServers":{}}', "--disable-slash-commands", "--no-session-persistence"]
+        request = json.dumps({"type": "control_request", "request_id": "hermes-usage",
+                              "request": {"subtype": "get_usage", "skip_behaviors": True}}) + "\n"
+        with tempfile.TemporaryDirectory(prefix="claude-directsdk-usage-") as cwd:
+            run = subprocess.run(argv, input=request, env=child, cwd=cwd, capture_output=True,
+                                 text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        rows = [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
+        response = next(r["response"] for r in rows if r.get("type") == "control_response"
+                        and r.get("response", {}).get("request_id") == "hermes-usage")
+    except subprocess.TimeoutExpired:
+        return None, "Claude Code did not answer in time"
+    except (OSError, ValueError, StopIteration, KeyError, AttributeError, subprocess.SubprocessError):
+        return None, "Claude Code gave no usage answer (needs a version with get_usage)"
+    finally:
+        gate.close()
+    if response.get("subtype") != "success":
+        return None, "Claude Code refused the usage request (needs a version with get_usage)"
+    body = response.get("response") if isinstance(response.get("response"), dict) else {}
+    limits = body.get("rate_limits")
+    if isinstance(limits, dict):
+        return limits, None
+    if not body.get("rate_limits_available"):
+        return None, "no Claude subscription login found (run `claude` and log in)"
+    if child.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"):
+        # Measured on 2.1.302: with nonessential traffic off the CLI answers rate_limits: null.
+        return None, "Claude Code skips the usage fetch with nonessential traffic off (claude_code_telemetry)"
+    return None, "Claude Code returned no plan limits"
+
+
+def _catalog_label(model):
+    """``claude-opus-4-8`` -> ``Opus 4.8``; a trailing snapshot date is dropped."""
+    parts = model.removeprefix("claude-").split("-")
+    if parts and len(parts[-1]) == 8 and parts[-1].isdigit():
+        parts = parts[:-1]
+    family, version = parts[0], [p for p in parts[1:] if p.isdigit()]
+    return " ".join(filter(None, [family.capitalize(), ".".join(version)]))

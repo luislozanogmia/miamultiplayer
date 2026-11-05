@@ -1,18 +1,18 @@
 # Vendored upstream plugin
 
 This directory contains the runtime files from the official Nous Research
-`hermes-plugin-claude-subscription-directsdk` plugin, version 0.3.0, reviewed
-commit `c92c27c9f919178a58974a72333b473c6cb2e71d`.
+`claude-subscription-directsdk` plugin, version 0.3.4, reviewed commit
+`83f0a896b3518c7131181838e340c9a80c79524d`.
 
-Source: https://github.com/NousResearch/hermes-plugin-claude-subscription-directsdk/tree/c92c27c9f919178a58974a72333b473c6cb2e71d
+Source: https://github.com/NousResearch/hermes-official-plugins/tree/83f0a896b3518c7131181838e340c9a80c79524d/claude-subscription-directsdk
 
 Mia provisions this copy into each managed Hermes runtime profile so agent and
 bot sessions use Hermes' native model-provider discovery. The provider code is
 vendored from that reviewed revision with Mia catalog policy customizations:
 `model_catalog.py` caps advertised context metadata at 250,000 tokens for the
 offered 1M-capable models (including Haiku 5.5), while retaining Claude Code's
-real `[1m]` route selector. `plugin.yaml` and `LICENSE` remain unchanged. See
-`LICENSE`.
+real `[1m]` route selector. `plugin.yaml` differs only in defaulting Claude Code
+telemetry to off. `LICENSE` remains unchanged. See `LICENSE`.
 
 The `haiku` alias and saved Haiku 4.5 choices select Haiku 5.5. The `opus`
 alias and saved Opus 5/4.8 choices select Opus 5.5. Retired models are omitted

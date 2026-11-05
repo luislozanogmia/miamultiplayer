@@ -1,11 +1,11 @@
 name: claude-subscription-directsdk-experimental
 kind: model-provider
-version: 0.3.0
+version: 0.3.4
 manifest_version: 2
 description: Claude Subscription DirectSDK (Experimental) — drive your Claude Pro/Max subscription through the official Claude Code CLI; Hermes owns tools, approvals and compaction
 author: Nous Research
 license: MIT
-homepage: https://github.com/NousResearch/hermes-plugin-claude-subscription-directsdk
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/claude-subscription-directsdk
 tags: [model-provider, anthropic, claude, subscription, experimental]
 requires_hermes: ">=0.21.4"
 platforms: []
@@ -17,3 +17,17 @@ external_dependencies:
   - name: claude
     check: "claude --version"
     install: "npm install -g @anthropic-ai/claude-code"
+config_schema:
+  claude_config_dir:
+    type: string
+    default: ""
+    label: Claude login config directory
+    description: Select this profile's logged-in Claude config directory, overriding process environment directories.
+  claude_code_telemetry:
+    type: bool
+    default: false
+    label: Claude Code telemetry and feature flags
+    description: >-
+      Let Claude Code send its usage telemetry and fetch feature flags. Feature flags unlock newer
+      models in the model picker; turn off to keep Claude Code quiet (the picker may then list fewer
+      models).
