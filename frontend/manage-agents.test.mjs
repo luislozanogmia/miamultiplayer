@@ -672,6 +672,11 @@ test('agent editor exposes a persisted avatar color with an automatic fallback',
   assert.match(profileHandler, /openManageAgentsPane\(\)/);
   assert.doesNotMatch(profileHandler, /openBenchDetail/);
   assert.match(source, /benchEditColorOptions'\)\.addEventListener\('change'/);
+  // A Mac color panel sends only `input` until it closes, so every custom
+  // picker must take the color from `input` too.
+  assert.match(source, /benchEditColorOptions'\)\.addEventListener\('input'[\s\S]{0,200}markCustomAgentColor\(e\.target\)/);
+  assert.match(source, /colors\.addEventListener\('input'[\s\S]{0,200}styledAgentEditColorInput[\s\S]{0,200}markCustomAgentColor\(e\.target\)/);
+  assert.match(source, /options\.addEventListener\('input'[\s\S]{0,300}saveManageAgentColor\(id, value\)/);
   assert.match(source, /function manageAgentColorOptionsHtml\(agent\)/);
   assert.match(source, /data-manage-agent-color-options/);
   assert.match(source, /body:\{avatarColor: color \|\| null\}/);

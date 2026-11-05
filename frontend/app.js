@@ -4026,6 +4026,13 @@
         var a = findBenchAgent(editState.agentId), avatar = el('#styledAgentEditAvatar', pane);
         if(avatar && a) avatar.innerHTML = agentAvatarHtml(editState.name || a.name, a.isBuiltin ? a.agentId : a.id, 42, null, editState.avatarColor);
       });
+      colors.addEventListener('input', function(e){
+        if(!e.target || e.target.id !== 'styledAgentEditColorInput') return;
+        editState.avatarColor = normalizeAgentAvatarColor(e.target.value);
+        markCustomAgentColor(e.target);
+        var a = findBenchAgent(editState.agentId), avatar = el('#styledAgentEditAvatar', pane);
+        if(avatar && a) avatar.innerHTML = agentAvatarHtml(editState.name || a.name, a.isBuiltin ? a.agentId : a.id, 42, null, editState.avatarColor);
+      });
       colors.addEventListener('change', function(e){
         if(!e.target || e.target.id !== 'styledAgentEditColorInput') return;
         editState.avatarColor = normalizeAgentAvatarColor(e.target.value);
@@ -4222,6 +4229,20 @@
     var custom = current && !AGENT_COLOR_OPTIONS.some(function(option){ return option.value === current; });
     html += '<label class="' + classPrefix + '-custom' + (custom ? ' selected' : '') + '" title="Choose a custom color"><span>Custom</span><input type="color" id="' + colorInputId + '" value="' + (current || AGENT_COLOR_OPTIONS[0].value) + '" aria-label="Custom agent color" /></label>';
     return html;
+  }
+
+  // A Mac color panel stays open and sends only `input` while someone picks;
+  // `change` comes when it closes, which may be after they press Save. Mark the
+  // custom swatch chosen in place, since rebuilding the controls would detach the
+  // input the open panel is still writing to.
+  function markCustomAgentColor(input){
+    var options = input && input.closest('label') && input.closest('label').parentNode;
+    if(!options) return;
+    els('[data-agent-color]', options).forEach(function(button){
+      button.classList.remove('selected');
+      button.setAttribute('aria-pressed', 'false');
+    });
+    input.closest('label').classList.add('selected');
   }
 
   function renderAgentColorPicker(){
@@ -4759,9 +4780,13 @@
     editState.avatarColor = normalizeAgentAvatarColor(button.getAttribute('data-agent-color'));
     renderEditCinema();
   });
-  // Native color inputs emit `input` while the picker is open. Listen for
-  // `change` so choosing a color does not replace the input underneath the
-  // browser's open picker and interrupt selection.
+  // Native color inputs emit `input` while the picker is open: keep the choice
+  // without re-rendering, and re-render on `change` once the picker closes.
+  el('#benchEditColorOptions').addEventListener('input', function(e){
+    if(!e.target || e.target.id !== 'benchEditColorInput') return;
+    editState.avatarColor = normalizeAgentAvatarColor(e.target.value);
+    markCustomAgentColor(e.target);
+  });
   el('#benchEditColorOptions').addEventListener('change', function(e){
     if(!e.target || e.target.id !== 'benchEditColorInput') return;
     editState.avatarColor = normalizeAgentAvatarColor(e.target.value);
@@ -13698,9 +13723,20 @@
         e.stopPropagation();
         saveManageAgentColor(id, button.getAttribute('data-agent-color'));
       });
+      // This list saves as soon as a color is chosen. While the picker is open
+      // it only sends `input`, so save once the picking pauses.
+      var pickTimer = null;
+      options.addEventListener('input', function(e){
+        if(!e.target || e.target.type !== 'color') return;
+        var value = e.target.value;
+        markCustomAgentColor(e.target);
+        clearTimeout(pickTimer);
+        pickTimer = setTimeout(function(){ saveManageAgentColor(id, value); }, 600);
+      });
       options.addEventListener('change', function(e){
         if(!e.target || e.target.type !== 'color') return;
         e.stopPropagation();
+        clearTimeout(pickTimer);
         saveManageAgentColor(id, e.target.value);
       });
     });
