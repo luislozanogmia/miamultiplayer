@@ -2,6 +2,32 @@
 
 const { createClerkDesktopFlow, failureLine } = require("./clerk-desktop-flow.cjs");
 const CHANNEL = "miaos-clerk-auth";
+// Clerk's reason in words, for refusals the person can act on.
+const CLERK_MESSAGES = Object.freeze({
+  form_code_incorrect: "That code isn't right. Check it and try again.",
+  verification_expired: "That code has expired. Start again to get a new one.",
+  verification_failed: "That code stopped working. Start again to get a new one.",
+  form_password_pwned: "That password has appeared in a data breach. Choose a different one.",
+  form_password_length_too_short: "Choose a longer password.",
+  form_password_not_strong_enough: "Choose a stronger password.",
+  form_identifier_exists: "This email already has an account. Sign in instead.",
+});
+function refusalMessage(error) {
+  if (error.code === "RATE_LIMITED") return "Too many attempts. Wait a moment, then try again.";
+  // Clerk answered and said no, so the connection and the keyring are fine.
+  if (error.code === "AUTH_REQUEST_FAILED") return "Mia could not complete that. Please try again.";
+  return "Sign-in could not be completed. Check your connection and system keyring, then try again.";
+}
+function signUpDetails(value) {
+  const details = {};
+  for (const [key, field, limit] of [["firstName", "first_name", 100], ["lastName", "last_name", 100], ["password", "password", 200]]) {
+    const text = value && value[key];
+    if (text === undefined) continue;
+    if (typeof text !== "string" || text.length > limit) throw new Error("invalid_details");
+    details[field] = key === "password" ? text : text.trim();
+  }
+  return details;
+}
 
 // Only the top-level local application can request a short-lived session
 // token. Browser tabs, popups, subframes and the offline shell are excluded.
@@ -45,7 +71,7 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
   }
   ipcMain.handle(CHANNEL, async (event, action, value) => {
     if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
-    const actions = ["status", "google", "email", "verify", "token", "cancel", "signOut"];
+    const actions = ["status", "google", "email", "verify", "signUpDetails", "token", "cancel", "signOut"];
     if (!actions.includes(action)) return { ok: false, error: "Unknown sign-in action." };
     // Polls and message sends can request tokens while account restoration runs.
     // Serialize bounded read requests; never replay interactive sign-in actions.
@@ -83,6 +109,7 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
         if (typeof value !== "string" || !/^\d{6}$/.test(value)) throw new Error("invalid_code");
         result = await client.verifyEmail(value);
       }
+      if (action === "signUpDetails") result = await client.completeSignUp(signUpDetails(value));
       if (action === "token") result = await client.getSessionToken();
       if (action === "cancel") result = await flow.cancel();
       if (action === "signOut") { await flow.cancel(); result = await client.signOut(); }
@@ -99,9 +126,9 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
         protocol_unavailable: "Install this Mia build to enable browser sign-in. You can still sign in with an email code.",
         invalid_email: "Enter a valid email address.",
         invalid_code: "Enter the six-digit code from your email.",
+        invalid_details: "Check your name and password, then try again.",
       };
-      const message = local[error.message] || "Sign-in could not be completed. Check your connection and system keyring, then try again.";
-      return { ok: false, error: message };
+      return { ok: false, error: local[error.message] || CLERK_MESSAGES[error.clerkCode] || refusalMessage(error) };
     } finally { busy = false; releaseOperation(); }
   });
   return {

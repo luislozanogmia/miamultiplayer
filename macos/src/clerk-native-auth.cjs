@@ -29,6 +29,8 @@ class NativeClerkAuthError extends Error {
   }
 }
 
+const SIGN_UP_FIELDS = Object.freeze(['first_name', 'last_name', 'password']);
+
 function safeError(code, options) {
   return new NativeClerkAuthError(code, options);
 }
@@ -160,6 +162,10 @@ function publicStatus(client, now) {
   const signUp = client && client.sign_up;
   if (signUp && signUp.id && signUp.status !== 'abandoned') {
     assertId(signUp.id, 'signUp');
+    // An email sign-up proves the address first, on the same code screen as sign-in.
+    if (Array.isArray(signUp.unverified_fields) && signUp.unverified_fields.includes('email_address')) {
+      return { status: 'needs_verification', attemptId: signUp.id };
+    }
     const result = { status: 'needs_sign_up', attemptId: signUp.id };
     if (Array.isArray(signUp.missing_fields)) result.missingFields = signUp.missing_fields.filter(v => typeof v === 'string');
     return result;
@@ -186,6 +192,7 @@ function createNativeClerkClient(options = {}) {
   let operationEpoch = 0;
   let googleSignInId = null;
   let emailSignInId = null;
+  let emailSignUpId = null;
   const usedNonces = new Set();
   // Clerk session tokens last about a minute. Reusing one until shortly
   // before it expires saves two Clerk round trips on every Hub request.
@@ -347,6 +354,7 @@ function createNativeClerkClient(options = {}) {
       const signIn = unwrapResponse(payload, 'sign_in_attempt');
       googleSignInId = assertId(signIn.id, 'signIn');
       emailSignInId = null;
+      emailSignUpId = null;
       const verification = signIn.first_factor_verification;
       return { url: externalGoogleUrl(verification && verification.external_verification_redirect_url, issuer) };
     });
@@ -400,11 +408,32 @@ function createNativeClerkClient(options = {}) {
     }
     return exclusive(async context => {
       await ensureClient(context);
-      const createPayload = await request('/v1/client/sign_ins', {
-        ...context,
-        method: 'POST',
-        body: { identifier },
-      });
+      emailSignInId = null;
+      emailSignUpId = null;
+      let createPayload;
+      try {
+        createPayload = await request('/v1/client/sign_ins', {
+          ...context,
+          method: 'POST',
+          body: { identifier },
+        });
+      } catch (error) {
+        // No account has this email yet, so this person is signing up.
+        if (error.clerkCode !== 'form_identifier_not_found') throw error;
+        const signUpPayload = await request('/v1/client/sign_ups', {
+          ...context,
+          method: 'POST',
+          body: { email_address: identifier },
+        });
+        emailSignUpId = assertId(unwrapResponse(signUpPayload, 'sign_up_attempt').id, 'signUp');
+        await request(`/v1/client/sign_ups/${encodeURIComponent(emailSignUpId)}/prepare_verification`, {
+          ...context,
+          method: 'POST',
+          body: { strategy: 'email_code' },
+        });
+        googleSignInId = null;
+        return publicStatus(client, now);
+      }
       const createdSignIn = unwrapResponse(createPayload, 'sign_in_attempt');
       emailSignInId = assertId(createdSignIn.id, 'signIn');
       const factor = Array.isArray(createdSignIn.supported_first_factors)
@@ -430,6 +459,17 @@ function createNativeClerkClient(options = {}) {
     const verificationCode = String(code || '').trim();
     if (!/^\d{4,10}$/.test(verificationCode)) throw safeError('INVALID_CODE');
     return exclusive(async context => {
+      if (emailSignUpId) {
+        const payload = await request(`/v1/client/sign_ups/${encodeURIComponent(emailSignUpId)}/attempt_verification`, {
+          ...context,
+          method: 'POST',
+          body: { strategy: 'email_code', code: verificationCode },
+        });
+        unwrapResponse(payload, 'sign_up_attempt');
+        const result = publicStatus(client, now);
+        if (result.status === 'active') emailSignUpId = null;
+        return result;
+      }
       if (!emailSignInId) {
         await refreshClient(context);
         emailSignInId = client && client.sign_in && client.sign_in.id
@@ -444,6 +484,27 @@ function createNativeClerkClient(options = {}) {
       unwrapResponse(payload, 'sign_in_attempt');
       const result = publicStatus(client, now);
       if (result.status === 'active') emailSignInId = null;
+      return result;
+    });
+  }
+
+  // What Clerk still needs before the account exists, and nothing else.
+  async function completeSignUp(details) {
+    forgetSessionToken();
+    return exclusive(async context => {
+      const signUp = client && client.sign_up;
+      if (!signUp || !signUp.id) throw safeError('NO_AUTH_ATTEMPT');
+      const missing = Array.isArray(signUp.missing_fields) ? signUp.missing_fields : [];
+      const body = {};
+      for (const field of SIGN_UP_FIELDS) if (missing.includes(field) && details && details[field]) body[field] = details[field];
+      const payload = await request(`/v1/client/sign_ups/${encodeURIComponent(assertId(signUp.id, 'signUp'))}`, {
+        ...context,
+        method: 'PATCH',
+        body,
+      });
+      unwrapResponse(payload, 'sign_up_attempt');
+      const result = publicStatus(client, now);
+      if (result.status === 'active') emailSignUpId = null;
       return result;
     });
   }
@@ -488,6 +549,7 @@ function createNativeClerkClient(options = {}) {
         loadedStorage = true;
         googleSignInId = null;
         emailSignInId = null;
+        emailSignUpId = null;
         usedNonces.clear();
       }
       if (failure) throw failure;
@@ -502,10 +564,11 @@ function createNativeClerkClient(options = {}) {
     activeOperation = null;
     googleSignInId = null;
     emailSignInId = null;
+    emailSignUpId = null;
     return { status: 'signed_out' };
   }
 
-  return Object.freeze({ status, startGoogle, completeGoogle, startEmail, verifyEmail, getSessionToken, signOut, cancel });
+  return Object.freeze({ status, startGoogle, completeGoogle, startEmail, verifyEmail, completeSignUp, getSessionToken, signOut, cancel });
 }
 
 module.exports = {

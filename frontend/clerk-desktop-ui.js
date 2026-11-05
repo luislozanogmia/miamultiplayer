@@ -17,6 +17,11 @@
       '<div class="native-clerk-divider">or</div>' +
       '<div class="login-field native-clerk-email"><label for="nativeClerkEmail">Email</label><input id="nativeClerkEmail" type="email" autocomplete="email" placeholder="you@example.com" required></div>' +
       '<div class="login-field native-clerk-code" hidden><label for="nativeClerkCode">Email code</label><input id="nativeClerkCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000"></div>' +
+      '<div class="native-clerk-sign-up" hidden>' +
+        '<div class="login-field" data-sign-up-field="first_name"><label for="nativeClerkFirstName">First name</label><input id="nativeClerkFirstName" type="text" autocomplete="given-name" maxlength="100"></div>' +
+        '<div class="login-field" data-sign-up-field="last_name"><label for="nativeClerkLastName">Last name</label><input id="nativeClerkLastName" type="text" autocomplete="family-name" maxlength="100"></div>' +
+        '<div class="login-field" data-sign-up-field="password"><label for="nativeClerkPassword">Password</label><input id="nativeClerkPassword" type="password" autocomplete="new-password" maxlength="200"></div>' +
+      '</div>' +
       '<button type="submit" class="login-btn native-clerk-submit">Continue with email</button>' +
       '<p class="native-clerk-status" role="status" aria-live="polite"></p>' +
       '<div class="native-clerk-browser-link" hidden><label for="nativeClerkLink">Open this link in your browser to continue</label><input id="nativeClerkLink" type="url" readonly autocomplete="off" aria-label="Google sign-in link"><button type="button" class="native-clerk-copy">Copy sign-in link</button></div>' +
@@ -33,6 +38,12 @@
     var linkBox = form.querySelector('.native-clerk-browser-link');
     var link = form.querySelector('#nativeClerkLink');
     var copy = form.querySelector('.native-clerk-copy');
+    var signUpBox = form.querySelector('.native-clerk-sign-up');
+    var divider = form.querySelector('.native-clerk-divider');
+    var firstName = form.querySelector('#nativeClerkFirstName');
+    var lastName = form.querySelector('#nativeClerkLastName');
+    var password = form.querySelector('#nativeClerkPassword');
+    var signUpInputs = {first_name: firstName, last_name: lastName, password: password};
     if(lockedEmail){
       email.value = lockedEmail;
       emailBox.hidden = true;
@@ -59,12 +70,23 @@
       google.textContent = manualLink ? 'Try Google again' : '';
       if(!manualLink) google.innerHTML = '<img src="assets/connectors/google-g.svg" width="18" height="18" alt="">Continue with Google';
       var verifying = kind === 'needs_verification';
+      // Clerk says what it still needs. A field Mia can't collect can't be finished here.
+      var missing = kind === 'needs_sign_up' && state.missingFields || [];
+      var finishing = missing.length > 0 && missing.every(function(name){ return !!signUpInputs[name]; });
+      signUpBox.hidden = !finishing;
+      google.hidden = finishing;
+      divider.hidden = finishing || !!lockedEmail;
+      Object.keys(signUpInputs).forEach(function(name){
+        var wanted = finishing && missing.indexOf(name) >= 0;
+        form.querySelector('[data-sign-up-field="' + name + '"]').hidden = !wanted;
+        signUpInputs[name].required = wanted;
+      });
       codeBox.hidden = !verifying;
-      emailBox.hidden = verifying || !!lockedEmail;
-      email.required = !verifying && !lockedEmail;
+      emailBox.hidden = verifying || finishing || !!lockedEmail;
+      email.required = !verifying && !finishing && !lockedEmail;
       code.required = verifying;
-      submit.textContent = verifying ? 'Verify email' : emailLabel;
-      cancel.hidden = !waiting && !verifying && !manualLink;
+      submit.textContent = verifying ? 'Verify email' : finishing ? 'Create account' : emailLabel;
+      cancel.hidden = !waiting && !verifying && !finishing && !manualLink;
       controls(waiting);
       status.textContent = '';
       if(waiting || manualLink){
@@ -80,7 +102,7 @@
       if(kind === 'active'){ status.textContent = 'Opening Mia…'; onSignedIn(); }
       if(kind === 'expired') status.textContent = 'Sign-in expired. Please try again.';
       if(kind === 'error') status.textContent = state.error || 'Sign-in failed. Please try again.';
-      if(kind === 'needs_sign_up') status.textContent = 'Complete your invitation first, then sign in again.';
+      if(kind === 'needs_sign_up') status.textContent = finishing ? 'Almost there. Finish creating your account.' : 'Mia can\'t finish creating this account yet. Please contact support.';
       if(kind === 'needs_second_factor') status.textContent = 'This account requires an additional verification method that Mia does not yet support.';
     }
     async function run(action){
@@ -108,12 +130,15 @@
     });
     form.addEventListener('submit', function(event){
       event.preventDefault();
-      run(function(){ return codeBox.hidden ? auth.startEmail(lockedEmail || email.value.trim()) : auth.verifyEmail(code.value.trim()); });
+      run(function(){
+        if(!signUpBox.hidden) return auth.completeSignUp({firstName: firstName.value, lastName: lastName.value, password: password.value});
+        return codeBox.hidden ? auth.startEmail(lockedEmail || email.value.trim()) : auth.verifyEmail(code.value.trim());
+      });
     });
-    cancel.addEventListener('click', function(){ code.value = ''; run(function(){ return auth.cancel(); }); });
+    cancel.addEventListener('click', function(){ code.value = ''; password.value = ''; run(function(){ return auth.cancel(); }); });
     var unsubscribe = auth.onState(update);
     run(function(){ return auth.status(); });
-    return function(){ disposed = true; clearTimeout(expiryTimer); unsubscribe(); email.value = ''; code.value = ''; link.value = ''; container.replaceChildren(); };
+    return function(){ disposed = true; clearTimeout(expiryTimer); unsubscribe(); email.value = ''; code.value = ''; link.value = ''; firstName.value = ''; lastName.value = ''; password.value = ''; container.replaceChildren(); };
   }
   root.MiaClerkDesktop = { mount:mount, unwrap:unwrap };
   if(typeof module === 'object' && module.exports) module.exports = root.MiaClerkDesktop;

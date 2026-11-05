@@ -40,6 +40,30 @@ test('email code submits through native API and failure remains readable',async(
   h.elements.get('.native-clerk-cancel').handlers.click();await settle();assert.equal(h.cancelled,1);
   assert.equal(h.signedIn,0);h.dispose();
 });
+test('a new email asks only for what Clerk still needs, then opens Mia',async()=>{
+  const sent=[];
+  const h=harness({startEmail:async()=>({ok:true,result:{status:'needs_verification'}}),verifyEmail:async()=>({ok:true,result:{status:'needs_sign_up',missingFields:['first_name','password']}}),completeSignUp:async details=>{sent.push(details);return {ok:true,result:{status:'active'}};}});
+  await settle();
+  h.elements.get('#nativeClerkEmail').value='new@example.test';h.form.handlers.submit({preventDefault(){}});await settle();
+  h.elements.get('#nativeClerkCode').value='123456';h.form.handlers.submit({preventDefault(){}});await settle();
+  assert.equal(h.elements.get('.native-clerk-submit').textContent,'Create account');
+  assert.equal(h.elements.get('.native-clerk-sign-up').hidden,false);
+  assert.equal(h.elements.get('[data-sign-up-field="first_name"]').hidden,false);
+  assert.equal(h.elements.get('[data-sign-up-field="last_name"]').hidden,true,'Clerk did not ask for it');
+  assert.equal(h.elements.get('#nativeClerkLastName').required,false);
+  assert.equal(h.elements.get('.native-clerk-google').hidden,true);
+  h.elements.get('#nativeClerkFirstName').value='Ana';h.elements.get('#nativeClerkPassword').value='not-a-real-one';
+  h.form.handlers.submit({preventDefault(){}});await settle();
+  assert.equal(sent[0].firstName,'Ana');assert.equal(h.signedIn,1);
+  h.dispose();assert.equal(h.elements.get('#nativeClerkPassword').value,'','a typed password does not stay on the page');
+});
+test('a sign-up field Mia cannot collect says so instead of showing a form it cannot finish',async()=>{
+  const h=harness();await settle();
+  h.notify({status:'needs_sign_up',missingFields:['legal_accepted']});
+  assert.equal(h.elements.get('.native-clerk-sign-up').hidden,true);
+  assert.match(h.elements.get('.native-clerk-status').textContent,/can't finish/);
+  h.dispose();
+});
 test('native auth is wired before Clerk browser assets, and restarts refresh the session',()=>{
   const source=fs.readFileSync(path.join(__dirname,'app.js'),'utf8');
   const signIn=source.slice(source.indexOf('function showClerkSignIn()'),source.indexOf('function setAppLoading'));

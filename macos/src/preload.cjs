@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     startGoogle: () => ipcRenderer.invoke("miaos-clerk-auth", "google"),
     startEmail: email => ipcRenderer.invoke("miaos-clerk-auth", "email", email),
     verifyEmail: code => ipcRenderer.invoke("miaos-clerk-auth", "verify", code),
+    completeSignUp: details => ipcRenderer.invoke("miaos-clerk-auth", "signUpDetails", details),
     getSessionToken: () => ipcRenderer.invoke("miaos-clerk-auth", "token"),
     signOut: () => ipcRenderer.invoke("miaos-clerk-auth", "signOut"),
     cancel: () => ipcRenderer.invoke("miaos-clerk-auth", "cancel"),
