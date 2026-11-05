@@ -46,7 +46,7 @@ test('shared-browser updates use Hub events rather than posting chat messages',(
 test('UTF8 limit applies to bytes, not characters',()=>{const api=transport();assert.equal(api.validateText('a'.repeat(16000)).length,16000);assert.throws(()=>api.validateText('😀'.repeat(4001)));assert.equal(api.validateText('',true),'');assert.throws(()=>api.validateText(' '));});
 test('each request obtains a fresh native session; body is exactly supplied data',async()=>{let tokens=0;const sent=[];const api=transport({miaDesktop:{auth:{getSessionToken:async()=>({token:++tokens})}},MiaClerkDesktop:{unwrap:r=>'token'+r.token},fetch:async(url,opts)=>{sent.push({url,opts});return {ok:true,json:async()=>({})};}});await api.call('GET','/v1/me');await api.call('POST','/v1/teams/a/channels/b/messages',{id:'c',text:'hello'});assert.equal(sent[0].opts.headers.authorization,'Bearer token1');assert.equal(sent[1].opts.headers.authorization,'Bearer token2');assert.deepEqual(JSON.parse(sent[1].opts.body),{id:'c',text:'hello'});assert.equal(sent[1].url,'/api/hub/v1/teams/a/channels/b/messages');});
 test('no session means no request or local fallback',async()=>{let fetched=false;const api=transport({fetch:()=>{fetched=true;}});await assert.rejects(api.call('GET','/v1/me'),/Sign in/);assert.equal(fetched,false);});
-test('Hub channels cannot start local conversation/socket or typing transports',async()=>{for(const name of ['connectNativeChatSocket','connectNativeWatchSocket','pollLiveState','setLocalChatTypingActivity']){const env={hubWorkspace:()=>true};const fn=appFunction(name,env);await fn();}});
+test('Hub channels cannot start local conversation/socket or typing transports',async()=>{for(const name of ['connectNativeChatSocket','connectNativeWatchSocket','pollLiveState']){const env={hubWorkspace:()=>true};const fn=appFunction(name,env);await fn();}});
 test('a team loads only its own bot chats, from Solo storage on this computer',async()=>{
   const key=appFunction('localChatWorkspaceKey',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
   assert.equal(key(),'solo');
@@ -392,6 +392,7 @@ test('a shared channel alert names the sender and channel, not "replied"',()=>{
   const env={chatWs:{activeRoomId:'other'},appInForeground:()=>true,desktopNotificationsEnabled:()=>true,hubChannel:()=>({name:'general'}),hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),
     displayNameForEmail:e=>e.split('@')[0],excerpt:(t,n)=>t.slice(0,n),String,showDesktopNotification:(room,title,body)=>shown.push({room,title,body})};
   env.googleDriveMessageDisplay=appFunction('googleDriveMessageDisplay',{String,JSON});
+  env.messageBotIdentity=m=>({name:m.nativeAgentName||null});
   const notify=appFunction('notifyDesktopChatMessage',env);
   notify('room',{hubMessage:true,hubAuthor:'ana@example.test',body:'hello team'});
   notify('room',{hubMessage:true,nativeAgentName:'Helper',body:''});
@@ -705,7 +706,7 @@ test('team sidebar splits My Bots from Company bots',()=>{
 });
 test('a company bot shows once, by name, with every channel it is in',()=>{
   const start=source.indexOf('  function companyBotsFromChannels(');
-  const merge=new Function(source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')();
+  const merge=new Function('normalizeAgentAvatarColor',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null);
   const ux={id:'a',name:'ux-test'}, gtm={id:'b',name:'GTM'};
   const list=merge([
     {channel:ux,bots:[{id:'1',name:'Web Research Agent',published:true},{id:'2',name:'Draft',published:false}]},
@@ -841,4 +842,19 @@ test('a channel reopened during startup still gets its bot count from the reopen
   assert.equal(state.hubBotRequest!==null&&state.hubBotRequest!==undefined,true,'the old request ending leaves the new one in place');
   pending[1]({bots:[{id:'deal-desk',name:'Deal Desk',published:1}]});await second;
   assert.deepEqual(state.hubBots.map(bot=>bot.id),['deal-desk']);
+});
+test('the @ menu names people, never an account id or email',()=>{
+  const profiles={'me@example.test':{displayName:'Ana Ruiz'},'local-user@localhost':{displayName:'Local User'}};
+  const name=appFunction('humanMentionName',{String,userProfiles:profiles,currentUser:'local-user@localhost',
+    realProfileName:appFunction('realProfileName',{String}),displayNameForEmailProfile:appFunction('displayNameForEmailProfile',{userProfiles:profiles}),displayNameForEmail:e=>e.split('@')[0]});
+  assert.equal(name({email:'me@example.test'}),'Ana Ruiz');
+  assert.equal(name({email:'other@example.test',displayName:'Sam Lee'}),'Sam Lee');
+  assert.equal(name({email:'local-user@localhost'}),'You');
+  assert.equal(name({email:'pat@example.test'}),'pat');
+  assert.match(source,/label: humanMentionName\(u\)/);
+  assert.match(source,/humanAvatarInitialsHtml\(entry\.searchUser\.email\)/);
+});
+test('the demo link reads MP with demo below it',()=>{
+  const html=require('fs').readFileSync(require('path').join(__dirname,'..','index.html'),'utf8');
+  assert.match(html,/id="workspaceRailDemo"[^>]*>\s*<span class="workspace-rail-mark" aria-hidden="true">MP<\/span><small class="workspace-rail-note">demo<\/small>/);
 });

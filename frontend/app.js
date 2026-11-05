@@ -15654,6 +15654,17 @@
      laid out in flow. */
   var chatMention = {open: false, atPos: -1, query: '', matches: [], highlight: 0, confirmEntry: null, confirmBusy: false, groupSend: null, slash: false};
 
+  // People go by their name in the @ menu, never by an account id or email.
+  function humanMentionName(user){
+    var email = String(user && user.email || '');
+    return realProfileName(user && (user.displayName || user.name))
+      || realProfileName(displayNameForEmailProfile(email))
+      || (email.toLowerCase() === String(currentUser || '').toLowerCase() ? 'You' : displayNameForEmail(email));
+  }
+  function displayNameForEmailProfile(email){
+    var known = userProfiles[email.toLowerCase()];
+    return known && known.displayName;
+  }
   function humanDirectoryMatches(user, query){
     var q = String(query || '').trim().toLowerCase();
     if(!q) return true;
@@ -15754,7 +15765,7 @@
     var roster = chatRoomState(roomId).mentionRoster;
     if(!roster || roster.loading) return {privateAgents: [], inChat: [], notInChat: []};
     var q = chatMention.query.toLowerCase();
-    function human(u){ return {kind: 'human', key: 'human:' + u.email, label: u.email, searchUser: u, inChat: u.inChat, clerkUserId: u.clerkUserId}; }
+    function human(u){ return {kind: 'human', key: 'human:' + u.email, label: humanMentionName(u), searchUser: u, inChat: u.inChat, clerkUserId: u.clerkUserId}; }
     function agent(a, inChat){ return {kind: 'agent', key: 'agent:' + a.id, label: a.name, id: a.id, department: a.department, inChat: inChat, privateAgent: a.privateAgent === true}; }
     // Group tags: '@all' = everyone, '@all_users' = humans, '@all_bots' =
     // agents. Inserted as the literal tag, never expanded into individual
@@ -15809,7 +15820,7 @@
     var ix = 0;
     function optionHtml(entry){
       var i = ix++;
-      var avatar = entry.kind === 'group' ? '@' : entry.kind === 'human' ? humanAvatarInitialsHtml(entry.label) : agentAvatarHtml(entry.label, entry.id, 22);
+      var avatar = entry.kind === 'group' ? '@' : entry.kind === 'human' ? humanAvatarInitialsHtml(entry.searchUser.email) : agentAvatarHtml(entry.label, entry.id, 22);
       var sub = entry.kind === 'agent' && !entry.inChat ? '<span class="cmp-option-sub">add</span>' : '';
       var kind = entry.kind === 'agent' ? '<span class="cmp-option-kind">' + (entry.id === 'gateway' ? 'Agent' : 'Bot') + '</span>' : '';
       var highlighted = i === chatMention.highlight ? ' highlighted' : '';

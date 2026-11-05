@@ -1310,6 +1310,8 @@
   .workspace-rail-tile{appearance:none;position:relative;display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;border:0;background:transparent;cursor:pointer;-webkit-app-region:no-drag;}
   .workspace-rail-tile[hidden]{display:none;}
   .workspace-rail-demo{text-decoration:none;color:inherit;}
+  .workspace-rail-demo{flex-direction:column;height:auto;}
+  .workspace-rail-note{display:block;margin-top:2px;font-size:10px;line-height:12px;color:var(--sand-text-secondary);}
   .workspace-rail-mark{display:flex;align-items:center;justify-content:center;width:36px;height:36px;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:9px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:700 12px/1 var(--styled-sans);letter-spacing:.02em;transition:border-color .12s ease,background .12s ease;}
   .workspace-rail-mark svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
   .workspace-rail-tile:hover .workspace-rail-mark{background:var(--sand-fill-secondary);}
