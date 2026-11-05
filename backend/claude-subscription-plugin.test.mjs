@@ -146,17 +146,32 @@ print('redacted')
   assert.equal(result.stdout.trim(), 'redacted');
 });
 
-test('Claude remote image hints omit credential-bearing URLs but keep public image URLs', () => {
+test('Claude fetches signed image URLs as bytes without showing their URL to the model', () => {
   const result = runPython(`
-import sys
+import base64, socket, sys
+from unittest.mock import patch
 sys.path.insert(0, sys.argv[1])
-from directsdk import content_blocks
+import directsdk
 private = 'https://example.test/image.png?X-Amz-Signature=fake-secret-value'
 public = 'https://example.test/image.png?size=large'
-hint = content_blocks([{'type':'image_url','image_url':{'url':private}}])[0]['text']
-assert private not in hint and 'attach the image' in hint
-hint = content_blocks([{'type':'image_url','image_url':{'url':public}}])[0]['text']
+png = b'\\x89PNG\\r\\n\\x1a\\n' + b'fake-image'
+with patch.object(directsdk, '_fetch_remote_image', return_value=('image/png', png)) as fetch:
+ image = directsdk.content_blocks([{'type':'image_url','image_url':{'url':private}}])[0]
+ assert image['type'] == 'image' and image['source']['media_type'] == 'image/png'
+ assert base64.b64decode(image['source']['data']) == png
+ assert private not in str(image)
+ assert fetch.call_count == 1
+ image = directsdk.content_blocks([{'type':'image_url','image_url':{'url':private}}])[0]
+ assert fetch.call_count == 1  # cached for the next turn
+with patch.object(directsdk, '_fetch_remote_image', return_value=None):
+ unavailable = directsdk.content_blocks([{'type':'image_url','image_url':{'url':private + "&token=other"}}])[0]['text']
+ assert private not in unavailable and 'attach the image' in unavailable
+hint = directsdk.content_blocks([{'type':'image_url','image_url':{'url':public}}])[0]['text']
 assert public in hint and 'vision_analyze' in hint
+with patch.object(socket, 'getaddrinfo', return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', 443))]):
+ try: directsdk._public_image_address('example.test', 443)
+ except ValueError: pass
+ else: raise AssertionError('local address accepted')
 print('safe')
 `);
   assert.equal(result.status, 0, result.stderr);

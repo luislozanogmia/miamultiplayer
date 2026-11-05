@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import base64
 import copy
 from collections import deque
 from contextlib import suppress
 import hashlib
+import http.client
 import inspect
+import ipaddress
 import json
 import math
 import os
@@ -16,6 +19,8 @@ import queue
 import re
 import shutil
 import signal
+import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -25,7 +30,7 @@ import time
 import uuid
 import weakref
 from types import SimpleNamespace
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 
 try:
     from .admission import Admission
@@ -78,6 +83,9 @@ PREFIX = 'mcp__hermes__'
 
 _SENSITIVE_URL_NAME = re.compile(r'(?:^|[_.-])(?:code|key|state|sid|sig|pass|pwd|otp|nonce|ticket|auth|assertion)$|session|token|secret|passw|signature|credential|apikey|api[_-]?key|jwt|saml|^x-(?:amz|goog)-', re.I)
 _SENSITIVE_URL_PATH = re.compile(r'^(?:reset|recover|recovery|verify|verification|invite|invitation|magic|activate|activation|confirm|confirmation|login|sign-?in|auth|oauth|sso|token)(?:[-_].*)?$', re.I)
+_REMOTE_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+_remote_image_cache = {}
+_remote_image_cache_lock = threading.Lock()
 
 
 def _remote_image_url_safe_to_share(url):
@@ -103,6 +111,79 @@ def _remote_image_url_safe_to_share(url):
         return len(url) <= 2000
     except (ValueError, TypeError):
         return False
+
+
+def _public_image_address(host, port):
+    """Resolve once and connect to that exact public IP, avoiding DNS rebinding."""
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+        raise ValueError('Remote image address is not public')
+    return addresses[0][4][0]
+
+
+def _image_media_type(data):
+    if data.startswith(b'\x89PNG\r\n\x1a\n'): return 'image/png'
+    if data.startswith(b'\xff\xd8\xff'): return 'image/jpeg'
+    if data.startswith((b'GIF87a', b'GIF89a')): return 'image/gif'
+    if data.startswith(b'RIFF') and data[8:12] == b'WEBP': return 'image/webp'
+    return None
+
+
+def _fetch_remote_image(url):
+    """Fetch an image locally without exposing its signed URL to the model.
+
+    Every redirect is HTTPS, publicly resolved, size bounded and connected to
+    the validated IP with normal TLS hostname verification. Never log URLs or
+    network error text, which may contain access tokens.
+    """
+    current = url
+    for _ in range(4):
+        parsed = urlsplit(current)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            return None
+        port = parsed.port or 443
+        address = _public_image_address(parsed.hostname, port)
+        connection = http.client.HTTPSConnection(parsed.hostname, port, timeout=8, context=ssl.create_default_context())
+        connection._create_connection = lambda _target, timeout, source_address=None: socket.create_connection(
+            (address, port), timeout, source_address)
+        try:
+            target = parsed.path or '/'
+            if parsed.query: target += '?' + parsed.query
+            connection.request('GET', target, headers={'Accept': 'image/*', 'Accept-Encoding': 'identity'})
+            response = connection.getresponse()
+            if response.status in (301, 302, 303, 307, 308):
+                location = response.getheader('Location')
+                if not location: return None
+                current = urljoin(current, location)
+                continue
+            if response.status != 200: return None
+            length = response.getheader('Content-Length')
+            if length and int(length) > _REMOTE_IMAGE_MAX_BYTES: return None
+            data = response.read(_REMOTE_IMAGE_MAX_BYTES + 1)
+            if len(data) > _REMOTE_IMAGE_MAX_BYTES: return None
+            media = _image_media_type(data)
+            return (media, data) if media else None
+        finally:
+            connection.close()
+    return None
+
+
+def _private_remote_image(url):
+    key = hashlib.sha256(url.encode('utf-8')).hexdigest()
+    with _remote_image_cache_lock:
+        cached = _remote_image_cache.get(key)
+        if cached and time.monotonic() - cached[0] < 600:
+            return cached[1:]
+    try:
+        result = _fetch_remote_image(url)
+    except (OSError, ValueError, OverflowError, http.client.HTTPException):
+        return None
+    if result:
+        with _remote_image_cache_lock:
+            if len(_remote_image_cache) >= 4:
+                _remote_image_cache.pop(next(iter(_remote_image_cache)))
+            _remote_image_cache[key] = (time.monotonic(), *result)
+    return result
 
 
 class Object(SimpleNamespace):
@@ -153,7 +234,13 @@ def content_blocks(content):
                     result.append({'type': 'text', 'text': f'[Image not attached: remote URL {url}. '
                                    'Call vision_analyze with this URL to see it.]'})
                 else:
-                    result.append({'type': 'text', 'text': '[Image not attached: this link may contain private access data. Ask the user to attach the image.]'})
+                    image = _private_remote_image(url)
+                    if image:
+                        media, data = image
+                        result.append({'type': 'image', 'source': {'type': 'base64', 'media_type': media,
+                                                                   'data': base64.b64encode(data).decode('ascii')}})
+                    else:
+                        result.append({'type': 'text', 'text': '[Image could not be fetched safely. Ask the user to attach the image.]'})
                 continue
             if not url.startswith('data:') or ';base64,' not in url:
                 raise ValueError('Only base64 data image_url inputs are supported')
