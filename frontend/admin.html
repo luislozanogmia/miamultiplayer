@@ -54,6 +54,7 @@
           <button type="button" class="btn" id="teamRenameBtn" data-team-only hidden>Rename team</button>
         </div>
       </div>
+      <div class="card" data-team-only hidden id="teamLogoCard"><h2>Team logo</h2><div id="teamLogoPreview" style="width:48px;height:48px;margin:12px 0" aria-label="Current team logo"></div><button type="button" class="btn" id="teamLogoUpload">Upload logo</button> <input id="teamLogoFile" type="file" accept="image/png,image/jpeg" hidden> <button type="button" class="btn" id="teamLogoRemove">Remove logo</button><p>PNG or JPEG, up to 8 MB. Visible to your team.</p><p id="teamLogoStatus" role="status"></p></div>
       <div class="admin-tiles" id="overviewTiles"></div>
       <div class="card hub-history-card" id="channelHistoryCard" data-team-only hidden>
         <h2>Channel history</h2>
@@ -330,9 +331,10 @@
 
 <script src="assets/mia-mark.js"></script>
 <script src="clerk-desktop-ui.js"></script>
+<script src="team-logo.js"></script>
 <script src="hub-chat.js"></script>
 <script src="team-files.js"></script>
 <script src="team-workflows.js"></script>
-<script src="admin.js?v=20261102-hub-admin-3"></script>
+<script src="admin.js?v=20261105-team-logo-1"></script>
 </body>
 </html>
