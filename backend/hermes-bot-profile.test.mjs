@@ -17,6 +17,7 @@ const {
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   GHOST_FIRST_PLUGIN,
   ASK_BEFORE_DO_PLUGIN,
+  PROVIDER_LIMITS_PLUGIN,
   GOOGLE_WORKSPACE_MCP_SERVER,
   GOOGLE_WORKSPACE_MCP_TOOLS,
   googleWorkspaceToolsConfigured,
@@ -378,7 +379,8 @@ test('full workspace profiles all receive the Ghost-first plugin; search-only pr
       for (const profile of profiles) {
         const config = YAML.parse(fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8'));
         assert.equal(config.terminal, undefined, profile);
-        assert.deepEqual(config.plugins.enabled, [ASK_BEFORE_DO_PLUGIN], profile);
+        assert.deepEqual(config.plugins.enabled, [ASK_BEFORE_DO_PLUGIN, PROVIDER_LIMITS_PLUGIN], profile);
+        assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', PROVIDER_LIMITS_PLUGIN, '__init__.py')), true, profile);
         assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', ASK_BEFORE_DO_PLUGIN, '__init__.py')), true, profile);
         assert.equal(fs.existsSync(path.join(profilesRoot, profile, 'plugins', GHOST_FIRST_PLUGIN)), false, profile);
       }

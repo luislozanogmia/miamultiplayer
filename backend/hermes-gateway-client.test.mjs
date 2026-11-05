@@ -1346,3 +1346,23 @@ test('a failed Stop can be retried while the interrupt observation stays open', 
   assert.deepEqual(events.map(e => e.status), ['timed_out', 'acknowledged'], 'one observation records both receipts');
   client.close();
 });
+
+test('a failed turn keeps the provider error beside the Hermes summary', async () => {
+  const client = new HermesGatewayClient({ env: {} });
+  const failure = new Promise((resolve, reject) => {
+    const turn = { sessionId: 'limit', text: '', resolve, reject };
+    client.turns.set('limit', turn);
+    client.handleTurnEvent(turn, 'message.complete', {
+      status: 'error',
+      text: "Claude didn't answer after 3 attempts.",
+      error: "You've hit your monthly spend limit",
+      failure_reason: 'billing',
+    });
+  });
+  await assert.rejects(failure, (error) => {
+    assert.equal(error.message, "Claude didn't answer after 3 attempts.");
+    assert.equal(error.providerError, "You've hit your monthly spend limit");
+    assert.equal(error.failureReason, 'billing');
+    return true;
+  });
+});

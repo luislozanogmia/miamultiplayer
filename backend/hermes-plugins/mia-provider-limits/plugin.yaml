@@ -1,0 +1,7 @@
+name: mia-provider-limits
+version: "0.1.0"
+description: "Mia: a provider's spend or session limit won't clear on its own in seconds, so the turn stops at the first failure instead of retrying."
+author: "Mia"
+license: MIT
+hooks:
+  - transform_api_error_classification

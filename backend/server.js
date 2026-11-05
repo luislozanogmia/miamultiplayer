@@ -142,7 +142,7 @@ const botAutomationActions = require('./bot-automation-actions');
 const botInstructionActions = require('./bot-instruction-actions');
 const { createGoogleAccountConnector, createOwnerBoundGoogleAccount } = require('./google-account-connector');
 const { stripTaskOpeningNotice, humanTaskStatus, shouldPostTaskStatus } = require('./background-status');
-const { providerWaitStatus } = require('./provider-wait-status');
+const { createProviderWaitTracker } = require('./provider-wait-status');
 const { MAX_INSTRUCTIONS: MAX_BOT_INSTRUCTIONS, buildAgentSetupPrompt, normalizeAgentDraft } = require('./agent-setup');
 const miaBotSetupActions = require('./mia-bot-setup-actions');
 const { INSTANCE_NAME, INSTANCE_TEAM_DESCRIPTION, INSTANCE_DOMAINS, INSTANCE_PASSWORD } = require('./instance');
@@ -6995,7 +6995,14 @@ async function handleNativeHermesSessionEvent(sessionId, kind, data) {
   if (kind === 'turn.complete') {
     if (data.status === 'interrupted') return;
     const signature = `[${metadata.agentName}]`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    text = sanitizeChatReply(String(data.text || ''))
+    // A failed continuation gets the same message as a failed turn, not the raw provider error.
+    const replyText = data.status === 'error'
+      ? userFacingModelDispatchError(Object.assign(new Error(String(data.text || '')), {
+        providerError: data.providerError,
+        failureReason: data.failureReason,
+      }))
+      : String(data.text || '');
+    text = sanitizeChatReply(replyText)
       .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, '')
       .replace(new RegExp(`\\s*${signature}\\s*$`, 'i'), '')
       .trim();
@@ -7881,7 +7888,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
   // not only in verbose mode: a silent model otherwise looks like Mia
   // thinking. It reuses the "working" progress row shape, so the final reply
   // supersedes it like any other status line.
-  let providerWaitShown = false;
+  const trackProviderWait = createProviderWaitTracker();
   const postProviderWaitStatus = (text) => {
     const sequence = ++hermesProgressIndex;
     hermesProgressSequence = hermesProgressSequence.then(() => createNativeDispatchReplyEvent(dispatch, trigger, {
@@ -7915,19 +7922,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       if (activeGateway && activeGateway.dispatchId === dispatch.id
         && postMidRunAnswer(activeGateway, agent, payload && (payload.text || payload.rendered))) return;
     }
-    if (type === 'thinking.delta') {
-      const wait = providerWaitStatus(payload && payload.text);
-      if (wait && wait.kind === 'cleared') {
-        if (providerWaitShown) {
-          providerWaitShown = false;
-          postProviderWaitStatus('The model is answering again.');
-        }
-      } else if (wait) {
-        providerWaitShown = true;
-        postProviderWaitStatus(wait.text);
-        return;
-      }
-    }
+    const providerWait = trackProviderWait(type, payload);
+    if (providerWait.status) postProviderWaitStatus(providerWait.status);
+    if (providerWait.handled) return;
     // Live status panel: an ephemeral, paths-only signal, independent of the
     // verbose-diagnostics setting. Never persisted, never part of the transcript.
     const toolActivity = extractToolActivity(type, payload);

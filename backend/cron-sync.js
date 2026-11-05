@@ -43,6 +43,7 @@ const HERMES_PYTHON = String(process.env.HERMES_PYTHON || '').trim();
 // mia_run_report is the toolset of the mia-run-report plugin (report_step).
 const BOT_TOOLSETS = Object.freeze(['web', 'todo', 'clarify', 'artifacts', 'mia_run_report']);
 const RUN_REPORT_PLUGIN = 'mia-run-report';
+const PROVIDER_LIMITS_PLUGIN = 'mia-provider-limits';
 const ARTIFACT_ROOT = requiredConfiguredPath(
   'MIAOS_AUTOMATION_ARTIFACT_DIR',
   process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
@@ -294,29 +295,30 @@ function runReportContextFor(automation) {
   return id && steps ? { automationId: id, steps: Math.min(steps, MAX_AUTOMATION_STEPS) } : null;
 }
 
-let runReportPluginReady = null;
+const cronPluginsReady = new Map();
 
-// Installs the bundled report_step plugin into the Hermes home that runs the
-// scheduled jobs and enables it there. Once per process; a failure is
-// retried on the next sync and never blocks the schedule itself.
-function ensureRunReportPlugin() {
-  if (!runReportPluginReady) {
-    runReportPluginReady = (async () => {
+// Installs a bundled plugin into the Hermes home that runs the scheduled jobs
+// and enables it there. Once per process; a failure is retried on the next
+// sync and never blocks the schedule itself.
+function ensureCronPlugin(plugin) {
+  if (!cronPluginsReady.has(plugin)) {
+    cronPluginsReady.set(plugin, (async () => {
       const { provisionBundledPlugin } = require('./hermes-bot-profile');
-      provisionBundledPlugin(HERMES_HOME, RUN_REPORT_PLUGIN);
-      await runHermesCommand(['plugins', 'enable', RUN_REPORT_PLUGIN]);
+      provisionBundledPlugin(HERMES_HOME, plugin);
+      await runHermesCommand(['plugins', 'enable', plugin]);
     })().catch((error) => {
-      runReportPluginReady = null;
-      console.error('step reporting plugin unavailable:', error.message);
-    });
+      cronPluginsReady.delete(plugin);
+      console.error(`${plugin} plugin unavailable:`, error.message);
+    }));
   }
-  return runReportPluginReady;
+  return cronPluginsReady.get(plugin);
 }
 
 async function restrictHermesJob(jobId, bot, workdir, automation) {
   const artifactWorkspace = artifactWorkspaceForBot(bot);
   const runReport = runReportContextFor(automation);
-  if (runReport) await ensureRunReportPlugin();
+  await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN);
+  if (runReport) await ensureCronPlugin(RUN_REPORT_PLUGIN);
   const source = [
     'import json,sys',
     'from cron.jobs import update_job',

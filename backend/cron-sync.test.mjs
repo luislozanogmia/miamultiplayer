@@ -235,7 +235,11 @@ test('a slash-namespaced provider model id schedules a job', async () => {
 
   await cronSync.syncBotAutomation(agent, null);
 
-  const commands = readCommands();
+  // The first scheduled job also installs the plugin that stops retries on provider limits.
+  const allCommands = readCommands();
+  assert.ok(allCommands.some((args) => args.join(' ') === 'plugins enable mia-provider-limits'));
+  assert.ok(fs.existsSync(path.join(hermesHome, 'plugins', 'mia-provider-limits', '__init__.py')));
+  const commands = allCommands.filter((args) => args[0] !== 'plugins');
   assert.equal(commands.length, 1);
   assert.equal(commands[0][2], 'create');
   assert.deepEqual(commands[0].slice(commands[0].indexOf('--workdir'), commands[0].indexOf('--workdir') + 2), [

@@ -619,7 +619,11 @@ class HermesGatewayClient {
       const text = String(payload.text || turn.text || '').trim();
       const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
       if (payload.status === 'error') {
-        turn.reject(new Error(text || payload.error || 'Hermes gateway turn failed'));
+        // text is Hermes' summary for the chat; error keeps the provider's own words.
+        turn.reject(Object.assign(new Error(text || payload.error || 'Hermes gateway turn failed'), {
+          providerError: String(payload.error || ''),
+          failureReason: String(payload.failure_reason || ''),
+        }));
       } else if (!text && artifacts.length === 0) {
         turn.reject(new Error('Hermes gateway returned no reply text'));
       } else {
@@ -661,6 +665,7 @@ class HermesGatewayClient {
       emit('turn.complete', {
         text: String(payload.text || (pending && pending.text) || '').trim(),
         status: payload.status || 'complete',
+        ...(payload.status === 'error' ? { providerError: String(payload.error || ''), failureReason: String(payload.failure_reason || '') } : {}),
         ...(Array.isArray(payload.artifacts) ? { artifacts: payload.artifacts } : {}),
       });
       return;
