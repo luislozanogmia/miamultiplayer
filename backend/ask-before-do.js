@@ -69,6 +69,40 @@ function hostOf(text) {
   const host = /(?:^|\s)(?:[\w.-]+@)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::\S*)?(?=\s|$)/i.exec(text);
   return host ? host[1] : '';
 }
+// A connector tool (mcp_<server>_<tool> or mcp__<server>__<tool>) in words:
+// what it does, to what, where. A title, file name or recipient is shown
+// when the call names one; any other argument stays out.
+const CONNECTOR_APPS = { gmail: 'Gmail', drive: 'Google Drive', calendar: 'Google Calendar', sheets: 'Google Sheets',
+  docs: 'Google Docs', slides: 'Google Slides', slack: 'Slack', linear: 'Linear', notion: 'Notion', github: 'GitHub',
+  jira: 'Jira', asana: 'Asana', hubspot: 'HubSpot' };
+const CONNECTOR_THINGS = { gmail: 'an email', docs: 'a document', sheets: 'a spreadsheet', slides: 'a presentation',
+  calendar: 'an event', drive: 'a file', slack: 'a message', linear: 'an issue', jira: 'an issue', notion: 'a page', asana: 'a task' };
+const CONNECTOR_VERBS = { send: 'Send', delete: 'Delete', remove: 'Remove', trash: 'Delete', create: 'Create', add: 'Add',
+  append: 'Add', insert: 'Add', update: 'Change', edit: 'Change', modify: 'Change', set: 'Change', post: 'Post',
+  publish: 'Publish', share: 'Share', move: 'Move', reply: 'Reply to', forward: 'Forward', invite: 'Invite people to',
+  write: 'Write', upload: 'Upload', copy: 'Copy', rename: 'Rename' };
+function describeConnectorCall(raw) {
+  const space = raw.indexOf(' ');
+  const name = (space < 0 ? raw : raw.slice(0, space)).replace(/^mcp_+/, '');
+  let args = {};
+  try { args = JSON.parse(raw.slice(space + 1)) || {}; } catch (_) { /* no readable arguments */ }
+  const words = name.split('_').filter(Boolean).map((word) => word.toLowerCase());
+  const appKey = words.find((word) => CONNECTOR_APPS[word]);
+  const server = words[0] || 'a connected app';
+  const app = CONNECTOR_APPS[appKey] || server.charAt(0).toUpperCase() + server.slice(1);
+  const verbAt = words.findIndex((word) => CONNECTOR_VERBS[word]);
+  if (verbAt < 0) return `Make a change in ${app}`;
+  const rest = words.slice(verbAt + 1).filter((word) => !CONNECTOR_APPS[word] && word !== 'google' && word !== 'workspace');
+  const noun = rest.join(' ');
+  let thing = !noun || ['message', 'email'].includes(noun) ? (CONNECTOR_THINGS[appKey] || (noun ? `a ${noun}` : 'an item'))
+    : / /.test(noun) || noun.endsWith('s') ? noun : `${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}`;
+  const label = ['title', 'name', 'subject', 'filename', 'summary'].map((key) => args && typeof args[key] === 'string' ? args[key] : '')
+    .map((value) => value.replace(/\s+/g, ' ').trim()).find((value) => value && value.length <= 60 && !SECRETISH.test(value));
+  if (label) thing += ` "${label}"`;
+  const to = args && typeof args.to === 'string' && args.to.length <= 80 && !SECRETISH.test(args.to) ? ` to ${args.to}` : '';
+  return `${CONNECTOR_VERBS[words[verbAt]]} ${thing}${to} ${appKey === 'gmail' ? 'with' : 'in'} ${app}`;
+}
+
 // A combined command is described by the part that made it need a yes.
 function describeCommand(raw) {
   const parts = raw.split(/\s*(?:&&|\|\||;|\||\n)\s*/).filter((part) => /\S/.test(part) && !/^(?:cd|export|set)\b/.test(part));
@@ -111,18 +145,7 @@ function describeSegment(segment) {
   if (lower === 'ssh') return `Run a command on ${hostOf(segment) || 'another computer'}`;
   const cloud = { aws: 'AWS', gcloud: 'Google Cloud', az: 'Azure', kubectl: 'Kubernetes', terraform: 'cloud infrastructure' }[lower];
   if (cloud) return `Make a change in ${cloud}`;
-  if (/^mcp_/.test(raw)) {
-    const parts = raw.split(/\s/)[0].replace(/^mcp_/, '').split('_').filter((part) => !['google', 'workspace'].includes(part));
-    const verbs = { send: 'Send', delete: 'Delete', remove: 'Remove', trash: 'Delete', create: 'Create', add: 'Add', update: 'Change',
-      edit: 'Change', modify: 'Change', set: 'Change', post: 'Post', publish: 'Publish', share: 'Share', move: 'Move',
-      reply: 'Reply to', forward: 'Forward', invite: 'Invite people to', write: 'Write' };
-    const at = parts.findIndex((part) => verbs[part]);
-    const app = { gmail: 'Gmail', drive: 'Google Drive', calendar: 'Google Calendar', sheets: 'Google Sheets', docs: 'Google Docs', slides: 'Google Slides' }[parts[0]] || parts[0];
-    if (at < 0) return `Make a change with ${app}`;
-    const object = parts.slice(at + 1).join(' ') || ({ gmail: 'an email', calendar: 'an event' }[parts[0]] || 'an item');
-    const thing = object === 'message' ? 'an email' : /^(an?|the) /.test(object) || / /.test(object) || object.endsWith('s') ? object : `${/^[aeiou]/.test(object) ? 'an' : 'a'} ${object}`;
-    return `${verbs[parts[at]]} ${thing} ${parts[0] === 'gmail' ? 'with' : 'in'} ${app}`;
-  }
+  if (/^mcp_/.test(raw)) return describeConnectorCall(raw);
   return tool ? `Run the command ${plainName(tool) || 'shown'}` : 'Do this action';
 }
 

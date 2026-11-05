@@ -329,7 +329,12 @@ test('the approval line says in plain words what the command will do, never the 
   assert.equal(line('git push origin main'), 'Push your changes to origin/main');
   assert.equal(line('gh pr create --title x'), 'Open a pull request on GitHub');
   assert.equal(line('curl -X POST https://api.example.test/v1?token=abc -d {}'), 'Send data to api.example.test');
-  assert.equal(line('mcp_google_workspace_gmail_send {"to":"a"}'), 'Send an email with Gmail');
+  assert.equal(line('mcp_google_workspace_gmail_send {"to":"a@example.test","subject":"Invoice"}'), 'Send an email "Invoice" to a@example.test with Gmail');
+  assert.equal(line('mcp__google__google_docs_create {"title":"Weekly plan"}'), 'Create a document "Weekly plan" in Google Docs');
+  assert.equal(line('mcp__google__google_drive_delete_file {}'), 'Delete a file in Google Drive');
+  assert.equal(line('mcp__linear__create_issue {"title":"Fix login"}'), 'Create an issue "Fix login" in Linear');
+  assert.equal(line('mcp__slack__post_message {"text":"hi"}'), 'Post a message in Slack');
+  assert.equal(line('mcp__google__google_docs_create {"title":"ghp_abcdefghijklmnopqrstuvwxyz0123456789ab"}'), 'Create a document in Google Docs');
   assert.equal(line('Run code: os.remove("a")'), 'Run code that can change or delete files');
   assert.equal(line('rm ghp_abcdefghijklmnopqrstuvwxyz0123456789ab'), 'Delete files', 'a value that looks secret is never shown');
   for (const summary of ['rm a.txt', 'git push origin main', 'curl -d x https://a.example.test']) assert.doesNotMatch(line(summary), /^Run (rm|git|curl)\b/);
