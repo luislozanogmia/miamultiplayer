@@ -647,6 +647,28 @@
   .app-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
   .app-confirm-actions .btn{height:36px;border-radius:10px;}
   .interrupted-card{max-width:440px;}
+  .bot-copy-card{max-width:440px;max-height:calc(100vh - 48px);overflow-y:auto;}
+  .bot-copy-card.wide{max-width:860px;}
+  .bot-copy-title{font-size:16px;font-weight:600;color:var(--ink);}
+  .bot-copy-sub{font-size:13px;line-height:1.45;color:var(--muted);margin:4px 0 12px;}
+  .bot-copy-field{display:flex;flex-direction:column;gap:4px;margin-top:10px;font-size:12px;color:var(--muted);}
+  .bot-copy-field select{height:36px;border:1px solid var(--rule);border-radius:10px;padding:0 10px;font:inherit;font-size:14px;color:var(--ink);background:#FFFFFF;}
+  .bot-copy-removed{font-size:12.5px;color:var(--ink);background:var(--paper-2);border-radius:10px;padding:8px 12px;margin-bottom:12px;}
+  .bot-copy-removed span{font-weight:600;}
+  .bot-copy-removed ul{margin:4px 0 0;padding-left:18px;}
+  .bot-copy-compare{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .bot-copy-col{display:flex;flex-direction:column;gap:6px;min-width:0;}
+  .bot-copy-col-label{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);}
+  .bot-copy-name{height:34px;display:flex;align-items:center;font-size:14px;font-weight:500;color:var(--ink);}
+  .bot-copy-name-input{height:34px;border:1px solid var(--rule);border-radius:8px;padding:0 10px;font:inherit;font-size:14px;color:var(--ink);}
+  .bot-copy-original,.bot-copy-compare textarea{margin:0;min-height:220px;max-height:46vh;overflow:auto;box-sizing:border-box;width:100%;border:1px solid var(--rule);border-radius:10px;padding:10px;font:inherit;font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink);}
+  .bot-copy-original{background:var(--paper-2);}
+  .bot-copy-compare textarea{resize:vertical;background:#FFFFFF;}
+  .bot-copy-skill{margin-top:10px;font-size:13px;}
+  .bot-copy-skill summary{cursor:pointer;margin-bottom:8px;color:var(--ink);}
+  .bot-copy-skill .bot-copy-original,.bot-copy-skill textarea{min-height:120px;}
+  .bot-copy-error{font-size:12.5px;color:#B3261E;margin-top:10px;}
+  @media (max-width:640px){.bot-copy-compare{grid-template-columns:1fr;}}
   .interrupted-title{font-size:16px;font-weight:600;color:var(--ink);}
   .interrupted-sub{font-size:13px;color:var(--muted);margin:2px 0 10px;}
   .interrupted-list{max-height:50vh;overflow-y:auto;}

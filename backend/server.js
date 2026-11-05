@@ -144,6 +144,7 @@ const { createGoogleAccountConnector, createOwnerBoundGoogleAccount } = require(
 const { stripTaskOpeningNotice, humanTaskStatus, shouldPostTaskStatus } = require('./background-status');
 const { createProviderWaitTracker } = require('./provider-wait-status');
 const { MAX_INSTRUCTIONS: MAX_BOT_INSTRUCTIONS, buildAgentSetupPrompt, normalizeAgentDraft } = require('./agent-setup');
+const botGenericCopy = require('./bot-generic-copy');
 const miaBotSetupActions = require('./mia-bot-setup-actions');
 const { INSTANCE_NAME, INSTANCE_TEAM_DESCRIPTION, INSTANCE_DOMAINS, INSTANCE_PASSWORD } = require('./instance');
 const cronSync = require('./cron-sync');
@@ -5694,6 +5695,24 @@ app.post('/api/bots/interpret', requireAuth, async (req, res) => {
     return res.status(502).json({ error: 'draft_unavailable', message: 'The model didn’t return a bot draft. Try again.' });
   }
   res.status(200).json({ draft });
+});
+
+// Copying a bot to another company: Mia returns a version with the first
+// company's private details taken out. Nothing is created here; the person
+// approves the result first.
+app.post('/api/bots/generic-copy', requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const instructions = String(body.instructions || '').trim();
+  if (!String(body.name || '').trim() || !instructions) return res.status(400).json({ error: 'bot required' });
+  let copy = null;
+  try {
+    const reply = await scheduleInference(botGenericCopy.genericCopyPrompt(body), 'suggestion', await inferenceOptionsForUser(req.userEmail));
+    copy = botGenericCopy.normalizeGenericCopy(reply, { skills: body.skills });
+  } catch (error) {
+    console.error('generic bot copy failed', error && error.message);
+  }
+  if (!copy) return res.status(502).json({ error: 'copy_unavailable', message: 'Mia couldn’t prepare a clean copy. Try again.' });
+  res.status(200).json({ copy });
 });
 
 // Live automation status comes from active Hermes cron sessions, not from

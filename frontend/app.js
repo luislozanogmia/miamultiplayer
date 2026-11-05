@@ -5282,12 +5282,20 @@
   // was just created: it is shared into the channel and, when you are a team
   // admin, published right away. Anyone else's bot waits for an admin.
   // -> Promise<true when published>
-  function shareBotToHubChannel(teamId, channelId, localBotId){
-    return window.MiaHubChat.localCall('POST', '/share', {teamId: teamId, channelId: channelId, localBotId: String(localBotId)}).then(function(result){
+  // A copy for another company (see copyCompanyBotToCompany) brings its
+  // reviewed skills and your role in that company.
+  function shareBotToHubChannel(teamId, channelId, localBotId, copy){
+    var body = {teamId: teamId, channelId: channelId, localBotId: String(localBotId)};
+    if(copy) body.skills = copy.skills;
+    return window.MiaHubChat.localCall('POST', '/share', body).then(function(result){
       var version = result && result.proposal && result.proposal.version, bot = result && result.bot;
       refreshCompanyBots();
-      if(!(hubChat.membership && hubChat.membership.role === 'admin') || !version || !bot) return false;
-      return hubCall('POST', hubPath() + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ refreshCompanyBots(); return true; });
+      var role = copy ? copy.role : hubChat.membership && hubChat.membership.role;
+      if(role !== 'admin' || !version || !bot) return false;
+      // A copy is already in the other company once shared; if approving
+      // fails, an admin there approves it as for anyone's bot.
+      return hubCall('POST', '/v1/teams/' + teamId + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ refreshCompanyBots(); return true; },
+        function(error){ if(copy) return false; throw error; });
     });
   }
   function hubBotJoinedMessage(name, label, published){
@@ -5606,6 +5614,144 @@
       });
     });
   }
+  // Copy a company bot to another company you are in. Mia first writes a
+  // copy without this company's private details; you read it beside the
+  // original, can edit it, and approve before it is added there. The bot here
+  // stays as it is.
+  function copyCompanyBotToCompany(bot){
+    var place=bot.places && bot.places[0];
+    if(!place)return;
+    var fromTeamId=activeWorkspaceKey.slice(4);
+    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',fromName:'this company',original:null,copy:null,error:''};
+    var previousFocus=document.activeElement;
+    var overlay=document.createElement('div');
+    overlay.className='app-confirm-overlay open';
+    overlay.setAttribute('role','presentation');
+    var card=document.createElement('div');
+    card.className='app-confirm-card bot-copy-card';
+    card.setAttribute('role','dialog');
+    card.setAttribute('aria-modal','true');
+    card.setAttribute('aria-label','Copy '+bot.name+' to another company');
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    function close(){ overlay.remove(); if(previousFocus && previousFocus.focus)try{previousFocus.focus();}catch(_){} }
+    overlay.addEventListener('click',function(e){ if(e.target===overlay && state.phase!=='copying')close(); });
+    overlay.addEventListener('keydown',function(e){ if(e.key==='Escape' && state.phase!=='copying'){ e.preventDefault(); close(); } });
+    function team(){ return state.teams.filter(function(t){ return t.teamId===state.teamId; })[0]||null; }
+    function channel(){ return state.channels.filter(function(c){ return c.id===state.channelId; })[0]||null; }
+    function render(){
+      var html='<div class="bot-copy-title">Copy '+esc(bot.name)+' to another company</div>';
+      if(state.phase==='loading'){
+        html+='<p class="bot-copy-sub">Loading your companies…</p>';
+      } else if(state.phase==='pick'){
+        html+='<p class="bot-copy-sub">Mia makes a clean copy first: names, clients, numbers and other private details from '+esc(state.fromName)+' are taken out. You check it before it is added. '+esc(bot.name)+' stays here as it is.</p>'
+          +'<label class="bot-copy-field"><span>Company</span><select data-bot-copy-team>'+state.teams.map(function(t){ return '<option value="'+esc(t.teamId)+'"'+(t.teamId===state.teamId?' selected':'')+'>'+esc(t.name)+'</option>'; }).join('')+'</select></label>'
+          +'<label class="bot-copy-field"><span>Channel</span><select data-bot-copy-channel'+(state.channels.length?'':' disabled')+'>'+(state.channels.length
+            ? state.channels.map(function(c){ return '<option value="'+esc(c.id)+'"'+(c.id===state.channelId?' selected':'')+'>#'+esc(c.name)+'</option>'; }).join('')
+            : '<option>'+(state.channelsLoading?'Loading channels…':'No channels you can add bots to')+'</option>')+'</select></label>';
+      } else if(state.phase==='reviewing'){
+        html+='<p class="bot-copy-sub">Mia is preparing a clean copy for '+esc(team().name)+'…</p>';
+      } else {
+        var copy=state.copy;
+        html+='<p class="bot-copy-sub">Check the copy for '+esc(team().name)+' · #'+esc(channel().name)+'. You can edit it before you add it.</p>'
+          +(copy.removed.length?'<div class="bot-copy-removed"><span>Taken out</span><ul>'+copy.removed.map(function(item){ return '<li>'+esc(item)+'</li>'; }).join('')+'</ul></div>':'')
+          +'<div class="bot-copy-compare">'
+          +'<div class="bot-copy-col"><div class="bot-copy-col-label">In '+esc(state.fromName)+'</div><div class="bot-copy-name">'+esc(bot.name)+'</div><pre class="bot-copy-original">'+esc(state.original.instructions)+'</pre></div>'
+          +'<div class="bot-copy-col"><div class="bot-copy-col-label">Copy for '+esc(team().name)+'</div><input class="bot-copy-name-input" data-bot-copy-name aria-label="Name of the copy" maxlength="40" value="'+esc(copy.name)+'"><textarea data-bot-copy-instructions aria-label="Instructions of the copy">'+esc(copy.instructions)+'</textarea></div>'
+          +'</div>'
+          +copy.skills.map(function(skill,i){
+            var original=state.original.skills[i]||{};
+            return '<details class="bot-copy-skill"><summary>Skill: '+esc(skill.name)+'</summary><div class="bot-copy-compare">'
+              +'<pre class="bot-copy-original">'+esc(original.body||'')+'</pre>'
+              +'<textarea data-bot-copy-skill="'+i+'" aria-label="'+esc('Skill '+skill.name+' in the copy')+'">'+esc(skill.body)+'</textarea></div></details>';
+          }).join('');
+      }
+      if(state.error)html+='<div class="bot-copy-error" role="alert">'+esc(state.error)+'</div>';
+      var primary=state.phase==='pick'?'Make clean copy':(state.phase==='review'||state.phase==='copying')?'Add to #'+esc(channel().name):'';
+      html+='<div class="app-confirm-actions"><button type="button" class="btn" data-bot-copy-cancel'+(state.phase==='copying'?' disabled':'')+'>Cancel</button>'
+        +(primary?'<button type="button" class="btn primary" data-bot-copy-go'+((state.phase==='pick'&&!state.channelId)||state.phase==='copying'?' disabled':'')+'>'+(state.phase==='copying'?'Adding…':primary)+'</button>':'')+'</div>';
+      card.innerHTML=html;
+      card.classList.toggle('wide',state.phase==='review'||state.phase==='copying');
+      var teamSelect=el('[data-bot-copy-team]',card), channelSelect=el('[data-bot-copy-channel]',card);
+      if(teamSelect)teamSelect.addEventListener('change',function(){ loadChannels(teamSelect.value); });
+      if(channelSelect)channelSelect.addEventListener('change',function(){ state.channelId=channelSelect.value; });
+      el('[data-bot-copy-cancel]',card).addEventListener('click',close);
+      var go=el('[data-bot-copy-go]',card);
+      if(go)go.addEventListener('click',state.phase==='pick'?review:add);
+      (go||el('[data-bot-copy-cancel]',card)).focus();
+    }
+    function readEdits(){
+      var name=el('[data-bot-copy-name]',card), text=el('[data-bot-copy-instructions]',card);
+      if(name)state.copy.name=name.value.trim();
+      if(text)state.copy.instructions=text.value.trim();
+      els('[data-bot-copy-skill]',card).forEach(function(box){ state.copy.skills[Number(box.getAttribute('data-bot-copy-skill'))].body=box.value.trim(); });
+    }
+    function loadChannels(teamId){
+      state.teamId=teamId; state.channels=[]; state.channelId=''; state.channelsLoading=true; state.error='';
+      render();
+      hubCall('GET','/v1/teams/'+teamId+'/channels').then(function(result){
+        if(state.teamId!==teamId)return;
+        state.channels=(result.channels||[]).filter(function(c){ return !hubPrivateConversation(c); });
+        state.channelId=state.channels.length?state.channels[0].id:'';
+      }).catch(function(){ if(state.teamId===teamId)state.error='Couldn\'t load that company\'s channels.'; })
+        .finally(function(){ if(state.teamId!==teamId)return; state.channelsLoading=false; render(); });
+    }
+    function review(){
+      state.phase='reviewing'; state.error=''; render();
+      api('/api/bots/generic-copy',{method:'POST',body:{name:bot.name,instructions:state.original.instructions,skills:state.original.skills,fromCompany:state.fromName}}).then(function(res){
+        if(!overlay.isConnected)return;
+        var copy=res.data && res.data.copy;
+        if(res.status!==200 || !copy)throw new Error(res.data && res.data.message || 'Mia couldn\'t prepare a clean copy. Try again.');
+        state.copy=copy; state.phase='review'; render();
+      }).catch(function(error){
+        if(!overlay.isConnected)return;
+        state.phase='pick'; state.error=error.message; render();
+      });
+    }
+    function add(){
+      readEdits();
+      if(!state.copy.name || !state.copy.instructions){ state.error='The copy needs a name and instructions.'; render(); return; }
+      var target=team(), room=channel(), copy=state.copy, model=selectedConnectedBotModel(), createdId=null;
+      if(!model){ state.error='Connect and choose a model before adding this bot.'; render(); return; }
+      state.phase='copying'; state.error=''; render();
+      api('/api/bots',{method:'POST',body:{name:copy.name,instructions:copy.instructions,model:model,status:'running',departments:[],avatarColor:bot.avatarColor||null}}).then(function(res){
+        var created=res.data && res.data.bot;
+        if(res.status!==201 || !created)throw new Error(res.data && res.data.error || 'Couldn\'t make the copy.');
+        createdId=String(created.id);
+        return shareBotToHubChannel(target.teamId,room.id,createdId,{skills:copy.skills,role:target.role});
+      }).then(function(published){
+        close();
+        if(hubWorkspace())loadTeamBotChats();
+        showBenchToast(published ? copy.name+' was added to '+target.name+' · #'+room.name+'.'
+          : copy.name+' was added to '+target.name+' · #'+room.name+'. An admin there must approve it before it can reply.');
+      }).catch(function(error){
+        // A copy that never reached the other company is not left behind here.
+        if(createdId)api('/api/bots/'+encodeURIComponent(createdId),{method:'DELETE'}).catch(function(){});
+        if(!overlay.isConnected)return;
+        state.phase='review'; state.error='Couldn\'t add the copy: '+(error && error.message || 'try again.'); render();
+      });
+    }
+    render();
+    Promise.all([
+      hubCall('GET','/v1/me'),
+      hubCall('GET',hubPath()+'/channels/'+place.channelId+'/bots/'+place.botId+'/definition')
+    ]).then(function(results){
+      if(!overlay.isConnected)return;
+      var definition=results[1] && results[1].definition;
+      if(!definition || !definition.instructions)throw new Error('Only a bot an admin has approved can be copied.');
+      state.original={instructions:definition.instructions,skills:(definition.skills||[]).map(function(skill){ return {name:skill.name,description:skill.description||'',body:skill.body}; })};
+      (results[0].teams||[]).forEach(function(t){
+        if(t.teamId===fromTeamId){ state.fromName=String(t.name||state.fromName); return; }
+        if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Shared team'),role:t.membership.role});
+      });
+      if(!state.teams.length)throw new Error('You are not in another company yet.');
+      state.phase='pick';
+      loadChannels(state.teams[0].teamId);
+    }).catch(function(error){
+      if(!overlay.isConnected)return;
+      state.phase='error'; state.error=error && error.message || 'Couldn\'t load this bot.'; render();
+    });
+  }
   // A company bot is used in the channels it was shared to; its row opens
   // one of them so you can mention it there.
   function companyBotRow(bot,pinned){
@@ -5617,7 +5763,9 @@
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview">'+esc(where)+'</span></span>';
     button.addEventListener('click',function(){ openCompanyBot(bot); });
-    wireTeamBotPin(button,'company:'+bot.key,!!pinned,companyBotCanRemove(bot)?[['Remove from team',function(){ removeCompanyBot(bot); }]]:null);
+    var items=[['Copy to another company…',function(){ copyCompanyBotToCompany(bot); }]];
+    if(companyBotCanRemove(bot))items.push(['Remove from team',function(){ removeCompanyBot(bot); }]);
+    wireTeamBotPin(button,'company:'+bot.key,!!pinned,items);
     return button;
   }
   // A bot row in a team opens your private chat with it for this team.

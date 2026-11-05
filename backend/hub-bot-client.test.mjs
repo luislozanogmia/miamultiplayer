@@ -54,6 +54,13 @@ test('sharing always forks and sends only the instructions, even when asked for 
   assert.equal(typeof f.client.sync,'undefined');
 });
 
+test('a copy from another company shares the skills its owner reviewed, not the library ones',async t=>{
+  const f=fixture(t);
+  await f.client.share(owner,{...f.input,skills:[{name:'Weekly report',description:'',body:'Write the [Company] report.'},{name:'Empty',body:' '}]},'fixture.token');
+  const version=f.requests.filter(r=>r.options.method==='POST' && r.url.endsWith('/versions')).map(r=>JSON.parse(r.options.body));
+  assert.deepEqual(version[0].skills,[{name:'Weekly report',description:'',body:'Write the [Company] report.'}]);
+});
+
 test('different Hub identity, disabled account, unknown local bot and invalid scope fail closed',async t=>{
   const f=fixture(t);
   f.setEmail('other@example.test');

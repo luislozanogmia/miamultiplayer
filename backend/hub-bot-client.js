@@ -219,7 +219,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const result=await requestHub(scope.origin,token,'POST',`/v1/teams/${scope.teamId}/channels/${scope.channelId}/bots`,
         {id:binding.registration_id,name:binding.public_name},fetcher);
       if(!result.bot || result.bot.owner_id!==scope.subject || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
-      const skills=bundleSkills(bot);
+      // A copy from another company brings the skills its owner reviewed.
+      const skills=Array.isArray(input.skills)?sharedSkills(input.skills):bundleSkills(bot);
       // A Hub that has not been updated refuses skills and long instructions.
       const proposed=await requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
         {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual',...(skills.length?{skills}:{})},fetcher)

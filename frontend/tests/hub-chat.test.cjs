@@ -649,6 +649,14 @@ test('adding a bot to a channel publishes it only when you are an admin',async()
     ['POST','/v1/teams/t/channels/chan/bots/bot1/versions/2/approve']]);
   const member=await run('member');
   assert.equal(member.published,false);assert.equal(member.calls.length,1);
+  // A copy for another company uses your role there, not in the team on screen.
+  const copyEnv={hubChat:{membership:{role:'member'}},refreshCompanyBots(){},calls:[],
+    window:{MiaHubChat:{localCall:(m,p,b)=>{copyEnv.calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot9'},proposal:{version:1}});}}},
+    hubCall:(m,p)=>{copyEnv.calls.push([m,p]);return Promise.resolve({});}};
+  const skills=[{name:'Report',description:'',body:'Write it.'}];
+  assert.equal(await appFunction('shareBotToHubChannel',copyEnv)('other','room','local8',{skills,role:'admin'}),true);
+  assert.deepEqual(JSON.parse(JSON.stringify(copyEnv.calls)),[['POST','/share',{teamId:'other',channelId:'room',localBotId:'local8',skills}],
+    ['POST','/v1/teams/other/channels/room/bots/bot9/versions/1/approve']]);
   const source=require('node:fs').readFileSync(require('node:path').join(__dirname,'..','app.js'),'utf8');
   assert.equal((source.match(/localCall\('POST', ?'\/share'/g)||[]).length,1,'only shareBotToHubChannel shares a bot');
   for(const caller of ['function addCreatedBotToTeam(','function confirmMentionAdd(']){
@@ -872,7 +880,17 @@ test('an admin can remove a company bot from every channel it is in, from its ro
   await remove(bot);
   assert.deepEqual(calls,['DELETE /v1/teams/t/channels/c1/bots/b1','DELETE /v1/teams/t/channels/c2/bots/b2','refresh']);
   assert.deepEqual(toasts,['Disk Manager was removed from the team.']);
-  assert.match(source,/companyBotCanRemove\(bot\)\?\[\['Remove from team'/);
+  assert.match(source,/if\(companyBotCanRemove\(bot\)\)items\.push\(\['Remove from team'/);
+});
+test('anyone can copy a company bot to another company, through Mia\'s clean copy and their approval',()=>{
+  assert.match(source,/var items=\[\['Copy to another company…',function\(\)\{ copyCompanyBotToCompany\(bot\); \}\]\];/);
+  const flow=source.slice(source.indexOf('  function copyCompanyBotToCompany('),source.indexOf('  function companyBotRow('));
+  assert.match(flow,/hubPath\(\)\+'\/channels\/'\+place\.channelId\+'\/bots\/'\+place\.botId\+'\/definition'/,'the copy starts from the approved definition');
+  assert.match(flow,/api\('\/api\/bots\/generic-copy'/);
+  // Nothing reaches the other company until the person presses Add.
+  assert.ok(flow.indexOf('shareBotToHubChannel(')>flow.indexOf('function add()'),'sharing happens only in add');
+  assert.match(flow,/shareBotToHubChannel\(target\.teamId,room\.id,createdId,\{skills:copy\.skills,role:target\.role\}\)/);
+  assert.match(flow,/if\(createdId\)api\('\/api\/bots\/'\+encodeURIComponent\(createdId\),\{method:'DELETE'\}\)/);
 });
 test('a team offers New bot like Solo: in Start something, on My Bots, and through the same setup',()=>{
   assert.match(source,/\.concat\(\[\{id:'new-bot', name:'New bot'\}\]\)/);
