@@ -207,6 +207,10 @@ function streamThroughClient(stream) {
   return runPython(`
 import json, os, stat, sys, tempfile, time
 sys.path.insert(0, sys.argv[1])
+import types
+sanitizer = types.ModuleType('tools.schema_sanitizer')
+sanitizer.strip_nullable_unions = lambda schema, **_: schema
+sys.modules.update({'tools': types.ModuleType('tools'), 'tools.schema_sanitizer': sanitizer})
 import directsdk
 fake = tempfile.NamedTemporaryFile('w', suffix='.py', delete=False)
 fake.write('''#!''' + sys.executable + '''
