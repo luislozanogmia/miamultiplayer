@@ -5463,8 +5463,8 @@
     var dmSection=section('dms','Direct messages','New direct message',openHubDirectMessagePicker);
     dms.forEach(function(channel){dmSection.list.appendChild(row(channel));});
     all.appendChild(dmSection.node);
-    // My Bots are made in Solo; here you chat with them about this team's work.
-    var myBotSection=section('bots','My Bots','',null);
+    // My Bots: your Solo bots and the ones you made in this team, made the same way as in Solo.
+    var myBotSection=section('bots','My Bots','New bot',function(){ runToolsAction('new-bot'); });
     myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id))myBotSection.list.appendChild(teamBotRow(bot)); });
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
     all.appendChild(myBotSection.node);
@@ -9562,7 +9562,7 @@
     return [{id:'new-chat', name:'New chat'}]
       .concat(hubWorkspace() ? [{id:'new-channel', name:'New channel'}] : [])
       .concat([{id:'new-automation', name:'New automation'}])
-      .concat(hubWorkspace() ? [] : [{id:'new-bot', name:'New bot'}])
+      .concat([{id:'new-bot', name:'New bot'}])
       .concat([{id:'new-app', name:'New app'}, {id:'new-artifact', name:'Create an artifact'}])
       .concat(browser && browser.command ? [{id:'new-tab', name:'New browser tab'}] : []);
   }
@@ -17277,7 +17277,8 @@
   function runToolsAction(action){
     // Views (Automations, Artifacts, Browser) are the same in Solo and a
     // team; only creating chats and bots differs.
-    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills';
+    // Making a bot works the same in a team: it belongs to the team you are in.
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills' || action === 'new-bot';
     if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full

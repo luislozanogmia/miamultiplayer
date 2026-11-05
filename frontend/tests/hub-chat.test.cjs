@@ -699,7 +699,7 @@ test('Solo Retry, delete and composer hand-off cover undelivered messages',()=>{
 });
 test('team sidebar splits My Bots from Company bots',()=>{
   const body=source.slice(source.indexOf('  function renderHubSidebar(){'),source.indexOf('  function hubInviteRow('));
-  assert.match(body,/section\('bots','My Bots','',null\)/);
+  assert.match(body,/section\('bots','My Bots','New bot',function\(\)\{ runToolsAction\('new-bot'\); \}\)/);
   assert.match(body,/section\('company-bots','Company bots','',null\)/);
   assert.match(source,/window\.MiaHubChat\.teamBots\(workspace\.slice\(4\)\)/,'the sidebar uses the shared team bot loader');
   assert.match(require('fs').readFileSync(require('path').join(__dirname,'..','admin.js'),'utf8'),/win\.MiaHubChat\.teamBots\(team\.id\)/,'the Bot Roster uses the same loader');
@@ -873,4 +873,11 @@ test('an admin can remove a company bot from every channel it is in, from its ro
   assert.deepEqual(calls,['DELETE /v1/teams/t/channels/c1/bots/b1','DELETE /v1/teams/t/channels/c2/bots/b2','refresh']);
   assert.deepEqual(toasts,['Disk Manager was removed from the team.']);
   assert.match(source,/companyBotCanRemove\(bot\)\?\[\['Remove from team'/);
+});
+test('a team offers New bot like Solo: in Start something, on My Bots, and through the same setup',()=>{
+  assert.match(source,/\.concat\(\[\{id:'new-bot', name:'New bot'\}\]\)/);
+  assert.doesNotMatch(source,/hubWorkspace\(\) \? \[\] : \[\{id:'new-bot'/);
+  assert.match(source,/section\('bots','My Bots','New bot',function\(\)\{ runToolsAction\('new-bot'\); \}\)/);
+  assert.match(source,/var sharedView = [^;]*action === 'new-bot';/);
+  assert.match(source,/else if\(action === 'new-bot'\) startAgentSetupChat\(\);/);
 });
