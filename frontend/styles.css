@@ -1520,7 +1520,7 @@
      on hover so the row doesn't widen. */
   .chat-row-hide{display:none;flex:0 0 auto;margin-left:auto;width:16px;height:16px;line-height:15px;text-align:center;border-radius:5px;color:var(--sand-text-secondary);font-size:13px;}
   .chat-recent-row:hover .chat-row-hide{display:block;}
-  .chat-recent-row:hover .chat-dm-time,.chat-recent-row:hover .chat-activity-dot{display:none;}
+  .chat-recent-row:hover .chat-dm-time{display:none;}
   .chat-row-hide:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
   .chat-hidden-toggle{appearance:none;border:none;background:transparent;cursor:pointer;width:100%;text-align:left;font-family:var(--styled-sans);font-size:11px;color:var(--sand-text-secondary);padding:6px 9px 4px;}
   .chat-hidden-toggle:hover{color:var(--sand-text-primary);}
@@ -1531,6 +1531,7 @@
   .chat-activity-dot{width:7px;height:7px;flex:0 0 auto;margin-left:auto;border-radius:50%;background:oklch(0.72 0.16 60);}
   .chat-activity-dot.is-live{animation:chatTaskPulse 1.6s ease-in-out infinite;}
   .chat-activity-dot.is-unread{animation:none;}
+  body .row-text.is-unread .row-label,body .row-text.is-unread .row-preview{font-weight:700;color:var(--sand-text-primary);}
   .chat-task-dot{width:6px;height:6px;border-radius:50%;background:oklch(0.72 0.16 60);animation:chatTaskPulse 1.6s ease-in-out infinite;}
   @keyframes chatTaskPulse{0%,100%{opacity:1;}50%{opacity:.3;}}
   /* Plugins row + user row, bottom of sidebar (styled shell's own layout, no
@@ -2158,7 +2159,7 @@
   @media (max-width:1100px){
     [data-shell]{grid-template-columns:64px minmax(0,1fr) !important;}
     [data-rail]{width:64px;}
-    [data-rail] [data-rail-hide]{display:none !important;}
+    [data-rail] [data-rail-hide]:not(.sidebar-views){display:none !important;}
     [data-rail] .row-label,[data-rail] .chat-recent-row .rt{display:none !important;}
     [data-rail] .chat-new-btn{justify-content:center;}
     [data-rail] .chat-recent-row{justify-content:center;padding-left:0;padding-right:0;}
@@ -3209,6 +3210,21 @@
   .mia-tab-working{flex:none;margin-left:6px;}
   .local-browser-bot-control{flex:none;display:inline-flex;align-items:center;gap:8px;margin-left:8px;padding:3px 3px 3px 10px;border-radius:999px;background:transparent;box-shadow:none;font-size:12.5px;color:#3a3a38;white-space:nowrap;-webkit-app-region:no-drag;}
   .local-browser-bot-control[hidden]{display:none;}
+  /* A small window gives up the address bar and the bot's name first. The collapse
+     buttons at both ends and Take over always stay in reach. */
+  .local-browser-toolbar>.local-browser-btn,.local-browser-toolbar>.local-browser-share-btn{flex:none;}
+  .local-browser-toolbar{container-type:inline-size;}
+  .local-browser-toolbar>.local-browser-bot-control{flex:0 1 auto;min-width:min-content;}
+  .local-browser-bot-control>span{flex:0 1 auto;width:auto;}
+  @container (max-width:560px){
+    .local-browser-bot-control>span{display:none;}
+    .local-browser-bot-control .local-browser-follow{font-size:0;gap:0;}
+    #localBrowserForwardBtn{display:none;}
+    .local-browser-url-wrap{flex:1 1 0;}
+  }
+  .local-browser-bot-control>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .local-browser-bot-control>button{flex:none;}
+  .local-browser-url-wrap>.local-browser-search-engine{flex:0 1 auto;min-width:0;overflow:hidden;}
   .local-browser-bot-control strong{font-weight:600;color:#1a1a19;}
   .local-browser-bot-control::before{content:"";width:8px;height:8px;margin-right:-2px;border-radius:2px;background:var(--mia-gold,#C9962B);animation:native-browser-bot-blink 1.1s steps(2,start) infinite;}
   @keyframes native-browser-bot-blink{to{visibility:hidden;}}

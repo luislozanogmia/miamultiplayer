@@ -16372,11 +16372,12 @@
     // Every row keeps a second line so titles sit on one line across the
     // sidebar. A room known to be empty says so; one still loading stays blank.
     function sidebarRowText(name, roomId, hasActivity){
-      var indicator = renderChatActivityIndicator(hasActivity, chatNeedsAttention(roomId));
+      var unread = chatNeedsAttention(roomId);
+      var indicator = renderChatActivityIndicator(hasActivity, unread);
       var preview = roomPreview(roomId);
       var state = roomId && chatWs.byRoom[roomId];
       var previewHtml = preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
-      return '<span class="row-text"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
+      return '<span class="row-text' + (unread ? ' is-unread' : '') + '"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
         '</span><span class="row-preview' + (preview ? '' : ' empty') + '">' + previewHtml + '</span></span>';
     }
 
