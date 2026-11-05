@@ -5797,9 +5797,11 @@
   // A section's + menu: each item is [label, run].
   // The browser's page is a native view drawn over the app, so a sidebar menu
   // that reached past the sidebar would be hidden behind it.
+  // A sidebar menu stays inside the sidebar: a browser tab beside it is drawn
+  // above the page, so anything past the sidebar's edge would be hidden.
   function sidebarMenuLeft(x,width){
-    var sidebar=document.body.classList.contains('browser-collab-mode')&&el('.chat-sidebar');
-    var limit=sidebar?sidebar.getBoundingClientRect().right:window.innerWidth;
+    var sidebar=el('.chat-sidebar'), box=sidebar&&sidebar.getBoundingClientRect();
+    var limit=box&&box.width?box.right:window.innerWidth;
     return Math.max(8,Math.min(x,limit-width-8));
   }
   function openSidebarAddMenu(anchor,items){

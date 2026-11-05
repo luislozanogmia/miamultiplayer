@@ -49,13 +49,14 @@ test('picking from the Start something list reuses the blank tab or closes it, n
   assert.match(source, /onBlankTab \? Promise\.resolve\(null\) : window\.miaDesktop\.browser\.command\(\{action:'new'\}\)/);
 });
 
-test('a sidebar menu stays clear of the page drawn over the app while the browser is open', () => {
+test('a sidebar menu stays inside the sidebar, which a browser tab beside it would cover', () => {
   const start = source.indexOf('function sidebarMenuLeft(x,width){');
   const left = new Function('document', 'el', 'window', source.slice(start, source.indexOf('function openSidebarAddMenu', start)) + 'return sidebarMenuLeft;');
-  const body = open => ({ body: { classList: { contains: () => open } } });
-  const sidebar = () => ({ getBoundingClientRect: () => ({ right: 330 }) });
-  assert.equal(left(body(true), sidebar, { innerWidth: 1280 })(209, 248), 74);
-  assert.equal(left(body(false), sidebar, { innerWidth: 1280 })(209, 248), 209);
+  const sidebar = width => () => ({ getBoundingClientRect: () => ({ right: 330, width }) });
+  // A team channel's ⋯ sits near the sidebar's right edge; its menu opens leftwards.
+  assert.equal(left({}, sidebar(330), { innerWidth: 1280 })(303, 248), 74);
+  assert.equal(left({}, sidebar(330), { innerWidth: 1280 })(40, 248), 40);
+  assert.equal(left({}, sidebar(0), { innerWidth: 1280 })(303, 248), 303, 'a hidden sidebar falls back to the window');
 });
 
 test('Skills opens from the left rail and is gone from Settings', () => {
