@@ -96,7 +96,7 @@ function hubRouteLimits(method, route) {
   const file = hubFileRoute(method, route);
   return {
     // Finishing a 500 MB upload lists up to 63 parts (an ETag and a hash each).
-    request: method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000
+    request: method === 'PUT' && /^\/v1\/teams\/[a-f0-9]{32}\/team\/logo$/.test(route) ? 45000 : method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000
       : file === 'complete' ? 32768 : method === 'POST' && HUB_WORKFLOW_WRITE.test(route) ? 16384 : method === 'POST' && HUB_BOT_VERSIONS.test(route) ? BOT_DEFINITION_BYTES : 8192,
     response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : HUB_WORKFLOW_ROUTE.test(route) ? 4194304 : method === 'GET' && HUB_ADMIN_LIST.test(route) ? 2097152 : method === 'GET' && HUB_BOT_VERSIONS.test(route) ? 5 * BOT_DEFINITION_BYTES + 65536 : method === 'GET' && HUB_BOT_DEFINITION.test(route) ? BOT_DEFINITION_BYTES + 65536 : 131072,
     // The Hub joins S3's multipart parts while it completes, which can take a while.

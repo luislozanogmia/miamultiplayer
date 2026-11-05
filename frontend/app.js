@@ -4928,7 +4928,7 @@
       // A team you're invited to shows too, dimmed, as in Slack: opening it
       // joins it. Only joined teams are remembered for the next launch.
       var teams=(result.teams||[]).filter(function(team){return (team.membership || team.invite) && /^[a-f0-9]{32}$/.test(team.teamId);})
-        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Shared team'),invited:!team.membership};});
+        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Shared team'),logo_hash:team.logo_hash||null,invited:!team.membership};});
       noteHubRemovals(teams);
       sendHubDisplayName(teams.filter(function(team){return !team.invited;}));
       try { localStorage.setItem(HUB_TEAMS_STORAGE_KEY, JSON.stringify(teams.filter(function(team){return !team.invited;}))); } catch(_hubTeamsStorageError) {}
@@ -4950,6 +4950,14 @@
       button.type='button'; button.className='workspace-rail-tile'+(team.invited ? ' invited' : '');
       button.setAttribute('data-hub-team',team.teamId); button.setAttribute('data-workspace-key',key); button.setAttribute('aria-label',label);
       button.innerHTML='<span class="workspace-rail-mark" aria-hidden="true">'+esc(workspaceCode(team.name))+'</span><strong class="workspace-rail-name">'+esc(label)+'</strong>';
+      if(!team.invited && team.logo_hash && window.MiaTeamLogo){
+        hubCall('GET','/v1/teams/'+team.teamId+'/team/logo').then(function(result){
+          var mark=button.querySelector('.workspace-rail-mark');
+          if(result.logo_hash===team.logo_hash && window.MiaTeamLogo.valid(result.logo_data_url)){
+            window.MiaTeamLogo.paint(mark,result.logo_data_url);
+          }
+        }).catch(function(){});
+      }
       button.addEventListener('click',function(){
         if(!team.invited){ if(key!==activeWorkspaceKey) switchWorkspace(key); return; }
         if(button.disabled) return;
