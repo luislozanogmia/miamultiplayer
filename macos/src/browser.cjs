@@ -221,7 +221,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   let queued = false;
   let disposed = false;
   let restoring = false;
-  let download = "";
+  // A download can finish after the person switches workspaces. Its status
+  // line belongs with the workspace where that download began.
+  const downloadNotices = new Map();
   let darkTheme = false;
   // Keep website sessions in Mia's own isolated browser profile so a user can
   // sign in once and remain signed in across app restarts. This does not share
@@ -880,7 +882,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // mode when it goes up. A blank tab still replaces the closed one.
   let lastTabCloses = 0;
   let sessionGroupId = null;
-  const state = () => ({ workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download, downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
     private: tab.private === true,
@@ -3124,7 +3126,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const worker = tab.botWorker && (tab.botWork > 0 || Date.now() - (tab.botWorkAt || 0) < AGENT_DOWNLOAD_WINDOW_MS)
       ? downloadWorker(tab.botWorker.botId ? tab.botWorker : { mia: true }) : null;
     if (worker && downloadsDir && item.setSavePath) item.setSavePath(freeDownloadPath(item.getFilename()));
-    download = `Downloading ${item.getFilename()}`;
     const entry = {
       id: nextDownloadId++,
       filename: String(item.getFilename() || "download").slice(0, 500),
@@ -3138,6 +3139,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       safety: null,
       workspace: workspaceKey,
     };
+    downloadNotices.set(entry.workspace, `Downloading ${item.getFilename()}`);
     if (worker && item.getSavePath) entry.path = String(item.getSavePath() || "");
     downloadEntries.unshift(entry);
     downloadEntries = downloadEntries.slice(0, DOWNLOADS_MAX_ENTRIES);
@@ -3155,7 +3157,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       entry.state = DOWNLOAD_STATES.has(result) ? result : "interrupted";
       entry.path = String((item.getSavePath && item.getSavePath()) || entry.path || "");
       entry.received = Number(item.getReceivedBytes && item.getReceivedBytes()) || entry.received;
-      download = `${result === "completed" ? "Saved" : result}: ${item.getFilename()}`;
+      downloadNotices.set(entry.workspace, `${result === "completed" ? "Saved" : result}: ${item.getFilename()}`);
       persistDownloads(); publish();
       if (entry.state === "completed" && entry.path) checkDownloadSafety(entry);
     });
@@ -3185,6 +3187,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   ipcMain.handle(channel, (event, command = {}) => {
     if (!authorized(event)) return { error: "Not authorized." };
     try {
+      // Shared-space commands name their company. Check that name before any
+      // action can read or change the current workspace's browser state.
+      if (baseStatePath && command.action !== "workspace"
+          && (/^space[A-Z]/.test(String(command.action)) || Object.hasOwn(command, "workspace"))
+          && command.workspace !== workspaceKey) {
+        return { error: "The browser is still showing another workspace's tabs. Wait a moment and try again." };
+      }
       if (command.action === "layout") {
         const b = command.bounds;
         if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return;
@@ -3236,12 +3245,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "new") { newSessionOrPlainTab(); return state(); }
       if (command.action === "closedTabs") return { closed: closedTabs.list().map(({ url, title, closedAt }) => ({ url, title, closedAt })) };
       if (command.action === "reopenClosed") { reopenClosedTab(boundedInteger(command.index, 0, 0, 24)); return state(); }
-      // Shared browsing streams pages to colleagues, so its commands (and any
-      // command that names a workspace) run only on that workspace's tabs.
-      if (baseStatePath && (/^space[A-Z]/.test(String(command.action)) || Object.hasOwn(command, "workspace")) && command.action !== "workspace"
-        && command.workspace !== workspaceKey) {
-        return { error: "The browser is still showing another workspace's tabs. Wait a moment and try again." };
-      }
       if (command.action === "spaceSession") {
         sessionGroupId = typeof command.groupId === "string" || Number.isInteger(command.groupId) ? command.groupId : null;
         return state();

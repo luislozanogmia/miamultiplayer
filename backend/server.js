@@ -1710,6 +1710,14 @@ app.use('/api', requireAuthForApiPrefix('/conversations'), createConversationRou
   service: nativeConversationService,
   attachmentStore: nativeConversationAttachmentStore,
   resolvePrincipal: (req) => nativeConversationPrincipal(req.userEmail, workspaceIdFromRequest(req)),
+  authorizeTeamWorkspace: (req, workspace) => require('./team-workspace-membership').verifyTeamWorkspaceMembership({
+    workspace,
+    token: req.get('x-hub-token'),
+    owner: String(req.userEmail || '').trim().toLowerCase(),
+    dataDirectory: path.dirname(path.resolve(DB_PATH)),
+    getIdentity: (owner) => owner === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null,
+    isOwnerActive: isActiveWorkspaceUser,
+  }),
 }));
 
 // Backend-first multiplayer slice. The existing workspace switcher is not an
@@ -7040,6 +7048,18 @@ function nativeBotSessionKey(profile, systemPrompt) {
 // /goal keeps working after a turn ends; those turns arrive with no dispatch
 // waiting, and this map is how they find their chat.
 const nativeGatewaySessionConversations = new Map();
+const BROWSER_RUN_LEASE_MS = 15 * 60 * 1000;
+function activateBrowserRun(target, source) {
+  if (source === 'dispatch') target.browserDispatchActive = true;
+  if (source === 'continuation') target.browserContinuationActive = true;
+  target.browserActiveUntil = Date.now() + BROWSER_RUN_LEASE_MS;
+}
+function expireBrowserRun(target, source) {
+  if (!target) return;
+  if (source === 'dispatch') target.browserDispatchActive = false;
+  if (source === 'continuation') target.browserContinuationActive = false;
+  if (!target.browserDispatchActive && !target.browserContinuationActive) target.browserActiveUntil = 0;
+}
 // Live Hermes session id -> a team bot running on this computer for its
 // owner, from a team channel or workflow. Kept only while the run lasts.
 const sharedBotRunSessions = new Map();
@@ -7066,7 +7086,7 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
     return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name, workspace: shared.workspace } });
   }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
-  if (!target) return res.status(200).json({ actor: null });
+  if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return res.status(200).json({ actor: null });
   let conversation;
   try {
     conversation = nativeConversationService.getConversation({
@@ -7092,6 +7112,9 @@ function bindNativeHermesSessionEvents() {
   nativeHermesSessionEventsBound = true;
   setHermesGatewaySessionEventHandler((sessionId, kind, data) => {
     const key = String(sessionId || '');
+    const target = nativeGatewaySessionConversations.get(key);
+    if (target && kind === 'turn.start') activateBrowserRun(target, 'continuation');
+    if (target && kind === 'turn.complete') expireBrowserRun(target, 'continuation');
     const next = (nativeHermesSessionEventChains.get(key) || Promise.resolve())
       .then(() => handleNativeHermesSessionEvent(key, kind, data))
       .catch(() => {});
@@ -8154,10 +8177,12 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision };
         nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
         if (ownsPrivateAgentConversation) {
-          nativeGatewaySessionConversations.set(String(session.sessionId), {
+          const browserTarget = {
             companyId: conversation.companyId,
             conversationId: conversation.id,
-          });
+          };
+          activateBrowserRun(browserTarget, 'dispatch');
+          nativeGatewaySessionConversations.set(String(session.sessionId), browserTarget);
           persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, gatewaySessionKey);
         }
       },
@@ -8186,6 +8211,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       }
     } finally {
       if (activeGatewayRecord && nativeActiveGatewaySessions.get(gatewayKey) === activeGatewayRecord) {
+        expireBrowserRun(nativeGatewaySessionConversations.get(String(activeGatewayRecord.sessionId)), 'dispatch');
         nativeActiveGatewaySessions.delete(gatewayKey);
       }
     }
@@ -8247,14 +8273,16 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         bindNativeHermesSessionEvents();
         activeBotRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision, agentId: agent.id };
         nativeActiveGatewaySessions.set(botGatewayKey, activeBotRecord);
-        nativeGatewaySessionConversations.set(String(session.sessionId), {
+        const browserTarget = {
           companyId: conversation.companyId,
           conversationId: conversation.id,
           botId: agent.id,
           agentName: agent.name,
           // Goal continuations validate their files against this bot's workspace.
           agent,
-        });
+        };
+        activateBrowserRun(browserTarget, 'dispatch');
+        nativeGatewaySessionConversations.set(String(session.sessionId), browserTarget);
         persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, sessionKey);
       },
       signal,
@@ -8276,6 +8304,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         : await runInferenceViaHermesGateway({ ...botRunArgs, message: turnMessage });
     } finally {
       if (activeBotRecord && nativeActiveGatewaySessions.get(botGatewayKey) === activeBotRecord) {
+        expireBrowserRun(nativeGatewaySessionConversations.get(String(activeBotRecord.sessionId)), 'dispatch');
         nativeActiveGatewaySessions.delete(botGatewayKey);
       }
     }
@@ -9300,7 +9329,7 @@ miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
   activity: miaAppRoutes.createActivityLog(ARTIFACTS_DATA_DIR),
   resolveTurn(session, owner) {
     const target = session.length <= 200 ? nativeGatewaySessionConversations.get(session) : null;
-    if (!target) return null;
+    if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return null;
     try {
       nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
     } catch (_) { return null; }

@@ -35,7 +35,7 @@
   // refuses it unless its own tabs are that company's.
   function command(action, extra){
     var key = teamKey();
-    return bridge.command(Object.assign({action: action}, key ? {workspace: key} : {}, extra || {}));
+    return bridge.command(Object.assign({action: action}, extra || {}, key ? {workspace: key} : {}));
   }
   function readStored(name){
     try { return JSON.parse(window.localStorage.getItem(name) || 'null'); } catch(_storedError) { return null; }

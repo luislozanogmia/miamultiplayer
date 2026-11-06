@@ -96,7 +96,7 @@ function routeError(error) {
   };
 }
 
-function createConversationRouter({ service, attachmentStore = null, resolvePrincipal }) {
+function createConversationRouter({ service, attachmentStore = null, resolvePrincipal, authorizeTeamWorkspace = null }) {
   if (!service) throw new Error('native conversation service is required');
   if (typeof resolvePrincipal !== 'function') throw new Error('resolvePrincipal is required');
   if (attachmentStore && typeof attachmentStore.createAttachment !== 'function') throw new Error('invalid attachment store');
@@ -136,15 +136,24 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
     res.status(200).json({ conversations });
   }));
 
-  router.post('/conversations', handle((req, res) => {
+  router.post('/conversations', handle(async (req, res) => {
     const { companyId, principal } = context(req);
     const body = requestBody(req);
+    const metadata = optionalObject(body.metadata, 'metadata');
+    if (Object.prototype.hasOwnProperty.call(metadata, 'teamWorkspace')) {
+      if (body.type !== 'bot' || typeof metadata.teamWorkspace !== 'string'
+          || !/^hub_[a-f0-9]{32}$/.test(metadata.teamWorkspace)
+          || typeof authorizeTeamWorkspace !== 'function'
+          || !(await authorizeTeamWorkspace(req, metadata.teamWorkspace))) {
+        fail('FORBIDDEN', 'company membership is required for this bot chat');
+      }
+    }
     const conversation = service.createConversation({
       companyId,
       principal,
       type: required(body.type, 'type'),
       name: body.name === undefined ? null : body.name,
-      metadata: optionalObject(body.metadata, 'metadata'),
+      metadata,
     });
     res.status(201).json({ conversation });
   }));
@@ -175,8 +184,14 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
     res.status(200).json(result);
   }));
 
-  router.post('/conversations/:conversationId/fresh', handle((req, res) => {
+  router.post('/conversations/:conversationId/fresh', handle(async (req, res) => {
     const { companyId, principal } = context(req);
+    const source = service.getConversation({ companyId, conversationId: req.params.conversationId, principal });
+    const teamWorkspace = source && source.metadata && source.metadata.teamWorkspace;
+    if (teamWorkspace && (typeof authorizeTeamWorkspace !== 'function'
+        || !(await authorizeTeamWorkspace(req, teamWorkspace)))) {
+      fail('FORBIDDEN', 'company membership is required for this bot chat');
+    }
     const conversation = service.createFreshBotConversation({
       companyId,
       conversationId: req.params.conversationId,

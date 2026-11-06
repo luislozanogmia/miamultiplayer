@@ -107,6 +107,31 @@ test('team bot chats open through the same remembered chat', () => {
   assert.match(body, /rememberedAgentChats\(\)\[bot\.id\]/);
 });
 
+test('a new company bot chat forwards its signed-in Hub token for membership verification', async () => {
+  const workspace = 'hub_' + 'a'.repeat(32);
+  const requests = [];
+  const context = {
+    window: { MiaHubChat: { sessionToken: async () => 'test-session-token' } },
+    activeWorkspaceKey: workspace,
+    chatWs: { nativeConversations: [] },
+    rememberedAgentChats: () => ({}),
+    api: async (path, options) => {
+      requests.push({ path, options });
+      return { status: 201, data: { conversation: { id: 'team-chat', metadata: options.body.metadata } } };
+    },
+    applyNativeConversationList(){},
+    loadChatRoom: async () => {},
+    showBenchToast: () => assert.fail('authorized chat should open'),
+  };
+  vm.createContext(context);
+  vm.runInContext(fn('openTeamBotChat'), context);
+  await context.openTeamBotChat({ id: 'bot-a', name: 'Team bot' });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].path, '/api/conversations?workspace=solo');
+  assert.equal(requests[0].options.headers['x-hub-token'], 'test-session-token');
+  assert.equal(requests[0].options.body.metadata.teamWorkspace, workspace);
+});
+
 test('a team shows only its own bot chats, and Solo never shows a team\'s', () => {
   const teamA = 'hub_' + 'a'.repeat(32), teamB = 'hub_' + 'b'.repeat(32);
   const chats = [

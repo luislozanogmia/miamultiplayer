@@ -212,7 +212,7 @@
       });
     });
   }
-  var api = {id:id, teamId:teamId, call:call, localCall:localCall, message:message, merge:merge, isSpaceControl:isSpaceControl, validateText:validateText, feed:feed, fileUrl:fileUrl, teamBots:teamBots};
+  var api = {id:id, teamId:teamId, call:call, localCall:localCall, sessionToken:sessionToken, message:message, merge:merge, isSpaceControl:isSpaceControl, validateText:validateText, feed:feed, fileUrl:fileUrl, teamBots:teamBots};
   root.MiaHubChat = api;
   if(typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
