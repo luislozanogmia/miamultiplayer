@@ -4447,6 +4447,16 @@ function turnUsesManagedRouter(preference, selection, routerConfigured) {
   return isRouter(preference.provider === 'openai-api' ? preference.apiProvider : preference.provider);
 }
 
+// The Mia Router runs only the models it offers. A turn with no concrete
+// model fell through to Hermes' own default and once ran GLM 5.2 on a pilot
+// key, so a router turn without an offered model gets the first offered one.
+function pinManagedRouterModel(options, allowlist, routerProvider) {
+  if (!allowlist || !allowlist.size) return options;
+  if (!allowlist.has(String(options.model || '').trim().toLowerCase())) options.model = allowlist.values().next().value;
+  if (!options.provider) options.provider = routerProvider;
+  return options;
+}
+
 function dispatchUsesManagedRouter(trigger) {
   if (!trigger) return false;
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
@@ -4574,6 +4584,9 @@ async function inferenceOptionsForUser(email, baseOptions) {
     // The shared profile can still remember a provider this user revoked.
     // Preserve that profile and the external login, but never inherit it.
     throw new Error('no usable credentials: choose a connected model before running inference');
+  }
+  if (turnUsesManagedRouter(preference, options.provider ? { provider: options.provider } : null, Boolean(MANAGED_ROUTER_URL))) {
+    pinManagedRouterModel(options, MANAGED_ROUTER_MODEL_ALLOWLIST, MANAGED_ROUTER_HERMES_PROVIDER);
   }
   return Object.keys(options).length ? options : undefined;
 }
