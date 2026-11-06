@@ -5567,14 +5567,52 @@
     });
     return list.sort(function(a,b){return a.name.localeCompare(b.name);});
   }
+  // Your Solo bots that already live in this company as company bots:
+  // local id -> the company bot's name. Only copies still in the company count.
+  function sharedSoloBots(bots,teamId,companyBots){
+    var live={}, names={}, shared={};
+    (companyBots||[]).forEach(function(bot){ bot.botIds.forEach(function(id){ live[id]=true; names[id]=bot.name; }); });
+    (bots||[]).forEach(function(bot){
+      var copy=(bot.sharedAs||[]).filter(function(item){ return item.teamId===teamId && live[item.registrationId]; })[0];
+      if(copy)shared[String(bot.id)]=names[copy.registrationId];
+    });
+    return shared;
+  }
+  // A shared Solo bot is greyed out in a company's My Bots until its owner
+  // reactivates it there. Kept per company on this computer.
+  var REACTIVATED_SOLO_BOTS_KEY='miaReactivatedSoloBots';
+  function soloBotReactivated(botId){
+    try { return !!((JSON.parse(localStorage.getItem(REACTIVATED_SOLO_BOTS_KEY)||'{}')||{})[activeWorkspaceKey]||{})[botId]; } catch(_reactivatedError) { return false; }
+  }
+  function reactivateSoloBot(botId){
+    try {
+      var all=JSON.parse(localStorage.getItem(REACTIVATED_SOLO_BOTS_KEY)||'{}')||{};
+      var mine=all[activeWorkspaceKey]||{}; mine[botId]=true; all[activeWorkspaceKey]=mine;
+      localStorage.setItem(REACTIVATED_SOLO_BOTS_KEY,JSON.stringify(all));
+    } catch(_reactivatedError) {}
+  }
+  function openSharedSoloBotNotice(bot){
+    var companyName=(hubChat.sharedSoloBots||{})[bot.id]||bot.name;
+    return appConfirm(bot.name+' was shared with the company. Here, everyone uses it as '+companyName+' under Company bots. Reactivate your Solo '+bot.name+' if you also want to use it here.','Reactivate').then(function(ok){
+      if(!ok)return;
+      reactivateSoloBot(bot.id);
+      renderChatSidebar();
+      return openTeamBotChat(bot);
+    });
+  }
   function loadCompanyBots(){
     var workspace=activeWorkspaceKey;
     var request=hubChat.companyBotsRequest=Number(hubChat.companyBotsRequest||0)+1;
-    return window.MiaHubChat.teamBots(workspace.slice(4)).then(function(results){
+    return Promise.all([
+      window.MiaHubChat.teamBots(workspace.slice(4)),
+      window.MiaHubChat.localCall('GET','/available').catch(function(){ return {bots:[]}; })
+    ]).then(function(answers){
+      var results=answers[0];
       if(workspace!==activeWorkspaceKey || request!==hubChat.companyBotsRequest)return;
       // The Hub decides who sees which bot: everyone by default, unless an
       // admin limits it. The sidebar shows exactly what it returns.
       hubChat.companyBots=companyBotsFromChannels(results);
+      hubChat.sharedSoloBots=sharedSoloBots(answers[1] && answers[1].bots, workspace.slice(4), hubChat.companyBots);
       renderChatSidebar();
     }).catch(function(){/* The sidebar keeps its last list; the next team open retries. */});
   }
@@ -5644,7 +5682,7 @@
   // stays as it is.
   function copyCompanyBotToCompany(bot){
     var place=bot.places && bot.places[0];
-    if(!place)return;
+    if(!place || (hubChat.membership||{}).role!=='admin')return;
     var fromTeamId=activeWorkspaceKey.slice(4);
     var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',fromName:'this company',original:null,copy:null,error:''};
     var previousFocus=document.activeElement;
@@ -5787,7 +5825,8 @@
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview">'+esc(where)+'</span></span>';
     button.addEventListener('click',function(){ openCompanyBot(bot); });
-    var items=[['Copy to another company…',function(){ copyCompanyBotToCompany(bot); }]];
+    // Only this company's admins may take a bot out of it, even as a clean copy.
+    var items=(hubChat.membership||{}).role==='admin' ? [['Copy to another company…',function(){ copyCompanyBotToCompany(bot); }]] : [];
     if(companyBotCanRemove(bot))items.push(['Remove from company',function(){ removeCompanyBot(bot); }]);
     wireTeamBotPin(button,'company:'+bot.key,!!pinned,items);
     return button;
@@ -5802,13 +5841,15 @@
     var active=!!chat && chatWs.activeRoomId===chat.id;
     var preview=chat ? hubRoomPreview(chat.id) : '';
     var button=document.createElement('button'); button.type='button';
-    button.className='chat-recent-row hub-channel-row'+(active?' active':'');
+    var sharedAway=!!(hubChat.sharedSoloBots||{})[bot.id] && !soloBotReactivated(bot.id);
+    button.className='chat-recent-row hub-channel-row'+(active?' active':'')+(sharedAway?' is-shared-away':'');
     button.setAttribute('data-team-bot-id',bot.id);
+    if(sharedAway)button.title='Shared with the company. Use it under Company bots.';
     button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
       +renderChatActivityIndicator(!!(state && state.thinking),false)
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview'+(preview?'':' empty')+'">'+(preview?esc(preview):'&nbsp;')+'</span></span>';
-    button.addEventListener('click',function(){ openTeamBotChat(bot); });
+    button.addEventListener('click',function(){ if(sharedAway)openSharedSoloBotNotice(bot); else openTeamBotChat(bot); });
     wireTeamBotPin(button,'mine:'+bot.id,!!pinned);
     return button;
   }

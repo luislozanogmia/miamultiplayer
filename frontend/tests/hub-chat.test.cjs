@@ -784,7 +784,7 @@ test('a bot reply shows its run label apart from the text; people cannot post on
 function companyRowEnv(activeRoomId){
   return {document:{createElement:()=>({className:'',innerHTML:'',setAttribute(){},addEventListener(){}})},
     companyBotPlace:()=>({action:'open',channel:{id:'c1'}}),hubChannel:()=>({id:'c1'}),chatWs:{activeRoomId},
-    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){},companyBotCanRemove:()=>false};
+    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){},companyBotCanRemove:()=>false,hubChat:{membership:{role:'member'}}};
 }
 test('a company bot row never lights up: the open channel is the channel row\'s to show',()=>{
   const row=appFunction('companyBotRow',companyRowEnv('c1'));
@@ -810,8 +810,8 @@ test('the company bot list refreshes once after a burst of bot changes, only for
 });
 test('an older company bot answer cannot overwrite a newer one',async()=>{
   const answers=[];let renders=0;
-  const env={activeWorkspaceKey:'hub_a',hubChat:{},renderChatSidebar(){renders+=1;},companyBotsFromChannels:(list)=>list,
-    window:{MiaHubChat:{teamBots:()=>new Promise((resolve)=>answers.push(resolve))}}};
+  const env={activeWorkspaceKey:'hub_a',hubChat:{},renderChatSidebar(){renders+=1;},companyBotsFromChannels:(list)=>list,sharedSoloBots:()=>({}),Promise,
+    window:{MiaHubChat:{teamBots:()=>new Promise((resolve)=>answers.push(resolve)),localCall:()=>Promise.resolve({bots:[]})}}};
   const load=appFunction('loadCompanyBots',env);
   const first=load(),second=load();
   answers[1](['new']);await second;
@@ -883,7 +883,8 @@ test('an admin can remove a company bot from every channel it is in, from its ro
   assert.match(source,/if\(companyBotCanRemove\(bot\)\)items\.push\(\['Remove from company'/);
 });
 test('anyone can copy a company bot to another company, through Mia\'s clean copy and their approval',()=>{
-  assert.match(source,/var items=\[\['Copy to another company…',function\(\)\{ copyCompanyBotToCompany\(bot\); \}\]\];/);
+  assert.match(source,/var items=\(hubChat\.membership\|\|\{\}\)\.role==='admin' \? \[\['Copy to another company…',function\(\)\{ copyCompanyBotToCompany\(bot\); \}\]\] : \[\];/,'only admins see Copy to another company');
+  assert.match(source,/if\(!place \|\| \(hubChat\.membership\|\|\{\}\)\.role!=='admin'\)return;/,'and the copy itself refuses anyone else');
   const flow=source.slice(source.indexOf('  function copyCompanyBotToCompany('),source.indexOf('  function companyBotRow('));
   assert.match(flow,/hubPath\(\)\+'\/channels\/'\+place\.channelId\+'\/bots\/'\+place\.botId\+'\/definition'/,'the copy starts from the approved definition');
   assert.match(flow,/api\('\/api\/bots\/generic-copy'/);
@@ -929,4 +930,20 @@ test('a direct message or group can be closed, and comes back when someone write
   appFunction('openHubChannel',Object.assign({setHubConversationClosed:set},env))(dm);
   assert.equal(closed(dm),false,'opening it clears the close');
   assert.match(source,/hubPrivateConversation\(channel\) && !hubConversationClosed\(channel\)/);
+});
+test('a Solo bot shared with this company is greyed in My Bots until reactivated',()=>{
+  const shared=appFunction('sharedSoloBots',{})(
+    [{id:'solo-admin',sharedAs:[{teamId:'t1',registrationId:'r1'}]},{id:'solo-old',sharedAs:[{teamId:'t1',registrationId:'gone'}]},
+     {id:'solo-other',sharedAs:[{teamId:'t2',registrationId:'r9'}]},{id:'solo-plain'}],
+    't1',[{name:'Admin Bot',botIds:['r1']}]);
+  assert.deepEqual(JSON.parse(JSON.stringify(shared)),{'solo-admin':'Admin Bot'},'only copies still in this company count');
+  const store={};const localStorage={getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}};
+  const env={localStorage,JSON,REACTIVATED_SOLO_BOTS_KEY:'miaReactivatedSoloBots',activeWorkspaceKey:'hub_t1'};
+  const isOn=appFunction('soloBotReactivated',Object.assign({},env));
+  assert.equal(isOn('solo-admin'),false);
+  appFunction('reactivateSoloBot',Object.assign({},env))('solo-admin');
+  assert.equal(isOn('solo-admin'),true);
+  assert.equal(appFunction('soloBotReactivated',Object.assign({},env,{activeWorkspaceKey:'hub_t2'}))('solo-admin'),false,'per company');
+  assert.match(source,/var sharedAway=!!\(hubChat\.sharedSoloBots\|\|\{\}\)\[bot\.id\] && !soloBotReactivated\(bot\.id\);/);
+  assert.match(source,/if\(sharedAway\)openSharedSoloBotNotice\(bot\); else openTeamBotChat\(bot\);/);
 });

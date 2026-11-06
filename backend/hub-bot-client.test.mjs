@@ -41,7 +41,8 @@ test('sharing binds the same local and Hub account, publishes explicitly shared 
   assert.deepEqual(Object.keys(first).sort(),['id','name']);
   assert.equal(JSON.stringify(first).includes('Private'),false);
   assert.equal(JSON.stringify(first).includes('local-private-id'),false);
-  assert.deepEqual(f.client.available(owner),{bots:[{id:'local-private-id',name:'Helper'}]});
+  assert.deepEqual(f.client.available(owner),{bots:[{id:'local-private-id',name:'Helper',sharedAs:[{teamId,registrationId:result.bot.id}]}]},
+    'each bot lists its company copies, so a company can grey out the Solo bot it already shares');
 });
 
 test('sharing always forks and sends only the instructions, even when asked for a linked copy',async t=>{

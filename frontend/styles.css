@@ -3963,6 +3963,7 @@ html.mac-inset-titlebar body.mia-call-zoomed .local-browser-overlay .native-brow
 /* Browsing together is live, invited or not: the card and its Join are green. */
 .mia-space-invite{border-color:#2f9e44;background:#f2fbf5;}
 .chat-msg-mention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;font-weight:500;}
+.hub-channel-row.is-shared-away .chat-row-mark,.hub-channel-row.is-shared-away .row-text{opacity:.45;}
 .chat-msg-mention > :first-child,.chat-msg-mention img,.chat-msg-mention svg{flex:none;width:16px;height:16px;max-width:16px;max-height:16px;object-fit:contain;}
 .mia-space-invite .mia-space-btn.primary{background:#2f9e44;color:#FFFFFF;}
 .mia-space-invite .mia-space-btn.primary:hover{background:#278a3b;}

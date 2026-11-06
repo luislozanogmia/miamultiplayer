@@ -204,7 +204,11 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     available(owner) {
       owner=String(owner||'').trim().toLowerCase();
       if(!isOwnerActive(owner)) throw failure(403,'account_unavailable');
-      return {bots:listBots(owner).map(bot=>({id:String(bot.id),name:bot.name}))};
+      // Each bot lists the company copies made from it, so a company's My Bots
+      // can tell which Solo bots it already uses as company bots.
+      const copies={};
+      for(const row of journal.sharedCopies(owner)) (copies[row.local_bot_id]=copies[row.local_bot_id]||[]).push({teamId:row.team_id,registrationId:row.registration_id});
+      return {bots:listBots(owner).map(bot=>({id:String(bot.id),name:bot.name,sharedAs:copies[String(bot.id)]||[]}))};
     },
     // Sharing forks the bot: the team gets its own copy of the instructions
     // and of its skills' text, no longer tied to the Solo bot or the library.
