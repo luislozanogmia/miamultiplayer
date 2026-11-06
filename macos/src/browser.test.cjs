@@ -2818,3 +2818,65 @@ test("a download shows only in the workspace it started in", async () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a group id belongs to one workspace, so work bound in Solo can't reach a company's tabs", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-group-ids-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    const soloTab = h.command("new").activeId;
+    h.command("groupCreate", { id: soloTab, name: "LinkedIn" });
+    const soloGroup = h.command("state").groups[0].id;
+    // A company whose saved tabs used the same group id.
+    const company = "hub_" + "e".repeat(32);
+    fs.writeFileSync(path.join(directory, `browser-ws-${company}.json`), JSON.stringify({ version: 1, activeId: soloTab,
+      groups: [{ id: soloGroup, name: "Team", color: "blue", collapsed: false, botId: null }],
+      tabs: [{ id: soloTab, url: "https://example.com/team", title: "Team", groupId: soloGroup }] }));
+    h.command("workspace", { key: company });
+    const state = h.command("state");
+    assert.equal(state.groups.length, 1);
+    assert.notEqual(state.groups[0].id, soloGroup, "the company's group gets an id Solo never used");
+    assert.equal(state.tabs[0].groupId, state.groups[0].id, "its tabs follow the new id");
+    assert.throws(() => h.controller.actors.bind({ actorId: "w1", ownerId: "me", taskId: "work-solo", tabId: soloTab, botId: "linkedin", groupId: soloGroup }),
+      "a Solo binding finds no such group here");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a browser-work suggestion made in Solo never starts in a company's tabs", async () => {
+  const sessions = { "s-mia": { kind: "mia", workspace: "solo" } };
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-proposal-ws-"));
+  const h = harness({ statePath: path.join(directory, "browser.json"), resolveActor: knownActor(sessions) });
+  try {
+    const source = fs.readFileSync(path.join(__dirname, "browser.cjs"), "utf8");
+    assert.match(source, /workProposal = \{ id: randomUUID\(\), groupId: group\.id, goal, assignments, createdAt: Date\.now\(\), workspace: workspaceKey,/);
+    assert.match(source, /if \(proposal\.workspace !== workspaceKey\) throw new Error\("This browser work belongs to another workspace\./);
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("downloads keep their workspace across a restart", async () => {
+  const downloadItem = url => Object.assign(new EventEmitter(), { getURL: () => url, getFilename: () => "team-report.csv", getState: () => "completed", getSavePath: () => "" });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-downloads-restart-"));
+  const company = "hub_" + "f".repeat(32);
+  try {
+    const first = harness({ statePath: path.join(directory, "browser.json") });
+    first.command("workspace", { key: company });
+    first.command("new");
+    first.profile.emit("will-download", {}, downloadItem("https://files.example/team-report.csv"), first.views.at(-1).webContents);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(first.command("state").downloads.length, 1);
+    first.controller.persist && first.controller.persist();
+    first.window.emit("closed");
+    const second = harness({ statePath: path.join(directory, "browser.json") });
+    assert.equal(second.command("state").downloads.length, 0, "after a restart, Solo still doesn't list the company's file");
+    second.command("workspace", { key: company });
+    assert.equal(second.command("state").downloads.length, 1, "the company still does");
+    second.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

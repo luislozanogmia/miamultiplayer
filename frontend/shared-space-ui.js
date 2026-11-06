@@ -31,7 +31,9 @@
   function me(){ var h = host(); return h && h.me(); }
   function teamKey(){ var h = host(); return h ? h.teamKey() : null; }
   function bound(){ return !!(s.space && s.teamKey && s.teamKey === teamKey()); }
-  function command(action, extra){ return bridge.command(Object.assign({action: action}, extra || {})); }
+  // Every shared-space command names the company on screen; the browser
+  // refuses it unless its own tabs are that company's.
+  function command(action, extra){ return bridge.command(Object.assign({action: action, workspace: teamKey()}, extra || {})); }
   function readStored(name){
     try { return JSON.parse(window.localStorage.getItem(name) || 'null'); } catch(_storedError) { return null; }
   }
