@@ -24,6 +24,17 @@ test("main-window trust uses exact parsed origins", () => {
   assert.equal(main.hasExactOrigin("not a url", "http://127.0.0.1:4871"), false);
   assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:4871/chat", "http://127.0.0.1:4871"), true);
   assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:48710/chat", "http://127.0.0.1:4871"), false);
+  const fallback = require("node:url").pathToFileURL(path.join(__dirname, "renderer", "index.html")).toString();
+  assert.equal(main.isTrustedMainWindowUrl(`${fallback}?reason=port-busy`, "http://127.0.0.1:4871"), true);
+  for (const url of [`${fallback}?reason=other`, `${fallback}?reason=port-busy&extra=1`, `${fallback}#fragment`]) {
+    assert.equal(main.isTrustedMainWindowUrl(url, "http://127.0.0.1:4871"), false);
+  }
+  const webContents = {};
+  const window = { webContents, isDestroyed: () => false };
+  const sender = url => ({ sender: webContents, senderFrame: { url } });
+  assert.equal(main.isMainWindowSenderFor(sender(`${fallback}?reason=port-busy`), window, "http://127.0.0.1:4871"), true);
+  assert.equal(main.isMainWindowSenderFor(sender(`${fallback}?reason=other`), window, "http://127.0.0.1:4871"), false);
+  assert.equal(main.isMainWindowSenderFor({ sender: {}, senderFrame: { url: `${fallback}?reason=port-busy` } }, window, "http://127.0.0.1:4871"), false);
 });
 
 test("packaged desktop always starts its backend with Clerk sign-in", () => {

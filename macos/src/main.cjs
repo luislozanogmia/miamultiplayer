@@ -2669,14 +2669,19 @@ function ipcSenderUrl(event) {
 
 function isTrustedMainWindowUrl(value, expectedBackendUrl = backendUrl) {
   if (expectedBackendUrl && hasExactOrigin(value, expectedBackendUrl)) return true;
-  return value === pathToFileURL(RENDERER_ENTRYPOINT).toString();
+  const fallbackUrl = pathToFileURL(RENDERER_ENTRYPOINT).toString();
+  return value === fallbackUrl || value === `${fallbackUrl}?reason=port-busy`;
+}
+
+function isMainWindowSenderFor(event, window, expectedBackendUrl = backendUrl) {
+  return Boolean(window
+    && !window.isDestroyed()
+    && event.sender === window.webContents
+    && isTrustedMainWindowUrl(ipcSenderUrl(event), expectedBackendUrl));
 }
 
 function isMainWindowSender(event) {
-  return mainWindow
-    && !mainWindow.isDestroyed()
-    && event.sender === mainWindow.webContents
-    && isTrustedMainWindowUrl(ipcSenderUrl(event));
+  return isMainWindowSenderFor(event, mainWindow);
 }
 
 // Which folder an app runs from is decided here from its id; the page never
@@ -2980,6 +2985,7 @@ module.exports = {
   isHarnessAuthNavigation,
   configureNavigation,
   isTrustedMainWindowUrl,
+  isMainWindowSenderFor,
   miaosWorkspacePath,
   venvBinDir,
   venvPythonPath,
