@@ -177,6 +177,11 @@ test('Solo shows local apps and no publishing; a team adds the catalog and Publi
   const solo = page.bodyHtml(state({ local, links }), esc);
   assert.match(solo, /On this computer/);
   assert.match(solo, /data-app-open-local="folder:apps\/r"/);
+  assert.match(solo, /data-app-stop-link="l1"/, 'a running localhost server can be stopped');
+  const off = page.bodyHtml(state({ local, links: [{ ...links[0], running: false }] }), esc);
+  assert.doesNotMatch(off, /data-app-stop-link/);
+  const remote = page.bodyHtml(state({ local, links: [{ ...links[0], local: false, running: null }] }), esc);
+  assert.doesNotMatch(remote, /data-app-stop-link/);
   assert.doesNotMatch(solo, /Your team|data-app-publish/);
   const team = page.bodyHtml(state({ local, links, teamId: TEAM, catalog: [catalogApp({ id: APP, name: 'Shared', live: bundle({ state: 'approved' }) })] }), esc);
   assert.ok(team.indexOf('Your team') < team.indexOf('On this computer'));
@@ -250,7 +255,7 @@ test('the final Hub answers each read plainly, and a live app whose file was del
   for (const code of ['app_limit', 'idempotency_conflict', 'version_rejected', 'version_superseded', 'version_already_approved', 'app_name_taken', 'file_not_ready']) {
     assert.doesNotMatch(page.errorMessage({ code, message: 'raw' }), /raw|\(/, code);
   }
-  assert.match(page.openErrorMessage({ code: 'not_found', status: 404 }, 'Sam'), /no longer on your team\. Ask Sam to publish it again/);
+  assert.match(page.openErrorMessage({ code: 'not_found', status: 404 }, 'Sam'), /no longer on your company\. Ask Sam to publish it again/);
   assert.match(page.openErrorMessage({ status: 404 }), /Ask whoever published it/);
   assert.equal(page.openErrorMessage({ message: 'raw network text' }), 'That app could not be opened.');
   assert.match(page.openErrorMessage({ code: 'file_not_ready' }), /virus check/);
@@ -364,7 +369,7 @@ test('a link an app was stopped from opening reads plainly', () => {
 test('the new refusals read plainly, and an app with nothing live is not openable', () => {
   assert.match(page.errorMessage({ code: 'app_pending_limit' }), /20 apps that aren’t live yet.*Remove any you no longer need/);
   assert.match(page.errorMessage({ code: 'version_superseded' }), /no longer available/);
-  assert.match(teamFiles.friendly({ code: 'file_in_use', message: 'raw' }), /team app is using this file/);
+  assert.match(teamFiles.friendly({ code: 'file_in_use', message: 'raw' }), /company app is using this file/);
   const html = page.bodyHtml(state({ teamId: TEAM, me: 'me', catalog: page.normalizeCatalog({ apps: [catalogApp({ publisher: { id: 'x', name: 'Sam' }, live: null, pending: null })] }) }), esc);
   assert.doesNotMatch(html, /data-app-open-team/);
   assert.match(html, /Not available/);

@@ -85,6 +85,7 @@ function buildAgentSetupPrompt(intent, skills = []) {
 
 module.exports = {
   MAX_INSTRUCTIONS,
+  parseJsonObject,
   buildAgentSetupPrompt,
   normalizeAgentDraft,
 };

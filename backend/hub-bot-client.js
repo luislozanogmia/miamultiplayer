@@ -21,7 +21,7 @@ function fitReply(text,limit=REPLY_BYTES) {
 const RUN_LABEL_MARK='\n\n\u2063';
 function runLabel(provider,memberName) {
   const first=String(memberName||'').trim().split(/\s+/)[0];
-  return [provider,'Ran on '+(first?first+'’s':'a teammate’s')+' Mia'].filter(Boolean).join(' · ');
+  return [provider,'Ran on '+(first?first+'’s':'a colleague’s')+' Mia'].filter(Boolean).join(' · ');
 }
 function withRunLabel(text,label) {
   if(typeof text!=='string' || !text.trim()) return fitReply(text);
@@ -122,10 +122,10 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       // Recheck revocation immediately before invoking the existing runtime.
       await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
       if(!localIdentityValid(s) || controller.signal.aborted) throw new Error('owner_changed');
-      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
+      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, registrationId:run.registration_id, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
-        channel:{teamId:s.teamId,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
+        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
       if(controller.signal.aborted) throw new Error('cancelled');
       journal.saveReply(s,run.job_id,withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName)));
     } catch {
@@ -157,7 +157,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     if(!isOwnerActive(owner) || !current || current.subject!==identity.subject || current.issuer!==identity.issuer || current.email!==identity.email) throw failure(403,'account_changed');
     const team=(me.teams||[]).find(team=>team.teamId===input.teamId && team.membership);
     if(!team || typeof team.membership.clerk_user_id!=='string' || team.membership.clerk_user_id!==identity.subject || String(team.membership.email||'').trim().toLowerCase()!==String(identity.email).trim().toLowerCase()) throw failure(403,'account_mismatch');
-    return {origin,owner,teamId:input.teamId,channelId:input.channelId,subject:team.membership.clerk_user_id,
+    return {origin,owner,teamId:input.teamId,teamName:String(team.name||''),channelId:input.channelId,subject:team.membership.clerk_user_id,
       memberName:team.membership.display_name||current.displayName||''};
   }
   return {
@@ -204,7 +204,11 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     available(owner) {
       owner=String(owner||'').trim().toLowerCase();
       if(!isOwnerActive(owner)) throw failure(403,'account_unavailable');
-      return {bots:listBots(owner).map(bot=>({id:String(bot.id),name:bot.name}))};
+      // Each bot lists the company copies made from it, so a company's My Bots
+      // can tell which Solo bots it already uses as company bots.
+      const copies={};
+      for(const row of journal.sharedCopies(owner)) (copies[row.local_bot_id]=copies[row.local_bot_id]||[]).push({teamId:row.team_id,registrationId:row.registration_id});
+      return {bots:listBots(owner).map(bot=>({id:String(bot.id),name:bot.name,sharedAs:copies[String(bot.id)]||[]}))};
     },
     // Sharing forks the bot: the team gets its own copy of the instructions
     // and of its skills' text, no longer tied to the Solo bot or the library.
@@ -219,7 +223,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const result=await requestHub(scope.origin,token,'POST',`/v1/teams/${scope.teamId}/channels/${scope.channelId}/bots`,
         {id:binding.registration_id,name:binding.public_name},fetcher);
       if(!result.bot || result.bot.owner_id!==scope.subject || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
-      const skills=bundleSkills(bot);
+      // A copy from another company brings the skills its owner reviewed.
+      const skills=Array.isArray(input.skills)?sharedSkills(input.skills):bundleSkills(bot);
       // A Hub that has not been updated refuses skills and long instructions.
       const proposed=await requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
         {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual',...(skills.length?{skills}:{})},fetcher)

@@ -43,11 +43,15 @@ const HERMES_PYTHON = String(process.env.HERMES_PYTHON || '').trim();
 // mia_run_report is the toolset of the mia-run-report plugin (report_step).
 const BOT_TOOLSETS = Object.freeze(['web', 'todo', 'clarify', 'artifacts', 'mia_run_report']);
 const RUN_REPORT_PLUGIN = 'mia-run-report';
+const PROVIDER_LIMITS_PLUGIN = 'mia-provider-limits';
 const ARTIFACT_ROOT = requiredConfiguredPath(
   'MIAOS_AUTOMATION_ARTIFACT_DIR',
   process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
 );
 const ARTIFACT_MARKER = '.miaos-artifact-scope.json';
+// Company bots work in <Mia folder>/companies/<company name>/<bot name>, beside bots/.
+const TEAM_ARTIFACT_ROOT = path.resolve(String(process.env.MIAOS_TEAM_ARTIFACT_DIR || '').trim()
+  || path.join(path.dirname(ARTIFACT_ROOT), 'companies'));
 const ARTIFACT_MANIFEST = '.miaos-artifacts.jsonl';
 const ARTIFACT_MANIFEST_MAX_BYTES = 1 * 1024 * 1024;
 const CRON_JOBS_FILE = process.env.HERMES_CRON_JOBS_FILE
@@ -272,6 +276,62 @@ function artifactWorkspaceForBot(bot) {
   return workspace;
 }
 
+// A folder under root bound to one key by a marker file, named readably and
+// found again by its marker after a rename. Creates it on first use.
+function markedFolder(root, marker, name) {
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const rootStat = fs.lstatSync(root);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('team folder root must be a real directory');
+  const matches = (folder) => {
+    try {
+      const stat = fs.lstatSync(path.join(folder, ARTIFACT_MARKER));
+      if (stat.isSymbolicLink() || !stat.isFile()) return false;
+      const stored = JSON.parse(fs.readFileSync(path.join(folder, ARTIFACT_MARKER), 'utf8'));
+      return Object.keys(marker).every((key) => stored[key] === marker[key]);
+    } catch (_) {
+      return false;
+    }
+  };
+  for (const entry of fs.readdirSync(root)) {
+    const candidate = path.join(root, entry);
+    if (isRealDirectory(candidate) && matches(candidate)) return candidate;
+  }
+  const base = botFolderBaseName({ name });
+  for (let index = 1; index < 10000; index += 1) {
+    const folder = path.join(root, index === 1 ? base : `${base}-${index}`);
+    try {
+      fs.mkdirSync(folder, { mode: 0o700 });
+    } catch (error) {
+      if (error.code === 'EEXIST') continue;
+      throw error;
+    }
+    fs.writeFileSync(path.join(folder, ARTIFACT_MARKER), JSON.stringify(marker), { flag: 'wx', mode: 0o600 });
+    return folder;
+  }
+  throw new Error('no free team folder name');
+}
+
+// Where a company's bot works on this computer: one folder per company, one
+// per bot inside it, kept apart from the person's Solo bots. A bot is keyed by its
+// team registration, so every approved version uses the same folder.
+function teamBotWorkspace(team, bot) {
+  const teamId = String(team && team.teamId || '');
+  const registrationId = String(bot && bot.registrationId || '');
+  if (!/^[a-f0-9]{32}$/.test(teamId) || !/^[A-Za-z0-9_-]{1,120}$/.test(registrationId)) {
+    throw new Error('team and bot ids are required for a team bot folder');
+  }
+  const teamFolder = markedFolder(TEAM_ARTIFACT_ROOT, { kind: 'miaos-team-workspace', teamId }, team.teamName || 'Company');
+  return markedFolder(teamFolder, { kind: 'miaos-bot-artifact-workspace', botId: `team-${registrationId}` }, bot.name || 'Bot');
+}
+
+function readBotInstructions(bot) {
+  return BOT_PACKAGE_STORE.readInstructions(bot);
+}
+
+function writeBotInstructions(bot, instructions, options) {
+  return BOT_PACKAGE_STORE.writeInstructions(bot, instructions, options);
+}
+
 function botPackageDirectoryFor(bot) {
   BOT_PACKAGE_STORE.hydrate(bot);
   const directory = BOT_PACKAGE_STORE.findDirectory(bot && bot.id);
@@ -290,29 +350,30 @@ function runReportContextFor(automation) {
   return id && steps ? { automationId: id, steps: Math.min(steps, MAX_AUTOMATION_STEPS) } : null;
 }
 
-let runReportPluginReady = null;
+const cronPluginsReady = new Map();
 
-// Installs the bundled report_step plugin into the Hermes home that runs the
-// scheduled jobs and enables it there. Once per process; a failure is
-// retried on the next sync and never blocks the schedule itself.
-function ensureRunReportPlugin() {
-  if (!runReportPluginReady) {
-    runReportPluginReady = (async () => {
+// Installs a bundled plugin into the Hermes home that runs the scheduled jobs
+// and enables it there. Once per process; a failure is retried on the next
+// sync and never blocks the schedule itself.
+function ensureCronPlugin(plugin) {
+  if (!cronPluginsReady.has(plugin)) {
+    cronPluginsReady.set(plugin, (async () => {
       const { provisionBundledPlugin } = require('./hermes-bot-profile');
-      provisionBundledPlugin(HERMES_HOME, RUN_REPORT_PLUGIN);
-      await runHermesCommand(['plugins', 'enable', RUN_REPORT_PLUGIN]);
-    })().catch((error) => {
-      runReportPluginReady = null;
-      console.error('step reporting plugin unavailable:', error.message);
-    });
+      provisionBundledPlugin(HERMES_HOME, plugin);
+      await runHermesCommand(['plugins', 'enable', plugin]);
+    })().catch(() => {
+      cronPluginsReady.delete(plugin);
+      console.error('automation plugin unavailable');
+    }));
   }
-  return runReportPluginReady;
+  return cronPluginsReady.get(plugin);
 }
 
 async function restrictHermesJob(jobId, bot, workdir, automation) {
   const artifactWorkspace = artifactWorkspaceForBot(bot);
   const runReport = runReportContextFor(automation);
-  if (runReport) await ensureRunReportPlugin();
+  await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN);
+  if (runReport) await ensureCronPlugin(RUN_REPORT_PLUGIN);
   const source = [
     'import json,sys',
     'from cron.jobs import update_job',
@@ -1240,7 +1301,10 @@ module.exports = {
   automationChecklist,
   readRunReports,
   artifactWorkspaceForBot,
+  teamBotWorkspace,
   botPackageDirectoryFor,
+  writeBotInstructions,
+  readBotInstructions,
   listSessionArtifacts,
   validateBotArtifacts,
   BOT_TOOLSETS,

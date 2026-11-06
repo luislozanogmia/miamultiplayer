@@ -23,7 +23,7 @@ function harness() {
 
 test('a team that opens while the Hub is down keeps retrying with growing waits', () => {
   const { env, timers } = harness();
-  const down = Object.assign(new Error('Can’t reach the shared team service right now. Try again in a moment.'), { status: 503 });
+  const down = Object.assign(new Error('Can’t reach the company service right now. Try again in a moment.'), { status: 503 });
   env.retryHubChat(down);
   env.retryHubChat(down);
   env.retryHubChat(down);
@@ -32,6 +32,17 @@ test('a team that opens while the Hub is down keeps retrying with growing waits'
   assert.equal(timers.at(-1).ms, 60000, 'never waits more than a minute');
   timers.at(-1).fn();
   assert.equal(env.opened, 1, 'the retry opens the team again');
+});
+
+test('a team opened while the Hub limits requests waits longer, says so, and opens on its own', () => {
+  const { env, timers } = harness();
+  const limited = Object.assign(new Error('Too many requests. Wait a moment and try again.'), { status: 429, code: 'rate_limit' });
+  env.retryHubChat(limited);
+  assert.equal(env.hubChat.error, 'The company is busy. Trying again shortly…');
+  env.retryHubChat(limited);
+  assert.deepEqual(timers.map(t => t.ms), [10000, 20000], 'never sooner than 10 seconds');
+  timers.at(-1).fn();
+  assert.equal(env.opened, 1);
 });
 
 test('a refusal or a switched workspace does not retry', () => {

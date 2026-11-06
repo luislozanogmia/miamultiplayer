@@ -22,7 +22,7 @@ function harness() {
     document: { getElementById: () => snapshot },
     open: true, overlay: { hidden: false },
     selected: () => page,
-    suggestCovered: false, downloadsOpen: false, followMenuOpen: false, followMenuRequested: false, callMenuCovered: false, callMenuRequested: false,
+    suggestCovered: false, downloadsOpen: false, followMenuOpen: false, followMenuRequested: false, callMenuCovered: false, callMenuRequested: false, tipsCovered: false, tipsRequested: false,
     downloadsView: { hidden: true, style: { setProperty() {} } },
     downloadsBtn: { setAttribute() {}, getBoundingClientRect: () => ({ right: 100 }) },
     downloadsSearch: { value: '', focus() {} }, screen: { getBoundingClientRect: () => ({ right: 200 }) },

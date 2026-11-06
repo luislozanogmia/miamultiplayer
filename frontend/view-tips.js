@@ -126,6 +126,8 @@
     var storage = options.storage || win.localStorage;
     var currentView = options.view || function () { return 'chat'; };
     var blocked = options.blocked || function () { return false; };
+    // Told when a view's tips appear and go: (view) then (null).
+    var onShown = options.onShown || function () {};
     var NS = 'http://www.w3.org/2000/svg';
 
     var layer = doc.createElement('div');
@@ -189,8 +191,10 @@
     }
     function close(done) {
       if (state.view && done) markSeen(storage, state.view);
+      var was = state.view;
       state.view = null; state.steps = []; state.index = 0;
       layer.hidden = true;
+      if (was) onShown(null);
       layer.classList.remove('is-in');
     }
     // Shows the open view's tips if they have not been seen. The view must
@@ -209,6 +213,7 @@
         close(false);
         state.view = view;
         state.steps = steps;
+        onShown(view);
         show(0);
       }, force ? 0 : 450);
     }

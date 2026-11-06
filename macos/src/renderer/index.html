@@ -69,10 +69,9 @@
     <main>
       <h1>Mia Desktop</h1>
       <p>
-        The desktop shell is ready, but the local Mia server is not
-        reachable yet. Start the server and try again.
+        Mia couldn't finish starting. This can happen while your computer is busy, such as during updates. Try again in a moment.
       </p>
-      <button id="retry" type="button">Retry connection</button>
+      <button id="retry" type="button">Try again</button>
     </main>
     <script>
       const retry = document.getElementById("retry");
@@ -84,7 +83,7 @@
           if (window.miaDesktop) await window.miaDesktop.retryConnection();
         } finally {
           retry.disabled = false;
-          retry.textContent = "Retry connection";
+          retry.textContent = "Try again";
         }
       });
     </script>

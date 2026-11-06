@@ -61,7 +61,7 @@
   // Everything the owner is agreeing to run, exactly as it was written.
   function stepContentHtml(item, people){
     var out = '<div class="twf-gate"><div class="twf-gate-row"><span class="twf-gate-label">Step</span><span>' + esc(item.text || '') + '</span></div>'
-      + '<div class="twf-gate-row"><span class="twf-gate-label">Bot</span><span>' + esc(item.botName || 'Team bot') + '</span></div>';
+      + '<div class="twf-gate-row"><span class="twf-gate-label">Bot</span><span>' + esc(item.botName || 'Company bot') + '</span></div>';
     if(item.definition){
       out += '<div class="twf-gate-instructions-label">Bot instructions · version ' + Number(item.definition.version) + '</div>'
         + '<pre class="twf-gate-instructions" tabindex="0" data-wf-keep-scroll="instructions:' + esc(item.runId) + ':' + Number(item.n) + '">' + esc(item.definition.instructions) + '</pre>'
@@ -84,7 +84,7 @@
   }
   var GATE_WHY = {
     new_version: 'This version of the workflow is new on this computer. Someone else wrote this step and its bot\'s instructions.',
-    teammate_text: 'This step carries text or files from teammates. Mia passes them to the bot as information, but they could still try to mislead it.',
+    teammate_text: 'This step carries text or files from colleagues. Mia passes them to the bot as information, but they could still try to mislead it.',
     bot_changed: 'This bot\'s instructions changed since you last agreed to run this step.',
     open_decision: 'The last step left a question that someone has to decide. Read it before this step runs.',
     changed_after_ok: 'What this step would run changed after you agreed, so Mia did not run it. Check it again.'
@@ -108,20 +108,20 @@
       var waitingFiles = (item.outputFiles || []).length ? '<div class="twf-card-text">Files waiting to be shared: ' + item.outputFiles.map(esc).join(', ') + '</div>' : '';
       if(item.reason === 'report_partial'){
         return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' is only partly done</div>'
-          + '<div class="twf-card-text">' + esc((item.why || []).indexOf('said_done') >= 0 ? 'The bot said this step was done, but it also listed something that failed or wasn\'t checked.' : 'The bot finished part of this step.') + ' Nothing has gone to the team yet.</div>'
+          + '<div class="twf-card-text">' + esc((item.why || []).indexOf('said_done') >= 0 ? 'The bot said this step was done, but it also listed something that failed or wasn\'t checked.' : 'The bot finished part of this step.') + ' Nothing has gone to the company yet.</div>'
           + sr.fullHtml({outcome: 'partial', report: item.report}, esc) + waitingFiles
           + '<div class="twf-actions">' + btn('Send as partly done', 'data-wf-resume="send"' + where + reviewed, 'primary') + runButton('Run it again', '') + failButton + '</div></div>';
       }
       if(item.reason === 'report_unclear'){
         return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': did step ' + n + ' finish?</div>'
-          + '<div class="twf-card-text">' + esc((item.why || []).indexOf('looks_secret') >= 0 ? 'The bot\'s report looked like it held a password or key, so Mia did not send it.' : 'The bot did not end with a complete report, so Mia can\'t tell.') + ' Nothing has gone to the team yet.</div>'
+          + '<div class="twf-card-text">' + esc((item.why || []).indexOf('looks_secret') >= 0 ? 'The bot\'s report looked like it held a password or key, so Mia did not send it.' : 'The bot did not end with a complete report, so Mia can\'t tell.') + ' Nothing has gone to the company yet.</div>'
           + (item.lastMessage ? '<div class="twf-gate-instructions-label">The bot\'s last message. Only you can see this.</div><pre class="twf-gate-instructions" tabindex="0" data-wf-keep-scroll="reply:' + run + ':' + n + '">' + esc(item.lastMessage) + '</pre>' : '<div class="twf-card-text">The bot left no message.</div>')
           + waitingFiles
           + '<div class="twf-actions">' + btn('Mark as done', 'data-wf-resume="done"' + where + reviewed, 'primary') + runButton('Run it again', '') + failButton + '</div></div>';
       }
       if(item.reason === 'instructions_unavailable'){
         return '<div class="twf-card twf-card-attention"><div class="twf-card-title">' + name + ': step ' + n + ' is waiting</div>'
-          + '<div class="twf-card-text">Mia could not read this bot\'s instructions, so the step has not started. It only runs once you can see them. Mia will look again. If this keeps happening, the team server may need an update.</div>'
+          + '<div class="twf-card-text">Mia could not read this bot\'s instructions, so the step has not started. It only runs once you can see them. Mia will look again. If this keeps happening, the company server may need an update.</div>'
           + stepContentHtml(item, people)
           + '<div class="twf-actions">' + btn('Don\u2019t run it', 'data-wf-resume="fail"' + where) + '</div></div>';
       }
@@ -160,10 +160,10 @@
   // view: {loading, error, unavailable, notice, workflows, runs, recent, approvals, needsYou, queue, people, isAdmin, now}
   function homeHtml(view){
     var people = view.people || {}, now = view.now;
-    var head = '<div class="twf-head"><div class="automations-group-title twf-section-title">Team workflows</div>'
+    var head = '<div class="twf-head"><div class="automations-group-title twf-section-title">Company workflows</div>'
       + (view.isAdmin && !view.unavailable ? btn('New workflow', 'data-wf-new') : '') + '</div>';
     var out = head + noticeHtml(view);
-    if(view.unavailable) return out + emptyHtml('Not on your team yet', 'Your team’s server does not offer team workflows yet. Everything else keeps working, and they will show up here once it does.');
+    if(view.unavailable) return out + emptyHtml('Not on your company yet', 'Your company’s server does not offer company workflows yet. Everything else keeps working, and they will show up here once it does.');
     if(view.loading && !view.workflows) return out + '<div class="twf-empty">Loading…</div>';
     if(view.error && !view.workflows) return out + '<div class="twf-empty">' + esc(view.error) + '<div class="twf-actions twf-center">' + btn('Try again', 'data-wf-reload') + '</div></div>';
     out += queueLineHtml(view.queue) + needsYouHtml(view.needsYou, view.people);
@@ -171,7 +171,7 @@
     if(approvals.length) out += '<div class="twf-section-sub">Waiting for your approval</div>' + approvals.map(function(a){ return approvalCardHtml(a, people); }).join('');
     if((view.runs || []).length) out += '<div class="twf-section-sub">In progress</div>' + view.runs.map(function(r){ return runRowHtml(r, people, now); }).join('');
     if((view.workflows || []).length) out += '<div class="twf-section-sub">Workflows</div>' + view.workflows.map(workflowRowHtml).join('');
-    else out += emptyHtml('No team workflows yet', view.isAdmin
+    else out += emptyHtml('No company workflows yet', view.isAdmin
       ? 'A workflow is one job shared across people. Each step runs on its owner’s computer, with their own bot.'
       : 'An admin can set one up. Each step runs on its owner’s computer, with their own bot.');
     if((view.recent || []).length) out += '<div class="twf-section-sub">Recently finished</div>' + view.recent.slice(0, 10).map(function(r){ return runRowHtml(r, people, now); }).join('');
@@ -281,7 +281,7 @@
     var workflow = view.workflow, length = (view.summary || '').length;
     return '<div class="twf-head">' + backHtml() + '</div>' + noticeHtml(view)
       + '<div class="automations-detail-title">' + esc(workflow.name) + '</div>'
-      + '<div class="twf-card-text">Write one line about what this run is for. Only this line goes to your team. Anything private stays on this computer.</div>'
+      + '<div class="twf-card-text">Write one line about what this run is for. Only this line goes to your company. Anything private stays on this computer.</div>'
       + '<label class="twf-label">Summary<textarea class="twf-input" rows="2" maxlength="' + wf.SUMMARY_MAX + '" data-wf-summary placeholder="For example: Quote request from a new customer">' + esc(view.summary || '') + '</textarea></label>'
       + '<div class="automations-step-note" data-wf-summary-count>' + length + ' of ' + wf.SUMMARY_MAX + ' characters</div>'
       + '<div class="twf-card-text">Nothing is sent until you press Start.</div>'
@@ -351,7 +351,7 @@
     if(!ctx || ctx.teamId !== teamId) return;
     var state = queues[teamId].state();
     var fresh = (state.needsYou || []).filter(function(item){ if(item.reason === 'instructions_unavailable') return false; var key = teamId + item.runId + ':' + item.n; if(seenNeeds[key]) return false; seenNeeds[key] = true; return true; });
-    if(fresh.length && ctx.toast) ctx.toast(fresh.some(function(item){ return item.reason === 'approval'; }) ? 'A team workflow step is waiting for your OK to run.' : 'A team workflow step needs your decision.');
+    if(fresh.length && ctx.toast) ctx.toast(fresh.some(function(item){ return item.reason === 'approval'; }) ? 'A company workflow step is waiting for your OK to run.' : 'A company workflow step needs your decision.');
     render();
   }
   // Every team this person belongs to keeps moving, whichever one is on screen.
@@ -438,7 +438,7 @@
       if(gen !== generation) return;
       // Every member can read this list, so a 404 means this Hub has no workflows.
       if(error && error.status === 404) view.unavailable = true;
-      else view.error = wf.errorMessage(error, 'Mia could not load team workflows.');
+      else view.error = wf.errorMessage(error, 'Mia could not load company workflows.');
     }).then(function(){
       if(gen !== generation) return;
       view.loading = false; render();
@@ -493,8 +493,8 @@
     if(!ctx || !event) return;
     if(event.kind === 'members'){ loadMembers(); return; }
     if(event.kind === 'workflow_step') queueFor(ctx.teamId).wake();
-    if(event.kind === 'workflow_fix' && ctx.toast) ctx.toast('A team workflow is paused and needs a fix.');
-    if(event.kind === 'workflow_reminder' && ctx.toast) ctx.toast('A team workflow step is waiting.');
+    if(event.kind === 'workflow_fix' && ctx.toast) ctx.toast('A company workflow is paused and needs a fix.');
+    if(event.kind === 'workflow_reminder' && ctx.toast) ctx.toast('A company workflow step is waiting.');
     reloadSoon();
   }
   var EVENT_KINDS = ['workflow', 'workflow_run', 'workflow_step', 'workflow_approval', 'workflow_fix', 'workflow_reminder', 'members'];

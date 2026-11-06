@@ -109,7 +109,7 @@ test('hidden toggles stay hidden in every mode and the active filter keeps its c
 
 test('shared bot size errors explain the current limits', () => {
   const source = read('./hub-chat.js');
-  assert.match(source, /bot_storage_limit:'This team has used all 256 MB/);
+  assert.match(source, /bot_storage_limit:'This company has used all 256 MB/);
   assert.match(source, /bot_too_large_for_team:'/);
   assert.doesNotMatch(source, /1 to 6,000 characters/);
 });

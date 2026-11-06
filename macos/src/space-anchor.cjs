@@ -3,14 +3,20 @@
 // element, with the spot's place in the whole document as a fallback.
 const MAX_DEPTH = 60;
 const VIEW_LINE = 0.3;
+const LETTER_REACH = 12;
+const ID_PATTERN = "^[A-Za-z0-9_:.-]{1,80}$";
 
 const fraction = value => Math.min(1, Math.max(0, Number(value) || 0));
 
 // Anchors come from teammates and end up in a page script, so only plain numbers pass.
 function cleanAnchor(anchor) {
   if (!anchor || typeof anchor !== "object") return null;
-  const path = Array.isArray(anchor.p) && anchor.p.length <= MAX_DEPTH && anchor.p.every(index => Number.isInteger(index) && index >= 0 && index < 100000) ? anchor.p : null;
-  return { p: path, t: /^[A-Za-z0-9-]{1,40}$/.test(anchor.t || "") ? anchor.t : "", fx: fraction(anchor.fx), fy: fraction(anchor.fy), dx: fraction(anchor.dx), dy: fraction(anchor.dy) };
+  const steps = list => (Array.isArray(list) && list.length <= MAX_DEPTH && list.every(index => Number.isInteger(index) && index >= 0 && index < 100000) ? list : null);
+  const path = steps(anchor.p);
+  const own = new RegExp(ID_PATTERN).test(anchor.i || "") && steps(anchor.r) ? { i: anchor.i, r: anchor.r } : {};
+  const count = value => (Number.isInteger(value) && value >= 0 && value < 10000000 ? value : null);
+  const letter = count(anchor.n) === null || count(anchor.o) === null ? {} : { n: anchor.n, o: anchor.o };
+  return { p: path, t: /^[A-Za-z0-9-]{1,40}$/.test(anchor.t || "") ? anchor.t : "", fx: fraction(anchor.fx), fy: fraction(anchor.fy), dx: fraction(anchor.dx), dy: fraction(anchor.dy), ...own, ...letter };
 }
 
 const PAGE_HELPERS = `
@@ -34,13 +40,50 @@ const PAGE_HELPERS = `
     }
     if (path.length > ${MAX_DEPTH}) return anchor;
     const box = el.getBoundingClientRect();
-    return Object.assign(anchor, { p: path, t: el.tagName, fx: box.width ? (x - box.left) / box.width : 0, fy: box.height ? (y - box.top) / box.height : 0 });
+    return Object.assign(anchor, { p: path, t: el.tagName }, nearestId(el), { fx: box.width ? (x - box.left) / box.width : 0, fy: box.height ? (y - box.top) / box.height : 0 }, textSpot(el, x, y));
+  };
+  // A page can add a banner on one computer and not the other, which renumbers everything
+  // after it. The closest element with its own id is still the same element on both.
+  const nearestId = el => {
+    const trail = [];
+    for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+      if (node.id && /${ID_PATTERN}/.test(node.id) && document.getElementById(node.id) === node) return { i: node.id, r: trail };
+      if (!node.parentElement) return {};
+      trail.unshift(Array.prototype.indexOf.call(node.parentElement.children, node));
+    }
+    return {};
+  };
+  const walk = (node, path) => {
+    for (const index of path) node = node && node.children[index];
+    return node;
+  };
+  // Text wraps differently on another window, so a spot inside a paragraph is kept as the
+  // letter under it: a share of the paragraph's box would land on some other word.
+  const letterBox = (text, at) => {
+    const range = document.createRange();
+    range.setStart(text, at);
+    range.setEnd(text, Math.min(text.length, at + 1));
+    return range.getBoundingClientRect();
+  };
+  const textSpot = (el, x, y) => {
+    const caret = document.caretRangeFromPoint && document.caretRangeFromPoint(x, y);
+    const text = caret && caret.startContainer;
+    if (!text || text.nodeType !== 3 || text.parentNode !== el || !text.length) return {};
+    const at = Math.min(caret.startOffset, text.length - 1);
+    const box = letterBox(text, at);
+    if (x < box.left - ${LETTER_REACH} || x > box.right + ${LETTER_REACH} || y < box.top || y > box.bottom) return {};
+    return { n: Array.prototype.indexOf.call(el.childNodes, text), o: at };
   };
   const findAnchor = anchor => {
     const root = document.documentElement;
-    let node = anchor.p ? root : null;
-    for (const index of anchor.p || []) { node = node && node.children[index]; }
+    const byId = anchor.i ? walk(document.getElementById(anchor.i), anchor.r || []) : null;
+    const node = byId && byId.tagName === anchor.t ? byId : anchor.p ? walk(root, anchor.p) : null;
     if (node && node.tagName === anchor.t) {
+      const text = Number.isInteger(anchor.n) ? node.childNodes[anchor.n] : null;
+      if (text && text.nodeType === 3 && anchor.o < text.length) {
+        const letter = letterBox(text, anchor.o);
+        if (letter.width || letter.height) return { x: letter.left + letter.width / 2, y: letter.top + letter.height / 2 };
+      }
       const box = node.getBoundingClientRect();
       if (box.width || box.height) return { x: box.left + anchor.fx * box.width, y: box.top + anchor.fy * box.height };
     }

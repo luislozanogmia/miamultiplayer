@@ -310,6 +310,103 @@ inference.runInferenceViaHermesGateway = async ({ options }) => {
   }
 });
 
+test('a bot instruction block waits for owner review, rejects bearer approval, and saves once', async () => {
+  const preloadScript = `
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async () => ({ text: 'I changed it.\\n<MIA_INSTRUCTIONS>Approved fixture instructions.</MIA_INSTRUCTIONS>' });
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Instruction Review Fixture', instructions: 'Original fixture instructions.',
+        model: 'fixture-model', status: 'draft', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json();
+    const bot = createdBody.bot || createdBody;
+    const database = new Database(server.dbPath, { readonly: true });
+    const chat = database.prepare("SELECT id FROM conversations WHERE type = 'bot' AND metadata LIKE ? LIMIT 1")
+      .get(`%${bot.id}%`);
+    database.close();
+    assert.ok(chat);
+    const sent = await fetch(`${server.origin}/api/conversations/${chat.id}/events`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: { text: 'Summarize this page.' }, clientIdempotencyKey: 'instruction-review-fixture' }),
+    });
+    assert.equal(sent.status, 201);
+    let proposalEvent;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(`${server.origin}/api/conversations/${chat.id}/events`, { headers: { cookie } });
+      const payload = await response.json();
+      proposalEvent = (payload.events || []).find((event) => event.metadata && event.metadata.instructionProposal);
+      if (proposalEvent) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(proposalEvent, 'the bot posted a pending review card');
+    assert.equal(proposalEvent.metadata.instructionProposal.status, 'pending');
+    const readBot = async () => {
+      const response = await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: { cookie } });
+      const body = await response.json();
+      return body.bot || body;
+    };
+    assert.match((await readBot()).instructions, /Original fixture instructions/);
+    const createdKey = await fetch(`${server.origin}/api/keys`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'fixture-key' }),
+    });
+    assert.equal(createdKey.status, 201);
+    const { key } = await createdKey.json();
+    const route = `${server.origin}/api/bots/${bot.id}/instruction-proposals/${proposalEvent.id}`;
+    const automationRoute = `${server.origin}/api/bots/${bot.id}/automation-proposals/${proposalEvent.id}`;
+    assert.equal((await fetch(automationRoute, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'accept' }) })).status, 401);
+    assert.equal((await fetch(automationRoute, { method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'accept' }) })).status, 404);
+    assert.equal((await fetch(route, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'accept' }) })).status, 401);
+    assert.match((await readBot()).instructions, /Original fixture instructions/);
+    const accepted = await fetch(route, { method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'accept' }) });
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    assert.equal((await accepted.json()).event.metadata.instructionProposal.status, 'accepted');
+    assert.match((await readBot()).instructions, /Approved fixture instructions/);
+    assert.equal((await fetch(route, { method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'accept' }) })).status, 409);
+
+    const second = await fetch(`${server.origin}/api/conversations/${chat.id}/events`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: { text: 'Summarize another page.' }, clientIdempotencyKey: 'instruction-review-stale' }),
+    });
+    assert.equal(second.status, 201);
+    let staleEvent;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(`${server.origin}/api/conversations/${chat.id}/events`, { headers: { cookie } });
+      const payload = await response.json();
+      staleEvent = (payload.events || []).find((event) => event.id !== proposalEvent.id
+        && event.metadata && event.metadata.instructionProposal?.status === 'pending');
+      if (staleEvent) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(staleEvent, 'the second turn proposed another review card');
+    const packageRoot = path.join(server.tempDir, 'bots');
+    const packageDir = fs.readdirSync(packageRoot).map((name) => path.join(packageRoot, name))
+      .find((candidate) => fs.existsSync(path.join(candidate, 'AGENTS.md')));
+    assert.ok(packageDir);
+    fs.writeFileSync(path.join(packageDir, 'AGENTS.md'), 'Newer fixture instructions.\n');
+    const staleRoute = `${server.origin}/api/bots/${bot.id}/instruction-proposals/${staleEvent.id}`;
+    const stale = await fetch(staleRoute, { method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'accept' }) });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).proposal.status, 'stale');
+    assert.equal(fs.readFileSync(path.join(packageDir, 'AGENTS.md'), 'utf8'), 'Newer fixture instructions.\n');
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('relative STATIC_DIR serves the standalone admin page', async () => {
   const server = await startServer({ extraEnv: { STATIC_DIR: '../frontend' } });
   try {
@@ -1379,7 +1476,7 @@ exit 9
   }
 });
 
-test('bearer keys cannot reach administrative exports, policy writes, or credential controls', async () => {
+test('bearer keys cannot reach administrative exports, credential controls, or local process controls', async () => {
   const server = await startServer({
     seedRows: [{ email: 'backup-member@example.com', password: 'backup-member-password', role: 'member' }],
   });
@@ -1396,6 +1493,13 @@ test('bearer keys cannot reach administrative exports, policy writes, or credent
     assert.equal(createdKey.status, 201);
     const { key } = await createdKey.json();
     const bearer = { authorization: `Bearer ${key}` };
+
+    const unknownLink = '/api/apps/links/unknown-link';
+    for (const route of [`${unknownLink}/server`, `${unknownLink}/stop`]) {
+      const method = route.endsWith('/stop') ? 'POST' : 'GET';
+      assert.equal((await fetch(`${server.origin}${route}`, { method, headers: bearer })).status, 401);
+      assert.equal((await fetch(`${server.origin}${route}`, { method, headers: { cookie: adminCookie } })).status, 404);
+    }
 
     assert.equal((await fetch(`${server.origin}/api/admin/overview`, { headers: bearer })).status, 401);
     assert.equal((await fetch(`${server.origin}/api/backup`, { headers: bearer })).status, 401);

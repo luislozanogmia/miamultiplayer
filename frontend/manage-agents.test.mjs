@@ -40,7 +40,7 @@ test('each creation and utility action has one control, all routed through runTo
 test('every action control uses one canonical Lucide icon system', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const controls = [...html.matchAll(/<button[^>]*data-tools-action="[^"]+"[\s\S]*?<\/button>/g)].map((m) => m[0]).filter((b) => !b.includes('chat-dm-add-btn'));
-  assert.equal(controls.length, 8, 'rail, view, New chat and New agent controls');
+  assert.equal(controls.length, 9, 'rail, view, New chat and New agent controls');
   for (const control of controls) {
     assert.match(control, /data-icon-set="lucide"/);
     assert.doesNotMatch(control, /<img|data-mia-mark|stroke-width=/, 'legacy and one-off icon treatments are removed');
@@ -672,6 +672,11 @@ test('agent editor exposes a persisted avatar color with an automatic fallback',
   assert.match(profileHandler, /openManageAgentsPane\(\)/);
   assert.doesNotMatch(profileHandler, /openBenchDetail/);
   assert.match(source, /benchEditColorOptions'\)\.addEventListener\('change'/);
+  // A Mac color panel sends only `input` until it closes, so every custom
+  // picker must take the color from `input` too.
+  assert.match(source, /benchEditColorOptions'\)\.addEventListener\('input'[\s\S]{0,200}markCustomAgentColor\(e\.target\)/);
+  assert.match(source, /colors\.addEventListener\('input'[\s\S]{0,200}styledAgentEditColorInput[\s\S]{0,200}markCustomAgentColor\(e\.target\)/);
+  assert.match(source, /options\.addEventListener\('input'[\s\S]{0,300}saveManageAgentColor\(id, value\)/);
   assert.match(source, /function manageAgentColorOptionsHtml\(agent\)/);
   assert.match(source, /data-manage-agent-color-options/);
   assert.match(source, /body:\{avatarColor: color \|\| null\}/);
@@ -752,8 +757,13 @@ test('sidebar collapses activity and unread state into one orange dot', async ()
   assert.doesNotMatch(indicator, /for\s*\(|&times;|tasks\.length/);
   assert.match(sidebarActivity, /activeAutomationRunsForRoom\(entry\.roomId\)\.length > 0/);
   assert.doesNotMatch(sidebarActivity, /workIndicatorsForAgent|activeAutomationRunsForAgent/);
-  assert.match(sidebarActivity, /roomHasLocalTypingActivity\(entry\.roomId\)/);
-  assert.match(source, /renderChatActivityIndicator\(hasActivity, chatNeedsAttention\(roomId\)\)/);
+  assert.doesNotMatch(sidebarActivity, /Typing/, 'typing a message is not the bot working');
+  assert.doesNotMatch(styles, /:hover \.chat-activity-dot\{display:none/, 'hovering a row keeps its dot');
+  assert.match(styles, /\.row-text\.is-unread \.row-label,body \.row-text\.is-unread \.row-preview\{font-weight:700/);
+  assert.match(source, /'<span class="row-text' \+ \(unread \? ' is-unread' : ''\)/);
+  assert.match(styles, /\[data-rail-hide\]:not\(\.sidebar-views\)/, 'a small window keeps the view icons');
+  assert.match(source, /renderChatActivityIndicator\(hasActivity, unread\)/);
+  assert.match(source, /var unread = chatNeedsAttention\(roomId\);/);
   assert.doesNotMatch(source, /chat-task-count/);
   assert.match(styles, /\.chat-activity-dot\{[^}]*background:oklch\(0\.72 0\.16 60\)/);
   assert.match(styles, /\.chat-activity-dot\.is-live\{animation:chatTaskPulse/);
@@ -856,7 +866,7 @@ test('creating a bot from the tools menu does not close browser mode, but every 
   // Bot store joins new-bot in this exception: it renders into the same
   // side chat pane too, so opening it shouldn't kill browser mode either.
   assert.match(source, /function closeBrowserSidebarDrawer\(\)[\s\S]*classList\.remove\('browser-sidebar-open'\)/);
-  assert.match(source, /function runToolsAction\(action\)[\s\S]*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store'\) closeLocalBrowser\(\);/);
+  assert.match(source, /function runToolsAction\(action\)[\s\S]*if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store' && action !== 'skills'\) closeLocalBrowser\(\);/);
 });
 
 test('a freshly activated bot greets you in its own room with a localWelcome message', async () => {

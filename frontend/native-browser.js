@@ -608,7 +608,7 @@
       var rect = screen.getBoundingClientRect();
       // Native views sit above HTML; hide them while something covers the page.
       // The docked "Your bots" panel doesn't: it narrows the screen instead.
-      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered &&
+      var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered && !tipsCovered &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation') &&
         !document.querySelector('.app-prompt-overlay.open');
@@ -616,7 +616,7 @@
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view
       // steps aside without pausing what it plays.
-      if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered) payload.menu = true;
+      if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered) payload.menu = true;
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
@@ -1304,6 +1304,20 @@
       layout();
     });
   }
+  // The browser's first-run tips throw their arrow from over the page, so a
+  // still of the page stands in while they show, as for the call's menus.
+  var tipsCovered = false, tipsRequested = false, tipsToken = 0;
+  function coverForTips(next) {
+    var token = ++tipsToken;
+    tipsRequested = next;
+    if (!next) { if (tipsCovered) { tipsCovered = false; layout(); hideStill(); } return; }
+    if (!open) return;
+    showStill().then(function (ready) {
+      if (token !== tipsToken || !ready) return;
+      tipsCovered = true;
+      layout();
+    });
+  }
   var snapshot = document.getElementById('localBrowserSnapshot');
   var downloadsToken = 0;
   var snapshotTimer = null;
@@ -1341,15 +1355,15 @@
   function showStill() {
     clearTimeout(snapshotTimer);
     syncStillPage();
-    if (!snapshot.hidden && (suggestCovered || downloadsOpen || tabsListOpen || followMenuOpen || callMenuCovered)) return Promise.resolve(true);
-    if (!suggestCovered && !downloadsOpen && !tabsListOpen && !followMenuOpen && !callMenuCovered) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
+    if (!snapshot.hidden && (suggestCovered || downloadsOpen || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered)) return Promise.resolve(true);
+    if (!suggestCovered && !downloadsOpen && !tabsListOpen && !followMenuOpen && !callMenuCovered && !tipsCovered) { snapshot.hidden = true; snapshot.removeAttribute('src'); }
     if (stillPending) return stillPending;
     if (!pageShowing()) return Promise.resolve(true);
     var generation = stillGeneration;
     var key = stillPage;
     function current() {
       return generation === stillGeneration && key === stillPageKey() &&
-        (suggestRequested || downloadsRequested || tabsListRequested || followMenuRequested || callMenuRequested);
+        (suggestRequested || downloadsRequested || tabsListRequested || followMenuRequested || callMenuRequested || tipsRequested);
     }
     var pending = command('snapshot').then(function (result) {
       if (!current()) return false;
@@ -1370,7 +1384,7 @@
     return pending;
   }
   function hideStill() {
-    if (downloadsRequested || suggestRequested || tabsListRequested || followMenuRequested || callMenuRequested) return;
+    if (downloadsRequested || suggestRequested || tabsListRequested || followMenuRequested || callMenuRequested || tipsRequested) return;
     // Invalidate capture/decode immediately, even before either menu has
     // committed its cover. Keep only an already visible still for the
     // native view's short return transition; a reopen always captures anew.
@@ -1500,6 +1514,7 @@
     // The shared call's follow controls, and the still under its menus.
     callFollow: callFollow,
     coverPage: coverPage,
+    coverForTips: coverForTips,
     // Counts only (feedback report); never URLs or titles.
     counts: function () { return { tabs: (state.tabs || []).length, groups: (state.groups || []).length }; },
     render: function (visible) {

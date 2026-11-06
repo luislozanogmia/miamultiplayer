@@ -67,7 +67,7 @@
     } catch(_hubTeamsStorageError) { return []; }
   }
   cachedHubTeams().forEach(function(team){ WORKSPACE_OPTIONS['hub_' + team.teamId] = {mode:'multiplayer', label:team.name}; });
-  if(/^hub_[a-f0-9]{32}$/.test(storedWorkspaceKey) && !WORKSPACE_OPTIONS[storedWorkspaceKey]) WORKSPACE_OPTIONS[storedWorkspaceKey] = {mode:'multiplayer', label:'Shared team'};
+  if(/^hub_[a-f0-9]{32}$/.test(storedWorkspaceKey) && !WORKSPACE_OPTIONS[storedWorkspaceKey]) WORKSPACE_OPTIONS[storedWorkspaceKey] = {mode:'multiplayer', label:'Company'};
   var activeWorkspaceKey = WORKSPACE_OPTIONS[storedWorkspaceKey] ? storedWorkspaceKey : 'solo';
   // Switching workspaces reloads the page, so nothing still in flight from
   // the old workspace can repaint the new one. The handoff hides that
@@ -114,6 +114,35 @@
     if(!words.length) return 'MI';
     var code = words.length > 1 ? words[0].charAt(0) + words[1].charAt(0) : words[0].slice(0, 2);
     return code.toUpperCase();
+  }
+  // The demo opens beside the workspace rail, so its tiles stay in reach. Any of
+  // them closes it; plain navigation still works when this page isn't running.
+  function setDemoViewOpen(open){
+    var view = el('#workspaceDemoView'), tile = el('#workspaceRailDemo');
+    if(!view || !tile) return;
+    if(open){
+      if(typeof closeLocalBrowser === 'function') closeLocalBrowser();
+      if(!view.firstChild){
+        var frame = document.createElement('iframe');
+        frame.src = tile.getAttribute('href');
+        frame.title = 'Multiplayer Demo';
+        frame.setAttribute('allow', 'fullscreen');
+        view.appendChild(frame);
+      }
+    }
+    view.hidden = !open;
+    tile.classList.toggle('active', open);
+    document.body.classList.toggle('workspace-demo-open', open);
+  }
+  function wireDemoView(){
+    var rail = el('#workspaceSwitcherMenu');
+    if(!rail) return;
+    rail.addEventListener('click', function(event){
+      var target = event.target.closest('a,button');
+      if(!target) return;
+      if(target.id === 'workspaceRailDemo'){ event.preventDefault(); setDemoViewOpen(true); return; }
+      setDemoViewOpen(false);
+    }, true);
   }
   function renderWorkspaceSwitcher(){
     var companyName = el('#miaCompanyName');
@@ -1391,7 +1420,7 @@
     var raw = String(model || '').trim().toLowerCase();
     var match = /^gpt-(\d+(?:\.\d+)?)(?:-(.+))?$/.exec(raw);
     if(match) return {family:'GPT', variant:'GPT ' + match[1] + (match[2] ? ' ' + chatModelTitleCase(match[2]) : ''), familyKey:'gpt'};
-    if(raw.indexOf('gpt-') === 0) return {family:'GPT', variant:chatModelTitleCase(raw.replace(/-latest$/, '').replace(/-/g, ' ')), familyKey:'gpt'};
+    if(raw.indexOf('gpt-') === 0) return {family:'GPT', variant:chatModelTitleCase(raw.replace(/^gpt-/, '').replace(/-latest$/, '').replace(/-/g, ' ')), familyKey:'gpt'};
     match = /^grok-(\d+(?:\.\d+)?)(?:-(.+))?$/.exec(raw);
     if(match) return {family:'Grok', variant:match[1] + (match[2] ? ' ' + chatModelTitleCase(match[2]) : ''), familyKey:'grok'};
     // Claude route ids carry a version, an optional snapshot date, and the
@@ -1771,7 +1800,6 @@
   // client-side only; every field keeps its id so the save handlers below
   // are untouched by the layout.
   function showSettingsPane(name){
-    if(name === 'skills') refreshSkillsPane();
     if(name === 'mia') loadMiaAppPane();
     els('#settingsNav .styled-settings-nav-item').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-pane') === name);
@@ -1915,6 +1943,23 @@
     });
   }
 
+  var harnessAuthLinks = {url: '', code: ''}, harnessAuthCopiedCode = '', harnessAuthMiaIsDefault = false;
+  function refreshHarnessAuthDefaultBrowser(){
+    var browser = window.miaDesktop && window.miaDesktop.defaultBrowser;
+    if(!browser) return Promise.resolve();
+    return Promise.resolve(browser.get()).then(function(state){
+      harnessAuthMiaIsDefault = !!(state && state.https);
+    }).catch(function(){});
+  }
+  function copyHarnessAuthText(button, text, done){
+    return copySidebarText(text).then(function(copied){
+      if(!copied || !button) return;
+      var label = button.getAttribute('data-label') || button.textContent;
+      button.setAttribute('data-label', label);
+      button.textContent = done;
+      setTimeout(function(){ button.textContent = label; }, 2500);
+    });
+  }
   function renderHarnessAuth(value){
     var panel = el('#harnessAuthPanel');
     var status = el('#harnessAuthStatus');
@@ -1951,15 +1996,27 @@
         : (auth.state === 'waiting'
           ? (auth.provider === 'claude-subscription-directsdk-experimental'
             ? 'Finish signing in to Claude in your browser, then paste the code it shows here.'
-            : 'Finish in the sign-in window and enter the code shown below.')
+            : (harnessAuthMiaIsDefault
+              ? 'Security keys don’t work in Mia’s browser. Copy the link and code into Chrome or Safari to finish signing in.'
+              : 'Finish in the sign-in window and enter the code shown below.'))
           : (auth.state === 'completing'
             ? 'Verifying sign-in…'
             : (auth.state === 'connected'
               ? authName + ' is connected.'
               : (auth.error || 'Sign-in could not be completed.'))));
     }
+    // A sign-in page must not cover the code: when Mia is the default browser,
+    // the plain link would open right over this panel.
+    harnessAuthLinks = {url: auth.verificationUrl || '', code: auth.userCode || ''};
+    var copyLink = el('#harnessAuthCopyLink'), openInMia = el('#harnessAuthOpenInMia');
+    if(copyLink) copyLink.hidden = !auth.verificationUrl;
+    if(openInMia) openInMia.hidden = !(auth.verificationUrl && harnessAuthMiaIsDefault && window.miaNativeBrowser);
+    if(auth.userCode && auth.userCode !== harnessAuthCopiedCode){
+      harnessAuthCopiedCode = auth.userCode;
+      copyHarnessAuthText(el('#harnessAuthCopyCode'), auth.userCode, 'Code copied');
+    }
     if(link){
-      link.hidden = !auth.verificationUrl;
+      link.hidden = !auth.verificationUrl || harnessAuthMiaIsDefault;
       link.textContent = 'Open ' + authName + ' sign-in';
       if(auth.verificationUrl) link.href = '/api/settings/harness/auth/redirect?provider=' + encodeURIComponent(auth.provider || harnessOnboardingState.provider);
     }
@@ -2251,12 +2308,15 @@
       : harnessOnboardingState.provider;
     api('/api/settings/harness/connected', {method:'POST', body:{provider:provider}}).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.ok) throw new Error((res.data && res.data.error) || 'Could not connect that provider');
+      clearTimeout(harnessSetupHintTimer);
       harnessAuthAwaitingSave = false;
       harnessAuthSaveInProgress = false;
       renderHarnessAuth(null);
       closeHarnessOnboarding();
       if(chatModelPicker.ensureLoaded) chatModelPicker.ensureLoaded();
     }).catch(function(err){
+      clearTimeout(harnessSetupHintTimer);
+      if(error) error.classList.remove('is-progress');
       harnessAuthSaveInProgress = false;
       harnessAuthAwaitingSave = false;
       if(error) error.textContent = err.message || 'Could not connect that provider';
@@ -2402,14 +2462,30 @@
       }
     });
   })();
+  // Mia Router's first start runs Mia's whole local runtime, which can take minutes.
+  var harnessSetupHintTimer = null;
+  function showHarnessSetupProgress(button, error){
+    clearTimeout(harnessSetupHintTimer);
+    if(error) error.classList.remove('is-progress');
+    if(harnessOnboardingState.provider !== 'managed-router'){
+      setHarnessActionLabel(button, 'Loading…');
+      return;
+    }
+    setHarnessActionLabel(button, 'Setting you up…');
+    harnessSetupHintTimer = setTimeout(function(){
+      if(!error || !harnessAuthSaveInProgress) return;
+      error.classList.add('is-progress');
+      error.textContent = 'Setting you up. The first time can take a few minutes on some computers.';
+    }, 8000);
+  }
   function saveHarnessSelection(){
     if(harnessAuthSaveInProgress) return;
     var button = el('#harnessOnboardingContinue');
     var error = el('#harnessOnboardingError');
     harnessAuthSaveInProgress = true;
     button.disabled = true;
-    setHarnessActionLabel(button, 'Loading…');
     if(error) error.textContent = '';
+    showHarnessSetupProgress(button, error);
     if(harnessConnectOnly){
       finishConnectOnly(button, error);
       return;
@@ -2449,6 +2525,8 @@
       setAppLoading(true);
       location.reload();
     }).catch(function(err){
+      clearTimeout(harnessSetupHintTimer);
+      if(error) error.classList.remove('is-progress');
       harnessAuthSaveInProgress = false;
       harnessAuthAwaitingSave = false;
       if(error) error.textContent = err.message || 'Could not save setup';
@@ -2534,6 +2612,7 @@
     harnessAuthAwaitingSave = true;
     harnessConnectionPending = authProvider;
     renderHarnessConnectionActions();
+    refreshHarnessAuthDefaultBrowser();
     // Open a same-origin redirect from the user gesture. That route starts
     // the background harness flow and redirects this tab to the real provider
     // URL, avoiding popup blocking in the later polling callback.
@@ -2589,6 +2668,16 @@
       if(input) input.disabled = false;
       if(error) error.textContent = err.message || 'Could not submit Claude sign-in';
     });
+  });
+  el('#harnessAuthCopyCode').addEventListener('click', function(event){
+    copyHarnessAuthText(event.currentTarget, harnessAuthLinks.code, 'Code copied');
+  });
+  el('#harnessAuthCopyLink').addEventListener('click', function(event){
+    copyHarnessAuthText(event.currentTarget, harnessAuthLinks.url, 'Link copied');
+  });
+  el('#harnessAuthOpenInMia').addEventListener('click', function(){
+    openWebBrowserTool();
+    window.miaNativeBrowser.openTab(harnessAuthLinks.url);
   });
   el('#harnessAuthCancel').addEventListener('click', function(){
     void cancelHarnessAuthFlow(harnessOnboardingState.provider);
@@ -3075,11 +3164,6 @@
     chatWs.activeLabel = renamed.name;
     renderChatHeaderBar();
     renderChatThread();
-  }
-  // Messages keep the name their bot had when it wrote them; a renamed bot goes by its name now.
-  function currentBotNameForSender(senderId){
-    var record = (chatWs.botRecords || []).filter(function(bot){ return String(bot.id) === String(senderId); })[0];
-    return record && record.name ? record.name : '';
   }
   function loadAgents(){
     return api('/api/bots').then(function(res){
@@ -3942,6 +4026,13 @@
         var a = findBenchAgent(editState.agentId), avatar = el('#styledAgentEditAvatar', pane);
         if(avatar && a) avatar.innerHTML = agentAvatarHtml(editState.name || a.name, a.isBuiltin ? a.agentId : a.id, 42, null, editState.avatarColor);
       });
+      colors.addEventListener('input', function(e){
+        if(!e.target || e.target.id !== 'styledAgentEditColorInput') return;
+        editState.avatarColor = normalizeAgentAvatarColor(e.target.value);
+        markCustomAgentColor(e.target);
+        var a = findBenchAgent(editState.agentId), avatar = el('#styledAgentEditAvatar', pane);
+        if(avatar && a) avatar.innerHTML = agentAvatarHtml(editState.name || a.name, a.isBuiltin ? a.agentId : a.id, 42, null, editState.avatarColor);
+      });
       colors.addEventListener('change', function(e){
         if(!e.target || e.target.id !== 'styledAgentEditColorInput') return;
         editState.avatarColor = normalizeAgentAvatarColor(e.target.value);
@@ -4138,6 +4229,20 @@
     var custom = current && !AGENT_COLOR_OPTIONS.some(function(option){ return option.value === current; });
     html += '<label class="' + classPrefix + '-custom' + (custom ? ' selected' : '') + '" title="Choose a custom color"><span>Custom</span><input type="color" id="' + colorInputId + '" value="' + (current || AGENT_COLOR_OPTIONS[0].value) + '" aria-label="Custom agent color" /></label>';
     return html;
+  }
+
+  // A Mac color panel stays open and sends only `input` while someone picks;
+  // `change` comes when it closes, which may be after they press Save. Mark the
+  // custom swatch chosen in place, since rebuilding the controls would detach the
+  // input the open panel is still writing to.
+  function markCustomAgentColor(input){
+    var options = input && input.closest('label') && input.closest('label').parentNode;
+    if(!options) return;
+    els('[data-agent-color]', options).forEach(function(button){
+      button.classList.remove('selected');
+      button.setAttribute('aria-pressed', 'false');
+    });
+    input.closest('label').classList.add('selected');
   }
 
   function renderAgentColorPicker(){
@@ -4675,9 +4780,13 @@
     editState.avatarColor = normalizeAgentAvatarColor(button.getAttribute('data-agent-color'));
     renderEditCinema();
   });
-  // Native color inputs emit `input` while the picker is open. Listen for
-  // `change` so choosing a color does not replace the input underneath the
-  // browser's open picker and interrupt selection.
+  // Native color inputs emit `input` while the picker is open: keep the choice
+  // without re-rendering, and re-render on `change` once the picker closes.
+  el('#benchEditColorOptions').addEventListener('input', function(e){
+    if(!e.target || e.target.id !== 'benchEditColorInput') return;
+    editState.avatarColor = normalizeAgentAvatarColor(e.target.value);
+    markCustomAgentColor(e.target);
+  });
   el('#benchEditColorOptions').addEventListener('change', function(e){
     if(!e.target || e.target.id !== 'benchEditColorInput') return;
     editState.avatarColor = normalizeAgentAvatarColor(e.target.value);
@@ -4793,7 +4902,6 @@
     watchReconnectTimer: null,
     lastNotifiedAt: {}         // conversationId -> ms, so an automation finish doesn't double-notify its reply
   };
-  var localChatTyping = {roomId: null, active: false, timer: null};
   var chatSearchDirectory = {humans: [], agents: [], loaded: false, loading: false, request: null};
 
   // Hub rooms use the same timeline and composer but a separate authenticated
@@ -4928,7 +5036,7 @@
       // A team you're invited to shows too, dimmed, as in Slack: opening it
       // joins it. Only joined teams are remembered for the next launch.
       var teams=(result.teams||[]).filter(function(team){return (team.membership || team.invite) && /^[a-f0-9]{32}$/.test(team.teamId);})
-        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Shared team'),logo_hash:team.logo_hash||null,invited:!team.membership};});
+        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Company'),logo_hash:team.logo_hash||null,invited:!team.membership};});
       noteHubRemovals(teams);
       sendHubDisplayName(teams.filter(function(team){return !team.invited;}));
       try { localStorage.setItem(HUB_TEAMS_STORAGE_KEY, JSON.stringify(teams.filter(function(team){return !team.invited;}))); } catch(_hubTeamsStorageError) {}
@@ -5015,7 +5123,7 @@
     var before=cachedHubTeams();
     var active=/^hub_([a-f0-9]{32})$/.exec(activeWorkspaceKey);
     if(active && !before.some(function(team){return team.teamId===active[1];}))
-      before.push({teamId:active[1],name:(WORKSPACE_OPTIONS[activeWorkspaceKey]||{}).label||'Shared team'});
+      before.push({teamId:active[1],name:(WORKSPACE_OPTIONS[activeWorkspaceKey]||{}).label||'Company'});
     var pending=pendingHubRemovals();
     before.forEach(function(team){
       if(member[team.teamId] || pending.some(function(item){return item.teamId===team.teamId;}))return;
@@ -5037,7 +5145,7 @@
     overlay.className='hub-removed-overlay'+(open?' locked':'');
     overlay.innerHTML='<div class="app-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="hubRemovedTitle" aria-describedby="hubRemovedText">'
       +'<div class="hub-removed-title" id="hubRemovedTitle">Your access to '+esc(team.name)+' has ended</div>'
-      +'<div class="app-confirm-msg" id="hubRemovedText">You were removed from this workspace by a team admin. Your existing chats, bots, and pages remain with the team.</div>'
+      +'<div class="app-confirm-msg" id="hubRemovedText">You were removed from this workspace by a company admin. Your existing chats, bots, and pages remain with the company.</div>'
       +'<div class="app-confirm-actions"><button type="button" class="styled-btn-primary">Back to Mia</button></div></div>';
     document.body.appendChild(overlay);
     var button=el('button',overlay);
@@ -5069,7 +5177,8 @@
   // are private conversations listed under Direct messages. A DM's stored
   // name is an internal key, so it is always shown as the other person's
   // name; a group without its own name shows its members' names.
-  function hubPrivateConversation(channel){ return !!channel && (channel.kind==='dm' || channel.kind==='group'); }
+  // A bot chat is one person's private conversation with a company bot.
+  function hubPrivateConversation(channel){ return !!channel && (channel.kind==='dm' || channel.kind==='group' || channel.kind==='bot'); }
   // Teammates' emails are remembered per team, from the member list and from
   // their messages, so a conversation keeps their name after they leave.
   var HUB_PEOPLE_STORAGE_KEY = 'miaHubPeople';
@@ -5119,24 +5228,46 @@
   function hubChannelTitle(channel){
     if(!channel)return '';
     if(!hubPrivateConversation(channel))return channel.name;
+    if(channel.kind==='bot')return channel.bot && channel.bot.name || 'Bot';
     var names=hubOtherMemberIds(channel).map(function(id){
       var email=hubPersonEmail(id);
       return email ? displayNameForEmail(email) : '';
     }).filter(Boolean);
     if(channel.kind==='group')return channel.name && channel.name!=='Group' ? channel.name : names.join(', ') || 'Group';
-    return names[0] || 'Former teammate';
+    return names[0] || 'Former colleague';
   }
   // Team rows use the same 40px mark column as solo rows: a # tile for a
   // channel, the teammate's avatar for a direct message, initials for a group.
   function hubChannelMark(channel){
     if(!hubPrivateConversation(channel))return '<span class="chat-row-mark channel" aria-hidden="true">#</span>';
+    if(channel.kind==='bot'){
+      var bot=channel.bot||{};
+      return '<span class="chat-row-mark tile" aria-hidden="true">'+agentAvatarHtml(bot.name||'Bot',String(bot.source_bot_id||bot.id||channel.id),40,null,normalizeAgentAvatarColor(bot.avatar_color),true)+'</span>';
+    }
     var others=hubOtherMemberIds(channel).map(hubPersonEmail).filter(Boolean);
     if(channel.kind==='dm' && others.length===1)return '<span class="chat-row-mark tile human" aria-hidden="true">'+humanAvatarContent(others[0])+'</span>';
     return '<span class="chat-row-mark tile human" aria-hidden="true">'+esc(benchMark(hubChannelTitle(channel)))+'</span>';
   }
   function hubChannelLabel(channel){ return !channel ? '' : hubPrivateConversation(channel) ? hubChannelTitle(channel) : '# '+channel.name; }
   function hubRoom(channel){ var title=hubChannelTitle(channel); return {id:channel.id,roomId:channel.id,conversationId:channel.id,kind:'group',roomType:'group',name:title,roomName:title,members:[]}; }
-  function openHubChannel(channel){ if(channel)return loadChatRoom(channel.id,'group',hubChannelTitle(channel)); }
+  // Closing a direct message or group hides it from the sidebar, like
+  // Slack's Close conversation, until someone writes again or you open it.
+  // Kept per company on this computer; nothing changes on the Hub.
+  var HUB_CLOSED_STORAGE_KEY='miaHubClosedConversations';
+  function hubClosedConversations(){
+    try { return JSON.parse(localStorage.getItem(HUB_CLOSED_STORAGE_KEY)||'{}')||{}; } catch(_closedStorageError) { return {}; }
+  }
+  function hubConversationClosed(channel){
+    var at=(hubClosedConversations()[activeWorkspaceKey]||{})[channel.id];
+    return at!==undefined && Number(channel.latest_sequence||0)<=Number(at);
+  }
+  function setHubConversationClosed(channelId,sequence){
+    var all=hubClosedConversations(), mine=all[activeWorkspaceKey]||{};
+    if(sequence===null){ if(!(channelId in mine))return; delete mine[channelId]; } else mine[channelId]=sequence;
+    all[activeWorkspaceKey]=mine;
+    try { localStorage.setItem(HUB_CLOSED_STORAGE_KEY,JSON.stringify(all)); } catch(_closedStorageError) {}
+  }
+  function openHubChannel(channel){ if(!channel)return; setHubConversationClosed(channel.id,null); return loadChatRoom(channel.id,'group',hubChannelTitle(channel)); }
   function refreshHubChannels(){
     var workspace=activeWorkspaceKey;
     return Promise.all([hubCall('GET',hubPath()+'/channels'),hubCall('GET',hubPath()+'/members').catch(function(){return {members:hubChat.members||[]};}),
@@ -5182,17 +5313,25 @@
   // was just created: it is shared into the channel and, when you are a team
   // admin, published right away. Anyone else's bot waits for an admin.
   // -> Promise<true when published>
-  function shareBotToHubChannel(teamId, channelId, localBotId){
-    return window.MiaHubChat.localCall('POST', '/share', {teamId: teamId, channelId: channelId, localBotId: String(localBotId)}).then(function(result){
+  // A copy for another company (see copyCompanyBotToCompany) brings its
+  // reviewed skills and your role in that company.
+  function shareBotToHubChannel(teamId, channelId, localBotId, copy){
+    var body = {teamId: teamId, channelId: channelId, localBotId: String(localBotId)};
+    if(copy) body.skills = copy.skills;
+    return window.MiaHubChat.localCall('POST', '/share', body).then(function(result){
       var version = result && result.proposal && result.proposal.version, bot = result && result.bot;
       refreshCompanyBots();
-      if(!(hubChat.membership && hubChat.membership.role === 'admin') || !version || !bot) return false;
-      return hubCall('POST', hubPath() + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ refreshCompanyBots(); return true; });
+      var role = copy ? copy.role : hubChat.membership && hubChat.membership.role;
+      if(role !== 'admin' || !version || !bot) return false;
+      // A copy is already in the other company once shared; if approving
+      // fails, an admin there approves it as for anyone's bot.
+      return hubCall('POST', '/v1/teams/' + teamId + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ refreshCompanyBots(); return true; },
+        function(error){ if(copy) return false; throw error; });
     });
   }
   function hubBotJoinedMessage(name, label, published){
     return published ? name + ' joined ' + label + '. Mention @' + name + ' to use it.'
-      : name + ' was added to ' + label + '. A team admin must approve it in Bot versions & runs before it can reply.';
+      : name + ' was added to ' + label + '. A company admin must approve it in Bot versions & runs before it can reply.';
   }
   function addCreatedBotToTeam(created, conversation, target){
     var name = String(created.name || 'Bot');
@@ -5250,6 +5389,7 @@
     }).catch(function(){ showBenchToast('Couldn\'t open a chat with '+bot.name+'. Try again.'); });
   }
   function initHubChat(){
+    hubHiddenBotsOpen[activeWorkspaceKey]=false;
     // Local startup callbacks may already have selected Mia. A Hub selection
     // is valid only after this team's authoritative channel list is loaded.
     // After a reload, reopen the channel this team last had open.
@@ -5285,12 +5425,19 @@
   function hubUnreachable(error){
     return !!error && (!error.status || error.status>=500 || ['hub_unavailable','service_unavailable','lifecycle_unavailable'].indexOf(error.code)>=0);
   }
+  // A Hub that is limiting requests answers again shortly. Opening waits and
+  // tries again on its own, with longer gaps, instead of leaving the team
+  // without its channels until it is reopened.
+  function hubRateLimited(error){
+    return !!error && (error.status===429 || error.code==='rate_limit' || error.code==='rate_limited');
+  }
   function retryHubChat(error){
-    hubFeedback(error);
+    var limited=hubRateLimited(error);
+    hubFeedback(limited ? {message:'The company is busy. Trying again shortly…'} : error);
     clearTimeout(hubChat.retryTimer);
-    if(!hubUnreachable(error) || !hubWorkspace())return;
+    if(!(limited || hubUnreachable(error)) || !hubWorkspace())return;
     var workspace=activeWorkspaceKey;
-    hubChat.retryWait=Math.min(60000,(hubChat.retryWait||2500)*2);
+    hubChat.retryWait=Math.min(60000,Math.max(limited ? 10000 : 0,(hubChat.retryWait||2500)*2));
     hubChat.retryTimer=setTimeout(function(){
       hubChat.retryTimer=null;
       if(workspace===activeWorkspaceKey && hubWorkspace())initHubChat();
@@ -5308,8 +5455,8 @@
     footer.style.display='block';
     footer.setAttribute('role','status');
     footer.setAttribute('aria-live','polite');
-    footer.textContent=hubChat.error || (offline ? 'Reconnecting to the shared team…'
-      : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to shared team');
+    footer.textContent=hubChat.error || (offline ? 'Reconnecting to the company…'
+      : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to company');
     footer.classList.toggle('chat-sync-fail',offline || !!hubChat.error || chatWs.configured===false);
   }
   function hubRoomPreview(roomId){
@@ -5325,7 +5472,8 @@
     var pinned=el('#chatPinned'), all=el('#chatAllConversations');
     var pinnedChannels=hubChat.channels.filter(function(channel){return !!channel.pinned;});
     var channels=hubChat.channels.filter(function(channel){return !channel.pinned && !hubPrivateConversation(channel);});
-    var dms=hubChat.channels.filter(function(channel){return !channel.pinned && hubPrivateConversation(channel);});
+    // A bot chat opens from its company bot's row, not from Direct messages.
+    var dms=hubChat.channels.filter(function(channel){return !channel.pinned && hubPrivateConversation(channel) && channel.kind!=='bot' && !hubConversationClosed(channel);});
     if(el('#chatAllCount'))el('#chatAllCount').textContent=String(hubChat.channels.length-pinnedChannels.length);
     renderHubStatus();
     function row(channel){
@@ -5388,9 +5536,26 @@
     var dmSection=section('dms','Direct messages','New direct message',openHubDirectMessagePicker);
     dms.forEach(function(channel){dmSection.list.appendChild(row(channel));});
     all.appendChild(dmSection.node);
-    // My Bots are made in Solo; here you chat with them about this team's work.
-    var myBotSection=section('bots','My Bots','',null);
-    myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id))myBotSection.list.appendChild(teamBotRow(bot)); });
+    // My Bots: your Solo bots and the ones you made in this team, made the same way as in Solo.
+    var myBotSection=section('bots','My Bots','New bot',function(){ runToolsAction('new-bot'); });
+    // Solo bots already shared with this company wait in a folded Hidden
+    // group at the end, greyed; each can be reactivated from there.
+    var hiddenBots=myBots.filter(function(bot){ return soloBotSharedAway(bot) && !botPinned('mine:'+bot.id); });
+    myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
+    if(hiddenBots.length){
+      // Folded each time the company opens; opening it lasts until you leave.
+      var hiddenOpen=hubHiddenBotsOpen[activeWorkspaceKey]===true;
+      var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
+      hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
+      hiddenToggle.innerHTML='<span class="hub-hidden-bots-chevron" aria-hidden="true">'+(hiddenOpen?'&#9662;':'&#9656;')+'</span>Hidden · '+hiddenBots.length;
+      hiddenToggle.title='Bots you shared with the company. Everyone uses them under Company bots.';
+      hiddenToggle.addEventListener('click',function(){
+        hubHiddenBotsOpen[activeWorkspaceKey]=!hiddenOpen;
+        renderHubSidebar();
+      });
+      myBotSection.list.appendChild(hiddenToggle);
+      if(hiddenOpen)hiddenBots.forEach(function(bot){ myBotSection.list.appendChild(teamBotRow(bot)); });
+    }
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
     all.appendChild(myBotSection.node);
     // Company bots: every bot shared into a channel of this workspace you can see.
@@ -5413,8 +5578,8 @@
     renderChatSidebar();
   }
   // A bot row's ⋯ and right-click both offer Pin or Unpin.
-  function wireTeamBotPin(button,key,pinned){
-    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){toggleTeamBotPin(activeWorkspaceKey,key);}]]); }
+  function wireTeamBotPin(button,key,pinned,extraItems){
+    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){toggleTeamBotPin(activeWorkspaceKey,key);}]].concat(extraItems||[])); }
     button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();open(button);});
     var more=el('.hub-channel-more',button);
     if(more)more.addEventListener('click',function(event){event.stopPropagation();open(more);});
@@ -5427,20 +5592,61 @@
       (result.bots||[]).forEach(function(bot){
         if(!bot.published || !bot.name)return;
         var key=String(bot.name).toLowerCase(), entry=byKey[key];
-        if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:normalizeAgentAvatarColor(bot.avatar_color),channels:[]}; list.push(entry); }
+        if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:normalizeAgentAvatarColor(bot.avatar_color),botIds:[],channels:[],places:[]}; list.push(entry); }
         if(entry.channels.indexOf(result.channel)<0)entry.channels.push(result.channel);
+        if(bot.id && result.channel && result.channel.id)entry.places.push({channelId:result.channel.id,botId:String(bot.id),ownerId:bot.owner_id});
+        if(bot.id&&entry.botIds.indexOf(String(bot.id))<0)entry.botIds.push(String(bot.id));
       });
     });
     return list.sort(function(a,b){return a.name.localeCompare(b.name);});
   }
+  // Your Solo bots that already live in this company as company bots:
+  // local id -> the company bot's name. Only copies still in the company count.
+  function sharedSoloBots(bots,teamId,companyBots){
+    var live={}, names={}, shared={};
+    (companyBots||[]).forEach(function(bot){ bot.botIds.forEach(function(id){ live[id]=true; names[id]=bot.name; }); });
+    (bots||[]).forEach(function(bot){
+      var copy=(bot.sharedAs||[]).filter(function(item){ return item.teamId===teamId && live[item.registrationId]; })[0];
+      if(copy)shared[String(bot.id)]=names[copy.registrationId];
+    });
+    return shared;
+  }
+  // A shared Solo bot is greyed out in a company's My Bots until its owner
+  // reactivates it there. Kept per company on this computer.
+  var REACTIVATED_SOLO_BOTS_KEY='miaReactivatedSoloBots';
+  function soloBotReactivated(botId){
+    try { return !!((JSON.parse(localStorage.getItem(REACTIVATED_SOLO_BOTS_KEY)||'{}')||{})[activeWorkspaceKey]||{})[botId]; } catch(_reactivatedError) { return false; }
+  }
+  function reactivateSoloBot(botId){
+    try {
+      var all=JSON.parse(localStorage.getItem(REACTIVATED_SOLO_BOTS_KEY)||'{}')||{};
+      var mine=all[activeWorkspaceKey]||{}; mine[botId]=true; all[activeWorkspaceKey]=mine;
+      localStorage.setItem(REACTIVATED_SOLO_BOTS_KEY,JSON.stringify(all));
+    } catch(_reactivatedError) {}
+  }
+  function soloBotSharedAway(bot){ return !!(hubChat.sharedSoloBots||{})[bot.id] && !soloBotReactivated(bot.id); }
+  function openSharedSoloBotNotice(bot){
+    var companyName=(hubChat.sharedSoloBots||{})[bot.id]||bot.name;
+    return appConfirm(bot.name+' was shared with the company. Here, everyone uses it as '+companyName+' under Company bots. Reactivate your Solo '+bot.name+' if you also want to use it here.','Reactivate').then(function(ok){
+      if(!ok)return;
+      reactivateSoloBot(bot.id);
+      renderChatSidebar();
+      return openTeamBotChat(bot);
+    });
+  }
   function loadCompanyBots(){
     var workspace=activeWorkspaceKey;
     var request=hubChat.companyBotsRequest=Number(hubChat.companyBotsRequest||0)+1;
-    return window.MiaHubChat.teamBots(workspace.slice(4)).then(function(results){
+    return Promise.all([
+      window.MiaHubChat.teamBots(workspace.slice(4)),
+      window.MiaHubChat.localCall('GET','/available').catch(function(){ return {bots:[]}; })
+    ]).then(function(answers){
+      var results=answers[0];
       if(workspace!==activeWorkspaceKey || request!==hubChat.companyBotsRequest)return;
       // The Hub decides who sees which bot: everyone by default, unless an
       // admin limits it. The sidebar shows exactly what it returns.
       hubChat.companyBots=companyBotsFromChannels(results);
+      hubChat.sharedSoloBots=sharedSoloBots(answers[1] && answers[1].bots, workspace.slice(4), hubChat.companyBots);
       renderChatSidebar();
     }).catch(function(){/* The sidebar keeps its last list; the next team open retries. */});
   }
@@ -5470,6 +5676,28 @@
     if(mine)return hubChannelTitle(mine);
     return channel.kind==='dm' ? 'Direct message' : channel.kind==='group' ? 'Group' : channel.name || 'Channel';
   }
+  // Your private chat with a company bot, if the Hub has made one.
+  function companyBotChat(bot){
+    return (hubChat.channels||[]).filter(function(channel){
+      return channel.kind==='bot' && channel.bot && bot.botIds.indexOf(String(channel.bot.source_bot_id||channel.bot.id))>=0;
+    })[0]||null;
+  }
+  // A company bot opens your private chat with it, made on the Hub the first
+  // time. A Hub without bot chats still sends you to a channel with the bot.
+  function openCompanyBotChat(bot){
+    var chat=companyBotChat(bot), place=bot.places && bot.places[0];
+    if(chat)return openHubChannel(chat);
+    if(!place)return openCompanyBot(bot);
+    var workspace=activeWorkspaceKey;
+    return hubCall('POST',hubPath()+'/bot-chats',{botId:place.botId}).then(function(result){
+      if(workspace!==activeWorkspaceKey)return;
+      return refreshHubChannels().then(function(){ return openHubChannel(hubChannel(result.channel.id)); });
+    }).catch(function(error){
+      if(workspace!==activeWorkspaceKey)return;
+      if(error && error.status===404)return openCompanyBot(bot);
+      showBenchToast(hubActionError(error,'Couldn\'t open a chat with '+bot.name+'. Try again.'));
+    });
+  }
   function openCompanyBot(bot){
     var place=companyBotPlace(bot,hubChannel);
     if(place.action==='open')return openHubChannel(place.channel);
@@ -5481,6 +5709,165 @@
         .catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t join. Try again.'));});
     });
   }
+  // Admins, and whoever added the bot, can take it out of every channel at once:
+  // the same removal the channel's bot panel does, once per channel.
+  function companyBotCanRemove(bot){
+    var me=hubChat.membership||{};
+    if(!bot.places || !bot.places.length)return false;
+    return me.role==='admin' || bot.places.every(function(place){ return place.ownerId && place.ownerId===me.clerk_user_id; });
+  }
+  function removeCompanyBot(bot){
+    var count=bot.places.length;
+    return appConfirm('Remove '+bot.name+' from the company? It leaves '+(count===1?'its channel':'all '+count+' channels it is in')+', and nobody here can use it until it is added again.','Remove').then(function(ok){
+      if(!ok)return;
+      var workspace=activeWorkspaceKey;
+      return Promise.all(bot.places.map(function(place){
+        return hubCall('DELETE',hubPath()+'/channels/'+place.channelId+'/bots/'+place.botId).then(function(){return true;},function(){return false;});
+      })).then(function(results){
+        if(workspace!==activeWorkspaceKey)return;
+        var failed=results.filter(function(done){return !done;}).length;
+        refreshCompanyBots();
+        bot.places.forEach(function(place){ refreshHubBotState(place.channelId,true); });
+        showBenchToast(failed ? 'Couldn\'t remove '+bot.name+' from '+failed+' of '+count+' channels. Try again.' : bot.name+' was removed from the company.');
+      });
+    });
+  }
+  // Copy a company bot to another company you are in. Mia proposes a
+  // generalized copy; an admin reviews and edits it before adding it there.
+  function copyCompanyBotToCompany(bot){
+    var place=bot.places && bot.places[0];
+    if(!place || (hubChat.membership||{}).role!=='admin')return;
+    var fromTeamId=activeWorkspaceKey.slice(4);
+    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',fromName:'this company',original:null,copy:null,error:''};
+    var previousFocus=document.activeElement;
+    var overlay=document.createElement('div');
+    overlay.className='app-confirm-overlay open';
+    overlay.setAttribute('role','presentation');
+    var card=document.createElement('div');
+    card.className='app-confirm-card bot-copy-card';
+    card.setAttribute('role','dialog');
+    card.setAttribute('aria-modal','true');
+    card.setAttribute('aria-label','Copy '+bot.name+' to another company');
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    function close(){ overlay.remove(); if(previousFocus && previousFocus.focus)try{previousFocus.focus();}catch(_){} }
+    overlay.addEventListener('click',function(e){ if(e.target===overlay && state.phase!=='copying')close(); });
+    overlay.addEventListener('keydown',function(e){ if(e.key==='Escape' && state.phase!=='copying'){ e.preventDefault(); close(); } });
+    function team(){ return state.teams.filter(function(t){ return t.teamId===state.teamId; })[0]||null; }
+    function channel(){ return state.channels.filter(function(c){ return c.id===state.channelId; })[0]||null; }
+    function render(){
+      var html='<div class="bot-copy-title">Copy '+esc(bot.name)+' to another company</div>';
+      if(state.phase==='loading'){
+        html+='<p class="bot-copy-sub">Loading your companies…</p>';
+      } else if(state.phase==='pick'){
+        html+='<p class="bot-copy-sub">Mia proposes a generalized copy. Inspect it and remove private details from '+esc(state.fromName)+' before adding it. '+esc(bot.name)+' stays here as it is.</p>'
+          +'<label class="bot-copy-field"><span>Company</span><select data-bot-copy-team>'+state.teams.map(function(t){ return '<option value="'+esc(t.teamId)+'"'+(t.teamId===state.teamId?' selected':'')+'>'+esc(t.name)+'</option>'; }).join('')+'</select></label>'
+          +'<label class="bot-copy-field"><span>Channel</span><select data-bot-copy-channel'+(state.channels.length?'':' disabled')+'>'+(state.channels.length
+            ? state.channels.map(function(c){ return '<option value="'+esc(c.id)+'"'+(c.id===state.channelId?' selected':'')+'>#'+esc(c.name)+'</option>'; }).join('')
+            : '<option>'+(state.channelsLoading?'Loading channels…':'No channels you can add bots to')+'</option>')+'</select></label>';
+      } else if(state.phase==='reviewing'){
+        html+='<p class="bot-copy-sub">Mia is preparing a proposed copy for '+esc(team().name)+'…</p>';
+      } else {
+        var copy=state.copy;
+        html+='<p class="bot-copy-sub">Check names, clients, numbers and other private details in the proposed copy for '+esc(team().name)+' · #'+esc(channel().name)+'. Edit it before you add it.</p>'
+          +(copy.removed.length?'<div class="bot-copy-removed"><span>Mia says it removed</span><ul>'+copy.removed.map(function(item){ return '<li>'+esc(item)+'</li>'; }).join('')+'</ul></div>':'')
+          +'<div class="bot-copy-compare">'
+          +'<div class="bot-copy-col"><div class="bot-copy-col-label">In '+esc(state.fromName)+'</div><div class="bot-copy-name">'+esc(bot.name)+'</div><pre class="bot-copy-original">'+esc(state.original.instructions)+'</pre></div>'
+          +'<div class="bot-copy-col"><div class="bot-copy-col-label">Copy for '+esc(team().name)+'</div><input class="bot-copy-name-input" data-bot-copy-name aria-label="Name of the copy" maxlength="40" value="'+esc(copy.name)+'"><textarea data-bot-copy-instructions aria-label="Instructions of the copy">'+esc(copy.instructions)+'</textarea></div>'
+          +'</div>'
+          +copy.skills.map(function(skill,i){
+            var original=state.original.skills[i]||{};
+            return '<details class="bot-copy-skill"><summary>Skill: '+esc(skill.name)+'</summary><div class="bot-copy-compare">'
+              +'<pre class="bot-copy-original">'+esc(original.body||'')+'</pre>'
+              +'<textarea data-bot-copy-skill="'+i+'" aria-label="'+esc('Skill '+skill.name+' in the copy')+'">'+esc(skill.body)+'</textarea></div></details>';
+          }).join('');
+      }
+      if(state.error)html+='<div class="bot-copy-error" role="alert">'+esc(state.error)+'</div>';
+      var primary=state.phase==='pick'?'Prepare copy for review':(state.phase==='review'||state.phase==='copying')?'Add to #'+esc(channel().name):'';
+      html+='<div class="app-confirm-actions"><button type="button" class="btn" data-bot-copy-cancel'+(state.phase==='copying'?' disabled':'')+'>Cancel</button>'
+        +(primary?'<button type="button" class="btn primary" data-bot-copy-go'+((state.phase==='pick'&&!state.channelId)||state.phase==='copying'?' disabled':'')+'>'+(state.phase==='copying'?'Adding…':primary)+'</button>':'')+'</div>';
+      card.innerHTML=html;
+      card.classList.toggle('wide',state.phase==='review'||state.phase==='copying');
+      var teamSelect=el('[data-bot-copy-team]',card), channelSelect=el('[data-bot-copy-channel]',card);
+      if(teamSelect)teamSelect.addEventListener('change',function(){ loadChannels(teamSelect.value); });
+      if(channelSelect)channelSelect.addEventListener('change',function(){ state.channelId=channelSelect.value; });
+      el('[data-bot-copy-cancel]',card).addEventListener('click',close);
+      var go=el('[data-bot-copy-go]',card);
+      if(go)go.addEventListener('click',state.phase==='pick'?review:add);
+      (go||el('[data-bot-copy-cancel]',card)).focus();
+    }
+    function readEdits(){
+      var name=el('[data-bot-copy-name]',card), text=el('[data-bot-copy-instructions]',card);
+      if(name)state.copy.name=name.value.trim();
+      if(text)state.copy.instructions=text.value.trim();
+      els('[data-bot-copy-skill]',card).forEach(function(box){ state.copy.skills[Number(box.getAttribute('data-bot-copy-skill'))].body=box.value.trim(); });
+    }
+    function loadChannels(teamId){
+      state.teamId=teamId; state.channels=[]; state.channelId=''; state.channelsLoading=true; state.error='';
+      render();
+      hubCall('GET','/v1/teams/'+teamId+'/channels').then(function(result){
+        if(state.teamId!==teamId)return;
+        state.channels=(result.channels||[]).filter(function(c){ return !hubPrivateConversation(c); });
+        state.channelId=state.channels.length?state.channels[0].id:'';
+      }).catch(function(){ if(state.teamId===teamId)state.error='Couldn\'t load that company\'s channels.'; })
+        .finally(function(){ if(state.teamId!==teamId)return; state.channelsLoading=false; render(); });
+    }
+    function review(){
+      state.phase='reviewing'; state.error=''; render();
+      api('/api/bots/generic-copy',{method:'POST',body:{name:bot.name,instructions:state.original.instructions,skills:state.original.skills,fromCompany:state.fromName}}).then(function(res){
+        if(!overlay.isConnected)return;
+        var copy=res.data && res.data.copy;
+        if(res.status!==200 || !copy)throw new Error(res.data && res.data.message || 'Mia couldn\'t prepare a proposed copy. Try again.');
+        state.copy=copy; state.phase='review'; render();
+      }).catch(function(error){
+        if(!overlay.isConnected)return;
+        state.phase='pick'; state.error=error.message; render();
+      });
+    }
+    function add(){
+      readEdits();
+      if(!state.copy.name || !state.copy.instructions){ state.error='The copy needs a name and instructions.'; render(); return; }
+      var target=team(), room=channel(), copy=state.copy, model=selectedConnectedBotModel(), createdId=null;
+      if(!model){ state.error='Connect and choose a model before adding this bot.'; render(); return; }
+      state.phase='copying'; state.error=''; render();
+      api('/api/bots',{method:'POST',body:{name:copy.name,instructions:copy.instructions,model:model,status:'running',departments:[],avatarColor:bot.avatarColor||null}}).then(function(res){
+        var created=res.data && res.data.bot;
+        if(res.status!==201 || !created)throw new Error(res.data && res.data.error || 'Couldn\'t make the copy.');
+        createdId=String(created.id);
+        return shareBotToHubChannel(target.teamId,room.id,createdId,{skills:copy.skills,role:target.role});
+      }).then(function(published){
+        close();
+        if(hubWorkspace())loadTeamBotChats();
+        showBenchToast(published ? copy.name+' was added to '+target.name+' · #'+room.name+'.'
+          : copy.name+' was added to '+target.name+' · #'+room.name+'. An admin there must approve it before it can reply.');
+      }).catch(function(error){
+        // A copy that never reached the other company is not left behind here.
+        if(createdId)api('/api/bots/'+encodeURIComponent(createdId),{method:'DELETE'}).catch(function(){});
+        if(!overlay.isConnected)return;
+        state.phase='review'; state.error='Couldn\'t add the copy: '+(error && error.message || 'try again.'); render();
+      });
+    }
+    render();
+    Promise.all([
+      hubCall('GET','/v1/me'),
+      hubCall('GET',hubPath()+'/channels/'+place.channelId+'/bots/'+place.botId+'/definition')
+    ]).then(function(results){
+      if(!overlay.isConnected)return;
+      var definition=results[1] && results[1].definition;
+      if(!definition || !definition.instructions)throw new Error('Only a bot an admin has approved can be copied.');
+      state.original={instructions:definition.instructions,skills:(definition.skills||[]).map(function(skill){ return {name:skill.name,description:skill.description||'',body:skill.body}; })};
+      (results[0].teams||[]).forEach(function(t){
+        if(t.teamId===fromTeamId){ state.fromName=String(t.name||state.fromName); return; }
+        if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Company'),role:t.membership.role});
+      });
+      if(!state.teams.length)throw new Error('You are not in another company yet.');
+      state.phase='pick';
+      loadChannels(state.teams[0].teamId);
+    }).catch(function(error){
+      if(!overlay.isConnected)return;
+      state.phase='error'; state.error=error && error.message || 'Couldn\'t load this bot.'; render();
+    });
+  }
   // A company bot is used in the channels it was shared to; its row opens
   // one of them so you can mention it there.
   function companyBotRow(bot,pinned){
@@ -5488,11 +5875,23 @@
     button.className='chat-recent-row hub-channel-row';
     button.setAttribute('data-company-bot',bot.key);
     var where=bot.channels.map(companyBotWhere).join(', ');
+    // With a private chat, the row shows it: lit while open, its latest line, unread.
+    var chat=companyBotChat(bot), state=chat && chatWs.byRoom[chat.id];
+    var chatPreview=chat ? hubRoomPreview(chat.id) : '';
+    if(chat && chatWs.activeRoomId===chat.id)button.className+=' active';
+    var unread=!!chat && chat.id!==chatWs.activeRoomId && Number(chat.unread||0)>0;
     button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
-      +'<span class="row-preview">'+esc(where)+'</span></span>';
-    button.addEventListener('click',function(){ openCompanyBot(bot); });
-    wireTeamBotPin(button,'company:'+bot.key,!!pinned);
+      +'<span class="row-preview">'+esc(chatPreview||where)+'</span></span>';
+    if(chat){
+      var line=el('.row-line1',button), more=el('.hub-channel-more',button);
+      if(line && more)more.insertAdjacentHTML('beforebegin',renderChatActivityIndicator(!!(state && state.thinking),unread));
+    }
+    button.addEventListener('click',function(){ openCompanyBotChat(bot); });
+    // Only this company's admins may take a bot out of it, even as a clean copy.
+    var items=(hubChat.membership||{}).role==='admin' ? [['Copy to another company…',function(){ copyCompanyBotToCompany(bot); }]] : [];
+    if(companyBotCanRemove(bot))items.push(['Remove from company',function(){ removeCompanyBot(bot); }]);
+    wireTeamBotPin(button,'company:'+bot.key,!!pinned,items);
     return button;
   }
   // A bot row in a team opens your private chat with it for this team.
@@ -5505,23 +5904,34 @@
     var active=!!chat && chatWs.activeRoomId===chat.id;
     var preview=chat ? hubRoomPreview(chat.id) : '';
     var button=document.createElement('button'); button.type='button';
-    button.className='chat-recent-row hub-channel-row'+(active?' active':'');
+    var sharedAway=soloBotSharedAway(bot);
+    button.className='chat-recent-row hub-channel-row'+(active?' active':'')+(sharedAway?' is-shared-away':'');
     button.setAttribute('data-team-bot-id',bot.id);
+    if(sharedAway)button.title='Shared with the company. Use it under Company bots.';
     button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
       +renderChatActivityIndicator(!!(state && state.thinking),false)
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span></span>'
       +'<span class="row-preview'+(preview?'':' empty')+'">'+(preview?esc(preview):'&nbsp;')+'</span></span>';
-    button.addEventListener('click',function(){ openTeamBotChat(bot); });
+    button.addEventListener('click',function(){ if(sharedAway)openSharedSoloBotNotice(bot); else openTeamBotChat(bot); });
     wireTeamBotPin(button,'mine:'+bot.id,!!pinned);
     return button;
   }
-  var hubSidebarSections={};
+  var hubSidebarSections={}, hubHiddenBotsOpen={};
   try { hubSidebarSections=JSON.parse(localStorage.getItem('miaHubSidebarSections')||'{}')||{}; } catch(_sectionStorageError) {}
   // The Channels + offers both ways in: start a channel, or find one.
   function openHubChannelAddMenu(anchor){
     openSidebarAddMenu(anchor,[['New channel',openNewChannelFlow],['Browse channels',openHubBrowseChannels]]);
   }
   // A section's + menu: each item is [label, run].
+  // The browser's page is a native view drawn over the app, so a sidebar menu
+  // that reached past the sidebar would be hidden behind it.
+  // A sidebar menu stays inside the sidebar: a browser tab beside it is drawn
+  // above the page, so anything past the sidebar's edge would be hidden.
+  function sidebarMenuLeft(x,width){
+    var sidebar=el('.chat-sidebar'), box=sidebar&&sidebar.getBoundingClientRect();
+    var limit=box&&box.width?box.right:window.innerWidth;
+    return Math.max(8,Math.min(x,limit-width-8));
+  }
   function openSidebarAddMenu(anchor,items){
     closeHubChannelMenu();
     var menu=document.createElement('div');
@@ -5529,7 +5939,7 @@
     menu.innerHTML=items.map(function(item,index){return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item" data-sidebar-add="'+index+'">'+esc(item[0])+'</button>';}).join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
     var box=anchor.getBoundingClientRect();
-    menu.style.left=Math.max(8,Math.min(box.left,window.innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.left=sidebarMenuLeft(box.left,menu.offsetWidth)+'px';
     menu.style.top=Math.max(8,Math.min(box.bottom+4,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
       var button=event.target.closest('[data-sidebar-add]');
@@ -5547,7 +5957,7 @@
     var box=document.createElement('div'); box.className='hub-invite-row';
     var inviter=(hubChat.members||[]).filter(function(member){return member.clerk_user_id===invite.invited_by;})[0];
     var name=invite.kind==='group' ? (invite.name && invite.name!=='Group' ? invite.name : 'a group') : '#'+invite.name;
-    box.innerHTML='<span class="hub-invite-text">'+esc((inviter ? displayNameForEmail(inviter.email) : 'A teammate')+' invited you to '+name)+'</span>'
+    box.innerHTML='<span class="hub-invite-text">'+esc((inviter ? displayNameForEmail(inviter.email) : 'A colleague')+' invited you to '+name)+'</span>'
       +'<span class="hub-invite-actions"><button type="button" class="btn hub-invite-join">Join</button><button type="button" class="btn hub-invite-decline">Decline</button></span>';
     var base=hubPath()+'/channels/'+invite.channel_id;
     el('.hub-invite-join',box).addEventListener('click',function(event){
@@ -5576,10 +5986,12 @@
   function hubChannelActions(channel){
     var me=hubChat.membership || {}, admin=me.role==='admin', regular=!hubPrivateConversation(channel), manager=admin || channel.created_by===me.clerk_user_id;
     var actions=[{id:'pin',label:channel.pinned?'Unpin':'Pin to top'}];
+    if(channel.kind==='bot')return actions;
     if(channel.kind!=='dm' && manager)actions.push({id:'invite',label:'Invite people…'});
     if(regular && manager)actions.push({id:'rename',label:'Rename…'});
     if(channel.kind!=='dm')actions.push({id:'leave',label:regular?'Leave channel':'Leave group'});
     if(regular && admin)actions.push({id:'archive',label:'Archive channel…',danger:true});
+    if(!regular && !channel.pinned)actions.push({id:'close',label:'Close conversation'});
     return actions;
   }
   function openHubChannelMenu(channel,x,y){
@@ -5590,7 +6002,7 @@
       return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item'+(item.danger?' chat-sidebar-ctx-item-danger':'')+'" data-hub-channel-action="'+item.id+'">'+esc(item.label)+'</button>';
     }).join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
-    menu.style.left=Math.max(8,Math.min(x,window.innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.left=sidebarMenuLeft(x,menu.offsetWidth)+'px';
     menu.style.top=Math.max(8,Math.min(y,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
       var button=event.target.closest('[data-hub-channel-action]');
@@ -5611,13 +6023,22 @@
         channel.pinned=!pinned; renderChatSidebar(); showBenchToast(hubActionError(error,'Couldn\'t update the pin. Try again.'));
       });
     }
-    if(id==='rename')return appPrompt(channel.name,{title:'Rename '+name,message:'Everyone in the team sees the new name.',inputLabel:'Channel name',submitLabel:'Rename',singleLine:true}).then(function(result){
+    if(id==='rename')return appPrompt(channel.name,{title:'Rename '+name,message:'Everyone in the company sees the new name.',inputLabel:'Channel name',submitLabel:'Rename',singleLine:true}).then(function(result){
       var value=result.ok ? result.text.replace(/\s+/g,' ').trim() : '';
       if(!value || value===channel.name)return;
       return hubCall('PATCH',base,{name:value}).then(refreshHubChannels).then(function(){
         if(chatWs.activeRoomId===channel.id)openHubChannel(hubChannel(channel.id));
       }).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t rename the channel. Try again.'));});
     });
+    if(id==='close'){
+      setHubConversationClosed(channel.id,Number(channel.latest_sequence||0));
+      if(chatWs.activeRoomId===channel.id){
+        var next=hubChat.channels.filter(function(c){ return !hubPrivateConversation(c); })[0];
+        if(next){ openHubChannel(next); return; }
+      }
+      renderChatSidebar();
+      return showBenchToast(name+' is closed. It comes back when someone writes, or from Direct messages +.');
+    }
     if(id==='leave')return appConfirm('Leave '+name+'? It leaves your list and stops alerting you. '+(channel.kind==='channel' && channel.visibility!=='private' ? 'You can rejoin from Browse channels.' : 'You\'ll need a new invitation to come back.'),'Leave').then(function(ok){
       if(ok)return hubCall('POST',base+'/leave').then(refreshHubChannels).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t leave the channel. Try again.'));});
     });
@@ -5704,7 +6125,7 @@
   function openHubInvitePeople(channel){
     var invited={};
     openHubListDialog({title:'Invite people to '+(hubPrivateConversation(channel) ? hubChannelTitle(channel) : '#'+channel.name),message:'They\'ll see an invitation in their sidebar and can join or decline.',
-      placeholder:'Type a teammate\'s name',empty:'Everyone in the team is already here.',load:function(){
+      placeholder:'Type a colleague\'s name',empty:'Everyone in the company is already here.',load:function(){
         return hubCall('GET',hubPath()+'/members').then(function(result){
           hubChat.members=result.members||[];
           var present=(hubChannel(channel.id)||channel).member_ids||[];
@@ -5719,7 +6140,7 @@
   function openHubDirectMessagePicker(){
     var me=(hubChat.membership||{}).clerk_user_id;
     openHubListDialog({title:'New direct message',message:'Only the two of you can see it. You can @mention your own bots there.',
-      placeholder:'Type a teammate\'s name',empty:'Invite a teammate first.',
+      placeholder:'Type a colleague\'s name',empty:'Invite a colleague first.',
       primary:function(){return {label:'New group…',run:function(){openHubGroupPicker();return 'close';}};},load:function(){
         return hubCall('GET',hubPath()+'/members').then(function(result){
           hubChat.members=result.members||[];
@@ -5744,10 +6165,10 @@
   // picked joins at once, so there is no invitation step.
   function openHubGroupPicker(){
     var me=(hubChat.membership||{}).clerk_user_id, picked=[], available=null;
-    openHubListDialog({title:'New group',message:'Pick two or more teammates. Only the group can see its messages.',
-      placeholder:'Type a teammate\'s name',empty:'Invite at least two teammates to the team first.',
+    openHubListDialog({title:'New group',message:'Pick two or more colleagues. Only the group can see its messages.',
+      placeholder:'Type a colleague\'s name',empty:'Invite at least two colleagues to the company first.',
       primary:function(){
-        var label=available!==null && available<2 ? 'Needs 2+ teammates' : picked.length<2 ? 'Pick at least 2 people' : 'Start group ('+(picked.length+1)+' people)';
+        var label=available!==null && available<2 ? 'Needs 2+ colleagues' : picked.length<2 ? 'Pick at least 2 people' : 'Start group ('+(picked.length+1)+' people)';
         return {label:label,disabled:picked.length<2,run:function(){
           return hubCall('POST',hubPath()+'/groups',{id:window.MiaHubChat.id(),member_ids:picked.slice()}).then(function(result){
             return refreshHubChannels().then(function(){openHubChannel(hubChannel(result.channel.id) || result.channel);return 'close';});
@@ -5991,7 +6412,7 @@
       return membership ? {id:membership.clerk_user_id,name:displayNameForEmail(membership.email || currentUser) || membership.email || 'You'} : null;
     },
     channels:function(){
-      return hubChat.channels.filter(function(channel){return channel.kind!=='dm';}).map(function(channel){return {id:channel.id,name:hubChannelTitle(channel)};});
+      return hubChat.channels.map(function(channel){return {id:channel.id,name:hubChannelTitle(channel),private:hubPrivateConversation(channel)};});
     },
     activeChannelId:function(){ return hubChannel(chatWs.activeRoomId) ? chatWs.activeRoomId : null; },
     toast:function(text){ showBenchToast(text); },
@@ -6008,7 +6429,7 @@
     leftSession:function(){ if(localBrowserState.open)setBrowserSidebarOpen(browserSidebarWanted()); applyLeftPane(); renderChatHeaderBar(); },
     channelPeople:function(channelId){
       var state=chatRoomState(channelId), members=(state.hubMembers||[]).length ? state.hubMembers : (hubChat.members||[]);
-      return members.map(function(member){return {id:member.clerk_user_id,name:member.display_name||displayNameForEmail(member.email)||member.email||'Teammate'};});
+      return members.map(function(member){return {id:member.clerk_user_id,name:member.display_name||displayNameForEmail(member.email)||member.email||'Colleague'};});
     },
     sharedSession:function(active){ api('/api/browser/shared-session',{method:'POST',body:{active:active===true}}).catch(function(){}); },
     send:function(channelId,text){
@@ -6414,6 +6835,7 @@
       nativeProgress: !!(event.metadata && event.metadata.progress === true),
       nativeDiagnostic: !!(event.metadata && event.metadata.diagnostic === true),
       askBeforeDo: event.metadata && event.metadata.askBeforeDo && typeof event.metadata.askBeforeDo === 'object' ? event.metadata.askBeforeDo : null,
+      reactions: event.metadata && event.metadata.reactions && typeof event.metadata.reactions === 'object' ? event.metadata.reactions : null,
       nativeEvent: event
     };
   }
@@ -7032,9 +7454,10 @@
       : (!shown.length ? 'Nothing matches.' : ''));
     list.innerHTML = shown.map(function(item){
       var meta = item.kind === 'app' ? appLinkHost(item.url) : (item.from ? item.from : 'You') + ' \u00b7 ' + window.MiaArtifactsPage.when(item.modifiedAt);
-      return '<button type="button" data-composer-artifact="' + esc(item.id) + '"><em>' + esc(item.kind === 'app' ? 'App' : item.type || '') + '</em>' +
+      return '<button type="button" data-composer-artifact="' + esc(item.id) + '"><em' + (item.kind === 'app' ? ' data-site-url="' + esc(item.url) + '"' : '') + '>' + esc(item.kind === 'app' ? 'App' : item.type || '') + '</em>' +
         '<span>' + esc(item.name) + '</span><small>' + esc(meta) + '</small></button>';
     }).join('');
+    fillSiteIcons(list);
   }
   function wireComposerPlusMenu(fileInput, staged){
     var menu = el('#ccPlusMenu'), picker = el('#ccArtifactsMenu');
@@ -7090,7 +7513,7 @@
     var label = app ? app.name + ' \u00b7 ' + appLinkHost(app.url) : (file.name || 'file') + ' \u00b7 ' + humanFileSize(file.size);
     strip.style.display = '';
     strip.innerHTML = (app && app.local ? '<div class="cc-attach-note" role="note"><strong>Local app sharing</strong>' +
-        '<span>You\u2019re sharing a local app. Changes aren\u2019t synced between you and your team yet.</span>' +
+        '<span>You\u2019re sharing a local app. Changes aren\u2019t synced between you and your company yet.</span>' +
         '<span>Shared editing is coming soon.</span></div>' : '') +
       '<div class="cc-attach-chip">' + preview +
       '<span class="cc-attach-name">' + esc(label) + '</span>' +
@@ -7106,7 +7529,7 @@
   function chatAttachmentProblem(file){
     var type = String(file.type || '').toLowerCase();
     var team = inHubRoom();
-    if(CHAT_PAGE_TYPES.indexOf(type) !== -1 && team) return 'Web pages can\u2019t be sent to a team yet. Save it as a PDF or image to share it.';
+    if(CHAT_PAGE_TYPES.indexOf(type) !== -1 && team) return 'Web pages can\u2019t be sent to a company yet. Save it as a PDF or image to share it.';
     if(CHAT_ATTACHMENT_TYPES.indexOf(type) === -1 && (team || CHAT_PAGE_TYPES.indexOf(type) === -1)) return 'Choose an image (PNG, JPEG, GIF, WebP) or a PDF.';
     var limit = team ? 8 : 25;
     if(file.size > limit * 1024 * 1024) return 'Files must be ' + limit + ' MB or smaller.';
@@ -7299,6 +7722,9 @@
     var deleteLabel = el('#chatSidebarCtxDeleteLabel');
     var scroll = el('.chat-sidebar-scroll');
     if(!menu || !pinItem || !scroll) return;
+    // With the browser open the sidebar docks above the chat pane, so a menu left
+    // inside the pane opens underneath the sidebar it belongs to.
+    document.body.appendChild(menu);
     var openEntry = null;
 
     function item(action){ return el('[data-sidebar-action="' + action + '"]', menu); }
@@ -7348,7 +7774,7 @@
       setSeparator('hide', hasCopy && hasHide);
       menu.hidden = false;
       var w = menu.offsetWidth, h = menu.offsetHeight;
-      menu.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + 'px';
+      menu.style.left = sidebarMenuLeft(x, w) + 'px';
       menu.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + 'px';
     }
 
@@ -7485,7 +7911,7 @@
 
   // The blank tab: the Mia dot logo, "Mia Browser", and "Mia suggests" cards,
   // three next things to ask built from the bots' latest replies, each credited
-  // to the bot it builds on. Clicking one puts it in Mia's composer to edit and send.
+  // to the bot it builds on. Clicking one sends it to that bot.
   var BROWSER_HOME_GO = '<svg class="local-browser-suggest-next-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>';
   // A diamond of dots; each dot's delay grows with its distance from the
   // center, so the logo fills in from the middle out.
@@ -7522,7 +7948,7 @@
         '</span>'
       : '';
     return '<button type="button" class="local-browser-suggest-next-item"' + (textColor ? ' style="--bot:' + esc(textColor) + '"' : '') +
-      ' data-browser-suggest-next="' + esc(item.text) + '" title="' + esc(item.text) + '">' +
+      ' data-browser-suggest-next="' + esc(item.text) + '"' + (item.botId ? ' data-browser-suggest-bot="' + esc(item.botId) + '"' : '') + ' title="' + esc(item.text) + '">' +
       who + '<span class="local-browser-suggest-next-text">' + esc(item.text) + '</span>' + BROWSER_HOME_GO + '</button>';
   }
   var browserSuggestNextRequest = 0;
@@ -7544,20 +7970,23 @@
       if(request === browserSuggestNextRequest) wrap.hidden = true;
     });
   }
-  function askMiaFromBrowserSuggestion(text){
-    var opened = chatWs.gatewayAgent ? navigateToAgentChat(chatWs.gatewayAgent, true) : null;
-    Promise.resolve(opened).then(function(){
+  // A card belongs to the bot that proposed it: open that bot's chat and send it there.
+  function askBotFromBrowserSuggestion(text, botId){
+    var agent = botId
+      ? (chatWs.allAgents || []).filter(function(item){ return item && String(item.id) === String(botId); })[0]
+      : (hubWorkspace() ? null : chatWs.gatewayAgent);
+    if(!agent){ showBenchToast('That bot is no longer here.'); return; }
+    Promise.resolve(navigateToAgentChat(agent, true)).then(function(){
       var input = el('#ccInput');
       if(!input) return;
       input.value = text;
       input.dispatchEvent(new Event('input', {bubbles:true}));
-      input.focus();
-      input.setSelectionRange(input.value.length, input.value.length);
+      submitComposerDraft();
     });
   }
   document.addEventListener('click', function(event){
     var button = event.target && event.target.closest ? event.target.closest('[data-browser-suggest-next]') : null;
-    if(button) askMiaFromBrowserSuggestion(button.getAttribute('data-browser-suggest-next'));
+    if(button) askBotFromBrowserSuggestion(button.getAttribute('data-browser-suggest-next'), button.getAttribute('data-browser-suggest-bot'));
   });
   // Refresh whenever the blank tab comes into view, however the browser got
   // there (opened, restored at startup, last page closed). The server caches
@@ -8078,8 +8507,12 @@
   }
 
   function automationsDetailHtml(row, automation, bot){
+    // The side stays short so the title keeps its width; what needs the
+    // person shows in full under it, with a way to hand it to Mia.
     var side = row.status === 'running' ? '<span class="automations-live" aria-hidden="true"></span>Running now'
-      : row.status === 'needs' ? row.detail : row.status === 'paused' ? 'Paused' : '';
+      : row.status === 'needs' ? 'Needs you' : row.status === 'paused' ? 'Paused' : '';
+    var needs = row.status === 'needs' && row.detail ? '<div class="automations-needs"><p>' + esc(row.detail) + '</p>' +
+      '<button type="button" class="styled-btn-secondary" id="automationsFix">Fix with Mia</button></div>' : '';
     var body;
     var checklist = row.checklist;
     if(row.steps.length){
@@ -8108,7 +8541,7 @@
     var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
     return '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
       '<div class="automations-detail-sub">' + esc([row.schedule, row.botName].filter(Boolean).join(' · ')) + '</div></div>' +
-      '<span class="automations-row-side">' + side + '</span></div>' + body + last +
+      '<span class="automations-row-side">' + side + '</span></div>' + needs + body + last +
       '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">' + (row.steps.length ? 'Edit' : 'Add steps') + '</button></div>';
   }
 
@@ -8156,6 +8589,39 @@
     });
     var edit = el('#automationsEdit', body);
     if(edit && found) edit.addEventListener('click', function(){ openAutomationDetail(found.bot.id, found.automation.id); });
+    var fix = el('#automationsFix', body);
+    if(fix && found) fix.addEventListener('click', function(){ fixAutomationWithMia(row, fix); });
+  }
+
+  // What the automation page knows about a stuck automation, sent to Mia as
+  // a message in her chat so she can find the cause and fix it.
+  function automationFixMessage(row){
+    var steps = (row.steps || []).slice(0, 12).map(function(step, index){
+      return (index + 1) + '. ' + String(step).replace(/\s+/g, ' ').slice(0, 300);
+    });
+    return ['Fix this automation so it can run again.',
+      'Automation: ' + row.name + ' (bot: ' + (row.botName || 'unknown') + (row.schedule ? ', ' + row.schedule : '') + '; bot id ' + row.botId + ', automation id ' + row.automationId + ')',
+      'Problem: ' + String(row.detail || '').replace(/\s+/g, ' ')]
+      .concat(steps.length ? ['Steps:'].concat(steps) : [])
+      .concat(['Find the cause and fix it, for example by reconnecting what is missing or changing the automation. If something only I can do, tell me exactly what.'])
+      .join('\n');
+  }
+  function fixAutomationWithMia(row, button){
+    var text = automationFixMessage(row);
+    if(button) button.disabled = true;
+    var mia = (chatWs.nativeConversations || []).filter(isNativeMiaConversation)[0];
+    var ready = mia ? Promise.resolve(chatWs.nativeConversations) : ensureNativeMiaConversation(chatWs.nativeConversations || []);
+    return ready.then(function(list){
+      mia = (list || []).filter(isNativeMiaConversation)[0];
+      if(!mia) throw new Error('Mia\'s chat is not available right now. Try again.');
+      if(list !== chatWs.nativeConversations) chatWs.nativeConversations = list;
+      if(window.MiaTabStrip) window.MiaTabStrip.mix.open('chat');
+      return Promise.resolve(loadChatRoom(mia.id, 'agent', 'Mia')).then(function(){
+        return sendNativeConversationEvent(text, null, null, mia.id);
+      });
+    }).catch(function(error){
+      showToast(error && error.message || 'Could not reach Mia. Try again.');
+    }).finally(function(){ if(button) button.disabled = false; });
   }
 
   // Automations tabs: the board is the first tab; each automation opened
@@ -8381,6 +8847,35 @@
     });
   }
 
+  // Your own saved apps show the icon their site has; the text label stays until one arrives.
+  var siteIcons = {}, siteIconRequests = {};
+  function showSiteIcon(thumb, icon){
+    var image = document.createElement('img');
+    image.alt = '';
+    image.src = icon;
+    thumb.textContent = '';
+    thumb.appendChild(image);
+    thumb.classList.add('has-site-icon');
+  }
+  function fillSiteIcons(root){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!root || !browser || !browser.command) return;
+    Array.prototype.forEach.call(root.querySelectorAll('[data-site-url]'), function(thumb){
+      var url = thumb.getAttribute('data-site-url');
+      if(siteIcons[url]){ showSiteIcon(thumb, siteIcons[url]); return; }
+      if(!siteIconRequests[url]){
+        siteIconRequests[url] = Promise.resolve(browser.command({action: 'siteIcon', url: url})).catch(function(){ return null; }).then(function(res){
+          var icon = res && /^data:image\//i.test(res.icon || '') ? res.icon : '';
+          if(icon) siteIcons[url] = icon;
+          // A site that was off or had no icon gets another try next time the list opens.
+          delete siteIconRequests[url];
+          return icon;
+        });
+      }
+      siteIconRequests[url].then(function(icon){ if(icon && thumb.isConnected) showSiteIcon(thumb, icon); });
+    });
+  }
+
   function renderArtifactsPage(){
     var overlay = el('#artifactsOverlay');
     if(!overlay) return;
@@ -8393,6 +8888,7 @@
     if(chips) chips.innerHTML = window.MiaArtifactsPage.chipsHtml(artifactsPage.items, artifactsPage.filter, esc);
     var body = el('#artifactsBody');
     if(body) body.innerHTML = window.MiaArtifactsPage.bodyHtml(Object.assign({}, artifactsPage, {recentIds: recentArtifactIds()}), esc);
+    fillSiteIcons(body);
   }
 
   // Files open from the Mia folder (the browser previews nothing outside
@@ -8574,6 +9070,30 @@
     select: function(id){ appsPage.activeTab = id === 'page' || appsTabByKey(id) ? id : 'page'; if(id === 'page') appsPage.tabClosed = false; renderAppsPage(); },
     render: notifyAppsTabs,
   });
+  function stopLocalServer(id){
+    var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0];
+    if(!link) return;
+    var path = '/api/apps/links/' + encodeURIComponent(id);
+    var address = String(link.url).replace(/^https?:\/\//, '').replace(/\/$/, '');
+    api(path + '/server').then(function(res){
+      var server = res.data || {};
+      if(res.status !== 200) throw new Error('lookup');
+      if(server.protected){ showBenchToast('Mia needs ' + address + ' to run, so it can’t be stopped here.'); return; }
+      if(!server.found){ loadApps(); return; }
+      return appConfirm(server.name + ' is running ' + address + '. Stop it? Anything unsaved there may be lost.', 'Stop').then(function(ok){
+        if(!ok) return;
+        return api(path + '/stop', {method:'POST', body:{pids:server.pids}}).then(function(stop){
+          var result = stop.data || {};
+          if(stop.status !== 200) throw new Error('stop');
+          showBenchToast(result.stopped ? address + ' stopped.' : result.reason === 'denied'
+            ? 'Mia isn’t allowed to stop that program. Close it where it’s running.'
+            : result.reason === 'changed' ? 'A different program is using ' + address + ' now. Check it and try again.'
+            : address + ' is still running. Close it where it’s running.');
+          loadApps();
+        });
+      });
+    }).catch(function(){ showBenchToast('Could not stop ' + address + '. Try again.'); });
+  }
   function appsTabByKey(key){ return appsPage.tabs.filter(function(tab){ return tab.key === key; })[0] || null; }
   function closeAppTab(key){
     appsPage.activeTab = window.MiaAppsPage.nextTabAfterClose(appsPage, key);
@@ -8676,7 +9196,7 @@
       appsPage.catalogError = '';
       checkAppsScans(teamId);
     }).catch(function(){
-      if(teamId === appsTeamId()) appsPage.catalogError = "Your team's apps could not be loaded. Check your connection, then try again.";
+      if(teamId === appsTeamId()) appsPage.catalogError = "Your company's apps could not be loaded. Check your connection, then try again.";
     });
   }
   function clearAppsScanTimer(){ if(appsScanTimer){ window.clearTimeout(appsScanTimer); appsScanTimer = null; } }
@@ -8890,7 +9410,7 @@
           });
         },
         confirmBundle: function(files){
-          return appConfirm('Publish these ' + files.length + ' files to the team?\n\n' + files.join('\n'), 'Publish files', {fileList: true});
+          return appConfirm('Publish these ' + files.length + ' files to the company?\n\n' + files.join('\n'), 'Publish files', {fileList: true});
         },
         buildBundle: function(appId, sha256){
           return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name, sha256: sha256})}).then(function(res){
@@ -8926,7 +9446,7 @@
   function archiveTeamApp(id){
     var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
     if(!app) return;
-    appConfirm('Remove "' + app.name + '" from your team? Nobody on your team will be able to open it from here.', 'Remove').then(function(yes){
+    appConfirm('Remove "' + app.name + '" from your company? Nobody on your company will be able to open it from here.', 'Remove').then(function(yes){
       if(!yes) return null;
       return hubCall('DELETE', '/v1/teams/' + teamId + '/apps/' + id, {}).then(function(){ return loadAppsCatalog(teamId); }).then(renderAppsPage);
     }).catch(function(error){ showBenchToast(window.MiaAppsPage.errorMessage(error, 'That did not work. Try again.')); });
@@ -8961,6 +9481,7 @@
       'data-app-archive': archiveTeamApp,
       'data-app-preview': previewTeamApp,
       'data-app-note-dismiss': function(key){ var tab = appsTabByKey(key); if(tab){ tab.note = ''; renderAppsPage(); } },
+      'data-app-stop-link': stopLocalServer,
       'data-app-open-link': function(id){ var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0]; if(link) openAppAddress(link.url); },
       'data-app-reload': function(key){ var tab = appsTabByKey(key), desktop = appsDesktop(); if(tab && desktop){ tab.status = 'loading'; desktop.reload(key).catch(function(){}); renderAppsPage(); } },
     };
@@ -9392,11 +9913,23 @@
     return [{id:'new-chat', name:'New chat'}]
       .concat(hubWorkspace() ? [{id:'new-channel', name:'New channel'}] : [])
       .concat([{id:'new-automation', name:'New automation'}])
-      .concat(hubWorkspace() ? [] : [{id:'new-bot', name:'New bot'}])
+      .concat([{id:'new-bot', name:'New bot'}])
       .concat([{id:'new-app', name:'New app'}, {id:'new-artifact', name:'Create an artifact'}])
       .concat(browser && browser.command ? [{id:'new-tab', name:'New browser tab'}] : []);
   }
+  // The "Start something" list opens from a blank tab: a new browser tab reuses it,
+  // and anything else leaves it behind, so picking never adds a second empty tab.
   function runLocalBrowserStart(id){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!browser || !browser.command) return startFromBrowser(id, false);
+    Promise.resolve(browser.command({action:'state'})).catch(function(){ return null; }).then(function(state){
+      var tabs = state && state.tabs || [];
+      var blank = tabs.filter(function(tab){ return tab.id === state.activeId && !tab.url && !tab.groupId; })[0];
+      if(blank && id !== 'new-tab' && tabs.length > 1) browser.command({action:'close', id:blank.id}).catch(function(){});
+      startFromBrowser(id, !!blank);
+    });
+  }
+  function startFromBrowser(id, onBlankTab){
     if(id === 'new-automation'){
       runToolsAction('automations');
       // After this click finishes, or it would close the menu the button opens.
@@ -9407,8 +9940,8 @@
       draftInChat(window.MiaArtifactsPage.CREATE_PROMPT);
     } else if(id === 'new-tab'){
       openWebBrowserTool();
-      window.miaDesktop.browser.command({action:'new'}).then(function(state){
-        followBrowserTab(state && !state.error ? state : null);
+      (onBlankTab ? Promise.resolve(null) : window.miaDesktop.browser.command({action:'new'})).then(function(state){
+        if(state) followBrowserTab(state.error ? null : state);
         var input = el('#localBrowserUrl');
         if(input) input.focus();
       }).catch(function(){});
@@ -9482,7 +10015,7 @@
     var messages = (state && state.messages || []).filter(function(m){ return m && m.id && !m.system && !m.deleted; }).map(function(m){
       var signed = m.hubAuthor ? {agent:m.hubAuthor, text:m.body} : parseSignedHumanBody(m.body);
       var email = signed.agent || '';
-      var author = m.nativeAgentName || (email ? (email.toLowerCase() === String(currentUser || '').toLowerCase() ? 'You' : displayNameForEmail(email)) : '');
+      var author = messageBotIdentity(m).name || (email ? (email.toLowerCase() === String(currentUser || '').toLowerCase() ? 'You' : displayNameForEmail(email)) : '');
       return {id:String(m.id), text:String(email ? signed.text : m.body || ''), author:author};
     }).reverse();
     return {roomId:chatWs.activeRoomId, name:chatWs.activeLabel || 'this chat', messages:messages};
@@ -9635,12 +10168,8 @@
     }
     if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.onOpen){
       window.miaDesktop.browser.onOpen(function(action){
-        // In the chat view, Cmd/Ctrl+T opens a new chat. A chat has no tab, so
+        // Cmd/Ctrl+T opens a browser tab from anywhere. A chat has no tab, so
         // Cmd/Ctrl+W has nothing to close there.
-        if(chatViewShowing() && action === 't'){
-          runToolsAction('new-chat');
-          return;
-        }
         if(action === 'w') return;
         openWebBrowserTool();
         window.setTimeout(function(){
@@ -10426,29 +10955,6 @@
     return agentHasLiveWork(agent) ? [{title: 'Preparing a response', transient: true}] : [];
   }
 
-  function roomHasLocalTypingActivity(roomId){
-    return !!(roomId && localChatTyping.active && localChatTyping.roomId === roomId);
-  }
-
-  function setLocalChatTypingActivity(active){
-    if(inHubRoom()){ if(active) sendHubTyping(); return; }
-    if(localChatTyping.timer){
-      clearTimeout(localChatTyping.timer);
-      localChatTyping.timer = null;
-    }
-    var nextRoomId = active ? chatWs.activeRoomId : null;
-    var changed = localChatTyping.active !== !!active || localChatTyping.roomId !== nextRoomId;
-    localChatTyping.active = !!active;
-    localChatTyping.roomId = nextRoomId;
-    if(active){
-      localChatTyping.timer = setTimeout(function(){
-        localChatTyping.timer = null;
-        setLocalChatTypingActivity(false);
-      }, 2500);
-    }
-    if(changed) renderChatSidebar();
-  }
-
   function roomHasModelResponseActivity(roomId){
     if(!roomId) return false;
     var state = chatWs.byRoom && chatWs.byRoom[roomId];
@@ -10457,7 +10963,6 @@
 
   function sidebarEntryHasActivity(entry){
     if(!entry) return false;
-    if(roomHasLocalTypingActivity(entry.roomId)) return true;
     if(roomHasModelResponseActivity(entry.roomId)) return true;
     return activeAutomationRunsForRoom(entry.roomId).length > 0;
   }
@@ -10758,7 +11263,7 @@
     if((roomId === chatWs.activeRoomId && appInForeground()) || !desktopNotificationsEnabled()) return;
     if(message && message.hubMessage){
       var channel = hubChannel(roomId);
-      var sender = message.nativeAgentName || displayNameForEmail(message.hubAuthor || '') || 'Someone';
+      var sender = messageBotIdentity(message).name || displayNameForEmail(message.hubAuthor || '') || 'Someone';
       var drive = googleDriveMessageDisplay(message.body);
       var body = drive.text.trim() || (drive.files.length ? 'Shared a Google Drive file' : message.hubFile ? 'Sent an image' : '');
       showDesktopNotification(roomId, sender + (channel && !hubPrivateConversation(channel) && channel.name ? ' in #' + channel.name : ''), excerpt(body.replace(/\s+/g, ' '), 120) || 'New message');
@@ -11148,6 +11653,22 @@
   // "New Agent" while the live roster correctly says "Researcher X". Use
   // the current room roster only when there is exactly one non-Mia agent to
   // avoid guessing in a multi-agent department or home room.
+  // Who a bot's message is from. A message saves the bot's name as it was when sent, so
+  // its sender ID finds the bot as it is now. A bot that no longer exists keeps its saved
+  // name. Mia's replies are left as they are: her name depends on the conversation.
+  function messageBotRecords(){
+    var lists = [chatWs.allAgents, typeof benchAgents !== 'undefined' ? benchAgents : null, chatWs.myBotRecords, typeof hubChat !== 'undefined' ? hubChat.companyBots : null];
+    return lists.reduce(function(all, list){ return Array.isArray(list) ? all.concat(list) : all; }, []);
+  }
+  function messageBotIdentity(m){
+    var saved = (m && m.nativeAgentName) || null;
+    var sender = String((m && m.sender) || '').replace(/^hub-bot:/, '');
+    if(!sender || sender === 'gateway') return {name: saved, id: saved === 'Mia' ? 'gateway' : null, color: null};
+    var record = messageBotRecords().filter(function(item){
+      return item && item.name && ([item.id, item.agentId].some(function(id){ return id && String(id) === sender; }) || (item.botIds || []).indexOf(sender) >= 0);
+    })[0];
+    return record ? {name: record.name, id: sender, color: record.avatarColor || null} : {name: saved, id: null, color: null};
+  }
   function currentAgentDisplayNameForMessage(name){
     var parsed = canonicalAgentDisplayName(name);
     if(isMiaOrchestrator(parsed)) return 'Mia';
@@ -11200,6 +11721,16 @@
         timezone: automationCardTimezone()
       });
     }
+    if(window.MiaInstructionProposalCard && m.nativeEvent){
+      var instructionProposal = m.nativeEvent.metadata && m.nativeEvent.metadata.instructionProposal;
+      var instructionState = instructionCardStates[m.nativeEvent.id] || {};
+      html += window.MiaInstructionProposalCard.html(m, {
+        esc: esc,
+        canEdit: canReviewInstructionProposal(m, instructionProposal),
+        busy: !!instructionState.busy,
+        error: instructionState.error || ''
+      });
+    }
     if(window.MiaAppCard && m.nativeEvent){
       var miaCardState = miaAppCardStates[m.nativeEvent.id] || {};
       html += window.MiaAppCard.html(m, {esc: esc, busy: !!miaCardState.busy, error: miaCardState.error || ''});
@@ -11210,7 +11741,17 @@
   // Unsaved edits, busy state and errors for bot automation cards, by event
   // id, so a thread re-render for a new message keeps what the user typed.
   var automationCardStates = {};
+  var instructionCardStates = {};
   var miaAppCardStates = {};
+
+  function canReviewInstructionProposal(message, proposal){
+    if(!proposal || !message || !message.nativeEvent || !currentUser) return false;
+    var event = message.nativeEvent;
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === event.conversationId; })[0];
+    return !!conversation && conversation.type === 'bot'
+      && String(conversation.createdBy || '').toLowerCase() === String(currentUser).toLowerCase()
+      && String(event.senderId || '') === String(proposal.botId || '');
+  }
 
   function automationCardTimezone(){
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch(_) { return ''; }
@@ -11261,10 +11802,58 @@
     });
   }
 
+  function answerInstructionCard(card, decision){
+    if(decision !== 'accept' && decision !== 'dismiss') return;
+    var eventId = card.getAttribute('data-instruction-proposal');
+    var message = automationCardMessage(eventId);
+    var proposal = message && message.nativeEvent.metadata && message.nativeEvent.metadata.instructionProposal;
+    if(!proposal || proposal.status !== 'pending' || !canReviewInstructionProposal(message, proposal)) return;
+    var cardState = instructionCardStates[eventId] = instructionCardStates[eventId] || {};
+    if(cardState.busy) return;
+    cardState.busy = true;
+    cardState.error = '';
+    renderChatThread();
+    api('/api/bots/' + encodeURIComponent(proposal.botId) + '/instruction-proposals/' + encodeURIComponent(eventId), {
+      method: 'POST', body: {decision: decision}
+    }).then(function(res){
+      cardState.busy = false;
+      if(res.status === 200 && res.data && res.data.event){
+        delete instructionCardStates[eventId];
+        applyNativeEvent(res.data.event);
+        return;
+      }
+      if(res.status === 409){
+        delete instructionCardStates[eventId];
+        if(res.data && res.data.event){ applyNativeEvent(res.data.event); return; }
+        if(res.data && res.data.proposal){
+          var answered = Object.assign({}, message.nativeEvent, {
+            metadata: Object.assign({}, message.nativeEvent.metadata, {instructionProposal: res.data.proposal})
+          });
+          applyNativeEvent(answered);
+          return;
+        }
+        cardState = instructionCardStates[eventId] = {error: 'These instructions changed. Ask the bot for a fresh update.'};
+      } else {
+        cardState.error = 'That didn’t save. Try again.';
+      }
+      renderChatThread();
+    }).catch(function(){
+      cardState.busy = false;
+      cardState.error = 'That didn’t save. Try again.';
+      renderChatThread();
+    });
+  }
+
   (function(){
     var thread = el('#chatThread');
     if(!thread) return;
     thread.addEventListener('click', function(e){
+      var instructionDecision = e.target.closest('[data-instruction-decision]');
+      if(instructionDecision){
+        var instructionCard = instructionDecision.closest('[data-instruction-proposal]');
+        if(instructionCard) answerInstructionCard(instructionCard, instructionDecision.getAttribute('data-instruction-decision'));
+        return;
+      }
       var decision = e.target.closest('[data-automation-decision]');
       if(decision){
         var card = decision.closest('[data-automation-proposal]');
@@ -11701,6 +12290,30 @@
       refresh:function(){if(activeWorkspaceKey===workspace && chatWs.activeRoomId===roomId)return hubBotsChanged(roomId);}},
       button.getAttribute('data-bot-id'),Number(button.getAttribute('data-version')),button.getAttribute('data-hub-admission-action'),button);
   });
+  // The bots this room can @: a company channel's own bots, else Mia's bots.
+  function roomMentionBots(){
+    if(hubWorkspace()){
+      var state = chatWs.byRoom[chatWs.activeRoomId] || {};
+      return (state.hubBots || []).map(function(bot){ return {id:String(bot.id), name:String(bot.name || ''), color:normalizeAgentAvatarColor(bot.avatar_color)}; });
+    }
+    return (chatWs.allAgents || []).filter(function(agent){ return agent && agent.id !== 'gateway'; })
+      .map(function(agent){ return {id:String(agent.id), name:String(agent.name || ''), color:normalizeAgentAvatarColor(agent.avatarColor)}; });
+  }
+  // "@Name" for a bot in this room shows that bot's Mote, in its color.
+  // Works on rendered text: only a mention at a word start outside a tag.
+  function withMentionChips(html){
+    var bots = roomMentionBots().filter(function(bot){ return bot.name; })
+      .sort(function(a, b){ return b.name.length - a.name.length; });
+    if(!bots.length) return html;
+    // One pass over every name, longest first, so "@Admin Bot" never also
+    // matches a bot called "Admin" inside the icon it just became.
+    var names = bots.map(function(bot){ return esc(bot.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+    var pattern = new RegExp('(^|[\\s>(])@(' + names.join('|') + ')(?![\\w-])', 'gi');
+    return html.replace(pattern, function(_match, before, name){
+      var bot = bots.filter(function(item){ return esc(item.name).toLowerCase() === name.toLowerCase(); })[0];
+      return before + '<span class="chat-msg-mention">' + agentAvatarHtml(bot.name, bot.id, 16, null, bot.color) + '@' + name + '</span>';
+    });
+  }
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
     if(m.system){
@@ -11718,7 +12331,11 @@
         return '<div class="chat-msg-system twf-approval-row">' + window.MiaTeamWorkflowsUi.channelCardHtml(m.hubWorkflowApproval) + '</div>';
       }
       var systemAvatar = '';
-      if(m.member && m.member.kind === 'agent'){
+      // A company channel's "<bot> joined" line has that bot's id as its own.
+      var joinedBot = m.hubBotJoined ? roomMentionBots().filter(function(bot){ return bot.id === m.hubBotJoined; })[0] : null;
+      if(joinedBot){
+        systemAvatar = agentAvatarHtml(joinedBot.name, joinedBot.id, 24, null, joinedBot.color, false);
+      } else if(m.member && m.member.kind === 'agent'){
         systemAvatar = agentAvatarHtml(m.member.label, m.member.id, 24, null, null, false);
       } else if(m.member && m.member.kind === 'human'){
         systemAvatar = humanAvatarContent(m.member.label);
@@ -11769,7 +12386,8 @@
       // parseSignedBody's regex and pass through untouched.
       var signed = chatWs.activeKind === 'department' || chatWs.activeKind === 'dm' || chatWs.activeKind === 'agent' || chatWs.activeKind === 'home';
       var parsed = signed && !m.hubMessage ? parseSignedBody(botBody) : {agent: null, text: botBody};
-      name = currentBotNameForSender(m.sender) || m.nativeAgentName || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
+      var bot = messageBotIdentity(m);
+      name = bot.name || currentAgentDisplayNameForMessage(parsed.agent || chatWs.activeLabel || 'agent');
       mark = esc(benchMark(name));
       tag = agentTagFor(name);
       text = stripLegacyBackgroundStatus(parsed.text);
@@ -11781,7 +12399,7 @@
     var markCol = visuallyGrouped
       // The group header already shows the time; follow-ups only show a send status.
       ? '<span class="chat-msg-mark-time">' + (m.pending || m.sendFailed ? timeText : '') + '</span>'
-      : '<span class="chat-msg-mark' + (isHuman ? '' : ' agent') + (!isHuman && isMiaOrchestrator(name, name === 'Mia' ? 'gateway' : null) ? ' mia-mark-host' : '') + '">' + (isHuman ? mark : agentAvatarHtml(name, name === 'Mia' ? 'gateway' : null, 28, null, null, true)) + '</span>';
+      : '<span class="chat-msg-mark' + (isHuman ? '' : ' agent') + (!isHuman && isMiaOrchestrator(name, name === 'Mia' ? 'gateway' : null) ? ' mia-mark-host' : '') + '">' + (isHuman ? mark : agentAvatarHtml(name, name === 'Mia' ? 'gateway' : bot.id, 28, null, bot.color, true)) + '</span>';
     // Message actions use the shared context menu, which reads the row's
     // existing permission attributes instead of recomputing them on click.
     var showThreadAction = !opts.inThread && !m.pending && !m.sendFailed && !(m.hubMessage && (m.hubLocal || m.deleted));
@@ -11796,6 +12414,7 @@
     var messageHtml = text ? (liveProgress
       ? '<span class="chat-thinking-shimmer">' + esc(text) + '</span>'
       : (isPreReasoning ? chatPreReasoningHtml(text, compactBrowserMessage) : (isLongMessage ? chatExpandableMessageHtml(text, false, compactBrowserMessage) : mdLite(text)))) : '';
+    if(text && !liveProgress && !isPreReasoning) messageHtml = withMentionChips(messageHtml);
     var mediaHtml = '';
     if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
@@ -11803,7 +12422,7 @@
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
     var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
       (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
-      '<span class="chat-msg-time">' + timeText + '</span></div>';
+      '<span class="chat-msg-time"' + (m.pending || m.sendFailed || !m.ts ? '' : ' data-ts="' + Number(m.ts) + '"') + '>' + timeText + '</span></div>';
     // A background task's live activity line ("✓ research done, building
     // table") — muted so a thread of them reads as a progress feed, not a
     // stack of full agent messages.
@@ -11819,7 +12438,7 @@
       : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (opts.footerHtml || '') + '</div></div>';
+      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, currentUser, esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '') + '</div></div>';
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed
@@ -11903,7 +12522,7 @@
     return [draft.role, draft.output].filter(Boolean).join('\n\n');
   }
 
-  // The skills library, shared by the setup card, the bot editor and Settings.
+  // The skills library, shared by the setup card, the bot editor and the Skills pane.
   var skillsLibrary = null;
   function loadSkillsLibrary(){
     return api('/api/skills').then(function(res){
@@ -11915,7 +12534,7 @@
   }
   function skillPickerRowsHtml(selected){
     var skills = skillsLibrary ? skillsLibrary.skills : [];
-    if(!skills.length) return '<div class="skill-picker-empty">' + (skillsLibrary ? 'No skills yet. Add them in Settings, under Skills.' : 'Loading skills…') + '</div>';
+    if(!skills.length) return '<div class="skill-picker-empty">' + (skillsLibrary ? 'No skills yet. Add them from Skills in the left bar.' : 'Loading skills…') + '</div>';
     return skills.map(function(skill){
       return '<label class="skill-picker-row"><input type="checkbox" value="' + esc(skill.id) + '"' + (selected.indexOf(skill.id) !== -1 ? ' checked' : '') + '>' +
         '<span><span class="skill-picker-name">' + esc(skill.name) + '</span>' + (skill.description ? '<span class="skill-picker-desc">' + esc(skill.description) + '</span>' : '') + '</span></label>';
@@ -12826,6 +13445,96 @@
     });
   }
 
+  // One emoji panel for the message box and for reactions. It sits on the page
+  // itself so it shows above the chat pane, and stays inside that pane so the
+  // browser view beside it can't cover it.
+  var emojiPicker = {node: null, anchor: null, onPick: null};
+  var EMOJI_RECENT_KEY = 'miaEmojiRecent';
+  function recentEmoji(){
+    try { var saved = JSON.parse(localStorage.getItem(EMOJI_RECENT_KEY) || '[]'); return Array.isArray(saved) ? saved : []; }
+    catch(_){ return []; }
+  }
+  function closeEmojiPicker(){
+    if(!emojiPicker.node) return;
+    emojiPicker.node.remove();
+    if(emojiPicker.anchor && emojiPicker.anchor.id === 'ccEmojiBtn') emojiPicker.anchor.setAttribute('aria-expanded', 'false');
+    emojiPicker = {node: null, anchor: null, onPick: null};
+  }
+  function openEmojiPicker(anchor, onPick, closeOnPick){
+    var same = emojiPicker.anchor === anchor;
+    closeEmojiPicker();
+    if(same) return;
+    var node = document.createElement('section');
+    node.className = 'mia-emoji-picker';
+    node.setAttribute('role', 'dialog');
+    node.setAttribute('aria-label', 'Choose an emoji');
+    node.innerHTML = '<input type="search" placeholder="Search emoji" aria-label="Search emoji"><div class="mia-emoji-list">' + window.MiaEmoji.listHtml('', recentEmoji(), esc) + '</div>';
+    document.body.appendChild(node);
+    var pane = (anchor.closest('.chat-app') || document.documentElement).getBoundingClientRect();
+    var spot = anchor.getBoundingClientRect();
+    var width = Math.min(node.offsetWidth, pane.width - 16);
+    node.style.width = width + 'px';
+    var height = node.offsetHeight;
+    node.style.left = Math.max(pane.left + 8, Math.min(spot.left, pane.right - width - 8)) + 'px';
+    node.style.top = (spot.top - height - 8 >= 8 ? spot.top - height - 8 : Math.min(spot.bottom + 8, window.innerHeight - height - 8)) + 'px';
+    emojiPicker = {node: node, anchor: anchor, onPick: onPick};
+    if(anchor.id === 'ccEmojiBtn') anchor.setAttribute('aria-expanded', 'true');
+    var search = node.querySelector('input'), list = node.querySelector('.mia-emoji-list');
+    search.addEventListener('input', function(){ list.innerHTML = window.MiaEmoji.listHtml(search.value, recentEmoji(), esc); });
+    search.addEventListener('keydown', function(event){ if(event.key === 'Escape'){ event.stopPropagation(); var from = anchor; closeEmojiPicker(); from.focus(); } });
+    list.addEventListener('click', function(event){
+      var button = event.target.closest('[data-emoji-pick]');
+      if(!button) return;
+      var emoji = button.getAttribute('data-emoji-pick');
+      try { localStorage.setItem(EMOJI_RECENT_KEY, JSON.stringify(window.MiaEmoji.remember(recentEmoji(), emoji))); } catch(_){}
+      if(closeOnPick) closeEmojiPicker();
+      onPick(emoji);
+    });
+    search.focus();
+  }
+  function insertComposerEmoji(emoji){
+    var input = el('#ccInput');
+    if(!input) return;
+    var start = input.selectionStart, end = input.selectionEnd;
+    input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+    input.selectionStart = input.selectionEnd = start + emoji.length;
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  }
+  // Shared channels keep their messages on the Hub, which has nowhere to store a reaction yet.
+  function canReactToMessage(m){
+    return !!(m && m.nativeEvent && m.nativeEvent.id && !m.pending && !m.deleted && !m.system && !m.nativeProgress);
+  }
+  function toggleMessageReaction(eventId, emoji){
+    var roomId = chatWs.activeRoomId;
+    api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId) + '/reactions'), {method: 'POST', body: {emoji: emoji}}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.event) throw new Error('reaction failed');
+      var message = chatRoomState(roomId).messages.filter(function(item){ return item.id === eventId; })[0];
+      if(message){
+        message.reactions = res.data.event.metadata && res.data.event.metadata.reactions || null;
+        message.nativeEvent = res.data.event;
+      }
+      if(chatWs.activeRoomId === roomId) renderChatThread();
+    }).catch(function(){ showBenchToast('That reaction could not be saved.'); });
+  }
+  document.addEventListener('click', function(event){
+    var target = event.target;
+    if(!target || !target.closest) return;
+    var composerButton = target.closest('#ccEmojiBtn');
+    var add = target.closest('[data-react-add]');
+    var chip = target.closest('[data-react-toggle]');
+    if(composerButton){ openEmojiPicker(composerButton, insertComposerEmoji, false); return; }
+    if(add || chip){
+      var row = target.closest('.chat-msg-row');
+      var eventId = row && row.getAttribute('data-event-id');
+      if(!eventId) return;
+      if(chip) toggleMessageReaction(eventId, chip.getAttribute('data-react-toggle'));
+      else openEmojiPicker(add, function(emoji){ toggleMessageReaction(eventId, emoji); }, true);
+      return;
+    }
+    if(emojiPicker.node && !emojiPicker.node.contains(target)) closeEmojiPicker();
+  });
+  document.addEventListener('keydown', function(event){ if(event.key === 'Escape') closeEmojiPicker(); });
+
   // A local-only confirmation line (@-mention add outcome) — never
   // sent to the server, just appended to this room's cached thread so it
   // persists like any other message until the room's next fresh load.
@@ -13437,9 +14146,20 @@
         e.stopPropagation();
         saveManageAgentColor(id, button.getAttribute('data-agent-color'));
       });
+      // This list saves as soon as a color is chosen. While the picker is open
+      // it only sends `input`, so save once the picking pauses.
+      var pickTimer = null;
+      options.addEventListener('input', function(e){
+        if(!e.target || e.target.type !== 'color') return;
+        var value = e.target.value;
+        markCustomAgentColor(e.target);
+        clearTimeout(pickTimer);
+        pickTimer = setTimeout(function(){ saveManageAgentColor(id, value); }, 600);
+      });
       options.addEventListener('change', function(e){
         if(!e.target || e.target.type !== 'color') return;
         e.stopPropagation();
+        clearTimeout(pickTimer);
         saveManageAgentColor(id, e.target.value);
       });
     });
@@ -13635,6 +14355,34 @@
   // hand-built bot — see createNativeAgentConversation / chatRoomState(...).localWelcome.
   function closeBotStorePane(){
     if(chatInfo.mode !== 'bot-store') return;
+    chatInfo.mode = 'automations';
+    chatInfo.open = false;
+    renderChatInfoPane();
+    syncSidebarToolButtons();
+  }
+
+  // The skills form keeps living in one element, so its handlers survive the pane redrawing.
+  var skillsShell = el('#skillsShell');
+  function renderSkillsUtilityPane(pane){
+    pane.setAttribute('aria-label', 'Skills');
+    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open');
+    pane.classList.add('open', 'bot-store-open');
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Skills</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="skillsPaneClose" aria-label="Close Skills" title="Close Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div></div>';
+    var body = document.createElement('div');
+    body.className = 'bot-store-body';
+    if(skillsShell) body.appendChild(skillsShell);
+    pane.appendChild(body);
+    el('#skillsPaneClose', pane).addEventListener('click', closeSkillsPane);
+  }
+  function openSkillsPane(){
+    if(!STYLED_SKIN) return;
+    prepareChatUtilityPane('skills');
+    renderChatInfoPane();
+    refreshSkillsPane();
+  }
+  function closeSkillsPane(){
+    if(chatInfo.mode !== 'skills') return;
     chatInfo.mode = 'automations';
     chatInfo.open = false;
     renderChatInfoPane();
@@ -13853,8 +14601,8 @@
       restorePluginShell();
       chatInfo.mode = 'automations';
     }
-    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-store';
-    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'bot-store') || (!specialMode && !isInfoPaneAvailable())){
+    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-store' || chatInfo.mode === 'skills';
+    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'bot-store' && chatInfo.mode !== 'skills') || (!specialMode && !isInfoPaneAvailable())){
       restorePluginShell();
       pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open', 'bot-store-open');
       pane.innerHTML = '';
@@ -13883,6 +14631,10 @@
     }
     if(chatInfo.mode === 'agents'){
       renderManageAgentsPane(pane);
+      return;
+    }
+    if(chatInfo.mode === 'skills'){
+      renderSkillsUtilityPane(pane);
       return;
     }
     if(chatInfo.mode === 'plugins'){
@@ -14120,10 +14872,6 @@
     if(e.key === 'Escape' && channelMenu.open) closeChannelMenu();
   });
 
-  function chatViewShowing(){
-    var classes = document.body.classList;
-    return !classes.contains('automations-mode') && !classes.contains('artifacts-mode') && !classes.contains('apps-mode') && !classes.contains('browser-collab-mode');
-  }
   // Chats and channels are picked from the sidebar and never get a tab. The
   // strip in the chat's row (native-browser.js) holds the other views' tabs.
   function renderChatTabs(){
@@ -14521,7 +15269,7 @@
     var state = chatRoomState(roomId);
     var hasMessages = state.messages.some(function(m){ return !m.system && !m.pending; });
     if(!hasMessages){
-      if(chatWs.activeKind === 'department') return 'What should Mia help us with in ' + (chatWs.activeLabel || 'this team') + '?';
+      if(chatWs.activeKind === 'department') return 'What should Mia help us with in ' + (chatWs.activeLabel || 'this company') + '?';
       if(chatWs.activeKind === 'home') return 'What should Mia help with first?';
       if(chatWs.activeKind === 'agent') return 'What should I ask ' + (chatWs.activeLabel || 'this bot') + '?';
       if(chatWs.activeKind === 'dm' || chatWs.activeKind === 'group') return 'What should we work on together?';
@@ -14895,7 +15643,6 @@
     // A saved tab's name can be stale (a DM partner learned later); the Hub's is current.
     if(inHubRoom(roomId))label=hubChannelTitle(hubChannel(roomId));
     chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
-    setLocalChatTypingActivity(false);
     closeMentionPopover();
     clearChatAttachmentError();
     chatRoster.open = null;
@@ -15042,7 +15789,7 @@
     if(mentioned.length > 1) return 'Bots';
     if(threadRootId){
       var root = (state.messages || []).filter(function(message){ return message.id === threadRootId; })[0];
-      if(root && !isHumanSender(root.sender)) return root.nativeAgentName || chatWs.activeLabel || 'Agent';
+      if(root && !isHumanSender(root.sender)) return messageBotIdentity(root).name || chatWs.activeLabel || 'Agent';
     }
     return null;
   }
@@ -15419,6 +16166,17 @@
      laid out in flow. */
   var chatMention = {open: false, atPos: -1, query: '', matches: [], highlight: 0, confirmEntry: null, confirmBusy: false, groupSend: null, slash: false};
 
+  // People go by their name in the @ menu, never by an account id or email.
+  function humanMentionName(user){
+    var email = String(user && user.email || '');
+    return realProfileName(user && (user.displayName || user.name))
+      || realProfileName(displayNameForEmailProfile(email))
+      || (email.toLowerCase() === String(currentUser || '').toLowerCase() ? 'You' : displayNameForEmail(email));
+  }
+  function displayNameForEmailProfile(email){
+    var known = userProfiles[email.toLowerCase()];
+    return known && known.displayName;
+  }
   function humanDirectoryMatches(user, query){
     var q = String(query || '').trim().toLowerCase();
     if(!q) return true;
@@ -15519,7 +16277,7 @@
     var roster = chatRoomState(roomId).mentionRoster;
     if(!roster || roster.loading) return {privateAgents: [], inChat: [], notInChat: []};
     var q = chatMention.query.toLowerCase();
-    function human(u){ return {kind: 'human', key: 'human:' + u.email, label: u.email, searchUser: u, inChat: u.inChat, clerkUserId: u.clerkUserId}; }
+    function human(u){ return {kind: 'human', key: 'human:' + u.email, label: humanMentionName(u), searchUser: u, inChat: u.inChat, clerkUserId: u.clerkUserId}; }
     function agent(a, inChat){ return {kind: 'agent', key: 'agent:' + a.id, label: a.name, id: a.id, department: a.department, inChat: inChat, privateAgent: a.privateAgent === true}; }
     // Group tags: '@all' = everyone, '@all_users' = humans, '@all_bots' =
     // agents. Inserted as the literal tag, never expanded into individual
@@ -15574,7 +16332,7 @@
     var ix = 0;
     function optionHtml(entry){
       var i = ix++;
-      var avatar = entry.kind === 'group' ? '@' : entry.kind === 'human' ? humanAvatarInitialsHtml(entry.label) : agentAvatarHtml(entry.label, entry.id, 22);
+      var avatar = entry.kind === 'group' ? '@' : entry.kind === 'human' ? humanAvatarInitialsHtml(entry.searchUser.email) : agentAvatarHtml(entry.label, entry.id, 22);
       var sub = entry.kind === 'agent' && !entry.inChat ? '<span class="cmp-option-sub">add</span>' : '';
       var kind = entry.kind === 'agent' ? '<span class="cmp-option-kind">' + (entry.id === 'gateway' ? 'Agent' : 'Bot') + '</span>' : '';
       var highlighted = i === chatMention.highlight ? ' highlighted' : '';
@@ -15634,7 +16392,7 @@
 
   // Sharing gives the team its own copy of the bot's instructions.
   function hubShareNotice(name, team){
-    return 'Share ' + name + ' with ' + team + '? The team gets its own copy: everyone can see its instructions and use it, and it is no longer linked to your Solo ' + name + '. Skills, automations and memories stay with you. An admin approves it once.';
+    return 'Share ' + name + ' with ' + team + '? The company gets its own copy: everyone can see its instructions and use it, and it is no longer linked to your Solo ' + name + '. Skills, automations and memories stay with you. An admin approves it once.';
   }
   function cancelMentionConfirm(){
     chatMention.confirmEntry = null;
@@ -16137,11 +16895,12 @@
     // Every row keeps a second line so titles sit on one line across the
     // sidebar. A room known to be empty says so; one still loading stays blank.
     function sidebarRowText(name, roomId, hasActivity){
-      var indicator = renderChatActivityIndicator(hasActivity, chatNeedsAttention(roomId));
+      var unread = chatNeedsAttention(roomId);
+      var indicator = renderChatActivityIndicator(hasActivity, unread);
       var preview = roomPreview(roomId);
       var state = roomId && chatWs.byRoom[roomId];
       var previewHtml = preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
-      return '<span class="row-text"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
+      return '<span class="row-text' + (unread ? ' is-unread' : '') + '"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
         '</span><span class="row-preview' + (preview ? '' : ' empty') + '">' + previewHtml + '</span></span>';
     }
 
@@ -16681,6 +17440,7 @@
      (an agent built elsewhere may now exist) without discarding whatever's
      cached per-room in chatWs.byRoom or resetting the active thread. */
   function renderChatWorkspace(){
+    wireDemoView();
     var ready = initChatWorkspace();
     startChatPolling();
     return ready;
@@ -16852,8 +17612,8 @@
     // Browse channels or by invitation.
     var team = hubWorkspace(), kicker = el('#channelNameKicker'), intro = el('#channelNameIntro'), hint = el('#channelNameHint');
     if(kicker) kicker.textContent = team ? 'Shared space' : 'Solo';
-    if(intro) intro.textContent = team ? 'Start a channel in this team. You\'re its first member.' : 'Start a conversation with your bots.';
-    if(hint) hint.textContent = team ? 'Teammates can find it in Browse channels, or you can invite them. Shared bots can be added here.' : 'Only you and your bots can see it. Type @ to add a bot.';
+    if(intro) intro.textContent = team ? 'Start a channel in this company. You\'re its first member.' : 'Start a conversation with your bots.';
+    if(hint) hint.textContent = team ? 'Colleagues can find it in Browse channels, or you can invite them. Shared bots can be added here.' : 'Only you and your bots can see it. Type @ to add a bot.';
     var privateRow = el('#channelPrivateRow'), privateBox = el('#channelPrivateInput');
     if(privateRow) privateRow.hidden = !team;
     if(privateBox) privateBox.checked = false;
@@ -16976,13 +17736,14 @@
   function runToolsAction(action){
     // Views (Automations, Artifacts, Browser) are the same in Solo and a
     // team; only creating chats and bots differs.
-    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser';
+    // Making a bot works the same in a team: it belongs to the team you are in.
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills' || action === 'new-bot';
     if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
     // layout back — closing the browser here would kill browser mode for no
     // reason. Every other tools-menu action still needs the full layout.
-    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store') closeLocalBrowser();
+    if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store' && action !== 'skills') closeLocalBrowser();
     if(automationsPage.open && action !== 'automations' && action !== 'new-bot' && action !== 'bot-store') closeAutomationsPage();
     if(artifactsPage.open && action !== 'artifacts' && action !== 'new-bot' && action !== 'bot-store') closeArtifactsPage();
     if(appsPage.open && action !== 'apps' && action !== 'new-bot' && action !== 'bot-store') closeAppsPage();
@@ -16991,6 +17752,7 @@
     else if(action === 'new-agent'){ if(window.miaPrivateAgents) window.miaPrivateAgents.create(); }
     else if(action === 'new-channel') openNewChannelFlow();
     else if(action === 'bot-store') openBotStorePane();
+    else if(action === 'skills') openSkillsPane();
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsPage();
     else if(action === 'artifacts') openArtifactsPage();
@@ -17047,7 +17809,49 @@
       button.classList.toggle('active', on);
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    fitSidebarViews();
   }
+
+  // Which view icons move behind the chevron when the header runs out of room.
+  // The one you are on always stays in the row.
+  function sidebarViewsToHide(count, activeIndex, room){
+    var ICON = 28, GAP = 6;
+    if(count * ICON + (count - 1) * GAP <= room) return [];
+    var keep = Math.max(1, Math.floor((room - ICON) / (ICON + GAP)));
+    var hidden = [];
+    for(var index = keep; index < count; index++) hidden.push(index);
+    if(activeIndex >= keep) hidden[hidden.indexOf(activeIndex)] = keep - 1;
+    return hidden;
+  }
+  // A long workspace name shortens to this much before it takes icons away.
+  var SIDEBAR_NAME_MIN_WIDTH = 90;
+  function fitSidebarViews(){
+    var wrap = el('.chat-new-btn-wrap'), views = el('.sidebar-views'), more = el('#sidebarViewsMore'), name = el('#miaCompanyName');
+    if(!wrap || !views || !more || !wrap.clientWidth) return;
+    var style = getComputedStyle(wrap), gap = parseFloat(style.columnGap) || 0;
+    var room = wrap.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - gap
+      - Math.min(name ? name.scrollWidth : 0, SIDEBAR_NAME_MIN_WIDTH);
+    var developer = el('#chatSidebarDeveloperBtn');
+    if(developer && !developer.hidden) room -= developer.offsetWidth + gap;
+    var buttons = els('.sidebar-view-btn', views).filter(function(button){ return button !== more && !button.hidden; });
+    var active = buttons.findIndex(function(button){ return button.classList.contains('active'); });
+    var hidden = sidebarViewsToHide(buttons.length, active, room);
+    buttons.forEach(function(button, index){ button.classList.toggle('sidebar-view-overflowed', hidden.indexOf(index) >= 0); });
+    more.hidden = !hidden.length;
+  }
+  (function(){
+    var wrap = el('.chat-new-btn-wrap'), more = el('#sidebarViewsMore'), name = el('#miaCompanyName');
+    if(!wrap || !more) return;
+    more.addEventListener('click', function(event){
+      event.stopPropagation();
+      openSidebarAddMenu(more, els('.sidebar-view-overflowed', wrap).map(function(button){
+        return [button.getAttribute('aria-label'), function(){ button.click(); }];
+      }));
+    });
+    if(typeof ResizeObserver === 'function') new ResizeObserver(fitSidebarViews).observe(wrap);
+    if(name && typeof MutationObserver === 'function') new MutationObserver(fitSidebarViews).observe(name, {childList: true, characterData: true, subtree: true});
+    fitSidebarViews();
+  })();
 
   // Back, Forward and Reload work in every view. Outside the browser they
   // step through the places you opened in Mia (a view, and the chat it
@@ -17133,7 +17937,7 @@
   function chatFileFrom(m){
     if(m.hubMessage) return m.hubAuthor || '';
     if(isHumanSender(m.sender)) return 'You';
-    return m.nativeAgentName || m.sender || '';
+    return messageBotIdentity(m).name || m.sender || '';
   }
   function chatFileRows(){
     if(!window.MiaViewShelf) return [];
@@ -17170,7 +17974,7 @@
       (more && chatInfo.filesExpanded ? '<input type="search" class="cip-files-search" id="cipFilesSearch" placeholder="Search files" aria-label="Search files" autocomplete="off" spellcheck="false">' : '') +
       (rows.length ? '<div class="cip-files-list" id="cipFilesList"></div>' : '<div class="cip-section-empty">Files shared in this chat appear here.</div>') +
       (more ? '<button type="button" class="cip-section-link" id="cipFilesAll">' + (chatInfo.filesExpanded ? 'Show less' : 'See all') + '</button>' : '') +
-      (teamFiles ? '<button type="button" class="cip-section-link" id="cipTeamFiles">Team files</button>' : '') + '</section>';
+      (teamFiles ? '<button type="button" class="cip-section-link" id="cipTeamFiles">Company files</button>' : '') + '</section>';
   }
   function bindDetailsFiles(pane, rows){
     var list = el('#cipFilesList', pane), search = el('#cipFilesSearch', pane), all = el('#cipFilesAll', pane), team = el('#cipTeamFiles', pane);
@@ -17400,14 +18204,17 @@
       if(account) account.setAttribute('aria-expanded', 'false');
       openSettingsDrawer();
     });
-    // Sidebar times would otherwise stay at "just now" until the next render.
-    setInterval(function(){
+    // Sidebar and message times would otherwise stay at "just now" until the
+    // next render, which an open chat may not get for hours.
+    function refreshChatTimes(){
       if(document.hidden) return;
-      els('#panel-chat .chat-dm-time[data-ts]').forEach(function(node){
+      els('#panel-chat .chat-dm-time[data-ts], #panel-chat .chat-msg-time[data-ts]').forEach(function(node){
         var text = chatRelTime(Number(node.getAttribute('data-ts')) || 0);
         if(node.textContent !== text) node.textContent = text;
       });
-    }, 60000);
+    }
+    setInterval(refreshChatTimes, 60000);
+    document.addEventListener('visibilitychange', refreshChatTimes);
     var nativeNotifications = nativeDesktopNotifications();
     if(nativeNotifications && typeof nativeNotifications.onClick === 'function') nativeNotifications.onClick(function(roomId){
       var reviewApp = window.MiaAppsPage && window.MiaAppsPage.reviewTagApp(roomId);
@@ -17487,7 +18294,7 @@
     }
 
     function clientDescription(entry){
-      var template = descriptionTemplates[entry.category] || 'Add {name} to the workflows your team chooses.';
+      var template = descriptionTemplates[entry.category] || 'Add {name} to the workflows your company chooses.';
       return template.replace(/\{name\}/g, clientName(entry));
     }
 
@@ -18019,6 +18826,32 @@
     return room.kind === 'dm' || room.kind === 'group' ? dmLabel(room) : room.name;
   }
 
+  // A chat's own title when it has one. Rows only: the chat itself keeps its bot's name.
+  function conversationHistoryTitle(conversation){
+    var title = conversation && conversation.metadata && conversation.metadata.historyTitle;
+    return typeof title === 'string' && title.trim() ? title.trim() : conversationHistoryLabel(conversation);
+  }
+  // Mia and each bot always keep one chat to open, so their last one stays.
+  function historyChatCanDelete(conversation){
+    var owner = function(item){ return (item.metadata && item.metadata.botId) || item.type; };
+    return (chatWs.nativeConversations || []).filter(function(item){ return owner(item) === owner(conversation); }).length > 1;
+  }
+  function deleteHistoryConversation(id){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === id; })[0];
+    if(!conversation) return;
+    appConfirm('Delete "' + conversationHistoryTitle(conversation) + '"?', 'Delete').then(function(confirmed){
+      if(!confirmed) return null;
+      return api(nativeConversationPath(id), {method:'DELETE'}).then(function(res){
+        if(res.status !== 200) throw new Error('delete failed');
+        var wasOpen = chatWs.activeRoomId === id;
+        chatWs.nativeConversations = chatWs.nativeConversations.filter(function(item){ return item.id !== id; });
+        if(wasOpen) return location.reload();
+        applyNativeConversationList(chatWs.nativeConversations);
+        renderConversationHistory();
+      });
+    }).catch(function(){ showBenchToast('Couldn\'t delete that chat. Try again.'); });
+  }
+
   function conversationHistoryTimestamp(conversation){
     var state = conversation && chatWs.byRoom[conversation.id];
     // A chat is as recent as its newest message; updatedAt only tracks
@@ -18091,12 +18924,18 @@
         var bookmarked = isChatPinned('room:' + conversation.id);
         var rowAgent = conversationHistoryRowAgent(conversation, agentId);
         return heading + '<button type="button" class="conversation-history-row' + (active ? ' active' : '') + '" data-history-room-id="' + esc(conversation.id) + '">' +
-          '<span class="conversation-history-name">' + esc(conversationHistoryLabel(conversation)) + '</span>' +
+          '<span class="conversation-history-name">' + esc(conversationHistoryTitle(conversation)) + '</span>' +
           (bookmarked ? '<svg class="conversation-history-bookmark" viewBox="0 0 24 24" aria-label="Bookmarked"><path d="M6.5 4.5h11v15l-5.5-3.5-5.5 3.5z"></path></svg>' : '') +
           (rowAgent ? '<span class="conversation-history-row-agent" title="' + esc(rowAgent.name) + '">' + agentAvatarHtml(rowAgent.name, rowAgent.id, 26, null, null, false) + '</span>' : '') +
+        (historyChatCanDelete(conversation) ? '<span class="conversation-history-delete" role="button" tabindex="0" data-history-delete="' + esc(conversation.id) + '" title="Delete chat" aria-label="Delete chat">&times;</span>' : '') +
         '</button>';
       }).join('') : '<div class="conversation-history-empty">' + conversationHistoryEmpty(tab) + '</div>';
     }
+    els('[data-history-delete]', list).forEach(function(control){
+      function remove(event){ event.preventDefault(); event.stopPropagation(); deleteHistoryConversation(control.getAttribute('data-history-delete')); }
+      control.addEventListener('click', remove);
+      control.addEventListener('keydown', function(event){ if(event.key === 'Enter' || event.key === ' ') remove(event); });
+    });
     els('[data-history-room-id]', list).forEach(function(row){
       row.addEventListener('click', function(){
         var id = row.getAttribute('data-history-room-id');
@@ -18369,7 +19208,6 @@
       var app = chatAttachment.app;
       if(app) text = (text ? text + '\n\n' : '') + app.name + ': ' + app.url;
       if((!text && !file) || chatAttachment.busy) return;
-      setLocalChatTypingActivity(false);
       function reallySend(){
         closeMentionPopover();
         if(!file){
@@ -18434,7 +19272,6 @@
       if(hint) hint.textContent = hasDraft ? 'Enter to send' : defaultHint;
       syncInlineChatSuggestion();
       renderComposerTaskControl();
-      setLocalChatTypingActivity(!!input.value.trim() && document.activeElement === input);
     }
     if(plusBtn && fileInput){
       plusBtn.addEventListener('click', function(e){
@@ -18468,7 +19305,6 @@
     });
     input.addEventListener('input', syncDraftState);
     input.addEventListener('focus', syncDraftState);
-    input.addEventListener('blur', function(){ setLocalChatTypingActivity(false); });
     sendBtn.addEventListener('click', function(){
       var taskId = sendBtn.getAttribute('data-stop-task-id');
       if(taskId){ stopTaskFromComposer(taskId); return; }
@@ -19775,6 +20611,11 @@
   // First-run tips for each view (view-tips.js). They wait while anything
   // sits on top of the view: sign-in, loading, a dialog or the guided tour.
   var viewTips = window.MiaViewTips ? window.MiaViewTips.install(document, {
+    // The browser draws its page above the app, so its tips need a still in its place.
+    onShown: function(view){
+      var browser = window.miaNativeBrowser;
+      if(browser && browser.coverForTips) browser.coverForTips(view === 'browser');
+    },
     view: function(){
       var classes = document.body.classList;
       if(window.MiaTabStrip && window.MiaTabStrip.mix.on()) return null;

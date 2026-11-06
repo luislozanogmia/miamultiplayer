@@ -25,7 +25,7 @@ provision_hermes() {
   local extract_root="$downloads/hermes-source"
   pinned_clone "$HERMES_SOURCE_URL" "$HERMES_COMMIT" "$extract_root"
   local patch
-  for patch in noninteractive profile-picker model-switch-history gpt6-tiers mia-browser-worker-scheduler process-secrets; do
+  for patch in noninteractive profile-picker model-switch-history gpt6-tiers mia-browser-worker-scheduler process-secrets external-process-streaming; do
     (cd "$extract_root" && git apply "$patches/hermes-$patch.patch")
   done
   local install_dir="$hermes_home/hermes-agent"

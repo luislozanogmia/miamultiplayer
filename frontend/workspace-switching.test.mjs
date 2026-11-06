@@ -511,7 +511,7 @@ test('removed from the open team: it locks blurred behind the notice, then Ackno
   h.context.showHubRemovalNotice();
   const overlay = h.getOverlay();
   assert.match(overlay.className, /\blocked\b/);
-  assert.match(overlay.innerHTML, /Your access to Mia AWS live test has ended<\/div>[\s\S]*You were removed from this workspace by a team admin\. Your existing chats, bots, and pages remain with the team\./);
+  assert.match(overlay.innerHTML, /Your access to Mia AWS live test has ended<\/div>[\s\S]*You were removed from this workspace by a company admin\. Your existing chats, bots, and pages remain with the company\./);
   assert.match(overlay.innerHTML, />Back to Mia</);
   assert.deepEqual(h.calls, ['stop feed', 'stop polling', 'close browser', 'notice shown']);
 
@@ -560,7 +560,7 @@ test('leaving a team yourself drops it from the rail without the removal notice'
   run('hub_' + teamId);
   assert.equal(calls.at(-1), 'open solo');
   const settings = readFileSync(new URL('./hub-teams.js', import.meta.url), 'utf8');
-  assert.match(settings, /'Leave team', \(\) => call\('DELETE'[^\n]*\n\s*\.then\(\(\) => window\.dispatchEvent\(new CustomEvent\('mia-hub-team-left', \{ detail: \{ teamId: team\.teamId \} \}\)\)\)\);/);
+  assert.match(settings, /'Leave company', \(\) => call\('DELETE'[^\n]*\n\s*\.then\(\(\) => window\.dispatchEvent\(new CustomEvent\('mia-hub-team-left', \{ detail: \{ teamId: team\.teamId \} \}\)\)\)\);/);
 });
 
 test('a direct message with someone removed keeps their name and blocks the message box', () => {
@@ -600,7 +600,7 @@ test('a direct message with someone removed keeps their name and blocks the mess
 
   // The Hub drops a removed person from the DM too: the remembered partner still names it.
   const dmGone = { id: 'chan_dm', kind: 'dm', member_ids: [me] };
-  assert.equal(context.hubChannelTitle(dmGone), 'Former teammate');
+  assert.equal(context.hubChannelTitle(dmGone), 'Former colleague');
   context.hubRememberPeople([{ id: 'dm:chan_dm', email: them }]);
   context.hubChat.members = [{ clerk_user_id: me, email: 'me@example.com' }];
   assert.equal(context.hubChannelTitle(dmGone), 'Former');

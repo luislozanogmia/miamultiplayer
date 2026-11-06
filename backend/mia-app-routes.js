@@ -246,10 +246,10 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
         await call('POST', `/api/bots/${seg(input.bot_id)}/departments`, { add: input.department });
         return { bot_id: input.bot_id, department: input.department };
       } },
-    app_install_propose: { group: 'C', trust: null, description: "Ask to install one version of a team's app on this computer.", args: { team_id: 'string', app_id: 'string', version: 'string' },
+    app_install_propose: { group: 'C', trust: null, description: "Ask to install one version of a company's app on this computer.", args: { team_id: 'string', app_id: 'string', version: 'string' },
       prepare({ args }) {
         const input = { team_id: text(args.team_id, 'team_id', 200), app_id: text(args.app_id, 'app_id', 200), version: text(args.version, 'version', 80) };
-        return { summary: `Install ${input.app_id} ${input.version}`, details: [`From team ${input.team_id}`], input };
+        return { summary: `Install ${input.app_id} ${input.version}`, details: [`From company ${input.team_id}`], input };
       },
       // The app's fingerprint and bytes come from the Hub, through the page.
       apply(_, input) { return { clientAction: 'installTeamApp', teamId: input.team_id, appId: input.app_id, version: input.version }; } },

@@ -18,8 +18,15 @@ const DEMO_FRAME_CSP = [
 // cannot reach another page with these looser frame headers.
 const DEMO_PATH = /^\/multiplayer-demo\/demos\/(?:[a-z0-9_-]+\/)*(?:[a-z0-9_-]+(?:\.[a-z0-9]+)?)?$/i;
 
+// The demo library itself opens beside Mia's workspace rail. Only Mia may frame
+// it, and the page keeps its own strict policy, which allows its demo frames.
+const DEMO_LIBRARY_CSP = "frame-ancestors 'self'; object-src 'none'; base-uri 'self'";
+function isDemoLibraryPath(requestPath) {
+  return requestPath === '/multiplayer-demo/' || requestPath === '/multiplayer-demo/index.html';
+}
+
 function isDemoFramePath(requestPath) {
   return DEMO_PATH.test(String(requestPath || ''));
 }
 
-module.exports = { DEMO_FRAME_CSP, isDemoFramePath };
+module.exports = { DEMO_FRAME_CSP, DEMO_LIBRARY_CSP, isDemoFramePath, isDemoLibraryPath };

@@ -38,7 +38,7 @@ index 421700f6be..90b1304672 100644
  # slugs). Fallback when the live probe fails; longest-key-first. gpt-5.3-codex-spark is listed so "gpt-5.3-codex" doesn't win.
  _CODEX_OAUTH_CONTEXT_FALLBACK: Dict[str, int] = {
 -    "gpt-6-astra": 272_000,
-+    "gpt-6-astra": 272_000, "gpt-6.1-sol": 272_000, "gpt-6-sol": 272_000, "gpt-6-luna": 272_000,
++    "gpt-6-astra": 272_000, "gpt-6.1-sol": 272_000, "gpt-6.1-terra": 272_000, "gpt-6-sol": 272_000, "gpt-6-luna": 272_000,
      "gpt-5.1-codex-max": 272_000, "gpt-5.1-codex-mini": 272_000, "gpt-5.3-codex": 272_000,
      "gpt-5.3-codex-spark": 128_000, "gpt-5.2-codex": 272_000, "gpt-5.4-mini": 272_000,
      "gpt-5.6-sol": 272_000, "gpt-5.6-terra": 272_000, "gpt-5.6-luna": 272_000, "gpt-daybreak-blue-latest": 272_000,
@@ -129,19 +129,25 @@ diff --git a/hermes_cli/codex_models.py b/hermes_cli/codex_models.py
 index e5d85602a7..7dd29bf493 100644
 --- a/hermes_cli/codex_models.py
 +++ b/hermes_cli/codex_models.py
-@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
+@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
  # choices (#52492). If OpenAI re-enables any, live discovery (_fetch_models_from_api) picks them
  # up automatically.
  DEFAULT_CODEX_MODELS: List[str] = [
++    "gpt-6.1-sol",
++    "gpt-6-astra",
++    "gpt-6.1-terra",
 +    "gpt-6-sol",
 +    "gpt-6-luna",
      "gpt-5.6-sol",
      "gpt-5.6-terra",
      "gpt-5.6-luna",
-@@ -38,6 +40,8 @@ DEFAULT_CODEX_MODELS: List[str] = [
+@@ -38,6 +43,11 @@ DEFAULT_CODEX_MODELS: List[str] = [
  # unsupported — that was wrong; restored here. Keep it in the curated fallback so Pro users still see Spark
  # in `/model` when live discovery is unavailable (offline first run, transient API failure).
  _FORWARD_COMPAT_TEMPLATE_MODELS: List[tuple[str, tuple[str, ...]]] = [
++    ("gpt-6.1-sol", ("gpt-6-sol", "gpt-5.6-sol")),
++    ("gpt-6-astra", ("gpt-5.6-sol", "gpt-5.5")),
++    ("gpt-6.1-terra", ("gpt-6-sol", "gpt-5.6-terra", "gpt-5.5")),
 +    ("gpt-6-sol", ("gpt-5.6-sol", "gpt-5.5")),
 +    ("gpt-6-luna", ("gpt-5.6-luna", "gpt-5.5")),
      ("gpt-5.6-sol", ("gpt-5.5", "gpt-5.4")),

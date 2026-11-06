@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { providerWaitStatus, formatWait } = require('./provider-wait-status.js');
+const { providerWaitStatus, createProviderWaitTracker, formatWait } = require('./provider-wait-status.js');
 
 // Strings below are what Hermes 0.21.4's wait_notice_text() and the Codex
 // watchdogs actually emit (agent/chat_completion_wait_notice.py).
@@ -54,7 +54,42 @@ test('server posts the wait status before the verbose-mode gate', async () => {
   const { readFile } = await import('node:fs/promises');
   const source = await readFile(new URL('./server.js', import.meta.url), 'utf8');
   const hook = source.slice(source.indexOf('const postHermesProgress = (type, payload) => {'));
-  assert.ok(hook.indexOf('providerWaitStatus(') !== -1);
-  assert.ok(hook.indexOf('providerWaitStatus(') < hook.indexOf('getHermesDiagnostics()'),
+  assert.ok(hook.indexOf('trackProviderWait(') !== -1);
+  assert.ok(hook.indexOf('trackProviderWait(') < hook.indexOf('getHermesDiagnostics()'),
     'the wait notice must not depend on verbose diagnostics');
+});
+
+const WAIT_NOTICE = '⏳ waiting on claude-sonnet-5-5 — 60s waiting for the first stream chunk';
+
+test('a failed attempt clearing the notice does not say the model is answering', () => {
+  const track = createProviderWaitTracker();
+  const shown = track('thinking.delta', { text: WAIT_NOTICE });
+  assert.equal(shown.handled, true);
+  assert.match(shown.status, /hasn’t started answering after 1 min/);
+  // Hermes sends an empty thinking.delta when an attempt fails, then its spinner text.
+  assert.equal(track('thinking.delta', { text: '' }).status, '');
+  assert.equal(track('thinking.delta', { text: '(¬_¬) pondering...' }).status, '');
+  assert.equal(track('message.delta', { text: '  ' }).status, '');
+  assert.equal(track('message.complete', { status: 'error', text: 'failed' }).status, '');
+});
+
+test('a retry backoff after a failed attempt is not a wait on the model', () => {
+  for (const text of ['⏳ waiting on provider — retrying in 2s (attempt 1/3)', '⏳ rate limit — resets in 1 min, retrying in 45s (attempt 2/3)']) {
+    assert.equal(providerWaitStatus(text), null, text);
+    assert.deepEqual(createProviderWaitTracker()('thinking.delta', { text }), { status: '', handled: false }, text);
+  }
+});
+
+test('real model output after a wait says it is answering again, once', () => {
+  for (const [type, payload] of [['message.delta', { text: 'Hi' }], ['message.interim', { text: 'Hi' }], ['reasoning.delta', { text: 'hm' }], ['reasoning.available', { text: 'hm' }], ['tool.generating', { name: 'read_file' }], ['tool.start', { name: 'read_file' }]]) {
+    const track = createProviderWaitTracker();
+    track('thinking.delta', { text: WAIT_NOTICE });
+    track('thinking.delta', { text: '' });
+    assert.equal(track(type, payload).status, 'The model is answering again.', type);
+    assert.equal(track(type, payload).status, '', type);
+  }
+});
+
+test('output with no wait before it posts no status', () => {
+  assert.equal(createProviderWaitTracker()('message.delta', { text: 'Hi' }).status, '');
 });

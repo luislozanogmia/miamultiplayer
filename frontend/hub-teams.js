@@ -26,10 +26,10 @@
       teams.replaceChildren(); requests.replaceChildren(); approvals.replaceChildren();
       for (const request of me.requests) node('p', request.name + ' — ' + request.status, requests);
       for (const team of me.teams) {
-        const c = card(teams, team.name || 'Team temporarily unavailable');
-        if (team.unavailable) { node('p', 'The team server is unavailable. Try refreshing shortly.', c); continue; }
+        const c = card(teams, team.name || 'Company temporarily unavailable');
+        if (team.unavailable) { node('p', 'The company server is unavailable. Try refreshing shortly.', c); continue; }
         if (team.invite && !team.membership) {
-          node('p', 'You have been invited to this team.', c);
+          node('p', 'You have been invited to this company.', c);
           button(c, 'Accept invitation', () => call('POST', '/v1/invites/' + team.teamId + '/accept', {}));
           button(c, 'Decline', () => call('POST', '/v1/invites/' + team.teamId + '/decline', {})); continue;
         }
@@ -50,11 +50,11 @@
           manage.type = 'button'; manage.className = 'styled-settings-pill-btn';
           manage.addEventListener('click', () => { location.href = '/admin?workspace=' + encodeURIComponent('hub_' + team.teamId) + '#/users'; });
         }
-        if (ownerId && ownerId === team.membership.clerk_user_id) node('p', 'You own this team. To leave, first make another admin the owner in the Admin Center.', c);
-        else button(c, 'Leave team', () => call('DELETE', '/v1/teams/' + team.teamId + '/members/' + encodeURIComponent(team.membership.clerk_user_id), {})
+        if (ownerId && ownerId === team.membership.clerk_user_id) node('p', 'You own this company. To leave, first make another admin the owner in the Admin Center.', c);
+        else button(c, 'Leave company', () => call('DELETE', '/v1/teams/' + team.teamId + '/members/' + encodeURIComponent(team.membership.clerk_user_id), {})
           .then(() => window.dispatchEvent(new CustomEvent('mia-hub-team-left', { detail: { teamId: team.teamId } }))));
       }
-      if (!me.teams.length) node('p', 'No team memberships or invitations yet.', teams);
+      if (!me.teams.length) node('p', 'No company memberships or invitations yet.', teams);
       try {
         const admin = await call('GET', '/v1/admin/team-requests');
         if (admin.requests.length) {

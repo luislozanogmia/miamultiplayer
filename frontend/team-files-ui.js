@@ -88,8 +88,8 @@
     if(!usage) return '';
     var used = percent(usage.usedBytes, usage.quotaBytes);
     return '<div class="tf-usage' + (used >= 90 ? ' tf-usage-high' : '') + '">'
-      + '<div class="tf-usage-text">' + esc(tf.formatBytes(usage.usedBytes)) + ' of ' + esc(tf.formatBytes(usage.quotaBytes)) + ' used by your team</div>'
-      + '<div class="tf-bar" role="progressbar" aria-label="Team file storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + used + '"><span style="width:' + Math.max(used, usage.usedBytes > 0 ? 1 : 0) + '%"></span></div></div>';
+      + '<div class="tf-usage-text">' + esc(tf.formatBytes(usage.usedBytes)) + ' of ' + esc(tf.formatBytes(usage.quotaBytes)) + ' used by your company</div>'
+      + '<div class="tf-bar" role="progressbar" aria-label="Company file storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + used + '"><span style="width:' + Math.max(used, usage.usedBytes > 0 ? 1 : 0) + '%"></span></div></div>';
   }
 
   // view: {loading, error, notice, usage, files, jobs, nextCursor, loadingMore, isAdmin, mine(), busy{}, now}
@@ -100,7 +100,7 @@
     var out = usageHtml(view.usage, esc);
     if(view.notice) out += '<div class="tf-notice" role="alert">' + esc(view.notice) + '</div>';
     if(view.unavailable){
-      return out + '<div class="artifacts-empty"><div class="artifacts-empty-title">Team files are not available</div><div>' + esc(view.unavailable) + '</div></div>';
+      return out + '<div class="artifacts-empty"><div class="artifacts-empty-title">Company files are not available</div><div>' + esc(view.unavailable) + '</div></div>';
     }
     var jobs = (view.jobs || []).filter(function(job){ return SHOWN_JOBS.indexOf(job.state) >= 0; });
     if(jobs.length){
@@ -267,7 +267,7 @@
   function forget(jobId){
     var entry = current, job = entry.manager.jobs().filter(function(j){ return j.id === jobId; })[0];
     if(!job) return;
-    confirmThen('Delete ' + job.filename + '? It is removed from your team’s storage.', 'Delete', function(){
+    confirmThen('Delete ' + job.filename + '? It is removed from your company’s storage.', 'Delete', function(){
       var fileId = job.record && job.record.fileId;
       (fileId ? entry.client.remove(fileId) : Promise.resolve()).then(function(){
         entry.manager.forget(jobId); loadUsage();

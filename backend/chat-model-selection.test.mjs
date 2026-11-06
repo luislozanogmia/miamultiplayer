@@ -124,6 +124,37 @@ test('userFacingModelDispatchError maps provider rate limits to a usage-limit me
   assert.notEqual(userFacingModelDispatchError(new Error('HTTP 401: Incorrect API key provided')), message);
 });
 
+const SPEND_LIMIT_ERROR = "You've hit your monthly spend limit · raise it at https://claude.ai/settings/usage · your session limit resets 10:40pm";
+const SPEND_LIMIT_MESSAGE = 'This model hit its limit. Your provider says it resets at 10:40pm. Wait until then, raise the limit with your provider, or switch models.';
+
+test('a spend or session limit says so, with the reset time and no URL', () => {
+  const message = userFacingModelDispatchError(new Error(SPEND_LIMIT_ERROR));
+  assert.equal(message, SPEND_LIMIT_MESSAGE);
+  assert.doesNotMatch(message, /https?:|claude\.ai/);
+  assert.match(userFacingModelDispatchError(new Error('Your session limit was reached')), /^This model hit its limit\. Wait for it to reset,/);
+  assert.match(userFacingModelDispatchError(new Error("You've hit your limit · resets 3pm (America/Monterrey)")), /resets at 3pm \(America\/Monterrey\)\./);
+  assert.match(userFacingModelDispatchError(new Error('Monthly spend limit, resets in 2 hours')), /resets in 2 hours\./);
+});
+
+test('a limit error finds the provider words behind the summary from Hermes', () => {
+  const summary = "Claude didn't answer after 3 attempts — it looks temporarily unavailable. Wait a minute and send /retry.";
+  assert.equal(userFacingModelDispatchError(Object.assign(new Error(summary), { providerError: `Native API error: ${SPEND_LIMIT_ERROR}` })), SPEND_LIMIT_MESSAGE);
+  assert.match(userFacingModelDispatchError(Object.assign(new Error('Billing or credits exhausted: insufficient credits'), { failureReason: 'billing' })), /^This model hit its limit/);
+});
+
+test('only a reset time of a known shape is copied from a limit error', () => {
+  for (const raw of ['session limit resets https://evil.example/x', 'session limit resets for person@example.com', 'session limit resets when account 12345 pays']) {
+    const message = userFacingModelDispatchError(new Error(raw));
+    assert.equal(message, 'This model hit its limit. Wait for it to reset, raise the limit with your provider, or switch models.', raw);
+  }
+});
+
+test('short rate limits keep the wait-or-switch message', () => {
+  for (const raw of ['HTTP 429 rate limit', "You've hit your rate limit"]) {
+    assert.equal(userFacingModelDispatchError(new Error(raw)), 'Your provider’s usage limit was reached. Wait or switch models.', raw);
+  }
+});
+
 test('userFacingModelDispatchError explains an unresolvable provider credential', () => {
   const message = userFacingModelDispatchError(new Error("config.set: Could not resolve credentials for provider 'ChatGPT or Codex Subscription': No Codex credentials stored. Run `hermes auth` to authenticate."));
   assert.match(message, /disconnected or out of usage/);

@@ -28,6 +28,8 @@ function createHubBotJournal(db) {
       })();
     },
     bindings(s) { return db.prepare(`SELECT * FROM hub_bot_bindings WHERE ${where}`).all(...scope(s)); },
+    // Every company copy of this person's bots: local id -> its Hub registration.
+    sharedCopies(owner) { return db.prepare('SELECT DISTINCT local_bot_id,team_id,registration_id FROM hub_bot_bindings WHERE owner=?').all(owner); },
     prepare(s,job) {
       return db.transaction(() => {
         if (!/^[a-f0-9]{32}$/.test(job.bot_id || '')) throw new Error('invalid_shared_bot');

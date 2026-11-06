@@ -272,6 +272,9 @@ try {
     $null = Invoke-Native "git apply hermes-process-secrets.patch" {
         & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-process-secrets.patch")
     }
+    $null = Invoke-Native "git apply hermes-external-process-streaming.patch" {
+        & git -c core.autocrlf=false apply (Join-Path $scriptDir "hermes-external-process-streaming.patch")
+    }
 } finally {
     Pop-Location
 }

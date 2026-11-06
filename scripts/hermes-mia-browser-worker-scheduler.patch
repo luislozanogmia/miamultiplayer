@@ -9,7 +9,7 @@ index 2ec4672..fe39024 100644
 +# Mia's existing mutations may overlap at dispatch only for its exact managed
 +# plugin. Native per-tab serialization and independent approvals remain owners.
 +# Deliberately version-coupled: a plugin update must review this digest again.
-+_MIA_WORKER_PLUGIN_SHA256 = "cc2c21d0b0f0586eedc6ba87eead9a8f880bc9535dec95ce5e35ff50b7967083"
++_MIA_WORKER_PLUGIN_SHA256 = "8df5f8d2794100131e4d3d1cb5c3ab9c535640647c1b63dd2336c9190eec406e"
 +
 +
 +def _mia_worker_batch_admitted(args: dict) -> bool:

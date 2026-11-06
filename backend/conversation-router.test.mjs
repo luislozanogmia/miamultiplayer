@@ -679,3 +679,36 @@ test('a message saves its attached browser page only as a cleaned address', asyn
     await app.close();
   }
 });
+
+test('a reaction toggles per person, is not an edit and never asks for a reply', async () => {
+  const app = await startApp();
+  try {
+    const { payload: created } = await app.request('/conversations', { method: 'POST', body: { type: 'dm', name: 'Reactions' } });
+    const conversationId = created.conversation.id;
+    await app.request(`/conversations/${conversationId}/members`, { method: 'POST', body: { principalId: 'bob', principalType: 'user' } });
+    const { payload: sent } = await app.request(`/conversations/${conversationId}/events`, { method: 'POST', body: { content: { text: 'hello' }, metadata: { keep: true } } });
+    const path = `/conversations/${conversationId}/events/${sent.event.id}/reactions`;
+    const react = (emoji, principal = 'alice') => app.request(path, { method: 'POST', principal, body: { emoji } });
+
+    let result = await react('👍');
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.payload.event.metadata.reactions, { '👍': ['alice'] });
+    assert.equal(result.payload.event.metadata.keep, true);
+    assert.equal(result.payload.event.editedAt ?? null, null);
+
+    result = await react('👍', 'bob');
+    assert.deepEqual(result.payload.event.metadata.reactions, { '👍': ['alice', 'bob'] });
+    result = await react('👍');
+    assert.deepEqual(result.payload.event.metadata.reactions, { '👍': ['bob'] });
+    result = await react('👍', 'bob');
+    assert.deepEqual(result.payload.event.metadata.reactions, {});
+
+    for (const bad of ['hello', '👍 nice', '', 7]) assert.equal((await react(bad)).response.status, 400, String(bad));
+    assert.equal((await app.request(`/conversations/${conversationId}/events/evt_missing/reactions`, { method: 'POST', body: { emoji: '👍' } })).response.status, 404);
+
+    const { payload: history } = await app.request(`/conversations/${conversationId}/events`);
+    assert.equal(history.events.filter(event => event.senderId === 'alice' || event.senderId === 'bob').length, 1);
+  } finally {
+    await app.close();
+  }
+});

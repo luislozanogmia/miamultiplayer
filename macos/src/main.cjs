@@ -150,6 +150,7 @@ function findEngineeringRoot() {
 const ENGINEERING_ROOT = findEngineeringRoot();
 const BACKEND_ROOT = path.join(ENGINEERING_ROOT, "backend");
 const BACKEND_ENTRYPOINT = path.join(BACKEND_ROOT, "server.js");
+const BACKEND_START_TIMEOUT_MS = 180000;
 const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require(path.join(BACKEND_ROOT, "process-secrets.js"));
 const { resolveClerkConfig } = require(path.join(BACKEND_ROOT, "clerk-config.js"));
 const requireBackendDependency = createRequire(BACKEND_ENTRYPOINT);
@@ -1091,11 +1092,19 @@ async function startLocalBackend(exactPort = null) {
     clearBackendLease(child.pid);
   });
 
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (await isMiaBackendReady(url)) return url;
+  // A first launch on a busy computer is slow: security software scans every new
+  // file and updates compete for the disk. A server that dies is noticed at once,
+  // so waiting longer only helps one that is still starting.
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < BACKEND_START_TIMEOUT_MS) {
+    if (await isMiaBackendReady(url)) {
+      desktopLog(`backend ready after ${Date.now() - startedAt}ms`);
+      return url;
+    }
     if (backendProcess !== child) return null;
     await delay(250);
   }
+  desktopLog(`backend not ready after ${BACKEND_START_TIMEOUT_MS}ms, stopping it`);
   await stopBackend(child);
   return null;
 }
@@ -1356,6 +1365,10 @@ function isClerkGoogleOAuthUrl(value) {
 // saved logins work and a stuck page can't hang Mia. Claude then shows a
 // one-time code that the user pastes back into Mia.
 const SYSTEM_BROWSER_AUTH_PROVIDERS = new Set(["claude-subscription-directsdk-experimental", "openai-codex", "xai-oauth"]);
+
+function miaIsDefaultBrowser() {
+  try { return app.isDefaultProtocolClient("https") === true; } catch (_) { return false; }
+}
 
 function harnessAuthRedirectProvider(value, expectedBackendUrl = backendUrl) {
   try {
@@ -1865,8 +1878,11 @@ function configureNavigation(window, expectedBackendUrl, _legacyClerkFlow = fals
       && harnessAuthRedirectProvider(url, expectedBackendUrl) === harnessAuthProvider) return;
     if (SYSTEM_BROWSER_AUTH_PROVIDERS.has(harnessAuthProvider) && isBoundHarnessAuthNavigation(url)) {
       // Hand the page to the user's own browser; Mia finishes from the code.
+      // When Mia is the default browser that would land back in Mia, on top of
+      // the code and without USB security keys, so the sign-in panel offers
+      // the link and the code to copy instead.
       event.preventDefault();
-      shell.openExternal(url);
+      if (!miaIsDefaultBrowser()) shell.openExternal(url);
       try { window.close(); } catch (_) { /* already closed */ }
       return;
     }
@@ -2036,8 +2052,7 @@ function installBrowserMenu() {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       // Browser menu actions must never fall through to shell/window actions.
       // Focus Address and New Tab can also serve as browser entry points when
-      // the browser surface is currently closed; in the chat view New Tab opens
-      // a new chat and Close Tab does nothing.
+      // the browser surface is currently closed; Close Tab does nothing there.
       if (["l", "t", "w"].includes(key) && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("miaos-browser-open", key);
       }

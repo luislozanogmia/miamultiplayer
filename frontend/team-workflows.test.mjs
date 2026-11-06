@@ -17,7 +17,7 @@ test('names read as Name · Department, and never invent a person', () => {
   assert.equal(wf.displayName(people, 'u1'), 'Pat · Sales');
   assert.equal(wf.displayName(people, 'u2'), 'lee@example.test');
   assert.equal(wf.shortName(people, 'system:schedule'), 'The schedule');
-  assert.equal(wf.shortName(people, 'gone'), 'A teammate');
+  assert.equal(wf.shortName(people, 'gone'), 'A colleague');
 });
 
 test('a waiting step reads as waiting on that person\'s computer', () => {
@@ -111,7 +111,7 @@ test('only real channels and ready bots are offered', () => {
 
 test('errors speak plainly, and an outage is never blamed on the person', () => {
   assert.match(wf.errorMessage({ code: 'bot_not_ready', status: 409 }), /approved version/);
-  assert.match(wf.errorMessage({ code: 'x', status: 503 }), /cannot reach the team server/);
+  assert.match(wf.errorMessage({ code: 'x', status: 503 }), /cannot reach the company server/);
   assert.match(wf.errorMessage({ code: 'x', status: 0 }), /cannot reach/);
   assert.equal(wf.errorMessage({ code: 'x', status: 400 }, 'Fallback.'), 'Fallback.');
 });

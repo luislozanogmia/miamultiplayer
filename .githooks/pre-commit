@@ -35,9 +35,15 @@ if grep -qE '^\+.*(sk-[A-Za-z0-9]{20,}|sk_live_|pk_live_|AKIA[0-9A-Z]{16}|-----B
   fail "staged changes contain what looks like a credential/private key."
 fi
 
-# 4. gitleaks, if installed (deeper scan).
+# 4. gitleaks, if installed (deeper scan). Version 8 scans stdin; its old
+# protect command was removed, so feed it exactly the staged patch.
 if command -v gitleaks >/dev/null 2>&1; then
-  gitleaks protect --staged --redact || fail "gitleaks found a potential secret in staged changes."
+  if gitleaks help | grep -qE '^[[:space:]]+stdin[[:space:]]'; then
+    git diff --staged --no-ext-diff --binary | gitleaks stdin --no-banner --redact=100 \
+      || fail "gitleaks found a potential secret in staged changes."
+  else
+    gitleaks protect --staged --redact || fail "gitleaks found a potential secret in staged changes."
+  fi
 fi
 
 exit 0

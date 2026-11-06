@@ -22,6 +22,12 @@ test('live apps come first, then pages and documents; filters and search narrow 
   assert.deepEqual(page.counts(items), { all: 4, page: 1, document: 1, app: 2 });
 });
 
+test('a saved app asks for its site icon; files keep their type label', () => {
+  const html = page.bodyHtml({ items, filter: 'all', query: '' }, esc, now);
+  assert.match(html, /<span class="artifacts-thumb" data-site-url="http:\/\/localhost:3000\/">App<\/span>/);
+  assert.match(html, /<span class="artifacts-thumb">HTML<\/span>/);
+});
+
 test('rows show who made a file and when, whether an app is running, and escape names', () => {
   const html = page.bodyHtml({ items, filter: 'all', query: '' }, esc, now);
   assert.match(html, /localhost:3000 · <span class="artifacts-dot on">● running<\/span>/);
@@ -42,7 +48,7 @@ test('an empty Mia folder invites you to add a live app', () => {
 
 test('Artifacts, Automations and Browser open the same way in Solo and in a team', () => {
   const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /var sharedView = action === 'automations' \|\| action === 'artifacts' \|\| action === 'apps' \|\| action === 'web-browser';/);
+  assert.match(app, /var sharedView = action === 'automations' \|\| action === 'artifacts' \|\| action === 'apps' \|\| action === 'web-browser' \|\| action === 'skills' \|\| action === 'new-bot';/);
   assert.match(app, /if\(hubWorkspace\(\) && !sharedView\)/);
   const html = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   assert.match(html, /data-sidebar-view="artifacts" data-tools-action="artifacts"/);

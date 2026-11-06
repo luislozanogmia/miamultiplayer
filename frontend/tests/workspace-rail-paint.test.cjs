@@ -34,7 +34,7 @@ test('the rail and title are painted from the saved teams before app.js runs',()
   assert.ok(!rail.children[0].classList.set.has('active'));
   assert.equal(title.textContent,'Mia AWS live test');
   assert.equal(run({}).title.textContent,'Solo','no saved workspace means Solo');
-  assert.equal(run({miaosActiveWorkspace:'hub_'+'f'.repeat(32)}).title.textContent,'Shared team','as app.js names a team not yet in the list');
+  assert.equal(run({miaosActiveWorkspace:'hub_'+'f'.repeat(32)}).title.textContent,'Company','as app.js names a team not yet in the list');
 });
 test('the painted tiles match the ones app.js renders',()=>{
   const teams=app.slice(app.indexOf('  function renderHubTeamOptions('),app.indexOf('  renderHubTeamOptions(cachedHubTeams());'));

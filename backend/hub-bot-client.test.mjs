@@ -41,7 +41,8 @@ test('sharing binds the same local and Hub account, publishes explicitly shared 
   assert.deepEqual(Object.keys(first).sort(),['id','name']);
   assert.equal(JSON.stringify(first).includes('Private'),false);
   assert.equal(JSON.stringify(first).includes('local-private-id'),false);
-  assert.deepEqual(f.client.available(owner),{bots:[{id:'local-private-id',name:'Helper'}]});
+  assert.deepEqual(f.client.available(owner),{bots:[{id:'local-private-id',name:'Helper',sharedAs:[{teamId,registrationId:result.bot.id}]}]},
+    'each bot lists its company copies, so a company can grey out the Solo bot it already shares');
 });
 
 test('sharing always forks and sends only the instructions, even when asked for a linked copy',async t=>{
@@ -52,6 +53,13 @@ test('sharing always forks and sends only the instructions, even when asked for 
   assert.deepEqual(Object.keys(version[0]).sort(),['instructions','mode','source']);
   assert.equal(version[0].mode,'fork');
   assert.equal(typeof f.client.sync,'undefined');
+});
+
+test('a copy from another company shares the skills its owner reviewed, not the library ones',async t=>{
+  const f=fixture(t);
+  await f.client.share(owner,{...f.input,skills:[{name:'Weekly report',description:'',body:'Write the [Company] report.'},{name:'Empty',body:' '}]},'fixture.token');
+  const version=f.requests.filter(r=>r.options.method==='POST' && r.url.endsWith('/versions')).map(r=>JSON.parse(r.options.body));
+  assert.deepEqual(version[0].skills,[{name:'Weekly report',description:'',body:'Write the [Company] report.'}]);
 });
 
 test('different Hub identity, disabled account, unknown local bot and invalid scope fail closed',async t=>{

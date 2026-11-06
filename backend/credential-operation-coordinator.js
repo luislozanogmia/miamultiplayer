@@ -4,7 +4,7 @@
 // an explicit retry. A new request after settlement can start a new operation.
 function createAccountSingleFlight() {
   const inFlight = new Map();
-  return (account, operation) => {
+  const run = (account, operation) => {
     const key = String(account || '').trim().toLowerCase();
     if (inFlight.has(key)) return inFlight.get(key);
     const promise = Promise.resolve().then(operation);
@@ -15,6 +15,8 @@ function createAccountSingleFlight() {
     promise.then(release, release);
     return promise;
   };
+  run.active = account => inFlight.get(String(account || '').trim().toLowerCase()) || null;
+  return run;
 }
 
 function createCredentialOperationCoordinator() {
@@ -29,6 +31,7 @@ function createCredentialOperationCoordinator() {
   return {
     mutate,
     provision: (account, operation) => singleFlight(account, () => mutate(operation)),
+    activeProvision: account => singleFlight.active(account),
   };
 }
 

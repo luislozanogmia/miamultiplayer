@@ -80,6 +80,8 @@ def usage_windows(payload):
 
 class ClaudeOAuthDirectSDKProfile(ProviderProfile):
     model_metadata = MODEL_METADATA
+    # This client yields real chunks, so Hermes can see activity and time silence, not the whole call.
+    streams_chunks = True
 
     def get_model_context_length(self, model):
         route = native_model(model)

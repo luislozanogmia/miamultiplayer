@@ -164,13 +164,49 @@ function managedRouterErrorCode(code, keyReplacedElsewhere) {
   return code;
 }
 
+// A limit that retrying can't clear. Short rate limits are left to the rate
+// limit message below. Matches HARD_LIMIT in hermes-plugins/mia-provider-limits,
+// which stops Hermes retrying these.
+const HARD_LIMIT = /\b(?:spend|spending|session|monthly|weekly|daily|budget|billing)\s+(?:usage\s+)?(?:limit|cap)\b|\bhit your\s+(?:(?!rate\b|requests?\b|tokens?\b|[\w-]*per-)[\w-]+\s+){0,3}limit\b/i;
+const CLOCK_TIME = '\\d{1,2}(?::\\d{2})?\\s*[ap]\\.?m\\b\\.?|\\d{1,2}:\\d{2}\\b';
+const TIME_ZONE = '(?:\\s*\\([A-Za-z_]+(?:\\/[A-Za-z_]+)*\\)|\\s+UTC\\b)?';
+const MONTH_DAY = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?\\s+\\d{1,2}\\b';
+const LIMIT_RESET = new RegExp(
+  `\\bresets?\\s+(?:(in\\s+\\d+\\s*(?:seconds?|minutes?|mins?|hours?|hrs?|days?)\\b)`
+  + `|(?:at\\s+)?((?:${CLOCK_TIME})${TIME_ZONE})`
+  + `|(?:on\\s+)?(${MONTH_DAY}(?:,?\\s+(?:at\\s+)?(?:${CLOCK_TIME})${TIME_ZONE})?))`,
+  'i'
+);
+
+// The raw provider error can carry account URLs and details, so only a reset
+// time of a known shape is ever copied out of it.
+function providerLimitReset(detail) {
+  const match = LIMIT_RESET.exec(detail);
+  if (!match) return '';
+  const [, after, clock, date] = match;
+  if (after) return after.replace(/\s+/g, ' ');
+  return clock ? `at ${clock.replace(/\s+/g, ' ')}` : `on ${date.replace(/\s+/g, ' ')}`;
+}
+
+function providerLimitMessage(detail) {
+  const reset = providerLimitReset(detail);
+  return reset
+    ? `This model hit its limit. Your provider says it resets ${reset}. Wait until then, raise the limit with your provider, or switch models.`
+    : 'This model hit its limit. Wait for it to reset, raise the limit with your provider, or switch models.';
+}
+
 function userFacingModelDispatchError(error, { managedRouter = false, managedRouterLabel = '' } = {}) {
   const message = String(error && error.message || error || '');
+  // Hermes' message is its own retry summary; the provider's words are here.
+  const detail = [message, error && error.providerError].filter(Boolean).join('\n');
   if ((error && error.code === 'NATIVE_DISPATCH_TIMEOUT') || /native dispatch timed out/i.test(message)) {
     return 'I ran out of time before finishing. Nothing was changed. Please try again.';
   }
   if (managedRouter && MANAGED_ROUTER_KEY_FAILURE.test(message)) {
     return managedRouterKeyMessage(managedRouterLabel);
+  }
+  if (HARD_LIMIT.test(detail) || (error && error.failureReason === 'billing' && !/unverified/i.test(message))) {
+    return providerLimitMessage(detail);
   }
   if (/invalid[_ -]?api[_ -]?key|incorrect api key|\b401\b|unauthori[sz]ed|authentication failed/i.test(message)) {
     return 'Your connected model credential was rejected. Reconnect it in Settings → Access, then try again.';

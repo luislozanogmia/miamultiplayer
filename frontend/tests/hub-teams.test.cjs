@@ -9,7 +9,7 @@ test('Settings Teams lists members without managing them, and the owner cannot l
   assert.doesNotMatch(source,/'Remove'/);
   assert.match(source,/Manage members in the Admin Center/);
   assert.match(source,/location\.href = '\/admin\?workspace=' \+ encodeURIComponent\('hub_' \+ team\.teamId\) \+ '#\/users'/);
-  assert.match(source,/if \(ownerId && ownerId === team\.membership\.clerk_user_id\) node\('p', 'You own this team\./);
+  assert.match(source,/if \(ownerId && ownerId === team\.membership\.clerk_user_id\) node\('p', 'You own this company\./);
   const channelActions=app.slice(app.indexOf('  function runHubChannelAction('),app.indexOf('  function openHubListDialog('));
   assert.ok(channelActions.length>0);
   assert.doesNotMatch(channelActions,/openSettingsDrawer\('teams'\)/,'Invite people opens the Admin Center');

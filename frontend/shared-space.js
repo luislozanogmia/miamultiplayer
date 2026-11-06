@@ -70,7 +70,7 @@
     if(!from || typeof from.id !== 'string') return next;
     if(message.t === 'leave') { delete next[from.id]; return next; }
     if(message.t !== 'here') return next;
-    next[from.id] = {id: from.id, name: String(from.name || 'Teammate').slice(0, 80), tab: typeof message.tab === 'string' ? message.tab : null,
+    next[from.id] = {id: from.id, name: String(from.name || 'Colleague').slice(0, 80), tab: typeof message.tab === 'string' ? message.tab : null,
       url: shareableUrl(message.url), follow: typeof message.follow === 'string' ? message.follow : null, away: message.away === true,
       bots: (Array.isArray(message.bots) ? message.bots : []).slice(0, 8).filter(function(bot){ return bot && typeof bot.tab === 'string'; })
         .map(function(bot){ return {tab: bot.tab, name: String(bot.name || 'Bot').slice(0, 80), mia: !!bot.mia}; }),

@@ -19,6 +19,10 @@ const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require('./process-secret
 
 const DEFAULT_PORT = 9121;
 const CONNECT_TIMEOUT_MS = 30000;
+// The first start on a busy computer can take minutes: security software scans
+// each Python file Hermes loads. Only a runtime this process started gets this
+// long, and one that exits is noticed at once.
+const GATEWAY_START_TIMEOUT_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 600000;
 const INTERRUPT_TIMEOUT_MS = 10000;
 const MODEL_OPTIONS_TIMEOUT_MS = 30000;
@@ -494,9 +498,11 @@ class HermesGatewayClient {
     if (this.readyPromise) return this.readyPromise;
     this.readyPromise = (async () => {
       await this.ensureGateway();
-      const deadline = this.now() + CONNECT_TIMEOUT_MS;
+      const startedHere = this.child;
+      const deadline = this.now() + (startedHere ? GATEWAY_START_TIMEOUT_MS : CONNECT_TIMEOUT_MS);
       let lastError = null;
       while (!this.shutdownRequested && this.now() < deadline) {
+        if (startedHere && this.child !== startedHere) throw new Error('Hermes gateway exited before it was ready');
         try {
           await new Promise((resolve, reject) => {
             let socket;
@@ -619,7 +625,11 @@ class HermesGatewayClient {
       const text = String(payload.text || turn.text || '').trim();
       const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
       if (payload.status === 'error') {
-        turn.reject(new Error(text || payload.error || 'Hermes gateway turn failed'));
+        // text is Hermes' summary for the chat; error keeps the provider's own words.
+        turn.reject(Object.assign(new Error(text || payload.error || 'Hermes gateway turn failed'), {
+          providerError: String(payload.error || ''),
+          failureReason: String(payload.failure_reason || ''),
+        }));
       } else if (!text && artifacts.length === 0) {
         turn.reject(new Error('Hermes gateway returned no reply text'));
       } else {
@@ -661,6 +671,7 @@ class HermesGatewayClient {
       emit('turn.complete', {
         text: String(payload.text || (pending && pending.text) || '').trim(),
         status: payload.status || 'complete',
+        ...(payload.status === 'error' ? { providerError: String(payload.error || ''), failureReason: String(payload.failure_reason || '') } : {}),
         ...(Array.isArray(payload.artifacts) ? { artifacts: payload.artifacts } : {}),
       });
       return;
@@ -723,10 +734,13 @@ class HermesGatewayClient {
       || String(current.provider || '').toLowerCase() === String(base.provider).toLowerCase());
     if (base.model && !(sameModel && sameProvider)) {
       // config.set model without --global/--session pins the pick to this session only.
+      // Choosing the model in the picker is the confirmation: Mia has no second prompt,
+      // so without the flag Hermes holds back the switch and every retry fails the same way.
       const selected = await this.request('config.set', {
         session_id: sessionId,
         key: 'model',
         value: base.provider ? `${base.model} --provider ${base.provider}` : base.model,
+        confirm_expensive_model: true,
       });
       if (selected.confirm_required) throw new Error(selected.confirm_message || selected.warning || 'Model selection requires confirmation');
     }

@@ -80,3 +80,15 @@ test('Settings replays the view tips', () => {
   assert.match(html, /id="settingsReplayViewTips"/);
   assert.match(app, /replayViewTips\.addEventListener\('click', function\(\)\{\s*closeSettingsDrawer\(\);\s*if\(viewTips\) setTimeout\(viewTips\.replay, 350\);/);
 });
+
+test('the browser tips put a still in place of the page, which would hide their arrow', () => {
+  const source = fs.readFileSync(new URL('./view-tips.js', import.meta.url), 'utf8');
+  const browser = fs.readFileSync(new URL('./native-browser.js', import.meta.url), 'utf8');
+  assert.match(app, /onShown: function\(view\)\{\n\s*var browser = window\.miaNativeBrowser;\n\s*if\(browser && browser\.coverForTips\) browser\.coverForTips\(view === 'browser'\);/);
+  assert.match(source, /onShown\(view\);\n\s*show\(0\);/);
+  assert.match(source, /if \(was\) onShown\(null\);/);
+  // The still is captured, kept and hidden for the tips like for any menu over the page.
+  assert.match(browser, /callMenuRequested \|\| tipsRequested\);\n/);
+  assert.match(browser, /followMenuRequested \|\| callMenuRequested \|\| tipsRequested\) return;/);
+  assert.match(browser, /!followMenuOpen && !callMenuCovered && !tipsCovered &&/);
+});

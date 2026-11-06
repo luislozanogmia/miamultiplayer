@@ -907,6 +907,7 @@ async function runStandaloneInferenceViaHermesGateway(
     options: rememberTurnModel(standaloneGatewayOptions(options), options),
     imagePaths,
     onEvent: typeof options.onEvent === 'function' ? options.onEvent : null,
+    onSession: typeof options.onSession === 'function' ? options.onSession : null,
     signal: options.signal || null,
   });
   const text = stripHermesOperationalLines(result && result.text);

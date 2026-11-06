@@ -13,10 +13,10 @@
   var OPEN_RUNS = ['running', 'waiting', 'paused', 'failed'];
 
   var MESSAGES = {
-    invalid_workflow: 'This workflow has something the team server cannot accept. Check that every step has its text, person and bot.',
+    invalid_workflow: 'This workflow has something the company server cannot accept. Check that every step has its text, person and bot.',
     bot_not_ready: 'One of the bots is not ready for that person. The bot needs an approved version and must sit in a channel they joined.',
     name_taken: 'Another workflow already has this name. Choose a different one.',
-    workflow_limit: 'This team already has 50 workflows. Archive one before adding another.',
+    workflow_limit: 'This company already has 50 workflows. Archive one before adding another.',
     version_already_approved: 'This version was already approved.',
     version_rejected: 'This version was already rejected. Save a new version instead.',
     version_superseded: 'A newer version has replaced this one, so it can no longer be approved. To use it again, propose it as a new version.',
@@ -24,9 +24,9 @@
     not_a_starter: 'You are not one of the people who can start this workflow.',
     workflow_not_published: 'This workflow has no approved version yet.',
     workflow_paused: 'This workflow is paused. Resume it first.',
-    run_limit: 'This team has 50 workflows in progress. Wait for one to finish, or cancel one.',
+    run_limit: 'This company has 50 workflows in progress. Wait for one to finish, or cancel one.',
     invalid_summary: 'Write the summary as one line, up to 200 characters.',
-    invalid_run: 'The team server refused this because it does not match the run. Nothing was shared.',
+    invalid_run: 'The company server refused this because it does not match the run. Nothing was shared.',
     invalid_fix: 'That person cannot take this step. They must be in the workflow\'s channel, and the approver must be someone else.',
     not_fixer: 'Only the person named on this step or an admin can fix it.',
     step_not_paused: 'This step is no longer paused.',
@@ -38,7 +38,7 @@
     invalid_note: 'Write the note as one line, up to 200 characters.',
     invalid_department: 'Write the department as one line, up to 40 characters.',
     forbidden: 'Only the person who started this run or an admin can do that.',
-    writes_paused: 'The team server is not taking changes right now. Try again shortly.',
+    writes_paused: 'The company server is not taking changes right now. Try again shortly.',
     step_gone: 'This step has moved on. There is nothing left to do here.',
     step_changed: 'This step changed after you saw it. Check the new details, then choose again.',
     step_paused: 'This step is paused. Someone has to fix it before it can run.',
@@ -48,12 +48,12 @@
     steps_busy: 'Mia is busy with other steps on this computer. Try again in a moment.',
     step_claimed: 'Another of your computers is working on this step.',
     bot_runtime_unavailable: 'Mia cannot run bots right now. Restart Mia and try again.',
-    hub_unavailable: 'Mia cannot reach the team server. Your work is safe; try again shortly.',
-    account_mismatch: 'This computer is signed in with a different account than this team expects.',
+    hub_unavailable: 'Mia cannot reach the company server. Your work is safe; try again shortly.',
+    account_mismatch: 'This computer is signed in with a different account than this company expects.',
     account_changed: 'Your account changed while this was running. Try again.',
-    account_not_linked: 'Sign in again to run team workflows on this computer.',
-    account_unavailable: 'Sign in again to run team workflows on this computer.',
-    hub_sign_in_required: 'Sign in again to run team workflows on this computer.'
+    account_not_linked: 'Sign in again to run company workflows on this computer.',
+    account_unavailable: 'Sign in again to run company workflows on this computer.',
+    hub_sign_in_required: 'Sign in again to run company workflows on this computer.'
   };
   function errorMessage(error, fallback){
     var code = error && error.code;
@@ -72,7 +72,7 @@
   function shortName(people, subject){
     if(subject === 'system:schedule') return 'The schedule';
     var member = people && people[subject];
-    if(!member) return subject ? 'A teammate' : 'Nobody';
+    if(!member) return subject ? 'A colleague' : 'Nobody';
     return String(member.display_name || member.email || 'Someone').trim();
   }
   function displayName(people, subject){

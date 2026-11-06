@@ -210,7 +210,7 @@
   function openLinked(tab, activate){
     if(!s.space) return Promise.resolve();
     s.pendingOpens++;
-    return command('spaceOpenTab', {url: tab.url, groupId: s.groupId, name: s.space.name, activate: activate}).then(function(result){
+    return command('spaceOpenTab', {url: tab.url, groupId: s.groupId, name: callName(s.channelId, s.space.name), activate: activate}).then(function(result){
       if(result && result.openedId){ s.links[tab.k] = result.openedId; s.groupId = result.groupId || s.groupId; }
     }).catch(function(){}).then(function(){ s.pendingOpens--; });
   }
@@ -226,7 +226,7 @@
       return;
     }
     if(row.author_type !== 'user' || typeof row.author_id !== 'string' || !row.author_id) return;
-    message.from = {id: row.author_id, name: row.author_name || row.author_email || message.from && message.from.name || 'Teammate'};
+    message.from = {id: row.author_id, name: row.author_name || row.author_email || message.from && message.from.name || 'Colleague'};
     if(message.t === 'ring'){
       var self = me();
       if(self && message.to === self.id && message.from.id !== self.id && !(bound() && s.space.id === message.space)){
@@ -286,15 +286,21 @@
     s.ended[spaceId] = true;
     delete s.invites[spaceId];
     if(bound() && s.space.id === spaceId && s.channelId === channelId){
-      var text = 'An admin ended ' + s.space.name + ' for everyone. Your tabs stay open on this computer.';
+      var text = 'An admin ended ' + callName(s.channelId, s.space.name) + ' for everyone. Your tabs stay open on this computer.';
       s.notice = {text: text, at: Date.now()};
       leave(false);
       toast(text);
     }
     render();
   }
+  // A private chat is called something different on each computer, so its call
+  // takes the name this person knows it by rather than the host's.
+  function callName(channelId, name){
+    var channel = (host() ? host().channels() : []).filter(function(item){ return item.id === channelId; })[0];
+    return channel && channel.private ? channel.name : name;
+  }
   function tabTitle(tabKey){
-    var tab = s.space && s.space.tabs.filter(function(item){ return item.k === tabKey; })[0];
+    var tab = s.space && shownSpace().tabs.filter(function(item){ return item.k === tabKey; })[0];
     return tab ? tab.title || model.hostOf(tab.url) : '';
   }
 
@@ -357,8 +363,8 @@
     if(bound()){ s.callMenu = 'invite'; renderCall(); return; }
     var state = s.browser, active = state && state.tabs.filter(function(tab){ return tab.active; })[0];
     var group = selectedGroup();
-    if(active && active.private){ toast('This tab is private. Open a shared page to invite your team.'); return; }
-    if(!active || !model.shareableUrl(active.url)){ toast('Open a web page first, then invite your team.'); return; }
+    if(active && active.private){ toast('This tab is private. Open a shared page to invite your company.'); return; }
+    if(!active || !model.shareableUrl(active.url)){ toast('Open a web page first, then invite your company.'); return; }
     if(group && group.id === active.groupId){ s.sharePicking = group.id; render(); return; }
     command('groupCreate', {id: active.id, name: active.title || 'Shared tabs'}).then(function(next){
       var created = next && next.groups && next.tabs && next.tabs.filter(function(tab){ return tab.id === active.id; })[0];
@@ -416,7 +422,7 @@
     delete leftovers[id];
     writeStored(LEFTOVERS_KEY, leftovers);
     // A group of another name took this number: not the copy from last time.
-    var same = groupId && s.browser && s.browser.groups.some(function(group){ return group.id === groupId && group.name === invite.space.name; });
+    var same = groupId && s.browser && s.browser.groups.some(function(group){ return group.id === groupId && group.name === callName(invite.channelId, invite.space.name); });
     var tabs = same ? s.browser.tabs.filter(function(tab){ return tab.groupId === groupId; }) : [];
     var plan = model.reuseGroupTabs(invite.space, tabs);
     plan.groupId = Object.keys(plan.links).length ? groupId : null;
@@ -744,7 +750,7 @@
     return Object.keys(live).map(function(id){ return {id: id, name: live[id].name}; });
   }
   function toolbarLine(){
-    var followed = s.follow && (s.presence[s.follow] ? s.presence[s.follow].name : 'teammate');
+    var followed = s.follow && (s.presence[s.follow] ? s.presence[s.follow].name : 'colleague');
     return model.toolbarLine(workerSummary(), followed, othersHere());
   }
   function syncToolbar(){
@@ -771,8 +777,8 @@
     }
     return visibleInvites.slice(0, 2).map(function(invite){
       var rung = s.rung[invite.space.id];
-      return '<div class="mia-space-invite' + (rung ? ' ringing' : '') + '"><span class="mia-space-live-dot" aria-hidden="true"></span><span class="mia-space-text"><b>' + esc(invite.from.name) + (rung ? ' invited you to browse together' : ' is browsing with the team') +
-        '</b><span class="mia-space-hint">' + esc(invite.space.name) + ' · ' + invite.space.tabs.length + ' tab' + (invite.space.tabs.length === 1 ? '' : 's') +
+      return '<div class="mia-space-invite' + (rung ? ' ringing' : '') + '"><span class="mia-space-live-dot" aria-hidden="true"></span><span class="mia-space-text"><b>' + esc(invite.from.name) + (rung ? ' invited you to browse together' : ' is browsing with the company') +
+        '</b><span class="mia-space-hint">' + esc(callName(invite.channelId, invite.space.name)) + ' · ' + invite.space.tabs.length + ' tab' + (invite.space.tabs.length === 1 ? '' : 's') +
         '</span></span><span class="mia-space-choices"><button type="button" class="mia-space-btn" data-space-decline="' + esc(invite.space.id) + '">Not now</button><button type="button" class="mia-space-btn primary" data-space-join="' + esc(invite.space.id) + '">Join</button></span></div>';
     }).join('');
   }
@@ -802,7 +808,7 @@
     if(!chatShown) html += invites;
     if(group && s.sharePicking === group.id){
       var h = host(), channels = h ? h.channels() : [], chosen = s.shareChannelId || defaultChannel();
-      html += '<div class="mia-space-invite"><span class="mia-space-icon">' + PEOPLE_ICON + '</span><span class="mia-space-text"><b>Browse ' + esc(group.name || 'this group') + ' with your team' +
+      html += '<div class="mia-space-invite"><span class="mia-space-icon">' + PEOPLE_ICON + '</span><span class="mia-space-text"><b>Browse ' + esc(group.name || 'this group') + ' with your company' +
         '</b><span class="mia-space-hint">Everyone in the chat you pick can join, open its tabs and see a small live view of them.</span></span>' +
         '<span class="mia-space-choices"><select class="mia-space-select" data-space-channel aria-label="Chat to invite">' + channels.map(function(channel){
           return '<option value="' + esc(channel.id) + '"' + (channel.id === chosen ? ' selected' : '') + '>' + esc(channel.name) + '</option>';
@@ -871,7 +877,7 @@
     var html;
     if(!s.zoomed){
       callBar.className = 'mia-space-call away';
-      html = '<button type="button" class="mia-space-call-return" data-space-return title="Return to ' + esc(s.space.name) + '"><i class="mia-space-live-dot" aria-hidden="true"></i>In a call <b class="mia-space-clock">' + clockText() + '</b><span aria-hidden="true">·</span> Return</button>';
+      html = '<button type="button" class="mia-space-call-return" data-space-return title="Return to ' + esc(callName(s.channelId, s.space.name)) + '"><i class="mia-space-live-dot" aria-hidden="true"></i>In a call <b class="mia-space-clock">' + clockText() + '</b><span aria-hidden="true">·</span> Return</button>';
     } else {
       callBar.className = 'mia-space-call';
       var self = me(), live = model.livePresence(s.presence, Date.now());
@@ -881,7 +887,7 @@
           '" title="' + (person.away ? esc(person.name) + ' is away · ' : '') + (s.follow === id ? 'Stop following ' : 'Follow ') + esc(person.name) + (where ? ' · on ' + esc(where) : '') + '">' + chip({name: person.name}, 'tone', ' style="background:' + tone(id) + '"') + '</button>';
       }).join('');
       html = '<button type="button" class="mia-space-btn" data-space-back><span aria-hidden="true">←</span> Back to Mia</button>' +
-        '<span class="mia-space-call-title"><i class="mia-space-live-dot" aria-hidden="true"></i><span class="mia-space-call-name">In a call: ' + esc(s.space.name) + '</span><b class="mia-space-clock">' + clockText() + '</b></span>' +
+        '<span class="mia-space-call-title"><i class="mia-space-live-dot" aria-hidden="true"></i><span class="mia-space-call-name">In a call: ' + esc(callName(s.channelId, s.space.name)) + '</span><b class="mia-space-clock">' + clockText() + '</b></span>' +
         '<span class="mia-space-faces">' + faces + '</span><span class="mia-space-call-follow-slot"></span>' +
         '<span class="mia-space-call-actions"><button type="button" class="mia-space-btn" data-space-invite>Invite</button>' +
         '<button type="button" class="mia-space-btn icon" data-space-more aria-label="More" title="More">⋯</button>' +

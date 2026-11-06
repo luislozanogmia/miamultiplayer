@@ -235,7 +235,11 @@ test('a slash-namespaced provider model id schedules a job', async () => {
 
   await cronSync.syncBotAutomation(agent, null);
 
-  const commands = readCommands();
+  // The first scheduled job also installs the plugin that stops retries on provider limits.
+  const allCommands = readCommands();
+  assert.ok(allCommands.some((args) => args.join(' ') === 'plugins enable mia-provider-limits'));
+  assert.ok(fs.existsSync(path.join(hermesHome, 'plugins', 'mia-provider-limits', '__init__.py')));
+  const commands = allCommands.filter((args) => args[0] !== 'plugins');
   assert.equal(commands.length, 1);
   assert.equal(commands[0][2], 'create');
   assert.deepEqual(commands[0].slice(commands[0].indexOf('--workdir'), commands[0].indexOf('--workdir') + 2), [
@@ -1116,4 +1120,19 @@ test('an existing job without the step-report context is edited to get it', asyn
   setJobs([{ ...base, mia_run_report: { automationId: 'roundup', steps: 2 } }]);
   await cronSync.syncBotAutomation(bot);
   assert.equal(readCommands().filter((args) => args[2] === 'edit').length, 0, 'current context means nothing to edit');
+});
+
+test('a company bot works in its company folder beside bots/, found again after renames', () => {
+  const teamsRoot = path.join(path.dirname(artifactRoot), 'companies');
+  const team = { teamId: 'a'.repeat(32), teamName: 'Acme Ops' };
+  const folder = cronSync.teamBotWorkspace(team, { registrationId: 'reg1', name: 'LinkedIn' });
+  assert.equal(folder, path.join(teamsRoot, 'Acme Ops', 'LinkedIn'));
+  assert.equal(cronSync.teamBotWorkspace({ ...team, teamName: 'Acme Renamed' }, { registrationId: 'reg1', name: 'LinkedIn Helper' }), folder,
+    'the marker keeps the same folder when the team or bot is renamed');
+  const other = cronSync.teamBotWorkspace(team, { registrationId: 'reg2', name: 'LinkedIn' });
+  assert.equal(other, path.join(teamsRoot, 'Acme Ops', 'LinkedIn-2'), 'two bots with one name get their own folders');
+  const otherTeam = cronSync.teamBotWorkspace({ teamId: 'b'.repeat(32), teamName: 'Acme Ops' }, { registrationId: 'reg1', name: 'LinkedIn' });
+  assert.equal(otherTeam, path.join(teamsRoot, 'Acme Ops-2', 'LinkedIn'), 'another team never shares a folder');
+  assert.ok(!folder.startsWith(artifactRoot + path.sep), 'never inside the Solo bot folders');
+  assert.throws(() => cronSync.teamBotWorkspace({ teamId: '../x', teamName: 'x' }, { registrationId: 'reg1', name: 'x' }));
 });

@@ -55,6 +55,21 @@ test('an acknowledged selection that leaves the wrong live model never submits a
   client.close();
 });
 
+test('choosing a model confirms the switch, so a large chat is not held back by Hermes', async () => {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
+  client.sessionInfo.set('live', { model: 'grok-4', provider: 'xai' });
+  // Hermes writes nothing and asks again unless the request carries the flag.
+  client.request = async (method, params) => {
+    assert.equal(method, 'config.set');
+    if (!params.confirm_expensive_model) return { value: params.value, confirm_required: true, confirm_message: '!!! LARGE CONTEXT MODEL SWITCH !!!' };
+    client.sessionInfo.set('live', { model: 'deepseek-flash', provider: 'deepseek' });
+    return { value: 'deepseek-flash', confirm_required: false };
+  };
+  await client.applySessionSelection('live', { model: 'deepseek-flash', provider: 'deepseek' }, { model: 'grok-4', provider: 'xai' });
+  assert.equal(client.sessionInfo.get('live').model, 'deepseek-flash');
+  client.close();
+});
+
 test('Hermes gateway credentials are confined to loopback and cannot be embedded in configuration URLs', () => {
   assert.throws(() => new HermesGatewayClient({
     url: 'wss://gateway.example.com/api/ws', token: 'secret', WebSocketImpl: class {}, env: {},
@@ -180,9 +195,9 @@ test('Hermes gateway client creates, streams, and resumes a persistent session',
   // Both fresh profile-backed sessions and resumed sessions are explicitly
   // pinned before their prompt so a profile default cannot replace the picker.
   assert.deepEqual(calls.filter((call) => call.method === 'config.set').map((call) => call.params), [
-    { session_id: 'live-1', key: 'model', value: 'gpt-5.6-luna --provider openai-codex' },
+    { session_id: 'live-1', key: 'model', value: 'gpt-5.6-luna --provider openai-codex', confirm_expensive_model: true },
     { session_id: 'live-1', key: 'fast', value: 'fast' },
-    { session_id: 'live-resumed', key: 'model', value: 'deepseek-chat --provider deepseek' },
+    { session_id: 'live-resumed', key: 'model', value: 'deepseek-chat --provider deepseek', confirm_expensive_model: true },
     { session_id: 'live-resumed', key: 'fast', value: 'normal' },
     { session_id: 'live-resumed', key: 'reasoning', value: 'high' },
   ]);
@@ -1329,5 +1344,68 @@ test('a failed Stop can be retried while the interrupt observation stays open', 
   assert.equal(calls.length, 2, 'the retry sends a fresh request');
   assert.equal(calls[0].timeoutMs, 500); assert.equal(calls[0].signal, signal);
   assert.deepEqual(events.map(e => e.status), ['timed_out', 'acknowledged'], 'one observation records both receipts');
+  client.close();
+});
+
+test('a failed turn keeps the provider error beside the Hermes summary', async () => {
+  const client = new HermesGatewayClient({ env: {} });
+  const failure = new Promise((resolve, reject) => {
+    const turn = { sessionId: 'limit', text: '', resolve, reject };
+    client.turns.set('limit', turn);
+    client.handleTurnEvent(turn, 'message.complete', {
+      status: 'error',
+      text: "Claude didn't answer after 3 attempts.",
+      error: "You've hit your monthly spend limit",
+      failure_reason: 'billing',
+    });
+  });
+  await assert.rejects(failure, (error) => {
+    assert.equal(error.message, "Claude didn't answer after 3 attempts.");
+    assert.equal(error.providerError, "You've hit your monthly spend limit");
+    assert.equal(error.failureReason, 'billing');
+    return true;
+  });
+});
+
+function connectFixture({ exitAfterMs, openAfterMs }) {
+  const child = { once(name, listener) { if (name === 'exit' && exitAfterMs !== undefined) setTimeout(listener, exitAfterMs); } };
+  class SlowSocket {
+    constructor() {
+      setTimeout(() => {
+        if (Date.now() - started >= openAfterMs) this.onopen?.();
+        else this.onerror?.(new Error('connection refused'));
+        if (Date.now() - started < openAfterMs) this.onclose?.({ code: 1006 });
+      }, 1);
+    }
+    close() {}
+  }
+  const started = Date.now();
+  let clock = started;
+  const client = new HermesGatewayClient({
+    binary: '/tmp/hermes', env: {}, port: 9177,
+    tokenFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mia-gateway-slow-')), 'gateway.token'),
+    WebSocketImpl: SlowSocket, probePortImpl: async () => false, spawnImpl: () => child,
+    stopExternalGatewayImpl: async () => {}, now: () => { clock += 5000; return clock; },
+  });
+  return client;
+}
+
+test('a runtime Mia started can take longer than the old 30 seconds to open', async () => {
+  const client = connectFixture({ openAfterMs: 1500 });
+  client.attachSocket = function (socket, resolve, reject) {
+    socket.onopen = resolve;
+    socket.onerror = reject;
+  };
+  await client.connect();
+  client.close();
+});
+
+test('a runtime that exits while starting fails at once instead of waiting out the limit', async () => {
+  const client = connectFixture({ exitAfterMs: 50, openAfterMs: 60 * 60 * 1000 });
+  client.attachSocket = function (socket, resolve, reject) {
+    socket.onopen = resolve;
+    socket.onerror = reject;
+  };
+  await assert.rejects(client.connect(), /exited before it was ready/);
   client.close();
 });

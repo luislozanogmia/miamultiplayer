@@ -105,6 +105,60 @@ def _short(text: Any, limit: int = SUMMARY_LIMIT) -> str:
     return flat if len(flat) <= limit else flat[:limit] + " ...(cut short)"
 
 
+# An edit to one named document, sheet or file. A yes to it also covers later
+# edits to that same item in the same reply. Sending, deleting, publishing and
+# creating are never covered this way: each of those asks again.
+EDIT_VERB = re.compile(r"(^|_)(append|update|edit|modify|insert|write|replace|format|batch_update)(_|$)")
+NOT_REPEATABLE = re.compile(r"(^|_)(send|delete|remove|trash|create|post|publish|share|move|reply|forward|invite)(_|$)")
+TARGET_KEY = re.compile(r"^(document|doc|spreadsheet|sheet|file|presentation|page|event|calendar)_?id$", re.I)
+DESTRUCTIVE_NESTED = re.compile(r"^(delete|remove|trash|clear|cut|move)", re.I)
+
+
+def _nested_destructive_action(value: Any, depth: int = 0) -> str:
+    if depth > 32:
+        return "unverifiedRequest"
+    if isinstance(value, dict):
+        for key, item in value.items():
+            name = str(key)
+            if DESTRUCTIVE_NESTED.match(name):
+                return name
+            if name.lower() in {"action", "operation", "type", "method"} and isinstance(item, str) and DESTRUCTIVE_NESTED.match(item):
+                return item
+            if name.lower() in {"requests", "request", "operations", "operation"} and isinstance(item, str) and not item.lstrip().startswith(("{", "[")):
+                return "unverifiedRequest"
+            nested = _nested_destructive_action(item, depth + 1)
+            if nested:
+                return nested
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            nested = _nested_destructive_action(item, depth + 1)
+            if nested:
+                return nested
+    elif isinstance(value, str) and value.lstrip().startswith(("{", "[")):
+        # Some connector tools accept a JSON-encoded request. Inspect it as
+        # data before granting repeat approval; malformed input fails closed.
+        if len(value) > 1_000_000:
+            return "unverifiedRequest"
+        try:
+            parsed = json.loads(value)
+        except (ValueError, RecursionError):
+            return "unverifiedRequest"
+        if not isinstance(parsed, (dict, list)):
+            return "unverifiedRequest"
+        return _nested_destructive_action(parsed, depth + 1)
+    return ""
+
+
+def _repeat_key(tool_name: str, args: Any) -> str:
+    name = str(tool_name or "").lower()
+    if not name.startswith("mcp_") or not EDIT_VERB.search(name) or NOT_REPEATABLE.search(name) or not isinstance(args, dict) or _nested_destructive_action(args):
+        return ""
+    targets = sorted((key.lower(), str(value)) for key, value in args.items() if TARGET_KEY.match(str(key)) and value)
+    if not targets:
+        return ""
+    return hashlib.sha256(json.dumps([name, targets]).encode()).hexdigest()
+
+
 def _fingerprint(tool_name: str, args: Any) -> str:
     exact = json.dumps([tool_name, args], sort_keys=True, default=str)
     return hashlib.sha256(exact.encode()).hexdigest()
@@ -167,6 +221,13 @@ def classify(tool_name: str, args: Any, session: str = "") -> Optional[Tuple[str
         return None
     if name.startswith("mcp_"):
         lowered = name.lower()
+        nested_action = _nested_destructive_action(args)
+        if nested_action == "unverifiedRequest":
+            return ("change", name + " " + json.dumps({"miaNestedAction": "review"}))
+        if nested_action:
+            # The fingerprint still binds the exact request. The card needs
+            # the destructive operation type, never its raw arguments.
+            return ("delete", name + " " + json.dumps({"miaNestedAction": nested_action}))
         if "draft" not in lowered and WRITE_VERB.search(lowered):
             category = "delete" if re.search(r"(^|_)(delete|remove|trash)(_|$)", lowered) else "send"
             return (category, name + " " + _short(json.dumps(args, default=str)))
@@ -203,7 +264,7 @@ def _on_pre_tool_call(tool_name: str = "", args: Any = None, session_id: str = "
         return None
     decision = _post("/decide", {
         "sessionId": session, "category": found[0], "summary": found[1],
-        "fingerprint": _fingerprint(tool_name, args),
+        "fingerprint": _fingerprint(tool_name, args), "repeatKey": _repeat_key(tool_name, args),
     }, 10)
     if decision and decision.get("allow") is True:
         return None

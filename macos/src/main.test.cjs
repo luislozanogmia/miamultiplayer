@@ -1013,3 +1013,33 @@ test("a gone main renderer reloads Mia instead of leaving a black window", () =>
   assert.match(handler, /loadURL\(backendUrl\)/);
   assert.match(handler, /rendererRecoveries\.length >= 3/, "a crash loop stops retrying");
 });
+
+test("a sign-in page never opens back inside Mia when Mia is the default browser", () => {
+  const { EventEmitter } = require("node:events");
+  const main = loadMain();
+  const opened = [];
+  main.__electron.shell.openExternal = url => { opened.push(url); return Promise.resolve(); };
+  main.__electron.app.isDefaultProtocolClient = scheme => scheme === "https";
+  const contents = new EventEmitter();
+  contents.session = { id: "main-session" };
+  contents.setWindowOpenHandler = handler => { contents.popup = handler; };
+  main.configureNavigation({ webContents: contents }, "http://localhost:4871");
+  const childContents = new EventEmitter();
+  childContents.setWindowOpenHandler = handler => { childContents.popup = handler; };
+  let closed = false;
+  contents.emit("did-create-window", { webContents: childContents, close() { closed = true; } }, { url: "http://localhost:4871/api/settings/harness/auth/redirect?provider=openai-codex" });
+  let blocked = false;
+  childContents.emit("will-redirect", { preventDefault() { blocked = true; } }, "https://auth.openai.com/codex/device");
+  assert.equal(blocked, true);
+  assert.deepEqual(opened, []);
+  assert.equal(closed, true, "the empty popup still closes and the sign-in panel stays");
+});
+
+test("a slow first start gets minutes to finish, and a dead server is still noticed at once", () => {
+  const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  assert.equal(Number(/const BACKEND_START_TIMEOUT_MS = (\d+);/.exec(source)[1]) >= 120000, true);
+  const wait = source.slice(source.indexOf("const startedAt = Date.now();"), source.indexOf("async function developmentStartServer"));
+  assert.match(wait, /if \(backendProcess !== child\) return null;/);
+  const screen = fs.readFileSync(path.join(__dirname, "renderer", "index.html"), "utf8");
+  assert.doesNotMatch(screen, /Start the server|desktop shell|Retry connection/);
+});

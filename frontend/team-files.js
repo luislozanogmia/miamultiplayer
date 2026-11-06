@@ -34,8 +34,8 @@
   var MESSAGES = {
     file_too_large: 'That file is over the 500 MB limit for one file.',
     empty_file: 'That file is empty, so there is nothing to upload.',
-    file_quota_exceeded: 'Your team has used all of its file storage. Delete some files to make room.',
-    team_files_not_configured: 'File storage is not set up for this team yet. Ask your team admin.',
+    file_quota_exceeded: 'Your company has used all of its file storage. Delete some files to make room.',
+    team_files_not_configured: 'File storage is not set up for this company yet. Ask your company admin.',
     file_uploads_disabled: 'Uploading files is turned off for now. Existing files can still be downloaded.',
     file_storage_unavailable: 'The file storage service did not answer. Try again in a moment.',
     upload_closed: 'This upload is no longer open. Start it again.',
@@ -50,29 +50,29 @@
     run_finished: 'That run has already finished.',
     space_archived: 'This conversation is archived, so files cannot be added.',
     channel_archived: 'This conversation is archived, so files cannot be added.',
-    download_allowance_exceeded: 'Your team has used this month’s download allowance. Try again next month.',
+    download_allowance_exceeded: 'Your company has used this month’s download allowance. Try again next month.',
     scan_status_conflict: 'This file’s scan result changed. Refresh and try again.',
     invalid_scan_status: 'The scan result could not be read. Try again.',
     not_found: 'This file is no longer available to you.',
-    file_in_use: 'A team app is using this file, so it can’t be deleted. Remove the app first.',
-    unsafe_url: 'Mia refused a file link that did not point at your team’s storage.',
+    file_in_use: 'A company app is using this file, so it can’t be deleted. Remove the app first.',
+    unsafe_url: 'Mia refused a file link that did not point at your company’s storage.',
     unsafe_headers: 'Mia refused upload instructions it did not expect.',
     bad_response: 'The file service sent something Mia could not read. Try again.',
     part_mismatch: 'The file service split this file differently than expected. Start it again.',
     file_changed: 'The file changed on this computer. Choose it again to upload the new version.',
     part_rejected: 'The storage service rejected a piece of the file. It may have changed while uploading. Start it again.',
     part_failed: 'A piece of the file did not upload. Check your connection, then retry.',
-    storage_unreadable: 'The storage service accepted a piece but your app cannot read its receipt. Ask your team admin to check the storage settings.',
+    storage_unreadable: 'The storage service accepted a piece but your app cannot read its receipt. Ask your company admin to check the storage settings.',
     storage_refused: 'The storage service refused this transfer. Try again.',
     download_failed: 'The file could not be downloaded. Try again.',
     integrity_failed: 'The downloaded file did not match its fingerprint, so it was discarded.',
     aborted: 'Stopped.',
-    team_storage_full: 'Your team has used all of its file storage. Delete some files to make room.',
+    team_storage_full: 'Your company has used all of its file storage. Delete some files to make room.',
     // Not specific to files; wording matches the rest of the team screens.
-    hub_unavailable: 'Can’t reach the shared team service right now. Try again in a moment.',
-    service_unavailable: 'Can’t reach the shared team service right now. Try again in a moment.',
-    writes_paused: 'The shared team service is briefly read-only for maintenance. Try again in a moment.',
-    sign_in_required: 'Sign in to your Mia account to use shared teams.',
+    hub_unavailable: 'Can’t reach the company service right now. Try again in a moment.',
+    service_unavailable: 'Can’t reach the company service right now. Try again in a moment.',
+    writes_paused: 'The company service is briefly read-only for maintenance. Try again in a moment.',
+    sign_in_required: 'Sign in to your Mia account to use companies.',
     rate_limit: 'Too many requests. Wait a moment and try again.',
   };
   function errorMessage(code, status){
@@ -85,7 +85,7 @@
   // Delete is only for the uploader or a team admin; the Hub answers anyone else
   // with "not found", so say what likely happened.
   function deleteErrorMessage(error){
-    if(error && (error.code === 'not_found' || error.status === 404 || error.status === 403)) return 'Only the person who added this file or a team admin can delete it.';
+    if(error && (error.code === 'not_found' || error.status === 404 || error.status === 403)) return 'Only the person who added this file or a company admin can delete it.';
     return friendly(error);
   }
   // A Hub error carries its own chat-flavoured wording; prefer the file wording.

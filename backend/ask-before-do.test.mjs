@@ -308,13 +308,110 @@ test('the gate answers only with its token', async (t) => {
 });
 
 test('the concise approval line comes from the operation, not model wording', () => {
-  const line = 'Run rm';
+  const line = 'Delete a.txt';
   assert.deepEqual(approvalCard('rm a.txt', 'concise', 'This deletes another file.'), { text: `Do you approve?\n\n${line}`, line });
   assert.deepEqual(approvalCard('rm a.txt', undefined), { text: `Do you approve?\n\n${line}`, line });
-  assert.deepEqual(approvalCard('rm a.txt', 'verbose', 'different wording'), { text: `Do you approve?\n\n${line}\n\nrm a.txt`, line, summary: 'rm a.txt' });
+  assert.deepEqual(approvalCard('rm a.txt', 'verbose', 'different wording'), {
+    text: `Do you approve?\n\n${line}\n\nThis approval covers this action once in this reply.`, line, summary: line,
+  });
+});
+
+test('verbose approvals keep the action but never persist raw URLs or tokens', () => {
+  const secretUrl = 'https://example.test/reset?token=fixture-private-value';
+  const jwt = `eyJ${'a'.repeat(20)}.eyJ${'b'.repeat(20)}.${'c'.repeat(30)}`;
+  for (const raw of [`Click Send on ${secretUrl}`, `Run code with ${jwt}`]) {
+    const card = approvalCard(raw, 'verbose', 'model wording');
+    assert.ok(card.text.includes(card.line));
+    assert.ok(card.text.includes('This approval covers this action once'));
+    assert.doesNotMatch(JSON.stringify(card), /fixture-private-value|eyJ[a-z]+\.eyJ/);
+  }
 });
 
 test('the actual browser action line is short and drops URL credentials', () => {
   assert.equal(approvalCard('Click Send on https://example.test/reset?token=secret', 'concise', 'This is harmless').line, 'Click Send on https://example.test');
   assert.equal(approvalCard('Click ' + 'x'.repeat(500), 'concise').line, 'Click [value]');
+});
+
+test('the approval line says in plain words what the command will do, never the command', () => {
+  const line = (summary) => approvalCard(summary, 'concise').line;
+  assert.equal(line('rm -rf build dist node_modules old'), 'Delete build, dist and 2 more');
+  assert.equal(line('cd x && rm notes.txt'), 'Delete notes.txt');
+  assert.equal(line('ls -la /tmp/notes.txt && rm /tmp/notes.txt'), 'Delete notes.txt', 'the risky part of a combined command');
+  assert.equal(line('mv a.txt b.pdf ~/.Trash/'), 'Move a.txt and b.pdf to the Trash');
+  assert.equal(line('find . -name x -delete'), 'Delete files found in this folder');
+  assert.equal(line('git push origin main'), 'Push your changes to origin/main');
+  assert.equal(line('gh pr create --title x'), 'Open a pull request on GitHub');
+  assert.equal(line('curl -X POST https://api.example.test/v1?token=abc -d {}'), 'Send data to api.example.test');
+  assert.equal(line('mcp_google_workspace_gmail_send {"to":"a@example.test","subject":"Invoice"}'), 'Send an email "Invoice" to a@example.test with Gmail');
+  assert.equal(line('mcp__google__google_docs_create {"title":"Weekly plan"}'), 'Create a document "Weekly plan" in Google Docs');
+  assert.equal(line('mcp__google__google_drive_delete_file {}'), 'Delete a file in Google Drive');
+  assert.equal(line('mcp__linear__create_issue {"title":"Fix login"}'), 'Create an issue "Fix login" in Linear');
+  assert.equal(line('mcp__slack__post_message {"text":"hi"}'), 'Post a message in Slack');
+  assert.equal(line('mcp__google__google_docs_create {"title":"ghp_abcdefghijklmnopqrstuvwxyz0123456789ab"}'), 'Create a document in Google Docs');
+  assert.equal(line('Run code: os.remove("a")'), 'Run code that can change or delete files');
+  assert.equal(line('rm ghp_abcdefghijklmnopqrstuvwxyz0123456789ab'), 'Delete files', 'a value that looks secret is never shown');
+  for (const summary of ['rm a.txt', 'git push origin main', 'curl -d x https://a.example.test']) assert.doesNotMatch(line(summary), /^Run (rm|git|curl)\b/);
+});
+
+test('a yes to editing one document covers more edits to it in the same reply, and nothing else', async () => {
+  const context = bound();
+  const { gate, turn, shown } = context;
+  turn();
+  const docA = 'a'.repeat(64), docB = 'b'.repeat(64);
+  const edit = (fingerprint, repeatKey) => gate.decide({ sessionId: 'stored', category: 'change', summary: 'mcp__google__google_docs_append {}', fingerprint, repeatKey });
+  const first = edit('append-1', docA);
+  assert.equal(first.allow, false);
+  const answer = await asking(context, first.message, (request) => gate.answer({ id: request.id, requester: 'a@example.com', approved: true }));
+  assert.equal(answer.approved, true);
+  assert.equal(shown[0].repeatable, true, 'the card says it covers more edits');
+  assert.equal(edit('append-1', docA).allow, true, 'the approved call');
+  assert.equal(edit('append-2', docA).allow, true, 'more text to the same document');
+  assert.equal(edit('append-3', docA).allow, true);
+  assert.equal(edit('append-4', docB).allow, false, 'another document asks');
+  assert.equal(gate.decide({ sessionId: 'stored', category: 'send', summary: 'send', fingerprint: 'send-1' }).allow, false, 'sending still asks');
+  assert.equal(gate.decide({ sessionId: 'stored', category: 'delete',
+    summary: 'mcp_google_sheets_batch_update {"miaNestedAction":"deleteSheet"}',
+    fingerprint: 'delete-sheet-1', repeatKey: '' }).allow, false,
+  'a nested sheet deletion on the same target needs its own approval');
+  turn();
+  assert.equal(edit('append-5', docA).allow, false, 'a new reply asks again');
+});
+
+test('only edits to a named item can be covered; sending, deleting and creating cannot', async () => {
+  const script = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1] + "/__init__.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+k = m._repeat_key
+print(json.dumps({
+  "append": bool(k("mcp__google__google_docs_append", {"documentId": "d1", "text": "a"})),
+  "sameDoc": k("mcp__google__google_docs_append", {"documentId": "d1", "text": "a"}) == k("mcp__google__google_docs_append", {"documentId": "d1", "text": "b"}),
+  "otherDoc": k("mcp__google__google_docs_append", {"documentId": "d1"}) == k("mcp__google__google_docs_append", {"documentId": "d2"}),
+  "sheet": bool(k("mcp__google__google_sheets_update_values", {"spreadsheetId": "s1", "values": []})),
+  "noTarget": bool(k("mcp__google__google_docs_append", {"text": "a"})),
+  "create": bool(k("mcp__google__google_docs_create", {"documentId": "d1"})),
+  "send": bool(k("mcp__google__google_gmail_send", {"fileId": "f"})),
+  "delete": bool(k("mcp__google__google_drive_delete_file", {"fileId": "f"})),
+  "terminal": bool(k("terminal", {"command": "rm a"})),
+  "batchEdit": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"updateCells": {"rows": []}}]})),
+  "batchDelete": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})),
+  "encodedBatchEdit": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": '[{"updateCells": {}}]'})),
+  "encodedBatchDelete": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": '[{"deleteSheet": {"sheetId": 1}}]'})),
+  "encodedBatchDeleteCategory": m.classify("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": '[{"deleteSheet": {"sheetId": 1}}]'})[0],
+  "malformedBatch": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": '[{"deleteSheet":'})),
+  "opaqueBatch": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": 'deleteSheet'})),
+  "batchDeleteCategory": m.classify("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})[0],
+  "batchDeleteSummary": m.classify("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})[1],
+}))
+`;
+  const { stdout } = await promisify(execFile)('python3', ['-c', script, pluginDir]);
+  const result = JSON.parse(stdout);
+  assert.deepEqual({ ...result, batchDeleteSummary: undefined }, {
+    append: true, sameDoc: true, otherDoc: false, sheet: true, noTarget: false,
+    create: false, send: false, delete: false, terminal: false,
+    batchEdit: true, batchDelete: false, batchDeleteCategory: 'delete', batchDeleteSummary: undefined,
+    encodedBatchEdit: true, encodedBatchDelete: false, encodedBatchDeleteCategory: 'delete', malformedBatch: false, opaqueBatch: false,
+  });
+  assert.equal(approvalCard(result.batchDeleteSummary, 'verbose', '').line, 'Delete a sheet in Google Sheets');
+  assert.equal(approvalCard('mcp__google__google_docs_append {"documentId":"d1"}', 'concise', '', true).line, 'Add to a document in Google Docs, and keep editing it in this reply');
 });

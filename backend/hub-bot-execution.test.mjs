@@ -115,7 +115,7 @@ test('long shared-channel replies are published, and over-limit replies are shor
   await f.client.share(owner,f.input,'fixture.token');
   await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();
   assert.equal(withoutRunLabel(f.reply()),long);
-  assert.deepEqual(f.received[0].channel,{teamId,channelId});
+  assert.deepEqual(f.received[0].channel,{teamId,teamName:'',channelId});
 
   const huge='é'.repeat(9000);
   const g=fixture(t,{ownRequest:true,replyText:huge});
@@ -134,7 +134,7 @@ test('a bot reply says who ran it and with which provider',async t=>{
 
 test('the run label never needs a provider or a name, and a failed run has none',async t=>{
   assert.equal(runLabel('','Ana'),'Ran on Ana’s Mia');
-  assert.equal(runLabel('Claude',''),'Claude · Ran on a teammate’s Mia');
+  assert.equal(runLabel('Claude',''),'Claude · Ran on a colleague’s Mia');
   const f=fixture(t,{ownRequest:true,revokeDuringRun:false,replyText:{provider:'Grok'}});
   await f.client.share(owner,f.input,'fixture.token');
   await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();

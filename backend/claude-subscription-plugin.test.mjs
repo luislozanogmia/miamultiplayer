@@ -201,3 +201,91 @@ print(json.dumps([stream(['']), stream(['', '']), stream([]), stream(['{"a"', ':
   const expected = input => ({ input, complete: true });
   assert.deepEqual(JSON.parse(result.stdout), [expected({}), expected({}), expected({}), expected({ a: 1 })]);
 });
+
+// Runs the real client against a stand-in Claude Code that streams the given events.
+function streamThroughClient(stream) {
+  return runPython(`
+import json, os, stat, sys, tempfile, time
+sys.path.insert(0, sys.argv[1])
+import types
+sanitizer = types.ModuleType('tools.schema_sanitizer')
+sanitizer.strip_nullable_unions = lambda schema, **_: schema
+sys.modules.update({'tools': types.ModuleType('tools'), 'tools.schema_sanitizer': sanitizer})
+import directsdk
+fake = tempfile.NamedTemporaryFile('w', suffix='.py', delete=False)
+fake.write('''#!''' + sys.executable + '''
+import json, sys, time
+sys.stdin.read()
+def send(event): print(json.dumps(event), flush=True)
+def stream_event(event): send({"type": "stream_event", "event": event})
+${stream}
+tool = {"type": "tool_use", "id": "t1", "name": "''' + directsdk.PREFIX + '''write_file", "input": {"path": "a", "content": "x"}}
+stream_event({"type": "message_stop"})
+send({"type": "assistant", "message": {"content": [tool], "usage": {}}})
+send({"type": "result", "subtype": "success", "usage": {"input_tokens": 1, "output_tokens": 1}})
+''')
+fake.close()
+os.chmod(fake.name, os.stat(fake.name).st_mode | stat.S_IEXEC)
+client = directsdk.Client(command=[fake.name], env={'PATH': os.environ['PATH']}, timeout=30)
+tools = [{'type': 'function', 'function': {'name': 'write_file', 'description': 'd', 'parameters': {'type': 'object', 'properties': {}}}}]
+last = time.monotonic()
+gaps, shown, calls = [], [], []
+for chunk in client.create(model='claude-sonnet-5-5', messages=[{'role': 'user', 'content': 'go'}], tools=tools, stream=True, timeout=30):
+    now = time.monotonic()
+    gaps.append(now - last)
+    last = now
+    delta = chunk.choices[0].delta
+    if delta.content or getattr(delta, 'reasoning_content', None):
+        shown.append('text')
+    if delta.tool_calls:
+        calls.append(delta.tool_calls)
+os.unlink(fake.name)
+print(json.dumps({'maxGap': max(gaps), 'shown': shown, 'calls': len(calls)}))
+`);
+}
+
+test('a long tool call keeps Hermes informed without showing partial arguments', () => {
+  // The API sends a few argument deltas, then only pings until the argument is complete.
+  const result = streamThroughClient(`
+stream_event({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use"}})
+stream_event({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "x"}})
+for part in range(15):
+    stream_event({"type": "ping"})
+    time.sleep(0.2)
+stream_event({"type": "content_block_stop", "index": 0})
+`);
+  assert.equal(result.status, 0, result.stderr);
+  const seen = JSON.parse(result.stdout);
+  assert.ok(seen.maxGap < 1.6, `activity reached Hermes, longest gap ${seen.maxGap}s`);
+  assert.deepEqual(seen.shown, [], 'nothing partial is shown in chat');
+  assert.equal(seen.calls, 1, 'the tool call arrives once, whole');
+});
+
+test('a provider that is truly silent still looks silent to Hermes', () => {
+  const result = streamThroughClient(`
+stream_event({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use"}})
+time.sleep(2.6)
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(JSON.parse(result.stdout).maxGap >= 2.5, 'nothing arrived, so nothing is reported');
+});
+
+test('pings before the model starts a block are not progress', () => {
+  const result = streamThroughClient(`
+for part in range(13):
+    stream_event({"type": "ping"})
+    time.sleep(0.2)
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(JSON.parse(result.stdout).maxGap >= 2.5, 'a queued request is not an answer');
+});
+
+test('Claude uses the Hermes streaming path, which times silence and not the whole call', () => {
+  const init = fs.readFileSync(path.join(plugin, '__init__.py'), 'utf8');
+  assert.match(init, /streams_chunks = True/);
+  const scripts = path.join(path.dirname(fileURLToPath(import.meta.url)), '../scripts');
+  assert.match(fs.readFileSync(path.join(scripts, 'hermes-external-process-streaming.patch'), 'utf8'), /"streams_chunks", False/);
+  for (const name of ['pinned-runtime.sh', 'install-local.sh', 'install-runtimes-win.ps1']) {
+    assert.match(fs.readFileSync(path.join(scripts, name), 'utf8'), /external-process-streaming/, name);
+  }
+});

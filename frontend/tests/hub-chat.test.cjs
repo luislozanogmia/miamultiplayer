@@ -46,7 +46,7 @@ test('shared-browser updates use Hub events rather than posting chat messages',(
 test('UTF8 limit applies to bytes, not characters',()=>{const api=transport();assert.equal(api.validateText('a'.repeat(16000)).length,16000);assert.throws(()=>api.validateText('😀'.repeat(4001)));assert.equal(api.validateText('',true),'');assert.throws(()=>api.validateText(' '));});
 test('each request obtains a fresh native session; body is exactly supplied data',async()=>{let tokens=0;const sent=[];const api=transport({miaDesktop:{auth:{getSessionToken:async()=>({token:++tokens})}},MiaClerkDesktop:{unwrap:r=>'token'+r.token},fetch:async(url,opts)=>{sent.push({url,opts});return {ok:true,json:async()=>({})};}});await api.call('GET','/v1/me');await api.call('POST','/v1/teams/a/channels/b/messages',{id:'c',text:'hello'});assert.equal(sent[0].opts.headers.authorization,'Bearer token1');assert.equal(sent[1].opts.headers.authorization,'Bearer token2');assert.deepEqual(JSON.parse(sent[1].opts.body),{id:'c',text:'hello'});assert.equal(sent[1].url,'/api/hub/v1/teams/a/channels/b/messages');});
 test('no session means no request or local fallback',async()=>{let fetched=false;const api=transport({fetch:()=>{fetched=true;}});await assert.rejects(api.call('GET','/v1/me'),/Sign in/);assert.equal(fetched,false);});
-test('Hub channels cannot start local conversation/socket or typing transports',async()=>{for(const name of ['connectNativeChatSocket','connectNativeWatchSocket','pollLiveState','setLocalChatTypingActivity']){const env={hubWorkspace:()=>true};const fn=appFunction(name,env);await fn();}});
+test('Hub channels cannot start local conversation/socket or typing transports',async()=>{for(const name of ['connectNativeChatSocket','connectNativeWatchSocket','pollLiveState']){const env={hubWorkspace:()=>true};const fn=appFunction(name,env);await fn();}});
 test('a team loads only its own bot chats, from Solo storage on this computer',async()=>{
   const key=appFunction('localChatWorkspaceKey',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
   assert.equal(key(),'solo');
@@ -392,6 +392,7 @@ test('a shared channel alert names the sender and channel, not "replied"',()=>{
   const env={chatWs:{activeRoomId:'other'},appInForeground:()=>true,desktopNotificationsEnabled:()=>true,hubChannel:()=>({name:'general'}),hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),
     displayNameForEmail:e=>e.split('@')[0],excerpt:(t,n)=>t.slice(0,n),String,showDesktopNotification:(room,title,body)=>shown.push({room,title,body})};
   env.googleDriveMessageDisplay=appFunction('googleDriveMessageDisplay',{String,JSON});
+  env.messageBotIdentity=m=>({name:m.nativeAgentName||null});
   const notify=appFunction('notifyDesktopChatMessage',env);
   notify('room',{hubMessage:true,hubAuthor:'ana@example.test',body:'hello team'});
   notify('room',{hubMessage:true,nativeAgentName:'Helper',body:''});
@@ -419,7 +420,7 @@ test('your own attachment cards stay readable beside the bubble',()=>{
 test('a reload reopens the shared channel you last had open',async()=>{
   const run=async(stored,channels)=>{const opened=[];const env={chatWs:{activeRoomId:null},hubChat:{channels},storedActiveChatLocation:()=>stored,
     loadHubTeams:()=>Promise.resolve(),refreshHubChannels:()=>{},startChatPolling(){},refreshChatMain(){},hubFeedback:e=>{throw e;},takeNewTeamBotRequest:()=>null,Date,activeWorkspaceKey:'hub_x',loadTeamBotChats:()=>Promise.resolve(),loadCompanyBots(){},restoreChatRoom:open=>open(),retryHubChat:e=>{throw e;},clearTimeout,
-    openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),Number,Promise};
+    openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),Number,Promise,hubHiddenBotsOpen:{}};
     await appFunction('initHubChat',env)();return opened;};
   const channels=[{id:'first',name:'general'},{id:'second',name:'ux-test'}];
   assert.deepEqual(await run('second',channels),['second']);
@@ -432,7 +433,7 @@ test('a second startup keeps the New Bot setup chat the first one opened',async(
   const env={chatWs:{activeRoomId:'agent-setup',activeKind:'agent-setup'},hubChat:{channels:[{id:'first',name:'general'}]},storedActiveChatLocation:()=>'',
     loadHubTeams:()=>Promise.resolve(),refreshHubChannels:()=>{},startChatPolling(){},refreshChatMain(){main++;},renderChatSidebar(){},hubFeedback:e=>{throw e;},
     takeNewTeamBotRequest:()=>null,Date,activeWorkspaceKey:'hub_x',AGENT_SETUP_ROOM_ID:'agent-setup',agentSetupIdentity:()=>({name:'New bot'}),loadTeamBotChats:()=>Promise.resolve(),loadCompanyBots(){},restoreChatRoom:open=>open(),retryHubChat:e=>{throw e;},clearTimeout,
-    openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:()=>false,Number,Promise};
+    openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:()=>false,Number,Promise,hubHiddenBotsOpen:{}};
   await appFunction('initHubChat',env)();
   assert.deepEqual(opened,[]);assert.equal(env.chatWs.activeKind,'agent-setup');assert.equal(env.chatWs.activeRoomId,'agent-setup');assert.equal(main,1);
 });
@@ -468,9 +469,9 @@ test('team channel menu follows the Hub permissions',()=>{
   assert.deepEqual(actions('member',{kind:'channel',created_by:'other'}),['pin','leave']);
   assert.deepEqual(actions('member',{kind:'channel',created_by:'me'}),['pin','invite','rename','leave']);
   assert.deepEqual(actions('admin',{kind:'channel',created_by:'other'}),['pin','invite','rename','leave','archive']);
-  assert.deepEqual(actions('admin',{kind:'dm',created_by:'me'}),['pin'],'a direct message can only be pinned');
-  assert.deepEqual(actions('member',{kind:'group',created_by:'me'}),['pin','invite','leave'],'a group is never renamed or archived here');
-  assert.deepEqual(actions('member',{kind:'group',created_by:'other'}),['pin','leave']);
+  assert.deepEqual(actions('admin',{kind:'dm',created_by:'me'}),['pin','close'],'a direct message can only be pinned or closed');
+  assert.deepEqual(actions('member',{kind:'group',created_by:'me'}),['pin','invite','leave','close'],'a group is never renamed or archived here');
+  assert.deepEqual(actions('member',{kind:'group',created_by:'other'}),['pin','leave','close']);
   assert.equal(menu('member')({kind:'group'})[1].label,'Leave group');
   assert.equal(menu('member')({kind:'channel',pinned:true})[0].label,'Unpin');
 });
@@ -478,7 +479,7 @@ test('a direct message shows the other person, never its internal name',()=>{
   const env={hubChat:{membership:{clerk_user_id:'me'},members:[{clerk_user_id:'me',email:'self@example.test'},{clerk_user_id:'ana',email:'ana@example.test'}]},displayNameForEmail:e=>e.split('@')[0],hubKnownPeople:()=>({})};
   appFunction('hubOtherMemberIds',env);appFunction('hubMember',env);appFunction('hubPersonEmail',env);appFunction('hubPrivateConversation',env);const title=appFunction('hubChannelTitle',env);const label=appFunction('hubChannelLabel',env);
   assert.equal(title({kind:'dm',name:'dm:ana:me',member_ids:['me','ana']}),'ana');
-  assert.equal(title({kind:'dm',name:'dm:gone:me',member_ids:['me','gone']}),'Former teammate');
+  assert.equal(title({kind:'dm',name:'dm:gone:me',member_ids:['me','gone']}),'Former colleague');
   assert.equal(label({kind:'dm',name:'dm:ana:me',member_ids:['me','ana']}),'ana');
   assert.equal(label({name:'general'}),'# general','channels from an older Hub have no kind');
   env.hubChat.members.push({clerk_user_id:'bo',email:'bo@example.test'});
@@ -630,7 +631,7 @@ test('a group picker says when the team is too small for a group',async()=>{
     hubCall:()=>Promise.resolve({members:[{clerk_user_id:'me',email:'me@x'},{clerk_user_id:'a',email:'ana@x'}]})};
   appFunction('openHubGroupPicker',env)();
   await dialog.load();
-  assert.equal(dialog.primary().label,'Needs 2+ teammates');assert.equal(dialog.primary().disabled,true);
+  assert.equal(dialog.primary().label,'Needs 2+ colleagues');assert.equal(dialog.primary().disabled,true);
   assert.match(source,/renderPrimary\(\); filter\.focus\(\); load\(\);/);
 });
 // Adding an existing bot and creating a new one share one path: an admin's
@@ -648,6 +649,14 @@ test('adding a bot to a channel publishes it only when you are an admin',async()
     ['POST','/v1/teams/t/channels/chan/bots/bot1/versions/2/approve']]);
   const member=await run('member');
   assert.equal(member.published,false);assert.equal(member.calls.length,1);
+  // A copy for another company uses your role there, not in the team on screen.
+  const copyEnv={hubChat:{membership:{role:'member'}},refreshCompanyBots(){},calls:[],
+    window:{MiaHubChat:{localCall:(m,p,b)=>{copyEnv.calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot9'},proposal:{version:1}});}}},
+    hubCall:(m,p)=>{copyEnv.calls.push([m,p]);return Promise.resolve({});}};
+  const skills=[{name:'Report',description:'',body:'Write it.'}];
+  assert.equal(await appFunction('shareBotToHubChannel',copyEnv)('other','room','local8',{skills,role:'admin'}),true);
+  assert.deepEqual(JSON.parse(JSON.stringify(copyEnv.calls)),[['POST','/share',{teamId:'other',channelId:'room',localBotId:'local8',skills}],
+    ['POST','/v1/teams/other/channels/room/bots/bot9/versions/1/approve']]);
   const source=require('node:fs').readFileSync(require('node:path').join(__dirname,'..','app.js'),'utf8');
   assert.equal((source.match(/localCall\('POST', ?'\/share'/g)||[]).length,1,'only shareBotToHubChannel shares a bot');
   for(const caller of ['function addCreatedBotToTeam(','function confirmMentionAdd(']){
@@ -663,7 +672,7 @@ test('Hub and shared-bot errors use one message table, with status fallbacks',as
   error=await fail(reply(401,{error:'hub_sign_in_required'}),true);assert.match(error.message,/Sign in to your Mia account/);
   error=await fail(reply(404,{error:'bot_not_found'}),true);assert.match(error.message,/no longer available on this computer/);
   error=await fail(reply(403,{}));assert.match(error.message,/no longer available to you/);
-  error=await fail(reply(502,null));assert.match(error.message,/Can’t reach the shared team service/);
+  error=await fail(reply(502,null));assert.match(error.message,/Can’t reach the company service/);
   error=await fail(async()=>{throw new TypeError('offline');});assert.equal(error.code,'hub_unavailable');
   error=await fail(reply(400,{error:'brand_new_code'}));assert.match(error.message,/\(brand_new_code\)/);
   const none=transport({});await assert.rejects(none.call('GET','/x'),{code:'sign_in_required'});
@@ -698,14 +707,14 @@ test('Solo Retry, delete and composer hand-off cover undelivered messages',()=>{
 });
 test('team sidebar splits My Bots from Company bots',()=>{
   const body=source.slice(source.indexOf('  function renderHubSidebar(){'),source.indexOf('  function hubInviteRow('));
-  assert.match(body,/section\('bots','My Bots','',null\)/);
+  assert.match(body,/section\('bots','My Bots','New bot',function\(\)\{ runToolsAction\('new-bot'\); \}\)/);
   assert.match(body,/section\('company-bots','Company bots','',null\)/);
   assert.match(source,/window\.MiaHubChat\.teamBots\(workspace\.slice\(4\)\)/,'the sidebar uses the shared team bot loader');
   assert.match(require('fs').readFileSync(require('path').join(__dirname,'..','admin.js'),'utf8'),/win\.MiaHubChat\.teamBots\(team\.id\)/,'the Bot Roster uses the same loader');
 });
 test('a company bot shows once, by name, with every channel it is in',()=>{
   const start=source.indexOf('  function companyBotsFromChannels(');
-  const merge=new Function(source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')();
+  const merge=new Function('normalizeAgentAvatarColor',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null);
   const ux={id:'a',name:'ux-test'}, gtm={id:'b',name:'GTM'};
   const list=merge([
     {channel:ux,bots:[{id:'1',name:'Web Research Agent',published:true},{id:'2',name:'Draft',published:false}]},
@@ -775,7 +784,7 @@ test('a bot reply shows its run label apart from the text; people cannot post on
 function companyRowEnv(activeRoomId){
   return {document:{createElement:()=>({className:'',innerHTML:'',setAttribute(){},addEventListener(){}})},
     companyBotPlace:()=>({action:'open',channel:{id:'c1'}}),hubChannel:()=>({id:'c1'}),chatWs:{activeRoomId},
-    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){}};
+    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){},companyBotCanRemove:()=>false,hubChat:{membership:{role:'member'}},companyBotChat:()=>null};
 }
 test('a company bot row never lights up: the open channel is the channel row\'s to show',()=>{
   const row=appFunction('companyBotRow',companyRowEnv('c1'));
@@ -801,8 +810,8 @@ test('the company bot list refreshes once after a burst of bot changes, only for
 });
 test('an older company bot answer cannot overwrite a newer one',async()=>{
   const answers=[];let renders=0;
-  const env={activeWorkspaceKey:'hub_a',hubChat:{},renderChatSidebar(){renders+=1;},companyBotsFromChannels:(list)=>list,
-    window:{MiaHubChat:{teamBots:()=>new Promise((resolve)=>answers.push(resolve))}}};
+  const env={activeWorkspaceKey:'hub_a',hubChat:{},renderChatSidebar(){renders+=1;},companyBotsFromChannels:(list)=>list,sharedSoloBots:()=>({}),Promise,
+    window:{MiaHubChat:{teamBots:()=>new Promise((resolve)=>answers.push(resolve)),localCall:()=>Promise.resolve({bots:[]})}}};
   const load=appFunction('loadCompanyBots',env);
   const first=load(),second=load();
   answers[1](['new']);await second;
@@ -841,4 +850,126 @@ test('a channel reopened during startup still gets its bot count from the reopen
   assert.equal(state.hubBotRequest!==null&&state.hubBotRequest!==undefined,true,'the old request ending leaves the new one in place');
   pending[1]({bots:[{id:'deal-desk',name:'Deal Desk',published:1}]});await second;
   assert.deepEqual(state.hubBots.map(bot=>bot.id),['deal-desk']);
+});
+test('the @ menu names people, never an account id or email',()=>{
+  const profiles={'me@example.test':{displayName:'Ana Ruiz'},'local-user@localhost':{displayName:'Local User'}};
+  const name=appFunction('humanMentionName',{String,userProfiles:profiles,currentUser:'local-user@localhost',
+    realProfileName:appFunction('realProfileName',{String}),displayNameForEmailProfile:appFunction('displayNameForEmailProfile',{userProfiles:profiles}),displayNameForEmail:e=>e.split('@')[0]});
+  assert.equal(name({email:'me@example.test'}),'Ana Ruiz');
+  assert.equal(name({email:'other@example.test',displayName:'Sam Lee'}),'Sam Lee');
+  assert.equal(name({email:'local-user@localhost'}),'You');
+  assert.equal(name({email:'pat@example.test'}),'pat');
+  assert.match(source,/label: humanMentionName\(u\)/);
+  assert.match(source,/humanAvatarInitialsHtml\(entry\.searchUser\.email\)/);
+});
+test('the demo link reads MP with demo below it',()=>{
+  const html=require('fs').readFileSync(require('path').join(__dirname,'..','index.html'),'utf8');
+  assert.match(html,/id="workspaceRailDemo"[^>]*>\s*<span class="workspace-rail-mark" aria-hidden="true">MP<\/span><small class="workspace-rail-note">demo<\/small>/);
+});
+test('an admin can remove a company bot from every channel it is in, from its row',async()=>{
+  const merge=new Function('normalizeAgentAvatarColor',source.slice(source.indexOf('  function companyBotsFromChannels('),source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null);
+  const [bot]=merge([{channel:{id:'c1'},bots:[{id:'b1',name:'Disk Manager',published:true,owner_id:'u_owner'}]},{channel:{id:'c2'},bots:[{id:'b2',name:'Disk Manager',published:true,owner_id:'u_owner'}]}]);
+  assert.deepEqual(bot.places,[{channelId:'c1',botId:'b1',ownerId:'u_owner'},{channelId:'c2',botId:'b2',ownerId:'u_owner'}]);
+  const can=me=>appFunction('companyBotCanRemove',{hubChat:{membership:me}})(bot);
+  assert.equal(can({role:'admin',clerk_user_id:'u_admin'}),true);
+  assert.equal(can({role:'member',clerk_user_id:'u_owner'}),true,'whoever added it');
+  assert.equal(can({role:'member',clerk_user_id:'u_other'}),false);
+  const calls=[],toasts=[];
+  const remove=appFunction('removeCompanyBot',{appConfirm:()=>Promise.resolve(true),activeWorkspaceKey:'hub_t',hubPath:()=>'/v1/teams/t',
+    hubCall:(method,path)=>{calls.push(method+' '+path);return Promise.resolve({});},refreshCompanyBots:()=>calls.push('refresh'),refreshHubBotState:()=>{},showBenchToast:t=>toasts.push(t),Promise});
+  await remove(bot);
+  assert.deepEqual(calls,['DELETE /v1/teams/t/channels/c1/bots/b1','DELETE /v1/teams/t/channels/c2/bots/b2','refresh']);
+  assert.deepEqual(toasts,['Disk Manager was removed from the company.']);
+  assert.match(source,/if\(companyBotCanRemove\(bot\)\)items\.push\(\['Remove from company'/);
+});
+test('anyone can copy a company bot to another company, through Mia\'s clean copy and their approval',()=>{
+  assert.match(source,/var items=\(hubChat\.membership\|\|\{\}\)\.role==='admin' \? \[\['Copy to another company…',function\(\)\{ copyCompanyBotToCompany\(bot\); \}\]\] : \[\];/,'only admins see Copy to another company');
+  assert.match(source,/if\(!place \|\| \(hubChat\.membership\|\|\{\}\)\.role!=='admin'\)return;/,'and the copy itself refuses anyone else');
+  const flow=source.slice(source.indexOf('  function copyCompanyBotToCompany('),source.indexOf('  function companyBotRow('));
+  assert.match(flow,/hubPath\(\)\+'\/channels\/'\+place\.channelId\+'\/bots\/'\+place\.botId\+'\/definition'/,'the copy starts from the approved definition');
+  assert.match(flow,/api\('\/api\/bots\/generic-copy'/);
+  // Nothing reaches the other company until the person presses Add.
+  assert.ok(flow.indexOf('shareBotToHubChannel(')>flow.indexOf('function add()'),'sharing happens only in add');
+  assert.match(flow,/shareBotToHubChannel\(target\.teamId,room\.id,createdId,\{skills:copy\.skills,role:target\.role\}\)/);
+  assert.match(flow,/if\(createdId\)api\('\/api\/bots\/'\+encodeURIComponent\(createdId\),\{method:'DELETE'\}\)/);
+});
+test('a team offers New bot like Solo: in Start something, on My Bots, and through the same setup',()=>{
+  assert.match(source,/\.concat\(\[\{id:'new-bot', name:'New bot'\}\]\)/);
+  assert.doesNotMatch(source,/hubWorkspace\(\) \? \[\] : \[\{id:'new-bot'/);
+  assert.match(source,/section\('bots','My Bots','New bot',function\(\)\{ runToolsAction\('new-bot'\); \}\)/);
+  assert.match(source,/var sharedView = [^;]*action === 'new-bot';/);
+  assert.match(source,/else if\(action === 'new-bot'\) startAgentSetupChat\(\);/);
+});
+test('a bot named with @ in a message, and a bot joining a company channel, show its Mote',()=>{
+  const esc=v=>String(v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  const env={esc,agentAvatarHtml:(name,id,size,mark,color)=>'<i data-bot="'+id+'" data-color="'+(color||'')+'"></i>',
+    roomMentionBots:()=>[{id:'b1',name:'Admin Bot',color:'#7c3aed'},{id:'b2',name:'Admin',color:null}]};
+  const chips=appFunction('withMentionChips',env);
+  const html=chips('<p>@Admin Bot you around? ask @admin too, not me@admin.test</p>');
+  assert.equal(html,'<p><span class="chat-msg-mention"><i data-bot="b1" data-color="#7c3aed"></i>@Admin Bot</span> you around? ask <span class="chat-msg-mention"><i data-bot="b2" data-color=""></i>@admin</span> too, not me@admin.test</p>');
+  assert.match(source,/if\(text && !liveProgress && !isPreReasoning\) messageHtml = withMentionChips\(messageHtml\);/);
+  const api=transport();
+  const row=api.message({id:'b1',sequence:3,author_type:'system',author_id:'system:bot-joined',body:'Admin Bot joined the chat.',created_at:1});
+  assert.equal(row.hubBotJoined,'b1');
+  assert.equal(api.message({id:'x',sequence:4,author_type:'user',author_id:'u',author_email:'a@example.test',body:'hi',created_at:1}).hubBotJoined,null);
+  assert.match(source,/var joinedBot = m\.hubBotJoined \? roomMentionBots\(\)\.filter/);
+});
+test('a direct message or group can be closed, and comes back when someone writes or it is opened',()=>{
+  const store={};const localStorage={getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}};
+  const env={localStorage,HUB_CLOSED_STORAGE_KEY:'miaHubClosedConversations',activeWorkspaceKey:'hub_x',JSON,Number,loadChatRoom:(id)=>'opened '+id,hubChannelTitle:c=>c.name};
+  const read=appFunction('hubClosedConversations',Object.assign({},env));
+  const closed=appFunction('hubConversationClosed',Object.assign({hubClosedConversations:read},env));
+  const set=appFunction('setHubConversationClosed',Object.assign({hubClosedConversations:read},env));
+  const dm={id:'d1',kind:'dm',name:'dm',latest_sequence:5};
+  assert.equal(closed(dm),false);
+  set('d1',5);
+  assert.equal(closed(dm),true);
+  dm.latest_sequence=6;
+  assert.equal(closed(dm),false,'a new message brings it back');
+  dm.latest_sequence=5;
+  appFunction('openHubChannel',Object.assign({setHubConversationClosed:set},env))(dm);
+  assert.equal(closed(dm),false,'opening it clears the close');
+  assert.match(source,/hubPrivateConversation\(channel\) && channel\.kind!=='bot' && !hubConversationClosed\(channel\)/);
+});
+test('a Solo bot shared with this company is greyed in My Bots until reactivated',()=>{
+  const shared=appFunction('sharedSoloBots',{})(
+    [{id:'solo-admin',sharedAs:[{teamId:'t1',registrationId:'r1'}]},{id:'solo-old',sharedAs:[{teamId:'t1',registrationId:'gone'}]},
+     {id:'solo-other',sharedAs:[{teamId:'t2',registrationId:'r9'}]},{id:'solo-plain'}],
+    't1',[{name:'Admin Bot',botIds:['r1']}]);
+  assert.deepEqual(JSON.parse(JSON.stringify(shared)),{'solo-admin':'Admin Bot'},'only copies still in this company count');
+  const store={};const localStorage={getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}};
+  const env={localStorage,JSON,REACTIVATED_SOLO_BOTS_KEY:'miaReactivatedSoloBots',activeWorkspaceKey:'hub_t1'};
+  const isOn=appFunction('soloBotReactivated',Object.assign({},env));
+  assert.equal(isOn('solo-admin'),false);
+  appFunction('reactivateSoloBot',Object.assign({},env))('solo-admin');
+  assert.equal(isOn('solo-admin'),true);
+  assert.equal(appFunction('soloBotReactivated',Object.assign({},env,{activeWorkspaceKey:'hub_t2'}))('solo-admin'),false,'per company');
+  assert.match(source,/function soloBotSharedAway\(bot\)\{ return !!\(hubChat\.sharedSoloBots\|\|\{\}\)\[bot\.id\] && !soloBotReactivated\(bot\.id\); \}/);
+  assert.match(source,/var sharedAway=soloBotSharedAway\(bot\);/);
+  // They sit folded in a Hidden group at the end of My Bots, closed until opened.
+  assert.match(source,/var hiddenOpen=hubHiddenBotsOpen\[activeWorkspaceKey\]===true;/);
+  assert.match(source,/function initHubChat\(\)\{\n\s*hubHiddenBotsOpen\[activeWorkspaceKey\]=false;/,'folded every time the company opens');
+  assert.match(source,/if\(hiddenOpen\)hiddenBots\.forEach\(function\(bot\)\{ myBotSection\.list\.appendChild\(teamBotRow\(bot\)\); \}\);/);
+  assert.match(source,/if\(sharedAway\)openSharedSoloBotNotice\(bot\); else openTeamBotChat\(bot\);/);
+});
+test('a company bot opens your private chat with it on the Hub, and falls back to its channel on an older Hub',async()=>{
+  const calls=[];let refreshed=0;
+  const bot={key:'admin bot',name:'Admin Bot',botIds:['src1'],places:[{channelId:'c1',botId:'src1'}],channels:[{id:'c1'}]};
+  const chat={id:'chat1',kind:'bot',bot:{id:'cb1',source_bot_id:'src1',name:'Admin Bot'}};
+  const env=(channels,answer)=>{const hubChat={channels:channels.slice()};const e={hubChat,activeWorkspaceKey:'hub_t',hubPath:()=>'/v1/teams/t',Promise,
+    hubCall:(m,p,b)=>{calls.push([m,p,b]);return answer();},
+    refreshHubChannels:()=>{refreshed++;hubChat.channels.push(chat);return Promise.resolve();},
+    hubChannel:id=>hubChat.channels.filter(c=>c.id===id)[0],openHubChannel:c=>calls.push(['open',c.id]),
+    openCompanyBot:b=>calls.push(['channel',b.name]),showBenchToast:t=>calls.push(['toast',t]),hubActionError:(e,f)=>f};
+    e.companyBotChat=appFunction('companyBotChat',e);return e;};
+  await appFunction('openCompanyBotChat',env([chat],()=>Promise.reject(new Error('no call'))))(bot);
+  assert.deepEqual(calls.splice(0),[['open','chat1']],'an existing chat just opens');
+  await appFunction('openCompanyBotChat',env([],()=>Promise.resolve({channel:{id:'chat1'}})))(bot);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.splice(0))),[['POST','/v1/teams/t/bot-chats',{botId:'src1'}],['open','chat1']]);
+  await appFunction('openCompanyBotChat',env([],()=>Promise.reject(Object.assign(new Error('missing'),{status:404}))))(bot);
+  assert.deepEqual(calls.splice(-1),[['channel','Admin Bot']],'a Hub without bot chats keeps the channel behavior');
+  const title=appFunction('hubChannelTitle',{hubPrivateConversation:c=>c.kind==='bot'});
+  assert.equal(title(chat),'Admin Bot');
+  assert.match(source,/channel\.kind!=='bot' && !hubConversationClosed/,'a bot chat is not listed under Direct messages');
+  assert.match(source,/if\(chat && chatWs\.activeRoomId===chat\.id\)button\.className\+=' active';/,'its company bot row lights up while it is open');
 });

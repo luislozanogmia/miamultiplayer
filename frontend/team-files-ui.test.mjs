@@ -16,7 +16,7 @@ const now = 1760000000 * 1000 + 2 * 3600000;
 
 test('the list shows size and age, and download for everyone', () => {
   const html = ui.bodyHtml({ files: [file(1), file(2)], usage: { usedBytes: 12300000000, quotaBytes: 100000000000 }, now }, deps);
-  assert.match(html, /12\.3 GB of 100 GB used by your team/);
+  assert.match(html, /12\.3 GB of 100 GB used by your company/);
   assert.equal((html.match(/data-tf-download=/g) || []).length, 2);
   assert.match(html, /1\.5 MB · 2h ago/);
   assert.match(html, /report-1\.pdf/);
@@ -69,11 +69,11 @@ test('empty, loading, error, paging and not-configured states', () => {
   const failed = ui.bodyHtml({ error: tf.errorMessage('', 503), files: [], now }, deps);
   assert.match(failed, /Can’t reach/);
   assert.match(failed, /data-tf-reload/);
-  assert.match(ui.bodyHtml({ unavailable: tf.errorMessage('team_files_not_configured'), files: [], now }, deps), /not set up for this team/);
+  assert.match(ui.bodyHtml({ unavailable: tf.errorMessage('team_files_not_configured'), files: [], now }, deps), /not set up for this company/);
   const more = ui.bodyHtml({ files: [file(1)], nextCursor: `1760000000/${ID(1)}`, now }, deps);
   assert.match(more, /data-tf-more/);
   assert.doesNotMatch(ui.bodyHtml({ files: [file(1)], nextCursor: null, now }, deps), /data-tf-more/);
-  assert.match(ui.bodyHtml({ files: [file(1)], notice: tf.errorMessage('file_quota_exceeded'), now }, deps), /role="alert">Your team has used all of its file storage/);
+  assert.match(ui.bodyHtml({ files: [file(1)], notice: tf.errorMessage('file_quota_exceeded'), now }, deps), /role="alert">Your company has used all of its file storage/);
   assert.match(ui.bodyHtml({ files: [], usage: { usedBytes: 95000000000, quotaBytes: 100000000000 }, now }, deps), /tf-usage-high/);
 });
 
@@ -94,7 +94,7 @@ test('app, page and shelf hooks: Team files is a team-only button that reuses th
   const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
   assert.match(app, /function teamFilesChannel\(\)\{\s*if\(!hubWorkspace\(\) \|\| !chatWs\.activeRoomId\) return null;/);
   assert.match(app, /var teamFiles = window\.MiaTeamFilesUi && teamFilesChannel\(\);/);
-  assert.match(app, /teamFiles \? '<button type="button" class="cip-section-link" id="cipTeamFiles">Team files<\/button>'/);
+  assert.match(app, /teamFiles \? '<button type="button" class="cip-section-link" id="cipTeamFiles">Company files<\/button>'/);
   assert.match(app, /window\.MiaTeamFilesUi\.open\(\{teamId: activeWorkspaceKey\.slice\(4\), spaceKind: channel\.kind, spaceId: channel\.id/);
   const html = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   assert.ok(html.indexOf('team-files.js') > 0 && html.indexOf('team-files.js') < html.indexOf('team-files-ui.js') && html.indexOf('team-files-ui.js') < html.indexOf('src="app.js'));
@@ -187,6 +187,6 @@ test('the panel loads usage and files, downloads with a hash check, deletes with
   const notConfigured = async (method, path) => { if (path.includes('/file-spaces/')) throw Object.assign(new Error('x'), { code: 'team_files_not_configured', status: 503 }); return { usedBytes: 0, quotaBytes: 100000000000 }; };
   ui.open({ teamId: TEAM, spaceKind: 'dm', spaceId: SPACE, title: 'Pat', call: notConfigured });
   await settle();
-  assert.match(page.nodes.teamFilesBody.innerHTML, /File storage is not set up for this team yet/);
+  assert.match(page.nodes.teamFilesBody.innerHTML, /File storage is not set up for this company yet/);
   ui.close();
 });

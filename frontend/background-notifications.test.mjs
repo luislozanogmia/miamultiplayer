@@ -217,7 +217,7 @@ test('blocked notifications point to System Settings', () => {
 
 test('sidebar times keep aging without a new message', () => {
   assert.match(source, /class="chat-dm-time" data-ts="/);
-  assert.match(source, /setInterval\(function\(\)\{[\s\S]*?\.chat-dm-time\[data-ts\][\s\S]*?\}, 60000\)/);
+  assert.match(source, /function refreshChatTimes\(\)\{[\s\S]*?\.chat-dm-time\[data-ts\][\s\S]*?\}\n\s*setInterval\(refreshChatTimes, 60000\)/);
 });
 
 // The desktop app's bridge: every show() answers with the next result.

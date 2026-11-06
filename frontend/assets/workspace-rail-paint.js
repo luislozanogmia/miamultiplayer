@@ -39,7 +39,7 @@
       rail.insertBefore(button, add);
     });
     var active = localStorage.getItem('miaosActiveWorkspace') || '';
-    if (/^hub_[a-f0-9]{32}$/.test(active) && !labels[active]) labels[active] = 'Shared team';
+    if (/^hub_[a-f0-9]{32}$/.test(active) && !labels[active]) labels[active] = 'Company';
     if (!labels[active]) active = 'solo';
     Array.prototype.forEach.call(rail.querySelectorAll('[data-workspace-key]'), function (tile) {
       var on = tile.getAttribute('data-workspace-key') === active;

@@ -210,6 +210,57 @@ test('email verification preserves pending and MFA states and never reports them
   assert.deepEqual(await auth.verifyEmail('123456'), { status: 'needs_second_factor', attemptId: 'sia_email' });
 });
 
+test('a new email creates the account: code first, then only what Clerk still needs', async () => {
+  const unverified = { object: 'sign_up_attempt', id: 'sua_new', status: 'missing_requirements', unverified_fields: ['email_address'], missing_fields: ['first_name', 'last_name', 'password'] };
+  const verified = { ...unverified, unverified_fields: [] };
+  const session = { id: 'sess_new', status: 'active', expire_at: Date.now() + 60000 };
+  const done = { ...verified, status: 'complete', missing_fields: [], created_session_id: 'sess_new' };
+  const { auth, mock } = make({
+    clientJwt: clientJwt(),
+    routes: {
+      'POST /v1/client/sign_ins': response({ errors: [{ code: 'form_identifier_not_found' }] }, { status: 422 }),
+      'POST /v1/client/sign_ups': wrapped(unverified, signedOutClient({ sign_up: unverified })),
+      'POST /v1/client/sign_ups/sua_new/prepare_verification': wrapped(unverified, signedOutClient({ sign_up: unverified })),
+      'POST /v1/client/sign_ups/sua_new/attempt_verification': wrapped(verified, signedOutClient({ sign_up: verified })),
+      'PATCH /v1/client/sign_ups/sua_new': wrapped(done, signedOutClient({ sign_up: null, sessions: [session], last_active_session_id: 'sess_new' })),
+    },
+  });
+  assert.deepEqual(await auth.startEmail('New@Example.com'), { status: 'needs_verification', attemptId: 'sua_new' });
+  assert.deepEqual(mock.calls[1].body, { email_address: 'new@example.com' });
+  assert.deepEqual(mock.calls[2].body, { strategy: 'email_code' });
+  assert.deepEqual(await auth.verifyEmail('123456'), { status: 'needs_sign_up', attemptId: 'sua_new', missingFields: ['first_name', 'last_name', 'password'] });
+  assert.deepEqual(mock.calls[3].body, { strategy: 'email_code', code: '123456' });
+  const result = await auth.completeSignUp({ first_name: 'Ana', last_name: 'Test', password: 'not-a-real-password', admin: 'true' });
+  assert.equal(result.status, 'active');
+  assert.deepEqual(mock.calls[4].body, { first_name: 'Ana', last_name: 'Test', password: 'not-a-real-password' }, 'only named fields reach Clerk');
+});
+
+test('a new email finishes on the code alone when Clerk needs nothing else', async () => {
+  const unverified = { object: 'sign_up_attempt', id: 'sua_new', status: 'missing_requirements', unverified_fields: ['email_address'], missing_fields: [] };
+  const session = { id: 'sess_new', status: 'active', expire_at: Date.now() + 60000 };
+  const done = { ...unverified, status: 'complete', unverified_fields: [], created_session_id: 'sess_new' };
+  const { auth } = make({
+    clientJwt: clientJwt(),
+    routes: {
+      'POST /v1/client/sign_ins': response({ errors: [{ code: 'form_identifier_not_found' }] }, { status: 422 }),
+      'POST /v1/client/sign_ups': wrapped(unverified, signedOutClient({ sign_up: unverified })),
+      'POST /v1/client/sign_ups/sua_new/prepare_verification': wrapped(unverified, signedOutClient({ sign_up: unverified })),
+      'POST /v1/client/sign_ups/sua_new/attempt_verification': wrapped(done, signedOutClient({ sessions: [session], last_active_session_id: 'sess_new' })),
+    },
+  });
+  await auth.startEmail('new@example.com');
+  assert.equal((await auth.verifyEmail('123456')).status, 'active');
+});
+
+test('any other sign-in refusal does not start a sign-up', async () => {
+  const { auth, mock } = make({
+    clientJwt: clientJwt(),
+    routes: { 'POST /v1/client/sign_ins': response({ errors: [{ code: 'form_identifier_blocked' }] }, { status: 422 }) },
+  });
+  await assert.rejects(auth.startEmail('person@example.com'), error => error.clerkCode === 'form_identifier_blocked');
+  assert.equal(mock.calls.some(call => call.url.pathname.endsWith('/sign_ups')), false);
+});
+
 test('email sign-in fails closed when the instance does not offer an email-code factor', async () => {
   const created = {
     object: 'sign_in_attempt', id: 'sia_email', status: 'needs_first_factor', first_factor_verification: null,
