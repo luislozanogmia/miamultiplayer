@@ -895,7 +895,7 @@
     <button class="styled-settings-nav-item" data-pane="model"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h6M12 8v2.5M14.5 8v1.8"/></svg>Access</button>
     <button class="styled-settings-nav-item" data-pane="security"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8l5 2v4.2c0 3-2.2 5.3-5 6.2-2.8-.9-5-3.2-5-6.2V3.8l5-2z"/><path d="M5.8 8l1.5 1.5L10.3 6.5"/></svg>Security</button>
     <button class="styled-settings-nav-item" data-pane="backups"><svg class="styled-settings-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v8.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8M2.8 8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2"/></svg>Backups</button>
-    <button class="styled-settings-nav-item" data-pane="teams">Teams</button>
+    <button class="styled-settings-nav-item" data-pane="teams">Companies</button>
     <button class="styled-settings-nav-item" data-pane="mia">Mia</button>
   </nav>
   <div class="styled-settings-content" id="settingsContent">
@@ -921,13 +921,13 @@
       <div class="styled-settings-card" id="miaActivityList"></div>
     </section>
     <section class="styled-settings-pane" data-pane="teams" id="hubTeamsPane">
-      <h1 class="styled-settings-h1">Teams</h1>
-      <p>Request a team, invite people, and manage your memberships.</p>
+      <h1 class="styled-settings-h1">Companies</h1>
+      <p>Request a company, invite people, and manage your memberships.</p>
       <button type="button" class="styled-settings-pill-btn" id="hubRefresh">Refresh</button>
       <p id="hubStatus" role="status" aria-live="polite"></p>
       <form id="hubRequestForm" class="styled-settings-card" style="padding:16px;display:flex;gap:12px;flex-wrap:wrap">
-        <label>Team name <input id="hubTeamName" class="styled-settings-field" required maxlength="120" autocomplete="off"></label>
-        <button class="styled-settings-pill-btn" type="submit">Request team</button>
+        <label>Company name <input id="hubTeamName" class="styled-settings-field" required maxlength="120" autocomplete="off"></label>
+        <button class="styled-settings-pill-btn" type="submit">Request company</button>
       </form>
       <div id="hubRequests"></div><div id="hubTeams"></div><div id="hubApprovals"></div>
     </section>
@@ -950,7 +950,7 @@
       <div class="styled-settings-group-label">Profile</div>
       <div class="styled-settings-card">
         <div class="styled-settings-row">
-          <div><div class="styled-settings-row-label">Display name</div><div class="styled-settings-row-desc">How you appear to agents and teammates</div></div>
+          <div><div class="styled-settings-row-label">Display name</div><div class="styled-settings-row-desc">How you appear to agents and colleagues</div></div>
           <input type="text" class="styled-settings-field" id="settingsDisplayName" placeholder="Your name" autocomplete="off" maxlength="80" />
         </div>
         <div class="styled-settings-row">
@@ -1137,7 +1137,7 @@
     </button>
     <button type="button" class="styled-onboarding-mode is-upcoming" data-harness-mode="multiplayer" aria-pressed="false" disabled aria-disabled="true">
       <span class="styled-onboarding-mode-mark" aria-hidden="true"><img src="assets/icons/mode-multiplayer.png?v=20260904-mode-icons-1" alt="" /></span>
-          <span><strong>Multiplayer <span class="styled-onboarding-mode-badge">Upcoming</span></strong><small>You and teammates, with shared bots and private agents</small></span>
+          <span><strong>Multiplayer <span class="styled-onboarding-mode-badge">Upcoming</span></strong><small>You and colleagues, with shared bots and private agents</small></span>
     </button>
   </div>
 

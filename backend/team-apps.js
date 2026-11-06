@@ -201,7 +201,7 @@ function installBundle(appsDir, identity, { sha256, bytes }) {
   const target = installLocation(appsDir, identity);
   if (!SHA256.test(String(sha256))) throw appError(400, 'invalid_app', 'That app could not be found.');
   if (!Buffer.isBuffer(bytes) || sha256Hex(bytes) !== sha256) {
-    throw appError(409, 'integrity_failed', "The downloaded app didn't match what your teammate published, so it was not installed.");
+    throw appError(409, 'integrity_failed', "The downloaded app didn't match what your colleague published, so it was not installed.");
   }
   const bundle = parseBundle(bytes);
   const parent = path.dirname(target);

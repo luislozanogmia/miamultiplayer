@@ -308,11 +308,11 @@ test('a bot keeps one main chat in Solo and a separate main chat per team worksp
   assert.equal(open({ teamWorkspace: teamA }).id, inA.id);
 
   for (const teamWorkspace of ['hub_short', 'solo', 42]) {
-    assert.throws(() => open({ teamWorkspace }), /teamWorkspace must name a team workspace/);
+    assert.throws(() => open({ teamWorkspace }), /teamWorkspace must name a company workspace/);
   }
   assert.throws(() => service.createConversation({
     companyId: 'company-a', principal: owner(), type: 'channel', name: 'x', metadata: { teamWorkspace: teamA },
-  }), /teamWorkspace must name a team workspace/);
+  }), /teamWorkspace must name a company workspace/);
 });
 
 test('Mia can start separate fresh conversations without losing or merging the canonical chat', (t) => {

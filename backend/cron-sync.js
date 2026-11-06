@@ -49,9 +49,9 @@ const ARTIFACT_ROOT = requiredConfiguredPath(
   process.env.MIAOS_AUTOMATION_ARTIFACT_DIR
 );
 const ARTIFACT_MARKER = '.miaos-artifact-scope.json';
-// Team bots work in <Mia folder>/teams/<team name>/<bot name>, beside bots/.
+// Company bots work in <Mia folder>/companies/<company name>/<bot name>, beside bots/.
 const TEAM_ARTIFACT_ROOT = path.resolve(String(process.env.MIAOS_TEAM_ARTIFACT_DIR || '').trim()
-  || path.join(path.dirname(ARTIFACT_ROOT), 'teams'));
+  || path.join(path.dirname(ARTIFACT_ROOT), 'companies'));
 const ARTIFACT_MANIFEST = '.miaos-artifacts.jsonl';
 const ARTIFACT_MANIFEST_MAX_BYTES = 1 * 1024 * 1024;
 const CRON_JOBS_FILE = process.env.HERMES_CRON_JOBS_FILE
@@ -311,8 +311,8 @@ function markedFolder(root, marker, name) {
   throw new Error('no free team folder name');
 }
 
-// Where a team's bot works on this computer: one folder per team, one per bot
-// inside it, kept apart from the person's Solo bots. A bot is keyed by its
+// Where a company's bot works on this computer: one folder per company, one
+// per bot inside it, kept apart from the person's Solo bots. A bot is keyed by its
 // team registration, so every approved version uses the same folder.
 function teamBotWorkspace(team, bot) {
   const teamId = String(team && team.teamId || '');
@@ -320,7 +320,7 @@ function teamBotWorkspace(team, bot) {
   if (!/^[a-f0-9]{32}$/.test(teamId) || !/^[A-Za-z0-9_-]{1,120}$/.test(registrationId)) {
     throw new Error('team and bot ids are required for a team bot folder');
   }
-  const teamFolder = markedFolder(TEAM_ARTIFACT_ROOT, { kind: 'miaos-team-workspace', teamId }, team.teamName || 'Team');
+  const teamFolder = markedFolder(TEAM_ARTIFACT_ROOT, { kind: 'miaos-team-workspace', teamId }, team.teamName || 'Company');
   return markedFolder(teamFolder, { kind: 'miaos-bot-artifact-workspace', botId: `team-${registrationId}` }, bot.name || 'Bot');
 }
 

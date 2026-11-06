@@ -21,7 +21,7 @@ function fitReply(text,limit=REPLY_BYTES) {
 const RUN_LABEL_MARK='\n\n\u2063';
 function runLabel(provider,memberName) {
   const first=String(memberName||'').trim().split(/\s+/)[0];
-  return [provider,'Ran on '+(first?first+'’s':'a teammate’s')+' Mia'].filter(Boolean).join(' · ');
+  return [provider,'Ran on '+(first?first+'’s':'a colleague’s')+' Mia'].filter(Boolean).join(' · ');
 }
 function withRunLabel(text,label) {
   if(typeof text!=='string' || !text.trim()) return fitReply(text);

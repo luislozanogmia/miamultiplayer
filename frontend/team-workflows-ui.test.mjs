@@ -41,14 +41,14 @@ test('everything from other people is escaped', () => {
 });
 
 test('home has a clear word for empty, loading, offline and not yet available', () => {
-  assert.match(ui.homeHtml({ workflows: [], isAdmin: true, people }), /No team workflows yet.*their own bot/s);
+  assert.match(ui.homeHtml({ workflows: [], isAdmin: true, people }), /No company workflows yet.*their own bot/s);
   assert.match(ui.homeHtml({ workflows: [], isAdmin: true, people }), /data-wf-new/);
   assert.doesNotMatch(ui.homeHtml({ workflows: [], isAdmin: false, people }), /data-wf-new/);
   assert.match(ui.homeHtml({ workflows: [], isAdmin: false, people }), /An admin can set one up/);
   assert.match(ui.homeHtml({ loading: true, people }), /Loading/);
-  assert.match(ui.homeHtml({ error: 'Mia cannot reach the team server.', people }), /cannot reach.*data-wf-reload/s);
+  assert.match(ui.homeHtml({ error: 'Mia cannot reach the company server.', people }), /cannot reach.*data-wf-reload/s);
   const none = ui.homeHtml({ unavailable: true, isAdmin: true, people });
-  assert.match(none, /does not offer team workflows yet/);
+  assert.match(none, /does not offer company workflows yet/);
   assert.doesNotMatch(none, /data-wf-new/);
 });
 
@@ -104,7 +104,7 @@ test('the gate shows what would run, escaped, and offers Run for this one step',
   assert.match(html, /Ignore &lt;b&gt;rules&lt;\/b&gt;/);
   assert.match(html, /run me\.pdf/);
   assert.match(html, /new on this computer/);
-  assert.match(html, /carries text or files from teammates/);
+  assert.match(html, /carries text or files from colleagues/);
   assert.match(html, /Run starts only this one step/);
   assert.ok(html.includes('data-wf-digest="' + digest + '"'));
   assert.match(html, /data-wf-resume="fail"/);
@@ -217,7 +217,7 @@ test('a flag start sends nothing until Start, and then only id and summary', asy
   await settle();
   await h.click({ 'data-wf-open-workflow': ID(1) });
   await h.click({ 'data-wf-start': '' });
-  assert.match(h.mount.innerHTML, /Only this line goes to your team/);
+  assert.match(h.mount.innerHTML, /Only this line goes to your company/);
   assert.match(h.mount.innerHTML, /Nothing is sent until you press Start/);
   h.type({ 'data-wf-summary': '' }, 'Inbound\nrequest');
   await settle();
@@ -263,7 +263,7 @@ test('an interrupted step runs again only when the person says so', async () => 
 test('a Hub without workflows shows a calm note, and does not keep asking', async () => {
   const h = harness({ '/workflows': Object.assign(new Error('not_found'), { status: 404, code: 'not_found' }) });
   await settle();
-  assert.match(h.mount.innerHTML, /does not offer team workflows yet/);
+  assert.match(h.mount.innerHTML, /does not offer company workflows yet/);
 });
 
 test('a step queued for this person wakes the queue right away', async () => {
@@ -361,7 +361,7 @@ const card = extra => ({ runId: ID(2), n: 3, workflowName: 'Quote flow', text: '
 
 test('a partly done card shows the whole report and offers exactly its three choices', () => {
   const html = ui.homeHtml({ workflows: [], people, needsYou: [card({ reason: 'report_partial', report: REPORT, outputFiles: ['a<b>.pdf'] })] });
-  for(const text of ['Partly done', 'Drafted the quote', 'Totals not checked', 'Check the totals', 'Which price list?', 'Nothing has gone to the team yet', 'Send as partly done', 'Run it again', 'Mark as failed']) assert.ok(html.includes(text), text);
+  for(const text of ['Partly done', 'Drafted the quote', 'Totals not checked', 'Check the totals', 'Which price list?', 'Nothing has gone to the company yet', 'Send as partly done', 'Run it again', 'Mark as failed']) assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /<b>/);
   assert.match(html, /a&lt;b&gt;\.pdf/);
   assert.match(html, /data-wf-resume="send"[^>]*data-wf-digest="b{64}"/);

@@ -12,7 +12,7 @@ test('images and PDFs attach everywhere; web pages only in Solo, since the team 
   const mb = 1024 * 1024;
   assert.equal(problem({ type: 'application/pdf', size: mb }), '');
   assert.equal(problem({ type: 'image/png', size: mb }), '');
-  assert.match(problem({ type: 'text/html', size: 10 }), /Web pages can.t be sent to a team/);
+  assert.match(problem({ type: 'text/html', size: 10 }), /Web pages can.t be sent to a company/);
   assert.match(problem({ type: 'application/zip', size: 10 }), /image .* or a PDF/);
   assert.match(problem({ type: 'application/pdf', size: 9 * mb }), /8 MB/);
   env.team = false;
@@ -34,6 +34,6 @@ test('the (+) Artifacts picker and the Artifacts page share button stage through
 
 test('a shared local app shows the local app sharing note and sends its address', () => {
   const render = slice('  function renderChatAttachment(', '  // Images and PDFs go everywhere.');
-  assert.match(render, /app && app\.local \?[\s\S]*Local app sharing[\s\S]*Changes aren.u2019t synced between you and your team yet\.[\s\S]*Shared editing is coming soon\./);
+  assert.match(render, /app && app\.local \?[\s\S]*Local app sharing[\s\S]*Changes aren.u2019t synced between you and your company yet\.[\s\S]*Shared editing is coming soon\./);
   assert.match(source, /if\(app\) text = \(text \? text \+ '\\n\\n' : ''\) \+ app\.name \+ ': ' \+ app\.url;/);
 });

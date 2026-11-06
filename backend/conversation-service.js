@@ -24,7 +24,7 @@ function conversationMetadata(type, metadata) {
   if (result.privateAgentId !== undefined) invalidInput('privateAgentId is set by the server');
   if (result.teamWorkspace !== undefined) {
     if (type !== 'bot' || typeof result.teamWorkspace !== 'string' || !TEAM_WORKSPACE_PATTERN.test(result.teamWorkspace)) {
-      invalidInput('teamWorkspace must name a team workspace on a bot conversation');
+      invalidInput('teamWorkspace must name a company workspace on a bot conversation');
     }
   }
   if (type !== 'channel') return result;

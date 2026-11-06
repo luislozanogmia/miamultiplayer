@@ -213,7 +213,7 @@ test('team users table protects the owner and lets only the owner hand ownership
   assert.doesNotMatch(asAdmin, /data-action="team-owner"/);
   assert.doesNotMatch(asAdmin, /data-action="team-remove" data-id="user_admin"/);
   assert.match(asAdmin, /admin-row-protected">Owner</);
-  assert.match(asAdmin, /Teammate · Owner/);
+  assert.match(asAdmin, /Colleague · Owner/);
 });
 
 test('team bot roster lists every channel bot with its owner and where it lives', () => {
@@ -270,7 +270,7 @@ test('team mode loads the Hub transport and hides controls Clerk and the Hub own
 test('a team role or removal button stays disabled while the Hub answers', async () => {
   const source = await readFile(new URL('./admin.js', import.meta.url), 'utf8');
   assert.match(source, /if\(team\)\{\s*\/\/[^\n]*\n\s*btn\.disabled = true;\s*teamUserAction\([^;]*\)\s*\.then\(function\(\)\{ btn\.disabled = false; \}\);/);
-  assert.match(admin.renderTeamUsersTable(TEAM_MEMBERS, {selfId: 'user_admin'}), /pat@example\.com<\/div><div class="admin-cell-sub">Teammate/);
+  assert.match(admin.renderTeamUsersTable(TEAM_MEMBERS, {selfId: 'user_admin'}), /pat@example\.com<\/div><div class="admin-cell-sub">Colleague/);
 });
 
 test('the Admin Center frame stays hidden until it knows local or team mode', async () => {
@@ -460,7 +460,7 @@ test('load more follows the Hub cursor, drops repeats and ignores a bad cursor',
 test('a file names where it lives and what its scan said', () => {
   assert.equal(admin.hubFileWhere({spaceKind: 'channel', spaceName: 'ops'}), '#ops');
   assert.equal(admin.hubFileWhere({spaceKind: 'dm', spaceName: 'secret'}), 'A direct message');
-  assert.equal(admin.hubFileWhere({spaceKind: 'app'}), 'A team app');
+  assert.equal(admin.hubFileWhere({spaceKind: 'app'}), 'A company app');
   assert.equal(admin.hubFileScan({state: 'uploading'}).label, 'Uploading');
 });
 
@@ -564,7 +564,7 @@ test('a file already being deleted says so and offers no second delete', async (
   await hub.load('files');
   const html = admin.renderHubView('files', hub.state.files, NOW);
   assert.match(html, /Deleting/);
-  assert.match(html, /A team app/);
+  assert.match(html, /A company app/);
   assert.doesNotMatch(html, /file-delete/);
   await hub.act('file-delete', hex('d'));
   assert.equal(confirms.length, 0);
@@ -615,7 +615,7 @@ test('approving a bundle warns the scan cannot see inside it, in the same words 
 test('deleting a file that is an app warns that the app goes too, and the row names the app', () => {
   const file = {fileId: hex('f'), filename: 'tool.miaapp', spaceKind: 'app', appId: hex('b'), appName: 'Tool'};
   const copy = admin.hubConfirmCopy('file-delete', file);
-  assert.match(copy.body, /removes this file’s apps from the team, including "Tool"/);
+  assert.match(copy.body, /removes this file’s apps from the company, including "Tool"/);
   assert.equal(admin.hubFileWhere(file), 'App: Tool');
   assert.doesNotMatch(admin.hubConfirmCopy('file-delete', {fileId: hex('f'), filename: 'a.txt', spaceKind: 'channel'}).body, /app/i);
 });
@@ -625,7 +625,7 @@ test('a session with no known starter says so, and an empty list does not claim 
   await hub.load('sessions');
   const html = admin.renderHubView('sessions', hub.state.sessions, NOW);
   assert.match(html, />Not known</);
-  assert.doesNotMatch(html, /A teammate/);
+  assert.doesNotMatch(html, /A colleague/);
   assert.match(html, /might not be listed/, 'the list may not hold every live session');
   const empty = hubHarness({'GET /browser-sessions': {sessions: []}});
   await empty.hub.load('sessions');

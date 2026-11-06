@@ -183,9 +183,9 @@
     var channels = data.channels || [];
     var regular = channels.filter(function(c){ return c.kind !== 'dm' && c.kind !== 'group'; }).length;
     return [
-      '<div class="card admin-tile"><div class="admin-tile-label">Team</div>' +
+      '<div class="card admin-tile"><div class="admin-tile-label">Company</div>' +
         '<div class="admin-tile-val">' + esc(data.name || '—') + '</div>' +
-        '<div class="admin-tile-sub">Shared team</div></div>',
+        '<div class="admin-tile-sub">Company</div></div>',
       '<div class="card admin-tile"><div class="admin-tile-label">Members</div>' +
         '<div class="admin-tile-val">' + esc(members.length) + '</div>' +
         '<div class="admin-tile-sub">' + esc(admins) + ' admin' + (admins === 1 ? '' : 's') + '</div></div>',
@@ -212,7 +212,7 @@
       var lastAdmin = u.role === 'admin' && admins <= 1;
       // The owner keeps their role and seat until they hand ownership to another admin.
       var locked = owner ? ' disabled title="The owner must make another admin the owner first."'
-        : lastAdmin ? ' disabled title="A team must keep at least one admin."' : '';
+        : lastAdmin ? ' disabled title="A company must keep at least one admin."' : '';
       var roleControl = u.role === 'admin'
         ? '<button type="button" class="btn small" data-action="team-role" data-role="member" data-id="' + esc(u.id) + '" data-email="' + esc(u.email) + '"' +
           locked + '>Set to member</button>'
@@ -230,7 +230,7 @@
         '<td><div class="admin-cell-user">' +
           '<div class="admin-avatar">' + esc(initialsFor(u)) + '</div>' +
           '<div><div class="admin-cell-name">' + esc(u.email) + '</div>' +
-          '<div class="admin-cell-sub">' + (self ? 'You' : 'Teammate') + (owner ? ' · Owner' : '') + '</div>' +
+          '<div class="admin-cell-sub">' + (self ? 'You' : 'Colleague') + (owner ? ' · Owner' : '') + '</div>' +
           '<input type="text" class="admin-department-input" maxlength="40" placeholder="Add department" data-team-department data-id="' + esc(u.id) + '" data-email="' + esc(u.email) + '" value="' + esc(u.department) + '" aria-label="Department for ' + esc(u.email) + '"></div>' +
         '</div></td>' +
         '<td>' + esc(owner ? 'Owner' : u.role === 'admin' ? 'Admin' : 'Member') + '</td>' +
@@ -255,7 +255,7 @@
         var admission = bot.admission || {};
         var owner = admission.requester_email || '';
         agents.push({id: bot.id, name: bot.name, owner: owner, ownerName: owner || 'Unknown member',
-          ownerDescription: 'Teammate', status: TEAM_BOT_STATUS[admission.status] || 'Unknown',
+          ownerDescription: 'Colleague', status: TEAM_BOT_STATUS[admission.status] || 'Unknown',
           model: '—', departments: [where], createdAt: hubTime(bot.created_at)});
       });
     });
@@ -263,13 +263,13 @@
   }
 
   var TEAM_AUDIT_LABELS = {
-    role_changed: 'Changed a role', owner_transferred: 'Transferred ownership', team_renamed: 'Renamed the team', invite_created: 'Invited',
-    invite_revoked: 'Revoked an invite', invite_accepted: 'Joined the team', invite_declined: 'Declined an invite',
+    role_changed: 'Changed a role', owner_transferred: 'Transferred ownership', team_renamed: 'Renamed the company', invite_created: 'Invited',
+    invite_revoked: 'Revoked an invite', invite_accepted: 'Joined the company', invite_declined: 'Declined an invite',
     member_removed: 'Removed a member', message_deleted: 'Deleted a message', file_uploaded: 'Uploaded an image',
     bot_shared: 'Added a bot', bot_unshared: 'Removed a bot', bot_execution_handoff: 'Handed off a bot run',
     bot_version_proposed: 'Proposed a bot change', bot_version_published: 'Approved a bot change',
     bot_version_rejected: 'Rejected a bot change', bot_editor_added: 'Added a bot editor',
-    bot_editor_removed: 'Removed a bot editor', team_approved: 'Team approved'
+    bot_editor_removed: 'Removed a bot editor', team_approved: 'Company approved'
   };
 
   function teamActivityEvents(events, members){
@@ -467,9 +467,9 @@
   function hubLoadError(error){
     var status = error && error.status, code = error && error.code;
     if(status === 401 || code === 'sign_in_required') return {kind: 'signin', message: 'Sign in to your Mia account, then try again.', retry: true};
-    if(status === 403) return {kind: 'forbidden', message: 'Only admins of this team can see this.', retry: false};
-    if(status === 404) return {kind: 'missing', message: 'This is not available right now. Your team server may need an update, or your admin access may have changed.', retry: true};
-    if(!status || status >= 500) return {kind: 'offline', message: 'Mia can’t reach the shared team service right now. Check your connection and try again.', retry: true};
+    if(status === 403) return {kind: 'forbidden', message: 'Only admins of this company can see this.', retry: false};
+    if(status === 404) return {kind: 'missing', message: 'This is not available right now. Your company server may need an update, or your admin access may have changed.', retry: true};
+    if(!status || status >= 500) return {kind: 'offline', message: 'Mia can’t reach the company service right now. Check your connection and try again.', retry: true};
     return {kind: 'error', message: 'Mia could not load this. Try again.', retry: true};
   }
 
@@ -520,20 +520,20 @@
     extra = extra || {};
     switch(action){
       case 'wf-archive': return {title: 'Archive ' + item.name + '?', body: 'Archive this workflow? Runs in progress will finish, and no new ones will start.', confirmLabel: 'Archive', danger: true};
-      case 'wf-approve': return {title: 'Approve version ' + extra.version + ' of ' + item.name + '?', body: 'It goes live for the team. Runs already in progress keep their version.', confirmLabel: 'Approve'};
+      case 'wf-approve': return {title: 'Approve version ' + extra.version + ' of ' + item.name + '?', body: 'It goes live for the company. Runs already in progress keep their version.', confirmLabel: 'Approve'};
       case 'wf-reject': return {title: 'Reject version ' + extra.version + ' of ' + item.name + '?', body: 'It will not go live. Anything live now stays live.', confirmLabel: 'Reject', danger: true};
       case 'file-delete': return {title: 'Delete ' + item.filename + '?',
-        body: 'This removes the file for everyone on the team and frees its space. It can’t be undone. Copies people already downloaded stay on their computers.' + (item.appId ? ' This is an app’s file, so deleting it removes this file’s apps from the team' + (item.appName ? ', including "' + item.appName + '".' : '.') : item.spaceKind === 'app' ? ' A team app may depend on this file.' : ''),
+        body: 'This removes the file for everyone in the company and frees its space. It can’t be undone. Copies people already downloaded stay on their computers.' + (item.appId ? ' This is an app’s file, so deleting it removes this file’s apps from the company' + (item.appName ? ', including "' + item.appName + '".' : '.') : item.spaceKind === 'app' ? ' A company app may depend on this file.' : ''),
         confirmLabel: 'Delete', danger: true};
       case 'app-approve': {
         var version = item.pending || {};
         return version.kind === 'link'
-          ? {title: 'Approve ' + item.name + ' for everyone?', body: 'This opens on every teammate’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.', detail: version.url, confirmLabel: 'Approve for everyone'}
-          : {title: 'Approve ' + item.name + ' for everyone?', body: 'This runs on every teammate’s computer. Only approve an app you trust. Published by ' + (item.publisher && item.publisher.name || 'a former teammate') + '. The virus scan can’t fully see inside an app bundle, so review it first.', confirmLabel: 'Approve for everyone'};
+          ? {title: 'Approve ' + item.name + ' for everyone?', body: 'This opens on every colleague’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.', detail: version.url, confirmLabel: 'Approve for everyone'}
+          : {title: 'Approve ' + item.name + ' for everyone?', body: 'This runs on every colleague’s computer. Only approve an app you trust. Published by ' + (item.publisher && item.publisher.name || 'a former colleague') + '. The virus scan can’t fully see inside an app bundle, so review it first.', confirmLabel: 'Approve for everyone'};
       }
       case 'app-reject': return {title: 'Reject version ' + Number(item.pending && item.pending.version) + ' of ' + item.name + '?',
-        body: 'It won’t reach the team. ' + (item.live ? 'The live version stays live. ' : '') + 'The publisher can send a new version.', confirmLabel: 'Reject', danger: true};
-      case 'app-archive': return {title: 'Archive ' + item.name + '?', body: 'It leaves the catalog for everyone, and teammates can no longer open it from there. Its file is not deleted.', confirmLabel: 'Archive', danger: true};
+        body: 'It won’t reach the company. ' + (item.live ? 'The live version stays live. ' : '') + 'The publisher can send a new version.', confirmLabel: 'Reject', danger: true};
+      case 'app-archive': return {title: 'Archive ' + item.name + '?', body: 'It leaves the catalog for everyone, and colleagues can no longer open it from there. Its file is not deleted.', confirmLabel: 'Archive', danger: true};
       case 'session-end': return {title: 'End ' + (item.name || 'this session') + '?',
         body: 'This closes the session for everyone in it. Their tabs stay open on their own computers. Older versions of Mia ignore this, so someone on an older version may reopen it.',
         confirmLabel: 'End session', danger: true};
@@ -619,8 +619,8 @@
       case 'group': return name ? 'Group: ' + name : 'A group';
       case 'dm': return 'A direct message';
       case 'automation': return name ? 'Workflow: ' + name : 'A workflow';
-      case 'app': return file.appName ? 'App: ' + file.appName : 'A team app';
-      default: return 'Team files';
+      case 'app': return file.appName ? 'App: ' + file.appName : 'A company app';
+      default: return 'Company files';
     }
   }
   function hubFileScan(file){
@@ -638,19 +638,19 @@
     var percent = Math.min(100, Math.round(usage.usedBytes / usage.quotaBytes * 100));
     return '<div class="card hub-usage' + (percent >= 100 ? ' full' : percent >= 90 ? ' high' : '') + '">' +
       '<div class="hub-usage-text">' + esc(tf.formatBytes(usage.usedBytes)) + ' of ' + esc(tf.formatBytes(usage.quotaBytes)) + ' used</div>' +
-      '<div class="hub-usage-bar" role="progressbar" aria-label="Team file storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + Math.max(percent, usage.usedBytes > 0 ? 1 : 0) + '%"></span></div></div>';
+      '<div class="hub-usage-bar" role="progressbar" aria-label="Company file storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + Math.max(percent, usage.usedBytes > 0 ? 1 : 0) + '%"></span></div></div>';
   }
   function renderHubFiles(st){
     var list = st.files || [], busy = st.busy || {};
     var html = hubUsageHtml(st);
-    if(!list.length) return html + '<div class="card hub-state"><p>No team files yet.</p></div>';
+    if(!list.length) return html + '<div class="card hub-state"><p>No company files yet.</p></div>';
     html += '<div class="card admin-table-wrap"><table class="admin-table hub-files-table"><thead><tr><th>File</th><th>Size</th><th>Where it lives</th><th>Uploaded by</th><th>Date</th><th>Scan</th><th></th></tr></thead><tbody>' +
       list.map(function(file){
         var scan = hubFileScan(file), uploader = file.uploader && file.uploader.name;
         return '<tr><td class="hub-filename">' + esc(file.filename) + '</td>' +
           '<td class="admin-cell-sub">' + esc(tf.formatBytes(file.sizeBytes)) + '</td>' +
           '<td class="admin-cell-sub">' + esc(hubFileWhere(file)) + '</td>' +
-          '<td class="admin-cell-sub">' + esc(uploader || 'A former teammate') + '</td>' +
+          '<td class="admin-cell-sub">' + esc(uploader || 'A former colleague') + '</td>' +
           '<td class="admin-cell-sub">' + esc(fmtDate(hubTime(file.createdAt))) + '</td>' +
           '<td>' + hubPill(scan.label, scan.tone) + '</td>' +
           '<td class="admin-row-control">' + (file.state === 'deleting' ? '' : hubButton('Delete', 'file-delete', file.fileId, {tone: 'danger', disabled: !!busy['file-delete:' + file.fileId]})) + '</td></tr>';
@@ -671,7 +671,7 @@
     clean: {text: 'Clean. Ready to approve.', tone: 'ok', approve: true},
     pending: {text: 'Still being scanned for viruses. You can approve it once it is clean.', tone: 'warn', approve: false},
     blocked: {text: 'Failed the virus scan. It can’t be approved.', tone: 'bad', approve: false},
-    unknown: {text: 'Mia could not check the scan. The team server checks again when you approve.', tone: 'warn', approve: true}
+    unknown: {text: 'Mia could not check the scan. The company server checks again when you approve.', tone: 'warn', approve: true}
   };
   function hubAppReadiness(version, scans){
     if(version.kind === 'link') return {text: 'No file to scan. This is a web address.', tone: '', approve: true};
@@ -682,7 +682,7 @@
   }
   function hubAppFacts(app, version, readiness){
     var size = hubAppVersionSize(version);
-    return '<dl class="hub-facts">' + hubFact('Published by', app.publisher && app.publisher.name || 'A former teammate') +
+    return '<dl class="hub-facts">' + hubFact('Published by', app.publisher && app.publisher.name || 'A former colleague') +
       hubFact('Kind', version.kind === 'link' ? 'Web address' : 'App file') +
       hubFact(size.label, size.value, version.kind === 'link' ? 'hub-address' : '') +
       hubFact('Note', version.note) +
@@ -699,7 +699,7 @@
       var readiness = hubAppReadiness(pending, st.scans), versionBusy = !!busy['app-version:' + app.id];
       html += '<div class="hub-review"><div class="hub-review-title">Version ' + Number(pending.version) + (live ? ' would replace the live version' : ' is waiting for review') + '</div>' +
         hubAppFacts(app, pending, readiness) +
-        '<div class="hub-item-meta">Approving makes this run on every teammate’s computer.' + (live ? ' Version ' + Number(live.version) + ' stays live until then.' : '') + '</div>' +
+        '<div class="hub-item-meta">Approving makes this run on every colleague’s computer.' + (live ? ' Version ' + Number(live.version) + ' stays live until then.' : '') + '</div>' +
         '<div class="hub-item-actions">' + hubButton('Review', 'app-review', app.id) + hubButton('Approve for everyone', 'app-approve', app.id, {tone: 'primary', version: pending.version, disabled: versionBusy || !readiness.approve}) +
         hubButton('Reject', 'app-reject', app.id, {version: pending.version, disabled: versionBusy}) + '</div></div>';
     }
@@ -710,7 +710,7 @@
   }
   function renderHubApps(st){
     var list = st.apps || [];
-    if(!list.length) return '<div class="card hub-state"><p>No apps yet. An app a teammate publishes shows up here for review.</p></div>';
+    if(!list.length) return '<div class="card hub-state"><p>No apps yet. An app a colleague publishes shows up here for review.</p></div>';
     var waiting = list.filter(hubAppWaiting).length;
     return hubSectionHead('Catalog', list.length + (list.length === 1 ? ' app' : ' apps') + (waiting ? ' · ' + waiting + ' waiting for review' : '')) +
       '<div class="hub-list">' + list.map(function(app){ return renderHubApp(app, st); }).join('') + '</div>';
@@ -731,7 +731,7 @@
     if(list.length >= HUB_SESSION_LIMIT) note += '<div class="hub-note">Showing the ' + HUB_SESSION_LIMIT + ' most recent sessions.</div>';
     return note + '<div class="card admin-table-wrap"><table class="admin-table hub-sessions-table"><thead><tr><th>Session</th><th>Channel</th><th>Started by</th><th>In it now</th><th>Tabs</th><th>Last seen</th><th></th></tr></thead><tbody>' +
       list.map(function(session){
-        var key = hubSessionKey(session), people = (session.people || []).map(function(person){ return person && person.name || 'A teammate'; });
+        var key = hubSessionKey(session), people = (session.people || []).map(function(person){ return person && person.name || 'A colleague'; });
         return '<tr><td class="admin-cell-name">' + esc(session.name || 'Shared tabs') + '</td>' +
           '<td class="admin-cell-sub">' + esc(session.channelName ? '#' + session.channelName : 'A direct message') + '</td>' +
           '<td class="admin-cell-sub">' + esc(session.startedBy && session.startedBy.name || 'Not known') + '</td>' +
@@ -1739,7 +1739,7 @@
         hub('PATCH', '/team', {name: renameForm.elements.name.value}).then(function(result){
           setTeamName(result.name);
           closeOverlay('renameTeamOverlay');
-          toast('Team renamed');
+          toast('Company renamed');
           loadOverview();
         }, function(err){
           var errEl = $('#renameTeamError');
@@ -1759,7 +1759,7 @@
           var select = $('#newTeamBotChannel');
           select.innerHTML = options.map(function(o){ return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join('');
           if(!options.length){
-            toast('Create a channel first; a team bot lives in a channel.', true);
+            toast('Create a channel first; a company bot lives in a channel.', true);
             return;
           }
           openOverlay('newTeamBotOverlay');
@@ -1801,21 +1801,21 @@
 
     function bootTeam(teamId){
       if(!win.MiaHubChat || !tf || !wf){
-        blocked('Admin Center is unavailable', 'The shared team connection did not load. Restart Mia and try again.');
+        blocked('Admin Center is unavailable', 'The company connection did not load. Restart Mia and try again.');
         return;
       }
       win.MiaHubChat.call('GET', '/v1/me').then(function(me){
         var entry = (me.teams || []).filter(function(t){ return t.teamId === teamId; })[0];
         if(!entry || !entry.membership || entry.membership.role !== 'admin'){
-          blocked('Not authorized', 'Only admins of this team can open the Admin Center.');
+          blocked('Not authorized', 'Only admins of this company can open the Admin Center.');
           return;
         }
-        team = {id: teamId, name: String(entry.name || 'Shared team'), selfId: entry.membership.clerk_user_id};
+        team = {id: teamId, name: String(entry.name || 'Company'), selfId: entry.membership.clerk_user_id};
         usersState.currentAdminEmail = normalizeEmail(entry.membership.email);
         doc.body.classList.add('admin-team');
         setTeamName(team.name);
         var sub = doc.querySelector('.admin-brand-sub');
-        if(sub) sub.textContent = 'Team admin';
+        if(sub) sub.textContent = 'Company admin';
         var renameBtn = $('#teamRenameBtn');
         if(renameBtn) renameBtn.hidden = false;
         var newBotBtn = $('#teamNewBotBtn');
@@ -1839,7 +1839,7 @@
         loadOverview();
         startAutoRefresh();
       }).catch(function(){
-        blocked('Cannot reach the team', 'The shared team service is unreachable. Check your connection and try again.');
+        blocked('Cannot reach the company', 'The company service is unreachable. Check your connection and try again.');
       });
     }
 

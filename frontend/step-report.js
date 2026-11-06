@@ -39,7 +39,7 @@
       'RESULT: done | partial | failed', 'DID: ...', 'HOW: ...',
       'FAILED OR UNCHECKED: Nothing, or what failed or wasn\'t checked', 'NEXT: ...',
       'NEEDS A DECISION: only if someone has to decide something', '',
-      'The whole team sees this block, so leave out file paths, account names, customer details and secrets. The app lists shared files itself. Describe how you worked in a sentence, not a log of commands.',
+      'The whole company sees this block, so leave out file paths, account names, customer details and secrets. The app lists shared files itself. Describe how you worked in a sentence, not a log of commands.',
       'Say what you did not check. "Nothing" means no failures and nothing left unchecked.',
       'NEXT is a suggestion. If a choice belongs to a person, put it under NEEDS A DECISION instead of guessing, and leave that line out if there is none.',
       'The rest of your reply never leaves this computer.'].join('\n');

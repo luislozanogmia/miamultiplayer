@@ -51,7 +51,7 @@
         <h1>Overview</h1>
         <div class="admin-head-actions">
           <div class="admin-updated" id="overviewUpdated"></div>
-          <button type="button" class="btn" id="teamRenameBtn" data-team-only hidden>Rename team</button>
+          <button type="button" class="btn" id="teamRenameBtn" data-team-only hidden>Rename company</button>
         </div>
       </div>
       <div class="admin-tiles" id="overviewTiles"></div>
@@ -127,7 +127,7 @@
       <div class="admin-head">
         <div>
           <h1>Automations</h1>
-          <div class="admin-head-sub">Every workflow on this team, what is live, and what is waiting for a decision.</div>
+          <div class="admin-head-sub">Every workflow in this company, what is live, and what is waiting for a decision.</div>
         </div>
         <div class="admin-head-actions">
           <div class="admin-updated" id="hubAutomationsUpdated"></div>
@@ -142,7 +142,7 @@
       <div class="admin-head">
         <div>
           <h1>Files</h1>
-          <div class="admin-head-sub">Every file on this team, newest first.</div>
+          <div class="admin-head-sub">Every file in this company, newest first.</div>
         </div>
         <div class="admin-head-actions">
           <div class="admin-updated" id="hubFilesUpdated"></div>
@@ -157,7 +157,7 @@
       <div class="admin-head">
         <div>
           <h1>Apps</h1>
-          <div class="admin-head-sub">Every app on this team. Versions waiting for review come first.</div>
+          <div class="admin-head-sub">Every app in this company. Versions waiting for review come first.</div>
         </div>
         <div class="admin-head-actions">
           <div class="admin-updated" id="hubAppsUpdated"></div>
@@ -272,10 +272,10 @@
 <!-- Rename team dialog (shared teams) -->
 <div class="admin-overlay" id="renameTeamOverlay" hidden>
   <div class="admin-dialog card">
-    <h2>Rename team</h2>
+    <h2>Rename company</h2>
     <div class="admin-form-error" id="renameTeamError" hidden></div>
     <form id="renameTeamForm">
-      <div class="field"><label>Team name</label><input class="input" type="text" name="name" maxlength="120" required autocomplete="off"></div>
+      <div class="field"><label>Company name</label><input class="input" type="text" name="name" maxlength="120" required autocomplete="off"></div>
       <div class="admin-dialog-actions">
         <button type="button" class="btn" data-close-overlay="renameTeamOverlay">Cancel</button>
         <button type="submit" class="btn primary">Rename</button>
@@ -287,7 +287,7 @@
 <!-- New team bot dialog (shared teams) -->
 <div class="admin-overlay" id="newTeamBotOverlay" hidden>
   <div class="admin-dialog card">
-    <h2>New bot for the team</h2>
+    <h2>New bot for the company</h2>
     <div class="field-hint">Mia opens the New Bot setup. When you activate the bot, it joins this channel, ready to use.</div>
     <div class="admin-form-error" id="newTeamBotError" hidden></div>
     <form id="newTeamBotForm">

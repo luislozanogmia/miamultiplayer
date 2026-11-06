@@ -1122,8 +1122,8 @@ test('an existing job without the step-report context is edited to get it', asyn
   assert.equal(readCommands().filter((args) => args[2] === 'edit').length, 0, 'current context means nothing to edit');
 });
 
-test('a team bot works in its team folder beside bots/, found again after renames', () => {
-  const teamsRoot = path.join(path.dirname(artifactRoot), 'teams');
+test('a company bot works in its company folder beside bots/, found again after renames', () => {
+  const teamsRoot = path.join(path.dirname(artifactRoot), 'companies');
   const team = { teamId: 'a'.repeat(32), teamName: 'Acme Ops' };
   const folder = cronSync.teamBotWorkspace(team, { registrationId: 'reg1', name: 'LinkedIn' });
   assert.equal(folder, path.join(teamsRoot, 'Acme Ops', 'LinkedIn'));

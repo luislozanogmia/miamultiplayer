@@ -226,7 +226,7 @@
       return;
     }
     if(row.author_type !== 'user' || typeof row.author_id !== 'string' || !row.author_id) return;
-    message.from = {id: row.author_id, name: row.author_name || row.author_email || message.from && message.from.name || 'Teammate'};
+    message.from = {id: row.author_id, name: row.author_name || row.author_email || message.from && message.from.name || 'Colleague'};
     if(message.t === 'ring'){
       var self = me();
       if(self && message.to === self.id && message.from.id !== self.id && !(bound() && s.space.id === message.space)){
@@ -363,8 +363,8 @@
     if(bound()){ s.callMenu = 'invite'; renderCall(); return; }
     var state = s.browser, active = state && state.tabs.filter(function(tab){ return tab.active; })[0];
     var group = selectedGroup();
-    if(active && active.private){ toast('This tab is private. Open a shared page to invite your team.'); return; }
-    if(!active || !model.shareableUrl(active.url)){ toast('Open a web page first, then invite your team.'); return; }
+    if(active && active.private){ toast('This tab is private. Open a shared page to invite your company.'); return; }
+    if(!active || !model.shareableUrl(active.url)){ toast('Open a web page first, then invite your company.'); return; }
     if(group && group.id === active.groupId){ s.sharePicking = group.id; render(); return; }
     command('groupCreate', {id: active.id, name: active.title || 'Shared tabs'}).then(function(next){
       var created = next && next.groups && next.tabs && next.tabs.filter(function(tab){ return tab.id === active.id; })[0];
@@ -750,7 +750,7 @@
     return Object.keys(live).map(function(id){ return {id: id, name: live[id].name}; });
   }
   function toolbarLine(){
-    var followed = s.follow && (s.presence[s.follow] ? s.presence[s.follow].name : 'teammate');
+    var followed = s.follow && (s.presence[s.follow] ? s.presence[s.follow].name : 'colleague');
     return model.toolbarLine(workerSummary(), followed, othersHere());
   }
   function syncToolbar(){
@@ -777,7 +777,7 @@
     }
     return visibleInvites.slice(0, 2).map(function(invite){
       var rung = s.rung[invite.space.id];
-      return '<div class="mia-space-invite' + (rung ? ' ringing' : '') + '"><span class="mia-space-live-dot" aria-hidden="true"></span><span class="mia-space-text"><b>' + esc(invite.from.name) + (rung ? ' invited you to browse together' : ' is browsing with the team') +
+      return '<div class="mia-space-invite' + (rung ? ' ringing' : '') + '"><span class="mia-space-live-dot" aria-hidden="true"></span><span class="mia-space-text"><b>' + esc(invite.from.name) + (rung ? ' invited you to browse together' : ' is browsing with the company') +
         '</b><span class="mia-space-hint">' + esc(callName(invite.channelId, invite.space.name)) + ' · ' + invite.space.tabs.length + ' tab' + (invite.space.tabs.length === 1 ? '' : 's') +
         '</span></span><span class="mia-space-choices"><button type="button" class="mia-space-btn" data-space-decline="' + esc(invite.space.id) + '">Not now</button><button type="button" class="mia-space-btn primary" data-space-join="' + esc(invite.space.id) + '">Join</button></span></div>';
     }).join('');
@@ -808,7 +808,7 @@
     if(!chatShown) html += invites;
     if(group && s.sharePicking === group.id){
       var h = host(), channels = h ? h.channels() : [], chosen = s.shareChannelId || defaultChannel();
-      html += '<div class="mia-space-invite"><span class="mia-space-icon">' + PEOPLE_ICON + '</span><span class="mia-space-text"><b>Browse ' + esc(group.name || 'this group') + ' with your team' +
+      html += '<div class="mia-space-invite"><span class="mia-space-icon">' + PEOPLE_ICON + '</span><span class="mia-space-text"><b>Browse ' + esc(group.name || 'this group') + ' with your company' +
         '</b><span class="mia-space-hint">Everyone in the chat you pick can join, open its tabs and see a small live view of them.</span></span>' +
         '<span class="mia-space-choices"><select class="mia-space-select" data-space-channel aria-label="Chat to invite">' + channels.map(function(channel){
           return '<option value="' + esc(channel.id) + '"' + (channel.id === chosen ? ' selected' : '') + '>' + esc(channel.name) + '</option>';

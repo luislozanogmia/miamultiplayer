@@ -158,7 +158,7 @@ test('the Hub errors people will hit are put in plain language', () => {
   // A chat-image error carries its own 8 MB wording; the file wording wins.
   const chatError = Object.assign(new Error('Files must be 8 MB or smaller.'), { code: 'file_too_large', status: 413 });
   assert.match(tf.friendly(chatError), /500 MB/);
-  assert.match(tf.deleteErrorMessage(Object.assign(new Error('x'), { code: 'not_found', status: 404 })), /added this file or a team admin/);
+  assert.match(tf.deleteErrorMessage(Object.assign(new Error('x'), { code: 'not_found', status: 404 })), /added this file or a company admin/);
   assert.equal(tf.formatBytes(0), '0 B');
   assert.equal(tf.formatBytes(1500000), '1.5 MB');
   assert.equal(tf.formatBytes(100000000000), '100 GB');

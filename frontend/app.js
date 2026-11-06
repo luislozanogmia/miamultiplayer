@@ -67,7 +67,7 @@
     } catch(_hubTeamsStorageError) { return []; }
   }
   cachedHubTeams().forEach(function(team){ WORKSPACE_OPTIONS['hub_' + team.teamId] = {mode:'multiplayer', label:team.name}; });
-  if(/^hub_[a-f0-9]{32}$/.test(storedWorkspaceKey) && !WORKSPACE_OPTIONS[storedWorkspaceKey]) WORKSPACE_OPTIONS[storedWorkspaceKey] = {mode:'multiplayer', label:'Shared team'};
+  if(/^hub_[a-f0-9]{32}$/.test(storedWorkspaceKey) && !WORKSPACE_OPTIONS[storedWorkspaceKey]) WORKSPACE_OPTIONS[storedWorkspaceKey] = {mode:'multiplayer', label:'Company'};
   var activeWorkspaceKey = WORKSPACE_OPTIONS[storedWorkspaceKey] ? storedWorkspaceKey : 'solo';
   // Switching workspaces reloads the page, so nothing still in flight from
   // the old workspace can repaint the new one. The handoff hides that
@@ -5036,7 +5036,7 @@
       // A team you're invited to shows too, dimmed, as in Slack: opening it
       // joins it. Only joined teams are remembered for the next launch.
       var teams=(result.teams||[]).filter(function(team){return (team.membership || team.invite) && /^[a-f0-9]{32}$/.test(team.teamId);})
-        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Shared team'),invited:!team.membership};});
+        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Company'),invited:!team.membership};});
       noteHubRemovals(teams);
       sendHubDisplayName(teams.filter(function(team){return !team.invited;}));
       try { localStorage.setItem(HUB_TEAMS_STORAGE_KEY, JSON.stringify(teams.filter(function(team){return !team.invited;}))); } catch(_hubTeamsStorageError) {}
@@ -5115,7 +5115,7 @@
     var before=cachedHubTeams();
     var active=/^hub_([a-f0-9]{32})$/.exec(activeWorkspaceKey);
     if(active && !before.some(function(team){return team.teamId===active[1];}))
-      before.push({teamId:active[1],name:(WORKSPACE_OPTIONS[activeWorkspaceKey]||{}).label||'Shared team'});
+      before.push({teamId:active[1],name:(WORKSPACE_OPTIONS[activeWorkspaceKey]||{}).label||'Company'});
     var pending=pendingHubRemovals();
     before.forEach(function(team){
       if(member[team.teamId] || pending.some(function(item){return item.teamId===team.teamId;}))return;
@@ -5137,7 +5137,7 @@
     overlay.className='hub-removed-overlay'+(open?' locked':'');
     overlay.innerHTML='<div class="app-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="hubRemovedTitle" aria-describedby="hubRemovedText">'
       +'<div class="hub-removed-title" id="hubRemovedTitle">Your access to '+esc(team.name)+' has ended</div>'
-      +'<div class="app-confirm-msg" id="hubRemovedText">You were removed from this workspace by a team admin. Your existing chats, bots, and pages remain with the team.</div>'
+      +'<div class="app-confirm-msg" id="hubRemovedText">You were removed from this workspace by a company admin. Your existing chats, bots, and pages remain with the company.</div>'
       +'<div class="app-confirm-actions"><button type="button" class="styled-btn-primary">Back to Mia</button></div></div>';
     document.body.appendChild(overlay);
     var button=el('button',overlay);
@@ -5224,7 +5224,7 @@
       return email ? displayNameForEmail(email) : '';
     }).filter(Boolean);
     if(channel.kind==='group')return channel.name && channel.name!=='Group' ? channel.name : names.join(', ') || 'Group';
-    return names[0] || 'Former teammate';
+    return names[0] || 'Former colleague';
   }
   // Team rows use the same 40px mark column as solo rows: a # tile for a
   // channel, the teammate's avatar for a direct message, initials for a group.
@@ -5236,7 +5236,24 @@
   }
   function hubChannelLabel(channel){ return !channel ? '' : hubPrivateConversation(channel) ? hubChannelTitle(channel) : '# '+channel.name; }
   function hubRoom(channel){ var title=hubChannelTitle(channel); return {id:channel.id,roomId:channel.id,conversationId:channel.id,kind:'group',roomType:'group',name:title,roomName:title,members:[]}; }
-  function openHubChannel(channel){ if(channel)return loadChatRoom(channel.id,'group',hubChannelTitle(channel)); }
+  // Closing a direct message or group hides it from the sidebar, like
+  // Slack's Close conversation, until someone writes again or you open it.
+  // Kept per company on this computer; nothing changes on the Hub.
+  var HUB_CLOSED_STORAGE_KEY='miaHubClosedConversations';
+  function hubClosedConversations(){
+    try { return JSON.parse(localStorage.getItem(HUB_CLOSED_STORAGE_KEY)||'{}')||{}; } catch(_closedStorageError) { return {}; }
+  }
+  function hubConversationClosed(channel){
+    var at=(hubClosedConversations()[activeWorkspaceKey]||{})[channel.id];
+    return at!==undefined && Number(channel.latest_sequence||0)<=Number(at);
+  }
+  function setHubConversationClosed(channelId,sequence){
+    var all=hubClosedConversations(), mine=all[activeWorkspaceKey]||{};
+    if(sequence===null){ if(!(channelId in mine))return; delete mine[channelId]; } else mine[channelId]=sequence;
+    all[activeWorkspaceKey]=mine;
+    try { localStorage.setItem(HUB_CLOSED_STORAGE_KEY,JSON.stringify(all)); } catch(_closedStorageError) {}
+  }
+  function openHubChannel(channel){ if(!channel)return; setHubConversationClosed(channel.id,null); return loadChatRoom(channel.id,'group',hubChannelTitle(channel)); }
   function refreshHubChannels(){
     var workspace=activeWorkspaceKey;
     return Promise.all([hubCall('GET',hubPath()+'/channels'),hubCall('GET',hubPath()+'/members').catch(function(){return {members:hubChat.members||[]};}),
@@ -5300,7 +5317,7 @@
   }
   function hubBotJoinedMessage(name, label, published){
     return published ? name + ' joined ' + label + '. Mention @' + name + ' to use it.'
-      : name + ' was added to ' + label + '. A team admin must approve it in Bot versions & runs before it can reply.';
+      : name + ' was added to ' + label + '. A company admin must approve it in Bot versions & runs before it can reply.';
   }
   function addCreatedBotToTeam(created, conversation, target){
     var name = String(created.name || 'Bot');
@@ -5401,7 +5418,7 @@
   }
   function retryHubChat(error){
     var limited=hubRateLimited(error);
-    hubFeedback(limited ? {message:'The shared team is busy. Trying again shortly…'} : error);
+    hubFeedback(limited ? {message:'The company is busy. Trying again shortly…'} : error);
     clearTimeout(hubChat.retryTimer);
     if(!(limited || hubUnreachable(error)) || !hubWorkspace())return;
     var workspace=activeWorkspaceKey;
@@ -5423,8 +5440,8 @@
     footer.style.display='block';
     footer.setAttribute('role','status');
     footer.setAttribute('aria-live','polite');
-    footer.textContent=hubChat.error || (offline ? 'Reconnecting to the shared team…'
-      : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to shared team');
+    footer.textContent=hubChat.error || (offline ? 'Reconnecting to the company…'
+      : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to company');
     footer.classList.toggle('chat-sync-fail',offline || !!hubChat.error || chatWs.configured===false);
   }
   function hubRoomPreview(roomId){
@@ -5440,7 +5457,7 @@
     var pinned=el('#chatPinned'), all=el('#chatAllConversations');
     var pinnedChannels=hubChat.channels.filter(function(channel){return !!channel.pinned;});
     var channels=hubChat.channels.filter(function(channel){return !channel.pinned && !hubPrivateConversation(channel);});
-    var dms=hubChat.channels.filter(function(channel){return !channel.pinned && hubPrivateConversation(channel);});
+    var dms=hubChat.channels.filter(function(channel){return !channel.pinned && hubPrivateConversation(channel) && !hubConversationClosed(channel);});
     if(el('#chatAllCount'))el('#chatAllCount').textContent=String(hubChat.channels.length-pinnedChannels.length);
     renderHubStatus();
     function row(channel){
@@ -5607,7 +5624,7 @@
   }
   function removeCompanyBot(bot){
     var count=bot.places.length;
-    return appConfirm('Remove '+bot.name+' from the team? It leaves '+(count===1?'its channel':'all '+count+' channels it is in')+', and nobody here can use it until it is added again.','Remove').then(function(ok){
+    return appConfirm('Remove '+bot.name+' from the company? It leaves '+(count===1?'its channel':'all '+count+' channels it is in')+', and nobody here can use it until it is added again.','Remove').then(function(ok){
       if(!ok)return;
       var workspace=activeWorkspaceKey;
       return Promise.all(bot.places.map(function(place){
@@ -5617,7 +5634,7 @@
         var failed=results.filter(function(done){return !done;}).length;
         refreshCompanyBots();
         bot.places.forEach(function(place){ refreshHubBotState(place.channelId,true); });
-        showBenchToast(failed ? 'Couldn\'t remove '+bot.name+' from '+failed+' of '+count+' channels. Try again.' : bot.name+' was removed from the team.');
+        showBenchToast(failed ? 'Couldn\'t remove '+bot.name+' from '+failed+' of '+count+' channels. Try again.' : bot.name+' was removed from the company.');
       });
     });
   }
@@ -5749,7 +5766,7 @@
       state.original={instructions:definition.instructions,skills:(definition.skills||[]).map(function(skill){ return {name:skill.name,description:skill.description||'',body:skill.body}; })};
       (results[0].teams||[]).forEach(function(t){
         if(t.teamId===fromTeamId){ state.fromName=String(t.name||state.fromName); return; }
-        if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Shared team'),role:t.membership.role});
+        if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Company'),role:t.membership.role});
       });
       if(!state.teams.length)throw new Error('You are not in another company yet.');
       state.phase='pick';
@@ -5771,7 +5788,7 @@
       +'<span class="row-preview">'+esc(where)+'</span></span>';
     button.addEventListener('click',function(){ openCompanyBot(bot); });
     var items=[['Copy to another company…',function(){ copyCompanyBotToCompany(bot); }]];
-    if(companyBotCanRemove(bot))items.push(['Remove from team',function(){ removeCompanyBot(bot); }]);
+    if(companyBotCanRemove(bot))items.push(['Remove from company',function(){ removeCompanyBot(bot); }]);
     wireTeamBotPin(button,'company:'+bot.key,!!pinned,items);
     return button;
   }
@@ -5836,7 +5853,7 @@
     var box=document.createElement('div'); box.className='hub-invite-row';
     var inviter=(hubChat.members||[]).filter(function(member){return member.clerk_user_id===invite.invited_by;})[0];
     var name=invite.kind==='group' ? (invite.name && invite.name!=='Group' ? invite.name : 'a group') : '#'+invite.name;
-    box.innerHTML='<span class="hub-invite-text">'+esc((inviter ? displayNameForEmail(inviter.email) : 'A teammate')+' invited you to '+name)+'</span>'
+    box.innerHTML='<span class="hub-invite-text">'+esc((inviter ? displayNameForEmail(inviter.email) : 'A colleague')+' invited you to '+name)+'</span>'
       +'<span class="hub-invite-actions"><button type="button" class="btn hub-invite-join">Join</button><button type="button" class="btn hub-invite-decline">Decline</button></span>';
     var base=hubPath()+'/channels/'+invite.channel_id;
     el('.hub-invite-join',box).addEventListener('click',function(event){
@@ -5869,6 +5886,7 @@
     if(regular && manager)actions.push({id:'rename',label:'Rename…'});
     if(channel.kind!=='dm')actions.push({id:'leave',label:regular?'Leave channel':'Leave group'});
     if(regular && admin)actions.push({id:'archive',label:'Archive channel…',danger:true});
+    if(!regular && !channel.pinned)actions.push({id:'close',label:'Close conversation'});
     return actions;
   }
   function openHubChannelMenu(channel,x,y){
@@ -5900,13 +5918,22 @@
         channel.pinned=!pinned; renderChatSidebar(); showBenchToast(hubActionError(error,'Couldn\'t update the pin. Try again.'));
       });
     }
-    if(id==='rename')return appPrompt(channel.name,{title:'Rename '+name,message:'Everyone in the team sees the new name.',inputLabel:'Channel name',submitLabel:'Rename',singleLine:true}).then(function(result){
+    if(id==='rename')return appPrompt(channel.name,{title:'Rename '+name,message:'Everyone in the company sees the new name.',inputLabel:'Channel name',submitLabel:'Rename',singleLine:true}).then(function(result){
       var value=result.ok ? result.text.replace(/\s+/g,' ').trim() : '';
       if(!value || value===channel.name)return;
       return hubCall('PATCH',base,{name:value}).then(refreshHubChannels).then(function(){
         if(chatWs.activeRoomId===channel.id)openHubChannel(hubChannel(channel.id));
       }).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t rename the channel. Try again.'));});
     });
+    if(id==='close'){
+      setHubConversationClosed(channel.id,Number(channel.latest_sequence||0));
+      if(chatWs.activeRoomId===channel.id){
+        var next=hubChat.channels.filter(function(c){ return !hubPrivateConversation(c); })[0];
+        if(next){ openHubChannel(next); return; }
+      }
+      renderChatSidebar();
+      return showBenchToast(name+' is closed. It comes back when someone writes, or from Direct messages +.');
+    }
     if(id==='leave')return appConfirm('Leave '+name+'? It leaves your list and stops alerting you. '+(channel.kind==='channel' && channel.visibility!=='private' ? 'You can rejoin from Browse channels.' : 'You\'ll need a new invitation to come back.'),'Leave').then(function(ok){
       if(ok)return hubCall('POST',base+'/leave').then(refreshHubChannels).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t leave the channel. Try again.'));});
     });
@@ -5993,7 +6020,7 @@
   function openHubInvitePeople(channel){
     var invited={};
     openHubListDialog({title:'Invite people to '+(hubPrivateConversation(channel) ? hubChannelTitle(channel) : '#'+channel.name),message:'They\'ll see an invitation in their sidebar and can join or decline.',
-      placeholder:'Type a teammate\'s name',empty:'Everyone in the team is already here.',load:function(){
+      placeholder:'Type a colleague\'s name',empty:'Everyone in the company is already here.',load:function(){
         return hubCall('GET',hubPath()+'/members').then(function(result){
           hubChat.members=result.members||[];
           var present=(hubChannel(channel.id)||channel).member_ids||[];
@@ -6008,7 +6035,7 @@
   function openHubDirectMessagePicker(){
     var me=(hubChat.membership||{}).clerk_user_id;
     openHubListDialog({title:'New direct message',message:'Only the two of you can see it. You can @mention your own bots there.',
-      placeholder:'Type a teammate\'s name',empty:'Invite a teammate first.',
+      placeholder:'Type a colleague\'s name',empty:'Invite a colleague first.',
       primary:function(){return {label:'New group…',run:function(){openHubGroupPicker();return 'close';}};},load:function(){
         return hubCall('GET',hubPath()+'/members').then(function(result){
           hubChat.members=result.members||[];
@@ -6033,10 +6060,10 @@
   // picked joins at once, so there is no invitation step.
   function openHubGroupPicker(){
     var me=(hubChat.membership||{}).clerk_user_id, picked=[], available=null;
-    openHubListDialog({title:'New group',message:'Pick two or more teammates. Only the group can see its messages.',
-      placeholder:'Type a teammate\'s name',empty:'Invite at least two teammates to the team first.',
+    openHubListDialog({title:'New group',message:'Pick two or more colleagues. Only the group can see its messages.',
+      placeholder:'Type a colleague\'s name',empty:'Invite at least two colleagues to the company first.',
       primary:function(){
-        var label=available!==null && available<2 ? 'Needs 2+ teammates' : picked.length<2 ? 'Pick at least 2 people' : 'Start group ('+(picked.length+1)+' people)';
+        var label=available!==null && available<2 ? 'Needs 2+ colleagues' : picked.length<2 ? 'Pick at least 2 people' : 'Start group ('+(picked.length+1)+' people)';
         return {label:label,disabled:picked.length<2,run:function(){
           return hubCall('POST',hubPath()+'/groups',{id:window.MiaHubChat.id(),member_ids:picked.slice()}).then(function(result){
             return refreshHubChannels().then(function(){openHubChannel(hubChannel(result.channel.id) || result.channel);return 'close';});
@@ -6297,7 +6324,7 @@
     leftSession:function(){ if(localBrowserState.open)setBrowserSidebarOpen(browserSidebarWanted()); applyLeftPane(); renderChatHeaderBar(); },
     channelPeople:function(channelId){
       var state=chatRoomState(channelId), members=(state.hubMembers||[]).length ? state.hubMembers : (hubChat.members||[]);
-      return members.map(function(member){return {id:member.clerk_user_id,name:member.display_name||displayNameForEmail(member.email)||member.email||'Teammate'};});
+      return members.map(function(member){return {id:member.clerk_user_id,name:member.display_name||displayNameForEmail(member.email)||member.email||'Colleague'};});
     },
     sharedSession:function(active){ api('/api/browser/shared-session',{method:'POST',body:{active:active===true}}).catch(function(){}); },
     send:function(channelId,text){
@@ -7381,7 +7408,7 @@
     var label = app ? app.name + ' \u00b7 ' + appLinkHost(app.url) : (file.name || 'file') + ' \u00b7 ' + humanFileSize(file.size);
     strip.style.display = '';
     strip.innerHTML = (app && app.local ? '<div class="cc-attach-note" role="note"><strong>Local app sharing</strong>' +
-        '<span>You\u2019re sharing a local app. Changes aren\u2019t synced between you and your team yet.</span>' +
+        '<span>You\u2019re sharing a local app. Changes aren\u2019t synced between you and your company yet.</span>' +
         '<span>Shared editing is coming soon.</span></div>' : '') +
       '<div class="cc-attach-chip">' + preview +
       '<span class="cc-attach-name">' + esc(label) + '</span>' +
@@ -7397,7 +7424,7 @@
   function chatAttachmentProblem(file){
     var type = String(file.type || '').toLowerCase();
     var team = inHubRoom();
-    if(CHAT_PAGE_TYPES.indexOf(type) !== -1 && team) return 'Web pages can\u2019t be sent to a team yet. Save it as a PDF or image to share it.';
+    if(CHAT_PAGE_TYPES.indexOf(type) !== -1 && team) return 'Web pages can\u2019t be sent to a company yet. Save it as a PDF or image to share it.';
     if(CHAT_ATTACHMENT_TYPES.indexOf(type) === -1 && (team || CHAT_PAGE_TYPES.indexOf(type) === -1)) return 'Choose an image (PNG, JPEG, GIF, WebP) or a PDF.';
     var limit = team ? 8 : 25;
     if(file.size > limit * 1024 * 1024) return 'Files must be ' + limit + ' MB or smaller.';
@@ -9027,7 +9054,7 @@
       appsPage.catalogError = '';
       checkAppsScans(teamId);
     }).catch(function(){
-      if(teamId === appsTeamId()) appsPage.catalogError = "Your team's apps could not be loaded. Check your connection, then try again.";
+      if(teamId === appsTeamId()) appsPage.catalogError = "Your company's apps could not be loaded. Check your connection, then try again.";
     });
   }
   function clearAppsScanTimer(){ if(appsScanTimer){ window.clearTimeout(appsScanTimer); appsScanTimer = null; } }
@@ -9241,7 +9268,7 @@
           });
         },
         confirmBundle: function(files){
-          return appConfirm('Publish these ' + files.length + ' files to the team?\n\n' + files.join('\n'), 'Publish files', {fileList: true});
+          return appConfirm('Publish these ' + files.length + ' files to the company?\n\n' + files.join('\n'), 'Publish files', {fileList: true});
         },
         buildBundle: function(appId, sha256){
           return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name, sha256: sha256})}).then(function(res){
@@ -9277,7 +9304,7 @@
   function archiveTeamApp(id){
     var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
     if(!app) return;
-    appConfirm('Remove "' + app.name + '" from your team? Nobody on your team will be able to open it from here.', 'Remove').then(function(yes){
+    appConfirm('Remove "' + app.name + '" from your company? Nobody on your company will be able to open it from here.', 'Remove').then(function(yes){
       if(!yes) return null;
       return hubCall('DELETE', '/v1/teams/' + teamId + '/apps/' + id, {}).then(function(){ return loadAppsCatalog(teamId); }).then(renderAppsPage);
     }).catch(function(error){ showBenchToast(window.MiaAppsPage.errorMessage(error, 'That did not work. Try again.')); });
@@ -12053,6 +12080,30 @@
       refresh:function(){if(activeWorkspaceKey===workspace && chatWs.activeRoomId===roomId)return hubBotsChanged(roomId);}},
       button.getAttribute('data-bot-id'),Number(button.getAttribute('data-version')),button.getAttribute('data-hub-admission-action'),button);
   });
+  // The bots this room can @: a company channel's own bots, else Mia's bots.
+  function roomMentionBots(){
+    if(hubWorkspace()){
+      var state = chatWs.byRoom[chatWs.activeRoomId] || {};
+      return (state.hubBots || []).map(function(bot){ return {id:String(bot.id), name:String(bot.name || ''), color:normalizeAgentAvatarColor(bot.avatar_color)}; });
+    }
+    return (chatWs.allAgents || []).filter(function(agent){ return agent && agent.id !== 'gateway'; })
+      .map(function(agent){ return {id:String(agent.id), name:String(agent.name || ''), color:normalizeAgentAvatarColor(agent.avatarColor)}; });
+  }
+  // "@Name" for a bot in this room shows that bot's Mote, in its color.
+  // Works on rendered text: only a mention at a word start outside a tag.
+  function withMentionChips(html){
+    var bots = roomMentionBots().filter(function(bot){ return bot.name; })
+      .sort(function(a, b){ return b.name.length - a.name.length; });
+    if(!bots.length) return html;
+    // One pass over every name, longest first, so "@Admin Bot" never also
+    // matches a bot called "Admin" inside the icon it just became.
+    var names = bots.map(function(bot){ return esc(bot.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+    var pattern = new RegExp('(^|[\\s>(])@(' + names.join('|') + ')(?![\\w-])', 'gi');
+    return html.replace(pattern, function(_match, before, name){
+      var bot = bots.filter(function(item){ return esc(item.name).toLowerCase() === name.toLowerCase(); })[0];
+      return before + '<span class="chat-msg-mention">' + agentAvatarHtml(bot.name, bot.id, 16, null, bot.color) + '@' + name + '</span>';
+    });
+  }
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
     if(m.system){
@@ -12070,7 +12121,11 @@
         return '<div class="chat-msg-system twf-approval-row">' + window.MiaTeamWorkflowsUi.channelCardHtml(m.hubWorkflowApproval) + '</div>';
       }
       var systemAvatar = '';
-      if(m.member && m.member.kind === 'agent'){
+      // A company channel's "<bot> joined" line has that bot's id as its own.
+      var joinedBot = m.hubBotJoined ? roomMentionBots().filter(function(bot){ return bot.id === m.hubBotJoined; })[0] : null;
+      if(joinedBot){
+        systemAvatar = agentAvatarHtml(joinedBot.name, joinedBot.id, 24, null, joinedBot.color, false);
+      } else if(m.member && m.member.kind === 'agent'){
         systemAvatar = agentAvatarHtml(m.member.label, m.member.id, 24, null, null, false);
       } else if(m.member && m.member.kind === 'human'){
         systemAvatar = humanAvatarContent(m.member.label);
@@ -12149,6 +12204,7 @@
     var messageHtml = text ? (liveProgress
       ? '<span class="chat-thinking-shimmer">' + esc(text) + '</span>'
       : (isPreReasoning ? chatPreReasoningHtml(text, compactBrowserMessage) : (isLongMessage ? chatExpandableMessageHtml(text, false, compactBrowserMessage) : mdLite(text)))) : '';
+    if(text && !liveProgress && !isPreReasoning) messageHtml = withMentionChips(messageHtml);
     var mediaHtml = '';
     if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
@@ -15003,7 +15059,7 @@
     var state = chatRoomState(roomId);
     var hasMessages = state.messages.some(function(m){ return !m.system && !m.pending; });
     if(!hasMessages){
-      if(chatWs.activeKind === 'department') return 'What should Mia help us with in ' + (chatWs.activeLabel || 'this team') + '?';
+      if(chatWs.activeKind === 'department') return 'What should Mia help us with in ' + (chatWs.activeLabel || 'this company') + '?';
       if(chatWs.activeKind === 'home') return 'What should Mia help with first?';
       if(chatWs.activeKind === 'agent') return 'What should I ask ' + (chatWs.activeLabel || 'this bot') + '?';
       if(chatWs.activeKind === 'dm' || chatWs.activeKind === 'group') return 'What should we work on together?';
@@ -16126,7 +16182,7 @@
 
   // Sharing gives the team its own copy of the bot's instructions.
   function hubShareNotice(name, team){
-    return 'Share ' + name + ' with ' + team + '? The team gets its own copy: everyone can see its instructions and use it, and it is no longer linked to your Solo ' + name + '. Skills, automations and memories stay with you. An admin approves it once.';
+    return 'Share ' + name + ' with ' + team + '? The company gets its own copy: everyone can see its instructions and use it, and it is no longer linked to your Solo ' + name + '. Skills, automations and memories stay with you. An admin approves it once.';
   }
   function cancelMentionConfirm(){
     chatMention.confirmEntry = null;
@@ -17346,8 +17402,8 @@
     // Browse channels or by invitation.
     var team = hubWorkspace(), kicker = el('#channelNameKicker'), intro = el('#channelNameIntro'), hint = el('#channelNameHint');
     if(kicker) kicker.textContent = team ? 'Shared space' : 'Solo';
-    if(intro) intro.textContent = team ? 'Start a channel in this team. You\'re its first member.' : 'Start a conversation with your bots.';
-    if(hint) hint.textContent = team ? 'Teammates can find it in Browse channels, or you can invite them. Shared bots can be added here.' : 'Only you and your bots can see it. Type @ to add a bot.';
+    if(intro) intro.textContent = team ? 'Start a channel in this company. You\'re its first member.' : 'Start a conversation with your bots.';
+    if(hint) hint.textContent = team ? 'Colleagues can find it in Browse channels, or you can invite them. Shared bots can be added here.' : 'Only you and your bots can see it. Type @ to add a bot.';
     var privateRow = el('#channelPrivateRow'), privateBox = el('#channelPrivateInput');
     if(privateRow) privateRow.hidden = !team;
     if(privateBox) privateBox.checked = false;
@@ -17708,7 +17764,7 @@
       (more && chatInfo.filesExpanded ? '<input type="search" class="cip-files-search" id="cipFilesSearch" placeholder="Search files" aria-label="Search files" autocomplete="off" spellcheck="false">' : '') +
       (rows.length ? '<div class="cip-files-list" id="cipFilesList"></div>' : '<div class="cip-section-empty">Files shared in this chat appear here.</div>') +
       (more ? '<button type="button" class="cip-section-link" id="cipFilesAll">' + (chatInfo.filesExpanded ? 'Show less' : 'See all') + '</button>' : '') +
-      (teamFiles ? '<button type="button" class="cip-section-link" id="cipTeamFiles">Team files</button>' : '') + '</section>';
+      (teamFiles ? '<button type="button" class="cip-section-link" id="cipTeamFiles">Company files</button>' : '') + '</section>';
   }
   function bindDetailsFiles(pane, rows){
     var list = el('#cipFilesList', pane), search = el('#cipFilesSearch', pane), all = el('#cipFilesAll', pane), team = el('#cipTeamFiles', pane);
@@ -18028,7 +18084,7 @@
     }
 
     function clientDescription(entry){
-      var template = descriptionTemplates[entry.category] || 'Add {name} to the workflows your team chooses.';
+      var template = descriptionTemplates[entry.category] || 'Add {name} to the workflows your company chooses.';
       return template.replace(/\{name\}/g, clientName(entry));
     }
 

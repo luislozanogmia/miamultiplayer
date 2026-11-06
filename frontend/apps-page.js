@@ -16,14 +16,14 @@
   var MAX_URL_LENGTH = 2048;
 
   var ERRORS = {
-    app_name_taken: 'Your team already has an app with that name. Rename the folder, then try again.',
-    invalid_app: 'The team would not accept this app. Check its name and address, then try again.',
+    app_name_taken: 'Your company already has an app with that name. Rename the folder, then try again.',
+    invalid_app: 'The company would not accept this app. Check its name and address, then try again.',
     file_not_ready: 'The virus check has not finished yet. Try again in a minute.',
     not_found: 'That app is no longer available.',
-    hub_unavailable: 'Your team could not be reached. Check your connection, then try again.',
+    hub_unavailable: 'Your company could not be reached. Check your connection, then try again.',
     sign_in_required: 'Sign in again, then try again.',
-    forbidden: 'Only a team admin can do that.',
-    app_limit: 'Your team has reached its limit of 200 apps. Remove one, then try again.',
+    forbidden: 'Only a company admin can do that.',
+    app_limit: 'Your company has reached its limit of 200 apps. Remove one, then try again.',
     idempotency_conflict: 'That publish clashed with an earlier try. Try again.',
     version_rejected: 'This version was already turned down. Change the app, then publish again.',
     version_superseded: 'This version is no longer available. Check the list and try again.',
@@ -39,7 +39,7 @@
   // The app is still listed, but its file was deleted from the team.
   function openErrorMessage(error, publisherName){
     if(error && (error.code === 'not_found' || error.status === 404)){
-      return "This app's file is no longer on your team. Ask " + (publisherName || 'whoever published it') + ' to publish it again.';
+      return "This app's file is no longer on your company. Ask " + (publisherName || 'whoever published it') + ' to publish it again.';
     }
     return errorMessage(error, 'That app could not be opened.');
   }
@@ -81,8 +81,8 @@
   }
   function linkPublishProblem(link){
     if(link && link.local) return 'A localhost address only works on your computer. To share this app, publish its folder instead.';
-    if(!link || !isPublishableAddress(link.url)) return 'Only an https address can be shared with your team.';
-    if(String(link.url).length > MAX_URL_LENGTH) return 'That address is too long to share with your team.';
+    if(!link || !isPublishableAddress(link.url)) return 'Only an https address can be shared with your company.';
+    if(String(link.url).length > MAX_URL_LENGTH) return 'That address is too long to share with your company.';
     return '';
   }
 
@@ -124,7 +124,7 @@
     if(!isAdmin || !review || !ID.test(review.app_id || '') || !Number.isSafeInteger(review.version) || review.version < 1) return null;
     return {appId: review.app_id, version: review.version};
   }
-  function reviewNotice(app){ return (app ? '"' + app.name + '" is' : 'A team app is') + ' waiting for your review.'; }
+  function reviewNotice(app){ return (app ? '"' + app.name + '" is' : 'A company app is') + ' waiting for your review.'; }
   function reviewTag(appId){ return REVIEW_TAG + appId; }
   function reviewTagApp(tag){
     var text = String(tag || '');
@@ -133,8 +133,8 @@
   }
   function approveMessage(app){
     var pending = app.pending || {};
-    if(pending.kind === 'link') return 'Approve "' + app.name + '" for everyone? It opens ' + pending.url + ' on every teammate’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.';
-    return 'Approve "' + app.name + '" for everyone? It runs on every teammate’s computer. ' + APP_SCAN_NOTE;
+    if(pending.kind === 'link') return 'Approve "' + app.name + '" for everyone? It opens ' + pending.url + ' on every colleague’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.';
+    return 'Approve "' + app.name + '" for everyone? It runs on every colleague’s computer. ' + APP_SCAN_NOTE;
   }
   function blockedLinkNote(blocked){
     if(blocked && blocked.reason === 'no-input') return 'This app tried to open ' + blocked.host + ' without a click, so Mia stopped it. Click inside the app to open a link.';
@@ -324,7 +324,7 @@
   function publishCell(esc, item, state, itemId, existing){
     var job = state.publishing && state.publishing[itemId];
     if(job && job.step) return '<span class="apps-note" role="status">' + esc(STEP_TEXT[job.step] || 'Working…') + '</span>';
-    var label = existing ? 'Publish update' : 'Publish to team';
+    var label = existing ? 'Publish update' : 'Publish to company';
     return (job && job.error ? '<span class="apps-note apps-note-bad" role="alert">' + esc(job.error) + '</span>' : '')
       + button(esc, label, 'data-app-publish="' + esc(itemId) + '"');
   }
@@ -354,7 +354,7 @@
       var ready = status === 'pending' || status === 'live-pending';
       if(ready) actions += button(esc, 'Approve', 'data-app-approve="' + esc(app.id) + '"') + button(esc, 'Reject', 'data-app-reject="' + esc(app.id) + '"');
     }
-    if(state.isAdmin || (state.me && app.publisher.id === state.me)) actions += button(esc, 'Remove', 'data-app-archive="' + esc(app.id) + '" aria-label="Remove ' + esc(app.name) + ' from the team"');
+    if(state.isAdmin || (state.me && app.publisher.id === state.me)) actions += button(esc, 'Remove', 'data-app-archive="' + esc(app.id) + '" aria-label="Remove ' + esc(app.name) + ' from the company"');
     return row(esc, app.live && app.live.kind === 'link' || (!app.live && app.pending && app.pending.kind === 'link') ? 'Link' : 'App', app.name, meta, actions)
       + (state.isAdmin && isWaitingForReview(app) ? reviewBlock(esc, app, state, status) : '');
   }
@@ -391,12 +391,12 @@
     var html = '';
     if(state.error) html += '<div class="artifacts-empty">' + esc(state.error) + '</div>';
     if(team && state.catalogError) html += '<div class="apps-banner" role="status"><span>' + esc(state.catalogError) + '</span>' + button(esc, 'Try again', 'data-apps-retry') + '</div>';
-    if(team) html += section(esc, 'Waiting for your review', toReview.map(rowOf)) + section(esc, 'Your team', shared);
+    if(team) html += section(esc, 'Waiting for your review', toReview.map(rowOf)) + section(esc, 'Your company', shared);
     html += section(esc, 'On this computer', mine);
     if(html) return html;
     if(state.query) return '<div class="artifacts-empty">Nothing matches.</div>';
     return '<div class="artifacts-empty"><div class="artifacts-empty-title">Your apps show up here</div>'
-      + '<div>' + (team ? 'Apps your team shares, and any folder with an index.html in your Mia folder.' : 'Any folder with an index.html in your Mia folder, and the links you save.') + '</div>'
+      + '<div>' + (team ? 'Apps your company shares, and any folder with an index.html in your Mia folder.' : 'Any folder with an index.html in your Mia folder, and the links you save.') + '</div>'
       + button(esc, 'Build with a bot', 'data-app-build', true) + '</div>';
   }
   function runHtml(tab, esc){
