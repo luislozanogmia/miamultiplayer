@@ -1424,8 +1424,13 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       ].filter(Boolean).join('\n\n'),
       googleRefs: workspace.safeGoogleRefs,
       googleWriteAuthorized: false,
-      // Only the requester's ask-before-do choice, none of their private instructions.
-      globalInstructions: { askBeforeDo: currentInstructionSettings(owner).askBeforeDo },
+      // The owner's Bot Instructions only in their own private chat with the
+      // bot (hub-bot-client checks that with the Hub). In a shared channel,
+      // only the ask-before-do choice: one person's preferences never shape
+      // replies other people read.
+      globalInstructions: channel.privateChat === true
+        ? promptInstructions(owner).bot
+        : { askBeforeDo: currentInstructionSettings(owner).askBeforeDo },
       seedMessages: (systemPrompt) => [{ role: 'system', content: systemPrompt }].concat(history.map(row => ({
         role: row.author_type === 'bot' ? 'assistant' : 'user',
         content: speaker(row),

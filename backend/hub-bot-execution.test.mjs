@@ -7,7 +7,7 @@ import {join} from 'node:path';
 const require=createRequire(import.meta.url),Database=require('better-sqlite3');
 const {createHubBotClient,runLabel,withRunLabel,withoutRunLabel,REPLY_BYTES}=require('./hub-bot-client');
 const owner='local-user@localhost',teamId='a'.repeat(32),channelId='c'.repeat(32),jobId='d'.repeat(32);
-function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,removeDuringHistory=false,ownRequest=false,replyText='A distinct bot reply',displayName='',priorBotBody=''}={}) {
+function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,removeDuringHistory=false,ownRequest=false,replyText='A distinct bot reply',displayName='',priorBotBody='',channelKind='channel',memberIds=['user_owner','user_human']}={}) {
   const db=new Database(':memory:');t.after(()=>db.close());
   const dataDirectory=mkdtempSync(join(tmpdir(),'mia-hub-execution-'));
   writeFileSync(join(dataDirectory,'hub-connection.json'),JSON.stringify({url:'https://hub.example.test'}));
@@ -26,6 +26,7 @@ function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,remov
     fetcher:async(url,options)=>{
       const body=options.body && JSON.parse(options.body);
       if(url.endsWith('/v1/me')) return response({teams:[{teamId,membership:{clerk_user_id:'user_owner',email:'owner@example.test',display_name:displayName}}]});
+      if(url.endsWith('/v1/teams/'+teamId+'/channels')) return response({channels:[{id:channelId,kind:channelKind,visibility:'private',member_ids:memberIds}]});
       if(url.endsWith('/bots')) {
         if(options.method==='POST') {registration={...body,owner_id:'user_owner'};return response({bot:registration});}
         return response({bots:registration?[registration]:[]});
@@ -115,7 +116,7 @@ test('long shared-channel replies are published, and over-limit replies are shor
   await f.client.share(owner,f.input,'fixture.token');
   await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();
   assert.equal(withoutRunLabel(f.reply()),long);
-  assert.deepEqual(f.received[0].channel,{teamId,teamName:'',channelId});
+  assert.deepEqual(f.received[0].channel,{teamId,teamName:'',channelId,privateChat:false});
 
   const huge='é'.repeat(9000);
   const g=fixture(t,{ownRequest:true,replyText:huge});
@@ -153,4 +154,27 @@ test('a labelled reply still fits the Hub limit',()=>{
   const labelled=withRunLabel('a'.repeat(REPLY_BYTES*2),'Grok · Ran on Tom’s Mia');
   assert.ok(Buffer.byteLength(labelled)<=REPLY_BYTES);
   assert.match(labelled,/shortened to fit[^]*Ran on Tom/);
+});
+
+test('your Bot Instructions apply only in your own private chat with a company bot',async t=>{
+  const run=async options=>{
+    const f=fixture(t,options);
+    await f.client.share(owner,f.input,'fixture.token');
+    await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();
+    // Someone else's request runs only once the owner approves it.
+    if(!options.ownRequest) {await f.client.run(owner,f.input,'fixture.token');await f.client.idle();}
+    return f.received[0].channel.privateChat;
+  };
+  assert.equal(await run({ownRequest:true,channelKind:'bot',memberIds:['user_owner']}),true,'your private bot chat');
+  assert.equal(await run({ownRequest:true,channelKind:'channel',memberIds:['user_owner','user_human']}),false,'a shared channel');
+  assert.equal(await run({ownRequest:true,channelKind:'bot',memberIds:['user_owner','user_human']}),false,'a bot chat someone else is in');
+  assert.equal(await run({ownRequest:false,channelKind:'bot',memberIds:['user_owner']}),false,'a message from someone else');
+});
+
+test('the bot turn uses the owner\'s Bot Instructions only for a private chat, else only ask-before-do', async () => {
+  const {readFileSync}=await import('node:fs');
+  const server=readFileSync(new URL('./server.js',import.meta.url),'utf8');
+  const start=server.indexOf('async function runSharedBotTurn(');
+  const body=server.slice(start,server.indexOf('\n}\n',start));
+  assert.match(body,/globalInstructions: channel\.privateChat === true\s*\? promptInstructions\(owner\)\.bot\s*: \{ askBeforeDo: currentInstructionSettings\(owner\)\.askBeforeDo \}/);
 });

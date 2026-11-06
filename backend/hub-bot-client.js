@@ -122,10 +122,18 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       // Recheck revocation immediately before invoking the existing runtime.
       await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
       if(!localIdentityValid(s) || controller.signal.aborted) throw new Error('owner_changed');
+      // In the person's own private chat with a company bot, their Bot
+      // Instructions apply, as in their Solo bot chats. Read from the Hub, not
+      // the page: a bot chat with this person as its only member, and their
+      // message. Anything else, or a failed lookup, stays a shared turn.
+      const listed=await requestHub(s.origin,token(),'GET','/v1/teams/'+s.teamId+'/channels',undefined,fetcher).catch(()=>null);
+      const place=((listed && listed.channels)||[]).find(channel=>channel && channel.id===s.channelId);
+      const privateChat=!!place && place.kind==='bot' && claim.requesterId===s.subject
+        && Array.isArray(place.member_ids) && place.member_ids.length===1 && place.member_ids[0]===s.subject;
       const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, registrationId:run.registration_id, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
-        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
+        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
       if(controller.signal.aborted) throw new Error('cancelled');
       journal.saveReply(s,run.job_id,withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName)));
     } catch {
