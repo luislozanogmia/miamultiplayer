@@ -11643,6 +11643,31 @@
     });
   });
 
+  // Picking a chat in the sidebar (Mia, a bot, a channel, Solo or company)
+  // puts the cursor in the message box, ready to type. Not on touch screens,
+  // where it would pop the keyboard, and not if something else took focus
+  // meanwhile (a dialog, the address bar).
+  function focusComposerAfterPick(){
+    if(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
+    var tries = 0;
+    (function attempt(){
+      var input = el('#ccInput');
+      var active = document.activeElement;
+      var free = !active || active === document.body || active.closest('.chat-recent-row');
+      if(input && free && input.offsetParent && !input.disabled && !document.querySelector('.app-confirm-overlay.open, .app-prompt-overlay.open')){
+        input.focus({preventScroll: true});
+        return;
+      }
+      // The chat may still be opening; try briefly, then leave focus alone.
+      if(free && tries++ < 10) setTimeout(attempt, 100);
+    })();
+  }
+  document.addEventListener('click', function(event){
+    var row = event.target.closest && event.target.closest('.chat-recent-row');
+    if(!row || row.classList.contains('chat-row-hidden') || event.defaultPrevented) return;
+    setTimeout(focusComposerAfterPick, 0);
+  });
+
   // A request for approval from the ask-before-do gate. Answering it here is
   // the only thing that unlocks the action; the server checks who answered.
   var askBeforeDoLocalStatus = {};
