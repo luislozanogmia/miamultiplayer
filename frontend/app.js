@@ -12164,8 +12164,17 @@
     return senderEmail.toLowerCase() === (currentUser || '').toLowerCase();
   }
 
+  // A bot's reply can be redone like Solo: Edit and resend opens the request
+  // that started it, when that request is the signed-in person's own.
+  function hubBotReplyRequest(roomId, message){
+    if(!message || !message.hubReplyTo || message.deleted) return null;
+    var request = (chatRoomState(roomId).messages || []).filter(function(m){ return m.id === message.hubReplyTo; })[0];
+    return request && !request.deleted && hubOwnMessage(request) && String(request.body || '').trim() ? request : null;
+  }
+
   function hubEditablePrompt(roomId, eventId){
     var message = roomId && (chatRoomState(roomId).messages || []).filter(function(m){ return m.id === eventId; })[0];
+    if(message && message.hubReplyTo) message = hubBotReplyRequest(roomId, message);
     return message && !message.hubLocal && !message.deleted && hubOwnMessage(message) ? String(message.body || '').trim() : null;
   }
 
@@ -12480,7 +12489,7 @@
     // existing permission attributes instead of recomputing them on click.
     var showThreadAction = !opts.inThread && !m.pending && !m.sendFailed && !(m.hubMessage && (m.hubLocal || m.deleted));
     var showDeleteAction = m.hubMessage ? hubMessageDeletable(m) : chatMsgDeletable(m);
-    var showEditAction = m.hubMessage ? !m.hubLocal && !m.deleted && hubOwnMessage(m) && !!String(m.body||'').trim() : chatMsgEditable(m);
+    var showEditAction = m.hubMessage ? (!m.hubLocal && !m.deleted && hubOwnMessage(m) && !!String(m.body||'').trim()) || !!hubBotReplyRequest(chatWs.activeRoomId, m) : chatMsgEditable(m);
     var isPreReasoning = !m.hubAuthor && !!text && isPreReasoningNotice(text);
     var compactBrowserMessage = !!text && document.body.classList.contains('browser-collab-mode');
     var isLongMessage = !!text && (compactBrowserMessage || chatMessageWordCount(text) > CHAT_MESSAGE_PREVIEW_WORDS);

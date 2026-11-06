@@ -114,6 +114,8 @@
       sender:row.author_type==='bot'?'hub-bot:'+row.author_id:row.author_email, hubAuthor:row.author_type==='bot'||row.author_type==='system'?null:row.author_email,
       nativeAgentName:row.author_type==='bot'?row.author_name:null, body:deleted ? 'Message deleted' : (runAt<0 ? row.body : row.body.slice(0,runAt)), hubRunLabel:runAt<0 ? '' : row.body.slice(runAt+3), ts:row.created_at * 1000,
       threadRoot:row.thread_root_sequence ? 'hub-sequence-'+row.thread_root_sequence : null, deleted:deleted, pending:false,
+      // A bot reply names the message that asked for it.
+      hubReplyTo:row.author_type==='bot' && row.reply_to_sequence ? 'hub-sequence-'+row.reply_to_sequence : null,
       hubFile:file, attachments:[], nativeEvent:{sequence:row.sequence}, reactions:deleted ? null : reactionMap(row.reactions)};
   }
   // Upserts authoritative rows, replacing the sender's optimistic copy by its
