@@ -3902,6 +3902,7 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .mia-space-tile{position:relative;display:block;height:96px;min-width:0;padding:0;border:0;border-radius:9px;background:var(--sand-bg-elevated,#fff);box-shadow:0 0 0 1px var(--sand-border-subtle);overflow:hidden;cursor:pointer;font:inherit;text-align:left;transition:box-shadow .2s;}
 .mia-space-tile:hover{box-shadow:0 0 0 1px var(--sand-border-default);}
 .mia-space-tile.mine{box-shadow:0 0 0 2px var(--sand-text-primary);}
+.mia-space-tile.no-view .mia-space-tile-view::after{content:"No live view";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--sand-text-tertiary,#8a857c);}
 .mia-space-tile.presenter:not(.mine){box-shadow:0 0 0 2px var(--sand-border-focus);}
 .mia-space-tile-view{position:absolute;inset:0;display:block;}
 .mia-space-frame{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top left;}

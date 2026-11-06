@@ -682,6 +682,9 @@
       if(!node) return;
       var frame = model.pickFrame(tile, s.frames, self && self.id, now, s.follow), img = node.querySelector('.mia-space-frame');
       if(img && frame && img.getAttribute('src') !== frame.url){ img.src = frame.url; img.hidden = false; }
+      // Nobody's view has arrived for a tab someone else is on: say so instead of an old picture.
+      if(img && !frame && !img.hidden){ img.hidden = true; img.removeAttribute('src'); }
+      node.classList.toggle('no-view', !frame && (tile.people.some(function(person){ return !self || person.id !== self.id; }) || tile.bots.length > 0));
       node.classList.toggle('working', tile.bots.length > 0);
       node.classList.toggle('done', !!s.done[tile.k]);
       paintMarkers(node, tile);

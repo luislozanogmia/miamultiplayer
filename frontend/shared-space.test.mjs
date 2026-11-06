@@ -122,11 +122,13 @@ test('a tile shows the copy of the page from the computer doing the work', () =>
   assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'anas');
   frames.k1.ana.at = now - 60000;
   assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'toms', 'a bot computer that went quiet gives way to a teammate on the tab');
-  assert.equal(space.pickFrame(tile, frames, 'me', now, 'me').url, 'mine');
+  assert.equal(space.pickFrame(tile, frames, 'me', now, 'me').url, 'toms', 'following yourself never puts your copy over a colleague\'s');
   frames.k1.ana.at = now;
   assert.equal(space.pickFrame(tile, frames, 'me', now, 'tom').url, 'toms', 'who you follow comes first, even over a bot');
-  frames.k1.tom.at = now - 60000; frames.k1.ana.at = now - 60000;
-  assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'mine', 'your own copy is the last live choice');
+  frames.k1.tom.at = now - 60000; frames.k1.ana.at = now - 50000;
+  assert.equal(space.pickFrame(tile, frames, 'me', now).url, 'anas', 'their newest copy, never yours, when theirs stopped arriving');
+  assert.equal(space.pickFrame(tile, { k1: { me: frames.k1.me } }, 'me', now), null, 'none from them yet: no picture rather than your own movements');
+  assert.equal(space.pickFrame({ k: 'k1', mine: true, people: [{ id: 'me' }], bots: [] }, frames, 'me', now).url, 'mine', 'a tab only you are on shows your copy');
   frames.k1.tom.at = now;
   assert.equal(space.pickFrame({ ...tile, mine: false, people: [{ id: 'tom' }], bots: [] }, frames, 'me', now).url, 'toms');
   assert.equal(space.pickFrame({ k: 'k2', mine: false, people: [], bots: [] }, frames, 'me', now), null);

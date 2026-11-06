@@ -105,19 +105,24 @@
     });
   }
   // Whose copy of a tab its tile shows: who you follow first, then a bot's
-  // computer, then a teammate on it, then yours, then the newest still anyone sent.
+  // computer, then a colleague on it. Where someone else is, your own copy
+  // never stands in for theirs: the minimap would show your own movements as
+  // theirs. Their newest frame is kept if theirs stopped arriving, else none.
+  // A tab only you are on shows your copy.
   var FRAME_FRESH_MS = 20000;
   function pickFrame(tile, frames, selfId, now, followId){
     var byPerson = frames && frames[tile.k] || {};
-    var order = followId ? [followId] : [];
-    tile.bots.forEach(function(bot){ if(bot.ownerId !== selfId) order.push(bot.ownerId); });
-    tile.people.forEach(function(person){ if(person.id !== selfId) order.push(person.id); });
-    if(selfId) order.push(selfId);
-    for(var i = 0; i < order.length; i++){
-      var frame = byPerson[order[i]];
+    var others = followId && followId !== selfId ? [followId] : [];
+    tile.bots.forEach(function(bot){ if(bot.ownerId !== selfId) others.push(bot.ownerId); });
+    tile.people.forEach(function(person){ if(person.id !== selfId) others.push(person.id); });
+    for(var i = 0; i < others.length; i++){
+      var frame = byPerson[others[i]];
       if(frame && now - frame.at < FRAME_FRESH_MS) return frame;
     }
-    return Object.keys(byPerson).map(function(id){ return byPerson[id]; }).sort(function(a, b){ return b.at - a.at; })[0] || null;
+    var newest = function(ids){ return ids.map(function(id){ return byPerson[id]; }).filter(Boolean).sort(function(a, b){ return b.at - a.at; })[0] || null; };
+    if(others.length) return newest(others);
+    var ownAndRest = Object.keys(byPerson);
+    return (selfId && byPerson[selfId]) || newest(ownAndRest);
   }
   // The line beside Follow: who is working in this group right now.
   // `active` holds teammates (other than you) moving on a tab: [{name, tab}].
