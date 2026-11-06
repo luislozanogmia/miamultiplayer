@@ -12185,6 +12185,17 @@
   // row stayed above that answer, so the chat looked finished. While a run's
   // row is live and the bot has spoken after it, the row moves to the end.
   // It still goes away when the run's own reply lands, or on Stop.
+  // "ChatGPT · Ran on Ana's Mia" under a company bot's reply: a chip with the
+  // provider's mark, as on the site, or plain text for a provider without one.
+  function providerRunChipHtml(label){
+    var text = String(label || ''), at = text.indexOf(' · ');
+    var provider = at > 0 && !/^Ran on /.test(text) ? text.slice(0, at) : '';
+    var rest = provider ? text.slice(at + 3) : text;
+    var mark = provider && window.MiaProviderMarks ? window.MiaProviderMarks.markFor(provider) : null;
+    if(!mark) return '<div class="chat-msg-run plain">' + esc(text) + '</div>';
+    return '<div class="chat-msg-run"><span class="chat-msg-run-mark">' + mark.svg + '</span><b>' + esc(provider) + '</b><span>· ' + esc(rest) + '</span></div>';
+  }
+
   function moveLiveProgressBelow(messages, superseded){
     var live = messages.filter(function(m, index){
       if(!m.nativeProgress || m.nativeDiagnostic || superseded(m)) return false;
@@ -12431,7 +12442,7 @@
     var mediaHtml = '';
     if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
-    if(m.hubRunLabel) messageHtml += '<div class="chat-msg-run">✓ ' + esc(m.hubRunLabel) + '</div>';
+    if(m.hubRunLabel) messageHtml += providerRunChipHtml(m.hubRunLabel);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
     var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
       (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +

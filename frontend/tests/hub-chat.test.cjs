@@ -1017,3 +1017,18 @@ test('a working row moves under the bot\'s mid-run answer and nowhere else',()=>
   assert.deepEqual(ids(move([ask,{...working,nativeDiagnostic:true},answer],()=>false)),['ask','working','answer'],'debug output is not a working row');
   assert.match(source,/var mainMessages = moveLiveProgressBelow\(state\.messages\.filter\(/);
 });
+test('a company bot reply shows the provider as a chip with its mark, or plain text without one',()=>{
+  const marks=require(path.join(__dirname,'../provider-marks.js'));
+  const env={esc:v=>String(v).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),window:{MiaProviderMarks:marks}};
+  const chip=appFunction('providerRunChipHtml',env);
+  const gpt=chip("ChatGPT · Ran on Ana's Mia");
+  assert.match(gpt,/^<div class="chat-msg-run"><span class="chat-msg-run-mark"><svg/);
+  assert.match(gpt,/<b>ChatGPT<\/b><span>· Ran on Ana&#39;s Mia<\/span><\/div>$/);
+  assert.match(chip('Claude · Ran on a colleague’s Mia'),/<b>Claude<\/b>/);
+  assert.equal(chip("DeepSeek · Ran on Ana's Mia"),'<div class="chat-msg-run plain">DeepSeek · Ran on Ana&#39;s Mia</div>','no mark: plain text, no checkmark');
+  assert.equal(chip("Ran on Ana's Mia"),'<div class="chat-msg-run plain">Ran on Ana&#39;s Mia</div>');
+  assert.equal(marks.markFor('codex').name,'ChatGPT');
+  assert.equal(marks.markFor('xai').name,'Grok');
+  assert.equal(marks.markFor('Mia Router'),null);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../styles.css'),'utf8').match(/\.chat-msg-run\{[^}]*\}/)[0],/animation/,'no pop-in animation in the app');
+});

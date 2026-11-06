@@ -1055,7 +1055,12 @@
   .chat-msg-name{font-family:var(--styled-sans);font-weight:500;font-size:14px;line-height:20px;letter-spacing:0;color:var(--sand-text-primary);}
   .chat-msg-tag{font-family:var(--styled-sans);font-size:11px;letter-spacing:.02em;padding:2px 7px;border-radius:5px;background:var(--sand-fill-accent-subtle);color:var(--sand-text-accent);}
   .chat-msg-time{font-family:var(--styled-sans);font-size:12px;line-height:16px;color:var(--sand-text-secondary);}
-  .chat-msg-run{margin-top:6px;font-size:12px;line-height:1.35;color:var(--sand-text-tertiary,var(--sand-text-secondary));}
+  .chat-msg-run{display:flex;width:fit-content;max-width:100%;align-items:center;gap:7px;margin-top:6px;padding:5px 12px 5px 5px;border:1px solid var(--sand-border-subtle,rgba(0,0,0,.08));border-radius:999px;font-size:12.5px;font-weight:500;line-height:1.35;color:var(--sand-text-secondary);background:var(--sand-bg-elevated,#fff);box-shadow:0 1px 2px rgba(0,0,0,.05);}
+  .chat-msg-run b{color:var(--sand-text-primary);font-weight:600;}
+  /* The provider's mark keeps its light badge in dark mode too, so dark marks stay visible. */
+  .chat-msg-run-mark{display:inline-flex;align-items:center;justify-content:center;flex:none;width:24px;height:24px;border-radius:50%;background:#f3f1ee;color:#111;}
+  .chat-msg-run-mark svg{width:15px;height:15px;}
+  .chat-msg-run.plain{display:block;padding:0;border:0;background:none;box-shadow:none;font-weight:400;font-size:12px;color:var(--sand-text-tertiary,var(--sand-text-secondary));}
   /* The bubble itself: agent = #eeeeee, first-in-group corner flat top-left;
      user = #070707/#fcfcfc, flat top-right (mirrored). Consecutive bubbles
      from the same sender stack with a 4px gap via .grouped's tighter
