@@ -23,6 +23,17 @@ test('a title is one short plain line', () => {
   assert.ok(long.endsWith('…'));
 });
 
+test('History titles and title prompts omit credential URLs and codes', () => {
+  const reset = 'https://example.test/reset?token=fixture-private-value';
+  const jwt = `eyJ${'a'.repeat(20)}.eyJ${'b'.repeat(20)}.${'c'.repeat(30)}`;
+  for (const text of [`Open ${reset}`, `Title: Review ${jwt}`, 'Verification code: 123456']) {
+    assert.doesNotMatch(titleFromText(text), /fixture-private-value|eyJ[a-z]+\.eyJ|123456/);
+    assert.doesNotMatch(titlePrompt([text]), /fixture-private-value|eyJ[a-z]+\.eyJ|123456/);
+  }
+  assert.equal(titleFromText(reset), 'New chat');
+  assert.match(titleFromText('Read https://example.test/news'), /example\.test\/news/);
+});
+
 test('the prompt keeps how the chat opened and where it went, as data', () => {
   const lines = Array.from({ length: 40 }, (_, index) => `line ${index}`);
   const prompt = titlePrompt(lines);

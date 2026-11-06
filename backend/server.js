@@ -1406,9 +1406,9 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       try {
         teamFolder = cronSync.teamBotWorkspace(channel, { registrationId: bot.registrationId, name: bot.name });
         provisionMiaosWorkspace({ workspaceDir: teamFolder });
-      } catch (error) {
+      } catch {
         teamFolder = null;
-        console.error('team bot folder unavailable', error && error.message);
+        console.error('team bot folder unavailable');
       }
     }
     const turn = await runBotReplyTurn({
@@ -1882,7 +1882,7 @@ const teamApps = require('./team-apps');
 const TEAM_APPS_DIR = process.env.MIAOS_TEAM_APPS_DIR || path.join(ARTIFACTS_DATA_DIR, 'team-apps');
 const TEAM_APP_PREVIEWS_DIR = process.env.MIAOS_TEAM_APP_PREVIEWS_DIR || path.join(ARTIFACTS_DATA_DIR, 'team-app-previews');
 teamApps.registerAppRoutes(app, {
-  express, requireAuth,
+  express, requireAuth, requireInteractiveAuth,
   workspaceDir: () => miaosWorkspaceDir(),
   dataDir: () => ARTIFACTS_DATA_DIR,
   appsDir: () => TEAM_APPS_DIR,
@@ -5734,8 +5734,8 @@ app.post('/api/bots/generic-copy', requireAuth, async (req, res) => {
   try {
     const reply = await scheduleInference(botGenericCopy.genericCopyPrompt(body), 'suggestion', await inferenceOptionsForUser(req.userEmail));
     copy = botGenericCopy.normalizeGenericCopy(reply, { skills: body.skills });
-  } catch (error) {
-    console.error('generic bot copy failed', error && error.message);
+  } catch {
+    console.error('generic bot copy failed');
   }
   if (!copy) return res.status(502).json({ error: 'copy_unavailable', message: 'Mia couldn’t prepare a clean copy. Try again.' });
   res.status(200).json({ copy });
@@ -6069,7 +6069,7 @@ app.get('/api/agents/gateway', requireAuth, (req, res) => {
 // The user's answer to a bot's automation card (see nativeBotAutomationAction).
 // accept saves the card's final values through the same validation and
 // scheduler sync as any automation edit; dismiss only records the answer.
-app.post('/api/bots/:id/automation-proposals/:eventId', requireAuth, async (req, res) => {
+app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, async (req, res) => {
   const bot = db.loadOne(conn, 'bots', req.params.id);
   if (!bot || !botVisibleInWorkspace(bot, req)) return res.status(404).json({ error: 'not_found' });
   if (!sameOwner(bot, req.userEmail) && !isAdmin(req.userEmail)) {
@@ -6146,6 +6146,56 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireAuth, async (req,
   const updated = answer({ status: 'accepted', automationId: record.id, automation: checked.proposal.automation, schedule });
   bumpVersion();
   return res.status(200).json({ event: updated, bot: savedBot });
+});
+
+// A model may propose new persistent instructions, but only this explicit
+// answer from the bot's signed-in owner can write AGENTS.md. The proposal is
+// bound to the owner's private bot chat and the revision it was drafted from.
+app.post('/api/bots/:id/instruction-proposals/:eventId', requireInteractiveAuth, (req, res) => {
+  const bot = db.loadOne(conn, 'bots', req.params.id);
+  if (!bot || !botVisibleInWorkspace(bot, req)) return res.status(404).json({ error: 'not_found' });
+  if (!sameOwner(bot, req.userEmail)) return res.status(403).json({ error: 'forbidden' });
+  const decision = String((req.body || {}).decision || '');
+  if (decision !== 'accept' && decision !== 'dismiss') return res.status(400).json({ error: 'invalid_decision' });
+  const companyId = nativeCompanyId(workspaceIdForRecord(bot), ownerOf(bot));
+  const event = nativeConversationRepository.getEvent({ companyId, id: req.params.eventId, includeDeleted: false });
+  const proposal = event && event.metadata && event.metadata.instructionProposal;
+  const trigger = proposal && nativeConversationRepository.getEvent({ companyId, id: proposal.triggerEventId, includeDeleted: false });
+  const conversation = event && nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
+  if (!event || event.senderType !== 'bot' || event.senderId !== bot.id
+    || !proposal || proposal.botId !== bot.id || !proposal.baseRevision
+    || typeof proposal.instructions !== 'string' || !proposal.instructions.trim()
+    || !trigger || trigger.senderType !== 'user' || trigger.conversationId !== event.conversationId
+    || !sameOwner(bot, trigger.senderId) || !ownsPrivateBotConversation(conversation, bot, trigger)) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  if (proposal.status !== 'pending') return res.status(409).json({ error: 'already_answered', proposal });
+  const answer = (status, fields = {}) => {
+    const updated = nativeConversationRepository.updateEvent({
+      companyId, id: event.id,
+      metadata: { ...event.metadata, instructionProposal: { ...proposal, ...fields, status, answeredAt: new Date().toISOString() } },
+      editedAt: event.editedAt || event.createdAt,
+    });
+    bumpVersion();
+    try { nativeConversationRealtime.publish(updated); } catch (_publishError) {}
+    return updated;
+  };
+  if (decision === 'dismiss') return res.status(200).json({ event: answer('dismissed') });
+  try {
+    const current = cronSync.readBotInstructions(bot);
+    if (!current || current.instructionRevision !== proposal.baseRevision) {
+      const updated = answer('stale');
+      return res.status(409).json({ error: 'instructions_changed', proposal: updated.metadata.instructionProposal, event: updated });
+    }
+    const saved = cronSync.writeBotInstructions(bot, proposal.instructions, { expectedRevision: proposal.baseRevision });
+    return res.status(200).json({ event: answer('accepted', { instructionRevision: saved.instructionRevision }) });
+  } catch (error) {
+    if (error && error.code === 'INSTRUCTIONS_CONFLICT') {
+      const updated = answer('stale');
+      return res.status(409).json({ error: 'instructions_changed', proposal: updated.metadata.instructionProposal, event: updated });
+    }
+    return res.status(500).json({ error: 'instructions_save_failed', message: 'The instructions were not saved. Try again.' });
+  }
 });
 
 // Mia's bot setup card answers her <MIA_BOT_SETUP> request: accepted once
@@ -7337,16 +7387,20 @@ function nativeBotInstructionUpdate(agent, replyText, trigger) {
   const extracted = botInstructionActions.extractInstructionUpdate(replyText);
   if (!extracted.instructions && !extracted.error) return { text: extracted.text, metadata: null };
   const failed = (reason) => ({
-    text: 'I couldn\u2019t save my new instructions, so nothing changed. Please ask me again.',
+    text: 'I couldn\u2019t prepare new instructions, so nothing changed. Please ask me again.',
     metadata: { instructionUpdateError: String(reason).slice(0, 200) },
   });
   if (extracted.error) return failed(extracted.error);
   if (!sameOwner(agent, trigger.senderId)) return failed('not_owner');
   try {
-    const saved = cronSync.writeBotInstructions(agent, extracted.instructions);
-    return { text: extracted.text || 'I updated my instructions.', metadata: { instructionRevision: saved.instructionRevision } };
+    const current = cronSync.readBotInstructions(agent);
+    if (!current) return failed('package_missing');
+    return { text: extracted.text, metadata: { instructionProposal: {
+      botId: agent.id, status: 'pending', instructions: extracted.instructions,
+      baseRevision: current.instructionRevision, triggerEventId: trigger.id,
+    } } };
   } catch (error) {
-    return failed(error && error.code || 'save_failed');
+    return failed(error && error.code || 'read_failed');
   }
 }
 
@@ -8293,7 +8347,10 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     : ownsMiaChat
       ? nativeMiaBotSetupRequest(botAutomationActions.stripAutomationBlocks(actionReply), senderLabel)
       : { text: stripAgentActionBlocks(actionReply), metadata: null };
-  const replyParts = cleanBotReplyText(agent.name, automationAction.text || automationAction.fallbackText || '');
+  const visibleText = instructionUpdate.metadata && instructionUpdate.metadata.instructionProposal
+    ? 'I drafted new instructions. Review the replacement below and choose Accept or Reject; nothing has changed yet.'
+    : automationAction.text || automationAction.fallbackText || '';
+  const replyParts = cleanBotReplyText(agent.name, visibleText);
   const safeReply = replyParts.text;
   const nextStepMetadata = replyParts.nextStep ? { nextStep: replyParts.nextStep } : {};
   if (!safeReply && validatedArtifacts.length === 0) throw new Error('native agent produced no user-facing reply');
@@ -8424,8 +8481,8 @@ async function executeNativeConversationDispatch(dispatch) {
       id: dispatch.id,
       claimToken,
     });
-    refreshNativeConversationTitle(dispatch).catch((error) => {
-      console.error('conversation title failed', dispatch.conversationId, error && error.message);
+    refreshNativeConversationTitle(dispatch).catch(() => {
+      console.error('conversation title failed');
     });
   } catch (error) {
     // Mia is closing, which ends every open stream. That isn't this turn failing:
@@ -8576,8 +8633,8 @@ async function refreshNativeConversationTitle(dispatch) {
         await inferenceOptionsForUser(people[people.length - 1].senderId)
       );
       save(conversationTitles.titleFromText(reply));
-    } catch (error) {
-      console.error('conversation title failed', dispatch.conversationId, error && error.message);
+    } catch {
+      console.error('conversation title failed');
     }
   }, CONVERSATION_TITLE_DELAY_MS);
   if (timer.unref) timer.unref();

@@ -232,13 +232,29 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // page-favicon-updated) stay small enough for the per-tab state that
   // travels over IPC on every publish.
   const FAVICON_MAX_BYTES = 128 * 1024;
-  async function faviconDataUri(url) {
-    const response = await profile.fetch(url, { bypassCustomProtocolHandlers: true });
+  async function faviconDataUri(url, signal) {
+    const response = await profile.fetch(url, { bypassCustomProtocolHandlers: true, signal });
     if (!response.ok) return null;
     const type = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     if (!/^image\//.test(type)) return null;
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (!buffer.length || buffer.length > FAVICON_MAX_BYTES) return null;
+    const length = Number(response.headers.get("content-length"));
+    if (length > FAVICON_MAX_BYTES) return null;
+    if (!response.body || typeof response.body.getReader !== "function") return null;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let bytes = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > FAVICON_MAX_BYTES) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+    if (!bytes) return null;
+    const buffer = Buffer.concat(chunks, bytes);
     return `data:${type};base64,${buffer.toString("base64")}`;
   }
   // A PDF has no page to declare an icon, so it gets a PDF mark.
@@ -489,9 +505,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const known = local ? "" : historyIcons.get(historyHost(url));
     if (known) return known;
     if (typeof profile.fetch !== "function") return "";
-    const timeout = new Promise(resolve => setTimeout(resolve, SITE_ICON_TIMEOUT_MS, null));
-    const fetched = faviconDataUri(new URL("/favicon.ico", page.origin).toString()).catch(() => null);
-    return (await Promise.race([fetched, timeout])) || "";
+    const controller = new AbortController();
+    let timer;
+    const timeout = new Promise(resolve => {
+      timer = setTimeout(() => { controller.abort(); resolve(null); }, SITE_ICON_TIMEOUT_MS);
+    });
+    const fetched = faviconDataUri(new URL("/favicon.ico", page.origin).toString(), controller.signal).catch(() => null);
+    try { return (await Promise.race([fetched, timeout])) || ""; }
+    finally { clearTimeout(timer); }
   }
   function removeVisit(url) {
     const before = historyEntries.length;

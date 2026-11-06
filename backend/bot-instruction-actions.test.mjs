@@ -50,9 +50,15 @@ test('the save replaces only that bot\'s AGENTS.md', (t) => {
   };
   const mine = make('bot-mine', 'Mine');
   const other = make('bot-other', 'Other');
+  const firstRevision = store.readInstructions(mine).instructionRevision;
   const saved = store.writeInstructions(mine, 'New rules\n');
   assert.equal(store.readInstructions(mine).instructions, 'New rules\n');
   assert.equal(saved.instructionRevision, store.readInstructions(mine).instructionRevision);
+  assert.throws(() => store.writeInstructions(mine, 'Stale overwrite\n', { expectedRevision: firstRevision }),
+    { code: 'INSTRUCTIONS_CONFLICT', statusCode: 409 });
+  assert.equal(store.readInstructions(mine).instructions, 'New rules\n');
+  assert.ok(store.writeInstructions(mine, 'Approved rules\n', { expectedRevision: saved.instructionRevision }).instructionRevision);
+  assert.equal(store.readInstructions(mine).instructions, 'Approved rules\n');
   assert.match(store.readInstructions(other).instructions, /Other rules/);
   assert.deepEqual(fs.readdirSync(store.findDirectory('bot-mine')).filter(name => name.endsWith('.tmp')), []);
   assert.throws(() => store.writeInstructions({ id: 'bot-missing' }, 'x'), /missing/);

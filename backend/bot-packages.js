@@ -132,11 +132,14 @@ function createBotPackageStore(rootDirectory) {
   }
 
   // Replaces one bot's AGENTS.md in place; the rest of its package is untouched.
-  function writeInstructions(record, instructions) {
+  function writeInstructions(record, instructions, { expectedRevision } = {}) {
     const directory = findDirectory(safeBotId(record && record.id));
     if (!directory) throw new BotPackageError('PACKAGE_MISSING', `bot package is missing for ${record.id}`);
     const agentsPath = path.join(directory, 'AGENTS.md');
     assertRegularFile(agentsPath, 'AGENTS.md');
+    if (expectedRevision !== undefined && readInstructions(record)?.instructionRevision !== String(expectedRevision)) {
+      throw new BotPackageError('INSTRUCTIONS_CONFLICT', 'Bot instructions changed on disk. Review the latest version before saving.', 409);
+    }
     const temporaryPath = `${agentsPath}.${crypto.randomUUID()}.tmp`;
     try {
       fs.writeFileSync(temporaryPath, instructions, { encoding: 'utf8', mode: 0o600 });

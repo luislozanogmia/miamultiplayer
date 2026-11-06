@@ -13,7 +13,7 @@ automatically through the in-app updater.
 
 ### Added
 - In a company, clicking a company bot opens your private chat with it where the company's server supports bot chats; otherwise it opens a channel with the bot, as before.
-- Company admins can copy a company bot to another company. Mia first writes a copy without the first company's names, clients, contacts, links and figures, and shows it beside the original to edit and approve.
+- Company admins can copy a company bot to another company. Mia proposes a generalized copy and shows it beside the original for the admin to review, edit, and approve before sharing.
 - New bots can be made inside a company, the same way as in Solo. Admins can remove a company bot from its sidebar row.
 - History titles each chat from how it started and updates the title as it goes; chats can be deleted from History.
 - A direct message or group can be closed, as in Slack: it leaves the sidebar until someone writes again or it is opened.

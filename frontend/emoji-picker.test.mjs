@@ -18,7 +18,7 @@ test('recent emoji come first, without repeats, and hide while searching', () =>
 });
 
 test('reaction chips show the count, mark your own and can be read-only', () => {
-  const html = emoji.reactionsHtml({ '👍': ['You@x.com', 'b'], '🔥': ['b'], '🎉': [] }, 'you@x.com', esc, true);
+  const html = emoji.reactionsHtml({ '👍': ['you@example.test', 'b'], '🔥': ['b'], '🎉': [] }, 'you@example.test', esc, true);
   assert.match(html, /chat-msg-reaction on" data-react-toggle="👍" aria-pressed="true"/);
   assert.match(html, /<em>2<\/em>/);
   assert.match(html, /data-react-toggle="🔥" aria-pressed="false"/);

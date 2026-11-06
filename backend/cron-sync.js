@@ -324,8 +324,12 @@ function teamBotWorkspace(team, bot) {
   return markedFolder(teamFolder, { kind: 'miaos-bot-artifact-workspace', botId: `team-${registrationId}` }, bot.name || 'Bot');
 }
 
-function writeBotInstructions(bot, instructions) {
-  return BOT_PACKAGE_STORE.writeInstructions(bot, instructions);
+function readBotInstructions(bot) {
+  return BOT_PACKAGE_STORE.readInstructions(bot);
+}
+
+function writeBotInstructions(bot, instructions, options) {
+  return BOT_PACKAGE_STORE.writeInstructions(bot, instructions, options);
 }
 
 function botPackageDirectoryFor(bot) {
@@ -357,9 +361,9 @@ function ensureCronPlugin(plugin) {
       const { provisionBundledPlugin } = require('./hermes-bot-profile');
       provisionBundledPlugin(HERMES_HOME, plugin);
       await runHermesCommand(['plugins', 'enable', plugin]);
-    })().catch((error) => {
+    })().catch(() => {
       cronPluginsReady.delete(plugin);
-      console.error(`${plugin} plugin unavailable:`, error.message);
+      console.error('automation plugin unavailable');
     }));
   }
   return cronPluginsReady.get(plugin);
@@ -1300,6 +1304,7 @@ module.exports = {
   teamBotWorkspace,
   botPackageDirectoryFor,
   writeBotInstructions,
+  readBotInstructions,
   listSessionArtifacts,
   validateBotArtifacts,
   BOT_TOOLSETS,

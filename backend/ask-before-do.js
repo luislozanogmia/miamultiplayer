@@ -90,6 +90,13 @@ function describeConnectorCall(raw) {
   const appKey = words.find((word) => CONNECTOR_APPS[word]);
   const server = words[0] || 'a connected app';
   const app = CONNECTOR_APPS[appKey] || server.charAt(0).toUpperCase() + server.slice(1);
+  const nested = String(args.miaNestedAction || '');
+  if (/^(delete|remove|trash|clear|cut|move)/i.test(nested)) {
+    if (/^deleteSheet$/i.test(nested)) return `Delete a sheet in ${app}`;
+    if (/^deleteDimension$/i.test(nested)) return `Delete rows or columns in ${app}`;
+    if (/^(clear|delete|remove|trash)/i.test(nested)) return `Delete content in ${app}`;
+    return `Move content in ${app}`;
+  }
   const verbAt = words.findIndex((word) => CONNECTOR_VERBS[word]);
   if (verbAt < 0) return `Make a change in ${app}`;
   const rest = words.slice(verbAt + 1).filter((word) => !CONNECTOR_APPS[word] && word !== 'google' && word !== 'workspace');
@@ -155,7 +162,13 @@ function approvalCard(summary, chatOutput, whatHappens, repeatable = false) {
   const line = actionLine(summary) + (repeatable ? ', and keep editing it in this reply' : '');
   const text = `Do you approve?\n\n${line}`;
   if (chatOutput !== 'verbose') return { text, line };
-  return { text: `${text}\n\n${summary}`, line, summary };
+  // The raw gate summary can contain command arguments, connector data, or a
+  // credential-bearing URL. It is authority for the exact-call gate, not chat
+  // or event metadata. Verbose mode explains the scope without persisting it.
+  const detail = repeatable
+    ? 'This approval covers that action and further edits to the same document in this reply.'
+    : 'This approval covers this action once in this reply.';
+  return { text: `${text}\n\n${detail}`, line, summary: line };
 }
 
 const ANSWERS = {

@@ -311,7 +311,20 @@ test('the concise approval line comes from the operation, not model wording', ()
   const line = 'Delete a.txt';
   assert.deepEqual(approvalCard('rm a.txt', 'concise', 'This deletes another file.'), { text: `Do you approve?\n\n${line}`, line });
   assert.deepEqual(approvalCard('rm a.txt', undefined), { text: `Do you approve?\n\n${line}`, line });
-  assert.deepEqual(approvalCard('rm a.txt', 'verbose', 'different wording'), { text: `Do you approve?\n\n${line}\n\nrm a.txt`, line, summary: 'rm a.txt' });
+  assert.deepEqual(approvalCard('rm a.txt', 'verbose', 'different wording'), {
+    text: `Do you approve?\n\n${line}\n\nThis approval covers this action once in this reply.`, line, summary: line,
+  });
+});
+
+test('verbose approvals keep the action but never persist raw URLs or tokens', () => {
+  const secretUrl = 'https://example.test/reset?token=fixture-private-value';
+  const jwt = `eyJ${'a'.repeat(20)}.eyJ${'b'.repeat(20)}.${'c'.repeat(30)}`;
+  for (const raw of [`Click Send on ${secretUrl}`, `Run code with ${jwt}`]) {
+    const card = approvalCard(raw, 'verbose', 'model wording');
+    assert.ok(card.text.includes(card.line));
+    assert.ok(card.text.includes('This approval covers this action once'));
+    assert.doesNotMatch(JSON.stringify(card), /fixture-private-value|eyJ[a-z]+\.eyJ/);
+  }
 });
 
 test('the actual browser action line is short and drops URL credentials', () => {
@@ -356,6 +369,10 @@ test('a yes to editing one document covers more edits to it in the same reply, a
   assert.equal(edit('append-3', docA).allow, true);
   assert.equal(edit('append-4', docB).allow, false, 'another document asks');
   assert.equal(gate.decide({ sessionId: 'stored', category: 'send', summary: 'send', fingerprint: 'send-1' }).allow, false, 'sending still asks');
+  assert.equal(gate.decide({ sessionId: 'stored', category: 'delete',
+    summary: 'mcp_google_sheets_batch_update {"miaNestedAction":"deleteSheet"}',
+    fingerprint: 'delete-sheet-1', repeatKey: '' }).allow, false,
+  'a nested sheet deletion on the same target needs its own approval');
   turn();
   assert.equal(edit('append-5', docA).allow, false, 'a new reply asks again');
 });
@@ -376,9 +393,19 @@ print(json.dumps({
   "send": bool(k("mcp__google__google_gmail_send", {"fileId": "f"})),
   "delete": bool(k("mcp__google__google_drive_delete_file", {"fileId": "f"})),
   "terminal": bool(k("terminal", {"command": "rm a"})),
+  "batchEdit": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"updateCells": {"rows": []}}]})),
+  "batchDelete": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})),
+  "batchDeleteCategory": m.classify("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})[0],
+  "batchDeleteSummary": m.classify("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})[1],
 }))
 `;
   const { stdout } = await promisify(execFile)('python3', ['-c', script, pluginDir]);
-  assert.deepEqual(JSON.parse(stdout), { append: true, sameDoc: true, otherDoc: false, sheet: true, noTarget: false, create: false, send: false, delete: false, terminal: false });
+  const result = JSON.parse(stdout);
+  assert.deepEqual({ ...result, batchDeleteSummary: undefined }, {
+    append: true, sameDoc: true, otherDoc: false, sheet: true, noTarget: false,
+    create: false, send: false, delete: false, terminal: false,
+    batchEdit: true, batchDelete: false, batchDeleteCategory: 'delete', batchDeleteSummary: undefined,
+  });
+  assert.equal(approvalCard(result.batchDeleteSummary, 'verbose', '').line, 'Delete a sheet in Google Sheets');
   assert.equal(approvalCard('mcp__google__google_docs_append {"documentId":"d1"}', 'concise', '', true).line, 'Add to a document in Google Docs, and keep editing it in this reply');
 });

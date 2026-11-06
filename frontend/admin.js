@@ -263,7 +263,7 @@
   }
 
   var TEAM_AUDIT_LABELS = {
-    role_changed: 'Changed a role', owner_transferred: 'Transferred ownership', team_renamed: 'Renamed the company', invite_created: 'Invited',
+    role_changed: 'Changed a role', owner_transferred: 'Transferred ownership', team_renamed: 'Renamed the company', team_logo_changed: 'Changed the company logo', invite_created: 'Invited',
     invite_revoked: 'Revoked an invite', invite_accepted: 'Joined the company', invite_declined: 'Declined an invite',
     member_removed: 'Removed a member', message_deleted: 'Deleted a message', file_uploaded: 'Uploaded an image',
     bot_shared: 'Added a bot', bot_unshared: 'Removed a bot', bot_execution_handoff: 'Handed off a bot run',
@@ -1726,6 +1726,23 @@
         if(btn) copyText(btn.getAttribute('data-reset-link') || '');
       });
 
+      var logoFile=$('#teamLogoFile'),logoRemove=$('#teamLogoRemove');
+      if($('#teamLogoUpload'))$('#teamLogoUpload').addEventListener('click',function(){if(!logoFile.disabled)logoFile.click();});
+      function logoStatus(text){$('#teamLogoStatus').textContent=text;}
+      function showLogo(result){var preview=$('#teamLogoPreview');preview.textContent='';win.MiaTeamLogo.paint(preview,result.logo_data_url);logoRemove.disabled=!result.logo_data_url;}
+      if(logoFile)logoFile.addEventListener('change',async function(){
+        var file=logoFile.files[0];if(!file||!team)return;
+        logoFile.disabled=true;logoRemove.disabled=true;logoStatus('Uploading…');
+        try{var data=await win.MiaTeamLogo.prepare(file);showLogo(await hub('PUT','/team/logo',{logo_data_url:data}));logoStatus('Team logo saved.');}
+        catch(error){logoStatus(error.message||'Could not upload logo.');logoRemove.disabled=false;}
+        finally{logoFile.disabled=false;logoFile.value='';}
+      });
+      if(logoRemove)logoRemove.addEventListener('click',async function(){
+        if(!team)return;logoRemove.disabled=true;logoFile.disabled=true;
+        try{showLogo(await hub('DELETE','/team/logo'));logoStatus('Team logo removed.');}
+        catch(error){logoStatus(error.message||'Could not remove logo.');logoRemove.disabled=false;}
+        finally{logoFile.disabled=false;}
+      });
       var renameBtn = $('#teamRenameBtn');
       var renameForm = $('#renameTeamForm');
       if(renameBtn) renameBtn.addEventListener('click', function(){
@@ -1811,6 +1828,7 @@
           return;
         }
         team = {id: teamId, name: String(entry.name || 'Company'), selfId: entry.membership.clerk_user_id};
+        hub('GET','/team/logo').then(function(result){var preview=$('#teamLogoPreview');win.MiaTeamLogo.paint(preview,result.logo_data_url);$('#teamLogoRemove').disabled=!result.logo_data_url;}).catch(function(){$('#teamLogoStatus').textContent='Logo settings need a Hub update.';});
         usersState.currentAdminEmail = normalizeEmail(entry.membership.email);
         doc.body.classList.add('admin-team');
         setTeamName(team.name);

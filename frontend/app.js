@@ -5036,7 +5036,7 @@
       // A team you're invited to shows too, dimmed, as in Slack: opening it
       // joins it. Only joined teams are remembered for the next launch.
       var teams=(result.teams||[]).filter(function(team){return (team.membership || team.invite) && /^[a-f0-9]{32}$/.test(team.teamId);})
-        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Company'),invited:!team.membership};});
+        .map(function(team){return {teamId:team.teamId,name:String(team.name||'Company'),logo_hash:team.logo_hash||null,invited:!team.membership};});
       noteHubRemovals(teams);
       sendHubDisplayName(teams.filter(function(team){return !team.invited;}));
       try { localStorage.setItem(HUB_TEAMS_STORAGE_KEY, JSON.stringify(teams.filter(function(team){return !team.invited;}))); } catch(_hubTeamsStorageError) {}
@@ -5058,6 +5058,14 @@
       button.type='button'; button.className='workspace-rail-tile'+(team.invited ? ' invited' : '');
       button.setAttribute('data-hub-team',team.teamId); button.setAttribute('data-workspace-key',key); button.setAttribute('aria-label',label);
       button.innerHTML='<span class="workspace-rail-mark" aria-hidden="true">'+esc(workspaceCode(team.name))+'</span><strong class="workspace-rail-name">'+esc(label)+'</strong>';
+      if(!team.invited && team.logo_hash && window.MiaTeamLogo){
+        hubCall('GET','/v1/teams/'+team.teamId+'/team/logo').then(function(result){
+          var mark=button.querySelector('.workspace-rail-mark');
+          if(result.logo_hash===team.logo_hash && window.MiaTeamLogo.valid(result.logo_data_url)){
+            window.MiaTeamLogo.paint(mark,result.logo_data_url);
+          }
+        }).catch(function(){});
+      }
       button.addEventListener('click',function(){
         if(!team.invited){ if(key!==activeWorkspaceKey) switchWorkspace(key); return; }
         if(button.disabled) return;
@@ -11715,6 +11723,16 @@
         timezone: automationCardTimezone()
       });
     }
+    if(window.MiaInstructionProposalCard && m.nativeEvent){
+      var instructionProposal = m.nativeEvent.metadata && m.nativeEvent.metadata.instructionProposal;
+      var instructionState = instructionCardStates[m.nativeEvent.id] || {};
+      html += window.MiaInstructionProposalCard.html(m, {
+        esc: esc,
+        canEdit: canReviewInstructionProposal(m, instructionProposal),
+        busy: !!instructionState.busy,
+        error: instructionState.error || ''
+      });
+    }
     if(window.MiaAppCard && m.nativeEvent){
       var miaCardState = miaAppCardStates[m.nativeEvent.id] || {};
       html += window.MiaAppCard.html(m, {esc: esc, busy: !!miaCardState.busy, error: miaCardState.error || ''});
@@ -11725,7 +11743,17 @@
   // Unsaved edits, busy state and errors for bot automation cards, by event
   // id, so a thread re-render for a new message keeps what the user typed.
   var automationCardStates = {};
+  var instructionCardStates = {};
   var miaAppCardStates = {};
+
+  function canReviewInstructionProposal(message, proposal){
+    if(!proposal || !message || !message.nativeEvent || !currentUser) return false;
+    var event = message.nativeEvent;
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === event.conversationId; })[0];
+    return !!conversation && conversation.type === 'bot'
+      && String(conversation.createdBy || '').toLowerCase() === String(currentUser).toLowerCase()
+      && String(event.senderId || '') === String(proposal.botId || '');
+  }
 
   function automationCardTimezone(){
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch(_) { return ''; }
@@ -11776,10 +11804,58 @@
     });
   }
 
+  function answerInstructionCard(card, decision){
+    if(decision !== 'accept' && decision !== 'dismiss') return;
+    var eventId = card.getAttribute('data-instruction-proposal');
+    var message = automationCardMessage(eventId);
+    var proposal = message && message.nativeEvent.metadata && message.nativeEvent.metadata.instructionProposal;
+    if(!proposal || proposal.status !== 'pending' || !canReviewInstructionProposal(message, proposal)) return;
+    var cardState = instructionCardStates[eventId] = instructionCardStates[eventId] || {};
+    if(cardState.busy) return;
+    cardState.busy = true;
+    cardState.error = '';
+    renderChatThread();
+    api('/api/bots/' + encodeURIComponent(proposal.botId) + '/instruction-proposals/' + encodeURIComponent(eventId), {
+      method: 'POST', body: {decision: decision}
+    }).then(function(res){
+      cardState.busy = false;
+      if(res.status === 200 && res.data && res.data.event){
+        delete instructionCardStates[eventId];
+        applyNativeEvent(res.data.event);
+        return;
+      }
+      if(res.status === 409){
+        delete instructionCardStates[eventId];
+        if(res.data && res.data.event){ applyNativeEvent(res.data.event); return; }
+        if(res.data && res.data.proposal){
+          var answered = Object.assign({}, message.nativeEvent, {
+            metadata: Object.assign({}, message.nativeEvent.metadata, {instructionProposal: res.data.proposal})
+          });
+          applyNativeEvent(answered);
+          return;
+        }
+        cardState = instructionCardStates[eventId] = {error: 'These instructions changed. Ask the bot for a fresh update.'};
+      } else {
+        cardState.error = 'That didn’t save. Try again.';
+      }
+      renderChatThread();
+    }).catch(function(){
+      cardState.busy = false;
+      cardState.error = 'That didn’t save. Try again.';
+      renderChatThread();
+    });
+  }
+
   (function(){
     var thread = el('#chatThread');
     if(!thread) return;
     thread.addEventListener('click', function(e){
+      var instructionDecision = e.target.closest('[data-instruction-decision]');
+      if(instructionDecision){
+        var instructionCard = instructionDecision.closest('[data-instruction-proposal]');
+        if(instructionCard) answerInstructionCard(instructionCard, instructionDecision.getAttribute('data-instruction-decision'));
+        return;
+      }
       var decision = e.target.closest('[data-automation-decision]');
       if(decision){
         var card = decision.closest('[data-automation-proposal]');

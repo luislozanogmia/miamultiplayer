@@ -321,7 +321,7 @@ async function listLocal({ workspaceDir, dataDir, workspaceId, probe = artifacts
   return { apps: listLocalApps(workspaceDir), links };
 }
 
-function registerAppRoutes(app, { express, requireAuth, workspaceDir, dataDir, appsDir, previewsDir, workspaceId }) {
+function registerAppRoutes(app, { express, requireAuth, requireInteractiveAuth, workspaceDir, dataDir, appsDir, previewsDir, workspaceId }) {
   // A version waiting for review installs apart from the versions people run.
   const folderFor = query => (query.preview === '1' ? previewsDir() : appsDir());
   const send = (res, error) => {
@@ -335,12 +335,12 @@ function registerAppRoutes(app, { express, requireAuth, workspaceDir, dataDir, a
   });
   // Only a saved localhost link can be stopped, never an address the page sends.
   const localLink = req => artifacts.readLinks(dataDir(), workspaceId(req)).filter(link => link.id === req.params.id && link.local)[0];
-  app.get('/api/apps/links/:id/server', requireAuth, async (req, res) => {
+  app.get('/api/apps/links/:id/server', requireInteractiveAuth, async (req, res) => {
     const link = localLink(req);
     if (!link) return res.status(404).json({ error: 'link_not_found', message: 'That address is no longer on this computer.' });
     try { res.json(await localServer.serverBehind(link.url)); } catch (error) { send(res, error); }
   });
-  app.post('/api/apps/links/:id/stop', requireAuth, express.json({ limit: '8kb' }), async (req, res) => {
+  app.post('/api/apps/links/:id/stop', requireInteractiveAuth, express.json({ limit: '8kb' }), async (req, res) => {
     const link = localLink(req);
     if (!link) return res.status(404).json({ error: 'link_not_found', message: 'That address is no longer on this computer.' });
     const pids = Array.isArray(req.body && req.body.pids) ? req.body.pids.filter(Number.isInteger) : [];

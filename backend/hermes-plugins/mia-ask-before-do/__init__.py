@@ -111,11 +111,31 @@ def _short(text: Any, limit: int = SUMMARY_LIMIT) -> str:
 EDIT_VERB = re.compile(r"(^|_)(append|update|edit|modify|insert|write|replace|format|batch_update)(_|$)")
 NOT_REPEATABLE = re.compile(r"(^|_)(send|delete|remove|trash|create|post|publish|share|move|reply|forward|invite)(_|$)")
 TARGET_KEY = re.compile(r"^(document|doc|spreadsheet|sheet|file|presentation|page|event|calendar)_?id$", re.I)
+DESTRUCTIVE_NESTED = re.compile(r"^(delete|remove|trash|clear|cut|move)", re.I)
+
+
+def _nested_destructive_action(value: Any) -> str:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            name = str(key)
+            if DESTRUCTIVE_NESTED.match(name):
+                return name
+            if name.lower() in {"action", "operation", "type", "method"} and isinstance(item, str) and DESTRUCTIVE_NESTED.match(item):
+                return item
+            nested = _nested_destructive_action(item)
+            if nested:
+                return nested
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            nested = _nested_destructive_action(item)
+            if nested:
+                return nested
+    return ""
 
 
 def _repeat_key(tool_name: str, args: Any) -> str:
     name = str(tool_name or "").lower()
-    if not name.startswith("mcp_") or not EDIT_VERB.search(name) or NOT_REPEATABLE.search(name) or not isinstance(args, dict):
+    if not name.startswith("mcp_") or not EDIT_VERB.search(name) or NOT_REPEATABLE.search(name) or not isinstance(args, dict) or _nested_destructive_action(args):
         return ""
     targets = sorted((key.lower(), str(value)) for key, value in args.items() if TARGET_KEY.match(str(key)) and value)
     if not targets:
@@ -185,6 +205,11 @@ def classify(tool_name: str, args: Any, session: str = "") -> Optional[Tuple[str
         return None
     if name.startswith("mcp_"):
         lowered = name.lower()
+        nested_action = _nested_destructive_action(args)
+        if nested_action:
+            # The fingerprint still binds the exact request. The card needs
+            # the destructive operation type, never its raw arguments.
+            return ("delete", name + " " + json.dumps({"miaNestedAction": nested_action}))
         if "draft" not in lowered and WRITE_VERB.search(lowered):
             category = "delete" if re.search(r"(^|_)(delete|remove|trash)(_|$)", lowered) else "send"
             return (category, name + " " + _short(json.dumps(args, default=str)))

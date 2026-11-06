@@ -53,7 +53,7 @@ function harness(options = {}) {
     return {
       ok: true,
       headers: { get: () => "image/png" },
-      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
+      body: new ReadableStream({ start(controller) { controller.enqueue(Uint8Array.from([1, 2, 3])); controller.close(); } }),
     };
   };
   class Contents extends EventEmitter {
@@ -149,7 +149,8 @@ function harness(options = {}) {
   const context = {
     require: request => request === "electron" ? electron : require(request),
     module: { exports: {} }, URL, Buffer, setImmediate,
-    setTimeout: options.setTimeout || setTimeout, clearTimeout: options.clearTimeout || clearTimeout, process,
+    setTimeout: options.setTimeout || setTimeout, clearTimeout: options.clearTimeout || clearTimeout,
+    AbortController, ReadableStream, process,
     __dirname,
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
@@ -291,6 +292,33 @@ test("tab favicon skips unsupported candidates and falls back after load", async
   await flush();
   assert.deepEqual(fallback.profile.fetched, ["https://claude.ai/favicon.ico"]);
   assert.equal(fallback.command("state").tabs[0].favicon, "data:image/png;base64,AQID");
+});
+
+test("saved app icons stop reading once the response exceeds the size cap", async () => {
+  const h = harness();
+  let cancelled = false;
+  h.profile.fetch = async () => ({
+    ok: true,
+    headers: { get: name => name === "content-type" ? "image/png" : null },
+    body: new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(129 * 1024)); },
+      cancel() { cancelled = true; },
+    }),
+  });
+  const result = await h.command("siteIcon", { url: "https://oversized.example.test/app" });
+  assert.equal(result.icon, "");
+  assert.equal(cancelled, true);
+});
+
+test("a timed-out saved app icon aborts the request", async () => {
+  const h = harness({ setTimeout: (callback, delay) => delay === 4000 ? setTimeout(callback, 0) : setTimeout(callback, delay) });
+  let aborted = false;
+  h.profile.fetch = (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); }, { once: true });
+  });
+  const result = await h.command("siteIcon", { url: "https://slow.example.test/app" });
+  assert.equal(result.icon, "");
+  assert.equal(aborted, true);
 });
 
 test("a PDF tab gets a PDF icon instead of fetching one", async () => {
