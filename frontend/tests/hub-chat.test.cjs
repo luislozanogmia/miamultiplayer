@@ -973,3 +973,28 @@ test('a company bot opens your private chat with it on the Hub, and falls back t
   assert.match(source,/channel\.kind!=='bot' && !hubConversationClosed/,'a bot chat is not listed under Direct messages');
   assert.match(source,/if\(chat && chatWs\.activeRoomId===chat\.id\)button\.className\+=' active';/,'its company bot row lights up while it is open');
 });
+test('company messages carry their Hub reactions and can be reacted to like Solo ones',async()=>{
+  const api=transport();
+  const row={id:'m1',sequence:7,author_type:'user',author_id:'u1',author_email:'a@example.test',body:'hey',created_at:1,
+    reactions:[{emoji:'👍',count:2,user_ids:['me','u1'],mine:true},{emoji:'🎉',count:0,user_ids:[]}]};
+  const message=api.message(row);
+  assert.deepEqual(JSON.parse(JSON.stringify(message.reactions)),{'👍':['me','u1']},'the same shape as Solo, empty ones dropped');
+  assert.equal(api.message({...row,deleted:true}).reactions,null,'a deleted message shows none');
+  assert.equal(api.message({...row,reactions:[]}).reactions,null);
+  const can=appFunction('canReactToMessage',{});
+  assert.equal(can(message),true,'a stored company message can be reacted to');
+  assert.equal(can({...message,pending:true}),false);
+  assert.equal(can({...message,system:true}),false);
+  const calls=[];const state={messages:[message]};let rendered=0;
+  const env={chatWs:{activeRoomId:'room'},inHubRoom:()=>true,chatRoomState:()=>state,hubPath:()=>'/v1/teams/t',hubChat:{membership:{clerk_user_id:'me'}},currentUser:'me@example.test',
+    renderChatThread:()=>{rendered++;},showBenchToast:()=>{},hubActionError:(e,f)=>f,window:{MiaHubChat:api},encodeURIComponent,
+    hubCall:(method,path)=>{calls.push(method+' '+path);return Promise.resolve({reactions:method==='DELETE'?[{emoji:'👍',user_ids:['u1']}]:[{emoji:'👍',user_ids:['me','u1']},{emoji:'🔥',user_ids:['me']}]});}};
+  env.reactionSelf=appFunction('reactionSelf',env);
+  const toggle=appFunction('toggleMessageReaction',env);
+  await toggle('hub-sequence-7','👍');
+  assert.equal(calls.at(-1),'DELETE /v1/teams/t/channels/room/messages/7/reactions/'+encodeURIComponent('👍'),'yours is taken back');
+  assert.deepEqual(JSON.parse(JSON.stringify(message.reactions)),{'👍':['u1']});
+  await toggle('hub-sequence-7','🔥');
+  assert.equal(calls.at(-1),'PUT /v1/teams/t/channels/room/messages/7/reactions/'+encodeURIComponent('🔥'),'a new one is added');
+  assert.equal(rendered,2);
+});

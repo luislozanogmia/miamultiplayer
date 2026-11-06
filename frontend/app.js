@@ -12438,7 +12438,7 @@
       : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, currentUser, esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '') + '</div></div>';
+      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, reactionSelf(m), esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '') + '</div></div>';
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed
@@ -13500,12 +13500,25 @@
     input.selectionStart = input.selectionEnd = start + emoji.length;
     input.dispatchEvent(new Event('input', {bubbles: true}));
   }
-  // Shared channels keep their messages on the Hub, which has nowhere to store a reaction yet.
+  // A company message keeps its reactions on the Hub; Solo's are local.
   function canReactToMessage(m){
-    return !!(m && m.nativeEvent && m.nativeEvent.id && !m.pending && !m.deleted && !m.system && !m.nativeProgress);
+    var stored = m && m.nativeEvent && (m.hubMessage ? m.nativeEvent.sequence : m.nativeEvent.id);
+    return !!(stored && !m.pending && !m.deleted && !m.system && !m.nativeProgress);
   }
+  // Who "you" are in a message's reactions: your Hub member id there, else your account.
+  function reactionSelf(m){ return m && m.hubMessage ? (hubChat.membership || {}).clerk_user_id : currentUser; }
   function toggleMessageReaction(eventId, emoji){
     var roomId = chatWs.activeRoomId;
+    if(inHubRoom(roomId)){
+      var hubMessage = chatRoomState(roomId).messages.filter(function(item){ return item.id === eventId; })[0];
+      if(!hubMessage || !hubMessage.nativeEvent) return;
+      var self = reactionSelf(hubMessage), mine = ((hubMessage.reactions || {})[emoji] || []).indexOf(self) >= 0;
+      return hubCall(mine ? 'DELETE' : 'PUT', hubPath() + '/channels/' + roomId + '/messages/' + hubMessage.nativeEvent.sequence + '/reactions/' + encodeURIComponent(emoji))
+        .then(function(result){
+          hubMessage.reactions = window.MiaHubChat.reactionMap(result && result.reactions);
+          if(chatWs.activeRoomId === roomId) renderChatThread();
+        }).catch(function(error){ showBenchToast(hubActionError(error, 'That reaction could not be saved.')); });
+    }
     api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId) + '/reactions'), {method: 'POST', body: {emoji: emoji}}).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.event) throw new Error('reaction failed');
       var message = chatRoomState(roomId).messages.filter(function(item){ return item.id === eventId; })[0];
