@@ -172,6 +172,7 @@ const {
   NATIVE_DISPATCH_TIMEOUT_CODE,
   createNativeDispatchWatchdog,
   NATIVE_DISPATCH_TOKEN_BUDGET_CODE,
+  OUTPUT_LIMIT_NOTICE,
   createNativeDispatchTokenBudgetTracker,
 } = require('./native-dispatch-runtime');
 const { miaosWorkspacePromptContext, PAGE_ICON_RULE, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
@@ -7792,6 +7793,9 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
 function budgetTrackingOnEvent(budgetTracker) {
   return (type, payload) => {
     if (type !== 'message.delta' && type !== 'thinking.delta' && type !== 'reasoning.delta') return;
+    // The reply written so far is kept, so a turn that reaches the budget
+    // still shows it and Continue can pick up after it.
+    if (type === 'message.delta') budgetTracker.replyText = (budgetTracker.replyText || '') + String((payload && payload.text) || '');
     budgetTracker.record(payload && payload.text);
   };
 }
@@ -8650,6 +8654,21 @@ async function executeNativeConversationDispatch(dispatch) {
         principalId: dispatch.targetType === 'gateway' ? 'gateway' : dispatch.targetId,
         principalType: dispatch.targetType === 'gateway' ? 'agent' : 'bot',
       };
+      const partialReply = budgetExceeded && budgetTracker
+        ? stripAgentActionBlocks(redactHermesChatDetail(String(budgetTracker.replyText || ''))).trim()
+        : '';
+      if (partialReply) {
+        await createNativeDispatchEvent(dispatch, failureTrigger, {
+          companyId: dispatch.companyId,
+          conversationId: dispatch.conversationId,
+          principal: failurePrincipal,
+          type: dispatch.targetType === 'gateway' ? 'agent_message' : 'bot_message',
+          content: { text: partialReply },
+          parentEventId: nativeReplyParentEventId(failureTrigger),
+          clientIdempotencyKey: `native-dispatch-partial-${dispatch.id}`,
+          metadata: { runtime: 'hermes', dispatchId: dispatch.id, status: 'partial', agentName: failureAgent },
+        });
+      }
       await createNativeDispatchEvent(dispatch, failureTrigger, {
         companyId: dispatch.companyId,
         conversationId: dispatch.conversationId,
@@ -8662,7 +8681,7 @@ async function executeNativeConversationDispatch(dispatch) {
           text: budgetExceeded
             // A distinct, named notice rather than the generic failure copy:
             // the run wasn't broken, it just kept going past its output cap.
-            ? '⏹ Stopped: this response reached its output budget before finishing. Nothing else was changed.'
+            ? OUTPUT_LIMIT_NOTICE
             : userFacingModelDispatchError(timedOut || error, {
               managedRouter: dispatchUsesManagedRouter(failureTrigger),
               managedRouterLabel: MANAGED_ROUTER_LABEL,

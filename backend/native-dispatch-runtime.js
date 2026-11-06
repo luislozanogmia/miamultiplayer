@@ -83,6 +83,11 @@ function createNativeDispatchWatchdog({ timeoutMs, maxMs = MAX_NATIVE_DISPATCH_T
   };
 }
 
+// What the chat shows when a turn reaches the output budget. The app turns
+// this exact opening into a card with a Continue button, so keep the two in
+// step (frontend/app.js, chatOutputLimitNotice).
+const OUTPUT_LIMIT_NOTICE = 'I reached the most I can write in one reply before finishing. What came before is done. Press Continue and I\'ll pick up from there.';
+
 function nativeDispatchTokenBudgetError(charBudget) {
   const error = new Error(`native dispatch exceeded its output budget (${charBudget} characters)`);
   error.name = 'TokenBudgetError';
@@ -127,6 +132,7 @@ module.exports = {
   MAX_NATIVE_DISPATCH_TIMEOUT_MS,
   NATIVE_DISPATCH_TIMEOUT_CODE,
   NATIVE_DISPATCH_TOKEN_BUDGET_CODE,
+  OUTPUT_LIMIT_NOTICE,
   nativeDispatchTimeoutMs,
   nativeDispatchTimeoutError,
   createNativeDispatchWatchdog,

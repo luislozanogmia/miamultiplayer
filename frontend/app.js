@@ -11560,6 +11560,78 @@
     ].some(function(pattern){ return pattern.test(normalized); });
   }
 
+  // A turn that reached the output budget stops with a notice (backend
+  // OUTPUT_LIMIT_NOTICE). It reads as a card like an ask-before-do approval,
+  // and Continue asks the same agent to pick up where it stopped.
+  var chatContinued = {};
+  function chatOutputLimitNotice(text){
+    var normalized = String(text || '').trim();
+    return /^I reached the most I can write in one reply before finishing\./.test(normalized)
+      || /^\u23f9 Stopped: this response reached its output budget\b/.test(normalized);
+  }
+
+  // A card someone already wrote after is settled, even after a restart.
+  function chatContinueAnswered(eventId){
+    var messages = (chatWs.activeRoomId && chatRoomState(chatWs.activeRoomId).messages) || [];
+    var index = messages.map(function(m){ return m.id; }).indexOf(eventId);
+    if(index < 0) return false;
+    return messages.slice(index + 1).some(function(m){ return !m.system && m.threadRoot === messages[index].threadRoot && isHumanSender(m.sender); });
+  }
+
+  function chatContinueButtonHtml(eventId){
+    return '<button type="button" class="chat-approval-button primary" data-chat-continue="' + esc(eventId) + '">Continue</button>';
+  }
+
+  function chatContinueHtml(eventId, text){
+    var line = String(text || '').replace(/^\u23f9 /, '').replace(/\s*Press Continue and I'll pick up from there\.$/, '');
+    var actions = chatContinued[eventId] || chatContinueAnswered(eventId) ? '<span class="chat-approval-status">Continued</span>' : chatContinueButtonHtml(eventId);
+    return '<div class="chat-approval" data-chat-continue-card="' + esc(eventId) + '">' +
+      '<div class="chat-approval-title">Keep going?</div>' +
+      '<div class="chat-approval-line">' + esc(line) + '</div>' +
+      '<div class="chat-approval-actions">' + actions + '</div></div>';
+  }
+
+  // The agent may not remember a reply that was cut off, so Continue quotes
+  // how the reply just above the card ended.
+  function chatContinueMessage(messages, eventId){
+    messages = messages || [];
+    var index = messages.map(function(m){ return m.id; }).indexOf(eventId);
+    var notice = messages[index], partial = '';
+    for(var i = index - 1; notice && i >= 0; i--){
+      var m = messages[i];
+      if(m.system || m.threadRoot !== notice.threadRoot || isSupersededNativeProgressMessage(m)) continue;
+      var body = isHumanSender(m.sender) ? '' : displayBotBody(m.body);
+      if(body && !chatOutputLimitNotice(body)) partial = body;
+      break;
+    }
+    var tail = String(partial).replace(/\s+/g, ' ').trim().slice(-200);
+    return tail ? 'Continue where you left off. Your last reply ended with: "…' + tail + '"' : 'Continue where you left off.';
+  }
+
+  document.addEventListener('click', function(event){
+    var button = event.target.closest && event.target.closest('[data-chat-continue]');
+    if(!button) return;
+    var eventId = button.getAttribute('data-chat-continue');
+    var roomId = chatWs.activeRoomId;
+    if(!roomId || chatContinued[eventId]) return;
+    var row = button.closest('.chat-msg-row');
+    var state = chatRoomState(roomId);
+    var threadRootId = row && row.classList.contains('in-thread') ? state.openThreadRoot : null;
+    chatContinued[eventId] = true;
+    button.disabled = true;
+    button.textContent = 'Continuing…';
+    Promise.resolve(sendActiveRoomMessage(chatContinueMessage(state.messages, eventId), threadRootId, null, roomId)).then(function(res){
+      // The chat may have redrawn while sending, so find the card again.
+      var actions = el('[data-chat-continue-card="' + eventId + '"] .chat-approval-actions');
+      if(res && (res.status === 200 || res.status === 201)){
+        if(actions) actions.innerHTML = '<span class="chat-approval-status">Continued</span>';
+        return;
+      }
+      delete chatContinued[eventId];
+      if(actions) actions.innerHTML = chatContinueButtonHtml(eventId);
+    });
+  });
+
   // A request for approval from the ask-before-do gate. Answering it here is
   // the only thing that unlocks the action; the server checks who answered.
   var askBeforeDoLocalStatus = {};
@@ -11630,7 +11702,7 @@
         button.disabled = true;
         button.textContent = 'Retrying…';
         Promise.resolve(sendActiveRoomMessage('Try that again.', threadRootId, null, roomId)).then(function(res){
-          if(res && res.status === 200){
+          if(res && (res.status === 200 || res.status === 201)){
             button.textContent = 'Retried';
             return;
           }
@@ -12503,6 +12575,7 @@
     if(text && !liveProgress && !isPreReasoning) messageHtml = withMentionChips(messageHtml);
     var mediaHtml = '';
     if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
+    else if(!isHuman && !m.pending && chatOutputLimitNotice(text)) messageHtml = chatContinueHtml(m.id, text);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
     if(m.hubRunLabel) messageHtml += providerRunChipHtml(m.hubRunLabel);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
