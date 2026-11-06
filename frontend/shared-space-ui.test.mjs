@@ -16,7 +16,7 @@ async function sharedBar({ stored = new Map(), browserState = null, selfId = 'me
   let state = browserState || { groups: [{ id: 'g1', name: 'Launch' }], selectedGroupId: 'g1',
     tabs: [{ id: 't1', groupId: 'g1', active: true, url: 'https://example.com/', title: 'Example' }] };
   const window = {
-    document: { getElementById: (id) => (id === 'miaSpaceBar' ? bar : id === 'miaSpaceCall' ? call : null), body: { classList: { toggle(name, on) { if (on === undefined ? !bodyClasses.has(name) : on) bodyClasses.add(name); else bodyClasses.delete(name); }, contains: (name) => bodyClasses.has(name) } } }, addEventListener() {},
+    document: { addEventListener() {}, querySelector: () => null, getElementById: (id) => (id === 'miaSpaceBar' ? bar : id === 'miaSpaceCall' ? call : null), body: { classList: { toggle(name, on) { if (on === undefined ? !bodyClasses.has(name) : on) bodyClasses.add(name); else bodyClasses.delete(name); }, contains: (name) => bodyClasses.has(name) } } }, addEventListener() {},
     miaDesktop: { browser: { command: async (payload) => {
       commands.push(payload);
       return payload.action === 'spaceOpenTab' ? { openedId: 'opened' + commands.length, groupId: 'g2' } : state;

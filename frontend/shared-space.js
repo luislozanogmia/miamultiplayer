@@ -214,6 +214,20 @@
       return tab.url && (!links[tab.k] || !approved || approved[tab.k] !== tab.url) && (!ignored || ignored[tab.k] !== tab.url);
     });
   }
+  // When a session should ask before ending on this computer. Idle: no real
+  // use of the shared browser for IDLE_MS; this person leaves, others stay.
+  // Alone: nobody else in it for ALONE_MS (nobody joined, or everyone left).
+  var IDLE_MS = 10 * 60000, IDLE_WARN_MS = 30000, ALONE_MS = 5 * 60000, ALONE_WARN_MS = 15000;
+  function endingDue(state, now){
+    if(state.activeAt && now - state.activeAt >= IDLE_MS) return {kind: 'idle', endsAt: now + IDLE_WARN_MS};
+    if(state.aloneSince && now - state.aloneSince >= ALONE_MS) return {kind: 'alone', endsAt: now + ALONE_WARN_MS};
+    return null;
+  }
+  // A saved session comes back after a reload only if it was in use lately.
+  function resumable(saved, now){
+    var last = Number(saved && (saved.activeAt || saved.at) || 0);
+    return !!last && now - last < IDLE_MS;
+  }
   function sameTabs(a, b){
     if(a.length !== b.length) return false;
     for(var i = 0; i < a.length; i++) if(a[i].k !== b[i].k || a[i].url !== b[i].url) return false;
@@ -222,5 +236,6 @@
 
   return {pickFrame: pickFrame, activity: activity, toolbarLine: toolbarLine, MARKER: MARKER, PRESENCE_TTL_MS: PRESENCE_TTL_MS, MAX_TABS: MAX_TABS, encode: encode, decode: decode, isSpaceMessage: isSpaceMessage, isAdminEnd: isAdminEnd,
     shareableUrl: shareableUrl, applySpace: applySpace, applyPresence: applyPresence, livePresence: livePresence, initials: initials,
-    tiles: tiles, hostOf: hostOf, reconcile: reconcile, localTabList: localTabList, reuseGroupTabs: reuseGroupTabs, pendingPages: pendingPages, sameTabs: sameTabs};
+    tiles: tiles, hostOf: hostOf, reconcile: reconcile, localTabList: localTabList, reuseGroupTabs: reuseGroupTabs, pendingPages: pendingPages, sameTabs: sameTabs,
+    endingDue: endingDue, resumable: resumable, IDLE_MS: IDLE_MS, ALONE_MS: ALONE_MS, EXTEND_MS: ALONE_MS};
 });
