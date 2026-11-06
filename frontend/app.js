@@ -176,6 +176,18 @@
     refreshAppName();
     return true;
   }
+  // Brings the browser to the workspace the app shows. If it can't yet (a
+  // resumed bot is mid-command), it keeps trying; until then the browser
+  // itself refuses shared browsing and other workspaces' bots.
+  function syncBrowserWorkspace(attempt){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!browser || typeof browser.command !== 'function') return;
+    var key = activeWorkspaceKey;
+    var retry = function(){ setTimeout(function(){ if(key === activeWorkspaceKey) syncBrowserWorkspace(attempt + 1); }, Math.min(30000, 2000 * (attempt + 1))); };
+    Promise.resolve(browser.command({ action: 'workspace', key: key })).then(function(result){
+      if(result && result.error && key === activeWorkspaceKey) retry();
+    }, retry);
+  }
   // The switcher's path: hand off to the reloaded page instead of showing
   // the loading screen.
   function switchWorkspace(key){
@@ -188,10 +200,12 @@
     // and stays put while a bot is still working in a page.
     var browser = window.miaDesktop && window.miaDesktop.browser;
     if(!browser || typeof browser.command !== 'function') return go();
+    // Switch only once the browser has: a company must never open on top of
+    // another workspace's tabs.
     Promise.resolve(browser.command({action:'workspace', key:key})).then(function(result){
       if(result && result.error){ showToast(result.error); return; }
       go();
-    }, go);
+    }, function(){ showToast('The browser could not switch workspace. Try again.'); });
     return true;
   }
   // While the new workspace's list loads, the sidebar shows placeholder bars
@@ -2517,6 +2531,7 @@
       // after persisting it so conversations, headers, sockets, and cached
       // active-room state are all requested in the same scope.
       activateWorkspace(res.data.harness.mode === 'multiplayer' ? 'multiplayer_test' : 'solo');
+      syncBrowserWorkspace(0);
       localStorage.removeItem('miaosHarnessOnboardingDismissed');
       harnessAuthAwaitingSave = false;
       harnessAuthSaveInProgress = false;
@@ -5378,8 +5393,10 @@
       || botChats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0];
     if(existing)return loadChatRoom(existing.id,'agent',bot.name);
     var workspace=activeWorkspaceKey;
-    return api('/api/conversations?workspace=solo',{method:'POST',body:{type:'bot',name:bot.name,
-      metadata:{botId:bot.id,teamWorkspace:workspace,departments:Array.isArray(bot.departments)?bot.departments:[],source:'team-bot-chat'}}}).then(function(res){
+    return window.MiaHubChat.sessionToken().then(function(token){
+      return api('/api/conversations?workspace=solo',{method:'POST',headers:{'x-hub-token':token},body:{type:'bot',name:bot.name,
+        metadata:{botId:bot.id,teamWorkspace:workspace,departments:Array.isArray(bot.departments)?bot.departments:[],source:'team-bot-chat'}}});
+    }).then(function(res){
       var conversation=res.data && res.data.conversation;
       if((res.status!==201 && res.status!==200) || !conversation)throw new Error('team bot chat');
       if(activeWorkspaceKey!==workspace)return;
@@ -9620,7 +9637,7 @@
   }
   if(window.miaDesktop && window.miaDesktop.browser && window.miaDesktop.browser.command){
     // The browser opens Solo's tabs at launch; show this workspace's.
-    Promise.resolve(window.miaDesktop.browser.command({ action: 'workspace', key: activeWorkspaceKey })).catch(function(){});
+    syncBrowserWorkspace(0);
     Promise.resolve(window.miaDesktop.browser.command({ action: 'state' })).then(function(initial){
       if(seenLastTabCloses === null && initial && Number.isFinite(Number(initial.lastTabCloses))) seenLastTabCloses = Number(initial.lastTabCloses);
     }).catch(function(){});
@@ -18716,7 +18733,11 @@
       promise: null
     };
     freshBotConversationRequest = request;
-    request.promise = api(nativeConversationPath(requestedRoomId, '/fresh'), {method:'POST', body:{}}).then(function(res){
+    request.promise = (metadata.teamWorkspace && window.MiaHubChat
+      ? window.MiaHubChat.sessionToken().then(function(token){
+          return api(nativeConversationPath(requestedRoomId, '/fresh'), {method:'POST', headers:{'x-hub-token':token}, body:{}});
+        })
+      : api(nativeConversationPath(requestedRoomId, '/fresh'), {method:'POST', body:{}})).then(function(res){
       if((res.status !== 201 && res.status !== 200) || !res.data || !res.data.conversation){
         throw new Error(res.data && (res.data.message || res.data.error) || 'Could not create a new conversation.');
       }

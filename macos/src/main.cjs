@@ -2292,16 +2292,12 @@ async function desktopAppRequest(window, pathname, { method = "GET", body, timeo
   return data;
 }
 
-const browserActorCache = new Map();
-const BROWSER_ACTOR_TTL_MS = 60_000;
-
 // Asks the backend which bot a Ghost request's Hermes session belongs to,
-// through the signed-in app session. Only verified identities are cached.
+// through the signed-in app session. Each command verifies the live run, so a
+// completed run cannot retain access through an old desktop cache entry.
 async function resolveBrowserActor(window, sessionId) {
   const unavailable = () => new Error("Mia could not verify this browser session. Try again when the app connection is available.");
   if (!backendUrl || !window || window.isDestroyed()) throw unavailable();
-  const cached = browserActorCache.get(sessionId);
-  if (cached && Date.now() - cached.at < BROWSER_ACTOR_TTL_MS) return cached.actor;
   let actor;
   try {
     const url = new URL("/api/browser/actor", backendUrl);
@@ -2315,16 +2311,17 @@ async function resolveBrowserActor(window, sessionId) {
     if (!response.ok) throw unavailable();
     const body = await response.json();
     const found = body && body.actor;
-    if (found && found.kind === "mia" && found.botId == null) actor = { kind: "mia" };
+    // The workspace the run belongs to; the browser acts only in that one.
+    const workspace = found && typeof found.workspace === "string" && /^[a-z0-9_-]{1,80}$/.test(found.workspace) ? found.workspace : null;
+    if (!workspace) throw unavailable();
+    if (found && found.kind === "mia" && found.botId == null) actor = { kind: "mia", workspace };
     else if (found && found.kind === "bot" && typeof found.botId === "string"
         && /^[A-Za-z0-9_.:-]{1,120}$/.test(found.botId)) {
-      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "" };
+      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "", workspace };
     } else throw unavailable();
   } catch (_) {
     throw unavailable();
   }
-  if (browserActorCache.size > 200) browserActorCache.clear();
-  browserActorCache.set(sessionId, { actor, at: Date.now() });
   return actor;
 }
 

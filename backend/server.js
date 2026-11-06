@@ -1394,7 +1394,7 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       const id = String(session && session.sessionId || '');
       if (!id) return;
       runSessions.push(id);
-      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot') });
+      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}` });
     };
     // A bot asked in a team channel works in that team's folder on this
     // computer (<Mia folder>/companies/<company>/<bot>), not in the person's Solo Mia
@@ -1710,6 +1710,14 @@ app.use('/api', requireAuthForApiPrefix('/conversations'), createConversationRou
   service: nativeConversationService,
   attachmentStore: nativeConversationAttachmentStore,
   resolvePrincipal: (req) => nativeConversationPrincipal(req.userEmail, workspaceIdFromRequest(req)),
+  authorizeTeamWorkspace: (req, workspace) => require('./team-workspace-membership').verifyTeamWorkspaceMembership({
+    workspace,
+    token: req.get('x-hub-token'),
+    owner: String(req.userEmail || '').trim().toLowerCase(),
+    dataDirectory: path.dirname(path.resolve(DB_PATH)),
+    getIdentity: (owner) => owner === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null,
+    isOwnerActive: isActiveWorkspaceUser,
+  }),
 }));
 
 // Backend-first multiplayer slice. The existing workspace switcher is not an
@@ -7040,9 +7048,31 @@ function nativeBotSessionKey(profile, systemPrompt) {
 // /goal keeps working after a turn ends; those turns arrive with no dispatch
 // waiting, and this map is how they find their chat.
 const nativeGatewaySessionConversations = new Map();
+const BROWSER_RUN_LEASE_MS = 15 * 60 * 1000;
+function activateBrowserRun(target, source) {
+  if (source === 'dispatch') target.browserDispatchActive = true;
+  if (source === 'continuation') target.browserContinuationActive = true;
+  target.browserActiveUntil = Date.now() + BROWSER_RUN_LEASE_MS;
+}
+function expireBrowserRun(target, source) {
+  if (!target) return;
+  if (source === 'dispatch') target.browserDispatchActive = false;
+  if (source === 'continuation') target.browserContinuationActive = false;
+  if (!target.browserDispatchActive && !target.browserContinuationActive) target.browserActiveUntil = 0;
+}
 // Live Hermes session id -> a team bot running on this computer for its
 // owner, from a team channel or workflow. Kept only while the run lasts.
 const sharedBotRunSessions = new Map();
+
+// The workspace whose browser a chat's run may use. Each workspace keeps its
+// own tabs; a run only ever acts in its own, so Solo work never lands in a
+// company's browser (which can be shared live) and the reverse. A company's
+// My Bots chat is stored in Solo but belongs to the company it was opened in.
+function browserWorkspaceForConversation(conversation, companyId, email) {
+  const team = conversation && conversation.metadata && conversation.metadata.teamWorkspace;
+  if (typeof team === 'string' && /^hub_[a-f0-9]{32}$/.test(team)) return team;
+  return companyId === nativeCompanyId('solo', String(email || '').trim().toLowerCase()) ? 'solo' : DEFAULT_WORKSPACE_ID;
+}
 
 // The desktop browser asks which bot a live Hermes session belongs to, so a
 // page a bot opens lands in that bot's tab group. Mia is an explicit verified
@@ -7053,12 +7083,13 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   if (shared) {
     // Only the person running it here: the bot uses their browser, as in Solo.
     if (shared.owner !== String(req.userEmail || '').trim().toLowerCase()) return res.status(200).json({ actor: null });
-    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name } });
+    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name, workspace: shared.workspace } });
   }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
-  if (!target) return res.status(200).json({ actor: null });
+  if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return res.status(200).json({ actor: null });
+  let conversation;
   try {
-    nativeConversationService.getConversation({
+    conversation = nativeConversationService.getConversation({
       companyId: target.companyId,
       conversationId: target.conversationId,
       principal: { principalId: String(req.userEmail || '').trim().toLowerCase(), principalType: 'user' },
@@ -7066,9 +7097,10 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   } catch (_) {
     return res.status(200).json({ actor: null });
   }
+  const workspace = browserWorkspaceForConversation(conversation, target.companyId, req.userEmail);
   return res.status(200).json({ actor: target.botId
-    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot') }
-    : { kind: 'mia' } });
+    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot'), workspace }
+    : { kind: 'mia', workspace } });
 });
 // Per-session chain so a verdict that waits on the goal snapshot still posts
 // before the continuation turn that follows it.
@@ -7080,6 +7112,9 @@ function bindNativeHermesSessionEvents() {
   nativeHermesSessionEventsBound = true;
   setHermesGatewaySessionEventHandler((sessionId, kind, data) => {
     const key = String(sessionId || '');
+    const target = nativeGatewaySessionConversations.get(key);
+    if (target && kind === 'turn.start') activateBrowserRun(target, 'continuation');
+    if (target && kind === 'turn.complete') expireBrowserRun(target, 'continuation');
     const next = (nativeHermesSessionEventChains.get(key) || Promise.resolve())
       .then(() => handleNativeHermesSessionEvent(key, kind, data))
       .catch(() => {});
@@ -8142,10 +8177,12 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision };
         nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
         if (ownsPrivateAgentConversation) {
-          nativeGatewaySessionConversations.set(String(session.sessionId), {
+          const browserTarget = {
             companyId: conversation.companyId,
             conversationId: conversation.id,
-          });
+          };
+          activateBrowserRun(browserTarget, 'dispatch');
+          nativeGatewaySessionConversations.set(String(session.sessionId), browserTarget);
           persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, gatewaySessionKey);
         }
       },
@@ -8174,6 +8211,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       }
     } finally {
       if (activeGatewayRecord && nativeActiveGatewaySessions.get(gatewayKey) === activeGatewayRecord) {
+        expireBrowserRun(nativeGatewaySessionConversations.get(String(activeGatewayRecord.sessionId)), 'dispatch');
         nativeActiveGatewaySessions.delete(gatewayKey);
       }
     }
@@ -8235,14 +8273,16 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         bindNativeHermesSessionEvents();
         activeBotRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision, agentId: agent.id };
         nativeActiveGatewaySessions.set(botGatewayKey, activeBotRecord);
-        nativeGatewaySessionConversations.set(String(session.sessionId), {
+        const browserTarget = {
           companyId: conversation.companyId,
           conversationId: conversation.id,
           botId: agent.id,
           agentName: agent.name,
           // Goal continuations validate their files against this bot's workspace.
           agent,
-        });
+        };
+        activateBrowserRun(browserTarget, 'dispatch');
+        nativeGatewaySessionConversations.set(String(session.sessionId), browserTarget);
         persistNativeHermesGatewaySession(conversation, trigger.id, session.storedSessionId, sessionKey);
       },
       signal,
@@ -8264,6 +8304,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
         : await runInferenceViaHermesGateway({ ...botRunArgs, message: turnMessage });
     } finally {
       if (activeBotRecord && nativeActiveGatewaySessions.get(botGatewayKey) === activeBotRecord) {
+        expireBrowserRun(nativeGatewaySessionConversations.get(String(activeBotRecord.sessionId)), 'dispatch');
         nativeActiveGatewaySessions.delete(botGatewayKey);
       }
     }
@@ -9288,7 +9329,7 @@ miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
   activity: miaAppRoutes.createActivityLog(ARTIFACTS_DATA_DIR),
   resolveTurn(session, owner) {
     const target = session.length <= 200 ? nativeGatewaySessionConversations.get(session) : null;
-    if (!target) return null;
+    if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return null;
     try {
       nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
     } catch (_) { return null; }
