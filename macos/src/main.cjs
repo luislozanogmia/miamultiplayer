@@ -152,6 +152,7 @@ const BACKEND_ROOT = path.join(ENGINEERING_ROOT, "backend");
 const BACKEND_ENTRYPOINT = path.join(BACKEND_ROOT, "server.js");
 const BACKEND_START_TIMEOUT_MS = 180000;
 const RENDERER_START_TIMEOUT_MS = 120000;
+const PORT_RELEASE_WAIT_MS = 15000;
 const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require(path.join(BACKEND_ROOT, "process-secrets.js"));
 const { resolveClerkConfig } = require(path.join(BACKEND_ROOT, "clerk-config.js"));
 const requireBackendDependency = createRequire(BACKEND_ENTRYPOINT);
@@ -875,6 +876,25 @@ async function selectLocalBackendPort(exactPort = null, {
   }
 }
 
+async function waitForLocalPortRelease(port, {
+  timeoutMs = PORT_RELEASE_WAIT_MS,
+  probe = findFreePort,
+  pause = delay,
+  now = Date.now,
+} = {}) {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    try {
+      await probe(port, { allowFallback: false });
+      return true;
+    } catch (error) {
+      if (!error || error.code !== "EADDRINUSE") throw error;
+    }
+    await pause(Math.min(250, Math.max(0, deadline - now())));
+  }
+  return false;
+}
+
 function stopBackend(processToStop = backendProcess) {
   if (!processToStop) return Promise.resolve(false);
   if (processToStop.exitCode !== null || processToStop.signalCode !== null) {
@@ -929,7 +949,19 @@ async function startLocalBackend(exactPort = null) {
   if (devProblem) throw new Error(devProblem);
 
   const packagedRuntime = await preparePackagedRuntime();
-  const port = await selectLocalBackendPort(exactPort);
+  let port;
+  try {
+    port = await selectLocalBackendPort(exactPort);
+  } catch (error) {
+    if (!app.isPackaged || exactPort !== null || !error || error.code !== "EADDRINUSE") throw error;
+    // An installer or older Mia copy may still be shutting down. Keep the
+    // preparation window visible while its listener releases the stable
+    // Clerk origin; never adopt that other process or silently change ports.
+    desktopLog("local connection occupied; waiting for the previous app to close");
+    const available = await waitForLocalPortRelease(PREFERRED_PORT + 1);
+    if (!available) throw error;
+    port = await selectLocalBackendPort(exactPort);
+  }
   const dataDirectory = app.getPath("userData");
   fs.mkdirSync(dataDirectory, { recursive: true });
   if (!googleWorkspaceBroker) {
@@ -2299,19 +2331,17 @@ async function loadMiaOS() {
     );
     return false;
   } catch (error) {
-    desktopLog(`Mia startup failed: ${error.message}`);
-    if (error && error.code === "EADDRINUSE") {
-      void updateMessage({
-        type: "error",
-        title: "Mia cannot start",
-        message: error.message,
-        buttons: ["OK"],
-      });
-    }
+    desktopLog(error && error.code === "EADDRINUSE"
+      ? "Mia startup failed: local connection occupied"
+      : `Mia startup failed: ${error.message}`);
     // A failed or timed-out navigation must not leave the retry IPC call
     // pending forever. Keep the standalone fallback visible and allow the
     // user to try again after starting the server.
-    try { await mainWindow.loadFile(RENDERER_ENTRYPOINT); } catch (_) { /* window is closing */ }
+    try {
+      await mainWindow.loadFile(RENDERER_ENTRYPOINT, {
+        query: error && error.code === "EADDRINUSE" ? { reason: "port-busy" } : {},
+      });
+    } catch (_) { /* window is closing */ }
     return false;
   }
 }
@@ -2937,6 +2967,7 @@ module.exports = {
   restartManagedBackend,
   findFreePort,
   selectLocalBackendPort,
+  waitForLocalPortRelease,
   disposeArtifactPanel,
   activateMainWindow,
   normalizeInAppArtifactTarget,

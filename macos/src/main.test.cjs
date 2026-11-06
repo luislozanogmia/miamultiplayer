@@ -665,6 +665,30 @@ test("production Clerk startup fails on its occupied stable port without falling
   );
 });
 
+test("packaged startup waits for a closing local listener, then keeps the same port", async (t) => {
+  const main = loadMain();
+  const occupied = await listeningLoopbackServer();
+  t.after(() => { if (occupied.listening) occupied.close(); });
+  const port = occupied.address().port;
+  const closing = new Promise(resolve => setTimeout(() => occupied.close(resolve), 50));
+  assert.equal(await main.waitForLocalPortRelease(port, { timeoutMs: 1000 }), true);
+  await closing;
+  assert.equal(await main.selectLocalBackendPort(null, {
+    production: true, preferredPort: port - 1,
+  }), port);
+});
+
+test("packaged startup does not borrow an occupied port or wait forever", async (t) => {
+  const main = loadMain();
+  const occupied = await listeningLoopbackServer();
+  t.after(() => occupied.close());
+  const port = occupied.address().port;
+  assert.equal(await main.waitForLocalPortRelease(port, { timeoutMs: 40 }), false);
+  await assert.rejects(main.selectLocalBackendPort(null, {
+    production: true, preferredPort: port - 1,
+  }), /already in use/);
+});
+
 test("production Clerk startup uses the default or configured stable port exactly", async () => {
   const main = loadMain();
   const calls = [];
