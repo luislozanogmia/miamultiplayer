@@ -320,6 +320,9 @@
     dockBar(view);
   }
   tabStrip.host = function () { return docked; };
+  // Full-window cards and viewers are added straight to the body; adding or
+  // removing one lays the live page out again so it never covers them.
+  new MutationObserver(function () { layout(); }).observe(document.body, { childList: true });
   new MutationObserver(function () {
     if (showingView() !== docked && state) render(state);
     else dockChatActions(bar && bar.getAttribute('data-view') || docked);
@@ -611,7 +614,8 @@
       var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered && !tipsCovered &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation') &&
-        !document.querySelector('.app-prompt-overlay.open');
+        // Full-window cards and viewers sit in the page too.
+        !document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view

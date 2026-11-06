@@ -343,7 +343,7 @@ test('My Bots keeps its own list, and dialogs hide the browser page that would c
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   assert.match(app, /var myBots=chatWs\.myBotRecords\|\|\[\]/);
   const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
-  assert.match(browser, /!document\.querySelector\('\.app-prompt-overlay\.open'\)/);
+  assert.match(browser, /!document\.querySelector\('\.app-prompt-overlay\.open, \.app-confirm-overlay\.open, \.chat-image-viewer'\)/);
   assert.match(browser, /attributeFilter: \['class'\], childList: true/);
 });
 
@@ -566,4 +566,9 @@ test('a person is shown on the title their tab has now, not the one it had when 
   page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab: tab.k, url: tab.url, from: { id: 'user_ana', name: 'Ana' } }), author_id: 'user_ana', author_type: 'user' });
   page.publish({ ...page.state, tabs: page.state.tabs.map((item) => ({ ...item, title: 'The page title' })) });
   assert.equal(page.ui.followPeople()[0].where, 'The page title');
+});
+
+test('the live page also steps aside for confirm cards and the image viewer, and relays out when one opens', async () => {
+  const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  assert.match(browser, /new MutationObserver\(function \(\) \{ layout\(\); \}\)\.observe\(document\.body, \{ childList: true \}\)/);
 });
