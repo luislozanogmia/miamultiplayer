@@ -83,7 +83,7 @@ function resetCommands() {
   fs.writeFileSync(pythonLog, '');
 }
 
-function readPythonCommands() {
+function readAllPythonCommands() {
   if (!fs.existsSync(pythonLog)) return [];
   return fs
     .readFileSync(pythonLog, 'utf8')
@@ -91,6 +91,11 @@ function readPythonCommands() {
     .split('\n')
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+// Job restrictions only; the one-time guard setup has its own test.
+function readPythonCommands() {
+  return readAllPythonCommands().filter((args) => args[1] !== cronSync.CRON_GUARD_SCRIPT);
 }
 
 function setJobs(jobs) {
@@ -144,7 +149,7 @@ test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 test('every cron subprocess receives the strict Hermes environment allowlist', () => {
   const source = fs.readFileSync(new URL('./cron-sync.js', import.meta.url), 'utf8');
-  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 3);
+  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 4);
 });
 
 test('briefing schedules preserve selected UTC offset and weekday across midnight', () => {
@@ -313,7 +318,7 @@ test('a stale Hermes job id is replaced by a newly created job', async () => {
   const restrictions = readPythonCommands();
   assert.equal(restrictions.length, 1);
   assert.equal(restrictions[0][2], 'replacement-id');
-  assert.deepEqual(JSON.parse(restrictions[0][3]), ['web', 'todo', 'clarify', 'artifacts', 'mia_run_report']);
+  assert.deepEqual(JSON.parse(restrictions[0][3]), cronSync.scheduledBotToolsets());
   assert.equal(restrictions[0][4], cronSync.botPackageDirectoryFor(agent));
   assert.equal(restrictions[0][5], cronSync.artifactWorkspaceForBot(agent));
   assert.equal(fs.statSync(restrictions[0][5]).mode & 0o777, 0o700);
@@ -406,7 +411,7 @@ test('a package rename edits the owned job to the new workdir without creating a
     schedule: { expr: cronSync.automationToCronExpr(automation) },
     prompt: cronSync.jobPromptFor(agent, automation), deliver: 'local',
     model: agent.model, provider: agent.modelProvider,
-    enabled_toolsets: cronSync.BOT_TOOLSETS, workdir: oldDirectory,
+    enabled_toolsets: cronSync.scheduledBotToolsets(), workdir: oldDirectory,
     artifact_workspace: cronSync.artifactWorkspaceForBot(agent),
   }]);
 
@@ -1079,7 +1084,7 @@ test('a new job for an automation with steps stores its step-report context, the
   await cronSync.syncBotAutomation(bot);
 
   const restriction = readPythonCommands()[0];
-  assert.deepEqual(JSON.parse(restriction[3]), ['web', 'todo', 'clarify', 'artifacts', 'mia_run_report']);
+  assert.deepEqual(JSON.parse(restriction[3]), cronSync.scheduledBotToolsets());
   assert.deepEqual(JSON.parse(restriction[6]), { automationId: 'roundup', steps: 3 });
   // The first job with steps also installs and enables the tool where jobs run.
   assert.ok(readCommands().some((args) => args.join(' ') === 'plugins enable mia-run-report'));
@@ -1109,7 +1114,7 @@ test('an existing job without the step-report context is edited to get it', asyn
     schedule: { expr: cronSync.automationToCronExpr(automation, 360) },
     prompt: cronSync.jobPromptFor(bot, automation), deliver: 'local',
     model: bot.model, provider: bot.modelProvider,
-    enabled_toolsets: cronSync.BOT_TOOLSETS, workdir: directory,
+    enabled_toolsets: cronSync.scheduledBotToolsets(), workdir: directory,
     artifact_workspace: cronSync.artifactWorkspaceForBot(bot),
   };
   setJobs([base]);
@@ -1135,4 +1140,69 @@ test('a company bot works in its company folder beside bots/, found again after 
   assert.equal(otherTeam, path.join(teamsRoot, 'Acme Ops-2', 'LinkedIn'), 'another team never shares a folder');
   assert.ok(!folder.startsWith(artifactRoot + path.sep), 'never inside the Solo bot folders');
   assert.throws(() => cronSync.teamBotWorkspace({ teamId: '../x', teamName: 'x' }, { registrationId: 'reg1', name: 'x' }));
+});
+
+test('a scheduled run gets the same tools as the bot in chat, plus artifacts and step reports', async () => {
+  const { botToolsets } = require('./hermes-bot-profile.js');
+  const full = cronSync.scheduledBotToolsets({ searchOnly: false });
+  assert.deepEqual(full, [...botToolsets({ searchOnly: false }), 'artifacts', 'mia_run_report'], 'one shared list, nothing separate');
+  for (const tool of ['terminal', 'file', 'web']) assert.ok(full.includes(tool), `${tool} in a scheduled run`);
+  const searchOnly = cronSync.scheduledBotToolsets({ searchOnly: true });
+  assert.ok(!searchOnly.includes('terminal') && !searchOnly.includes('file'), 'a search-only bot stays search-only on a schedule');
+  assert.deepEqual(searchOnly, [...botToolsets({ searchOnly: true }), 'artifacts', 'mia_run_report']);
+});
+
+test('a scheduled job keeps the bot\'s tools across a resync, and an old narrow job is widened', async () => {
+  resetCommands();
+  setJobs([]);
+  const bot = stepBot(['Check disk', 'Report']);
+  await cronSync.syncBotAutomation(bot);
+  const restriction = readPythonCommands()[0];
+  const tools = JSON.parse(restriction[3]);
+  assert.deepEqual(tools, cronSync.scheduledBotToolsets());
+  const automation = bot.automations[0];
+  const job = {
+    id: bot.hermesCronJobIds[automation.id], name: cronSync.jobNameFor(bot, automation), enabled: true,
+    schedule: { expr: cronSync.automationToCronExpr(automation) },
+    prompt: cronSync.jobPromptFor(bot, automation), deliver: 'local',
+    model: bot.model, provider: bot.modelProvider,
+    enabled_toolsets: tools, workdir: cronSync.botPackageDirectoryFor(bot),
+    artifact_workspace: cronSync.artifactWorkspaceForBot(bot),
+    mia_run_report: { automationId: automation.id, steps: 2 },
+  };
+  resetCommands();
+  setJobs([job]);
+  await cronSync.syncBotAutomation(bot);
+  assert.equal(readCommands().filter((args) => args[2] === 'edit').length, 0, 'the resync leaves the tools alone');
+  assert.equal(readPythonCommands().length, 0);
+
+  resetCommands();
+  setJobs([{ ...job, enabled_toolsets: ['web', 'todo', 'clarify', 'artifacts', 'mia_run_report'] }]);
+  await cronSync.syncBotAutomation(bot);
+  assert.equal(readCommands().filter((args) => args[2] === 'edit').length, 1, 'a job from before is brought up to the bot\'s tools');
+  assert.deepEqual(JSON.parse(readPythonCommands()[0][3]), cronSync.scheduledBotToolsets());
+});
+
+test('the first scheduled job sets the bot\'s guards where jobs run, once', async () => {
+  const guardCalls = readAllPythonCommands().filter((args) => args[1] === cronSync.CRON_GUARD_SCRIPT);
+  // Earlier tests in this file already synced jobs; the guard ran exactly once for all of them.
+  assert.equal(guardCalls.length <= 1, true);
+  const guard = path.join(hermesHome, 'miaos-shell-guard.sh');
+  assert.ok(fs.existsSync(guard), 'the chat shell guard is written beside the jobs');
+  assert.match(cronSync.CRON_GUARD_SCRIPT, /cron_mode"\]="deny"/);
+  assert.match(cronSync.CRON_GUARD_SCRIPT, /protected_instruction_files"\]=True/);
+  assert.match(cronSync.CRON_GUARD_SCRIPT, /"mode"\]="manual" if .*=="off"/, 'approvals off would skip every gate, so it is turned back on');
+});
+
+test('a plugin already enabled where jobs run is not enabled again at startup', () => {
+  const config = path.join(hermesHome, 'config.yaml');
+  try {
+    fs.writeFileSync(config, 'plugins:\n  enabled:\n    - mia-ask-before-do\n    - mia-run-report\n  disabled:\n    - mia-run-report\nterminal:\n  enabled:\n    - mia-provider-limits\n');
+    assert.equal(cronSync.cronPluginEnabled('mia-ask-before-do'), true);
+    assert.equal(cronSync.cronPluginEnabled('mia-run-report'), false, 'a disabled entry wins, so it is enabled again');
+    assert.equal(cronSync.cronPluginEnabled('mia-provider-limits'), false, 'only the plugins list counts');
+  } finally {
+    fs.rmSync(config, { force: true });
+  }
+  assert.equal(cronSync.cronPluginEnabled('mia-ask-before-do'), false, 'no config yet');
 });

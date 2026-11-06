@@ -28,6 +28,16 @@ const ASK_BEFORE_DO_TOOLSET = 'mia_ask_before_do';
 // MCP tools are additive, not a confinement boundary for other runtime tools.
 const FULL_AGENT_TOOLSETS = Object.freeze(['file', 'terminal', 'memory', 'session_search', 'todo', 'clarify']);
 const SEARCH_ONLY_TOOLSETS = Object.freeze(['web', 'todo', 'clarify']);
+// A bot's tools, the same in its chat and in its scheduled automations (see
+// cron-sync.js scheduledBotToolsets, which adds only artifacts and step
+// reports). One list, so the two can't drift apart. It names what bots use
+// in chat: web search (their prompt sends them to it), files and the guarded
+// terminal. No memory or session search: scheduled runs share one Hermes
+// home, so those would reach other bots' notes and runs.
+const BOT_FULL_TOOLSETS = Object.freeze(['web', 'file', 'terminal', 'todo', 'clarify']);
+function botToolsets({ searchOnly = MIAOS_AGENT_SEARCH_ONLY } = {}) {
+  return [...(searchOnly ? SEARCH_ONLY_TOOLSETS : BOT_FULL_TOOLSETS)];
+}
 const GOOGLE_WORKSPACE_MCP_SERVER = 'google';
 const GOOGLE_WORKSPACE_MCP_TOOLS = Object.freeze([
   'google_gmail_list',
@@ -389,6 +399,16 @@ function guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }) {
   };
 }
 
+// The same shell guard for scheduled runs, which run from the Hermes home
+// rather than a profile (cron-sync.js ensureCronGuards). Search-only bots
+// have no terminal, so they get none.
+function cronShellGuard(home, { searchOnly = MIAOS_AGENT_SEARCH_ONLY } = {}) {
+  if (searchOnly || !home) return '';
+  const guardPath = path.join(path.resolve(home), 'miaos-shell-guard.sh');
+  writeAtomic(guardPath, SHELL_GUARD, 0o700);
+  return guardPath;
+}
+
 function provisionHermesBotProfile({
   profilesRoot = path.join(hermesHome(), 'profiles'),
   searchOnly = MIAOS_AGENT_SEARCH_ONLY,
@@ -399,7 +419,7 @@ function provisionHermesBotProfile({
   return provisionRuntimeProfile({
     profilesRoot,
     profile: MIAOS_BOT_HERMES_PROFILE,
-    toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
+    toolsets: botToolsets({ searchOnly }),
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     backgroundReview: backgroundReviewEnabledForBot(),
@@ -414,7 +434,7 @@ function provisionHermesGoogleBotProfile({
   return provisionRuntimeProfile({
     profilesRoot,
     profile: MIAOS_BOT_GOOGLE_HERMES_PROFILE,
-    toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
+    toolsets: botToolsets({ searchOnly }),
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     googleWorkspace: true,
@@ -533,6 +553,9 @@ module.exports = {
   MIAOS_AGENT_MAX_TURNS,
   FULL_AGENT_TOOLSETS,
   SEARCH_ONLY_TOOLSETS,
+  BOT_FULL_TOOLSETS,
+  botToolsets,
+  cronShellGuard,
   GOOGLE_WORKSPACE_MCP_SERVER,
   GOOGLE_WORKSPACE_MCP_TOOLS,
   googleWorkspaceToolsConfigured,

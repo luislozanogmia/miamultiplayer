@@ -92,16 +92,16 @@ test('Mia provisions agent and bot configurations in the shared Hermes runtime',
   assert.doesNotMatch(agentConfig, /\n  - web\n|onepassword:\n    enabled: true|op:\/\//);
   const profileDir = path.join(profileRoot, MIAOS_BOT_HERMES_PROFILE);
   const config = fs.readFileSync(path.join(profileDir, 'config.yaml'), 'utf8');
-  // Full-mode bots drive the local browser through the guarded terminal, but
-  // do not share the hosted-web credential scope with that terminal.
-  assert.match(config, /toolsets:\n  - todo\n  - clarify\n  - terminal/);
-  assert.doesNotMatch(config, /  - web\n/);
+  // A bot's profile names the tools it uses in chat, the same list its
+  // scheduled runs get (botToolsets): web search, files, the guarded terminal.
+  assert.match(config, /toolsets:\n  - web\n  - file\n  - terminal\n  - todo\n  - clarify\n/);
+  assert.doesNotMatch(config, /  - memory\n|  - session_search\n/, 'no memory or session search shared across bots');
   assert.match(config, /coding_context: off/);
   assert.match(config, /max_turns: 100/);
   assert.match(agentConfig, /approvals:\n  mode: "off"/);
   assert.match(config, /approvals:\n  mode: "off"/);
   assert.match(config, /onepassword:\n    enabled: false/);
-  assert.doesNotMatch(config, /file|memory|skills|op:\/\//);
+  assert.doesNotMatch(config, /memory|skills|op:\/\//);
   // Only Mia's own agent may write bot instructions (AGENTS.md); bot workers
   // keep Hermes' protected-instruction gate.
   assert.match(agentConfig, /security:\n  protected_instruction_files: false/);

@@ -40,9 +40,15 @@ const {
 const HERMES_HOME = requiredConfiguredPath('HERMES_HOME', process.env.HERMES_HOME);
 const HERMES_BIN = String(process.env.HERMES_BIN || '').trim();
 const HERMES_PYTHON = String(process.env.HERMES_PYTHON || '').trim();
-// mia_run_report is the toolset of the mia-run-report plugin (report_step).
-const BOT_TOOLSETS = Object.freeze(['web', 'todo', 'clarify', 'artifacts', 'mia_run_report']);
+// A scheduled run has the same tools as the bot in its chat (one shared list,
+// hermes-bot-profile.js botToolsets), plus artifacts and report_step (the
+// mia_run_report toolset). Search-only stays search-only.
+function scheduledBotToolsets({ searchOnly } = {}) {
+  const { botToolsets } = require('./hermes-bot-profile');
+  return [...botToolsets(searchOnly === undefined ? {} : { searchOnly }), 'artifacts', 'mia_run_report'];
+}
 const RUN_REPORT_PLUGIN = 'mia-run-report';
+const ASK_BEFORE_DO_PLUGIN = 'mia-ask-before-do';
 const PROVIDER_LIMITS_PLUGIN = 'mia-provider-limits';
 const ARTIFACT_ROOT = requiredConfiguredPath(
   'MIAOS_AUTOMATION_ARTIFACT_DIR',
@@ -395,12 +401,24 @@ const cronPluginsReady = new Map();
 // Installs a bundled plugin into the Hermes home that runs the scheduled jobs
 // and enables it there. Once per process; a failure is retried on the next
 // sync and never blocks the schedule itself.
+// Whether the Hermes home's config.yaml already lists the plugin as enabled,
+// so startup only pays for `hermes plugins enable` the first time.
+function cronPluginEnabled(plugin) {
+  let text = '';
+  try { text = fs.readFileSync(path.join(HERMES_HOME, 'config.yaml'), 'utf8'); } catch (_) { return false; }
+  const block = /^plugins:\n((?:[ \t]+.*\n?)*)/m.exec(text);
+  const enabled = block && /^  enabled:\n((?:    - .*\n?)*)/m.exec(block[1]);
+  const disabled = block && /^  disabled:\n((?:    - .*\n?)*)/m.exec(block[1]);
+  const listed = (match) => !!match && match[1].split('\n').some((line) => line.replace(/^\s*-\s*/, '').replace(/^["']|["']$/g, '').trim() === plugin);
+  return listed(enabled) && !listed(disabled);
+}
+
 function ensureCronPlugin(plugin) {
   if (!cronPluginsReady.has(plugin)) {
     cronPluginsReady.set(plugin, (async () => {
       const { provisionBundledPlugin } = require('./hermes-bot-profile');
       provisionBundledPlugin(HERMES_HOME, plugin);
-      await runHermesCommand(['plugins', 'enable', plugin]);
+      if (!cronPluginEnabled(plugin)) await runHermesCommand(['plugins', 'enable', plugin]);
     })().catch(() => {
       cronPluginsReady.delete(plugin);
       console.error('automation plugin unavailable');
@@ -409,9 +427,64 @@ function ensureCronPlugin(plugin) {
   return cronPluginsReady.get(plugin);
 }
 
+// Scheduled jobs run from the Hermes home, not from a bot's profile, so the
+// guards a bot has in chat are set there too, once per process: the shell
+// guard on the terminal (a search-only bot has no terminal and gets none),
+// the instruction-file guard, and approvals that fail closed with nobody
+// watching (cron_mode deny; mode "off" would skip every gate). Ask-before-do
+// runs as in chat, except that nobody can answer: a blocked action becomes a
+// "needs you" step (ask-before-do.js decide).
+let cronGuardsReady = null;
+// Run by Hermes' own Python so Hermes writes its own config.yaml.
+const CRON_GUARD_SCRIPT = [
+  'import sys',
+  'from hermes_cli.config import load_config, save_config',
+  'cfg=load_config() or {}',
+  'a=cfg.setdefault("approvals",{})',
+  'a["cron_mode"]="deny"',
+  'a["mode"]="manual" if str(a.get("mode") or "").lower()=="off" else (a.get("mode") or "manual")',
+  'cfg.setdefault("security",{})["protected_instruction_files"]=True',
+  'g=sys.argv[1] if len(sys.argv)>1 else ""',
+  't=cfg.setdefault("terminal",{})',
+  'g and t.update({"shell_init_files":[g],"auto_source_bashrc":False})',
+  'save_config(cfg)',
+].join('\n');
+function ensureCronGuards() {
+  if (!cronGuardsReady) {
+    cronGuardsReady = (async () => {
+      const { cronShellGuard } = require('./hermes-bot-profile');
+      const guardPath = cronShellGuard(HERMES_HOME) || '';
+      await new Promise((resolve, reject) => {
+        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath], {
+          timeout: 30000,
+          maxBuffer: 1024 * 1024,
+          cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
+          env: hermesProcessEnv(),
+        }, (err, stdout, stderr) => (err ? reject(new Error(String(stderr || stdout || err.message || '').trim().slice(0, 1000))) : resolve()));
+      });
+      await ensureCronPlugin(ASK_BEFORE_DO_PLUGIN);
+    })().catch((error) => {
+      cronGuardsReady = null;
+      throw error;
+    });
+  }
+  return cronGuardsReady;
+}
+
+// Hermes loads plugins when its gateway starts, so Mia prepares scheduled
+// runs before starting it (server.js): a run never starts without the bot's
+// guards, ask-before-do or step reports, even on the first automation.
+async function prepareScheduledRuns() {
+  await ensureCronGuards();
+  await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN);
+  await ensureCronPlugin(RUN_REPORT_PLUGIN);
+}
+
 async function restrictHermesJob(jobId, bot, workdir, automation) {
   const artifactWorkspace = artifactWorkspaceForBot(bot);
   const runReport = runReportContextFor(automation);
+  // A job never gets the bot's tools without the bot's guards.
+  await ensureCronGuards();
   await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN);
   if (runReport) await ensureCronPlugin(RUN_REPORT_PLUGIN);
   const source = [
@@ -421,7 +494,7 @@ async function restrictHermesJob(jobId, bot, workdir, automation) {
     'raise SystemExit(0 if job else 2)',
   ].join(';');
   return new Promise((resolve, reject) => {
-    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(BOT_TOOLSETS), workdir, artifactWorkspace, JSON.stringify(runReport)], {
+    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(scheduledBotToolsets()), workdir, artifactWorkspace, JSON.stringify(runReport)], {
       timeout: 30000,
       maxBuffer: 1024 * 1024,
       cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
@@ -637,7 +710,7 @@ function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspa
     String(job.deliver || '') !== deliver ||
     String(job.model || '') !== model ||
     String(job.provider || '') !== provider ||
-    JSON.stringify(job.enabled_toolsets || []) !== JSON.stringify(BOT_TOOLSETS) ||
+    JSON.stringify(job.enabled_toolsets || []) !== JSON.stringify(scheduledBotToolsets()) ||
     String(job.workdir || '') !== workdir ||
     String(job.artifact_workspace || '') !== artifactWorkspace ||
     JSON.stringify(job.mia_run_report || null) !== JSON.stringify(runReport)
@@ -1349,5 +1422,8 @@ module.exports = {
   readBotInstructions,
   listSessionArtifacts,
   validateBotArtifacts,
-  BOT_TOOLSETS,
+  scheduledBotToolsets,
+  CRON_GUARD_SCRIPT,
+  prepareScheduledRuns,
+  cronPluginEnabled,
 };

@@ -128,8 +128,19 @@ test('setting off, scheduled runs and unknown sessions', () => {
   const off = bound({ enabled: false });
   off.turn();
   assert.equal(off.call().allow, true);
-  assert.equal(createGateState().decide({ sessionId: 'cron_job_20261101', category: 'send' }).allow, true);
   assert.equal(createGateState().decide({ sessionId: 'subagent-1', category: 'send' }).allow, false);
+});
+
+test('a scheduled run never waits: a blocked action is skipped and reported as needs you', () => {
+  const gate = createGateState();
+  const started = Date.now();
+  const decision = gate.decide({ sessionId: 'cron_job_20261101_090000', summary: 'rm ~/Library/Caches/old.log', fingerprint: 'f'.repeat(64) });
+  assert.equal(decision.allow, false, 'nothing that needs a yes runs with nobody watching');
+  assert.ok(Date.now() - started < 50, 'it answers at once instead of waiting');
+  assert.match(decision.message, /^BLOCKED by ask-before-do, nothing ran: rm ~\/Library\/Caches\/old\.log\./);
+  assert.match(decision.message, /report_step with state "needs_you" and exactly what you wanted to do/);
+  assert.match(decision.message, /carry on with the steps that do not depend on it/);
+  assert.doesNotMatch(decision.message, /request_approval/, 'it never offers an approval nobody can give');
 });
 
 test('each turn reads the setting where promptInstructions puts it', async () => {
@@ -304,7 +315,7 @@ test('the gate answers only with its token', async (t) => {
   const post = (headers) => fetch(`${gate.url}/decide`, { method: 'POST', headers, body: JSON.stringify({ sessionId: 'cron_x', category: 'send' }) });
   assert.equal((await post({})).status, 403);
   assert.equal((await post({ Authorization: 'Bearer wrong' })).status, 403);
-  assert.deepEqual(await (await post({ Authorization: `Bearer ${gate.token}` })).json(), { allow: true });
+  assert.equal((await (await post({ Authorization: `Bearer ${gate.token}` })).json()).allow, false);
 });
 
 test('the concise approval line comes from the operation, not model wording', () => {

@@ -55,6 +55,10 @@ provisionHermesWebSearchConfig({
   gatewayToken: MIAOS_AGENT_SEARCH_ONLY ? process.env.MIAOS_FIRECRAWL_GATEWAY_TOKEN : '',
 });
 provisionHermesRuntimeProfiles();
+// Scheduled runs get their guards and plugins from the Hermes home, which the
+// gateway reads when it starts, so that comes first, whatever starts it.
+require('./inference').beforeHermesGatewayStarts(() => require('./cron-sync').prepareScheduledRuns()
+  .catch((error) => console.error('Scheduled runs not prepared', error.message)));
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const express = require('express');
