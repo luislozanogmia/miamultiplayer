@@ -2880,3 +2880,44 @@ test("downloads keep their workspace across a restart", async () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("restoring a company whose group id Solo used never merges two of its groups", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-group-merge-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    const soloTab = h.command("new").activeId;
+    h.command("groupCreate", { id: soloTab, name: "Solo" });
+    assert.equal(h.command("state").groups[0].id, "g1");
+    const company = "hub_" + "9".repeat(32);
+    fs.writeFileSync(path.join(directory, `browser-ws-${company}.json`), JSON.stringify({ version: 1, activeId: 1,
+      groups: [{ id: "g1", name: "Mine", color: "blue", collapsed: false, botId: null }, { id: "g2", name: "Bot work", color: "red", collapsed: false, botId: "bot-x" }],
+      tabs: [{ id: 1, url: "https://example.com/mine", title: "Mine", groupId: "g1" }, { id: 2, url: "https://example.com/bot", title: "Bot", groupId: "g2" }] }));
+    h.command("workspace", { key: company });
+    const state = h.command("state");
+    assert.equal(state.groups.length, 2, "both groups survive");
+    const mine = state.groups.find(group => group.name === "Mine"), bot = state.groups.find(group => group.name === "Bot work");
+    assert.notEqual(mine.id, bot.id);
+    assert.equal(state.tabs.find(tab => tab.id === 1).groupId, mine.id, "the person's tab stays in their group");
+    assert.equal(state.tabs.find(tab => tab.id === 2).groupId, bot.id);
+    assert.equal(bot.botId, "bot-x");
+    assert.equal(mine.botId ?? null, null, "the bot never gains the person's tabs");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a renderer command naming another workspace is refused", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-command-ws-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    const tab = h.command("new").activeId;
+    const refused = h.command("navigate", { id: tab, value: "https://example.com/x", workspace: "hub_" + "1".repeat(32) });
+    assert.match(String(refused && refused.error), /another workspace/);
+    assert.ok(!h.command("navigate", { id: tab, value: "https://example.com/y", workspace: "solo" }).error, "its own workspace passes");
+    assert.ok(!h.command("state").error, "commands without a workspace are the app's own and pass");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

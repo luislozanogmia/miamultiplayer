@@ -3236,9 +3236,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "new") { newSessionOrPlainTab(); return state(); }
       if (command.action === "closedTabs") return { closed: closedTabs.list().map(({ url, title, closedAt }) => ({ url, title, closedAt })) };
       if (command.action === "reopenClosed") { reopenClosedTab(boundedInteger(command.index, 0, 0, 24)); return state(); }
-      // Shared browsing streams pages to colleagues, so it runs only when the
-      // company the app shows is the workspace these tabs belong to.
-      if (baseStatePath && /^space[A-Z]/.test(String(command.action)) && command.workspace !== workspaceKey) {
+      // Shared browsing streams pages to colleagues, so its commands (and any
+      // command that names a workspace) run only on that workspace's tabs.
+      if (baseStatePath && (/^space[A-Z]/.test(String(command.action)) || Object.hasOwn(command, "workspace")) && command.action !== "workspace"
+        && command.workspace !== workspaceKey) {
         return { error: "The browser is still showing another workspace's tabs. Wait a moment and try again." };
       }
       if (command.action === "spaceSession") {
@@ -3512,12 +3513,18 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   if (restored && restored.tabs.length) {
     restoring = true;
     const renamed = new Map();
+    // Reserve every saved id first, so a renamed group can't take an id a
+    // later group in this same list still holds (that merged two groups).
     for (const group of restored.groups) {
       const number = Number(group.id.slice(1));
       if (Number.isInteger(number)) nextGroupNumber = Math.max(nextGroupNumber, number + 1);
+    }
+    const restoredIds = new Set(restored.groups.map(group => group.id));
+    for (const group of restored.groups) {
       // An id another workspace already used this run gets a new one here.
       if (groupIdOwners.has(group.id) && groupIdOwners.get(group.id) !== workspaceKey) {
-        const fresh = freshGroupId();
+        let fresh;
+        do { fresh = freshGroupId(); } while (restoredIds.has(fresh));
         renamed.set(group.id, fresh);
         group.id = fresh;
       }

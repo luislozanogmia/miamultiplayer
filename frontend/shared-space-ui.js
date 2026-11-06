@@ -33,7 +33,10 @@
   function bound(){ return !!(s.space && s.teamKey && s.teamKey === teamKey()); }
   // Every shared-space command names the company on screen; the browser
   // refuses it unless its own tabs are that company's.
-  function command(action, extra){ return bridge.command(Object.assign({action: action, workspace: teamKey()}, extra || {})); }
+  function command(action, extra){
+    var key = teamKey();
+    return bridge.command(Object.assign({action: action}, key ? {workspace: key} : {}, extra || {}));
+  }
   function readStored(name){
     try { return JSON.parse(window.localStorage.getItem(name) || 'null'); } catch(_storedError) { return null; }
   }
