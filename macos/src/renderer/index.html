@@ -68,13 +68,17 @@
   <body>
     <main>
       <h1>Mia Desktop</h1>
-      <p>
+      <p id="message">
         Mia couldn't finish starting. This can happen while your computer is busy, such as during updates. Try again in a moment.
       </p>
       <button id="retry" type="button">Try again</button>
     </main>
     <script>
       const retry = document.getElementById("retry");
+      if (new URLSearchParams(location.search).get("reason") === "port-busy") {
+        document.getElementById("message").textContent =
+          "Another Mia window or app is using the connection Mia needs. Close it, then try again.";
+      }
       if (window.miaDesktop) window.miaDesktop.ready();
       retry.addEventListener("click", async () => {
         retry.disabled = true;

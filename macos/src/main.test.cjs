@@ -24,6 +24,17 @@ test("main-window trust uses exact parsed origins", () => {
   assert.equal(main.hasExactOrigin("not a url", "http://127.0.0.1:4871"), false);
   assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:4871/chat", "http://127.0.0.1:4871"), true);
   assert.equal(main.isTrustedMainWindowUrl("http://127.0.0.1:48710/chat", "http://127.0.0.1:4871"), false);
+  const fallback = require("node:url").pathToFileURL(path.join(__dirname, "renderer", "index.html")).toString();
+  assert.equal(main.isTrustedMainWindowUrl(`${fallback}?reason=port-busy`, "http://127.0.0.1:4871"), true);
+  for (const url of [`${fallback}?reason=other`, `${fallback}?reason=port-busy&extra=1`, `${fallback}#fragment`]) {
+    assert.equal(main.isTrustedMainWindowUrl(url, "http://127.0.0.1:4871"), false);
+  }
+  const webContents = {};
+  const window = { webContents, isDestroyed: () => false };
+  const sender = url => ({ sender: webContents, senderFrame: { url } });
+  assert.equal(main.isMainWindowSenderFor(sender(`${fallback}?reason=port-busy`), window, "http://127.0.0.1:4871"), true);
+  assert.equal(main.isMainWindowSenderFor(sender(`${fallback}?reason=other`), window, "http://127.0.0.1:4871"), false);
+  assert.equal(main.isMainWindowSenderFor({ sender: {}, senderFrame: { url: `${fallback}?reason=port-busy` } }, window, "http://127.0.0.1:4871"), false);
 });
 
 test("packaged desktop always starts its backend with Clerk sign-in", () => {
@@ -319,25 +330,23 @@ test("dev mode refuses to start without its own Hermes home and Python", () => {
 
 test("Claude CLI discovery skips an unreadable PATH entry", () => {
   const main = loadMain();
-  const originalPath = process.env.PATH;
-  const originalStatSync = fs.statSync;
-  try {
-    process.env.PATH = ["/unreadable", "/working"].join(path.delimiter);
-    fs.statSync = candidate => {
-      if (candidate.startsWith("/unreadable/")) {
-        const error = new Error("permission denied");
-        error.code = "EACCES";
-        throw error;
-      }
-      if (candidate.startsWith("/working/")) return { isFile: () => true };
-      return undefined;
-    };
-    assert.equal(main.discoverClaudeCodeCommand(), path.join("/working", "claude"));
-  } finally {
-    fs.statSync = originalStatSync;
-    if (originalPath === undefined) delete process.env.PATH;
-    else process.env.PATH = originalPath;
-  }
+  const unreadable = path.resolve(os.tmpdir(), "unreadable");
+  const working = path.resolve(os.tmpdir(), "working");
+  const expected = path.join(working, process.platform === "win32" ? "claude.exe" : "claude");
+  const stat = candidate => {
+    if (candidate.startsWith(`${unreadable}${path.sep}`)) {
+      const error = new Error("permission denied");
+      error.code = "EACCES";
+      throw error;
+    }
+    if (candidate === expected) return { isFile: () => true };
+    return undefined;
+  };
+  assert.equal(main.discoverClaudeCodeCommand({
+    env: { PATH: [unreadable, working].join(path.delimiter) },
+    home: path.resolve(os.tmpdir(), "unused-home"),
+    stat,
+  }), expected);
 });
 
 test("packaged runtime resolves platform layout through shared helpers", () => {
@@ -663,6 +672,30 @@ test("production Clerk startup fails on its occupied stable port without falling
     main.selectLocalBackendPort(null, { production: true, preferredPort: port - 1 }),
     new RegExp(`stable Mia desktop origin http://localhost:${port} is already in use`),
   );
+});
+
+test("packaged startup waits for a closing local listener, then keeps the same port", async (t) => {
+  const main = loadMain();
+  const occupied = await listeningLoopbackServer();
+  t.after(() => { if (occupied.listening) occupied.close(); });
+  const port = occupied.address().port;
+  const closing = new Promise(resolve => setTimeout(() => occupied.close(resolve), 50));
+  assert.equal(await main.waitForLocalPortRelease(port, { timeoutMs: 1000 }), true);
+  await closing;
+  assert.equal(await main.selectLocalBackendPort(null, {
+    production: true, preferredPort: port - 1,
+  }), port);
+});
+
+test("packaged startup does not borrow an occupied port or wait forever", async (t) => {
+  const main = loadMain();
+  const occupied = await listeningLoopbackServer();
+  t.after(() => occupied.close());
+  const port = occupied.address().port;
+  assert.equal(await main.waitForLocalPortRelease(port, { timeoutMs: 40 }), false);
+  await assert.rejects(main.selectLocalBackendPort(null, {
+    production: true, preferredPort: port - 1,
+  }), /already in use/);
 });
 
 test("production Clerk startup uses the default or configured stable port exactly", async () => {
