@@ -1039,7 +1039,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Where the user's keyboard focus is: the app (chat, address bar) or the
   // page in front. A bot working in a background tab must never take it.
   let userFocus = null;
-  function restoreUserFocus(target = userFocus) {
+  // A focus this soon after the person pressed in a page is theirs.
+  const PERSON_FOCUS_MS = 1000;
+  const PERSON_LOAD_MS = 10000;
+  function restoreUserFocus(target = userFocus || window.webContents) {
     setImmediate(() => {
       if (disposed || !target || target.isDestroyed()) return;
       if (target.isFocused && target.isFocused()) return;
@@ -1056,6 +1059,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function focusTabWebContents(tab) {
     if (!tab) return;
     const wc = tab.view.webContents;
+    tab.personPressedAt = Date.now();
     if (!wc.isDestroyed()) wc.focus();
   }
   // ERR_ABORTED (-3) means a load was cancelled, almost always because a
@@ -2170,7 +2174,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       activateTab(tab.id);
       layout();
       persistTabs();
-      focusTabWebContents(tab);
+      // A bot bringing its tab forward leaves the person's focus where it is.
+      if (!actor) focusTabWebContents(tab);
       publish();
       return protocolTabResult(tab);
     }
@@ -2509,6 +2514,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("before-mouse-event", (_event, mouse) => {
       // Where this person's pointer is, for teammates in a shared session.
       if (mouse.type === "mouseMove" || mouse.type === "mouseDown") tab.pointer = { x: mouse.x, y: mouse.y, at: Date.now() };
+      if (mouse.type === "mouseDown") tab.personPressedAt = Date.now();
       if (mouse.type !== "mouseDown" || tab.id !== activeId) return;
       if (heldByRenderer.has(tab.id) || (tab.botWork || 0) > 0 || tab.actorOperationCount > 0) {
         groupBotEvent({ action: "page-click", tabId: tab.id });
@@ -2516,11 +2522,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     });
     // A navigation drops inserted styles; put the bot glow back if needed.
     wc.on("dom-ready", () => { tab.botGlowKey = null; tab.botGlowCss = null; syncBotGlow(tab); });
-    // Pages focus themselves as they load (search boxes, editors). Only the
-    // tab in front may hold focus; a background tab gives it straight back.
+    // Pages focus themselves as they load (search boxes, editors), and a
+    // bot's fill or click focuses a box in its page. Only the person moves
+    // their focus. A background tab gives it straight back; so does the tab
+    // in front while a bot works there, or while the person's focus is in
+    // Mia (the chat, the address bar), unless they just clicked into the
+    // page or picked or loaded it themselves.
     wc.on("focus", () => {
       if (borrowingTabId === tab.id) return;
-      if (tab.id === activeId) userFocus = wc;
+      const theirs = Date.now() - (tab.personPressedAt || 0) < PERSON_FOCUS_MS;
+      const taken = !theirs && ((tab.botWork || 0) > 0 || userFocus === window.webContents);
+      if (tab.id === activeId && !taken) userFocus = wc;
       else restoreUserFocus();
     });
     wc.on("found-in-page", (_event, result) => {
@@ -3474,6 +3486,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (!tabs.size || !active()) newTab();
       const tab = active();
       if (command.action === "navigate") {
+        // A page the person opens may take their focus as it loads.
+        tab.personPressedAt = Date.now() + PERSON_LOAD_MS;
         if (isLocalFileTarget(command.value)) openLocalFile(tab, command.value);
         else navigate(tab, command.value);
       }

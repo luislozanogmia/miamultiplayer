@@ -2121,6 +2121,34 @@ test("bot tab groups: a bot working in the background never takes foreground foc
   assert.equal(app.focusCalls, beforeKey + 1);
 });
 
+test("bot tab groups: a bot working in the tab in front gives the person's focus back", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: knownActor(sessions) });
+  h.command("new");
+  const app = h.window.webContents;
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const page = h.views.at(-1).webContents;
+  const switchFocus = page.focusCalls || 0;
+  await h.controller.protocol("tab_switch", { tab_id: opened.tab_id, actor_session: "s-a" });
+  assert.equal(page.focusCalls || 0, switchFocus, "the bot bringing its tab forward doesn't focus it");
+  app.emit("focus"); // The person is typing in the chat beside the page.
+  const original = page.executeJavaScript.bind(page);
+  page.executeJavaScript = script => { page.emit("focus"); return original(script); }; // The page focuses a box.
+  const before = app.focusCalls || 0;
+  await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls, before + 1, "focus goes back to the chat");
+
+  // A press into the page is the person's own: focus stays there.
+  page.executeJavaScript = original;
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 5, y: 5 });
+  page.executeJavaScript = script => { page.emit("focus"); return original(script); };
+  const afterPress = app.focusCalls;
+  await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls, afterPress, "the page keeps focus the person gave it");
+});
+
 test("bot tab groups: a failing lookup rejects without touching the tab in front", async () => {
   const h = harness({ resolveActor: async () => { throw new Error("backend down"); } });
   const mine = h.command("new").activeId;
