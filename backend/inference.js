@@ -810,6 +810,17 @@ function automationSteps(automation) {
   return steps.map((step) => String(step || '').trim().replace(/\s+/g, ' ')).filter(Boolean);
 }
 
+// Files a person would open or share go in the bot's Mia folder; everything
+// else stays in its working folder inside Mia, out of the person's Documents.
+function botFilesRule(folder) {
+  return [
+    'Your files:',
+    `- Your Mia folder is ${folder}. Save there only finished files a person would open or share: PDFs, spreadsheets, documents, slides, images, video, audio, and readable reports or notes (.md, .html).`,
+    '- Keep everything else in your current working folder: scripts, code, small apps and tools, data gathered along the way, temporary downloads, drafts and logs. Never put those in the Mia folder or make other folders in the person\'s Documents.',
+    '- Make one file when one will do, and give it a clear name a person understands.',
+  ].join('\n');
+}
+
 function buildBotContext(agent, transcript, message, platformContext, senderLabel, globalInstructions) {
   const bot = agent && typeof agent === 'object' ? agent : {};
   const name = String(bot.name || 'Task bot').trim();
@@ -852,6 +863,7 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
     ].join('\n'),
     `Your automations:\n${automationLines.join('\n')}`,
   );
+  if (bot.filesFolder) sections.push(botFilesRule(bot.filesFolder));
   if (platformContext) sections.push(`Current Mia context (authoritative):\n${String(platformContext).trim()}`);
   return sections.join('\n\n');
 }
@@ -1062,6 +1074,7 @@ module.exports = {
   getHermesGatewayClient,
   buildContext,
   buildBotContext,
+  botFilesRule,
   buildScheduledBotPrompt,
   userInstructionSection,
   runInference,

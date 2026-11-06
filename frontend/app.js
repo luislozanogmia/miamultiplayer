@@ -17518,6 +17518,8 @@
 
   function initChatWorkspace(){
     if(window.MiaInterruptedWork) window.MiaInterruptedWork.showOnce({api: api, toast: showBenchToast});
+    // TEMPORARY (0.3.4 only): the one-time bot files tidy-up card. Remove in 0.3.5.
+    if(window.MiaBotFilesTidy) window.MiaBotFilesTidy.showOnce({api: api, toast: showBenchToast});
     if(hubWorkspace()) return initHubChat().then(openPendingPerson);
     return Promise.all([
       loadNativeConversations(),

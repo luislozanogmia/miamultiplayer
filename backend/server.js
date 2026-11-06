@@ -174,7 +174,7 @@ const {
   NATIVE_DISPATCH_TOKEN_BUDGET_CODE,
   createNativeDispatchTokenBudgetTracker,
 } = require('./native-dispatch-runtime');
-const { miaosWorkspacePromptContext, PAGE_ICON_RULE, provisionMiaosWorkspace, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
+const { miaosWorkspacePromptContext, PAGE_ICON_RULE, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
 const {
   DEFAULT_WORKSPACE_ID,
   departmentsMetaKey,
@@ -1396,23 +1396,25 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       runSessions.push(id);
       sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}` });
     };
-    // A bot asked in a team channel works in that team's folder on this
-    // computer (<Mia folder>/companies/<company>/<bot>), not in the person's Solo Mia
-    // folder. The folder carries the same workspace instructions. A workflow
-    // step has its own step folder instead.
+    // A bot asked in a team channel saves its finished files in that team's
+    // folder on this computer (<Mia folder>/companies/<company>/<bot>), not in
+    // the person's Solo Mia folder, and works in a folder inside Mia's data.
+    // A workflow step has its own step folder instead.
     let teamFolder = null;
+    let teamWorkFolder = null;
     if (bot.registrationId && channel.teamName !== undefined && !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly
       && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) {
       try {
         teamFolder = cronSync.teamBotWorkspace(channel, { registrationId: bot.registrationId, name: bot.name });
-        provisionMiaosWorkspace({ workspaceDir: teamFolder });
+        teamWorkFolder = cronSync.teamBotWorkFolder(channel, { registrationId: bot.registrationId });
       } catch {
         teamFolder = null;
+        teamWorkFolder = null;
         console.error('team bot folder unavailable');
       }
     }
     const turn = await runBotReplyTurn({
-      agent: sharedBot,
+      agent: teamFolder ? { ...sharedBot, filesFolder: teamFolder } : sharedBot,
       senderLabel: trigger.author_email,
       message: trigger.body,
       promptLine: '[' + trigger.author_email + '] ' + withAttachment(trigger),
@@ -1436,7 +1438,7 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         maxTurns: MIAOS_BOT_MAX_TURNS,
         maxTokens: hermesTokenBudgetFromOptions(userOptions),
         profile: workspace.connectionInventory.googleToolsEnabled ? MIAOS_BOT_GOOGLE_HERMES_PROFILE : MIAOS_BOT_HERMES_PROFILE,
-        ...(teamFolder ? { workspaceDir: teamFolder } : {}),
+        ...(teamWorkFolder ? { workspaceDir: teamWorkFolder } : {}),
         onSession,
       },
       signal,
@@ -1842,6 +1844,56 @@ app.post('/api/speech/transcribe', requireAuth, express.raw({ type: 'audio/wav',
     res.status(error.status || 500).json({ error: error.code || 'transcribe_failed', message: error.message });
   }
 });
+
+// One-time bot files tidy-up, asked once with the person's OK.
+// TEMPORARY: remove these routes and bot-files-tidy.js in 0.3.5.
+const botFilesTidy = require('./bot-files-tidy');
+const BOT_FILES_TIDY_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'bot-files-tidy.json');
+function botFilesTidyPlan() {
+  if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly || !String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) return [];
+  const day = new Date().toISOString().slice(0, 10);
+  return botFilesTidy.planTidy({
+    miaFolder: miaosWorkspaceDir(),
+    tidiedFolder: path.join(path.dirname(path.resolve(DB_PATH)), 'tidied-files', day),
+    bots: cronSync.listBotFileFolders(),
+  });
+}
+app.get('/api/bot-files-tidy', requireAuth, (req, res) => {
+  const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (state.state === 'running' && !botFilesTidyRunning) startBotFilesTidy();
+  if (state.state) return res.json({ state: state.state, moved: (state.moved || []).length });
+  let plan = [];
+  try { plan = botFilesTidyPlan(); } catch (error) { console.error('bot files tidy plan failed', error.message); }
+  if (!plan.length) return res.json({ state: 'none' });
+  res.json({ state: 'ask', count: plan.length, examples: plan.slice(0, 4).map((move) => path.basename(move.from)) });
+});
+app.post('/api/bot-files-tidy', requireAuth, (req, res) => {
+  const current = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (current.state) return res.json({ state: current.state });
+  if (!(req.body && req.body.accept === true)) {
+    botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { state: 'declined', at: Date.now() });
+    return res.json({ state: 'declined' });
+  }
+  startBotFilesTidy();
+  res.json({ state: 'running' });
+});
+let botFilesTidyRunning = false;
+// Runs in the background. A run cut short by quitting picks up again on the
+// next check; files already moved are no longer in the plan.
+function startBotFilesTidy() {
+  if (botFilesTidyRunning) return;
+  botFilesTidyRunning = true;
+  const before = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { ...before, state: 'running', at: Date.now() });
+  setImmediate(() => {
+    let result = { moved: [], skipped: [] };
+    try { result = botFilesTidy.runTidy(botFilesTidyPlan()); } catch (error) { console.error('bot files tidy failed', error.message); }
+    botFilesTidy.writeState(BOT_FILES_TIDY_STATE, {
+      state: 'done', at: Date.now(), moved: (before.moved || []).concat(result.moved), skipped: result.skipped,
+    });
+    botFilesTidyRunning = false;
+  });
+}
 
 // Artifacts: pages, documents and live apps, opened in Mia's browser.
 const artifacts = require('./artifacts');
@@ -7765,6 +7817,17 @@ async function turnWorkspaceContext(senderLabel, transcript, message, conversati
   };
 }
 
+// The folder a Solo bot's chat turns run in: its package folder inside Mia,
+// the same one its automations use. None in search-only releases, which have
+// no terminal, or when the package can't be found (the profile default stays).
+function soloBotWorkFolder(agent) {
+  if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly || !String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) return '';
+  try { return cronSync.botPackageDirectoryFor(agent); } catch (error) {
+    console.error('bot work folder unavailable', error.message);
+    return '';
+  }
+}
+
 // One bot reply outside the bot's own chat: Solo group and direct chats, and
 // shared team channels. Both build the prompt and run the model here; a shared
 // channel passes a narrower context. -> { rawReply, artifacts }
@@ -7944,6 +8007,10 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     : googleGatewaySessionKey;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
+  // A bot works in its own folder inside Mia, like its automations, and
+  // saves only finished files to its Mia folder (artifactWorkspace).
+  const botWorkFolder = artifactWorkspace ? soloBotWorkFolder(agent) : '';
+  const botPromptAgent = artifactWorkspace ? { ...agent, filesFolder: artifactWorkspace } : agent;
   const turnAttachments = await nativeTurnFiles(dispatch, trigger);
   const inferenceOptions = {
     ...(turnAttachments.imagePaths.length ? { imagePaths: turnAttachments.imagePaths } : {}),
@@ -7969,6 +8036,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()
       ? { workspaceDir: miaosWorkspaceDir() }
       : {}),
+    ...(botWorkFolder ? { workspaceDir: botWorkFolder } : {}),
     ...(artifactWorkspace ? { artifactWorkspace } : {}),
   };
   let rawReply;
@@ -8222,7 +8290,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // The bot's own chat keeps one session. Its durable instructions seed the
     // session once; what changes per turn (platform state, Google write
     // instructions) travels with each message instead.
-    const systemPrompt = buildHermesTaskPrompt(agent, [], '', senderLabel, '', [], false, globalInstructions.bot);
+    const systemPrompt = buildHermesTaskPrompt(botPromptAgent, [], '', senderLabel, '', [], false, globalInstructions.bot);
     const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + '\nConnection capabilities: ' + connectionInventory.revision);
     const googleActionInstruction = googleWorkspaceWriteAuthorized
       && /authoritative server state\): CONNECTED/.test(String(platformContext || ''))
@@ -8308,7 +8376,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     );
   } else {
     const turn = await runBotReplyTurn({
-      agent,
+      agent: botPromptAgent,
       senderLabel,
       message,
       promptLine: nativePromptLine(trigger),
