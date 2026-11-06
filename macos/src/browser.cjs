@@ -472,8 +472,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       log(`browser downloads save failed: ${error.message}`);
     }
   }
+  // Downloads stay in the workspace they started in, like its tabs: one
+  // workspace's list never shows another's files. Older entries are Solo's.
+  const inWorkspace = entry => (entry.workspace || "solo") === workspaceKey;
   function downloadList() {
-    return downloadEntries.map(entry => ({
+    return downloadEntries.filter(inWorkspace).map(entry => ({
       ...entry,
       exists: entry.state === "completed" && Boolean(entry.path) && fs.existsSync(entry.path),
     }));
@@ -1141,6 +1144,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     let actor;
     try { actor = await options.resolveActor(sessionId.trim()); }
     catch (_) { throw unavailable(); }
+    // Each workspace has its own tabs, and a company's can be shared live with
+    // colleagues. A run acts only in the workspace it belongs to: Solo work
+    // never opens or touches tabs while a company is on screen, nor the reverse.
+    if (actor && (actor.kind === "mia" || actor.kind === "bot")) {
+      if (typeof actor.workspace !== "string" || !actor.workspace) throw unavailable();
+      if (actor.workspace !== workspaceKey) {
+        throw protocolError("BROWSER_OTHER_WORKSPACE",
+          `This work belongs to ${actor.workspace === "solo" ? "Solo" : "another workspace"}, but Mia's browser is showing ${workspaceKey === "solo" ? "Solo" : "a different workspace"}. ` +
+          "Each workspace keeps its own tabs. Ask the person to switch back to that workspace in Mia, then try again.");
+      }
+    }
     if (actor && actor.kind === "mia" && actor.botId == null) return null;
     if (actor && actor.kind === "bot" && typeof actor.botId === "string"
         && /^[A-Za-z0-9_.:-]{1,120}$/.test(actor.botId)) return actor;
@@ -2153,7 +2167,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (method === "downloads") {
       // What actually landed on disk, so a bot reports only real files. A
       // bot sees its own downloads; Mia sees every bot's and her own.
-      const mine = () => downloadEntries.filter(entry => entry.by && (actor ? entry.by.botId === actor.botId : true));
+      const mine = () => downloadEntries.filter(entry => inWorkspace(entry) && entry.by && (actor ? entry.by.botId === actor.botId : true));
       const waitMs = boundedInteger(params.wait_ms, 0, 0, 60000);
       const deadline = Date.now() + waitMs;
       while (Date.now() < deadline && mine().some(entry => entry.state === "progressing" || entry.safety?.verdict === "checking")) {
@@ -3105,6 +3119,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       startedAt: Date.now(),
       by: worker,
       safety: null,
+      workspace: workspaceKey,
     };
     if (worker && item.getSavePath) entry.path = String(item.getSavePath() || "");
     downloadEntries.unshift(entry);
@@ -3327,7 +3342,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return { ...state(), openedId: tab.id, groupId };
       }
       if (command.action === "downloadShow") {
-        const entry = downloadEntries.find(item => item.id === command.id);
+        const entry = downloadEntries.find(item => item.id === command.id && inWorkspace(item));
         if (!entry || entry.state !== "completed" || !entry.path || !fs.existsSync(entry.path)) {
           return { error: "This file was moved or deleted." };
         }
@@ -3335,7 +3350,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return state();
       }
       if (command.action === "downloadOpen") {
-        const entry = downloadEntries.find(item => item.id === command.id);
+        const entry = downloadEntries.find(item => item.id === command.id && inWorkspace(item));
         if (!entry || entry.state !== "completed" || !entry.path || !fs.existsSync(entry.path)) {
           return { error: "This file was moved or deleted." };
         }
@@ -3356,7 +3371,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "downloadRemove") {
         // Drops one finished entry from the list; the file stays where it is.
         const before = downloadEntries.length;
-        downloadEntries = downloadEntries.filter(entry => entry.id !== command.id || entry.state === "progressing");
+        downloadEntries = downloadEntries.filter(entry => entry.id !== command.id || entry.state === "progressing" || !inWorkspace(entry));
         if (downloadEntries.length !== before) { persistDownloads(); publish(); }
         return state();
       }
@@ -3366,8 +3381,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return state();
       }
       if (command.action === "downloadsClear") {
-        // Removes finished entries from the list; files stay where they are.
-        downloadEntries = downloadEntries.filter(entry => entry.state === "progressing");
+        // Removes this workspace's finished entries; files stay where they are.
+        downloadEntries = downloadEntries.filter(entry => entry.state === "progressing" || !inWorkspace(entry));
         persistDownloads(); publish();
         return state();
       }

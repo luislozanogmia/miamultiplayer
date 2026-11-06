@@ -8,8 +8,9 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { EventEmitter } = require("node:events");
 
-const knownActor = sessions => async id => id === "s-mia" ? { kind: "mia" }
-  : sessions[id] ? { kind: "bot", ...sessions[id] } : null;
+// Every run belongs to a workspace; these all run in Solo unless a test says otherwise.
+const knownActor = sessions => async id => id === "s-mia" ? { kind: "mia", workspace: "solo" }
+  : sessions[id] ? { kind: "bot", workspace: "solo", ...sessions[id] } : null;
 
 // Coordinator browser work runs only in a real tab group.
 function groupFor(h, tabId) {
@@ -2266,20 +2267,27 @@ test("bot tab groups: the owner menu assigns a bot and survives a restart", asyn
 
 
 test("unknown, missing and failed actor identities cannot list or close another bot's tabs", async () => {
-  let identity = { kind: "bot", botId: "bot-a", name: "A" };
+  let identity = { kind: "bot", botId: "bot-a", name: "A", workspace: "solo" };
   const h = harness({ resolveActor: async () => identity });
   const a = await h.controller.protocol("tab_open", { actor_session: "s-a", url: "a.example", wait: "none" });
-  identity = { kind: "bot", botId: "bot-b", name: "B" };
+  identity = { kind: "bot", botId: "bot-b", name: "B", workspace: "solo" };
   const b = await h.controller.protocol("tab_open", { actor_session: "s-b", url: "b.example", wait: "none" });
   for (const invalid of [null, {}, { botId: "bot-a" }, { kind: "mia", botId: "bot-a" }]) {
     identity = invalid;
     await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-a" }), /verify|unavailable/i);
     await assert.rejects(h.controller.protocol("tab_close", { actor_session: "s-a", tab_id: b.tab_id }), /verify|unavailable/i);
   }
+  // A run with no workspace, or another workspace's, never reaches these tabs.
+  identity = { kind: "bot", botId: "bot-a", name: "A" };
+  await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-a" }), /verify|unavailable/i);
+  identity = { kind: "bot", botId: "bot-a", name: "A", workspace: "hub_" + "a".repeat(32) };
+  await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-a" }), /another workspace|BROWSER_OTHER_WORKSPACE|switch back/i);
   identity = { kind: "mia" };
+  await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-mia" }), /verify|unavailable/i);
+  identity = { kind: "mia", workspace: "solo" };
   await assert.rejects(h.controller.protocol("tab_list", {}), /verify|session/i);
   assert.equal((await h.controller.protocol("tab_list", { actor_session: "s-mia" })).tabs.length, 2);
-  identity = { kind: "bot", botId: "bot-a", name: "A" };
+  identity = { kind: "bot", botId: "bot-a", name: "A", workspace: "solo" };
   assert.deepEqual(plain((await h.controller.protocol("tab_list", { actor_session: "s-a" })).tabs.map(t => t.tab_id)), [a.tab_id]);
   await assert.rejects(h.controller.protocol("tab_close", { actor_session: "s-a", tab_id: b.tab_id }), /not one of your tabs/);
   h.window.emit("closed");
@@ -2763,4 +2771,50 @@ test("tab menu saves a page as an artifact or an app, only for a web page", asyn
   await waitForSave(4);
   assert.deepEqual(plain(notice()), { kind: "artifact", failed: true });
   fs.rmSync(folder, { recursive: true, force: true });
+});
+
+test("a Solo bot never works in a company's browser, and a company bot never in Solo's", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-workspaces-"));
+  const company = "hub_" + "c".repeat(32);
+  const sessions = { "s-solo": { botId: "linkedin", name: "LinkedIn", workspace: "solo" }, "s-team": { botId: "admin", name: "Admin Bot", workspace: company } };
+  const h = harness({ statePath: path.join(directory, "browser.json"), resolveActor: knownActor(sessions) });
+  try {
+    const solo = await h.controller.protocol("tab_open", { actor_session: "s-solo", url: "https://www.linkedin.com/feed/", wait: "none" });
+    assert.ok(solo.tab_id);
+    h.command("workspace", { key: company });
+    // The person is now in the company; the Solo bot's next step is refused there.
+    await assert.rejects(h.controller.protocol("tab_open", { actor_session: "s-solo", url: "https://www.linkedin.com/in/someone", wait: "none" }), /switch back|another workspace|Solo/i);
+    await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-solo" }), /switch back|another workspace|Solo/i);
+    assert.ok(!h.command("state").tabs.some(tab => /linkedin/.test(tab.url || "")), "no Solo tab shows in the company's browser");
+    const team = await h.controller.protocol("tab_open", { actor_session: "s-team", url: "https://example.com/team", wait: "none" });
+    assert.ok(team.tab_id, "the company's own bot works there");
+    h.command("workspace", { key: "solo" });
+    await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-team" }), /another workspace/i, "and never in Solo");
+    const back = await h.controller.protocol("tab_list", { actor_session: "s-solo" });
+    assert.ok(back.tabs.length >= 1, "the Solo bot works again once Solo is on screen");
+    assert.ok(!h.command("state").tabs.some(tab => /example\.com\/team/.test(tab.url || "")), "no company tab shows in Solo");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a download shows only in the workspace it started in", async () => {
+  const downloadItem = url => Object.assign(new EventEmitter(), { getURL: () => url, getFilename: () => "solo-report.csv" });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-downloads-ws-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    h.command("new");
+    h.profile.emit("will-download", {}, downloadItem("https://files.example/solo-report.csv"), h.views[0].webContents);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.command("state").downloads.length, 1, "listed in Solo");
+    h.command("workspace", { key: "hub_" + "d".repeat(32) });
+    assert.equal(h.command("state").downloads.length, 0, "a company's Downloads never lists Solo's files");
+    h.command("downloadsClear");
+    h.command("workspace", { key: "solo" });
+    assert.equal(h.command("state").downloads.length, 1, "clearing in the company leaves Solo's list alone");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

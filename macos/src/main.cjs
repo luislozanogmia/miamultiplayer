@@ -2315,10 +2315,13 @@ async function resolveBrowserActor(window, sessionId) {
     if (!response.ok) throw unavailable();
     const body = await response.json();
     const found = body && body.actor;
-    if (found && found.kind === "mia" && found.botId == null) actor = { kind: "mia" };
+    // The workspace the run belongs to; the browser acts only in that one.
+    const workspace = found && typeof found.workspace === "string" && /^[a-z0-9_-]{1,80}$/.test(found.workspace) ? found.workspace : null;
+    if (!workspace) throw unavailable();
+    if (found && found.kind === "mia" && found.botId == null) actor = { kind: "mia", workspace };
     else if (found && found.kind === "bot" && typeof found.botId === "string"
         && /^[A-Za-z0-9_.:-]{1,120}$/.test(found.botId)) {
-      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "" };
+      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "", workspace };
     } else throw unavailable();
   } catch (_) {
     throw unavailable();
