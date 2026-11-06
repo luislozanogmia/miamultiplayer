@@ -12349,19 +12349,30 @@
     return (chatWs.allAgents || []).filter(function(agent){ return agent && agent.id !== 'gateway'; })
       .map(function(agent){ return {id:String(agent.id), name:String(agent.name || ''), color:normalizeAgentAvatarColor(agent.avatarColor)}; });
   }
-  // "@Name" for a bot in this room shows that bot's Mote, in its color.
-  // Works on rendered text: only a mention at a word start outside a tag.
+  // The people a company room can @: its members, under the name the @ menu writes.
+  function roomMentionPeople(){
+    if(!hubWorkspace()) return [];
+    return (hubChat.members || []).filter(function(member){ return member && member.email; }).map(function(member){
+      return {email: String(member.email), name: humanMentionName({email: member.email, displayName: member.display_name})};
+    }).filter(function(person){ return person.name && person.name !== 'You'; });
+  }
+  // "@Name" shows who it is: a bot's Mote in its color, a person's picture
+  // or initials. Works on rendered text: only a mention at a word start
+  // outside a tag.
   function withMentionChips(html){
-    var bots = roomMentionBots().filter(function(bot){ return bot.name; })
-      .sort(function(a, b){ return b.name.length - a.name.length; });
-    if(!bots.length) return html;
+    var named = roomMentionBots().filter(function(bot){ return bot.name; }).map(function(bot){
+      return {name: bot.name, face: agentAvatarHtml(bot.name, bot.id, 16, null, bot.color)};
+    }).concat(roomMentionPeople().map(function(person){
+      return {name: person.name, face: '<span class="chat-msg-mention-face">' + humanAvatarContent(person.email) + '</span>'};
+    })).sort(function(a, b){ return b.name.length - a.name.length; });
+    if(!named.length) return html;
     // One pass over every name, longest first, so "@Admin Bot" never also
     // matches a bot called "Admin" inside the icon it just became.
-    var names = bots.map(function(bot){ return esc(bot.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+    var names = named.map(function(item){ return esc(item.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
     var pattern = new RegExp('(^|[\\s>(])@(' + names.join('|') + ')(?![\\w-])', 'gi');
     return html.replace(pattern, function(_match, before, name){
-      var bot = bots.filter(function(item){ return esc(item.name).toLowerCase() === name.toLowerCase(); })[0];
-      return before + '<span class="chat-msg-mention">' + agentAvatarHtml(bot.name, bot.id, 16, null, bot.color) + '@' + name + '</span>';
+      var item = named.filter(function(entry){ return esc(entry.name).toLowerCase() === name.toLowerCase(); })[0];
+      return before + '<span class="chat-msg-mention">' + item.face + '@' + name + '</span>';
     });
   }
   function chatMsgHtml(m, grouped, opts){

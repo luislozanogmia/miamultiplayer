@@ -904,7 +904,7 @@ test('a team offers New bot like Solo: in Start something, on My Bots, and throu
 test('a bot named with @ in a message, and a bot joining a company channel, show its Mote',()=>{
   const esc=v=>String(v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
   const env={esc,agentAvatarHtml:(name,id,size,mark,color)=>'<i data-bot="'+id+'" data-color="'+(color||'')+'"></i>',
-    roomMentionBots:()=>[{id:'b1',name:'Admin Bot',color:'#7c3aed'},{id:'b2',name:'Admin',color:null}]};
+    roomMentionBots:()=>[{id:'b1',name:'Admin Bot',color:'#7c3aed'},{id:'b2',name:'Admin',color:null}],roomMentionPeople:()=>[]};
   const chips=appFunction('withMentionChips',env);
   const html=chips('<p>@Admin Bot you around? ask @admin too, not me@admin.test</p>');
   assert.equal(html,'<p><span class="chat-msg-mention"><i data-bot="b1" data-color="#7c3aed"></i>@Admin Bot</span> you around? ask <span class="chat-msg-mention"><i data-bot="b2" data-color=""></i>@admin</span> too, not me@admin.test</p>');
@@ -1052,4 +1052,16 @@ test('connection trouble shows the Offline pill and leaves the status line quiet
   const unreachable=appFunction('hubUnreachable',{});
   assert.equal(unreachable({message:'Check your connection'}),true,'no HTTP status: a connection problem');
   assert.equal(unreachable({status:403,message:'denied'}),false);
+});
+test('a person named with @ in a company message shows their picture or initials',()=>{
+  const esc=v=>String(v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  const env={esc,agentAvatarHtml:()=>'<i bot></i>',humanAvatarContent:email=>'<i who="'+email+'"></i>',roomMentionBots:()=>[{id:'b1',name:'Ux Test Greeter'}],
+    roomMentionPeople:()=>[{email:'asr@example.test',name:'Ana Sofia Reyes'},{email:'a@example.test',name:'Ana'}]};
+  const chips=appFunction('withMentionChips',env);
+  assert.equal(chips('<p>@Ana Sofia Reyes feel free, and @Ana too</p>'),
+    '<p><span class="chat-msg-mention"><span class="chat-msg-mention-face"><i who="asr@example.test"></i></span>@Ana Sofia Reyes</span> feel free, and <span class="chat-msg-mention"><span class="chat-msg-mention-face"><i who="a@example.test"></i></span>@Ana</span> too</p>');
+  const people=appFunction('roomMentionPeople',{hubWorkspace:()=>true,hubChat:{members:[{email:'asr@example.test',display_name:'Ana Sofia Reyes'},{email:'me@example.test'}]},
+    humanMentionName:u=>u.email==='me@example.test'?'You':u.displayName});
+  assert.deepEqual(JSON.parse(JSON.stringify(people())),[{email:'asr@example.test',name:'Ana Sofia Reyes'}],'members under the @ menu name, never you');
+  assert.equal(appFunction('roomMentionPeople',{hubWorkspace:()=>false})().length,0,'Solo has no one else to name');
 });
