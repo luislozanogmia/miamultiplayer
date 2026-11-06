@@ -1394,7 +1394,7 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       const id = String(session && session.sessionId || '');
       if (!id) return;
       runSessions.push(id);
-      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot') });
+      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}` });
     };
     // A bot asked in a team channel works in that team's folder on this
     // computer (<Mia folder>/companies/<company>/<bot>), not in the person's Solo Mia
@@ -7057,6 +7057,16 @@ const nativeGatewaySessionConversations = new Map();
 // owner, from a team channel or workflow. Kept only while the run lasts.
 const sharedBotRunSessions = new Map();
 
+// The workspace whose browser a chat's run may use. Each workspace keeps its
+// own tabs; a run only ever acts in its own, so Solo work never lands in a
+// company's browser (which can be shared live) and the reverse. A company's
+// My Bots chat is stored in Solo but belongs to the company it was opened in.
+function browserWorkspaceForConversation(conversation, companyId, email) {
+  const team = conversation && conversation.metadata && conversation.metadata.teamWorkspace;
+  if (typeof team === 'string' && /^hub_[a-f0-9]{32}$/.test(team)) return team;
+  return companyId === nativeCompanyId('solo', String(email || '').trim().toLowerCase()) ? 'solo' : DEFAULT_WORKSPACE_ID;
+}
+
 // The desktop browser asks which bot a live Hermes session belongs to, so a
 // page a bot opens lands in that bot's tab group. Mia is an explicit verified
 // identity; unknown sessions and inaccessible conversations never become Mia.
@@ -7066,12 +7076,13 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   if (shared) {
     // Only the person running it here: the bot uses their browser, as in Solo.
     if (shared.owner !== String(req.userEmail || '').trim().toLowerCase()) return res.status(200).json({ actor: null });
-    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name } });
+    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name, workspace: shared.workspace } });
   }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
   if (!target) return res.status(200).json({ actor: null });
+  let conversation;
   try {
-    nativeConversationService.getConversation({
+    conversation = nativeConversationService.getConversation({
       companyId: target.companyId,
       conversationId: target.conversationId,
       principal: { principalId: String(req.userEmail || '').trim().toLowerCase(), principalType: 'user' },
@@ -7079,9 +7090,10 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   } catch (_) {
     return res.status(200).json({ actor: null });
   }
+  const workspace = browserWorkspaceForConversation(conversation, target.companyId, req.userEmail);
   return res.status(200).json({ actor: target.botId
-    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot') }
-    : { kind: 'mia' } });
+    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot'), workspace }
+    : { kind: 'mia', workspace } });
 });
 // Per-session chain so a verdict that waits on the goal snapshot still posts
 // before the continuation turn that follows it.

@@ -8,8 +8,9 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { EventEmitter } = require("node:events");
 
-const knownActor = sessions => async id => id === "s-mia" ? { kind: "mia" }
-  : sessions[id] ? { kind: "bot", ...sessions[id] } : null;
+// Every run belongs to a workspace; these all run in Solo unless a test says otherwise.
+const knownActor = sessions => async id => id === "s-mia" ? { kind: "mia", workspace: "solo" }
+  : sessions[id] ? { kind: "bot", workspace: "solo", ...sessions[id] } : null;
 
 // Coordinator browser work runs only in a real tab group.
 function groupFor(h, tabId) {
@@ -2272,20 +2273,27 @@ test("bot tab groups: the owner menu assigns a bot and survives a restart", asyn
 
 
 test("unknown, missing and failed actor identities cannot list or close another bot's tabs", async () => {
-  let identity = { kind: "bot", botId: "bot-a", name: "A" };
+  let identity = { kind: "bot", botId: "bot-a", name: "A", workspace: "solo" };
   const h = harness({ resolveActor: async () => identity });
   const a = await h.controller.protocol("tab_open", { actor_session: "s-a", url: "a.example", wait: "none" });
-  identity = { kind: "bot", botId: "bot-b", name: "B" };
+  identity = { kind: "bot", botId: "bot-b", name: "B", workspace: "solo" };
   const b = await h.controller.protocol("tab_open", { actor_session: "s-b", url: "b.example", wait: "none" });
   for (const invalid of [null, {}, { botId: "bot-a" }, { kind: "mia", botId: "bot-a" }]) {
     identity = invalid;
     await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-a" }), /verify|unavailable/i);
     await assert.rejects(h.controller.protocol("tab_close", { actor_session: "s-a", tab_id: b.tab_id }), /verify|unavailable/i);
   }
+  // A run with no workspace, or another workspace's, never reaches these tabs.
+  identity = { kind: "bot", botId: "bot-a", name: "A" };
+  await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-a" }), /verify|unavailable/i);
+  identity = { kind: "bot", botId: "bot-a", name: "A", workspace: "hub_" + "a".repeat(32) };
+  await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-a" }), /another workspace|BROWSER_OTHER_WORKSPACE|switch back/i);
   identity = { kind: "mia" };
+  await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-mia" }), /verify|unavailable/i);
+  identity = { kind: "mia", workspace: "solo" };
   await assert.rejects(h.controller.protocol("tab_list", {}), /verify|session/i);
   assert.equal((await h.controller.protocol("tab_list", { actor_session: "s-mia" })).tabs.length, 2);
-  identity = { kind: "bot", botId: "bot-a", name: "A" };
+  identity = { kind: "bot", botId: "bot-a", name: "A", workspace: "solo" };
   assert.deepEqual(plain((await h.controller.protocol("tab_list", { actor_session: "s-a" })).tabs.map(t => t.tab_id)), [a.tab_id]);
   await assert.rejects(h.controller.protocol("tab_close", { actor_session: "s-a", tab_id: b.tab_id }), /not one of your tabs/);
   h.window.emit("closed");
@@ -2794,4 +2802,153 @@ test("a new tab joins the group in front, and opens alone while that group's bot
   assert.equal(h.command("state").tabs.find(tab => tab.id === alone).groupId ?? null, null);
   page.isLoading = () => false;
   h.window.emit("closed");
+});
+
+test("a Solo bot never works in a company's browser, and a company bot never in Solo's", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-workspaces-"));
+  const company = "hub_" + "c".repeat(32);
+  const sessions = { "s-solo": { botId: "linkedin", name: "LinkedIn", workspace: "solo" }, "s-team": { botId: "admin", name: "Admin Bot", workspace: company } };
+  const h = harness({ statePath: path.join(directory, "browser.json"), resolveActor: knownActor(sessions) });
+  try {
+    const solo = await h.controller.protocol("tab_open", { actor_session: "s-solo", url: "https://www.linkedin.com/feed/", wait: "none" });
+    assert.ok(solo.tab_id);
+    h.command("workspace", { key: company });
+    // The person is now in the company; the Solo bot's next step is refused there.
+    await assert.rejects(h.controller.protocol("tab_open", { actor_session: "s-solo", url: "https://www.linkedin.com/in/someone", wait: "none" }), /switch back|another workspace|Solo/i);
+    await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-solo" }), /switch back|another workspace|Solo/i);
+    assert.ok(!h.command("state").tabs.some(tab => /linkedin/.test(tab.url || "")), "no Solo tab shows in the company's browser");
+    const team = await h.controller.protocol("tab_open", { actor_session: "s-team", url: "https://example.com/team", wait: "none" });
+    assert.ok(team.tab_id, "the company's own bot works there");
+    h.command("workspace", { key: "solo" });
+    await assert.rejects(h.controller.protocol("tab_list", { actor_session: "s-team" }), /another workspace/i, "and never in Solo");
+    const back = await h.controller.protocol("tab_list", { actor_session: "s-solo" });
+    assert.ok(back.tabs.length >= 1, "the Solo bot works again once Solo is on screen");
+    assert.ok(!h.command("state").tabs.some(tab => /example\.com\/team/.test(tab.url || "")), "no company tab shows in Solo");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a download shows only in the workspace it started in", async () => {
+  const downloadItem = url => Object.assign(new EventEmitter(), { getURL: () => url, getFilename: () => "solo-report.csv" });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-downloads-ws-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    h.command("new");
+    h.profile.emit("will-download", {}, downloadItem("https://files.example/solo-report.csv"), h.views[0].webContents);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.command("state").downloads.length, 1, "listed in Solo");
+    h.command("workspace", { key: "hub_" + "d".repeat(32) });
+    assert.equal(h.command("state").downloads.length, 0, "a company's Downloads never lists Solo's files");
+    h.command("downloadsClear");
+    h.command("workspace", { key: "solo" });
+    assert.equal(h.command("state").downloads.length, 1, "clearing in the company leaves Solo's list alone");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a group id belongs to one workspace, so work bound in Solo can't reach a company's tabs", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-group-ids-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    const soloTab = h.command("new").activeId;
+    h.command("groupCreate", { id: soloTab, name: "LinkedIn" });
+    const soloGroup = h.command("state").groups[0].id;
+    // A company whose saved tabs used the same group id.
+    const company = "hub_" + "e".repeat(32);
+    fs.writeFileSync(path.join(directory, `browser-ws-${company}.json`), JSON.stringify({ version: 1, activeId: soloTab,
+      groups: [{ id: soloGroup, name: "Team", color: "blue", collapsed: false, botId: null }],
+      tabs: [{ id: soloTab, url: "https://example.com/team", title: "Team", groupId: soloGroup }] }));
+    h.command("workspace", { key: company });
+    const state = h.command("state");
+    assert.equal(state.groups.length, 1);
+    assert.notEqual(state.groups[0].id, soloGroup, "the company's group gets an id Solo never used");
+    assert.equal(state.tabs[0].groupId, state.groups[0].id, "its tabs follow the new id");
+    assert.throws(() => h.controller.actors.bind({ actorId: "w1", ownerId: "me", taskId: "work-solo", tabId: soloTab, botId: "linkedin", groupId: soloGroup }),
+      "a Solo binding finds no such group here");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a browser-work suggestion made in Solo never starts in a company's tabs", async () => {
+  const sessions = { "s-mia": { kind: "mia", workspace: "solo" } };
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-proposal-ws-"));
+  const h = harness({ statePath: path.join(directory, "browser.json"), resolveActor: knownActor(sessions) });
+  try {
+    const source = fs.readFileSync(path.join(__dirname, "browser.cjs"), "utf8");
+    assert.match(source, /workProposal = \{ id: randomUUID\(\), groupId: group\.id, goal, assignments, createdAt: Date\.now\(\), workspace: workspaceKey,/);
+    assert.match(source, /if \(proposal\.workspace !== workspaceKey\) throw new Error\("This browser work belongs to another workspace\./);
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("downloads keep their workspace across a restart", async () => {
+  const downloadItem = url => Object.assign(new EventEmitter(), { getURL: () => url, getFilename: () => "team-report.csv", getState: () => "completed", getSavePath: () => "" });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-downloads-restart-"));
+  const company = "hub_" + "f".repeat(32);
+  try {
+    const first = harness({ statePath: path.join(directory, "browser.json") });
+    first.command("workspace", { key: company });
+    first.command("new");
+    first.profile.emit("will-download", {}, downloadItem("https://files.example/team-report.csv"), first.views.at(-1).webContents);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(first.command("state").downloads.length, 1);
+    first.controller.persist && first.controller.persist();
+    first.window.emit("closed");
+    const second = harness({ statePath: path.join(directory, "browser.json") });
+    assert.equal(second.command("state").downloads.length, 0, "after a restart, Solo still doesn't list the company's file");
+    second.command("workspace", { key: company });
+    assert.equal(second.command("state").downloads.length, 1, "the company still does");
+    second.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("restoring a company whose group id Solo used never merges two of its groups", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-group-merge-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    const soloTab = h.command("new").activeId;
+    h.command("groupCreate", { id: soloTab, name: "Solo" });
+    assert.equal(h.command("state").groups[0].id, "g1");
+    const company = "hub_" + "9".repeat(32);
+    fs.writeFileSync(path.join(directory, `browser-ws-${company}.json`), JSON.stringify({ version: 1, activeId: 1,
+      groups: [{ id: "g1", name: "Mine", color: "blue", collapsed: false, botId: null }, { id: "g2", name: "Bot work", color: "red", collapsed: false, botId: "bot-x" }],
+      tabs: [{ id: 1, url: "https://example.com/mine", title: "Mine", groupId: "g1" }, { id: 2, url: "https://example.com/bot", title: "Bot", groupId: "g2" }] }));
+    h.command("workspace", { key: company });
+    const state = h.command("state");
+    assert.equal(state.groups.length, 2, "both groups survive");
+    const mine = state.groups.find(group => group.name === "Mine"), bot = state.groups.find(group => group.name === "Bot work");
+    assert.notEqual(mine.id, bot.id);
+    assert.equal(state.tabs.find(tab => tab.id === 1).groupId, mine.id, "the person's tab stays in their group");
+    assert.equal(state.tabs.find(tab => tab.id === 2).groupId, bot.id);
+    assert.equal(bot.botId, "bot-x");
+    assert.equal(mine.botId ?? null, null, "the bot never gains the person's tabs");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a renderer command naming another workspace is refused", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-command-ws-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    const tab = h.command("new").activeId;
+    const refused = h.command("navigate", { id: tab, value: "https://example.com/x", workspace: "hub_" + "1".repeat(32) });
+    assert.match(String(refused && refused.error), /another workspace/);
+    assert.ok(!h.command("navigate", { id: tab, value: "https://example.com/y", workspace: "solo" }).error, "its own workspace passes");
+    assert.ok(!h.command("state").error, "commands without a workspace are the app's own and pass");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

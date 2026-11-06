@@ -14,6 +14,9 @@ function createActorRuntime({ getTab, isHumanViewing, ownsGroup = () => true, em
     binding = { ...binding, taskId: binding?.taskId || binding?.workId };
     if (!binding || !/^[A-Za-z0-9_.:-]{1,128}$/.test(binding.actorId || "") || !binding.ownerId || !binding.taskId || !binding.botId || !Number.isInteger(binding.tabId)) throw fail("INVALID_BINDING", "Actor, owner, task, bot and tab are required.");
     if (!getTab(binding.tabId)) throw fail("TAB_CLOSED", "Assigned tab is unavailable.");
+    // The group must exist here with that tab in it: group ids never repeat
+    // across workspaces, so work bound in one never reaches another's tabs.
+    if (!ownsGroup(binding.groupId, binding.tabId)) throw fail("TAB_NOT_OWNED", "Assigned tab is not in its group here.");
     if (bindings.has(binding.actorId)) throw fail("ACTOR_ALREADY_BOUND", "Revoke the previous assignment before rebinding.");
     if ([...bindings.values()].some(existing => existing.botId === binding.botId)) throw fail("BOT_ALREADY_BOUND", "A bot can own only one tab at a time.");
     if ([...bindings.values()].some(existing => existing.tabId === binding.tabId)) throw fail("TAB_ALREADY_BOUND", "This tab is already assigned to another bot.");

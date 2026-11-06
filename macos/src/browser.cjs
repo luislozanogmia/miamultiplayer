@@ -202,6 +202,15 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // belongs to at most one group (tab.groupId); a group with no tabs is gone.
   const groups = new Map();
   let nextGroupNumber = 1;
+  // Which workspace each group id belongs to while Mia runs. Browser work and
+  // bots attach to tabs by group and tab id, and each workspace's saved tabs
+  // start their numbering alone, so an id never moves to another workspace.
+  const groupIdOwners = new Map();
+  function freshGroupId() {
+    let id;
+    do { id = `g${nextGroupNumber++}`; } while (groupIdOwners.has(id) || groups.has(id));
+    return id;
+  }
   let botUseCounter = 0;
   let fullscreenId = null;
   let windowWasFullscreen = false;
@@ -449,6 +458,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             startedAt: Number(item.startedAt) || 0,
             by: downloadWorker(item.by),
             safety: downloadSafety(item.safety),
+            // Keep the workspace across restarts; older entries were Solo's.
+            workspace: typeof item.workspace === "string" && /^[a-z0-9_-]{1,80}$/.test(item.workspace) ? item.workspace : "solo",
           }));
         for (const entry of downloadEntries) entry.id = nextDownloadId++;
         setImmediate(() => {
@@ -472,8 +483,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       log(`browser downloads save failed: ${error.message}`);
     }
   }
+  // Downloads stay in the workspace they started in, like its tabs: one
+  // workspace's list never shows another's files. Older entries are Solo's.
+  const inWorkspace = entry => (entry.workspace || "solo") === workspaceKey;
   function downloadList() {
-    return downloadEntries.map(entry => ({
+    return downloadEntries.filter(inWorkspace).map(entry => ({
       ...entry,
       exists: entry.state === "completed" && Boolean(entry.path) && fs.existsSync(entry.path),
     }));
@@ -1141,6 +1155,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     let actor;
     try { actor = await options.resolveActor(sessionId.trim()); }
     catch (_) { throw unavailable(); }
+    // Each workspace has its own tabs, and a company's can be shared live with
+    // colleagues. A run acts only in the workspace it belongs to: Solo work
+    // never opens or touches tabs while a company is on screen, nor the reverse.
+    if (actor && (actor.kind === "mia" || actor.kind === "bot")) {
+      if (typeof actor.workspace !== "string" || !actor.workspace) throw unavailable();
+      if (actor.workspace !== workspaceKey) {
+        throw protocolError("BROWSER_OTHER_WORKSPACE",
+          `This work belongs to ${actor.workspace === "solo" ? "Solo" : "another workspace"}, but Mia's browser is showing ${workspaceKey === "solo" ? "Solo" : "a different workspace"}. ` +
+          "Each workspace keeps its own tabs. Ask the person to switch back to that workspace in Mia, then try again.");
+      }
+    }
     if (actor && actor.kind === "mia" && actor.botId == null) return null;
     if (actor && actor.kind === "bot" && typeof actor.botId === "string"
         && /^[A-Za-z0-9_.:-]{1,120}$/.test(actor.botId)) return actor;
@@ -1871,7 +1896,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (new Set(assignments.map(item => item.tabId)).size !== assignments.length) throw invalid("Assign each tab once.");
       if (new Set(assignments.map(item => item.bot.toLowerCase())).size !== assignments.length) throw invalid("Each bot can own one tab.");
       const replaced = workProposal;
-      workProposal = { id: randomUUID(), groupId: group.id, goal, assignments, createdAt: Date.now(),
+      workProposal = { id: randomUUID(), groupId: group.id, goal, assignments, createdAt: Date.now(), workspace: workspaceKey,
         requiresConfirmation: recentPageRead(actorSession), ...(replaced ? { replacedProposalId: replaced.id } : {}) };
       publish();
       return { proposed: true, proposal_id: workProposal.id, group_id: group.id, ...(replaced ? { replaced_proposal_id: replaced.id } : {}),
@@ -1903,11 +1928,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // The person already confirmed, or switched this on themselves. Runs through
   // the same plan and start as the panel's Start button, under their session.
   async function launchWorkProposal(proposal, start, selection) {
-    const group = groups.get(proposal.groupId);
+    // A suggestion made in one workspace never starts in another's tabs:
+    // group and tab ids repeat across workspaces.
+    const group = proposal.workspace === workspaceKey ? groups.get(proposal.groupId) : null;
     start.status = "starting";
     proposal.starting = true;
     publish();
     try {
+      if (proposal.workspace !== workspaceKey) throw new Error("This browser work belongs to another workspace. Switch back to it in Mia, then start it again.");
       if (!group) throw new Error("This tab group is no longer available.");
       const { work } = await appRequest("/api/browser-work/proposal/start", { method: "POST", timeoutMs: 300000, body: {
         groupId: group.id, goal: proposal.goal, assignments: proposal.assignments, ...selection,
@@ -2153,7 +2181,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (method === "downloads") {
       // What actually landed on disk, so a bot reports only real files. A
       // bot sees its own downloads; Mia sees every bot's and her own.
-      const mine = () => downloadEntries.filter(entry => entry.by && (actor ? entry.by.botId === actor.botId : true));
+      // The workspace the call started in, even if the person switches while it waits.
+      const callWorkspace = workspaceKey;
+      const mine = () => downloadEntries.filter(entry => (entry.workspace || "solo") === callWorkspace && entry.by && (actor ? entry.by.botId === actor.botId : true));
       const waitMs = boundedInteger(params.wait_ms, 0, 0, 60000);
       const deadline = Date.now() + waitMs;
       while (Date.now() < deadline && mine().some(entry => entry.state === "progressing" || entry.safety?.verdict === "checking")) {
@@ -2706,7 +2736,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function addGroup(name = "") {
     const used = new Set([...groups.values()].map(group => group.color));
     const color = GROUP_COLORS.find(item => !used.has(item)) || GROUP_COLORS[groups.size % GROUP_COLORS.length];
-    const group = { id: `g${nextGroupNumber++}`, name, color, collapsed: false, botId: null };
+    const group = { id: freshGroupId(), name, color, collapsed: false, botId: null };
+    groupIdOwners.set(group.id, workspaceKey);
     groups.set(group.id, group);
     return group;
   }
@@ -3115,6 +3146,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       startedAt: Date.now(),
       by: worker,
       safety: null,
+      workspace: workspaceKey,
     };
     if (worker && item.getSavePath) entry.path = String(item.getSavePath() || "");
     downloadEntries.unshift(entry);
@@ -3214,6 +3246,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "new") { newSessionOrPlainTab(); return state(); }
       if (command.action === "closedTabs") return { closed: closedTabs.list().map(({ url, title, closedAt }) => ({ url, title, closedAt })) };
       if (command.action === "reopenClosed") { reopenClosedTab(boundedInteger(command.index, 0, 0, 24)); return state(); }
+      // Shared browsing streams pages to colleagues, so its commands (and any
+      // command that names a workspace) run only on that workspace's tabs.
+      if (baseStatePath && (/^space[A-Z]/.test(String(command.action)) || Object.hasOwn(command, "workspace")) && command.action !== "workspace"
+        && command.workspace !== workspaceKey) {
+        return { error: "The browser is still showing another workspace's tabs. Wait a moment and try again." };
+      }
       if (command.action === "spaceSession") {
         sessionGroupId = typeof command.groupId === "string" || Number.isInteger(command.groupId) ? command.groupId : null;
         return state();
@@ -3337,7 +3375,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return { ...state(), openedId: tab.id, groupId };
       }
       if (command.action === "downloadShow") {
-        const entry = downloadEntries.find(item => item.id === command.id);
+        const entry = downloadEntries.find(item => item.id === command.id && inWorkspace(item));
         if (!entry || entry.state !== "completed" || !entry.path || !fs.existsSync(entry.path)) {
           return { error: "This file was moved or deleted." };
         }
@@ -3345,7 +3383,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return state();
       }
       if (command.action === "downloadOpen") {
-        const entry = downloadEntries.find(item => item.id === command.id);
+        const entry = downloadEntries.find(item => item.id === command.id && inWorkspace(item));
         if (!entry || entry.state !== "completed" || !entry.path || !fs.existsSync(entry.path)) {
           return { error: "This file was moved or deleted." };
         }
@@ -3366,18 +3404,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (command.action === "downloadRemove") {
         // Drops one finished entry from the list; the file stays where it is.
         const before = downloadEntries.length;
-        downloadEntries = downloadEntries.filter(entry => entry.id !== command.id || entry.state === "progressing");
+        downloadEntries = downloadEntries.filter(entry => entry.id !== command.id || entry.state === "progressing" || !inWorkspace(entry));
         if (downloadEntries.length !== before) { persistDownloads(); publish(); }
         return state();
       }
       if (command.action === "downloadCancel") {
-        const item = downloadItems.get(command.id);
+        const listed = downloadEntries.find(entry => entry.id === command.id);
+        const item = listed && inWorkspace(listed) ? downloadItems.get(command.id) : null;
         if (item) item.cancel();
         return state();
       }
       if (command.action === "downloadsClear") {
-        // Removes finished entries from the list; files stay where they are.
-        downloadEntries = downloadEntries.filter(entry => entry.state === "progressing");
+        // Removes this workspace's finished entries; files stay where they are.
+        downloadEntries = downloadEntries.filter(entry => entry.state === "progressing" || !inWorkspace(entry));
         persistDownloads(); publish();
         return state();
       }
@@ -3483,14 +3522,28 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const restored = persistedTabs();
   if (restored && restored.tabs.length) {
     restoring = true;
+    const renamed = new Map();
+    // Reserve every saved id first, so a renamed group can't take an id a
+    // later group in this same list still holds (that merged two groups).
     for (const group of restored.groups) {
-      groups.set(group.id, group);
       const number = Number(group.id.slice(1));
       if (Number.isInteger(number)) nextGroupNumber = Math.max(nextGroupNumber, number + 1);
     }
+    const restoredIds = new Set(restored.groups.map(group => group.id));
+    for (const group of restored.groups) {
+      // An id another workspace already used this run gets a new one here.
+      if (groupIdOwners.has(group.id) && groupIdOwners.get(group.id) !== workspaceKey) {
+        let fresh;
+        do { fresh = freshGroupId(); } while (restoredIds.has(fresh));
+        renamed.set(group.id, fresh);
+        group.id = fresh;
+      }
+      groupIdOwners.set(group.id, workspaceKey);
+      groups.set(group.id, group);
+    }
     for (const savedTab of restored.tabs) {
       newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false,
-        groupId: savedTab.groupId, private: savedTab.private === true });
+        groupId: renamed.get(savedTab.groupId) || savedTab.groupId, private: savedTab.private === true });
     }
     normalizeGroups();
     activateTab(tabs.has(restored.activeId) ? restored.activeId : [...tabs.keys()].at(-1));
@@ -3508,7 +3561,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const key = String(value || "").trim().toLowerCase();
     if (!/^[a-z0-9_-]{1,80}$/.test(key)) throw new Error("Unknown workspace.");
     if (!baseStatePath || key === workspaceKey) return state();
-    if ([...tabs.values()].some(tab => (tab.botWork || 0) > 0)) {
+    // Any operation still running blocks the switch. Finished work's bindings
+    // go with its tabs below, and late bindings are refused by workspace.
+    if ([...tabs.values()].some(tab => (tab.botWork || 0) > 0 || (tab.actorOperationCount || 0) > 0)) {
       throw protocolError("BROWSER_BUSY", "A bot is still working in the browser. Wait for it to finish before switching workspace.");
     }
     persistTabs();
@@ -3524,6 +3579,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     groups.clear();
     activeId = null;
     workProposal = null;
+    // A shared session belongs to the workspace it started in.
+    sessionGroupId = null;
     workspaceKey = key;
     workspaceChangedAt = Date.now();
     statePath = workspaceStatePath(key);
