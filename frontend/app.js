@@ -8402,8 +8402,12 @@
   }
 
   function automationsDetailHtml(row, automation, bot){
+    // The side stays short so the title keeps its width; what needs the
+    // person shows in full under it, with a way to hand it to Mia.
     var side = row.status === 'running' ? '<span class="automations-live" aria-hidden="true"></span>Running now'
-      : row.status === 'needs' ? row.detail : row.status === 'paused' ? 'Paused' : '';
+      : row.status === 'needs' ? 'Needs you' : row.status === 'paused' ? 'Paused' : '';
+    var needs = row.status === 'needs' && row.detail ? '<div class="automations-needs"><p>' + esc(row.detail) + '</p>' +
+      '<button type="button" class="styled-btn-secondary" id="automationsFix">Fix with Mia</button></div>' : '';
     var body;
     var checklist = row.checklist;
     if(row.steps.length){
@@ -8432,7 +8436,7 @@
     var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
     return '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
       '<div class="automations-detail-sub">' + esc([row.schedule, row.botName].filter(Boolean).join(' · ')) + '</div></div>' +
-      '<span class="automations-row-side">' + side + '</span></div>' + body + last +
+      '<span class="automations-row-side">' + side + '</span></div>' + needs + body + last +
       '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">' + (row.steps.length ? 'Edit' : 'Add steps') + '</button></div>';
   }
 
@@ -8480,6 +8484,39 @@
     });
     var edit = el('#automationsEdit', body);
     if(edit && found) edit.addEventListener('click', function(){ openAutomationDetail(found.bot.id, found.automation.id); });
+    var fix = el('#automationsFix', body);
+    if(fix && found) fix.addEventListener('click', function(){ fixAutomationWithMia(row, fix); });
+  }
+
+  // What the automation page knows about a stuck automation, sent to Mia as
+  // a message in her chat so she can find the cause and fix it.
+  function automationFixMessage(row){
+    var steps = (row.steps || []).slice(0, 12).map(function(step, index){
+      return (index + 1) + '. ' + String(step).replace(/\s+/g, ' ').slice(0, 300);
+    });
+    return ['Fix this automation so it can run again.',
+      'Automation: ' + row.name + ' (bot: ' + (row.botName || 'unknown') + (row.schedule ? ', ' + row.schedule : '') + '; bot id ' + row.botId + ', automation id ' + row.automationId + ')',
+      'Problem: ' + String(row.detail || '').replace(/\s+/g, ' ')]
+      .concat(steps.length ? ['Steps:'].concat(steps) : [])
+      .concat(['Find the cause and fix it, for example by reconnecting what is missing or changing the automation. If something only I can do, tell me exactly what.'])
+      .join('\n');
+  }
+  function fixAutomationWithMia(row, button){
+    var text = automationFixMessage(row);
+    if(button) button.disabled = true;
+    var mia = (chatWs.nativeConversations || []).filter(isNativeMiaConversation)[0];
+    var ready = mia ? Promise.resolve(chatWs.nativeConversations) : ensureNativeMiaConversation(chatWs.nativeConversations || []);
+    return ready.then(function(list){
+      mia = (list || []).filter(isNativeMiaConversation)[0];
+      if(!mia) throw new Error('Mia\'s chat is not available right now. Try again.');
+      if(list !== chatWs.nativeConversations) chatWs.nativeConversations = list;
+      if(window.MiaTabStrip) window.MiaTabStrip.mix.open('chat');
+      return Promise.resolve(loadChatRoom(mia.id, 'agent', 'Mia')).then(function(){
+        return sendNativeConversationEvent(text, null, null, mia.id);
+      });
+    }).catch(function(error){
+      showToast(error && error.message || 'Could not reach Mia. Try again.');
+    }).finally(function(){ if(button) button.disabled = false; });
   }
 
   // Automations tabs: the board is the first tab; each automation opened

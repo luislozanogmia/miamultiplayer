@@ -2932,6 +2932,7 @@
   @keyframes automations-live{50%{opacity:.35;}}
   .automations-empty{margin:60px auto;max-width:360px;text-align:center;font-size:14px;color:var(--sand-text-secondary);line-height:1.5;}
   .automations-detail-head{display:flex;align-items:flex-start;gap:12px;margin:6px 0 14px;}
+  .automations-detail-head > div:first-child{flex:1;min-width:0;}
   .automations-detail-title{font-size:20px;font-weight:500;line-height:1.3;}
   .automations-detail-sub{margin-top:3px;font-size:13px;color:var(--sand-text-tertiary);}
   .automations-detail-head .automations-row-side{margin-left:auto;padding-top:5px;}
@@ -2954,6 +2955,9 @@
   .automations-note{margin:12px 0 0;font-size:13px;color:var(--sand-text-tertiary);line-height:1.5;}
   .automations-instructions{margin-top:8px;padding:12px 14px;border-radius:8px;background:#00000006;font-size:14px;line-height:1.5;white-space:pre-wrap;}
   .automations-actions{display:flex;gap:8px;margin-top:18px;}
+  .automations-needs{display:flex;align-items:flex-start;gap:12px;margin:0 0 16px;padding:10px 12px;border-radius:10px;background:#fdf3e4;color:#8a4b00;font-size:13px;line-height:1.45;}
+  .automations-needs p{flex:1;min-width:0;margin:0;overflow-wrap:anywhere;}
+  .automations-needs .styled-btn-secondary{flex:none;}
   .local-browser-overlay{position:fixed;inset:0;z-index:120;display:none;background:#fff;font-family:var(--styled-sans);}
   .local-browser-overlay.open{display:block;}
   .local-browser-window{position:absolute;inset:0;display:flex;flex-direction:column;min-width:0;min-height:0;background:#fff;overflow:hidden;}
