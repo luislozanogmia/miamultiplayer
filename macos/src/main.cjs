@@ -151,6 +151,7 @@ const ENGINEERING_ROOT = findEngineeringRoot();
 const BACKEND_ROOT = path.join(ENGINEERING_ROOT, "backend");
 const BACKEND_ENTRYPOINT = path.join(BACKEND_ROOT, "server.js");
 const BACKEND_START_TIMEOUT_MS = 180000;
+const RENDERER_START_TIMEOUT_MS = 120000;
 const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require(path.join(BACKEND_ROOT, "process-secrets.js"));
 const { resolveClerkConfig } = require(path.join(BACKEND_ROOT, "clerk-config.js"));
 const requireBackendDependency = createRequire(BACKEND_ENTRYPOINT);
@@ -242,6 +243,8 @@ if (hasSingleInstanceLock) {
 }
 
 let mainWindow = null;
+let startupWindow = null;
+let startupHandoff = false;
 let startupComplete = false;
 let nativeBrowser = null;
 let browserWorkBroker = null;
@@ -2233,6 +2236,44 @@ function revealMainWindow(window = mainWindow) {
   return true;
 }
 
+async function showPackagedStartupWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const splash = new BrowserWindow({
+    ...mainWindow.getBounds(),
+    show: false,
+    backgroundColor: "#f5f6f8",
+    icon: fs.existsSync(MIA_ICON_PATH) ? MIA_ICON_PATH : undefined,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  startupWindow = splash;
+  startupHandoff = false;
+  splash.on("closed", () => {
+    if (startupWindow === splash) startupWindow = null;
+    if (!startupHandoff && !isQuitting) app.quit();
+  });
+  try {
+    await splash.loadFile(path.join(__dirname, "renderer", "startup.html"));
+    if (!splash.isDestroyed()) splash.show();
+  } catch (error) {
+    desktopLog(`startup screen failed: ${error.message}`);
+    startupHandoff = true;
+    if (!splash.isDestroyed()) splash.destroy();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await mainWindow.loadFile(RENDERER_ENTRYPOINT);
+      revealMainWindow();
+    }
+  }
+}
+
+function finishPackagedStartupWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const splash = startupWindow;
+  if (splash && !splash.isDestroyed()) mainWindow.setBounds(splash.getBounds());
+  revealMainWindow();
+  startupHandoff = true;
+  if (splash && !splash.isDestroyed()) splash.close();
+}
+
 async function loadMiaOS() {
   if (!mainWindow) return false;
   try {
@@ -2246,7 +2287,7 @@ async function loadMiaOS() {
       }
       await withTimeout(
         mainWindow.loadURL(`${resolvedBackend}/#/chat`),
-        15000,
+        RENDERER_START_TIMEOUT_MS,
         "Timed out loading Mia",
       );
       return true;
@@ -2258,7 +2299,7 @@ async function loadMiaOS() {
     );
     return false;
   } catch (error) {
-    desktopLog(`Mia backend unavailable: ${error.message}`);
+    desktopLog(`Mia startup failed: ${error.message}`);
     if (error && error.code === "EADDRINUSE") {
       void updateMessage({
         type: "error",
@@ -2727,6 +2768,12 @@ ipcMain.handle("miaos-artifact-state", (event) => {
 });
 
 function activateMainWindow() {
+  if (startupWindow && !startupWindow.isDestroyed()) {
+    if (startupWindow.isMinimized()) startupWindow.restore();
+    startupWindow.show();
+    startupWindow.focus();
+    return;
+  }
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow();
     loadMiaOS().then(() => startGhostBridge()).catch(error => {
@@ -2810,8 +2857,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   installClientHints(session.defaultSession);
   createWindow();
   if (app.isPackaged) {
-    await mainWindow.loadFile(path.join(__dirname, "renderer", "startup.html"));
-    revealMainWindow();
+    await showPackagedStartupWindow();
   }
   let runtimeReady = false;
   try {
@@ -2821,7 +2867,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     desktopLog(`Packaged runtime preparation failed: ${error.message}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       await mainWindow.loadFile(RENDERER_ENTRYPOINT);
-      revealMainWindow();
+      if (app.isPackaged) finishPackagedStartupWindow();
     }
   }
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -2835,6 +2881,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     // Missing CLIs retain the explicit first-install consent in onboarding.
     const claudeDependency = await maintainDesktopClaudeCode();
     await loadMiaOS();
+    if (app.isPackaged) finishPackagedStartupWindow();
+    else revealMainWindow();
     notifyClaudeMaintenanceFailure(claudeDependency).catch(() => {});
   }
   await startGhostBridge();
