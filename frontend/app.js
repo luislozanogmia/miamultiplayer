@@ -11555,6 +11555,7 @@
       /^Google didn't respond in time, so I didn't change the spreadsheet\./i,
       /^I couldn't apply the spreadsheet update\./i,
       /^I ran out of time before finishing\./i,
+      /^I stopped at step \d+\b[^:]*: it made no progress\b/i,
       /^Sorry\s*[—-]\s*I ran into a problem working on that and couldn't finish\./i
     ].some(function(pattern){ return pattern.test(normalized); });
   }

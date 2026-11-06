@@ -7861,7 +7861,7 @@ function cleanBotReplyText(agentName, text) {
   return { text: parts.text.replace(signature, '').trim(), nextStep: parts.nextStep || '' };
 }
 
-async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) {
+async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, onProgress) {
   throwIfNativeDispatchStopped(signal);
   const conversation = nativeConversationRepository.getConversation({
     companyId: dispatch.companyId,
@@ -8119,6 +8119,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     })).catch(() => {});
   };
   const postHermesProgress = (type, payload) => {
+    if (onProgress) onProgress(type, payload);
     if (trackBudget) trackBudget(type, payload);
     if (type !== 'session.info') {
       const activeGateway = nativeActiveGatewaySessions.get(nativeDispatchChainKey(dispatch));
@@ -8558,7 +8559,13 @@ async function executeNativeConversationDispatch(dispatch) {
         abortController.abort();
       },
     });
-    await runNativeConversationAgentReply(claimed.dispatch, abortController.signal, budgetTracker);
+    // Every model response, tool call and tool result restarts the step
+    // timer; a tool call starting is a new step, named if the turn stops there.
+    await runNativeConversationAgentReply(claimed.dispatch, abortController.signal, budgetTracker, (type, payload) => {
+      const activity = extractToolActivity(type, payload);
+      watchdog.progress(activity && activity.phase === 'start'
+        ? (activity.label === 'Working' ? activity.tool : activity.label.toLowerCase()) : undefined);
+    });
     // Abort is cooperative. A runtime that ignores the signal can still
     // resolve after the watchdog fires; the timeout (and the output budget)
     // must win over completion so the durable dispatch cannot be marked

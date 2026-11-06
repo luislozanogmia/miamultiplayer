@@ -14,33 +14,62 @@ function nativeDispatchTimeoutMs(value, fallback = DEFAULT_NATIVE_DISPATCH_TIMEO
   return parsed;
 }
 
-function nativeDispatchTimeoutError(timeoutMs) {
-  const error = new Error(`native dispatch timed out after ${timeoutMs}ms`);
+// `step` is the step that stopped moving: {n, label}, or null when the whole
+// turn reached its outer ceiling.
+function nativeDispatchTimeoutError(timeoutMs, step = null) {
+  const where = step ? ` on step ${step.n}${step.label ? ` (${step.label})` : ''}` : '';
+  const error = new Error(step
+    ? `native dispatch made no progress for ${timeoutMs}ms${where}`
+    : `native dispatch timed out after ${timeoutMs}ms`);
   error.name = 'TimeoutError';
   error.code = NATIVE_DISPATCH_TIMEOUT_CODE;
   error.timeoutMs = timeoutMs;
+  if (step) error.step = step;
   return error;
 }
 
-// A dispatch watchdog owns only the timer. The caller owns the AbortController
+// A dispatch watchdog owns only the timers. The caller owns the AbortController
 // and durable failure transition, which keeps manual cancellation and timeout
 // recovery distinguishable when they race.
-function createNativeDispatchWatchdog({ timeoutMs, onTimeout } = {}) {
+// `timeoutMs` is per step: every sign of progress (a model response, a tool
+// call or result) starts it again, so only a step that goes that long with no
+// progress stops the turn. `maxMs` is the ceiling for the whole turn.
+function createNativeDispatchWatchdog({ timeoutMs, maxMs = MAX_NATIVE_DISPATCH_TIMEOUT_MS, onTimeout } = {}) {
   const duration = Number(timeoutMs);
   if (!Number.isInteger(duration) || duration <= 0) throw new TypeError('timeoutMs must be a positive integer');
   if (typeof onTimeout !== 'function') throw new TypeError('onTimeout must be a function');
+  const ceiling = Math.max(duration, Number(maxMs) || MAX_NATIVE_DISPATCH_TIMEOUT_MS);
   let timedOut = false;
-  const timer = setTimeout(() => {
+  let step = { n: 1, label: '' };
+  const fire = (error) => {
+    if (timedOut) return;
     timedOut = true;
-    onTimeout(nativeDispatchTimeoutError(duration));
-  }, duration);
-  if (timer && typeof timer.unref === 'function') timer.unref();
+    clearTimeout(stepTimer);
+    clearTimeout(turnTimer);
+    onTimeout(error);
+  };
+  const unref = (timer) => { if (timer && typeof timer.unref === 'function') timer.unref(); return timer; };
+  const armStep = () => unref(setTimeout(() => fire(nativeDispatchTimeoutError(duration, { ...step })), duration));
+  let stepTimer = armStep();
+  const turnTimer = unref(setTimeout(() => fire(nativeDispatchTimeoutError(ceiling)), ceiling));
   return {
+    // `nextStep` names a new step (a tool call starting); any other call is
+    // progress within the current one.
+    progress(nextStep) {
+      if (timedOut) return;
+      if (nextStep) step = { n: step.label ? step.n + 1 : step.n, label: String(nextStep).slice(0, 80) };
+      clearTimeout(stepTimer);
+      stepTimer = armStep();
+    },
     cancel() {
-      clearTimeout(timer);
+      clearTimeout(stepTimer);
+      clearTimeout(turnTimer);
     },
     get timedOut() {
       return timedOut;
+    },
+    get step() {
+      return { ...step };
     },
   };
 }

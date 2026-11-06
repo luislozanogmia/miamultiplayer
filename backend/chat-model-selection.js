@@ -199,8 +199,13 @@ function userFacingModelDispatchError(error, { managedRouter = false, managedRou
   const message = String(error && error.message || error || '');
   // Hermes' message is its own retry summary; the provider's words are here.
   const detail = [message, error && error.providerError].filter(Boolean).join('\n');
+  if (error && error.code === 'NATIVE_DISPATCH_TIMEOUT' && error.step) {
+    const minutes = Math.round(Number(error.timeoutMs) / 60000);
+    const label = error.step.label ? ` (${error.step.label})` : '';
+    return `I stopped at step ${error.step.n}${label}: it made no progress for ${minutes} minute${minutes === 1 ? '' : 's'}. What came before it is done. Ask again to retry from there.`;
+  }
   if ((error && error.code === 'NATIVE_DISPATCH_TIMEOUT') || /native dispatch timed out/i.test(message)) {
-    return 'I ran out of time before finishing. Nothing was changed. Please try again.';
+    return 'I ran out of time before finishing. Please try again.';
   }
   if (managedRouter && MANAGED_ROUTER_KEY_FAILURE.test(message)) {
     return managedRouterKeyMessage(managedRouterLabel);
