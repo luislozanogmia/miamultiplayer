@@ -419,13 +419,14 @@
   botControl.append(botControlLabel, followButton, takeOver);
   var urlWrap = overlay.querySelector('.local-browser-url-wrap');
   if (urlWrap) urlWrap.after(botControl);
-  takeOver.onclick = function (reason) {
+  takeOver.onclick = function () {
     var botId = botControl.getAttribute('data-bot-id');
     var agents = window.miaBrowserAgents;
     if (!botId || takeOver.disabled || !agents || !agents.takeOver) return;
     takeOver.disabled = true;
-    takeOver.textContent = 'Stopping…';
-    return Promise.resolve().then(function () { return agents.takeOver(botId, reason === 'page-click' ? reason : undefined); }).then(function (stopped) {
+    takeOver.textContent = 'Pausing…';
+    var page = selected();
+    return Promise.resolve().then(function () { return agents.takeOver(botId, page ? page.title || page.url || '' : ''); }).then(function (stopped) {
       if (stopped !== true) return;
       // Control stays with the bot until every cancellation is acknowledged.
       botReleasedAt[botId] = Date.now();
@@ -1529,7 +1530,7 @@
     // between steps), so a click while the bot thinks never stops its reply.
     if (payload.action === 'page-click') {
       var tab = selected();
-      if (tab && tab.id === payload.tabId && tab.botActivity && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick('page-click');
+      if (tab && tab.id === payload.tabId && tab.botActivity && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick();
     }
     if (payload.action === 'choose') {
       var g = (state.groups || []).find(function (item) { return item.id === payload.groupId; });

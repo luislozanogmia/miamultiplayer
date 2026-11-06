@@ -9704,9 +9704,10 @@
       agentSetup.onCreated = typeof onCreated === 'function' ? onCreated : null;
     },
     // "Take over" in the browser stops whatever this bot is running now.
-    // reason 'page-click' when a click in the page did it, so the notice says so.
-    takeOver: function(botId, reason){
-      return stopBrowserBot(botId, reason);
+    // Take over pauses the bot: its reply ends with "Browser is yours", the
+    // page it was on, and a Continue button.
+    takeOver: function(botId, page){
+      return stopBrowserBot(botId, 'take-over', page);
     },
     // The group this bot worked in was given to someone else.
     stopQuietly: function(botId){
@@ -9734,13 +9735,13 @@
     },
   };
   var browserMenuIconCache = {};
-  function stopBrowserBot(botId, reason){
+  function stopBrowserBot(botId, reason, page){
     var running = browserBotRunningTasks(botId);
     if(!running.length){
       showToast('Could not confirm that the response stopped. Check its chat before taking over.');
       return Promise.resolve(false);
     }
-    return Promise.all(running.map(function(task){ return stopTaskFromComposer(task.id, reason); })).then(function(results){
+    return Promise.all(running.map(function(task){ return stopTaskFromComposer(task.id, reason, page); })).then(function(results){
       var stopped = results.every(function(result){ return result === true; });
       if(!stopped) showToast('Could not stop every response. The bot may still be working; try again.');
       return stopped;
@@ -10947,14 +10948,14 @@
     button.innerHTML = showStop ? '<span class="cc-stop-square" aria-hidden="true"></span>' : CHAT_SEND_ICON_HTML;
   }
 
-  function stopTaskFromComposer(taskId, reason){
+  function stopTaskFromComposer(taskId, reason, page){
     var task = (chatWs.tasks || []).filter(function(candidate){ return candidate.id === taskId; })[0];
     if(!task || task.kind !== 'native-dispatch' || chatTaskStopPending[taskId]) return Promise.resolve(false);
     chatTaskStopPending[taskId] = true;
     renderComposerTaskControl();
     return api(nativeConversationPath(task.roomId, '/dispatches/' + encodeURIComponent(taskId) + '/stop'), {
       method: 'POST',
-      body: reason ? {reason: reason} : {}
+      body: reason ? {reason: reason, page: page || ''} : {}
     }).then(function(res){
       if(res.status !== 200) throw new Error(res.data && (res.data.message || res.data.error) || 'Stop failed');
       var stoppedIds = (res.data && res.data.stoppedDispatchIds) || [taskId];
@@ -11570,6 +11571,11 @@
     return /^I reached the most I can write in one reply before finishing\./.test(normalized)
       || /^\u23f9 Stopped: this response reached its output budget\b/.test(normalized);
   }
+  // Take over paused the agent (backend stopNoticeText); same card, and
+  // Continue hands the browser back.
+  function chatPausedNotice(text){
+    return /^\u23f8 Browser is yours\./.test(String(text || '').trim());
+  }
 
   // A card someone already wrote after is settled, even after a restart.
   function chatContinueAnswered(eventId){
@@ -11584,10 +11590,11 @@
   }
 
   function chatContinueHtml(eventId, text){
-    var line = String(text || '').replace(/^\u23f9 /, '').replace(/\s*Press Continue and I'll pick up from there\.$/, '');
+    var paused = chatPausedNotice(text);
+    var line = String(text || '').replace(/^[\u23f8\u23f9] /, '').replace(/\s*Press Continue (?:and I'll pick up from there|when you want me back)\.$/, '');
     var actions = chatContinued[eventId] || chatContinueAnswered(eventId) ? '<span class="chat-approval-status">Continued</span>' : chatContinueButtonHtml(eventId);
     return '<div class="chat-approval" data-chat-continue-card="' + esc(eventId) + '">' +
-      '<div class="chat-approval-title">Keep going?</div>' +
+      '<div class="chat-approval-title">' + (paused ? 'Paused' : 'Keep going?') + '</div>' +
       '<div class="chat-approval-line">' + esc(line) + '</div>' +
       '<div class="chat-approval-actions">' + actions + '</div></div>';
   }
@@ -11598,6 +11605,7 @@
     messages = messages || [];
     var index = messages.map(function(m){ return m.id; }).indexOf(eventId);
     var notice = messages[index], partial = '';
+    if(notice && chatPausedNotice(displayBotBody(notice.body))) return "The browser is yours again. Continue where you left off.";
     for(var i = index - 1; notice && i >= 0; i--){
       var m = messages[i];
       if(m.system || m.threadRoot !== notice.threadRoot || isSupersededNativeProgressMessage(m)) continue;
@@ -12576,7 +12584,7 @@
     if(text && !liveProgress && !isPreReasoning) messageHtml = withMentionChips(messageHtml);
     var mediaHtml = '';
     if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
-    else if(!isHuman && !m.pending && chatOutputLimitNotice(text)) messageHtml = chatContinueHtml(m.id, text);
+    else if(!isHuman && !m.pending && (chatOutputLimitNotice(text) || chatPausedNotice(text))) messageHtml = chatContinueHtml(m.id, text);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
     if(m.hubRunLabel) messageHtml += providerRunChipHtml(m.hubRunLabel);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';

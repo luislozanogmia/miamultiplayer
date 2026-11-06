@@ -519,9 +519,11 @@ function createConversationService({ repository, authorization, realtime = null,
 
   const STOP_STEP_MAX_LENGTH = 240;
 
-  function stopNoticeText({ targetType, reason }) {
+  // Take over in the browser pauses the agent: it hands the browser back,
+  // says where it was, and waits for Continue (frontend chatContinueHtml).
+  function stopNoticeText({ targetType, reason, page }) {
     const noun = targetType === 'gateway' ? 'the agent' : 'the bot';
-    if (reason === 'page-click') return `⏹ Stopped because you clicked the page ${noun} was using.`;
+    if (reason === 'take-over') return `⏸ Browser is yours.${page ? ` I was on ${page}.` : ''} Press Continue when you want me back.`;
     return `⏹ Stopped by you — ${noun} was mid-response.`;
   }
 
@@ -554,12 +556,12 @@ function createConversationService({ repository, authorization, realtime = null,
   // no frontend changes (mirrors the failure-notice event server.js posts on
   // a timeout). Best-effort: bookkeeping here must never turn a successful
   // stop into an error response.
-  function postStopNotice({ companyId, conversationId, stoppedDispatch, reason }) {
+  function postStopNotice({ companyId, conversationId, stoppedDispatch, reason, page }) {
     if (!stoppedDispatch) return;
     try {
       const lastStep = lastDispatchProgressStep({ companyId, conversationId, dispatchId: stoppedDispatch.id });
-      const noticeText = stopNoticeText({ targetType: stoppedDispatch.targetType, reason });
-      const text = lastStep ? `${noticeText}\nWhere it left off: ${lastStep}` : noticeText;
+      const noticeText = stopNoticeText({ targetType: stoppedDispatch.targetType, reason, page });
+      const text = lastStep && reason !== 'take-over' ? `${noticeText}\nWhere it left off: ${lastStep}` : noticeText;
       const result = repository.createEvent({
         companyId,
         conversationId,
@@ -577,7 +579,7 @@ function createConversationService({ repository, authorization, realtime = null,
     }
   }
 
-  async function stopDispatch({ companyId, conversationId, principal, dispatchId, reason }) {
+  async function stopDispatch({ companyId, conversationId, principal, dispatchId, reason, page }) {
     authorization.authorize(callerPrincipal(principal, companyId, conversationId, 'send'));
     const id = required(dispatchId, 'dispatchId');
     const current = repository.getDispatch({ companyId, id });
@@ -606,7 +608,7 @@ function createConversationService({ repository, authorization, realtime = null,
     }));
     const newlyStopped = stopped.filter(({ result }) => !result.idempotent);
     const noticed = newlyStopped.find(({ running }) => running) || newlyStopped[0];
-    if (noticed) postStopNotice({ companyId, conversationId, stoppedDispatch: noticed.result.dispatch, reason });
+    if (noticed) postStopNotice({ companyId, conversationId, stoppedDispatch: noticed.result.dispatch, reason, page });
     const result = stopped[0].result;
     return {
       ...result,

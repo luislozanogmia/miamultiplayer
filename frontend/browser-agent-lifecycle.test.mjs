@@ -132,18 +132,20 @@ test('missing task state and an already pending stop cannot claim browser contro
 });
 
 function toolbarHarness() {
-  const request = deferred(); let renders = 0;
-  const ctx = { Promise, Date, state: {}, botControlLabel: { textContent: '' }, takeOver: { disabled: false, textContent: 'Take over' }, botControl: { getAttribute: () => 'a' }, window: { miaBrowserAgents: { takeOver: () => request.promise } }, botReleasedAt: {}, botHolds: { 1: { botId: 'a' } }, botDroveAt: { 1: 0 }, render() { renders++; } };
-  const begin = browser.indexOf('  takeOver.onclick = function (reason) {'); const end = browser.indexOf('\n  };', begin) + 5;
+  const request = deferred(); let renders = 0; const taken = [];
+  const ctx = { Promise, Date, state: {}, botControlLabel: { textContent: '' }, takeOver: { disabled: false, textContent: 'Take over' }, botControl: { getAttribute: () => 'a' }, selected: () => ({ title: 'People | LinkedIn' }), window: { miaBrowserAgents: { takeOver: (botId, page) => { taken.push([botId, page]); return request.promise; } } }, botReleasedAt: {}, botHolds: { 1: { botId: 'a' } }, botDroveAt: { 1: 0 }, render() { renders++; } };
+  const begin = browser.indexOf('  takeOver.onclick = function () {'); const end = browser.indexOf('\n  };', begin) + 5;
   vm.createContext(ctx); vm.runInContext(browser.slice(begin, end), ctx);
-  return { ctx, request, renders: () => renders };
+  return { ctx, request, renders: () => renders, taken };
 }
 
 test('Take over retains bot marks while pending and after failure, clearing only on success', async () => {
   for (const success of [false, true]) {
     const h = toolbarHarness(); const result = h.ctx.takeOver.onclick();
     assert.ok(h.ctx.botHolds[1], 'still owned while stop is pending'); assert.equal(h.ctx.takeOver.disabled, true);
+    assert.equal(h.ctx.takeOver.textContent, 'Pausing…');
     h.request.resolve(success); await result;
+    assert.deepEqual(h.taken, [['a', 'People | LinkedIn']], 'the pause names the page the bot was on');
     assert.equal(!!h.ctx.botHolds[1], !success); assert.equal(!!h.ctx.botReleasedAt.a, success);
     assert.equal(h.ctx.takeOver.disabled, false); assert.equal(h.ctx.takeOver.textContent, 'Take over');
   }
@@ -176,7 +178,7 @@ test('a bot has control only while it runs browser commands, not for its whole r
 
 // Clicking into the page a bot is working on is the same as pressing Take over.
 function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a', live = true } = {}) {
-  let handler = null, takeOvers = 0, reason = null;
+  let handler = null, takeOvers = 0;
   const ctx = {
     hubWorkspace: () => false,
     inHubRoom: () => false,
@@ -184,7 +186,7 @@ function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a', li
     state: { activeId, tabs: [{ id: 1, botActivity: live ? { botId } : null }, { id: 2 }], groups: [] },
     window: { miaBrowserAgents: {} },
     botControl: { hidden: controlHidden, getAttribute: () => botId },
-    takeOver: { onclick(why) { takeOvers++; reason = why; } },
+    takeOver: { onclick() { takeOvers++; } },
     bridge: { onGroupBot(callback) { handler = callback; } },
     chooseGroupBot() {},
   };
@@ -193,13 +195,12 @@ function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a', li
   assert.ok(start >= 0);
   vm.runInContext('function selected() { return state.tabs.find(function (tab) { return tab.id === state.activeId; }); }\n'
     + browser.slice(start, browser.indexOf('\n  });', start) + 6), ctx);
-  return { click: tabId => handler({ action: 'page-click', tabId }), takeOvers: () => takeOvers, reason: () => reason };
+  return { click: tabId => handler({ action: 'page-click', tabId }), takeOvers: () => takeOvers };
 }
 
 test('a click inside the page a bot is working on takes it over', () => {
   const h = pageClickHarness(); h.click(1);
   assert.equal(h.takeOvers(), 1);
-  assert.equal(h.reason(), 'page-click', 'the stop notice can say a click did it');
 });
 
 test('a page click takes nothing over when no bot has control of that tab', () => {
