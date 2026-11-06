@@ -77,6 +77,21 @@ test('a step with no progress for 10 minutes stops the turn and is named', (t) =
   assert.equal(watchdog.step.n, 2, 'nothing moves after it fired');
 });
 
+test('a command may run its full 10 minutes: a running tool gets two more before the step stops', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let timeout = null;
+  const watchdog = createNativeDispatchWatchdog({ timeoutMs: 600000, onTimeout: (error) => { timeout = error; } });
+  watchdog.progress('running a command', true);
+  t.mock.timers.tick(600000);
+  assert.equal(timeout, null, 'a 10-minute command is not cut off');
+  watchdog.progress(undefined, false); // its result
+  t.mock.timers.tick(599999);
+  assert.equal(timeout, null);
+  watchdog.progress('running a command', true);
+  t.mock.timers.tick(720000);
+  assert.deepEqual(timeout.step, { n: 2, label: 'running a command' }, 'a tool that never returns still stops');
+});
+
 test('the whole turn still has an outer ceiling', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let timeout = null;

@@ -24,6 +24,7 @@ const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
 const { normalizedGatewayUrl } = require('./hermes-web-search-config');
 const {
   EFFECTIVE_RELEASE_PROFILE,
+  FULL_AGENT_TURN_LIMIT,
   MIAOS_AGENT_MAX_TURNS,
   MIAOS_AGENT_SEARCH_ONLY,
   MIAOS_RELEASE_PROFILE,
@@ -52,7 +53,8 @@ function hermesGatewayLaunch() {
   if (!argvJson && !HERMES_BIN) return null;
   return configuredHermesLaunch(HERMES_BIN);
 }
-const MIAOS_BOT_MAX_TURNS = Math.min(100, Math.max(1, Number(process.env.MIAOS_BOT_MAX_TURNS) || 100));
+// Bots get the same (no) step limit as Mia; see FULL_AGENT_TURN_LIMIT.
+const MIAOS_BOT_MAX_TURNS = Math.min(FULL_AGENT_TURN_LIMIT, Math.max(1, Number(process.env.MIAOS_BOT_MAX_TURNS) || FULL_AGENT_TURN_LIMIT));
 // A turn cap (MIAOS_BOT_MAX_TURNS) and the native dispatch wall-clock timeout
 // (native-dispatch-runtime.js) both bound a run, but neither bounds how much
 // a single turn streams back before hitting either limit. The Hermes gateway

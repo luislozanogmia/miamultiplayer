@@ -8561,10 +8561,14 @@ async function executeNativeConversationDispatch(dispatch) {
     });
     // Every model response, tool call and tool result restarts the step
     // timer; a tool call starting is a new step, named if the turn stops there.
+    const runningTools = new Set();
     await runNativeConversationAgentReply(claimed.dispatch, abortController.signal, budgetTracker, (type, payload) => {
       const activity = extractToolActivity(type, payload);
+      const toolKey = activity && (activity.toolId || activity.tool);
+      if (activity && activity.phase === 'start') runningTools.add(toolKey);
+      if (activity && activity.phase === 'complete') runningTools.delete(toolKey);
       watchdog.progress(activity && activity.phase === 'start'
-        ? (activity.label === 'Working' ? activity.tool : activity.label.toLowerCase()) : undefined);
+        ? (activity.label === 'Working' ? activity.tool : activity.label.toLowerCase()) : undefined, runningTools.size > 0);
     });
     // Abort is cooperative. A runtime that ignores the signal can still
     // resolve after the watchdog fires; the timeout (and the output budget)

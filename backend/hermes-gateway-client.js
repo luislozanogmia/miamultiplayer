@@ -426,6 +426,10 @@ class HermesGatewayClient {
       // A process-global HERMES_TUI_TOOLSETS value would flatten those two
       // security postures and is therefore intentionally not set here.
       gatewayEnv.HERMES_TUI_MAX_TURNS = String(this.maxTurns);
+      // Each command: 2 minutes unless the model asks for more, at most 10 in
+      // the foreground; longer ones run in the background and report back.
+      if (!gatewayEnv.TERMINAL_TIMEOUT) gatewayEnv.TERMINAL_TIMEOUT = '120';
+      if (!gatewayEnv.TERMINAL_MAX_FOREGROUND_TIMEOUT) gatewayEnv.TERMINAL_MAX_FOREGROUND_TIMEOUT = '600';
       gatewayEnv.MIAOS_EXTERNAL_CHAT = '1';
       if (Object.keys(this.secretEnv).length) gatewayEnv[PROCESS_SECRETS_MARKER] = '1';
       // The desktop server owns both native chat sessions and cron ticks.

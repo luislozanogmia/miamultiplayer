@@ -400,7 +400,7 @@ function provisionHermesBotProfile({
     profilesRoot,
     profile: MIAOS_BOT_HERMES_PROFILE,
     toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
-    maxTurns: 100,
+    maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     backgroundReview: backgroundReviewEnabledForBot(),
   });
@@ -415,7 +415,7 @@ function provisionHermesGoogleBotProfile({
     profilesRoot,
     profile: MIAOS_BOT_GOOGLE_HERMES_PROFILE,
     toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
-    maxTurns: 100,
+    maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForBot(),

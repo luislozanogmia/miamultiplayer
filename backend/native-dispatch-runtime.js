@@ -33,13 +33,17 @@ function nativeDispatchTimeoutError(timeoutMs, step = null) {
 // recovery distinguishable when they race.
 // `timeoutMs` is per step: every sign of progress (a model response, a tool
 // call or result) starts it again, so only a step that goes that long with no
-// progress stops the turn. `maxMs` is the ceiling for the whole turn.
-function createNativeDispatchWatchdog({ timeoutMs, maxMs = MAX_NATIVE_DISPATCH_TIMEOUT_MS, onTimeout } = {}) {
+// progress stops the turn. While a tool runs it is silent, so the step gets
+// `toolGraceMs` more: Hermes ends a foreground command at 10 minutes itself
+// (longer ones go to the background), and the result arrives just after.
+// `maxMs` is the ceiling for the whole turn.
+function createNativeDispatchWatchdog({ timeoutMs, maxMs = MAX_NATIVE_DISPATCH_TIMEOUT_MS, toolGraceMs = 2 * 60 * 1000, onTimeout } = {}) {
   const duration = Number(timeoutMs);
   if (!Number.isInteger(duration) || duration <= 0) throw new TypeError('timeoutMs must be a positive integer');
   if (typeof onTimeout !== 'function') throw new TypeError('onTimeout must be a function');
   const ceiling = Math.max(duration, Number(maxMs) || MAX_NATIVE_DISPATCH_TIMEOUT_MS);
   let timedOut = false;
+  let toolRunning = false;
   let step = { n: 1, label: '' };
   const fire = (error) => {
     if (timedOut) return;
@@ -49,14 +53,19 @@ function createNativeDispatchWatchdog({ timeoutMs, maxMs = MAX_NATIVE_DISPATCH_T
     onTimeout(error);
   };
   const unref = (timer) => { if (timer && typeof timer.unref === 'function') timer.unref(); return timer; };
-  const armStep = () => unref(setTimeout(() => fire(nativeDispatchTimeoutError(duration, { ...step })), duration));
+  const armStep = () => {
+    const limit = toolRunning ? duration + Math.max(0, Number(toolGraceMs) || 0) : duration;
+    return unref(setTimeout(() => fire(nativeDispatchTimeoutError(limit, { ...step })), limit));
+  };
   let stepTimer = armStep();
   const turnTimer = unref(setTimeout(() => fire(nativeDispatchTimeoutError(ceiling)), ceiling));
   return {
     // `nextStep` names a new step (a tool call starting); any other call is
-    // progress within the current one.
-    progress(nextStep) {
+    // progress within the current one. `running` says whether a tool is
+    // still working when this progress arrives.
+    progress(nextStep, running) {
       if (timedOut) return;
+      if (running !== undefined) toolRunning = !!running;
       if (nextStep) step = { n: step.label ? step.n + 1 : step.n, label: String(nextStep).slice(0, 80) };
       clearTimeout(stepTimer);
       stepTimer = armStep();
