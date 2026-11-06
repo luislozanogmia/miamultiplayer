@@ -519,8 +519,9 @@ function createConversationService({ repository, authorization, realtime = null,
 
   const STOP_STEP_MAX_LENGTH = 240;
 
-  function stopNoticeText({ targetType }) {
+  function stopNoticeText({ targetType, reason }) {
     const noun = targetType === 'gateway' ? 'the agent' : 'the bot';
+    if (reason === 'page-click') return `⏹ Stopped because you clicked the page ${noun} was using.`;
     return `⏹ Stopped by you — ${noun} was mid-response.`;
   }
 
@@ -553,11 +554,11 @@ function createConversationService({ repository, authorization, realtime = null,
   // no frontend changes (mirrors the failure-notice event server.js posts on
   // a timeout). Best-effort: bookkeeping here must never turn a successful
   // stop into an error response.
-  function postStopNotice({ companyId, conversationId, stoppedDispatch }) {
+  function postStopNotice({ companyId, conversationId, stoppedDispatch, reason }) {
     if (!stoppedDispatch) return;
     try {
       const lastStep = lastDispatchProgressStep({ companyId, conversationId, dispatchId: stoppedDispatch.id });
-      const noticeText = stopNoticeText({ targetType: stoppedDispatch.targetType });
+      const noticeText = stopNoticeText({ targetType: stoppedDispatch.targetType, reason });
       const text = lastStep ? `${noticeText}\nWhere it left off: ${lastStep}` : noticeText;
       const result = repository.createEvent({
         companyId,
@@ -576,7 +577,7 @@ function createConversationService({ repository, authorization, realtime = null,
     }
   }
 
-  async function stopDispatch({ companyId, conversationId, principal, dispatchId }) {
+  async function stopDispatch({ companyId, conversationId, principal, dispatchId, reason }) {
     authorization.authorize(callerPrincipal(principal, companyId, conversationId, 'send'));
     const id = required(dispatchId, 'dispatchId');
     const current = repository.getDispatch({ companyId, id });
@@ -605,7 +606,7 @@ function createConversationService({ repository, authorization, realtime = null,
     }));
     const newlyStopped = stopped.filter(({ result }) => !result.idempotent);
     const noticed = newlyStopped.find(({ running }) => running) || newlyStopped[0];
-    if (noticed) postStopNotice({ companyId, conversationId, stoppedDispatch: noticed.result.dispatch });
+    if (noticed) postStopNotice({ companyId, conversationId, stoppedDispatch: noticed.result.dispatch, reason });
     const result = stopped[0].result;
     return {
       ...result,

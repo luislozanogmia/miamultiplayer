@@ -258,6 +258,8 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
       conversationId: req.params.conversationId,
       dispatchId: req.params.dispatchId,
       principal,
+      // Only the one known reason changes the notice's wording.
+      reason: requestBody(req).reason === 'page-click' ? 'page-click' : undefined,
     });
     res.status(200).json(result);
   }));

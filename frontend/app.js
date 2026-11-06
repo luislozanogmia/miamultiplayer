@@ -9704,8 +9704,9 @@
       agentSetup.onCreated = typeof onCreated === 'function' ? onCreated : null;
     },
     // "Take over" in the browser stops whatever this bot is running now.
-    takeOver: function(botId){
-      return stopBrowserBot(botId);
+    // reason 'page-click' when a click in the page did it, so the notice says so.
+    takeOver: function(botId, reason){
+      return stopBrowserBot(botId, reason);
     },
     // The group this bot worked in was given to someone else.
     stopQuietly: function(botId){
@@ -9733,13 +9734,13 @@
     },
   };
   var browserMenuIconCache = {};
-  function stopBrowserBot(botId){
+  function stopBrowserBot(botId, reason){
     var running = browserBotRunningTasks(botId);
     if(!running.length){
       showToast('Could not confirm that the response stopped. Check its chat before taking over.');
       return Promise.resolve(false);
     }
-    return Promise.all(running.map(function(task){ return stopTaskFromComposer(task.id); })).then(function(results){
+    return Promise.all(running.map(function(task){ return stopTaskFromComposer(task.id, reason); })).then(function(results){
       var stopped = results.every(function(result){ return result === true; });
       if(!stopped) showToast('Could not stop every response. The bot may still be working; try again.');
       return stopped;
@@ -10946,14 +10947,14 @@
     button.innerHTML = showStop ? '<span class="cc-stop-square" aria-hidden="true"></span>' : CHAT_SEND_ICON_HTML;
   }
 
-  function stopTaskFromComposer(taskId){
+  function stopTaskFromComposer(taskId, reason){
     var task = (chatWs.tasks || []).filter(function(candidate){ return candidate.id === taskId; })[0];
     if(!task || task.kind !== 'native-dispatch' || chatTaskStopPending[taskId]) return Promise.resolve(false);
     chatTaskStopPending[taskId] = true;
     renderComposerTaskControl();
     return api(nativeConversationPath(task.roomId, '/dispatches/' + encodeURIComponent(taskId) + '/stop'), {
       method: 'POST',
-      body: {}
+      body: reason ? {reason: reason} : {}
     }).then(function(res){
       if(res.status !== 200) throw new Error(res.data && (res.data.message || res.data.error) || 'Stop failed');
       var stoppedIds = (res.data && res.data.stoppedDispatchIds) || [taskId];

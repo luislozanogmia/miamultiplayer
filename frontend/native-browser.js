@@ -419,13 +419,13 @@
   botControl.append(botControlLabel, followButton, takeOver);
   var urlWrap = overlay.querySelector('.local-browser-url-wrap');
   if (urlWrap) urlWrap.after(botControl);
-  takeOver.onclick = function () {
+  takeOver.onclick = function (reason) {
     var botId = botControl.getAttribute('data-bot-id');
     var agents = window.miaBrowserAgents;
     if (!botId || takeOver.disabled || !agents || !agents.takeOver) return;
     takeOver.disabled = true;
     takeOver.textContent = 'Stopping…';
-    return Promise.resolve().then(function () { return agents.takeOver(botId); }).then(function (stopped) {
+    return Promise.resolve().then(function () { return agents.takeOver(botId, reason === 'page-click' ? reason : undefined); }).then(function (stopped) {
       if (stopped !== true) return;
       // Control stays with the bot until every cancellation is acknowledged.
       botReleasedAt[botId] = Date.now();
@@ -1524,10 +1524,12 @@
     if (!payload) return;
     if (payload.action === 'stop' && agents && agents.stopQuietly) agents.stopQuietly(payload.botId);
     if (payload.action === 'new-bot') newBotGroup();
-    // The person clicked into the page a bot is working on: take it over.
+    // The person clicked into the page while a bot is acting on it: take it
+    // over. Only a live command counts (not the grace the control bar keeps
+    // between steps), so a click while the bot thinks never stops its reply.
     if (payload.action === 'page-click') {
       var tab = selected();
-      if (tab && tab.id === payload.tabId && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick();
+      if (tab && tab.id === payload.tabId && tab.botActivity && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick('page-click');
     }
     if (payload.action === 'choose') {
       var g = (state.groups || []).find(function (item) { return item.id === payload.groupId; });

@@ -511,6 +511,20 @@ test('native HTTP stop exposes active work, cancels it durably, and prevents a q
     });
     assert.equal(claim.idempotent, true);
     assert.equal(claim.dispatch.status, 'failed');
+
+    // A stop from a click in the page the agent was using says so.
+    result = await app.request(`/conversations/${conversationId}/events`, {
+      method: 'POST',
+      body: { content: { text: 'browse again' }, clientIdempotencyKey: 'stop-turn-2' },
+    });
+    const clickedId = result.payload.dispatch.dispatches[0].id;
+    result = await app.request(`/conversations/${conversationId}/dispatches/${clickedId}/stop`, {
+      method: 'POST', body: { reason: 'page-click' },
+    });
+    assert.equal(result.response.status, 200);
+    result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=10`);
+    const clickNotice = result.payload.events.find((event) => event.metadata && event.metadata.status === 'stopped' && event.metadata.dispatchId === clickedId);
+    assert.match(clickNotice.content.text, /^⏹ Stopped because you clicked the page the agent was using\./);
   } finally {
     await app.close();
   }

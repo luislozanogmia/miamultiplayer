@@ -134,7 +134,7 @@ test('missing task state and an already pending stop cannot claim browser contro
 function toolbarHarness() {
   const request = deferred(); let renders = 0;
   const ctx = { Promise, Date, state: {}, botControlLabel: { textContent: '' }, takeOver: { disabled: false, textContent: 'Take over' }, botControl: { getAttribute: () => 'a' }, window: { miaBrowserAgents: { takeOver: () => request.promise } }, botReleasedAt: {}, botHolds: { 1: { botId: 'a' } }, botDroveAt: { 1: 0 }, render() { renders++; } };
-  const begin = browser.indexOf('  takeOver.onclick = function () {'); const end = browser.indexOf('\n  };', begin) + 5;
+  const begin = browser.indexOf('  takeOver.onclick = function (reason) {'); const end = browser.indexOf('\n  };', begin) + 5;
   vm.createContext(ctx); vm.runInContext(browser.slice(begin, end), ctx);
   return { ctx, request, renders: () => renders };
 }
@@ -175,16 +175,16 @@ test('a bot has control only while it runs browser commands, not for its whole r
 });
 
 // Clicking into the page a bot is working on is the same as pressing Take over.
-function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a' } = {}) {
-  let handler = null, takeOvers = 0;
+function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a', live = true } = {}) {
+  let handler = null, takeOvers = 0, reason = null;
   const ctx = {
     hubWorkspace: () => false,
     inHubRoom: () => false,
     teamBotRoom: () => false,
-    state: { activeId, tabs: [{ id: 1 }, { id: 2 }], groups: [] },
+    state: { activeId, tabs: [{ id: 1, botActivity: live ? { botId } : null }, { id: 2 }], groups: [] },
     window: { miaBrowserAgents: {} },
     botControl: { hidden: controlHidden, getAttribute: () => botId },
-    takeOver: { onclick() { takeOvers++; } },
+    takeOver: { onclick(why) { takeOvers++; reason = why; } },
     bridge: { onGroupBot(callback) { handler = callback; } },
     chooseGroupBot() {},
   };
@@ -193,12 +193,13 @@ function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a' } =
   assert.ok(start >= 0);
   vm.runInContext('function selected() { return state.tabs.find(function (tab) { return tab.id === state.activeId; }); }\n'
     + browser.slice(start, browser.indexOf('\n  });', start) + 6), ctx);
-  return { click: tabId => handler({ action: 'page-click', tabId }), takeOvers: () => takeOvers };
+  return { click: tabId => handler({ action: 'page-click', tabId }), takeOvers: () => takeOvers, reason: () => reason };
 }
 
 test('a click inside the page a bot is working on takes it over', () => {
   const h = pageClickHarness(); h.click(1);
   assert.equal(h.takeOvers(), 1);
+  assert.equal(h.reason(), 'page-click', 'the stop notice can say a click did it');
 });
 
 test('a page click takes nothing over when no bot has control of that tab', () => {
@@ -208,6 +209,8 @@ test('a page click takes nothing over when no bot has control of that tab', () =
   assert.equal(mia.takeOvers(), 0, 'Mia working, no bot to stop');
   const other = pageClickHarness(); other.click(2);
   assert.equal(other.takeOvers(), 0, 'a click from a tab no longer in front');
+  const thinking = pageClickHarness({ live: false }); thinking.click(1);
+  assert.equal(thinking.takeOvers(), 0, 'the bot used the page earlier in the reply but is not acting on it now');
 });
 
 test('+ New bot makes a new tab and group, starts bot setup, and gives the new bot that group', async () => {
