@@ -12181,6 +12181,19 @@
     });
   }
 
+  // A bot answering a message sent mid-run keeps working, but its "working"
+  // row stayed above that answer, so the chat looked finished. While a run's
+  // row is live and the bot has spoken after it, the row moves to the end.
+  // It still goes away when the run's own reply lands, or on Stop.
+  function moveLiveProgressBelow(messages, superseded){
+    var live = messages.filter(function(m, index){
+      if(!m.nativeProgress || m.nativeDiagnostic || superseded(m)) return false;
+      return messages.slice(index + 1).some(function(later){ return !later.nativeProgress && !later.system && !isHumanSender(later.sender); });
+    });
+    if(!live.length) return messages;
+    return messages.filter(function(m){ return live.indexOf(m) < 0; }).concat(live);
+  }
+
   function chatArtifactCardHtml(media){
     var mediaUrl = esc(media.url || '');
     var previewUrl = esc(media.previewUrl || ((media.url || '').indexOf('?') === -1 ? (media.url + '?preview=true') : (media.url + '&preview=true')));
@@ -13192,7 +13205,7 @@
     // capability answered.
     // Thread replies (m.threadRoot set) never appear in this main pass —
     // they render nested under their root instead, via chatThreadFooterHtml.
-    var mainMessages = state.messages.filter(function(m){ return !m.threadRoot && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); });
+    var mainMessages = moveLiveProgressBelow(state.messages.filter(function(m){ return !m.threadRoot && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); }), isSupersededNativeProgressMessage);
     var dateDivider = '';
     if(mainMessages.length){
       var dividerDate = new Date(mainMessages[0].ts || Date.now());

@@ -1007,3 +1007,13 @@ test('a company bot chat looks like a Solo bot chat: its Mote, name and Bot in t
   assert.match(source,/if\(el\('#hubBotsToggle',header\)\)el\('#hubBotsToggle',header\)\.addEventListener/);
   assert.match(source,/chatHeroHtml\(esc\('Your private chat with ' \+ \(chatBot\.name \|\| 'this bot'\) \+ '\. Only you see it, and it runs on your computer with your own models\.'\), chatBot\.name \|\| 'Bot', normalizeAgentAvatarColor\(chatBot\.avatar_color\)\)/);
 });
+test('a working row moves under the bot\'s mid-run answer and nowhere else',()=>{
+  const move=appFunction('moveLiveProgressBelow',{isHumanSender:s=>s==='me'});
+  const ids=list=>list.map(m=>m.id);
+  const ask={id:'ask',sender:'me'}, working={id:'working',sender:'bot',nativeProgress:true}, more={id:'more',sender:'me'}, answer={id:'answer',sender:'bot'};
+  assert.deepEqual(ids(move([ask,working,more,answer],()=>false)),['ask','more','answer','working'],'still working: under the latest answer');
+  assert.deepEqual(ids(move([ask,working,more],()=>false)),['ask','working','more'],'a person writing alone does not move it');
+  assert.deepEqual(ids(move([ask,working,more,answer],()=>true)),['ask','working','more','answer'],'a finished run\'s row stays where it was (and is hidden)');
+  assert.deepEqual(ids(move([ask,{...working,nativeDiagnostic:true},answer],()=>false)),['ask','working','answer'],'debug output is not a working row');
+  assert.match(source,/var mainMessages = moveLiveProgressBelow\(state\.messages\.filter\(/);
+});
