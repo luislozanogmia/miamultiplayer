@@ -114,7 +114,9 @@ TARGET_KEY = re.compile(r"^(document|doc|spreadsheet|sheet|file|presentation|pag
 DESTRUCTIVE_NESTED = re.compile(r"^(delete|remove|trash|clear|cut|move)", re.I)
 
 
-def _nested_destructive_action(value: Any) -> str:
+def _nested_destructive_action(value: Any, depth: int = 0) -> str:
+    if depth > 32:
+        return "unverifiedRequest"
     if isinstance(value, dict):
         for key, item in value.items():
             name = str(key)
@@ -122,14 +124,28 @@ def _nested_destructive_action(value: Any) -> str:
                 return name
             if name.lower() in {"action", "operation", "type", "method"} and isinstance(item, str) and DESTRUCTIVE_NESTED.match(item):
                 return item
-            nested = _nested_destructive_action(item)
+            if name.lower() in {"requests", "request", "operations", "operation"} and isinstance(item, str) and not item.lstrip().startswith(("{", "[")):
+                return "unverifiedRequest"
+            nested = _nested_destructive_action(item, depth + 1)
             if nested:
                 return nested
     elif isinstance(value, (list, tuple)):
         for item in value:
-            nested = _nested_destructive_action(item)
+            nested = _nested_destructive_action(item, depth + 1)
             if nested:
                 return nested
+    elif isinstance(value, str) and value.lstrip().startswith(("{", "[")):
+        # Some connector tools accept a JSON-encoded request. Inspect it as
+        # data before granting repeat approval; malformed input fails closed.
+        if len(value) > 1_000_000:
+            return "unverifiedRequest"
+        try:
+            parsed = json.loads(value)
+        except (ValueError, RecursionError):
+            return "unverifiedRequest"
+        if not isinstance(parsed, (dict, list)):
+            return "unverifiedRequest"
+        return _nested_destructive_action(parsed, depth + 1)
     return ""
 
 
@@ -206,6 +222,8 @@ def classify(tool_name: str, args: Any, session: str = "") -> Optional[Tuple[str
     if name.startswith("mcp_"):
         lowered = name.lower()
         nested_action = _nested_destructive_action(args)
+        if nested_action == "unverifiedRequest":
+            return ("change", name + " " + json.dumps({"miaNestedAction": "review"}))
         if nested_action:
             # The fingerprint still binds the exact request. The card needs
             # the destructive operation type, never its raw arguments.

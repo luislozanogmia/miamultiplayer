@@ -395,6 +395,11 @@ print(json.dumps({
   "terminal": bool(k("terminal", {"command": "rm a"})),
   "batchEdit": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"updateCells": {"rows": []}}]})),
   "batchDelete": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})),
+  "encodedBatchEdit": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": '[{"updateCells": {}}]'})),
+  "encodedBatchDelete": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": '[{"deleteSheet": {"sheetId": 1}}]'})),
+  "encodedBatchDeleteCategory": m.classify("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": '[{"deleteSheet": {"sheetId": 1}}]'})[0],
+  "malformedBatch": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": '[{"deleteSheet":'})),
+  "opaqueBatch": bool(k("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": 'deleteSheet'})),
   "batchDeleteCategory": m.classify("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})[0],
   "batchDeleteSummary": m.classify("mcp_google_sheets_batch_update", {"spreadsheetId": "s1", "requests": [{"deleteSheet": {"sheetId": 1}}]})[1],
 }))
@@ -405,6 +410,7 @@ print(json.dumps({
     append: true, sameDoc: true, otherDoc: false, sheet: true, noTarget: false,
     create: false, send: false, delete: false, terminal: false,
     batchEdit: true, batchDelete: false, batchDeleteCategory: 'delete', batchDeleteSummary: undefined,
+    encodedBatchEdit: true, encodedBatchDelete: false, encodedBatchDeleteCategory: 'delete', malformedBatch: false, opaqueBatch: false,
   });
   assert.equal(approvalCard(result.batchDeleteSummary, 'verbose', '').line, 'Delete a sheet in Google Sheets');
   assert.equal(approvalCard('mcp__google__google_docs_append {"documentId":"d1"}', 'concise', '', true).line, 'Add to a document in Google Docs, and keep editing it in this reply');

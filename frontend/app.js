@@ -5732,10 +5732,8 @@
       });
     });
   }
-  // Copy a company bot to another company you are in. Mia first writes a
-  // copy without this company's private details; you read it beside the
-  // original, can edit it, and approve before it is added there. The bot here
-  // stays as it is.
+  // Copy a company bot to another company you are in. Mia proposes a
+  // generalized copy; an admin reviews and edits it before adding it there.
   function copyCompanyBotToCompany(bot){
     var place=bot.places && bot.places[0];
     if(!place || (hubChat.membership||{}).role!=='admin')return;
@@ -5762,17 +5760,17 @@
       if(state.phase==='loading'){
         html+='<p class="bot-copy-sub">Loading your companies…</p>';
       } else if(state.phase==='pick'){
-        html+='<p class="bot-copy-sub">Mia makes a clean copy first: names, clients, numbers and other private details from '+esc(state.fromName)+' are taken out. You check it before it is added. '+esc(bot.name)+' stays here as it is.</p>'
+        html+='<p class="bot-copy-sub">Mia proposes a generalized copy. Inspect it and remove private details from '+esc(state.fromName)+' before adding it. '+esc(bot.name)+' stays here as it is.</p>'
           +'<label class="bot-copy-field"><span>Company</span><select data-bot-copy-team>'+state.teams.map(function(t){ return '<option value="'+esc(t.teamId)+'"'+(t.teamId===state.teamId?' selected':'')+'>'+esc(t.name)+'</option>'; }).join('')+'</select></label>'
           +'<label class="bot-copy-field"><span>Channel</span><select data-bot-copy-channel'+(state.channels.length?'':' disabled')+'>'+(state.channels.length
             ? state.channels.map(function(c){ return '<option value="'+esc(c.id)+'"'+(c.id===state.channelId?' selected':'')+'>#'+esc(c.name)+'</option>'; }).join('')
             : '<option>'+(state.channelsLoading?'Loading channels…':'No channels you can add bots to')+'</option>')+'</select></label>';
       } else if(state.phase==='reviewing'){
-        html+='<p class="bot-copy-sub">Mia is preparing a clean copy for '+esc(team().name)+'…</p>';
+        html+='<p class="bot-copy-sub">Mia is preparing a proposed copy for '+esc(team().name)+'…</p>';
       } else {
         var copy=state.copy;
-        html+='<p class="bot-copy-sub">Check the copy for '+esc(team().name)+' · #'+esc(channel().name)+'. You can edit it before you add it.</p>'
-          +(copy.removed.length?'<div class="bot-copy-removed"><span>Taken out</span><ul>'+copy.removed.map(function(item){ return '<li>'+esc(item)+'</li>'; }).join('')+'</ul></div>':'')
+        html+='<p class="bot-copy-sub">Check names, clients, numbers and other private details in the proposed copy for '+esc(team().name)+' · #'+esc(channel().name)+'. Edit it before you add it.</p>'
+          +(copy.removed.length?'<div class="bot-copy-removed"><span>Mia says it removed</span><ul>'+copy.removed.map(function(item){ return '<li>'+esc(item)+'</li>'; }).join('')+'</ul></div>':'')
           +'<div class="bot-copy-compare">'
           +'<div class="bot-copy-col"><div class="bot-copy-col-label">In '+esc(state.fromName)+'</div><div class="bot-copy-name">'+esc(bot.name)+'</div><pre class="bot-copy-original">'+esc(state.original.instructions)+'</pre></div>'
           +'<div class="bot-copy-col"><div class="bot-copy-col-label">Copy for '+esc(team().name)+'</div><input class="bot-copy-name-input" data-bot-copy-name aria-label="Name of the copy" maxlength="40" value="'+esc(copy.name)+'"><textarea data-bot-copy-instructions aria-label="Instructions of the copy">'+esc(copy.instructions)+'</textarea></div>'
@@ -5785,7 +5783,7 @@
           }).join('');
       }
       if(state.error)html+='<div class="bot-copy-error" role="alert">'+esc(state.error)+'</div>';
-      var primary=state.phase==='pick'?'Make clean copy':(state.phase==='review'||state.phase==='copying')?'Add to #'+esc(channel().name):'';
+      var primary=state.phase==='pick'?'Prepare copy for review':(state.phase==='review'||state.phase==='copying')?'Add to #'+esc(channel().name):'';
       html+='<div class="app-confirm-actions"><button type="button" class="btn" data-bot-copy-cancel'+(state.phase==='copying'?' disabled':'')+'>Cancel</button>'
         +(primary?'<button type="button" class="btn primary" data-bot-copy-go'+((state.phase==='pick'&&!state.channelId)||state.phase==='copying'?' disabled':'')+'>'+(state.phase==='copying'?'Adding…':primary)+'</button>':'')+'</div>';
       card.innerHTML=html;
@@ -5819,7 +5817,7 @@
       api('/api/bots/generic-copy',{method:'POST',body:{name:bot.name,instructions:state.original.instructions,skills:state.original.skills,fromCompany:state.fromName}}).then(function(res){
         if(!overlay.isConnected)return;
         var copy=res.data && res.data.copy;
-        if(res.status!==200 || !copy)throw new Error(res.data && res.data.message || 'Mia couldn\'t prepare a clean copy. Try again.');
+        if(res.status!==200 || !copy)throw new Error(res.data && res.data.message || 'Mia couldn\'t prepare a proposed copy. Try again.');
         state.copy=copy; state.phase='review'; render();
       }).catch(function(error){
         if(!overlay.isConnected)return;
