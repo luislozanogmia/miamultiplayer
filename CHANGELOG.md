@@ -9,6 +9,32 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-11-06
+
+### Added
+- In a company, clicking a company bot opens your private chat with it where the company's server supports bot chats; otherwise it opens a channel with the bot, as before.
+- Company admins can copy a company bot to another company. Mia first writes a copy without the first company's names, clients, contacts, links and figures, and shows it beside the original to edit and approve.
+- New bots can be made inside a company, the same way as in Solo. Admins can remove a company bot from its sidebar row.
+- History titles each chat from how it started and updates the title as it goes; chats can be deleted from History.
+- A direct message or group can be closed, as in Slack: it leaves the sidebar until someone writes again or it is opened.
+- A stuck automation shows what it needs under its title, with a Fix with Mia button that sends the problem to Mia.
+- Emoji reactions on messages. GPT 6.1 is offered when signing in with ChatGPT.
+
+### Changed
+- The shared space is called a company everywhere you read it, and colleagues instead of teammates.
+- A bot asked in a company channel works in that company's own folder on your computer, and can use Mia's browser there.
+- A Solo bot you have shared with a company moves to a folded Hidden group in that company's My Bots, where it can be reactivated.
+- Approval cards say in plain words what will happen, including connector actions, and one yes covers further edits to the same document in a reply.
+- Bots' Motes show beside @mentions and on the line saying a bot joined a channel. Browse-together cards are green.
+- Mia Router shows Setting you up while it starts, and Mia gives a slow computer more time to start.
+
+### Fixed
+- A custom bot color picked from the color panel is kept.
+- Message times in an open chat no longer stay at "just now".
+- Sidebar menus and the browser tips stay above the browser page; collapse buttons and browser controls stay in reach in a small window.
+- The sidebar dot no longer blinks while someone types, and stays visible on hover; unread chats are bold.
+- Signing up with a new email creates the account.
+- A company that hits the server's request limit waits and opens again on its own.
 ## [0.3.1] — 2026-11-05
 
 ### Added
