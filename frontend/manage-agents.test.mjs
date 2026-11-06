@@ -657,7 +657,7 @@ test('agent editor exposes a persisted avatar color with an automatic fallback',
   assert.match(source, /avatarColor: normalizeAgentAvatarColor\(a\.avatarColor\)/);
   assert.match(source, /avatarColor: editState\.avatarColor \|\| null/);
   assert.match(source, /moteColorFilterFor\(name, color\)/);
-  assert.match(source, /moteColorFilterFor\(agentName, agentAvatarColorFor\(agentName, null\)\)/);
+  assert.match(source, /moteColorFilterFor\(agentName, color \|\| agentAvatarColorFor\(agentName, null\)\)/);
   assert.match(source, /function agentProfileRefFor\(name, agentId\)/);
   assert.match(source, /data-agent-profile-id/);
   assert.match(source, /function openProfile\(target\)/);

@@ -3108,9 +3108,9 @@
   // picked, and again for a freshly-opened room with no messages yet.
   // For an agent room the hero is that bot's own Mote variant; elsewhere
   // (no room / channels) it's the plain pink one.
-  function chatHeroHtml(message, agentName){
+  function chatHeroHtml(message, agentName, color){
     var hero = agentName && isMiaOrchestrator(agentName) ? miaAvatarHtml(132, 'chat-empty-hero-mia', 'static')
-      : '<img src="' + (agentName ? moteSrcFor(agentName, true) : 'assets/mote/mote-static.svg') + '" alt="" class="chat-empty-hero-mote"' + (agentName ? ' style="filter:' + moteColorFilterFor(agentName, agentAvatarColorFor(agentName, null)) + '"' : '') + ' draggable="false" />';
+      : '<img src="' + (agentName ? moteSrcFor(agentName, true) : 'assets/mote/mote-static.svg') + '" alt="" class="chat-empty-hero-mote"' + (agentName ? ' style="filter:' + moteColorFilterFor(agentName, color || agentAvatarColorFor(agentName, null)) + '"' : '') + ' draggable="false" />';
     return '<div class="chat-empty-hero">' + hero +
       '<div class="chat-empty-hero-text">' + message + '</div></div>';
   }
@@ -5547,7 +5547,7 @@
       var hiddenOpen=hubHiddenBotsOpen[activeWorkspaceKey]===true;
       var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
       hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
-      hiddenToggle.innerHTML='<span class="hub-hidden-bots-chevron" aria-hidden="true">'+(hiddenOpen?'&#9662;':'&#9656;')+'</span>Hidden · '+hiddenBots.length;
+      hiddenToggle.innerHTML='<svg class="hub-hidden-bots-chevron'+(hiddenOpen?' open':'')+'" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3"/></svg>Hidden · '+hiddenBots.length;
       hiddenToggle.title='Bots you shared with the company. Everyone uses them under Company bots.';
       hiddenToggle.addEventListener('click',function(){
         hubHiddenBotsOpen[activeWorkspaceKey]=!hiddenOpen;
@@ -13168,6 +13168,14 @@
       return;
     }
     if(inHubRoom() && !state.historyInitialized && !state.messages.length && !state.thinking) return showChatThreadPlaceholder(thread);
+    var botChat = inHubRoom() ? hubChannel(roomId) : null;
+    if(botChat && botChat.kind === 'bot' && !state.messages.length && !state.thinking){
+      // A company bot chat opens like a Solo bot chat: the bot itself, and what this chat is.
+      var chatBot = botChat.bot || {};
+      replaceChatTimeline(thread, roomId, state, chatHistoryControlHtml(state) + chatHeroHtml(esc('Your private chat with ' + (chatBot.name || 'this bot') + '. Only you see it, and it runs on your computer with your own models.'), chatBot.name || 'Bot', normalizeAgentAvatarColor(chatBot.avatar_color)), options);
+      wireChatHistoryControl(thread, roomId);
+      return;
+    }
     if(!state.messages.length && !state.thinking && !botDraftFlow){
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
         ? esc(miaEmptyGreeting(currentRealProfileName()))
@@ -14909,9 +14917,13 @@
       var peopleCount=botCount+(botCount===1?' bot':' bots')+(hubRoom.hubDirectoryAt?' & '+userCount+(userCount===1?' user':' users'):'');
       // The count opens People and bots, where this channel's bots are added
       // and managed. It stays on this header: nothing here goes in the address bar.
-      header.innerHTML='<div class="ch-left"><button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to channels">‹</button><span class="channel-header-title'+(window.MiaSpaceUI && window.MiaSpaceUI.inChannel(chatWs.activeRoomId) ? ' in-call' : '')+'">'+esc(chatWs.activeLabel||'')+'</span></div><div class="ch-right ch-stays">'+(window.MiaSpaceUI && window.MiaSpaceUI.sessionGroup()===null ? '<button type="button" class="ch-roster-chip ch-browse-together" id="hubBrowseTogether" title="Open a shared browser with this chat and invite people">Browse together</button>' : '')+'<button type="button" class="ch-roster-chip" id="hubBotsToggle">'+peopleCount+'</button>'+
+      // A company bot chat heads like a Solo bot chat: the bot's Mote, its
+      // name and Bot, with no people count for a one-to-one chat.
+      var openChat=hubChannel(chatWs.activeRoomId), chatBot=openChat && openChat.kind==='bot' ? openChat.bot||{} : null;
+      var headerMark=chatBot ? '<span class="ch-mark dm">'+agentAvatarHtml(chatBot.name||'Bot',String(chatBot.source_bot_id||chatBot.id||''),24,null,normalizeAgentAvatarColor(chatBot.avatar_color))+'</span>' : '';
+      header.innerHTML='<div class="ch-left"><button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to channels">‹</button>'+headerMark+'<span class="channel-header-title'+(window.MiaSpaceUI && window.MiaSpaceUI.inChannel(chatWs.activeRoomId) ? ' in-call' : '')+'">'+esc(chatWs.activeLabel||'')+'</span>'+(chatBot ? '<span class="chat-msg-tag">Bot</span>' : '')+'</div><div class="ch-right ch-stays">'+(window.MiaSpaceUI && window.MiaSpaceUI.sessionGroup()===null ? '<button type="button" class="ch-roster-chip ch-browse-together" id="hubBrowseTogether" title="Open a shared browser with this chat and invite people">Browse together</button>' : '')+(chatBot ? '' : '<button type="button" class="ch-roster-chip" id="hubBotsToggle">'+peopleCount+'</button>')+
         '<button type="button" class="ch-icon-btn conv-more-btn" id="hubChannelMoreBtn" title="More" aria-label="More" aria-haspopup="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg></button></div>';
-      el('#hubBotsToggle',header).addEventListener('click',openManageAgentsPane);
+      if(el('#hubBotsToggle',header))el('#hubBotsToggle',header).addEventListener('click',openManageAgentsPane);
       var browseTogether=el('#hubBrowseTogether',header);
       if(browseTogether)browseTogether.addEventListener('click',function(){window.MiaSpaceUI.startInChannel(chatWs.activeRoomId).then(renderChatHeaderBar);});
       // The same channel menu as right-clicking it in the sidebar, under the dots.

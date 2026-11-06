@@ -173,7 +173,7 @@ test('frequent roster refresh reuses the membership directory to preserve reques
 test('the header bot count opens the People and bots list instead of its own',()=>{
  const header={style:{},innerHTML:''},handlers={},control=id=>({addEventListener:(type,fn)=>{handlers[id]=fn;}});
  let opened=0;const openManageAgentsPane=()=>opened++;
- const env={window:{},hubWorkspace:()=>true,chatWs:{activeRoomId:'channel',activeLabel:'Shared'},chatRoomState:()=>({hubBots:[{id:'bot',name:'Pod',published:null},{id:'b2',name:'Live',published:1}],hubMembers:[{},{}],hubDirectoryAt:1}),hubChat:{},el:selector=>selector==='#channelHeader'?header:control(selector),els:()=>[],esc:s=>s,openManageAgentsPane,closeMobileChatRoom:()=>{},renderChatTabs:()=>{}};
+ const env={window:{},hubWorkspace:()=>true,hubChannel:()=>({id:'channel',kind:'channel'}),chatWs:{activeRoomId:'channel',activeLabel:'Shared'},chatRoomState:()=>({hubBots:[{id:'bot',name:'Pod',published:null},{id:'b2',name:'Live',published:1}],hubMembers:[{},{}],hubDirectoryAt:1}),hubChat:{},el:selector=>selector==='#channelHeader'?header:control(selector),els:()=>[],esc:s=>s,openManageAgentsPane,closeMobileChatRoom:()=>{},renderChatTabs:()=>{}};
  appFunction('renderChatHeaderBar',env)();
  assert.match(header.innerHTML,/>1 bot &amp; 2 users<|>1 bot & 2 users</);assert.doesNotMatch(header.innerHTML,/Remove|@Pod|ch-roster-panel|Add bot|Bot versions/);
  assert.equal(handlers['#hubBotsToggle'],openManageAgentsPane);
@@ -409,7 +409,8 @@ test('Edit says the edited text is sent as a new message',()=>{
   assert.match(source,/appPrompt\(original, \{title: 'Edit and resend', message: 'Your edited text is sent as a new message\. The original stays\.', submitLabel: 'Send'\}\)/);
 });
 test('a shared channel shows placeholder bars, not "No messages yet", before its history arrives',()=>{
-  assert.match(source,/if\(inHubRoom\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);\n\s+if\(!state\.messages\.length && !state\.thinking && !botDraftFlow\)\{/);
+  // The placeholder comes first; a company bot chat's intro, then the empty state, only once history is in.
+  assert.match(source,/if\(inHubRoom\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);\n\s+var botChat = inHubRoom\(\) \? hubChannel\(roomId\) : null;[\s\S]{0,900}?\n\s+if\(!state\.messages\.length && !state\.thinking && !botDraftFlow\)\{/);
 });
 test('your own attachment cards stay readable beside the bubble',()=>{
   const css=fs.readFileSync(path.join(__dirname,'../styles.css'),'utf8');
@@ -997,4 +998,12 @@ test('company messages carry their Hub reactions and can be reacted to like Solo
   await toggle('hub-sequence-7','🔥');
   assert.equal(calls.at(-1),'PUT /v1/teams/t/channels/room/messages/7/reactions/'+encodeURIComponent('🔥'),'a new one is added');
   assert.equal(rendered,2);
+});
+test('a company bot chat looks like a Solo bot chat: its Mote, name and Bot in the header, and an intro when empty',()=>{
+  assert.match(source,/var openChat=hubChannel\(chatWs\.activeRoomId\), chatBot=openChat && openChat\.kind==='bot' \? openChat\.bot\|\|\{\} : null;/);
+  assert.match(source,/var headerMark=chatBot \? '<span class="ch-mark dm">'\+agentAvatarHtml\(chatBot\.name\|\|'Bot'/);
+  assert.match(source,/\(chatBot \? '<span class="chat-msg-tag">Bot<\/span>' : ''\)/);
+  assert.match(source,/\(chatBot \? '' : '<button type="button" class="ch-roster-chip" id="hubBotsToggle">'/,'no people count in a one-to-one chat');
+  assert.match(source,/if\(el\('#hubBotsToggle',header\)\)el\('#hubBotsToggle',header\)\.addEventListener/);
+  assert.match(source,/chatHeroHtml\(esc\('Your private chat with ' \+ \(chatBot\.name \|\| 'this bot'\) \+ '\. Only you see it, and it runs on your computer with your own models\.'\), chatBot\.name \|\| 'Bot', normalizeAgentAvatarColor\(chatBot\.avatar_color\)\)/);
 });
