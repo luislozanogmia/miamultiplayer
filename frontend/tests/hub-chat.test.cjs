@@ -420,7 +420,7 @@ test('your own attachment cards stay readable beside the bubble',()=>{
 test('a reload reopens the shared channel you last had open',async()=>{
   const run=async(stored,channels)=>{const opened=[];const env={chatWs:{activeRoomId:null},hubChat:{channels},storedActiveChatLocation:()=>stored,
     loadHubTeams:()=>Promise.resolve(),refreshHubChannels:()=>{},startChatPolling(){},refreshChatMain(){},hubFeedback:e=>{throw e;},takeNewTeamBotRequest:()=>null,Date,activeWorkspaceKey:'hub_x',loadTeamBotChats:()=>Promise.resolve(),loadCompanyBots(){},restoreChatRoom:open=>open(),retryHubChat:e=>{throw e;},clearTimeout,
-    openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),Number,Promise};
+    openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),Number,Promise,hubHiddenBotsOpen:{}};
     await appFunction('initHubChat',env)();return opened;};
   const channels=[{id:'first',name:'general'},{id:'second',name:'ux-test'}];
   assert.deepEqual(await run('second',channels),['second']);
@@ -433,7 +433,7 @@ test('a second startup keeps the New Bot setup chat the first one opened',async(
   const env={chatWs:{activeRoomId:'agent-setup',activeKind:'agent-setup'},hubChat:{channels:[{id:'first',name:'general'}]},storedActiveChatLocation:()=>'',
     loadHubTeams:()=>Promise.resolve(),refreshHubChannels:()=>{},startChatPolling(){},refreshChatMain(){main++;},renderChatSidebar(){},hubFeedback:e=>{throw e;},
     takeNewTeamBotRequest:()=>null,Date,activeWorkspaceKey:'hub_x',AGENT_SETUP_ROOM_ID:'agent-setup',agentSetupIdentity:()=>({name:'New bot'}),loadTeamBotChats:()=>Promise.resolve(),loadCompanyBots(){},restoreChatRoom:open=>open(),retryHubChat:e=>{throw e;},clearTimeout,
-    openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:()=>false,Number,Promise};
+    openHubChannel:(channel)=>{opened.push(channel.id);},hubPrivateConversation:()=>false,Number,Promise,hubHiddenBotsOpen:{}};
   await appFunction('initHubChat',env)();
   assert.deepEqual(opened,[]);assert.equal(env.chatWs.activeKind,'agent-setup');assert.equal(env.chatWs.activeRoomId,'agent-setup');assert.equal(main,1);
 });
@@ -784,7 +784,7 @@ test('a bot reply shows its run label apart from the text; people cannot post on
 function companyRowEnv(activeRoomId){
   return {document:{createElement:()=>({className:'',innerHTML:'',setAttribute(){},addEventListener(){}})},
     companyBotPlace:()=>({action:'open',channel:{id:'c1'}}),hubChannel:()=>({id:'c1'}),chatWs:{activeRoomId},
-    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){},companyBotCanRemove:()=>false,hubChat:{membership:{role:'member'}}};
+    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){},companyBotCanRemove:()=>false,hubChat:{membership:{role:'member'}},companyBotChat:()=>null};
 }
 test('a company bot row never lights up: the open channel is the channel row\'s to show',()=>{
   const row=appFunction('companyBotRow',companyRowEnv('c1'));
@@ -929,7 +929,7 @@ test('a direct message or group can be closed, and comes back when someone write
   dm.latest_sequence=5;
   appFunction('openHubChannel',Object.assign({setHubConversationClosed:set},env))(dm);
   assert.equal(closed(dm),false,'opening it clears the close');
-  assert.match(source,/hubPrivateConversation\(channel\) && !hubConversationClosed\(channel\)/);
+  assert.match(source,/hubPrivateConversation\(channel\) && channel\.kind!=='bot' && !hubConversationClosed\(channel\)/);
 });
 test('a Solo bot shared with this company is greyed in My Bots until reactivated',()=>{
   const shared=appFunction('sharedSoloBots',{})(
@@ -947,7 +947,29 @@ test('a Solo bot shared with this company is greyed in My Bots until reactivated
   assert.match(source,/function soloBotSharedAway\(bot\)\{ return !!\(hubChat\.sharedSoloBots\|\|\{\}\)\[bot\.id\] && !soloBotReactivated\(bot\.id\); \}/);
   assert.match(source,/var sharedAway=soloBotSharedAway\(bot\);/);
   // They sit folded in a Hidden group at the end of My Bots, closed until opened.
-  assert.match(source,/var hiddenOpen=hubSidebarSections\['bots-hidden'\]===true;/);
+  assert.match(source,/var hiddenOpen=hubHiddenBotsOpen\[activeWorkspaceKey\]===true;/);
+  assert.match(source,/function initHubChat\(\)\{\n\s*hubHiddenBotsOpen\[activeWorkspaceKey\]=false;/,'folded every time the company opens');
   assert.match(source,/if\(hiddenOpen\)hiddenBots\.forEach\(function\(bot\)\{ myBotSection\.list\.appendChild\(teamBotRow\(bot\)\); \}\);/);
   assert.match(source,/if\(sharedAway\)openSharedSoloBotNotice\(bot\); else openTeamBotChat\(bot\);/);
+});
+test('a company bot opens your private chat with it on the Hub, and falls back to its channel on an older Hub',async()=>{
+  const calls=[];let refreshed=0;
+  const bot={key:'admin bot',name:'Admin Bot',botIds:['src1'],places:[{channelId:'c1',botId:'src1'}],channels:[{id:'c1'}]};
+  const chat={id:'chat1',kind:'bot',bot:{id:'cb1',source_bot_id:'src1',name:'Admin Bot'}};
+  const env=(channels,answer)=>{const hubChat={channels:channels.slice()};const e={hubChat,activeWorkspaceKey:'hub_t',hubPath:()=>'/v1/teams/t',Promise,
+    hubCall:(m,p,b)=>{calls.push([m,p,b]);return answer();},
+    refreshHubChannels:()=>{refreshed++;hubChat.channels.push(chat);return Promise.resolve();},
+    hubChannel:id=>hubChat.channels.filter(c=>c.id===id)[0],openHubChannel:c=>calls.push(['open',c.id]),
+    openCompanyBot:b=>calls.push(['channel',b.name]),showBenchToast:t=>calls.push(['toast',t]),hubActionError:(e,f)=>f};
+    e.companyBotChat=appFunction('companyBotChat',e);return e;};
+  await appFunction('openCompanyBotChat',env([chat],()=>Promise.reject(new Error('no call'))))(bot);
+  assert.deepEqual(calls.splice(0),[['open','chat1']],'an existing chat just opens');
+  await appFunction('openCompanyBotChat',env([],()=>Promise.resolve({channel:{id:'chat1'}})))(bot);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.splice(0))),[['POST','/v1/teams/t/bot-chats',{botId:'src1'}],['open','chat1']]);
+  await appFunction('openCompanyBotChat',env([],()=>Promise.reject(Object.assign(new Error('missing'),{status:404}))))(bot);
+  assert.deepEqual(calls.splice(-1),[['channel','Admin Bot']],'a Hub without bot chats keeps the channel behavior');
+  const title=appFunction('hubChannelTitle',{hubPrivateConversation:c=>c.kind==='bot'});
+  assert.equal(title(chat),'Admin Bot');
+  assert.match(source,/channel\.kind!=='bot' && !hubConversationClosed/,'a bot chat is not listed under Direct messages');
+  assert.match(source,/if\(chat && chatWs\.activeRoomId===chat\.id\)button\.className\+=' active';/,'its company bot row lights up while it is open');
 });

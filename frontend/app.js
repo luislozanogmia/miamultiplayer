@@ -5169,7 +5169,8 @@
   // are private conversations listed under Direct messages. A DM's stored
   // name is an internal key, so it is always shown as the other person's
   // name; a group without its own name shows its members' names.
-  function hubPrivateConversation(channel){ return !!channel && (channel.kind==='dm' || channel.kind==='group'); }
+  // A bot chat is one person's private conversation with a company bot.
+  function hubPrivateConversation(channel){ return !!channel && (channel.kind==='dm' || channel.kind==='group' || channel.kind==='bot'); }
   // Teammates' emails are remembered per team, from the member list and from
   // their messages, so a conversation keeps their name after they leave.
   var HUB_PEOPLE_STORAGE_KEY = 'miaHubPeople';
@@ -5219,6 +5220,7 @@
   function hubChannelTitle(channel){
     if(!channel)return '';
     if(!hubPrivateConversation(channel))return channel.name;
+    if(channel.kind==='bot')return channel.bot && channel.bot.name || 'Bot';
     var names=hubOtherMemberIds(channel).map(function(id){
       var email=hubPersonEmail(id);
       return email ? displayNameForEmail(email) : '';
@@ -5230,6 +5232,10 @@
   // channel, the teammate's avatar for a direct message, initials for a group.
   function hubChannelMark(channel){
     if(!hubPrivateConversation(channel))return '<span class="chat-row-mark channel" aria-hidden="true">#</span>';
+    if(channel.kind==='bot'){
+      var bot=channel.bot||{};
+      return '<span class="chat-row-mark tile" aria-hidden="true">'+agentAvatarHtml(bot.name||'Bot',String(bot.source_bot_id||bot.id||channel.id),40,null,normalizeAgentAvatarColor(bot.avatar_color),true)+'</span>';
+    }
     var others=hubOtherMemberIds(channel).map(hubPersonEmail).filter(Boolean);
     if(channel.kind==='dm' && others.length===1)return '<span class="chat-row-mark tile human" aria-hidden="true">'+humanAvatarContent(others[0])+'</span>';
     return '<span class="chat-row-mark tile human" aria-hidden="true">'+esc(benchMark(hubChannelTitle(channel)))+'</span>';
@@ -5375,6 +5381,7 @@
     }).catch(function(){ showBenchToast('Couldn\'t open a chat with '+bot.name+'. Try again.'); });
   }
   function initHubChat(){
+    hubHiddenBotsOpen[activeWorkspaceKey]=false;
     // Local startup callbacks may already have selected Mia. A Hub selection
     // is valid only after this team's authoritative channel list is loaded.
     // After a reload, reopen the channel this team last had open.
@@ -5457,7 +5464,8 @@
     var pinned=el('#chatPinned'), all=el('#chatAllConversations');
     var pinnedChannels=hubChat.channels.filter(function(channel){return !!channel.pinned;});
     var channels=hubChat.channels.filter(function(channel){return !channel.pinned && !hubPrivateConversation(channel);});
-    var dms=hubChat.channels.filter(function(channel){return !channel.pinned && hubPrivateConversation(channel) && !hubConversationClosed(channel);});
+    // A bot chat opens from its company bot's row, not from Direct messages.
+    var dms=hubChat.channels.filter(function(channel){return !channel.pinned && hubPrivateConversation(channel) && channel.kind!=='bot' && !hubConversationClosed(channel);});
     if(el('#chatAllCount'))el('#chatAllCount').textContent=String(hubChat.channels.length-pinnedChannels.length);
     renderHubStatus();
     function row(channel){
@@ -5527,14 +5535,14 @@
     var hiddenBots=myBots.filter(function(bot){ return soloBotSharedAway(bot) && !botPinned('mine:'+bot.id); });
     myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
     if(hiddenBots.length){
-      var hiddenOpen=hubSidebarSections['bots-hidden']===true;
+      // Folded each time the company opens; opening it lasts until you leave.
+      var hiddenOpen=hubHiddenBotsOpen[activeWorkspaceKey]===true;
       var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
       hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
       hiddenToggle.innerHTML='<span class="hub-hidden-bots-chevron" aria-hidden="true">'+(hiddenOpen?'&#9662;':'&#9656;')+'</span>Hidden · '+hiddenBots.length;
       hiddenToggle.title='Bots you shared with the company. Everyone uses them under Company bots.';
       hiddenToggle.addEventListener('click',function(){
-        hubSidebarSections['bots-hidden']=!hiddenOpen;
-        try { localStorage.setItem('miaHubSidebarSections',JSON.stringify(hubSidebarSections)); } catch(_sectionStorageError) {}
+        hubHiddenBotsOpen[activeWorkspaceKey]=!hiddenOpen;
         renderHubSidebar();
       });
       myBotSection.list.appendChild(hiddenToggle);
@@ -5659,6 +5667,28 @@
     var mine=hubChannel(channel.id);
     if(mine)return hubChannelTitle(mine);
     return channel.kind==='dm' ? 'Direct message' : channel.kind==='group' ? 'Group' : channel.name || 'Channel';
+  }
+  // Your private chat with a company bot, if the Hub has made one.
+  function companyBotChat(bot){
+    return (hubChat.channels||[]).filter(function(channel){
+      return channel.kind==='bot' && channel.bot && bot.botIds.indexOf(String(channel.bot.source_bot_id||channel.bot.id))>=0;
+    })[0]||null;
+  }
+  // A company bot opens your private chat with it, made on the Hub the first
+  // time. A Hub without bot chats still sends you to a channel with the bot.
+  function openCompanyBotChat(bot){
+    var chat=companyBotChat(bot), place=bot.places && bot.places[0];
+    if(chat)return openHubChannel(chat);
+    if(!place)return openCompanyBot(bot);
+    var workspace=activeWorkspaceKey;
+    return hubCall('POST',hubPath()+'/bot-chats',{botId:place.botId}).then(function(result){
+      if(workspace!==activeWorkspaceKey)return;
+      return refreshHubChannels().then(function(){ return openHubChannel(hubChannel(result.channel.id)); });
+    }).catch(function(error){
+      if(workspace!==activeWorkspaceKey)return;
+      if(error && error.status===404)return openCompanyBot(bot);
+      showBenchToast(hubActionError(error,'Couldn\'t open a chat with '+bot.name+'. Try again.'));
+    });
   }
   function openCompanyBot(bot){
     var place=companyBotPlace(bot,hubChannel);
@@ -5839,10 +5869,19 @@
     button.className='chat-recent-row hub-channel-row';
     button.setAttribute('data-company-bot',bot.key);
     var where=bot.channels.map(companyBotWhere).join(', ');
+    // With a private chat, the row shows it: lit while open, its latest line, unread.
+    var chat=companyBotChat(bot), state=chat && chatWs.byRoom[chat.id];
+    var chatPreview=chat ? hubRoomPreview(chat.id) : '';
+    if(chat && chatWs.activeRoomId===chat.id)button.className+=' active';
+    var unread=!!chat && chat.id!==chatWs.activeRoomId && Number(chat.unread||0)>0;
     button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
       +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
-      +'<span class="row-preview">'+esc(where)+'</span></span>';
-    button.addEventListener('click',function(){ openCompanyBot(bot); });
+      +'<span class="row-preview">'+esc(chatPreview||where)+'</span></span>';
+    if(chat){
+      var line=el('.row-line1',button), more=el('.hub-channel-more',button);
+      if(line && more)more.insertAdjacentHTML('beforebegin',renderChatActivityIndicator(!!(state && state.thinking),unread));
+    }
+    button.addEventListener('click',function(){ openCompanyBotChat(bot); });
     // Only this company's admins may take a bot out of it, even as a clean copy.
     var items=(hubChat.membership||{}).role==='admin' ? [['Copy to another company…',function(){ copyCompanyBotToCompany(bot); }]] : [];
     if(companyBotCanRemove(bot))items.push(['Remove from company',function(){ removeCompanyBot(bot); }]);
@@ -5871,7 +5910,7 @@
     wireTeamBotPin(button,'mine:'+bot.id,!!pinned);
     return button;
   }
-  var hubSidebarSections={};
+  var hubSidebarSections={}, hubHiddenBotsOpen={};
   try { hubSidebarSections=JSON.parse(localStorage.getItem('miaHubSidebarSections')||'{}')||{}; } catch(_sectionStorageError) {}
   // The Channels + offers both ways in: start a channel, or find one.
   function openHubChannelAddMenu(anchor){
@@ -5941,6 +5980,7 @@
   function hubChannelActions(channel){
     var me=hubChat.membership || {}, admin=me.role==='admin', regular=!hubPrivateConversation(channel), manager=admin || channel.created_by===me.clerk_user_id;
     var actions=[{id:'pin',label:channel.pinned?'Unpin':'Pin to top'}];
+    if(channel.kind==='bot')return actions;
     if(channel.kind!=='dm' && manager)actions.push({id:'invite',label:'Invite people…'});
     if(regular && manager)actions.push({id:'rename',label:'Rename…'});
     if(channel.kind!=='dm')actions.push({id:'leave',label:regular?'Leave channel':'Leave group'});
