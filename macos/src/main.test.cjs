@@ -330,25 +330,23 @@ test("dev mode refuses to start without its own Hermes home and Python", () => {
 
 test("Claude CLI discovery skips an unreadable PATH entry", () => {
   const main = loadMain();
-  const originalPath = process.env.PATH;
-  const originalStatSync = fs.statSync;
-  try {
-    process.env.PATH = ["/unreadable", "/working"].join(path.delimiter);
-    fs.statSync = candidate => {
-      if (candidate.startsWith("/unreadable/")) {
-        const error = new Error("permission denied");
-        error.code = "EACCES";
-        throw error;
-      }
-      if (candidate.startsWith("/working/")) return { isFile: () => true };
-      return undefined;
-    };
-    assert.equal(main.discoverClaudeCodeCommand(), path.join("/working", "claude"));
-  } finally {
-    fs.statSync = originalStatSync;
-    if (originalPath === undefined) delete process.env.PATH;
-    else process.env.PATH = originalPath;
-  }
+  const unreadable = path.resolve(os.tmpdir(), "unreadable");
+  const working = path.resolve(os.tmpdir(), "working");
+  const expected = path.join(working, process.platform === "win32" ? "claude.exe" : "claude");
+  const stat = candidate => {
+    if (candidate.startsWith(`${unreadable}${path.sep}`)) {
+      const error = new Error("permission denied");
+      error.code = "EACCES";
+      throw error;
+    }
+    if (candidate === expected) return { isFile: () => true };
+    return undefined;
+  };
+  assert.equal(main.discoverClaudeCodeCommand({
+    env: { PATH: [unreadable, working].join(path.delimiter) },
+    home: path.resolve(os.tmpdir(), "unused-home"),
+    stat,
+  }), expected);
 });
 
 test("packaged runtime resolves platform layout through shared helpers", () => {
