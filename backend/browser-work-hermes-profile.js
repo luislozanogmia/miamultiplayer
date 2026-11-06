@@ -18,6 +18,9 @@ function provisionBrowserWorkProfile({ profilesRoot, worker, binding }) {
   provisionBundledPlugin(home, PROVIDER_LIMITS_PLUGIN);
   fs.writeFileSync(path.join(home, 'config.yaml'), [
     '# Managed by Mia browser work. No credentials.',
+    // Each turn pins its model; Hermes' large-context switch confirmation has
+    // no one to answer it here either (see hermes-bot-profile.js).
+    'model:', '  switch_context_confirm_tokens: 0',
     'platform_toolsets:', '  cli:', '    - mia_browser_work', `    - ${ASK_BEFORE_DO_TOOLSET}`,
     // Keep the sole bound tool eager: the pinned scheduler admits its exact
     // native name, while deferred tool_call wrappers remain sequential.

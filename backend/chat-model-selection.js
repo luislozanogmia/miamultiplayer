@@ -225,6 +225,17 @@ function userFacingModelDispatchError(error, { managedRouter = false, managedRou
   if (/selected model is not available|unsupported reasoning effort|response speed is not available/i.test(message)) {
     return 'That model selection is no longer available. Choose a connected model, then try again.';
   }
+  // Hermes asks before some model switches and Mia can't answer it mid-turn.
+  // The large-context one is turned off in every profile; these remain.
+  if (/expensive model warning/i.test(message)) {
+    return 'Your model provider marks that model as expensive and asked for a confirmation Mia can’t give here. Choose a different model.';
+  }
+  if (/data-training tier warning/i.test(message)) {
+    return 'That model is on a tier that may use your chats for training, so it needs a confirmation Mia can’t give here. Choose a different model.';
+  }
+  if (/large context model switch/i.test(message)) {
+    return 'This chat is too large to switch models without a confirmation. Go back to the previous model, or start a new chat.';
+  }
   return 'I couldn’t complete that response. Please try again.';
 }
 
