@@ -13,7 +13,7 @@ async function save({ onboardingComplete }) {
   const button = { disabled: false };
   const run = new Function('el', 'api', 'state', 'setHarnessActionLabel', 'renderHarnessSettings', 'activateWorkspace',
     'renderHarnessAuth', 'closeHarnessOnboarding', 'setAppLoading', 'location', 'localStorage', 'chatModelPicker',
-    'showBenchToast', 'harnessProviderDisplayName', 'renderHarnessOnboarding', 'finishConnectOnly', 'cache',
+    'showBenchToast', 'harnessProviderDisplayName', 'renderHarnessOnboarding', 'finishConnectOnly', 'cache', 'syncBrowserWorkspace',
     `var harnessAuthSaveInProgress = false, harnessAuthAwaitingSave = true, harnessConnectOnly = false;
      var harnessSetupHintTimer = null, showHarnessSetupProgress = function(){};
      var harnessOnboardingState = state, harnessSettingsCache = cache;
@@ -30,7 +30,7 @@ async function save({ onboardingComplete }) {
     { useConfiguredConnection: () => events.push('picker') },
     (text) => { events.push('toast:' + text); saved(); },
     (provider) => (provider === 'claude-subscription-directsdk-experimental' ? 'Claude' : provider),
-    () => {}, () => {}, cache);
+    () => {}, () => {}, cache, () => events.push('browser-workspace'));
   await done;
   return events;
 }
@@ -44,5 +44,6 @@ test('first-time setup still reloads into the chosen workspace', async () => {
   const events = await save({ onboardingComplete: false });
   assert.ok(events.includes('reload'));
   assert.ok(events.includes('workspace:solo'));
+  assert.ok(events.includes('browser-workspace'), 'the browser follows the chosen workspace');
   assert.ok(!events.some((event) => event.startsWith('toast:')));
 });
