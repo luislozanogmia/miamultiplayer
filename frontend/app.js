@@ -5004,6 +5004,8 @@
   }
   function hubFeedback(error){
     hubChat.error = error && error.message || '';
+    // Trouble reaching the Hub or sign-in shows as the Offline pill, not red text.
+    hubChat.errorIsConnection = !!(error && error.message && hubUnreachable(error));
     if(error && (error.status === 403 || error.status === 404)){
       // Revocation invalidates cached content and its history cursor.
       // A later invitation must rebuild history from the authorized beginning.
@@ -5403,7 +5405,7 @@
     hubChat.companyBots=[];
     var teamBots=loadTeamBotChats();
     return loadHubTeams(false).then(refreshHubChannels).then(function(){ loadCompanyBots(); return teamBots; }).then(function(){
-      hubChat.error='';hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
+      hubChat.error='';hubChat.errorIsConnection=false;hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
       var botChat=(chatWs.nativeConversations||[]).filter(function(c){return c.id===previousRoomId;})[0];
       if(botChat && !keepSetup){ startChatPolling(); return loadChatRoom(botChat.id,'agent',botChat.name); }
       var room=hubChat.channels.filter(function(c){return c.id===previousRoomId;})[0] || hubChat.channels.filter(function(c){return !hubPrivateConversation(c);})[0] || hubChat.channels[0];
@@ -5448,17 +5450,41 @@
     clearTimeout(hubChat.retryTimer);hubChat.retryTimer=null;initHubChat();
   });
   function renderHubStatus(){
+    renderOfflinePill();
     var footer=el('#chatSyncFooter');
     if(!footer)return;
     var typing=hubChat.typing.filter(function(entry){return entry.channel_id===chatWs.activeRoomId;}).map(function(entry){return displayNameForEmail(entry.email);});
-    var offline=hubChat.feedStatus==='offline';
+    // Connection trouble is the Offline pill's to show; the line keeps quiet
+    // and red text is left for refusals reconnecting won't fix.
+    var connection=hubConnectionTrouble(), refusal=hubChat.error && !hubChat.errorIsConnection ? hubChat.error : '';
     footer.style.display='block';
     footer.setAttribute('role','status');
     footer.setAttribute('aria-live','polite');
-    footer.textContent=hubChat.error || (offline ? 'Reconnecting to the company…'
-      : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to company');
-    footer.classList.toggle('chat-sync-fail',offline || !!hubChat.error || chatWs.configured===false);
+    footer.textContent=refusal || (connection ? '' : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to company');
+    footer.classList.toggle('chat-sync-fail',!!refusal || (!connection && chatWs.configured===false));
   }
+  // Offline, the way Google Calendar shows it: a small dark pill in the
+  // corner, gone by itself when the connection is back. × hides it until
+  // the next time the connection drops.
+  var offlinePill={dismissed:false};
+  function hubConnectionTrouble(){
+    return hubWorkspace() && (hubChat.feedStatus==='offline' || !!(hubChat.error && hubChat.errorIsConnection));
+  }
+  function renderOfflinePill(){
+    var offline=navigator.onLine===false || hubConnectionTrouble();
+    if(!offline)offlinePill.dismissed=false;
+    var pill=document.getElementById('miaOfflinePill');
+    if(!offline || offlinePill.dismissed){ if(pill)pill.hidden=true; return; }
+    if(!pill){
+      pill=document.createElement('div'); pill.id='miaOfflinePill'; pill.className='mia-offline-pill'; pill.setAttribute('role','status');
+      pill.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M8.5 8.6A5 5 0 0 0 6.5 18H17"/><path d="M10.2 6.2A6 6 0 0 1 18.4 11 3.5 3.5 0 0 1 20.6 16.9"/></svg><span>Offline</span><button type="button" aria-label="Hide" title="Hide">&times;</button>';
+      pill.querySelector('button').addEventListener('click',function(){ offlinePill.dismissed=true; pill.hidden=true; });
+      document.body.appendChild(pill);
+    }
+    pill.hidden=false;
+  }
+  window.addEventListener('offline',renderOfflinePill);
+  window.addEventListener('online',renderOfflinePill);
   function hubRoomPreview(roomId){
     var state=chatWs.byRoom[roomId];
     var last=state && (state.messages||[]).filter(function(m){return !m.system && !m.threadRoot && (m.body || m.hubFile);}).slice(-1)[0];
@@ -6243,7 +6269,7 @@
       }
       applyHubRows(roomId,result.messages||[]);
       state.historyInitialized=true;state.historyComplete=!state.historyCursor;
-      hubChat.error='';chatWs.configured=true;
+      hubChat.error='';hubChat.errorIsConnection=false;chatWs.configured=true;
       markHubRead(roomId);
       renderChatSidebar();renderChatThread();renderDeptAgentSelector();
       if(!state.messages.length && state.historyCursor)return loadOlderHubMessages(roomId);

@@ -216,7 +216,7 @@ function hubEnv(overrides={}){
     renderChatSidebar:()=>{},renderChatThread:()=>{},renderDeptAgentSelector:()=>{},renderChatHeaderBar:()=>{},refreshChatMain:()=>{},
     showBenchToast:()=>{},showDesktopNotification:()=>{},notifyDesktopChatMessage:()=>{},pollHubBots:()=>{},refreshHubBotState:()=>{},refreshHubChannels:()=>Promise.resolve(),
     startChatThinking:()=>{},stopChatThinking:()=>{},hubCall:async()=>({messages:[],hasMore:false}),hubRememberPeople:()=>{},hubMember:()=>null,mergeUserProfile:()=>{},loadHubTeams:()=>Promise.resolve(),...overrides};
-  for(const name of ['hubChannel','hubSequence','hubOwnMessage','hubLatestSequence','applyHubRows','markHubRead','loadHubRoom','loadOlderHubMessages','sendHubMessage','deliverHubMessage','hubMessageDeletable','deleteHubMessage','applyHubEvents','trackHubDispatch','hubRoomThinking','hubFeedback','stopHubFeed'])
+  for(const name of ['hubChannel','hubSequence','hubOwnMessage','hubLatestSequence','applyHubRows','markHubRead','loadHubRoom','loadOlderHubMessages','sendHubMessage','deliverHubMessage','hubMessageDeletable','deleteHubMessage','applyHubEvents','trackHubDispatch','hubRoomThinking','hubUnreachable','hubFeedback','stopHubFeed'])
     if(!(name in overrides))env[name]=appFunction(name,env);
   return env;
 }
@@ -1031,4 +1031,25 @@ test('a company bot reply shows the provider as a chip with its mark, or plain t
   assert.equal(marks.markFor('xai').name,'Grok');
   assert.equal(marks.markFor('Mia Router'),null);
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../styles.css'),'utf8').match(/\.chat-msg-run\{[^}]*\}/)[0],/animation/,'no pop-in animation in the app');
+});
+test('connection trouble shows the Offline pill and leaves the status line quiet; a refusal still says why',()=>{
+  const footer={style:{},textContent:'',classList:{on:{},toggle(name,value){this.on[name]=!!value;}},setAttribute(){}};
+  const pills=[];
+  const env={el:sel=>sel==='#chatSyncFooter'?footer:null,hubChat:{typing:[],feedStatus:'live',error:'',errorIsConnection:false},chatWs:{activeRoomId:'room',configured:true},
+    displayNameForEmail:e=>e,hubWorkspace:()=>true,renderOfflinePill:()=>pills.push(1)};
+  env.hubConnectionTrouble=appFunction('hubConnectionTrouble',env);
+  const render=appFunction('renderHubStatus',env);
+  env.hubChat.error='Sign-in could not be completed. Check your connection and system keyring, then try again.';env.hubChat.errorIsConnection=true;
+  render();
+  assert.equal(footer.textContent,'','no red sign-in text for a lost connection');assert.equal(footer.classList.on['chat-sync-fail'],false);
+  assert.equal(env.hubConnectionTrouble(),true,'the pill shows instead');
+  env.hubChat.error='This team, channel or item is no longer available to you.';env.hubChat.errorIsConnection=false;
+  render();
+  assert.match(footer.textContent,/no longer available/);assert.equal(footer.classList.on['chat-sync-fail'],true);
+  env.hubChat.error='';env.hubChat.feedStatus='offline';
+  render();assert.equal(footer.textContent,'');assert.equal(env.hubConnectionTrouble(),true,'a reconnecting feed is the pill too');
+  assert.ok(pills.length>=3,'every status render keeps the pill in step');
+  const unreachable=appFunction('hubUnreachable',{});
+  assert.equal(unreachable({message:'Check your connection'}),true,'no HTTP status: a connection problem');
+  assert.equal(unreachable({status:403,message:'denied'}),false);
 });
