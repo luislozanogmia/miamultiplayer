@@ -17,7 +17,7 @@ const { createConversationAttachmentStore } = require('./conversation-attachment
 const { createConversationDispatchService } = require('./conversation-dispatch.js');
 const { createConversationRouter } = require('./conversation-router.js');
 
-async function startApp({ withAttachments = false, ensureMembers = null } = {}) {
+async function startApp({ withAttachments = false, ensureMembers = null, authorizeTeamWorkspace = null } = {}) {
   const db = new Database(':memory:');
   const repository = createConversationRepository(db);
   const authorization = createConversationAuthorization(repository);
@@ -36,17 +36,19 @@ async function startApp({ withAttachments = false, ensureMembers = null } = {}) 
     service,
     attachmentStore,
     resolvePrincipal: (req) => principals.get(req.headers['x-principal']) || null,
+    authorizeTeamWorkspace,
   }));
   const server = http.createServer(app);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}/api`;
-  async function request(path, { principal = 'alice', method = 'GET', body } = {}) {
+  async function request(path, { principal = 'alice', method = 'GET', body, headers = {} } = {}) {
     const response = await fetch(`${baseUrl}${path}`, {
       method,
       headers: {
         'x-principal': principal,
+        ...headers,
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -168,6 +170,29 @@ test('fresh bot route creates a distinct empty direct-routing conversation and p
     assert.equal(result.response.status, 403);
     result = await app.request(`/conversations/${sourceId}/fresh`, { principal: 'other-company', method: 'POST', body: {} });
     assert.equal(result.response.status, 403);
+  } finally {
+    await app.close();
+  }
+});
+
+test('company-tagged bot chats require Hub membership on create and fresh chat', async () => {
+  const workspace = 'hub_' + 'a'.repeat(32);
+  let member = true;
+  const app = await startApp({ authorizeTeamWorkspace: async (req, requested) =>
+    member && requested === workspace && req.headers['x-hub-token'] === 'signed-in-token' });
+  try {
+    const body = { type: 'bot', name: 'Team bot', metadata: { botId: 'bot-team', teamWorkspace: workspace } };
+    const options = { method: 'POST', body };
+    assert.equal((await app.request('/conversations', options)).response.status, 403);
+    const allowed = await app.request('/conversations', { ...options, headers: { 'x-hub-token': 'signed-in-token' } });
+    assert.equal(allowed.response.status, 201);
+    const sourceId = allowed.payload.conversation.id;
+    assert.equal((await app.request(`/conversations/${sourceId}/fresh`, { method: 'POST', body: {} })).response.status, 403);
+    const fresh = await app.request(`/conversations/${sourceId}/fresh`, { method: 'POST', body: {}, headers: { 'x-hub-token': 'signed-in-token' } });
+    assert.equal(fresh.response.status, 201);
+    member = false;
+    assert.equal((await app.request('/conversations', { ...options, headers: { 'x-hub-token': 'signed-in-token' } })).response.status, 403);
+    assert.equal((await app.request(`/conversations/${sourceId}/fresh`, { method: 'POST', body: {}, headers: { 'x-hub-token': 'signed-in-token' } })).response.status, 403);
   } finally {
     await app.close();
   }

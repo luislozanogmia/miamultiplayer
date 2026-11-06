@@ -5395,8 +5395,10 @@
       || botChats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0];
     if(existing)return loadChatRoom(existing.id,'agent',bot.name);
     var workspace=activeWorkspaceKey;
-    return api('/api/conversations?workspace=solo',{method:'POST',body:{type:'bot',name:bot.name,
-      metadata:{botId:bot.id,teamWorkspace:workspace,departments:Array.isArray(bot.departments)?bot.departments:[],source:'team-bot-chat'}}}).then(function(res){
+    return window.MiaHubChat.sessionToken().then(function(token){
+      return api('/api/conversations?workspace=solo',{method:'POST',headers:{'x-hub-token':token},body:{type:'bot',name:bot.name,
+        metadata:{botId:bot.id,teamWorkspace:workspace,departments:Array.isArray(bot.departments)?bot.departments:[],source:'team-bot-chat'}}});
+    }).then(function(res){
       var conversation=res.data && res.data.conversation;
       if((res.status!==201 && res.status!==200) || !conversation)throw new Error('team bot chat');
       if(activeWorkspaceKey!==workspace)return;
@@ -18911,7 +18913,11 @@
       promise: null
     };
     freshBotConversationRequest = request;
-    request.promise = api(nativeConversationPath(requestedRoomId, '/fresh'), {method:'POST', body:{}}).then(function(res){
+    request.promise = (metadata.teamWorkspace && window.MiaHubChat
+      ? window.MiaHubChat.sessionToken().then(function(token){
+          return api(nativeConversationPath(requestedRoomId, '/fresh'), {method:'POST', headers:{'x-hub-token':token}, body:{}});
+        })
+      : api(nativeConversationPath(requestedRoomId, '/fresh'), {method:'POST', body:{}})).then(function(res){
       if((res.status !== 201 && res.status !== 200) || !res.data || !res.data.conversation){
         throw new Error(res.data && (res.data.message || res.data.error) || 'Could not create a new conversation.');
       }

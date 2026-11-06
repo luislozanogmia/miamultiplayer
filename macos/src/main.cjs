@@ -151,6 +151,8 @@ const ENGINEERING_ROOT = findEngineeringRoot();
 const BACKEND_ROOT = path.join(ENGINEERING_ROOT, "backend");
 const BACKEND_ENTRYPOINT = path.join(BACKEND_ROOT, "server.js");
 const BACKEND_START_TIMEOUT_MS = 180000;
+const RENDERER_START_TIMEOUT_MS = 120000;
+const PORT_RELEASE_WAIT_MS = 15000;
 const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require(path.join(BACKEND_ROOT, "process-secrets.js"));
 const { resolveClerkConfig } = require(path.join(BACKEND_ROOT, "clerk-config.js"));
 const requireBackendDependency = createRequire(BACKEND_ENTRYPOINT);
@@ -242,6 +244,8 @@ if (hasSingleInstanceLock) {
 }
 
 let mainWindow = null;
+let startupWindow = null;
+let startupHandoff = false;
 let startupComplete = false;
 let nativeBrowser = null;
 let browserWorkBroker = null;
@@ -872,6 +876,25 @@ async function selectLocalBackendPort(exactPort = null, {
   }
 }
 
+async function waitForLocalPortRelease(port, {
+  timeoutMs = PORT_RELEASE_WAIT_MS,
+  probe = findFreePort,
+  pause = delay,
+  now = Date.now,
+} = {}) {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    try {
+      await probe(port, { allowFallback: false });
+      return true;
+    } catch (error) {
+      if (!error || error.code !== "EADDRINUSE") throw error;
+    }
+    await pause(Math.min(250, Math.max(0, deadline - now())));
+  }
+  return false;
+}
+
 function stopBackend(processToStop = backendProcess) {
   if (!processToStop) return Promise.resolve(false);
   if (processToStop.exitCode !== null || processToStop.signalCode !== null) {
@@ -926,7 +949,19 @@ async function startLocalBackend(exactPort = null) {
   if (devProblem) throw new Error(devProblem);
 
   const packagedRuntime = await preparePackagedRuntime();
-  const port = await selectLocalBackendPort(exactPort);
+  let port;
+  try {
+    port = await selectLocalBackendPort(exactPort);
+  } catch (error) {
+    if (!app.isPackaged || exactPort !== null || !error || error.code !== "EADDRINUSE") throw error;
+    // An installer or older Mia copy may still be shutting down. Keep the
+    // preparation window visible while its listener releases the stable
+    // Clerk origin; never adopt that other process or silently change ports.
+    desktopLog("local connection occupied; waiting for the previous app to close");
+    const available = await waitForLocalPortRelease(PREFERRED_PORT + 1);
+    if (!available) throw error;
+    port = await selectLocalBackendPort(exactPort);
+  }
   const dataDirectory = app.getPath("userData");
   fs.mkdirSync(dataDirectory, { recursive: true });
   if (!googleWorkspaceBroker) {
@@ -2233,6 +2268,44 @@ function revealMainWindow(window = mainWindow) {
   return true;
 }
 
+async function showPackagedStartupWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const splash = new BrowserWindow({
+    ...mainWindow.getBounds(),
+    show: false,
+    backgroundColor: "#f5f6f8",
+    icon: fs.existsSync(MIA_ICON_PATH) ? MIA_ICON_PATH : undefined,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  startupWindow = splash;
+  startupHandoff = false;
+  splash.on("closed", () => {
+    if (startupWindow === splash) startupWindow = null;
+    if (!startupHandoff && !isQuitting) app.quit();
+  });
+  try {
+    await splash.loadFile(path.join(__dirname, "renderer", "startup.html"));
+    if (!splash.isDestroyed()) splash.show();
+  } catch (error) {
+    desktopLog(`startup screen failed: ${error.message}`);
+    startupHandoff = true;
+    if (!splash.isDestroyed()) splash.destroy();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await mainWindow.loadFile(RENDERER_ENTRYPOINT);
+      revealMainWindow();
+    }
+  }
+}
+
+function finishPackagedStartupWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const splash = startupWindow;
+  if (splash && !splash.isDestroyed()) mainWindow.setBounds(splash.getBounds());
+  revealMainWindow();
+  startupHandoff = true;
+  if (splash && !splash.isDestroyed()) splash.close();
+}
+
 async function loadMiaOS() {
   if (!mainWindow) return false;
   try {
@@ -2246,7 +2319,7 @@ async function loadMiaOS() {
       }
       await withTimeout(
         mainWindow.loadURL(`${resolvedBackend}/#/chat`),
-        15000,
+        RENDERER_START_TIMEOUT_MS,
         "Timed out loading Mia",
       );
       return true;
@@ -2258,19 +2331,17 @@ async function loadMiaOS() {
     );
     return false;
   } catch (error) {
-    desktopLog(`Mia backend unavailable: ${error.message}`);
-    if (error && error.code === "EADDRINUSE") {
-      void updateMessage({
-        type: "error",
-        title: "Mia cannot start",
-        message: error.message,
-        buttons: ["OK"],
-      });
-    }
+    desktopLog(error && error.code === "EADDRINUSE"
+      ? "Mia startup failed: local connection occupied"
+      : `Mia startup failed: ${error.message}`);
     // A failed or timed-out navigation must not leave the retry IPC call
     // pending forever. Keep the standalone fallback visible and allow the
     // user to try again after starting the server.
-    try { await mainWindow.loadFile(RENDERER_ENTRYPOINT); } catch (_) { /* window is closing */ }
+    try {
+      await mainWindow.loadFile(RENDERER_ENTRYPOINT, {
+        query: error && error.code === "EADDRINUSE" ? { reason: "port-busy" } : {},
+      });
+    } catch (_) { /* window is closing */ }
     return false;
   }
 }
@@ -2292,16 +2363,12 @@ async function desktopAppRequest(window, pathname, { method = "GET", body, timeo
   return data;
 }
 
-const browserActorCache = new Map();
-const BROWSER_ACTOR_TTL_MS = 60_000;
-
 // Asks the backend which bot a Ghost request's Hermes session belongs to,
-// through the signed-in app session. Only verified identities are cached.
+// through the signed-in app session. Each command verifies the live run, so a
+// completed run cannot retain access through an old desktop cache entry.
 async function resolveBrowserActor(window, sessionId) {
   const unavailable = () => new Error("Mia could not verify this browser session. Try again when the app connection is available.");
   if (!backendUrl || !window || window.isDestroyed()) throw unavailable();
-  const cached = browserActorCache.get(sessionId);
-  if (cached && Date.now() - cached.at < BROWSER_ACTOR_TTL_MS) return cached.actor;
   let actor;
   try {
     const url = new URL("/api/browser/actor", backendUrl);
@@ -2326,8 +2393,6 @@ async function resolveBrowserActor(window, sessionId) {
   } catch (_) {
     throw unavailable();
   }
-  if (browserActorCache.size > 200) browserActorCache.clear();
-  browserActorCache.set(sessionId, { actor, at: Date.now() });
   return actor;
 }
 
@@ -2604,14 +2669,19 @@ function ipcSenderUrl(event) {
 
 function isTrustedMainWindowUrl(value, expectedBackendUrl = backendUrl) {
   if (expectedBackendUrl && hasExactOrigin(value, expectedBackendUrl)) return true;
-  return value === pathToFileURL(RENDERER_ENTRYPOINT).toString();
+  const fallbackUrl = pathToFileURL(RENDERER_ENTRYPOINT).toString();
+  return value === fallbackUrl || value === `${fallbackUrl}?reason=port-busy`;
+}
+
+function isMainWindowSenderFor(event, window, expectedBackendUrl = backendUrl) {
+  return Boolean(window
+    && !window.isDestroyed()
+    && event.sender === window.webContents
+    && isTrustedMainWindowUrl(ipcSenderUrl(event), expectedBackendUrl));
 }
 
 function isMainWindowSender(event) {
-  return mainWindow
-    && !mainWindow.isDestroyed()
-    && event.sender === mainWindow.webContents
-    && isTrustedMainWindowUrl(ipcSenderUrl(event));
+  return isMainWindowSenderFor(event, mainWindow);
 }
 
 // Which folder an app runs from is decided here from its id; the page never
@@ -2733,6 +2803,12 @@ ipcMain.handle("miaos-artifact-state", (event) => {
 });
 
 function activateMainWindow() {
+  if (startupWindow && !startupWindow.isDestroyed()) {
+    if (startupWindow.isMinimized()) startupWindow.restore();
+    startupWindow.show();
+    startupWindow.focus();
+    return;
+  }
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow();
     loadMiaOS().then(() => startGhostBridge()).catch(error => {
@@ -2816,8 +2892,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   installClientHints(session.defaultSession);
   createWindow();
   if (app.isPackaged) {
-    await mainWindow.loadFile(path.join(__dirname, "renderer", "startup.html"));
-    revealMainWindow();
+    await showPackagedStartupWindow();
   }
   let runtimeReady = false;
   try {
@@ -2827,7 +2902,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     desktopLog(`Packaged runtime preparation failed: ${error.message}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       await mainWindow.loadFile(RENDERER_ENTRYPOINT);
-      revealMainWindow();
+      if (app.isPackaged) finishPackagedStartupWindow();
     }
   }
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -2841,6 +2916,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     // Missing CLIs retain the explicit first-install consent in onboarding.
     const claudeDependency = await maintainDesktopClaudeCode();
     await loadMiaOS();
+    if (app.isPackaged) finishPackagedStartupWindow();
+    else revealMainWindow();
     notifyClaudeMaintenanceFailure(claudeDependency).catch(() => {});
   }
   await startGhostBridge();
@@ -2895,6 +2972,7 @@ module.exports = {
   restartManagedBackend,
   findFreePort,
   selectLocalBackendPort,
+  waitForLocalPortRelease,
   disposeArtifactPanel,
   activateMainWindow,
   normalizeInAppArtifactTarget,
@@ -2907,6 +2985,7 @@ module.exports = {
   isHarnessAuthNavigation,
   configureNavigation,
   isTrustedMainWindowUrl,
+  isMainWindowSenderFor,
   miaosWorkspacePath,
   venvBinDir,
   venvPythonPath,

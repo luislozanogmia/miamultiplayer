@@ -9,6 +9,14 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-11-06
+
+### Fixed
+- Bot browser work stays in the Solo or company workspace where the chat began, even when you switch workspaces during a run. Browser suggestions, tab groups, and download notices stay with their workspace.
+- A company bot chat checks current company membership before it is created or started fresh.
+- A finished bot or Mia run no longer keeps browser or Mia app access through its old session ID.
+- Updated Electron and affected dependency versions with published security fixes.
+
 ## [0.3.2] — 2026-11-06
 
 ### Added

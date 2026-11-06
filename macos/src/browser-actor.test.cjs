@@ -8,7 +8,7 @@ const vm = require("node:vm");
 // Exercise the actual main-process resolver without starting Electron or a backend.
 function resolver() {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  const start = source.indexOf("const browserActorCache = new Map();");
+  const start = source.indexOf("// Asks the backend which bot a Ghost request's Hermes session belongs to,");
   const end = source.indexOf("async function startGhostBridge()", start);
   const context = { backendUrl: "http://127.0.0.1:4870", URL, AbortSignal, Date, Map };
   vm.runInNewContext(source.slice(start, end), context);
@@ -31,7 +31,7 @@ test("failed, unknown and malformed actor lookups reject and recover without a c
   }
 });
 
-test("only verified Mia and bot identities are cached and the app-session fetch is bounded", async () => {
+test("verified Mia and bot identities are rechecked for each command and the app-session fetch is bounded", async () => {
   for (const actor of [{ kind: "mia", workspace: "solo" }, { kind: "bot", botId: "bot-a", name: "A", workspace: "hub_" + "a".repeat(32) }]) {
     const lookup = resolver(); let calls = 0;
     const window = windowWith(async (_url, options) => {
@@ -41,7 +41,16 @@ test("only verified Mia and bot identities are cached and the app-session fetch 
     });
     assert.deepEqual(JSON.parse(JSON.stringify(await lookup(window, "known-session"))), actor);
     assert.deepEqual(JSON.parse(JSON.stringify(await lookup(window, "known-session"))), actor);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
   }
   const lookup = resolver(); await assert.rejects(lookup(null, "session"), /verify|unavailable/i);
+});
+
+test("a previously verified session is refused as soon as the backend expires it", async () => {
+  const lookup = resolver();
+  let calls = 0;
+  const window = windowWith(async () => ({ ok: true, json: async () =>
+    ++calls === 1 ? { actor: { kind: "bot", botId: "bot-a", workspace: "solo" } } : { actor: null } }));
+  assert.equal((await lookup(window, "finished-run")).botId, "bot-a");
+  await assert.rejects(lookup(window, "finished-run"), /verify|unavailable/i);
 });

@@ -2850,6 +2850,29 @@ test("a download shows only in the workspace it started in", async () => {
   }
 });
 
+test("download status stays with its workspace when a download finishes after a switch", async () => {
+  const downloadItem = Object.assign(new EventEmitter(), {
+    getURL: () => "https://files.example/solo-report.csv",
+    getFilename: () => "solo-private-report.csv",
+  });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-download-notice-ws-"));
+  const h = harness({ statePath: path.join(directory, "browser.json") });
+  try {
+    h.command("new");
+    h.profile.emit("will-download", {}, downloadItem, h.views.at(-1).webContents);
+    assert.match(h.command("state").download, /solo-private-report/);
+    h.command("workspace", { key: "hub_" + "d".repeat(32) });
+    assert.doesNotMatch(h.command("state").download, /solo-private-report/, "the company never sees Solo's filename");
+    downloadItem.emit("done", {}, "completed");
+    assert.doesNotMatch(h.command("state").download, /solo-private-report/, "a late completion stays in Solo");
+    h.command("workspace", { key: "solo" });
+    assert.match(h.command("state").download, /solo-private-report/, "Solo still sees its own status");
+  } finally {
+    h.window.emit("closed");
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("a group id belongs to one workspace, so work bound in Solo can't reach a company's tabs", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-group-ids-"));
   const h = harness({ statePath: path.join(directory, "browser.json") });
@@ -2945,6 +2968,12 @@ test("a renderer command naming another workspace is refused", () => {
     const tab = h.command("new").activeId;
     const refused = h.command("navigate", { id: tab, value: "https://example.com/x", workspace: "hub_" + "1".repeat(32) });
     assert.match(String(refused && refused.error), /another workspace/);
+    for (const action of ["state", "new", "closedTabs", "reopenClosed", "history", "snapshot"]) {
+      const before = h.command("state").tabs.length;
+      const result = h.command(action, { workspace: "hub_" + "1".repeat(32) });
+      assert.match(String(result && result.error), /another workspace/, `${action} must check before accessing tabs`);
+      assert.equal(h.command("state").tabs.length, before, `${action} did not change current tabs`);
+    }
     assert.ok(!h.command("navigate", { id: tab, value: "https://example.com/y", workspace: "solo" }).error, "its own workspace passes");
     assert.ok(!h.command("state").error, "commands without a workspace are the app's own and pass");
   } finally {
