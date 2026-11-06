@@ -70,6 +70,8 @@ function harness(options = {}) {
     isDestroyed() { return this.closed; }
     insertCSS(css) { this.insertedCSS = (this.insertedCSS || 0) + 1; this.lastCSS = css; return Promise.resolve(`css-${this.insertedCSS}`); }
     removeInsertedCSS() { return Promise.resolve(); }
+    printToPDF(options) { this.pdfOptions = options; return Promise.resolve(Buffer.from("%PDF-1.7 page")); }
+    print(options) { this.printed = options; }
     close() { this.closed = true; }
     removeListener(...args) {
       if (this.closed) throw new Error("Object has been destroyed");
@@ -133,7 +135,8 @@ function harness(options = {}) {
       setBackgroundColor(color) { this.backgroundColor = color; }
     },
     session: { fromPartition: partition => { profile.partition = partition; return profile; } },
-    ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
+    ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key),
+      on: (key, fn) => handlers.set(`on:${key}`, fn), removeListener: key => handlers.delete(`on:${key}`) },
     Menu: { buildFromTemplate: template => { menuTemplates.push(template); return { popup() {} }; } },
     nativeTheme: { themeSource: "light" },
     nativeImage: {
@@ -1595,6 +1598,40 @@ test("bot tab groups: a bot's pages land in its own group, never Mia's tab", asy
   assert.equal(h.command("state").tabs.length, tabCount, "no duplicate tab");
   // Another bot's tab on that page is not reused.
   assert.notEqual(again.tab_id, patTab.tab_id);
+});
+
+test("a page's Print offers Save as PDF, which lands in Downloads", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-print-pdf-"));
+  try {
+    const h = harness({ downloadsDir: directory });
+    h.command("new");
+    h.command("navigate", { url: "example.com" });
+    const wc = h.views.at(-1).webContents;
+    wc.emit("page-title-updated", {}, "Resumen: Detalle");
+    h.menuTemplates.length = 0;
+    h.handlers.get("on:miaos-browser-print")({ sender: wc });
+    const menu = h.menuTemplates.at(-1);
+    assert.deepEqual(plain(menu.map(item => item.label)), ["Save as PDF", "Print…"], "the page's Print asks which one");
+    menu[1].click();
+    assert.deepEqual(plain(wc.printed), {}, "Print… still opens the system dialog");
+    menu[0].click();
+    let state;
+    for (let i = 0; i < 50; i += 1) {
+      state = h.command("state");
+      if ((state.downloads || []).length) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const saved = state.downloads[0];
+    assert.equal(saved.state, "completed");
+    assert.equal(path.dirname(saved.path), directory);
+    assert.match(path.basename(saved.path), /\.pdf$/);
+    assert.equal(fs.readFileSync(saved.path, "utf8"), "%PDF-1.7 page");
+    assert.equal(wc.pdfOptions.printBackground, true);
+    h.handlers.get("on:miaos-browser-print")({ sender: {} });
+    assert.equal(h.menuTemplates.length, 1, "a print request from something that isn't a tab is ignored");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("bot downloads save straight to Downloads, get checked, and are reported only once on disk", async () => {

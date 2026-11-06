@@ -13,7 +13,7 @@
 // script through webFrame rather than contextBridge (which cannot merge into
 // the existing window.chrome). Everything is presence-and-shape only; no
 // privileged surface is exposed to the page.
-const { webFrame } = require("electron");
+const { webFrame, ipcRenderer } = require("electron");
 
 const platform = process.platform === "darwin" ? "macOS"
   : process.platform === "win32" ? "Windows" : "Linux";
@@ -103,7 +103,18 @@ const script = `(() => {
       });
     }
   } catch (_) {}
+  // Electron's print dialog has no Save as PDF, so a page's Print asks Mia,
+  // which offers Save as PDF and Print (see browser.cjs printChoice).
+  try {
+    window.print = function () { window.dispatchEvent(new Event("mia-print-request")); };
+  } catch (_) {}
 })();`;
+
+// The preload's world shares the page's window events, so it relays the
+// page's Print to Mia. Only a menu opens; the person picks what happens.
+window.addEventListener("mia-print-request", () => {
+  try { ipcRenderer.send("miaos-browser-print"); } catch (_) {}
+});
 
 try {
   webFrame.executeJavaScript(script).catch(() => {});

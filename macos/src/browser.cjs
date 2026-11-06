@@ -2410,6 +2410,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     else if (key === "t") { newSessionOrPlainTab(); focusLocation(); }
     else if (key === "w") closeTabByPerson(activeId);
     else if (key === "r") active()?.view.webContents.reloadIgnoringCache();
+    else if (key === "p") { if (active()) printChoice(active()); }
     else if (active()) {
       const wc = active().view.webContents;
       wc.setZoomLevel(key === "0" ? 0 : Math.max(-4, Math.min(5, wc.getZoomLevel() + (key === "-" ? -0.5 : 0.5))));
@@ -2421,7 +2422,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const key = input.key.toLowerCase();
     // Plain Cmd+R reloads Mia through the app menu; Shift+Cmd+R hard-reloads the page.
     if (key === "r" && !input.shift) return;
-    if ((input.meta || input.control) && ["l", "t", "w", "r", "f", "+", "=", "-", "0"].includes(key)) {
+    if ((input.meta || input.control) && ["l", "t", "w", "r", "f", "p", "+", "=", "-", "0"].includes(key)) {
       event.preventDefault(); runShortcut(key === "t" && input.shift ? "T" : key);
     } else if (key === "escape") active()?.view.webContents.stop();
   }
@@ -2700,7 +2701,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       else if (params.selectionText) items.push({ role: "copy" });
       items.push({ label: "Back", enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
         { label: "Forward", enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
-        { label: "Reload", click: () => wc.reload() });
+        { label: "Reload", click: () => wc.reload() },
+        { type: "separator" }, ...printMenuItems(tab));
       Menu.buildFromTemplate(items).popup({ window });
     });
     if (value) {
@@ -3189,6 +3191,48 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     tab.error = ""; persistTabs(); layout(); publish();
   }
   profile.on("will-download", downloadStarted);
+  // Electron's print dialog has no Save as PDF (macOS shows only printers),
+  // so Mia offers both: the page as a PDF in Downloads, listed with the
+  // other downloads, or the system Print dialog.
+  function printMenuItems(tab) {
+    const ready = !!tab.url && !tab.view.webContents.isDestroyed();
+    return [
+      { label: "Save as PDF", enabled: ready, click: menuAction(() => savePageAsPdf(tab)) },
+      { label: "Print…", enabled: ready, click: menuAction(() => tab.view.webContents.print({})) },
+    ];
+  }
+  function printChoice(tab) {
+    if (!tab || disposed || window.isDestroyed()) return;
+    Menu.buildFromTemplate(printMenuItems(tab)).popup({ window });
+  }
+  async function savePageAsPdf(tab) {
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed() || !downloadsDir) return;
+    const name = `${String(tab.title || "Page").replace(/[\\/:*?"<>|\x00-\x1f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) || "Page"}.pdf`;
+    const workspace = workspaceKey;
+    try {
+      const data = await wc.printToPDF({ printBackground: true, preferCSSPageSize: true });
+      const file = freeDownloadPath(name);
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, data);
+      downloadEntries.unshift({
+        id: nextDownloadId++, filename: path.basename(file), path: file,
+        url: /^https?:\/\//i.test(tab.url || "") ? String(tab.url).slice(0, 2000) : "",
+        state: "completed", received: data.length, total: data.length, startedAt: Date.now(),
+        by: null, safety: null, workspace,
+      });
+      downloadEntries = downloadEntries.slice(0, DOWNLOADS_MAX_ENTRIES);
+      downloadNotices.set(workspace, `Saved: ${path.basename(file)}`);
+    } catch (error) {
+      downloadNotices.set(workspace, `Could not save the page as a PDF: ${error.message}`);
+    }
+    persistDownloads(); publish();
+  }
+  function pagePrintRequest(event) {
+    const tab = [...tabs.values()].find(candidate => candidate.view.webContents === event.sender);
+    if (tab && tab.id === activeId) printChoice(tab);
+  }
+  ipcMain.on("miaos-browser-print", pagePrintRequest);
   function authorized(event) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return false;
     try { return new URL(event.senderFrame.url).origin === trustedOrigin(); } catch (_) { return false; }
@@ -3517,6 +3561,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     window.removeListener("resize", requestLayout);
     window.removeListener("leave-full-screen", leaveWindowFullscreen);
     ipcMain.removeHandler(channel);
+    ipcMain.removeListener("miaos-browser-print", pagePrintRequest);
     profile.removeListener("will-download", downloadStarted);
     for (const tab of tabs.values()) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     tabs.clear();
