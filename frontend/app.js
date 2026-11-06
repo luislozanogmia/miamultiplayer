@@ -5522,7 +5522,24 @@
     all.appendChild(dmSection.node);
     // My Bots: your Solo bots and the ones you made in this team, made the same way as in Solo.
     var myBotSection=section('bots','My Bots','New bot',function(){ runToolsAction('new-bot'); });
-    myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id))myBotSection.list.appendChild(teamBotRow(bot)); });
+    // Solo bots already shared with this company wait in a folded Hidden
+    // group at the end, greyed; each can be reactivated from there.
+    var hiddenBots=myBots.filter(function(bot){ return soloBotSharedAway(bot) && !botPinned('mine:'+bot.id); });
+    myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
+    if(hiddenBots.length){
+      var hiddenOpen=hubSidebarSections['bots-hidden']===true;
+      var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
+      hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
+      hiddenToggle.innerHTML='<span class="hub-hidden-bots-chevron" aria-hidden="true">'+(hiddenOpen?'&#9662;':'&#9656;')+'</span>Hidden · '+hiddenBots.length;
+      hiddenToggle.title='Bots you shared with the company. Everyone uses them under Company bots.';
+      hiddenToggle.addEventListener('click',function(){
+        hubSidebarSections['bots-hidden']=!hiddenOpen;
+        try { localStorage.setItem('miaHubSidebarSections',JSON.stringify(hubSidebarSections)); } catch(_sectionStorageError) {}
+        renderHubSidebar();
+      });
+      myBotSection.list.appendChild(hiddenToggle);
+      if(hiddenOpen)hiddenBots.forEach(function(bot){ myBotSection.list.appendChild(teamBotRow(bot)); });
+    }
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
     all.appendChild(myBotSection.node);
     // Company bots: every bot shared into a channel of this workspace you can see.
@@ -5591,6 +5608,7 @@
       localStorage.setItem(REACTIVATED_SOLO_BOTS_KEY,JSON.stringify(all));
     } catch(_reactivatedError) {}
   }
+  function soloBotSharedAway(bot){ return !!(hubChat.sharedSoloBots||{})[bot.id] && !soloBotReactivated(bot.id); }
   function openSharedSoloBotNotice(bot){
     var companyName=(hubChat.sharedSoloBots||{})[bot.id]||bot.name;
     return appConfirm(bot.name+' was shared with the company. Here, everyone uses it as '+companyName+' under Company bots. Reactivate your Solo '+bot.name+' if you also want to use it here.','Reactivate').then(function(ok){
@@ -5841,7 +5859,7 @@
     var active=!!chat && chatWs.activeRoomId===chat.id;
     var preview=chat ? hubRoomPreview(chat.id) : '';
     var button=document.createElement('button'); button.type='button';
-    var sharedAway=!!(hubChat.sharedSoloBots||{})[bot.id] && !soloBotReactivated(bot.id);
+    var sharedAway=soloBotSharedAway(bot);
     button.className='chat-recent-row hub-channel-row'+(active?' active':'')+(sharedAway?' is-shared-away':'');
     button.setAttribute('data-team-bot-id',bot.id);
     if(sharedAway)button.title='Shared with the company. Use it under Company bots.';

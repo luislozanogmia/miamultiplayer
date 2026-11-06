@@ -944,6 +944,10 @@ test('a Solo bot shared with this company is greyed in My Bots until reactivated
   appFunction('reactivateSoloBot',Object.assign({},env))('solo-admin');
   assert.equal(isOn('solo-admin'),true);
   assert.equal(appFunction('soloBotReactivated',Object.assign({},env,{activeWorkspaceKey:'hub_t2'}))('solo-admin'),false,'per company');
-  assert.match(source,/var sharedAway=!!\(hubChat\.sharedSoloBots\|\|\{\}\)\[bot\.id\] && !soloBotReactivated\(bot\.id\);/);
+  assert.match(source,/function soloBotSharedAway\(bot\)\{ return !!\(hubChat\.sharedSoloBots\|\|\{\}\)\[bot\.id\] && !soloBotReactivated\(bot\.id\); \}/);
+  assert.match(source,/var sharedAway=soloBotSharedAway\(bot\);/);
+  // They sit folded in a Hidden group at the end of My Bots, closed until opened.
+  assert.match(source,/var hiddenOpen=hubSidebarSections\['bots-hidden'\]===true;/);
+  assert.match(source,/if\(hiddenOpen\)hiddenBots\.forEach\(function\(bot\)\{ myBotSection\.list\.appendChild\(teamBotRow\(bot\)\); \}\);/);
   assert.match(source,/if\(sharedAway\)openSharedSoloBotNotice\(bot\); else openTeamBotChat\(bot\);/);
 });
