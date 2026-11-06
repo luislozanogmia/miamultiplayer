@@ -54,6 +54,29 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
   let busy = false;
   let settled = Promise.resolve(), releaseOperation = () => {};
   let waitingReads = 0;
+  // Every company request reads a token, often many at once. Readers share
+  // one read, and the client answers from its cache until shortly before
+  // expiry, so a burst costs one read at most.
+  let tokenRead = null;
+  function sharedToken() {
+    if (!tokenRead) tokenRead = Promise.resolve().then(() => client.getSessionToken()).finally(() => { tokenRead = null; });
+    return tokenRead;
+  }
+  function errorResult(action, error) {
+    // Exception messages and provider bodies can contain credentials. Never
+    // pass those across IPC or put them in logs. Only the fixed error code,
+    // HTTP status and Clerk's error code are logged, so failures stay diagnosable.
+    try {
+      log(failureLine(action, error));
+    } catch (_) { /* Diagnostics must not interrupt account restoration. */ }
+    const local = {
+      protocol_unavailable: "Install this Mia build to enable browser sign-in. You can still sign in with an email code.",
+      invalid_email: "Enter a valid email address.",
+      invalid_code: "Enter the six-digit code from your email.",
+      invalid_details: "Check your name and password, then try again.",
+    };
+    return { ok: false, error: local[error.message] || CLERK_MESSAGES[error.clerkCode] || refusalMessage(error) };
+  }
   function notify(state) {
     const window = getWindow();
     if (window && !window.isDestroyed()) {
@@ -73,9 +96,23 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
     if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
     const actions = ["status", "google", "email", "verify", "signUpDetails", "token", "cancel", "signOut"];
     if (!actions.includes(action)) return { ok: false, error: "Unknown sign-in action." };
-    // Polls and message sends can request tokens while account restoration runs.
-    // Serialize bounded read requests; never replay interactive sign-in actions.
-    if (busy && (action === "status" || action === "token") && waitingReads < 8) {
+    // A token read is never refused as busy: it waits for a sign-in action in
+    // progress, then joins the shared read outside the single lane.
+    if (action === "token") {
+      while (busy) await settled;
+      if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
+      try {
+        init();
+        const result = await sharedToken();
+        if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
+        return { ok: true, result };
+      } catch (error) {
+        return errorResult(action, error);
+      }
+    }
+    // Status polls can arrive while account restoration runs. Serialize bounded
+    // status reads; never replay interactive sign-in actions.
+    if (busy && action === "status" && waitingReads < 8) {
       waitingReads++;
       try { while (busy) await settled; } finally { waitingReads--; }
     }
@@ -110,25 +147,12 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
         result = await client.verifyEmail(value);
       }
       if (action === "signUpDetails") result = await client.completeSignUp(signUpDetails(value));
-      if (action === "token") result = await client.getSessionToken();
       if (action === "cancel") result = await flow.cancel();
       if (action === "signOut") { await flow.cancel(); result = await client.signOut(); }
       if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
       return { ok: true, result };
     } catch (error) {
-      // Exception messages and provider bodies can contain credentials. Never
-      // pass those across IPC or put them in logs. Only the fixed error code,
-      // HTTP status and Clerk's error code are logged, so failures stay diagnosable.
-      try {
-        log(failureLine(action, error));
-      } catch (_) { /* Diagnostics must not interrupt account restoration. */ }
-      const local = {
-        protocol_unavailable: "Install this Mia build to enable browser sign-in. You can still sign in with an email code.",
-        invalid_email: "Enter a valid email address.",
-        invalid_code: "Enter the six-digit code from your email.",
-        invalid_details: "Check your name and password, then try again.",
-      };
-      return { ok: false, error: local[error.message] || CLERK_MESSAGES[error.clerkCode] || refusalMessage(error) };
+      return errorResult(action, error);
     } finally { busy = false; releaseOperation(); }
   });
   return {

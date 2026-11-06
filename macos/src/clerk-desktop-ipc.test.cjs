@@ -85,10 +85,22 @@ test('queued and in-flight reads recheck renderer authorization before exposing 
  for(const r of await Promise.all([status,token]))assert.deepEqual(r,{ok:false,error:'Not authorized.'});
  assert.equal(f.tokenCalls(),0);
 });
-test('read waiting is bounded and interactive actions are never queued or replayed',async()=>{
- const f=concurrentFixture();const active=f.handler(f.event,'status');const queued=Array.from({length:8},()=>f.handler(f.event,'token'));
- assert.equal((await f.handler(f.event,'token')).ok,false);assert.equal((await f.handler(f.event,'signOut')).ok,false);
- f.release();await active;assert.ok((await Promise.all(queued)).every(r=>r.ok));assert.equal(f.tokenCalls(),8);
+test('status waiting is bounded and interactive actions are never queued or replayed',async()=>{
+ const f=concurrentFixture();const active=f.handler(f.event,'status');const queued=Array.from({length:8},()=>f.handler(f.event,'status'));
+ assert.equal((await f.handler(f.event,'status')).ok,false);assert.equal((await f.handler(f.event,'signOut')).ok,false);
+ f.release();await active;assert.ok((await Promise.all(queued)).every(r=>r.ok));
+});
+test('a burst of token reads during a sign-in action never fails busy and shares one read',async()=>{
+ // Each company request reads a token; a channel opening fires many at once.
+ const f=concurrentFixture();const active=f.handler(f.event,'status');
+ const reads=Array.from({length:20},()=>f.handler(f.event,'token'));
+ assert.equal(f.tokenCalls(),0,'they wait for the sign-in action in progress');
+ f.release();await active;
+ const results=await Promise.all(reads);
+ assert.ok(results.every(r=>r.ok && r.result==='synthetic-token'),'none is refused as busy');
+ assert.equal(f.tokenCalls(),1,'one shared read answers all of them');
+ const later=await Promise.all(Array.from({length:3},()=>f.handler(f.event,'token')));
+ assert.ok(later.every(r=>r.ok));assert.equal(f.tokenCalls(),2,'a later burst reads again, from the client cache');
 });
 
 test('auth failure returns its safe response even when launcher diagnostics have a broken pipe',async()=>{
