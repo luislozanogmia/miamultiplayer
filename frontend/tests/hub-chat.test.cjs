@@ -173,7 +173,7 @@ test('frequent roster refresh reuses the membership directory to preserve reques
 test('the header bot count opens the People and bots list instead of its own',()=>{
  const header={style:{},innerHTML:''},handlers={},control=id=>({addEventListener:(type,fn)=>{handlers[id]=fn;}});
  let opened=0;const openManageAgentsPane=()=>opened++;
- const env={window:{},hubWorkspace:()=>true,chatWs:{activeRoomId:'channel',activeLabel:'Shared'},chatRoomState:()=>({hubBots:[{id:'bot',name:'Pod',published:null},{id:'b2',name:'Live',published:1}],hubMembers:[{},{}],hubDirectoryAt:1}),hubChat:{},el:selector=>selector==='#channelHeader'?header:control(selector),els:()=>[],esc:s=>s,openManageAgentsPane,closeMobileChatRoom:()=>{},renderChatTabs:()=>{}};
+ const env={window:{},hubWorkspace:()=>true,hubChannel:()=>({id:'channel',kind:'channel'}),chatWs:{activeRoomId:'channel',activeLabel:'Shared'},chatRoomState:()=>({hubBots:[{id:'bot',name:'Pod',published:null},{id:'b2',name:'Live',published:1}],hubMembers:[{},{}],hubDirectoryAt:1}),hubChat:{},el:selector=>selector==='#channelHeader'?header:control(selector),els:()=>[],esc:s=>s,openManageAgentsPane,closeMobileChatRoom:()=>{},renderChatTabs:()=>{}};
  appFunction('renderChatHeaderBar',env)();
  assert.match(header.innerHTML,/>1 bot &amp; 2 users<|>1 bot & 2 users</);assert.doesNotMatch(header.innerHTML,/Remove|@Pod|ch-roster-panel|Add bot|Bot versions/);
  assert.equal(handlers['#hubBotsToggle'],openManageAgentsPane);
@@ -216,7 +216,7 @@ function hubEnv(overrides={}){
     renderChatSidebar:()=>{},renderChatThread:()=>{},renderDeptAgentSelector:()=>{},renderChatHeaderBar:()=>{},refreshChatMain:()=>{},
     showBenchToast:()=>{},showDesktopNotification:()=>{},notifyDesktopChatMessage:()=>{},pollHubBots:()=>{},refreshHubBotState:()=>{},refreshHubChannels:()=>Promise.resolve(),
     startChatThinking:()=>{},stopChatThinking:()=>{},hubCall:async()=>({messages:[],hasMore:false}),hubRememberPeople:()=>{},hubMember:()=>null,mergeUserProfile:()=>{},loadHubTeams:()=>Promise.resolve(),...overrides};
-  for(const name of ['hubChannel','hubSequence','hubOwnMessage','hubLatestSequence','applyHubRows','markHubRead','loadHubRoom','loadOlderHubMessages','sendHubMessage','deliverHubMessage','hubMessageDeletable','deleteHubMessage','applyHubEvents','trackHubDispatch','hubRoomThinking','hubFeedback','stopHubFeed'])
+  for(const name of ['hubChannel','hubSequence','hubOwnMessage','hubLatestSequence','applyHubRows','markHubRead','loadHubRoom','loadOlderHubMessages','sendHubMessage','deliverHubMessage','hubMessageDeletable','deleteHubMessage','applyHubEvents','trackHubDispatch','hubRoomThinking','hubUnreachable','hubFeedback','stopHubFeed'])
     if(!(name in overrides))env[name]=appFunction(name,env);
   return env;
 }
@@ -409,7 +409,8 @@ test('Edit says the edited text is sent as a new message',()=>{
   assert.match(source,/appPrompt\(original, \{title: 'Edit and resend', message: 'Your edited text is sent as a new message\. The original stays\.', submitLabel: 'Send'\}\)/);
 });
 test('a shared channel shows placeholder bars, not "No messages yet", before its history arrives',()=>{
-  assert.match(source,/if\(inHubRoom\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);\n\s+if\(!state\.messages\.length && !state\.thinking && !botDraftFlow\)\{/);
+  // The placeholder comes first; a company bot chat's intro, then the empty state, only once history is in.
+  assert.match(source,/if\(inHubRoom\(\) && !state\.historyInitialized && !state\.messages\.length && !state\.thinking\) return showChatThreadPlaceholder\(thread\);\n\s+var botChat = inHubRoom\(\) \? hubChannel\(roomId\) : null;[\s\S]{0,900}?\n\s+if\(!state\.messages\.length && !state\.thinking && !botDraftFlow\)\{/);
 });
 test('your own attachment cards stay readable beside the bubble',()=>{
   const css=fs.readFileSync(path.join(__dirname,'../styles.css'),'utf8');
@@ -903,7 +904,7 @@ test('a team offers New bot like Solo: in Start something, on My Bots, and throu
 test('a bot named with @ in a message, and a bot joining a company channel, show its Mote',()=>{
   const esc=v=>String(v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
   const env={esc,agentAvatarHtml:(name,id,size,mark,color)=>'<i data-bot="'+id+'" data-color="'+(color||'')+'"></i>',
-    roomMentionBots:()=>[{id:'b1',name:'Admin Bot',color:'#7c3aed'},{id:'b2',name:'Admin',color:null}]};
+    roomMentionBots:()=>[{id:'b1',name:'Admin Bot',color:'#7c3aed'},{id:'b2',name:'Admin',color:null}],roomMentionPeople:()=>[]};
   const chips=appFunction('withMentionChips',env);
   const html=chips('<p>@Admin Bot you around? ask @admin too, not me@admin.test</p>');
   assert.equal(html,'<p><span class="chat-msg-mention"><i data-bot="b1" data-color="#7c3aed"></i>@Admin Bot</span> you around? ask <span class="chat-msg-mention"><i data-bot="b2" data-color=""></i>@admin</span> too, not me@admin.test</p>');
@@ -972,4 +973,95 @@ test('a company bot opens your private chat with it on the Hub, and falls back t
   assert.equal(title(chat),'Admin Bot');
   assert.match(source,/channel\.kind!=='bot' && !hubConversationClosed/,'a bot chat is not listed under Direct messages');
   assert.match(source,/if\(chat && chatWs\.activeRoomId===chat\.id\)button\.className\+=' active';/,'its company bot row lights up while it is open');
+});
+test('company messages carry their Hub reactions and can be reacted to like Solo ones',async()=>{
+  const api=transport();
+  const row={id:'m1',sequence:7,author_type:'user',author_id:'u1',author_email:'a@example.test',body:'hey',created_at:1,
+    reactions:[{emoji:'👍',count:2,user_ids:['me','u1'],mine:true},{emoji:'🎉',count:0,user_ids:[]}]};
+  const message=api.message(row);
+  assert.deepEqual(JSON.parse(JSON.stringify(message.reactions)),{'👍':['me','u1']},'the same shape as Solo, empty ones dropped');
+  assert.equal(api.message({...row,deleted:true}).reactions,null,'a deleted message shows none');
+  assert.equal(api.message({...row,reactions:[]}).reactions,null);
+  const can=appFunction('canReactToMessage',{});
+  assert.equal(can(message),true,'a stored company message can be reacted to');
+  assert.equal(can({...message,pending:true}),false);
+  assert.equal(can({...message,system:true}),false);
+  const calls=[];const state={messages:[message]};let rendered=0;
+  const env={chatWs:{activeRoomId:'room'},inHubRoom:()=>true,chatRoomState:()=>state,hubPath:()=>'/v1/teams/t',hubChat:{membership:{clerk_user_id:'me'}},currentUser:'me@example.test',
+    renderChatThread:()=>{rendered++;},showBenchToast:()=>{},hubActionError:(e,f)=>f,window:{MiaHubChat:api},encodeURIComponent,
+    hubCall:(method,path)=>{calls.push(method+' '+path);return Promise.resolve({reactions:method==='DELETE'?[{emoji:'👍',user_ids:['u1']}]:[{emoji:'👍',user_ids:['me','u1']},{emoji:'🔥',user_ids:['me']}]});}};
+  env.reactionSelf=appFunction('reactionSelf',env);
+  const toggle=appFunction('toggleMessageReaction',env);
+  await toggle('hub-sequence-7','👍');
+  assert.equal(calls.at(-1),'DELETE /v1/teams/t/channels/room/messages/7/reactions/'+encodeURIComponent('👍'),'yours is taken back');
+  assert.deepEqual(JSON.parse(JSON.stringify(message.reactions)),{'👍':['u1']});
+  await toggle('hub-sequence-7','🔥');
+  assert.equal(calls.at(-1),'PUT /v1/teams/t/channels/room/messages/7/reactions/'+encodeURIComponent('🔥'),'a new one is added');
+  assert.equal(rendered,2);
+});
+test('a company bot chat looks like a Solo bot chat: its Mote, name and Bot in the header, and an intro when empty',()=>{
+  assert.match(source,/var openChat=hubChannel\(chatWs\.activeRoomId\), chatBot=openChat && openChat\.kind==='bot' \? openChat\.bot\|\|\{\} : null;/);
+  assert.match(source,/var headerMark=chatBot \? '<span class="ch-mark dm">'\+agentAvatarHtml\(chatBot\.name\|\|'Bot'/);
+  assert.match(source,/\(chatBot \? '<span class="chat-msg-tag">Bot<\/span>' : ''\)/);
+  assert.match(source,/\(chatBot \? '' : '<button type="button" class="ch-roster-chip" id="hubBotsToggle">'/,'no people count in a one-to-one chat');
+  assert.match(source,/if\(el\('#hubBotsToggle',header\)\)el\('#hubBotsToggle',header\)\.addEventListener/);
+  assert.match(source,/chatHeroHtml\(esc\('Your private chat with ' \+ \(chatBot\.name \|\| 'this bot'\) \+ '\. Only you see it, and it runs on your computer with your own models\.'\), chatBot\.name \|\| 'Bot', normalizeAgentAvatarColor\(chatBot\.avatar_color\)\)/);
+});
+test('a working row moves under the bot\'s mid-run answer and nowhere else',()=>{
+  const move=appFunction('moveLiveProgressBelow',{isHumanSender:s=>s==='me'});
+  const ids=list=>list.map(m=>m.id);
+  const ask={id:'ask',sender:'me'}, working={id:'working',sender:'bot',nativeProgress:true}, more={id:'more',sender:'me'}, answer={id:'answer',sender:'bot'};
+  assert.deepEqual(ids(move([ask,working,more,answer],()=>false)),['ask','more','answer','working'],'still working: under the latest answer');
+  assert.deepEqual(ids(move([ask,working,more],()=>false)),['ask','working','more'],'a person writing alone does not move it');
+  assert.deepEqual(ids(move([ask,working,more,answer],()=>true)),['ask','working','more','answer'],'a finished run\'s row stays where it was (and is hidden)');
+  assert.deepEqual(ids(move([ask,{...working,nativeDiagnostic:true},answer],()=>false)),['ask','working','answer'],'debug output is not a working row');
+  assert.match(source,/var mainMessages = moveLiveProgressBelow\(state\.messages\.filter\(/);
+});
+test('a company bot reply shows the provider as a chip with its mark, or plain text without one',()=>{
+  const marks=require(path.join(__dirname,'../provider-marks.js'));
+  const env={esc:v=>String(v).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),window:{MiaProviderMarks:marks}};
+  const chip=appFunction('providerRunChipHtml',env);
+  const gpt=chip("ChatGPT · Ran on Ana's Mia");
+  assert.match(gpt,/^<div class="chat-msg-run"><span class="chat-msg-run-mark"><svg/);
+  assert.match(gpt,/<b>ChatGPT<\/b><span>· Ran on Ana&#39;s Mia<\/span><\/div>$/);
+  assert.match(chip('Claude · Ran on a colleague’s Mia'),/<b>Claude<\/b>/);
+  assert.equal(chip("DeepSeek · Ran on Ana's Mia"),'<div class="chat-msg-run plain">DeepSeek · Ran on Ana&#39;s Mia</div>','no mark: plain text, no checkmark');
+  assert.equal(chip("Ran on Ana's Mia"),'<div class="chat-msg-run plain">Ran on Ana&#39;s Mia</div>');
+  assert.equal(marks.markFor('codex').name,'ChatGPT');
+  assert.equal(marks.markFor('xai').name,'Grok');
+  assert.equal(marks.markFor('Mia Router'),null);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../styles.css'),'utf8').match(/\.chat-msg-run\{[^}]*\}/)[0],/animation/,'no pop-in animation in the app');
+});
+test('connection trouble shows the Offline pill and leaves the status line quiet; a refusal still says why',()=>{
+  const footer={style:{},textContent:'',classList:{on:{},toggle(name,value){this.on[name]=!!value;}},setAttribute(){}};
+  const pills=[];
+  const env={el:sel=>sel==='#chatSyncFooter'?footer:null,hubChat:{typing:[],feedStatus:'live',error:'',errorIsConnection:false},chatWs:{activeRoomId:'room',configured:true},
+    displayNameForEmail:e=>e,hubWorkspace:()=>true,renderOfflinePill:()=>pills.push(1)};
+  env.hubConnectionTrouble=appFunction('hubConnectionTrouble',env);
+  const render=appFunction('renderHubStatus',env);
+  env.hubChat.error='Sign-in could not be completed. Check your connection and system keyring, then try again.';env.hubChat.errorIsConnection=true;
+  render();
+  assert.equal(footer.textContent,'','no red sign-in text for a lost connection');assert.equal(footer.classList.on['chat-sync-fail'],false);
+  assert.equal(env.hubConnectionTrouble(),true,'the pill shows instead');
+  env.hubChat.error='This team, channel or item is no longer available to you.';env.hubChat.errorIsConnection=false;
+  render();
+  assert.match(footer.textContent,/no longer available/);assert.equal(footer.classList.on['chat-sync-fail'],true);
+  env.hubChat.error='';env.hubChat.feedStatus='offline';
+  render();assert.equal(footer.textContent,'');assert.equal(env.hubConnectionTrouble(),true,'a reconnecting feed is the pill too');
+  assert.ok(pills.length>=3,'every status render keeps the pill in step');
+  const unreachable=appFunction('hubUnreachable',{});
+  assert.equal(unreachable({message:'Check your connection'}),true,'no HTTP status: a connection problem');
+  assert.equal(unreachable({status:403,message:'denied'}),false);
+});
+test('a person named with @ in a company message shows their picture or initials',()=>{
+  const esc=v=>String(v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  const env={esc,agentAvatarHtml:()=>'<i bot></i>',humanAvatarContent:email=>'<i who="'+email+'"></i>',roomMentionBots:()=>[{id:'b1',name:'Ux Test Greeter'}],
+    roomMentionPeople:()=>[{email:'asr@example.test',name:'Ana Sofia Reyes'},{email:'a@example.test',name:'Ana'}]};
+  const chips=appFunction('withMentionChips',env);
+  assert.equal(chips('<p>@Ana Sofia Reyes feel free, and @Ana too</p>'),
+    '<p><span class="chat-msg-mention"><span class="chat-msg-mention-face"><i who="asr@example.test"></i></span>@Ana Sofia Reyes</span> feel free, and <span class="chat-msg-mention"><span class="chat-msg-mention-face"><i who="a@example.test"></i></span>@Ana</span> too</p>');
+  const people=appFunction('roomMentionPeople',{hubWorkspace:()=>true,hubChat:{members:[{email:'asr@example.test',display_name:'Ana Sofia Reyes'},{email:'me@example.test'}]},
+    humanMentionName:u=>u.email==='me@example.test'?'You':u.displayName});
+  assert.deepEqual(JSON.parse(JSON.stringify(people())),[{email:'asr@example.test',name:'Ana Sofia Reyes'}],'members under the @ menu name, never you');
+  assert.equal(appFunction('roomMentionPeople',{hubWorkspace:()=>false})().length,0,'Solo has no one else to name');
 });

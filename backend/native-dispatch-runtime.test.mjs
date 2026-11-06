@@ -31,7 +31,7 @@ test('native dispatch watchdog reports a timeout once and can be cancelled', asy
   await new Promise((resolve) => setTimeout(resolve, 45));
   assert.equal(watchdog.timedOut, true);
   assert.equal(timeout.code, NATIVE_DISPATCH_TIMEOUT_CODE);
-  assert.match(timeout.message, /timed out after 20ms/);
+  assert.match(timeout.message, /made no progress for 20ms on step 1/);
 
   let cancelled = false;
   const cancelledWatchdog = createNativeDispatchWatchdog({
@@ -43,6 +43,64 @@ test('native dispatch watchdog reports a timeout once and can be cancelled', asy
   assert.equal(cancelledWatchdog.timedOut, false);
   assert.equal(cancelled, false);
   watchdog.cancel();
+});
+
+test('the 10-minute limit is per step: 30 steps of 30 s each finish', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let timeout = null;
+  const watchdog = createNativeDispatchWatchdog({ timeoutMs: 600000, onTimeout: (error) => { timeout = error; } });
+  for (let step = 1; step <= 30; step += 1) {
+    watchdog.progress(`step-${step}`);
+    t.mock.timers.tick(15000);
+    watchdog.progress(); // the tool's result
+    t.mock.timers.tick(15000);
+  }
+  assert.equal(timeout, null, '15 minutes in total, never 10 without progress');
+  assert.equal(watchdog.step.n, 30);
+  watchdog.cancel();
+});
+
+test('a step with no progress for 10 minutes stops the turn and is named', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let timeout = null;
+  const watchdog = createNativeDispatchWatchdog({ timeoutMs: 600000, onTimeout: (error) => { timeout = error; } });
+  watchdog.progress('browsing the web');
+  t.mock.timers.tick(20000);
+  watchdog.progress('running a command');
+  t.mock.timers.tick(599999);
+  assert.equal(timeout, null);
+  t.mock.timers.tick(1);
+  assert.equal(timeout.code, NATIVE_DISPATCH_TIMEOUT_CODE);
+  assert.deepEqual(timeout.step, { n: 2, label: 'running a command' });
+  assert.match(timeout.message, /no progress for 600000ms on step 2 \(running a command\)/);
+  watchdog.progress('too late');
+  assert.equal(watchdog.step.n, 2, 'nothing moves after it fired');
+});
+
+test('a command may run its full 10 minutes: a running tool gets two more before the step stops', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let timeout = null;
+  const watchdog = createNativeDispatchWatchdog({ timeoutMs: 600000, onTimeout: (error) => { timeout = error; } });
+  watchdog.progress('running a command', true);
+  t.mock.timers.tick(600000);
+  assert.equal(timeout, null, 'a 10-minute command is not cut off');
+  watchdog.progress(undefined, false); // its result
+  t.mock.timers.tick(599999);
+  assert.equal(timeout, null);
+  watchdog.progress('running a command', true);
+  t.mock.timers.tick(720000);
+  assert.deepEqual(timeout.step, { n: 2, label: 'running a command' }, 'a tool that never returns still stops');
+});
+
+test('the whole turn still has an outer ceiling', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let timeout = null;
+  const watchdog = createNativeDispatchWatchdog({ timeoutMs: 600000, maxMs: 1800000, onTimeout: (error) => { timeout = error; } });
+  for (let minute = 0; minute < 29; minute += 1) { t.mock.timers.tick(60000); watchdog.progress(); }
+  assert.equal(timeout, null);
+  t.mock.timers.tick(60000);
+  assert.match(timeout.message, /timed out after 1800000ms/);
+  assert.equal(timeout.step, undefined);
 });
 
 test('native dispatch token budget tracker fires once, at the char threshold, and stays fail-open below it', () => {
@@ -80,7 +138,10 @@ test('native dispatch execution wires the token budget into the same abort path 
   assert.match(execution, /abortController\.abort\(\)/);
   assert.match(execution, /if \(budgetError\) throw budgetError/);
   assert.match(execution, /NATIVE_DISPATCH_TOKEN_BUDGET_CODE/);
-  assert.match(execution, /runNativeConversationAgentReply\(claimed\.dispatch, abortController\.signal, budgetTracker\)/);
+  assert.match(execution, /runNativeConversationAgentReply\(claimed\.dispatch, abortController\.signal, budgetTracker, \(type, payload\) => \{/);
+  // Every event from the run is progress for the step timer.
+  assert.match(execution, /watchdog\.progress\(activity && activity\.phase === 'start'/);
+  assert.match(source, /const postHermesProgress = \(type, payload\) => \{\n    if \(onProgress\) onProgress\(type, payload\);/);
 });
 
 test('native dispatch execution wires timeout into durable recovery', () => {

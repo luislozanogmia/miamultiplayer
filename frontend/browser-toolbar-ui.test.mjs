@@ -104,6 +104,29 @@ test('a crowded strip folds idle groups first, then moves the oldest into the »
   assert.ok(!overflow.hidden.includes('g39'), 'never the group in front');
 });
 
+test('a group shows all its tabs while the strip has room, and stacks behind +N only when crowded', async () => {
+  const js = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  const start = js.indexOf('  var TAB_MIN_WIDTH');
+  const end = js.indexOf('\n  }\n', js.indexOf('function spreadGroups')) + 4;
+  const groups = { li: { id: 'li', collapsed: false }, yt: { id: 'yt', collapsed: false } };
+  const tabs = [
+    { id: 1, groupId: 'li', url: 'a' }, { id: 2, groupId: 'li', url: 'b' },
+    { id: 3, groupId: 'yt', url: 'c' }, { id: 4, groupId: 'yt', url: 'd' }, { id: 5, groupId: 'yt', url: 'e' },
+    { id: 6, groupId: null, url: 'f' },
+  ];
+  const front = { li: { id: 1, others: [2] }, yt: { id: 3, others: [4, 5] } };
+  const spread = (width, crowd) => {
+    const context = { state: { tabs, activeId: 1 }, strip: { clientWidth: width }, add: { offsetWidth: 0 }, Date };
+    vm.runInNewContext(js.slice(start, end) + '\nthis.spreadGroups = spreadGroups; this.groupUsedAt = groupUsedAt;', context);
+    context.groupUsedAt.li = 2; context.groupUsedAt.yt = 1;
+    return Object.keys(context.spreadGroups(groups, front, crowd || { folded: [], hidden: [] }, 0)).sort();
+  };
+  assert.deepEqual(spread(2000), [], 'room for everything: no group stacks');
+  assert.deepEqual(spread(1000), ['yt'], 'the most recently used group spreads first; the other stays stacked');
+  assert.deepEqual(spread(500), ['li', 'yt'], 'a tight strip keeps every group stacked');
+  assert.deepEqual(spread(2000, { folded: ['yt'], hidden: [] }), ['li', 'yt'], 'nothing spreads while a group had to fold');
+});
+
 test('"Show this bot\'s tabs" picks the tab the bot is working in, else the one it used last', async () => {
   const js = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   const start = js.indexOf('  function botBrowserTab(state, botId){');

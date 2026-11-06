@@ -461,15 +461,16 @@ test('the latest turn model becomes the profile default and survives re-provisio
     provisionHermesRuntimeProfiles({ profilesRoot });
     const agentConfig = path.join(profilesRoot, MIAOS_AGENT_HERMES_PROFILE, 'config.yaml');
     const botConfig = path.join(profilesRoot, MIAOS_BOT_HERMES_PROFILE, 'config.yaml');
-    // No turn yet: no guessed default.
-    assert.doesNotMatch(fs.readFileSync(agentConfig, 'utf8'), /^model:/m);
+    // No turn yet: no guessed default, only the large-context switch confirmation turned off.
+    assert.match(fs.readFileSync(agentConfig, 'utf8'), /^model:\n  switch_context_confirm_tokens: 0\ntoolsets:/m);
+    assert.doesNotMatch(fs.readFileSync(agentConfig, 'utf8'), /^  default:/m);
 
     assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE,
       { provider: 'openai-codex', model: 'gpt-5.6-luna' }, { profilesRoot }), true);
     let config = fs.readFileSync(agentConfig, 'utf8');
-    assert.match(config, /^# Managed by Mia[^\n]*\nmodel:\n  default: "gpt-5\.6-luna"\n  provider: "openai-codex"\ntoolsets:/);
+    assert.match(config, /^# Managed by Mia[^\n]*\nmodel:\n  default: "gpt-5\.6-luna"\n  provider: "openai-codex"\n  switch_context_confirm_tokens: 0\ntoolsets:/);
     // Only the turn's own profile changes.
-    assert.doesNotMatch(fs.readFileSync(botConfig, 'utf8'), /^model:/m);
+    assert.doesNotMatch(fs.readFileSync(botConfig, 'utf8'), /^  default:/m);
     // The same model again is a no-op; a new pick replaces the block.
     assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE,
       { provider: 'openai-codex', model: 'gpt-5.6-luna' }, { profilesRoot }), false);
@@ -477,11 +478,13 @@ test('the latest turn model becomes the profile default and survives re-provisio
       { provider: 'deepseek', model: 'deepseek-flash' }, { profilesRoot }), true);
     config = fs.readFileSync(agentConfig, 'utf8');
     assert.equal(config.match(/^model:/gm).length, 1);
-    assert.match(config, /default: "deepseek-flash"\n  provider: "deepseek"/);
+    assert.match(config, /default: "deepseek-flash"\n  provider: "deepseek"\n  switch_context_confirm_tokens: 0\n/,
+      'a model switch keeps the confirmation off');
 
-    // Boot-time provisioning keeps the recorded model.
+    // Boot-time provisioning keeps the recorded model and the setting.
     provisionHermesRuntimeProfiles({ profilesRoot });
-    assert.match(fs.readFileSync(agentConfig, 'utf8'), /default: "deepseek-flash"\n  provider: "deepseek"/);
+    assert.match(fs.readFileSync(agentConfig, 'utf8'), /default: "deepseek-flash"\n  provider: "deepseek"\n  switch_context_confirm_tokens: 0\n/);
+    assert.equal(fs.readFileSync(agentConfig, 'utf8').match(/switch_context_confirm_tokens/g).length, 1);
 
     // Incomplete or unsafe selections and unmanaged configs are ignored.
     assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE, { model: 'x' }, { profilesRoot }), false);
@@ -513,7 +516,7 @@ test('Google workspace profiles keep browser guards and MCP registration through
       provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir });
       for (const profile of profiles) {
         const config = YAML.parse(fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8'));
-        assert.deepEqual(config.model, { default: selection.model, provider: selection.provider });
+        assert.deepEqual(config.model, { default: selection.model, provider: selection.provider, switch_context_confirm_tokens: 0 });
         assert.equal(config.terminal.cwd, workspaceDir);
         assert.equal(config.terminal.auto_source_bashrc, false);
         assert.equal(config.terminal.shell_init_files.length, 1);

@@ -273,6 +273,10 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
       conversationId: req.params.conversationId,
       dispatchId: req.params.dispatchId,
       principal,
+      // Take over pauses the agent; its notice names the page it was on.
+      reason: requestBody(req).reason === 'take-over' ? 'take-over' : undefined,
+      page: typeof requestBody(req).page === 'string'
+        ? requestBody(req).page.replace(/\s+/g, ' ').trim().slice(0, 120) : undefined,
     });
     res.status(200).json(result);
   }));

@@ -173,11 +173,21 @@ function backgroundReviewEnabledForBot() {
 // agent itself) falls back to the profile's model block, so Mia records the
 // model of the latest turn there. Until a turn runs there is no block: a
 // guessed default could route to a provider the user never connected.
-function profileModelBlock(selection) {
+//
+// Every block also turns off Hermes' large-context switch confirmation: Mia
+// has no way to answer it, so a chat over 100k tokens failed every turn after
+// its model changed. Choosing the model is the consent. Hermes reads this key
+// only from model:, which is why it is written even before a model is known.
+const SWITCH_CONFIRM_OFF = '  switch_context_confirm_tokens: 0';
+function validProfileModel(selection) {
   const model = String((selection && selection.model) || '').trim();
   const provider = String((selection && selection.provider) || '').trim();
-  if (!model || !provider || /[\r\n]/.test(model + provider)) return [];
-  return ['model:', `  default: ${JSON.stringify(model)}`, `  provider: ${JSON.stringify(provider)}`];
+  return model && provider && !/[\r\n]/.test(model + provider) ? { model, provider } : null;
+}
+function profileModelBlock(selection) {
+  const valid = validProfileModel(selection);
+  if (!valid) return ['model:', SWITCH_CONFIRM_OFF];
+  return ['model:', `  default: ${JSON.stringify(valid.model)}`, `  provider: ${JSON.stringify(valid.provider)}`, SWITCH_CONFIRM_OFF];
 }
 
 // The model block a previous turn wrote, so re-provisioning at boot keeps it.
@@ -340,8 +350,8 @@ function provisionRuntimeProfile({
 // Record the latest turn's model as the profile default. Only Mia-managed
 // configs are touched; returns true when the file changed.
 function setHermesProfileModel(profile, selection, { profilesRoot = path.join(hermesHome(), 'profiles') } = {}) {
+  if (!validProfileModel(selection) || !/^[a-z0-9-]+$/.test(String(profile || ''))) return false;
   const block = profileModelBlock(selection);
-  if (!block.length || !/^[a-z0-9-]+$/.test(String(profile || ''))) return false;
   const configPath = path.join(profilesRoot, profile, 'config.yaml');
   let existing;
   try { existing = fs.readFileSync(configPath, 'utf8'); } catch (_) { return false; }
@@ -390,7 +400,7 @@ function provisionHermesBotProfile({
     profilesRoot,
     profile: MIAOS_BOT_HERMES_PROFILE,
     toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
-    maxTurns: 100,
+    maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     backgroundReview: backgroundReviewEnabledForBot(),
   });
@@ -405,7 +415,7 @@ function provisionHermesGoogleBotProfile({
     profilesRoot,
     profile: MIAOS_BOT_GOOGLE_HERMES_PROFILE,
     toolsets: searchOnly ? ['web', 'todo', 'clarify'] : ['todo', 'clarify', 'terminal'],
-    maxTurns: 100,
+    maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForBot(),

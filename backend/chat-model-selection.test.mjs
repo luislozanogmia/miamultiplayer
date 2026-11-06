@@ -97,7 +97,7 @@ test('limits the product picker to explicitly selected providers and hides techn
 test('turns model credential and stale-selection failures into actionable safe replies', () => {
   assert.equal(
     userFacingModelDispatchError(Object.assign(new Error('native dispatch timed out after 600000ms'), { code: 'NATIVE_DISPATCH_TIMEOUT' })),
-    'I ran out of time before finishing. Nothing was changed. Please try again.'
+    'I ran out of time before finishing. Please try again.'
   );
   assert.equal(
     userFacingModelDispatchError(new Error("Error code: 401 - {'code': 'invalid_api_key'}")),
@@ -211,4 +211,11 @@ test('a router key replaced on another computer keeps that explanation through s
   assert.equal(managedRouterErrorCode('unavailable', true), 'unavailable');
   assert.equal(managedRouterErrorCode('not_authorized', true), 'not_authorized');
   assert.equal(managedRouterErrorCode('session_rejected', false), 'session_rejected');
+});
+
+test('a Hermes switch warning Mia cannot answer says what happened instead of the generic failure', () => {
+  const large = new Error('!!! LARGE CONTEXT MODEL SWITCH !!! This session holds ~168,326 tokens of context. Switching to gpt-6-sol makes the next reply re-read all of it uncached.');
+  assert.equal(userFacingModelDispatchError(large), 'This chat is too large to switch models without a confirmation. Go back to the previous model, or start a new chat.');
+  assert.match(userFacingModelDispatchError(new Error('Expensive Model Warning: this model costs more')), /marks that model as expensive/);
+  assert.match(userFacingModelDispatchError(new Error('Data-Training Tier Warning: contributor tier')), /may use your chats for training/);
 });

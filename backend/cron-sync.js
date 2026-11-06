@@ -324,6 +324,46 @@ function teamBotWorkspace(team, bot) {
   return markedFolder(teamFolder, { kind: 'miaos-bot-artifact-workspace', botId: `team-${registrationId}` }, bot.name || 'Bot');
 }
 
+// Where a company bot keeps its scripts, notes and temporary files on this
+// computer: inside Mia's own data, never in Documents. Its finished files go
+// in its company folder (teamBotWorkspace).
+function teamBotWorkFolder(team, bot) {
+  const teamId = String(team && team.teamId || '');
+  const registrationId = String(bot && bot.registrationId || '');
+  if (!/^[a-f0-9]{32}$/.test(teamId) || !/^[A-Za-z0-9_-]{1,120}$/.test(registrationId)) {
+    throw new Error('team and bot ids are required for a team bot work folder');
+  }
+  const folder = path.join(path.dirname(BOT_PACKAGE_ROOT), 'company-bot-work', teamId, registrationId);
+  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+  return folder;
+}
+
+// Every bot folder in the Mia folder with the working folder it belongs to,
+// for the one-time tidy-up (bot-files-tidy.js). Remove with it in 0.3.5.
+function listBotFileFolders() {
+  const found = [];
+  const folders = (root) => { try { return fs.readdirSync(root).map((name) => path.join(root, name)).filter(isRealDirectory); } catch (_) { return []; } };
+  for (const folder of folders(ARTIFACT_ROOT)) {
+    try {
+      const botId = readArtifactMarker(folder);
+      const workFolder = botId && BOT_PACKAGE_STORE.findDirectory(botId);
+      if (workFolder) found.push({ folder, workFolder });
+    } catch (_) { /* not a bot folder Mia can place */ }
+  }
+  for (const company of folders(TEAM_ARTIFACT_ROOT)) {
+    let teamId = '';
+    try { teamId = String(JSON.parse(fs.readFileSync(path.join(company, ARTIFACT_MARKER), 'utf8')).teamId || ''); } catch (_) { continue; }
+    for (const folder of folders(company)) {
+      try {
+        const botId = readArtifactMarker(folder) || '';
+        if (!botId.startsWith('team-')) continue;
+        found.push({ folder, workFolder: teamBotWorkFolder({ teamId }, { registrationId: botId.slice(5) }) });
+      } catch (_) { /* not a company bot folder */ }
+    }
+  }
+  return found;
+}
+
 function readBotInstructions(bot) {
   return BOT_PACKAGE_STORE.readInstructions(bot);
 }
@@ -1302,6 +1342,8 @@ module.exports = {
   readRunReports,
   artifactWorkspaceForBot,
   teamBotWorkspace,
+  teamBotWorkFolder,
+  listBotFileFolders,
   botPackageDirectoryFor,
   writeBotInstructions,
   readBotInstructions,

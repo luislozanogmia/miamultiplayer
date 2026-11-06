@@ -6,7 +6,8 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { HermesGatewayClient, waitForRecordedGatewayExit, bindableGatewayPort } = require('./hermes-gateway-client.js');
+const { HermesGatewayClient, waitForRecordedGatewayExit, bindableGatewayPort, stopStaleHermesServers } = require('./hermes-gateway-client.js');
+import { spawn as spawnProcess } from 'node:child_process';
 
 test('a fresh session waits for constructor normalization before pinning and submitting its selected model', async () => {
   const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
@@ -1408,4 +1409,54 @@ test('a runtime that exits while starting fails at once instead of waiting out t
   };
   await assert.rejects(client.connect(), /exited before it was ready/);
   client.close();
+});
+
+test('a Hermes server left running for this data folder is stopped before a new one starts, and nothing else is', { skip: process.platform === 'win32' }, async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-ledger-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  // A stand-in named like Hermes and run with "serve", and an unrelated process.
+  const script = path.join(home, 'hermes');
+  fs.writeFileSync(script, 'setInterval(() => {}, 1000);\n');
+  const stale = spawnProcess(process.execPath, [script, 'serve', '--port', '9121'], { stdio: 'ignore' });
+  const other = spawnProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => { try { stale.kill('SIGKILL'); } catch (_) {} try { other.kill('SIGKILL'); } catch (_) {} });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  fs.writeFileSync(path.join(home, 'spawn-ledger.json'), JSON.stringify([
+    { pid: stale.pid, purpose: 'serve', port: 9121 },
+    { pid: other.pid, purpose: 'serve', port: 9122 },
+    { pid: 999999, purpose: 'dashboard' },
+  ]));
+  const exited = new Promise((resolve) => stale.once('exit', () => resolve(true)));
+  const stopped = await stopStaleHermesServers({ HERMES_HOME: home }, { timeoutMs: 3000 });
+  assert.deepEqual(stopped, [stale.pid], 'only the process still running hermes serve');
+  assert.equal(await exited, true);
+  assert.equal(other.exitCode, null, 'a recorded pid now used by something else is left alone');
+  assert.deepEqual(await stopStaleHermesServers({ HERMES_HOME: home }, { timeoutMs: 100 }), [], 'nothing left to stop');
+  assert.deepEqual(await stopStaleHermesServers({}, {}), [], 'no data folder, nothing read');
+});
+
+test('while its own Hermes is still starting, the client waits instead of starting a second one', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-starting-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  let listening = false, probes = 0;
+  const spawns = [];
+  const child = { pid: 4242, exitCode: null, signalCode: null, once: () => {}, kill: () => {} };
+  const client = new HermesGatewayClient({
+    binary: process.execPath,
+    WebSocketImpl: class FakeWebSocket {},
+    env: {},
+    tokenFile: path.join(directory, 'gateway.token'),
+    token: 'token',
+    probePortImpl: async () => { probes += 1; if (probes === 3) listening = true; return listening; },
+    stopExternalGatewayImpl: async () => {},
+    stopStaleServersImpl: async () => [],
+    spawnImpl: () => { spawns.push(1); return child; },
+  });
+  client.child = child;
+  await client.ensureGateway();
+  assert.equal(spawns.length, 0, 'no second Hermes while the first is starting');
+  assert.ok(probes >= 3, 'it waited for the first one to listen');
+  child.exitCode = 1; listening = false; probes = 0;
+  await client.ensureGateway();
+  assert.equal(spawns.length, 1, 'once it has exited, a new one starts');
 });

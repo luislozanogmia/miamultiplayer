@@ -2447,13 +2447,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     for (const item of order) tabs.set(item.id, item);
     return true;
   }
-  // In a shared session a new tab belongs to the session.
+  // In a shared session a new tab belongs to the session. Otherwise it joins
+  // the group of the tab in front, reusing its blank tab, unless that group's
+  // bot is working: the bot steers every tab in its group, so the person's new
+  // tab then opens on its own.
   function newSessionOrPlainTab() {
-    if (!sessionGroupId || !groups.has(sessionGroupId)) return newTab();
-    const members = groupTabs(sessionGroupId);
+    const front = tabs.get(activeId);
+    const frontGroup = front && groups.has(front.groupId) && !groupTabs(front.groupId).find(browserWorkPending) ? front.groupId : null;
+    const groupId = sessionGroupId && groups.has(sessionGroupId) ? sessionGroupId : frontGroup;
+    if (!groupId) return newTab();
+    const members = groupTabs(groupId);
     const blank = members.find(item => !item.url);
     if (blank) { activateTab(blank.id); layout(); persistTabs(); return blank; }
-    return newTab(undefined, { after: members.at(-1)?.id, groupId: sessionGroupId });
+    return newTab(undefined, { after: members.at(-1)?.id, groupId });
   }
   function newTab(value, options = {}) {
     if (value) normalizeStoredTarget(value);
@@ -3038,16 +3044,20 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     actorRuntime.closeTab(id);
     if (byUser && !tab.private) closedTabs.remember({ url: tab.url, title: tab.title, groupId: tab.groupId || null,
       afterId: [...tabs.keys()][[...tabs.keys()].indexOf(id) - 1] ?? null, closedAt: Date.now() });
-    // Closing the active tab goes back to the tab used before it. A tab never
-    // used yet, as after a restart, falls back to its neighbor in the same group.
+    // Closing the active tab stays with its group: the group's tab used most
+    // recently, else its neighbor there. Only a group with no other tab hands
+    // over to the tab used before it, so closing a tab never jumps to another
+    // bot's tabs (and its chat) while its own group still has some.
     const order = [...tabs.keys()];
     const at = order.indexOf(id);
     const visible = other => other !== id && !groups.get(tabs.get(other).groupId)?.collapsed;
     const sameGroup = other => tab.groupId && tabs.get(other).groupId === tab.groupId;
     const neighbors = [...order.slice(at + 1), ...order.slice(0, at).reverse()].filter(visible);
-    const lastUsed = neighbors.filter(other => tabs.get(other).lastActiveAt)
+    const lastUsedOf = list => list.filter(other => tabs.get(other).lastActiveAt)
       .sort((a, b) => tabs.get(b).lastActiveAt - tabs.get(a).lastActiveAt)[0];
-    const successor = lastUsed ?? neighbors.find(sameGroup) ?? order.slice(at + 1).find(visible) ?? order.slice(0, at).reverse().find(visible);
+    const inGroup = neighbors.filter(sameGroup);
+    const successor = lastUsedOf(inGroup) ?? inGroup[0] ?? lastUsedOf(neighbors)
+      ?? order.slice(at + 1).find(visible) ?? order.slice(0, at).reverse().find(visible);
     tabs.delete(id);
     clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);

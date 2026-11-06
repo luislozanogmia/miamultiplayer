@@ -24,7 +24,7 @@
   var s = {space:null, teamKey:null, channelId:null, groupId:null, links:{}, presence:{}, participants:{}, invites:{},
     follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null, ended:{}, notice:null,
     confirming:null, approveEach:false, approved:{}, approving:{}, ignored:{}, joined:false, resumeChecked:false, dismissed:{}, rung:{}, invited:{}, callMenu:null, joinedAt:0,
-    sharePicking:null, zoomed:false, covered:false, mapHidden:false, mesh:null, frames:{}, pointers:{}, botPoints:{}, worked:{}, done:{}, lastBot:{}, frameBusy:false, frameTick:0, cursorSig:'', cursorTab:null, pillSig:'', sendQueue:null, joinReady:false};
+    sharePicking:null, activeAt:0, aloneSince:0, ending:null, endingCard:null, zoomed:false, covered:false, mapHidden:false, mesh:null, frames:{}, pointers:{}, botPoints:{}, worked:{}, done:{}, lastBot:{}, frameBusy:false, frameTick:0, cursorSig:'', cursorTab:null, pillSig:'', sendQueue:null, joinReady:false};
 
   function key(){ return Array.from(crypto.getRandomValues(new Uint8Array(8)), function(b){ return b.toString(16).padStart(2, '0'); }).join(''); }
   function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch){ return '&#' + ch.charCodeAt(0) + ';'; }); }
@@ -54,7 +54,7 @@
   function saveSession(){
     if(!bound() || !me()) return;
     writeStored(SESSION_KEY, {space: s.space, teamKey: s.teamKey, channelId: s.channelId, groupId: s.groupId, links: s.links,
-      follow: s.follow, approveEach: s.approveEach, approved: s.approved, ignored: s.ignored, joined: s.joined, user: me().id, at: Date.now()});
+      follow: s.follow, approveEach: s.approveEach, approved: s.approved, ignored: s.ignored, joined: s.joined, user: me().id, at: Date.now(), activeAt: s.activeAt});
   }
   function resumeSession(){
     var team = teamKey(), self = me();
@@ -63,7 +63,14 @@
     var saved = readStored(SESSION_KEY);
     if(!saved || saved.teamKey !== team) return;
     if(saved.user !== self.id || !saved.space || Date.now() - Number(saved.at || 0) >= RESUME_MS){ writeStored(SESSION_KEY, null); return; }
+    // One left unused (Mia closed, or open with nobody at it) ends instead of coming back.
+    if(!model.resumable(saved, Date.now())){
+      writeStored(SESSION_KEY, null);
+      toast('Your shared browser session ended because it wasn\'t used for a while.');
+      return;
+    }
     start(saved.channelId, saved.space, saved.groupId || null, saved.links);
+    if(saved.activeAt) s.activeAt = Number(saved.activeAt);
     enterRoom();
     s.follow = saved.follow || null; s.approveEach = !!saved.approveEach; s.ignored = saved.ignored || {}; s.joined = !!saved.joined;
     s.approved = saved.approved || {};
@@ -309,6 +316,83 @@
     return tab ? tab.title || model.hostOf(tab.url) : '';
   }
 
+  // ---- Ending an unused session -------------------------------------------
+  // Someone really using the session: the page's pointer moving or scrolling,
+  // or a click, key or scroll in Mia. Being followed to a new page is not.
+  function touch(){
+    if(!bound()) return;
+    s.activeAt = Date.now();
+    if(s.ending && s.ending.kind === 'idle') closeEnding();
+  }
+  function closeEnding(){
+    s.ending = null;
+    if(s.endingCard){ s.endingCard.remove(); s.endingCard = null; }
+  }
+  function othersInSession(){
+    var self = me(), live = model.livePresence(s.presence, Date.now());
+    return Object.keys(live).filter(function(id){ return !self || id !== self.id; }).length;
+  }
+  function endingText(){
+    var seconds = Math.max(0, Math.ceil((s.ending.endsAt - Date.now()) / 1000));
+    return s.ending.kind === 'idle'
+      ? 'You haven\'t used the shared browser for ' + Math.round(model.IDLE_MS / 60000) + ' minutes. Leaving in ' + seconds + ' s.'
+      : 'Nobody else has been in this session for ' + Math.round(model.ALONE_MS / 60000) + ' minutes. Ending in ' + seconds + ' s.';
+  }
+  // Asks like a video call does: a countdown, and one button to stay.
+  function showEnding(due){
+    s.ending = due;
+    var overlay = document.createElement('div');
+    overlay.className = 'app-confirm-overlay open mia-space-ending';
+    overlay.setAttribute('role', 'presentation');
+    var idle = due.kind === 'idle';
+    overlay.innerHTML = '<div class="app-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="miaSpaceEndingTitle" aria-describedby="miaSpaceEndingText">'
+      + '<div class="mia-space-ending-title" id="miaSpaceEndingTitle">' + (idle ? 'Are you still sharing?' : 'Nobody else is here') + '</div>'
+      + '<div class="app-confirm-msg" id="miaSpaceEndingText"></div>'
+      + '<div class="app-confirm-actions"><button type="button" class="btn" data-ending="end">' + (idle ? 'Leave now' : 'End now') + '</button>'
+      + '<button type="button" class="btn primary" data-ending="stay">' + (idle ? 'Keep sharing' : 'Extend ' + Math.round(model.EXTEND_MS / 60000) + ' min') + '</button></div></div>';
+    overlay.querySelector('#miaSpaceEndingText').textContent = endingText();
+    overlay.addEventListener('click', function(event){
+      var button = event.target.closest('[data-ending]');
+      if(!button) return;
+      if(button.getAttribute('data-ending') === 'end') return endUnused();
+      stay();
+    });
+    overlay.addEventListener('keydown', function(event){ if(event.key === 'Escape'){ event.preventDefault(); stay(); } });
+    document.body.appendChild(overlay);
+    s.endingCard = overlay;
+    overlay.querySelector('[data-ending="stay"]').focus();
+  }
+  function stay(){
+    var now = Date.now();
+    if(s.ending && s.ending.kind === 'alone') s.aloneSince = now;
+    s.activeAt = now;
+    closeEnding();
+    saveSession();
+  }
+  function endUnused(){
+    var kind = s.ending && s.ending.kind, name = bound() ? callName(s.channelId, s.space.name) : 'the session';
+    closeEnding();
+    if(!bound()) return;
+    leave(false);
+    toast(kind === 'alone' ? 'Ended ' + name + ': nobody else was in it. Your tabs stay open.' : 'You left ' + name + '. Your tabs stay open.');
+  }
+  // Runs every second while a session is on this computer.
+  function checkEnding(){
+    if(!bound()){ closeEnding(); return; }
+    var now = Date.now(), others = othersInSession();
+    if(others) s.aloneSince = 0;
+    else if(!s.aloneSince) s.aloneSince = now;
+    if(s.ending){
+      if(s.ending.kind === 'alone' && others) return closeEnding();
+      if(now >= s.ending.endsAt) return endUnused();
+      var text = s.endingCard && s.endingCard.querySelector('#miaSpaceEndingText');
+      if(text) text.textContent = endingText();
+      return;
+    }
+    var due = model.endingDue({activeAt: s.activeAt, aloneSince: s.aloneSince}, now);
+    if(due) showEnding(due);
+  }
+
   // ---- Actions -------------------------------------------------------------
   function selectedGroup(){
     var state = s.browser;
@@ -322,6 +406,7 @@
     s.sendQueue = null; s.joinReady = false;
     if(me()) s.participants[me().id] = true;
     s.sharePicking = null; s.invited = {}; s.callMenu = null; s.joinedAt = Date.now();
+    s.activeAt = s.aloneSince = Date.now(); closeEnding();
     delete s.rung[space.id]; delete s.dismissed[space.id];
     command('spaceSession', {groupId: groupId}).catch(function(){});
     announce(true);
@@ -443,6 +528,7 @@
     writeStored(SESSION_KEY, null);
     command('spaceSession', {groupId: null}).catch(function(){});
     s.callMenu = null;
+    closeEnding();
     announce(false);
     clearInterval(s.timers.beat);
     stopLive();
@@ -601,6 +687,7 @@
         var mine = s.pointers[me().id], spot = now.pointer && JSON.stringify(now.pointer.a);
         // Scrolling moves what the pointer is over, even when the mouse stays still.
         if(link.tab.active && now.pointer && (!mine || mine.stamp !== now.pointer.at || mine.spot !== spot)){
+          if(mine) touch();
           s.pointers[me().id] = {k: link.k, x: now.pointer.x, y: now.pointer.y, a: now.pointer.a, at: Date.now(), stamp: now.pointer.at, spot: spot};
           if(s.mesh) s.mesh.send({t: 'p', tab: link.k, x: now.pointer.x, y: now.pointer.y, a: now.pointer.a});
         }
@@ -687,6 +774,9 @@
       if(!node) return;
       var frame = model.pickFrame(tile, s.frames, self && self.id, now, s.follow), img = node.querySelector('.mia-space-frame');
       if(img && frame && img.getAttribute('src') !== frame.url){ img.src = frame.url; img.hidden = false; }
+      // Nobody's view has arrived for a tab someone else is on: say so instead of an old picture.
+      if(img && !frame && !img.hidden){ img.hidden = true; img.removeAttribute('src'); }
+      node.classList.toggle('no-view', !frame && (tile.people.some(function(person){ return !self || person.id !== self.id; }) || tile.bots.length > 0));
       node.classList.toggle('working', tile.bots.length > 0);
       node.classList.toggle('done', !!s.done[tile.k]);
       paintMarkers(node, tile);
@@ -997,7 +1087,13 @@
   setInterval(function(){
     var clock = callBar && callBar.querySelector('.mia-space-clock');
     if(clock && bound()) clock.textContent = clockText();
+    checkEnding();
   }, 1000);
+  ['pointerdown', 'keydown', 'wheel'].forEach(function(type){
+    document.addEventListener(type, function(event){
+      if(!s.endingCard || !s.endingCard.contains(event.target)) touch();
+    }, {capture: true, passive: true});
+  });
   // Any way out of the browser or back into it, not only the bar's buttons.
   if(window.MutationObserver) new MutationObserver(syncZoom).observe(document.body, {attributes: true, attributeFilter: ['class']});
   setInterval(render, 3000);

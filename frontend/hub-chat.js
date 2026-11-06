@@ -38,7 +38,7 @@
     cannot_invite_dm:'You can’t add people to a direct message.', cannot_leave_dm:'You can’t leave a direct message.',
     invalid_visibility:'Choose who can see this channel.', invalid_channel:'This channel is no longer available.',
     invalid_thread:'That thread is no longer available.', invalid_message:'Messages must be 1 to 16,000 characters.',
-    invalid_sequence:'That message is no longer available.', invalid_pagination:'Older messages could not be loaded. Try again.',
+    invalid_sequence:'That message is no longer available.', reaction_limit:'This message already has 20 different reactions.', invalid_emoji:'That emoji can\u2019t be used as a reaction.', message_deleted:'That message was deleted.', invalid_pagination:'Older messages could not be loaded. Try again.',
     idempotency_conflict:'That was already sent with different content. Refresh and try again.',
     file_too_large:'Files must be 8 MB or smaller.', team_storage_full:'This company has used its file storage. Delete older files to add more.',
     unsupported_file_type:'Choose an image, PDF, Word, Excel, PowerPoint, CSV, text, Markdown or JSON file.',
@@ -114,7 +114,9 @@
       sender:row.author_type==='bot'?'hub-bot:'+row.author_id:row.author_email, hubAuthor:row.author_type==='bot'||row.author_type==='system'?null:row.author_email,
       nativeAgentName:row.author_type==='bot'?row.author_name:null, body:deleted ? 'Message deleted' : (runAt<0 ? row.body : row.body.slice(0,runAt)), hubRunLabel:runAt<0 ? '' : row.body.slice(runAt+3), ts:row.created_at * 1000,
       threadRoot:row.thread_root_sequence ? 'hub-sequence-'+row.thread_root_sequence : null, deleted:deleted, pending:false,
-      hubFile:file, attachments:[], nativeEvent:{sequence:row.sequence}};
+      // A bot reply names the message that asked for it.
+      hubReplyTo:row.author_type==='bot' && row.reply_to_sequence ? 'hub-sequence-'+row.reply_to_sequence : null,
+      hubFile:file, attachments:[], nativeEvent:{sequence:row.sequence}, reactions:deleted ? null : reactionMap(row.reactions)};
   }
   // Upserts authoritative rows, replacing the sender's optimistic copy by its
   // client-generated id, and keeps unsent copies after the confirmed history.
@@ -138,6 +140,15 @@
   }
   // One live connection per team: the Hub holds each request until something
   // changes, so a quiet team costs one request about every 20 seconds.
+  // The Hub lists a message's reactions as [{emoji, user_ids}]; the app keeps
+  // them as {emoji: [who]}, the same shape as Solo's, so one renderer serves both.
+  function reactionMap(list){
+    var map={};
+    (Array.isArray(list)?list:[]).forEach(function(item){
+      if(item && typeof item.emoji==='string' && Array.isArray(item.user_ids) && item.user_ids.length) map[item.emoji]=item.user_ids.map(String);
+    });
+    return Object.keys(map).length ? map : null;
+  }
   function feed(options){
     var cursor=0, synced=false, stopped=false, failures=0, timer=null;
     function schedule(delay){ if(!stopped) timer=root.setTimeout(next, delay); }
@@ -212,7 +223,7 @@
       });
     });
   }
-  var api = {id:id, teamId:teamId, call:call, localCall:localCall, sessionToken:sessionToken, message:message, merge:merge, isSpaceControl:isSpaceControl, validateText:validateText, feed:feed, fileUrl:fileUrl, teamBots:teamBots};
+  var api = {id:id, teamId:teamId, call:call, localCall:localCall, sessionToken:sessionToken, message:message, merge:merge, isSpaceControl:isSpaceControl, validateText:validateText, feed:feed, fileUrl:fileUrl, teamBots:teamBots, reactionMap:reactionMap};
   root.MiaHubChat = api;
   if(typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -192,6 +192,54 @@ async function waitForRecordedGatewayExit(env, { timeoutMs = 10000, pollMs = 250
   return true;
 }
 
+// Hermes lists every long-running process it starts for a data folder in
+// spawn-ledger.json. A `hermes serve` there that this client is not managing
+// (one an earlier backend left running) would sit beside a new one, each with
+// part of the state: the Mac showed two, and the model list read from the
+// wrong one. Before starting, stop any such server for this folder.
+function ledgerServePids(home) {
+  let entries;
+  try { entries = JSON.parse(fs.readFileSync(path.join(home, 'spawn-ledger.json'), 'utf8')); } catch (_) { return []; }
+  if (!Array.isArray(entries)) return [];
+  return [...new Set(entries
+    .filter((entry) => entry && entry.purpose === 'serve')
+    .map((entry) => Number.parseInt(entry.pid, 10))
+    .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid))];
+}
+
+// A recorded pid is only stopped while it still runs `hermes serve`; a pid
+// the system has since given to something else is left alone. Windows has no
+// portable way to read another process's command line here, so it is skipped.
+function isHermesServe(pid) {
+  if (process.platform === 'win32') return false;
+  try {
+    if (process.platform === 'linux') {
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ');
+      return /hermes/.test(argv) && /\sserve(\s|$)/.test(argv);
+    }
+    const argv = require('child_process').execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 });
+    return /hermes/.test(argv) && /\sserve(\s|$)/.test(argv);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function stopStaleHermesServers(env, { ownPid = null, timeoutMs = 10000, isServe = isHermesServe, kill = process.kill.bind(process), alive = processAlive } = {}) {
+  const home = String((env && env.HERMES_HOME) || '').trim();
+  if (!home) return [];
+  const stale = ledgerServePids(home).filter((pid) => pid !== ownPid && alive(pid) && isServe(pid));
+  for (const pid of stale) {
+    try { kill(pid, 'SIGTERM'); } catch (_) { /* already gone */ }
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (stale.some(alive) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+  for (const pid of stale.filter(alive)) {
+    try { kill(pid, 'SIGKILL'); } catch (_) { /* already gone */ }
+  }
+  if (stale.length) console.warn(`[hermes] stopped ${stale.length} Hermes server(s) left running for this data folder`);
+  return stale;
+}
+
 function stopExternalHermesGateway(launch, env) {
   return new Promise((resolve, reject) => {
     execFile(launch.command, [...launch.prefixArgs, 'gateway', 'stop'], {
@@ -230,6 +278,7 @@ class HermesGatewayClient {
     stopExternalGatewayImpl = stopExternalHermesGateway,
     beforeSpawn = null,
     waitForGatewayExitImpl = waitForRecordedGatewayExit,
+    stopStaleServersImpl = stopStaleHermesServers,
     secretEnv = null,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
@@ -263,6 +312,7 @@ class HermesGatewayClient {
     this.stopExternalGatewayImpl = stopExternalGatewayImpl;
     this.beforeSpawn = typeof beforeSpawn === 'function' ? beforeSpawn : null;
     this.waitForGatewayExitImpl = waitForGatewayExitImpl;
+    this.stopStaleServersImpl = stopStaleServersImpl;
     this.secretEnv = secretEnv && typeof secretEnv === 'object' ? { ...secretEnv } : {};
     this.toolProgressMode = String(this.env.HERMES_TUI_TOOL_PROGRESS || '').trim().toLowerCase() === 'verbose'
       ? 'verbose'
@@ -320,6 +370,19 @@ class HermesGatewayClient {
         return;
       }
 
+      // Our own Hermes may still be starting: a slow computer takes many
+      // seconds before it listens. Wait for it rather than start a second.
+      const own = this.child;
+      if (own && own.exitCode === null && own.signalCode === null) {
+        const deadline = this.now() + GATEWAY_START_TIMEOUT_MS;
+        while (this.child === own && own.exitCode === null && own.signalCode === null && this.now() < deadline) {
+          if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
+          if (await this.probePortImpl(this.port, PORT_PROBE_TIMEOUT_MS)) return;
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        }
+        if (this.child === own && own.exitCode === null && own.signalCode === null) throw new Error('Hermes gateway is still starting');
+      }
+
       if (!this.gatewayToken) {
         this.gatewayToken = crypto.randomBytes(32).toString('hex');
         if (!this.tokenFile) {
@@ -332,6 +395,9 @@ class HermesGatewayClient {
 
       if (typeof this.stopExternalGatewayImpl === 'function') {
         await this.stopExternalGatewayImpl(this.launch, this.env);
+      }
+      if (typeof this.stopStaleServersImpl === 'function') {
+        await this.stopStaleServersImpl(this.env, { ownPid: this.child && this.child.pid });
       }
       if (this.shutdownRequested) throw new Error('Hermes gateway client closed');
       // Stores are changed only once no Hermes is running for this home, so
@@ -360,6 +426,10 @@ class HermesGatewayClient {
       // A process-global HERMES_TUI_TOOLSETS value would flatten those two
       // security postures and is therefore intentionally not set here.
       gatewayEnv.HERMES_TUI_MAX_TURNS = String(this.maxTurns);
+      // Each command: 2 minutes unless the model asks for more, at most 10 in
+      // the foreground; longer ones run in the background and report back.
+      if (!gatewayEnv.TERMINAL_TIMEOUT) gatewayEnv.TERMINAL_TIMEOUT = '120';
+      if (!gatewayEnv.TERMINAL_MAX_FOREGROUND_TIMEOUT) gatewayEnv.TERMINAL_MAX_FOREGROUND_TIMEOUT = '600';
       gatewayEnv.MIAOS_EXTERNAL_CHAT = '1';
       if (Object.keys(this.secretEnv).length) gatewayEnv[PROCESS_SECRETS_MARKER] = '1';
       // The desktop server owns both native chat sessions and cron ticks.
@@ -1286,6 +1356,8 @@ class HermesGatewayClient {
 
 module.exports = {
   bindableGatewayPort,
+  ledgerServePids,
+  stopStaleHermesServers,
   waitForRecordedGatewayExit,
   HermesGatewayClient,
   DEFAULT_PORT,

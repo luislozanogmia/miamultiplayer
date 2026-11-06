@@ -320,6 +320,9 @@
     dockBar(view);
   }
   tabStrip.host = function () { return docked; };
+  // Full-window cards and viewers are added straight to the body; adding or
+  // removing one lays the live page out again so it never covers them.
+  new MutationObserver(function () { layout(); }).observe(document.body, { childList: true });
   new MutationObserver(function () {
     if (showingView() !== docked && state) render(state);
     else dockChatActions(bar && bar.getAttribute('data-view') || docked);
@@ -421,12 +424,13 @@
     var agents = window.miaBrowserAgents;
     if (!botId || takeOver.disabled || !agents || !agents.takeOver) return;
     takeOver.disabled = true;
-    takeOver.textContent = 'Stopping…';
-    return Promise.resolve().then(function () { return agents.takeOver(botId); }).then(function (stopped) {
+    takeOver.textContent = 'Pausing…';
+    var page = selected();
+    return Promise.resolve().then(function () { return agents.takeOver(botId, page ? page.title || page.url || '' : ''); }).then(function (stopped) {
       if (stopped !== true) return;
       // Control stays with the bot until every cancellation is acknowledged.
       botReleasedAt[botId] = Date.now();
-      Object.keys(botHolds).forEach(function (id) { if (botHolds[id].botId === botId) delete botHolds[id]; });
+      Object.keys(botHolds).forEach(function (id) { if (botHolds[id].botId === botId) { delete botHolds[id]; delete botDroveAt[id]; } });
       render(state);
     }).catch(function () {
       botControlLabel.textContent = 'Could not stop. The bot may still be working.';
@@ -481,16 +485,26 @@
   }
   var botReleasedAt = {};
   var botHoldTimer = null;
+  // A bot has control of a page only while it runs browser commands there,
+  // plus a short grace between them. Thinking or working outside the browser
+  // in the same reply keeps the tab's working mark but gives control back.
+  var CONTROL_GRACE_MS = 8000;
+  var botDroveAt = {};
   function botWorking(t) {
     var agents = window.miaBrowserAgents;
     var fresh = t.botActivity && !(Date.now() - (botReleasedAt[t.botActivity.botId] || 0) < 3000) ? t.botActivity : null;
-    if (fresh) botHolds[t.id] = fresh;
+    if (fresh) { botHolds[t.id] = fresh; botDroveAt[t.id] = Date.now(); }
     var hold = botHolds[t.id];
     if (!hold) return null;
     if (fresh) return hold;
     if (agents && agents.isRunning && agents.isRunning(hold.botId)) return hold;
     delete botHolds[t.id];
+    delete botDroveAt[t.id];
     return null;
+  }
+  function botInControl(t) {
+    var hold = botWorking(t);
+    return hold && Date.now() - (botDroveAt[t.id] || 0) < CONTROL_GRACE_MS ? hold : null;
   }
   function refreshBotHolds() {
     if (botHoldTimer) clearTimeout(botHoldTimer);
@@ -586,7 +600,7 @@
   }
   function renderBotControl(tab) {
     renderCallFollow();
-    var activity = tab && botWorking(tab);
+    var activity = tab && botInControl(tab);
     botControl.hidden = !activity;
     if (!activity) { botControl.removeAttribute('data-bot-id'); return; }
     takeOver.hidden = false;
@@ -611,7 +625,8 @@
       var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered && !tipsCovered &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation') &&
-        !document.querySelector('.app-prompt-overlay.open');
+        // Full-window cards and viewers sit in the page too.
+        !document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       // The Downloads menu sits over a still of the page, so the live view
@@ -683,6 +698,7 @@
     state.tabs.forEach(function (t) { byId[t.id] = t; });
     var reserved = items.reduce(function (sum, item) { return item.view === 'browser' ? sum : sum + (item.head ? MIX_HEAD_WIDTH : TAB_MIN_WIDTH); }, 0);
     var crowd = crowdedStrip(groups, working, reserved);
+    front = spreadGroups(groups, front, crowd, reserved);
     // In a session the strip is the session: its tabs, all showing, and your private ones.
     var session = window.MiaSpaceUI ? window.MiaSpaceUI.sessionGroup() : null;
     if (session !== null) {
@@ -875,6 +891,31 @@
       if (needed() > width && !busy[id]) hidden.push(id);
     });
     return { folded: folded, hidden: hidden };
+  }
+  // Stacking a group behind "+N" is for a crowded strip. While nothing had
+  // to fold and there is room, groups show all their tabs, the most
+  // recently used first, each tab at a width its title can be read at.
+  var SPREAD_TAB_WIDTH = 150;
+  function spreadGroups(groups, front, crowd, reserved) {
+    if (crowd.folded.length || crowd.hidden.length || !strip.clientWidth) return front;
+    var room = strip.clientWidth - (add.offsetWidth || 0) - (reserved || 0);
+    var used = 0, seen = {};
+    state.tabs.forEach(function (t) {
+      var g = groups[t.groupId];
+      if (!g) { used += SPREAD_TAB_WIDTH; return; }
+      if (!seen[g.id]) { seen[g.id] = true; used += GROUP_HEAD_WIDTH + (g.collapsed ? 0 : SPREAD_TAB_WIDTH); }
+    });
+    var spread = {};
+    Object.keys(front).forEach(function (id) { spread[id] = front[id]; });
+    Object.keys(front).filter(function (id) { return groups[id] && !groups[id].collapsed; })
+      .sort(function (a, b) { return (groupUsedAt[b] || 0) - (groupUsedAt[a] || 0); })
+      .forEach(function (id) {
+        var extra = front[id].others.length * SPREAD_TAB_WIDTH;
+        if (used + extra > room) return;
+        used += extra;
+        delete spread[id];
+      });
+    return spread;
   }
   // The "+N" list drops down under the bot's tab and draws the bot's other
   // tabs the way the strip draws tabs (page icon, title, working dot, close),
@@ -1484,10 +1525,12 @@
     if (!payload) return;
     if (payload.action === 'stop' && agents && agents.stopQuietly) agents.stopQuietly(payload.botId);
     if (payload.action === 'new-bot') newBotGroup();
-    // The person clicked into the page a bot is working on: take it over.
+    // The person clicked into the page while a bot is acting on it: take it
+    // over. Only a live command counts (not the grace the control bar keeps
+    // between steps), so a click while the bot thinks never stops its reply.
     if (payload.action === 'page-click') {
       var tab = selected();
-      if (tab && tab.id === payload.tabId && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick();
+      if (tab && tab.id === payload.tabId && tab.botActivity && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick();
     }
     if (payload.action === 'choose') {
       var g = (state.groups || []).find(function (item) { return item.id === payload.groupId; });

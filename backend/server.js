@@ -172,9 +172,10 @@ const {
   NATIVE_DISPATCH_TIMEOUT_CODE,
   createNativeDispatchWatchdog,
   NATIVE_DISPATCH_TOKEN_BUDGET_CODE,
+  OUTPUT_LIMIT_NOTICE,
   createNativeDispatchTokenBudgetTracker,
 } = require('./native-dispatch-runtime');
-const { miaosWorkspacePromptContext, PAGE_ICON_RULE, provisionMiaosWorkspace, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
+const { miaosWorkspacePromptContext, PAGE_ICON_RULE, workspaceDir: miaosWorkspaceDir } = require('./miaos-workspace');
 const {
   DEFAULT_WORKSPACE_ID,
   departmentsMetaKey,
@@ -1396,23 +1397,25 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       runSessions.push(id);
       sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}` });
     };
-    // A bot asked in a team channel works in that team's folder on this
-    // computer (<Mia folder>/companies/<company>/<bot>), not in the person's Solo Mia
-    // folder. The folder carries the same workspace instructions. A workflow
-    // step has its own step folder instead.
+    // A bot asked in a team channel saves its finished files in that team's
+    // folder on this computer (<Mia folder>/companies/<company>/<bot>), not in
+    // the person's Solo Mia folder, and works in a folder inside Mia's data.
+    // A workflow step has its own step folder instead.
     let teamFolder = null;
+    let teamWorkFolder = null;
     if (bot.registrationId && channel.teamName !== undefined && !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly
       && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) {
       try {
         teamFolder = cronSync.teamBotWorkspace(channel, { registrationId: bot.registrationId, name: bot.name });
-        provisionMiaosWorkspace({ workspaceDir: teamFolder });
+        teamWorkFolder = cronSync.teamBotWorkFolder(channel, { registrationId: bot.registrationId });
       } catch {
         teamFolder = null;
+        teamWorkFolder = null;
         console.error('team bot folder unavailable');
       }
     }
     const turn = await runBotReplyTurn({
-      agent: sharedBot,
+      agent: teamFolder ? { ...sharedBot, filesFolder: teamFolder } : sharedBot,
       senderLabel: trigger.author_email,
       message: trigger.body,
       promptLine: '[' + trigger.author_email + '] ' + withAttachment(trigger),
@@ -1436,7 +1439,7 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         maxTurns: MIAOS_BOT_MAX_TURNS,
         maxTokens: hermesTokenBudgetFromOptions(userOptions),
         profile: workspace.connectionInventory.googleToolsEnabled ? MIAOS_BOT_GOOGLE_HERMES_PROFILE : MIAOS_BOT_HERMES_PROFILE,
-        ...(teamFolder ? { workspaceDir: teamFolder } : {}),
+        ...(teamWorkFolder ? { workspaceDir: teamWorkFolder } : {}),
         onSession,
       },
       signal,
@@ -1850,6 +1853,56 @@ app.post('/api/speech/transcribe', requireAuth, express.raw({ type: 'audio/wav',
     res.status(error.status || 500).json({ error: error.code || 'transcribe_failed', message: error.message });
   }
 });
+
+// One-time bot files tidy-up, asked once with the person's OK.
+// TEMPORARY: remove these routes and bot-files-tidy.js in 0.3.5.
+const botFilesTidy = require('./bot-files-tidy');
+const BOT_FILES_TIDY_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'bot-files-tidy.json');
+function botFilesTidyPlan() {
+  if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly || !String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) return [];
+  const day = new Date().toISOString().slice(0, 10);
+  return botFilesTidy.planTidy({
+    miaFolder: miaosWorkspaceDir(),
+    tidiedFolder: path.join(path.dirname(path.resolve(DB_PATH)), 'tidied-files', day),
+    bots: cronSync.listBotFileFolders(),
+  });
+}
+app.get('/api/bot-files-tidy', requireAuth, (req, res) => {
+  const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (state.state === 'running' && !botFilesTidyRunning) startBotFilesTidy();
+  if (state.state) return res.json({ state: state.state, moved: (state.moved || []).length });
+  let plan = [];
+  try { plan = botFilesTidyPlan(); } catch (error) { console.error('bot files tidy plan failed', error.message); }
+  if (!plan.length) return res.json({ state: 'none' });
+  res.json({ state: 'ask', count: plan.length, examples: plan.slice(0, 4).map((move) => path.basename(move.from)) });
+});
+app.post('/api/bot-files-tidy', requireAuth, (req, res) => {
+  const current = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (current.state) return res.json({ state: current.state });
+  if (!(req.body && req.body.accept === true)) {
+    botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { state: 'declined', at: Date.now() });
+    return res.json({ state: 'declined' });
+  }
+  startBotFilesTidy();
+  res.json({ state: 'running' });
+});
+let botFilesTidyRunning = false;
+// Runs in the background. A run cut short by quitting picks up again on the
+// next check; files already moved are no longer in the plan.
+function startBotFilesTidy() {
+  if (botFilesTidyRunning) return;
+  botFilesTidyRunning = true;
+  const before = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { ...before, state: 'running', at: Date.now() });
+  setImmediate(() => {
+    let result = { moved: [], skipped: [] };
+    try { result = botFilesTidy.runTidy(botFilesTidyPlan()); } catch (error) { console.error('bot files tidy failed', error.message); }
+    botFilesTidy.writeState(BOT_FILES_TIDY_STATE, {
+      state: 'done', at: Date.now(), moved: (before.moved || []).concat(result.moved), skipped: result.skipped,
+    });
+    botFilesTidyRunning = false;
+  });
+}
 
 // Artifacts: pages, documents and live apps, opened in Mia's browser.
 const artifacts = require('./artifacts');
@@ -4455,6 +4508,16 @@ function turnUsesManagedRouter(preference, selection, routerConfigured) {
   return isRouter(preference.provider === 'openai-api' ? preference.apiProvider : preference.provider);
 }
 
+// The Mia Router runs only the models it offers. A turn with no concrete
+// model fell through to Hermes' own default and once ran GLM 5.2 on a pilot
+// key, so a router turn without an offered model gets the first offered one.
+function pinManagedRouterModel(options, allowlist, routerProvider) {
+  if (!allowlist || !allowlist.size) return options;
+  if (!allowlist.has(String(options.model || '').trim().toLowerCase())) options.model = allowlist.values().next().value;
+  if (!options.provider) options.provider = routerProvider;
+  return options;
+}
+
 function dispatchUsesManagedRouter(trigger) {
   if (!trigger) return false;
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
@@ -4582,6 +4645,9 @@ async function inferenceOptionsForUser(email, baseOptions) {
     // The shared profile can still remember a provider this user revoked.
     // Preserve that profile and the external login, but never inherit it.
     throw new Error('no usable credentials: choose a connected model before running inference');
+  }
+  if (turnUsesManagedRouter(preference, options.provider ? { provider: options.provider } : null, Boolean(MANAGED_ROUTER_URL))) {
+    pinManagedRouterModel(options, MANAGED_ROUTER_MODEL_ALLOWLIST, MANAGED_ROUTER_HERMES_PROVIDER);
   }
   return Object.keys(options).length ? options : undefined;
 }
@@ -7750,6 +7816,9 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
 function budgetTrackingOnEvent(budgetTracker) {
   return (type, payload) => {
     if (type !== 'message.delta' && type !== 'thinking.delta' && type !== 'reasoning.delta') return;
+    // The reply written so far is kept, so a turn that reaches the budget
+    // still shows it and Continue can pick up after it.
+    if (type === 'message.delta') budgetTracker.replyText = (budgetTracker.replyText || '') + String((payload && payload.text) || '');
     budgetTracker.record(payload && payload.text);
   };
 }
@@ -7773,6 +7842,17 @@ async function turnWorkspaceContext(senderLabel, transcript, message, conversati
     googleWorkspaceConnected,
     safeGoogleRefs: googleWorkspaceConnected ? googleWorkspaceActions.safeGoogleResourceRefs(googleResourceRefs) : [],
   };
+}
+
+// The folder a Solo bot's chat turns run in: its package folder inside Mia,
+// the same one its automations use. None in search-only releases, which have
+// no terminal, or when the package can't be found (the profile default stays).
+function soloBotWorkFolder(agent) {
+  if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly || !String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) return '';
+  try { return cronSync.botPackageDirectoryFor(agent); } catch (error) {
+    console.error('bot work folder unavailable', error.message);
+    return '';
+  }
 }
 
 // One bot reply outside the bot's own chat: Solo group and direct chats, and
@@ -7808,7 +7888,7 @@ function cleanBotReplyText(agentName, text) {
   return { text: parts.text.replace(signature, '').trim(), nextStep: parts.nextStep || '' };
 }
 
-async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) {
+async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, onProgress) {
   throwIfNativeDispatchStopped(signal);
   const conversation = nativeConversationRepository.getConversation({
     companyId: dispatch.companyId,
@@ -7954,6 +8034,10 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     : googleGatewaySessionKey;
   const platformContext = `${buildPlatformContext(false, senderLabel, conversation.companyId)}\n${workspaceContext}`;
   const artifactWorkspace = !isGatewayAgent ? cronSync.artifactWorkspaceForBot(agent) : null;
+  // A bot works in its own folder inside Mia, like its automations, and
+  // saves only finished files to its Mia folder (artifactWorkspace).
+  const botWorkFolder = artifactWorkspace ? soloBotWorkFolder(agent) : '';
+  const botPromptAgent = artifactWorkspace ? { ...agent, filesFolder: artifactWorkspace } : agent;
   const turnAttachments = await nativeTurnFiles(dispatch, trigger);
   const inferenceOptions = {
     ...(turnAttachments.imagePaths.length ? { imagePaths: turnAttachments.imagePaths } : {}),
@@ -7979,6 +8063,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
       && String(process.env.MIAOS_WORKSPACE_DIR || '').trim()
       ? { workspaceDir: miaosWorkspaceDir() }
       : {}),
+    ...(botWorkFolder ? { workspaceDir: botWorkFolder } : {}),
     ...(artifactWorkspace ? { artifactWorkspace } : {}),
   };
   let rawReply;
@@ -8061,6 +8146,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     })).catch(() => {});
   };
   const postHermesProgress = (type, payload) => {
+    if (onProgress) onProgress(type, payload);
     if (trackBudget) trackBudget(type, payload);
     if (type !== 'session.info') {
       const activeGateway = nativeActiveGatewaySessions.get(nativeDispatchChainKey(dispatch));
@@ -8235,7 +8321,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     // The bot's own chat keeps one session. Its durable instructions seed the
     // session once; what changes per turn (platform state, Google write
     // instructions) travels with each message instead.
-    const systemPrompt = buildHermesTaskPrompt(agent, [], '', senderLabel, '', [], false, globalInstructions.bot);
+    const systemPrompt = buildHermesTaskPrompt(botPromptAgent, [], '', senderLabel, '', [], false, globalInstructions.bot);
     const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + '\nConnection capabilities: ' + connectionInventory.revision);
     const googleActionInstruction = googleWorkspaceWriteAuthorized
       && /authoritative server state\): CONNECTED/.test(String(platformContext || ''))
@@ -8324,7 +8410,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker) 
     );
   } else {
     const turn = await runBotReplyTurn({
-      agent,
+      agent: botPromptAgent,
       senderLabel,
       message,
       promptLine: nativePromptLine(trigger),
@@ -8506,7 +8592,17 @@ async function executeNativeConversationDispatch(dispatch) {
         abortController.abort();
       },
     });
-    await runNativeConversationAgentReply(claimed.dispatch, abortController.signal, budgetTracker);
+    // Every model response, tool call and tool result restarts the step
+    // timer; a tool call starting is a new step, named if the turn stops there.
+    const runningTools = new Set();
+    await runNativeConversationAgentReply(claimed.dispatch, abortController.signal, budgetTracker, (type, payload) => {
+      const activity = extractToolActivity(type, payload);
+      const toolKey = activity && (activity.toolId || activity.tool);
+      if (activity && activity.phase === 'start') runningTools.add(toolKey);
+      if (activity && activity.phase === 'complete') runningTools.delete(toolKey);
+      watchdog.progress(activity && activity.phase === 'start'
+        ? (activity.label === 'Working' ? activity.tool : activity.label.toLowerCase()) : undefined, runningTools.size > 0);
+    });
     // Abort is cooperative. A runtime that ignores the signal can still
     // resolve after the watchdog fires; the timeout (and the output budget)
     // must win over completion so the durable dispatch cannot be marked
@@ -8587,6 +8683,21 @@ async function executeNativeConversationDispatch(dispatch) {
         principalId: dispatch.targetType === 'gateway' ? 'gateway' : dispatch.targetId,
         principalType: dispatch.targetType === 'gateway' ? 'agent' : 'bot',
       };
+      const partialReply = budgetExceeded && budgetTracker
+        ? stripAgentActionBlocks(redactHermesChatDetail(String(budgetTracker.replyText || ''))).trim()
+        : '';
+      if (partialReply) {
+        await createNativeDispatchEvent(dispatch, failureTrigger, {
+          companyId: dispatch.companyId,
+          conversationId: dispatch.conversationId,
+          principal: failurePrincipal,
+          type: dispatch.targetType === 'gateway' ? 'agent_message' : 'bot_message',
+          content: { text: partialReply },
+          parentEventId: nativeReplyParentEventId(failureTrigger),
+          clientIdempotencyKey: `native-dispatch-partial-${dispatch.id}`,
+          metadata: { runtime: 'hermes', dispatchId: dispatch.id, status: 'partial', agentName: failureAgent },
+        });
+      }
       await createNativeDispatchEvent(dispatch, failureTrigger, {
         companyId: dispatch.companyId,
         conversationId: dispatch.conversationId,
@@ -8599,7 +8710,7 @@ async function executeNativeConversationDispatch(dispatch) {
           text: budgetExceeded
             // A distinct, named notice rather than the generic failure copy:
             // the run wasn't broken, it just kept going past its output cap.
-            ? '⏹ Stopped: this response reached its output budget before finishing. Nothing else was changed.'
+            ? OUTPUT_LIMIT_NOTICE
             : userFacingModelDispatchError(timedOut || error, {
               managedRouter: dispatchUsesManagedRouter(failureTrigger),
               managedRouterLabel: MANAGED_ROUTER_LABEL,

@@ -271,10 +271,12 @@ test('subscription model selections stay inside the provider allowlist', () => {
     fast: false,
   });
   assert.equal(inference.isAllowedHermesModel('xai-oauth', 'deepseek-v4-flash', false), false);
-  assert.equal(inference.MIAOS_BOT_MAX_TURNS, 100);
+  // No step limit for Mia or bots: the cap is only a large safety number.
+  assert.equal(inference.MIAOS_BOT_MAX_TURNS, 100000);
   assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200 }), 200);
-  assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 201 }), 200);
-  assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200, botWorker: true }), inference.MIAOS_BOT_MAX_TURNS);
+  assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 201 }), 201);
+  assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 200, botWorker: true }), 200);
+  assert.equal(inference.hermesTurnsFromOptions({ maxTurns: 500000, botWorker: true }), inference.MIAOS_BOT_MAX_TURNS);
 });
 
 test('Claude picker offers current models and migrates saved retired choices', () => {

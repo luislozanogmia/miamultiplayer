@@ -2140,22 +2140,28 @@ test("right-clicking Back or Forward lists that way's pages, nearest first, like
   h.window.emit("closed");
 });
 
-test("closing a grouped tab goes back to the tab used before it, even outside the group", () => {
+test("closing a grouped tab stays in its group, and leaves it only once the group is empty", async () => {
+  // The Mac report: group g1 has tabs 1 and 2, group g2 has tab 3, used in the order 1, 3, 2.
   const h = harness();
-  const mine = h.command("new").activeId;
-  const first = h.command("new").activeId;
-  const second = h.command("new").activeId;
-  h.command("groupCreate", { id: first });
-  const groupId = h.command("state").groups[0].id;
-  h.command("move", { id: second, index: 1, groupId });
-  const after = h.command("new").activeId;
-  h.command("select", { id: first });
-  h.command("close", { id: first });
-  assert.equal(h.command("state").activeId, after, "the tab used before, outside the bot's group");
-  h.command("select", { id: second });
-  h.command("close", { id: second });
-  assert.equal(h.command("state").activeId, after);
-  assert.ok(mine);
+  const page = async () => { h.command("navigate", { value: `https://${h.command("state").activeId}.example/` }); await new Promise(resolve => setImmediate(resolve)); };
+  const one = h.command("new").activeId;
+  h.command("groupCreate", { id: one });
+  const g1 = h.command("state").groups[0].id;
+  await page();
+  const two = h.command("new").activeId;
+  await page();
+  const three = h.command("new").activeId;
+  await page();
+  h.command("groupRemoveTab", { id: three });
+  h.command("groupCreate", { id: three });
+  assert.equal(h.command("state").tabs.find(tab => tab.id === two).groupId, g1);
+  for (const id of [one, three, two]) h.command("select", { id });
+  h.command("close", { id: two });
+  assert.equal(h.command("state").activeId, one, "back to the group's own tab, not the other bot's");
+  h.command("select", { id: three });
+  h.command("select", { id: one });
+  h.command("close", { id: one });
+  assert.equal(h.command("state").activeId, three, "an emptied group hands over to the tab used before it");
   h.window.emit("closed");
 });
 
@@ -2532,12 +2538,16 @@ test("a new tab for a bot opens at the end of that bot's group", async () => {
   const first = h.command("new").activeId;
   h.command("groupCreate", { id: first });
   const groupId = h.command("state").groups[0].id;
+  // A page first, so a new tab is not the group's blank tab reused.
+  h.command("navigate", { value: `https://${first}.example/` });
+  await new Promise(resolve => setImmediate(resolve));
   const second = h.command("new").activeId;
   h.command("move", { id: second, index: 1, groupId });
   // Real pages, so the group has no blank tab to reuse yet.
   for (const id of [first, second]) { h.command("select", { id }); h.command("navigate", { value: `https://${id}.example/` }); }
   await new Promise(resolve => setImmediate(resolve));
   const loose = h.command("new").activeId;
+  h.command("groupRemoveTab", { id: loose });
   h.command("groupNewTab", { groupId });
   const state = h.command("state");
   const added = state.tabs.find(tab => tab.id === state.activeId);
@@ -2771,6 +2781,27 @@ test("tab menu saves a page as an artifact or an app, only for a web page", asyn
   await waitForSave(4);
   assert.deepEqual(plain(notice()), { kind: "artifact", failed: true });
   fs.rmSync(folder, { recursive: true, force: true });
+});
+
+test("a new tab joins the group in front, and opens alone while that group's bot is working", async () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  h.command("groupCreate", { id: first });
+  const groupId = h.command("state").groups[0].id;
+  h.command("select", { id: first });
+  h.command("navigate", { value: "https://first.example/" });
+  await new Promise(resolve => setImmediate(resolve));
+  const added = h.command("new").activeId;
+  assert.equal(h.command("state").tabs.find(tab => tab.id === added).groupId, groupId, "Cmd+T and + join the group");
+  assert.equal(h.command("new").activeId, added, "its blank tab is reused instead of piling up");
+  // The bot is loading a page in the group: the person's tab stays out of its way.
+  h.command("select", { id: first });
+  const page = h.views[0].webContents;
+  page.isLoading = () => true;
+  const alone = h.command("new").activeId;
+  assert.equal(h.command("state").tabs.find(tab => tab.id === alone).groupId ?? null, null);
+  page.isLoading = () => false;
+  h.window.emit("closed");
 });
 
 test("a Solo bot never works in a company's browser, and a company bot never in Solo's", async () => {

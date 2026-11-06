@@ -12,7 +12,11 @@ const RELEASE_PROFILES = Object.freeze({
 
 const RELEASE_PROFILE_VALUES = Object.freeze(Object.values(RELEASE_PROFILES));
 const SEARCH_ONLY_TURN_LIMIT = 200;
-const FULL_AGENT_TURN_LIMIT = 200;
+// Mia and her bots have no step limit: a long job runs until it is done. What
+// bounds it is the per-step no-progress timer, the 24-hour ceiling for a turn
+// (native-dispatch-runtime.js) and Stop. A large number rather than Hermes'
+// "unlimited" so any pinned Hermes version reads it.
+const FULL_AGENT_TURN_LIMIT = 100000;
 
 function envText(env, name) {
   const value = env && env[name];
