@@ -12066,19 +12066,29 @@
   // stays escaped exactly as before. Trailing punctuation (incl. the ")" in
   // "(https://…/)" asides) is left outside the link; a ")" is kept only when
   // the URL itself contains a "(" (wikipedia-style paths).
+  var BARE_URL_RE = /https?:\/\/[^\s<>"]+/g;
+  // A web address ends before trailing punctuation and markdown markers:
+  // in **https://example.com/** the closing ** is bold, not part of the link.
+  function trimUrlTail(url){
+    while(/[).,;:!?’”*_]$/.test(url)){
+      if(url.slice(-1) === ')' && url.indexOf('(') !== -1) break;
+      url = url.slice(0, -1);
+    }
+    return url;
+  }
+  function bareLinkHtml(url){
+    return '<a href="' + esc(url) + '" data-chat-web-link>' + esc(url) + '</a>';
+  }
   function linkifyEsc(text){
     var s = String(text == null ? '' : text);
-    var re = /https?:\/\/[^\s<>"]+/g;
+    var re = new RegExp(BARE_URL_RE.source, 'g');
     var out = '', last = 0, match;
     while((match = re.exec(s))){
-      var url = match[0];
-      while(/[).,;:!?’”]$/.test(url)){
-        if(url.slice(-1) === ')' && url.indexOf('(') !== -1) break;
-        url = url.slice(0, -1);
-      }
+      var url = trimUrlTail(match[0]);
       out += esc(s.slice(last, match.index));
-      out += '<a href="' + esc(url) + '" data-chat-web-link>' + esc(url) + '</a>';
+      out += bareLinkHtml(url);
       last = match.index + url.length;
+      re.lastIndex = last;
     }
     out += esc(s.slice(last));
     return out;
@@ -12143,20 +12153,34 @@
     return text.split(/(\*\*`[^`\n]+`\*\*|`[^`\n]+`)/g).map(function(seg){
       if(/^\*\*`[^`\n]+`\*\*$/.test(seg)) return '<strong><code>' + esc(seg.slice(3, -3)) + '</code></strong>';
       if(/^`[^`\n]+`$/.test(seg)) return '<code>' + esc(seg.slice(1, -1)) + '</code>';
+      // Bare web addresses become tokens before math, bold and italics, like
+      // [label](url) links above, so a ** or _ can never land inside a link's
+      // address and leave a tag open for every message after it.
+      var bare = [];
+      if(!insideLink) seg = seg.replace(BARE_URL_RE, function(match){
+        // An address ends where a [label](url) link right after it begins.
+        var token = match.indexOf('MIAOSLINKTOKEN');
+        var url = trimUrlTail(token === -1 ? match : match.slice(0, token));
+        bare.push(bareLinkHtml(url));
+        return 'MIAOSURLTOKEN' + (bare.length - 1) + 'END' + match.slice(url.length);
+      });
       var math = [];
       // $…$ follows the usual markdown rule so money stays money: no digit or
       // space after the opening $, no space before the closing $, and no
       // letter or digit right after it. \(…\) is always math.
-      seg = seg.replace(/\\\(([^\n]+?)\\\)|\$(?![\s\d])([^$\n]*[^$\s])\$(?![A-Za-z0-9])/g, function(_match, parenMath, dollarMath){
+      seg = seg.replace(/\\\(([^\n]+?)\\\)|\$(?![\s\d])([^$\n]*[^$\s])\$(?![A-Za-z0-9])/g, function(match, parenMath, dollarMath){
+        // A link between the markers stays a link, not math.
+        if(/MIAOS(?:LINK|URL)TOKEN\d+END/.test(match)) return match;
         var index = math.length;
         math.push(renderMathExpression(parenMath === undefined ? dollarMath : parenMath, false));
         return 'MIAOSMATHTOKEN' + index + 'END';
       });
-      var html = insideLink ? esc(seg) : linkifyEsc(seg);
+      var html = esc(seg);
       html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
       // word-boundary guards keep snake_case and URL underscores untouched
       html = html.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
       html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+      html = html.replace(/MIAOSURLTOKEN(\d+)END/g, function(_token, index){ return bare[Number(index)] || ''; });
       return html.replace(/MIAOSMATHTOKEN(\d+)END/g, function(_token, index){ return math[Number(index)] || ''; });
     }).join('').replace(/MIAOSLINKTOKEN(\d+)END/g, function(_token, index){ return links[Number(index)] || ''; });
   }

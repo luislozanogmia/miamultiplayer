@@ -58,20 +58,7 @@ test('inactive conversation previews render markdown as plain readable text', as
 });
 
 test('bold inline-code filenames render without leaking markdown markers', async () => {
-  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  const helperStart = source.indexOf('function mdInline(');
-  const helperEnd = source.indexOf('\n  // A line counts as a table row', helperStart);
-  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'inline markdown renderer is available');
-  const escape = value => String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
-  const mdInline = Function(
-    'esc',
-    'linkifyEsc',
-    `${source.slice(helperStart, helperEnd)}\nreturn mdInline;`,
-  )(escape, escape);
+  const {mdInline} = await chatMarkdownHelpers();
 
   assert.equal(
     mdInline('Created and attached **`openai-news-top-3.pdf`**.'),
@@ -339,7 +326,7 @@ async function chatMarkdownHelpers(){
   };
   return Function(
     'esc',
-    `${slice('function linkifyEsc(', '\n  // Lite markdown for chat bubbles')}
+    `${slice('var BARE_URL_RE', '\n  // Lite markdown for chat bubbles')}
      ${slice('function renderMathExpression(', '\n  // A line counts as a table row')}
      ${slice('function chatMessagePreview(', '\n  function isPreReasoningNotice(')}
      return {mdInline, chatMessagePreview};`,
@@ -439,4 +426,53 @@ test('a narrow window only clips and fades a message that has a Show more', asyn
   const rule = styles.slice(start, styles.indexOf('mask-repeat:no-repeat;', start));
   assert.match(rule, /\.chat-expandable-preview\[data-chat-truncated\],/);
   assert.doesNotMatch(rule, /\.chat-expandable-preview,/, 'a short message has no Show more to reveal clipped text');
+});
+
+async function chatMdLite() {
+  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const escape = value => String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+  const start = source.indexOf('var BARE_URL_RE');
+  const end = source.indexOf('\n  // Which human posted', start);
+  assert.ok(start >= 0 && end > start, 'markdown renderer is available');
+  return Function('esc', `${source.slice(start, end)}\nreturn mdLite;`)(escape);
+}
+// Every tag opened is closed in order, and no tag sits inside an attribute.
+function tagsBalanced(html) {
+  if (/="[^"]*<\/?[a-z]/.test(html)) return false;
+  const stack = [];
+  for (const [, close, tag] of html.matchAll(/<(\/?)([a-z0-9]+)[^>]*>/g)) {
+    if (tag === 'br' || tag === 'hr') continue;
+    if (!close) stack.push(tag);
+    else if (stack.pop() !== tag) return false;
+  }
+  return stack.length === 0;
+}
+
+test('a bold web address is one bold link, and the bold closes', async () => {
+  const mdLite = await chatMdLite();
+  const html = mdLite('Also added **https://example.com/in/someone/** under requested-FDEs');
+  assert.match(html, /<strong><a href="https:\/\/example\.com\/in\/someone\/" data-chat-web-link>https:\/\/example\.com\/in\/someone\/<\/a><\/strong>/);
+  assert.ok(tagsBalanced(html), html);
+  assert.match(mdLite('see _https://example.com/a_b_ now'), /<em><a href="https:\/\/example\.com\/a_b"/);
+});
+
+test('chat markdown never leaves a tag open for the messages after it', async () => {
+  const mdLite = await chatMdLite();
+  const parts = ['\n', '- ', '# ', '1. ', '| a |', '```', '<b>', '"', '&', '\\[', '\\]', '**', '*', '_', '`',
+    'https://a.test/x_y', 'https://a.test/c', '(', ')', '$', '$x', '\\(', '\\)', '[l](https://a.test)', ' ', 'w', ' x ', '_{a}', '^{b}', ':', '.'];
+  let seed = 7;
+  const pick = n => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n;
+  for (let i = 0; i < 20000; i++) {
+    let text = '';
+    for (let k = 2 + pick(7); k > 0; k--) text += parts[pick(parts.length)];
+    const html = mdLite(text);
+    assert.ok(tagsBalanced(html), `${JSON.stringify(text)} -> ${html}`);
+  }
+  for (const text of ['https://a.test/c**$x$', '$[l](https://a.test)$', 'https://a.test/c[l](https://a.test)', '**https://a.test/x/**']) {
+    assert.ok(tagsBalanced(mdLite(text)), text);
+  }
 });
