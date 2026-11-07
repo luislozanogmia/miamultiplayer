@@ -53,7 +53,7 @@ test('inactive conversation previews render markdown as plain readable text', as
   assert.equal(markdownPreviewText('2 * 3 stays ordinary text'), '2 * 3 stays ordinary text');
 
   const sidebarStart = source.indexOf('function roomPreview(roomId){');
-  const sidebarEnd = source.indexOf('\n    function sidebarRowText(', sidebarStart);
+  const sidebarEnd = source.indexOf('\n  function sidebarRowText(', sidebarStart);
   assert.match(source.slice(sidebarStart, sidebarEnd), /markdownPreviewText\(text\)/);
 });
 

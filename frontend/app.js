@@ -3153,6 +3153,8 @@
     var existing = Array.isArray(chatWs.allAgents) ? chatWs.allAgents : [];
     var previousRecords = chatWs.botRecords || [];
     chatWs.botRecords = records.slice();
+    // In a company, My Bots is this same list: one list of your bots.
+    if(hubWorkspace()) chatWs.myBotRecords = chatWs.botRecords;
     scheduleNeedsYouRender();
     chatWs.botRecordsLoaded = true;
     chatWs.allAgents = records.map(function(record){
@@ -3180,11 +3182,18 @@
     renderChatHeaderBar();
     renderChatThread();
   }
+  // Your bots, the same list in Solo and in a company: there it is My Bots,
+  // your Solo bots plus the ones made in that company.
   function loadAgents(){
-    return api('/api/bots').then(function(res){
-      var agents = ((res.data && res.data.bots) || []).filter(function(agent){
+    var lists = hubWorkspace()
+      ? Promise.all([api('/api/bots?workspace=solo'), api('/api/bots')])
+      : api('/api/bots').then(function(res){ return [res]; });
+    return lists.then(function(results){
+      var seen = {};
+      var agents = results.reduce(function(all, res){ return all.concat((res.data && res.data.bots) || []); }, []).filter(function(agent){
         var status = String(agent.status || '').toLowerCase();
-        return status !== 'paused';
+        if(status === 'paused' || seen[agent.id]) return false;
+        return seen[agent.id] = true;
       });
       // Native conversation hydration projects bots down to room identity
       // fields in chatWs.allAgents. Keep the complete API records separately
@@ -5367,20 +5376,8 @@
   // Bots section empty; channels still load.
   function loadTeamBotChats(){
     var workspace=activeWorkspaceKey;
-    return Promise.all([
-      api('/api/bots?workspace=solo').then(function(res){ return res.status===200 && res.data && res.data.bots || []; }),
-      loadNativeConversations(),
-      api('/api/bots').then(function(res){ return res.status===200 && res.data && res.data.bots || []; })
-    ]).then(function(results){
+    return Promise.all([loadAgents(), loadNativeConversations()]).then(function(results){
       if(activeWorkspaceKey!==workspace)return;
-      // botRecords also takes this workspace's own list later, so My Bots keeps its own:
-      // your Solo bots plus any bot made while in this team.
-      var seen={}, myBots=results[0].concat(results[2]).filter(function(bot){
-        if(seen[bot.id] || String(bot.status||'').toLowerCase()==='paused')return false;
-        return seen[bot.id]=true;
-      });
-      chatWs.myBotRecords=myBots;
-      syncChatBotRecords(myBots);
       applyNativeConversationList(results[1]);
     }).catch(function(){});
   }
@@ -5560,8 +5557,8 @@
       return {node:wrap,list:list};
     }
     var myBots=chatWs.myBotRecords||[], companyBots=hubChat.companyBots||[];
-    var pinnedBots=teamBotPins(activeWorkspaceKey);
-    function botPinned(key){ return pinnedBots.indexOf(key)>=0; }
+    adoptOldTeamBotPins();
+    function botPinned(key){ return isChatPinned('bot:'+key); }
     if(pinned){
       pinned.innerHTML='';
       pinnedChannels.forEach(function(channel){pinned.appendChild(row(channel));});
@@ -5607,22 +5604,21 @@
     if(!companyBots.length)companySection.list.innerHTML='<div class="chat-sidebar-empty">Bots shared in this workspace show up here</div>';
     all.appendChild(companySection.node);
   }
-  // Pinned bots are a personal preference, kept on this computer per workspace.
-  function teamBotPins(workspace){
-    try { return (JSON.parse(localStorage.getItem('miaPinnedTeamBots')||'{}')||{})[workspace]||[]; } catch(_pinStorageError) { return []; }
-  }
-  function toggleTeamBotPin(workspace,key){
+  // Pinned bots live with every other pinned chat (one store per workspace,
+  // as in Solo). Pins kept in the older bots-only store move over once.
+  function adoptOldTeamBotPins(){
     var all={};
-    try { all=JSON.parse(localStorage.getItem('miaPinnedTeamBots')||'{}')||{}; } catch(_pinStorageError) {}
-    var pins=(all[workspace]||[]).filter(function(item){return item!==key;});
-    if(pins.length===(all[workspace]||[]).length)pins.push(key);
-    all[workspace]=pins;
+    try { all=JSON.parse(localStorage.getItem('miaPinnedTeamBots')||'{}')||{}; } catch(_pinStorageError) { return; }
+    var old=all[activeWorkspaceKey];
+    if(!Array.isArray(old) || !old.length)return;
+    old.forEach(function(key){ if(typeof key==='string' && key)chatPinnedKeys['bot:'+key]=true; });
+    saveChatPinned();
+    delete all[activeWorkspaceKey];
     try { localStorage.setItem('miaPinnedTeamBots',JSON.stringify(all)); } catch(_pinStorageError) {}
-    renderChatSidebar();
   }
   // A bot row's ⋯ and right-click both offer Pin or Unpin.
   function wireTeamBotPin(button,key,pinned,extraItems){
-    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){toggleTeamBotPin(activeWorkspaceKey,key);}]].concat(extraItems||[])); }
+    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){setChatPinned('bot:'+key,!pinned);}]].concat(extraItems||[])); }
     button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();open(button);});
     var more=el('.hub-channel-more',button);
     if(more)more.addEventListener('click',function(event){event.stopPropagation();open(more);});
@@ -5945,16 +5941,16 @@
     })[0];
     var state=chat && chatWs.byRoom[chat.id];
     var active=!!chat && chatWs.activeRoomId===chat.id;
-    var preview=chat ? hubRoomPreview(chat.id) : '';
     var button=document.createElement('button'); button.type='button';
     var sharedAway=soloBotSharedAway(bot);
     button.className='chat-recent-row hub-channel-row'+(active?' active':'')+(sharedAway?' is-shared-away':'');
     button.setAttribute('data-team-bot-id',bot.id);
     if(sharedAway)button.title='Shared with the company. Use it under Company bots.';
-    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
-      +renderChatActivityIndicator(!!(state && state.thinking),false)
-      +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span></span>'
-      +'<span class="row-preview'+(preview?'':' empty')+'">'+(preview?esc(preview):'&nbsp;')+'</span></span>';
+    // The same row text as Solo: activity, unread, time and latest line.
+    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span>'
+      +sidebarRowText(bot.name||'Bot',chat ? chat.id : null,!!(state && state.thinking));
+    var line=el('.row-line1',button);
+    if(line)line.insertAdjacentHTML('beforeend','<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span>');
     button.addEventListener('click',function(){ if(sharedAway)openSharedSoloBotNotice(bot); else openTeamBotChat(bot); });
     wireTeamBotPin(button,'mine:'+bot.id,!!pinned);
     return button;
@@ -7058,8 +7054,11 @@
       return conversation && conversation.id && !(conversation.metadata && conversation.metadata.botArchived === true);
     }).map(function(conversation){ return String(conversation.id); });
   }
+  // Your bots' chats are local in Solo and in a company alike, so the watch
+  // socket (unread dots, needs-you, notifications) runs in both.
+  function localChatsLive(){ return chatWs.native || hubWorkspace(); }
   function syncNativeWatchSubscriptions(){
-    if(!chatWs.native || typeof WebSocket !== 'function') return;
+    if(!localChatsLive() || typeof WebSocket !== 'function') return;
     var socket = chatWs.watchSocket;
     if(!socket){ connectNativeWatchSocket(); return; }
     if(socket.readyState !== 1) return; // onopen subscribes everything
@@ -7077,7 +7076,6 @@
     });
   }
   function connectNativeWatchSocket(){
-    if(hubWorkspace()) return;
     if(chatWs.watchReconnectTimer){
       clearTimeout(chatWs.watchReconnectTimer);
       chatWs.watchReconnectTimer = null;
@@ -7099,10 +7097,10 @@
       if(chatWs.watchSocket !== socket) return;
       chatWs.watchSocket = null;
       chatWs.watchSubscribed = {};
-      if(!chatWs.native) return;
+      if(!localChatsLive()) return;
       chatWs.watchReconnectTimer = setTimeout(function(){
         chatWs.watchReconnectTimer = null;
-        if(chatWs.native && !chatWs.watchSocket) connectNativeWatchSocket();
+        if(localChatsLive() && !chatWs.watchSocket) connectNativeWatchSocket();
       }, 3000);
     };
   }
@@ -7167,6 +7165,7 @@
     if(hubWorkspace()){
       // A team's channels and DMs come from the Hub; only its bot chats are here.
       chatWs.nativeConversations = conversations;
+      syncNativeWatchSubscriptions();
       renderChatSidebar();
       return;
     }
@@ -9596,14 +9595,8 @@
   // changes, so picking another chat by hand sticks until then.
   var browserFollowKey = '';
   var browserFollowState = null;
-  // The bots that can own a browser group are yours, the same as in Solo.
-  // In a company that is My Bots (your Solo bots and the ones you made
-  // there); botRecords there holds only the company workspace's own list.
-  function browserBotRecords(){
-    return (hubWorkspace() ? chatWs.myBotRecords : chatWs.botRecords) || [];
-  }
   function browserBotRecord(botId){
-    return browserBotRecords().filter(function(record){ return String(record.id) === String(botId); })[0] || null;
+    return (chatWs.botRecords || []).filter(function(record){ return String(record.id) === String(botId); })[0] || null;
   }
   // The browser names Mia's own work "mia"; every other id is a bot's.
   function browserBotRunningTasks(botId){
@@ -9690,7 +9683,7 @@
     // Each bot's color as a hue, for the glow around a page the bot works on.
     hues: function(){
       var hues = {};
-      browserBotRecords().forEach(function(bot){
+      (chatWs.botRecords || []).forEach(function(bot){
         var name = String(bot.name || 'Bot');
         var hue = avatarColorHue(normalizeAgentAvatarColor(bot.avatarColor) || agentAvatarColorFor(name, bot.id));
         hues[String(bot.id)] = hue === null ? MOTE_COLOR_PALETTE[moteColorSlotFor(name)] : hue;
@@ -9733,7 +9726,7 @@
     // The bot list with each bot's own mote (and Mia's mark) drawn as a small
     // PNG, so the native owner menu shows the same faces as the tab strip.
     menuBots: function(){
-      var bots = browserBotRecords().map(function(bot){
+      var bots = (chatWs.botRecords || []).map(function(bot){
         var name = String(bot.name || 'Bot');
         return browserMenuIcon(moteSrcFor(name, true), moteColorFilterFor(name, normalizeAgentAvatarColor(bot.avatarColor) || agentAvatarColorFor(name, bot.id)))
           .then(function(icon){ return { botId: String(bot.id), name: name, icon: icon }; });
@@ -10040,7 +10033,9 @@
       var id = String(record.id || agent.id || '');
       return {kind:'agent', id:id, name:String(record.name || agent.name || id || 'Bot'), sub:id === 'gateway' ? 'Agent' : 'Bot'};
     })).concat(otherTeamPeople.rows);
-    var rooms = hubWorkspace() ? (chatWs.rooms.dms || []) : (chatWs.nativeConversations || []).map(nativeConversationToRoom);
+    // Your chats with your bots are local in a company too; its channels and
+    // DMs come from the Hub on top.
+    var rooms = (chatWs.nativeConversations || []).map(nativeConversationToRoom).concat(hubWorkspace() ? (chatWs.rooms.dms || []) : []);
     // A bot's main chat is its People row; history keeps the rest, dated
     // so same-named conversations can be told apart.
     var mainRooms = {};
@@ -10819,7 +10814,7 @@
       if(changed) renderChatSidebar();
       return [];
     };
-    return api('/api/automations/active').then(function(res){
+    return api('/api/automations/active?workspace=' + encodeURIComponent(localChatWorkspaceKey())).then(function(res){
       if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return clearStaleRuns();
       var next = res.data.runs;
       var checklists = Array.isArray(res.data.checklists) ? res.data.checklists : [];
@@ -13214,7 +13209,6 @@
     });
     createdBotRecords.push(created);
     syncChatBotRecords(createdBotRecords);
-    if(hubWorkspace())chatWs.myBotRecords=(chatWs.myBotRecords||[]).concat(created);
     chatWs.nativeConversations.push(conversation);
     applyNativeConversationList(chatWs.nativeConversations);
     renderChatSidebar();
@@ -14752,7 +14746,6 @@
           });
           createdBotRecords.push(created);
           syncChatBotRecords(createdBotRecords);
-          if(hubWorkspace())chatWs.myBotRecords=(chatWs.myBotRecords||[]).concat(created);
           chatWs.nativeConversations.push(conversation);
           applyNativeConversationList(chatWs.nativeConversations);
           chatRoomState(conversation.id).localWelcome = buildBotStoreWelcomeMessage(conversation.id, created, freshManifest.welcome);
@@ -15369,12 +15362,12 @@
   function renderDeptAgentSelector(){
     if(inHubRoom()){
       setComposerBoundState(!!chatWs.activeRoomId && chatWs.configured!==false);
-      // Attach, Google Drive and the model menu work the same as in Solo. A
-      // Drive file is shared as a link chip; each teammate opens it with their
-      // own Google access. Shared bots run without Google tools, so they do not
-      // read it on anyone's behalf. Dictation is not offered here yet.
-      ['#ccMicBtn'].forEach(function(selector){var node=el(selector);if(node){node.disabled=true;node.style.display='none';}});
-      ['#ccPlusBtn','#ccModelBtn','#ccDriveBtn'].forEach(function(selector){var node=el(selector);if(node){node.disabled=false;node.style.display='';}});
+      // Attach, Google Drive, dictation and the model menu work the same as in
+      // Solo. A Drive file is shared as a link chip; each teammate opens it with
+      // their own Google access. Shared bots run without Google tools, so they
+      // do not read it on anyone's behalf. Dictation stays on this computer and
+      // only types into the message box.
+      ['#ccPlusBtn','#ccModelBtn','#ccDriveBtn','#ccMicBtn'].forEach(function(selector){var node=el(selector);if(node){node.disabled=false;node.style.display='';}});
       var openChannel=hubChannel(chatWs.activeRoomId);
       var input=el('#ccInput');if(input)input.placeholder=hubPrivateConversation(openChannel) ? 'Message '+hubChannelTitle(openChannel) : 'Message this shared channel';
       setComposerBlocked(hubDmWithFormerMember(openChannel) ? 'This account has been deactivated.' : '');
@@ -15629,7 +15622,7 @@
     var input = el('#ccInput');
     if(!suggestion || !input) return;
     var mentionOpen = typeof chatMention !== 'undefined' && chatMention.open;
-    var show = !inHubRoom() && chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
+    var show = chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
     var text = suggestion.querySelector('span');
     var suggested = chatInlineSuggestionText();
     if(text) text.textContent = suggested;
@@ -17066,6 +17059,47 @@
     return Promise.all(requests);
   }
 
+  // Sidebar row text, the same for every chat row in Solo and in a company:
+  // name, activity, unread, time, and the latest line.
+  // A room's last-message time only appears once we've actually loaded it
+  // this session (chatWs.byRoom[roomId].lastTs) — no fabricated numbers
+  // for rooms we haven't fetched yet.
+  function roomTimeTag(roomId){
+    var state = roomId && chatWs.byRoom[roomId];
+    if(!state || !state.lastTs) return '';
+    return '<span class="chat-dm-time" data-ts="' + Number(state.lastTs) + '">' + esc(chatRelTime(state.lastTs)) + '</span>';
+  }
+  function lastTsFor(roomId){
+    var state = roomId && chatWs.byRoom[roomId];
+    return (state && state.lastTs) || 0;
+  }
+  function roomPreview(roomId){
+    var state = roomId && chatWs.byRoom[roomId];
+    if(!state || !state.messages || !state.messages.length) return '';
+    var real = state.messages.filter(function(m){ return !m.system && (m.body || chatMessageHasAttachments(m)); });
+    if(!real.length) return '';
+    var last = real[real.length - 1];
+    if(!last.body && chatMessageHasAttachments(last)) return 'Attachment';
+    // Bot messages must go through displayBotBody to strip internal plumbing
+    // text and legacy filler placeholders, matching the main thread renderer.
+    var body = isHumanSender(last.sender) ? last.body : displayBotBody(last.body);
+    if(!body) return '';
+    var parsed = isHumanSender(last.sender) ? parseSignedHumanBody(body) : parseSignedBody(body);
+    var text = parsed && parsed.text ? parsed.text : body;
+    return excerpt(markdownPreviewText(text).replace(/\s+/g, ' ').trim(), 58);
+  }
+  // Every row keeps a second line so titles sit on one line across the
+  // sidebar. A room known to be empty says so; one still loading stays blank.
+  function sidebarRowText(name, roomId, hasActivity){
+    var unread = chatNeedsAttention(roomId);
+    var indicator = renderChatActivityIndicator(hasActivity, unread);
+    var preview = roomPreview(roomId);
+    var state = roomId && chatWs.byRoom[roomId];
+    var previewHtml = preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
+    return '<span class="row-text' + (unread ? ' is-unread' : '') + '"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
+      '</span><span class="row-preview' + (preview ? '' : ' empty') + '">' + previewHtml + '</span></span>';
+  }
+
   function renderChatSidebar(){
     // Keep the placeholder bars until the live list has answered.
     if(sidebarPlaceholderShown){
@@ -17090,45 +17124,6 @@
       syncFooter.removeAttribute('role');syncFooter.removeAttribute('aria-live');
       syncFooter.textContent = chatWs.configured === false ? 'Chat Failure' : (chatWs.configured === true ? 'Chat Online' : 'Connecting…');
       syncFooter.classList.toggle('chat-sync-fail', chatWs.configured === false);
-    }
-
-    // A room's last-message time only appears once we've actually loaded it
-    // this session (chatWs.byRoom[roomId].lastTs) — no fabricated numbers
-    // for rooms we haven't fetched yet.
-    function roomTimeTag(roomId){
-      var state = roomId && chatWs.byRoom[roomId];
-      if(!state || !state.lastTs) return '';
-      return '<span class="chat-dm-time" data-ts="' + Number(state.lastTs) + '">' + esc(chatRelTime(state.lastTs)) + '</span>';
-    }
-    function lastTsFor(roomId){
-      var state = roomId && chatWs.byRoom[roomId];
-      return (state && state.lastTs) || 0;
-    }
-    function roomPreview(roomId){
-      var state = roomId && chatWs.byRoom[roomId];
-      if(!state || !state.messages || !state.messages.length) return '';
-      var real = state.messages.filter(function(m){ return !m.system && (m.body || chatMessageHasAttachments(m)); });
-      if(!real.length) return '';
-      var last = real[real.length - 1];
-      if(!last.body && chatMessageHasAttachments(last)) return 'Attachment';
-      // Bot messages must go through displayBotBody to strip internal plumbing
-      // text and legacy filler placeholders, matching the main thread renderer.
-      var body = isHumanSender(last.sender) ? last.body : displayBotBody(last.body);
-      if(!body) return '';
-      var parsed = isHumanSender(last.sender) ? parseSignedHumanBody(body) : parseSignedBody(body);
-      var text = parsed && parsed.text ? parsed.text : body;
-      return excerpt(markdownPreviewText(text).replace(/\s+/g, ' ').trim(), 58);
-    }
-    // Every row keeps a second line so titles sit on one line across the
-    // sidebar. A room known to be empty says so; one still loading stays blank.
-    function sidebarRowText(name, roomId, hasActivity){
-      var unread = chatNeedsAttention(roomId);
-      var indicator = renderChatActivityIndicator(hasActivity, unread);
-      var preview = roomPreview(roomId);
-      var state = roomId && chatWs.byRoom[roomId];
-      var previewHtml = preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
-      return '<span class="row-text' + (unread ? ' is-unread' : '') + '"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
-        '</span><span class="row-preview' + (preview ? '' : ' empty') + '">' + previewHtml + '</span></span>';
     }
 
     // Official channels are represented by their own square initials mark,
@@ -17763,10 +17758,12 @@
   }
 
   function pollLiveState(){
-    if(hubWorkspace()) return;
     // Cron sessions begin and end outside Mia, so they do not bump the app's
-    // state version. Poll their narrow status endpoint on every live tick.
+    // state version. Poll their narrow status endpoint on every live tick,
+    // in a company too: your bots' automations run there as in Solo.
     loadActiveAutomationRuns();
+    // A company's channels and people refresh from the Hub instead.
+    if(hubWorkspace()) return;
     api('/api/state/version').then(function(res){
       if(res.status !== 200 || !res.data) return;
       var v = res.data.version;

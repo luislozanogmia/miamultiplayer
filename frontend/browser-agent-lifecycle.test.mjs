@@ -38,7 +38,7 @@ function navigationHarness() {
   vm.createContext(ctx);
   vm.runInContext("var browserFollowKey='', browserFollowState=null; var chatTextDrafts={}; var chatTabStaysClosed=false; function reopenChatTab(){}\n" +
     "var agentSetupResume={}, AGENT_SETUP_UNFINISHED={intent:true, interpreting:true, review:true, activating:true}, FIRST_BOT_COLORS=['#3478d4'];\n" +
-    ['browserBotRecords', 'browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat',
+    ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat',
       'normalizeAgentAvatarColor', 'agentSetupKey', 'freshAgentSetup', 'agentSetupUnfinished', 'newSetupBotColor', 'agentSetupIdentity', 'parkAgentSetup', 'startAgentSetupChat'].map(sourceFunction).join('\n') +
     "\nvar agentSetup = freshAgentSetup(null); agentSetup.phase = 'idle';", ctx);
   const follow = (id, botId) => ctx.followBrowserTab({ activeId: id, tabs: [{ id, groupId: 'g' + id }], groups: [{ id: 'g' + id, botId }] });
@@ -56,13 +56,12 @@ test('late first-time bot chat creation cannot replace the current browser tab o
   h.follow(2, 'b'); assert.equal(h.ctx.chatWs.activeRoomId, 'room-b');
 });
 
-test('in a company, browser groups take your own bots, as in Solo, and follow your private chat with them', async () => {
+test('in a company, following a bot\'s browser group opens your private chat with it there', async () => {
   const { ctx, follow } = navigationHarness();
   const opened = [];
   ctx.hubWorkspace = () => true;
-  // botRecords in a company holds only that workspace's list; My Bots has your Solo bots.
-  ctx.chatWs.botRecords = [];
-  ctx.chatWs.myBotRecords = [{ id: 'solo-bot', name: 'Solo bot' }];
+  // In a company the bot list is My Bots: your Solo bots and the ones made there.
+  ctx.chatWs.botRecords = [{ id: 'solo-bot', name: 'Solo bot' }];
   ctx.openTeamBotChat = bot => { opened.push(bot.id); return Promise.resolve(); };
   assert.equal(ctx.browserBotRecord('solo-bot').name, 'Solo bot');
   follow(7, 'solo-bot');

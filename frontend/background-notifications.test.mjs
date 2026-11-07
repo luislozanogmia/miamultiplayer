@@ -28,6 +28,7 @@ function harness({ activeRoomId = 'bot-a', focused = true, permission = 'granted
   FakeNotification.permission = permission;
   FakeNotification.requestPermission = async () => FakeNotification.permission;
   const context = vm.createContext({
+    localChatWorkspaceKey: () => 'solo',
     Date,
     window: {
       Notification: FakeNotification,

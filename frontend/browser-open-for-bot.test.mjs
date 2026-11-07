@@ -54,7 +54,7 @@ async function openFor(browser) {
   };
   vm.createContext(context);
   vm.runInContext([
-    slice(source, '  function browserBotRecords(', '\n  // The browser names'),
+    slice(source, '  function browserBotRecord(', '\n  // The browser names'),
     slice(source, '  function botBrowserTab(', '\n  function showActiveBotTabs'),
     slice(source, '  function openBrowserForBot(', '\n\n  // Automations page'),
   ].join('\n'), context);
