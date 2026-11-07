@@ -38,7 +38,7 @@ function navigationHarness() {
   vm.createContext(ctx);
   vm.runInContext("var browserFollowKey='', browserFollowState=null; var chatTextDrafts={}; var chatTabStaysClosed=false; function reopenChatTab(){}\n" +
     "var agentSetupResume={}, AGENT_SETUP_UNFINISHED={intent:true, interpreting:true, review:true, activating:true}, FIRST_BOT_COLORS=['#3478d4'];\n" +
-    ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat',
+    ['browserBotRecords', 'browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat',
       'normalizeAgentAvatarColor', 'agentSetupKey', 'freshAgentSetup', 'agentSetupUnfinished', 'newSetupBotColor', 'agentSetupIdentity', 'parkAgentSetup', 'startAgentSetupChat'].map(sourceFunction).join('\n') +
     "\nvar agentSetup = freshAgentSetup(null); agentSetup.phase = 'idle';", ctx);
   const follow = (id, botId) => ctx.followBrowserTab({ activeId: id, tabs: [{ id, groupId: 'g' + id }], groups: [{ id: 'g' + id, botId }] });
@@ -54,6 +54,20 @@ test('late first-time bot chat creation cannot replace the current browser tab o
   assert.equal(h.ctx.chatWs.activeRoomId, 'room-b');
   assert.ok(h.ctx.chatWs.nativeConversations.some(c => c.id === 'room-a'), 'retain the created chat without navigating');
   h.follow(2, 'b'); assert.equal(h.ctx.chatWs.activeRoomId, 'room-b');
+});
+
+test('in a company, browser groups take your own bots, as in Solo, and follow your private chat with them', async () => {
+  const { ctx, follow } = navigationHarness();
+  const opened = [];
+  ctx.hubWorkspace = () => true;
+  // botRecords in a company holds only that workspace's list; My Bots has your Solo bots.
+  ctx.chatWs.botRecords = [];
+  ctx.chatWs.myBotRecords = [{ id: 'solo-bot', name: 'Solo bot' }];
+  ctx.openTeamBotChat = bot => { opened.push(bot.id); return Promise.resolve(); };
+  assert.equal(ctx.browserBotRecord('solo-bot').name, 'Solo bot');
+  follow(7, 'solo-bot');
+  await flush();
+  assert.deepEqual(opened, ['solo-bot']);
 });
 
 test('out-of-order creation follows only the newest bot tab and records its room', async () => {

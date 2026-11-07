@@ -9596,8 +9596,14 @@
   // changes, so picking another chat by hand sticks until then.
   var browserFollowKey = '';
   var browserFollowState = null;
+  // The bots that can own a browser group are yours, the same as in Solo.
+  // In a company that is My Bots (your Solo bots and the ones you made
+  // there); botRecords there holds only the company workspace's own list.
+  function browserBotRecords(){
+    return (hubWorkspace() ? chatWs.myBotRecords : chatWs.botRecords) || [];
+  }
   function browserBotRecord(botId){
-    return (chatWs.botRecords || []).filter(function(record){ return String(record.id) === String(botId); })[0] || null;
+    return browserBotRecords().filter(function(record){ return String(record.id) === String(botId); })[0] || null;
   }
   // The browser names Mia's own work "mia"; every other id is a bot's.
   function browserBotRunningTasks(botId){
@@ -9640,14 +9646,15 @@
     var key = tab.id + '|' + owner;
     if(key === browserFollowKey) return;
     if(activeConversationOwner() === owner){ browserFollowKey = key; return; }
-    var agent = bot
+    // In a company a bot's chat is your private chat with it there.
+    var agent = bot && hubWorkspace() ? null : bot
       ? (chatWs.allAgents || []).filter(function(a){ return String(a.id) === String(bot.id); })[0]
       : chatWs.gatewayAgent;
-    if(!agent) return;
+    if(!agent && !(bot && hubWorkspace())) return;
     browserFollowKey = key;
-    Promise.resolve(navigateToAgentChat(agent, false, function(){
+    Promise.resolve(agent ? navigateToAgentChat(agent, false, function(){
       return browserFollowKey === key && localBrowserState.open && document.body.classList.contains('browser-collab-mode');
-    })).then(function(){
+    }) : openTeamBotChat(bot)).then(function(){
       if(browserFollowKey === key && activeConversationOwner() === owner) localBrowserState.roomId = chatWs.activeRoomId;
     });
   }
@@ -9683,7 +9690,7 @@
     // Each bot's color as a hue, for the glow around a page the bot works on.
     hues: function(){
       var hues = {};
-      (chatWs.botRecords || []).forEach(function(bot){
+      browserBotRecords().forEach(function(bot){
         var name = String(bot.name || 'Bot');
         var hue = avatarColorHue(normalizeAgentAvatarColor(bot.avatarColor) || agentAvatarColorFor(name, bot.id));
         hues[String(bot.id)] = hue === null ? MOTE_COLOR_PALETTE[moteColorSlotFor(name)] : hue;
@@ -9726,7 +9733,7 @@
     // The bot list with each bot's own mote (and Mia's mark) drawn as a small
     // PNG, so the native owner menu shows the same faces as the tab strip.
     menuBots: function(){
-      var bots = (chatWs.botRecords || []).map(function(bot){
+      var bots = browserBotRecords().map(function(bot){
         var name = String(bot.name || 'Bot');
         return browserMenuIcon(moteSrcFor(name, true), moteColorFilterFor(name, normalizeAgentAvatarColor(bot.avatarColor) || agentAvatarColorFor(name, bot.id)))
           .then(function(icon){ return { botId: String(bot.id), name: name, icon: icon }; });

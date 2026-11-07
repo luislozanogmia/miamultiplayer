@@ -49,11 +49,12 @@ async function openFor(browser) {
   const context = {
     window: { miaDesktop: { browser } },
     chatWs: { botRecords: [{ id: 'bot-1', name: 'Browser-use' }] },
+    hubWorkspace: () => false,
     followBrowserTab(state) { followed.push(state); },
   };
   vm.createContext(context);
   vm.runInContext([
-    slice(source, '  function browserBotRecord(', '\n  // The browser names'),
+    slice(source, '  function browserBotRecords(', '\n  // The browser names'),
     slice(source, '  function botBrowserTab(', '\n  function showActiveBotTabs'),
     slice(source, '  function openBrowserForBot(', '\n\n  // Automations page'),
   ].join('\n'), context);
