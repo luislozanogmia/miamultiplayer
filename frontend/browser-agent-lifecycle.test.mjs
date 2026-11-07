@@ -106,11 +106,12 @@ function stopHarness() {
   const ctx = { Promise, encodeURIComponent, window: {}, chatTaskStopPending: {},
     chatWs: { nativeConversations: [{ id: 'a1', type: 'bot', metadata: { botId: 'a' } }, { id: 'a2', type: 'bot', metadata: { botId: 'a' } }], tasks: [{ id: 'd1', kind: 'native-dispatch', roomId: 'a1' }, { id: 'd2', kind: 'native-dispatch', roomId: 'a2' }] },
     nativeConversationPath: (room, suffix) => '/conversations/' + room + suffix,
+    inHubRoom: () => false,
     api() { const request = deferred(); requests.push(request); return request.promise; },
     renderComposerTaskControl() {}, stopChatThinking() {}, renderLiveViews() {}, showToast: text => toasts.push(text),
   };
   vm.createContext(ctx);
-  const helpers = ['browserBotRunningTasks', 'stopBrowserBot', 'stopTaskFromComposer'].filter(name => app.includes('  function ' + name + '(')).map(sourceFunction).join('\n');
+  const helpers = ['hubRoomRun', 'browserBotRunningTasks', 'stopBrowserBot', 'stopTaskFromComposer'].filter(name => app.includes('  function ' + name + '(')).map(sourceFunction).join('\n');
   // The object is the public production bridge used by the toolbar and native
   // Stop and Switch, not a replacement implementation of its cancellation.
   const start = app.indexOf('  window.miaBrowserAgents = {');

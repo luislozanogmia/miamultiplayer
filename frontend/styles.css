@@ -4172,3 +4172,7 @@ body.mia-session-mode #localBrowserCloseBtn,body.mia-session-mode .native-browse
 .chat-msg-row:hover>.chat-msg-body>.chat-msg-react-add,.chat-msg-react-add:focus-visible{opacity:1;}
 .chat-msg-react-add:hover{color:var(--sand-text-primary);}
 @media (hover:none){.chat-msg-react-add{opacity:1;}}
+/* A company bot's approved instructions and skills in its chat's details. */
+.cip-bot-instructions { margin-top: 8px; font-size: 13px; }
+.cip-bot-instructions summary { cursor: pointer; color: var(--sand-text-primary); }
+.cip-bot-text { margin-top: 6px; max-height: 320px; overflow: auto; color: var(--sand-text-secondary); overflow-wrap: anywhere; }

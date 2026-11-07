@@ -40,7 +40,7 @@ async function requestHub(origin,token,method,path,body,fetcher=fetch) {
   const chunks=[];let length=0;
   for await(const chunk of response.body) {length+=chunk.length;if(length>RESPONSE_BYTES) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
   const result=JSON.parse(Buffer.concat(chunks));
-  if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','invalid_claim','bot_storage_limit'].includes(result.error)?result.error:'hub_request_failed');
+  if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','dispatch_cancelled','invalid_claim','bot_storage_limit'].includes(result.error)?result.error:'hub_request_failed');
   return result;
 }
 function sharedSkills(value) {

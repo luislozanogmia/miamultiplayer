@@ -6328,6 +6328,7 @@
     if(['pending','claimed'].indexOf(job.state)>=0)hubChat.dispatches[job.id]=job;
     else delete hubChat.dispatches[job.id];
     if(job.channel_id)hubRoomThinking(job.channel_id);
+    if(job.channel_id && job.channel_id===chatWs.activeRoomId)renderComposerTaskControl();
   }
   function applyHubEvents(events){
     var subject=hubChat.membership && hubChat.membership.clerk_user_id, refreshChannels=false, refreshTeams=false, render={};
@@ -10917,7 +10918,19 @@
   // One composer controls the active room, so its Stop affordance targets
   // the newest active background turn in that room. The server remains the
   // authority and re-checks task ownership before cancelling anything.
+  // A company bot's run in this room that you asked for (or that runs on this
+  // computer): the Stop button ends it through the Hub, as Solo's does locally.
+  function hubRoomRun(roomId){
+    if(!inHubRoom() || !roomId) return null;
+    var me = hubChat.membership && hubChat.membership.clerk_user_id;
+    var job = Object.keys(hubChat.dispatches || {}).map(function(id){ return hubChat.dispatches[id]; }).filter(function(item){
+      return item.channel_id === roomId && (item.state === 'pending' || item.state === 'claimed') && !!me && (item.requester_id === me || item.executor_id === me);
+    }).sort(function(a, b){ return Number(b.created_at || 0) - Number(a.created_at || 0); })[0];
+    return job ? {id: job.id, roomId: roomId, hub: true, status: job.state} : null;
+  }
   function activeRoomTask(){
+    var hubRun = hubRoomRun(chatWs.activeRoomId);
+    if(hubRun) return hubRun;
     var tasks = tasksForRoom(chatWs.activeRoomId).slice().sort(function(a, b){
       return Number(b.startedAt || 0) - Number(a.startedAt || 0);
     });
@@ -10953,6 +10966,23 @@
   }
 
   function stopTaskFromComposer(taskId, reason, page){
+    var hubRun = hubRoomRun(chatWs.activeRoomId);
+    if(hubRun && hubRun.id === taskId){
+      if(chatTaskStopPending[taskId]) return Promise.resolve(false);
+      chatTaskStopPending[taskId] = true;
+      renderComposerTaskControl();
+      return hubCall('POST', hubPath() + '/channels/' + hubRun.roomId + '/bot-dispatches/' + taskId + '/cancel', {}).then(function(){
+        delete chatTaskStopPending[taskId];
+        trackHubDispatch(Object.assign({}, hubChat.dispatches[taskId], {state: 'cancelled'}));
+        renderComposerTaskControl();
+        return true;
+      }).catch(function(error){
+        delete chatTaskStopPending[taskId];
+        renderComposerTaskControl();
+        showBenchToast(hubActionError(error, 'Couldn\'t stop this reply. Try again.'));
+        return false;
+      });
+    }
     var task = (chatWs.tasks || []).filter(function(candidate){ return candidate.id === taskId; })[0];
     if(!task || task.kind !== 'native-dispatch' || chatTaskStopPending[taskId]) return Promise.resolve(false);
     chatTaskStopPending[taskId] = true;
@@ -14867,6 +14897,7 @@
     }
     pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open', 'bot-store-open');
     pane.setAttribute('aria-label', 'Details');
+    if(companyBotForRoom(chatWs.activeRoomId)) return renderCompanyBotDetails(pane);
     var agent = chatWs.activeKind === 'agent'
       ? chatWs.allAgents.filter(function(a){ return a.roomId === chatWs.activeRoomId || a.nativeConversationId === chatWs.activeRoomId || a.name === chatWs.activeLabel; })[0]
       : null;
@@ -14910,6 +14941,55 @@
     el('#chatInfoAddRoutineTop', pane).addEventListener('click', function(){
       if(!agent) return showBenchToast('Open a bot conversation to add an automation.');
       if(!openAutomationDetail(agent.id, null, true)) showBenchToast('This bot already has 10 automations.');
+    });
+  }
+
+  // A company bot chat's details: the same pane as a Solo bot chat, with what
+  // a member can see of someone else's bot (its approved instructions and
+  // skills, where it is) in place of the automations, which belong to its owner.
+  var companyBotDefinitions = {};
+  function companyBotForRoom(roomId){
+    var channel = inHubRoom() && roomId ? hubChannel(roomId) : null;
+    if(!channel || channel.kind !== 'bot' || !channel.bot) return null;
+    var id = String(channel.bot.source_bot_id || channel.bot.id || '');
+    return (hubChat.companyBots || []).filter(function(bot){ return bot.botIds.indexOf(id) >= 0; })[0] || {name: channel.bot.name || 'Bot', botIds: [id], channels: [], places: []};
+  }
+  function renderCompanyBotDetails(pane){
+    var bot = companyBotForRoom(chatWs.activeRoomId);
+    var place = (bot.places || []).filter(function(item){ return !!hubChannel(item.channelId); })[0] || (bot.places || [])[0];
+    var key = place ? place.channelId + '/' + place.botId : '';
+    var loaded = key ? companyBotDefinitions[key] : {definition: null};
+    if(key && !loaded){
+      companyBotDefinitions[key] = {loading: true};
+      hubCall('GET', hubPath() + '/channels/' + place.channelId + '/bots/' + place.botId + '/definition').then(function(result){
+        companyBotDefinitions[key] = {definition: result && result.definition || null};
+      }).catch(function(){ companyBotDefinitions[key] = {failed: true}; }).then(function(){
+        if(chatInfo.open && companyBotForRoom(chatWs.activeRoomId) === bot) renderChatInfoPane();
+      });
+      loaded = companyBotDefinitions[key];
+    }
+    var definition = loaded && loaded.definition;
+    var about = loaded && loaded.loading ? '<div class="cip-section-empty">Loading…</div>'
+      : !definition ? '<div class="cip-section-empty">' + (loaded && loaded.failed ? 'Couldn\'t load this bot\'s instructions.' : 'An admin hasn\'t approved instructions for this bot yet.') + '</div>'
+      : '<details class="cip-bot-instructions"><summary>Instructions</summary><div class="cip-bot-text">' + mdLite(definition.instructions || '') + '</div></details>' +
+        (definition.skills || []).map(function(skill){
+          return '<details class="cip-bot-instructions"><summary>Skill: ' + esc(skill.name) + '</summary>' + (skill.description ? '<p>' + esc(skill.description) + '</p>' : '') + '<div class="cip-bot-text">' + mdLite(skill.body || '') + '</div></details>';
+        }).join('');
+    var where = (bot.channels || []).map(function(channel){ return '#' + esc(channel.name || 'channel'); }).join(', ');
+    var fileRows = chatFileRows();
+    pane.classList.add('open');
+    chatInfo.filesKey = JSON.stringify([chatWs.activeRoomId, fileRows.map(function(row){ return row.id; })]);
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">' + esc(bot.name) + '</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="chatInfoClose" aria-label="Hide details" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
+      '<div class="cip-details">' + detailsFilesHtml(fileRows) +
+      '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">About this company bot</span></div>' +
+      '<div class="cip-section-empty">Runs on its owner\'s computer' + (where ? ', in ' + where : '') + '.</div>' + about + '</section></div>';
+    bindDetailsFiles(pane, fileRows);
+    el('#chatInfoClose', pane).addEventListener('click', function(){
+      chatInfo.open = false;
+      localStorage.setItem('styledInfoPaneOpen', '0');
+      renderChatInfoPane();
+      renderChatHeaderBar();
     });
   }
 
