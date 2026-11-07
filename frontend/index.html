@@ -567,6 +567,15 @@
                   </div>
                 </div>
               </div>
+              <section class="chat-pip" id="chatPip" aria-label="Docked tab" hidden>
+                <div class="chat-pip-head">
+                  <img class="chat-pip-icon" id="chatPipIcon" alt="" hidden />
+                  <span class="chat-pip-title" id="chatPipTitle"></span>
+                  <button type="button" class="chat-pip-btn" id="chatPipBack" title="Back to the browser" aria-label="Back to the browser"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg></button>
+                  <button type="button" class="chat-pip-btn" id="chatPipClose" title="Close picture in picture" aria-label="Close picture in picture"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+                </div>
+                <div class="chat-pip-view" id="chatPipView"></div>
+              </section>
             </div>
             <aside class="chat-info-pane" id="chatInfoPane" aria-label="Details"></aside>
             <div id="skillsHome" hidden><div class="skills-shell" id="skillsShell">
@@ -762,6 +771,9 @@
       <button type="button" class="mia-space-invite-btn" id="localBrowserInviteBtn" title="Browse together: invite people to these tabs" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"></path><path d="M18 8v6M15 11h6"></path></svg>Invite</button>
       <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
+      </button>
+      <button type="button" class="local-browser-btn local-browser-pip-btn" id="localBrowserPipBtn" title="Picture in picture: keep this tab below the chat" aria-label="Picture in picture">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 9V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4"></path><rect x="12" y="13" width="10" height="7" rx="2"></rect></svg>
       </button>
       <button type="button" class="local-browser-btn local-browser-mia-toggle" id="localBrowserMiaToggle" title="Hide Mia" aria-label="Hide Mia" aria-pressed="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M14.5 4.5v15"></path></svg>

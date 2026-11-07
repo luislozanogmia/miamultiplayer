@@ -150,6 +150,46 @@
   miaResize.addEventListener('dblclick', function () { miaPane.width = null; applyMiaPane(); saveMiaPane(); });
   window.addEventListener('resize', function () { if (miaPane.width) applyMiaPane(); });
   applyMiaPane();
+  // Picture in picture: one tab sits in the dock below the chat (a video on
+  // its own, or a bot's page shrunk whole) while the person uses the rest.
+  // The page itself is a native view; this only reserves its place.
+  var pipBtn = document.getElementById('localBrowserPipBtn');
+  var pip = document.getElementById('chatPip');
+  var pipView = document.getElementById('chatPipView');
+  var pipTitle = document.getElementById('chatPipTitle');
+  var pipIcon = document.getElementById('chatPipIcon');
+  var PIP_MAX_HEIGHT = 0.4;
+  function sizePip(dock) {
+    if (!dock) return;
+    var room = pip.clientWidth;
+    var width = room, height = Math.round(room * dock.aspect);
+    var most = Math.round(window.innerHeight * PIP_MAX_HEIGHT);
+    if (height > most) { height = most; width = Math.round(most / dock.aspect); }
+    pipView.style.width = width + 'px';
+    pipView.style.height = height + 'px';
+  }
+  function renderPip() {
+    var dock = state.dock;
+    var tab = dock && state.tabs.find(function (t) { return t.id === dock.id; });
+    pip.hidden = !tab;
+    if (!tab) return;
+    pip.setAttribute('data-mode', dock.mode);
+    var bot = tab.botWorkAt && window.miaBrowserAgents ? window.miaBrowserAgents.name(tab.botWorkAt.botId) : '';
+    pipTitle.textContent = bot ? bot + ' \u00b7 ' + (tab.title || tab.url) : (tab.title || tab.url);
+    pipTitle.title = tab.title || tab.url;
+    pipIcon.hidden = !tab.favicon;
+    if (tab.favicon) pipIcon.src = tab.favicon;
+    sizePip(dock);
+  }
+  pipBtn.addEventListener('click', function () { command('dock'); });
+  document.getElementById('chatPipBack').addEventListener('click', function () {
+    // Picking the docked tab brings it back to the front of the browser.
+    if (!state.dock) return;
+    if (docked !== 'browser') window.MiaTabStrip.mix.open('browser', state.dock.id);
+    else command('select', { id: state.dock.id });
+  });
+  document.getElementById('chatPipClose').addEventListener('click', function () { command('undock'); });
+  new ResizeObserver(function () { if (state.dock) sizePip(state.dock); layout(); }).observe(pip);
   var downloadsBtn = document.getElementById('localBrowserDownloadsBtn');
   var downloadsView = document.getElementById('localBrowserDownloads');
   var downloadsList = document.getElementById('localBrowserDownloadsList');
@@ -629,6 +669,11 @@
         !document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+      var pipRect = pipView.getBoundingClientRect();
+      payload.dock = { x: pipRect.x, y: pipRect.y, width: pipRect.width, height: pipRect.height };
+      // The dock sits beside the chat, so only full-window layers cover it.
+      payload.dockVisible = !pip.hidden && pipRect.width > 0 && pipRect.height > 0 &&
+        !document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
       // The Downloads menu sits over a still of the page, so the live view
       // steps aside without pausing what it plays.
       if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered) payload.menu = true;
@@ -646,6 +691,8 @@
     if (changedTab) { findBar.hidden = true; findResult.textContent = ''; }
     input.setAttribute('aria-invalid', tab && tab.error ? 'true' : 'false');
     syncPageNav();
+    renderPip();
+    layout();
     overlay.setAttribute('data-loading', tab && tab.loading ? 'true' : 'false');
     document.getElementById('localBrowserEmpty').hidden = !!url;
     var blocked = document.getElementById('localBrowserBlocked');

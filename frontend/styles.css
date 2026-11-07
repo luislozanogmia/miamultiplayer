@@ -4176,3 +4176,16 @@ body.mia-session-mode #localBrowserCloseBtn,body.mia-session-mode .native-browse
 .cip-bot-instructions { margin-top: 8px; font-size: 13px; }
 .cip-bot-instructions summary { cursor: pointer; color: var(--sand-text-primary); }
 .cip-bot-text { margin-top: 6px; max-height: 320px; overflow: auto; color: var(--sand-text-secondary); overflow-wrap: anywhere; }
+/* Picture in picture: a tab kept below the chat. The page is a native view
+   drawn over .chat-pip-view; this only holds its place and its header. */
+.chat-pip { flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 12px 12px; }
+.chat-pip[hidden] { display: none; }
+.chat-pip-head { align-self: stretch; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--sand-text-secondary); }
+.chat-pip-icon { width: 14px; height: 14px; flex: none; border-radius: 3px; }
+.chat-pip-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-pip-btn { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.chat-pip-btn:hover { background: var(--sand-fill-ghost-hover); color: var(--sand-text-primary); }
+.chat-pip-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.chat-pip-view { flex: none; max-width: 100%; border-radius: 10px; overflow: hidden; background: var(--sand-fill-secondary); }
+.chat-pip[data-mode="video"] .chat-pip-view { background: #000; }
+.local-browser-toolbar:not([data-view="browser"]) .local-browser-pip-btn { display: none; }

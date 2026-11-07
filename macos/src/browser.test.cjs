@@ -2231,6 +2231,70 @@ test("closing a grouped tab stays in its group, and leaves it only once the grou
 });
 
 
+test("picture in picture: a tab docks below the chat, the group's next tab comes forward, and a pick brings it back", async () => {
+  const h = harness();
+  const page = async () => { h.command("navigate", { value: `https://${h.command("state").activeId}.example/` }); await new Promise(resolve => setImmediate(resolve)); };
+  const one = h.command("new").activeId;
+  await page();
+  h.command("groupCreate", { id: one });
+  const two = h.command("new").activeId;
+  await page();
+  const viewOf = id => h.views[id - 1];
+  // A bot's page, not a video: it is shrunk whole through the debugger.
+  const sent = [];
+  const wc = viewOf(two).webContents;
+  wc.debugger = { attached: false, isAttached() { return this.attached; }, attach() { this.attached = true; }, detach() { this.attached = false; },
+    sendCommand: (method, params) => { sent.push({ method, params }); return Promise.resolve({ data: Buffer.from("png").toString("base64") }); } };
+  const run = wc.executeJavaScript.bind(wc);
+  wc.executeJavaScript = script => script.includes("data-mia-pip', ''") ? Promise.resolve(false) : run(script);
+  h.command("layout", { visible: true, bounds: { x: 0, y: 80, width: 800, height: 500 } });
+  let state = h.command("dock");
+  assert.equal(state.dock.id, two);
+  assert.equal(state.activeId, one, "the group's other tab comes forward");
+  await new Promise(resolve => setImmediate(resolve));
+  h.command("layout", { visible: true, bounds: { x: 0, y: 80, width: 800, height: 500 }, dock: { x: 820, y: 560, width: 160, height: 100 }, dockVisible: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual({ ...viewOf(two).bounds }, { x: 820, y: 560, width: 160, height: 100 });
+  assert.equal(viewOf(two).visible, true, "both the dock and the page in front are on screen");
+  assert.equal(viewOf(one).visible, true);
+  const scale = sent.find(item => item.method === "Emulation.setDeviceMetricsOverride");
+  assert.deepEqual({ width: scale.params.width, height: scale.params.height, scale: scale.params.scale }, { width: 800, height: 500, scale: 0.2 },
+    "laid out at the browser's size, drawn at the dock's");
+  // Closing the browser keeps the dock on screen.
+  h.command("layout", { visible: false, bounds: { x: 0, y: 80, width: 800, height: 500 }, dock: { x: 820, y: 560, width: 160, height: 100 }, dockVisible: true });
+  assert.equal(viewOf(one).visible, false);
+  assert.equal(viewOf(two).visible, true);
+  // Picking it brings it back to the front and lets go of the debugger.
+  state = h.command("select", { id: two });
+  assert.equal(state.dock, null);
+  assert.equal(state.activeId, two);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(sent.some(item => item.method === "Emulation.clearDeviceMetricsOverride"));
+  assert.equal(wc.debugger.attached, false);
+  h.window.emit("closed");
+});
+
+test("picture in picture: a playing video docks alone, and closing the docked tab empties the dock", async () => {
+  const h = harness();
+  const one = h.command("new").activeId;
+  h.command("navigate", { value: "https://one.example/" });
+  const two = h.command("new").activeId;
+  h.command("navigate", { value: "https://video.example/" });
+  await new Promise(resolve => setImmediate(resolve));
+  const wc = h.views[two - 1].webContents;
+  const run = wc.executeJavaScript.bind(wc);
+  wc.executeJavaScript = script => script.includes("data-mia-pip', ''") ? Promise.resolve(true) : run(script);
+  h.command("dock");
+  await new Promise(resolve => setImmediate(resolve));
+  let state = h.command("state");
+  assert.deepEqual({ id: state.dock.id, mode: state.dock.mode, aspect: state.dock.aspect }, { id: two, mode: "video", aspect: 9 / 16 });
+  assert.match(wc.lastCSS, /\[data-mia-pip\]\{position:fixed/, "its player fills the dock, not the window");
+  state = h.command("close", { id: two });
+  assert.equal(state.dock, null);
+  assert.equal(state.activeId, one);
+  h.window.emit("closed");
+});
+
 test("closing the last tab counts a last-tab close and keeps one blank tab", () => {
   const h = harness();
   h.command("new"); h.command("new");
