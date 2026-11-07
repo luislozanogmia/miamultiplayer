@@ -227,7 +227,10 @@ test('jobPromptFor requires an explicit scheduled task instead of guessing from 
   const prompt = cronSync.jobPromptFor(enabledAgent(), explicit);
   assert.match(prompt, /specialized task bot inside Mia/);
   assert.match(prompt, /authorized owner of this bot/);
-  assert.match(prompt, /Keep responses, reasoning, and tool use concise and tight/);
+  // Brevity is for the reply, never the investigation (the shared working method).
+  assert.doesNotMatch(prompt, /concise and tight/);
+  assert.match(prompt, /How you work:\n- Investigate until you have evidence/);
+  assert.match(prompt, /Check the data before the code/);
   assert.match(prompt, /web_extract[\s\S]*Task:\nRun the reminder now\.$/);
   assert.doesNotMatch(prompt, /Purpose:/);
   assert.doesNotMatch(prompt, /Publish the weekly newsletter/);

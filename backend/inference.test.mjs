@@ -478,7 +478,10 @@ test('bot context keeps durable instructions while Hermes owns structured conver
   assert.match(prompt, /Who the user is:\nYou are working for Luis, the authorized user interacting with this bot/);
   assert.match(prompt, /never infer a name from an email address/);
   assert.match(prompt, /Capabilities: answer in chat/);
-  assert.match(prompt, /Keep responses, reasoning, and tool use concise and tight/);
+  // Brevity is for the reply, never the investigation (the shared working method).
+  assert.doesNotMatch(prompt, /concise and tight/);
+  assert.match(prompt, /How you work:\n- Investigate until you have evidence/);
+  assert.match(prompt, /Check the data before the code/);
   assert.match(prompt, /“run it now”/);
   assert.match(prompt, /My news briefing \(daily at 09:00\)/);
   assert.match(prompt, /Task: Create today’s concise news briefing about architecture in Mexico\./);
@@ -512,7 +515,10 @@ test('scheduled bot prompt states bot, Mia, owner, scope, and exact automation t
   assert.match(prompt, /Mia is the user’s primary private AI assistant and the coordinator/);
   assert.match(prompt, /working for the authorized owner of this bot/);
   assert.match(prompt, /never infer a name from an email address/);
-  assert.match(prompt, /Keep responses, reasoning, and tool use concise and tight/);
+  // Brevity is for the reply, never the investigation (the shared working method).
+  assert.doesNotMatch(prompt, /concise and tight/);
+  assert.match(prompt, /How you work:\n- Investigate until you have evidence/);
+  assert.match(prompt, /Check the data before the code/);
   assert.match(prompt, /Automation:\nName: My news briefing\nSchedule: daily at 09:00/);
   assert.match(prompt, /Task:\nCreate today’s concise news briefing about architecture in Mexico\.$/);
 });
@@ -608,4 +614,11 @@ test('backend shutdown closes and releases its singleton Hermes gateway client',
     HermesGatewayClient.prototype.modelOptions = originalModelOptions;
     HermesGatewayClient.prototype.close = originalClose;
   }
+});
+
+test('Mia, bots and scheduled runs share one working method', () => {
+  const mia = inference.buildContext({ name: 'Mia' }, [], '', '', 'Sam', null);
+  const bot = inference.buildBotContext({ name: 'Helper', instructions: 'Help.' }, [], '', '', 'Sam', null);
+  const scheduled = inference.buildScheduledBotPrompt({ name: 'Helper' }, { name: 'Daily check', prompt: 'Check the disk.', enabled: true, frequency: 'daily' });
+  for (const prompt of [mia, bot, scheduled]) assert.ok(prompt.includes(inference.WORKING_METHOD));
 });
