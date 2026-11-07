@@ -16,7 +16,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-cron-guards-'));
 process.env.HERMES_HOME = process.env.HERMES_HOME || home;
 process.env.MIAOS_AUTOMATION_ARTIFACT_DIR = process.env.MIAOS_AUTOMATION_ARTIFACT_DIR || path.join(home, 'artifacts');
 const { CRON_GUARD_SCRIPT } = require('./cron-sync.js');
-const { cronShellGuard } = require('./hermes-bot-profile.js');
+const { cronShellGuard, COMPRESSION_THRESHOLD_TOKENS } = require('./hermes-bot-profile.js');
 test.after(() => fs.rmSync(home, { recursive: true, force: true }));
 
 function hermes(code, args = [], extraEnv = {}) {
@@ -32,8 +32,10 @@ test('a scheduled run keeps the bot\'s guards: rm blocked without waiting, shell
   // Someone switched approvals off in the Hermes home; that must not reach scheduled runs.
   fs.writeFileSync(path.join(home, 'config.yaml'), 'approvals:\n  mode: "off"\n');
   const guard = cronShellGuard(home, { searchOnly: false });
-  hermes(CRON_GUARD_SCRIPT, [guard]);
+  hermes(CRON_GUARD_SCRIPT, [guard, String(COMPRESSION_THRESHOLD_TOKENS)]);
   const config = JSON.parse(hermes('import json\nfrom hermes_cli.config import load_config\nprint(json.dumps(load_config()))'));
+  assert.equal(config.compression.threshold_tokens, COMPRESSION_THRESHOLD_TOKENS, 'long runs compress at the same point as chat');
+  assert.equal(config.compression.enabled, true);
   assert.equal(config.approvals.mode, 'manual');
   assert.equal(config.approvals.cron_mode, 'deny');
   assert.equal(config.security.protected_instruction_files, true, 'the instruction-file guard stays on for bots');

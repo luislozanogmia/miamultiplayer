@@ -218,6 +218,9 @@ function existingProfileModel(config) {
   return selection.model && selection.provider ? selection : null;
 }
 
+// Every Mia profile (Mia, bots, private agents, scheduled runs) compresses at
+// the same point, so a long chat behaves the same wherever it runs.
+const COMPRESSION_THRESHOLD_TOKENS = 64000;
 function runtimeProfileConfig({
   toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, model = null,
 }) {
@@ -242,6 +245,16 @@ function runtimeProfileConfig({
     'auxiliary:',
     '  background_review:',
     `    enabled: ${backgroundReview === true ? 'true' : 'false'}`,
+    // Long chats stay fast: Hermes summarizes older turns once a request
+    // passes this size, before sending it, and keeps working. Its default
+    // waits for half the model's window (up to 256k tokens), so a large
+    // window resent ~170k tokens every step and each one took 10-40 s.
+    // The last turns stay word for word, including the last few requests.
+    'compression:',
+    '  enabled: true',
+    `  threshold_tokens: ${COMPRESSION_THRESHOLD_TOKENS}`,
+    '  protect_last_n: 20',
+    '  min_tail_user_messages: 3',
   ];
   if (editsBots) {
     // Mia's own agent creates and edits bots, whose instructions live in
@@ -542,6 +555,7 @@ function provisionHermesRuntimeProfiles(options = {}) {
 }
 
 module.exports = {
+  COMPRESSION_THRESHOLD_TOKENS,
   isManagedProfileConfig,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,

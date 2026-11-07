@@ -447,15 +447,17 @@ const CRON_GUARD_SCRIPT = [
   'g=sys.argv[1] if len(sys.argv)>1 else ""',
   't=cfg.setdefault("terminal",{})',
   'g and t.update({"shell_init_files":[g],"auto_source_bashrc":False})',
+  // Long runs compress at the same point as chat (hermes-bot-profile.js).
+  'cfg.setdefault("compression",{}).update({"enabled":True,"threshold_tokens":int(sys.argv[2]),"protect_last_n":20,"min_tail_user_messages":3})',
   'save_config(cfg)',
 ].join('\n');
 function ensureCronGuards() {
   if (!cronGuardsReady) {
     cronGuardsReady = (async () => {
-      const { cronShellGuard } = require('./hermes-bot-profile');
+      const { cronShellGuard, COMPRESSION_THRESHOLD_TOKENS } = require('./hermes-bot-profile');
       const guardPath = cronShellGuard(HERMES_HOME) || '';
       await new Promise((resolve, reject) => {
-        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath], {
+        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS)], {
           timeout: 30000,
           maxBuffer: 1024 * 1024,
           cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
