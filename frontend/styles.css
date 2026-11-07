@@ -1313,6 +1313,7 @@
   .cc-inline-suggestion span{overflow:hidden;text-overflow:ellipsis;}
   .cc-input{position:relative;z-index:1;flex:1;font-family:var(--styled-sans);font-size:14px;line-height:20px;color:var(--sand-text-primary);padding:0 4px;border:none;outline:none;background:transparent;width:100%;min-width:0;resize:none;overflow-y:auto;}
   .cc-input::placeholder{color:var(--sand-text-secondary);opacity:1;}
+  .cc-input.cc-input-suggesting::placeholder{color:transparent;}
   .cc-bottom-row{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
   .cc-hint{display:none;}
   .cc-plus-btn{appearance:none;flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:none;background:var(--sand-fill-secondary);color:var(--sand-text-secondary);font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .12s ease,color .12s ease;}

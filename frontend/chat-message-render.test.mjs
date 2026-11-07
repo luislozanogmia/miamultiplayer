@@ -410,6 +410,14 @@ test('the composer only suggests a reply\'s next step once a chat has messages',
   assert.match(sync, /show = show && !!suggested;/, 'an empty suggestion hides the Tab hint');
 });
 
+test('a channel\'s placeholder steps aside while the Tab suggestion shows', async () => {
+  const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const sync = source.slice(source.indexOf('function syncInlineChatSuggestion(){'), source.indexOf('// Detailed output includes'));
+  assert.match(sync, /input\.classList\.toggle\('cc-input-suggesting', show\);/);
+  assert.ok(styles.includes('.cc-input.cc-input-suggesting::placeholder{color:transparent;}'));
+});
+
 test('a direct message keeps the whole line when the chat gets narrow', async () => {
   const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
   const inset = 'clamp(0px,calc((100% - 420px) * .5),28%)';

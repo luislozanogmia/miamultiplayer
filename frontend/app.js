@@ -15733,6 +15733,8 @@
     show = show && !!suggested;
     suggestion.hidden = !show;
     suggestion.setAttribute('aria-hidden', show ? 'false' : 'true');
+    // The suggestion is the empty-box prompt; a channel's own placeholder would draw under it.
+    input.classList.toggle('cc-input-suggesting', show);
   }
 
   // Detailed output includes additional execution progress; concise output
