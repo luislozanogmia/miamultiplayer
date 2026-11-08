@@ -46,7 +46,14 @@ test('shared-browser updates use Hub events rather than posting chat messages',(
 test('UTF8 limit applies to bytes, not characters',()=>{const api=transport();assert.equal(api.validateText('a'.repeat(16000)).length,16000);assert.throws(()=>api.validateText('😀'.repeat(4001)));assert.equal(api.validateText('',true),'');assert.throws(()=>api.validateText(' '));});
 test('each request obtains a fresh native session; body is exactly supplied data',async()=>{let tokens=0;const sent=[];const api=transport({miaDesktop:{auth:{getSessionToken:async()=>({token:++tokens})}},MiaClerkDesktop:{unwrap:r=>'token'+r.token},fetch:async(url,opts)=>{sent.push({url,opts});return {ok:true,json:async()=>({})};}});await api.call('GET','/v1/me');await api.call('POST','/v1/teams/a/channels/b/messages',{id:'c',text:'hello'});assert.equal(sent[0].opts.headers.authorization,'Bearer token1');assert.equal(sent[1].opts.headers.authorization,'Bearer token2');assert.deepEqual(JSON.parse(sent[1].opts.body),{id:'c',text:'hello'});assert.equal(sent[1].url,'/api/hub/v1/teams/a/channels/b/messages');});
 test('no session means no request or local fallback',async()=>{let fetched=false;const api=transport({fetch:()=>{fetched=true;}});await assert.rejects(api.call('GET','/v1/me'),/Sign in/);assert.equal(fetched,false);});
-test('Hub channels cannot start local conversation/socket or typing transports',async()=>{for(const name of ['connectNativeChatSocket','connectNativeWatchSocket','pollLiveState']){const env={hubWorkspace:()=>true};const fn=appFunction(name,env);await fn();}});
+test('Hub channels cannot start a local chat socket; a company polls only its own automation runs',async()=>{
+  await appFunction('connectNativeChatSocket',{hubWorkspace:()=>true})('room-1');
+  // Your bots' chats and automations stay live in a company, as in Solo.
+  assert.equal(appFunction('localChatsLive',{hubWorkspace:()=>true,chatWs:{native:false}})(),true);
+  const calls=[];
+  appFunction('pollLiveState',{hubWorkspace:()=>true,loadActiveAutomationRuns:()=>calls.push('runs'),api:()=>{calls.push('state');return Promise.resolve({});}})();
+  assert.deepEqual(calls,['runs'],'the company\'s channels and people come from the Hub, not local state');
+});
 test('a team loads only its own bot chats, from Solo storage on this computer',async()=>{
   const key=appFunction('localChatWorkspaceKey',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
   assert.equal(key(),'solo');
@@ -215,7 +222,7 @@ function hubEnv(overrides={}){
     chatRoomState:id=>byRoom[id]||(byRoom[id]={messages:[]}),hubPath:()=>'/team',appInForeground:()=>true,
     renderChatSidebar:()=>{},renderChatThread:()=>{},renderDeptAgentSelector:()=>{},renderChatHeaderBar:()=>{},refreshChatMain:()=>{},
     showBenchToast:()=>{},showDesktopNotification:()=>{},notifyDesktopChatMessage:()=>{},pollHubBots:()=>{},refreshHubBotState:()=>{},refreshHubChannels:()=>Promise.resolve(),
-    startChatThinking:()=>{},stopChatThinking:()=>{},hubCall:async()=>({messages:[],hasMore:false}),hubRememberPeople:()=>{},hubMember:()=>null,mergeUserProfile:()=>{},loadHubTeams:()=>Promise.resolve(),...overrides};
+    startChatThinking:()=>{},stopChatThinking:()=>{},renderComposerTaskControl:()=>{},hubCall:async()=>({messages:[],hasMore:false}),hubRememberPeople:()=>{},hubMember:()=>null,mergeUserProfile:()=>{},loadHubTeams:()=>Promise.resolve(),...overrides};
   for(const name of ['hubChannel','hubSequence','hubOwnMessage','hubLatestSequence','applyHubRows','markHubRead','loadHubRoom','loadOlderHubMessages','sendHubMessage','deliverHubMessage','hubMessageDeletable','deleteHubMessage','applyHubEvents','trackHubDispatch','hubRoomThinking','hubUnreachable','hubFeedback','stopHubFeed'])
     if(!(name in overrides))env[name]=appFunction(name,env);
   return env;
@@ -297,11 +304,12 @@ test('messages from others raise unread on closed channels and mark the open cha
   assert.equal(env.hubChannel('side').unread,0);
 });
 test('a pending bot request from this member starts on this computer right away',()=>{
-  let polls=0;const env=hubEnv({pollHubBots:()=>polls++});
+  let polls=0,stopButtons=0;const env=hubEnv({pollHubBots:()=>polls++,renderComposerTaskControl:()=>stopButtons++});
   env.applyHubEvents([{kind:'dispatch',channel_id:'room',dispatch:{id:'d1',state:'pending',executor_id:'user_other',requester_id:'user_other'}}]);
   assert.equal(polls,0);
   env.applyHubEvents([{kind:'dispatch',channel_id:'room',dispatch:{id:'d2',state:'pending',executor_id:'user_self',requester_id:'user_self'}}]);
   assert.equal(polls,1);
+  assert.ok(stopButtons>0,'a reply starting in the open channel shows Stop');
 });
 test('only the author or an admin can delete; deleted messages stay as a marker',async()=>{
   const env=hubEnv({hubCall:async()=>({})});
@@ -359,13 +367,13 @@ test('an offline send says it is offline instead of a sign-in or keyring message
   const local=env.chatRoomState('room').messages[0];
   assert.equal(local.sendFailed,true);assert.equal(local.sendError,'Not delivered. You are offline.');
 });
-test('team channels offer Attach, Google Drive and the model menu, and keep dictation hidden',()=>{
+test('team channels offer Attach, Google Drive, the model menu and dictation, as in Solo',()=>{
   const nodes={};['#ccPlusBtn','#ccDriveBtn','#ccModelBtn','#ccMicBtn','#ccInput'].forEach(s=>{nodes[s]={style:{display:'none'},disabled:true};});
   let open={kind:'channel',name:'general'};
   const env={hubWorkspace:()=>true,chatWs:{activeRoomId:'room'},el:s=>nodes[s],setComposerBoundState:()=>{},setComposerBlocked:()=>{},hubDmWithFormerMember:()=>false,hubChannel:()=>open,hubChannelTitle:()=>'ana',hubPrivateConversation:c=>!!c&&(c.kind==='dm'||c.kind==='group'),};
   appFunction('renderDeptAgentSelector',env)();
   assert.equal(nodes['#ccPlusBtn'].style.display,'');assert.equal(nodes['#ccModelBtn'].style.display,'');
-  assert.equal(nodes['#ccDriveBtn'].style.display,'');assert.equal(nodes['#ccDriveBtn'].disabled,false);assert.equal(nodes['#ccMicBtn'].style.display,'none');
+  assert.equal(nodes['#ccDriveBtn'].style.display,'');assert.equal(nodes['#ccDriveBtn'].disabled,false);assert.equal(nodes['#ccMicBtn'].style.display,'');
   assert.equal(nodes['#ccInput'].placeholder,'Message this shared channel');
   open={kind:'dm'};env.renderDeptAgentSelector();assert.equal(nodes['#ccInput'].placeholder,'Message ana');
 });
@@ -724,17 +732,18 @@ test('a company bot shows once, by name, with every channel it is in',()=>{
   assert.deepEqual(list.map(bot=>bot.name),['AI News Tracker','Web Research Agent']);
   assert.deepEqual(list[1].channels,[ux,gtm]);
 });
-test('bot pins are kept per workspace and toggle on and off',()=>{
-  const start=source.indexOf('  function teamBotPins(');
-  const store={};
-  const api=new Function('localStorage','renderChatSidebar',source.slice(start,source.indexOf('  // A bot row\'s')) + 'return {teamBotPins,toggleTeamBotPin};')(
-    {getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}},()=>{});
-  api.toggleTeamBotPin('hub_a','company:web');
-  api.toggleTeamBotPin('hub_a','mine:7');
-  assert.deepEqual(api.teamBotPins('hub_a'),['company:web','mine:7']);
-  assert.deepEqual(api.teamBotPins('hub_b'),[],'another workspace has its own pins');
-  api.toggleTeamBotPin('hub_a','company:web');
-  assert.deepEqual(api.teamBotPins('hub_a'),['mine:7']);
+test('bot pins live with every other pinned chat, per workspace, and old bot pins move over once',()=>{
+  const store={'miaPinnedTeamBots':JSON.stringify({hub_a:['company:web'],hub_b:['mine:9']})};
+  const env={localStorage:{getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}},currentUser:'self@example.test',activeWorkspaceKey:'hub_a',chatPinnedKeys:{},renderChatSidebar:()=>{},api:()=>Promise.resolve()};
+  for(const name of ['chatPinnedStorageKey','loadChatPinned','saveChatPinned','isChatPinned','setChatPinned','adoptOldTeamBotPins'])env[name]=appFunction(name,env);
+  env.adoptOldTeamBotPins();
+  assert.equal(env.isChatPinned('bot:company:web'),true,'an old bot pin is kept');
+  assert.deepEqual(JSON.parse(store.miaPinnedTeamBots),{hub_b:['mine:9']},'moved once; other workspaces wait for their turn');
+  env.setChatPinned('bot:mine:7',true);
+  env.setChatPinned('bot:company:web',false);
+  assert.deepEqual(JSON.parse(store['miaChatPinned:self@example.test:hub_a']),{'bot:mine:7':true});
+  env.activeWorkspaceKey='hub_b';env.loadChatPinned();
+  assert.equal(env.isChatPinned('bot:mine:7'),false,'another workspace has its own pins');
 });
 
 function hubFetch(routes){
