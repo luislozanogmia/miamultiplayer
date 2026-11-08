@@ -18,6 +18,9 @@ test('changed work refresh preserves reading position and only the same valid ac
     const nodes = ids.filter(id => !['browserWorkList', 'browserWorkPanel', 'browserWorkGoal'].includes(id)).map(id => `<div id="${id}"></div>`).join('');
     const script = `
       setInterval=()=>1;
+      // Headless Chrome only sometimes gives its window focus (less often under load),
+      // so the test sets it: the shell is focused unless a case says otherwise.
+      document.hasFocus=()=>true;
       const state={tabs:[{id:1}],activeId:1,groups:[{id:'g',name:'Group',tabIds:[1]}],selectedGroupId:'g'};
       const work={id:'work',groupId:'g',createdAt:2,goal:'Read fixture',status:'working',workers:[{id:'worker',actorId:'actor',tabId:1,status:'working'}],results:{worker:{text:'Long result line\\n'.repeat(200),verified:true}}};
       const other={id:'other-work',groupId:'g',createdAt:1,goal:'Other task',status:'working',workers:[{id:'worker',actorId:'other-actor',tabId:1,status:'working'}],results:{}};
