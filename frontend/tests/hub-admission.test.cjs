@@ -29,7 +29,7 @@ test('review reads exact proposal and mode without publishing anything',async()=
 test('bot dialogs use the app\'s modal styling instead of browser defaults',()=>{
   const fs=require('fs'),path=require('path');
   const manager=fs.readFileSync(path.join(__dirname,'..','hub-bot-manager.js'),'utf8');
-  const css=fs.readFileSync(path.join(__dirname,'..','styles.css'),'utf8');
+  const css=fs.readFileSync(path.join(__dirname,'..','hub-bot-dialog.css'),'utf8');
   assert.equal((manager.match(/node\('dialog'\)/g)||[]).length,2);
   assert.equal((manager.match(/className='hub-bot-dialog'/g)||[]).length,2,'both dialogs');
   assert.doesNotMatch(manager,/#ddd|background:white|color:#222/,'no fixed colors, so dark themes work');
