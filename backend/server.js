@@ -1867,8 +1867,9 @@ app.post('/api/speech/transcribe', requireAuth, express.raw({ type: 'audio/wav',
   }
 });
 
-// One-time bot files tidy-up, asked once with the person's OK.
-// TEMPORARY: remove these routes and bot-files-tidy.js in 0.3.5.
+// One-time bot files tidy-up, asked once with the person's OK. Mia reviews
+// the list in her chat first; Go ahead on her plan moves the files.
+// TEMPORARY: remove these routes and bot-files-tidy.js in 0.3.6.
 const botFilesTidy = require('./bot-files-tidy');
 const BOT_FILES_TIDY_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'bot-files-tidy.json');
 const BOT_FILES_TIDY_REVIEW_KEY = crypto.randomBytes(32);
@@ -1889,6 +1890,7 @@ function botFilesTidyReview() {
   return { items, reviewId };
 }
 app.get('/api/bot-files-tidy', requireAuth, (req, res) => {
+  if (workspaceIdFromRequest(req) !== 'solo') return res.status(404).json({ error: 'not_found' });
   const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
   if (state.state === 'running' && !botFilesTidyRunning) startBotFilesTidy();
   if (state.state) return res.json({ state: state.state, moved: (state.moved || []).length });
@@ -1897,29 +1899,113 @@ app.get('/api/bot-files-tidy', requireAuth, (req, res) => {
   if (!review || !review.items.length) return res.json({ state: 'none' });
   res.json({ state: 'ask', count: review.items.length, items: review.items.map(({ fingerprint: _fingerprint, ...item }) => item), reviewId: review.reviewId });
 });
+// The card's answer: review (open Mia's chat) or decline. Moving needs Mia's
+// plan, accepted with /api/bot-files-tidy/plans/:eventId.
 app.post('/api/bot-files-tidy', requireAuth, (req, res) => {
+  if (workspaceIdFromRequest(req) !== 'solo') return res.status(404).json({ error: 'not_found' });
   const current = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
-  if (current.state) return res.json({ state: current.state });
-  if (!(req.body && req.body.accept === true)) {
+  const body = req.body || {};
+  if (current.state && current.state !== 'reviewing') return res.json({ state: current.state });
+  if (body.review === true) {
+    if (!current.state) botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { state: 'reviewing', at: Date.now() });
+    return res.json({ state: 'reviewing' });
+  }
+  if (body.accept === false) {
     botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { state: 'declined', at: Date.now() });
     return res.json({ state: 'declined' });
   }
+  res.status(400).json({ error: 'invalid_answer' });
+});
+// Go ahead on Mia's plan. The plan names review ids; if the files changed
+// since Mia looked, the person asks her to look again.
+app.post('/api/bot-files-tidy/plans/:eventId', requireAuth, (req, res) => {
+  if (workspaceIdFromRequest(req) !== 'solo') return res.status(404).json({ error: 'not_found' });
+  const owner = String(req.userEmail || '').toLowerCase();
+  const companyId = nativeCompanyId(workspaceIdFromRequest(req), owner);
+  const event = nativeConversationRepository.getEvent({ companyId, id: req.params.eventId, includeDeleted: false });
+  const plan = event && event.metadata && event.metadata.tidyPlan;
+  const conversation = event && nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
+  // Only Mia's reply carries a plan; a person's own message can't stand in for it.
+  if (!plan || !Array.isArray(plan.move) || event.senderType !== 'agent' || event.senderId !== 'gateway'
+    || !conversation || conversation.type !== 'agent'
+    || String(conversation.createdBy || '').toLowerCase() !== owner
+    || String(plan.requestedBy || '').toLowerCase() !== owner) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  if (plan.status !== 'pending') return res.status(409).json({ error: 'already_answered', plan });
+  const current = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (current.state && current.state !== 'reviewing') return res.status(409).json({ error: 'already_answered', state: current.state });
+  if (current.latestPlanEventId !== event.id) return res.status(409).json({ error: 'plan_replaced' });
   let review;
   try { review = botFilesTidyReview(); } catch (_) { return res.status(503).json({ error: 'review_unavailable' }); }
-  if (!req.body || req.body.reviewId !== review.reviewId) return res.status(409).json({ error: 'review_changed' });
-  const selected = req.body.selected;
-  if (!Array.isArray(selected) || !selected.length || selected.length > review.items.length
-      || selected.some(id => typeof id !== 'string') || new Set(selected).size !== selected.length) {
-    return res.status(400).json({ error: 'invalid_selection' });
-  }
+  if (plan.reviewId !== review.reviewId) return res.status(409).json({ error: 'review_changed' });
   const byId = new Map(review.items.map(item => [item.id, item]));
-  if (selected.some(id => !byId.has(id))) return res.status(400).json({ error: 'invalid_selection' });
+  const selected = plan.move.filter(id => byId.has(id));
+  if (!selected.length) return res.status(409).json({ error: 'review_changed' });
+  const updated = updateTidyPlanEvent(companyId, event.id, { status: 'accepted' });
   botFilesTidy.writeState(BOT_FILES_TIDY_STATE, {
-    state: 'running', at: Date.now(), approved: selected.map(id => ({ id, fingerprint: byId.get(id).fingerprint })), moved: [],
+    state: 'running', at: Date.now(), planEvent: { companyId, id: event.id },
+    approved: selected.map(id => ({ id, fingerprint: byId.get(id).fingerprint })), moved: [],
   });
   startBotFilesTidy();
-  res.json({ state: 'running' });
+  res.json({ state: 'running', event: updated });
 });
+function updateTidyPlanEvent(companyId, id, fields) {
+  const event = nativeConversationRepository.getEvent({ companyId, id, includeDeleted: false });
+  const plan = event && event.metadata && event.metadata.tidyPlan;
+  if (!plan) return null;
+  const updated = nativeConversationRepository.updateEvent({
+    companyId, id,
+    metadata: { ...event.metadata, tidyPlan: { ...plan, ...fields, answeredAt: plan.answeredAt || new Date().toISOString() } },
+    editedAt: event.editedAt || event.createdAt,
+  });
+  bumpVersion();
+  try { nativeConversationRealtime.publish(updated); } catch (_publishError) {}
+  return updated;
+}
+// Mia's own chat while the review is open: the brief (with the list when the
+// card started this turn), and her reply's plan block read into a card.
+function botFilesTidyReviewing() {
+  return botFilesTidy.readState(BOT_FILES_TIDY_STATE).state === 'reviewing';
+}
+function botFilesTidyTurnNote(trigger) {
+  if (!botFilesTidyReviewing()) return '';
+  try {
+    const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+    if (!state.reviewConversationId) {
+      if (!trigger?.metadata?.botFilesTidy || !trigger.conversationId) return '';
+      botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { ...state, reviewConversationId: trigger.conversationId });
+    } else if (state.reviewConversationId !== trigger?.conversationId) return '';
+    return botFilesTidy.tidyBrief(botFilesTidyReview().items, { previousKeep: state.latestPlanKeep || [] });
+  } catch (_) {
+    return '';
+  }
+}
+function recordTidyPlanEvent(result, tidyPlan) {
+  if (!result || !result.event || !tidyPlan || !tidyPlan.metadata || !tidyPlan.metadata.tidyPlan) return;
+  const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (state.state !== 'reviewing') return;
+  botFilesTidy.writeState(BOT_FILES_TIDY_STATE, {
+    ...state,
+    latestPlanEventId: result.event.id,
+    latestPlanKeep: tidyPlan.metadata.tidyPlan.keep,
+  });
+}
+function nativeMiaTidyPlan(replyText, senderLabel, trigger) {
+  if (!botFilesTidyReviewing()) return { text: botFilesTidy.stripTidyPlanBlocks(replyText), metadata: null };
+  const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (!state.reviewConversationId || state.reviewConversationId !== trigger?.conversationId) {
+    return { text: botFilesTidy.stripTidyPlanBlocks(replyText), metadata: null };
+  }
+  let review;
+  try { review = botFilesTidyReview(); } catch (_) { return { text: botFilesTidy.stripTidyPlanBlocks(replyText), metadata: null }; }
+  const extracted = botFilesTidy.extractTidyPlan(replyText, review.items, { previousKeep: state.latestPlanKeep || [] });
+  if (!extracted.plan) return { text: extracted.text, metadata: extracted.error ? { tidyPlanError: extracted.error } : null };
+  return { text: extracted.text, metadata: { tidyPlan: {
+    status: 'pending', reviewId: review.reviewId, requestedBy: senderLabel,
+    move: extracted.plan.move, keep: extracted.plan.keep,
+  } } };
+}
 let botFilesTidyRunning = false;
 // Runs in the background. A run cut short by quitting picks up again on the
 // next check; files already moved are no longer in the plan.
@@ -1937,9 +2023,15 @@ function startBotFilesTidy() {
       const available = new Set(moves.map(move => path.relative(miaosWorkspaceDir(), move.from).split(path.sep).join('/')));
       result.skipped.push(...approved.filter(item => !available.has(item.id)).map(item => ({ from: item.id, reason: 'changed since review' })));
     } catch (_) { console.error('Bot file tidy failed.'); }
+    const moved = (before.moved || []).concat(result.moved);
     botFilesTidy.writeState(BOT_FILES_TIDY_STATE, {
-      state: 'done', at: Date.now(), moved: (before.moved || []).concat(result.moved), skipped: result.skipped,
+      state: 'done', at: Date.now(), planEvent: before.planEvent, moved, skipped: result.skipped,
     });
+    if (before.planEvent) {
+      try {
+        updateTidyPlanEvent(before.planEvent.companyId, before.planEvent.id, { status: 'done', moved: moved.length, skipped: result.skipped.length });
+      } catch (_) { console.error('Bot file tidy result not shown in chat.'); }
+    }
     botFilesTidyRunning = false;
   });
 }
@@ -7519,7 +7611,7 @@ function localTimezoneName() {
 // Action blocks are read by Mia, never shown: a bot's <MIA_AUTOMATION> and
 // Mia's own <MIA_BOT_SETUP>.
 function stripAgentActionBlocks(text) {
-  return botInstructionActions.stripInstructionBlocks(miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text)));
+  return botFilesTidy.stripTidyPlanBlocks(botInstructionActions.stripInstructionBlocks(miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text))));
 }
 
 // Reads a bot's <MIA_INSTRUCTIONS> block in its owner's own chat and saves it.
@@ -8270,6 +8362,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     sharedBrowserNote(),
     // Only Mia's own chat shows the bot setup card.
     ownsPrivateAgentConversation && !slashCommand && !privateAgent ? miaBotSetupActions.botSetupInstruction() : '',
+    // TEMPORARY (bot files tidy-up): remove in 0.3.6.
+    ownsPrivateAgentConversation && conversation.companyId === nativeCompanyId('solo', senderLabel)
+      && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
     slashCommand ? '' : nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
@@ -8509,14 +8604,17 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   const instructionUpdate = privateBotChat
     ? nativeBotInstructionUpdate(agent, actionReply, trigger)
     : { text: actionReply, metadata: null };
+  const tidyPlan = ownsMiaChat && conversation.companyId === nativeCompanyId('solo', senderLabel)
+    ? nativeMiaTidyPlan(actionReply, senderLabel, trigger) : { text: actionReply, metadata: null };
   const automationAction = privateBotChat
-    ? await nativeBotAutomationAction(agent, miaBotSetupActions.stripBotSetupBlocks(instructionUpdate.text), trigger)
+    ? await nativeBotAutomationAction(agent, botFilesTidy.stripTidyPlanBlocks(miaBotSetupActions.stripBotSetupBlocks(instructionUpdate.text)), trigger)
     : ownsMiaChat
-      ? nativeMiaBotSetupRequest(botAutomationActions.stripAutomationBlocks(actionReply), senderLabel)
+      ? nativeMiaBotSetupRequest(botAutomationActions.stripAutomationBlocks(tidyPlan.text), senderLabel)
       : { text: stripAgentActionBlocks(actionReply), metadata: null };
   const visibleText = instructionUpdate.metadata && instructionUpdate.metadata.instructionProposal
     ? 'I drafted new instructions. Review the replacement below and choose Accept or Reject; nothing has changed yet.'
-    : automationAction.text || automationAction.fallbackText || '';
+    : automationAction.text || automationAction.fallbackText
+      || (tidyPlan.metadata && tidyPlan.metadata.tidyPlan ? 'Here\u2019s my plan for your bot files. Nothing has moved yet.' : '');
   const replyParts = cleanBotReplyText(agent.name, visibleText);
   const safeReply = replyParts.text;
   const nextStepMetadata = replyParts.nextStep ? { nextStep: replyParts.nextStep } : {};
@@ -8556,6 +8654,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
           artifact: true,
           artifactSource: 'interactive',
           ...(index === validatedArtifacts.length - 1 ? nextStepMetadata : {}),
+          ...(index === validatedArtifacts.length - 1 ? tidyPlan.metadata || {} : {}),
         },
       });
       for (const attachment of attachments) {
@@ -8567,6 +8666,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       }
       lastResult = created;
     }
+    recordTidyPlanEvent(lastResult, tidyPlan);
     if (dispatch.targetType === 'gateway') {
       await enqueueNativeMiaHandoffs(conversation, trigger, lastResult.event, safeReply || '');
     }
@@ -8583,11 +8683,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       agentName: agent.name,
       ...(instructionUpdate.metadata || {}),
       ...(automationAction.metadata || {}),
+      ...(tidyPlan.metadata || {}),
       ...nextStepMetadata,
       ...(slashCommand ? { slashCommand: slashCommand.name } : {}),
       ...(inferenceResult && inferenceResult.goal !== undefined ? { goal: inferenceResult.goal } : {}),
     },
   });
+  recordTidyPlanEvent(result, tidyPlan);
   if (dispatch.targetType === 'gateway') {
     await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch);
   }

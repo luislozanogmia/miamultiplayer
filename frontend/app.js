@@ -11913,6 +11913,15 @@
         error: instructionState.error || ''
       });
     }
+    if(window.MiaBotFilesTidy && m.nativeEvent && m.nativeEvent.metadata && m.nativeEvent.metadata.tidyPlan){
+      var tidyState = tidyPlanCardStates[m.nativeEvent.id] || {};
+      html += window.MiaBotFilesTidy.planHtml(m, {
+        esc: esc,
+        latest: latestTidyPlanEventId() === m.nativeEvent.id,
+        busy: !!tidyState.busy,
+        error: tidyState.error || ''
+      });
+    }
     if(window.MiaAppCard && m.nativeEvent){
       var miaCardState = miaAppCardStates[m.nativeEvent.id] || {};
       html += window.MiaAppCard.html(m, {esc: esc, busy: !!miaCardState.busy, error: miaCardState.error || ''});
@@ -11925,6 +11934,67 @@
   var automationCardStates = {};
   var instructionCardStates = {};
   var miaAppCardStates = {};
+  var tidyPlanCardStates = {};
+
+  /* TEMPORARY (bot files tidy-up): remove in 0.3.6. Let Mia look opens
+     Mia's chat with the request; the server adds the file list and rules.
+     Her reply's plan card moves files only on Go ahead. */
+  function reviewBotFilesWithMia(count){
+    var mia = chatWs.gatewayAgent || {id:'gateway', name:'Mia'};
+    clearChatBack();
+    chatRoster.open = null;
+    clearChatActive();
+    Promise.resolve(selectAgentRoom(mia)).then(function(){
+      var roomId = chatWs.activeRoomId;
+      if(!roomId || chatWs.activeKind !== 'agent') return showBenchToast('Open your chat with Mia to see her plan.');
+      sendNativeConversationEvent('Organize my bot files (' + (count === 1 ? '1 file' : count + ' files') + ' found)', null, null, roomId, {botFilesTidy: {count: count}});
+    });
+  }
+
+  function latestTidyPlanEventId(){
+    var messages = chatRoomState(chatWs.activeRoomId).messages || [];
+    for(var i = messages.length - 1; i >= 0; i--){
+      var event = messages[i] && messages[i].nativeEvent;
+      if(event && event.metadata && event.metadata.tidyPlan) return event.id;
+    }
+    return '';
+  }
+
+  document.addEventListener('click', function(event){
+    var button = event.target.closest && event.target.closest('[data-tidy-plan-decision]');
+    if(!button) return;
+    var card = button.closest('[data-tidy-plan]');
+    var eventId = card && card.getAttribute('data-tidy-plan');
+    if(!eventId) return;
+    if(button.getAttribute('data-tidy-plan-decision') === 'list'){
+      sendActiveRoomMessage('Show me the full list.', null, null, chatWs.activeRoomId);
+      return;
+    }
+    var roomId = chatWs.activeRoomId;
+    var state = tidyPlanCardStates[eventId] = {busy: true};
+    renderChatThread();
+    api('/api/bot-files-tidy/plans/' + encodeURIComponent(eventId), {method:'POST', body:{}}).then(function(res){
+      if(res.status === 200 && res.data && res.data.event){
+        delete tidyPlanCardStates[eventId];
+        // A small move can finish, and its "done" arrive live, before this
+        // answer does; keep the newer status.
+        var shown = (chatRoomState(roomId).messages || []).filter(function(m){ return m.nativeEvent && m.nativeEvent.id === eventId; })[0];
+        var plan = shown && shown.nativeEvent.metadata && shown.nativeEvent.metadata.tidyPlan;
+        if(!plan || plan.status === 'pending') applyNativeEvent(res.data.event);
+      } else {
+        state.busy = false;
+        state.error = res.data && res.data.error === 'review_changed'
+          ? 'Your files changed since Mia looked. Ask her to look again.'
+          : res.data && res.data.error === 'plan_replaced' ? 'Mia updated this plan. Use the newest Go ahead button.'
+          : res.data && res.data.error === 'already_answered' ? 'This tidy-up was already answered.' : 'That didn\u2019t go through. Try again.';
+      }
+      if(chatWs.activeRoomId === roomId) renderChatThread();
+    }).catch(function(){
+      state.busy = false;
+      state.error = 'That didn\u2019t go through. Try again.';
+      if(chatWs.activeRoomId === roomId) renderChatThread();
+    });
+  });
 
   function canReviewInstructionProposal(message, proposal){
     if(!proposal || !message || !message.nativeEvent || !currentUser) return false;
@@ -17736,9 +17806,9 @@
 
   function initChatWorkspace(){
     if(window.MiaInterruptedWork) window.MiaInterruptedWork.showOnce({api: api, toast: showBenchToast});
-    // TEMPORARY (0.3.4 only): the one-time bot files tidy-up card. Remove in 0.3.5.
-    if(window.MiaBotFilesTidy) window.MiaBotFilesTidy.showOnce({api: api, toast: showBenchToast});
     if(hubWorkspace()) return initHubChat().then(openPendingPerson);
+    // TEMPORARY: the one-time bot files tidy-up card, reviewed in Mia's own chat. Remove in 0.3.6.
+    if(window.MiaBotFilesTidy) window.MiaBotFilesTidy.showOnce({api: api, toast: showBenchToast, reviewWithMia: reviewBotFilesWithMia});
     return Promise.all([
       loadNativeConversations(),
       loadAgents(),
