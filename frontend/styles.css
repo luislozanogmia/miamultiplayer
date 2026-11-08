@@ -682,7 +682,10 @@
   .interrupted-error:not(:empty){margin-top:8px;}
   /* TEMPORARY (0.3.4 only): bot files tidy-up card. Remove in 0.3.5. */
   .tidy-card{max-width:400px;}
-  .tidy-art{display:block;width:100%;max-width:240px;height:auto;margin:0 auto 10px;}
+  .tidy-art{display:flex;align-items:flex-end;justify-content:center;gap:14px;margin:0 auto 12px;}
+  .tidy-mote{width:64px;height:auto;}
+  .tidy-mote-flip{transform:scaleX(-1);}
+  .tidy-folder{width:58px;height:auto;}
   .tidy-title{font-size:16px;font-weight:600;color:var(--ink);text-align:center;margin-bottom:8px;}
   .tidy-copy{font-size:13.5px;line-height:1.5;color:var(--ink);margin:0 0 8px;}
   .tidy-safe{font-size:13px;line-height:1.45;color:var(--muted);margin:0;}

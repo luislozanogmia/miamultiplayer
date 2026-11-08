@@ -11,38 +11,18 @@
     });
   }
 
-  // Two bots sorting files: one carries a page to the open folder, the other
-  // holds the wrench. Still, no animation.
-  var ART = '<svg class="tidy-art" viewBox="0 0 240 120" aria-hidden="true" focusable="false">'
-    + '<ellipse cx="120" cy="108" rx="96" ry="6" fill="#000" opacity=".06"/>'
-    // Folder
+  // Two Motes either side of the open folder. Static, no blink.
+  var ART = '<div class="tidy-art" aria-hidden="true">'
+    + '<img class="tidy-mote" src="assets/mote/mote-static.svg" alt="" draggable="false">'
+    + '<svg class="tidy-folder" viewBox="88 20 66 86" focusable="false">'
     + '<path d="M92 50h22l6 7h30a4 4 0 0 1 4 4v38a4 4 0 0 1-4 4H92a4 4 0 0 1-4-4V54a4 4 0 0 1 4-4z" fill="#E4B43C"/>'
     + '<rect x="96" y="60" width="50" height="34" rx="3" fill="#FFF8E6"/>'
     + '<rect x="88" y="66" width="66" height="37" rx="4" fill="#F2C75C"/>'
-    // Left bot (orange) holding a page
-    + '<g><rect x="22" y="44" width="50" height="50" rx="22" fill="#F06A3B"/>'
-    + '<circle cx="39" cy="66" r="4.5" fill="#fff"/><circle cx="55" cy="66" r="4.5" fill="#fff"/>'
-    + '<circle cx="40" cy="67" r="2.2" fill="#1d1d1f"/><circle cx="56" cy="67" r="2.2" fill="#1d1d1f"/>'
-    + '<path d="M42 78q5 4 10 0" stroke="#1d1d1f" stroke-width="2" fill="none" stroke-linecap="round"/>'
-    + '<line x1="47" y1="44" x2="47" y2="36" stroke="#F06A3B" stroke-width="3" stroke-linecap="round"/><circle cx="47" cy="34" r="3.5" fill="#F06A3B"/>'
-    + '<g transform="rotate(-12 80 52)"><rect x="66" y="36" width="24" height="30" rx="3" fill="#fff" stroke="#d9d4cb" stroke-width="1.5"/>'
-    + '<line x1="71" y1="45" x2="85" y2="45" stroke="#c9c3b8" stroke-width="2" stroke-linecap="round"/>'
-    + '<line x1="71" y1="51" x2="85" y2="51" stroke="#c9c3b8" stroke-width="2" stroke-linecap="round"/>'
-    + '<line x1="71" y1="57" x2="80" y2="57" stroke="#c9c3b8" stroke-width="2" stroke-linecap="round"/></g>'
-    + '<path d="M70 70q6-6 8-12" stroke="#F06A3B" stroke-width="5" fill="none" stroke-linecap="round"/></g>'
-    // Right bot (blue) with a wrench
-    + '<g><rect x="168" y="46" width="48" height="48" rx="21" fill="#4F8DF7"/>'
-    + '<circle cx="184" cy="67" r="4.5" fill="#fff"/><circle cx="200" cy="67" r="4.5" fill="#fff"/>'
-    + '<circle cx="183" cy="68" r="2.2" fill="#1d1d1f"/><circle cx="199" cy="68" r="2.2" fill="#1d1d1f"/>'
-    + '<path d="M187 79q5 3 10 0" stroke="#1d1d1f" stroke-width="2" fill="none" stroke-linecap="round"/>'
-    + '<path d="M170 72q-8 2-12-6" stroke="#4F8DF7" stroke-width="5" fill="none" stroke-linecap="round"/>'
-    + '<g transform="rotate(-35 156 58)"><rect x="153" y="46" width="6" height="22" rx="3" fill="#8a8f98"/>'
-    + '<path d="M150 40a8 8 0 1 0 12 0l-3 5h-6z" fill="#8a8f98"/></g>'
-    + '<path d="M184 46l-4-8M200 46l4-8" stroke="#4F8DF7" stroke-width="3" stroke-linecap="round"/></g>'
-    // Sparkles
     + '<path d="M120 22l2 6 6 2-6 2-2 6-2-6-6-2 6-2z" fill="#E4B43C"/>'
     + '<path d="M146 30l1 3 3 1-3 1-1 3-1-3-3-1 3-1z" fill="#E4B43C" opacity=".7"/>'
-    + '</svg>';
+    + '</svg>'
+    + '<img class="tidy-mote tidy-mote-flip" src="assets/mote/mote-research-static.svg" alt="" draggable="false">'
+    + '</div>';
 
   function filesText(count){ return count === 1 ? '1 file' : count + ' files'; }
 
