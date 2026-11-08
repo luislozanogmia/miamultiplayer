@@ -17,6 +17,7 @@ automatically through the in-app updater.
 - A one-time review lets people choose exactly which technical files Mia moves out of their Mia folder; hidden files inside a selected folder are listed too.
 
 ### Fixed
+- Google sign-in completes when Mia is the Mac's default browser. Saved browser tabs and history remove credential-bearing query parameters, including older history on load.
 - Large chats can switch models without an extra Hermes confirmation, and Mia Router chooses a model it actually offers.
 - Background sign-in reads wait instead of showing a busy error. Mia keeps one Hermes server per data folder.
 - Bot work remains visible and controllable during browser takeovers, long replies and workspace changes.
