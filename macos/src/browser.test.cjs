@@ -577,6 +577,49 @@ test("web popups become tabs, blocked schemes never navigate", () => {
   }
 });
 
+test("Mia's default-browser Google sign-in returns only a matching finish-page callback", async () => {
+  const callbacks = [];
+  const h = harness({ onClerkAuthCallback: async url => { callbacks.push(url); return true; } });
+  const first = h.command("new");
+  const wc = h.views[0].webContents;
+  const callback = `miamultiplayer://auth/clerk?state=${"a".repeat(64)}&rotating_token_nonce=${"b".repeat(24)}`;
+  function navigate(url) {
+    let blocked = false;
+    wc.emit("will-navigate", { url, preventDefault() { blocked = true; } });
+    return blocked;
+  }
+  wc.shownUrl = "https://example.test/";
+  assert.equal(navigate(callback), true);
+  assert.equal(callbacks.length, 0, "a different page cannot deliver the sign-in callback");
+  wc.shownUrl = "https://miamultiplayer.com/auth/done/";
+  assert.equal(navigate("miamultiplayer://auth/clerk?state=bad"), true);
+  assert.equal(callbacks.length, 0, "malformed callbacks stay blocked");
+  assert.equal(navigate(callback), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(callbacks.length, 1);
+  assert.equal(wc.closed, true, "successful sign-in closes the temporary browser tab");
+  assert.notEqual(h.command("state").activeId, first.activeId);
+});
+
+test("rejected or background Clerk callbacks never close a browser tab", async () => {
+  const callbacks = [];
+  const h = harness({ onClerkAuthCallback: async url => { callbacks.push(url); return false; } });
+  const first = h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://miamultiplayer.com/auth/done/";
+  const callback = `miamultiplayer://auth/clerk?state=${"a".repeat(64)}`;
+  h.command("new");
+  let blocked = false;
+  wc.emit("will-navigate", { url: callback, preventDefault() { blocked = true; } });
+  assert.equal(blocked, true);
+  assert.equal(callbacks.length, 0, "a background page cannot complete the sign-in");
+  h.command("select", { id: first.activeId });
+  wc.emit("will-navigate", { url: callback, preventDefault() {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(callbacks.length, 1);
+  assert.equal(wc.closed, false, "a wrong-state or expired callback leaves the page open for retry");
+});
+
 test("Google authentication preserves the native popup and browser session", () => {
   const h = harness(); h.command("new");
   const wc = h.views[0].webContents;
@@ -1002,6 +1045,32 @@ test("visited URLs are recorded with title/count and exposed by the history comm
     h.views[0].webContents.emit("did-navigate", null, "file:///etc/passwd");
     assert.equal(h.command("history").history.length, 1);
 
+    h.window.emit("closed");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("browser state and history never persist credential query parameters", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-auth-history-"));
+  const statePath = path.join(directory, "browser.json");
+  const historyPath = path.join(directory, "browser-history.json");
+  const sensitive = `https://example.com/path?q=hello&state=${"a".repeat(64)}&code=${"b".repeat(48)}`;
+  try {
+    fs.writeFileSync(historyPath, JSON.stringify({ version: 1, entries: [
+      { url: sensitive, title: "Existing visit", count: 1, lastVisit: Date.now() },
+    ], icons: {} }));
+    const h = harness({ statePath });
+    assert.equal(h.command("history").history[0].url, "https://example.com/path?q=hello");
+    assert.equal(JSON.parse(fs.readFileSync(historyPath, "utf8")).entries[0].url,
+      "https://example.com/path?q=hello", "loading old history removes stored credentials");
+    h.command("new");
+    h.command("navigate", { value: sensitive });
+    h.views[0].webContents.emit("did-navigate", null, sensitive);
+    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).tabs[0].url,
+      "https://example.com/path?q=hello");
+    assert.equal(JSON.parse(fs.readFileSync(historyPath, "utf8")).entries[0].url,
+      "https://example.com/path?q=hello");
     h.window.emit("closed");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

@@ -294,9 +294,13 @@ const desktopAuth = createDesktopAuth({
 function receiveAuthCallback(value) {
   // An unsolicited/cold-launch URL never creates a sign-in attempt. The
   // in-memory pending flow owns its nonce and state; URLs are never logged.
-  void desktopAuth.acceptCallback(value).then(accepted => {
+  return desktopAuth.acceptCallback(value).then(accepted => {
     if (accepted) activateMainWindow();
-  }).catch(() => desktopLog("Native sign-in callback could not be completed"));
+    return accepted;
+  }).catch(() => {
+    desktopLog("Native sign-in callback could not be completed");
+    return false;
+  });
 }
 const externalLinks = createExternalLinkQueue({ open: url => void openLinkInMiaBrowser(url) });
 // Windows and Linux pass the link on the command line of a cold start. macOS
@@ -2166,6 +2170,7 @@ function createWindow() {
       }),
       resolveActor: sessionId => resolveBrowserActor(window, sessionId),
       appRequest: (pathname, request) => desktopAppRequest(window, pathname, request),
+      onClerkAuthCallback: receiveAuthCallback,
     },
   );
   const windowNativeBrowser = nativeBrowser;

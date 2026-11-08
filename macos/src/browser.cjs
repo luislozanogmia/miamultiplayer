@@ -8,6 +8,7 @@ const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, 
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
+const { validClerkNonce } = require("./clerk-nonce.cjs");
 const { safeBrowserPageUrl } = require("../../frontend/safe-page-url.js");
 const { PAGE_HELPERS, cleanAnchor, readScript, scrollScript } = require("./space-anchor.cjs");
 
@@ -104,6 +105,27 @@ function normalizeTarget(value) {
   return url.toString();
 }
 
+function isClerkFinishPage(value) {
+  try {
+    const url = new URL(value);
+    return url.origin === "https://miamultiplayer.com" && url.pathname === "/auth/done/"
+      && !url.username && !url.password;
+  } catch (_) { return false; }
+}
+
+function isClerkCallbackNavigation(value) {
+  try {
+    const url = new URL(value);
+    const states = url.searchParams.getAll("state");
+    const nonces = url.searchParams.getAll("rotating_token_nonce");
+    return url.protocol === "miamultiplayer:" && url.hostname === "auth" && url.pathname === "/clerk"
+      && !url.username && !url.password && !url.port && !url.hash
+      && states.length === 1 && /^[a-f0-9]{64}$/.test(states[0])
+      && nonces.length <= 1 && (!nonces.length || validClerkNonce(nonces[0]))
+      && [...url.searchParams.keys()].every(key => key === "state" || key === "rotating_token_nonce");
+  } catch (_) { return false; }
+}
+
 function normalizeLocalFileTarget(value, workspaceRoot) {
   const rootInput = String(workspaceRoot || "").trim();
   if (!rootInput) throw new Error("Mia local workspace is unavailable.");
@@ -158,6 +180,7 @@ function normalizeGroupRecord(item) {
 
 function createBrowser(window, trustedOrigin, log, options = {}) {
   const tabs = new Map();
+  const onClerkAuthCallback = options.onClerkAuthCallback;
   const shellContents = window.webContents;
   let workProposal = null;
   const workStarts = new Map();
@@ -391,21 +414,24 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     try {
       const saved = JSON.parse(fs.readFileSync(historyPath, "utf8"));
       if (saved && Array.isArray(saved.entries)) {
-        historyEntries = saved.entries
-          .filter(item => item && typeof item.url === "string" && /^https?:\/\//i.test(item.url))
+        const previous = saved.entries.slice(0, HISTORY_MAX_ENTRIES);
+        historyEntries = previous
+          .filter(item => item && typeof item.url === "string")
           .slice(0, HISTORY_MAX_ENTRIES)
           .map(item => ({
-            url: item.url,
+            url: safeBrowserPageUrl(item.url),
             title: typeof item.title === "string" ? item.title.slice(0, 500) : "",
             count: Number.isInteger(Number(item.count)) && Number(item.count) > 0 ? Number(item.count) : 1,
             lastVisit: Number.isFinite(Number(item.lastVisit)) ? Number(item.lastVisit) : Date.now(),
-          }));
+          })).filter(item => item.url);
         const hosts = new Set(historyEntries.map(entry => historyHost(entry.url)));
         if (saved.icons && typeof saved.icons === "object") {
           historyIcons = new Map(Object.entries(saved.icons)
             .filter(([host, icon]) => hosts.has(host) && typeof icon === "string"
               && /^data:image\//i.test(icon) && icon.length <= HISTORY_ICON_MAX_CHARS));
         }
+        if (saved.entries.length !== previous.length || historyEntries.length !== previous.length
+          || historyEntries.some((entry, index) => entry.url !== previous[index]?.url)) persistHistory();
       }
     } catch (_) { /* First run or unreadable history: start empty. */ }
   }
@@ -565,7 +591,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     persistHistory();
   }
   function recordVisit(url, title) {
-    if (!historyPath || !/^https?:\/\//i.test(String(url || ""))) return;
+    url = safeBrowserPageUrl(url);
+    if (!historyPath || !url) return;
     const now = Date.now();
     const existing = historyEntries.find(entry => entry.url === url);
     if (existing) {
@@ -582,6 +609,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
   function updateVisitTitle(url, title) {
     if (!historyPath || !title) return;
+    url = safeBrowserPageUrl(url);
     const existing = historyEntries.find(entry => entry.url === url);
     if (existing && existing.title !== title) {
       existing.title = String(title).slice(0, 500);
@@ -744,7 +772,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       groups: groupList(),
       tabs: [...tabs.values()].slice(0, 50).map(tab => ({
         id: tab.id,
-        url: tab.url,
+        url: /^https?:\/\//i.test(tab.url) ? safeBrowserPageUrl(tab.url) : tab.url,
         title: tab.title,
         media: tab.media || null,
         groupId: tab.groupId || null,
@@ -2679,7 +2707,23 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         matches: result.matches, activeMatchOrdinal: result.activeMatchOrdinal,
       });
     });
+    // When Mia itself is the OS default browser, Clerk's finish page can
+    // arrive in a Mia tab. Only that page may return the pending desktop
+    // callback; the desktop auth flow still checks its one-time state.
+    const handOffClerkCallback = value => {
+      if (typeof onClerkAuthCallback !== "function" || tab.id !== activeId
+        || (tab.actorOperationCount || 0) > 0 || (tab.botWork || 0) > 0
+        || !isClerkFinishPage(wc.getURL()) || !isClerkCallbackNavigation(value)) return false;
+      if (tab.clerkCallbackPending) return true;
+      tab.clerkCallbackPending = true;
+      Promise.resolve().then(() => onClerkAuthCallback(value)).then(accepted => {
+        tab.clerkCallbackPending = false;
+        if (accepted && tabs.get(tab.id) === tab) closeTab(tab.id);
+      }).catch(() => { tab.clerkCallbackPending = false; });
+      return true;
+    };
     wc.setWindowOpenHandler(({ url, disposition }) => {
+      if (handOffClerkCallback(url)) return { action: "deny" };
       // A page a bot or Mia is driving may hand off through a popup (a flight
       // site's "Continue to book" opens the airline). It never becomes a
       // window or takes the front. A worker bound to this one tab follows it
@@ -2725,6 +2769,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       return { action: "deny" };
     });
     const guard = (event) => {
+      if (handOffClerkCallback(event.url)) { event.preventDefault(); return; }
       try { normalizeNavigableTarget(event.url); } catch (_) { event.preventDefault(); }
     };
     wc.on("did-create-window", child => {
