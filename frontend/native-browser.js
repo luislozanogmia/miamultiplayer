@@ -425,8 +425,11 @@
     return command(action).then(function (result) {
       if (result && result.error) chromeSignInError(result.error);
       else if (result && result.chromeSignInImported) {
-        if (status) { status.textContent = 'Sign-in imported'; status.hidden = false; }
-        setTimeout(function () { if (status && status.textContent === 'Sign-in imported') status.hidden = true; }, 5000);
+        // Cookies can also exist before authentication; the reloaded page is
+        // the source of truth for whether ChatGPT accepted the sign-in.
+        var message = 'Chrome data copied. Check the reloaded ChatGPT page.';
+        if (status) { status.textContent = message; status.hidden = false; }
+        setTimeout(function () { if (status && status.textContent === message) status.hidden = true; }, 5000);
       }
     }).finally(function () { if (button) button.disabled = false; });
   }
