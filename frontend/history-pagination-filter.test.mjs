@@ -224,6 +224,8 @@ test('native browser visibility owner occludes and restores the live view withou
     requestAnimationFrame(callback) { callback(); },
     screen: { getBoundingClientRect() { return { x: 1, y: 2, width: 800, height: 600 }; } },
     overlay: { hidden: false },
+    pip: { hidden: false },
+    pipView: { getBoundingClientRect() { return { x: 820, y: 640, width: 160, height: 90 }; } },
     document: { querySelector: () => dialog, body: { classList: { contains(name) { return classes.has(name); } } } },
     bridge: { command(payload) { commands.push(payload); return Promise.resolve(); } },
     JSON,
@@ -232,10 +234,13 @@ test('native browser visibility owner occludes and restores the live view withou
   vm.runInContext(nativeBrowserSource.slice(start, end), context);
   context.layout();
   assert.equal(commands.at(-1).visible, true);
+  assert.equal(commands.at(-1).dockVisible, true);
+  assert.equal(commands.at(-1).dock.width, 160);
   dialog = {};
   context.lastLayout = '';
   context.layout();
   assert.equal(commands.at(-1).visible, false, 'an open dialog hides the page that would cover it');
+  assert.equal(commands.at(-1).dockVisible, false, 'and the picture in picture below the chat');
   dialog = null;
   context.lastLayout = '';
   context.layout();

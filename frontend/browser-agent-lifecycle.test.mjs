@@ -56,6 +56,19 @@ test('late first-time bot chat creation cannot replace the current browser tab o
   h.follow(2, 'b'); assert.equal(h.ctx.chatWs.activeRoomId, 'room-b');
 });
 
+test('in a company, following a bot\'s browser group opens your private chat with it there', async () => {
+  const { ctx, follow } = navigationHarness();
+  const opened = [];
+  ctx.hubWorkspace = () => true;
+  // In a company the bot list is My Bots: your Solo bots and the ones made there.
+  ctx.chatWs.botRecords = [{ id: 'solo-bot', name: 'Solo bot' }];
+  ctx.openTeamBotChat = bot => { opened.push(bot.id); return Promise.resolve(); };
+  assert.equal(ctx.browserBotRecord('solo-bot').name, 'Solo bot');
+  follow(7, 'solo-bot');
+  await flush();
+  assert.deepEqual(opened, ['solo-bot']);
+});
+
 test('out-of-order creation follows only the newest bot tab and records its room', async () => {
   const h = navigationHarness(); delete h.b.roomId; h.ctx.chatWs.activeRoomId = 'initial'; h.ctx.chatWs.nativeConversations = [];
   h.follow(1, 'a'); h.follow(2, 'b'); h.created('b'); await flush(); h.created('a'); await flush();
@@ -93,11 +106,12 @@ function stopHarness() {
   const ctx = { Promise, encodeURIComponent, window: {}, chatTaskStopPending: {},
     chatWs: { nativeConversations: [{ id: 'a1', type: 'bot', metadata: { botId: 'a' } }, { id: 'a2', type: 'bot', metadata: { botId: 'a' } }], tasks: [{ id: 'd1', kind: 'native-dispatch', roomId: 'a1' }, { id: 'd2', kind: 'native-dispatch', roomId: 'a2' }] },
     nativeConversationPath: (room, suffix) => '/conversations/' + room + suffix,
+    inHubRoom: () => false,
     api() { const request = deferred(); requests.push(request); return request.promise; },
     renderComposerTaskControl() {}, stopChatThinking() {}, renderLiveViews() {}, showToast: text => toasts.push(text),
   };
   vm.createContext(ctx);
-  const helpers = ['browserBotRunningTasks', 'stopBrowserBot', 'stopTaskFromComposer'].filter(name => app.includes('  function ' + name + '(')).map(sourceFunction).join('\n');
+  const helpers = ['hubRoomRun', 'browserBotRunningTasks', 'stopBrowserBot', 'stopTaskFromComposer'].filter(name => app.includes('  function ' + name + '(')).map(sourceFunction).join('\n');
   // The object is the public production bridge used by the toolbar and native
   // Stop and Switch, not a replacement implementation of its cancellation.
   const start = app.indexOf('  window.miaBrowserAgents = {');
@@ -132,18 +146,20 @@ test('missing task state and an already pending stop cannot claim browser contro
 });
 
 function toolbarHarness() {
-  const request = deferred(); let renders = 0;
-  const ctx = { Promise, Date, state: {}, botControlLabel: { textContent: '' }, takeOver: { disabled: false, textContent: 'Take over' }, botControl: { getAttribute: () => 'a' }, window: { miaBrowserAgents: { takeOver: () => request.promise } }, botReleasedAt: {}, botHolds: { 1: { botId: 'a' } }, render() { renders++; } };
+  const request = deferred(); let renders = 0; const taken = [];
+  const ctx = { Promise, Date, state: {}, botControlLabel: { textContent: '' }, takeOver: { disabled: false, textContent: 'Take over' }, botControl: { getAttribute: () => 'a' }, selected: () => ({ title: 'People | LinkedIn' }), window: { miaBrowserAgents: { takeOver: (botId, page) => { taken.push([botId, page]); return request.promise; } } }, botReleasedAt: {}, botHolds: { 1: { botId: 'a' } }, botDroveAt: { 1: 0 }, render() { renders++; } };
   const begin = browser.indexOf('  takeOver.onclick = function () {'); const end = browser.indexOf('\n  };', begin) + 5;
   vm.createContext(ctx); vm.runInContext(browser.slice(begin, end), ctx);
-  return { ctx, request, renders: () => renders };
+  return { ctx, request, renders: () => renders, taken };
 }
 
 test('Take over retains bot marks while pending and after failure, clearing only on success', async () => {
   for (const success of [false, true]) {
     const h = toolbarHarness(); const result = h.ctx.takeOver.onclick();
     assert.ok(h.ctx.botHolds[1], 'still owned while stop is pending'); assert.equal(h.ctx.takeOver.disabled, true);
+    assert.equal(h.ctx.takeOver.textContent, 'Pausing…');
     h.request.resolve(success); await result;
+    assert.deepEqual(h.taken, [['a', 'People | LinkedIn']], 'the pause names the page the bot was on');
     assert.equal(!!h.ctx.botHolds[1], !success); assert.equal(!!h.ctx.botReleasedAt.a, success);
     assert.equal(h.ctx.takeOver.disabled, false); assert.equal(h.ctx.takeOver.textContent, 'Take over');
   }
@@ -156,14 +172,32 @@ test('a rejected toolbar cancellation remains retryable and visibly reports fail
   assert.equal(h.ctx.takeOver.disabled, false); assert.match(h.ctx.botControlLabel.textContent, /Could not stop/);
 });
 
+test('a bot has control only while it runs browser commands, not for its whole reply', () => {
+  let now = 1000000; const running = { a: true };
+  const ctx = { Date: { now: () => now }, window: { miaBrowserAgents: { isRunning: id => !!running[id] } } };
+  const start = browser.indexOf('  var botHolds = {};');
+  const end = browser.indexOf('\n  }\n', browser.indexOf('function botInControl')) + 4;
+  vm.createContext(ctx);
+  vm.runInContext(browser.slice(start, end).replace(/function syncGlowHolds[^]*?\n  }\n/, '') + '\nthis.botWorking = botWorking; this.botInControl = botInControl;', ctx);
+  const tab = { id: 1, botActivity: { botId: 'a', name: 'LinkedIn' } };
+  assert.ok(ctx.botInControl(tab), 'in control while a command runs');
+  delete tab.botActivity; now += 3000;
+  assert.ok(ctx.botInControl(tab), 'still in control between quick steps');
+  now += 10000;
+  assert.equal(ctx.botInControl(tab), null, 'control returns once the bot stops using the browser');
+  assert.ok(ctx.botWorking(tab), 'the tab stays marked while the reply runs');
+  running.a = false;
+  assert.equal(ctx.botWorking(tab), null, 'and unmarked once the reply ends');
+});
+
 // Clicking into the page a bot is working on is the same as pressing Take over.
-function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a' } = {}) {
+function pageClickHarness({ activeId = 1, controlHidden = false, botId = 'a', live = true } = {}) {
   let handler = null, takeOvers = 0;
   const ctx = {
     hubWorkspace: () => false,
     inHubRoom: () => false,
     teamBotRoom: () => false,
-    state: { activeId, tabs: [{ id: 1 }, { id: 2 }], groups: [] },
+    state: { activeId, tabs: [{ id: 1, botActivity: live ? { botId } : null }, { id: 2 }], groups: [] },
     window: { miaBrowserAgents: {} },
     botControl: { hidden: controlHidden, getAttribute: () => botId },
     takeOver: { onclick() { takeOvers++; } },
@@ -190,6 +224,8 @@ test('a page click takes nothing over when no bot has control of that tab', () =
   assert.equal(mia.takeOvers(), 0, 'Mia working, no bot to stop');
   const other = pageClickHarness(); other.click(2);
   assert.equal(other.takeOvers(), 0, 'a click from a tab no longer in front');
+  const thinking = pageClickHarness({ live: false }); thinking.click(1);
+  assert.equal(thinking.takeOvers(), 0, 'the bot used the page earlier in the reply but is not acting on it now');
 });
 
 test('+ New bot makes a new tab and group, starts bot setup, and gives the new bot that group', async () => {

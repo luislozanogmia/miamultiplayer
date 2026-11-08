@@ -57,7 +57,7 @@ test('a refusal or a switched workspace does not retry', () => {
 
 test('a successful open clears the error and resets the wait', () => {
   const open = source.slice(source.indexOf('  function initHubChat(){'), source.indexOf('  function hubUnreachable('));
-  assert.match(open, /hubChat\.error='';hubChat\.retryWait=0;clearTimeout\(hubChat\.retryTimer\);/);
+  assert.match(open, /hubChat\.error='';hubChat\.errorIsConnection=false;hubChat\.retryWait=0;clearTimeout\(hubChat\.retryTimer\);/);
   assert.match(open, /\}\)\.catch\(retryHubChat\);/);
   assert.match(source, /window\.addEventListener\('online'/);
 });

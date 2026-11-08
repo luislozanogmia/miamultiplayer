@@ -3123,9 +3123,9 @@
   // picked, and again for a freshly-opened room with no messages yet.
   // For an agent room the hero is that bot's own Mote variant; elsewhere
   // (no room / channels) it's the plain pink one.
-  function chatHeroHtml(message, agentName){
+  function chatHeroHtml(message, agentName, color){
     var hero = agentName && isMiaOrchestrator(agentName) ? miaAvatarHtml(132, 'chat-empty-hero-mia', 'static')
-      : '<img src="' + (agentName ? moteSrcFor(agentName, true) : 'assets/mote/mote-static.svg') + '" alt="" class="chat-empty-hero-mote"' + (agentName ? ' style="filter:' + moteColorFilterFor(agentName, agentAvatarColorFor(agentName, null)) + '"' : '') + ' draggable="false" />';
+      : '<img src="' + (agentName ? moteSrcFor(agentName, true) : 'assets/mote/mote-static.svg') + '" alt="" class="chat-empty-hero-mote"' + (agentName ? ' style="filter:' + moteColorFilterFor(agentName, color || agentAvatarColorFor(agentName, null)) + '"' : '') + ' draggable="false" />';
     return '<div class="chat-empty-hero">' + hero +
       '<div class="chat-empty-hero-text">' + message + '</div></div>';
   }
@@ -3153,6 +3153,8 @@
     var existing = Array.isArray(chatWs.allAgents) ? chatWs.allAgents : [];
     var previousRecords = chatWs.botRecords || [];
     chatWs.botRecords = records.slice();
+    // In a company, My Bots is this same list: one list of your bots.
+    if(hubWorkspace()) chatWs.myBotRecords = chatWs.botRecords;
     scheduleNeedsYouRender();
     chatWs.botRecordsLoaded = true;
     chatWs.allAgents = records.map(function(record){
@@ -3180,11 +3182,18 @@
     renderChatHeaderBar();
     renderChatThread();
   }
+  // Your bots, the same list in Solo and in a company: there it is My Bots,
+  // your Solo bots plus the ones made in that company.
   function loadAgents(){
-    return api('/api/bots').then(function(res){
-      var agents = ((res.data && res.data.bots) || []).filter(function(agent){
+    var lists = hubWorkspace()
+      ? Promise.all([api('/api/bots?workspace=solo'), api('/api/bots')])
+      : api('/api/bots').then(function(res){ return [res]; });
+    return lists.then(function(results){
+      var seen = {};
+      var agents = results.reduce(function(all, res){ return all.concat((res.data && res.data.bots) || []); }, []).filter(function(agent){
         var status = String(agent.status || '').toLowerCase();
-        return status !== 'paused';
+        if(status === 'paused' || seen[agent.id]) return false;
+        return seen[agent.id] = true;
       });
       // Native conversation hydration projects bots down to room identity
       // fields in chatWs.allAgents. Keep the complete API records separately
@@ -5019,6 +5028,8 @@
   }
   function hubFeedback(error){
     hubChat.error = error && error.message || '';
+    // Trouble reaching the Hub or sign-in shows as the Offline pill, not red text.
+    hubChat.errorIsConnection = !!(error && error.message && hubUnreachable(error));
     if(error && (error.status === 403 || error.status === 404)){
       // Revocation invalidates cached content and its history cursor.
       // A later invitation must rebuild history from the authorized beginning.
@@ -5365,20 +5376,8 @@
   // Bots section empty; channels still load.
   function loadTeamBotChats(){
     var workspace=activeWorkspaceKey;
-    return Promise.all([
-      api('/api/bots?workspace=solo').then(function(res){ return res.status===200 && res.data && res.data.bots || []; }),
-      loadNativeConversations(),
-      api('/api/bots').then(function(res){ return res.status===200 && res.data && res.data.bots || []; })
-    ]).then(function(results){
+    return Promise.all([loadAgents(), loadNativeConversations()]).then(function(results){
       if(activeWorkspaceKey!==workspace)return;
-      // botRecords also takes this workspace's own list later, so My Bots keeps its own:
-      // your Solo bots plus any bot made while in this team.
-      var seen={}, myBots=results[0].concat(results[2]).filter(function(bot){
-        if(seen[bot.id] || String(bot.status||'').toLowerCase()==='paused')return false;
-        return seen[bot.id]=true;
-      });
-      chatWs.myBotRecords=myBots;
-      syncChatBotRecords(myBots);
       applyNativeConversationList(results[1]);
     }).catch(function(){});
   }
@@ -5420,7 +5419,7 @@
     hubChat.companyBots=[];
     var teamBots=loadTeamBotChats();
     return loadHubTeams(false).then(refreshHubChannels).then(function(){ loadCompanyBots(); return teamBots; }).then(function(){
-      hubChat.error='';hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
+      hubChat.error='';hubChat.errorIsConnection=false;hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
       var botChat=(chatWs.nativeConversations||[]).filter(function(c){return c.id===previousRoomId;})[0];
       if(botChat && !keepSetup){ startChatPolling(); return loadChatRoom(botChat.id,'agent',botChat.name); }
       var room=hubChat.channels.filter(function(c){return c.id===previousRoomId;})[0] || hubChat.channels.filter(function(c){return !hubPrivateConversation(c);})[0] || hubChat.channels[0];
@@ -5465,17 +5464,41 @@
     clearTimeout(hubChat.retryTimer);hubChat.retryTimer=null;initHubChat();
   });
   function renderHubStatus(){
+    renderOfflinePill();
     var footer=el('#chatSyncFooter');
     if(!footer)return;
     var typing=hubChat.typing.filter(function(entry){return entry.channel_id===chatWs.activeRoomId;}).map(function(entry){return displayNameForEmail(entry.email);});
-    var offline=hubChat.feedStatus==='offline';
+    // Connection trouble is the Offline pill's to show; the line keeps quiet
+    // and red text is left for refusals reconnecting won't fix.
+    var connection=hubConnectionTrouble(), refusal=hubChat.error && !hubChat.errorIsConnection ? hubChat.error : '';
     footer.style.display='block';
     footer.setAttribute('role','status');
     footer.setAttribute('aria-live','polite');
-    footer.textContent=hubChat.error || (offline ? 'Reconnecting to the company…'
-      : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to company');
-    footer.classList.toggle('chat-sync-fail',offline || !!hubChat.error || chatWs.configured===false);
+    footer.textContent=refusal || (connection ? '' : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to company');
+    footer.classList.toggle('chat-sync-fail',!!refusal || (!connection && chatWs.configured===false));
   }
+  // Offline, the way Google Calendar shows it: a small dark pill in the
+  // corner, gone by itself when the connection is back. × hides it until
+  // the next time the connection drops.
+  var offlinePill={dismissed:false};
+  function hubConnectionTrouble(){
+    return hubWorkspace() && (hubChat.feedStatus==='offline' || !!(hubChat.error && hubChat.errorIsConnection));
+  }
+  function renderOfflinePill(){
+    var offline=navigator.onLine===false || hubConnectionTrouble();
+    if(!offline)offlinePill.dismissed=false;
+    var pill=document.getElementById('miaOfflinePill');
+    if(!offline || offlinePill.dismissed){ if(pill)pill.hidden=true; return; }
+    if(!pill){
+      pill=document.createElement('div'); pill.id='miaOfflinePill'; pill.className='mia-offline-pill'; pill.setAttribute('role','status');
+      pill.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M8.5 8.6A5 5 0 0 0 6.5 18H17"/><path d="M10.2 6.2A6 6 0 0 1 18.4 11 3.5 3.5 0 0 1 20.6 16.9"/></svg><span>Offline</span><button type="button" aria-label="Hide" title="Hide">&times;</button>';
+      pill.querySelector('button').addEventListener('click',function(){ offlinePill.dismissed=true; pill.hidden=true; });
+      document.body.appendChild(pill);
+    }
+    pill.hidden=false;
+  }
+  window.addEventListener('offline',renderOfflinePill);
+  window.addEventListener('online',renderOfflinePill);
   function hubRoomPreview(roomId){
     var state=chatWs.byRoom[roomId];
     var last=state && (state.messages||[]).filter(function(m){return !m.system && !m.threadRoot && (m.body || m.hubFile);}).slice(-1)[0];
@@ -5534,8 +5557,8 @@
       return {node:wrap,list:list};
     }
     var myBots=chatWs.myBotRecords||[], companyBots=hubChat.companyBots||[];
-    var pinnedBots=teamBotPins(activeWorkspaceKey);
-    function botPinned(key){ return pinnedBots.indexOf(key)>=0; }
+    adoptOldTeamBotPins();
+    function botPinned(key){ return isChatPinned('bot:'+key); }
     if(pinned){
       pinned.innerHTML='';
       pinnedChannels.forEach(function(channel){pinned.appendChild(row(channel));});
@@ -5564,7 +5587,7 @@
       var hiddenOpen=hubHiddenBotsOpen[activeWorkspaceKey]===true;
       var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
       hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
-      hiddenToggle.innerHTML='<span class="hub-hidden-bots-chevron" aria-hidden="true">'+(hiddenOpen?'&#9662;':'&#9656;')+'</span>Hidden · '+hiddenBots.length;
+      hiddenToggle.innerHTML='<svg class="hub-hidden-bots-chevron'+(hiddenOpen?' open':'')+'" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3"/></svg>Hidden · '+hiddenBots.length;
       hiddenToggle.title='Bots you shared with the company. Everyone uses them under Company bots.';
       hiddenToggle.addEventListener('click',function(){
         hubHiddenBotsOpen[activeWorkspaceKey]=!hiddenOpen;
@@ -5581,22 +5604,21 @@
     if(!companyBots.length)companySection.list.innerHTML='<div class="chat-sidebar-empty">Bots shared in this workspace show up here</div>';
     all.appendChild(companySection.node);
   }
-  // Pinned bots are a personal preference, kept on this computer per workspace.
-  function teamBotPins(workspace){
-    try { return (JSON.parse(localStorage.getItem('miaPinnedTeamBots')||'{}')||{})[workspace]||[]; } catch(_pinStorageError) { return []; }
-  }
-  function toggleTeamBotPin(workspace,key){
+  // Pinned bots live with every other pinned chat (one store per workspace,
+  // as in Solo). Pins kept in the older bots-only store move over once.
+  function adoptOldTeamBotPins(){
     var all={};
-    try { all=JSON.parse(localStorage.getItem('miaPinnedTeamBots')||'{}')||{}; } catch(_pinStorageError) {}
-    var pins=(all[workspace]||[]).filter(function(item){return item!==key;});
-    if(pins.length===(all[workspace]||[]).length)pins.push(key);
-    all[workspace]=pins;
+    try { all=JSON.parse(localStorage.getItem('miaPinnedTeamBots')||'{}')||{}; } catch(_pinStorageError) { return; }
+    var old=all[activeWorkspaceKey];
+    if(!Array.isArray(old) || !old.length)return;
+    old.forEach(function(key){ if(typeof key==='string' && key)chatPinnedKeys['bot:'+key]=true; });
+    saveChatPinned();
+    delete all[activeWorkspaceKey];
     try { localStorage.setItem('miaPinnedTeamBots',JSON.stringify(all)); } catch(_pinStorageError) {}
-    renderChatSidebar();
   }
   // A bot row's ⋯ and right-click both offer Pin or Unpin.
   function wireTeamBotPin(button,key,pinned,extraItems){
-    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){toggleTeamBotPin(activeWorkspaceKey,key);}]].concat(extraItems||[])); }
+    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){setChatPinned('bot:'+key,!pinned);}]].concat(extraItems||[])); }
     button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();open(button);});
     var more=el('.hub-channel-more',button);
     if(more)more.addEventListener('click',function(event){event.stopPropagation();open(more);});
@@ -5919,16 +5941,16 @@
     })[0];
     var state=chat && chatWs.byRoom[chat.id];
     var active=!!chat && chatWs.activeRoomId===chat.id;
-    var preview=chat ? hubRoomPreview(chat.id) : '';
     var button=document.createElement('button'); button.type='button';
     var sharedAway=soloBotSharedAway(bot);
     button.className='chat-recent-row hub-channel-row'+(active?' active':'')+(sharedAway?' is-shared-away':'');
     button.setAttribute('data-team-bot-id',bot.id);
     if(sharedAway)button.title='Shared with the company. Use it under Company bots.';
-    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name||'Bot')+'</span>'
-      +renderChatActivityIndicator(!!(state && state.thinking),false)
-      +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span></span>'
-      +'<span class="row-preview'+(preview?'':' empty')+'">'+(preview?esc(preview):'&nbsp;')+'</span></span>';
+    // The same row text as Solo: activity, unread, time and latest line.
+    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span>'
+      +sidebarRowText(bot.name||'Bot',chat ? chat.id : null,!!(state && state.thinking));
+    var line=el('.row-line1',button);
+    if(line)line.insertAdjacentHTML('beforeend','<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span>');
     button.addEventListener('click',function(){ if(sharedAway)openSharedSoloBotNotice(bot); else openTeamBotChat(bot); });
     wireTeamBotPin(button,'mine:'+bot.id,!!pinned);
     return button;
@@ -6260,7 +6282,7 @@
       }
       applyHubRows(roomId,result.messages||[]);
       state.historyInitialized=true;state.historyComplete=!state.historyCursor;
-      hubChat.error='';chatWs.configured=true;
+      hubChat.error='';hubChat.errorIsConnection=false;chatWs.configured=true;
       markHubRead(roomId);
       renderChatSidebar();renderChatThread();renderDeptAgentSelector();
       if(!state.messages.length && state.historyCursor)return loadOlderHubMessages(roomId);
@@ -6306,6 +6328,7 @@
     if(['pending','claimed'].indexOf(job.state)>=0)hubChat.dispatches[job.id]=job;
     else delete hubChat.dispatches[job.id];
     if(job.channel_id)hubRoomThinking(job.channel_id);
+    if(job.channel_id && job.channel_id===chatWs.activeRoomId)renderComposerTaskControl();
   }
   function applyHubEvents(events){
     var subject=hubChat.membership && hubChat.membership.clerk_user_id, refreshChannels=false, refreshTeams=false, render={};
@@ -7032,8 +7055,11 @@
       return conversation && conversation.id && !(conversation.metadata && conversation.metadata.botArchived === true);
     }).map(function(conversation){ return String(conversation.id); });
   }
+  // Your bots' chats are local in Solo and in a company alike, so the watch
+  // socket (unread dots, needs-you, notifications) runs in both.
+  function localChatsLive(){ return chatWs.native || hubWorkspace(); }
   function syncNativeWatchSubscriptions(){
-    if(!chatWs.native || typeof WebSocket !== 'function') return;
+    if(!localChatsLive() || typeof WebSocket !== 'function') return;
     var socket = chatWs.watchSocket;
     if(!socket){ connectNativeWatchSocket(); return; }
     if(socket.readyState !== 1) return; // onopen subscribes everything
@@ -7051,7 +7077,6 @@
     });
   }
   function connectNativeWatchSocket(){
-    if(hubWorkspace()) return;
     if(chatWs.watchReconnectTimer){
       clearTimeout(chatWs.watchReconnectTimer);
       chatWs.watchReconnectTimer = null;
@@ -7073,10 +7098,10 @@
       if(chatWs.watchSocket !== socket) return;
       chatWs.watchSocket = null;
       chatWs.watchSubscribed = {};
-      if(!chatWs.native) return;
+      if(!localChatsLive()) return;
       chatWs.watchReconnectTimer = setTimeout(function(){
         chatWs.watchReconnectTimer = null;
-        if(chatWs.native && !chatWs.watchSocket) connectNativeWatchSocket();
+        if(localChatsLive() && !chatWs.watchSocket) connectNativeWatchSocket();
       }, 3000);
     };
   }
@@ -7141,6 +7166,7 @@
     if(hubWorkspace()){
       // A team's channels and DMs come from the Hub; only its bot chats are here.
       chatWs.nativeConversations = conversations;
+      syncNativeWatchSubscriptions();
       renderChatSidebar();
       return;
     }
@@ -9614,14 +9640,15 @@
     var key = tab.id + '|' + owner;
     if(key === browserFollowKey) return;
     if(activeConversationOwner() === owner){ browserFollowKey = key; return; }
-    var agent = bot
+    // In a company a bot's chat is your private chat with it there.
+    var agent = bot && hubWorkspace() ? null : bot
       ? (chatWs.allAgents || []).filter(function(a){ return String(a.id) === String(bot.id); })[0]
       : chatWs.gatewayAgent;
-    if(!agent) return;
+    if(!agent && !(bot && hubWorkspace())) return;
     browserFollowKey = key;
-    Promise.resolve(navigateToAgentChat(agent, false, function(){
+    Promise.resolve(agent ? navigateToAgentChat(agent, false, function(){
       return browserFollowKey === key && localBrowserState.open && document.body.classList.contains('browser-collab-mode');
-    })).then(function(){
+    }) : openTeamBotChat(bot)).then(function(){
       if(browserFollowKey === key && activeConversationOwner() === owner) localBrowserState.roomId = chatWs.activeRoomId;
     });
   }
@@ -9680,8 +9707,10 @@
       agentSetup.onCreated = typeof onCreated === 'function' ? onCreated : null;
     },
     // "Take over" in the browser stops whatever this bot is running now.
-    takeOver: function(botId){
-      return stopBrowserBot(botId);
+    // Take over pauses the bot: its reply ends with "Browser is yours", the
+    // page it was on, and a Continue button.
+    takeOver: function(botId, page){
+      return stopBrowserBot(botId, 'take-over', page);
     },
     // The group this bot worked in was given to someone else.
     stopQuietly: function(botId){
@@ -9709,13 +9738,13 @@
     },
   };
   var browserMenuIconCache = {};
-  function stopBrowserBot(botId){
+  function stopBrowserBot(botId, reason, page){
     var running = browserBotRunningTasks(botId);
     if(!running.length){
       showToast('Could not confirm that the response stopped. Check its chat before taking over.');
       return Promise.resolve(false);
     }
-    return Promise.all(running.map(function(task){ return stopTaskFromComposer(task.id); })).then(function(results){
+    return Promise.all(running.map(function(task){ return stopTaskFromComposer(task.id, reason, page); })).then(function(results){
       var stopped = results.every(function(result){ return result === true; });
       if(!stopped) showToast('Could not stop every response. The bot may still be working; try again.');
       return stopped;
@@ -10005,7 +10034,9 @@
       var id = String(record.id || agent.id || '');
       return {kind:'agent', id:id, name:String(record.name || agent.name || id || 'Bot'), sub:id === 'gateway' ? 'Agent' : 'Bot'};
     })).concat(otherTeamPeople.rows);
-    var rooms = hubWorkspace() ? (chatWs.rooms.dms || []) : (chatWs.nativeConversations || []).map(nativeConversationToRoom);
+    // Your chats with your bots are local in a company too; its channels and
+    // DMs come from the Hub on top.
+    var rooms = (chatWs.nativeConversations || []).map(nativeConversationToRoom).concat(hubWorkspace() ? (chatWs.rooms.dms || []) : []);
     // A bot's main chat is its People row; history keeps the rest, dated
     // so same-named conversations can be told apart.
     var mainRooms = {};
@@ -10784,7 +10815,7 @@
       if(changed) renderChatSidebar();
       return [];
     };
-    return api('/api/automations/active').then(function(res){
+    return api('/api/automations/active?workspace=' + encodeURIComponent(localChatWorkspaceKey())).then(function(res){
       if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return clearStaleRuns();
       var next = res.data.runs;
       var checklists = Array.isArray(res.data.checklists) ? res.data.checklists : [];
@@ -10887,7 +10918,19 @@
   // One composer controls the active room, so its Stop affordance targets
   // the newest active background turn in that room. The server remains the
   // authority and re-checks task ownership before cancelling anything.
+  // A company bot's run in this room that you asked for (or that runs on this
+  // computer): the Stop button ends it through the Hub, as Solo's does locally.
+  function hubRoomRun(roomId){
+    if(!inHubRoom() || !roomId) return null;
+    var me = hubChat.membership && hubChat.membership.clerk_user_id;
+    var job = Object.keys(hubChat.dispatches || {}).map(function(id){ return hubChat.dispatches[id]; }).filter(function(item){
+      return item.channel_id === roomId && (item.state === 'pending' || item.state === 'claimed') && !!me && (item.requester_id === me || item.executor_id === me);
+    }).sort(function(a, b){ return Number(b.created_at || 0) - Number(a.created_at || 0); })[0];
+    return job ? {id: job.id, roomId: roomId, hub: true, status: job.state} : null;
+  }
   function activeRoomTask(){
+    var hubRun = hubRoomRun(chatWs.activeRoomId);
+    if(hubRun) return hubRun;
     var tasks = tasksForRoom(chatWs.activeRoomId).slice().sort(function(a, b){
       return Number(b.startedAt || 0) - Number(a.startedAt || 0);
     });
@@ -10922,14 +10965,31 @@
     button.innerHTML = showStop ? '<span class="cc-stop-square" aria-hidden="true"></span>' : CHAT_SEND_ICON_HTML;
   }
 
-  function stopTaskFromComposer(taskId){
+  function stopTaskFromComposer(taskId, reason, page){
+    var hubRun = hubRoomRun(chatWs.activeRoomId);
+    if(hubRun && hubRun.id === taskId){
+      if(chatTaskStopPending[taskId]) return Promise.resolve(false);
+      chatTaskStopPending[taskId] = true;
+      renderComposerTaskControl();
+      return hubCall('POST', hubPath() + '/channels/' + hubRun.roomId + '/bot-dispatches/' + taskId + '/cancel', {}).then(function(){
+        delete chatTaskStopPending[taskId];
+        trackHubDispatch(Object.assign({}, hubChat.dispatches[taskId], {state: 'cancelled'}));
+        renderComposerTaskControl();
+        return true;
+      }).catch(function(error){
+        delete chatTaskStopPending[taskId];
+        renderComposerTaskControl();
+        showBenchToast(hubActionError(error, 'Couldn\'t stop this reply. Try again.'));
+        return false;
+      });
+    }
     var task = (chatWs.tasks || []).filter(function(candidate){ return candidate.id === taskId; })[0];
     if(!task || task.kind !== 'native-dispatch' || chatTaskStopPending[taskId]) return Promise.resolve(false);
     chatTaskStopPending[taskId] = true;
     renderComposerTaskControl();
     return api(nativeConversationPath(task.roomId, '/dispatches/' + encodeURIComponent(taskId) + '/stop'), {
       method: 'POST',
-      body: {}
+      body: reason ? {reason: reason, page: page || ''} : {}
     }).then(function(res){
       if(res.status !== 200) throw new Error(res.data && (res.data.message || res.data.error) || 'Stop failed');
       var stoppedIds = (res.data && res.data.stoppedDispatchIds) || [taskId];
@@ -11531,9 +11591,114 @@
       /^Google didn't respond in time, so I didn't change the spreadsheet\./i,
       /^I couldn't apply the spreadsheet update\./i,
       /^I ran out of time before finishing\./i,
+      /^I stopped at step \d+\b[^:]*: it made no progress\b/i,
       /^Sorry\s*[—-]\s*I ran into a problem working on that and couldn't finish\./i
     ].some(function(pattern){ return pattern.test(normalized); });
   }
+
+  // A turn that reached the output budget stops with a notice (backend
+  // OUTPUT_LIMIT_NOTICE). It reads as a card like an ask-before-do approval,
+  // and Continue asks the same agent to pick up where it stopped.
+  var chatContinued = {};
+  function chatOutputLimitNotice(text){
+    var normalized = String(text || '').trim();
+    return /^I reached the most I can write in one reply before finishing\./.test(normalized)
+      || /^\u23f9 Stopped: this response reached its output budget\b/.test(normalized);
+  }
+  // Take over paused the agent (backend stopNoticeText); same card, and
+  // Continue hands the browser back.
+  function chatPausedNotice(text){
+    return /^\u23f8 Browser is yours\./.test(String(text || '').trim());
+  }
+
+  // A card someone already wrote after is settled, even after a restart.
+  function chatContinueAnswered(eventId){
+    var messages = (chatWs.activeRoomId && chatRoomState(chatWs.activeRoomId).messages) || [];
+    var index = messages.map(function(m){ return m.id; }).indexOf(eventId);
+    if(index < 0) return false;
+    return messages.slice(index + 1).some(function(m){ return !m.system && m.threadRoot === messages[index].threadRoot && isHumanSender(m.sender); });
+  }
+
+  function chatContinueButtonHtml(eventId){
+    return '<button type="button" class="chat-approval-button primary" data-chat-continue="' + esc(eventId) + '">Continue</button>';
+  }
+
+  function chatContinueHtml(eventId, text){
+    var paused = chatPausedNotice(text);
+    var line = String(text || '').replace(/^[\u23f8\u23f9] /, '').replace(/\s*Press Continue (?:and I'll pick up from there|when you want me back)\.$/, '');
+    var actions = chatContinued[eventId] || chatContinueAnswered(eventId) ? '<span class="chat-approval-status">Continued</span>' : chatContinueButtonHtml(eventId);
+    return '<div class="chat-approval" data-chat-continue-card="' + esc(eventId) + '">' +
+      '<div class="chat-approval-title">' + (paused ? 'Paused' : 'Keep going?') + '</div>' +
+      '<div class="chat-approval-line">' + esc(line) + '</div>' +
+      '<div class="chat-approval-actions">' + actions + '</div></div>';
+  }
+
+  // The agent may not remember a reply that was cut off, so Continue quotes
+  // how the reply just above the card ended.
+  function chatContinueMessage(messages, eventId){
+    messages = messages || [];
+    var index = messages.map(function(m){ return m.id; }).indexOf(eventId);
+    var notice = messages[index], partial = '';
+    if(notice && chatPausedNotice(displayBotBody(notice.body))) return "The browser is yours again. Continue where you left off.";
+    for(var i = index - 1; notice && i >= 0; i--){
+      var m = messages[i];
+      if(m.system || m.threadRoot !== notice.threadRoot || isSupersededNativeProgressMessage(m)) continue;
+      var body = isHumanSender(m.sender) ? '' : displayBotBody(m.body);
+      if(body && !chatOutputLimitNotice(body)) partial = body;
+      break;
+    }
+    var tail = String(partial).replace(/\s+/g, ' ').trim().slice(-200);
+    return tail ? 'Continue where you left off. Your last reply ended with: "…' + tail + '"' : 'Continue where you left off.';
+  }
+
+  document.addEventListener('click', function(event){
+    var button = event.target.closest && event.target.closest('[data-chat-continue]');
+    if(!button) return;
+    var eventId = button.getAttribute('data-chat-continue');
+    var roomId = chatWs.activeRoomId;
+    if(!roomId || chatContinued[eventId]) return;
+    var row = button.closest('.chat-msg-row');
+    var state = chatRoomState(roomId);
+    var threadRootId = row && row.classList.contains('in-thread') ? state.openThreadRoot : null;
+    chatContinued[eventId] = true;
+    button.disabled = true;
+    button.textContent = 'Continuing…';
+    Promise.resolve(sendActiveRoomMessage(chatContinueMessage(state.messages, eventId), threadRootId, null, roomId)).then(function(res){
+      // The chat may have redrawn while sending, so find the card again.
+      var actions = el('[data-chat-continue-card="' + eventId + '"] .chat-approval-actions');
+      if(res && (res.status === 200 || res.status === 201)){
+        if(actions) actions.innerHTML = '<span class="chat-approval-status">Continued</span>';
+        return;
+      }
+      delete chatContinued[eventId];
+      if(actions) actions.innerHTML = chatContinueButtonHtml(eventId);
+    });
+  });
+
+  // Picking a chat in the sidebar (Mia, a bot, a channel, Solo or company)
+  // puts the cursor in the message box, ready to type. Not on touch screens,
+  // where it would pop the keyboard, and not if something else took focus
+  // meanwhile (a dialog, the address bar).
+  function focusComposerAfterPick(){
+    if(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
+    var tries = 0;
+    (function attempt(){
+      var input = el('#ccInput');
+      var active = document.activeElement;
+      var free = !active || active === document.body || active.closest('.chat-recent-row');
+      if(input && free && input.offsetParent && !input.disabled && !document.querySelector('.app-confirm-overlay.open, .app-prompt-overlay.open')){
+        input.focus({preventScroll: true});
+        return;
+      }
+      // The chat may still be opening; try briefly, then leave focus alone.
+      if(free && tries++ < 10) setTimeout(attempt, 100);
+    })();
+  }
+  document.addEventListener('click', function(event){
+    var row = event.target.closest && event.target.closest('.chat-recent-row');
+    if(!row || row.classList.contains('chat-row-hidden') || event.defaultPrevented) return;
+    setTimeout(focusComposerAfterPick, 0);
+  });
 
   // A request for approval from the ask-before-do gate. Answering it here is
   // the only thing that unlocks the action; the server checks who answered.
@@ -11605,7 +11770,7 @@
         button.disabled = true;
         button.textContent = 'Retrying…';
         Promise.resolve(sendActiveRoomMessage('Try that again.', threadRootId, null, roomId)).then(function(res){
-          if(res && res.status === 200){
+          if(res && (res.status === 200 || res.status === 201)){
             button.textContent = 'Retried';
             return;
           }
@@ -11901,19 +12066,29 @@
   // stays escaped exactly as before. Trailing punctuation (incl. the ")" in
   // "(https://…/)" asides) is left outside the link; a ")" is kept only when
   // the URL itself contains a "(" (wikipedia-style paths).
+  var BARE_URL_RE = /https?:\/\/[^\s<>"]+/g;
+  // A web address ends before trailing punctuation and markdown markers:
+  // in **https://example.com/** the closing ** is bold, not part of the link.
+  function trimUrlTail(url){
+    while(/[).,;:!?’”*_]$/.test(url)){
+      if(url.slice(-1) === ')' && url.indexOf('(') !== -1) break;
+      url = url.slice(0, -1);
+    }
+    return url;
+  }
+  function bareLinkHtml(url){
+    return '<a href="' + esc(url) + '" data-chat-web-link>' + esc(url) + '</a>';
+  }
   function linkifyEsc(text){
     var s = String(text == null ? '' : text);
-    var re = /https?:\/\/[^\s<>"]+/g;
+    var re = new RegExp(BARE_URL_RE.source, 'g');
     var out = '', last = 0, match;
     while((match = re.exec(s))){
-      var url = match[0];
-      while(/[).,;:!?’”]$/.test(url)){
-        if(url.slice(-1) === ')' && url.indexOf('(') !== -1) break;
-        url = url.slice(0, -1);
-      }
+      var url = trimUrlTail(match[0]);
       out += esc(s.slice(last, match.index));
-      out += '<a href="' + esc(url) + '" data-chat-web-link>' + esc(url) + '</a>';
+      out += bareLinkHtml(url);
       last = match.index + url.length;
+      re.lastIndex = last;
     }
     out += esc(s.slice(last));
     return out;
@@ -11978,20 +12153,34 @@
     return text.split(/(\*\*`[^`\n]+`\*\*|`[^`\n]+`)/g).map(function(seg){
       if(/^\*\*`[^`\n]+`\*\*$/.test(seg)) return '<strong><code>' + esc(seg.slice(3, -3)) + '</code></strong>';
       if(/^`[^`\n]+`$/.test(seg)) return '<code>' + esc(seg.slice(1, -1)) + '</code>';
+      // Bare web addresses become tokens before math, bold and italics, like
+      // [label](url) links above, so a ** or _ can never land inside a link's
+      // address and leave a tag open for every message after it.
+      var bare = [];
+      if(!insideLink) seg = seg.replace(BARE_URL_RE, function(match){
+        // An address ends where a [label](url) link right after it begins.
+        var token = match.indexOf('MIAOSLINKTOKEN');
+        var url = trimUrlTail(token === -1 ? match : match.slice(0, token));
+        bare.push(bareLinkHtml(url));
+        return 'MIAOSURLTOKEN' + (bare.length - 1) + 'END' + match.slice(url.length);
+      });
       var math = [];
       // $…$ follows the usual markdown rule so money stays money: no digit or
       // space after the opening $, no space before the closing $, and no
       // letter or digit right after it. \(…\) is always math.
-      seg = seg.replace(/\\\(([^\n]+?)\\\)|\$(?![\s\d])([^$\n]*[^$\s])\$(?![A-Za-z0-9])/g, function(_match, parenMath, dollarMath){
+      seg = seg.replace(/\\\(([^\n]+?)\\\)|\$(?![\s\d])([^$\n]*[^$\s])\$(?![A-Za-z0-9])/g, function(match, parenMath, dollarMath){
+        // A link between the markers stays a link, not math.
+        if(/MIAOS(?:LINK|URL)TOKEN\d+END/.test(match)) return match;
         var index = math.length;
         math.push(renderMathExpression(parenMath === undefined ? dollarMath : parenMath, false));
         return 'MIAOSMATHTOKEN' + index + 'END';
       });
-      var html = insideLink ? esc(seg) : linkifyEsc(seg);
+      var html = esc(seg);
       html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
       // word-boundary guards keep snake_case and URL underscores untouched
       html = html.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
       html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+      html = html.replace(/MIAOSURLTOKEN(\d+)END/g, function(_token, index){ return bare[Number(index)] || ''; });
       return html.replace(/MIAOSMATHTOKEN(\d+)END/g, function(_token, index){ return math[Number(index)] || ''; });
     }).join('').replace(/MIAOSLINKTOKEN(\d+)END/g, function(_token, index){ return links[Number(index)] || ''; });
   }
@@ -12140,8 +12329,17 @@
     return senderEmail.toLowerCase() === (currentUser || '').toLowerCase();
   }
 
+  // A bot's reply can be redone like Solo: Edit and resend opens the request
+  // that started it, when that request is the signed-in person's own.
+  function hubBotReplyRequest(roomId, message){
+    if(!message || !message.hubReplyTo || message.deleted) return null;
+    var request = (chatRoomState(roomId).messages || []).filter(function(m){ return m.id === message.hubReplyTo; })[0];
+    return request && !request.deleted && hubOwnMessage(request) && String(request.body || '').trim() ? request : null;
+  }
+
   function hubEditablePrompt(roomId, eventId){
     var message = roomId && (chatRoomState(roomId).messages || []).filter(function(m){ return m.id === eventId; })[0];
+    if(message && message.hubReplyTo) message = hubBotReplyRequest(roomId, message);
     return message && !message.hubLocal && !message.deleted && hubOwnMessage(message) ? String(message.body || '').trim() : null;
   }
 
@@ -12196,6 +12394,30 @@
         !candidate.nativeProgress &&
         Number(candidate.ts || 0) >= Number(message.ts || 0);
     });
+  }
+
+  // A bot answering a message sent mid-run keeps working, but its "working"
+  // row stayed above that answer, so the chat looked finished. While a run's
+  // row is live and the bot has spoken after it, the row moves to the end.
+  // It still goes away when the run's own reply lands, or on Stop.
+  // "ChatGPT · Ran on Ana's Mia" under a company bot's reply: a chip with the
+  // provider's mark, as on the site, or plain text for a provider without one.
+  function providerRunChipHtml(label){
+    var text = String(label || ''), at = text.indexOf(' · ');
+    var provider = at > 0 && !/^Ran on /.test(text) ? text.slice(0, at) : '';
+    var rest = provider ? text.slice(at + 3) : text;
+    var mark = provider && window.MiaProviderMarks ? window.MiaProviderMarks.markFor(provider) : null;
+    if(!mark) return '<div class="chat-msg-run plain">' + esc(text) + '</div>';
+    return '<div class="chat-msg-run"><span class="chat-msg-run-mark">' + mark.svg + '</span><b>' + esc(provider) + '</b><span>· ' + esc(rest) + '</span></div>';
+  }
+
+  function moveLiveProgressBelow(messages, superseded){
+    var live = messages.filter(function(m, index){
+      if(!m.nativeProgress || m.nativeDiagnostic || superseded(m)) return false;
+      return messages.slice(index + 1).some(function(later){ return !later.nativeProgress && !later.system && !isHumanSender(later.sender); });
+    });
+    if(!live.length) return messages;
+    return messages.filter(function(m){ return live.indexOf(m) < 0; }).concat(live);
   }
 
   function chatArtifactCardHtml(media){
@@ -12316,19 +12538,30 @@
     return (chatWs.allAgents || []).filter(function(agent){ return agent && agent.id !== 'gateway'; })
       .map(function(agent){ return {id:String(agent.id), name:String(agent.name || ''), color:normalizeAgentAvatarColor(agent.avatarColor)}; });
   }
-  // "@Name" for a bot in this room shows that bot's Mote, in its color.
-  // Works on rendered text: only a mention at a word start outside a tag.
+  // The people a company room can @: its members, under the name the @ menu writes.
+  function roomMentionPeople(){
+    if(!hubWorkspace()) return [];
+    return (hubChat.members || []).filter(function(member){ return member && member.email; }).map(function(member){
+      return {email: String(member.email), name: humanMentionName({email: member.email, displayName: member.display_name})};
+    }).filter(function(person){ return person.name && person.name !== 'You'; });
+  }
+  // "@Name" shows who it is: a bot's Mote in its color, a person's picture
+  // or initials. Works on rendered text: only a mention at a word start
+  // outside a tag.
   function withMentionChips(html){
-    var bots = roomMentionBots().filter(function(bot){ return bot.name; })
-      .sort(function(a, b){ return b.name.length - a.name.length; });
-    if(!bots.length) return html;
+    var named = roomMentionBots().filter(function(bot){ return bot.name; }).map(function(bot){
+      return {name: bot.name, face: agentAvatarHtml(bot.name, bot.id, 16, null, bot.color)};
+    }).concat(roomMentionPeople().map(function(person){
+      return {name: person.name, face: '<span class="chat-msg-mention-face">' + humanAvatarContent(person.email) + '</span>'};
+    })).sort(function(a, b){ return b.name.length - a.name.length; });
+    if(!named.length) return html;
     // One pass over every name, longest first, so "@Admin Bot" never also
     // matches a bot called "Admin" inside the icon it just became.
-    var names = bots.map(function(bot){ return esc(bot.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+    var names = named.map(function(item){ return esc(item.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
     var pattern = new RegExp('(^|[\\s>(])@(' + names.join('|') + ')(?![\\w-])', 'gi');
     return html.replace(pattern, function(_match, before, name){
-      var bot = bots.filter(function(item){ return esc(item.name).toLowerCase() === name.toLowerCase(); })[0];
-      return before + '<span class="chat-msg-mention">' + agentAvatarHtml(bot.name, bot.id, 16, null, bot.color) + '@' + name + '</span>';
+      var item = named.filter(function(entry){ return esc(entry.name).toLowerCase() === name.toLowerCase(); })[0];
+      return before + '<span class="chat-msg-mention">' + item.face + '@' + name + '</span>';
     });
   }
   function chatMsgHtml(m, grouped, opts){
@@ -12421,7 +12654,7 @@
     // existing permission attributes instead of recomputing them on click.
     var showThreadAction = !opts.inThread && !m.pending && !m.sendFailed && !(m.hubMessage && (m.hubLocal || m.deleted));
     var showDeleteAction = m.hubMessage ? hubMessageDeletable(m) : chatMsgDeletable(m);
-    var showEditAction = m.hubMessage ? !m.hubLocal && !m.deleted && hubOwnMessage(m) && !!String(m.body||'').trim() : chatMsgEditable(m);
+    var showEditAction = m.hubMessage ? (!m.hubLocal && !m.deleted && hubOwnMessage(m) && !!String(m.body||'').trim()) || !!hubBotReplyRequest(chatWs.activeRoomId, m) : chatMsgEditable(m);
     var isPreReasoning = !m.hubAuthor && !!text && isPreReasoningNotice(text);
     var compactBrowserMessage = !!text && document.body.classList.contains('browser-collab-mode');
     var isLongMessage = !!text && (compactBrowserMessage || chatMessageWordCount(text) > CHAT_MESSAGE_PREVIEW_WORDS);
@@ -12434,8 +12667,9 @@
     if(text && !liveProgress && !isPreReasoning) messageHtml = withMentionChips(messageHtml);
     var mediaHtml = '';
     if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
+    else if(!isHuman && !m.pending && (chatOutputLimitNotice(text) || chatPausedNotice(text))) messageHtml = chatContinueHtml(m.id, text);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
-    if(m.hubRunLabel) messageHtml += '<div class="chat-msg-run">✓ ' + esc(m.hubRunLabel) + '</div>';
+    if(m.hubRunLabel) messageHtml += providerRunChipHtml(m.hubRunLabel);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
     var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
       (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
@@ -12455,7 +12689,7 @@
       : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, currentUser, esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '') + '</div></div>';
+      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, reactionSelf(m), esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '') + '</div></div>';
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed
@@ -13029,7 +13263,6 @@
     });
     createdBotRecords.push(created);
     syncChatBotRecords(createdBotRecords);
-    if(hubWorkspace())chatWs.myBotRecords=(chatWs.myBotRecords||[]).concat(created);
     chatWs.nativeConversations.push(conversation);
     applyNativeConversationList(chatWs.nativeConversations);
     renderChatSidebar();
@@ -13185,6 +13418,14 @@
       return;
     }
     if(inHubRoom() && !state.historyInitialized && !state.messages.length && !state.thinking) return showChatThreadPlaceholder(thread);
+    var botChat = inHubRoom() ? hubChannel(roomId) : null;
+    if(botChat && botChat.kind === 'bot' && !state.messages.length && !state.thinking){
+      // A company bot chat opens like a Solo bot chat: the bot itself, and what this chat is.
+      var chatBot = botChat.bot || {};
+      replaceChatTimeline(thread, roomId, state, chatHistoryControlHtml(state) + chatHeroHtml(esc('Your private chat with ' + (chatBot.name || 'this bot') + '. Only you see it, and it runs on your computer with your own models.'), chatBot.name || 'Bot', normalizeAgentAvatarColor(chatBot.avatar_color)), options);
+      wireChatHistoryControl(thread, roomId);
+      return;
+    }
     if(!state.messages.length && !state.thinking && !botDraftFlow){
       var emptyMessage = chatWs.activeKind === 'agent' && isMiaOrchestrator(chatWs.activeLabel)
         ? esc(miaEmptyGreeting(currentRealProfileName()))
@@ -13201,7 +13442,7 @@
     // capability answered.
     // Thread replies (m.threadRoot set) never appear in this main pass —
     // they render nested under their root instead, via chatThreadFooterHtml.
-    var mainMessages = state.messages.filter(function(m){ return !m.threadRoot && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); });
+    var mainMessages = moveLiveProgressBelow(state.messages.filter(function(m){ return !m.threadRoot && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); }), isSupersededNativeProgressMessage);
     var dateDivider = '';
     if(mainMessages.length){
       var dividerDate = new Date(mainMessages[0].ts || Date.now());
@@ -13517,12 +13758,25 @@
     input.selectionStart = input.selectionEnd = start + emoji.length;
     input.dispatchEvent(new Event('input', {bubbles: true}));
   }
-  // Shared channels keep their messages on the Hub, which has nowhere to store a reaction yet.
+  // A company message keeps its reactions on the Hub; Solo's are local.
   function canReactToMessage(m){
-    return !!(m && m.nativeEvent && m.nativeEvent.id && !m.pending && !m.deleted && !m.system && !m.nativeProgress);
+    var stored = m && m.nativeEvent && (m.hubMessage ? m.nativeEvent.sequence : m.nativeEvent.id);
+    return !!(stored && !m.pending && !m.deleted && !m.system && !m.nativeProgress);
   }
+  // Who "you" are in a message's reactions: your Hub member id there, else your account.
+  function reactionSelf(m){ return m && m.hubMessage ? (hubChat.membership || {}).clerk_user_id : currentUser; }
   function toggleMessageReaction(eventId, emoji){
     var roomId = chatWs.activeRoomId;
+    if(inHubRoom(roomId)){
+      var hubMessage = chatRoomState(roomId).messages.filter(function(item){ return item.id === eventId; })[0];
+      if(!hubMessage || !hubMessage.nativeEvent) return;
+      var self = reactionSelf(hubMessage), mine = ((hubMessage.reactions || {})[emoji] || []).indexOf(self) >= 0;
+      return hubCall(mine ? 'DELETE' : 'PUT', hubPath() + '/channels/' + roomId + '/messages/' + hubMessage.nativeEvent.sequence + '/reactions/' + encodeURIComponent(emoji))
+        .then(function(result){
+          hubMessage.reactions = window.MiaHubChat.reactionMap(result && result.reactions);
+          if(chatWs.activeRoomId === roomId) renderChatThread();
+        }).catch(function(error){ showBenchToast(hubActionError(error, 'That reaction could not be saved.')); });
+    }
     api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId) + '/reactions'), {method: 'POST', body: {emoji: emoji}}).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.event) throw new Error('reaction failed');
       var message = chatRoomState(roomId).messages.filter(function(item){ return item.id === eventId; })[0];
@@ -14546,7 +14800,6 @@
           });
           createdBotRecords.push(created);
           syncChatBotRecords(createdBotRecords);
-          if(hubWorkspace())chatWs.myBotRecords=(chatWs.myBotRecords||[]).concat(created);
           chatWs.nativeConversations.push(conversation);
           applyNativeConversationList(chatWs.nativeConversations);
           chatRoomState(conversation.id).localWelcome = buildBotStoreWelcomeMessage(conversation.id, created, freshManifest.welcome);
@@ -14668,6 +14921,7 @@
     }
     pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open', 'bot-store-open');
     pane.setAttribute('aria-label', 'Details');
+    if(companyBotForRoom(chatWs.activeRoomId)) return renderCompanyBotDetails(pane);
     var agent = chatWs.activeKind === 'agent'
       ? chatWs.allAgents.filter(function(a){ return a.roomId === chatWs.activeRoomId || a.nativeConversationId === chatWs.activeRoomId || a.name === chatWs.activeLabel; })[0]
       : null;
@@ -14711,6 +14965,55 @@
     el('#chatInfoAddRoutineTop', pane).addEventListener('click', function(){
       if(!agent) return showBenchToast('Open a bot conversation to add an automation.');
       if(!openAutomationDetail(agent.id, null, true)) showBenchToast('This bot already has 10 automations.');
+    });
+  }
+
+  // A company bot chat's details: the same pane as a Solo bot chat, with what
+  // a member can see of someone else's bot (its approved instructions and
+  // skills, where it is) in place of the automations, which belong to its owner.
+  var companyBotDefinitions = {};
+  function companyBotForRoom(roomId){
+    var channel = inHubRoom() && roomId ? hubChannel(roomId) : null;
+    if(!channel || channel.kind !== 'bot' || !channel.bot) return null;
+    var id = String(channel.bot.source_bot_id || channel.bot.id || '');
+    return (hubChat.companyBots || []).filter(function(bot){ return bot.botIds.indexOf(id) >= 0; })[0] || {name: channel.bot.name || 'Bot', botIds: [id], channels: [], places: []};
+  }
+  function renderCompanyBotDetails(pane){
+    var bot = companyBotForRoom(chatWs.activeRoomId);
+    var place = (bot.places || []).filter(function(item){ return !!hubChannel(item.channelId); })[0] || (bot.places || [])[0];
+    var key = place ? place.channelId + '/' + place.botId : '';
+    var loaded = key ? companyBotDefinitions[key] : {definition: null};
+    if(key && !loaded){
+      companyBotDefinitions[key] = {loading: true};
+      hubCall('GET', hubPath() + '/channels/' + place.channelId + '/bots/' + place.botId + '/definition').then(function(result){
+        companyBotDefinitions[key] = {definition: result && result.definition || null};
+      }).catch(function(){ companyBotDefinitions[key] = {failed: true}; }).then(function(){
+        if(chatInfo.open && companyBotForRoom(chatWs.activeRoomId) === bot) renderChatInfoPane();
+      });
+      loaded = companyBotDefinitions[key];
+    }
+    var definition = loaded && loaded.definition;
+    var about = loaded && loaded.loading ? '<div class="cip-section-empty">Loading…</div>'
+      : !definition ? '<div class="cip-section-empty">' + (loaded && loaded.failed ? 'Couldn\'t load this bot\'s instructions.' : 'An admin hasn\'t approved instructions for this bot yet.') + '</div>'
+      : '<details class="cip-bot-instructions"><summary>Instructions</summary><div class="cip-bot-text">' + mdLite(definition.instructions || '') + '</div></details>' +
+        (definition.skills || []).map(function(skill){
+          return '<details class="cip-bot-instructions"><summary>Skill: ' + esc(skill.name) + '</summary>' + (skill.description ? '<p>' + esc(skill.description) + '</p>' : '') + '<div class="cip-bot-text">' + mdLite(skill.body || '') + '</div></details>';
+        }).join('');
+    var where = (bot.channels || []).map(function(channel){ return '#' + esc(channel.name || 'channel'); }).join(', ');
+    var fileRows = chatFileRows();
+    pane.classList.add('open');
+    chatInfo.filesKey = JSON.stringify([chatWs.activeRoomId, fileRows.map(function(row){ return row.id; })]);
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">' + esc(bot.name) + '</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="chatInfoClose" aria-label="Hide details" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
+      '<div class="cip-details">' + detailsFilesHtml(fileRows) +
+      '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">About this company bot</span></div>' +
+      '<div class="cip-section-empty">Runs on the requesting or approving participant\'s computer, using that participant\'s credentials' + (where ? ', in ' + where : '') + '.</div>' + about + '</section></div>';
+    bindDetailsFiles(pane, fileRows);
+    el('#chatInfoClose', pane).addEventListener('click', function(){
+      chatInfo.open = false;
+      localStorage.setItem('styledInfoPaneOpen', '0');
+      renderChatInfoPane();
+      renderChatHeaderBar();
     });
   }
 
@@ -14913,9 +15216,13 @@
       var peopleCount=botCount+(botCount===1?' bot':' bots')+(hubRoom.hubDirectoryAt?' & '+userCount+(userCount===1?' user':' users'):'');
       // The count opens People and bots, where this channel's bots are added
       // and managed. It stays on this header: nothing here goes in the address bar.
-      header.innerHTML='<div class="ch-left"><button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to channels">‹</button><span class="channel-header-title'+(window.MiaSpaceUI && window.MiaSpaceUI.inChannel(chatWs.activeRoomId) ? ' in-call' : '')+'">'+esc(chatWs.activeLabel||'')+'</span></div><div class="ch-right ch-stays">'+(window.MiaSpaceUI && window.MiaSpaceUI.sessionGroup()===null ? '<button type="button" class="ch-roster-chip ch-browse-together" id="hubBrowseTogether" title="Open a shared browser with this chat and invite people">Browse together</button>' : '')+'<button type="button" class="ch-roster-chip" id="hubBotsToggle">'+peopleCount+'</button>'+
+      // A company bot chat heads like a Solo bot chat: the bot's Mote, its
+      // name and Bot, with no people count for a one-to-one chat.
+      var openChat=hubChannel(chatWs.activeRoomId), chatBot=openChat && openChat.kind==='bot' ? openChat.bot||{} : null;
+      var headerMark=chatBot ? '<span class="ch-mark dm">'+agentAvatarHtml(chatBot.name||'Bot',String(chatBot.source_bot_id||chatBot.id||''),24,null,normalizeAgentAvatarColor(chatBot.avatar_color))+'</span>' : '';
+      header.innerHTML='<div class="ch-left"><button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to channels">‹</button>'+headerMark+'<span class="channel-header-title'+(window.MiaSpaceUI && window.MiaSpaceUI.inChannel(chatWs.activeRoomId) ? ' in-call' : '')+'">'+esc(chatWs.activeLabel||'')+'</span>'+(chatBot ? '<span class="chat-msg-tag">Bot</span>' : '')+'</div><div class="ch-right ch-stays">'+(window.MiaSpaceUI && window.MiaSpaceUI.sessionGroup()===null ? '<button type="button" class="ch-roster-chip ch-browse-together" id="hubBrowseTogether" title="Open a shared browser with this chat and invite people">Browse together</button>' : '')+(chatBot ? '' : '<button type="button" class="ch-roster-chip" id="hubBotsToggle">'+peopleCount+'</button>')+
         '<button type="button" class="ch-icon-btn conv-more-btn" id="hubChannelMoreBtn" title="More" aria-label="More" aria-haspopup="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"></circle><circle cx="12" cy="12" r="1.4"></circle><circle cx="12" cy="19" r="1.4"></circle></svg></button></div>';
-      el('#hubBotsToggle',header).addEventListener('click',openManageAgentsPane);
+      if(el('#hubBotsToggle',header))el('#hubBotsToggle',header).addEventListener('click',openManageAgentsPane);
       var browseTogether=el('#hubBrowseTogether',header);
       if(browseTogether)browseTogether.addEventListener('click',function(){window.MiaSpaceUI.startInChannel(chatWs.activeRoomId).then(renderChatHeaderBar);});
       // The same channel menu as right-clicking it in the sidebar, under the dots.
@@ -15159,12 +15466,12 @@
   function renderDeptAgentSelector(){
     if(inHubRoom()){
       setComposerBoundState(!!chatWs.activeRoomId && chatWs.configured!==false);
-      // Attach, Google Drive and the model menu work the same as in Solo. A
-      // Drive file is shared as a link chip; each teammate opens it with their
-      // own Google access. Shared bots run without Google tools, so they do not
-      // read it on anyone's behalf. Dictation is not offered here yet.
-      ['#ccMicBtn'].forEach(function(selector){var node=el(selector);if(node){node.disabled=true;node.style.display='none';}});
-      ['#ccPlusBtn','#ccModelBtn','#ccDriveBtn'].forEach(function(selector){var node=el(selector);if(node){node.disabled=false;node.style.display='';}});
+      // Attach, Google Drive, dictation and the model menu work the same as in
+      // Solo. A Drive file is shared as a link chip; each teammate opens it with
+      // their own Google access. Shared bots run without Google tools, so they
+      // do not read it on anyone's behalf. Dictation stays on this computer and
+      // only types into the message box.
+      ['#ccPlusBtn','#ccModelBtn','#ccDriveBtn','#ccMicBtn'].forEach(function(selector){var node=el(selector);if(node){node.disabled=false;node.style.display='';}});
       var openChannel=hubChannel(chatWs.activeRoomId);
       var input=el('#ccInput');if(input)input.placeholder=hubPrivateConversation(openChannel) ? 'Message '+hubChannelTitle(openChannel) : 'Message this shared channel';
       setComposerBlocked(hubDmWithFormerMember(openChannel) ? 'This account has been deactivated.' : '');
@@ -15419,13 +15726,15 @@
     var input = el('#ccInput');
     if(!suggestion || !input) return;
     var mentionOpen = typeof chatMention !== 'undefined' && chatMention.open;
-    var show = !inHubRoom() && chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
+    var show = chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
     var text = suggestion.querySelector('span');
     var suggested = chatInlineSuggestionText();
     if(text) text.textContent = suggested;
     show = show && !!suggested;
     suggestion.hidden = !show;
     suggestion.setAttribute('aria-hidden', show ? 'false' : 'true');
+    // The suggestion is the empty-box prompt; a channel's own placeholder would draw under it.
+    input.classList.toggle('cc-input-suggesting', show);
   }
 
   // Detailed output includes additional execution progress; concise output
@@ -16856,6 +17165,47 @@
     return Promise.all(requests);
   }
 
+  // Sidebar row text, the same for every chat row in Solo and in a company:
+  // name, activity, unread, time, and the latest line.
+  // A room's last-message time only appears once we've actually loaded it
+  // this session (chatWs.byRoom[roomId].lastTs) — no fabricated numbers
+  // for rooms we haven't fetched yet.
+  function roomTimeTag(roomId){
+    var state = roomId && chatWs.byRoom[roomId];
+    if(!state || !state.lastTs) return '';
+    return '<span class="chat-dm-time" data-ts="' + Number(state.lastTs) + '">' + esc(chatRelTime(state.lastTs)) + '</span>';
+  }
+  function lastTsFor(roomId){
+    var state = roomId && chatWs.byRoom[roomId];
+    return (state && state.lastTs) || 0;
+  }
+  function roomPreview(roomId){
+    var state = roomId && chatWs.byRoom[roomId];
+    if(!state || !state.messages || !state.messages.length) return '';
+    var real = state.messages.filter(function(m){ return !m.system && (m.body || chatMessageHasAttachments(m)); });
+    if(!real.length) return '';
+    var last = real[real.length - 1];
+    if(!last.body && chatMessageHasAttachments(last)) return 'Attachment';
+    // Bot messages must go through displayBotBody to strip internal plumbing
+    // text and legacy filler placeholders, matching the main thread renderer.
+    var body = isHumanSender(last.sender) ? last.body : displayBotBody(last.body);
+    if(!body) return '';
+    var parsed = isHumanSender(last.sender) ? parseSignedHumanBody(body) : parseSignedBody(body);
+    var text = parsed && parsed.text ? parsed.text : body;
+    return excerpt(markdownPreviewText(text).replace(/\s+/g, ' ').trim(), 58);
+  }
+  // Every row keeps a second line so titles sit on one line across the
+  // sidebar. A room known to be empty says so; one still loading stays blank.
+  function sidebarRowText(name, roomId, hasActivity){
+    var unread = chatNeedsAttention(roomId);
+    var indicator = renderChatActivityIndicator(hasActivity, unread);
+    var preview = roomPreview(roomId);
+    var state = roomId && chatWs.byRoom[roomId];
+    var previewHtml = preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
+    return '<span class="row-text' + (unread ? ' is-unread' : '') + '"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
+      '</span><span class="row-preview' + (preview ? '' : ' empty') + '">' + previewHtml + '</span></span>';
+  }
+
   function renderChatSidebar(){
     // Keep the placeholder bars until the live list has answered.
     if(sidebarPlaceholderShown){
@@ -16880,45 +17230,6 @@
       syncFooter.removeAttribute('role');syncFooter.removeAttribute('aria-live');
       syncFooter.textContent = chatWs.configured === false ? 'Chat Failure' : (chatWs.configured === true ? 'Chat Online' : 'Connecting…');
       syncFooter.classList.toggle('chat-sync-fail', chatWs.configured === false);
-    }
-
-    // A room's last-message time only appears once we've actually loaded it
-    // this session (chatWs.byRoom[roomId].lastTs) — no fabricated numbers
-    // for rooms we haven't fetched yet.
-    function roomTimeTag(roomId){
-      var state = roomId && chatWs.byRoom[roomId];
-      if(!state || !state.lastTs) return '';
-      return '<span class="chat-dm-time" data-ts="' + Number(state.lastTs) + '">' + esc(chatRelTime(state.lastTs)) + '</span>';
-    }
-    function lastTsFor(roomId){
-      var state = roomId && chatWs.byRoom[roomId];
-      return (state && state.lastTs) || 0;
-    }
-    function roomPreview(roomId){
-      var state = roomId && chatWs.byRoom[roomId];
-      if(!state || !state.messages || !state.messages.length) return '';
-      var real = state.messages.filter(function(m){ return !m.system && (m.body || chatMessageHasAttachments(m)); });
-      if(!real.length) return '';
-      var last = real[real.length - 1];
-      if(!last.body && chatMessageHasAttachments(last)) return 'Attachment';
-      // Bot messages must go through displayBotBody to strip internal plumbing
-      // text and legacy filler placeholders, matching the main thread renderer.
-      var body = isHumanSender(last.sender) ? last.body : displayBotBody(last.body);
-      if(!body) return '';
-      var parsed = isHumanSender(last.sender) ? parseSignedHumanBody(body) : parseSignedBody(body);
-      var text = parsed && parsed.text ? parsed.text : body;
-      return excerpt(markdownPreviewText(text).replace(/\s+/g, ' ').trim(), 58);
-    }
-    // Every row keeps a second line so titles sit on one line across the
-    // sidebar. A room known to be empty says so; one still loading stays blank.
-    function sidebarRowText(name, roomId, hasActivity){
-      var unread = chatNeedsAttention(roomId);
-      var indicator = renderChatActivityIndicator(hasActivity, unread);
-      var preview = roomPreview(roomId);
-      var state = roomId && chatWs.byRoom[roomId];
-      var previewHtml = preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
-      return '<span class="row-text' + (unread ? ' is-unread' : '') + '"><span class="row-line1"><span class="row-label">' + esc(name) + '</span>' + indicator + roomTimeTag(roomId) +
-        '</span><span class="row-preview' + (preview ? '' : ' empty') + '">' + previewHtml + '</span></span>';
     }
 
     // Official channels are represented by their own square initials mark,
@@ -17425,6 +17736,8 @@
 
   function initChatWorkspace(){
     if(window.MiaInterruptedWork) window.MiaInterruptedWork.showOnce({api: api, toast: showBenchToast});
+    // TEMPORARY (0.3.4 only): the one-time bot files tidy-up card. Remove in 0.3.5.
+    if(window.MiaBotFilesTidy) window.MiaBotFilesTidy.showOnce({api: api, toast: showBenchToast});
     if(hubWorkspace()) return initHubChat().then(openPendingPerson);
     return Promise.all([
       loadNativeConversations(),
@@ -17551,10 +17864,12 @@
   }
 
   function pollLiveState(){
-    if(hubWorkspace()) return;
     // Cron sessions begin and end outside Mia, so they do not bump the app's
-    // state version. Poll their narrow status endpoint on every live tick.
+    // state version. Poll their narrow status endpoint on every live tick,
+    // in a company too: your bots' automations run there as in Solo.
     loadActiveAutomationRuns();
+    // A company's channels and people refresh from the Hub instead.
+    if(hubWorkspace()) return;
     api('/api/state/version').then(function(res){
       if(res.status !== 200 || !res.data) return;
       var v = res.data.version;

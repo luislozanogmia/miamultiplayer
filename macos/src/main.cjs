@@ -219,7 +219,9 @@ function desktopAuthEnvironment(packaged, environment = process.env) {
 // Set this before Electron creates its native application menu so development
 // runs are branded as Mia too. This must also precede app.getPath("userData"):
 // that path selects the packaged .env.local read by desktopClerkEnvironment.
-app.setName("Mia");
+// A diagnostic dev copy must not ask for the installed app's Keychain item.
+app.setName(!app.isPackaged && process.env.MIA_DEV_CHROME_HANDOFF_TEST === "1"
+  ? "Mia Chrome Handoff Test" : "Mia");
 const CLERK_CONFIG = resolveClerkConfig(desktopClerkEnvironment());
 const CLERK_ISSUER_ORIGIN = CLERK_CONFIG.issuerOrigin;
 const CLERK_OAUTH_CALLBACK_ORIGIN = CLERK_CONFIG.oauthCallbackOrigin;

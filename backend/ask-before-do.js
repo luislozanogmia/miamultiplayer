@@ -6,7 +6,8 @@
 // A yes unlocks the call the gate saw, whatever the model says about it, and
 // only the signed-in requester can answer, so the model cannot talk its way
 // past this. The one line on the card is the model's own words. Scheduled runs
-// have nobody to ask; they follow the prompt rule and the owner's automation.
+// have nobody to ask, so there a blocked action is skipped and reported as a
+// "needs you" step, and the run carries on without waiting.
 
 const http = require('node:http');
 const crypto = require('node:crypto');
@@ -20,6 +21,12 @@ function blockedMessage(summary, requestId) {
   return `BLOCKED by ask-before-do, nothing ran: ${summary}. To ask the user, call request_approval with request_id `
     + `"${requestId}" and what_happens, one plain sentence on what will happen. They answer Yes or No, and a yes unlocks this exact action once. `
     + 'Do not ask in text first and do not reach the same result another way.';
+}
+
+function scheduledRunMessage(summary) {
+  return `BLOCKED by ask-before-do, nothing ran: ${summary}. Nobody is watching this scheduled run, so nothing can be approved and nothing waits. `
+    + 'Do not try it another way. Call report_step with state "needs_you" and exactly what you wanted to do, '
+    + 'then carry on with the steps that do not depend on it, and list it in your final report.';
 }
 
 function noUserMessage(summary) {
@@ -243,8 +250,8 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
     },
     decide({ sessionId, summary, fingerprint, repeatKey }) {
       const id = String(sessionId || '');
-      if (id.startsWith('cron_')) return { allow: true };
       const what = String(summary || 'this action').slice(0, 1200);
+      if (id.startsWith('cron_')) return { allow: false, message: scheduledRunMessage(what) };
       const state = scopes.get(sessions.get(id));
       // Delegated work and unknown sessions have no user to answer them.
       if (!state) return { allow: false, message: noUserMessage(what) };
@@ -340,4 +347,5 @@ async function createAskBeforeDoGate(options) {
   };
 }
 
-module.exports = { approvalCard, createAskBeforeDoGate, createGateState };
+module.exports = {
+  scheduledRunMessage, approvalCard, createAskBeforeDoGate, createGateState };

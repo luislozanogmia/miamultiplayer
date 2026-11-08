@@ -7,6 +7,8 @@ const { fileURLToPath, pathToFileURL } = require("node:url");
 const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
+const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
+const { safeBrowserPageUrl } = require("../../frontend/safe-page-url.js");
 const { PAGE_HELPERS, cleanAnchor, readScript, scrollScript } = require("./space-anchor.cjs");
 
 const { createActorRuntime } = require("./browser-actors.cjs");
@@ -214,6 +216,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   let botUseCounter = 0;
   let fullscreenId = null;
   let windowWasFullscreen = false;
+  // One tab can sit in the dock below the chat while the person works in
+  // the others: a video playing on its own, or a bot's page shrunk whole
+  // (laid out as in the browser, so the bot sees the same page). The renderer
+  // reports where the dock is; `area` is the browser's own page area.
+  const docked = { id: null, mode: "page", bounds: null, visible: false, area: null, applied: "" };
   let nextId = 1;
   let visible = false;
   let panelOpen = false;
@@ -229,6 +236,25 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // sign in once and remain signed in across app restarts. This does not share
   // or import Chrome/Safari cookies; Clear Browser Data and clean slate erase it.
   const profile = session.fromPartition(BROWSER_PARTITION, { cache: true });
+  let handoffTab = null;
+  let handoffWorkspace = null;
+  const chromeHandoff = options.chromeHandoff || createChromeCookieHandoff({
+    userData: app.getPath("userData"), profile,
+    onChange: () => {
+      if (!chromeHandoff.status()) { handoffTab = null; handoffWorkspace = null; }
+      publish();
+    },
+  });
+  function humanChromeSignInTab(tab) {
+    if (!tab || !visible || active() !== tab || !window.isFocused()
+        || tab.view.webContents.isDestroyed() || groups.get(tab.groupId)?.botId
+        || botDrivingTab(tab)) return false;
+    try {
+      const url = new URL(tab.view.webContents.getURL() || tab.url);
+      return url.protocol === "https:" && !url.username && !url.password && chatGptSignInHost(url.hostname);
+    } catch { return false; }
+  }
+
   const attachmentAccess = createAttachmentPreviewAccess(profile, trustedOrigin);
   // Google's OAuth endpoints (and some other identity providers) reject
   // sessions that reveal an embedded framework — "Sign in with Google"
@@ -452,7 +478,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             id: 0,
             filename: item.filename.slice(0, 500),
             path: item.path,
-            url: typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? item.url.slice(0, 2000) : "",
+            url: safeBrowserPageUrl(item.url),
             // A download still running when Mia quit did not finish.
             state: DOWNLOAD_STATES.has(item.state) && item.state !== "progressing" ? item.state : "interrupted",
             received: Number(item.received) || 0,
@@ -464,6 +490,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             workspace: typeof item.workspace === "string" && /^[a-z0-9_-]{1,80}$/.test(item.workspace) ? item.workspace : "solo",
           }));
         for (const entry of downloadEntries) entry.id = nextDownloadId++;
+        if (saved.entries.some(item => item && item.url && safeBrowserPageUrl(item.url) !== item.url)) persistDownloads();
         setImmediate(() => {
           for (const entry of downloadEntries) {
             if (!disposed && entry.by && entry.state === "completed" && entry.path && !entry.safety) checkDownloadSafety(entry);
@@ -743,7 +770,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         const media = await wc.executeJavaScript(`(() => {
           const mediaNodes = [...document.querySelectorAll("audio,video")];
           const video = document.querySelector("video");
-          if (${pause ? "true" : "false"}) {
+          if (${pause && tab.id !== docked.id ? "true" : "false"}) {
             for (const mediaNode of mediaNodes) {
               try { mediaNode.pause(); } catch (_) {}
             }
@@ -813,7 +840,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }
 
   function holdAllMediaPausedWhileHidden() {
-    for (const tab of tabs.values()) holdMediaPausedWhileHidden(tab);
+    // The docked tab is still on screen and keeps playing.
+    for (const tab of tabs.values()) if (tab.id !== docked.id) holdMediaPausedWhileHidden(tab);
     void captureMediaState({ pause: true });
   }
 
@@ -882,7 +910,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // mode when it goes up. A blank tab still replaces the closed one.
   let lastTabCloses = 0;
   let sessionGroupId = null;
-  const state = () => ({ workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ chromeSignInAvailable: chromeHandoff.available(), chromeSignIn: chromeHandoff.status(), workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, dock: docked.id === null ? null : { id: docked.id, mode: docked.mode, aspect: dockAspect() }, lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
     private: tab.private === true,
@@ -991,6 +1019,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // covering the window over the tab now in front.
   function activateTab(id) {
     if (fullscreenId !== null && fullscreenId !== id) exitPageFullscreen();
+    // Picking the docked tab brings it back to the browser.
+    if (docked.id === id) undock();
     activeId = id;
     if (tabs.has(id)) tabs.get(id).lastActiveAt = ++lastActiveCounter;
     // The tab in front is never hidden inside a collapsed group.
@@ -1018,15 +1048,120 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       return;
     }
     const scale = shellScale();
-    const x = Math.min(width, Math.max(0, Math.round(bounds.x * scale)));
-    const y = Math.min(height, Math.max(0, Math.round(bounds.y * scale)));
-    const area = { x, y, width: Math.max(0, Math.min(width - x, Math.round(bounds.width * scale))),
-      height: Math.max(0, Math.min(height - y, Math.round(bounds.height * scale))) };
+    const place = box => {
+      const x = Math.min(width, Math.max(0, Math.round(box.x * scale)));
+      const y = Math.min(height, Math.max(0, Math.round(box.y * scale)));
+      return { x, y, width: Math.max(0, Math.min(width - x, Math.round(box.width * scale))),
+        height: Math.max(0, Math.min(height - y, Math.round(box.height * scale))) };
+    };
+    const area = place(bounds);
+    if (area.width > 0 && area.height > 0) docked.area = area;
+    const dockTab = tabs.get(docked.id);
+    if (dockTab) {
+      const box = docked.bounds ? place(docked.bounds) : { x: 0, y: 0, width: 0, height: 0 };
+      const shown = docked.visible && box.width > 0 && box.height > 0;
+      if (shown) dockTab.view.setBounds(box);
+      dockTab.view.setVisible(shown && !!dockTab.url);
+      if (shown) void applyDockScale(dockTab, box);
+    }
     for (const tab of tabs.values()) {
+      if (tab === dockTab) continue;
       if (area.width > 0 && area.height > 0) tab.captureBounds = area;
       tab.view.setBounds(area.width > 0 && area.height > 0 ? area : (tab.captureBounds || { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) }));
       tab.view.setVisible(visible && tab.id === activeId && !!tab.url && !tab.error && area.width > 0 && area.height > 0);
     }
+  }
+  // Docking: the tab leaves the front for the dock below the chat and the
+  // browser shows the tab that would follow it on close. A playing video is
+  // docked on its own (its player is styled to fill the dock; the page's own
+  // fullscreen would take the whole window); any other page is docked whole,
+  // laid out at the browser's size and drawn smaller.
+  const DOCK_VIDEO_CSS = `[data-mia-pip]{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;transform:none!important;z-index:2147483647!important;background:#000!important}
+[data-mia-pip] :has(video),[data-mia-pip] video{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;transform:none!important}
+[data-mia-pip] video{object-fit:contain!important}
+html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important}`;
+  const DOCK_VIDEO_SCRIPT = `(() => {
+    const videos = [...document.querySelectorAll('video')].map(video => ({ video, box: video.getBoundingClientRect() }))
+      .filter(item => item.box.width > 80 && item.box.height > 45);
+    if (!videos.length) return false;
+    videos.sort((a, b) => (b.video.paused ? 0 : 1) - (a.video.paused ? 0 : 1) || b.box.width * b.box.height - a.box.width * a.box.height);
+    const { video, box } = videos[0];
+    // The player around the video keeps its own controls.
+    let target = video;
+    for (let up = video.parentElement; up && up !== document.body; up = up.parentElement) {
+      const r = up.getBoundingClientRect();
+      if (r.width > box.width * 1.05 + 4 || r.height > box.height * 1.25 + 4) break;
+      target = up;
+    }
+    document.querySelectorAll('[data-mia-pip]').forEach(node => node.removeAttribute('data-mia-pip'));
+    target.setAttribute('data-mia-pip', '');
+    return true;
+  })()`;
+  function dockAspect() {
+    if (docked.mode === "video") return 9 / 16;
+    const area = docked.area;
+    return area && area.width > 0 && area.height > 0 ? Math.min(1.5, Math.max(0.3, area.height / area.width)) : 0.625;
+  }
+  function dockTab(id) {
+    const tab = tabs.get(id);
+    if (!tab || !tab.url || tab.view.webContents.isDestroyed()) return;
+    if (docked.id === id) return;
+    if (docked.id !== null) undock();
+    if (fullscreenId === id) exitPageFullscreen();
+    docked.id = id; docked.mode = "page"; docked.applied = "";
+    if (activeId === id) {
+      const next = tabAfter(id);
+      activeId = null;
+      if (next !== undefined) activateTab(next);
+      else newTab();
+    }
+    const wc = tab.view.webContents;
+    wc.executeJavaScript(DOCK_VIDEO_SCRIPT, true).then(isVideo => {
+      if (docked.id !== id || disposed) return;
+      if (isVideo) {
+        docked.mode = "video"; clearDockScale(tab);
+        // It is on screen now: the hidden-page pause no longer applies.
+        if (tab.hiddenMediaPlaybackGuard) { wc.removeListener("media-started-playing", tab.hiddenMediaPlaybackGuard); tab.hiddenMediaPlaybackGuard = null; }
+        wc.insertCSS(DOCK_VIDEO_CSS).then(key => { if (docked.id === id) tab.dockCss = key; else wc.removeInsertedCSS(key).catch(() => {}); }).catch(() => {});
+      }
+      layout(); publish();
+    }).catch(() => {});
+  }
+  function undock({ closing = false } = {}) {
+    const tab = tabs.get(docked.id);
+    docked.id = null; docked.applied = "";
+    if (!tab || closing) return;
+    clearDockScale(tab);
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed()) return;
+    if (tab.dockCss) { wc.removeInsertedCSS(tab.dockCss).catch(() => {}); tab.dockCss = null; }
+    wc.executeJavaScript("document.querySelectorAll('[data-mia-pip]').forEach(node => node.removeAttribute('data-mia-pip'))").catch(() => {});
+  }
+  async function applyDockScale(tab, box) {
+    if (docked.mode !== "page" || docked.id !== tab.id) return;
+    const area = docked.area || { width: 1280, height: 800 };
+    const key = `${area.width}x${area.height}@${box.width}`;
+    if (docked.applied === key) return;
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed() || !wc.debugger) return;
+    if (!tab.dockDebugger) {
+      // A capture holding the debugger for a moment: try at the next layout.
+      if (wc.debugger.isAttached()) return;
+      try { wc.debugger.attach("1.3"); tab.dockDebugger = true; } catch (_) { return; }
+    }
+    docked.applied = key;
+    await wc.debugger.sendCommand("Emulation.setDeviceMetricsOverride", {
+      width: area.width, height: area.height, deviceScaleFactor: 0, mobile: false,
+      scale: Math.min(1, box.width / area.width),
+    }).catch(() => { if (docked.applied === key) docked.applied = ""; });
+  }
+  function clearDockScale(tab) {
+    if (!tab.dockDebugger) return;
+    tab.dockDebugger = false;
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed() || !wc.debugger.isAttached()) return;
+    wc.debugger.sendCommand("Emulation.clearDeviceMetricsOverride").catch(() => {})
+      .finally(() => { if (!wc.isDestroyed() && wc.debugger.isAttached() && !tab.dockDebugger) wc.debugger.detach(); });
   }
   function requestLayout() {
     if (disposed || window.isDestroyed()) return;
@@ -1039,7 +1174,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // Where the user's keyboard focus is: the app (chat, address bar) or the
   // page in front. A bot working in a background tab must never take it.
   let userFocus = null;
-  function restoreUserFocus(target = userFocus) {
+  // A focus this soon after the person pressed in a page is theirs.
+  const PERSON_FOCUS_MS = 1000;
+  const PERSON_LOAD_MS = 10000;
+  function restoreUserFocus(target = userFocus || window.webContents) {
     setImmediate(() => {
       if (disposed || !target || target.isDestroyed()) return;
       if (target.isFocused && target.isFocused()) return;
@@ -1056,6 +1194,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function focusTabWebContents(tab) {
     if (!tab) return;
     const wc = tab.view.webContents;
+    tab.personPressedAt = Date.now();
     if (!wc.isDestroyed()) wc.focus();
   }
   // ERR_ABORTED (-3) means a load was cancelled, almost always because a
@@ -1241,12 +1380,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       const previous = activeId;
       const focusBefore = userFocus;
       borrowingTabId = tab.id;
-      if (tab.id !== activeId) { activateTab(tab.id); layout(); publish(); }
+      // The docked tab is already on screen, so it stays in the dock.
+      const borrow = tab.id !== activeId && tab.id !== docked.id;
+      if (borrow) { activateTab(tab.id); layout(); publish(); }
       try {
         return await action();
       } finally {
         borrowingTabId = null;
-        if (activeId === tab.id && previous !== tab.id && tabs.has(previous)) activateTab(previous);
+        if (borrow && activeId === tab.id && previous !== tab.id && tabs.has(previous)) activateTab(previous);
         layout(); persistTabs(); publish();
         restoreUserFocus(focusBefore);
       }
@@ -1347,10 +1488,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const pending = previous.catch(() => {}).then(async () => {
       const wc = tab.view.webContents;
       if (tabs.get(tab.id) !== tab || wc.isDestroyed()) throw protocolError("TAB_CLOSED", "Assigned tab closed before capture.");
-      if (!wc.debugger || wc.debugger.isAttached()) throw protocolError("CAPTURE_BUSY", "Assigned page capture transport is already in use.");
+      // The dock holds this page's debugger to shrink it; capture through it.
+      const dockOwned = tab.dockDebugger === true && wc.debugger && wc.debugger.isAttached();
+      if (!dockOwned && (!wc.debugger || wc.debugger.isAttached())) throw protocolError("CAPTURE_BUSY", "Assigned page capture transport is already in use.");
       let timer, attached = false;
       try {
-        wc.debugger.attach("1.3"); attached = true;
+        if (!dockOwned) { wc.debugger.attach("1.3"); attached = true; }
         const result = await Promise.race([
           wc.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true }),
           new Promise((_, reject) => { timer = setTimeout(() => reject(protocolError("BROWSER_TIMEOUT", "Assigned page capture timed out.")), PROTOCOL_SCRIPT_TIMEOUT_MS); }),
@@ -2170,7 +2313,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       activateTab(tab.id);
       layout();
       persistTabs();
-      focusTabWebContents(tab);
+      // A bot bringing its tab forward leaves the person's focus where it is.
+      if (!actor) focusTabWebContents(tab);
       publish();
       return protocolTabResult(tab);
     }
@@ -2335,7 +2479,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       let image;
       // Viz may not have allocated a surface immediately after first layout.
       // Retry only this tab, without showing it or changing human selection.
-      if (!visible || activeId !== tab.id) image = await captureHiddenPage(tab);
+      if (!visible || activeId !== tab.id || tab.id === docked.id) image = await captureHiddenPage(tab);
       else for (let attempt = 0; attempt < 4; attempt++) {
         if (wc.isDestroyed()) throw protocolError("TAB_CLOSED", "Assigned tab closed during capture.");
         if (tab.sequence !== generation) throw protocolError("TAB_NAVIGATED", "Document changed during capture.");
@@ -2410,6 +2554,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     else if (key === "t") { newSessionOrPlainTab(); focusLocation(); }
     else if (key === "w") closeTabByPerson(activeId);
     else if (key === "r") active()?.view.webContents.reloadIgnoringCache();
+    else if (key === "p") { if (active()) printChoice(active()); }
     else if (active()) {
       const wc = active().view.webContents;
       wc.setZoomLevel(key === "0" ? 0 : Math.max(-4, Math.min(5, wc.getZoomLevel() + (key === "-" ? -0.5 : 0.5))));
@@ -2421,7 +2566,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const key = input.key.toLowerCase();
     // Plain Cmd+R reloads Mia through the app menu; Shift+Cmd+R hard-reloads the page.
     if (key === "r" && !input.shift) return;
-    if ((input.meta || input.control) && ["l", "t", "w", "r", "f", "+", "=", "-", "0"].includes(key)) {
+    if ((input.meta || input.control) && ["l", "t", "w", "r", "f", "p", "+", "=", "-", "0"].includes(key)) {
       event.preventDefault(); runShortcut(key === "t" && input.shift ? "T" : key);
     } else if (key === "escape") active()?.view.webContents.stop();
   }
@@ -2447,13 +2592,19 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     for (const item of order) tabs.set(item.id, item);
     return true;
   }
-  // In a shared session a new tab belongs to the session.
+  // In a shared session a new tab belongs to the session. Otherwise it joins
+  // the group of the tab in front, reusing its blank tab, unless that group's
+  // bot is working: the bot steers every tab in its group, so the person's new
+  // tab then opens on its own.
   function newSessionOrPlainTab() {
-    if (!sessionGroupId || !groups.has(sessionGroupId)) return newTab();
-    const members = groupTabs(sessionGroupId);
+    const front = tabs.get(activeId);
+    const frontGroup = front && groups.has(front.groupId) && !groupTabs(front.groupId).find(browserWorkPending) ? front.groupId : null;
+    const groupId = sessionGroupId && groups.has(sessionGroupId) ? sessionGroupId : frontGroup;
+    if (!groupId) return newTab();
+    const members = groupTabs(groupId);
     const blank = members.find(item => !item.url);
     if (blank) { activateTab(blank.id); layout(); persistTabs(); return blank; }
-    return newTab(undefined, { after: members.at(-1)?.id, groupId: sessionGroupId });
+    return newTab(undefined, { after: members.at(-1)?.id, groupId });
   }
   function newTab(value, options = {}) {
     if (value) normalizeStoredTarget(value);
@@ -2502,6 +2653,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     wc.on("before-mouse-event", (_event, mouse) => {
       // Where this person's pointer is, for teammates in a shared session.
       if (mouse.type === "mouseMove" || mouse.type === "mouseDown") tab.pointer = { x: mouse.x, y: mouse.y, at: Date.now() };
+      if (mouse.type === "mouseDown") tab.personPressedAt = Date.now();
       if (mouse.type !== "mouseDown" || tab.id !== activeId) return;
       if (heldByRenderer.has(tab.id) || (tab.botWork || 0) > 0 || tab.actorOperationCount > 0) {
         groupBotEvent({ action: "page-click", tabId: tab.id });
@@ -2509,11 +2661,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     });
     // A navigation drops inserted styles; put the bot glow back if needed.
     wc.on("dom-ready", () => { tab.botGlowKey = null; tab.botGlowCss = null; syncBotGlow(tab); });
-    // Pages focus themselves as they load (search boxes, editors). Only the
-    // tab in front may hold focus; a background tab gives it straight back.
+    // Pages focus themselves as they load (search boxes, editors), and a
+    // bot's fill or click focuses a box in its page. Only the person moves
+    // their focus. A background tab gives it straight back; so does the tab
+    // in front while a bot works there, or while the person's focus is in
+    // Mia (the chat, the address bar), unless they just clicked into the
+    // page or picked or loaded it themselves.
     wc.on("focus", () => {
       if (borrowingTabId === tab.id) return;
-      if (tab.id === activeId) userFocus = wc;
+      const theirs = Date.now() - (tab.personPressedAt || 0) < PERSON_FOCUS_MS;
+      const taken = !theirs && ((tab.botWork || 0) > 0 || userFocus === window.webContents);
+      if (tab.id === activeId && !taken) userFocus = wc;
       else restoreUserFocus();
     });
     wc.on("found-in-page", (_event, result) => {
@@ -2694,7 +2852,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       else if (params.selectionText) items.push({ role: "copy" });
       items.push({ label: "Back", enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
         { label: "Forward", enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
-        { label: "Reload", click: () => wc.reload() });
+        { label: "Reload", click: () => wc.reload() },
+        { type: "separator" }, ...printMenuItems(tab));
       Menu.buildFromTemplate(items).popup({ window });
     });
     if (value) {
@@ -3031,35 +3190,50 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       })) },
     ];
   }
+  // The tab that comes to the front when `id` leaves it (closed or docked).
+  // It stays with the group: the group's tab used most recently, else its
+  // neighbor there. Only a group with no other tab hands over to the tab used
+  // before it, so this never jumps to another bot's tabs (and its chat) while
+  // its own group still has some.
+  function tabAfter(id) {
+    const tab = tabs.get(id);
+    const order = [...tabs.keys()];
+    const at = order.indexOf(id);
+    const visible = other => other !== id && other !== docked.id && !groups.get(tabs.get(other).groupId)?.collapsed;
+    const sameGroup = other => tab.groupId && tabs.get(other).groupId === tab.groupId;
+    const neighbors = [...order.slice(at + 1), ...order.slice(0, at).reverse()].filter(visible);
+    const lastUsedOf = list => list.filter(other => tabs.get(other).lastActiveAt)
+      .sort((a, b) => tabs.get(b).lastActiveAt - tabs.get(a).lastActiveAt)[0];
+    const inGroup = neighbors.filter(sameGroup);
+    return lastUsedOf(inGroup) ?? inGroup[0] ?? lastUsedOf(neighbors)
+      ?? order.slice(at + 1).find(visible) ?? order.slice(0, at).reverse().find(visible);
+  }
   function closeTab(id, { byUser = false } = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
+    if (handoffTab === tab) {
+      handoffTab = null;
+      handoffWorkspace = null;
+      Promise.resolve(chromeHandoff.cancel()).catch(() => {});
+    }
     if (fullscreenId === id) exitPageFullscreen();
+    if (docked.id === id) undock({ closing: true });
     actorRuntime.closeTab(id);
     if (byUser && !tab.private) closedTabs.remember({ url: tab.url, title: tab.title, groupId: tab.groupId || null,
       afterId: [...tabs.keys()][[...tabs.keys()].indexOf(id) - 1] ?? null, closedAt: Date.now() });
-    // Closing the active tab goes back to the tab used before it. A tab never
-    // used yet, as after a restart, falls back to its neighbor in the same group.
-    const order = [...tabs.keys()];
-    const at = order.indexOf(id);
-    const visible = other => other !== id && !groups.get(tabs.get(other).groupId)?.collapsed;
-    const sameGroup = other => tab.groupId && tabs.get(other).groupId === tab.groupId;
-    const neighbors = [...order.slice(at + 1), ...order.slice(0, at).reverse()].filter(visible);
-    const lastUsed = neighbors.filter(other => tabs.get(other).lastActiveAt)
-      .sort((a, b) => tabs.get(b).lastActiveAt - tabs.get(a).lastActiveAt)[0];
-    const successor = lastUsed ?? neighbors.find(sameGroup) ?? order.slice(at + 1).find(visible) ?? order.slice(0, at).reverse().find(visible);
+    const successor = tabAfter(id);
     tabs.delete(id);
     clearPendingLoadError(tab);
     window.contentView.removeChildView(tab.view);
     tab.view.webContents.close();
     normalizeGroups();
     if (activeId === id) {
-      const remaining = [...tabs.values()];
+      const remaining = [...tabs.values()].filter(other => other.id !== docked.id);
       const next = (successor !== undefined && tabs.get(successor)) || remaining.at(-1);
       activeId = null;
       if (next) activateTab(next.id);
     }
-    if (!tabs.size) {
+    if (![...tabs.keys()].some(other => other !== docked.id)) {
       newTab();
       if (byUser) lastTabCloses += 1;
     }
@@ -3087,6 +3261,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }).catch((error) => log(`close tab prompt failed: ${error.message}`)).finally(() => closePrompts.delete(id));
   }
   async function clearData() {
+    await chromeHandoff.cancel();
+    handoffTab = null;
+    handoffWorkspace = null;
     actorRuntime.dispose();
     await profile.clearStorageData();
     await profile.clearCache();
@@ -3130,7 +3307,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       id: nextDownloadId++,
       filename: String(item.getFilename() || "download").slice(0, 500),
       path: "",
-      url: /^https?:\/\//i.test(String(item.getURL() || "")) ? String(item.getURL()).slice(0, 2000) : "",
+      url: safeBrowserPageUrl(item.getURL()),
       state: "progressing",
       received: 0,
       total: Number(item.getTotalBytes && item.getTotalBytes()) || 0,
@@ -3179,6 +3356,48 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     tab.error = ""; persistTabs(); layout(); publish();
   }
   profile.on("will-download", downloadStarted);
+  // Electron's print dialog has no Save as PDF (macOS shows only printers),
+  // so Mia offers both: the page as a PDF in Downloads, listed with the
+  // other downloads, or the system Print dialog.
+  function printMenuItems(tab) {
+    const ready = !!tab.url && !tab.view.webContents.isDestroyed();
+    return [
+      { label: "Save as PDF", enabled: ready, click: menuAction(() => savePageAsPdf(tab)) },
+      { label: "Print…", enabled: ready, click: menuAction(() => tab.view.webContents.print({})) },
+    ];
+  }
+  function printChoice(tab) {
+    if (!tab || disposed || window.isDestroyed()) return;
+    Menu.buildFromTemplate(printMenuItems(tab)).popup({ window });
+  }
+  async function savePageAsPdf(tab) {
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed() || !downloadsDir) return;
+    const name = `${String(tab.title || "Page").replace(/[\\/:*?"<>|\x00-\x1f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) || "Page"}.pdf`;
+    const workspace = workspaceKey;
+    try {
+      const data = await wc.printToPDF({ printBackground: true, preferCSSPageSize: true });
+      const file = freeDownloadPath(name);
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, data);
+      downloadEntries.unshift({
+        id: nextDownloadId++, filename: path.basename(file), path: file,
+        url: safeBrowserPageUrl(tab.url),
+        state: "completed", received: data.length, total: data.length, startedAt: Date.now(),
+        by: null, safety: null, workspace,
+      });
+      downloadEntries = downloadEntries.slice(0, DOWNLOADS_MAX_ENTRIES);
+      downloadNotices.set(workspace, `Saved: ${path.basename(file)}`);
+    } catch (error) {
+      downloadNotices.set(workspace, `Could not save the page as a PDF: ${error.message}`);
+    }
+    persistDownloads(); publish();
+  }
+  function pagePrintRequest(event) {
+    const tab = [...tabs.values()].find(candidate => candidate.view.webContents === event.sender);
+    if (tab && tab.id === activeId) printChoice(tab);
+  }
+  ipcMain.on("miaos-browser-print", pagePrintRequest);
   function authorized(event) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return false;
     try { return new URL(event.senderFrame.url).origin === trustedOrigin(); } catch (_) { return false; }
@@ -3199,6 +3418,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return;
         const wasVisible = visible;
         bounds = b; visible = command.visible === true;
+        const d = command.dock;
+        docked.bounds = d && [d.x, d.y, d.width, d.height].every(Number.isFinite) ? d : null;
+        docked.visible = command.dockVisible === true;
         panelOpen = command.panelOpen === undefined ? visible : command.panelOpen === true;
         // A menu drawn over a still of the page hides the view only for a
         // moment; the page keeps playing and stays in fullscreen.
@@ -3219,6 +3441,32 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         return state();
       }
       if (command.action === "state") return state();
+      if (command.action === "chromeSignInStart") {
+        const tab = active();
+        if (!humanChromeSignInTab(tab)) return { error: "Open ChatGPT or its sign-in page in a human browser tab first." };
+        return chromeHandoff.start(tab.id).then(() => {
+          handoffTab = tab;
+          handoffWorkspace = workspaceKey;
+          return state();
+        }).catch(error => ({ error: error.message }));
+      }
+      if (command.action === "chromeSignInFinish") {
+        const tab = active();
+        if (!humanChromeSignInTab(tab) || tab !== handoffTab || workspaceKey !== handoffWorkspace) {
+          return { error: "Return to the original ChatGPT tab before importing the sign-in." };
+        }
+        const startedWorkspace = handoffWorkspace;
+        return chromeHandoff.finish(tab.id).then(() => {
+          if (!disposed && tabs.get(tab.id) === tab && workspaceKey === startedWorkspace && !tab.view.webContents.isDestroyed()) {
+            tab.view.webContents.reload();
+          }
+          return { ...state(), chromeSignInImported: true };
+        }).catch(error => ({ error: error.message }));
+      }
+      if (command.action === "chromeSignInCancel") {
+        chromeHandoff.cancel();
+        return state();
+      }
       // The tab strip knows when a bot's reply is still running and keeps
       // its tabs lit through the pauses between browser commands.
       if (command.action === "botColors") {
@@ -3420,6 +3668,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (!tabs.size || !active()) newTab();
       const tab = active();
       if (command.action === "navigate") {
+        // A page the person opens may take their focus as it loads.
+        tab.personPressedAt = Date.now() + PERSON_LOAD_MS;
         if (isLocalFileTarget(command.value)) openLocalFile(tab, command.value);
         else navigate(tab, command.value);
       }
@@ -3429,6 +3679,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
         if (!command.follow) focusTabWebContents(tabs.get(command.id));
       }
       if (command.action === "close") closeTabByPerson(command.id);
+      // The tab in front goes to the dock below the chat, in place of the
+      // one there. Picking the docked tab (select) brings it back.
+      if (command.action === "dock") {
+        const id = tabs.has(command.id) ? command.id : activeId;
+        if (id !== null) dockTab(id);
+        layout(); persistTabs();
+      }
+      if (command.action === "undock" && docked.id !== null) { undock(); layout(); }
       if (command.action === "move") {
         const moved = tabs.get(command.id);
         const nextGroup = command.groupId === null || groups.has(command.groupId) ? command.groupId : moved?.groupId;
@@ -3503,10 +3761,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     persistTabs();
     disposed = true;
     actorRuntime.dispose();
+    chromeHandoff.dispose();
     if (!shellContents.isDestroyed()) shellContents.removeListener("zoom-changed", requestLayout);
     window.removeListener("resize", requestLayout);
     window.removeListener("leave-full-screen", leaveWindowFullscreen);
     ipcMain.removeHandler(channel);
+    ipcMain.removeListener("miaos-browser-print", pagePrintRequest);
     profile.removeListener("will-download", downloadStarted);
     for (const tab of tabs.values()) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     tabs.clear();
@@ -3562,6 +3822,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     persistTabs();
     persistHistory();
     if (fullscreenId !== null) exitPageFullscreen();
+    if (docked.id !== null) undock({ closing: true });
     for (const tab of [...tabs.values()]) {
       actorRuntime.closeTab(tab.id);
       tabs.delete(tab.id);

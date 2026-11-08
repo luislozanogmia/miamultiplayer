@@ -199,8 +199,13 @@ function userFacingModelDispatchError(error, { managedRouter = false, managedRou
   const message = String(error && error.message || error || '');
   // Hermes' message is its own retry summary; the provider's words are here.
   const detail = [message, error && error.providerError].filter(Boolean).join('\n');
+  if (error && error.code === 'NATIVE_DISPATCH_TIMEOUT' && error.step) {
+    const minutes = Math.round(Number(error.timeoutMs) / 60000);
+    const label = error.step.label ? ` (${error.step.label})` : '';
+    return `I stopped at step ${error.step.n}${label}: it made no progress for ${minutes} minute${minutes === 1 ? '' : 's'}. What came before it is done. Ask again to retry from there.`;
+  }
   if ((error && error.code === 'NATIVE_DISPATCH_TIMEOUT') || /native dispatch timed out/i.test(message)) {
-    return 'I ran out of time before finishing. Nothing was changed. Please try again.';
+    return 'I ran out of time before finishing. Please try again.';
   }
   if (managedRouter && MANAGED_ROUTER_KEY_FAILURE.test(message)) {
     return managedRouterKeyMessage(managedRouterLabel);
@@ -224,6 +229,17 @@ function userFacingModelDispatchError(error, { managedRouter = false, managedRou
   }
   if (/selected model is not available|unsupported reasoning effort|response speed is not available/i.test(message)) {
     return 'That model selection is no longer available. Choose a connected model, then try again.';
+  }
+  // Hermes asks before some model switches and Mia can't answer it mid-turn.
+  // The large-context one is turned off in every profile; these remain.
+  if (/expensive model warning/i.test(message)) {
+    return 'Your model provider marks that model as expensive and asked for a confirmation Mia can’t give here. Choose a different model.';
+  }
+  if (/data-training tier warning/i.test(message)) {
+    return 'That model is on a tier that may use your chats for training, so it needs a confirmation Mia can’t give here. Choose a different model.';
+  }
+  if (/large context model switch/i.test(message)) {
+    return 'This chat is too large to switch models without a confirmation. Go back to the previous model, or start a new chat.';
   }
   return 'I couldn’t complete that response. Please try again.';
 }

@@ -67,7 +67,7 @@
   async function decide(scope,botId,version,action,button){
     if(!/^[a-f0-9]{32}$/.test(botId) || !Number.isSafeInteger(version) || version<1)return;
     var api=root.MiaHubChat,base='/v1/teams/'+scope.teamId+'/channels/'+scope.channelId+'/bots/'+botId;
-    var feedback=button && button.closest('.chat-msg-system').querySelector('[data-admission-feedback]');
+    var notice=button && button.closest('.chat-msg-system'),feedback=notice && notice.querySelector('[data-admission-feedback]');
     if(button)button.disabled=true;
     try{
       if(action==='review'){
@@ -88,7 +88,7 @@
         await api.call('POST',base+'/versions/'+version+'/'+(action==='accept'?'approve':'reject'),{});
         await scope.refresh();
       }
-    }catch(error){if(feedback)feedback.textContent=error.message;}
+    }catch(error){if(feedback)feedback.textContent=error.message;else if(scope.report)scope.report(error.message);}
     finally{if(button)button.disabled=false;}
   }
   root.MiaHubBots={open:open,admissionHtml:admissionHtml,decide:decide};

@@ -13,6 +13,10 @@
   var input = document.getElementById('localBrowserUrl');
   var dot = document.getElementById('localBrowserDot');
   var status = document.getElementById('localBrowserStatus');
+  var chromeSignInButton = document.getElementById('localBrowserChromeSignInBtn');
+  var chromeHandoffBar = document.getElementById('localBrowserChromeHandoff');
+  var chromeImportButton = document.getElementById('localBrowserChromeImportBtn');
+  var chromeCancelButton = document.getElementById('localBrowserChromeCancelBtn');
   var foot = overlay.querySelector('.local-browser-foot');
   var strip = document.createElement('div');
   strip.className = 'native-browser-tabs';
@@ -150,6 +154,46 @@
   miaResize.addEventListener('dblclick', function () { miaPane.width = null; applyMiaPane(); saveMiaPane(); });
   window.addEventListener('resize', function () { if (miaPane.width) applyMiaPane(); });
   applyMiaPane();
+  // Picture in picture: one tab sits in the dock below the chat (a video on
+  // its own, or a bot's page shrunk whole) while the person uses the rest.
+  // The page itself is a native view; this only reserves its place.
+  var pipBtn = document.getElementById('localBrowserPipBtn');
+  var pip = document.getElementById('chatPip');
+  var pipView = document.getElementById('chatPipView');
+  var pipTitle = document.getElementById('chatPipTitle');
+  var pipIcon = document.getElementById('chatPipIcon');
+  var PIP_MAX_HEIGHT = 0.4;
+  function sizePip(dock) {
+    if (!dock) return;
+    var room = pip.clientWidth;
+    var width = room, height = Math.round(room * dock.aspect);
+    var most = Math.round(window.innerHeight * PIP_MAX_HEIGHT);
+    if (height > most) { height = most; width = Math.round(most / dock.aspect); }
+    pipView.style.width = width + 'px';
+    pipView.style.height = height + 'px';
+  }
+  function renderPip() {
+    var dock = state.dock;
+    var tab = dock && state.tabs.find(function (t) { return t.id === dock.id; });
+    pip.hidden = !tab;
+    if (!tab) return;
+    pip.setAttribute('data-mode', dock.mode);
+    var bot = tab.botWorkAt && window.miaBrowserAgents ? window.miaBrowserAgents.name(tab.botWorkAt.botId) : '';
+    pipTitle.textContent = bot ? bot + ' \u00b7 ' + (tab.title || tab.url) : (tab.title || tab.url);
+    pipTitle.title = tab.title || tab.url;
+    pipIcon.hidden = !tab.favicon;
+    if (tab.favicon) pipIcon.src = tab.favicon;
+    sizePip(dock);
+  }
+  pipBtn.addEventListener('click', function () { command('dock'); });
+  document.getElementById('chatPipBack').addEventListener('click', function () {
+    // Picking the docked tab brings it back to the front of the browser.
+    if (!state.dock) return;
+    if (docked !== 'browser') window.MiaTabStrip.mix.open('browser', state.dock.id);
+    else command('select', { id: state.dock.id });
+  });
+  document.getElementById('chatPipClose').addEventListener('click', function () { command('undock'); });
+  new ResizeObserver(function () { if (state.dock) sizePip(state.dock); layout(); }).observe(pip);
   var downloadsBtn = document.getElementById('localBrowserDownloadsBtn');
   var downloadsView = document.getElementById('localBrowserDownloads');
   var downloadsList = document.getElementById('localBrowserDownloadsList');
@@ -320,6 +364,9 @@
     dockBar(view);
   }
   tabStrip.host = function () { return docked; };
+  // Full-window cards and viewers are added straight to the body; adding or
+  // removing one lays the live page out again so it never covers them.
+  new MutationObserver(function () { layout(); }).observe(document.body, { childList: true });
   new MutationObserver(function () {
     if (showingView() !== docked && state) render(state);
     else dockChatActions(bar && bar.getAttribute('data-view') || docked);
@@ -367,6 +414,28 @@
     var tab = selected();
     if (tab && tab.url && (input.value === tab.url || input.value === displayUrl(tab.url))) showUrl(tab.url);
   });
+  function chromeSignInError(message) {
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = false;
+    setTimeout(function () { if (status.textContent === message) status.hidden = true; }, 6000);
+  }
+  function chromeSignInAction(action, button) {
+    if (button) button.disabled = true;
+    return command(action).then(function (result) {
+      if (result && result.error) chromeSignInError(result.error);
+      else if (result && result.chromeSignInImported) {
+        // Cookies can also exist before authentication; the reloaded page is
+        // the source of truth for whether ChatGPT accepted the sign-in.
+        var message = 'Chrome data copied. Check the reloaded ChatGPT page.';
+        if (status) { status.textContent = message; status.hidden = false; }
+        setTimeout(function () { if (status && status.textContent === message) status.hidden = true; }, 5000);
+      }
+    }).finally(function () { if (button) button.disabled = false; });
+  }
+  if (chromeSignInButton) chromeSignInButton.addEventListener('click', function () { chromeSignInAction('chromeSignInStart', chromeSignInButton); });
+  if (chromeImportButton) chromeImportButton.addEventListener('click', function () { chromeSignInAction('chromeSignInFinish', chromeImportButton); });
+  if (chromeCancelButton) chromeCancelButton.addEventListener('click', function () { chromeSignInAction('chromeSignInCancel', chromeCancelButton); });
   function command(action, extra) {
     return bridge.command(Object.assign({ action: action }, extra)).then(function (next) {
       if (next && next.error) { status.textContent = next.error; input.setAttribute('aria-invalid', 'true'); }
@@ -421,12 +490,13 @@
     var agents = window.miaBrowserAgents;
     if (!botId || takeOver.disabled || !agents || !agents.takeOver) return;
     takeOver.disabled = true;
-    takeOver.textContent = 'Stopping…';
-    return Promise.resolve().then(function () { return agents.takeOver(botId); }).then(function (stopped) {
+    takeOver.textContent = 'Pausing…';
+    var page = selected();
+    return Promise.resolve().then(function () { return agents.takeOver(botId, page ? page.title || page.url || '' : ''); }).then(function (stopped) {
       if (stopped !== true) return;
       // Control stays with the bot until every cancellation is acknowledged.
       botReleasedAt[botId] = Date.now();
-      Object.keys(botHolds).forEach(function (id) { if (botHolds[id].botId === botId) delete botHolds[id]; });
+      Object.keys(botHolds).forEach(function (id) { if (botHolds[id].botId === botId) { delete botHolds[id]; delete botDroveAt[id]; } });
       render(state);
     }).catch(function () {
       botControlLabel.textContent = 'Could not stop. The bot may still be working.';
@@ -481,16 +551,26 @@
   }
   var botReleasedAt = {};
   var botHoldTimer = null;
+  // A bot has control of a page only while it runs browser commands there,
+  // plus a short grace between them. Thinking or working outside the browser
+  // in the same reply keeps the tab's working mark but gives control back.
+  var CONTROL_GRACE_MS = 8000;
+  var botDroveAt = {};
   function botWorking(t) {
     var agents = window.miaBrowserAgents;
     var fresh = t.botActivity && !(Date.now() - (botReleasedAt[t.botActivity.botId] || 0) < 3000) ? t.botActivity : null;
-    if (fresh) botHolds[t.id] = fresh;
+    if (fresh) { botHolds[t.id] = fresh; botDroveAt[t.id] = Date.now(); }
     var hold = botHolds[t.id];
     if (!hold) return null;
     if (fresh) return hold;
     if (agents && agents.isRunning && agents.isRunning(hold.botId)) return hold;
     delete botHolds[t.id];
+    delete botDroveAt[t.id];
     return null;
+  }
+  function botInControl(t) {
+    var hold = botWorking(t);
+    return hold && Date.now() - (botDroveAt[t.id] || 0) < CONTROL_GRACE_MS ? hold : null;
   }
   function refreshBotHolds() {
     if (botHoldTimer) clearTimeout(botHoldTimer);
@@ -586,7 +666,7 @@
   }
   function renderBotControl(tab) {
     renderCallFollow();
-    var activity = tab && botWorking(tab);
+    var activity = tab && botInControl(tab);
     botControl.hidden = !activity;
     if (!activity) { botControl.removeAttribute('data-bot-id'); return; }
     takeOver.hidden = false;
@@ -611,9 +691,15 @@
       var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered && !tipsCovered &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation') &&
-        !document.querySelector('.app-prompt-overlay.open');
+        // Full-window cards and viewers sit in the page too.
+        !document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+      var pipRect = pipView.getBoundingClientRect();
+      payload.dock = { x: pipRect.x, y: pipRect.y, width: pipRect.width, height: pipRect.height };
+      // The dock sits beside the chat, so only full-window layers cover it.
+      payload.dockVisible = !pip.hidden && pipRect.width > 0 && pipRect.height > 0 &&
+        !document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
       // The Downloads menu sits over a still of the page, so the live view
       // steps aside without pausing what it plays.
       if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered) payload.menu = true;
@@ -627,10 +713,15 @@
     syncStillPage();
     var tab = selected();
     var url = tab && tab.url || '';
+    var botGroup = (state.groups || []).some(function (group) { return tab && group.id === tab.groupId && group.botId; });
+    if (chromeSignInButton) chromeSignInButton.hidden = !state.chromeSignInAvailable || !/^https:\/\/(?:(?:[a-z0-9-]+\.)*chatgpt\.com|auth\.openai\.com)(?:[/:?#]|$)/i.test(url) || !!botGroup || !!state.chromeSignIn;
+    if (chromeHandoffBar) chromeHandoffBar.hidden = !state.chromeSignIn;
     if (changedTab || document.activeElement !== input) showUrl(url);
     if (changedTab) { findBar.hidden = true; findResult.textContent = ''; }
     input.setAttribute('aria-invalid', tab && tab.error ? 'true' : 'false');
     syncPageNav();
+    renderPip();
+    layout();
     overlay.setAttribute('data-loading', tab && tab.loading ? 'true' : 'false');
     document.getElementById('localBrowserEmpty').hidden = !!url;
     var blocked = document.getElementById('localBrowserBlocked');
@@ -683,6 +774,7 @@
     state.tabs.forEach(function (t) { byId[t.id] = t; });
     var reserved = items.reduce(function (sum, item) { return item.view === 'browser' ? sum : sum + (item.head ? MIX_HEAD_WIDTH : TAB_MIN_WIDTH); }, 0);
     var crowd = crowdedStrip(groups, working, reserved);
+    front = spreadGroups(groups, front, crowd, reserved);
     // In a session the strip is the session: its tabs, all showing, and your private ones.
     var session = window.MiaSpaceUI ? window.MiaSpaceUI.sessionGroup() : null;
     if (session !== null) {
@@ -875,6 +967,31 @@
       if (needed() > width && !busy[id]) hidden.push(id);
     });
     return { folded: folded, hidden: hidden };
+  }
+  // Stacking a group behind "+N" is for a crowded strip. While nothing had
+  // to fold and there is room, groups show all their tabs, the most
+  // recently used first, each tab at a width its title can be read at.
+  var SPREAD_TAB_WIDTH = 150;
+  function spreadGroups(groups, front, crowd, reserved) {
+    if (crowd.folded.length || crowd.hidden.length || !strip.clientWidth) return front;
+    var room = strip.clientWidth - (add.offsetWidth || 0) - (reserved || 0);
+    var used = 0, seen = {};
+    state.tabs.forEach(function (t) {
+      var g = groups[t.groupId];
+      if (!g) { used += SPREAD_TAB_WIDTH; return; }
+      if (!seen[g.id]) { seen[g.id] = true; used += GROUP_HEAD_WIDTH + (g.collapsed ? 0 : SPREAD_TAB_WIDTH); }
+    });
+    var spread = {};
+    Object.keys(front).forEach(function (id) { spread[id] = front[id]; });
+    Object.keys(front).filter(function (id) { return groups[id] && !groups[id].collapsed; })
+      .sort(function (a, b) { return (groupUsedAt[b] || 0) - (groupUsedAt[a] || 0); })
+      .forEach(function (id) {
+        var extra = front[id].others.length * SPREAD_TAB_WIDTH;
+        if (used + extra > room) return;
+        used += extra;
+        delete spread[id];
+      });
+    return spread;
   }
   // The "+N" list drops down under the bot's tab and draws the bot's other
   // tabs the way the strip draws tabs (page icon, title, working dot, close),
@@ -1484,10 +1601,12 @@
     if (!payload) return;
     if (payload.action === 'stop' && agents && agents.stopQuietly) agents.stopQuietly(payload.botId);
     if (payload.action === 'new-bot') newBotGroup();
-    // The person clicked into the page a bot is working on: take it over.
+    // The person clicked into the page while a bot is acting on it: take it
+    // over. Only a live command counts (not the grace the control bar keeps
+    // between steps), so a click while the bot thinks never stops its reply.
     if (payload.action === 'page-click') {
       var tab = selected();
-      if (tab && tab.id === payload.tabId && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick();
+      if (tab && tab.id === payload.tabId && tab.botActivity && !botControl.hidden && botControl.getAttribute('data-bot-id')) takeOver.onclick();
     }
     if (payload.action === 'choose') {
       var g = (state.groups || []).find(function (item) { return item.id === payload.groupId; });

@@ -70,6 +70,8 @@ function harness(options = {}) {
     isDestroyed() { return this.closed; }
     insertCSS(css) { this.insertedCSS = (this.insertedCSS || 0) + 1; this.lastCSS = css; return Promise.resolve(`css-${this.insertedCSS}`); }
     removeInsertedCSS() { return Promise.resolve(); }
+    printToPDF(options) { this.pdfOptions = options; return Promise.resolve(Buffer.from("%PDF-1.7 page")); }
+    print(options) { this.printed = options; }
     close() { this.closed = true; }
     removeListener(...args) {
       if (this.closed) throw new Error("Object has been destroyed");
@@ -124,6 +126,7 @@ function harness(options = {}) {
   window.isFullScreen = () => window.fullScreen;
   window.setFullScreen = value => { window.fullScreen = value; if (!value) window.emit("leave-full-screen"); };
   window.isDestroyed = () => false;
+  window.isFocused = () => true;
   window.contentView = { addChildView() {}, removeChildView() {} };
   const electron = {
     WebContentsView: class {
@@ -133,7 +136,8 @@ function harness(options = {}) {
       setBackgroundColor(color) { this.backgroundColor = color; }
     },
     session: { fromPartition: partition => { profile.partition = partition; return profile; } },
-    ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
+    ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key),
+      on: (key, fn) => handlers.set(`on:${key}`, fn), removeListener: key => handlers.delete(`on:${key}`) },
     Menu: { buildFromTemplate: template => { menuTemplates.push(template); return { popup() {} }; } },
     nativeTheme: { themeSource: "light" },
     nativeImage: {
@@ -156,7 +160,8 @@ function harness(options = {}) {
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
   const { createBrowser, normalizeTarget, normalizeLocalFileTarget } = context.module.exports;
-  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, resolveActor: knownActor({}), ...options });
+  const chromeHandoff = options.chromeHandoff || { status: () => null, available: () => false, start: async () => {}, finish: async () => {}, cancel: () => {}, dispose: () => {} };
+  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, resolveActor: knownActor({}), ...options, chromeHandoff });
   const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   const command = (action, extra = {}, event = sender) => handlers.get("miaos-browser-command")(event, { action, ...extra });
   return { command, window, views, sender, profile, handlers, shown, opened, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, botRunning, stopResult, menuTemplates };
@@ -1597,6 +1602,41 @@ test("bot tab groups: a bot's pages land in its own group, never Mia's tab", asy
   assert.notEqual(again.tab_id, patTab.tab_id);
 });
 
+test("a page's Print offers Save as PDF, which lands in Downloads", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-print-pdf-"));
+  try {
+    const h = harness({ downloadsDir: directory });
+    h.command("new");
+    h.command("navigate", { value: "https://example.com/reset?code=fake-code-for-test#fragment" });
+    const wc = h.views.at(-1).webContents;
+    wc.emit("page-title-updated", {}, "Resumen: Detalle");
+    h.menuTemplates.length = 0;
+    h.handlers.get("on:miaos-browser-print")({ sender: wc });
+    const menu = h.menuTemplates.at(-1);
+    assert.deepEqual(plain(menu.map(item => item.label)), ["Save as PDF", "Print…"], "the page's Print asks which one");
+    menu[1].click();
+    assert.deepEqual(plain(wc.printed), {}, "Print… still opens the system dialog");
+    menu[0].click();
+    let state;
+    for (let i = 0; i < 50; i += 1) {
+      state = h.command("state");
+      if ((state.downloads || []).length) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const saved = state.downloads[0];
+    assert.equal(saved.state, "completed");
+    assert.equal(saved.url, "https://example.com/reset", "the saved PDF cannot retain a credential-bearing page address");
+    assert.equal(path.dirname(saved.path), directory);
+    assert.match(path.basename(saved.path), /\.pdf$/);
+    assert.equal(fs.readFileSync(saved.path, "utf8"), "%PDF-1.7 page");
+    assert.equal(wc.pdfOptions.printBackground, true);
+    h.handlers.get("on:miaos-browser-print")({ sender: {} });
+    assert.equal(h.menuTemplates.length, 1, "a print request from something that isn't a tab is ignored");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("bot downloads save straight to Downloads, get checked, and are reported only once on disk", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-bot-downloads-"));
   try {
@@ -2084,6 +2124,34 @@ test("bot tab groups: a bot working in the background never takes foreground foc
   assert.equal(app.focusCalls, beforeKey + 1);
 });
 
+test("bot tab groups: a bot working in the tab in front gives the person's focus back", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: knownActor(sessions) });
+  h.command("new");
+  const app = h.window.webContents;
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const page = h.views.at(-1).webContents;
+  const switchFocus = page.focusCalls || 0;
+  await h.controller.protocol("tab_switch", { tab_id: opened.tab_id, actor_session: "s-a" });
+  assert.equal(page.focusCalls || 0, switchFocus, "the bot bringing its tab forward doesn't focus it");
+  app.emit("focus"); // The person is typing in the chat beside the page.
+  const original = page.executeJavaScript.bind(page);
+  page.executeJavaScript = script => { page.emit("focus"); return original(script); }; // The page focuses a box.
+  const before = app.focusCalls || 0;
+  await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls, before + 1, "focus goes back to the chat");
+
+  // A press into the page is the person's own: focus stays there.
+  page.executeJavaScript = original;
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 5, y: 5 });
+  page.executeJavaScript = script => { page.emit("focus"); return original(script); };
+  const afterPress = app.focusCalls;
+  await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls, afterPress, "the page keeps focus the person gave it");
+});
+
 test("bot tab groups: a failing lookup rejects without touching the tab in front", async () => {
   const h = harness({ resolveActor: async () => { throw new Error("backend down"); } });
   const mine = h.command("new").activeId;
@@ -2140,25 +2208,95 @@ test("right-clicking Back or Forward lists that way's pages, nearest first, like
   h.window.emit("closed");
 });
 
-test("closing a grouped tab goes back to the tab used before it, even outside the group", () => {
+test("closing a grouped tab stays in its group, and leaves it only once the group is empty", async () => {
+  // The Mac report: group g1 has tabs 1 and 2, group g2 has tab 3, used in the order 1, 3, 2.
   const h = harness();
-  const mine = h.command("new").activeId;
-  const first = h.command("new").activeId;
-  const second = h.command("new").activeId;
-  h.command("groupCreate", { id: first });
-  const groupId = h.command("state").groups[0].id;
-  h.command("move", { id: second, index: 1, groupId });
-  const after = h.command("new").activeId;
-  h.command("select", { id: first });
-  h.command("close", { id: first });
-  assert.equal(h.command("state").activeId, after, "the tab used before, outside the bot's group");
-  h.command("select", { id: second });
-  h.command("close", { id: second });
-  assert.equal(h.command("state").activeId, after);
-  assert.ok(mine);
+  const page = async () => { h.command("navigate", { value: `https://${h.command("state").activeId}.example/` }); await new Promise(resolve => setImmediate(resolve)); };
+  const one = h.command("new").activeId;
+  h.command("groupCreate", { id: one });
+  const g1 = h.command("state").groups[0].id;
+  await page();
+  const two = h.command("new").activeId;
+  await page();
+  const three = h.command("new").activeId;
+  await page();
+  h.command("groupRemoveTab", { id: three });
+  h.command("groupCreate", { id: three });
+  assert.equal(h.command("state").tabs.find(tab => tab.id === two).groupId, g1);
+  for (const id of [one, three, two]) h.command("select", { id });
+  h.command("close", { id: two });
+  assert.equal(h.command("state").activeId, one, "back to the group's own tab, not the other bot's");
+  h.command("select", { id: three });
+  h.command("select", { id: one });
+  h.command("close", { id: one });
+  assert.equal(h.command("state").activeId, three, "an emptied group hands over to the tab used before it");
   h.window.emit("closed");
 });
 
+
+test("picture in picture: a tab docks below the chat, the group's next tab comes forward, and a pick brings it back", async () => {
+  const h = harness();
+  const page = async () => { h.command("navigate", { value: `https://${h.command("state").activeId}.example/` }); await new Promise(resolve => setImmediate(resolve)); };
+  const one = h.command("new").activeId;
+  await page();
+  h.command("groupCreate", { id: one });
+  const two = h.command("new").activeId;
+  await page();
+  const viewOf = id => h.views[id - 1];
+  // A bot's page, not a video: it is shrunk whole through the debugger.
+  const sent = [];
+  const wc = viewOf(two).webContents;
+  wc.debugger = { attached: false, isAttached() { return this.attached; }, attach() { this.attached = true; }, detach() { this.attached = false; },
+    sendCommand: (method, params) => { sent.push({ method, params }); return Promise.resolve({ data: Buffer.from("png").toString("base64") }); } };
+  const run = wc.executeJavaScript.bind(wc);
+  wc.executeJavaScript = script => script.includes("data-mia-pip', ''") ? Promise.resolve(false) : run(script);
+  h.command("layout", { visible: true, bounds: { x: 0, y: 80, width: 800, height: 500 } });
+  let state = h.command("dock");
+  assert.equal(state.dock.id, two);
+  assert.equal(state.activeId, one, "the group's other tab comes forward");
+  await new Promise(resolve => setImmediate(resolve));
+  h.command("layout", { visible: true, bounds: { x: 0, y: 80, width: 800, height: 500 }, dock: { x: 820, y: 560, width: 160, height: 100 }, dockVisible: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual({ ...viewOf(two).bounds }, { x: 820, y: 560, width: 160, height: 100 });
+  assert.equal(viewOf(two).visible, true, "both the dock and the page in front are on screen");
+  assert.equal(viewOf(one).visible, true);
+  const scale = sent.find(item => item.method === "Emulation.setDeviceMetricsOverride");
+  assert.deepEqual({ width: scale.params.width, height: scale.params.height, scale: scale.params.scale }, { width: 800, height: 500, scale: 0.2 },
+    "laid out at the browser's size, drawn at the dock's");
+  // Closing the browser keeps the dock on screen.
+  h.command("layout", { visible: false, bounds: { x: 0, y: 80, width: 800, height: 500 }, dock: { x: 820, y: 560, width: 160, height: 100 }, dockVisible: true });
+  assert.equal(viewOf(one).visible, false);
+  assert.equal(viewOf(two).visible, true);
+  // Picking it brings it back to the front and lets go of the debugger.
+  state = h.command("select", { id: two });
+  assert.equal(state.dock, null);
+  assert.equal(state.activeId, two);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(sent.some(item => item.method === "Emulation.clearDeviceMetricsOverride"));
+  assert.equal(wc.debugger.attached, false);
+  h.window.emit("closed");
+});
+
+test("picture in picture: a playing video docks alone, and closing the docked tab empties the dock", async () => {
+  const h = harness();
+  const one = h.command("new").activeId;
+  h.command("navigate", { value: "https://one.example/" });
+  const two = h.command("new").activeId;
+  h.command("navigate", { value: "https://video.example/" });
+  await new Promise(resolve => setImmediate(resolve));
+  const wc = h.views[two - 1].webContents;
+  const run = wc.executeJavaScript.bind(wc);
+  wc.executeJavaScript = script => script.includes("data-mia-pip', ''") ? Promise.resolve(true) : run(script);
+  h.command("dock");
+  await new Promise(resolve => setImmediate(resolve));
+  let state = h.command("state");
+  assert.deepEqual({ id: state.dock.id, mode: state.dock.mode, aspect: state.dock.aspect }, { id: two, mode: "video", aspect: 9 / 16 });
+  assert.match(wc.lastCSS, /\[data-mia-pip\]\{position:fixed/, "its player fills the dock, not the window");
+  state = h.command("close", { id: two });
+  assert.equal(state.dock, null);
+  assert.equal(state.activeId, one);
+  h.window.emit("closed");
+});
 
 test("closing the last tab counts a last-tab close and keeps one blank tab", () => {
   const h = harness();
@@ -2532,12 +2670,16 @@ test("a new tab for a bot opens at the end of that bot's group", async () => {
   const first = h.command("new").activeId;
   h.command("groupCreate", { id: first });
   const groupId = h.command("state").groups[0].id;
+  // A page first, so a new tab is not the group's blank tab reused.
+  h.command("navigate", { value: `https://${first}.example/` });
+  await new Promise(resolve => setImmediate(resolve));
   const second = h.command("new").activeId;
   h.command("move", { id: second, index: 1, groupId });
   // Real pages, so the group has no blank tab to reuse yet.
   for (const id of [first, second]) { h.command("select", { id }); h.command("navigate", { value: `https://${id}.example/` }); }
   await new Promise(resolve => setImmediate(resolve));
   const loose = h.command("new").activeId;
+  h.command("groupRemoveTab", { id: loose });
   h.command("groupNewTab", { groupId });
   const state = h.command("state");
   const added = state.tabs.find(tab => tab.id === state.activeId);
@@ -2773,6 +2915,27 @@ test("tab menu saves a page as an artifact or an app, only for a web page", asyn
   fs.rmSync(folder, { recursive: true, force: true });
 });
 
+test("a new tab joins the group in front, and opens alone while that group's bot is working", async () => {
+  const h = harness();
+  const first = h.command("new").activeId;
+  h.command("groupCreate", { id: first });
+  const groupId = h.command("state").groups[0].id;
+  h.command("select", { id: first });
+  h.command("navigate", { value: "https://first.example/" });
+  await new Promise(resolve => setImmediate(resolve));
+  const added = h.command("new").activeId;
+  assert.equal(h.command("state").tabs.find(tab => tab.id === added).groupId, groupId, "Cmd+T and + join the group");
+  assert.equal(h.command("new").activeId, added, "its blank tab is reused instead of piling up");
+  // The bot is loading a page in the group: the person's tab stays out of its way.
+  h.command("select", { id: first });
+  const page = h.views[0].webContents;
+  page.isLoading = () => true;
+  const alone = h.command("new").activeId;
+  assert.equal(h.command("state").tabs.find(tab => tab.id === alone).groupId ?? null, null);
+  page.isLoading = () => false;
+  h.window.emit("closed");
+});
+
 test("a Solo bot never works in a company's browser, and a company bot never in Solo's", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-browser-workspaces-"));
   const company = "hub_" + "c".repeat(32);
@@ -2949,4 +3112,62 @@ test("a renderer command naming another workspace is refused", () => {
     h.window.emit("closed");
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("Chrome sign-in handoff requires the human's visible OpenAI tab and reloads only that tab", async () => {
+  let activeHandoff = null;
+  const calls = [];
+  const fake = {
+    available: () => true,
+    status: () => activeHandoff,
+    start: async id => { calls.push(["start", id]); activeHandoff = { tabId: id }; return activeHandoff; },
+    finish: async id => { calls.push(["finish", id]); activeHandoff = null; return { imported: 1 }; },
+    cancel: () => { activeHandoff = null; }, dispose: () => {},
+  };
+  const h = harness({ chromeHandoff: fake });
+  h.command("new");
+  const id = h.command("state").activeId;
+  const contents = h.views[0].webContents;
+  contents.shownUrl = "https://chatgpt.com/auth/login";
+  assert.match((await h.command("chromeSignInStart")).error, /human browser tab/);
+  assert.equal(calls.length, 0);
+  h.command("layout", { visible: true, bounds: { x: 0, y: 0, width: 900, height: 650 } });
+  assert.equal((await h.command("chromeSignInStart")).chromeSignIn.tabId, id);
+  assert.deepEqual(calls, [["start", id]]);
+  assert.equal((await h.command("chromeSignInFinish")).chromeSignInImported, true);
+  assert.equal(contents.reloaded, true);
+  contents.shownUrl = "https://accounts.google.com/";
+  assert.match((await h.command("chromeSignInStart")).error, /ChatGPT or its sign-in page/);
+  contents.shownUrl = "https://platform.openai.com/";
+  assert.match((await h.command("chromeSignInStart")).error, /ChatGPT or its sign-in page/);
+  assert.deepEqual(calls, [["start", id], ["finish", id]]);
+  h.window.emit("closed");
+});
+
+test("clearing browser data or closing the sign-in tab cancels the Chrome handoff", async () => {
+  let activeHandoff = null;
+  let cancelled = 0;
+  const fake = {
+    available: () => true,
+    status: () => activeHandoff,
+    start: async id => { activeHandoff = { tabId: id }; return activeHandoff; },
+    finish: async () => { throw new Error("a cancelled sign-in cannot be imported"); },
+    cancel: async () => { cancelled++; activeHandoff = null; },
+    dispose: () => {},
+  };
+  const h = harness({ chromeHandoff: fake });
+  h.command("new");
+  h.command("layout", { visible: true, bounds: { x: 0, y: 0, width: 900, height: 650 } });
+  h.views.at(-1).webContents.shownUrl = "https://chatgpt.com/";
+  await h.command("chromeSignInStart");
+  await h.controller.clearData();
+  assert.equal(cancelled, 1);
+  assert.equal(h.command("state").chromeSignIn, null);
+  h.views.at(-1).webContents.shownUrl = "https://chatgpt.com/";
+  const tabId = h.command("state").activeId;
+  await h.command("chromeSignInStart");
+  h.command("close", { id: tabId });
+  assert.equal(cancelled, 2);
+  assert.equal(h.command("state").chromeSignIn, null);
+  h.window.emit("closed");
 });

@@ -49,6 +49,7 @@ async function openFor(browser) {
   const context = {
     window: { miaDesktop: { browser } },
     chatWs: { botRecords: [{ id: 'bot-1', name: 'Browser-use' }] },
+    hubWorkspace: () => false,
     followBrowserTab(state) { followed.push(state); },
   };
   vm.createContext(context);

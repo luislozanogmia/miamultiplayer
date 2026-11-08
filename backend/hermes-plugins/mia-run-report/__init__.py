@@ -33,8 +33,9 @@ SCHEMA = {
     "description": (
         "Tell the user which step of this automation you are on. Call it with state "
         "'working' and a one-line note when you start a step, 'done', 'failed' or "
-        "'skipped' when you finish it, and 'needs_you' (with what you need) to stop "
-        "and ask the user. Only works during a scheduled automation run."
+        "'skipped' when you finish it, and 'needs_you' (with exactly what you wanted to do "
+        "or need) for anything left for the user; then carry on with the other steps. "
+        "Only works during a scheduled automation run."
     ),
     "parameters": {
         "type": "object",

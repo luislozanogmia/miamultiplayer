@@ -108,7 +108,7 @@ test('default and explicit trusted-local profiles remain full-agent compatible',
 
     assert.equal(output.release.agentSearchOnly, false);
     assert.equal(output.inferenceSearchOnly, false);
-    assert.equal(output.maxTurns, 200);
+    assert.equal(output.maxTurns, 100000);
     assert.match(
       output.config,
       /toolsets:\n  - file\n  - terminal\n  - memory\n  - session_search\n  - todo\n  - clarify/

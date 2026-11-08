@@ -154,7 +154,7 @@ test('automation panel renders durable bot schedules separately from running wor
   assert.match(source, /function automationScheduleText\(automation\)[\s\S]*automation\.frequency === 'interval'[\s\S]*Every /);
   assert.match(source, /function automationBotsForPanel\(isMia, agent\)[\s\S]*entries\.push\(\{bot:bot, automation:automation\}\)/);
   assert.match(source, /automationRuns:\s*\[\],\s*\/\/ active Hermes cron sessions only/);
-  assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*api\('\/api\/automations\/active'\)/);
+  assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*api\('\/api\/automations\/active\?workspace=' \+ encodeURIComponent\(localChatWorkspaceKey\(\)\)\)/);
   assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*if\(changed\)\{[\s\S]*renderChatSidebar\(\)/);
   assert.match(source, /function activeAutomationRunsForPanel\(isMia, agent\)[\s\S]*chatWs\.automationRuns/);
   const paneStart = source.indexOf('function renderChatInfoPane(){');
@@ -361,7 +361,7 @@ test('draft bots remain visible and inactive without scheduling work', async () 
   ]);
   assert.match(source, /var BENCH_COLUMNS = \[[\s\S]*key:'draft'/);
   assert.match(source, /stateMap = \{draft:'draft'/);
-  assert.match(source, /return status !== 'paused'/);
+  assert.match(source, /if\(status === 'paused' \|\| seen\[agent\.id\]\) return false;/, 'only paused bots (and repeats) leave the list');
   assert.match(source, /Draft — finish setup to activate/);
   assert.match(server, /\['draft', 'running', 'watch'\]\.indexOf\(body\.status\)/);
   assert.match(server, /if \(record\.status === 'paused'\)\s*\{/);
@@ -657,7 +657,7 @@ test('agent editor exposes a persisted avatar color with an automatic fallback',
   assert.match(source, /avatarColor: normalizeAgentAvatarColor\(a\.avatarColor\)/);
   assert.match(source, /avatarColor: editState\.avatarColor \|\| null/);
   assert.match(source, /moteColorFilterFor\(name, color\)/);
-  assert.match(source, /moteColorFilterFor\(agentName, agentAvatarColorFor\(agentName, null\)\)/);
+  assert.match(source, /moteColorFilterFor\(agentName, color \|\| agentAvatarColorFor\(agentName, null\)\)/);
   assert.match(source, /function agentProfileRefFor\(name, agentId\)/);
   assert.match(source, /data-agent-profile-id/);
   assert.match(source, /function openProfile\(target\)/);

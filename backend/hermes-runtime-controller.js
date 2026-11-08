@@ -8,10 +8,12 @@ class HermesRuntimeController {
     this.current = null;
     this.tail = Promise.resolve();
     this.closed = false;
+    this.prerequisiteError = null;
   }
 
   assertOpen() {
     if (this.closed) throw new Error('Hermes gateway controller closed');
+    if (this.prerequisiteError) throw this.prerequisiteError;
   }
 
   create() {
@@ -44,6 +46,19 @@ class HermesRuntimeController {
     });
     this.tail = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  // Safety setup runs before any client can start. A failed setup must remain
+  // a barrier even though ordinary queue failures are allowed to be retried.
+  enqueuePrerequisite(operation, { failureBlocks = true } = {}) {
+    return this.enqueue(async () => {
+      try { return await operation(); }
+      catch (_) {
+        const error = new Error('Hermes gateway safety prerequisites failed');
+        if (failureBlocks) this.prerequisiteError = error;
+        throw error;
+      }
+    });
   }
 
   async stopCurrent() {

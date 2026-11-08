@@ -227,6 +227,27 @@ test('team bot roster lists every channel bot with its owner and where it lives'
   assert.equal(agents[0].createdAt, 1700000000 * 1000);
 });
 
+test('a bot waiting in a channel the admin is not in can be reviewed from the roster', () => {
+  // The company-wide bot list carries no admission, only whether a version is approved.
+  const agents = admin.teamRosterAgents([
+    {channel: {id: 'c3', name: 'quiet-room', kind: 'channel', visibility: 'private'}, bots: [
+      {id: 'b3', name: 'Counter', owner_email: 'member@example.test', owner_display_name: 'Sam Sample', published: null},
+      {id: 'b4', name: 'Greeter', owner_email: 'member@example.test', published: 1},
+    ]},
+  ]);
+  assert.deepEqual(agents.map(a => [a.name, a.ownerName, a.status, a.reviewChannelId]),
+    [['Counter', 'Sam Sample', 'Pending', 'c3'], ['Greeter', 'member@example.test', 'Active', '']]);
+  const html = admin.renderAgentsTable(agents);
+  assert.match(html, /<button type="button" class="btn small" data-agent-review data-bot-id="b3" data-channel-id="c3">Review<\/button>/);
+  assert.equal(html.match(/data-agent-review/g).length, 1, 'an approved bot has nothing to review');
+});
+
+test('the Admin Center loads the same bot review as channels', async () => {
+  const html = await readFile(adminHtmlUrl, 'utf8');
+  assert.match(html, /<link rel="stylesheet" href="hub-bot-dialog.css" \/>/);
+  assert.ok(html.indexOf('hub-bot-manager.js') > html.indexOf('hub-chat.js') && html.indexOf('hub-bot-manager.js') < html.indexOf('admin.js'));
+});
+
 test('team activity names actors and targets by email and readable actions', () => {
   const rows = admin.teamActivityEvents([
     {id: 3, event: 'role_changed', actor: 'user_admin', actor_email: 'member@example.test', target: 'user_member', at: 1700000000},

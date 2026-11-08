@@ -252,10 +252,13 @@
       var channel = entry.channel || {};
       var where = channel.kind === 'dm' ? 'Direct message' : channel.kind === 'group' ? 'Group' : '#' + (channel.name || 'channel');
       (entry.bots || []).forEach(function(bot){
+        // The company-wide list has no admission; a bot with no approved version is waiting for an admin.
         var admission = bot.admission || {};
-        var owner = admission.requester_email || '';
-        agents.push({id: bot.id, name: bot.name, owner: owner, ownerName: owner || 'Unknown member',
-          ownerDescription: 'Colleague', status: TEAM_BOT_STATUS[admission.status] || 'Unknown',
+        var state = admission.status || (bot.published ? 'accepted' : 'pending');
+        var owner = admission.requester_email || bot.owner_email || '';
+        agents.push({id: bot.id, name: bot.name, owner: owner, ownerName: bot.owner_display_name || owner || 'Unknown member',
+          ownerDescription: 'Colleague', status: TEAM_BOT_STATUS[state] || 'Unknown',
+          reviewChannelId: state === 'pending' ? channel.id : '',
           model: '—', departments: [where], createdAt: hubTime(bot.created_at)});
       });
     });
@@ -401,7 +404,9 @@
           '<div class="admin-agent-id">' + esc(id || '—') + '</div>' +
         '</td>' +
         '<td><span class="pill admin-agent-type ' + (mia ? 'mia' : 'bot') + '">' + esc(type) + '</span></td>' +
-        '<td><span class="pill ' + agentStatusClass(status) + '">' + esc(status) + '</span></td>' +
+        '<td><span class="pill ' + agentStatusClass(status) + '">' + esc(status) + '</span>' +
+          (agent && agent.reviewChannelId ? ' <button type="button" class="btn small" data-agent-review data-bot-id="' + esc(id) + '" data-channel-id="' + esc(agent.reviewChannelId) + '">Review</button>' : '') +
+        '</td>' +
         '<td class="admin-cell-sub">' + esc(model) + '</td>' +
         '<td class="admin-agent-departments">' + esc(departments.length ? departments.join(', ') : 'No departments') + '</td>' +
         '<td class="admin-cell-sub">' + esc(fmtDate(agent && agent.createdAt)) + '</td>' +
@@ -1606,6 +1611,21 @@
         });
       });
 
+      // An admin approves a bot here even when it was asked for in a channel they are not in.
+      var agentsBody = $('#agentsBody');
+      if(agentsBody) agentsBody.addEventListener('click', function(ev){
+        var btn = ev.target.closest && ev.target.closest('button[data-agent-review]');
+        if(!btn || btn.disabled || !team || !win.MiaHubBots) return;
+        var botId = btn.getAttribute('data-bot-id'), channelId = btn.getAttribute('data-channel-id');
+        btn.disabled = true;
+        hub('GET', '/channels/' + channelId + '/bots/' + botId + '/versions').then(function(result){
+          var waiting = (result.versions || []).filter(function(v){ return !v.approved_by && !v.rejected_by; })[0];
+          if(!waiting){ toast('Nothing is waiting for approval. Refreshing.'); return loadAgents(); }
+          return win.MiaHubBots.decide({teamId: team.id, channelId: channelId, refresh: loadAgents, report: function(message){ toast(message, true); }},
+            botId, Number(waiting.version), 'review', null);
+        }).catch(function(){ /* hub() already showed the error */ }).then(function(){ btn.disabled = false; });
+      });
+
       var usersBody = $('#usersBody');
       if(usersBody) usersBody.addEventListener('click', function(ev){
         var btn = ev.target.closest && ev.target.closest('button[data-action]');
@@ -1841,7 +1861,7 @@
         var groupHead = $('#agentsGroupHead');
         if(groupHead) groupHead.textContent = 'Channel';
         var agentsSub = $('#agentsSub');
-        if(agentsSub) agentsSub.textContent = 'Bots in the channels you are in, with the member who added each one.';
+        if(agentsSub) agentsSub.textContent = 'Every bot in the company, private channels too, with the member who added it.';
         hubAdmin = createHubAdmin({teamId: team.id, call: win.MiaHubChat.call, confirm: hubConfirm, toast: toast, onChange: hubPaint, openReview: function(appId){
           // Reviewing happens on the Apps page, where the app can run in its sandbox.
           try {

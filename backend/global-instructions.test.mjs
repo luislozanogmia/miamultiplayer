@@ -101,6 +101,6 @@ test('ask-before-do defaults on, survives saving instructions, and is wired to e
   assert.match(server, /app\.post\('\/api\/settings\/ask-before-do'/);
   assert.match(server, /const globalInstructions = promptInstructions\(isGatewayAgent/);
   assert.match(server, /globalInstructionsForBot: \(bot\) => promptInstructions\(ownerOf\(bot\)\)\.bot/);
-  assert.match(server, /globalInstructions: \{ askBeforeDo: currentInstructionSettings\(owner\)\.askBeforeDo \}/);
+  assert.match(server, /globalInstructions: channel\.privateChat === true\s*\? promptInstructions\(owner\)\.bot\s*: \{ askBeforeDo: currentInstructionSettings\(owner\)\.askBeforeDo \}/);
   assert.doesNotMatch(server, /globalInstructions: '',/);
 });
