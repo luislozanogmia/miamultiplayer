@@ -12,7 +12,7 @@ automatically through the in-app updater.
 ## [0.3.5] — 2026-11-08
 
 ### Changed
-- The one-time bot files tidy-up now asks Mia to look first. Let Mia look opens her chat, where she sorts the files bots left in the Mia folder from the ones that look like yours and explains the plan. You can change it in plain words, and nothing moves until you choose Go ahead. Nothing is deleted.
+- The one-time bot files tidy-up now asks Mia to look first. Let Mia look opens her chat, where she sorts the files bots left in the Mia folder from the ones that look like yours and explains the plan. You can change it in plain words. The tidy-up starts only when you choose Go ahead and never deletes files.
 - The tidy-up card shows Mia's own Motes.
 
 ## [0.3.4] — 2026-11-07

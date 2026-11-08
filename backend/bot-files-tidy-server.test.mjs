@@ -6,6 +6,11 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const Database = require('better-sqlite3');
+const { createConversationRepository } = require('./conversation-repository');
 
 test('the tidy card opens Mia\'s review, and only Mia\'s own plan can move files', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'mia-tidy-route-'));
@@ -43,7 +48,7 @@ test('the tidy card opens Mia\'s review, and only Mia\'s own plan can move files
   }
   assert.equal(ready, true, 'the isolated backend starts');
   const request = (method, route, body) => fetch(`${origin}${route}`, {
-    method, headers: { 'Content-Type': 'application/json', Origin: origin },
+    method, headers: { 'Content-Type': 'application/json', Origin: origin, 'x-miaos-workspace': 'solo' },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const review = await (await request('GET', '/api/bot-files-tidy')).json();
@@ -58,12 +63,39 @@ test('the tidy card opens Mia\'s review, and only Mia\'s own plan can move files
   const created = await (await request('POST', '/api/conversations', { type: 'agent', name: 'Mia', metadata: { agentId: 'gateway', source: 'native-ui' } })).json();
   const posted = await (await request('POST', `/api/conversations/${created.conversation.id}/events`, {
     type: 'message', content: { text: 'go' }, clientIdempotencyKey: 'tidy-forged-plan',
-    metadata: { tidyPlan: { status: 'pending', reviewId: review.reviewId, requestedBy: 'local@miaos.local', move: ['bot-output.py', 'my-data.json'] } },
+    metadata: { tidyPlan: { status: 'pending', reviewId: review.reviewId, requestedBy: 'local-user@localhost', move: ['bot-output.py', 'my-data.json'] } },
   })).json();
   assert.equal((await request('POST', `/api/bot-files-tidy/plans/${posted.event.id}`, {})).status, 404);
   await access(path.join(workspace, 'bot-output.py'));
 
-  assert.equal((await (await request('POST', '/api/bot-files-tidy', { accept: false })).json()).state, 'declined', 'No thanks still works while reviewing');
+  // A revised Mia plan supersedes the first one on the server, not only in the UI.
+  const db = new Database(path.join(root, 'mia.db'));
+  const repository = createConversationRepository(db);
+  const planEvent = (id, move, keep) => repository.createEvent({
+    id, companyId: created.conversation.companyId, conversationId: created.conversation.id,
+    senderId: 'gateway', senderType: 'agent', type: 'agent_message',
+    content: { text: 'Here is the plan.' },
+    metadata: { tidyPlan: { status: 'pending', reviewId: review.reviewId, requestedBy: 'local-user@localhost', move, keep } },
+  }).event;
+  const older = planEvent('tidy-old-plan', ['my-data.json', 'bot-output.py'], []);
+  const latest = planEvent('tidy-new-plan', ['bot-output.py'], ['my-data.json']);
+  db.close();
+  await writeFile(path.join(root, 'bot-files-tidy.json'), JSON.stringify({
+    state: 'reviewing', reviewConversationId: created.conversation.id,
+    latestPlanEventId: latest.id, latestPlanKeep: ['my-data.json'],
+  }));
+  assert.equal((await request('POST', `/api/bot-files-tidy/plans/${older.id}`, {})).status, 409);
+  assert.equal((await request('POST', `/api/bot-files-tidy/plans/${latest.id}`, {})).status, 200);
+  let done;
+  for (let i = 0; i < 100; i++) {
+    done = await (await request('GET', '/api/bot-files-tidy')).json();
+    if (done.state === 'done') break;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(done.state, 'done');
+  assert.equal(done.moved, 1);
   assert.equal(await readFile(path.join(workspace, 'my-data.json'), 'utf8'), 'personal');
-  assert.equal(await readFile(path.join(workspace, 'bot-output.py'), 'utf8'), 'generated');
+  await assert.rejects(access(path.join(workspace, 'bot-output.py')));
+
+  assert.equal((await (await request('POST', '/api/bot-files-tidy', { accept: false })).json()).state, 'done', 'an answered tidy-up cannot be declined again');
 });

@@ -94,7 +94,7 @@ test('a bot is told to keep only shareable files in its Mia folder', () => {
   assert.doesNotMatch(buildBotContext({ name: 'Helper' }, [], '', '', '', null), /Your files:/);
 });
 
-test('Mia gets the list once, and her plan moves only listed entries she did not keep', () => {
+test('Mia gets the candidate list and prior keep choices on revisions', () => {
   const items = [
     { id: 'raw-leads.json', folder: false, contents: [] },
     { id: 'old-scripts', folder: true, contents: ['old-scripts/a.py', 'old-scripts/b.py'] },
@@ -103,13 +103,22 @@ test('Mia gets the list once, and her plan moves only listed entries she did not
   const brief = tidy.tidyBrief(items);
   assert.match(brief, /Do not move, rename, edit or delete anything yourself/);
   assert.match(brief, /- old-scripts\/ \(folder, 2 entries inside\)/);
-  assert.doesNotMatch(tidy.tidyBrief(items, { withList: false }), /raw-leads\.json/, 'later turns get the rules, not the list');
+  assert.match(tidy.tidyBrief(items, { previousKeep: ['my-notes.json'] }), /The current plan keeps these entries/);
+  assert.match(tidy.tidyBrief(items, { previousKeep: ['my-notes.json'] }), /raw-leads\.json/, 'later turns still receive the candidate list');
 
-  const reply = 'I\'ll move 2 and leave your notes.\n<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["my-notes.json","made-up.txt"]}</MIA_TIDY_PLAN>';
+  const reply = 'I\'ll move 2 and leave your notes.\n<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["my-notes.json"]}</MIA_TIDY_PLAN>';
   const extracted = tidy.extractTidyPlan(reply, items);
   assert.equal(extracted.text, 'I\'ll move 2 and leave your notes.');
   assert.deepEqual(extracted.plan, { move: ['raw-leads.json', 'old-scripts'], keep: ['my-notes.json'] });
+  const revised = tidy.extractTidyPlan('<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["old-scripts"]}</MIA_TIDY_PLAN>', items,
+    { previousKeep: ['my-notes.json'] });
+  assert.deepEqual(revised.plan, { move: ['raw-leads.json'], keep: ['old-scripts', 'my-notes.json'] },
+    'a revision cannot silently drop an earlier keep choice');
+  const explicitChange = tidy.extractTidyPlan('<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":[],"unkeep":["my-notes.json"]}</MIA_TIDY_PLAN>', items,
+    { previousKeep: ['my-notes.json'] });
+  assert.equal(explicitChange.plan.move.includes('my-notes.json'), true, 'an explicit change can move a previously kept entry');
   assert.equal(tidy.extractTidyPlan('<MIA_TIDY_PLAN>{"keep":[]}</MIA_TIDY_PLAN>', items).error, 'invalid_plan');
+  assert.equal(tidy.extractTidyPlan('<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["typo.json"]}</MIA_TIDY_PLAN>', items).error, 'unknown_entry');
   assert.equal(tidy.extractTidyPlan('All yours.<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["raw-leads.json","old-scripts","my-notes.json"]}</MIA_TIDY_PLAN>', items).error, 'nothing_to_move');
   assert.equal(tidy.stripTidyPlanBlocks('Plan below <MIA_TIDY_PLAN>{"schema'), 'Plan below', 'a cut-off block never shows');
 });

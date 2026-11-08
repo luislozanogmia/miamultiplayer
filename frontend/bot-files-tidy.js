@@ -30,7 +30,7 @@
     return ART
       + '<div class="tidy-title" id="tidyTitle">We\'re making bots more organized</div>'
       + '<p class="tidy-copy">Mia found ' + esc(filesText(info.count)) + ' she can analyze and organize for you. She\'ll show you a plan first.</p>'
-      + '<p class="tidy-safe">Nothing moves until you say so, and nothing is ever deleted.</p>'
+      + '<p class="tidy-safe">The tidy-up starts only after Go ahead and never deletes files.</p>'
       + '<div class="tidy-error" role="status"></div>'
       + '<div class="app-confirm-actions"><button type="button" class="btn" data-tidy="no">No thanks</button>'
       + '<button type="button" class="btn primary" data-tidy="yes">Let Mia look</button></div>';

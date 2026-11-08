@@ -11985,8 +11985,13 @@
         state.busy = false;
         state.error = res.data && res.data.error === 'review_changed'
           ? 'Your files changed since Mia looked. Ask her to look again.'
+          : res.data && res.data.error === 'plan_replaced' ? 'Mia updated this plan. Use the newest Go ahead button.'
           : res.data && res.data.error === 'already_answered' ? 'This tidy-up was already answered.' : 'That didn\u2019t go through. Try again.';
       }
+      if(chatWs.activeRoomId === roomId) renderChatThread();
+    }).catch(function(){
+      state.busy = false;
+      state.error = 'That didn\u2019t go through. Try again.';
       if(chatWs.activeRoomId === roomId) renderChatThread();
     });
   });

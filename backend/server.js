@@ -1890,6 +1890,7 @@ function botFilesTidyReview() {
   return { items, reviewId };
 }
 app.get('/api/bot-files-tidy', requireAuth, (req, res) => {
+  if (workspaceIdFromRequest(req) !== 'solo') return res.status(404).json({ error: 'not_found' });
   const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
   if (state.state === 'running' && !botFilesTidyRunning) startBotFilesTidy();
   if (state.state) return res.json({ state: state.state, moved: (state.moved || []).length });
@@ -1901,6 +1902,7 @@ app.get('/api/bot-files-tidy', requireAuth, (req, res) => {
 // The card's answer: review (open Mia's chat) or decline. Moving needs Mia's
 // plan, accepted with /api/bot-files-tidy/plans/:eventId.
 app.post('/api/bot-files-tidy', requireAuth, (req, res) => {
+  if (workspaceIdFromRequest(req) !== 'solo') return res.status(404).json({ error: 'not_found' });
   const current = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
   const body = req.body || {};
   if (current.state && current.state !== 'reviewing') return res.json({ state: current.state });
@@ -1917,6 +1919,7 @@ app.post('/api/bot-files-tidy', requireAuth, (req, res) => {
 // Go ahead on Mia's plan. The plan names review ids; if the files changed
 // since Mia looked, the person asks her to look again.
 app.post('/api/bot-files-tidy/plans/:eventId', requireAuth, (req, res) => {
+  if (workspaceIdFromRequest(req) !== 'solo') return res.status(404).json({ error: 'not_found' });
   const owner = String(req.userEmail || '').toLowerCase();
   const companyId = nativeCompanyId(workspaceIdFromRequest(req), owner);
   const event = nativeConversationRepository.getEvent({ companyId, id: req.params.eventId, includeDeleted: false });
@@ -1932,6 +1935,7 @@ app.post('/api/bot-files-tidy/plans/:eventId', requireAuth, (req, res) => {
   if (plan.status !== 'pending') return res.status(409).json({ error: 'already_answered', plan });
   const current = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
   if (current.state && current.state !== 'reviewing') return res.status(409).json({ error: 'already_answered', state: current.state });
+  if (current.latestPlanEventId !== event.id) return res.status(409).json({ error: 'plan_replaced' });
   let review;
   try { review = botFilesTidyReview(); } catch (_) { return res.status(503).json({ error: 'review_unavailable' }); }
   if (plan.reviewId !== review.reviewId) return res.status(409).json({ error: 'review_changed' });
@@ -1966,18 +1970,36 @@ function botFilesTidyReviewing() {
 }
 function botFilesTidyTurnNote(trigger) {
   if (!botFilesTidyReviewing()) return '';
-  const started = !!(trigger && trigger.metadata && trigger.metadata.botFilesTidy);
   try {
-    return botFilesTidy.tidyBrief(botFilesTidyReview().items, { withList: started });
+    const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+    if (!state.reviewConversationId) {
+      if (!trigger?.metadata?.botFilesTidy || !trigger.conversationId) return '';
+      botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { ...state, reviewConversationId: trigger.conversationId });
+    } else if (state.reviewConversationId !== trigger?.conversationId) return '';
+    return botFilesTidy.tidyBrief(botFilesTidyReview().items, { previousKeep: state.latestPlanKeep || [] });
   } catch (_) {
     return '';
   }
 }
-function nativeMiaTidyPlan(replyText, senderLabel) {
+function recordTidyPlanEvent(result, tidyPlan) {
+  if (!result || !result.event || !tidyPlan || !tidyPlan.metadata || !tidyPlan.metadata.tidyPlan) return;
+  const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (state.state !== 'reviewing') return;
+  botFilesTidy.writeState(BOT_FILES_TIDY_STATE, {
+    ...state,
+    latestPlanEventId: result.event.id,
+    latestPlanKeep: tidyPlan.metadata.tidyPlan.keep,
+  });
+}
+function nativeMiaTidyPlan(replyText, senderLabel, trigger) {
   if (!botFilesTidyReviewing()) return { text: botFilesTidy.stripTidyPlanBlocks(replyText), metadata: null };
+  const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
+  if (!state.reviewConversationId || state.reviewConversationId !== trigger?.conversationId) {
+    return { text: botFilesTidy.stripTidyPlanBlocks(replyText), metadata: null };
+  }
   let review;
   try { review = botFilesTidyReview(); } catch (_) { return { text: botFilesTidy.stripTidyPlanBlocks(replyText), metadata: null }; }
-  const extracted = botFilesTidy.extractTidyPlan(replyText, review.items);
+  const extracted = botFilesTidy.extractTidyPlan(replyText, review.items, { previousKeep: state.latestPlanKeep || [] });
   if (!extracted.plan) return { text: extracted.text, metadata: extracted.error ? { tidyPlanError: extracted.error } : null };
   return { text: extracted.text, metadata: { tidyPlan: {
     status: 'pending', reviewId: review.reviewId, requestedBy: senderLabel,
@@ -8341,7 +8363,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     // Only Mia's own chat shows the bot setup card.
     ownsPrivateAgentConversation && !slashCommand && !privateAgent ? miaBotSetupActions.botSetupInstruction() : '',
     // TEMPORARY (bot files tidy-up): remove in 0.3.6.
-    ownsPrivateAgentConversation && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
+    ownsPrivateAgentConversation && conversation.companyId === nativeCompanyId('solo', senderLabel)
+      && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
     slashCommand ? '' : nextStep.nextStepInstruction(),
     ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
@@ -8581,7 +8604,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   const instructionUpdate = privateBotChat
     ? nativeBotInstructionUpdate(agent, actionReply, trigger)
     : { text: actionReply, metadata: null };
-  const tidyPlan = ownsMiaChat ? nativeMiaTidyPlan(actionReply, senderLabel) : { text: actionReply, metadata: null };
+  const tidyPlan = ownsMiaChat && conversation.companyId === nativeCompanyId('solo', senderLabel)
+    ? nativeMiaTidyPlan(actionReply, senderLabel, trigger) : { text: actionReply, metadata: null };
   const automationAction = privateBotChat
     ? await nativeBotAutomationAction(agent, botFilesTidy.stripTidyPlanBlocks(miaBotSetupActions.stripBotSetupBlocks(instructionUpdate.text)), trigger)
     : ownsMiaChat
@@ -8630,6 +8654,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
           artifact: true,
           artifactSource: 'interactive',
           ...(index === validatedArtifacts.length - 1 ? nextStepMetadata : {}),
+          ...(index === validatedArtifacts.length - 1 ? tidyPlan.metadata || {} : {}),
         },
       });
       for (const attachment of attachments) {
@@ -8641,6 +8666,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       }
       lastResult = created;
     }
+    recordTidyPlanEvent(lastResult, tidyPlan);
     if (dispatch.targetType === 'gateway') {
       await enqueueNativeMiaHandoffs(conversation, trigger, lastResult.event, safeReply || '');
     }
@@ -8663,6 +8689,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       ...(inferenceResult && inferenceResult.goal !== undefined ? { goal: inferenceResult.goal } : {}),
     },
   });
+  recordTidyPlanEvent(result, tidyPlan);
   if (dispatch.targetType === 'gateway') {
     await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch);
   }

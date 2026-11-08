@@ -10,7 +10,7 @@ const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;',
 test('the card offers Mia\'s review with the real Motes, not a file checklist', () => {
   const html = tidy.dialogHtml({ count: 511 });
   assert.match(html, /Mia found 511 files she can analyze and organize for you/);
-  assert.match(html, /Nothing moves until you say so/);
+  assert.match(html, /The tidy-up starts only after Go ahead/);
   assert.match(html, />Let Mia look</);
   assert.match(html, /assets\/mote\/mote-static\.svg/);
   assert.match(html, /assets\/mote\/mote-research-static\.svg/);

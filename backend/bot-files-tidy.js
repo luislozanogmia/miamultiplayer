@@ -182,8 +182,8 @@ function stripTidyPlanBlocks(text) {
 }
 
 // -> { text, plan, error }. plan is { move, keep }, both lists of review ids;
-// ids Mia made up are dropped, and anything she was shown but didn't keep moves.
-function extractTidyPlan(text, items) {
+// Unknown ids invalidate the plan; shown entries not kept move after approval.
+function extractTidyPlan(text, items, { previousKeep = [] } = {}) {
   const source = String(text || '');
   const clean = stripTidyPlanBlocks(source);
   const matches = [...source.matchAll(PLAN_TAG)];
@@ -192,7 +192,13 @@ function extractTidyPlan(text, items) {
   try { parsed = JSON.parse(matches[matches.length - 1][1]); } catch (_) { return { text: clean, plan: null, error: 'invalid_json' }; }
   if (!parsed || parsed.schemaVersion !== 1 || !Array.isArray(parsed.keep)) return { text: clean, plan: null, error: 'invalid_plan' };
   const ids = (items || []).slice(0, MAX_BRIEF_ENTRIES).map(item => item.id);
-  const keep = new Set(parsed.keep.filter(id => typeof id === 'string'));
+  const unkeep = parsed.unkeep === undefined ? [] : parsed.unkeep;
+  if (!Array.isArray(unkeep) || parsed.keep.some(id => typeof id !== 'string' || !ids.includes(id))
+    || unkeep.some(id => typeof id !== 'string' || !previousKeep.includes(id))) {
+    return { text: clean, plan: null, error: 'unknown_entry' };
+  }
+  const keep = new Set([...previousKeep, ...parsed.keep]);
+  for (const id of unkeep) keep.delete(id);
   const plan = { move: ids.filter(id => !keep.has(id)), keep: ids.filter(id => keep.has(id)) };
   if (!plan.move.length) return { text: clean, plan: null, error: 'nothing_to_move' };
   return { text: clean, plan, error: null };
@@ -206,7 +212,7 @@ function entryLine(item) {
 
 // The instructions Mia gets with the person's "organize my bot files" message.
 // The full list goes only with that first message; later turns get the rules.
-function tidyBrief(items, { withList = true } = {}) {
+function tidyBrief(items, { previousKeep = [] } = {}) {
   const lines = [
     'Bot files tidy-up (authoritative):',
     'Before Mia 0.3.4, bots worked directly in the person’s Mia folder (~/Documents/mia), so scripts, raw data, logs and temp files piled up beside the files the person actually opens. Mia found the entries below. Each one can move out of the Mia folder into Mia’s own working files: entries under bots/<Bot>/ go to that bot’s working folder, the rest to one tidied folder. Moving never deletes or overwrites anything, and every move is recorded.',
@@ -214,13 +220,13 @@ function tidyBrief(items, { withList = true } = {}) {
     'Reply with a short, high-level review in plain words: how many entries move and how many stay, grouped by kind with two or three example names each, and where they go. Do not list every entry unless the person asks. Say that nothing has moved yet and that they can choose Go ahead below or tell you what to change.',
     'End every reply about this plan, including after changes the person asks for, with exactly one block listing the entry ids that stay (an empty list moves everything):',
     '<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["company-review-rejections-2026-11-07.json"]}</MIA_TIDY_PLAN>',
-    '- keep: ids copied exactly from the list. Every entry not listed moves.',
+    '- keep: ids copied exactly from the list. Previously kept entries stay kept automatically. Every other entry not listed moves. A misspelled or unknown id invalidates the plan.',
+    '- If the person explicitly changes a previously kept entry to move, add its exact id to an optional unkeep list. Otherwise omit unkeep.',
   ];
-  if (withList) {
-    const shown = items.slice(0, MAX_BRIEF_ENTRIES);
-    lines.push('', `Entries (${items.length}):`, ...shown.map(entryLine));
-    if (items.length > shown.length) lines.push(`- …and ${items.length - shown.length} more, which stay unless the person asks again.`);
-  }
+  if (previousKeep.length) lines.push('', `The current plan keeps these entries. Keep them in the next plan unless the person explicitly changes that choice: ${JSON.stringify(previousKeep)}`);
+  const shown = items.slice(0, MAX_BRIEF_ENTRIES);
+  lines.push('', `Entries (${items.length}):`, ...shown.map(entryLine));
+  if (items.length > shown.length) lines.push(`- …and ${items.length - shown.length} more, which stay unless the person asks again.`);
   return lines.join('\n');
 }
 
