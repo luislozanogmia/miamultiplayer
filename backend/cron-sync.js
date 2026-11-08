@@ -345,7 +345,7 @@ function teamBotWorkFolder(team, bot) {
 }
 
 // Every bot folder in the Mia folder with the working folder it belongs to,
-// for the one-time tidy-up (bot-files-tidy.js). Remove with it in 0.3.5.
+// for the one-time tidy-up (bot-files-tidy.js). Remove with it in 0.3.6.
 function listBotFileFolders() {
   const found = [];
   const folders = (root) => { try { return fs.readdirSync(root).map((name) => path.join(root, name)).filter(isRealDirectory); } catch (_) { return []; } };

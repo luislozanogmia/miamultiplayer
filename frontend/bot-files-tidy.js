@@ -1,9 +1,9 @@
 (function(root){
   'use strict';
-  // The one-time "bots are getting organized" card for 0.3.4. It asks before
-  // Mia moves the scripts, notes and logs bots left in the Mia folder into
-  // Mia's own data; the move runs in the background and deletes nothing.
-  // TEMPORARY: remove this file, its script tag, its styles and its call in 0.3.5.
+  // The one-time "bots are getting organized" card. Let Mia look opens her
+  // chat, where she reviews the files bots left in the Mia folder and shows a
+  // plan; nothing moves until the person chooses Go ahead on that plan.
+  // TEMPORARY: remove this file, its script tag, its styles and its call in 0.3.6.
 
   function esc(value){
     return String(value == null ? '' : value).replace(/[&<>"']/g, function(c){
@@ -27,23 +27,13 @@
   function filesText(count){ return count === 1 ? '1 file' : count + ' files'; }
 
   function dialogHtml(info){
-    var items = Array.isArray(info.items) ? info.items : [];
-    var fileList = items.map(function(item){
-      var children = item.folder && item.contents && item.contents.length
-        ? '<details><summary>Show ' + esc(filesText(item.contents.length)) + ' inside</summary><ul>'
-          + item.contents.map(function(name){ return '<li>' + esc(name) + '</li>'; }).join('') + '</ul></details>' : '';
-      return '<div class="tidy-file-row"><label><input type="checkbox" data-tidy-file value="' + esc(item.id) + '"> '
-        + esc(item.id) + (item.folder ? ' (folder)' : '') + '</label>' + children + '</div>';
-    }).join('');
     return ART
       + '<div class="tidy-title" id="tidyTitle">We\'re making bots more organized</div>'
-      + '<p class="tidy-copy">Mia found ' + esc(filesText(info.count)) + ' it can move into its working folder. Some may be files you made. Select only the entries you want moved; open a folder to review everything inside it.</p>'
-      + '<div class="tidy-file-list" role="group" aria-label="Files to move">' + fileList + '</div>'
-      + '<button type="button" class="btn" data-tidy="all">Select all</button>'
-      + '<p class="tidy-safe">Nothing is deleted or overwritten. Files you leave unselected stay here.</p>'
+      + '<p class="tidy-copy">Mia found ' + esc(filesText(info.count)) + ' she can analyze and organize for you. She\'ll show you a plan first.</p>'
+      + '<p class="tidy-safe">Nothing moves until you say so, and nothing is ever deleted.</p>'
       + '<div class="tidy-error" role="status"></div>'
       + '<div class="app-confirm-actions"><button type="button" class="btn" data-tidy="no">No thanks</button>'
-      + '<button type="button" class="btn primary" data-tidy="yes">Tidy up</button></div>';
+      + '<button type="button" class="btn primary" data-tidy="yes">Let Mia look</button></div>';
   }
 
   function show(info, options){
@@ -60,37 +50,50 @@
     document.body.appendChild(overlay);
     var yes = card.querySelector('[data-tidy="yes"]');
     var no = card.querySelector('[data-tidy="no"]');
-    var all = card.querySelector('[data-tidy="all"]');
     function close(){ document.removeEventListener('keydown', onKeydown); overlay.remove(); }
     // Closing without answering asks again the next time Mia opens.
     function onKeydown(event){ if(event.key === 'Escape'){ event.preventDefault(); close(); } }
-    function answer(accept){
-      var selected = Array.from(card.querySelectorAll('[data-tidy-file]:checked')).map(function(input){ return input.value; });
-      if(accept && !selected.length){ card.querySelector('.tidy-error').textContent = 'Select at least one file or folder first.'; return; }
+    function answer(review){
       yes.disabled = no.disabled = true;
-      options.api('/api/bot-files-tidy', {method: 'POST', body: {accept: accept, reviewId: info.reviewId, selected: selected}}).then(function(){
+      options.api('/api/bot-files-tidy', {method: 'POST', body: review ? {review: true} : {accept: false}}).then(function(res){
+        if(!res || res.status !== 200) throw new Error('not saved');
         close();
-        if(accept){
-          options.toast('Tidying up bot files in the background.');
-          setTimeout(function(){ reportDone(options, 0); }, 2000);
-        }
-      }, function(){
-        close(); shown = false;
-        setTimeout(function(){ root.MiaBotFilesTidy.showOnce(options); }, 250);
+        if(review) options.reviewWithMia(info.count);
+      }).catch(function(){
+        yes.disabled = no.disabled = false;
+        card.querySelector('.tidy-error').textContent = 'That didn\'t go through. Try again.';
       });
-    }
-    function reportDone(opts, attempt){
-      opts.api('/api/bot-files-tidy').then(function(res){
-        var data = res.data || {};
-        if(data.state === 'running' && attempt < 10) return setTimeout(function(){ reportDone(opts, attempt + 1); }, 3000);
-        if(data.state === 'done') opts.toast('Bot files tidied: ' + filesText(data.moved || 0) + ' moved into Mia. Nothing was deleted.');
-      }).catch(function(){});
     }
     yes.addEventListener('click', function(){ answer(true); });
     no.addEventListener('click', function(){ answer(false); });
-    all.addEventListener('click', function(){ card.querySelectorAll('[data-tidy-file]').forEach(function(input){ input.checked = true; }); });
     document.addEventListener('keydown', onKeydown);
     yes.focus();
+  }
+
+  // Mia's plan in her reply: Go ahead moves what she didn't keep.
+  function planHtml(message, options){
+    var event = message && message.nativeEvent;
+    var plan = event && event.metadata && event.metadata.tidyPlan;
+    var esc = options && options.esc;
+    if(!plan || !Array.isArray(plan.move) || typeof esc !== 'function') return '';
+    var status = String(plan.status || '');
+    if(status === 'done'){
+      var left = (plan.keep ? plan.keep.length : 0) + Number(plan.skipped || 0);
+      return '<div class="automation-proposal-answered" data-tidy-plan-status="done">Done. Moved ' + esc(filesText(Number(plan.moved || 0)))
+        + ' into Mia\'s working files' + (left ? ' and left ' + esc(String(left)) + ' where ' + (left === 1 ? 'it was' : 'they were') : '') + '. Nothing was deleted.</div>';
+    }
+    if(status === 'accepted') return '<div class="automation-proposal-answered" data-tidy-plan-status="accepted">Moving ' + esc(filesText(plan.move.length)) + ' in the background…</div>';
+    if(status !== 'pending') return '';
+    if(!options.latest) return '<div class="automation-proposal-answered" data-tidy-plan-status="replaced">Mia updated this plan below.</div>';
+    var busy = !!options.busy;
+    return '<div class="agent-setup-card automation-proposal-card" data-tidy-plan="' + esc(event.id) + '">'
+      + '<div class="agent-setup-card-intro">' + esc(filesText(plan.move.length)) + ' will move into Mia\'s working files; '
+      + esc(String((plan.keep || []).length)) + ((plan.keep || []).length === 1 ? ' stays where it is' : ' stay where they are') + '. Nothing is deleted.</div>'
+      + (options.error ? '<div class="agent-setup-error" role="alert">' + esc(options.error) + '</div>' : '')
+      + '<div class="agent-setup-actions">'
+      + '<button type="button" class="agent-setup-yes" data-tidy-plan-decision="go"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Starting…' : 'Go ahead') + '</button>'
+      + '<button type="button" class="agent-setup-later" data-tidy-plan-decision="list"' + (busy ? ' disabled' : '') + '>Show full list</button>'
+      + '</div></div>';
   }
 
   var shown = false;
@@ -109,6 +112,7 @@
         if(data.state === 'ask' && data.count > 0) show(data, options);
       }).catch(function(){ shown = false; });
     },
-    dialogHtml: dialogHtml
+    dialogHtml: dialogHtml,
+    planHtml: planHtml
   };
 })(typeof window !== 'undefined' ? window : globalThis);

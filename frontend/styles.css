@@ -680,7 +680,7 @@
   .interrupted-repeat{font-size:11px;padding:1px 6px;margin-top:2px;border-radius:6px;background:#FBF0D9;color:#7A5300;}
   .interrupted-error{font-size:12px;color:#B3261E;min-height:0;}
   .interrupted-error:not(:empty){margin-top:8px;}
-  /* TEMPORARY (0.3.4 only): bot files tidy-up card. Remove in 0.3.5. */
+  /* TEMPORARY: bot files tidy-up card. Remove in 0.3.6. */
   .tidy-card{max-width:400px;}
   .tidy-art{display:flex;align-items:flex-end;justify-content:center;gap:14px;margin:0 auto 12px;}
   .tidy-mote{width:64px;height:auto;}
@@ -689,12 +689,6 @@
   .tidy-title{font-size:16px;font-weight:600;color:var(--ink);text-align:center;margin-bottom:8px;}
   .tidy-copy{font-size:13.5px;line-height:1.5;color:var(--ink);margin:0 0 8px;}
   .tidy-safe{font-size:13px;line-height:1.45;color:var(--muted);margin:0;}
-  .tidy-file-list{max-height:220px;overflow:auto;margin:10px 0;padding:6px;border:1px solid var(--sand-border-default);border-radius:8px;font-size:12px;overflow-wrap:anywhere;}
-  .tidy-file-row{padding:5px 3px;border-bottom:1px solid var(--sand-border-default);}
-  .tidy-file-row:last-child{border-bottom:0;}
-  .tidy-file-row label{display:flex;align-items:flex-start;gap:6px;cursor:pointer;}
-  .tidy-file-row details{margin:4px 0 0 20px;}
-  .tidy-file-row ul{margin:4px 0;padding-left:16px;}
   .tidy-error{font-size:12px;color:#B3261E;}
   .tidy-error:not(:empty){margin-top:8px;}
   /* Removed from a team: the notice blocks everything; if that team is open it

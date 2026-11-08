@@ -93,3 +93,23 @@ test('a bot is told to keep only shareable files in its Mia folder', () => {
   assert.match(buildBotContext({ name: 'Helper', filesFolder: '/x/bots/Helper' }, [], '', '', '', null), /Your files:/);
   assert.doesNotMatch(buildBotContext({ name: 'Helper' }, [], '', '', '', null), /Your files:/);
 });
+
+test('Mia gets the list once, and her plan moves only listed entries she did not keep', () => {
+  const items = [
+    { id: 'raw-leads.json', folder: false, contents: [] },
+    { id: 'old-scripts', folder: true, contents: ['old-scripts/a.py', 'old-scripts/b.py'] },
+    { id: 'my-notes.json', folder: false, contents: [] },
+  ];
+  const brief = tidy.tidyBrief(items);
+  assert.match(brief, /Do not move, rename, edit or delete anything yourself/);
+  assert.match(brief, /- old-scripts\/ \(folder, 2 entries inside\)/);
+  assert.doesNotMatch(tidy.tidyBrief(items, { withList: false }), /raw-leads\.json/, 'later turns get the rules, not the list');
+
+  const reply = 'I\'ll move 2 and leave your notes.\n<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["my-notes.json","made-up.txt"]}</MIA_TIDY_PLAN>';
+  const extracted = tidy.extractTidyPlan(reply, items);
+  assert.equal(extracted.text, 'I\'ll move 2 and leave your notes.');
+  assert.deepEqual(extracted.plan, { move: ['raw-leads.json', 'old-scripts'], keep: ['my-notes.json'] });
+  assert.equal(tidy.extractTidyPlan('<MIA_TIDY_PLAN>{"keep":[]}</MIA_TIDY_PLAN>', items).error, 'invalid_plan');
+  assert.equal(tidy.extractTidyPlan('All yours.<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["raw-leads.json","old-scripts","my-notes.json"]}</MIA_TIDY_PLAN>', items).error, 'nothing_to_move');
+  assert.equal(tidy.stripTidyPlanBlocks('Plan below <MIA_TIDY_PLAN>{"schema'), 'Plan below', 'a cut-off block never shows');
+});

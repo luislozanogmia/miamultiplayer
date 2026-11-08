@@ -6,7 +6,10 @@
 // files into Mia's own data: a bot's into its working folder, loose ones into
 // one tidied folder. Nothing is deleted or overwritten, and every move is
 // recorded so it can be undone by hand.
-// TEMPORARY: remove this module, its routes and the app card in 0.3.5.
+// Mia reviews the list first: the card opens her chat with tidyBrief, her
+// reply ends in a <MIA_TIDY_PLAN> block naming what stays, and the person's
+// Go ahead moves the rest with runTidy. Mia never moves anything herself.
+// TEMPORARY: remove this module, its routes and the app card in 0.3.6.
 
 const fs = require('fs');
 const path = require('path');
@@ -168,4 +171,60 @@ function writeState(stateFile, state) {
   fs.renameSync(temporary, stateFile);
 }
 
-module.exports = { isTechnicalFile, isTechnicalFolder, planTidy, reviewPlan, approvedMoves, runTidy, readState, writeState };
+const PLAN_TAG = /<MIA_TIDY_PLAN>([\s\S]*?)<\/MIA_TIDY_PLAN>/gi;
+const MAX_BRIEF_ENTRIES = 2000;
+
+function stripTidyPlanBlocks(text) {
+  let clean = String(text || '').replace(PLAN_TAG, '');
+  const unclosed = clean.search(/<MIA_TIDY_PLAN>/i);
+  if (unclosed >= 0) clean = clean.slice(0, unclosed);
+  return clean.replace(/<\/?MIA_TIDY_PLAN>/gi, '').trim();
+}
+
+// -> { text, plan, error }. plan is { move, keep }, both lists of review ids;
+// ids Mia made up are dropped, and anything she was shown but didn't keep moves.
+function extractTidyPlan(text, items) {
+  const source = String(text || '');
+  const clean = stripTidyPlanBlocks(source);
+  const matches = [...source.matchAll(PLAN_TAG)];
+  if (!matches.length) return { text: clean, plan: null, error: null };
+  let parsed;
+  try { parsed = JSON.parse(matches[matches.length - 1][1]); } catch (_) { return { text: clean, plan: null, error: 'invalid_json' }; }
+  if (!parsed || parsed.schemaVersion !== 1 || !Array.isArray(parsed.keep)) return { text: clean, plan: null, error: 'invalid_plan' };
+  const ids = (items || []).slice(0, MAX_BRIEF_ENTRIES).map(item => item.id);
+  const keep = new Set(parsed.keep.filter(id => typeof id === 'string'));
+  const plan = { move: ids.filter(id => !keep.has(id)), keep: ids.filter(id => keep.has(id)) };
+  if (!plan.move.length) return { text: clean, plan: null, error: 'nothing_to_move' };
+  return { text: clean, plan, error: null };
+}
+
+function entryLine(item) {
+  if (!item.folder) return `- ${item.id}`;
+  const files = item.contents.length;
+  return `- ${item.id}/ (folder, ${files === 1 ? '1 entry' : files + ' entries'} inside)`;
+}
+
+// The instructions Mia gets with the person's "organize my bot files" message.
+// The full list goes only with that first message; later turns get the rules.
+function tidyBrief(items, { withList = true } = {}) {
+  const lines = [
+    'Bot files tidy-up (authoritative):',
+    'Before Mia 0.3.4, bots worked directly in the person’s Mia folder (~/Documents/mia), so scripts, raw data, logs and temp files piled up beside the files the person actually opens. Mia found the entries below. Each one can move out of the Mia folder into Mia’s own working files: entries under bots/<Bot>/ go to that bot’s working folder, the rest to one tidied folder. Moving never deletes or overwrites anything, and every move is recorded.',
+    'Decide which entries are leftovers from bot work and should move, and which look like something the person made, edited or still uses and should stay. You may open or inspect files to decide. Do not move, rename, edit or delete anything yourself: the app moves the files after the person agrees.',
+    'Reply with a short, high-level review in plain words: how many entries move and how many stay, grouped by kind with two or three example names each, and where they go. Do not list every entry unless the person asks. Say that nothing has moved yet and that they can choose Go ahead below or tell you what to change.',
+    'End every reply about this plan, including after changes the person asks for, with exactly one block listing the entry ids that stay (an empty list moves everything):',
+    '<MIA_TIDY_PLAN>{"schemaVersion":1,"keep":["company-review-rejections-2026-11-07.json"]}</MIA_TIDY_PLAN>',
+    '- keep: ids copied exactly from the list. Every entry not listed moves.',
+  ];
+  if (withList) {
+    const shown = items.slice(0, MAX_BRIEF_ENTRIES);
+    lines.push('', `Entries (${items.length}):`, ...shown.map(entryLine));
+    if (items.length > shown.length) lines.push(`- …and ${items.length - shown.length} more, which stay unless the person asks again.`);
+  }
+  return lines.join('\n');
+}
+
+module.exports = {
+  isTechnicalFile, isTechnicalFolder, planTidy, reviewPlan, approvedMoves, runTidy, readState, writeState,
+  tidyBrief, extractTidyPlan, stripTidyPlanBlocks,
+};
