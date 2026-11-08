@@ -484,3 +484,11 @@ test('chat markdown never leaves a tag open for the messages after it', async ()
     assert.ok(tagsBalanced(mdLite(text)), text);
   }
 });
+
+test('a view tip waits under a dialog opened while it is showing', async () => {
+  const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const tips = styles.match(/\.mia-tips\{[^}]*z-index:(\d+)/);
+  const dialogs = styles.match(/\.app-prompt-overlay\{[^}]*z-index:(\d+)/);
+  assert.ok(Number(tips[1]) > Number(dialogs[1]), 'tips draw above dialogs, so they must step aside');
+  assert.ok(styles.includes('body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mia-tips{visibility:hidden;}'));
+});
