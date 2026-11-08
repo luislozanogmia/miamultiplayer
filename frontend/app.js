@@ -15007,7 +15007,7 @@
       '<button type="button" class="cip-pane-btn" id="chatInfoClose" aria-label="Hide details" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
       '<div class="cip-details">' + detailsFilesHtml(fileRows) +
       '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">About this company bot</span></div>' +
-      '<div class="cip-section-empty">Runs on its owner\'s computer' + (where ? ', in ' + where : '') + '.</div>' + about + '</section></div>';
+      '<div class="cip-section-empty">Runs on the requesting or approving participant\'s computer, using that participant\'s credentials' + (where ? ', in ' + where : '') + '.</div>' + about + '</section></div>';
     bindDetailsFiles(pane, fileRows);
     el('#chatInfoClose', pane).addEventListener('click', function(){
       chatInfo.open = false;

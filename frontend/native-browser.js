@@ -13,6 +13,10 @@
   var input = document.getElementById('localBrowserUrl');
   var dot = document.getElementById('localBrowserDot');
   var status = document.getElementById('localBrowserStatus');
+  var chromeSignInButton = document.getElementById('localBrowserChromeSignInBtn');
+  var chromeHandoffBar = document.getElementById('localBrowserChromeHandoff');
+  var chromeImportButton = document.getElementById('localBrowserChromeImportBtn');
+  var chromeCancelButton = document.getElementById('localBrowserChromeCancelBtn');
   var foot = overlay.querySelector('.local-browser-foot');
   var strip = document.createElement('div');
   strip.className = 'native-browser-tabs';
@@ -410,6 +414,25 @@
     var tab = selected();
     if (tab && tab.url && (input.value === tab.url || input.value === displayUrl(tab.url))) showUrl(tab.url);
   });
+  function chromeSignInError(message) {
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = false;
+    setTimeout(function () { if (status.textContent === message) status.hidden = true; }, 6000);
+  }
+  function chromeSignInAction(action, button) {
+    if (button) button.disabled = true;
+    return command(action).then(function (result) {
+      if (result && result.error) chromeSignInError(result.error);
+      else if (result && result.chromeSignInImported) {
+        if (status) { status.textContent = 'Sign-in imported'; status.hidden = false; }
+        setTimeout(function () { if (status && status.textContent === 'Sign-in imported') status.hidden = true; }, 5000);
+      }
+    }).finally(function () { if (button) button.disabled = false; });
+  }
+  if (chromeSignInButton) chromeSignInButton.addEventListener('click', function () { chromeSignInAction('chromeSignInStart', chromeSignInButton); });
+  if (chromeImportButton) chromeImportButton.addEventListener('click', function () { chromeSignInAction('chromeSignInFinish', chromeImportButton); });
+  if (chromeCancelButton) chromeCancelButton.addEventListener('click', function () { chromeSignInAction('chromeSignInCancel', chromeCancelButton); });
   function command(action, extra) {
     return bridge.command(Object.assign({ action: action }, extra)).then(function (next) {
       if (next && next.error) { status.textContent = next.error; input.setAttribute('aria-invalid', 'true'); }
@@ -687,6 +710,9 @@
     syncStillPage();
     var tab = selected();
     var url = tab && tab.url || '';
+    var botGroup = (state.groups || []).some(function (group) { return tab && group.id === tab.groupId && group.botId; });
+    if (chromeSignInButton) chromeSignInButton.hidden = !state.chromeSignInAvailable || !/^https:\/\/(?:(?:[a-z0-9-]+\.)*chatgpt\.com|auth\.openai\.com)(?:[/:?#]|$)/i.test(url) || !!botGroup || !!state.chromeSignIn;
+    if (chromeHandoffBar) chromeHandoffBar.hidden = !state.chromeSignIn;
     if (changedTab || document.activeElement !== input) showUrl(url);
     if (changedTab) { findBar.hidden = true; findResult.textContent = ''; }
     input.setAttribute('aria-invalid', tab && tab.error ? 'true' : 'false');

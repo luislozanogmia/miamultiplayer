@@ -422,6 +422,7 @@ function ensureCronPlugin(plugin) {
     })().catch(() => {
       cronPluginsReady.delete(plugin);
       console.error('automation plugin unavailable');
+      throw new Error('automation plugin unavailable');
     }));
   }
   return cronPluginsReady.get(plugin);
@@ -476,10 +477,17 @@ function ensureCronGuards() {
 // Hermes loads plugins when its gateway starts, so Mia prepares scheduled
 // runs before starting it (server.js): a run never starts without the bot's
 // guards, ask-before-do or step reports, even on the first automation.
+let scheduledPreparationFailed = false;
 async function prepareScheduledRuns() {
-  await ensureCronGuards();
-  await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN);
-  await ensureCronPlugin(RUN_REPORT_PLUGIN);
+  try {
+    await ensureCronGuards();
+    await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN);
+    await ensureCronPlugin(RUN_REPORT_PLUGIN);
+    scheduledPreparationFailed = false;
+  } catch (_) {
+    scheduledPreparationFailed = true;
+    throw new Error('scheduled-run safety preparation failed');
+  }
 }
 
 async function restrictHermesJob(jobId, bot, workdir, automation) {
@@ -761,6 +769,11 @@ function readHermesJobs() {
   }
 }
 
+function hasActiveMiaJobs() {
+  const registry = readHermesJobs();
+  return [...registry.byId.values()].some(job => jobOwnerFromJob(job) && !jobIsPaused(job));
+}
+
 function resolveOwnedAutomationJob(bot, automation, registry, existingJob, allowLegacy) {
   const key = automationOwnerKey(bot.id, automation.id);
   const ownedJobs = (registry.byOwnerKey.get(key) || []).slice();
@@ -832,6 +845,10 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
     if (job && !jobIsPaused(job)) await runHermes(['pause', job.id]);
     return;
   }
+
+  // If startup could not install the guards and plugins, an automation must
+  // never be created, edited or resumed in the still-running gateway.
+  if (scheduledPreparationFailed) throw new Error('scheduled-run safety preparation failed');
 
   let workdir;
   try {
@@ -1427,5 +1444,6 @@ module.exports = {
   scheduledBotToolsets,
   CRON_GUARD_SCRIPT,
   prepareScheduledRuns,
+  hasActiveMiaJobs,
   cronPluginEnabled,
 };

@@ -7,6 +7,8 @@ const { fileURLToPath, pathToFileURL } = require("node:url");
 const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
+const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
+const { safeBrowserPageUrl } = require("../../frontend/safe-page-url.js");
 const { PAGE_HELPERS, cleanAnchor, readScript, scrollScript } = require("./space-anchor.cjs");
 
 const { createActorRuntime } = require("./browser-actors.cjs");
@@ -234,6 +236,25 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // sign in once and remain signed in across app restarts. This does not share
   // or import Chrome/Safari cookies; Clear Browser Data and clean slate erase it.
   const profile = session.fromPartition(BROWSER_PARTITION, { cache: true });
+  let handoffTab = null;
+  let handoffWorkspace = null;
+  const chromeHandoff = options.chromeHandoff || createChromeCookieHandoff({
+    userData: app.getPath("userData"), profile,
+    onChange: () => {
+      if (!chromeHandoff.status()) { handoffTab = null; handoffWorkspace = null; }
+      publish();
+    },
+  });
+  function humanChromeSignInTab(tab) {
+    if (!tab || !visible || active() !== tab || !window.isFocused()
+        || tab.view.webContents.isDestroyed() || groups.get(tab.groupId)?.botId
+        || botDrivingTab(tab)) return false;
+    try {
+      const url = new URL(tab.view.webContents.getURL() || tab.url);
+      return url.protocol === "https:" && !url.username && !url.password && chatGptSignInHost(url.hostname);
+    } catch { return false; }
+  }
+
   const attachmentAccess = createAttachmentPreviewAccess(profile, trustedOrigin);
   // Google's OAuth endpoints (and some other identity providers) reject
   // sessions that reveal an embedded framework — "Sign in with Google"
@@ -457,7 +478,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             id: 0,
             filename: item.filename.slice(0, 500),
             path: item.path,
-            url: typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? item.url.slice(0, 2000) : "",
+            url: safeBrowserPageUrl(item.url),
             // A download still running when Mia quit did not finish.
             state: DOWNLOAD_STATES.has(item.state) && item.state !== "progressing" ? item.state : "interrupted",
             received: Number(item.received) || 0,
@@ -469,6 +490,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
             workspace: typeof item.workspace === "string" && /^[a-z0-9_-]{1,80}$/.test(item.workspace) ? item.workspace : "solo",
           }));
         for (const entry of downloadEntries) entry.id = nextDownloadId++;
+        if (saved.entries.some(item => item && item.url && safeBrowserPageUrl(item.url) !== item.url)) persistDownloads();
         setImmediate(() => {
           for (const entry of downloadEntries) {
             if (!disposed && entry.by && entry.state === "completed" && entry.path && !entry.safety) checkDownloadSafety(entry);
@@ -888,7 +910,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // mode when it goes up. A blank tab still replaces the closed one.
   let lastTabCloses = 0;
   let sessionGroupId = null;
-  const state = () => ({ workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, dock: docked.id === null ? null : { id: docked.id, mode: docked.mode, aspect: dockAspect() }, lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ chromeSignInAvailable: chromeHandoff.available(), chromeSignIn: chromeHandoff.status(), workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, dock: docked.id === null ? null : { id: docked.id, mode: docked.mode, aspect: dockAspect() }, lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
     private: tab.private === true,
@@ -3189,6 +3211,11 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   function closeTab(id, { byUser = false } = {}) {
     const tab = tabs.get(id);
     if (!tab) return;
+    if (handoffTab === tab) {
+      handoffTab = null;
+      handoffWorkspace = null;
+      Promise.resolve(chromeHandoff.cancel()).catch(() => {});
+    }
     if (fullscreenId === id) exitPageFullscreen();
     if (docked.id === id) undock({ closing: true });
     actorRuntime.closeTab(id);
@@ -3234,6 +3261,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     }).catch((error) => log(`close tab prompt failed: ${error.message}`)).finally(() => closePrompts.delete(id));
   }
   async function clearData() {
+    await chromeHandoff.cancel();
+    handoffTab = null;
+    handoffWorkspace = null;
     actorRuntime.dispose();
     await profile.clearStorageData();
     await profile.clearCache();
@@ -3277,7 +3307,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       id: nextDownloadId++,
       filename: String(item.getFilename() || "download").slice(0, 500),
       path: "",
-      url: /^https?:\/\//i.test(String(item.getURL() || "")) ? String(item.getURL()).slice(0, 2000) : "",
+      url: safeBrowserPageUrl(item.getURL()),
       state: "progressing",
       received: 0,
       total: Number(item.getTotalBytes && item.getTotalBytes()) || 0,
@@ -3352,7 +3382,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       await fs.promises.writeFile(file, data);
       downloadEntries.unshift({
         id: nextDownloadId++, filename: path.basename(file), path: file,
-        url: /^https?:\/\//i.test(tab.url || "") ? String(tab.url).slice(0, 2000) : "",
+        url: safeBrowserPageUrl(tab.url),
         state: "completed", received: data.length, total: data.length, startedAt: Date.now(),
         by: null, safety: null, workspace,
       });
@@ -3411,6 +3441,32 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         return state();
       }
       if (command.action === "state") return state();
+      if (command.action === "chromeSignInStart") {
+        const tab = active();
+        if (!humanChromeSignInTab(tab)) return { error: "Open ChatGPT or its sign-in page in a human browser tab first." };
+        return chromeHandoff.start(tab.id).then(() => {
+          handoffTab = tab;
+          handoffWorkspace = workspaceKey;
+          return state();
+        }).catch(error => ({ error: error.message }));
+      }
+      if (command.action === "chromeSignInFinish") {
+        const tab = active();
+        if (!humanChromeSignInTab(tab) || tab !== handoffTab || workspaceKey !== handoffWorkspace) {
+          return { error: "Return to the original ChatGPT tab before importing the sign-in." };
+        }
+        const startedWorkspace = handoffWorkspace;
+        return chromeHandoff.finish(tab.id).then(() => {
+          if (!disposed && tabs.get(tab.id) === tab && workspaceKey === startedWorkspace && !tab.view.webContents.isDestroyed()) {
+            tab.view.webContents.reload();
+          }
+          return { ...state(), chromeSignInImported: true };
+        }).catch(error => ({ error: error.message }));
+      }
+      if (command.action === "chromeSignInCancel") {
+        chromeHandoff.cancel();
+        return state();
+      }
       // The tab strip knows when a bot's reply is still running and keeps
       // its tabs lit through the pauses between browser commands.
       if (command.action === "botColors") {
@@ -3705,6 +3761,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     persistTabs();
     disposed = true;
     actorRuntime.dispose();
+    chromeHandoff.dispose();
     if (!shellContents.isDestroyed()) shellContents.removeListener("zoom-changed", requestLayout);
     window.removeListener("resize", requestLayout);
     window.removeListener("leave-full-screen", leaveWindowFullscreen);

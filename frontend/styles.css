@@ -686,6 +686,12 @@
   .tidy-title{font-size:16px;font-weight:600;color:var(--ink);text-align:center;margin-bottom:8px;}
   .tidy-copy{font-size:13.5px;line-height:1.5;color:var(--ink);margin:0 0 8px;}
   .tidy-safe{font-size:13px;line-height:1.45;color:var(--muted);margin:0;}
+  .tidy-file-list{max-height:220px;overflow:auto;margin:10px 0;padding:6px;border:1px solid var(--sand-border-default);border-radius:8px;font-size:12px;overflow-wrap:anywhere;}
+  .tidy-file-row{padding:5px 3px;border-bottom:1px solid var(--sand-border-default);}
+  .tidy-file-row:last-child{border-bottom:0;}
+  .tidy-file-row label{display:flex;align-items:flex-start;gap:6px;cursor:pointer;}
+  .tidy-file-row details{margin:4px 0 0 20px;}
+  .tidy-file-row ul{margin:4px 0;padding-left:16px;}
   .tidy-error{font-size:12px;color:#B3261E;}
   .tidy-error:not(:empty){margin-top:8px;}
   /* Removed from a team: the notice blocks everything; if that team is open it
@@ -4178,3 +4184,13 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 .chat-pip-view { flex: none; max-width: 100%; border-radius: 10px; overflow: hidden; background: var(--sand-fill-secondary); }
 .chat-pip[data-mode="video"] .chat-pip-view { background: #000; }
 .local-browser-toolbar:not([data-view="browser"]) .local-browser-pip-btn { display: none; }
+
+/* Human-only Chrome security-key sign-in handoff. */
+.local-browser-chrome-signin-btn{flex:none;border:1px solid #dadce0;border-radius:8px;background:#fff;color:#174ea6;padding:6px 9px;font:600 12px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.local-browser-chrome-signin-btn:hover:not(:disabled){background:#f0f5ff}
+.local-browser-chrome-signin-btn:disabled{opacity:.55;cursor:default}
+.local-browser-chrome-handoff{display:flex;align-items:center;gap:9px;min-height:35px;padding:5px 12px;border-bottom:1px solid #d8e3f6;background:#f2f6ff;color:#263b57;font:12px/1.3 system-ui,sans-serif}
+.local-browser-chrome-handoff[hidden]{display:none}
+.local-browser-chrome-handoff span{flex:1;min-width:0}
+.local-browser-chrome-handoff button{flex:none;border:1px solid #b9c8e2;border-radius:6px;background:#fff;color:#174ea6;padding:4px 8px;font:600 12px/1.2 system-ui,sans-serif;cursor:pointer}
+@media(max-width:850px){.local-browser-chrome-signin-btn{max-width:74px;white-space:normal;text-align:center;padding:3px 5px}}

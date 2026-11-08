@@ -60,6 +60,25 @@ const cronSync = require('./cron-sync.js');
 const { createBotPackageStore } = require('./bot-packages.js');
 const botPackageStore = createBotPackageStore(botPackageRoot);
 
+test('startup blocks a gateway only when an active Mia automation exists', () => {
+  const original = fs.readFileSync(jobsFile);
+  try {
+    fs.writeFileSync(jobsFile, JSON.stringify({ jobs: [] }));
+    assert.equal(cronSync.hasActiveMiaJobs(), false);
+    fs.writeFileSync(jobsFile, JSON.stringify({ jobs: [
+      { id: 'other', name: 'Other app job', enabled: true },
+      { id: 'paused', name: 'Mia bot-id/automation-id · Bot · Work', enabled: false },
+    ] }));
+    assert.equal(cronSync.hasActiveMiaJobs(), false);
+    fs.writeFileSync(jobsFile, JSON.stringify({ jobs: [
+      { id: 'active', name: 'Mia bot-id/automation-id · Bot · Work', enabled: true },
+    ] }));
+    assert.equal(cronSync.hasActiveMiaJobs(), true);
+  } finally {
+    fs.writeFileSync(jobsFile, original);
+  }
+});
+
 function ensureBotPackage(bot) {
   const current = botPackageStore.findDirectory(bot.id);
   const change = botPackageStore.prepare(bot, current ? {} : { writeInstructions: true });

@@ -550,6 +550,17 @@ test('native HTTP stop exposes active work, cancels it durably, and prevents a q
     result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=10`);
     const clickNotice = result.payload.events.find((event) => event.metadata && event.metadata.status === 'stopped' && event.metadata.dispatchId === clickedId);
     assert.equal(clickNotice.content.text, '⏸ Browser is yours. I was on Airbag Technologies: People. Press Continue when you want me back.');
+
+    result = await app.request(`/conversations/${conversationId}/events`, {
+      method: 'POST', body: { content: { text: 'one more page' }, clientIdempotencyKey: 'stop-turn-3' },
+    });
+    const sensitiveId = result.payload.dispatch.dispatches[0].id;
+    await app.request(`/conversations/${conversationId}/dispatches/${sensitiveId}/stop`, {
+      method: 'POST', body: { reason: 'take-over', page: 'https://example.test/reset?code=fake-code-for-test#fragment' },
+    });
+    result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=10`);
+    const safeNotice = result.payload.events.find((event) => event.metadata && event.metadata.dispatchId === sensitiveId);
+    assert.equal(safeNotice.content.text, '⏸ Browser is yours. I was on example.test. Press Continue when you want me back.');
   } finally {
     await app.close();
   }

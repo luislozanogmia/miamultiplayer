@@ -7,11 +7,12 @@ const Module = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
 
-test("desktop shell uses the Mia application name and Linux icon", () => {
+test("desktop shell keeps Mia's packaged name and isolates opt-in diagnostic Keychain access", () => {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
-  assert.match(source, /app\.setName\("Mia"\)/);
-  assert.doesNotMatch(source, /app\.setName\("MiaOS"\)/);
-  assert.ok(source.indexOf('app.setName("Mia")') < source.indexOf('resolveClerkConfig(desktopClerkEnvironment())'));
+  assert.match(source, /app\.setName\(!app\.isPackaged && process\.env\.MIA_DEV_CHROME_HANDOFF_TEST === "1"[\s\S]*?"Mia"\)/);
+  assert.ok(source.indexOf('app.setName(') < source.indexOf('resolveClerkConfig(desktopClerkEnvironment())'));
+  assert.equal(loadMain().__electron.app.name, "Mia");
+  assert.equal(loadMain({ MIA_DEV_CHROME_HANDOFF_TEST: "1" }).__electron.app.name, "Mia Chrome Handoff Test");
   assert.match(source, /process\.platform === "linux"[\s\S]{0,120}MIA_LINUX_ICON_PATH/);
   assert.match(source, /icon: fs\.existsSync\(windowIconPath\) \? windowIconPath : undefined/);
 });
@@ -424,7 +425,7 @@ function loadMain(environment = {}) {
   }
   const electron = {
     app: {
-      setName() {},
+      setName(value) { this.name = value; },
       requestSingleInstanceLock() { return true; },
       quit() {},
       getPath() { return "/tmp/miaos-main-test"; },

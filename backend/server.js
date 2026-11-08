@@ -57,8 +57,12 @@ provisionHermesWebSearchConfig({
 provisionHermesRuntimeProfiles();
 // Scheduled runs get their guards and plugins from the Hermes home, which the
 // gateway reads when it starts, so that comes first, whatever starts it.
-require('./inference').beforeHermesGatewayStarts(() => require('./cron-sync').prepareScheduledRuns()
-  .catch((error) => console.error('Scheduled runs not prepared', error.message)));
+const cronStartup = require('./cron-sync');
+let scheduledJobsAtStartup = true;
+try { scheduledJobsAtStartup = cronStartup.hasActiveMiaJobs(); } catch (_) { /* uncertain registry: fail closed */ }
+require('./inference').beforeHermesGatewayStarts(() => cronStartup.prepareScheduledRuns(), {
+  failureBlocks: scheduledJobsAtStartup,
+}).catch(() => console.error('Scheduled-run safety preparation failed; automations remain unavailable.'));
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const express = require('express');
@@ -1867,6 +1871,7 @@ app.post('/api/speech/transcribe', requireAuth, express.raw({ type: 'audio/wav',
 // TEMPORARY: remove these routes and bot-files-tidy.js in 0.3.5.
 const botFilesTidy = require('./bot-files-tidy');
 const BOT_FILES_TIDY_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'bot-files-tidy.json');
+const BOT_FILES_TIDY_REVIEW_KEY = crypto.randomBytes(32);
 function botFilesTidyPlan() {
   if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly || !String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) return [];
   const day = new Date().toISOString().slice(0, 10);
@@ -1876,14 +1881,21 @@ function botFilesTidyPlan() {
     bots: cronSync.listBotFileFolders(),
   });
 }
+function botFilesTidyReview() {
+  const moves = botFilesTidyPlan();
+  const items = botFilesTidy.reviewPlan(miaosWorkspaceDir(), moves);
+  const reviewId = crypto.createHmac('sha256', BOT_FILES_TIDY_REVIEW_KEY)
+    .update(JSON.stringify(items)).digest('hex');
+  return { items, reviewId };
+}
 app.get('/api/bot-files-tidy', requireAuth, (req, res) => {
   const state = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
   if (state.state === 'running' && !botFilesTidyRunning) startBotFilesTidy();
   if (state.state) return res.json({ state: state.state, moved: (state.moved || []).length });
-  let plan = [];
-  try { plan = botFilesTidyPlan(); } catch (error) { console.error('bot files tidy plan failed', error.message); }
-  if (!plan.length) return res.json({ state: 'none' });
-  res.json({ state: 'ask', count: plan.length, examples: plan.slice(0, 4).map((move) => path.basename(move.from)) });
+  let review;
+  try { review = botFilesTidyReview(); } catch (_) { console.error('Bot file review unavailable.'); }
+  if (!review || !review.items.length) return res.json({ state: 'none' });
+  res.json({ state: 'ask', count: review.items.length, items: review.items.map(({ fingerprint: _fingerprint, ...item }) => item), reviewId: review.reviewId });
 });
 app.post('/api/bot-files-tidy', requireAuth, (req, res) => {
   const current = botFilesTidy.readState(BOT_FILES_TIDY_STATE);
@@ -1892,6 +1904,19 @@ app.post('/api/bot-files-tidy', requireAuth, (req, res) => {
     botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { state: 'declined', at: Date.now() });
     return res.json({ state: 'declined' });
   }
+  let review;
+  try { review = botFilesTidyReview(); } catch (_) { return res.status(503).json({ error: 'review_unavailable' }); }
+  if (!req.body || req.body.reviewId !== review.reviewId) return res.status(409).json({ error: 'review_changed' });
+  const selected = req.body.selected;
+  if (!Array.isArray(selected) || !selected.length || selected.length > review.items.length
+      || selected.some(id => typeof id !== 'string') || new Set(selected).size !== selected.length) {
+    return res.status(400).json({ error: 'invalid_selection' });
+  }
+  const byId = new Map(review.items.map(item => [item.id, item]));
+  if (selected.some(id => !byId.has(id))) return res.status(400).json({ error: 'invalid_selection' });
+  botFilesTidy.writeState(BOT_FILES_TIDY_STATE, {
+    state: 'running', at: Date.now(), approved: selected.map(id => ({ id, fingerprint: byId.get(id).fingerprint })), moved: [],
+  });
   startBotFilesTidy();
   res.json({ state: 'running' });
 });
@@ -1905,7 +1930,13 @@ function startBotFilesTidy() {
   botFilesTidy.writeState(BOT_FILES_TIDY_STATE, { ...before, state: 'running', at: Date.now() });
   setImmediate(() => {
     let result = { moved: [], skipped: [] };
-    try { result = botFilesTidy.runTidy(botFilesTidyPlan()); } catch (error) { console.error('bot files tidy failed', error.message); }
+    try {
+      const approved = Array.isArray(before.approved) ? before.approved : [];
+      const moves = botFilesTidy.approvedMoves(miaosWorkspaceDir(), botFilesTidyPlan(), approved);
+      result = botFilesTidy.runTidy(moves);
+      const available = new Set(moves.map(move => path.relative(miaosWorkspaceDir(), move.from).split(path.sep).join('/')));
+      result.skipped.push(...approved.filter(item => !available.has(item.id)).map(item => ({ from: item.id, reason: 'changed since review' })));
+    } catch (_) { console.error('Bot file tidy failed.'); }
     botFilesTidy.writeState(BOT_FILES_TIDY_STATE, {
       state: 'done', at: Date.now(), moved: (before.moved || []).concat(result.moved), skipped: result.skipped,
     });

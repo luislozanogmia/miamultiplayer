@@ -1087,8 +1087,8 @@ async function startHermesGatewayRuntime() {
 
 // Work that must finish before the gateway first starts (it loads plugins and
 // config only then). Every start and client request waits behind it.
-function beforeHermesGatewayStarts(operation) {
-  return hermesGatewayRuntime.enqueue(operation);
+function beforeHermesGatewayStarts(operation, options) {
+  return hermesGatewayRuntime.enqueuePrerequisite(operation, options);
 }
 
 module.exports = {

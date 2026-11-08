@@ -54,6 +54,30 @@ test('concurrent provider saves never overlap and failures do not poison the que
   assert.equal((await second).runtimeReady, true);
 });
 
+test('failed safety preparation prevents both gateway acquisition and startup', async () => {
+  const ready = deferred();
+  const { runtime, trace } = fixture();
+  const preparation = assert.rejects(runtime.enqueuePrerequisite(async () => {
+    await ready.promise;
+    throw new Error('fixture output must not reach the caller');
+  }), /safety prerequisites failed/);
+  const acquisition = assert.rejects(runtime.get(), /safety prerequisites failed/);
+  const startup = assert.rejects(runtime.start(), /safety prerequisites failed/);
+  ready.resolve();
+  await Promise.all([preparation, acquisition, startup]);
+  assert.deepEqual(trace, [], 'no gateway client was created after preparation failed');
+  await assert.rejects(runtime.get(), /safety prerequisites failed/, 'later reads cannot bypass the failed gate');
+});
+
+test('a failed optional scheduled setup does not stop ordinary gateway chat', async () => {
+  const { runtime, trace } = fixture();
+  await assert.rejects(runtime.enqueuePrerequisite(async () => {
+    throw new Error('fixture preparation failed');
+  }, { failureBlocks: false }), /safety prerequisites failed/);
+  await runtime.start();
+  assert.deepEqual(trace, ['create:1', 'connect:1']);
+});
+
 test('failed runtime startup preserves successful credential save and permits a runtime-only retry', async () => {
   let connects = 0, saves = 0;
   const { runtime } = fixture(async () => { if (++connects === 1) throw new Error('startup failed'); });

@@ -75,6 +75,17 @@ function optionalInteger(value, field, { min = 0, max = 1000 } = {}) {
   return parsed;
 }
 
+// A Take over notice is stored in chat. A blank page title may make the
+// browser send its address instead, so never persist a URL's path or tokens.
+function safeStopPageLabel(value) {
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  return text.replace(/https?:\/\/[^\s<>]+/gi, (address) => {
+    try { return new URL(address).hostname || 'web page'; } catch { return 'web page'; }
+  }).slice(0, 120) || undefined;
+}
+
 function decodeBase64(value) {
   required(value, 'contentBase64');
   if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) fail('INVALID_INPUT', 'contentBase64 must be standard base64');
@@ -275,8 +286,7 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
       principal,
       // Take over pauses the agent; its notice names the page it was on.
       reason: requestBody(req).reason === 'take-over' ? 'take-over' : undefined,
-      page: typeof requestBody(req).page === 'string'
-        ? requestBody(req).page.replace(/\s+/g, ' ').trim().slice(0, 120) : undefined,
+      page: safeStopPageLabel(requestBody(req).page),
     });
     res.status(200).json(result);
   }));

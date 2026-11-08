@@ -47,13 +47,20 @@
   function filesText(count){ return count === 1 ? '1 file' : count + ' files'; }
 
   function dialogHtml(info){
-    var examples = (info.examples || []).map(esc).join(', ');
-    var more = info.count > (info.examples || []).length ? ' and more' : '';
+    var items = Array.isArray(info.items) ? info.items : [];
+    var fileList = items.map(function(item){
+      var children = item.folder && item.contents && item.contents.length
+        ? '<details><summary>Show ' + esc(filesText(item.contents.length)) + ' inside</summary><ul>'
+          + item.contents.map(function(name){ return '<li>' + esc(name) + '</li>'; }).join('') + '</ul></details>' : '';
+      return '<div class="tidy-file-row"><label><input type="checkbox" data-tidy-file value="' + esc(item.id) + '"> '
+        + esc(item.id) + (item.folder ? ' (folder)' : '') + '</label>' + children + '</div>';
+    }).join('');
     return ART
       + '<div class="tidy-title" id="tidyTitle">We\'re making bots more organized</div>'
-      + '<p class="tidy-copy">Your Mia folder will keep only what you open or share: PDFs, spreadsheets, documents, images and videos. Scripts, notes and logs that bots use for their work now stay inside Mia.</p>'
-      + '<p class="tidy-copy">Mia can move ' + esc(filesText(info.count)) + ' bots left in your Mia folder' + (examples ? ' (' + examples + more + ')' : '') + '. It runs in the background.</p>'
-      + '<p class="tidy-safe">Nothing is deleted, and your own files stay where they are.</p>'
+      + '<p class="tidy-copy">Mia found ' + esc(filesText(info.count)) + ' it can move into its working folder. Some may be files you made. Select only the entries you want moved; open a folder to review everything inside it.</p>'
+      + '<div class="tidy-file-list" role="group" aria-label="Files to move">' + fileList + '</div>'
+      + '<button type="button" class="btn" data-tidy="all">Select all</button>'
+      + '<p class="tidy-safe">Nothing is deleted or overwritten. Files you leave unselected stay here.</p>'
       + '<div class="tidy-error" role="status"></div>'
       + '<div class="app-confirm-actions"><button type="button" class="btn" data-tidy="no">No thanks</button>'
       + '<button type="button" class="btn primary" data-tidy="yes">Tidy up</button></div>';
@@ -73,20 +80,23 @@
     document.body.appendChild(overlay);
     var yes = card.querySelector('[data-tidy="yes"]');
     var no = card.querySelector('[data-tidy="no"]');
+    var all = card.querySelector('[data-tidy="all"]');
     function close(){ document.removeEventListener('keydown', onKeydown); overlay.remove(); }
     // Closing without answering asks again the next time Mia opens.
     function onKeydown(event){ if(event.key === 'Escape'){ event.preventDefault(); close(); } }
     function answer(accept){
+      var selected = Array.from(card.querySelectorAll('[data-tidy-file]:checked')).map(function(input){ return input.value; });
+      if(accept && !selected.length){ card.querySelector('.tidy-error').textContent = 'Select at least one file or folder first.'; return; }
       yes.disabled = no.disabled = true;
-      options.api('/api/bot-files-tidy', {method: 'POST', body: {accept: accept}}).then(function(){
+      options.api('/api/bot-files-tidy', {method: 'POST', body: {accept: accept, reviewId: info.reviewId, selected: selected}}).then(function(){
         close();
         if(accept){
           options.toast('Tidying up bot files in the background.');
           setTimeout(function(){ reportDone(options, 0); }, 2000);
         }
       }, function(){
-        yes.disabled = no.disabled = false;
-        card.querySelector('.tidy-error').textContent = 'Couldn\'t save that. Try again.';
+        close(); shown = false;
+        setTimeout(function(){ root.MiaBotFilesTidy.showOnce(options); }, 250);
       });
     }
     function reportDone(opts, attempt){
@@ -98,6 +108,7 @@
     }
     yes.addEventListener('click', function(){ answer(true); });
     no.addEventListener('click', function(){ answer(false); });
+    all.addEventListener('click', function(){ card.querySelectorAll('[data-tidy-file]').forEach(function(input){ input.checked = true; }); });
     document.addEventListener('keydown', onKeydown);
     yes.focus();
   }

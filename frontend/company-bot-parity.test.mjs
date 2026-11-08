@@ -6,6 +6,10 @@ import vm from 'node:vm';
 // Company bot chats get what Solo bot chats have: Stop while a run is going,
 // and a details pane about the bot.
 const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+test('company bot details name the participant whose computer and credentials execute the work', () => {
+  assert.match(app, /Runs on the requesting or approving participant\\'s computer, using that participant\\'s credentials/);
+  assert.doesNotMatch(app, /Runs on its owner\\'s computer/);
+});
 function sourceFunction(name) {
   const start = app.indexOf('  function ' + name + '(');
   assert.ok(start >= 0, name);

@@ -9,6 +9,19 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-11-07
+
+### Added
+- On Mac, ChatGPT and its OpenAI sign-in page offer **Sign in with Chrome** for security-key and passkey sign-in. Mia uses a temporary Chrome profile and imports only that site's session after the person approves the handoff.
+- Company chat gains more of Solo's bot controls, reactions, private bot chats and scheduled work. Browser tabs can stay with their group, dock beside chat, and save a page as a PDF.
+- A one-time review lets people choose exactly which technical files Mia moves out of their Mia folder; hidden files inside a selected folder are listed too.
+
+### Fixed
+- Large chats can switch models without an extra Hermes confirmation, and Mia Router chooses a model it actually offers.
+- Background sign-in reads wait instead of showing a busy error. Mia keeps one Hermes server per data folder.
+- Bot work remains visible and controllable during browser takeovers, long replies and workspace changes.
+- Scheduled jobs cannot start the agent gateway if their safety setup fails; credential-bearing page addresses are cleaned before they enter chat notices or download records.
+
 ## [0.3.3] — 2026-11-06
 
 ### Fixed

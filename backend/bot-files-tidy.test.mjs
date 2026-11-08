@@ -50,6 +50,34 @@ test('moves never overwrite or delete, and each one is recorded', () => {
   assert.deepEqual(result.moved.map((m) => path.basename(m.to)).sort(), ['a (2).py', 'b.json']);
 });
 
+test('review names every nested file and moves only approved unchanged entries', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tidy-review-'));
+  const mia = path.join(root, 'mia');
+  const tidied = path.join(root, 'tidied');
+  try {
+    tree(mia, {
+      'my-data.json': 'mine', 'bot-output.py': 'bot',
+      'scraper/main.py': 'script', 'scraper/.hidden.txt': 'hidden',
+    });
+    const plan = tidy.planTidy({ miaFolder: mia, tidiedFolder: tidied });
+    const reviewed = tidy.reviewPlan(mia, plan);
+    assert.deepEqual(reviewed.map(item => item.id).sort(), ['bot-output.py', 'my-data.json', 'scraper']);
+    assert.ok(reviewed.find(item => item.id === 'scraper').contents.includes('scraper/.hidden.txt'));
+    const approved = tidy.approvedMoves(mia, plan, [reviewed.find(item => item.id === 'bot-output.py')]);
+    assert.equal(tidy.runTidy(approved).moved.length, 1);
+    assert.equal(fs.readFileSync(path.join(mia, 'my-data.json'), 'utf8'), 'mine');
+    assert.equal(fs.existsSync(path.join(mia, 'scraper', '.hidden.txt')), true);
+
+    const stillReviewed = tidy.reviewPlan(mia, tidy.planTidy({ miaFolder: mia, tidiedFolder: tidied }));
+    const own = stillReviewed.find(item => item.id === 'my-data.json');
+    const staleMove = tidy.approvedMoves(mia, tidy.planTidy({ miaFolder: mia, tidiedFolder: tidied }), [own]);
+    fs.writeFileSync(path.join(mia, 'my-data.json'), 'changed after review');
+    assert.equal(tidy.approvedMoves(mia, tidy.planTidy({ miaFolder: mia, tidiedFolder: tidied }), [own]).length, 0);
+    assert.equal(tidy.runTidy(staleMove).moved.length, 0);
+    assert.equal(fs.readFileSync(path.join(mia, 'my-data.json'), 'utf8'), 'changed after review');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('state is saved and read back; a missing file reads as empty', () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tidy-')), 'state.json');
   assert.deepEqual(tidy.readState(file), {});

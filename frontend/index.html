@@ -770,6 +770,7 @@
       </div>
       <button type="submit" class="local-browser-go-btn">Go</button>
       <button type="button" class="mia-space-invite-btn" id="localBrowserInviteBtn" title="Browse together: invite people to these tabs" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"></path><path d="M18 8v6M15 11h6"></path></svg>Invite</button>
+      <button type="button" class="local-browser-chrome-signin-btn" id="localBrowserChromeSignInBtn" title="Sign in to ChatGPT using Chrome and a security key" hidden>Sign in with Chrome</button>
       <button type="button" class="local-browser-btn local-browser-downloads-btn" id="localBrowserDownloadsBtn" title="Downloads" aria-label="Downloads" aria-expanded="false" aria-controls="localBrowserDownloads">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4"></path><path d="M5 19h14"></path></svg>
       </button>
@@ -783,6 +784,11 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"></path><path d="M7 10H5.5A1.5 1.5 0 0 0 4 11.5v7A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H17"></path></svg>
       </button>
     </form>
+    <div class="local-browser-chrome-handoff" id="localBrowserChromeHandoff" role="status" hidden>
+      <span>Finish signing in to ChatGPT in Chrome, then return here.</span>
+      <button type="button" id="localBrowserChromeImportBtn">Import sign-in</button>
+      <button type="button" id="localBrowserChromeCancelBtn">Cancel</button>
+    </div>
     <div class="mia-space-pagehead" id="miaSpacePageHead" hidden></div>
     <div class="local-browser-screen" id="localBrowserScreen">
       <img class="local-browser-snapshot" id="localBrowserSnapshot" alt="" aria-hidden="true" hidden />

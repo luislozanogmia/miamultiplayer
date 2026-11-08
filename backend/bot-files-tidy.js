@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const TECHNICAL_EXTENSIONS = new Set([
   '.py', '.pyc', '.ipynb', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
@@ -76,6 +77,48 @@ function planTidy({ miaFolder, tidiedFolder, bots = [] }) {
   return moves;
 }
 
+// The review lists every file inside a folder, including hidden entries.
+// Unreadable, linked or oversized trees are left for manual review instead.
+function reviewPlan(miaFolder, moves) {
+  const items = [];
+  for (const move of moves) {
+    const id = path.relative(miaFolder, move.from).split(path.sep).join('/');
+    if (!id || id === '..' || id.startsWith('../') || path.isAbsolute(id)) continue;
+    const entries = [];
+    const inspect = (file, depth) => {
+      if (depth > 12 || entries.length >= MAX_WALK_FILES) return false;
+      let stat;
+      try { stat = fs.lstatSync(file); } catch (_) { return false; }
+      if (!stat.isFile() && !stat.isDirectory()) return false;
+      entries.push({
+        path: path.relative(miaFolder, file).split(path.sep).join('/'),
+        type: stat.isDirectory() ? 'folder' : 'file',
+        dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs,
+      });
+      if (!stat.isDirectory()) return true;
+      let names;
+      try { names = fs.readdirSync(file).sort(); } catch (_) { return false; }
+      return names.every(name => inspect(path.join(file, name), depth + 1));
+    };
+    if (!inspect(move.from, 0)) continue;
+    const fingerprint = crypto.createHash('sha256')
+      .update(JSON.stringify({ from: move.from, toFolder: move.toFolder, entries })).digest('hex');
+    items.push({ id, folder: entries[0].type === 'folder', contents: entries.slice(1).map(entry => entry.path), fingerprint });
+  }
+  return items;
+}
+
+function approvedMoves(miaFolder, moves, approved) {
+  const review = new Map(reviewPlan(miaFolder, moves).map(item => [item.id, item]));
+  const byId = new Map(moves.map(move => [path.relative(miaFolder, move.from).split(path.sep).join('/'), move]));
+  return approved.map(item => {
+    const current = item && review.get(item.id);
+    const move = current && byId.get(item.id);
+    return move && current.fingerprint === item.fingerprint
+      ? { ...move, reviewRoot: miaFolder, expectedFingerprint: item.fingerprint } : null;
+  }).filter(Boolean);
+}
+
 function freeName(folder, name) {
   const ext = path.extname(name);
   const stem = ext ? name.slice(0, -ext.length) : name;
@@ -93,6 +136,10 @@ function runTidy(moves) {
   const skipped = [];
   for (const move of moves) {
     try {
+      if (move.expectedFingerprint
+          && reviewPlan(move.reviewRoot, [move])[0]?.fingerprint !== move.expectedFingerprint) {
+        throw new Error('changed since review');
+      }
       fs.mkdirSync(move.toFolder, { recursive: true, mode: 0o700 });
       const to = freeName(move.toFolder, path.basename(move.from));
       if (!to) throw new Error('no free name');
@@ -121,4 +168,4 @@ function writeState(stateFile, state) {
   fs.renameSync(temporary, stateFile);
 }
 
-module.exports = { isTechnicalFile, isTechnicalFolder, planTidy, runTidy, readState, writeState };
+module.exports = { isTechnicalFile, isTechnicalFolder, planTidy, reviewPlan, approvedMoves, runTidy, readState, writeState };

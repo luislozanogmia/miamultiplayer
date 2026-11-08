@@ -126,6 +126,7 @@ function harness(options = {}) {
   window.isFullScreen = () => window.fullScreen;
   window.setFullScreen = value => { window.fullScreen = value; if (!value) window.emit("leave-full-screen"); };
   window.isDestroyed = () => false;
+  window.isFocused = () => true;
   window.contentView = { addChildView() {}, removeChildView() {} };
   const electron = {
     WebContentsView: class {
@@ -159,7 +160,8 @@ function harness(options = {}) {
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
   const { createBrowser, normalizeTarget, normalizeLocalFileTarget } = context.module.exports;
-  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, resolveActor: knownActor({}), ...options });
+  const chromeHandoff = options.chromeHandoff || { status: () => null, available: () => false, start: async () => {}, finish: async () => {}, cancel: () => {}, dispose: () => {} };
+  const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, resolveActor: knownActor({}), ...options, chromeHandoff });
   const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   const command = (action, extra = {}, event = sender) => handlers.get("miaos-browser-command")(event, { action, ...extra });
   return { command, window, views, sender, profile, handlers, shown, opened, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, botRunning, stopResult, menuTemplates };
@@ -1605,7 +1607,7 @@ test("a page's Print offers Save as PDF, which lands in Downloads", async () => 
   try {
     const h = harness({ downloadsDir: directory });
     h.command("new");
-    h.command("navigate", { url: "example.com" });
+    h.command("navigate", { value: "https://example.com/reset?code=fake-code-for-test#fragment" });
     const wc = h.views.at(-1).webContents;
     wc.emit("page-title-updated", {}, "Resumen: Detalle");
     h.menuTemplates.length = 0;
@@ -1623,6 +1625,7 @@ test("a page's Print offers Save as PDF, which lands in Downloads", async () => 
     }
     const saved = state.downloads[0];
     assert.equal(saved.state, "completed");
+    assert.equal(saved.url, "https://example.com/reset", "the saved PDF cannot retain a credential-bearing page address");
     assert.equal(path.dirname(saved.path), directory);
     assert.match(path.basename(saved.path), /\.pdf$/);
     assert.equal(fs.readFileSync(saved.path, "utf8"), "%PDF-1.7 page");
@@ -3109,4 +3112,62 @@ test("a renderer command naming another workspace is refused", () => {
     h.window.emit("closed");
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("Chrome sign-in handoff requires the human's visible OpenAI tab and reloads only that tab", async () => {
+  let activeHandoff = null;
+  const calls = [];
+  const fake = {
+    available: () => true,
+    status: () => activeHandoff,
+    start: async id => { calls.push(["start", id]); activeHandoff = { tabId: id }; return activeHandoff; },
+    finish: async id => { calls.push(["finish", id]); activeHandoff = null; return { imported: 1 }; },
+    cancel: () => { activeHandoff = null; }, dispose: () => {},
+  };
+  const h = harness({ chromeHandoff: fake });
+  h.command("new");
+  const id = h.command("state").activeId;
+  const contents = h.views[0].webContents;
+  contents.shownUrl = "https://chatgpt.com/auth/login";
+  assert.match((await h.command("chromeSignInStart")).error, /human browser tab/);
+  assert.equal(calls.length, 0);
+  h.command("layout", { visible: true, bounds: { x: 0, y: 0, width: 900, height: 650 } });
+  assert.equal((await h.command("chromeSignInStart")).chromeSignIn.tabId, id);
+  assert.deepEqual(calls, [["start", id]]);
+  assert.equal((await h.command("chromeSignInFinish")).chromeSignInImported, true);
+  assert.equal(contents.reloaded, true);
+  contents.shownUrl = "https://accounts.google.com/";
+  assert.match((await h.command("chromeSignInStart")).error, /ChatGPT or its sign-in page/);
+  contents.shownUrl = "https://platform.openai.com/";
+  assert.match((await h.command("chromeSignInStart")).error, /ChatGPT or its sign-in page/);
+  assert.deepEqual(calls, [["start", id], ["finish", id]]);
+  h.window.emit("closed");
+});
+
+test("clearing browser data or closing the sign-in tab cancels the Chrome handoff", async () => {
+  let activeHandoff = null;
+  let cancelled = 0;
+  const fake = {
+    available: () => true,
+    status: () => activeHandoff,
+    start: async id => { activeHandoff = { tabId: id }; return activeHandoff; },
+    finish: async () => { throw new Error("a cancelled sign-in cannot be imported"); },
+    cancel: async () => { cancelled++; activeHandoff = null; },
+    dispose: () => {},
+  };
+  const h = harness({ chromeHandoff: fake });
+  h.command("new");
+  h.command("layout", { visible: true, bounds: { x: 0, y: 0, width: 900, height: 650 } });
+  h.views.at(-1).webContents.shownUrl = "https://chatgpt.com/";
+  await h.command("chromeSignInStart");
+  await h.controller.clearData();
+  assert.equal(cancelled, 1);
+  assert.equal(h.command("state").chromeSignIn, null);
+  h.views.at(-1).webContents.shownUrl = "https://chatgpt.com/";
+  const tabId = h.command("state").activeId;
+  await h.command("chromeSignInStart");
+  h.command("close", { id: tabId });
+  assert.equal(cancelled, 2);
+  assert.equal(h.command("state").chromeSignIn, null);
+  h.window.emit("closed");
 });
