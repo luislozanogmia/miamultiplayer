@@ -4173,6 +4173,12 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 /* Picture in picture: a tab kept below the chat. The page is a native view
    drawn over .chat-pip-view; this only holds its place and its header. */
 .chat-pip { flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 12px 12px; }
+/* The line between the chat and the docked page: drag it up or down. */
+.chat-pip-resize { align-self: stretch; height: 10px; margin: 0 -12px -4px; cursor: row-resize; position: relative; touch-action: none; }
+.chat-pip-resize::after { content: ""; position: absolute; left: 50%; top: 3px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--sand-border-default); }
+.chat-pip-resize:hover::after, .chat-pip-resize:focus-visible::after, body.chat-pip-resizing .chat-pip-resize::after { background: var(--sand-text-tertiary, #8a857c); }
+.chat-pip-resize:focus-visible { outline: none; }
+body.chat-pip-resizing { cursor: row-resize; user-select: none; }
 .chat-pip[hidden] { display: none; }
 .chat-pip-head { align-self: stretch; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--sand-text-secondary); }
 .chat-pip-icon { width: 14px; height: 14px; flex: none; border-radius: 3px; }

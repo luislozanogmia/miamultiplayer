@@ -163,15 +163,72 @@
   var pipTitle = document.getElementById('chatPipTitle');
   var pipIcon = document.getElementById('chatPipIcon');
   var PIP_MAX_HEIGHT = 0.4;
+  var PIP_MIN_HEIGHT = 90;
+  var PIP_MIN_CHAT = 180;
+  var PIP_HEIGHT_KEY = 'miaPipHeight';
+  var pipResize = document.getElementById('chatPipResize');
+  var pipPreferred = 0;
+  try { pipPreferred = Number(localStorage.getItem(PIP_HEIGHT_KEY)) || 0; } catch (_) {}
+  // The most the page can take: the chat column less everything around it,
+  // keeping a readable chat above, so the dock never runs past the bottom.
+  function pipRoom() {
+    var column = pip.parentElement;
+    if (!column) return Math.round(window.innerHeight * PIP_MAX_HEIGHT);
+    var used = 0;
+    Array.prototype.forEach.call(column.children, function (child) {
+      if (child === pip || child.id === 'chatThread') return;
+      used += child.getBoundingClientRect().height;
+    });
+    var chrome = pip.getBoundingClientRect().height - pipView.getBoundingClientRect().height;
+    return Math.max(PIP_MIN_HEIGHT, column.clientHeight - used - chrome - PIP_MIN_CHAT);
+  }
+  // Full width of the pane by default, as tall as it fits; a height the
+  // person dragged to sticks. The page keeps its shape, so a shorter dock
+  // is narrower too.
   function sizePip(dock) {
     if (!dock) return;
-    var room = pip.clientWidth;
-    var width = room, height = Math.round(room * dock.aspect);
-    var most = Math.round(window.innerHeight * PIP_MAX_HEIGHT);
-    if (height > most) { height = most; width = Math.round(most / dock.aspect); }
+    var room = pip.clientWidth - 24;
+    var height = Math.round(room * dock.aspect);
+    if (!pipPreferred) height = Math.min(height, Math.round(window.innerHeight * PIP_MAX_HEIGHT));
+    else height = Math.min(height, pipPreferred);
+    height = Math.max(PIP_MIN_HEIGHT, Math.min(height, pipRoom()));
+    var width = Math.min(room, Math.round(height / dock.aspect));
     pipView.style.width = width + 'px';
     pipView.style.height = height + 'px';
+    pipResize.setAttribute('aria-valuenow', String(height));
   }
+  function setPipHeight(height, save) {
+    pipPreferred = Math.max(PIP_MIN_HEIGHT, Math.round(height));
+    if (save) { try { localStorage.setItem(PIP_HEIGHT_KEY, String(pipPreferred)); } catch (_) {} }
+    if (state.dock) sizePip(state.dock);
+    layout();
+  }
+  // Dragging the bar above the dock moves the line between chat and page.
+  pipResize.addEventListener('pointerdown', function (event) {
+    if (event.button !== 0 || !state.dock) return;
+    event.preventDefault();
+    var startY = event.clientY, startHeight = pipView.getBoundingClientRect().height;
+    pipResize.setPointerCapture(event.pointerId);
+    document.body.classList.add('chat-pip-resizing');
+    function move(e) { setPipHeight(startHeight + startY - e.clientY, false); }
+    function end(e) {
+      pipResize.removeEventListener('pointermove', move);
+      pipResize.removeEventListener('pointerup', end);
+      pipResize.removeEventListener('pointercancel', end);
+      document.body.classList.remove('chat-pip-resizing');
+      setPipHeight(pipView.getBoundingClientRect().height, true);
+    }
+    pipResize.addEventListener('pointermove', move);
+    pipResize.addEventListener('pointerup', end);
+    pipResize.addEventListener('pointercancel', end);
+  });
+  pipResize.addEventListener('keydown', function (event) {
+    var step = event.key === 'ArrowUp' ? 24 : event.key === 'ArrowDown' ? -24 : 0;
+    if (!step || !state.dock) return;
+    event.preventDefault();
+    setPipHeight(pipView.getBoundingClientRect().height + step, true);
+  });
+  window.addEventListener('resize', function () { if (state && state.dock) { sizePip(state.dock); layout(); } });
   function renderPip() {
     var dock = state.dock;
     var tab = dock && state.tabs.find(function (t) { return t.id === dock.id; });
