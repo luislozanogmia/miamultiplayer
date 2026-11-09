@@ -981,9 +981,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   let heldByRenderer = new Set();
   // Only a bot's own commands count. A page loading says nothing about who
   // asked for it: the tab may be one a bot used earlier and a person now.
+  // A page the person loads themselves ("page load") is theirs, even on a
+  // tab a bot used before; only a load a bot started ("bot page load") is bot work.
   function botDrivingTab(tab) {
-    return (tab.botWork || 0) > 0 || !!pendingBrowserOperations.get(tab.view.webContents)?.size
-      || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
+    if ((tab.botWork || 0) > 0 || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS) return true;
+    for (const entry of pendingBrowserOperations.get(tab.view.webContents)?.values() || []) if (entry.kind !== "page load") return true;
+    return false;
   }
   function glowWanted(tab) {
     if (!tab.botWorker) return null;
@@ -1278,7 +1281,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     persistTabs();
     // Do not hold the toolbar IPC open until every page resource has loaded.
     trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
-      () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
+      () => browserWorkSettled(tab), { kind: (tab.botWork || 0) > 0 ? "bot page load" : "page load" }).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -1291,7 +1294,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     layout();
     persistTabs();
     trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
-      () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
+      () => browserWorkSettled(tab), { kind: (tab.botWork || 0) > 0 ? "bot page load" : "page load" }).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }

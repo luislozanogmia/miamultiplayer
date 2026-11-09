@@ -3240,3 +3240,19 @@ test("clearing browser data or closing the sign-in tab cancels the Chrome handof
   assert.equal(h.command("state").chromeSignIn, null);
   h.window.emit("closed");
 });
+
+test("going to a page yourself on a tab a bot used earlier never shows the bot in control", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: knownActor(sessions) });
+  h.command("new");
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const botPage = h.views[h.views.length - 1].webContents;
+  await new Promise(resolve => setTimeout(resolve, 2600));
+  h.command("select", { id: opened.tab_id });
+  // The person's own page load is still running, as on a heavy site.
+  botPage.loadURL = url => { botPage.loads.push(url); return new Promise(() => {}); };
+  h.command("navigate", { value: "https://chatgpt.com" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.command("state").tabs.find(tab => tab.id === opened.tab_id).botActivity, null, "no glow, working dot or Take over");
+  h.window.emit("closed");
+});
