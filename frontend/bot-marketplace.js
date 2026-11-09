@@ -177,7 +177,7 @@
         meta: [store.category, 'by ' + (manifest.author || 'Mia'), manifest.version ? 'v' + manifest.version : ''].filter(Boolean).join(' · '),
         action: installed ? '<button type="button" class="bot-market-btn" data-market-open-local="' + esc(installed.id) + '">Open</button>'
           : '<button type="button" class="bot-market-btn primary" data-market-install="' + esc(d.id) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Getting…' : 'Get') + '</button>',
-        instructions: text(bot.instructions), skills: Array.isArray(bot.skills) ? bot.skills : [],
+        instructions: text(bot.instructions), skills: Array.isArray(manifest.skills) ? manifest.skills : [],
         automations: Array.isArray(bot.automations) ? bot.automations : [],
         requires: requires};
     } else {

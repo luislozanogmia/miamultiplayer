@@ -14934,6 +14934,20 @@
     })[0] || null;
   }
 
+  // A bot's skills, from Mia's catalog or a company, become skill folders in
+  // your library, files and all. -> Promise<skill ids>
+  function createLibrarySkills(skills){
+    return (Array.isArray(skills) ? skills : []).slice(0, 10).reduce(function(done, skill){
+      return done.then(function(ids){
+        return api('/api/skills', {method:'POST', body:{name: skill.name, description: skill.description || '', body: skill.body || '',
+          files: Array.isArray(skill.files) ? skill.files : []}}).then(function(res){
+          if(res.status !== 200 || !res.data || !res.data.skill) throw new Error(res.data && res.data.message || 'its skill "' + (skill.name || 'skill') + '" could not be added.');
+          return ids.concat([res.data.skill.id]);
+        });
+      });
+    }, Promise.resolve([]));
+  }
+
   // Getting a company's shared bot makes it your bot: its latest version
   // becomes a bot of yours, linked back so it follows the shared bot.
   // -> Promise<created bot record>
@@ -14945,17 +14959,7 @@
       var latest = shared.latest || shared;
       var instructions = String(latest.instructions || '').trim();
       if(!instructions) throw new Error('this bot has no instructions yet.');
-      // Its skills become skill folders in your library, files and all.
-      var shared = (Array.isArray(latest.skills) ? latest.skills : []).slice(0, 10);
-      return shared.reduce(function(done, skill){
-        return done.then(function(ids){
-          return api('/api/skills', {method:'POST', body:{name: skill.name, description: skill.description || '', body: skill.body || '',
-            files: Array.isArray(skill.files) ? skill.files : []}}).then(function(res){
-            if(res.status !== 200 || !res.data || !res.data.skill) throw new Error(res.data && res.data.message || 'its skill "' + (skill.name || 'skill') + '" could not be added.');
-            return ids.concat([res.data.skill.id]);
-          });
-        });
-      }, Promise.resolve([])).then(function(skillIds){
+      return createLibrarySkills(latest.skills).then(function(skillIds){
         return api('/api/bots', {method:'POST', body:{name: String(latest.name || bot.name), instructions: instructions, model: model, status: 'running', departments: [],
           avatarColor: latest.avatar_color || bot.color || null, skills: skillIds,
           marketSource: {teamId: teamId, botId: bot.id, version: Number(latest.version || bot.version || 0)}}});
@@ -15013,7 +15017,9 @@
     return api('/api/bots/catalog/' + encodeURIComponent(id)).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.bot) throw new Error('manifest unavailable');
       var freshManifest = res.data;
-      return api('/api/bots', {method:'POST', body: freshManifest.bot}).then(function(createRes){
+      return createLibrarySkills(freshManifest.skills).then(function(skillIds){
+        return api('/api/bots', {method:'POST', body: skillIds.length ? Object.assign({}, freshManifest.bot, {skills: skillIds}) : freshManifest.bot});
+      }).then(function(createRes){
         if(createRes.status !== 201 || !createRes.data || !createRes.data.bot){
           throw new Error(createRes.data && (createRes.data.message || createRes.data.error) || 'install failed');
         }

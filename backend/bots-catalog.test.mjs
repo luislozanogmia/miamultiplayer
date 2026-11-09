@@ -6,7 +6,10 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { createRequire } from 'node:module';
+
+const { createSkillsLibrary } = createRequire(import.meta.url)('./skills-library.js');
 
 const BACKEND_DIR = path.dirname(new URL(import.meta.url).pathname);
 const CATALOG_DIR = path.join(BACKEND_DIR, '..', 'bots-catalog');
@@ -48,6 +51,18 @@ test('the seed catalog on disk has a valid index and matching manifests', () => 
     }
     assert.equal(typeof manifest.welcome, 'string');
     assert.ok(manifest.welcome.includes(manifest.bot.name));
+    // A catalog bot's skills are folders the library accepts as they are:
+    // Get creates each one, then the bot carrying their ids.
+    assert.equal(manifest.bot.skills, undefined, 'skills sit beside the bot, not in its create body');
+    const skills = manifest.skills || [];
+    assert.ok(skills.length <= 10);
+    if (skills.length) {
+      const library = createSkillsLibrary(mkdtempSync(path.join(tmpdir(), 'catalog-skills-')));
+      for (const skill of skills) {
+        const made = library.create(skill);
+        assert.deepEqual(made.files.map((file) => file.path).sort(), (skill.files || []).map((file) => file.path).sort(), skill.name);
+      }
+    }
   }
 });
 
