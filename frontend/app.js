@@ -6866,7 +6866,7 @@
   // timeline shows them at once and a retry can resend the same bytes.
   function prepareHubAttachment(file){
     return fileAsBase64(file).then(function(contentBase64){
-      return {hubUpload:{filename:file.name || 'image',mimeType:String(file.type || '').toLowerCase(),contentBase64:contentBase64,previewUrl:URL.createObjectURL(file)}};
+      return {hubUpload:{filename:file.name || 'image',mimeType:chatAttachmentType(file),contentBase64:contentBase64,previewUrl:URL.createObjectURL(file)}};
     });
   }
   function hubAttachmentsFor(m){
@@ -7863,15 +7863,30 @@
       (chatAttachment.error ? '<div class="cc-attach-error" role="alert">' + esc(chatAttachment.error) + '</div>' : '');
   }
 
-  // Images and PDFs go everywhere. Web pages attach only in Solo: a team's
-  // Hub refuses HTML, since teammates' apps would run it.
-  var CHAT_ATTACHMENT_TYPES = ['image/png','image/jpeg','image/gif','image/webp','application/pdf'];
+  // Images, PDFs, Office files and text files (CSV, TXT, Markdown, JSON) go
+  // everywhere: Solo and a company's Hub take the same list. Web pages attach
+  // only in Solo: a team's Hub refuses HTML, since teammates' apps would run it.
+  var CHAT_ATTACHMENT_TYPES = ['image/png','image/jpeg','image/gif','image/webp','application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/csv','text/plain','text/markdown','application/json'];
   var CHAT_PAGE_TYPES = ['text/html','image/svg+xml'];
+  // A file's type by its name: browsers leave some blank (Markdown) or name
+  // CSV differently, and both stores check the type against the name.
+  var CHAT_ATTACHMENT_EXTENSIONS = {'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.pdf':'application/pdf',
+    '.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation','.csv':'text/csv','.txt':'text/plain','.md':'text/markdown','.json':'application/json',
+    '.html':'text/html','.htm':'text/html','.svg':'image/svg+xml'};
+  function chatAttachmentType(file){
+    var match = /\.[a-z0-9]+$/i.exec(String(file && file.name || ''));
+    return (match && CHAT_ATTACHMENT_EXTENSIONS[match[0].toLowerCase()]) || String(file && file.type || '').toLowerCase();
+  }
   function chatAttachmentProblem(file){
-    var type = String(file.type || '').toLowerCase();
+    var type = chatAttachmentType(file);
     var team = inHubRoom();
     if(CHAT_PAGE_TYPES.indexOf(type) !== -1 && team) return 'Web pages can\u2019t be sent to a company yet. Save it as a PDF or image to share it.';
-    if(CHAT_ATTACHMENT_TYPES.indexOf(type) === -1 && (team || CHAT_PAGE_TYPES.indexOf(type) === -1)) return 'Choose an image (PNG, JPEG, GIF, WebP) or a PDF.';
+    if(CHAT_ATTACHMENT_TYPES.indexOf(type) === -1 && (team || CHAT_PAGE_TYPES.indexOf(type) === -1)) return 'Choose an image, a PDF, a Word, Excel or PowerPoint file, or a CSV, text, Markdown or JSON file.';
     var limit = team ? 8 : 25;
     if(file.size > limit * 1024 * 1024) return 'Files must be ' + limit + ' MB or smaller.';
     return '';
@@ -7939,7 +7954,7 @@
     return fileAsBase64(file).then(function(dataBase64){
       return api(nativeConversationPath(roomId, '/attachments'), {method:'POST', body:{
         filename: file.name || 'image',
-        mimeType: file.type || 'application/octet-stream',
+        mimeType: chatAttachmentType(file) || 'application/octet-stream',
         contentBase64: dataBase64
       }});
     }).then(function(result){
