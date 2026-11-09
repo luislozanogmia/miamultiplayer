@@ -5405,7 +5405,7 @@
     }).catch(function(){ showBenchToast('Couldn\'t open a chat with '+bot.name+'. Try again.'); });
   }
   function initHubChat(){
-    hubHiddenBotsOpen[activeWorkspaceKey]=false;
+    ['channels','bots','company-bots'].forEach(function(key){ hubHiddenBotsOpen[activeWorkspaceKey+':'+key]=false; });
     // Local startup callbacks may already have selected Mia. A Hub selection
     // is valid only after this team's authoritative channel list is loaded.
     // After a reload, reopen the channel this team last had open.
@@ -5520,7 +5520,7 @@
       var button=document.createElement('button'); button.type='button';
       var state=chatWs.byRoom[channel.id];
       var live=hubChat.typing.some(function(entry){return entry.channel_id===channel.id;}) || !!(state && state.thinking);
-      var unread=channel.id!==chatWs.activeRoomId && Number(channel.unread||0)>0;
+      var unread=channel.id!==chatWs.activeRoomId && (Number(channel.unread||0)>0 || chatNeedsAttention(channel.id));
       button.className='chat-recent-row hub-channel-row'+(chatWs.activeRoomId===channel.id?' active':'');
       button.setAttribute('data-hub-channel-id',channel.id);
       var preview=hubRoomPreview(channel.id);
@@ -5570,8 +5570,26 @@
     all.innerHTML='';
     (hubChat.invites||[]).forEach(function(invite){all.appendChild(hubInviteRow(invite));});
     all.parentElement.classList.add('hub-sections');
+    // Hidden rows fold into one Hidden group at the end of their section,
+    // folded each time the company opens; opening it lasts until you leave.
+    function hiddenGroup(list,key,rows,title){
+      if(!rows.length)return;
+      var openKey=activeWorkspaceKey+':'+key, hiddenOpen=hubHiddenBotsOpen[openKey]===true;
+      var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
+      hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
+      hiddenToggle.innerHTML='<svg class="hub-hidden-bots-chevron'+(hiddenOpen?' open':'')+'" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3"/></svg>Hidden · '+rows.length;
+      hiddenToggle.title=title;
+      hiddenToggle.addEventListener('click',function(){
+        hubHiddenBotsOpen[openKey]=!hiddenOpen;
+        renderHubSidebar();
+      });
+      list.appendChild(hiddenToggle);
+      if(hiddenOpen)rows.forEach(function(make){ list.appendChild(make()); });
+    }
     var channelSection=section('channels','Channels','Add a channel',openHubChannelAddMenu);
-    channels.forEach(function(channel){channelSection.list.appendChild(row(channel));});
+    var hiddenChannels=channels.filter(function(channel){ return hubRowHidden('channel:'+channel.id); });
+    channels.forEach(function(channel){ if(hiddenChannels.indexOf(channel)<0)channelSection.list.appendChild(row(channel)); });
+    hiddenGroup(channelSection.list,'channels',hiddenChannels.map(function(channel){ return function(){ return row(channel); }; }),'Channels you hid. You are still in them.');
     all.appendChild(channelSection.node);
     var dmSection=section('dms','Direct messages','New direct message',openHubDirectMessagePicker);
     dms.forEach(function(channel){dmSection.list.appendChild(row(channel));});
@@ -5580,27 +5598,19 @@
     var myBotSection=section('bots','My Bots','New bot',function(){ runToolsAction('new-bot'); });
     // Solo bots already shared with this company wait in a folded Hidden
     // group at the end, greyed; each can be reactivated from there.
-    var hiddenBots=myBots.filter(function(bot){ return soloBotSharedAway(bot) && !botPinned('mine:'+bot.id); });
+    // Bots you hid, and Solo bots already shared with this company (greyed,
+    // each can be reactivated), wait in the Hidden group.
+    var hiddenBots=myBots.filter(function(bot){ return (soloBotSharedAway(bot) || hubRowHidden('bot:mine:'+bot.id)) && !botPinned('mine:'+bot.id); });
     myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
-    if(hiddenBots.length){
-      // Folded each time the company opens; opening it lasts until you leave.
-      var hiddenOpen=hubHiddenBotsOpen[activeWorkspaceKey]===true;
-      var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
-      hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
-      hiddenToggle.innerHTML='<svg class="hub-hidden-bots-chevron'+(hiddenOpen?' open':'')+'" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3"/></svg>Hidden · '+hiddenBots.length;
-      hiddenToggle.title='Bots you shared with the company. Everyone uses them under Company bots.';
-      hiddenToggle.addEventListener('click',function(){
-        hubHiddenBotsOpen[activeWorkspaceKey]=!hiddenOpen;
-        renderHubSidebar();
-      });
-      myBotSection.list.appendChild(hiddenToggle);
-      if(hiddenOpen)hiddenBots.forEach(function(bot){ myBotSection.list.appendChild(teamBotRow(bot)); });
-    }
+    hiddenGroup(myBotSection.list,'bots',hiddenBots.map(function(bot){ return function(){ return teamBotRow(bot); }; }),
+      'Bots you hid, and bots you shared with the company. Shared ones are under Company bots.');
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
     all.appendChild(myBotSection.node);
     // Company bots: every bot shared into a channel of this workspace you can see.
     var companySection=section('company-bots','Company bots','',null);
-    companyBots.forEach(function(bot){ if(!botPinned('company:'+bot.key))companySection.list.appendChild(companyBotRow(bot)); });
+    var hiddenCompanyBots=companyBots.filter(function(bot){ return hubRowHidden('bot:company:'+bot.key) && !botPinned('company:'+bot.key); });
+    companyBots.forEach(function(bot){ if(!botPinned('company:'+bot.key) && hiddenCompanyBots.indexOf(bot)<0)companySection.list.appendChild(companyBotRow(bot)); });
+    hiddenGroup(companySection.list,'company-bots',hiddenCompanyBots.map(function(bot){ return function(){ return companyBotRow(bot); }; }),'Company bots you hid. You can still mention them.');
     if(!companyBots.length)companySection.list.innerHTML='<div class="chat-sidebar-empty">Bots shared in this workspace show up here</div>';
     all.appendChild(companySection.node);
   }
@@ -5616,12 +5626,62 @@
     delete all[activeWorkspaceKey];
     try { localStorage.setItem('miaPinnedTeamBots',JSON.stringify(all)); } catch(_pinStorageError) {}
   }
-  // A bot row's ⋯ and right-click both offer Pin or Unpin.
-  function wireTeamBotPin(button,key,pinned,extraItems){
-    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){setChatPinned('bot:'+key,!pinned);}]].concat(extraItems||[])); }
-    button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();open(button);});
+  // A row's ⋯ and right-click open the same menu. groups() runs when it opens.
+  function wireRowMenu(button,groups){
+    button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();openRowMenu(groups(),event.clientX,event.clientY);});
     var more=el('.hub-channel-more',button);
-    if(more)more.addEventListener('click',function(event){event.stopPropagation();open(more);});
+    if(more)more.addEventListener('click',function(event){event.stopPropagation();var box=more.getBoundingClientRect();openRowMenu(groups(),box.left,box.bottom+4);});
+  }
+  // Rows you hide in a company fold into a Hidden group at the end of their
+  // section. Kept on this computer, per company; nothing leaves the Hub.
+  function hubHiddenStorageKey(){ return 'miaHubHiddenRows:'+String(currentUser||'preview').toLowerCase()+':'+activeWorkspaceKey; }
+  function hubRowHidden(key){
+    try { return !!(JSON.parse(localStorage.getItem(hubHiddenStorageKey())||'{}')||{})[key]; } catch(_hiddenStorageError) { return false; }
+  }
+  function setHubRowHidden(key,hidden){
+    var all={};
+    try { all=JSON.parse(localStorage.getItem(hubHiddenStorageKey())||'{}')||{}; } catch(_hiddenStorageError) {}
+    if(hidden)all[key]=true; else delete all[key];
+    try { localStorage.setItem(hubHiddenStorageKey(),JSON.stringify(all)); } catch(_hiddenStorageError) {}
+    renderChatSidebar();
+  }
+  // One bot menu for Solo and companies: the row's own actions, then the
+  // conversation actions from the chat's ⋯ menu, then the ones to be careful with.
+  // bot: {name, agent (your bot, or null), pinned, setPinned, hidden, setHidden,
+  // roomId, open() -> Promise once its chat is showing, extra, danger}
+  function botRowMenuGroups(bot){
+    var agent=bot.agent, roomId=bot.roomId;
+    var bench=agent && findBenchAgentByServerId(agent.id);
+    function inChat(run){ return function(){ Promise.resolve(bot.open()).then(function(){ if(chatWs.activeKind==='agent')run(); }); }; }
+    var conversation=roomId && (chatWs.nativeConversations||[]).filter(function(item){ return item.id===roomId; })[0];
+    var top=[
+      {label:bot.pinned?'Unpin':'Pin to top',icon:'pin',run:function(){ bot.setPinned(!bot.pinned); }},
+      {label:bot.hidden?'Show bot':'Hide bot',icon:bot.hidden?'eye':'eyeOff',run:function(){ bot.setHidden(!bot.hidden); }}
+    ];
+    if(agent)top.push({label:'Share bot…',icon:'share',run:function(){ openShareBotPicker(agent); }});
+    if(roomId)top.push({label:chatNeedsAttention(roomId)?'Mark as read':'Mark as unread',icon:'unread',run:function(){ setChatAttention(roomId,!chatNeedsAttention(roomId)); }});
+    top=top.concat(bot.extra||[]);
+    var middle=[];
+    if(roomId){
+      var bookmarked=isChatPinned('room:'+roomId);
+      middle.push({label:'Copy conversation ID',icon:'copy',run:function(){ copySidebarText(roomId,'Conversation ID copied'); }});
+      middle.push({label:bookmarked?'Remove bookmark':'Bookmark conversation',icon:'bookmark',run:function(){ setChatPinned('room:'+roomId,!bookmarked); renderChatHeaderBar(); }});
+    }
+    if(agent){
+      if(conversation && activeBotTabsAvailable(conversation))middle.push({label:'Show this bot\'s tabs',icon:'tabs',run:inChat(showActiveBotTabs)});
+      middle.push({label:'History',icon:'history',run:inChat(function(){ openConversationHistory('chats'); })});
+      middle.push({label:'New conversation',icon:'plus',run:inChat(createFreshConversationForActiveBot)});
+      middle.push({label:'Bot settings',icon:'settings',run:inChat(openActiveBotSettings)});
+      if(bench)middle.push({label:'Duplicate bot',icon:'duplicate',run:function(){ duplicateBenchAgent(bench); }});
+    }
+    var bottom=[];
+    if(agent && roomId)bottom.push({label:'Restart conversation',icon:'restart',run:inChat(function(){
+      channelMenu.open=true; channelMenu.roomId=chatWs.activeRoomId; channelMenu.confirming=true; channelMenu.busy=false;
+      renderChatHeaderBar();
+    })});
+    if(bench && !hubWorkspace())bottom.push({label:'Archive bot',icon:'archive',danger:true,run:function(){ deleteBenchAgent(bench); }});
+    bottom=bottom.concat(bot.danger||[]);
+    return [top,middle,bottom];
   }
   // The same bot can be added to several channels; the Hub lists it per
   // channel, so it shows once here, by name, with the channels it is in.
@@ -5773,6 +5833,88 @@
   }
   // Copy a company bot to another company you are in. Mia proposes a
   // generalized copy; an admin reviews and edits it before adding it there.
+  // Share bot…: one of your bots joins a channel of a company you're in,
+  // as when you @mention it there. In a company, that company comes first.
+  function openShareBotPicker(bot){
+    var here=hubWorkspace() ? activeWorkspaceKey.slice(4) : '';
+    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',channelsLoading:false,error:''};
+    var previousFocus=document.activeElement;
+    var overlay=document.createElement('div');
+    overlay.className='app-confirm-overlay open';
+    overlay.setAttribute('role','presentation');
+    var card=document.createElement('div');
+    card.className='app-confirm-card bot-copy-card';
+    card.setAttribute('role','dialog');
+    card.setAttribute('aria-modal','true');
+    card.setAttribute('aria-label','Share '+bot.name);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    function close(){ overlay.remove(); if(previousFocus && previousFocus.focus)try{previousFocus.focus();}catch(_){} }
+    overlay.addEventListener('click',function(e){ if(e.target===overlay && state.phase!=='sharing')close(); });
+    overlay.addEventListener('keydown',function(e){ if(e.key==='Escape' && state.phase!=='sharing'){ e.preventDefault(); close(); } });
+    function team(){ return state.teams.filter(function(t){ return t.teamId===state.teamId; })[0]||null; }
+    function channel(){ return state.channels.filter(function(c){ return c.id===state.channelId; })[0]||null; }
+    function render(){
+      var html='<div class="bot-copy-title">Share '+esc(bot.name)+'</div>';
+      if(state.phase==='loading')html+='<p class="bot-copy-sub">Loading your companies…</p>';
+      else if(state.phase!=='error'){
+        html+='<p class="bot-copy-sub">'+esc(bot.name)+' joins the channel, and people there can mention it. It runs on your computer with your keys.</p>'
+          +'<label class="bot-copy-field"><span>Company</span><select data-share-team>'+state.teams.map(function(t){ return '<option value="'+esc(t.teamId)+'"'+(t.teamId===state.teamId?' selected':'')+'>'+esc(t.name)+'</option>'; }).join('')+'</select></label>'
+          +'<label class="bot-copy-field"><span>Channel</span><select data-share-channel'+(state.channels.length?'':' disabled')+'>'+(state.channels.length
+            ? state.channels.map(function(c){ return '<option value="'+esc(c.id)+'"'+(c.id===state.channelId?' selected':'')+'>#'+esc(c.name)+'</option>'; }).join('')
+            : '<option>'+(state.channelsLoading?'Loading channels…':'No channels you\'re in')+'</option>')+'</select></label>';
+      }
+      if(state.error)html+='<div class="bot-copy-error" role="alert">'+esc(state.error)+'</div>';
+      var room=channel();
+      html+='<div class="app-confirm-actions"><button type="button" class="btn" data-share-cancel'+(state.phase==='sharing'?' disabled':'')+'>Cancel</button>'
+        +(state.phase==='pick'||state.phase==='sharing' ? '<button type="button" class="btn primary" data-share-go'+(!room||state.phase==='sharing'?' disabled':'')+'>'+(state.phase==='sharing'?'Sharing…':'Share to #'+esc(room ? room.name : 'channel'))+'</button>' : '')+'</div>';
+      card.innerHTML=html;
+      var teamSelect=el('[data-share-team]',card), channelSelect=el('[data-share-channel]',card);
+      if(teamSelect)teamSelect.addEventListener('change',function(){ loadChannels(teamSelect.value); });
+      if(channelSelect)channelSelect.addEventListener('change',function(){ state.channelId=channelSelect.value; render(); });
+      el('[data-share-cancel]',card).addEventListener('click',close);
+      var go=el('[data-share-go]',card);
+      if(go)go.addEventListener('click',share);
+      (go||el('[data-share-cancel]',card)).focus();
+    }
+    function loadChannels(teamId){
+      state.teamId=teamId; state.channels=[]; state.channelId=''; state.channelsLoading=true; state.error='';
+      render();
+      hubCall('GET','/v1/teams/'+teamId+'/channels').then(function(result){
+        if(state.teamId!==teamId)return;
+        state.channels=(result.channels||[]).filter(function(c){ return !hubPrivateConversation(c) && c.joined!==false && !c.archived_at; });
+        state.channelId=state.channels.length?state.channels[0].id:'';
+      }).catch(function(){ if(state.teamId===teamId)state.error='Couldn\'t load that company\'s channels.'; })
+        .finally(function(){ if(state.teamId!==teamId)return; state.channelsLoading=false; render(); });
+    }
+    function share(){
+      var target=team(), room=channel();
+      if(!target || !room)return;
+      state.phase='sharing'; state.error=''; render();
+      shareBotToHubChannel(target.teamId,room.id,bot.id,{role:target.role}).then(function(published){
+        close();
+        if(activeWorkspaceKey==='hub_'+target.teamId)refreshHubBotState(room.id,true);
+        showBenchToast(hubBotJoinedMessage(bot.name,target.name+' · #'+room.name,published));
+      }).catch(function(error){
+        if(!overlay.isConnected)return;
+        state.phase='pick'; state.error='Couldn\'t share '+bot.name+': '+(error && error.message || 'try again.'); render();
+      });
+    }
+    render();
+    hubCall('GET','/v1/me').then(function(me){
+      if(!overlay.isConnected)return;
+      (me.teams||[]).forEach(function(t){
+        if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Company'),role:t.membership.role});
+      });
+      if(!state.teams.length)throw new Error('Join a company first to share a bot.');
+      state.phase='pick';
+      var first=state.teams.filter(function(t){ return t.teamId===here; })[0]||state.teams[0];
+      loadChannels(first.teamId);
+    }).catch(function(error){
+      if(!overlay.isConnected)return;
+      state.phase='error'; state.error=error && error.message || 'Couldn\'t load your companies.'; render();
+    });
+  }
   function copyCompanyBotToCompany(bot){
     var place=bot.places && bot.places[0];
     if(!place || (hubChat.membership||{}).role!=='admin')return;
@@ -5927,10 +6069,15 @@
       if(line && more)more.insertAdjacentHTML('beforebegin',renderChatActivityIndicator(!!(state && state.thinking),unread));
     }
     button.addEventListener('click',function(){ openCompanyBotChat(bot); });
-    // Only this company's admins may take a bot out of it, even as a clean copy.
-    var items=(hubChat.membership||{}).role==='admin' ? [['Copy to another company…',function(){ copyCompanyBotToCompany(bot); }]] : [];
-    if(companyBotCanRemove(bot))items.push(['Remove from company',function(){ removeCompanyBot(bot); }]);
-    wireTeamBotPin(button,'company:'+bot.key,!!pinned,items);
+    wireRowMenu(button,function(){
+      // Only this company's admins may take a bot out of it, even as a clean copy.
+      var extra=(hubChat.membership||{}).role==='admin' ? [{label:'Copy to another company…',icon:'share',run:function(){ copyCompanyBotToCompany(bot); }}] : [];
+      var danger=companyBotCanRemove(bot) ? [{label:'Remove from company',icon:'archive',danger:true,run:function(){ removeCompanyBot(bot); }}] : [];
+      return botRowMenuGroups({name:bot.name,agent:null,roomId:chat ? chat.id : null,
+        pinned:!!pinned,setPinned:function(on){ setChatPinned('bot:company:'+bot.key,on); },
+        hidden:hubRowHidden('bot:company:'+bot.key),setHidden:function(on){ setHubRowHidden('bot:company:'+bot.key,on); },
+        open:function(){ return openCompanyBotChat(bot); },extra:extra,danger:danger});
+    });
     return button;
   }
   // A bot row in a team opens your private chat with it for this team.
@@ -5952,7 +6099,12 @@
     var line=el('.row-line1',button);
     if(line)line.insertAdjacentHTML('beforeend','<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span>');
     button.addEventListener('click',function(){ if(sharedAway)openSharedSoloBotNotice(bot); else openTeamBotChat(bot); });
-    wireTeamBotPin(button,'mine:'+bot.id,!!pinned);
+    wireRowMenu(button,function(){
+      return botRowMenuGroups({name:bot.name,agent:bot,roomId:chat ? chat.id : null,
+        pinned:!!pinned,setPinned:function(on){ setChatPinned('bot:mine:'+bot.id,on); },
+        hidden:hubRowHidden('bot:mine:'+bot.id),setHidden:function(on){ setHubRowHidden('bot:mine:'+bot.id,on); },
+        open:function(){ return sharedAway ? openSharedSoloBotNotice(bot) : openTeamBotChat(bot); }});
+    });
     return button;
   }
   var hubSidebarSections={}, hubHiddenBotsOpen={};
@@ -6022,31 +6174,74 @@
   // invited to; direct messages can only be pinned.
   var hubChannelMenu=null;
   function closeHubChannelMenu(){ if(hubChannelMenu){hubChannelMenu.remove();hubChannelMenu=null;} }
+  // group 0 is the row's own actions, 1 the channel's, 2 the ones to be careful with.
   function hubChannelActions(channel){
     var me=hubChat.membership || {}, admin=me.role==='admin', regular=!hubPrivateConversation(channel), manager=admin || channel.created_by===me.clerk_user_id;
-    var actions=[{id:'pin',label:channel.pinned?'Unpin':'Pin to top'}];
-    if(channel.kind==='bot')return actions;
-    if(channel.kind!=='dm' && manager)actions.push({id:'invite',label:'Invite people…'});
-    if(regular && manager)actions.push({id:'rename',label:'Rename…'});
-    if(channel.kind!=='dm')actions.push({id:'leave',label:regular?'Leave channel':'Leave group'});
-    if(regular && admin)actions.push({id:'archive',label:'Archive channel…',danger:true});
-    if(!regular && !channel.pinned)actions.push({id:'close',label:'Close conversation'});
+    var actions=[{id:'pin',label:channel.pinned?'Unpin':'Pin to top',icon:'pin',group:0}];
+    if(regular)actions.push(hubRowHidden('channel:'+channel.id) ? {id:'show',label:'Show channel',icon:'eye',group:0} : {id:'hide',label:'Hide channel',icon:'eyeOff',group:0});
+    actions.push({id:'unread',label:chatNeedsAttention(channel.id)?'Mark as read':'Mark as unread',icon:'unread',group:0});
+    if(channel.kind==='bot')return actions.concat([{id:'copy',label:'Copy conversation ID',icon:'copy',group:1}]);
+    if(channel.kind!=='dm' && manager)actions.push({id:'invite',label:'Invite people…',icon:'invite',group:0});
+    if(regular && manager)actions.push({id:'rename',label:'Edit channel…',icon:'edit',group:1});
+    if(channel.kind!=='dm')actions.push({id:'people',label:'People and bots',icon:'people',group:1});
+    actions.push({id:'copy',label:regular?'Copy channel ID':'Copy conversation ID',icon:'copy',group:1});
+    if(channel.kind!=='dm')actions.push({id:'leave',label:regular?'Leave channel':'Leave group',icon:'leave',group:2});
+    if(regular && admin)actions.push({id:'archive',label:'Archive channel…',icon:'archive',danger:true,group:2});
+    if(!regular && !channel.pinned)actions.push({id:'close',label:'Close conversation',icon:'close',group:2});
     return actions;
   }
   function openHubChannelMenu(channel,x,y){
+    var groups=[[],[],[]];
+    hubChannelActions(channel).forEach(function(item){
+      groups[item.group].push({label:item.label,icon:item.icon,danger:item.danger,run:function(){ runHubChannelAction(channel,item.id); }});
+    });
+    openRowMenu(groups,x,y);
+  }
+  var ROW_MENU_ICONS={
+    pin:'<path d="M12 17v5M9 3h6l-1 7 3.5 3.5h-11L10 10z"/>',
+    eye:'<path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff:'<path d="M3.5 3.5 20.5 20.5"/><path d="M10.2 5.2A9.8 9.8 0 0 1 12 5c5.3 0 8.9 4.2 9.8 7-.3 1.1-1.1 2.4-2.3 3.6M6.2 6.2C4.8 7.3 3.8 8.8 2.8 12c.8 2.8 4.2 7 9.2 7 1.1 0 2.1-.2 3-.6"/><path d="M9.5 9.5a3.5 3.5 0 0 0 5 5"/>',
+    share:'<path d="M12 15V3.5M8 7.5l4-4 4 4"/><path d="M5 12v7.5h14V12"/>',
+    unread:'<path d="M6.5 16.5h11l-1.5-2v-4a4 4 0 0 0-8 0v4z"/><path d="M9.5 19a2.5 2.5 0 0 0 5 0"/>',
+    invite:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6"/>',
+    edit:'<path d="m4 16.8-.8 4 4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3z"/><path d="m14.5 6.5 3 3"/>',
+    people:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>',
+    copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+    bookmark:'<path d="M18 20l-6-4-6 4V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1z"/>',
+    tabs:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M9 5v4"/>',
+    history:'<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
+    plus:'<path d="M12 5v14M5 12h14"/>',
+    settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+    duplicate:'<rect x="7" y="7" width="12" height="12" rx="1.5"/><path d="M5 16V5a1 1 0 0 1 1-1h11"/>',
+    restart:'<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    leave:'<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
+    close:'<path d="M6 6l12 12M18 6 6 18"/>',
+    archive:'<path d="M5 7h14M9 7V4.5h6V7M7 7l.7 13h8.6L17 7M10 10.5v6M14 10.5v6"/>'
+  };
+  // The one row menu for chats, bots and channels, Solo and companies:
+  // groups of {label, icon, run, danger}, with a line between groups.
+  function openRowMenu(groups,x,y){
     closeHubChannelMenu();
+    if(chatSidebarCtxMenuClose)chatSidebarCtxMenuClose();
+    var items=[], html=[];
+    groups.filter(function(group){ return group.length; }).forEach(function(group,index){
+      if(index)html.push('<div class="chat-sidebar-ctx-sep" role="separator"></div>');
+      group.forEach(function(item){
+        html.push('<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item'+(item.danger?' chat-sidebar-ctx-item-danger':'')+'" data-row-menu="'+items.length+'">'
+          +'<svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true">'+(ROW_MENU_ICONS[item.icon]||'')+'</svg><span>'+esc(item.label)+'</span></button>');
+        items.push(item);
+      });
+    });
     var menu=document.createElement('div');
     menu.className='chat-ctx-menu chat-sidebar-ctx-menu hub-channel-menu'; menu.setAttribute('role','menu');
-    menu.innerHTML=hubChannelActions(channel).map(function(item){
-      return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item'+(item.danger?' chat-sidebar-ctx-item-danger':'')+'" data-hub-channel-action="'+item.id+'">'+esc(item.label)+'</button>';
-    }).join('');
+    menu.innerHTML=html.join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
     menu.style.left=sidebarMenuLeft(x,menu.offsetWidth)+'px';
     menu.style.top=Math.max(8,Math.min(y,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
-      var button=event.target.closest('[data-hub-channel-action]');
+      var button=event.target.closest('[data-row-menu]');
       if(!button)return;
-      closeHubChannelMenu(); runHubChannelAction(channel,button.getAttribute('data-hub-channel-action'));
+      closeHubChannelMenu(); items[Number(button.getAttribute('data-row-menu'))].run();
     });
     document.addEventListener('scroll',closeHubChannelMenu,{capture:true,once:true});
     setTimeout(function(){
@@ -6056,6 +6251,10 @@
   function runHubChannelAction(channel,id){
     var base=hubPath()+'/channels/'+channel.id, name=hubPrivateConversation(channel) ? hubChannelTitle(channel) : '#'+channel.name;
     if(id==='invite')return openHubInvitePeople(channel);
+    if(id==='hide' || id==='show')return setHubRowHidden('channel:'+channel.id,id==='hide');
+    if(id==='unread')return setChatAttention(channel.id,!chatNeedsAttention(channel.id));
+    if(id==='copy')return copySidebarText(channel.id,hubPrivateConversation(channel)?'Conversation ID copied':'Channel ID copied');
+    if(id==='people')return Promise.resolve(chatWs.activeRoomId===channel.id ? null : openHubChannel(channel)).then(openManageAgentsPane);
     if(id==='pin'){
       var pinned=!channel.pinned; channel.pinned=pinned; renderChatSidebar();
       return hubCall(pinned?'PUT':'DELETE',base+'/pin').catch(function(error){
@@ -7825,6 +8024,20 @@
       var row = e.target.closest('.chat-recent-row[data-chat-key]');
       if(!row) return;
       e.preventDefault();
+      // A bot gets the same menu as in a company; Mia and other chats keep this one.
+      var agentId = row.getAttribute('data-chat-menu-agent-id');
+      var agent = row.getAttribute('data-chat-menu-kind') === 'agent' && agentId && agentId !== 'gateway' && !row.getAttribute('data-agent-room-id')
+        && (chatWs.allAgents || []).filter(function(item){ return item.id === agentId; })[0];
+      if(agent){
+        closeMenu();
+        var pinKey = row.getAttribute('data-chat-key'), hideKey = row.getAttribute('data-chat-menu-hide-key') || '';
+        var roomId = row.getAttribute('data-chat-room-id') || null;
+        openRowMenu(botRowMenuGroups({name: agent.name, agent: agent, roomId: roomId,
+          pinned: isChatPinned(pinKey), setPinned: function(on){ setChatPinned(pinKey, on); },
+          hidden: false, setHidden: function(){ hideChatEntry(hideKey); },
+          open: function(){ return chatWs.activeRoomId === roomId && roomId ? null : selectAgentRoom(agent); }}), e.clientX, e.clientY);
+        return;
+      }
       openMenuFor(row, e.clientX, e.clientY);
     });
     menu.addEventListener('click', function(e){
