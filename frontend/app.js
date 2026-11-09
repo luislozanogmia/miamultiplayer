@@ -15065,15 +15065,61 @@
       row('Model', '<span id="cipModelValue">' + esc(tags ? tags.textContent.trim() : '') + '</span>', 'data-bot-setting="model"') +
       (agent ? row('Brief', '', 'data-bot-setting="edit"') + row('Workplaces', places ? String(places) : '', 'data-bot-setting="edit"') + row('Avatar color', color, 'data-bot-setting="edit"') : '') + '</section>';
   }
-  // The same editor the details pane opens, from the conversation's menu.
+  // Bot settings, from the conversation's menu, shows the bot in the right
+  // pane as the same card the marketplace shows; its Edit opens the editor.
   function openActiveBotSettings(){
     var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
     var botId = conversation && conversation.metadata && conversation.metadata.botId;
     return loadBenchAgents().then(function(){
       var bench = botId && findBenchAgentByServerId(botId);
-      if(!bench){ showBenchToast('Bot editor is unavailable right now'); return; }
-      openEditCinema(bench.id);
+      if(!bench){ showBenchToast('Bot settings are unavailable right now'); return; }
+      openBotCardPane(botId);
     });
+  }
+  var botCardSkills = {};
+  function openBotCardPane(botId){
+    if(!STYLED_SKIN) return;
+    prepareChatUtilityPane('bot-card');
+    chatInfo.cardBotId = botId;
+    renderChatInfoPane();
+    var bench = findBenchAgentByServerId(botId);
+    var ids = bench && Array.isArray(bench.skills) ? bench.skills : [];
+    botCardSkills[botId] = null;
+    Promise.all(ids.map(function(id){
+      return api('/api/skills/' + encodeURIComponent(id)).then(function(res){ return res.status === 200 && res.data ? res.data.skill : null; }, function(){ return null; });
+    })).then(function(skills){
+      botCardSkills[botId] = skills.filter(Boolean);
+      if(chatInfo.mode === 'bot-card' && chatInfo.cardBotId === botId) renderChatInfoPane();
+    });
+  }
+  function closeBotCardPane(){
+    if(chatInfo.mode !== 'bot-card') return;
+    chatInfo.mode = 'automations';
+    chatInfo.open = false;
+    renderChatInfoPane();
+    syncSidebarToolButtons();
+  }
+  function renderBotCardPane(pane){
+    var botId = chatInfo.cardBotId, bench = findBenchAgentByServerId(botId);
+    var record = (chatWs.botRecords || []).filter(function(item){ return String(item.id) === String(botId); })[0] || {};
+    pane.setAttribute('aria-label', 'Bot settings');
+    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open');
+    pane.classList.add('open', 'bot-store-open');
+    var card = !bench || !window.MiaBotMarketplace ? '<p class="bot-market-empty">This bot isn\'t available right now.</p>'
+      : window.MiaBotMarketplace.cardHtml({
+          name: bench.name, color: bench.avatarColor,
+          meta: [bench.model && bench.model !== 'default' ? String(bench.model).split('/').pop() : '', record.marketSource ? 'from the marketplace' : ''].filter(Boolean).join(' · '),
+          action: '<button type="button" class="bot-market-btn" data-bot-card-edit>Edit</button>',
+          instructions: String(bench.instructions || ''),
+          skills: botCardSkills[botId] === undefined ? [] : botCardSkills[botId],
+          automations: (Array.isArray(record.automations) ? record.automations : []).map(function(item){ return {name: item.name, schedule: automationScheduleText(item)}; })
+        }, {esc: esc, avatarHtml: function(name, color){ return agentAvatarHtml(name, botId, 56, null, color || null); }});
+    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Bot settings</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
+      '<button type="button" class="cip-pane-btn" id="botCardPaneClose" aria-label="Close bot settings" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div></div>' +
+      '<div class="bot-store-body bot-card-pane">' + card + '</div>';
+    el('#botCardPaneClose', pane).addEventListener('click', closeBotCardPane);
+    var edit = el('[data-bot-card-edit]', pane);
+    if(edit) edit.addEventListener('click', function(){ if(bench) openEditCinema(bench.id); });
   }
   function bindDetailsBotSettings(pane, agent){
     els('[data-bot-setting]', pane).forEach(function(button){
@@ -15101,7 +15147,7 @@
       restorePluginShell();
       chatInfo.mode = 'automations';
     }
-    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail';
+    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-card';
     if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit') || (!specialMode && !isInfoPaneAvailable())){
       restorePluginShell();
       pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open', 'bot-store-open');
@@ -15127,6 +15173,10 @@
     }
     if(chatInfo.mode === 'agents'){
       renderManageAgentsPane(pane);
+      return;
+    }
+    if(chatInfo.mode === 'bot-card'){
+      renderBotCardPane(pane);
       return;
     }
     if(chatInfo.mode === 'plugins'){

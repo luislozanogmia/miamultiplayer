@@ -4268,3 +4268,9 @@ textarea.bot-market-input{min-height:96px;}
 .bot-market-edit-actions{display:flex;align-items:center;gap:8px;}
 .bot-market-spacer{flex:1;}
 .bot-market-error{font-size:13px;color:var(--sand-text-danger);}
+/* A bot's card in the right pane: the marketplace card, narrower. */
+.bot-card-pane .bot-market-detail{max-width:none;gap:16px;}
+.bot-card-pane .bot-market-detail-head{gap:10px;}
+.bot-card-pane .bot-market-avatar.large,.bot-card-pane .bot-market-avatar.large img{width:48px;height:48px;}
+.bot-card-pane .bot-market-detail-name{font-size:17px;}
+.bot-card-pane .bot-market-text{max-height:260px;}

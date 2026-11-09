@@ -189,22 +189,31 @@
         instructions: d.loading ? null : text(latest.instructions), skills: Array.isArray(latest.skills) ? latest.skills : [],
         automations: [], requires: [], error: d.error, owners: Array.isArray(full.owners) ? full.owners : []};
     }
+    return '<button type="button" class="bot-market-back" data-market-back>&larr; Back</button>' + botCard(view);
+  }
+
+  // One bot card for the marketplace and for a bot's own right pane, so a bot
+  // looks the same wherever you see it. view: {name, color, about, meta,
+  // action, instructions (null while loading), skills, automations, requires,
+  // owners, error}.
+  function botCard(view){
     var instructions = view.error ? '<p class="bot-market-empty">' + esc(view.error) + '</p>'
       : view.instructions === null ? '<p class="bot-market-empty">Loading…</p>'
       : view.instructions ? '<pre class="bot-market-text">' + esc(view.instructions) + '</pre>' : '<p class="bot-market-empty">No instructions.</p>';
-    return '<button type="button" class="bot-market-back" data-market-back>&larr; Back</button>'
-      + '<div class="bot-market-detail">'
+    var skills = view.skills === null ? '<p class="bot-market-empty">Loading…</p>' : skillsHtml(view.skills || []);
+    var requires = view.requires || [], automations = view.automations || [], owners = view.owners || [];
+    return '<div class="bot-market-detail">'
       + '<div class="bot-market-detail-head"><span class="bot-market-avatar large">' + opts.avatarHtml(view.name, view.color) + '</span>'
       + '<div class="bot-market-copy"><h1 class="bot-market-detail-name">' + esc(view.name) + '</h1>'
-      + (view.meta ? '<span class="bot-market-meta">' + esc(view.meta) + '</span>' : '') + '</div>' + view.action + '</div>'
+      + (view.meta ? '<span class="bot-market-meta">' + esc(view.meta) + '</span>' : '') + '</div>' + (view.action || '') + '</div>'
       + (view.about ? section('What it does', '<p class="bot-market-about-full">' + esc(view.about) + '</p>') : '')
-      + (view.requires.length ? section('Needs', '<p class="bot-market-about-full">' + esc(view.requires.join(', ')) + '</p>') : '')
+      + (requires.length ? section('Needs', '<p class="bot-market-about-full">' + esc(requires.join(', ')) + '</p>') : '')
       + section('Instructions', instructions)
-      + section('Skills', skillsHtml(view.skills))
-      + (view.automations.length ? section('Automations', '<ul class="bot-market-list-plain">' + view.automations.map(function(item){
+      + section('Skills', skills)
+      + (automations.length ? section('Automations', '<ul class="bot-market-list-plain">' + automations.map(function(item){
           return '<li><strong>' + esc(item.name || 'Automation') + '</strong>' + (item.schedule || item.cron ? ' · ' + esc(item.schedule || item.cron) : '') + '</li>';
         }).join('') + '</ul>') : '')
-      + (view.owners && view.owners.length ? section('Owners', '<p class="bot-market-about-full">' + esc(view.owners.map(function(o){ return o.name || o.email || o; }).join(', ')) + '</p>') : '')
+      + (owners.length ? section('Owners', '<p class="bot-market-about-full">' + esc(owners.map(function(o){ return o.name || o.email || o; }).join(', ')) + '</p>') : '')
       + '</div>';
   }
 
@@ -505,5 +514,13 @@
     }, function(){ if(state === mine) render(); });
   }
 
-  root.MiaBotMarketplace = {open: open, close: close, isOpen: function(){ return !!state; }, marketBot: function(raw){ opts = opts || {esc: String}; return marketBot(raw); }};
+  // The same card outside the marketplace (a bot's right pane), with that
+  // place's own esc and avatar.
+  function cardHtml(view, options){
+    var own = opts;
+    if(!state) opts = options;
+    try { return botCard(view); } finally { if(!state) opts = own; }
+  }
+
+  root.MiaBotMarketplace = {open: open, close: close, cardHtml: cardHtml, isOpen: function(){ return !!state; }, marketBot: function(raw){ opts = opts || {esc: String}; return marketBot(raw); }};
 })(typeof window !== 'undefined' ? window : globalThis);

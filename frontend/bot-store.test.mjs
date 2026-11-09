@@ -66,3 +66,11 @@ test('the Bot marketplace opens inside a company too, not only in Solo', async (
   const source = await readFile(appUrl, 'utf8');
   assert.match(source, /var sharedView = [^;]*action === 'bot-store'/);
 });
+
+test('Bot settings shows the bot as the same card the marketplace shows, with Edit', async () => {
+  const [source, market] = await Promise.all([readFile(appUrl, 'utf8'), readFile(new URL('./bot-marketplace.js', import.meta.url), 'utf8')]);
+  assert.match(source, /function openActiveBotSettings\(\)\{[\s\S]*?openBotCardPane\(botId\);/);
+  assert.match(source, /function renderBotCardPane\(pane\)\{[\s\S]*?window\.MiaBotMarketplace\.cardHtml\(\{/);
+  assert.match(source, /if\(edit\) edit\.addEventListener\('click', function\(\)\{ if\(bench\) openEditCinema\(bench\.id\); \}\);/);
+  assert.match(market, /return '<button type="button" class="bot-market-back" data-market-back>&larr; Back<\/button>' \+ botCard\(view\);/, 'the marketplace uses the same card');
+});
