@@ -182,8 +182,8 @@ const MIAOS_HERMES_TOOLSETS = MIAOS_AGENT_SEARCH_ONLY
   ? SEARCH_ONLY_TOOLSETS
   : FULL_AGENT_TOOLSETS;
 // Bots are bounded task workers, not private agents. They can research the
-// web and drive the Mia browser through the guarded terminal, but they
-// cannot access durable memory, sessions, skills, or delegation.
+// web and drive the Mia browser through the guarded terminal. Delegation is
+// turned off in their profiles (hermes-bot-profile.js BOT_DISABLED_TOOLSETS).
 const MIAOS_BOT_TOOLSETS = Object.freeze(
   MIAOS_AGENT_SEARCH_ONLY
     ? ['web', 'todo', 'clarify']
