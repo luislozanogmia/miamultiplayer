@@ -1,4 +1,7 @@
 'use strict';
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
 const {createHubBotJournal}=require('./hub-bot-journal');
 const {hubEndpoint}=require('./hub-client');
 const {CLERK_INSTANCES}=require('./clerk-config');
@@ -7,6 +10,7 @@ const {CLERK_INSTANCES}=require('./clerk-config');
 // cut at a character boundary rather than lost.
 // A definition holds long instructions and up to ten skills.
 const RESPONSE_BYTES=12*1024*1024;
+const DEFINITION_RESPONSE_BYTES=73*1024*1024;
 const REPLY_BYTES=16000, CUT_NOTE='\n\n[Reply shortened to fit the channel.]';
 function fitReply(text,limit=REPLY_BYTES) {
   if(typeof text!=='string' || Buffer.byteLength(text)<=limit) return text;
@@ -38,14 +42,43 @@ async function requestHub(origin,token,method,path,body,fetcher=fetch) {
   const response=await fetcher(origin+path,{method,redirect:'error',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
     body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
   const chunks=[];let length=0;
-  for await(const chunk of response.body) {length+=chunk.length;if(length>RESPONSE_BYTES) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
+  const responseLimit = /\/(?:definition|claim)$/.test(path) ? DEFINITION_RESPONSE_BYTES : RESPONSE_BYTES;
+  for await(const chunk of response.body) {length+=chunk.length;if(length>responseLimit) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
   const result=JSON.parse(Buffer.concat(chunks));
   if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','dispatch_cancelled','invalid_claim','bot_storage_limit'].includes(result.error)?result.error:'hub_request_failed');
   return result;
 }
 function sharedSkills(value) {
   return (Array.isArray(value)?value:[]).filter(skill=>skill && typeof skill.name==='string' && typeof skill.body==='string' && skill.body.trim())
-    .map(skill=>({name:skill.name,description:typeof skill.description==='string'?skill.description:'',body:skill.body}));
+    .map(skill=>({name:skill.name,description:typeof skill.description==='string'?skill.description:'',body:skill.body,
+      ...(Array.isArray(skill.files)?{files:skill.files.filter(file=>file && typeof file.path==='string' && typeof file.body==='string')
+        .map(file=>({path:file.path,body:file.body}))}:{})}));
+}
+function safeSharedSkillPath(value) {
+  if(typeof value!=='string' || value.length>512 || !value.isWellFormed()) return false;
+  const parts=value.split('/');
+  return parts.length<=5 && value.toLowerCase()!=='skill.md' && parts.every(part=>part && !part.startsWith('.')
+    && !part.includes('..') && !part.endsWith('.') && !part.endsWith(' ') && !/[\\:\x00-\x1f\x7f]/.test(part));
+}
+function materializeSharedSkills(skills) {
+  if(!skills.some(skill=>skill.files && skill.files.length)) return {skills,cleanup:()=>{}};
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'mia-shared-skills-'));
+  try {
+    const prepared=skills.map((skill,index)=>{
+      if(!skill.files || !skill.files.length) return skill;
+      const folder=path.join(root,String(index));
+      fs.mkdirSync(folder,{mode:0o700});
+      fs.writeFileSync(path.join(folder,'SKILL.md'),skill.body,{mode:0o600,flag:'wx'});
+      for(const file of skill.files) {
+        if(!safeSharedSkillPath(file.path) || file.body.length>200000) throw new Error('invalid_shared_skill_file');
+        const target=path.join(folder,file.path);
+        fs.mkdirSync(path.dirname(target),{recursive:true,mode:0o700});
+        fs.writeFileSync(target,file.body,{mode:/\.(py|sh|js|mjs)$/i.test(file.path)?0o700:0o600,flag:'wx'});
+      }
+      return {...skill,folder};
+    });
+    return {skills:prepared,cleanup:()=>fs.rmSync(root,{recursive:true,force:true})};
+  } catch(error) {fs.rmSync(root,{recursive:true,force:true});throw error;}
 }
 function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,isHeld=()=>false,isClosing=()=>false,checkIntervalMs=15000,fetcher=fetch}) {
   const journal=createHubBotJournal(db);
@@ -98,6 +131,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     const controller=new AbortController();
     const timeout=setTimeout(()=>controller.abort(),120000);
     let checking=false;
+    let skillFilesCleanup=()=>{};
     const check=setInterval(async()=>{
       if(checking) return;
       checking=true;
@@ -130,7 +164,9 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const place=((listed && listed.channels)||[]).find(channel=>channel && channel.id===s.channelId);
       const privateChat=!!place && place.kind==='bot' && claim.requesterId===s.subject
         && Array.isArray(place.member_ids) && place.member_ids.length===1 && place.member_ids[0]===s.subject;
-      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, registrationId:run.registration_id, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:sharedSkills(claim.definition.skills)};
+      const preparedSkills=materializeSharedSkills(sharedSkills(claim.definition.skills));
+      skillFilesCleanup=preparedSkills.cleanup;
+      const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, registrationId:run.registration_id, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:preparedSkills.skills};
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
         channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
@@ -140,7 +176,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       // Mia is closing: the journal keeps this as started, and the person decides next time.
       if(isClosing()) return;
       journal.saveReply(s,run.job_id,'This bot could not complete the request. Please send a new message to try again.');
-    } finally {clearTimeout(timeout);clearInterval(check);}
+    } finally {clearTimeout(timeout);clearInterval(check);skillFilesCleanup();}
     await publish(s,journal.getRun(s,run.job_id),token());
   }
   function launch(s,run,token) {
@@ -232,7 +268,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
         {id:binding.registration_id,name:binding.public_name},fetcher);
       if(!result.bot || result.bot.owner_id!==scope.subject || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
       // A copy from another company brings the skills its owner reviewed.
-      const skills=Array.isArray(input.skills)?sharedSkills(input.skills):bundleSkills(bot);
+      const skills=sharedSkills(Array.isArray(input.skills)?input.skills:bundleSkills(bot));
       // A Hub that has not been updated refuses skills and long instructions.
       const proposed=await requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
         {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual',...(skills.length?{skills}:{})},fetcher)
@@ -253,4 +289,4 @@ function createHubBotRouter(options) {
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
-module.exports={sharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};
+module.exports={sharedSkills,materializeSharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};
