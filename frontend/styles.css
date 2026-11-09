@@ -2578,7 +2578,12 @@
      underneath without touching its open state, so closing the thread
      brings the automations pane straight back. */
   body.styled-skin .chat-thread-panel{flex:0 0 var(--sand-thread-pane-width);width:var(--sand-thread-pane-width);box-sizing:border-box;background:var(--sand-bg-base);border-left:1px solid var(--sand-border-default);}
-  body.styled-skin .chat-thread-panel .ctp-header{box-sizing:border-box;height:calc(var(--mia-top-tabs) + var(--mia-top-bar));min-height:calc(var(--mia-top-tabs) + var(--mia-top-bar));padding:var(--mia-top-tabs) 10px 0 16px;gap:8px;}
+  /* Thread and Tasks use the pane head's grid: the close button in the top
+     band, then the title with the room or bot name beside it. */
+  body.styled-skin .chat-thread-panel .ctp-header{box-sizing:border-box;height:calc(var(--mia-top-tabs) + var(--mia-top-bar));min-height:calc(var(--mia-top-tabs) + var(--mia-top-bar));padding:0 10px 0 16px;grid-template-columns:auto minmax(0,1fr) auto;column-gap:8px;}
+  body.styled-skin .chat-thread-panel .ctp-header .ctp-header-title{grid-row:2;grid-column:1;}
+  body.styled-skin .chat-thread-panel .ctp-header .ctp-header-room{grid-row:2;grid-column:2;}
+  body.styled-skin .chat-thread-panel .ctp-header>.cip-pane-actions{grid-column:3;}
   body.styled-skin .chat-thread-panel .ctp-header-title{font-size:13px;line-height:16px;font-weight:500;}
   body.styled-skin .chat-thread-panel .ctp-header-room{font-size:12px;}
   body.styled-skin .chat-thread-panel .ctp-close{margin-left:0;width:28px;height:28px;border-radius:8px;font-size:inherit;}
@@ -2590,8 +2595,9 @@
      keep their natural right-aligned width through .is-you's alignment rule. */
   body.styled-skin .chat-thread-panel .chat-msg-row{padding-left:0;padding-right:0;}
   body.styled-skin .chat-thread-panel .chat-msg-row.is-direct{padding-left:0;padding-right:0;}
-  body.styled-skin .chat-thread-panel .chat-msg-body{flex:1 1 auto;max-width:100%;}
-  body.styled-skin .chat-thread-panel .chat-msg-row.is-direct .chat-msg-body{flex:1 1 auto;max-width:100%;}
+  /* Leave room beside each bubble for its reaction button (see .chat-msg-react-add). */
+  body.styled-skin .chat-thread-panel .chat-msg-body{flex:0 1 auto;max-width:calc(100% - 34px);}
+  body.styled-skin .chat-thread-panel .chat-msg-row.is-direct .chat-msg-body{flex:0 1 auto;max-width:calc(100% - 34px);}
   body.styled-skin .chat-thread-panel .chat-msg-text{max-width:100%;}
   body.styled-skin.ctp-open .chat-info-pane.open{display:none;}
   /* The pane's top two rows match the tab row and the address bar, so their dividers run straight across. */
