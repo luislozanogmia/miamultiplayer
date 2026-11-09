@@ -222,7 +222,7 @@ function existingProfileModel(config) {
 // the same point, so a long chat behaves the same wherever it runs.
 const COMPRESSION_THRESHOLD_TOKENS = 64000;
 function runtimeProfileConfig({
-  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, model = null,
+  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, model = null, mcpApps = [],
 }) {
   const lines = [
     MANAGED_MARKER,
@@ -287,7 +287,15 @@ function runtimeProfileConfig({
     `    - ${PROVIDER_LIMITS_PLUGIN}`,
     ...(terminal && terminal.cwd ? [`    - ${GHOST_FIRST_PLUGIN}`] : []),
   );
-  if (googleWorkspace) lines.push(...googleWorkspaceMcpConfig());
+  // Google's server and your own MCP apps share one mcp_servers block.
+  const google = googleWorkspace ? googleWorkspaceMcpConfig() : [];
+  const yours = require('./mcp-apps').hermesMcpServerLines(mcpApps);
+  if (google.length) {
+    const tools = google.indexOf('tools:');
+    lines.push(...google.slice(0, tools), ...yours, ...google.slice(tools));
+  } else if (yours.length) {
+    lines.push('mcp_servers:', ...yours);
+  }
   lines.push('');
   return lines.join('\n');
 }
@@ -329,7 +337,7 @@ function provisionBundledPlugin(profileDir, plugin) {
 }
 
 function provisionRuntimeProfile({
-  profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false,
+  profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, mcpApps = [],
 }) {
   const profileDir = path.join(profilesRoot, profile);
   const configPath = path.join(profileDir, 'config.yaml');
@@ -339,7 +347,7 @@ function provisionRuntimeProfile({
     if (error.code !== 'ENOENT') throw error;
   }
   const next = runtimeProfileConfig({
-    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots,
+    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots, mcpApps,
     model: existing.startsWith(MANAGED_MARKER) ? existingProfileModel(existing) : null,
   });
 
@@ -455,6 +463,11 @@ function provisionHermesGoogleBotProfile({
   });
 }
 
+// The MCP apps Mia added for you; a missing or unreadable list is none.
+function mcpApps() {
+  try { return require('./mcp-apps').defaultStore.list(); } catch (_) { return []; }
+}
+
 function provisionHermesAgentProfile({
   profilesRoot = path.join(hermesHome(), 'profiles'),
   searchOnly = MIAOS_AGENT_SEARCH_ONLY,
@@ -477,6 +490,8 @@ function provisionHermesAgentProfile({
     terminal,
     backgroundReview: backgroundReviewEnabledForGateway(),
     editsBots: !searchOnly,
+    // Your own MCP apps reach Mia's agent only, never bots.
+    mcpApps: searchOnly ? [] : mcpApps(),
   });
 }
 
@@ -498,6 +513,8 @@ function provisionHermesGoogleAgentProfile({
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForGateway(),
     editsBots: !searchOnly,
+    // Your own MCP apps reach Mia's agent only, never bots.
+    mcpApps: searchOnly ? [] : mcpApps(),
   });
 }
 

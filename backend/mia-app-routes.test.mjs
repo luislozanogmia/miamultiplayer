@@ -52,6 +52,9 @@ async function harness(t) {
   app.post('/api/skills', (req, res) => { const skill = { id: `s${state.skills.length + 1}`, ...req.body, files: req.body.files || [] }; state.skills.push(skill); res.json({ skill }); });
   app.put('/api/skills/:id', (req, res) => { const skill = state.skills.find(item => item.id === req.params.id); Object.assign(skill, req.body); res.json({ skill }); });
   app.post('/api/bots', (req, res) => { state.createdBots.push(req.body); res.status(201).json({ bot: { id: 'b2', name: req.body.name } }); });
+  state.mcpApps = [];
+  app.get('/api/mcp-apps', (_req, res) => res.json({ apps: state.mcpApps }));
+  app.post('/api/mcp-apps', (req, res) => { const added = { id: 'attio', status: 'sign_in_on_first_use', ...req.body }; state.mcpApps.push(added); res.json({ app: added }); });
   // Group D routes exist in the app. Nothing may reach them.
   for (const route of ['/api/keys', '/api/settings/guardrails', '/api/dev/clean-slate']) app.all(route, (_req, res) => { state.reachedForbidden = true; res.json({}); });
   registerMiaAppRoutes(app, {
@@ -236,4 +239,23 @@ test('Mia manages skills and the marketplace through cards the person accepts', 
   assert.equal(state.createdBots[0].name, 'Inbox Triage');
   assert.deepEqual(state.createdBots[0].skills, ['s2']);
   assert.equal(state.skills[1].name, 'Sort new messages');
+});
+
+test('Mia adds an MCP app only through a card, from the vendor, and never with a key', async t => {
+  const { call, post, state } = await harness(t);
+  assert.equal((await call('mcp_app_add_propose', { name: 'Attio', url: 'http://mcp.example.test' })).status, 400, 'https only');
+  assert.equal((await call('mcp_app_add_propose', { name: 'Attio', url: 'https://mcp.example.test/mcp', auth: 'oauth' })).status, 400, 'needs the vendor page');
+  const asked = await call('mcp_app_add_propose', { name: 'Attio', description: 'Your CRM', url: 'https://mcp.example.test/mcp', auth: 'oauth',
+    docs_url: 'https://example.test/docs/mcp', logo_url: 'https://127.0.0.1/logo.png' });
+  assert.equal(asked.status, 200, JSON.stringify(asked.data));
+  assert.equal(state.mcpApps.length, 0, 'nothing added before Accept');
+  const card = JSON.stringify(state.cards.get(asked.data.result.event_id));
+  assert.match(card, /Add Attio to Connected apps/);
+  assert.match(card, /From: https:\/\/example\.test\/docs\/mcp/);
+  assert.match(card, /No logo found/, 'a private address is never fetched');
+  await post(`/api/mia-app/proposals/${asked.data.result.event_id}`, { decision: 'accept' });
+  assert.equal(state.mcpApps[0].url, 'https://mcp.example.test/mcp');
+  assert.equal(state.mcpApps[0].logo, null);
+  assert.equal((await call('mcp_apps_list')).data.result.apps.length, 1);
+  assert.doesNotMatch(JSON.stringify((await call('list_tools')).data.result.find(tool => tool.name === 'mcp_app_add_propose').arguments), /"key"\s*:/, 'no tool takes a key');
 });

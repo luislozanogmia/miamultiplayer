@@ -1866,7 +1866,8 @@
     var eventId = card.getAttribute('data-mia-app-card');
     var state = miaAppCardStates[eventId] = {busy: true, error: ''};
     renderChatThread();
-    api('/api/mia-app/proposals/' + encodeURIComponent(eventId), {method: 'POST', body: {decision: decision.getAttribute('data-mia-app-decision')}}).then(function(res){
+    // The card lives in the chat's own store: in a company, your Mia chat is kept in Solo's.
+    api('/api/mia-app/proposals/' + encodeURIComponent(eventId) + '?workspace=' + encodeURIComponent(localChatWorkspaceKey()), {method: 'POST', body: {decision: decision.getAttribute('data-mia-app-decision')}}).then(function(res){
       state.busy = false;
       if(res.data && res.data.result && res.data.result.clientAction === 'installTeamApp'){
         installTeamVersion(res.data.result.teamId, res.data.result.appId, res.data.result.version, false).catch(function(){ showBenchToast('That app could not be installed.'); });
@@ -15127,6 +15128,7 @@
       pane.innerHTML = '<div class="cip-pane-head styled-plugin-pane-head"><span class="cip-pane-title">Connected apps</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
         '<button type="button" class="cip-pane-btn" id="styledPluginPaneClose" aria-label="Close connected apps" title="Close connected apps"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>';
       if(shell) pane.appendChild(shell);
+      if(window.MiaMcpAppsUI) window.MiaMcpAppsUI.load();
       var pluginClose = el('#styledPluginPaneClose', pane);
       if(pluginClose) pluginClose.addEventListener('click', closePluginPane);
       return;
@@ -18282,7 +18284,7 @@
     // team; only creating chats and bots differs.
     // Making a bot works the same in a team: it belongs to the team you are in.
     // The Bot marketplace opens anywhere, on the shelf of the company you are in.
-    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills' || action === 'new-bot' || action === 'bot-store';
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills' || action === 'new-bot' || action === 'bot-store' || action === 'connected-apps';
     if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
@@ -18781,6 +18783,10 @@
     });
     syncDesktopNotificationControl();
   })();
+
+  // Your apps in Connected apps: the MCP apps Mia added (mcp-apps-ui.js).
+  if(window.MiaMcpAppsUI) window.MiaMcpAppsUI.init({api: api, esc: esc, askMia: askMiaAbout,
+    confirm: function(message){ return appConfirm(message, 'Remove'); }});
 
   /* ============ STYLED: Hermes connector catalog ============ */
   (function(){

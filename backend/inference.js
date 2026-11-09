@@ -152,6 +152,7 @@ Mia browser boundary (non-negotiable): when the user asks you to browse, navigat
 // boundary survive a normal Mia checkout without changing user config.
 const MIAOS_GHOST_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'browser', 'SKILL.md');
 const MIAOS_APP_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'mia-app', 'SKILL.md');
+const MIAOS_MCP_APPS_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'mcp-apps', 'SKILL.md');
 const MIAOS_BOT_CREATION_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'bot-creation', 'SKILL.md');
 const MIAOS_GHOST_FALLBACK = `
 Mia browser policy (authoritative): use only the browser already embedded in
@@ -273,12 +274,11 @@ function stripHermesOperationalLines(value) {
     .trim();
 }
 
+// The mia-app CLI, then how to add an MCP app with it.
 function loadMiaAppSkill() {
-  try {
-    return fs.readFileSync(MIAOS_APP_SKILL_PATH, 'utf8').trim().replace(/^---[\s\S]*?---\s*/, '').trim();
-  } catch {
-    return '';
-  }
+  return [MIAOS_APP_SKILL_PATH, MIAOS_MCP_APPS_SKILL_PATH].map((file) => {
+    try { return fs.readFileSync(file, 'utf8').trim().replace(/^---[\s\S]*?---\s*/, '').trim(); } catch { return ''; }
+  }).filter(Boolean).join('\n\n');
 }
 
 function loadMiaGhostSkill() {

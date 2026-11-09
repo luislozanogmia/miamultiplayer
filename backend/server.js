@@ -5884,6 +5884,54 @@ app.post('/api/bots/archived/:id/restore', requireAuth, async (req, res) => {
   res.status(200).json({ bot: db.loadOne(conn, 'bots', record.id) });
 });
 
+// Your own MCP apps (backend/mcp-apps.js), shown in Connected apps. Adding
+// one comes from a card you accepted in Mia's chat; a key comes only from the
+// key field in Connected apps, into Mia's own Hermes profiles, never through
+// chat. Each change rewrites Mia's profiles and restarts her gateway.
+const mcpApps = require('./mcp-apps');
+const mcpAppKeyFiles = () => [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE]
+  .map((profile) => path.join(String(process.env.HERMES_HOME || ''), 'profiles', profile, '.env'));
+function reloadMcpApps() {
+  return withStoppedHermesGateway(async () => { provisionHermesRuntimeProfiles(); });
+}
+function mcpAppRoute(action) {
+  return async (req, res) => {
+    try { res.status(200).json(await action(req)); } catch (error) {
+      if (!(error instanceof mcpApps.McpAppError)) return res.status(502).json({ error: 'mcp_app_failed', message: 'Mia couldn\u2019t update this app. Try again.' });
+      res.status(error.statusCode).json({ error: error.code, message: error.message });
+    }
+  };
+}
+function listedMcpApps() {
+  return mcpApps.defaultStore.list().map((app) => mcpApps.publicMcpApp(app,
+    app.auth !== 'key' || mcpAppKeyFiles().every((file) => mcpApps.hasProfileKey(file, mcpApps.keyEnvName(app.id)))));
+}
+app.get('/api/mcp-apps', requireAuth, mcpAppRoute(async () => ({ apps: listedMcpApps() })));
+app.post('/api/mcp-apps', requireInteractiveAuth, mcpAppRoute(async (req) => {
+  const added = mcpApps.defaultStore.add(req.body || {});
+  await reloadMcpApps();
+  return { app: mcpApps.publicMcpApp(added, added.auth !== 'key') };
+}));
+app.post('/api/mcp-apps/:id/key', requireInteractiveAuth, mcpAppRoute(async (req) => {
+  const found = mcpApps.defaultStore.get(String(req.params.id || ''));
+  if (!found || found.auth !== 'key') throw new mcpApps.McpAppError('mcp_app_not_found', 'That app doesn\u2019t take a key.', 404);
+  const key = typeof (req.body || {}).key === 'string' ? req.body.key.trim() : '';
+  await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
+    for (const file of mcpAppKeyFiles()) mcpApps.setProfileKey(file, mcpApps.keyEnvName(found.id), key);
+  }));
+  return { app: mcpApps.publicMcpApp(found, true) };
+}));
+app.delete('/api/mcp-apps/:id', requireInteractiveAuth, mcpAppRoute(async (req) => {
+  const found = mcpApps.defaultStore.get(String(req.params.id || ''));
+  if (!found) throw new mcpApps.McpAppError('mcp_app_not_found', 'That app is no longer in Connected apps.', 404);
+  mcpApps.defaultStore.remove(found.id);
+  await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
+    for (const file of mcpAppKeyFiles()) mcpApps.setProfileKey(file, mcpApps.keyEnvName(found.id), null);
+    provisionHermesRuntimeProfiles();
+  }));
+  return { removed: found.id };
+}));
+
 // The skills library. A scheduled job stores its prompt, so editing a skill
 // refreshes the jobs of the bots that carry it.
 app.use('/api/skills', createSkillsRouter({

@@ -142,6 +142,11 @@
             <div class="styled-integrations-view" id="styledConnectorsView">
               <div class="styled-connector-grid" id="hermesConnectorGrid"></div>
               <p id="hermesConnectorEmpty" class="hermes-catalog-empty" hidden>No connected apps match your search.</p>
+            <section class="mcp-apps" id="mcpApps" aria-labelledby="mcpAppsTitle">
+              <div class="mcp-apps-head"><h3 id="mcpAppsTitle">Your apps</h3><button type="button" class="mcp-apps-ask" id="mcpAppsAsk">Ask Mia to add an app</button></div>
+              <p class="mcp-apps-note">Apps Mia added for you, like your CRM. Tell her "add the MCP for Attio CRM" and she finds the vendor's own server and asks you first.</p>
+              <div class="mcp-apps-list" id="mcpAppsList"></div>
+            </section>
             </div>
           </div>
         </div>
@@ -1386,6 +1391,7 @@
     <script src="interrupted-work.js?v=20261104-interrupted-1"></script>
     <script src="bot-files-tidy.js?v=20261106-tidy-1"></script>
     <script src="bot-marketplace.js?v=20261109-market-1"></script>
+    <script src="mcp-apps-ui.js?v=20261109-mcp-1"></script>
     <script src="emoji-picker.js?v=20261106-emoji-all"></script>
     <script src="provider-marks.js?v=20261106-1"></script>
     <script src="app.js?v=20261106-company-logo-1"></script>
