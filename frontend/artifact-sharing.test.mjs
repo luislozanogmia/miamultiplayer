@@ -5,7 +5,7 @@ import test from 'node:test';
 const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)));
 
-test('images and PDFs attach everywhere; web pages only in Solo, since the team Hub refuses HTML', () => {
+test('images, PDFs and documents attach everywhere; web pages only in Solo, since the team Hub refuses HTML', () => {
   const block = slice('  var CHAT_ATTACHMENT_TYPES', '  function stageChatAttachment(');
   const env = { team: true, hubWorkspace: () => env.team, inHubRoom: () => env.team };
   const problem = new Function('env', `with (env) { ${block}; return chatAttachmentProblem; }`)(env);
@@ -13,7 +13,7 @@ test('images and PDFs attach everywhere; web pages only in Solo, since the team 
   assert.equal(problem({ type: 'application/pdf', size: mb }), '');
   assert.equal(problem({ type: 'image/png', size: mb }), '');
   assert.match(problem({ type: 'text/html', size: 10 }), /Web pages can.t be sent to a company/);
-  assert.match(problem({ type: 'application/zip', size: 10 }), /image .* or a PDF/);
+  assert.match(problem({ type: 'application/zip', size: 10 }), /Choose an image, a PDF/);
   assert.match(problem({ type: 'application/pdf', size: 9 * mb }), /8 MB/);
   env.team = false;
   assert.equal(problem({ type: 'text/html', size: 10 }), '');
