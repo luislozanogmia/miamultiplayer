@@ -270,8 +270,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   });
   function humanChromeSignInTab(tab) {
     if (!tab || !visible || active() !== tab || !window.isFocused()
-        || tab.view.webContents.isDestroyed() || groups.get(tab.groupId)?.botId
-        || botDrivingTab(tab)) return false;
+        || tab.view.webContents.isDestroyed() || botDrivingTab(tab)) return false;
     try {
       const url = new URL(tab.view.webContents.getURL() || tab.url);
       return url.protocol === "https:" && !url.username && !url.password && chatGptSignInHost(url.hostname);
@@ -3503,7 +3502,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (command.action === "state") return state();
       if (command.action === "chromeSignInStart") {
         const tab = active();
-        if (!humanChromeSignInTab(tab)) return { error: "Open ChatGPT or its sign-in page in a human browser tab first." };
+        if (!humanChromeSignInTab(tab)) return { error: "Open ChatGPT or its sign-in page in a tab no bot is working in right now." };
         return chromeHandoff.start(tab.id).then(() => {
           handoffTab = tab;
           handoffWorkspace = workspaceKey;

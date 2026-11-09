@@ -770,8 +770,8 @@
     syncStillPage();
     var tab = selected();
     var url = tab && tab.url || '';
-    var botGroup = (state.groups || []).some(function (group) { return tab && group.id === tab.groupId && group.botId; });
-    if (chromeSignInButton) chromeSignInButton.hidden = !state.chromeSignInAvailable || !/^https:\/\/(?:(?:[a-z0-9-]+\.)*chatgpt\.com|auth\.openai\.com)(?:[/:?#]|$)/i.test(url) || !!botGroup || !!state.chromeSignIn;
+    // ChatGPT only, on any tab (a bot's too, signing in for it), never while a bot is driving it.
+    if (chromeSignInButton) chromeSignInButton.hidden = !state.chromeSignInAvailable || !/^https:\/\/(?:(?:[a-z0-9-]+\.)*chatgpt\.com|auth\.openai\.com)(?:[/:?#]|$)/i.test(url) || !!(tab && tab.botActivity) || !!state.chromeSignIn;
     if (chromeHandoffBar) chromeHandoffBar.hidden = !state.chromeSignIn;
     if (changedTab || document.activeElement !== input) showUrl(url);
     if (changedTab) { findBar.hidden = true; findResult.textContent = ''; }

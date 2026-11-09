@@ -3183,7 +3183,7 @@ test("a renderer command naming another workspace is refused", () => {
   }
 });
 
-test("Chrome sign-in handoff requires the human's visible OpenAI tab and reloads only that tab", async () => {
+test("Chrome sign-in handoff requires a visible OpenAI tab and reloads only that tab", async () => {
   let activeHandoff = null;
   const calls = [];
   const fake = {
@@ -3198,7 +3198,7 @@ test("Chrome sign-in handoff requires the human's visible OpenAI tab and reloads
   const id = h.command("state").activeId;
   const contents = h.views[0].webContents;
   contents.shownUrl = "https://chatgpt.com/auth/login";
-  assert.match((await h.command("chromeSignInStart")).error, /human browser tab/);
+  assert.match((await h.command("chromeSignInStart")).error, /no bot is working in right now/);
   assert.equal(calls.length, 0);
   h.command("layout", { visible: true, bounds: { x: 0, y: 0, width: 900, height: 650 } });
   assert.equal((await h.command("chromeSignInStart")).chromeSignIn.tabId, id);
@@ -3277,4 +3277,25 @@ test("with two tabs open, a click in the visible tab never lands in the hidden o
   h.command("select", { id: h.command("state").tabs[0].id });
   assert.deepEqual(under(76, 780), [hiddenTab]);
   assert.equal(shownTab.visible, false);
+});
+
+test("Chrome sign-in works on a bot's ChatGPT tab, but not while the bot is driving it", async () => {
+  let activeHandoff = null;
+  const fake = {
+    available: () => true, status: () => activeHandoff,
+    start: async id => { activeHandoff = { tabId: id }; return activeHandoff; },
+    finish: async () => { activeHandoff = null; return { imported: 1 }; },
+    cancel: () => { activeHandoff = null; }, dispose: () => {},
+  };
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ chromeHandoff: fake, resolveActor: knownActor(sessions) });
+  h.command("new");
+  const opened = await h.controller.protocol("tab_open", { url: "https://chatgpt.com/", actor_session: "s-a", wait: "none" });
+  h.command("select", { id: opened.tab_id });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 0, width: 900, height: 650 } });
+  h.views.at(-1).webContents.shownUrl = "https://chatgpt.com/auth/login";
+  assert.match((await h.command("chromeSignInStart")).error, /no bot is working in right now/, "the bot just acted here");
+  await new Promise(resolve => setTimeout(resolve, 2600));
+  assert.equal((await h.command("chromeSignInStart")).chromeSignIn.tabId, opened.tab_id, "the bot's tab, once it is idle");
+  h.window.emit("closed");
 });
