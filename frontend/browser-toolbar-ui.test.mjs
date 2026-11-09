@@ -262,3 +262,12 @@ test('a closed sidebar leaves nothing poking out over the tab row', async () => 
   const source = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
   assert.match(source, /body\.browser-collab-mode:not\(\.browser-sidebar-open\) \.chat-sidebar\{visibility:hidden;\}/);
 });
+
+test('the docked tab fits the space left under the chat and can be dragged taller or shorter', async () => {
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const source = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
+  assert.match(html, /<div class="chat-pip-resize" id="chatPipResize" role="separator"/);
+  assert.match(source, /height = Math\.max\(PIP_MIN_HEIGHT, Math\.min\(height, pipRoom\(\)\)\);/, 'never past the bottom of the chat column');
+  assert.match(source, /localStorage\.setItem\(PIP_HEIGHT_KEY, String\(pipPreferred\)\)/, 'the dragged height sticks');
+  assert.match(source, /var width = Math\.min\(room, Math\.round\(height \/ dock\.aspect\)\);/, 'follows the pane width');
+});

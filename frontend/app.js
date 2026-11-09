@@ -1685,7 +1685,10 @@
 
   // Hoisted so both the boot-time /api/settings load and the drawer's change
   // handler (defined much later in this module) share one renderer.
+  // Normal user (saved as 'concise', the default) or Power user ('verbose'):
+  // a power user also sees how things work, like progress and skill files.
   var chatOutputMode = 'concise';
+  function powerUser(){ return chatOutputMode === 'verbose'; }
   function renderOutputSetting(mode){
     chatOutputMode = mode;
     renderChatActivityPanel();
@@ -1694,8 +1697,8 @@
     var verbose = mode === 'verbose';
     if(select) select.value = verbose ? 'verbose' : 'concise';
     if(note) note.textContent = verbose
-      ? 'Detailed activity is selected — replies include additional execution progress.'
-      : 'Concise is selected — replies show only the final answer.';
+      ? 'Power user — replies include execution progress, and settings show how things work, like skill files.'
+      : 'Normal user — replies show only the final answer, and settings stay simple.';
   }
 
   function renderInstructionSettings(value){
@@ -3979,8 +3982,11 @@
         '' +
       '</div>' +
       '<div class="styled-agent-edit-body">' +
-        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">BRIEF</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="Brief information" title="Brief information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot brief"></textarea></section>' +
-        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SKILLS</span></div>' + skillPickerHtml('styledAgentEditSkills', editState.skills) + '</section>' +
+        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">INSTRUCTIONS</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="About instructions" title="About instructions">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot instructions"></textarea></section>' +
+        // A normal user ticks skills; a power user sees them as folders.
+        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SKILLS</span></div>' +
+          (powerUser() ? '<div class="styled-agent-edit-skill-folders" id="styledAgentEditSkillFolders"></div><div class="styled-agent-edit-skill-add" id="styledAgentEditSkillAdd"></div>'
+            : skillPickerHtml('styledAgentEditSkills', editState.skills)) + '</section>' +
         styledAgentAutomationMarkup(a) +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">WORKPLACES</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditWorkplacesInfo" aria-label="Workplaces information" title="Workplaces information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditWorkplacesInfo" role="tooltip">The workplace this bot belongs to. In multiplayer you can share it with the people in your workplace.</span></span></div><div class="styled-agent-edit-select styled-agent-edit-workspace" id="styledAgentEditWorkspace">' + esc(workspaceLabel()) + '</div></section>' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">AVATAR COLOR</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditAvatarInfo" aria-label="Avatar color information" title="Avatar color information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditAvatarInfo" role="tooltip">Automatic follows the bot identity.</span></span></div><div class="styled-agent-edit-color-control"><div class="styled-agent-color-options" id="styledAgentEditColorOptions" role="group" aria-label="Bot avatar color">' + colorMarkup + '</div></div></section>' +
@@ -4080,7 +4086,68 @@
       var remove = el('#styledAgentEditDelete', pane);
       if(remove) remove.style.display = (a.isBuiltin && !a.agentId) ? 'none' : '';
       wireStyledAgentEditControls(pane);
+      renderEditSkillFolders();
     }
+  }
+  // For a power user, the skills the bot carries as folders whose files edit
+  // in place. Remove takes one off and + Add skill puts one on; the bot keeps
+  // it after Save changes.
+  var editSkillFolders = {ids: '', skills: []};
+  function setEditSkills(ids){
+    editState.skills = ids;
+    renderEditSkillFolders();
+  }
+  function renderEditSkillAdd(){
+    var box = el('#styledAgentEditSkillAdd');
+    if(!box) return;
+    var carried = editState.skills || [];
+    var others = (skillsLibrary && skillsLibrary.skills || []).filter(function(skill){ return carried.indexOf(skill.id) < 0; });
+    var full = carried.length >= (skillsLibrary && skillsLibrary.limits ? skillsLibrary.limits.perBot : 10);
+    box.innerHTML = '<details class="styled-agent-edit-skill-choose"' + (box.querySelector('details[open]') ? ' open' : '') + '><summary>+ Add skill</summary><div class="styled-agent-edit-skill-options">'
+      + (full ? '<p class="bot-market-empty">A bot can carry up to 10 skills.</p>' : others.map(function(skill){
+        return '<button type="button" class="styled-agent-edit-skill-option" data-add-skill="' + esc(skill.id) + '"><strong>' + esc(skill.name) + '</strong>' + (skill.description ? '<span>' + esc(skill.description) + '</span>' : '') + '</button>';
+      }).join(''))
+      + '<button type="button" class="bot-market-link add" data-new-skill>New skill…</button></div></details>';
+    els('[data-add-skill]', box).forEach(function(button){
+      button.addEventListener('click', function(){ setEditSkills(carried.concat([button.getAttribute('data-add-skill')])); });
+    });
+    el('[data-new-skill]', box).addEventListener('click', function(){ openBotStorePane('skills'); });
+  }
+  function renderEditSkillFolders(){
+    var box = el('#styledAgentEditSkillFolders');
+    if(!box || !window.MiaBotMarketplace) return;
+    var ids = Array.isArray(editState.skills) ? editState.skills.slice() : [];
+    var key = ids.join(',');
+    function draw(){
+      if(!box.isConnected || editSkillFolders.ids !== key) return;
+      box.innerHTML = editSkillFolders.skills.length
+        ? window.MiaBotMarketplace.skillFoldersHtml(editSkillFolders.skills, {esc: esc}, true)
+        : '<p class="bot-market-empty">No skills yet.</p>';
+      els('.bot-market-skill', box).forEach(function(folder, index){
+        var skill = editSkillFolders.skills[index], summary = folder.querySelector('summary');
+        if(!skill || !summary) return;
+        summary.insertAdjacentHTML('beforeend', '<button type="button" class="bot-market-link" data-remove-skill title="Take this skill off the bot. It stays in your skills.">Remove</button>');
+        summary.lastChild.addEventListener('click', function(event){
+          event.preventDefault(); event.stopPropagation();
+          setEditSkills((editState.skills || []).filter(function(id){ return id !== skill.id; }));
+        });
+      });
+      renderEditSkillAdd();
+      els('[data-card-edit]', box).forEach(function(target){
+        target.addEventListener('click', function(){ beginSkillFileEdit(target, editSkillFolders.skills, draw); });
+        target.addEventListener('keydown', function(event){ if(event.key === 'Enter'){ event.preventDefault(); beginSkillFileEdit(target, editSkillFolders.skills, draw); } });
+      });
+    }
+    if(editSkillFolders.ids === key && editSkillFolders.skills.length === ids.length) return draw();
+    editSkillFolders = {ids: key, skills: []};
+    box.innerHTML = ids.length ? '<p class="bot-market-empty">Loading…</p>' : '';
+    Promise.all(ids.map(function(id){
+      return api('/api/skills/' + encodeURIComponent(id)).then(function(res){ return res.status === 200 && res.data ? res.data.skill : null; }, function(){ return null; });
+    })).then(function(skills){
+      if(editSkillFolders.ids !== key) return;
+      editSkillFolders.skills = skills.filter(Boolean);
+      draw();
+    });
   }
 
   function openCinema(origin){
@@ -5405,7 +5472,7 @@
     }).catch(function(){ showBenchToast('Couldn\'t open a chat with '+bot.name+'. Try again.'); });
   }
   function initHubChat(){
-    hubHiddenBotsOpen[activeWorkspaceKey]=false;
+    ['channels','bots','company-bots'].forEach(function(key){ hubHiddenBotsOpen[activeWorkspaceKey+':'+key]=false; });
     // Local startup callbacks may already have selected Mia. A Hub selection
     // is valid only after this team's authoritative channel list is loaded.
     // After a reload, reopen the channel this team last had open.
@@ -5520,7 +5587,7 @@
       var button=document.createElement('button'); button.type='button';
       var state=chatWs.byRoom[channel.id];
       var live=hubChat.typing.some(function(entry){return entry.channel_id===channel.id;}) || !!(state && state.thinking);
-      var unread=channel.id!==chatWs.activeRoomId && Number(channel.unread||0)>0;
+      var unread=channel.id!==chatWs.activeRoomId && (Number(channel.unread||0)>0 || chatNeedsAttention(channel.id));
       button.className='chat-recent-row hub-channel-row'+(chatWs.activeRoomId===channel.id?' active':'');
       button.setAttribute('data-hub-channel-id',channel.id);
       var preview=hubRoomPreview(channel.id);
@@ -5570,8 +5637,26 @@
     all.innerHTML='';
     (hubChat.invites||[]).forEach(function(invite){all.appendChild(hubInviteRow(invite));});
     all.parentElement.classList.add('hub-sections');
+    // Hidden rows fold into one Hidden group at the end of their section,
+    // folded each time the company opens; opening it lasts until you leave.
+    function hiddenGroup(list,key,rows,title){
+      if(!rows.length)return;
+      var openKey=activeWorkspaceKey+':'+key, hiddenOpen=hubHiddenBotsOpen[openKey]===true;
+      var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
+      hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
+      hiddenToggle.innerHTML='<svg class="hub-hidden-bots-chevron'+(hiddenOpen?' open':'')+'" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3"/></svg>Hidden · '+rows.length;
+      hiddenToggle.title=title;
+      hiddenToggle.addEventListener('click',function(){
+        hubHiddenBotsOpen[openKey]=!hiddenOpen;
+        renderHubSidebar();
+      });
+      list.appendChild(hiddenToggle);
+      if(hiddenOpen)rows.forEach(function(make){ list.appendChild(make()); });
+    }
     var channelSection=section('channels','Channels','Add a channel',openHubChannelAddMenu);
-    channels.forEach(function(channel){channelSection.list.appendChild(row(channel));});
+    var hiddenChannels=channels.filter(function(channel){ return hubRowHidden('channel:'+channel.id); });
+    channels.forEach(function(channel){ if(hiddenChannels.indexOf(channel)<0)channelSection.list.appendChild(row(channel)); });
+    hiddenGroup(channelSection.list,'channels',hiddenChannels.map(function(channel){ return function(){ return row(channel); }; }),'Channels you hid. You are still in them.');
     all.appendChild(channelSection.node);
     var dmSection=section('dms','Direct messages','New direct message',openHubDirectMessagePicker);
     dms.forEach(function(channel){dmSection.list.appendChild(row(channel));});
@@ -5580,27 +5665,19 @@
     var myBotSection=section('bots','My Bots','New bot',function(){ runToolsAction('new-bot'); });
     // Solo bots already shared with this company wait in a folded Hidden
     // group at the end, greyed; each can be reactivated from there.
-    var hiddenBots=myBots.filter(function(bot){ return soloBotSharedAway(bot) && !botPinned('mine:'+bot.id); });
+    // Bots you hid, and Solo bots already shared with this company (greyed,
+    // each can be reactivated), wait in the Hidden group.
+    var hiddenBots=myBots.filter(function(bot){ return (soloBotSharedAway(bot) || hubRowHidden('bot:mine:'+bot.id)) && !botPinned('mine:'+bot.id); });
     myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
-    if(hiddenBots.length){
-      // Folded each time the company opens; opening it lasts until you leave.
-      var hiddenOpen=hubHiddenBotsOpen[activeWorkspaceKey]===true;
-      var hiddenToggle=document.createElement('button'); hiddenToggle.type='button';
-      hiddenToggle.className='hub-hidden-bots-toggle'; hiddenToggle.setAttribute('aria-expanded',hiddenOpen?'true':'false');
-      hiddenToggle.innerHTML='<svg class="hub-hidden-bots-chevron'+(hiddenOpen?' open':'')+'" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3"/></svg>Hidden · '+hiddenBots.length;
-      hiddenToggle.title='Bots you shared with the company. Everyone uses them under Company bots.';
-      hiddenToggle.addEventListener('click',function(){
-        hubHiddenBotsOpen[activeWorkspaceKey]=!hiddenOpen;
-        renderHubSidebar();
-      });
-      myBotSection.list.appendChild(hiddenToggle);
-      if(hiddenOpen)hiddenBots.forEach(function(bot){ myBotSection.list.appendChild(teamBotRow(bot)); });
-    }
+    hiddenGroup(myBotSection.list,'bots',hiddenBots.map(function(bot){ return function(){ return teamBotRow(bot); }; }),
+      'Bots you hid, and bots you shared with the company. Shared ones are under Company bots.');
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
     all.appendChild(myBotSection.node);
     // Company bots: every bot shared into a channel of this workspace you can see.
     var companySection=section('company-bots','Company bots','',null);
-    companyBots.forEach(function(bot){ if(!botPinned('company:'+bot.key))companySection.list.appendChild(companyBotRow(bot)); });
+    var hiddenCompanyBots=companyBots.filter(function(bot){ return hubRowHidden('bot:company:'+bot.key) && !botPinned('company:'+bot.key); });
+    companyBots.forEach(function(bot){ if(!botPinned('company:'+bot.key) && hiddenCompanyBots.indexOf(bot)<0)companySection.list.appendChild(companyBotRow(bot)); });
+    hiddenGroup(companySection.list,'company-bots',hiddenCompanyBots.map(function(bot){ return function(){ return companyBotRow(bot); }; }),'Company bots you hid. You can still mention them.');
     if(!companyBots.length)companySection.list.innerHTML='<div class="chat-sidebar-empty">Bots shared in this workspace show up here</div>';
     all.appendChild(companySection.node);
   }
@@ -5616,12 +5693,62 @@
     delete all[activeWorkspaceKey];
     try { localStorage.setItem('miaPinnedTeamBots',JSON.stringify(all)); } catch(_pinStorageError) {}
   }
-  // A bot row's ⋯ and right-click both offer Pin or Unpin.
-  function wireTeamBotPin(button,key,pinned,extraItems){
-    function open(anchor){ openSidebarAddMenu(anchor,[[pinned?'Unpin':'Pin to top',function(){setChatPinned('bot:'+key,!pinned);}]].concat(extraItems||[])); }
-    button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();open(button);});
+  // A row's ⋯ and right-click open the same menu. groups() runs when it opens.
+  function wireRowMenu(button,groups){
+    button.addEventListener('contextmenu',function(event){event.preventDefault();event.stopPropagation();openRowMenu(groups(),event.clientX,event.clientY);});
     var more=el('.hub-channel-more',button);
-    if(more)more.addEventListener('click',function(event){event.stopPropagation();open(more);});
+    if(more)more.addEventListener('click',function(event){event.stopPropagation();var box=more.getBoundingClientRect();openRowMenu(groups(),box.left,box.bottom+4);});
+  }
+  // Rows you hide in a company fold into a Hidden group at the end of their
+  // section. Kept on this computer, per company; nothing leaves the Hub.
+  function hubHiddenStorageKey(){ return 'miaHubHiddenRows:'+String(currentUser||'preview').toLowerCase()+':'+activeWorkspaceKey; }
+  function hubRowHidden(key){
+    try { return !!(JSON.parse(localStorage.getItem(hubHiddenStorageKey())||'{}')||{})[key]; } catch(_hiddenStorageError) { return false; }
+  }
+  function setHubRowHidden(key,hidden){
+    var all={};
+    try { all=JSON.parse(localStorage.getItem(hubHiddenStorageKey())||'{}')||{}; } catch(_hiddenStorageError) {}
+    if(hidden)all[key]=true; else delete all[key];
+    try { localStorage.setItem(hubHiddenStorageKey(),JSON.stringify(all)); } catch(_hiddenStorageError) {}
+    renderChatSidebar();
+  }
+  // One bot menu for Solo and companies: the row's own actions, then the
+  // conversation actions from the chat's ⋯ menu, then the ones to be careful with.
+  // bot: {name, agent (your bot, or null), pinned, setPinned, hidden, setHidden,
+  // roomId, open() -> Promise once its chat is showing, extra, danger}
+  function botRowMenuGroups(bot){
+    var agent=bot.agent, roomId=bot.roomId;
+    var bench=agent && findBenchAgentByServerId(agent.id);
+    function inChat(run){ return function(){ Promise.resolve(bot.open()).then(function(){ if(chatWs.activeKind==='agent')run(); }); }; }
+    var conversation=roomId && (chatWs.nativeConversations||[]).filter(function(item){ return item.id===roomId; })[0];
+    var top=[
+      {label:bot.pinned?'Unpin':'Pin to top',icon:'pin',run:function(){ bot.setPinned(!bot.pinned); }},
+      {label:bot.hidden?'Show bot':'Hide bot',icon:bot.hidden?'eye':'eyeOff',run:function(){ bot.setHidden(!bot.hidden); }}
+    ];
+    if(agent)top.push({label:'Share bot…',icon:'share',run:function(){ openShareBotPicker(agent); }});
+    if(roomId)top.push({label:chatNeedsAttention(roomId)?'Mark as read':'Mark as unread',icon:'unread',run:function(){ setChatAttention(roomId,!chatNeedsAttention(roomId)); }});
+    top=top.concat(bot.extra||[]);
+    var middle=[];
+    if(roomId){
+      var bookmarked=isChatPinned('room:'+roomId);
+      middle.push({label:'Copy conversation ID',icon:'copy',run:function(){ copySidebarText(roomId,'Conversation ID copied'); }});
+      middle.push({label:bookmarked?'Remove bookmark':'Bookmark conversation',icon:'bookmark',run:function(){ setChatPinned('room:'+roomId,!bookmarked); renderChatHeaderBar(); }});
+    }
+    if(agent){
+      if(conversation && activeBotTabsAvailable(conversation))middle.push({label:'Show this bot\'s tabs',icon:'tabs',run:inChat(showActiveBotTabs)});
+      middle.push({label:'History',icon:'history',run:inChat(function(){ openConversationHistory('chats'); })});
+      middle.push({label:'New conversation',icon:'plus',run:inChat(createFreshConversationForActiveBot)});
+      middle.push({label:'Bot settings',icon:'settings',run:inChat(openActiveBotSettings)});
+      if(bench)middle.push({label:'Duplicate bot',icon:'duplicate',run:function(){ duplicateBenchAgent(bench); }});
+    }
+    var bottom=[];
+    if(agent && roomId)bottom.push({label:'Restart conversation',icon:'restart',run:inChat(function(){
+      channelMenu.open=true; channelMenu.roomId=chatWs.activeRoomId; channelMenu.confirming=true; channelMenu.busy=false;
+      renderChatHeaderBar();
+    })});
+    if(bench && !hubWorkspace())bottom.push({label:'Archive bot',icon:'archive',danger:true,run:function(){ deleteBenchAgent(bench); }});
+    bottom=bottom.concat(bot.danger||[]);
+    return [top,middle,bottom];
   }
   // The same bot can be added to several channels; the Hub lists it per
   // channel, so it shows once here, by name, with the channels it is in.
@@ -5773,11 +5900,102 @@
   }
   // Copy a company bot to another company you are in. Mia proposes a
   // generalized copy; an admin reviews and edits it before adding it there.
+  // Share bot…: one of your bots joins a channel of a company you're in,
+  // as when you @mention it there. In a company, that company comes first.
+  function openShareBotPicker(bot){
+    var here=hubWorkspace() ? activeWorkspaceKey.slice(4) : '';
+    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',channelsLoading:false,error:''};
+    var previousFocus=document.activeElement;
+    var overlay=document.createElement('div');
+    overlay.className='app-confirm-overlay open';
+    overlay.setAttribute('role','presentation');
+    var card=document.createElement('div');
+    card.className='app-confirm-card bot-copy-card';
+    card.setAttribute('role','dialog');
+    card.setAttribute('aria-modal','true');
+    card.setAttribute('aria-label','Share '+bot.name);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    function close(){ overlay.remove(); if(previousFocus && previousFocus.focus)try{previousFocus.focus();}catch(_){} }
+    overlay.addEventListener('click',function(e){ if(e.target===overlay && state.phase!=='sharing')close(); });
+    overlay.addEventListener('keydown',function(e){ if(e.key==='Escape' && state.phase!=='sharing'){ e.preventDefault(); close(); } });
+    function team(){ return state.teams.filter(function(t){ return t.teamId===state.teamId; })[0]||null; }
+    function channel(){ return state.channels.filter(function(c){ return c.id===state.channelId; })[0]||null; }
+    function render(){
+      var html='<div class="bot-copy-title">Share '+esc(bot.name)+'</div>';
+      if(state.phase==='loading')html+='<p class="bot-copy-sub">Loading your companies…</p>';
+      else if(state.phase!=='error'){
+        html+='<p class="bot-copy-sub">'+esc(bot.name)+' joins the channel, and people there can mention it. It runs on your computer with your keys.</p>'
+          +'<label class="bot-copy-field"><span>Company</span><select data-share-team>'+state.teams.map(function(t){ return '<option value="'+esc(t.teamId)+'"'+(t.teamId===state.teamId?' selected':'')+'>'+esc(t.name)+'</option>'; }).join('')+'</select></label>'
+          +'<label class="bot-copy-field"><span>Channel</span><select data-share-channel'+(state.channels.length?'':' disabled')+'>'+(state.channels.length
+            ? state.channels.map(function(c){ return '<option value="'+esc(c.id)+'"'+(c.id===state.channelId?' selected':'')+'>#'+esc(c.name)+'</option>'; }).join('')
+            : '<option>'+(state.channelsLoading?'Loading channels…':'No channels you\'re in')+'</option>')+'</select></label>';
+      }
+      if(state.error)html+='<div class="bot-copy-error" role="alert">'+esc(state.error)+'</div>';
+      var room=channel();
+      html+='<div class="app-confirm-actions"><button type="button" class="btn" data-share-cancel'+(state.phase==='sharing'?' disabled':'')+'>Cancel</button>'
+        +(state.phase==='pick'||state.phase==='sharing' ? '<button type="button" class="btn primary" data-share-go'+(!room||state.phase==='sharing'?' disabled':'')+'>'+(state.phase==='sharing'?'Sharing…':'Share to #'+esc(room ? room.name : 'channel'))+'</button>' : '')+'</div>';
+      card.innerHTML=html;
+      var teamSelect=el('[data-share-team]',card), channelSelect=el('[data-share-channel]',card);
+      if(teamSelect)teamSelect.addEventListener('change',function(){ loadChannels(teamSelect.value); });
+      if(channelSelect)channelSelect.addEventListener('change',function(){ state.channelId=channelSelect.value; render(); });
+      el('[data-share-cancel]',card).addEventListener('click',close);
+      var go=el('[data-share-go]',card);
+      if(go)go.addEventListener('click',share);
+      (go||el('[data-share-cancel]',card)).focus();
+    }
+    function loadChannels(teamId){
+      state.teamId=teamId; state.channels=[]; state.channelId=''; state.channelsLoading=true; state.error='';
+      render();
+      hubCall('GET','/v1/teams/'+teamId+'/channels').then(function(result){
+        if(state.teamId!==teamId)return;
+        state.channels=(result.channels||[]).filter(function(c){ return !hubPrivateConversation(c) && c.joined!==false && !c.archived_at; });
+        state.channelId=state.channels.length?state.channels[0].id:'';
+      }).catch(function(){ if(state.teamId===teamId)state.error='Couldn\'t load that company\'s channels.'; })
+        .finally(function(){ if(state.teamId!==teamId)return; state.channelsLoading=false; render(); });
+    }
+    function share(){
+      var target=team(), room=channel();
+      if(!target || !room)return;
+      state.phase='sharing'; state.error=''; render();
+      shareBotToHubChannel(target.teamId,room.id,bot.id,{role:target.role}).then(function(published){
+        close();
+        if(activeWorkspaceKey==='hub_'+target.teamId)refreshHubBotState(room.id,true);
+        showBenchToast(hubBotJoinedMessage(bot.name,target.name+' · #'+room.name,published));
+      }).catch(function(error){
+        if(!overlay.isConnected)return;
+        state.phase='pick'; state.error='Couldn\'t share '+bot.name+': '+(error && error.message || 'try again.'); render();
+      });
+    }
+    render();
+    hubCall('GET','/v1/me').then(function(me){
+      if(!overlay.isConnected)return;
+      (me.teams||[]).forEach(function(t){
+        if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Company'),role:t.membership.role});
+      });
+      if(!state.teams.length)throw new Error('Join a company first to share a bot.');
+      state.phase='pick';
+      var first=state.teams.filter(function(t){ return t.teamId===here; })[0]||state.teams[0];
+      loadChannels(first.teamId);
+    }).catch(function(error){
+      if(!overlay.isConnected)return;
+      state.phase='error'; state.error=error && error.message || 'Couldn\'t load your companies.'; render();
+    });
+  }
+  function companyCopyWithFiles(copy,originalSkills){
+    copy.skills.forEach(function(skill,i){ var original=originalSkills[i]||{};
+      skill.files=(original.files||[]).map(function(file){ return {path:file.path,body:file.body}; });
+    });
+    return copy;
+  }
+  function companyCopyFilesReviewed(copy,reviews){
+    return !copy || copy.skills.every(function(skill,i){ return (skill.files||[]).every(function(file,j){ return !!reviews[i+':'+j]; }); });
+  }
   function copyCompanyBotToCompany(bot){
     var place=bot.places && bot.places[0];
     if(!place || (hubChat.membership||{}).role!=='admin')return;
     var fromTeamId=activeWorkspaceKey.slice(4);
-    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',fromName:'this company',original:null,copy:null,error:''};
+    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',fromName:'this company',original:null,copy:null,fileReviews:{},error:''};
     var previousFocus=document.activeElement;
     var overlay=document.createElement('div');
     overlay.className='app-confirm-overlay open';
@@ -5818,13 +6036,21 @@
             var original=state.original.skills[i]||{};
             return '<details class="bot-copy-skill"><summary>Skill: '+esc(skill.name)+'</summary><div class="bot-copy-compare">'
               +'<pre class="bot-copy-original">'+esc(original.body||'')+'</pre>'
-              +'<textarea data-bot-copy-skill="'+i+'" aria-label="'+esc('Skill '+skill.name+' in the copy')+'">'+esc(skill.body)+'</textarea></div></details>';
+              +'<textarea data-bot-copy-skill="'+i+'" aria-label="'+esc('Skill '+skill.name+' in the copy')+'">'+esc(skill.body)+'</textarea></div>'
+              +(skill.files||[]).map(function(file,j){
+                var key=i+':'+j, source=(original.files||[])[j]||{};
+                return '<details class="bot-copy-skill"><summary>File: '+esc(file.path)+'</summary><p>Review and edit this file before sharing it with another company.</p>'
+                  +'<div class="bot-copy-compare"><pre class="bot-copy-original">'+esc(source.body||'')+'</pre>'
+                  +'<textarea data-bot-copy-file="'+key+'" aria-label="'+esc('File '+file.path+' in the copy')+'">'+esc(file.body)+'</textarea></div>'
+                  +'<label><input type="checkbox" data-bot-copy-file-reviewed="'+key+'"'+(state.fileReviews[key]?' checked':'')+'> I reviewed this file</label></details>';
+              }).join('')+'</details>';
           }).join('');
       }
       if(state.error)html+='<div class="bot-copy-error" role="alert">'+esc(state.error)+'</div>';
+      var filesReviewed=companyCopyFilesReviewed(state.copy,state.fileReviews);
       var primary=state.phase==='pick'?'Prepare copy for review':(state.phase==='review'||state.phase==='copying')?'Add to #'+esc(channel().name):'';
       html+='<div class="app-confirm-actions"><button type="button" class="btn" data-bot-copy-cancel'+(state.phase==='copying'?' disabled':'')+'>Cancel</button>'
-        +(primary?'<button type="button" class="btn primary" data-bot-copy-go'+((state.phase==='pick'&&!state.channelId)||state.phase==='copying'?' disabled':'')+'>'+(state.phase==='copying'?'Adding…':primary)+'</button>':'')+'</div>';
+        +(primary?'<button type="button" class="btn primary" data-bot-copy-go'+((state.phase==='pick'&&!state.channelId)||state.phase==='copying'||(state.phase==='review'&&!filesReviewed)?' disabled':'')+'>'+(state.phase==='copying'?'Adding…':primary)+'</button>':'')+'</div>';
       card.innerHTML=html;
       card.classList.toggle('wide',state.phase==='review'||state.phase==='copying');
       var teamSelect=el('[data-bot-copy-team]',card), channelSelect=el('[data-bot-copy-channel]',card);
@@ -5833,6 +6059,11 @@
       el('[data-bot-copy-cancel]',card).addEventListener('click',close);
       var go=el('[data-bot-copy-go]',card);
       if(go)go.addEventListener('click',state.phase==='pick'?review:add);
+      els('[data-bot-copy-file]',card).forEach(function(field){ field.addEventListener('input',function(){
+        var key=field.getAttribute('data-bot-copy-file'),check=el('[data-bot-copy-file-reviewed="'+key+'"]',card);
+        state.fileReviews[key]=false;if(check)check.checked=false;if(go)go.disabled=true;
+      }); });
+      els('[data-bot-copy-file-reviewed]',card).forEach(function(check){ check.addEventListener('change',function(){ readEdits();render(); }); });
       (go||el('[data-bot-copy-cancel]',card)).focus();
     }
     function readEdits(){
@@ -5840,6 +6071,8 @@
       if(name)state.copy.name=name.value.trim();
       if(text)state.copy.instructions=text.value.trim();
       els('[data-bot-copy-skill]',card).forEach(function(box){ state.copy.skills[Number(box.getAttribute('data-bot-copy-skill'))].body=box.value.trim(); });
+      els('[data-bot-copy-file]',card).forEach(function(box){ var parts=box.getAttribute('data-bot-copy-file').split(':');state.copy.skills[Number(parts[0])].files[Number(parts[1])].body=box.value; });
+      els('[data-bot-copy-file-reviewed]',card).forEach(function(box){ state.fileReviews[box.getAttribute('data-bot-copy-file-reviewed')]=box.checked; });
     }
     function loadChannels(teamId){
       state.teamId=teamId; state.channels=[]; state.channelId=''; state.channelsLoading=true; state.error='';
@@ -5853,11 +6086,15 @@
     }
     function review(){
       state.phase='reviewing'; state.error=''; render();
-      api('/api/bots/generic-copy',{method:'POST',body:{name:bot.name,instructions:state.original.instructions,skills:state.original.skills,fromCompany:state.fromName}}).then(function(res){
+      // Mia rewrites the instructions; file contents stay local for explicit
+      // human review and never enter this model prompt.
+      var textSkills=state.original.skills.map(function(skill){ return {name:skill.name,description:skill.description,body:skill.body}; });
+      api('/api/bots/generic-copy',{method:'POST',body:{name:bot.name,instructions:state.original.instructions,skills:textSkills,fromCompany:state.fromName}}).then(function(res){
         if(!overlay.isConnected)return;
         var copy=res.data && res.data.copy;
         if(res.status!==200 || !copy)throw new Error(res.data && res.data.message || 'Mia couldn\'t prepare a proposed copy. Try again.');
-        state.copy=copy; state.phase='review'; render();
+        state.copy=companyCopyWithFiles(copy,state.original.skills);
+        state.fileReviews={};state.phase='review'; render();
       }).catch(function(error){
         if(!overlay.isConnected)return;
         state.phase='pick'; state.error=error.message; render();
@@ -5866,6 +6103,9 @@
     function add(){
       readEdits();
       if(!state.copy.name || !state.copy.instructions){ state.error='The copy needs a name and instructions.'; render(); return; }
+      if(!companyCopyFilesReviewed(state.copy,state.fileReviews)){
+        state.error='Review every skill file before sharing it with another company.';render();return;
+      }
       var target=team(), room=channel(), copy=state.copy, model=selectedConnectedBotModel(), createdId=null;
       if(!model){ state.error='Connect and choose a model before adding this bot.'; render(); return; }
       state.phase='copying'; state.error=''; render();
@@ -5894,7 +6134,8 @@
       if(!overlay.isConnected)return;
       var definition=results[1] && results[1].definition;
       if(!definition || !definition.instructions)throw new Error('Only a bot an admin has approved can be copied.');
-      state.original={instructions:definition.instructions,skills:(definition.skills||[]).map(function(skill){ return {name:skill.name,description:skill.description||'',body:skill.body}; })};
+      state.original={instructions:definition.instructions,skills:(definition.skills||[]).map(function(skill){ return {name:skill.name,description:skill.description||'',body:skill.body,
+        files:(skill.files||[]).map(function(file){ return {path:file.path,body:file.body}; })}; })};
       (results[0].teams||[]).forEach(function(t){
         if(t.teamId===fromTeamId){ state.fromName=String(t.name||state.fromName); return; }
         if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Company'),role:t.membership.role});
@@ -5927,10 +6168,15 @@
       if(line && more)more.insertAdjacentHTML('beforebegin',renderChatActivityIndicator(!!(state && state.thinking),unread));
     }
     button.addEventListener('click',function(){ openCompanyBotChat(bot); });
-    // Only this company's admins may take a bot out of it, even as a clean copy.
-    var items=(hubChat.membership||{}).role==='admin' ? [['Copy to another company…',function(){ copyCompanyBotToCompany(bot); }]] : [];
-    if(companyBotCanRemove(bot))items.push(['Remove from company',function(){ removeCompanyBot(bot); }]);
-    wireTeamBotPin(button,'company:'+bot.key,!!pinned,items);
+    wireRowMenu(button,function(){
+      // Only this company's admins may take a bot out of it, even as a clean copy.
+      var extra=(hubChat.membership||{}).role==='admin' ? [{label:'Copy to another company…',icon:'share',run:function(){ copyCompanyBotToCompany(bot); }}] : [];
+      var danger=companyBotCanRemove(bot) ? [{label:'Remove from company',icon:'archive',danger:true,run:function(){ removeCompanyBot(bot); }}] : [];
+      return botRowMenuGroups({name:bot.name,agent:null,roomId:chat ? chat.id : null,
+        pinned:!!pinned,setPinned:function(on){ setChatPinned('bot:company:'+bot.key,on); },
+        hidden:hubRowHidden('bot:company:'+bot.key),setHidden:function(on){ setHubRowHidden('bot:company:'+bot.key,on); },
+        open:function(){ return openCompanyBotChat(bot); },extra:extra,danger:danger});
+    });
     return button;
   }
   // A bot row in a team opens your private chat with it for this team.
@@ -5952,7 +6198,12 @@
     var line=el('.row-line1',button);
     if(line)line.insertAdjacentHTML('beforeend','<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span>');
     button.addEventListener('click',function(){ if(sharedAway)openSharedSoloBotNotice(bot); else openTeamBotChat(bot); });
-    wireTeamBotPin(button,'mine:'+bot.id,!!pinned);
+    wireRowMenu(button,function(){
+      return botRowMenuGroups({name:bot.name,agent:bot,roomId:chat ? chat.id : null,
+        pinned:!!pinned,setPinned:function(on){ setChatPinned('bot:mine:'+bot.id,on); },
+        hidden:hubRowHidden('bot:mine:'+bot.id),setHidden:function(on){ setHubRowHidden('bot:mine:'+bot.id,on); },
+        open:function(){ return sharedAway ? openSharedSoloBotNotice(bot) : openTeamBotChat(bot); }});
+    });
     return button;
   }
   var hubSidebarSections={}, hubHiddenBotsOpen={};
@@ -6022,31 +6273,74 @@
   // invited to; direct messages can only be pinned.
   var hubChannelMenu=null;
   function closeHubChannelMenu(){ if(hubChannelMenu){hubChannelMenu.remove();hubChannelMenu=null;} }
+  // group 0 is the row's own actions, 1 the channel's, 2 the ones to be careful with.
   function hubChannelActions(channel){
     var me=hubChat.membership || {}, admin=me.role==='admin', regular=!hubPrivateConversation(channel), manager=admin || channel.created_by===me.clerk_user_id;
-    var actions=[{id:'pin',label:channel.pinned?'Unpin':'Pin to top'}];
-    if(channel.kind==='bot')return actions;
-    if(channel.kind!=='dm' && manager)actions.push({id:'invite',label:'Invite people…'});
-    if(regular && manager)actions.push({id:'rename',label:'Rename…'});
-    if(channel.kind!=='dm')actions.push({id:'leave',label:regular?'Leave channel':'Leave group'});
-    if(regular && admin)actions.push({id:'archive',label:'Archive channel…',danger:true});
-    if(!regular && !channel.pinned)actions.push({id:'close',label:'Close conversation'});
+    var actions=[{id:'pin',label:channel.pinned?'Unpin':'Pin to top',icon:'pin',group:0}];
+    if(regular)actions.push(hubRowHidden('channel:'+channel.id) ? {id:'show',label:'Show channel',icon:'eye',group:0} : {id:'hide',label:'Hide channel',icon:'eyeOff',group:0});
+    actions.push({id:'unread',label:chatNeedsAttention(channel.id)?'Mark as read':'Mark as unread',icon:'unread',group:0});
+    if(channel.kind==='bot')return actions.concat([{id:'copy',label:'Copy conversation ID',icon:'copy',group:1}]);
+    if(channel.kind!=='dm' && manager)actions.push({id:'invite',label:'Invite people…',icon:'invite',group:0});
+    if(regular && manager)actions.push({id:'rename',label:'Edit channel…',icon:'edit',group:1});
+    if(channel.kind!=='dm')actions.push({id:'people',label:'People and bots',icon:'people',group:1});
+    actions.push({id:'copy',label:regular?'Copy channel ID':'Copy conversation ID',icon:'copy',group:1});
+    if(channel.kind!=='dm')actions.push({id:'leave',label:regular?'Leave channel':'Leave group',icon:'leave',group:2});
+    if(regular && admin)actions.push({id:'archive',label:'Archive channel…',icon:'archive',danger:true,group:2});
+    if(!regular && !channel.pinned)actions.push({id:'close',label:'Close conversation',icon:'close',group:2});
     return actions;
   }
   function openHubChannelMenu(channel,x,y){
+    var groups=[[],[],[]];
+    hubChannelActions(channel).forEach(function(item){
+      groups[item.group].push({label:item.label,icon:item.icon,danger:item.danger,run:function(){ runHubChannelAction(channel,item.id); }});
+    });
+    openRowMenu(groups,x,y);
+  }
+  var ROW_MENU_ICONS={
+    pin:'<path d="M12 17v5M9 3h6l-1 7 3.5 3.5h-11L10 10z"/>',
+    eye:'<path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff:'<path d="M3.5 3.5 20.5 20.5"/><path d="M10.2 5.2A9.8 9.8 0 0 1 12 5c5.3 0 8.9 4.2 9.8 7-.3 1.1-1.1 2.4-2.3 3.6M6.2 6.2C4.8 7.3 3.8 8.8 2.8 12c.8 2.8 4.2 7 9.2 7 1.1 0 2.1-.2 3-.6"/><path d="M9.5 9.5a3.5 3.5 0 0 0 5 5"/>',
+    share:'<path d="M12 15V3.5M8 7.5l4-4 4 4"/><path d="M5 12v7.5h14V12"/>',
+    unread:'<path d="M6.5 16.5h11l-1.5-2v-4a4 4 0 0 0-8 0v4z"/><path d="M9.5 19a2.5 2.5 0 0 0 5 0"/>',
+    invite:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6"/>',
+    edit:'<path d="m4 16.8-.8 4 4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3z"/><path d="m14.5 6.5 3 3"/>',
+    people:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>',
+    copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+    bookmark:'<path d="M18 20l-6-4-6 4V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1z"/>',
+    tabs:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M9 5v4"/>',
+    history:'<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
+    plus:'<path d="M12 5v14M5 12h14"/>',
+    settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+    duplicate:'<rect x="7" y="7" width="12" height="12" rx="1.5"/><path d="M5 16V5a1 1 0 0 1 1-1h11"/>',
+    restart:'<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    leave:'<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
+    close:'<path d="M6 6l12 12M18 6 6 18"/>',
+    archive:'<path d="M5 7h14M9 7V4.5h6V7M7 7l.7 13h8.6L17 7M10 10.5v6M14 10.5v6"/>'
+  };
+  // The one row menu for chats, bots and channels, Solo and companies:
+  // groups of {label, icon, run, danger}, with a line between groups.
+  function openRowMenu(groups,x,y){
     closeHubChannelMenu();
+    if(chatSidebarCtxMenuClose)chatSidebarCtxMenuClose();
+    var items=[], html=[];
+    groups.filter(function(group){ return group.length; }).forEach(function(group,index){
+      if(index)html.push('<div class="chat-sidebar-ctx-sep" role="separator"></div>');
+      group.forEach(function(item){
+        html.push('<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item'+(item.danger?' chat-sidebar-ctx-item-danger':'')+'" data-row-menu="'+items.length+'">'
+          +'<svg class="chat-sidebar-ctx-icon" viewBox="0 0 24 24" aria-hidden="true">'+(ROW_MENU_ICONS[item.icon]||'')+'</svg><span>'+esc(item.label)+'</span></button>');
+        items.push(item);
+      });
+    });
     var menu=document.createElement('div');
     menu.className='chat-ctx-menu chat-sidebar-ctx-menu hub-channel-menu'; menu.setAttribute('role','menu');
-    menu.innerHTML=hubChannelActions(channel).map(function(item){
-      return '<button type="button" role="menuitem" class="chat-ctx-menu-item chat-sidebar-ctx-item'+(item.danger?' chat-sidebar-ctx-item-danger':'')+'" data-hub-channel-action="'+item.id+'">'+esc(item.label)+'</button>';
-    }).join('');
+    menu.innerHTML=html.join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
     menu.style.left=sidebarMenuLeft(x,menu.offsetWidth)+'px';
     menu.style.top=Math.max(8,Math.min(y,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
-      var button=event.target.closest('[data-hub-channel-action]');
+      var button=event.target.closest('[data-row-menu]');
       if(!button)return;
-      closeHubChannelMenu(); runHubChannelAction(channel,button.getAttribute('data-hub-channel-action'));
+      closeHubChannelMenu(); items[Number(button.getAttribute('data-row-menu'))].run();
     });
     document.addEventListener('scroll',closeHubChannelMenu,{capture:true,once:true});
     setTimeout(function(){
@@ -6056,6 +6350,10 @@
   function runHubChannelAction(channel,id){
     var base=hubPath()+'/channels/'+channel.id, name=hubPrivateConversation(channel) ? hubChannelTitle(channel) : '#'+channel.name;
     if(id==='invite')return openHubInvitePeople(channel);
+    if(id==='hide' || id==='show')return setHubRowHidden('channel:'+channel.id,id==='hide');
+    if(id==='unread')return setChatAttention(channel.id,!chatNeedsAttention(channel.id));
+    if(id==='copy')return copySidebarText(channel.id,hubPrivateConversation(channel)?'Conversation ID copied':'Channel ID copied');
+    if(id==='people')return Promise.resolve(chatWs.activeRoomId===channel.id ? null : openHubChannel(channel)).then(openManageAgentsPane);
     if(id==='pin'){
       var pinned=!channel.pinned; channel.pinned=pinned; renderChatSidebar();
       return hubCall(pinned?'PUT':'DELETE',base+'/pin').catch(function(error){
@@ -7825,6 +8123,20 @@
       var row = e.target.closest('.chat-recent-row[data-chat-key]');
       if(!row) return;
       e.preventDefault();
+      // A bot gets the same menu as in a company; Mia and other chats keep this one.
+      var agentId = row.getAttribute('data-chat-menu-agent-id');
+      var agent = row.getAttribute('data-chat-menu-kind') === 'agent' && agentId && agentId !== 'gateway' && !row.getAttribute('data-agent-room-id')
+        && (chatWs.allAgents || []).filter(function(item){ return item.id === agentId; })[0];
+      if(agent){
+        closeMenu();
+        var pinKey = row.getAttribute('data-chat-key'), hideKey = row.getAttribute('data-chat-menu-hide-key') || '';
+        var roomId = row.getAttribute('data-chat-room-id') || null;
+        openRowMenu(botRowMenuGroups({name: agent.name, agent: agent, roomId: roomId,
+          pinned: isChatPinned(pinKey), setPinned: function(on){ setChatPinned(pinKey, on); },
+          hidden: false, setHidden: function(){ hideChatEntry(hideKey); },
+          open: function(){ return chatWs.activeRoomId === roomId && roomId ? null : selectAgentRoom(agent); }}), e.clientX, e.clientY);
+        return;
+      }
       openMenuFor(row, e.clientX, e.clientY);
     });
     menu.addEventListener('click', function(e){
@@ -12887,54 +13199,7 @@
       showBenchToast('A bot can carry up to ' + limit + ' skills.');
     }
     picker.setAttribute('data-selected', JSON.stringify(chosen));
-    if(picker.id === 'styledAgentEditSkills') editState.skills = chosen;
-  });
-
-  var skillEditing = null;
-  function renderSkillsPane(){
-    var list = el('#settingsSkillsList');
-    if(!list) return;
-    el('#settingsSkillForm').hidden = !skillEditing;
-    el('#settingsSkillNew').hidden = !!skillEditing;
-    var skills = skillsLibrary ? skillsLibrary.skills : [];
-    list.innerHTML = skills.length ? skills.map(function(skill){
-      var bots = (skill.bots || []).map(function(bot){ return bot.name; }).join(', ');
-      return '<div class="styled-settings-row"><div><div class="styled-settings-row-label">' + esc(skill.name) + '</div>' +
-        '<div class="styled-settings-row-desc">' + esc(skill.description || 'No description') + (bots ? ' · Used by ' + esc(bots) : '') + '</div></div>' +
-        '<div class="skills-row-actions"><button class="styled-settings-pill-btn" data-skill-edit="' + esc(skill.id) + '">Edit</button><button class="styled-settings-pill-btn" data-skill-remove="' + esc(skill.id) + '">Remove</button></div></div>';
-    }).join('') : '<div class="styled-settings-row"><div class="styled-settings-row-desc">Skills teach a bot how to do a job. A skill you edit here changes for every bot that carries it.</div></div>';
-  }
-  function refreshSkillsPane(){ return loadSkillsLibrary().then(renderSkillsPane).catch(function(){ showBenchToast('Could not load your skills.'); }); }
-  function openSkillForm(skill){
-    skillEditing = skill;
-    el('#settingsSkillName').value = skill.name || '';
-    el('#settingsSkillDescription').value = skill.description || '';
-    el('#settingsSkillBody').value = skill.body || '';
-    el('#settingsSkillError').textContent = '';
-    renderSkillsPane();
-  }
-  var settingsSkillNew = el('#settingsSkillNew');
-  if(settingsSkillNew) settingsSkillNew.addEventListener('click', function(){ openSkillForm({}); });
-  var settingsSkillCancel = el('#settingsSkillCancel');
-  if(settingsSkillCancel) settingsSkillCancel.addEventListener('click', function(){ skillEditing = null; renderSkillsPane(); });
-  var settingsSkillSave = el('#settingsSkillSave');
-  if(settingsSkillSave) settingsSkillSave.addEventListener('click', function(){
-    var body = {name: el('#settingsSkillName').value, description: el('#settingsSkillDescription').value, body: el('#settingsSkillBody').value};
-    var path = skillEditing && skillEditing.id ? '/api/skills/' + encodeURIComponent(skillEditing.id) : '/api/skills';
-    api(path, {method: skillEditing && skillEditing.id ? 'PUT' : 'POST', body: body}).then(function(res){
-      if(res.status !== 200){ el('#settingsSkillError').textContent = (res.data && res.data.message) || 'Could not save this skill.'; return; }
-      skillEditing = null;
-      return refreshSkillsPane();
-    }).catch(function(){ el('#settingsSkillError').textContent = 'Could not save this skill.'; });
-  });
-  var settingsSkillsList = el('#settingsSkillsList');
-  if(settingsSkillsList) settingsSkillsList.addEventListener('click', function(e){
-    var edit = e.target.getAttribute('data-skill-edit'), remove = e.target.getAttribute('data-skill-remove');
-    if(edit) api('/api/skills/' + encodeURIComponent(edit)).then(function(res){ if(res.status === 200) openSkillForm(res.data.skill); });
-    if(remove) api('/api/skills/' + encodeURIComponent(remove), {method:'DELETE'}).then(function(res){
-      if(res.status === 409) showBenchToast('Take this skill off ' + (res.data.bots || []).map(function(bot){ return bot.name; }).join(', ') + ' first.');
-      return refreshSkillsPane();
-    });
+    if(picker.id === 'styledAgentEditSkills'){ editState.skills = chosen; renderEditSkillFolders(); }
   });
 
   function agentSetupProposalText(draft){
@@ -14688,64 +14953,89 @@
     });
   }
 
-  // Bot Store: a read-only marketplace of predefined bots (bots-catalog/ in
-  // the repo, served via GET /api/bots/catalog and GET /api/bots/catalog/:id).
-  // Installing one POSTs manifest.bot through the exact same create path
-  // startAgentSetupChat's review card uses, then greets the new room with
-  // manifest.welcome the same way buildAgentSetupWelcomeMessage does for a
-  // hand-built bot — see createNativeAgentConversation / chatRoomState(...).localWelcome.
-  function closeBotStorePane(){
-    if(chatInfo.mode !== 'bot-store') return;
-    chatInfo.mode = 'automations';
-    chatInfo.open = false;
-    renderChatInfoPane();
-    syncSidebarToolButtons();
+  // The Bot marketplace opens over the app like Settings (bot-marketplace.js).
+  // Mia's shelf is the catalog (bots-catalog/ in the repo, GET /api/bots/catalog);
+  // each company's shelf is the bots people brought into its channels. A bot
+  // you get is your bot everywhere (marketSource records its reviewed version).
+  function openBotStorePane(shelf){
+    if(!STYLED_SKIN || !window.MiaBotMarketplace) return;
+    // The native browser view covers HTML overlays, as for Settings.
+    closeLocalBrowser();
+    window.MiaBotMarketplace.open({
+      esc: esc,
+      avatarHtml: function(name, color){ return agentAvatarHtml(name, null, 40, null, color || null); },
+      loadCatalog: loadBotStoreCatalog,
+      installCatalog: installBotStoreBot,
+      installedByName: botStoreInstalledAgentByName,
+      companies: function(){
+        return hubCall('GET', '/v1/me').then(function(me){
+          return (me.teams || []).filter(function(team){ return team.membership && /^[a-f0-9]{32}$/.test(team.teamId); })
+            .map(function(team){ return {teamId: team.teamId, name: String(team.name || 'Company')}; });
+        });
+      },
+      currentTeamId: function(){ return hubWorkspace() ? activeWorkspaceKey.slice(4) : ''; },
+      // The Hub names people by member id; show their name when it's someone here.
+      personName: function(subject){
+        var member = (hubChat.members || []).filter(function(item){ return item.clerk_user_id === subject; })[0];
+        return member ? displayNameForEmail(member.email) : '';
+      },
+      hubCall: hubCall,
+      localBots: function(){ return chatWs.botRecords || []; },
+      getMarketBot: getMarketBotCopy,
+      updateMarketBot: updateMarketBotCopy,
+      // Your skills, each a folder (the same library bots carry skills from).
+      loadSkills: function(){ return loadSkillsLibrary().then(function(library){ return library.skills || []; }); },
+      loadSkill: function(id){
+        return api('/api/skills/' + encodeURIComponent(id)).then(function(res){
+          if(res.status !== 200 || !res.data || !res.data.skill) throw new Error('skill unavailable');
+          return res.data.skill;
+        });
+      },
+      saveSkill: function(id, skill){
+        return api(id ? '/api/skills/' + encodeURIComponent(id) : '/api/skills', {method: id ? 'PUT' : 'POST', body: skill}).then(function(res){
+          if(res.status !== 200 || !res.data || !res.data.skill) throw new Error(res.data && res.data.message || 'Couldn\'t save this skill.');
+          loadSkillsLibrary().catch(function(){});
+          return res.data.skill;
+        });
+      },
+      removeSkill: function(id){
+        return api('/api/skills/' + encodeURIComponent(id), {method:'DELETE'}).then(function(res){
+          if(res.status === 409) throw new Error('Take this skill off ' + (res.data.bots || []).map(function(bot){ return bot.name; }).join(', ') + ' first.');
+          if(res.status !== 200) throw new Error(res.data && res.data.message || 'Couldn\'t remove this skill.');
+          loadSkillsLibrary().catch(function(){});
+        });
+      },
+      openLocal: function(id){
+        var agent = (chatWs.allAgents || []).filter(function(item){ return item.id === id; })[0];
+        if(agent) navigateToAgentChat(agent, true);
+      },
+      toast: showBenchToast,
+      askMia: askMiaAbout
+    }, shelf);
   }
 
-  // The skills form keeps living in one element, so its handlers survive the pane redrawing.
-  var skillsShell = el('#skillsShell');
-  function renderSkillsUtilityPane(pane){
-    pane.setAttribute('aria-label', 'Skills');
-    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open');
-    pane.classList.add('open', 'bot-store-open');
-    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Skills</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
-      '<button type="button" class="cip-pane-btn" id="skillsPaneClose" aria-label="Close Skills" title="Close Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div></div>';
-    var body = document.createElement('div');
-    body.className = 'bot-store-body';
-    if(skillsShell) body.appendChild(skillsShell);
-    pane.appendChild(body);
-    el('#skillsPaneClose', pane).addEventListener('click', closeSkillsPane);
-  }
-  function openSkillsPane(){
-    if(!STYLED_SKIN) return;
-    prepareChatUtilityPane('skills');
-    renderChatInfoPane();
-    refreshSkillsPane();
-  }
-  function closeSkillsPane(){
-    if(chatInfo.mode !== 'skills') return;
-    chatInfo.mode = 'automations';
-    chatInfo.open = false;
-    renderChatInfoPane();
-    syncSidebarToolButtons();
+  // Opens Mia's chat with the start of a message filled in. Her chat lives in
+  // Solo; a company has none yet.
+  function askMiaAbout(start){
+    if(hubWorkspace()){ showBenchToast('Mia\'s chat is in Solo. Switch to Solo to ask her.'); return; }
+    var mia = chatWs.gatewayAgent || {id:'gateway', name:'Mia'};
+    clearChatBack();
+    chatRoster.open = null;
+    clearChatActive();
+    Promise.resolve(selectAgentRoom(mia)).then(function(){
+      var input = el('#ccInput');
+      if(!input || chatWs.activeKind !== 'agent') return;
+      input.value = start;
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
   }
 
-  function openBotStorePane(){
-    if(!STYLED_SKIN) return;
-    prepareChatUtilityPane('bot-store');
-    renderChatInfoPane();
-    loadBotStoreCatalog();
-  }
-
+  // -> Promise<manifests>; the catalog and every manifest, fetched once.
   function loadBotStoreCatalog(force){
-    if(botStoreState.entries && !force){
-      if(chatInfo.mode === 'bot-store') renderChatInfoPane();
-      return;
-    }
-    botStoreState.loading = true;
-    botStoreState.error = '';
-    if(chatInfo.mode === 'bot-store') renderChatInfoPane();
-    api('/api/bots/catalog').then(function(res){
+    if(botStoreState.entries && !force) return Promise.resolve(botStoreState.entries);
+    return api('/api/bots/catalog').then(function(res){
       if(res.status !== 200 || !res.data || !Array.isArray(res.data.bots)) throw new Error('catalog unavailable');
       return Promise.all(res.data.bots.map(function(entry){
         return api('/api/bots/catalog/' + encodeURIComponent(entry.id));
@@ -14754,12 +15044,7 @@
       botStoreState.entries = results
         .filter(function(res){ return res.status === 200 && res.data && res.data.bot; })
         .map(function(res){ return res.data; });
-      botStoreState.loading = false;
-    }).catch(function(){
-      botStoreState.loading = false;
-      botStoreState.error = 'The Bot Marketplace is unavailable right now.';
-    }).then(function(){
-      if(chatInfo.mode === 'bot-store') renderChatInfoPane();
+      return botStoreState.entries;
     });
   }
 
@@ -14773,48 +15058,74 @@
     })[0] || null;
   }
 
-  function botStoreCardHtml(manifest){
-    var bot = manifest.bot || {};
-    var store = manifest.store || {};
-    var requires = store.requires || {};
-    var connectors = Array.isArray(requires.connectors) ? requires.connectors : [];
-    var installed = botStoreInstalledAgentByName(bot.name);
-    var installing = botStoreState.installingId === manifest.id;
-    return '<div class="bot-store-card" data-bot-store-card="' + esc(manifest.id) + '">' +
-      '<span class="bot-store-card-avatar">' + agentAvatarHtml(bot.name || manifest.id, null, 40, null, store.avatarColor || bot.avatarColor || null) + '</span>' +
-      '<div class="bot-store-card-body">' +
-        '<div class="bot-store-card-head"><span class="bot-store-card-name">' + esc(bot.name || manifest.id) + '</span><span class="bot-store-card-version">v' + esc(manifest.version || '') + '</span></div>' +
-        '<div class="bot-store-card-tagline">' + esc(store.tagline || '') + '</div>' +
-        '<div class="bot-store-card-meta"><span>' + esc(store.category || 'general') + '</span><span aria-hidden="true">&middot;</span><span>' + esc(manifest.author || 'Mia') + '</span></div>' +
-        (connectors.length ? '<div class="bot-store-card-requires">Requires: ' + esc(connectors.join(', ')) + '</div>' : '') +
-      '</div>' +
-      (installed
-        ? '<span class="bot-store-card-installed">Installed</span>'
-        : '<button type="button" class="bot-store-card-install" data-bot-store-install="' + esc(manifest.id) + '"' + (installing ? ' disabled' : '') + '>' + (installing ? 'Installing…' : 'Install') + '</button>') +
-      '</div>';
+  // A bot's skills, from Mia's catalog or a company, become skill folders in
+  // your library, files and all. -> Promise<skill ids>
+  function createLibrarySkills(skills){
+    return (Array.isArray(skills) ? skills : []).slice(0, 10).reduce(function(done, skill){
+      return done.then(function(ids){
+        return api('/api/skills', {method:'POST', body:{name: skill.name, description: skill.description || '', body: skill.body || '',
+          files: Array.isArray(skill.files) ? skill.files : []}}).then(function(res){
+          if(res.status !== 200 || !res.data || !res.data.skill) throw new Error(res.data && res.data.message || 'its skill "' + (skill.name || 'skill') + '" could not be added.');
+          return ids.concat([res.data.skill.id]);
+        });
+      });
+    }, Promise.resolve([]));
   }
 
-  function renderBotStorePane(pane){
-    pane.setAttribute('aria-label', 'Bot Marketplace');
-    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open', 'bot-store-open');
-    pane.classList.add('open', 'bot-store-open');
-    var body;
-    if(botStoreState.loading && !botStoreState.entries){
-      body = '<div class="bot-store-status">Loading bots…</div>';
-    } else if(botStoreState.error){
-      body = '<div class="bot-store-status bot-store-error">' + esc(botStoreState.error) + '</div>';
-    } else if(!botStoreState.entries || !botStoreState.entries.length){
-      body = '<div class="bot-store-status">No bots available right now.</div>';
-    } else {
-      body = '<div class="bot-store-list">' + botStoreState.entries.map(botStoreCardHtml).join('') + '</div>';
-    }
-    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Bot Marketplace</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
-      '<button type="button" class="cip-pane-btn" id="botStorePaneClose" aria-label="Close Bot Marketplace" title="Close Bot Marketplace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
-      '<div class="bot-store-body">' + body + '</div>';
-    var close = el('#botStorePaneClose', pane);
-    if(close) close.addEventListener('click', closeBotStorePane);
-    els('[data-bot-store-install]', pane).forEach(function(button){
-      button.addEventListener('click', function(){ installBotStoreBot(button.getAttribute('data-bot-store-install')); });
+  // Getting a company's shared bot makes it your bot: its latest version
+  // becomes a bot of yours, with its source recorded for future reviewed updates.
+  // -> Promise<created bot record>
+  function getMarketBotCopy(teamId, bot){
+    var model = selectedConnectedBotModel();
+    if(!model) return Promise.reject(new Error('connect and choose a model first.'));
+    return hubCall('GET', '/v1/teams/' + teamId + '/market/bots/' + encodeURIComponent(bot.id)).then(function(result){
+      // The Hub answers {bot, definition, versions}; definition is the latest version.
+      var latest = result && (result.definition || result.latest) || {};
+      var instructions = String(latest.instructions || '').trim();
+      if(!instructions) throw new Error('this bot has no instructions yet.');
+      return createLibrarySkills(latest.skills).then(function(skillIds){
+        return api('/api/bots', {method:'POST', body:{name: String(latest.name || bot.name), instructions: instructions, model: model, status: 'running', departments: [],
+          avatarColor: latest.avatar_color || bot.color || null, skills: skillIds,
+          marketSource: {teamId: teamId, botId: bot.id, version: Number(latest.version || bot.version || 0)}}});
+      });
+    }).then(function(res){
+      var created = res.data && res.data.bot;
+      if(res.status !== 201 || !created) throw new Error(res.data && (res.data.message || res.data.error) || 'try again.');
+      return createNativeAgentConversation(created, {}).then(function(conversation){
+        syncChatBotRecords((chatWs.botRecords || []).filter(function(record){ return String(record.id) !== String(created.id); }).concat([created]));
+        chatWs.nativeConversations.push(conversation);
+        applyNativeConversationList(chatWs.nativeConversations);
+        renderChatSidebar();
+        return loadAgents().then(function(){ return created; }, function(){ return created; });
+      });
+    });
+  }
+
+  // A downloaded company bot stays at its reviewed version until its owner
+  // chooses Update. Fetch both sides again so a stale shelf cannot overwrite a
+  // newer local copy or apply an update after company access was removed.
+  function updateMarketBotCopy(teamId, bot, copy){
+    return hubCall('GET', '/v1/teams/' + teamId + '/market/bots/' + encodeURIComponent(bot.id)).then(function(result){
+      var latest = result && (result.definition || result.latest) || {};
+      var version = Number(latest.version || 0);
+      if(!Number.isSafeInteger(version) || version < 1 || !String(latest.instructions || '').trim()) throw new Error('this company version is unavailable.');
+      return api('/api/bots/' + encodeURIComponent(copy.id)).then(function(local){
+        var current = local && local.data && local.data.bot;
+        var source = current && current.marketSource;
+        if(local.status !== 200 || !source || source.teamId !== teamId || source.botId !== bot.id) throw new Error('this local copy has changed.');
+        if(version <= Number(source.version || 0)) return current;
+        return createLibrarySkills(latest.skills).then(function(skillIds){
+          return api('/api/bots/' + encodeURIComponent(current.id), {method:'PUT', body:{
+            instructions: String(latest.instructions), skills: skillIds,
+            expectedInstructionsRevision: current.instructionsRevision,
+            marketSource: {teamId: teamId, botId: bot.id, version: version}
+          }}).then(function(saved){
+            if(saved.status !== 200 || !saved.data || !saved.data.bot) throw new Error(saved.data && (saved.data.message || saved.data.error) || 'try again.');
+            syncChatBotRecords((chatWs.botRecords || []).filter(function(record){ return String(record.id) !== String(saved.data.bot.id); }).concat([saved.data.bot]));
+            return loadAgents().then(function(){ return saved.data.bot; }, function(){ return saved.data.bot; });
+          });
+        });
+      });
     });
   }
 
@@ -14844,22 +15155,23 @@
     };
   }
 
+  // -> Promise<true when installed and opened>
   function installBotStoreBot(id){
-    if(!id || botStoreState.installingId) return;
+    if(!id || botStoreState.installingId) return Promise.resolve(false);
     var manifest = (botStoreState.entries || []).filter(function(entry){ return entry.id === id; })[0];
-    if(!manifest){ showBenchToast('That bot is unavailable right now'); return; }
+    if(!manifest){ showBenchToast('That bot is unavailable right now'); return Promise.resolve(false); }
     var already = botStoreInstalledAgentByName(manifest.bot && manifest.bot.name);
     if(already){
-      closeBotStorePane();
       navigateToAgentChat(already, true);
-      return;
+      return Promise.resolve(true);
     }
     botStoreState.installingId = id;
-    if(chatInfo.mode === 'bot-store') renderChatInfoPane();
-    api('/api/bots/catalog/' + encodeURIComponent(id)).then(function(res){
+    return api('/api/bots/catalog/' + encodeURIComponent(id)).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.bot) throw new Error('manifest unavailable');
       var freshManifest = res.data;
-      return api('/api/bots', {method:'POST', body: freshManifest.bot}).then(function(createRes){
+      return createLibrarySkills(freshManifest.skills).then(function(skillIds){
+        return api('/api/bots', {method:'POST', body: skillIds.length ? Object.assign({}, freshManifest.bot, {skills: skillIds}) : freshManifest.bot});
+      }).then(function(createRes){
         if(createRes.status !== 201 || !createRes.data || !createRes.data.bot){
           throw new Error(createRes.data && (createRes.data.message || createRes.data.error) || 'install failed');
         }
@@ -14874,16 +15186,16 @@
           applyNativeConversationList(chatWs.nativeConversations);
           chatRoomState(conversation.id).localWelcome = buildBotStoreWelcomeMessage(conversation.id, created, freshManifest.welcome);
           botStoreState.installingId = null;
-          closeBotStorePane();
           renderChatSidebar();
           renderChatHeaderBar();
           loadChatRoom(conversation.id, 'agent', created.name);
+          return true;
         });
       });
     }).catch(function(err){
       botStoreState.installingId = null;
-      if(chatInfo.mode === 'bot-store') renderChatInfoPane();
       showBenchToast('Could not install bot: ' + (err && err.message ? err.message : 'please try again.'));
+      return false;
     });
   }
 
@@ -14903,7 +15215,7 @@
     var places = bench ? agentDepartments(bench).length : 0;
     return '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">Bot settings</span></div>' +
       row('Model', '<span id="cipModelValue">' + esc(tags ? tags.textContent.trim() : '') + '</span>', 'data-bot-setting="model"') +
-      (agent ? row('Brief', '', 'data-bot-setting="edit"') + row('Workplaces', places ? String(places) : '', 'data-bot-setting="edit"') + row('Avatar color', color, 'data-bot-setting="edit"') : '') + '</section>';
+      (agent ? row('Instructions', '', 'data-bot-setting="edit"') + row('Workplaces', places ? String(places) : '', 'data-bot-setting="edit"') + row('Avatar color', color, 'data-bot-setting="edit"') : '') + '</section>';
   }
   // The same editor the details pane opens, from the conversation's menu.
   function openActiveBotSettings(){
@@ -14915,6 +15227,57 @@
       openEditCinema(bench.id);
     });
   }
+  // In Bot settings, a bot's skills show as folders. Clicking a file edits it
+  // right there and saves it into the skill's folder, for every bot that
+  // carries the skill. skills: the folders on screen; onSaved redraws them.
+  function beginSkillFileEdit(target, skills, onSaved){
+    if(target.hidden) return;
+    var editor = document.createElement('div');
+    editor.className = 'bot-card-editor';
+    editor.innerHTML = '<textarea class="bot-market-input mono" aria-label="' + esc(target.getAttribute('data-file-path')) + '"></textarea>'
+      + '<div class="bot-card-editor-actions"><span class="bot-card-editor-hint">⌘Enter to save · Esc to cancel</span>'
+      + '<button type="button" class="bot-market-btn" data-card-cancel>Cancel</button><button type="button" class="bot-market-btn primary" data-card-save>Save</button></div>'
+      + '<div class="bot-market-error" role="alert"></div>';
+    var field = editor.querySelector('textarea');
+    field.value = target.textContent;
+    field.rows = Math.min(24, Math.max(6, field.value.split('\n').length + 1));
+    target.hidden = true;
+    target.insertAdjacentElement('afterend', editor);
+    field.focus();
+    function done(){ editor.remove(); target.hidden = false; }
+    function save(){
+      if(field.value === target.textContent){ done(); return; }
+      var saveBtn = editor.querySelector('[data-card-save]');
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      saveSkillFile(skills, target.getAttribute('data-skill-id'), target.getAttribute('data-file-path'), field.value).then(onSaved, function(error){
+        saveBtn.disabled = false; saveBtn.textContent = 'Save';
+        editor.querySelector('.bot-market-error').textContent = error && error.message || 'That didn\'t save. Try again.';
+      });
+    }
+    editor.querySelector('[data-card-cancel]').addEventListener('click', done);
+    editor.querySelector('[data-card-save]').addEventListener('click', save);
+    field.addEventListener('keydown', function(event){
+      if(event.key === 'Escape'){ event.preventDefault(); event.stopPropagation(); done(); }
+      else if(event.key === 'Enter' && (event.metaKey || event.ctrlKey)){ event.preventDefault(); save(); }
+    });
+  }
+  // SKILL.md is the skill's body; any other file is saved with the rest.
+  // -> Promise<the saved skill, also put back in skills>
+  function saveSkillFile(skills, skillId, path, value){
+    var index = skills.map(function(item){ return item.id; }).indexOf(skillId), skill = skills[index];
+    if(!skill) return Promise.reject(new Error('This skill isn\'t available right now.'));
+    var main = /^skill\.md$/i.test(path);
+    var update = {name: skill.name, description: skill.description || '', body: main ? value : skill.body};
+    if(!main) update.files = (skill.files || []).map(function(file){ return {path: file.path, body: file.path === path ? value : file.body}; });
+    return api('/api/skills/' + encodeURIComponent(skillId), {method:'PUT', body: update}).then(function(res){
+      if(res.status !== 200) throw new Error(res.data && (res.data.message || res.data.error) || 'That didn\'t save. Try again.');
+      return api('/api/skills/' + encodeURIComponent(skillId));
+    }).then(function(res){
+      if(res.status === 200 && res.data && res.data.skill) skills[index] = res.data.skill;
+      return skills[index];
+    });
+  }
+
   function bindDetailsBotSettings(pane, agent){
     els('[data-bot-setting]', pane).forEach(function(button){
       button.addEventListener('click', function(event){
@@ -14941,8 +15304,8 @@
       restorePluginShell();
       chatInfo.mode = 'automations';
     }
-    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-store' || chatInfo.mode === 'skills';
-    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'bot-store' && chatInfo.mode !== 'skills') || (!specialMode && !isInfoPaneAvailable())){
+    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail';
+    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit') || (!specialMode && !isInfoPaneAvailable())){
       restorePluginShell();
       pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open', 'bot-store-open');
       pane.innerHTML = '';
@@ -14950,10 +15313,6 @@
     }
     if(chatInfo.mode === 'agent-edit'){
       renderStyledAgentEditPane(pane);
-      return;
-    }
-    if(chatInfo.mode === 'bot-store'){
-      renderBotStorePane(pane);
       return;
     }
     if(chatInfo.mode === 'automation-detail'){
@@ -14971,10 +15330,6 @@
     }
     if(chatInfo.mode === 'agents'){
       renderManageAgentsPane(pane);
-      return;
-    }
-    if(chatInfo.mode === 'skills'){
-      renderSkillsUtilityPane(pane);
       return;
     }
     if(chatInfo.mode === 'plugins'){
@@ -15328,7 +15683,7 @@
     // browser, so closing them here tore the editor down the moment
     // openProfile re-rendered this header after opening it.
     var collabMode = document.body.classList.contains('browser-collab-mode');
-    var collabOverlayMode = chatInfo.mode === 'agent-edit' || chatInfo.mode === 'bot-store' || chatInfo.mode === 'automation-detail';
+    var collabOverlayMode = chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail';
     if(collabMode && !collabOverlayMode) chatInfo.open = false;
     else if(!collabMode && STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && chatInfoOpenPreference();
     if(STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && !isInfoPaneAvailable()) chatInfo.open = false;
@@ -18139,7 +18494,8 @@
     // Views (Automations, Artifacts, Browser) are the same in Solo and a
     // team; only creating chats and bots differs.
     // Making a bot works the same in a team: it belongs to the team you are in.
-    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills' || action === 'new-bot';
+    // The Bot marketplace opens anywhere, on the shelf of the company you are in.
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills' || action === 'new-bot' || action === 'bot-store';
     if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full
@@ -18154,7 +18510,7 @@
     else if(action === 'new-agent'){ if(window.miaPrivateAgents) window.miaPrivateAgents.create(); }
     else if(action === 'new-channel') openNewChannelFlow();
     else if(action === 'bot-store') openBotStorePane();
-    else if(action === 'skills') openSkillsPane();
+    else if(action === 'skills') openBotStorePane('skills');
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsPage();
     else if(action === 'artifacts') openArtifactsPage();
@@ -18542,9 +18898,8 @@
       location.hash = '#/chat';
     });
     document.addEventListener('keydown', function(e){
-      if(e.key === 'Escape' && (chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'bot-store')){
+      if(e.key === 'Escape' && (chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit')){
         if(chatInfo.mode === 'agent-edit') closeCinema();
-        else if(chatInfo.mode === 'bot-store') closeBotStorePane();
         else
         closeManageAgentsPane();
       }

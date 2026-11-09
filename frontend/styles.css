@@ -3969,7 +3969,7 @@ html.mac-inset-titlebar body.mia-call-zoomed .local-browser-overlay .native-brow
 .mia-space-invite{flex-wrap:wrap;}
 /* Browsing together is live, invited or not: the card and its Join are green. */
 .mia-space-invite{border-color:#2f9e44;background:#f2fbf5;}
-.chat-msg-mention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;font-weight:500;}
+.chat-msg-mention{white-space:nowrap;font-weight:500;}
 .hub-channel-row.is-shared-away .chat-row-mark,.hub-channel-row.is-shared-away .row-text{opacity:.45;}
 .hub-hidden-bots-toggle{display:flex;align-items:center;gap:6px;width:100%;padding:4px 8px 4px 58px;border:0;background:none;color:var(--sand-text-tertiary,#8a857c);font:inherit;font-size:12px;text-align:left;cursor:pointer;border-radius:8px;}
 .hub-hidden-bots-toggle:hover{background:var(--sand-fill-ghost-hover,rgba(0,0,0,.04));}
@@ -3983,6 +3983,8 @@ html.mac-inset-titlebar body.mia-call-zoomed .local-browser-overlay .native-brow
 .chat-msg-mention-face .human-avatar-initials{display:flex;align-items:center;justify-content:center;width:100%;height:100%;border-radius:50%;line-height:1;}
 .chat-msg-mention-face .human-avatar-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
 .chat-msg-mention > :first-child,.chat-msg-mention img,.chat-msg-mention svg{flex:none;width:16px;height:16px;max-width:16px;max-height:16px;object-fit:contain;}
+/* Only the face drops to sit on the text; the "@name" stays on the line. */
+.chat-msg-mention > :first-child{display:inline-block;vertical-align:-3px;margin-right:3px;}
 .mia-space-invite .mia-space-btn.primary{background:#2f9e44;color:#FFFFFF;}
 .mia-space-invite .mia-space-btn.primary:hover{background:#278a3b;}
 .mia-space-invite-btn{flex:none;display:inline-flex;align-items:center;gap:5px;height:28px;margin:0 2px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:999px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;app-region:no-drag;}
@@ -4138,8 +4140,6 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
   body.styled-skin .skill-picker-name{display:block;font-weight:600;}
   body.styled-skin .skill-picker-desc{display:block;color:var(--sand-text-secondary);}
   body.styled-skin .skill-picker-empty{font-size:13px;line-height:1.4;color:var(--sand-text-secondary);text-transform:none;letter-spacing:0;}
-  body.styled-skin .skills-row-actions{display:flex;gap:6px;flex:none;}
-  body.styled-skin .skill-form-field{display:block;width:calc(100% - 32px);max-width:none;margin:16px 16px 0;text-align:left;}
   body.styled-skin #settingsSkillBody{min-height:240px;margin-top:16px;}
   body.styled-skin #settingsSkillError:empty{display:none;}
   body.styled-skin #settingsSkillError{margin:0 16px;}
@@ -4171,6 +4171,12 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 /* Picture in picture: a tab kept below the chat. The page is a native view
    drawn over .chat-pip-view; this only holds its place and its header. */
 .chat-pip { flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 12px 12px; }
+/* The line between the chat and the docked page: drag it up or down. */
+.chat-pip-resize { align-self: stretch; height: 10px; margin: 0 -12px -4px; cursor: row-resize; position: relative; touch-action: none; }
+.chat-pip-resize::after { content: ""; position: absolute; left: 50%; top: 3px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--sand-border-default); }
+.chat-pip-resize:hover::after, .chat-pip-resize:focus-visible::after, body.chat-pip-resizing .chat-pip-resize::after { background: var(--sand-text-tertiary, #8a857c); }
+.chat-pip-resize:focus-visible { outline: none; }
+body.chat-pip-resizing { cursor: row-resize; user-select: none; }
 .chat-pip[hidden] { display: none; }
 .chat-pip-head { align-self: stretch; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--sand-text-secondary); }
 .chat-pip-icon { width: 14px; height: 14px; flex: none; border-radius: 3px; }
@@ -4191,3 +4197,98 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 .local-browser-chrome-handoff span{flex:1;min-width:0}
 .local-browser-chrome-handoff button{flex:none;border:1px solid #b9c8e2;border-radius:6px;background:#fff;color:#174ea6;padding:4px 8px;font:600 12px/1.2 system-ui,sans-serif;cursor:pointer}
 @media(max-width:850px){.local-browser-chrome-signin-btn{max-width:74px;white-space:normal;text-align:center;padding:3px 5px}}
+/* Bot marketplace: opens over the app like Settings (bot-marketplace.js). */
+.bot-market-sheet .styled-settings-content{display:flex;flex-direction:column;}
+.bot-market-title{font-size:13px;font-weight:600;color:var(--sand-text-primary);padding:4px 10px 10px;}
+.bot-market-nav-sep{height:1px;margin:8px 6px;background:var(--sand-border-default);}
+.bot-market-soon{margin-left:auto;font-size:11px;color:var(--sand-text-secondary);}
+.bot-market-search{max-width:420px;margin-bottom:14px;}
+.bot-market-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;align-content:start;}
+.bot-market-card{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-bg-base);min-width:0;}
+.bot-market-avatar{flex:none;width:40px;height:40px;display:grid;place-items:center;}
+.bot-market-avatar img{width:40px;height:40px;object-fit:contain;}
+.bot-market-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.bot-market-name{font-size:14px;font-weight:500;color:var(--sand-text-primary);}
+.bot-market-about,.bot-market-meta{font-size:12px;color:var(--sand-text-secondary);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+.bot-market-meta{-webkit-line-clamp:1;}
+.bot-market-btn{flex:none;border:1px solid var(--sand-border-default);background:var(--sand-fill-secondary);border-radius:8px;padding:5px 12px;font:inherit;font-size:12px;cursor:pointer;color:var(--sand-text-primary);}
+.bot-market-btn.primary{background:var(--accent,#DC4E13);border-color:transparent;color:#fff;}
+.bot-market-btn:disabled{opacity:.6;cursor:default;}
+.bot-market-note{flex:none;font-size:12px;color:var(--sand-text-secondary);}
+.bot-market-group{grid-column:1/-1;font-size:12px;color:var(--sand-text-secondary);margin-top:6px;}
+.bot-market-status{grid-column:1/-1;font-size:13px;color:var(--sand-text-secondary);max-width:520px;line-height:1.5;}
+.bot-market-card[data-market-detail]{cursor:pointer;}
+.bot-market-card[data-market-detail]:hover{border-color:var(--sand-border-strong,#c9c4bb);}
+.bot-market-back{align-self:flex-start;border:0;background:none;font:inherit;font-size:13px;color:var(--sand-text-secondary);cursor:pointer;padding:2px 0;margin-bottom:12px;}
+.bot-market-back:hover{color:var(--sand-text-primary);}
+.bot-market-detail{max-width:760px;display:flex;flex-direction:column;gap:18px;}
+.bot-market-detail-head{display:flex;align-items:center;gap:14px;}
+.bot-market-avatar.large,.bot-market-avatar.large img{width:64px;height:64px;}
+.bot-market-detail-name{font-size:20px;font-weight:600;margin:0 0 2px;color:var(--sand-text-primary);}
+.bot-market-section h2{font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--sand-text-secondary);margin:0 0 8px;}
+.bot-market-about-full{font-size:14px;line-height:1.55;margin:0;color:var(--sand-text-primary);}
+.bot-market-text{margin:0;padding:12px 14px;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--sand-fill-secondary-hover);border-radius:10px;color:var(--sand-text-primary);}
+.bot-market-skill{border:1px solid var(--sand-border-default);border-radius:10px;padding:10px 12px;margin-bottom:8px;}
+.bot-market-skill>summary{cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;list-style:none;}
+.bot-market-skill>summary::-webkit-details-marker,.bot-market-file>summary::-webkit-details-marker{display:none;}
+.bot-market-skill-icon{flex:none;width:20px;height:20px;fill:#F2C75C;stroke:#E4B43C;stroke-width:1.2;}
+.bot-market-skill-head{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.bot-market-skill-head span{font-size:12px;color:var(--sand-text-secondary);}
+.bot-market-skill-count{flex:none;font-size:11px;color:var(--sand-text-secondary);}
+.bot-market-files{margin:10px 0 2px 10px;padding-left:12px;border-left:1px solid var(--sand-border-default);display:flex;flex-direction:column;gap:4px;}
+.bot-market-file>summary{cursor:pointer;display:flex;align-items:center;gap:8px;font-size:13px;padding:4px 6px;border-radius:6px;list-style:none;}
+.bot-market-file>summary:hover{background:var(--sand-fill-ghost-hover);}
+.bot-market-file-icon{flex:none;width:15px;height:15px;fill:none;stroke:var(--sand-text-secondary);stroke-width:1.6;stroke-linejoin:round;}
+.bot-market-file-name{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;}
+.bot-market-file-kind{flex:none;font-size:11px;color:var(--sand-text-secondary);}
+.bot-market-file .bot-market-text{margin:6px 0 6px 6px;}
+.bot-market-empty{font-size:13px;color:var(--sand-text-secondary);margin:0;}
+.bot-market-list-plain{margin:0;padding-left:18px;font-size:13px;line-height:1.7;}
+/* Skills in the marketplace: folder cards, the folder's files, and the editor. */
+.bot-market-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-right:44px;}
+.bot-market-head .styled-settings-h1{margin-bottom:18px;}
+.bot-market-folder{width:34px;height:34px;fill:#F2C75C;stroke:#E4B43C;stroke-width:1.1;}
+.bot-market-avatar.large .bot-market-folder{width:56px;height:56px;}
+.bot-market-files.open{margin:0;padding:0;border:0;}
+.bot-market-files.open .bot-market-file{border:1px solid var(--sand-border-default);border-radius:10px;padding:4px 6px;}
+.bot-market-edit{gap:16px;}
+.bot-market-field{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--sand-text-secondary);}
+.bot-market-input{width:100%;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px;font-weight:400;color:var(--sand-text-primary);background:var(--sand-bg-base);outline:none;}
+.bot-market-input:focus{border-color:var(--sand-border-focus);}
+.bot-market-input.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;resize:vertical;}
+textarea.bot-market-input{min-height:96px;}
+.bot-market-edit-files{display:flex;flex-direction:column;gap:10px;}
+.bot-market-edit-file{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--sand-border-default);border-radius:10px;}
+.bot-market-edit-file-head{display:flex;align-items:center;gap:8px;font-weight:400;}
+.bot-market-edit-file-head .bot-market-input{flex:1;width:auto;}
+.bot-market-link{border:0;background:none;font:inherit;font-size:12px;font-weight:400;color:var(--sand-text-secondary);cursor:pointer;padding:4px 6px;border-radius:6px;}
+.bot-market-link:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
+.bot-market-link.add{align-self:flex-start;font-size:13px;}
+.bot-market-link.danger{color:var(--sand-text-danger);}
+.bot-market-edit-actions{display:flex;align-items:center;gap:8px;}
+.bot-market-spacer{flex:1;}
+.bot-market-error{font-size:13px;color:var(--sand-text-danger);}
+.bot-market-ask{margin-top:auto;display:flex;align-items:center;gap:8px;border:1px solid var(--sand-border-default);background:var(--sand-bg-base);border-radius:10px;padding:8px 10px;font:inherit;font-size:13px;color:var(--sand-text-primary);cursor:pointer;}
+.bot-market-ask:hover{background:var(--sand-fill-ghost-hover);}
+.bot-market-ask svg{width:16px;height:16px;fill:#E4B43C;}
+/* Your bot's card edits in place: a text shows it can be clicked, then turns into a box. */
+[data-card-edit]{cursor:text;border-radius:8px;transition:box-shadow .12s ease;}
+[data-card-edit]:hover,[data-card-edit]:focus-visible{box-shadow:0 0 0 2px var(--sand-border-default);outline:none;}
+.bot-card-editor{display:flex;flex-direction:column;gap:8px;}
+.bot-card-editor-actions{display:flex;align-items:center;gap:8px;}
+.bot-card-editor-hint{flex:1;font-size:11px;color:var(--sand-text-secondary);}
+.bot-card-editor .bot-market-error:empty{display:none;}
+.bot-card-editor textarea.bot-market-input{min-height:220px;}
+
+/* Bot settings: the skills a bot carries as folders, then Choose skills. */
+.styled-agent-edit-skill-folders{display:flex;flex-direction:column;}
+.styled-agent-edit-skill-folders .bot-market-text{max-height:260px;}
+.styled-agent-edit-skill-choose{margin-top:6px;}
+.styled-agent-edit-skill-choose>summary{cursor:pointer;font-size:12px;color:var(--sand-text-secondary);padding:4px 0;}
+.styled-agent-edit-skill-choose>summary:hover{color:var(--sand-text-primary);}
+/* Closed info tooltips take no room, so the bot editor never scrolls sideways. */
+body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:not(.open) .styled-agent-edit-info-popover{display:none;}
+.styled-agent-edit-skill-options{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
+.styled-agent-edit-skill-option{display:flex;flex-direction:column;gap:2px;text-align:left;border:1px solid var(--sand-border-default);background:var(--sand-bg-base);border-radius:10px;padding:8px 10px;font:inherit;font-size:13px;cursor:pointer;color:var(--sand-text-primary);}
+.styled-agent-edit-skill-option:hover{background:var(--sand-fill-ghost-hover);}
+.styled-agent-edit-skill-option span{font-size:12px;color:var(--sand-text-secondary);}

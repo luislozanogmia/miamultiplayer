@@ -13,7 +13,7 @@ function harness({ styled = true, storedModel = 'current-chat-model', draftModel
   const bot = { id: 'sample-bot', name: 'Sample bot', model: storedModel, state: 'running' };
   const requests = [], toasts = [];
   const context = {
-    skillPickerHtml: () => '<div>Skills</div>', skillsLibrary: null,
+    skillPickerHtml: () => '<div>Skills</div>', skillsLibrary: null, powerUser: () => false,
     STYLED_SKIN: styled, chatInfo: { mode: styled ? 'agent-edit' : '' }, BENCH_MODELS: models,
     editState: { agentId: bot.id, name: 'Renamed bot', instructions: ' Updated brief ', instructionsRevision: 'revision-1', avatarColor: '#123456', model: draftModel, modelIx: 0 },
     chatWs: { botRecords: [bot] },
@@ -38,7 +38,7 @@ test('the rendered bot profile removes MODEL while preserving its editable field
   for (const id of ['styledAgentEditName', 'styledAgentEditInstructions', 'styledAgentAddAutomation', 'styledAgentEditWorkspace', 'styledAgentEditColorOptions', 'styledAgentEditSave', 'styledAgentEditCancel', 'styledAgentEditDelete']) {
     assert.ok(html.includes(`id="${id}"`), id);
   }
-  for (const label of ['BRIEF', 'AUTOMATIONS', 'WORKPLACES', 'AVATAR COLOR']) assert.ok(html.includes(label), label);
+  for (const label of ['INSTRUCTIONS', 'SKILLS', 'AUTOMATIONS', 'WORKPLACES', 'AVATAR COLOR']) assert.ok(html.includes(label), label);
 });
 
 for (const storedModel of ['current-chat-model', null]) {

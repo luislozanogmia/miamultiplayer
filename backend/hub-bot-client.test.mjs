@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-import {mkdtempSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,readFileSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const require=createRequire(import.meta.url),Database=require('better-sqlite3');
-const {createHubBotClient}=require('./hub-bot-client');
+const {createHubBotClient,materializeSharedSkills}=require('./hub-bot-client');
 const owner='owner@example.test',teamId='a'.repeat(32),channelId='c'.repeat(32);
-function fixture(t,localOwner=owner) {
+function fixture(t,localOwner=owner,bundleSkills=()=>[]) {
   const db=new Database(':memory:');t.after(()=>db.close());
   const dataDirectory=mkdtempSync(join(tmpdir(),'mia-hub-bindings-'));
   writeFileSync(join(dataDirectory,'hub-connection.json'),JSON.stringify({url:'https://hub.example.test'}));
@@ -16,7 +16,7 @@ function fixture(t,localOwner=owner) {
   let identity={email:owner,subject:'user_owner',issuer:'https://clerk.miamultiplayer.com'};
   const bot={id:'local-private-id',name:'Helper',instructions:'Private instructions stay local',owner};
   let versionAnswer=null;
-  const client=createHubBotClient({db,dataDirectory,isOwnerActive:()=>active,
+  const client=createHubBotClient({db,dataDirectory,isOwnerActive:()=>active,bundleSkills,
     getAccountIdentity:()=>identity,
     getBot:(id,email)=>id===bot.id && email===localOwner?bot:null,listBots:email=>email===localOwner?[bot]:[],
     fetcher:async(url,options)=>{
@@ -57,9 +57,30 @@ test('sharing always forks and sends only the instructions, even when asked for 
 
 test('a copy from another company shares the skills its owner reviewed, not the library ones',async t=>{
   const f=fixture(t);
-  await f.client.share(owner,{...f.input,skills:[{name:'Weekly report',description:'',body:'Write the [Company] report.'},{name:'Empty',body:' '}]},'fixture.token');
+  await f.client.share(owner,{...f.input,skills:[{name:'Weekly report',description:'',body:'Write the [Company] report.',files:[{path:'score.py',body:'print(1)'}],folder:'/private/local/skill'},{name:'Empty',body:' '}]},'fixture.token');
   const version=f.requests.filter(r=>r.options.method==='POST' && r.url.endsWith('/versions')).map(r=>JSON.parse(r.options.body));
-  assert.deepEqual(version[0].skills,[{name:'Weekly report',description:'',body:'Write the [Company] report.'}]);
+  assert.deepEqual(version[0].skills,[{name:'Weekly report',description:'',body:'Write the [Company] report.',files:[{path:'score.py',body:'print(1)'}]}]);
+  assert.equal(JSON.stringify(version[0]).includes('/private/local/skill'),false);
+});
+
+test('sharing a local bot includes the skill files without its private folder path',async t=>{
+  const f=fixture(t,owner,()=>[{name:'Review',description:'',body:'Use the scorer.',files:[{path:'score.py',body:'print(1)'}],folder:'/private/local/skill'}]);
+  await f.client.share(owner,f.input,'fixture.token');
+  const version=f.requests.filter(r=>r.options.method==='POST' && r.url.endsWith('/versions')).map(r=>JSON.parse(r.options.body))[0];
+  assert.deepEqual(version.skills,[{name:'Review',description:'',body:'Use the scorer.',files:[{path:'score.py',body:'print(1)'}]}]);
+  assert.equal(JSON.stringify(version).includes('/private/local/skill'),false);
+});
+
+test('a shared bot receives executable skill files only inside a temporary folder',()=>{
+  const prepared=materializeSharedSkills([{name:'Review',body:'Run score.py.',files:[{path:'score.py',body:'print(1)'}]}]);
+  const folder=prepared.skills[0].folder;
+  assert.equal(readFileSync(join(folder,'SKILL.md'),'utf8'),'Run score.py.');
+  assert.equal(readFileSync(join(folder,'score.py'),'utf8'),'print(1)');
+  prepared.cleanup();
+  assert.equal(existsSync(folder),false);
+  for(const badPath of ['../escape.py','nested/../escape.py','/absolute.py','CON.py'])
+    assert.throws(()=>materializeSharedSkills([{name:'Bad',body:'Bad',files:[{path:badPath,body:'x'}]}]),/invalid_shared_skill_file/);
+  assert.throws(()=>materializeSharedSkills([{name:'Bad',body:'Bad',files:[{path:'a.py',body:'x'},{path:'A.py',body:'y'}]}]),/invalid_shared_skill_file/);
 });
 
 test('different Hub identity, disabled account, unknown local bot and invalid scope fail closed',async t=>{

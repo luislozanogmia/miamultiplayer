@@ -1,8 +1,9 @@
 (function(root){
   'use strict';
   function node(tag,text,parent){var n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(parent)parent.append(n);return n;}
-  // Skills are part of what an administrator approves, so their full text shows.
-  function showSkills(skills,parent){(skills||[]).forEach(function(skill){var item=node('details',undefined,parent);node('summary','Skill: '+skill.name,item);if(skill.description)node('p',skill.description,item);node('pre',skill.body,item).style.whiteSpace='pre-wrap';});}
+  // Skills and their executable files are part of the exact version an administrator approves.
+  function showSkills(skills,parent){(skills||[]).forEach(function(skill){var item=node('details',undefined,parent);node('summary','Skill: '+skill.name,item);if(skill.description)node('p',skill.description,item);node('pre',skill.body,item).style.whiteSpace='pre-wrap';
+    (skill.files||[]).forEach(function(file){var entry=node('details',undefined,item);node('summary','File: '+file.path,entry);node('pre',file.body,entry).style.whiteSpace='pre-wrap';});});}
   async function open(scope){
     var old=document.querySelector('#hubBotManager');if(old)old.remove();
     var dialog=node('dialog');dialog.id='hubBotManager';dialog.className='hub-bot-dialog';

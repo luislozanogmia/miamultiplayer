@@ -25,6 +25,10 @@ async function harness(t) {
   const app = express();
   app.use(express.json());
   const auth = (req, _res, next) => { req.userEmail = OWNER; next(); };
+  // The catalog, before /api/bots/:id as in the app.
+  app.get('/api/bots/catalog', (_req, res) => res.json({ bots: [{ id: 'inbox-triage' }] }));
+  app.get('/api/bots/catalog/:id', (_req, res) => res.json({ id: 'inbox-triage', version: '1.3.0', store: { tagline: 'Triage' },
+    bot: { name: 'Inbox Triage', instructions: 'Sort the inbox.' }, skills: [{ name: 'Sort new messages', description: 'd', body: 'Read BUCKETS.md', files: [{ path: 'BUCKETS.md', body: 'b' }] }] }));
   app.get('/api/bots', (_req, res) => res.json({ bots: [state.bot] }));
   app.get('/api/bots/:id', (req, res) => (req.params.id === 'b1' ? res.json({ bot: state.bot }) : res.status(404).json({ error: 'not_found' })));
   app.put('/api/bots/:id', (req, res) => {
@@ -41,6 +45,13 @@ async function harness(t) {
   app.get('/api/conversations/:id/members', (_req, res) => res.json({ members: state.members }));
   app.post('/api/conversations/:id/events', (req, res) => { state.posted.push(req.body); res.status(201).json({ event: { id: 'e1' } }); });
   app.delete('/api/conversations/:id/events/:eventId', (req, res) => { state.deleted.push(req.params.eventId); res.json({ ok: true }); });
+  // A skills library and a one-bot catalog, for the marketplace and skill tools.
+  state.skills = []; state.createdBots = [];
+  app.get('/api/skills', (_req, res) => res.json({ skills: state.skills.map(({ body, ...skill }) => skill) }));
+  app.get('/api/skills/:id', (req, res) => { const skill = state.skills.find(item => item.id === req.params.id); return skill ? res.json({ skill }) : res.status(404).json({ error: 'skill_not_found' }); });
+  app.post('/api/skills', (req, res) => { const skill = { id: `s${state.skills.length + 1}`, ...req.body, files: req.body.files || [] }; state.skills.push(skill); res.json({ skill }); });
+  app.put('/api/skills/:id', (req, res) => { const skill = state.skills.find(item => item.id === req.params.id); Object.assign(skill, req.body); res.json({ skill }); });
+  app.post('/api/bots', (req, res) => { state.createdBots.push(req.body); res.status(201).json({ bot: { id: 'b2', name: req.body.name } }); });
   // Group D routes exist in the app. Nothing may reach them.
   for (const route of ['/api/keys', '/api/settings/guardrails', '/api/dev/clean-slate']) app.all(route, (_req, res) => { state.reachedForbidden = true; res.json({}); });
   registerMiaAppRoutes(app, {
@@ -48,7 +59,7 @@ async function harness(t) {
     loadSettings: () => state.settings, saveSettings: value => { state.settings = value; },
     tools: createMiaAppTools({
       browserWork: () => null, botAutomationActions, botRuns: () => [{ automationId: 'a1', reports: [{ status: 'failed' }] }],
-      automationDestination: () => ({ conversationId: 'c-bot', companyId: 'co' }), workspaceDir: () => dataDir,
+      automationDestination: () => ({ conversationId: 'c-bot', companyId: 'co' }), workspaceDir: () => dataDir, botModel: async () => 'deepseek/flash',
     }),
     activity: createActivityLog(dataDir),
     resolveTurn(session) {
@@ -196,4 +207,33 @@ test('dismissing a card changes nothing', async t => {
   const answer = await post(`/api/mia-app/proposals/${asked.data.result.event_id}`, { decision: 'dismiss' });
   assert.equal(answer.data.event.metadata.miaAppProposal.status, 'dismissed');
   assert.deepEqual(state.archived, []);
+});
+
+test('Mia manages skills and the marketplace through cards the person accepts', async t => {
+  const { call, post, state } = await harness(t);
+  const accept = async result => post(`/api/mia-app/proposals/${result.data.result.event_id}`, { decision: 'accept' });
+  // A skill is a folder: SKILL.md plus its files. Nothing is saved before Accept.
+  const asked = await call('skill_save_propose', { name: 'GTM prospecting', description: 'Finds leads', body: 'Read ICP.md', files: [{ path: 'ICP.md', body: 'who' }] });
+  assert.equal(asked.data.result.proposed, true);
+  assert.equal(state.skills.length, 0);
+  assert.match(JSON.stringify(state.cards.get(asked.data.result.event_id)), /Files: SKILL\.md, ICP\.md/);
+  assert.equal((await accept(asked)).status, 200);
+  assert.deepEqual(state.skills[0].files, [{ path: 'ICP.md', body: 'who' }]);
+  assert.equal((await call('skill_get', { skill_id: 's1' })).data.result.skill.name, 'GTM prospecting');
+  // Giving it to a bot is a card too, and an unknown skill is refused.
+  assert.equal((await call('bot_skills_propose', { bot_id: 'b1', skill_ids: ['nope'] })).status, 404);
+  const give = await call('bot_skills_propose', { bot_id: 'b1', skill_ids: ['s1'] });
+  assert.equal(state.bot.skills, undefined);
+  await accept(give);
+  assert.deepEqual(state.bot.skills, ['s1']);
+  // The From Mia shelf, and getting a bot with its skill folders.
+  const shelf = (await call('marketplace_list')).data.result.bots[0];
+  assert.deepEqual(shelf.skills[0].files, ['SKILL.md', 'BUCKETS.md']);
+  assert.equal(shelf.installed, false);
+  const get = await call('marketplace_get_propose', { catalog_id: 'inbox-triage' });
+  assert.equal(state.createdBots.length, 0);
+  await accept(get);
+  assert.equal(state.createdBots[0].name, 'Inbox Triage');
+  assert.deepEqual(state.createdBots[0].skills, ['s2']);
+  assert.equal(state.skills[1].name, 'Sort new messages');
 });

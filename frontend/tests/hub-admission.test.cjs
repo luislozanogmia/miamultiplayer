@@ -21,9 +21,11 @@ test('failed decision reports inline error and leaves retry available',async()=>
 test('review reads exact proposal and mode without publishing anything',async()=>{
  class Node{constructor(tag){this.tag=tag;this.children=[];this.style={};}append(n){this.children.push(n);}showModal(){this.open=true;}}
  const doc={body:new Node('body'),createElement:tag=>new Node(tag)};const calls=[];
- const api=moduleFor(async(method,url)=>{calls.push([method,url]);return url.endsWith('/versions')?{versions:[{version:1,instructions:'Exact instructions'}]}:{bot:{name:'Geek'},mode:'linked'};},doc);
+ const api=moduleFor(async(method,url)=>{calls.push([method,url]);return url.endsWith('/versions')?{versions:[{version:1,instructions:'Exact instructions',skills:[{name:'Review',body:'Run the scorer.',files:[{path:'score.py',body:'print(1)'}]}]}]}:{bot:{name:'Geek'},mode:'linked'};},doc);
  await api.decide({teamId:'t',channelId:'c'},request.id,1,'review');assert.equal(calls.length,2);assert.ok(calls.every(c=>c[0]==='GET'));
  const dialog=doc.body.children[0];assert.equal(dialog.open,true);assert.ok(dialog.children.some(c=>c.textContent==='Exact instructions'));assert.ok(dialog.children.some(c=>c.textContent==='Version 1 · linked'));
+ const seen=[];function walk(n){seen.push(n.textContent);n.children.forEach(walk);}walk(dialog);
+ assert.ok(seen.includes('File: score.py'));assert.ok(seen.includes('print(1)'),'review exposes the script being approved');
 });
 
 test('bot dialogs use the app\'s modal styling instead of browser defaults',()=>{

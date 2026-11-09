@@ -18,37 +18,28 @@ test('the rail exposes a Bot marketplace entry point wired to its own pane', asy
   assert.match(source, /if\(localBrowserState\.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store' && action !== 'skills'\) closeLocalBrowser\(\);/);
 });
 
-test('Bot store fetches the catalog index and every manifest before rendering cards', async () => {
+test('the Bot marketplace opens over the app like Settings, not in the right panel', async () => {
   const source = await readFile(appUrl, 'utf8');
-  assert.match(source, /var botStoreState = \{loading: false, error: '', entries: null, installingId: null\};/);
-  assert.match(source, /function openBotStorePane\(\)\{[\s\S]*?prepareChatUtilityPane\('bot-store'\)[\s\S]*?loadBotStoreCatalog\(\)/);
+  assert.match(source, /function openBotStorePane\(shelf\)\{[\s\S]*?closeLocalBrowser\(\);[\s\S]*?window\.MiaBotMarketplace\.open\(\{/);
+  assert.doesNotMatch(source, /prepareChatUtilityPane\('bot-store'\)|renderBotStorePane|chatInfo\.mode === 'bot-store'/);
   assert.match(source, /function loadBotStoreCatalog\(force\)\{[\s\S]*?api\('\/api\/bots\/catalog'\)[\s\S]*?Promise\.all\(res\.data\.bots\.map\(function\(entry\)\{[\s\S]*?api\('\/api\/bots\/catalog\/' \+ encodeURIComponent\(entry\.id\)\)/);
 });
 
-test('Bot store cards show avatar color, tagline, category, author, version and connector requirements', async () => {
-  const source = await readFile(appUrl, 'utf8');
-  assert.match(source, /function botStoreCardHtml\(manifest\)\{[\s\S]*?agentAvatarHtml\(bot\.name \|\| manifest\.id, null, 40, null, store\.avatarColor \|\| bot\.avatarColor \|\| null\)/);
-  assert.match(source, /bot-store-card-tagline[\s\S]*?esc\(store\.tagline \|\| ''\)/);
-  assert.match(source, /bot-store-card-meta[\s\S]*?esc\(store\.category \|\| 'general'\)[\s\S]*?esc\(manifest\.author \|\| 'Mia'\)/);
-  assert.match(source, /bot-store-card-requires[\s\S]*?Requires: ' \+ esc\(connectors\.join\(', '\)\)/);
-  assert.doesNotMatch(source, /connectors\.length[\s\S]{0,80}disabled="disabled"|connectors\.length[\s\S]{0,80}aria-disabled="true"/);
-});
-
-test('Bot store already-installed detection matches by bot name and swaps the Install button for a badge', async () => {
+test('Bot store already-installed detection matches by bot name', async () => {
   const source = await readFile(appUrl, 'utf8');
   assert.match(source, /function botStoreInstalledAgentByName\(name\)\{[\s\S]*?chatWs\.allAgents \|\| \[\]\)\.filter\(function\(agent\)\{[\s\S]*?agent\.name \|\| ''\)\.trim\(\)\.toLowerCase\(\) === target/);
-  assert.match(source, /var installed = botStoreInstalledAgentByName\(bot\.name\);/);
-  assert.match(source, /installed\s*\?\s*'<span class="bot-store-card-installed">Installed<\/span>'/);
 });
 
 test('Install fetches the manifest, creates the bot through POST \\/api\\/bots, greets its room with manifest.welcome, then opens it', async () => {
   const source = await readFile(appUrl, 'utf8');
   const installStart = source.indexOf('function installBotStoreBot(id){');
-  const installEnd = source.indexOf('\n  function renderChatInfoPane(){', installStart);
+  const installEnd = source.indexOf('\n  // The details pane', installStart);
   assert.ok(installStart >= 0 && installEnd > installStart, 'installBotStoreBot exists');
   const install = source.slice(installStart, installEnd);
   assert.match(install, /api\('\/api\/bots\/catalog\/' \+ encodeURIComponent\(id\)\)/);
-  assert.match(install, /api\('\/api\/bots', \{method:'POST', body: freshManifest\.bot\}\)/);
+  // The bot's skills become skill folders first, then the bot carries their ids.
+  assert.match(install, /createLibrarySkills\(freshManifest\.skills\)\.then\(function\(skillIds\)\{/);
+  assert.match(install, /api\('\/api\/bots', \{method:'POST', body: skillIds\.length \? Object\.assign\(\{\}, freshManifest\.bot, \{skills: skillIds\}\) : freshManifest\.bot\}\)/);
   assert.match(install, /createNativeAgentConversation\(created, \{\}\)/);
   assert.match(install, /chatRoomState\(conversation\.id\)\.localWelcome = buildBotStoreWelcomeMessage\(conversation\.id, created, freshManifest\.welcome\);/);
   assert.match(install, /loadChatRoom\(conversation\.id, 'agent', created\.name\);/);
@@ -56,18 +47,6 @@ test('Install fetches the manifest, creates the bot through POST \\/api\\/bots, 
   // Reuses the same conversation-provisioning helper the chat-native new-bot
   // flow uses, rather than duplicating room creation.
   assert.equal((source.match(/function createNativeAgentConversation\(agent, requestOptions\)\{/g) || []).length, 1);
-});
-
-test('Bot store pane renders through the shared chat info pane dispatch and clears its class on other modes', async () => {
-  const source = await readFile(appUrl, 'utf8');
-  const renderStart = source.indexOf('function renderChatInfoPane(){');
-  const renderEnd = source.indexOf('\n  function ', renderStart + 1);
-  const render = source.slice(renderStart, renderEnd);
-  assert.match(render, /chatInfo\.mode === 'plugins' \|\| chatInfo\.mode === 'agents' \|\| chatInfo\.mode === 'agent-edit' \|\| chatInfo\.mode === 'automation-detail' \|\| chatInfo\.mode === 'bot-store'/);
-  assert.match(render, /chatInfo\.mode !== 'bot-store'/);
-  assert.match(render, /if\(chatInfo\.mode === 'bot-store'\)\{\s*renderBotStorePane\(pane\);\s*return;\s*\}/);
-  assert.match(source, /function renderBotStorePane\(pane\)\{[\s\S]*?pane\.classList\.add\('open', 'bot-store-open'\)/);
-  assert.match(source, /function closeBotStorePane\(\)\{[\s\S]*?chatInfo\.mode = 'automations';[\s\S]*?chatInfo\.open = false;/);
 });
 
 test('Bot store pane stays reachable in browser-collab-mode', async () => {
@@ -81,4 +60,40 @@ test('backend serves the catalog and its manifests, and installing stays on the 
   assert.match(server, /app\.get\('\/api\/bots\/catalog\/:id', requireAuth/);
   assert.match(server, /BOT_CATALOG_ID_RE = \/\^\[a-z0-9-\]\+\$\//);
   assert.doesNotMatch(server, /app\.post\('\/api\/bots\/catalog/);
+});
+
+test('the Bot marketplace opens inside a company too, not only in Solo', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /var sharedView = [^;]*action === 'bot-store'/);
+});
+
+test('Bot settings is one page: instructions, then skills as folders whose files edit in place', async () => {
+  const [source, market] = await Promise.all([readFile(appUrl, 'utf8'), readFile(new URL('./bot-marketplace.js', import.meta.url), 'utf8')]);
+  assert.match(source, /function openActiveBotSettings\(\)\{[\s\S]*?openEditCinema\(bench\.id\);/);
+  assert.doesNotMatch(source, /renderBotCardPane|'bot-card'/, 'no second settings page');
+  assert.match(source, /styled-agent-edit-section-label">INSTRUCTIONS<\/span>/);
+  assert.doesNotMatch(source, /section-label">BRIEF</);
+  // A normal user (the default) ticks skills; a power user sees folders, with Remove and + Add skill.
+  assert.match(source, /\(powerUser\(\) \? '<div class="styled-agent-edit-skill-folders" id="styledAgentEditSkillFolders"><\/div><div class="styled-agent-edit-skill-add" id="styledAgentEditSkillAdd"><\/div>'\s*: skillPickerHtml\('styledAgentEditSkills', editState\.skills\)\)/);
+  assert.match(source, /function powerUser\(\)\{ return chatOutputMode === 'verbose'; \}/);
+  assert.match(source, /data-remove-skill/);
+  assert.match(source, /<summary>\+ Add skill<\/summary>/);
+  assert.match(source, /window\.MiaBotMarketplace\.skillFoldersHtml\(editSkillFolders\.skills, \{esc: esc\}, true\)/);
+  assert.match(source, /if\(!main\) update\.files = \(skill\.files \|\| \[\]\)\.map\(function\(file\)\{ return \{path: file\.path, body: file\.path === path \? value : file\.body\}; \}\);/);
+  assert.match(market, /data-card-edit="file"/);
+  assert.match(market, /return '<button type="button" class="bot-market-back" data-market-back>&larr; Back<\/button>' \+ botCard\(view\);/);
+});
+
+test('Ask Mia in the marketplace opens her chat with what you were looking at named', async () => {
+  const [source, market] = await Promise.all([readFile(appUrl, 'utf8'), readFile(new URL('./bot-marketplace.js', import.meta.url), 'utf8')]);
+  assert.match(market, /data-market-ask/);
+  assert.match(market, /if\(event\.target\.closest\('\[data-market-ask\]'\)\)\{ var context = askMiaContext\(\); close\(\); return opts\.askMia\(context\); \}/);
+  assert.match(market, /return 'About ' \+ \(\(manifest\.bot && manifest\.bot\.name\) \|\| 'this bot'\) \+ ' in the Bot marketplace: ';/);
+  assert.match(source, /function askMiaAbout\(start\)\{[\s\S]*?selectAgentRoom\(mia\)[\s\S]*?input\.value = start;/);
+});
+
+test('the view setting is Normal user (default) or Power user', async () => {
+  const html = await readFile(htmlUrl, 'utf8');
+  assert.match(html, /<option value="concise">Normal user<\/option>\s*<option value="verbose">Power user<\/option>/);
+  assert.doesNotMatch(html, />Concise<|>Verbose</);
 });

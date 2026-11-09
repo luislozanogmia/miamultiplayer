@@ -6,6 +6,30 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const require=createRequire(import.meta.url);
 const {hubEndpoint,createHubClient,hubRouteLimits}=require('./hub-client.js');
+test('only bot definition and marketplace routes accept skill-file payloads',async()=>{
+ const team='/v1/teams/'+'a'.repeat(32),channel=team+'/channels/'+'c'.repeat(32),bot='b'.repeat(32);
+ const versions=channel+'/bots/'+bot+'/versions',definition=channel+'/bots/'+bot+'/definition';
+ const market=team+'/market/bots',detail=market+'/'+bot,claim=channel+'/bot-dispatches/'+'d'.repeat(32)+'/claim';
+ for(const route of [versions,market,market+'/'+bot+'/versions']){
+  assert.equal(hubRouteLimits('POST',route).request,72*1024*1024);
+  assert.equal(hubRouteLimits('POST',route).timeout,60000);
+ }
+ for(const [method,route] of [['GET',definition],['GET',detail],['POST',claim]]){
+  assert.ok(hubRouteLimits(method,route).response>=72*1024*1024);
+  assert.equal(hubRouteLimits(method,route).timeout,60000);
+ }
+ assert.equal(hubRouteLimits('GET',market).response,16*1024*1024);
+ assert.equal(hubRouteLimits('POST',team+'/channels').request,8192);
+ assert.equal(hubRouteLimits('GET',team+'/channels').response,131072);
+ const previous=process.env.MIA_HUB_URL;process.env.MIA_HUB_URL='http://127.0.0.1:9876';
+ try{
+  let sent=false;
+  const proxy=createHubClient({fetcher:async()=>{sent=true;return {status:200,body:[Buffer.from(JSON.stringify({definition:{skills:[{files:[{path:'script.py',body:'x'.repeat(200000)}]}]}}))]};}});
+  const response={status(code){this.code=code;return this;},json(data){this.data=data;return this;}};
+  await proxy({url:detail,method:'GET',headers:{authorization:'Bearer token'}},response);
+  assert.equal(response.code,200);assert.equal(response.data.definition.skills[0].files[0].body.length,200000);assert.equal(sent,true);
+ }finally{if(previous===undefined)delete process.env.MIA_HUB_URL;else process.env.MIA_HUB_URL=previous;}
+});
 
 test('fresh installations discover public production Hub without embedded credentials',()=>{
  const previous=process.env.MIA_HUB_URL;delete process.env.MIA_HUB_URL;

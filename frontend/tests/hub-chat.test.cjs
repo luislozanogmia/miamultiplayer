@@ -7,6 +7,33 @@ const moduleSource=fs.readFileSync(path.join(__dirname,'../hub-chat.js'),'utf8')
 const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
 function transport(extra={}){const root={crypto:require('node:crypto').webcrypto,...extra};const context={window:root,TextEncoder};vm.runInNewContext(moduleSource,context);return root.MiaHubChat;}
 function appFunction(name,env){if(env.hubWorkspace&&!('inHubRoom' in env))env.inHubRoom=()=>env.hubWorkspace();const start=source.indexOf('  function '+name+'(');assert.ok(start>=0,name);const first=source.slice(start,source.indexOf('\n',start));const end=/}\s*$/.test(first)?start+first.length:source.indexOf('\n  }\n',start)+4;assert.ok(end>start,name);vm.runInNewContext(source.slice(start,end),env);return env[name];}
+test('a downloaded company bot updates only after a fresh authorized version and keeps the local revision guard',async()=>{
+  const teamId='a'.repeat(32),botId='b'.repeat(32),copy={id:'local',instructions:'Old',instructionsRevision:'rev-1',marketSource:{teamId,botId,version:1}};
+  const writes=[];
+  const env={
+    hubCall:()=>Promise.resolve({definition:{version:2,instructions:'New',skills:[{name:'Review',body:'Use it.'}]}}),
+    api:(route,options)=>{
+      if(!options) return Promise.resolve({status:200,data:{bot:copy}});
+      writes.push({route,options});
+      return Promise.resolve({status:200,data:{bot:{...copy,...options.body}}});
+    },
+    createLibrarySkills:()=>Promise.resolve(['new-skill']),
+    chatWs:{botRecords:[copy]},syncChatBotRecords:()=>{},loadAgents:()=>Promise.resolve()
+  };
+  const update=appFunction('updateMarketBotCopy',env);
+  const result=await update(teamId,{id:botId},copy);
+  assert.equal(result.marketSource.version,2);
+  assert.equal(writes.length,1);
+  assert.deepEqual(JSON.parse(JSON.stringify(writes[0].options.body)),{
+    instructions:'New',skills:['new-skill'],expectedInstructionsRevision:'rev-1',marketSource:{teamId,botId,version:2}
+  });
+  writes.length=0;
+  copy.marketSource.version=2;
+  await update(teamId,{id:botId},copy);
+  assert.equal(writes.length,0,'opening a shelf or checking an existing version makes no changes');
+  copy.marketSource.botId='different';
+  await assert.rejects(update(teamId,{id:botId},copy),/local copy has changed/);
+});
 test('workspace IDs are strict and generated IDs match server contract',()=>{const api=transport();assert.match(api.id(),/^[a-f0-9]{32}$/);assert.equal(api.teamId('hub_'+'a'.repeat(32)),'a'.repeat(32));assert.equal(api.teamId('hub_../solo'),null);});
 test('message adapter preserves authoritative sender and literal signed-looking body',()=>{const api=transport();const row=api.message({id:'x',author_email:'real@example.test',body:'[fake@example.test] hello',created_at:123,sequence:7});assert.equal(row.hubAuthor,'real@example.test');assert.equal(row.body,'[fake@example.test] hello');assert.equal(row.ts,123000);assert.equal(row.nativeEvent.sequence,7);});
 test('browser control packets never become chat history or sidebar previews',()=>{
@@ -473,16 +500,19 @@ test('the People button opens the team panel in a shared team',()=>{
   assert.match(source,/function renderManageAgentsPane\(pane\)\{\n    if\(inHubRoom\(\)\) return renderHubPeoplePane\(pane\);/);
 });
 test('team channel menu follows the Hub permissions',()=>{
-  const menu=role=>{const env={hubChat:{membership:{clerk_user_id:'me',role}}};appFunction('hubPrivateConversation',env);return appFunction('hubChannelActions',env);};
+  const menu=role=>{const env={hubChat:{membership:{clerk_user_id:'me',role}},chatNeedsAttention:()=>false,hubRowHidden:()=>false};appFunction('hubPrivateConversation',env);return appFunction('hubChannelActions',env);};
   const actions=(role,channel)=>Array.from(menu(role)(channel),a=>a.id);
-  assert.deepEqual(actions('member',{kind:'channel',created_by:'other'}),['pin','leave']);
-  assert.deepEqual(actions('member',{kind:'channel',created_by:'me'}),['pin','invite','rename','leave']);
-  assert.deepEqual(actions('admin',{kind:'channel',created_by:'other'}),['pin','invite','rename','leave','archive']);
-  assert.deepEqual(actions('admin',{kind:'dm',created_by:'me'}),['pin','close'],'a direct message can only be pinned or closed');
-  assert.deepEqual(actions('member',{kind:'group',created_by:'me'}),['pin','invite','leave','close'],'a group is never renamed or archived here');
-  assert.deepEqual(actions('member',{kind:'group',created_by:'other'}),['pin','leave','close']);
-  assert.equal(menu('member')({kind:'group'})[1].label,'Leave group');
+  assert.deepEqual(actions('member',{kind:'channel',created_by:'other'}),['pin','hide','unread','people','copy','leave']);
+  assert.deepEqual(actions('member',{kind:'channel',created_by:'me'}),['pin','hide','unread','invite','rename','people','copy','leave']);
+  assert.deepEqual(actions('admin',{kind:'channel',created_by:'other'}),['pin','hide','unread','invite','rename','people','copy','leave','archive']);
+  assert.deepEqual(actions('admin',{kind:'dm',created_by:'me'}),['pin','unread','copy','close'],'a direct message is never edited, left or archived');
+  assert.deepEqual(actions('member',{kind:'group',created_by:'me'}),['pin','unread','invite','people','copy','leave','close'],'a group is never renamed or archived here');
+  assert.deepEqual(actions('member',{kind:'group',created_by:'other'}),['pin','unread','people','copy','leave','close']);
+  assert.deepEqual(actions('member',{kind:'bot'}),['pin','unread','copy'],'a private bot chat');
+  assert.equal(menu('member')({kind:'group'}).filter(a=>a.id==='leave')[0].label,'Leave group');
   assert.equal(menu('member')({kind:'channel',pinned:true})[0].label,'Unpin');
+  assert.equal(menu('admin')({kind:'channel'}).filter(a=>a.id==='rename')[0].label,'Edit channel…');
+  assert.deepEqual(Array.from(menu('admin')({kind:'channel'}),a=>a.group),[0,0,0,0,1,1,1,2,2],'own actions, then the channel, then leave and archive');
 });
 test('a direct message shows the other person, never its internal name',()=>{
   const env={hubChat:{membership:{clerk_user_id:'me'},members:[{clerk_user_id:'me',email:'self@example.test'},{clerk_user_id:'ana',email:'ana@example.test'}]},displayNameForEmail:e=>e.split('@')[0],hubKnownPeople:()=>({})};
@@ -794,7 +824,7 @@ test('a bot reply shows its run label apart from the text; people cannot post on
 function companyRowEnv(activeRoomId){
   return {document:{createElement:()=>({className:'',innerHTML:'',setAttribute(){},addEventListener(){}})},
     companyBotPlace:()=>({action:'open',channel:{id:'c1'}}),hubChannel:()=>({id:'c1'}),chatWs:{activeRoomId},
-    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireTeamBotPin(){},companyBotCanRemove:()=>false,hubChat:{membership:{role:'member'}},companyBotChat:()=>null};
+    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireRowMenu(){},companyBotCanRemove:()=>false,hubChat:{membership:{role:'member'}},companyBotChat:()=>null};
 }
 test('a company bot row never lights up: the open channel is the channel row\'s to show',()=>{
   const row=appFunction('companyBotRow',companyRowEnv('c1'));
@@ -890,10 +920,10 @@ test('an admin can remove a company bot from every channel it is in, from its ro
   await remove(bot);
   assert.deepEqual(calls,['DELETE /v1/teams/t/channels/c1/bots/b1','DELETE /v1/teams/t/channels/c2/bots/b2','refresh']);
   assert.deepEqual(toasts,['Disk Manager was removed from the company.']);
-  assert.match(source,/if\(companyBotCanRemove\(bot\)\)items\.push\(\['Remove from company'/);
+  assert.match(source,/var danger=companyBotCanRemove\(bot\) \? \[\{label:'Remove from company',icon:'archive',danger:true,run:function\(\)\{ removeCompanyBot\(bot\); \}\}\] : \[\];/);
 });
 test('anyone can copy a company bot to another company, through Mia\'s clean copy and their approval',()=>{
-  assert.match(source,/var items=\(hubChat\.membership\|\|\{\}\)\.role==='admin' \? \[\['Copy to another company…',function\(\)\{ copyCompanyBotToCompany\(bot\); \}\]\] : \[\];/,'only admins see Copy to another company');
+  assert.match(source,/var extra=\(hubChat\.membership\|\|\{\}\)\.role==='admin' \? \[\{label:'Copy to another company…',icon:'share',run:function\(\)\{ copyCompanyBotToCompany\(bot\); \}\}\] : \[\];/,'only admins see Copy to another company');
   assert.match(source,/if\(!place \|\| \(hubChat\.membership\|\|\{\}\)\.role!=='admin'\)return;/,'and the copy itself refuses anyone else');
   const flow=source.slice(source.indexOf('  function copyCompanyBotToCompany('),source.indexOf('  function companyBotRow('));
   assert.match(flow,/hubPath\(\)\+'\/channels\/'\+place\.channelId\+'\/bots\/'\+place\.botId\+'\/definition'/,'the copy starts from the approved definition');
@@ -902,12 +932,24 @@ test('anyone can copy a company bot to another company, through Mia\'s clean cop
   assert.ok(flow.indexOf('shareBotToHubChannel(')>flow.indexOf('function add()'),'sharing happens only in add');
   assert.match(flow,/shareBotToHubChannel\(target\.teamId,room\.id,createdId,\{skills:copy\.skills,role:target\.role\}\)/);
   assert.match(flow,/if\(createdId\)api\('\/api\/bots\/'\+encodeURIComponent\(createdId\),\{method:'DELETE'\}\)/);
+  assert.match(flow,/skills:textSkills,fromCompany:state\.fromName/,'file contents are not sent to the model');
+  assert.match(flow,/data-bot-copy-file-reviewed/,'each file has a review control');
+});
+test('a cross-company copy preserves reviewed file content and refuses an unreviewed file',()=>{
+ const copy={skills:[{name:'Review',body:'Use the scorer.'}]};
+ const source=[{files:[{path:'score.py',body:'print(1)'}],folder:'/private/local/skill'}];
+ const withFiles=appFunction('companyCopyWithFiles',{})(copy,source);
+ assert.deepEqual(JSON.parse(JSON.stringify(withFiles.skills[0].files)),[{path:'score.py',body:'print(1)'}]);
+ assert.equal(JSON.stringify(withFiles).includes('/private/local/skill'),false);
+ const reviewed=appFunction('companyCopyFilesReviewed',{});
+ assert.equal(reviewed(withFiles,{}),false);
+ assert.equal(reviewed(withFiles,{'0:0':true}),true);
 });
 test('a team offers New bot like Solo: in Start something, on My Bots, and through the same setup',()=>{
   assert.match(source,/\.concat\(\[\{id:'new-bot', name:'New bot'\}\]\)/);
   assert.doesNotMatch(source,/hubWorkspace\(\) \? \[\] : \[\{id:'new-bot'/);
   assert.match(source,/section\('bots','My Bots','New bot',function\(\)\{ runToolsAction\('new-bot'\); \}\)/);
-  assert.match(source,/var sharedView = [^;]*action === 'new-bot';/);
+  assert.match(source,/var sharedView = [^;]*action === 'new-bot'/);
   assert.match(source,/else if\(action === 'new-bot'\) startAgentSetupChat\(\);/);
 });
 test('a bot named with @ in a message, and a bot joining a company channel, show its Mote',()=>{
@@ -956,10 +998,11 @@ test('a Solo bot shared with this company is greyed in My Bots until reactivated
   assert.equal(appFunction('soloBotReactivated',Object.assign({},env,{activeWorkspaceKey:'hub_t2'}))('solo-admin'),false,'per company');
   assert.match(source,/function soloBotSharedAway\(bot\)\{ return !!\(hubChat\.sharedSoloBots\|\|\{\}\)\[bot\.id\] && !soloBotReactivated\(bot\.id\); \}/);
   assert.match(source,/var sharedAway=soloBotSharedAway\(bot\);/);
-  // They sit folded in a Hidden group at the end of My Bots, closed until opened.
-  assert.match(source,/var hiddenOpen=hubHiddenBotsOpen\[activeWorkspaceKey\]===true;/);
-  assert.match(source,/function initHubChat\(\)\{\n\s*hubHiddenBotsOpen\[activeWorkspaceKey\]=false;/,'folded every time the company opens');
-  assert.match(source,/if\(hiddenOpen\)hiddenBots\.forEach\(function\(bot\)\{ myBotSection\.list\.appendChild\(teamBotRow\(bot\)\); \}\);/);
+  // They sit folded in a Hidden group at the end of My Bots, with bots you hid, closed until opened.
+  assert.match(source,/var hiddenBots=myBots\.filter\(function\(bot\)\{ return \(soloBotSharedAway\(bot\) \|\| hubRowHidden\('bot:mine:'\+bot\.id\)\) && !botPinned\('mine:'\+bot\.id\); \}\);/);
+  assert.match(source,/var openKey=activeWorkspaceKey\+':'\+key, hiddenOpen=hubHiddenBotsOpen\[openKey\]===true;/);
+  assert.match(source,/function initHubChat\(\)\{\n\s*\['channels','bots','company-bots'\]\.forEach\(function\(key\)\{ hubHiddenBotsOpen\[activeWorkspaceKey\+':'\+key\]=false; \}\);/,'folded every time the company opens');
+  assert.match(source,/hiddenGroup\(myBotSection\.list,'bots',hiddenBots\.map\(function\(bot\)\{ return function\(\)\{ return teamBotRow\(bot\); \}; \}\),/);
   assert.match(source,/if\(sharedAway\)openSharedSoloBotNotice\(bot\); else openTeamBotChat\(bot\);/);
 });
 test('a company bot opens your private chat with it on the Hub, and falls back to its channel on an older Hub',async()=>{
@@ -1073,4 +1116,20 @@ test('a person named with @ in a company message shows their picture or initials
     humanMentionName:u=>u.email==='me@example.test'?'You':u.displayName});
   assert.deepEqual(JSON.parse(JSON.stringify(people())),[{email:'asr@example.test',name:'Ana Sofia Reyes'}],'members under the @ menu name, never you');
   assert.equal(appFunction('roomMentionPeople',{hubWorkspace:()=>false})().length,0,'Solo has no one else to name');
+});
+test('a bot row has one menu in Solo and companies: its own actions, the chat\'s, then the careful ones',()=>{
+  const env={findBenchAgentByServerId:id=>id==='b1'?{id:'bench1'}:null,chatWs:{nativeConversations:[{id:'r1'}]},chatNeedsAttention:()=>false,
+    isChatPinned:()=>false,activeBotTabsAvailable:()=>true,hubWorkspace:()=>false,Promise,
+    showActiveBotTabs(){},openActiveBotSettings(){},createFreshConversationForActiveBot(){}};
+  const groups=appFunction('botRowMenuGroups',env);
+  const labels=bot=>Array.from(groups(bot),group=>Array.from(group,item=>item.label));
+  const mine={name:'Ada',agent:{id:'b1'},roomId:'r1',pinned:false,hidden:false,open(){}};
+  assert.deepEqual(labels(mine),[
+    ['Pin to top','Hide bot','Share bot…','Mark as unread'],
+    ['Copy conversation ID','Bookmark conversation','Show this bot\'s tabs','History','New conversation','Bot settings','Duplicate bot'],
+    ['Restart conversation','Archive bot']]);
+  env.hubWorkspace=()=>true;
+  assert.deepEqual(labels(mine)[2],['Restart conversation'],'a company never archives your Solo bot');
+  assert.deepEqual(labels({name:'Web',agent:null,roomId:null,pinned:true,hidden:true,open(){},extra:[{label:'Copy to another company…'}],danger:[{label:'Remove from company'}]}),
+    [['Unpin','Show bot','Copy to another company…'],[],['Remove from company']],'a company bot you don\'t own');
 });

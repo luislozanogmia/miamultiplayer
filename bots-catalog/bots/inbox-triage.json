@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "id": "inbox-triage",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "Mia",
   "store": {
     "tagline": "Reviews new messages and flags the ones that need a reply.",
@@ -33,5 +33,41 @@
       }
     ]
   },
-  "welcome": "I'm Inbox Triage. Want me to run this morning's triage now, or is there a specific inbox or time range you'd like me to start with?"
+  "welcome": "I'm Inbox Triage. Want me to run this morning's triage now, or is there a specific inbox or time range you'd like me to start with?",
+  "skills": [
+    {
+      "name": "Sort new messages",
+      "description": "When asked to triage: put each new message in one of three buckets and lead with what's urgent.",
+      "body": "# Sort new messages\n\nUse this skill when someone asks you to triage, check the inbox, or see what needs a reply.\n\n## Steps\n1. Collect the messages that arrived since the last triage.\n2. For each one, follow BUCKETS.md to pick: Needs a reply today, Can wait, or No action needed.\n3. Run urgency.py on the list to flag deadlines and blocking questions. Anything it scores 3 or more goes to the top.\n4. Reply with the three buckets as short bullets: sender, one-line ask, and why it's in that bucket.\n\n## Rules\n- Never reply, archive or delete anything yourself.\n- When unsure, use Needs a reply today and say why.",
+      "files": [
+        {
+          "path": "BUCKETS.md",
+          "body": "# The three buckets\n\n## Needs a reply today\n- A direct question to the person, from a customer, teammate or partner\n- Anything with a deadline in the next two days\n- A request that blocks someone else's work\n\n## Can wait\n- Questions without a deadline\n- Updates that may need a short acknowledgement later this week\n\n## No action needed\n- Newsletters, receipts, notifications and automated reports\n- Threads where someone else already answered\n\nWhen a message fits two buckets, pick the more urgent one."
+        },
+        {
+          "path": "urgency.py",
+          "body": "\"\"\"Scores how urgent each message looks, 0 to 5.\n\nUsage: python3 urgency.py < messages.json\nInput: a JSON list of {\"from\": ..., \"subject\": ..., \"text\": ...}\nOutput: the same list, each with \"urgency\" and \"reasons\", most urgent first.\n\"\"\"\nimport json\nimport re\nimport sys\n\nSIGNALS = [\n    (r\"\\b(today|tonight|asap|urgent|eod|end of day)\\b\", 2, \"says it's due today\"),\n    (r\"\\b(tomorrow|by (mon|tue|wed|thu|fri)\\w*)\\b\", 1, \"has a near deadline\"),\n    (r\"\\b(blocked|waiting on you|can't continue|need your (ok|approval|sign-off))\\b\", 2, \"someone is waiting\"),\n    (r\"\\?\", 1, \"asks a question\"),\n]\n\n\ndef score(message):\n    words = f\"{message.get('subject', '')} {message.get('text', '')}\".lower()\n    total, reasons = 0, []\n    for pattern, points, reason in SIGNALS:\n        if re.search(pattern, words):\n            total += points\n            reasons.append(reason)\n    return min(total, 5), reasons\n\n\nif __name__ == \"__main__\":\n    messages = json.load(sys.stdin)\n    for message in messages:\n        message[\"urgency\"], message[\"reasons\"] = score(message)\n    messages.sort(key=lambda item: item[\"urgency\"], reverse=True)\n    print(json.dumps(messages, indent=2))\n"
+        }
+      ]
+    },
+    {
+      "name": "Draft a reply",
+      "description": "Only when the person asks for a draft: write a short reply in their voice, never send it.",
+      "body": "# Draft a reply\n\nUse this skill only when the person asks you to draft or suggest a reply. Triage never drafts on its own.\n\n## Steps\n1. Read the whole thread, not just the last message.\n2. Follow TONE.md for how the person writes.\n3. If the reply matches a template in templates/, start from it and fill in the details.\n4. Show the draft and ask what to change. Never send it.\n\n## Keep it short\n- Answer the question in the first line.\n- One ask per reply at most.",
+      "files": [
+        {
+          "path": "TONE.md",
+          "body": "# How the person writes\n\n- Warm but brief: two to five sentences.\n- First name only, no \"Dear\".\n- No filler like \"I hope this finds you well\".\n- Sign off with just their first name.\n- Spanish when the sender wrote in Spanish."
+        },
+        {
+          "path": "templates/follow-up.md",
+          "body": "Hi {name},\n\nQuick follow-up on {topic}: {the one thing you need}. Could you let me know by {day}?\n\nThanks,\n{your name}"
+        },
+        {
+          "path": "templates/not-now.md",
+          "body": "Hi {name},\n\nThanks for thinking of us. We can't take on {request} right now, but {alternative or when to check back}.\n\nBest,\n{your name}"
+        }
+      ]
+    }
+  ]
 }

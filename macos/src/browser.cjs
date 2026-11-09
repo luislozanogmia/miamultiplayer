@@ -270,8 +270,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   });
   function humanChromeSignInTab(tab) {
     if (!tab || !visible || active() !== tab || !window.isFocused()
-        || tab.view.webContents.isDestroyed() || groups.get(tab.groupId)?.botId
-        || botDrivingTab(tab)) return false;
+        || tab.view.webContents.isDestroyed() || botDrivingTab(tab)) return false;
     try {
       const url = new URL(tab.view.webContents.getURL() || tab.url);
       return url.protocol === "https:" && !url.username && !url.password && chatGptSignInHost(url.hostname);
@@ -953,6 +952,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // A tab shows its bot as working while a command runs on it and briefly
   // after, so a burst of quick commands reads as one stretch of work.
   const BOT_WORK_LINGER_MS = 2500;
+  // How far left of the window a hidden tab waits.
+  const OFFSCREEN_GAP = 10000;
   const BOT_COMMAND_LIMIT_MS = options.botCommandLimitMs || 180000;
   reportClearedOperation = (kind, reason) => log(`browser busy cleared: ${kind}, ${reason}`);
   // A download that starts this soon after a bot's command on that tab is
@@ -981,9 +982,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   let heldByRenderer = new Set();
   // Only a bot's own commands count. A page loading says nothing about who
   // asked for it: the tab may be one a bot used earlier and a person now.
+  // A page the person loads themselves ("page load") is theirs, even on a
+  // tab a bot used before; only a load a bot started ("bot page load") is bot work.
   function botDrivingTab(tab) {
-    return (tab.botWork || 0) > 0 || !!pendingBrowserOperations.get(tab.view.webContents)?.size
-      || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS;
+    if ((tab.botWork || 0) > 0 || Date.now() - (tab.botWorkAt || 0) < BOT_WORK_LINGER_MS) return true;
+    for (const entry of pendingBrowserOperations.get(tab.view.webContents)?.values() || []) if (entry.kind !== "page load") return true;
+    return false;
   }
   function glowWanted(tab) {
     if (!tab.botWorker) return null;
@@ -1066,12 +1070,20 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function layout() {
     if (disposed || window.isDestroyed()) return;
     const [width, height] = window.getContentSize();
+    // A hidden view can still take the mouse on macOS, so a tab that isn't
+    // shown also moves off the window, keeping its size so its page keeps its
+    // layout and can still be captured. Clicks then only reach the tab in front.
+    const hide = (tab, size) => {
+      tab.view.setVisible(false);
+      tab.view.setBounds({ x: -(size.width + OFFSCREEN_GAP), y: 0, width: size.width, height: size.height });
+    };
     const fullscreenTab = tabs.get(fullscreenId);
     if (fullscreenTab) {
       // A page in fullscreen (a video's ⤢ button) covers the whole window.
       for (const tab of tabs.values()) {
-        if (tab === fullscreenTab) tab.view.setBounds({ x: 0, y: 0, width, height });
-        tab.view.setVisible(tab === fullscreenTab);
+        if (tab !== fullscreenTab) { hide(tab, tab.captureBounds || { width: Math.max(1, width), height: Math.max(1, height) }); continue; }
+        tab.view.setBounds({ x: 0, y: 0, width, height });
+        tab.view.setVisible(true);
       }
       return;
     }
@@ -1087,16 +1099,18 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     const dockTab = tabs.get(docked.id);
     if (dockTab) {
       const box = docked.bounds ? place(docked.bounds) : { x: 0, y: 0, width: 0, height: 0 };
-      const shown = docked.visible && box.width > 0 && box.height > 0;
-      if (shown) dockTab.view.setBounds(box);
-      dockTab.view.setVisible(shown && !!dockTab.url);
-      if (shown) void applyDockScale(dockTab, box);
+      const shown = docked.visible && box.width > 0 && box.height > 0 && !!dockTab.url;
+      if (shown) { dockTab.dockBox = box; dockTab.view.setBounds(box); dockTab.view.setVisible(true); void applyDockScale(dockTab, box); }
+      else hide(dockTab, dockTab.dockBox || dockTab.captureBounds || { width: Math.max(1, width), height: Math.max(1, height) });
     }
     for (const tab of tabs.values()) {
       if (tab === dockTab) continue;
       if (area.width > 0 && area.height > 0) tab.captureBounds = area;
-      tab.view.setBounds(area.width > 0 && area.height > 0 ? area : (tab.captureBounds || { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) }));
-      tab.view.setVisible(visible && tab.id === activeId && !!tab.url && !tab.error && area.width > 0 && area.height > 0);
+      const size = area.width > 0 && area.height > 0 ? area : (tab.captureBounds || { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) });
+      if (visible && tab.id === activeId && !!tab.url && !tab.error && area.width > 0 && area.height > 0) {
+        tab.view.setBounds(size);
+        tab.view.setVisible(true);
+      } else hide(tab, size);
     }
   }
   // Docking: the tab leaves the front for the dock below the chat and the
@@ -1278,7 +1292,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     persistTabs();
     // Do not hold the toolbar IPC open until every page resource has loaded.
     trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
-      () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
+      () => browserWorkSettled(tab), { kind: (tab.botWork || 0) > 0 ? "bot page load" : "page load" }).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -1291,7 +1305,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     layout();
     persistTabs();
     trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(target),
-      () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
+      () => browserWorkSettled(tab), { kind: (tab.botWork || 0) > 0 ? "bot page load" : "page load" }).catch(error => reportLoadError(tab, target, error));
     publish();
     return target;
   }
@@ -3488,7 +3502,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (command.action === "state") return state();
       if (command.action === "chromeSignInStart") {
         const tab = active();
-        if (!humanChromeSignInTab(tab)) return { error: "Open ChatGPT or its sign-in page in a human browser tab first." };
+        if (!humanChromeSignInTab(tab)) return { error: "Open ChatGPT or its sign-in page in a tab no bot is working in right now." };
         return chromeHandoff.start(tab.id).then(() => {
           handoffTab = tab;
           handoffWorkspace = workspaceKey;

@@ -72,12 +72,17 @@ test('right-click exposes conversation delete and keeps bot delete separate', as
     isChatPinned: () => false, chatNeedsAttention: () => false,
     deleteNativeConversation: (entry) => deletedChats.push(entry.roomId),
     findBenchAgentByServerId: (id) => ({ id }), deleteBenchAgent: (agent) => deletedBots.push(agent.id),
+    chatWs: { allAgents: [{ id: 'bot1', name: 'Bot' }] },
+    botRowMenuGroups: (bot) => [[{ label: 'Archive bot', run: () => deletedBots.push(bot.agent.id) }]],
+    openRowMenu: (groups) => groups[0][0].run(),
   });
   for (const kind of ['dm', 'group', 'department', 'human', 'agent', 'home']) {
     const attributes = { 'data-chat-key': 'room:c1', 'data-chat-menu-kind': kind,
       'data-chat-room-id': 'c1', 'data-chat-menu-agent-id': 'bot1' };
     const row = { getAttribute: (name) => attributes[name] || '' };
     listeners['.chat-sidebar-scroll:contextmenu']({ target: { closest: () => row }, preventDefault() {}, clientX: 20, clientY: 20 });
+    // A bot opens the shared bot menu (see botRowMenuGroups), where Archive bot lives.
+    if (kind === 'agent') { assert.deepEqual(deletedBots, ['bot1']); continue; }
     const button = node('[data-sidebar-action="delete"]');
     assert.equal(button.hidden, kind === 'home', kind);
     if (kind === 'home') continue;

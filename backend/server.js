@@ -1018,11 +1018,6 @@ app.use((req, res, next) => {
   if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
   next();
 });
-// There is no multipart middleware in this backend. The browser upload
-// contract therefore uses strict JSON base64, with a request ceiling that is
-// large enough for one 8 MiB image plus base64/JSON overhead but still bounded
-// before route code runs.
-app.use(express.json({ limit: MAX_MEDIA_UPLOAD_REQUEST_BYTES }));
 app.use(cookieParser());
 // Apply the boundary before any route-specific authentication. This prevents
 // the no-auth local preview from turning a cross-site POST into a destructive
@@ -1033,6 +1028,20 @@ app.use((req, res, next) => {
   if (rejectRequestBoundary(req, res)) return;
   return next();
 });
+// The shared-bot and marketplace version writes can carry ten reviewed skill
+// folders. Parse only those exact Hub proxy routes with the Hub's larger bound;
+// every other JSON request keeps the media upload ceiling.
+const HUB_LARGE_DEFINITION_POST = /^\/api\/hub\/v1\/teams\/[a-f0-9]{32}\/(?:channels\/[a-f0-9]{32}\/bots\/[a-f0-9]{32}\/versions|market\/bots(?:\/[a-f0-9]{32}\/versions)?)$/;
+const largeHubDefinitionJson = express.json({ limit: 72 * 1024 * 1024 });
+app.use((req, res, next) => req.method === 'POST' && HUB_LARGE_DEFINITION_POST.test(req.path)
+  ? largeHubDefinitionJson(req, res, next) : next());
+// A copy from another company carries the same reviewed files through the
+// cookie-authenticated local share route. Authenticate before parsing it.
+app.use((req, res, next) => req.method === 'POST' && req.path === '/api/hub-bots/share'
+  ? requireSessionAuth(req, res, () => largeHubDefinitionJson(req, res, next)) : next());
+// There is no multipart middleware in this backend. Ordinary JSON requests
+// stay bounded to one 8 MiB image plus base64/JSON overhead.
+app.use(express.json({ limit: MAX_MEDIA_UPLOAD_REQUEST_BYTES }));
 app.use((err, _req, res, next) => {
   if (err && (err.type === 'entity.too.large' || err instanceof SyntaxError)) {
     return res.status(err.type === 'entity.too.large' ? 413 : 400).json({ error: 'invalid media upload' });

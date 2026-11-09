@@ -32,7 +32,32 @@ test('a skill dropped into the library folder by hand is picked up', (t) => {
   const { library, data } = fixture(t);
   fs.mkdirSync(path.join(data, 'skills', 'hand-made'), { recursive: true });
   fs.writeFileSync(path.join(data, 'skills', 'hand-made', 'SKILL.md'), '---\nname: Hand Made\ndescription: d\n---\nDo it.\n');
-  assert.deepEqual(library.bundle(['hand-made']), [{ id: 'hand-made', name: 'Hand Made', description: 'd', body: 'Do it.' }]);
+  assert.deepEqual(library.bundle(['hand-made']), [{ id: 'hand-made', name: 'Hand Made', description: 'd', body: 'Do it.', files: [],
+    folder: path.join(data, 'skills', 'hand-made') }]);
+});
+
+test('a skill is a folder: SKILL.md plus the notes and scripts it points to', (t) => {
+  const { library, data } = fixture(t);
+  const folder = path.join(data, 'skills', 'gtm-prospecting');
+  const skill = library.create({ name: 'GTM prospecting', description: 'Finds leads', body: 'Read ICP.md, then run search.py.',
+    files: [{ path: 'ICP.md', body: '# Who we sell to' }, { path: 'search.py', body: 'print(1)' }, { path: 'data/cities.csv', body: 'Austin' }] });
+  assert.deepEqual(skill.files.map((file) => file.path).sort(), ['ICP.md', 'data/cities.csv', 'search.py'].sort());
+  assert.equal(fs.readFileSync(path.join(folder, 'ICP.md'), 'utf8'), '# Who we sell to');
+  assert.equal(fs.statSync(path.join(folder, 'search.py')).mode & 0o100, 0o100, 'scripts stay runnable');
+  assert.deepEqual(library.bundle([skill.id])[0].files.find((file) => file.path === 'search.py'), { path: 'search.py', body: 'print(1)' });
+  // A file dropped in by hand counts too.
+  fs.writeFileSync(path.join(folder, 'notes.md'), 'hello');
+  assert.ok(library.read(skill.id).files.some((file) => file.path === 'notes.md'));
+  // Saving with a shorter list moves the others aside, never deletes them.
+  library.update(skill.id, { name: 'GTM prospecting', body: 'Read ICP.md.', files: [{ path: 'ICP.md', body: '# Changed' }] });
+  assert.deepEqual(library.read(skill.id).files.map((file) => file.path), ['ICP.md']);
+  assert.ok(fs.readdirSync(path.join(data, 'skills', '.removed')).length >= 1);
+  // Saving without files leaves them as they are.
+  library.update(skill.id, { name: 'GTM prospecting', body: 'Read ICP.md again.' });
+  assert.deepEqual(library.read(skill.id).files.map((file) => file.path), ['ICP.md']);
+  for (const bad of ['../escape.md', '.hidden', 'SKILL.md', 'a b.md', 'a/b/c/d/e.md']) {
+    assert.throws(() => library.update(skill.id, { name: 'GTM prospecting', body: 'x', files: [{ path: bad, body: '' }] }), /isn't a file name/, bad);
+  }
 });
 
 test('bad input and links planted in the library are refused', (t) => {
@@ -40,6 +65,7 @@ test('bad input and links planted in the library are refused', (t) => {
   assert.throws(() => library.create({ name: '', body: 'x' }), { code: 'invalid_skill' });
   assert.throws(() => library.create({ name: 'x', body: '' }), { code: 'invalid_skill' });
   assert.throws(() => library.create({ name: 'x', body: 'y'.repeat(MAX_SKILL_CHARS + 1) }), { code: 'skill_too_long' });
+  assert.throws(() => library.create({ name: 'x', body: 'Safe', files: [{ path: 'CON.py', body: 'x' }] }), { code: 'invalid_skill_file' });
   assert.equal(library.read('../../etc'), null);
   const secret = path.join(data, 'secret.md');
   fs.writeFileSync(secret, 'private');
@@ -116,4 +142,11 @@ test('a skill used by a bot in another workspace cannot be removed', async (t) =
   assert.equal(refused.status, 409);
   assert.deepEqual((await refused.json()).bots, [{ id: 'bot_1', name: 'Writer' }]);
   assert.ok(library.read(skill.id), 'the skill stays in the library');
+});
+
+test('a bot is told where its skill folders are and which files they hold', async () => {
+  const source = fs.readFileSync(new URL('./inference.js', import.meta.url), 'utf8');
+  assert.match(source, /function skillFilesNote\(skill\)\{|function skillFilesNote\(skill\) \{/);
+  assert.match(source, /\$\{skill\.body\}\$\{skillFilesNote\(skill\)\}/);
+  assert.match(source, /This skill's folder is \$\{skill\.folder\}\. It also holds: \$\{files\.join\(', '\)\}/);
 });

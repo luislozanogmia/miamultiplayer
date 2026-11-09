@@ -91,16 +91,27 @@ function hubFileRoute(method, route) {
 // One shared bot version at every limit, and the five the version list returns.
 const HUB_BOT_VERSIONS = /\/channels\/[a-f0-9]{32}\/bots\/[a-f0-9]{32}\/versions$/;
 const HUB_BOT_DEFINITION = /\/channels\/[a-f0-9]{32}\/bots\/[a-f0-9]{32}\/definition$/;
-const BOT_DEFINITION_BYTES = 2 * 1024 * 1024;
+const HUB_BOT_CLAIM = /\/channels\/[a-f0-9]{32}\/bot-dispatches\/[a-f0-9]{32}\/claim$/;
+const HUB_MARKET_LIST = new RegExp(FILE_BASE + '/market/bots$');
+const HUB_MARKET_DETAIL = new RegExp(FILE_BASE + '/market/bots/' + FILE_ID + '(?:/versions/' + APP_VERSION + ')?$');
+const HUB_MARKET_WRITE = new RegExp(FILE_BASE + '/market/bots(?:/' + FILE_ID + '/versions)?$');
+const BOT_DEFINITION_BYTES = 72 * 1024 * 1024;
 function hubRouteLimits(method, route) {
   const file = hubFileRoute(method, route);
+  const largeDefinition = (method === 'POST' && (HUB_BOT_VERSIONS.test(route) || HUB_MARKET_WRITE.test(route)))
+    || (method === 'GET' && (HUB_BOT_VERSIONS.test(route) || HUB_BOT_DEFINITION.test(route) || HUB_MARKET_DETAIL.test(route) || HUB_MARKET_LIST.test(route)))
+    || (method === 'POST' && HUB_BOT_CLAIM.test(route));
   return {
     // Finishing a 500 MB upload lists up to 63 parts (an ETag and a hash each).
     request: method === 'PUT' && /^\/v1\/teams\/[a-f0-9]{32}\/team\/logo$/.test(route) ? 45000 : method === 'POST' && HUB_UPLOAD.test(route) ? 12 * 1024 * 1024 : method === 'POST' && HUB_MESSAGE.test(route) ? 40000
-      : file === 'complete' ? 32768 : method === 'POST' && HUB_WORKFLOW_WRITE.test(route) ? 16384 : method === 'POST' && HUB_BOT_VERSIONS.test(route) ? BOT_DEFINITION_BYTES : 8192,
-    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : HUB_WORKFLOW_ROUTE.test(route) ? 4194304 : method === 'GET' && HUB_ADMIN_LIST.test(route) ? 2097152 : method === 'GET' && HUB_BOT_VERSIONS.test(route) ? 5 * BOT_DEFINITION_BYTES + 65536 : method === 'GET' && HUB_BOT_DEFINITION.test(route) ? BOT_DEFINITION_BYTES + 65536 : 131072,
+      : file === 'complete' ? 32768 : method === 'POST' && HUB_WORKFLOW_WRITE.test(route) ? 16384 : method === 'POST' && (HUB_BOT_VERSIONS.test(route) || HUB_MARKET_WRITE.test(route)) ? BOT_DEFINITION_BYTES : 8192,
+    response: method === 'GET' && HUB_DOWNLOAD.test(route) ? 12 * 1024 * 1024 : HUB_WORKFLOW_ROUTE.test(route) ? 4194304 : method === 'GET' && HUB_ADMIN_LIST.test(route) ? 2097152
+      : method === 'GET' && HUB_BOT_VERSIONS.test(route) ? 5 * BOT_DEFINITION_BYTES + 65536
+      : method === 'GET' && HUB_MARKET_LIST.test(route) ? 16 * 1024 * 1024
+      : method === 'GET' && HUB_MARKET_DETAIL.test(route) ? BOT_DEFINITION_BYTES + 512 * 1024
+      : (method === 'GET' && HUB_BOT_DEFINITION.test(route)) || (method === 'POST' && HUB_BOT_CLAIM.test(route)) ? BOT_DEFINITION_BYTES + 65536 : 131072,
     // The Hub joins S3's multipart parts while it completes, which can take a while.
-    timeout: method === 'GET' && HUB_FEED.test(route) ? 30000 : HUB_UPLOAD.test(route) || HUB_DOWNLOAD.test(route) || file === 'complete' ? 30000 : 15000,
+    timeout: largeDefinition ? 60000 : method === 'GET' && HUB_FEED.test(route) ? 30000 : HUB_UPLOAD.test(route) || HUB_DOWNLOAD.test(route) || file === 'complete' ? 30000 : 15000,
   };
 }
 // Decision (review item 18): unlike /api/hub-bots, this proxy does not require

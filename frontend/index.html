@@ -569,6 +569,7 @@
                 </div>
               </div>
               <section class="chat-pip" id="chatPip" aria-label="Docked tab" hidden>
+                <div class="chat-pip-resize" id="chatPipResize" role="separator" aria-orientation="horizontal" aria-label="Drag to resize the docked tab" title="Drag to resize" tabindex="0"></div>
                 <div class="chat-pip-head">
                   <img class="chat-pip-icon" id="chatPipIcon" alt="" hidden />
                   <span class="chat-pip-title" id="chatPipTitle"></span>
@@ -579,17 +580,6 @@
               </section>
             </div>
             <aside class="chat-info-pane" id="chatInfoPane" aria-label="Details"></aside>
-            <div id="skillsHome" hidden><div class="skills-shell" id="skillsShell">
-        <div class="styled-settings-card" id="settingsSkillsList"></div>
-        <div class="styled-settings-row styled-settings-row-actions"><button class="styled-settings-pill-btn" id="settingsSkillNew">New skill</button></div>
-        <div class="styled-settings-card styled-settings-instructions-card" id="settingsSkillForm" hidden>
-          <input class="styled-settings-field skill-form-field" id="settingsSkillName" aria-label="Skill name" placeholder="Name" maxlength="64">
-          <input class="styled-settings-field skill-form-field" id="settingsSkillDescription" aria-label="When to use this skill" placeholder="When to use it" maxlength="500">
-          <textarea class="styled-settings-field styled-settings-instructions-text" id="settingsSkillBody" aria-label="Skill instructions" placeholder="How to do the job, step by step" maxlength="20000"></textarea>
-          <div class="agent-setup-error" id="settingsSkillError" role="alert"></div>
-          <div class="styled-settings-row styled-settings-row-actions"><button class="styled-settings-pill-btn" id="settingsSkillCancel">Cancel</button><button class="styled-settings-pill-btn" id="settingsSkillSave">Save skill</button></div>
-        </div>
-            </div></div>
             <aside class="chat-thread-panel" id="chatThreadPanel" hidden>
               <div class="ctp-resize" data-ctp-resize title="Drag to resize"></div>
               <div class="ctp-header cip-pane-head">
@@ -1001,10 +991,10 @@
           <button class="styled-settings-pill-btn" id="settingsReplayViewTips">Replay</button>
         </div>
         <div class="styled-settings-row">
-          <div><div class="styled-settings-row-label">Output</div><div class="styled-settings-row-desc" id="settingsOutputNote">Concise is selected — replies show only the final answer.</div></div>
-          <select class="styled-settings-field styled-settings-select" id="settingsOutputMode" aria-label="Chat output detail">
-            <option value="concise">Concise</option>
-            <option value="verbose">Verbose</option>
+          <div><div class="styled-settings-row-label">View</div><div class="styled-settings-row-desc" id="settingsOutputNote">Normal user — replies show only the final answer, and settings stay simple.</div></div>
+          <select class="styled-settings-field styled-settings-select" id="settingsOutputMode" aria-label="View: normal user or power user">
+            <option value="concise">Normal user</option>
+            <option value="verbose">Power user</option>
           </select>
         </div>
         <div class="styled-settings-row" id="settingsThemeRow" hidden>
@@ -1395,6 +1385,7 @@
     <div class="workspace-demo-view" id="workspaceDemoView" hidden></div>
     <script src="interrupted-work.js?v=20261104-interrupted-1"></script>
     <script src="bot-files-tidy.js?v=20261106-tidy-1"></script>
+    <script src="bot-marketplace.js?v=20261109-market-1"></script>
     <script src="emoji-picker.js?v=20261106-emoji-all"></script>
     <script src="provider-marks.js?v=20261106-1"></script>
     <script src="app.js?v=20261106-company-logo-1"></script>
