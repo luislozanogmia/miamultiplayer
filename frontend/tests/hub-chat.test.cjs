@@ -910,7 +910,7 @@ test('a team offers New bot like Solo: in Start something, on My Bots, and throu
   assert.match(source,/\.concat\(\[\{id:'new-bot', name:'New bot'\}\]\)/);
   assert.doesNotMatch(source,/hubWorkspace\(\) \? \[\] : \[\{id:'new-bot'/);
   assert.match(source,/section\('bots','My Bots','New bot',function\(\)\{ runToolsAction\('new-bot'\); \}\)/);
-  assert.match(source,/var sharedView = [^;]*action === 'new-bot';/);
+  assert.match(source,/var sharedView = [^;]*action === 'new-bot'/);
   assert.match(source,/else if\(action === 'new-bot'\) startAgentSetupChat\(\);/);
 });
 test('a bot named with @ in a message, and a bot joining a company channel, show its Mote',()=>{

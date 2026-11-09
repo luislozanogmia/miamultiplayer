@@ -59,11 +59,11 @@ test('a sidebar menu stays inside the sidebar, which a browser tab beside it wou
   assert.equal(left({}, sidebar(0), { innerWidth: 1280 })(303, 248), 303, 'a hidden sidebar falls back to the window');
 });
 
-test('Skills opens from the left rail and is gone from Settings', () => {
+test('Skills open from the left rail on the marketplace shelf, gone from Settings', () => {
   const rail = html.slice(html.indexOf('id="workspaceSwitcherMenu"'), html.indexOf('id="railNotificationsBtn"'));
   assert.match(rail, /data-tools-action="skills" aria-label="Skills"/);
   assert.doesNotMatch(html, /data-pane="skills"/);
-  assert.match(source, /action === 'skills'\) openSkillsPane\(\)/);
+  assert.match(source, /action === 'skills'\) openBotStorePane\('skills'\)/, 'Skills open on the marketplace shelf');
 });
 
 test('view icons that do not fit move behind a chevron, and the current view stays out', () => {

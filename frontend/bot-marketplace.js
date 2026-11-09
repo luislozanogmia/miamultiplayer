@@ -2,7 +2,8 @@
   'use strict';
   // The Bot marketplace opens over the app like Settings. Shelves: Mia's own
   // bots (the catalog), each company you're in (bots people shared there),
-  // Everyone (later), then the bots you own and the copies you got.
+  // Everyone (later), then the bots you own, the copies you got, and your
+  // skills (each a folder: SKILL.md plus the files it points to).
   // A copy you get is your bot everywhere; it follows the shared bot's updates.
 
   var state = null;
@@ -41,6 +42,7 @@
     list.push({id:'everyone', label:'Everyone', soon:true});
     list.push({id:'uploads', label:'My uploads', mine:true});
     list.push({id:'downloaded', label:'Downloaded', mine:true});
+    list.push({id:'skills', label:'Skills', mine:true});
     return list;
   }
 
@@ -57,7 +59,7 @@
 
   function card(options){
     return '<div class="bot-market-card"' + (options.detail ? ' data-market-detail="' + esc(options.detail) + '" role="button" tabindex="0" aria-label="' + esc('About ' + options.name) + '"' : '') + '>'
-      + '<span class="bot-market-avatar">' + opts.avatarHtml(options.name, options.color) + '</span>'
+      + '<span class="bot-market-avatar">' + (options.icon || opts.avatarHtml(options.name, options.color)) + '</span>'
       + '<span class="bot-market-copy"><span class="bot-market-name">' + esc(options.name) + '</span>'
       + (options.about ? '<span class="bot-market-about">' + esc(options.about) + '</span>' : '')
       + (options.meta ? '<span class="bot-market-meta">' + esc(options.meta) + '</span>' : '')
@@ -221,8 +223,115 @@
     if(scroller) scroller.scrollTop = 0;
   }
 
+  // Your skills: each a folder card; it opens to its files, and Edit changes them.
+  var BIG_FOLDER = '<svg class="bot-market-folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  function filesCount(skill){ var n = (skill.files ? skill.files.length : 0) + 1; return n === 1 ? '1 file' : n + ' files'; }
+  function skillsShelf(){
+    var skills = state.skills;
+    if(!skills || (skills.loading && !skills.list)) return '<p class="bot-market-status">Loading skills…</p>';
+    if(skills.error) return '<p class="bot-market-status">' + esc(skills.error) + '</p>';
+    var cards = skills.list.filter(function(skill){ return matches(text(skill.name), text(skill.description)); }).map(function(skill){
+      var bots = (skill.bots || []).map(function(bot){ return bot.name; });
+      return card({detail: 'skill:' + skill.id, icon: BIG_FOLDER, name: skill.name, about: skill.description,
+        meta: [filesCount(skill), bots.length ? 'used by ' + bots.join(', ') : 'not on a bot yet'].join(' · '),
+        action: ''});
+    });
+    return (cards.length ? cards.join('') : '<p class="bot-market-status">' + (state.query ? 'No skills match.' : 'Skills teach a bot how to do a job. Each is a folder: SKILL.md says what it is and when to use it, and can point to notes and scripts beside it.') + '</p>');
+  }
+  function fileRows(files){
+    return '<div class="bot-market-files open">' + files.map(function(file){
+      return '<details class="bot-market-file"' + (/^skill\.md$/i.test(file.path) ? ' open' : '') + '><summary>' + FILE_ICON + '<span class="bot-market-file-name">' + esc(file.path) + '</span>'
+        + '<span class="bot-market-file-kind">' + esc(/^skill\.md$/i.test(file.path) ? 'Read first' : fileKind(file.path)) + '</span></summary>'
+        + '<pre class="bot-market-text">' + esc(file.body || '') + '</pre></details>';
+    }).join('') + '</div>';
+  }
+  function skillView(){
+    var d = state.detail, skill = d.data;
+    var head = '<button type="button" class="bot-market-back" data-market-back>&larr; Back</button><div class="bot-market-detail">';
+    if(d.error) return head + '<p class="bot-market-empty">' + esc(d.error) + '</p></div>';
+    if(!skill) return head + '<p class="bot-market-empty">Loading…</p></div>';
+    var bots = (skill.bots || []).map(function(bot){ return bot.name; });
+    return head + '<div class="bot-market-detail-head"><span class="bot-market-avatar large">' + BIG_FOLDER + '</span>'
+      + '<div class="bot-market-copy"><h1 class="bot-market-detail-name">' + esc(skill.name) + '</h1>'
+      + '<span class="bot-market-meta">' + esc(filesCount(skill)) + '</span></div>'
+      + '<button type="button" class="bot-market-btn" data-skill-edit>Edit</button></div>'
+      + (skill.description ? section('When to use it', '<p class="bot-market-about-full">' + esc(skill.description) + '</p>') : '')
+      + section('Used by', '<p class="bot-market-about-full">' + esc(bots.length ? bots.join(', ') : 'No bot yet. Add it from a bot\'s settings.') + '</p>')
+      + section('Files', fileRows(skillFiles(skill)))
+      + '</div>';
+  }
+  function editRow(file, index){
+    return '<div class="bot-market-edit-file" data-edit-file="' + index + '"><div class="bot-market-edit-file-head">' + FILE_ICON
+      + '<input class="bot-market-input mono" data-edit-path placeholder="ICP.md" maxlength="200" aria-label="File name" value="' + esc(file.path || '') + '">'
+      + '<button type="button" class="bot-market-link" data-edit-remove-file>Remove</button></div>'
+      + '<textarea class="bot-market-input mono" data-edit-body rows="6" aria-label="' + esc((file.path || 'File') + ' contents') + '" placeholder="What this file holds">' + esc(file.body || '') + '</textarea></div>';
+  }
+  function editView(){
+    var e = state.editing;
+    return '<button type="button" class="bot-market-back" data-edit-cancel>&larr; ' + (e.id ? 'Back to the skill' : 'Back') + '</button>'
+      + '<div class="bot-market-detail bot-market-edit">'
+      + '<div class="bot-market-detail-head"><span class="bot-market-avatar large">' + BIG_FOLDER + '</span><h1 class="bot-market-detail-name">' + esc(e.id ? 'Edit ' + (e.name || 'skill') : 'New skill') + '</h1></div>'
+      + '<label class="bot-market-field"><span>Name</span><input class="bot-market-input" data-edit-name maxlength="64" value="' + esc(e.name) + '" placeholder="GTM prospecting"></label>'
+      + '<label class="bot-market-field"><span>When to use it</span><input class="bot-market-input" data-edit-description maxlength="500" value="' + esc(e.description) + '" placeholder="When someone asks for new leads"></label>'
+      + '<div class="bot-market-field"><span>Files</span><div class="bot-market-edit-files">'
+      + '<div class="bot-market-edit-file"><div class="bot-market-edit-file-head">' + FILE_ICON + '<span class="bot-market-file-name">SKILL.md</span><span class="bot-market-file-kind">Read first</span></div>'
+      + '<textarea class="bot-market-input mono" data-edit-skill rows="10" aria-label="SKILL.md" placeholder="How to do the job, step by step. Point to the other files when a step needs them.">' + esc(e.body) + '</textarea></div>'
+      + e.files.map(editRow).join('')
+      + '<button type="button" class="bot-market-link add" data-edit-add-file>+ Add file</button></div></div>'
+      + (e.error ? '<div class="bot-market-error" role="alert">' + esc(e.error) + '</div>' : '')
+      + '<div class="bot-market-edit-actions">' + (e.id ? '<button type="button" class="bot-market-link danger" data-edit-delete>Remove skill</button>' : '') + '<span class="bot-market-spacer"></span>'
+      + '<button type="button" class="bot-market-btn" data-edit-cancel>Cancel</button>'
+      + '<button type="button" class="bot-market-btn primary" data-edit-save' + (e.busy ? ' disabled' : '') + '>' + (e.busy ? 'Saving…' : 'Save skill') + '</button></div>'
+      + '</div>';
+  }
+  // What's typed so far, kept when the editor redraws.
+  function readEdit(){
+    var e = state.editing, sheet = state.sheet;
+    if(!e || !sheet.querySelector('[data-edit-name]')) return e;
+    e.name = sheet.querySelector('[data-edit-name]').value;
+    e.description = sheet.querySelector('[data-edit-description]').value;
+    e.body = sheet.querySelector('[data-edit-skill]').value;
+    e.files = Array.prototype.map.call(sheet.querySelectorAll('[data-edit-file]'), function(row){
+      return {path: row.querySelector('[data-edit-path]').value.trim(), body: row.querySelector('[data-edit-body]').value};
+    });
+    return e;
+  }
+  function loadSkills(){
+    state.skills = {loading: true, list: state.skills && state.skills.list || null};
+    render();
+    var mine = state;
+    Promise.resolve(opts.loadSkills()).then(function(list){ if(state === mine){ state.skills = {list: list || []}; render(); } },
+      function(){ if(state === mine){ state.skills = {error: 'Couldn\'t load your skills. Try again.', list: []}; render(); } });
+  }
+  function openSkill(id){
+    var detail = {kind: 'skill', id: id};
+    state.detail = detail;
+    state.editing = null;
+    render();
+    Promise.resolve(opts.loadSkill(id)).then(function(skill){ detail.data = skill; },
+      function(){ detail.error = 'Couldn\'t load this skill. Try again.'; }).then(function(){ if(state && state.detail === detail) render(); });
+  }
+  function editSkill(skill){
+    state.editing = {id: skill ? skill.id : null, name: skill ? skill.name : '', description: skill ? skill.description || '' : '',
+      body: skill ? skill.body || '' : '', files: skill ? (skill.files || []).map(function(file){ return {path: file.path, body: file.body || ''}; }) : [], error: '', busy: false};
+    render();
+  }
+  function saveSkill(){
+    var e = readEdit();
+    var files = e.files.filter(function(file){ return file.path || file.body.trim(); });
+    e.busy = true; e.error = ''; render();
+    Promise.resolve(opts.saveSkill(e.id, {name: e.name, description: e.description, body: e.body, files: files})).then(function(skill){
+      state.editing = null;
+      loadSkills();
+      openSkill(skill.id);
+    }, function(error){ e.busy = false; e.error = error && error.message || 'Couldn\'t save this skill.'; render(); });
+  }
+
   function body(){
+    if(state.editing) return editView();
+    if(state.detail && state.detail.kind === 'skill') return skillView();
     if(state.detail) return detailView();
+    if(state.shelf === 'skills') return skillsShelf();
     if(state.shelf === 'mia') return catalogShelf();
     if(state.shelf === 'everyone') return '<p class="bot-market-status">The open marketplace, with bots shared by everyone using Mia, is coming later.</p>';
     if(state.shelf === 'uploads') return uploadsShelf();
@@ -241,8 +350,9 @@
     }).join('');
     state.sheet.innerHTML = '<button type="button" class="styled-sheet-close" data-market-close aria-label="Close Bot marketplace">&times;</button>'
       + '<nav class="styled-settings-nav" aria-label="Shelves"><div class="bot-market-title">Bot marketplace</div>' + nav + '</nav>'
-      + '<div class="styled-settings-content">' + (state.detail ? body() : '<h1 class="styled-settings-h1">' + esc(current.label) + '</h1>'
-      + (current.soon ? '' : '<input type="search" class="styled-settings-input bot-market-search" data-market-search placeholder="Search bots" aria-label="Search bots" value="' + esc(state.query) + '">')
+      + '<div class="styled-settings-content">' + (state.detail || state.editing ? body() : '<div class="bot-market-head"><h1 class="styled-settings-h1">' + esc(current.label) + '</h1>'
+      + (current.id === 'skills' ? '<button type="button" class="bot-market-btn primary" data-skill-new>New skill</button>' : '') + '</div>'
+      + (current.soon ? '' : '<input type="search" class="styled-settings-input bot-market-search" data-market-search placeholder="' + (current.id === 'skills' ? 'Search skills' : 'Search bots') + '" aria-label="' + (current.id === 'skills' ? 'Search skills' : 'Search bots') + '" value="' + esc(state.query) + '">')
       + '<div class="bot-market-list">' + body() + '</div>') + '</div>';
     if(focused){ var search = state.sheet.querySelector('[data-market-search]'); if(search){ search.focus(); search.setSelectionRange(search.value.length, search.value.length); } }
   }
@@ -263,6 +373,8 @@
   function pick(shelf){
     state.shelf = shelf;
     state.detail = null;
+    state.editing = null;
+    if(shelf === 'skills') loadSkills();
     if(shelf.indexOf('company:') === 0) loadCompany(shelf.slice(8));
     if(shelf === 'uploads') (state.companies || []).forEach(function(company){ loadCompany(company.teamId); });
     render();
@@ -285,10 +397,34 @@
   }
 
   function onClick(event){
-    var target = event.target.closest('[data-market-close],[data-market-shelf],[data-market-install],[data-market-get],[data-market-open-local],[data-market-back],[data-market-detail]');
+    var target = event.target.closest('[data-market-close],[data-market-shelf],[data-market-install],[data-market-get],[data-market-open-local],[data-market-back],[data-market-detail],[data-skill-new],[data-skill-edit],[data-edit-cancel],[data-edit-save],[data-edit-add-file],[data-edit-remove-file],[data-edit-delete]');
     if(!target) return;
+    if(target.hasAttribute('data-skill-new')) return editSkill(null);
+    if(target.hasAttribute('data-skill-edit')) return editSkill(state.detail && state.detail.data);
+    if(target.hasAttribute('data-edit-cancel')){ var back = state.editing && state.editing.id; state.editing = null; return back ? openSkill(back) : render(); }
+    if(target.hasAttribute('data-edit-save')) return saveSkill();
+    if(target.hasAttribute('data-edit-add-file')){
+      readEdit().files.push({path: '', body: ''});
+      render();
+      var paths = state.sheet.querySelectorAll('[data-edit-path]');
+      if(paths.length) paths[paths.length - 1].focus();
+      return;
+    }
+    if(target.hasAttribute('data-edit-remove-file')){
+      var index = Number(target.closest('[data-edit-file]').getAttribute('data-edit-file'));
+      readEdit().files.splice(index, 1);
+      return render();
+    }
+    if(target.hasAttribute('data-edit-delete')){
+      var id = state.editing.id;
+      return Promise.resolve(opts.removeSkill(id)).then(function(){ state.editing = null; state.detail = null; loadSkills(); },
+        function(error){ state.editing.error = error && error.message || 'Couldn\'t remove this skill.'; render(); });
+    }
     if(target.hasAttribute('data-market-back')){ state.detail = null; return render(); }
-    if(target.hasAttribute('data-market-detail')) return openDetail(target.getAttribute('data-market-detail'));
+    if(target.hasAttribute('data-market-detail')){
+      var key = target.getAttribute('data-market-detail');
+      return key.indexOf('skill:') === 0 ? openSkill(key.slice(6)) : openDetail(key);
+    }
     if(target.hasAttribute('data-market-close')) return close();
     if(target.hasAttribute('data-market-shelf')) return pick(target.getAttribute('data-market-shelf'));
     if(target.hasAttribute('data-market-open-local')){ close(); return opts.openLocal(target.getAttribute('data-market-open-local')); }
@@ -305,9 +441,19 @@
 
   function onKey(event){
     if(!state) return;
-    if(event.key === 'Escape'){ event.preventDefault(); if(state.detail){ state.detail = null; render(); } else close(); return; }
+    if(event.key === 'Escape'){
+      event.preventDefault();
+      if(state.editing){ var back = state.editing.id; state.editing = null; if(back) openSkill(back); else render(); }
+      else if(state.detail){ state.detail = null; render(); }
+      else close();
+      return;
+    }
     var card = event.target.closest && event.target.closest('[data-market-detail]');
-    if(card && (event.key === 'Enter' || event.key === ' ') && event.target === card){ event.preventDefault(); openDetail(card.getAttribute('data-market-detail')); }
+    if(card && (event.key === 'Enter' || event.key === ' ') && event.target === card){
+      event.preventDefault();
+      var key = card.getAttribute('data-market-detail');
+      if(key.indexOf('skill:') === 0) openSkill(key.slice(6)); else openDetail(key);
+    }
   }
 
   function close(){
@@ -321,7 +467,7 @@
   function open(options, shelf){
     opts = options;
     if(state) close();
-    state = {shelf: 'mia', detail: null, query: '', catalog: {loading: true, entries: null, error: ''}, companies: [], market: {}, busy: null};
+    state = {shelf: 'mia', detail: null, editing: null, skills: null, query: '', catalog: {loading: true, entries: null, error: ''}, companies: [], market: {}, busy: null};
     state.scrim = document.createElement('div');
     state.scrim.className = 'styled-scrim open bot-market-scrim';
     state.scrim.addEventListener('click', close);

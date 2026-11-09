@@ -13103,82 +13103,6 @@
     if(picker.id === 'styledAgentEditSkills') editState.skills = chosen;
   });
 
-  var skillEditing = null;
-  function renderSkillsPane(){
-    var list = el('#settingsSkillsList');
-    if(!list) return;
-    el('#settingsSkillForm').hidden = !skillEditing;
-    el('#settingsSkillNew').hidden = !!skillEditing;
-    var skills = skillsLibrary ? skillsLibrary.skills : [];
-    list.innerHTML = skills.length ? skills.map(function(skill){
-      var bots = (skill.bots || []).map(function(bot){ return bot.name; }).join(', ');
-      return '<div class="styled-settings-row"><div><div class="styled-settings-row-label">' + esc(skill.name) + '</div>' +
-        '<div class="styled-settings-row-desc">' + esc(skill.description || 'No description') + (skill.files && skill.files.length ? ' · ' + esc((skill.files.length + 1) + ' files') : '') + (bots ? ' · Used by ' + esc(bots) : '') + '</div></div>' +
-        '<div class="skills-row-actions"><button class="styled-settings-pill-btn" data-skill-edit="' + esc(skill.id) + '">Edit</button><button class="styled-settings-pill-btn" data-skill-remove="' + esc(skill.id) + '">Remove</button></div></div>';
-    }).join('') : '<div class="styled-settings-row"><div class="styled-settings-row-desc">Skills teach a bot how to do a job. A skill you edit here changes for every bot that carries it.</div></div>';
-  }
-  function refreshSkillsPane(){ return loadSkillsLibrary().then(renderSkillsPane).catch(function(){ showBenchToast('Could not load your skills.'); }); }
-  // A skill is a folder: SKILL.md (the fields above) plus its other files.
-  function skillFileRowHtml(file){
-    return '<div class="skill-file"><div class="skill-file-head"><input class="styled-settings-field skill-file-path" aria-label="File name" placeholder="ICP.md" maxlength="200" value="' + esc(file.path || '') + '">' +
-      '<button type="button" class="styled-settings-pill-btn" data-skill-file-remove>Remove</button></div>' +
-      '<textarea class="styled-settings-field skill-file-body" aria-label="' + esc((file.path || 'File') + ' contents') + '" placeholder="What this file holds">' + esc(file.body || '') + '</textarea></div>';
-  }
-  function renderSkillFiles(files){
-    var box = el('#settingsSkillFiles');
-    if(box) box.innerHTML = (files || []).map(skillFileRowHtml).join('');
-  }
-  function skillFormFiles(){
-    return Array.prototype.map.call(document.querySelectorAll('#settingsSkillFiles .skill-file'), function(row){
-      return {path: row.querySelector('.skill-file-path').value.trim(), body: row.querySelector('.skill-file-body').value};
-    }).filter(function(file){ return file.path || file.body.trim(); });
-  }
-  function openSkillForm(skill){
-    skillEditing = skill;
-    el('#settingsSkillName').value = skill.name || '';
-    el('#settingsSkillDescription').value = skill.description || '';
-    el('#settingsSkillBody').value = skill.body || '';
-    el('#settingsSkillError').textContent = '';
-    renderSkillFiles(skill.files);
-    renderSkillsPane();
-  }
-  var settingsSkillAddFile = el('#settingsSkillAddFile');
-  if(settingsSkillAddFile) settingsSkillAddFile.addEventListener('click', function(){
-    var box = el('#settingsSkillFiles');
-    if(!box) return;
-    box.insertAdjacentHTML('beforeend', skillFileRowHtml({}));
-    var rows = box.querySelectorAll('.skill-file-path');
-    rows[rows.length - 1].focus();
-  });
-  var settingsSkillFiles = el('#settingsSkillFiles');
-  if(settingsSkillFiles) settingsSkillFiles.addEventListener('click', function(e){
-    var remove = e.target.closest('[data-skill-file-remove]');
-    if(remove) remove.closest('.skill-file').remove();
-  });
-  var settingsSkillNew = el('#settingsSkillNew');
-  if(settingsSkillNew) settingsSkillNew.addEventListener('click', function(){ openSkillForm({}); });
-  var settingsSkillCancel = el('#settingsSkillCancel');
-  if(settingsSkillCancel) settingsSkillCancel.addEventListener('click', function(){ skillEditing = null; renderSkillsPane(); });
-  var settingsSkillSave = el('#settingsSkillSave');
-  if(settingsSkillSave) settingsSkillSave.addEventListener('click', function(){
-    var body = {name: el('#settingsSkillName').value, description: el('#settingsSkillDescription').value, body: el('#settingsSkillBody').value, files: skillFormFiles()};
-    var path = skillEditing && skillEditing.id ? '/api/skills/' + encodeURIComponent(skillEditing.id) : '/api/skills';
-    api(path, {method: skillEditing && skillEditing.id ? 'PUT' : 'POST', body: body}).then(function(res){
-      if(res.status !== 200){ el('#settingsSkillError').textContent = (res.data && res.data.message) || 'Could not save this skill.'; return; }
-      skillEditing = null;
-      return refreshSkillsPane();
-    }).catch(function(){ el('#settingsSkillError').textContent = 'Could not save this skill.'; });
-  });
-  var settingsSkillsList = el('#settingsSkillsList');
-  if(settingsSkillsList) settingsSkillsList.addEventListener('click', function(e){
-    var edit = e.target.getAttribute('data-skill-edit'), remove = e.target.getAttribute('data-skill-remove');
-    if(edit) api('/api/skills/' + encodeURIComponent(edit)).then(function(res){ if(res.status === 200) openSkillForm(res.data.skill); });
-    if(remove) api('/api/skills/' + encodeURIComponent(remove), {method:'DELETE'}).then(function(res){
-      if(res.status === 409) showBenchToast('Take this skill off ' + (res.data.bots || []).map(function(bot){ return bot.name; }).join(', ') + ' first.');
-      return refreshSkillsPane();
-    });
-  });
-
   function agentSetupProposalText(draft){
     return [
       'Here’s what I inferred:',
@@ -14930,34 +14854,6 @@
     });
   }
 
-  // The skills form keeps living in one element, so its handlers survive the pane redrawing.
-  var skillsShell = el('#skillsShell');
-  function renderSkillsUtilityPane(pane){
-    pane.setAttribute('aria-label', 'Skills');
-    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open');
-    pane.classList.add('open', 'bot-store-open');
-    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Skills</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
-      '<button type="button" class="cip-pane-btn" id="skillsPaneClose" aria-label="Close Skills" title="Close Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div></div>';
-    var body = document.createElement('div');
-    body.className = 'bot-store-body';
-    if(skillsShell) body.appendChild(skillsShell);
-    pane.appendChild(body);
-    el('#skillsPaneClose', pane).addEventListener('click', closeSkillsPane);
-  }
-  function openSkillsPane(){
-    if(!STYLED_SKIN) return;
-    prepareChatUtilityPane('skills');
-    renderChatInfoPane();
-    refreshSkillsPane();
-  }
-  function closeSkillsPane(){
-    if(chatInfo.mode !== 'skills') return;
-    chatInfo.mode = 'automations';
-    chatInfo.open = false;
-    renderChatInfoPane();
-    syncSidebarToolButtons();
-  }
-
   // The Bot marketplace opens over the app like Settings (bot-marketplace.js).
   // Mia's shelf is the catalog (bots-catalog/ in the repo, GET /api/bots/catalog);
   // each company's shelf is the bots people brought into its channels. A bot
@@ -14982,6 +14878,28 @@
       hubCall: hubCall,
       localBots: function(){ return chatWs.botRecords || []; },
       getMarketBot: getMarketBotCopy,
+      // Your skills, each a folder (the same library bots carry skills from).
+      loadSkills: function(){ return loadSkillsLibrary().then(function(library){ return library.skills || []; }); },
+      loadSkill: function(id){
+        return api('/api/skills/' + encodeURIComponent(id)).then(function(res){
+          if(res.status !== 200 || !res.data || !res.data.skill) throw new Error('skill unavailable');
+          return res.data.skill;
+        });
+      },
+      saveSkill: function(id, skill){
+        return api(id ? '/api/skills/' + encodeURIComponent(id) : '/api/skills', {method: id ? 'PUT' : 'POST', body: skill}).then(function(res){
+          if(res.status !== 200 || !res.data || !res.data.skill) throw new Error(res.data && res.data.message || 'Couldn\'t save this skill.');
+          loadSkillsLibrary().catch(function(){});
+          return res.data.skill;
+        });
+      },
+      removeSkill: function(id){
+        return api('/api/skills/' + encodeURIComponent(id), {method:'DELETE'}).then(function(res){
+          if(res.status === 409) throw new Error('Take this skill off ' + (res.data.bots || []).map(function(bot){ return bot.name; }).join(', ') + ' first.');
+          if(res.status !== 200) throw new Error(res.data && res.data.message || 'Couldn\'t remove this skill.');
+          loadSkillsLibrary().catch(function(){});
+        });
+      },
       openLocal: function(id){
         var agent = (chatWs.allAgents || []).filter(function(item){ return item.id === id; })[0];
         if(agent) navigateToAgentChat(agent, true);
@@ -15177,8 +15095,8 @@
       restorePluginShell();
       chatInfo.mode = 'automations';
     }
-    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'skills';
-    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'skills') || (!specialMode && !isInfoPaneAvailable())){
+    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail';
+    if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit') || (!specialMode && !isInfoPaneAvailable())){
       restorePluginShell();
       pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open', 'bot-store-open');
       pane.innerHTML = '';
@@ -15203,10 +15121,6 @@
     }
     if(chatInfo.mode === 'agents'){
       renderManageAgentsPane(pane);
-      return;
-    }
-    if(chatInfo.mode === 'skills'){
-      renderSkillsUtilityPane(pane);
       return;
     }
     if(chatInfo.mode === 'plugins'){
@@ -18387,7 +18301,7 @@
     else if(action === 'new-agent'){ if(window.miaPrivateAgents) window.miaPrivateAgents.create(); }
     else if(action === 'new-channel') openNewChannelFlow();
     else if(action === 'bot-store') openBotStorePane();
-    else if(action === 'skills') openSkillsPane();
+    else if(action === 'skills') openBotStorePane('skills');
     else if(action === 'connected-apps') openPluginPane();
     else if(action === 'automations') openAutomationsPage();
     else if(action === 'artifacts') openArtifactsPage();

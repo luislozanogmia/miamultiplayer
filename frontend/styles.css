@@ -4140,8 +4140,6 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
   body.styled-skin .skill-picker-name{display:block;font-weight:600;}
   body.styled-skin .skill-picker-desc{display:block;color:var(--sand-text-secondary);}
   body.styled-skin .skill-picker-empty{font-size:13px;line-height:1.4;color:var(--sand-text-secondary);text-transform:none;letter-spacing:0;}
-  body.styled-skin .skills-row-actions{display:flex;gap:6px;flex:none;}
-  body.styled-skin .skill-form-field{display:block;width:calc(100% - 32px);max-width:none;margin:16px 16px 0;text-align:left;}
   body.styled-skin #settingsSkillBody{min-height:240px;margin-top:16px;}
   body.styled-skin #settingsSkillError:empty{display:none;}
   body.styled-skin #settingsSkillError{margin:0 16px;}
@@ -4246,11 +4244,27 @@ body.chat-pip-resizing { cursor: row-resize; user-select: none; }
 .bot-market-file .bot-market-text{margin:6px 0 6px 6px;}
 .bot-market-empty{font-size:13px;color:var(--sand-text-secondary);margin:0;}
 .bot-market-list-plain{margin:0;padding-left:18px;font-size:13px;line-height:1.7;}
-/* A skill's other files in the Skills editor: name, then contents. */
-.skill-files{display:flex;flex-direction:column;gap:10px;margin-top:10px;}
-.skill-file{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--sand-border-default);border-radius:10px;}
-.skill-file-head{display:flex;gap:8px;align-items:center;}
-.skill-file-path{flex:1;min-width:0;width:auto;max-width:none;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;}
-.skill-file-body{display:block;width:100%;max-width:none;box-sizing:border-box;min-height:110px;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;resize:vertical;}
-.skill-files-help{margin:8px 0 6px;}
-.skill-file-add{align-self:flex-start;}
+/* Skills in the marketplace: folder cards, the folder's files, and the editor. */
+.bot-market-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-right:44px;}
+.bot-market-head .styled-settings-h1{margin-bottom:18px;}
+.bot-market-folder{width:34px;height:34px;fill:#F2C75C;stroke:#E4B43C;stroke-width:1.1;}
+.bot-market-avatar.large .bot-market-folder{width:56px;height:56px;}
+.bot-market-files.open{margin:0;padding:0;border:0;}
+.bot-market-files.open .bot-market-file{border:1px solid var(--sand-border-default);border-radius:10px;padding:4px 6px;}
+.bot-market-edit{gap:16px;}
+.bot-market-field{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--sand-text-secondary);}
+.bot-market-input{width:100%;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px;font-weight:400;color:var(--sand-text-primary);background:var(--sand-bg-base);outline:none;}
+.bot-market-input:focus{border-color:var(--sand-border-focus);}
+.bot-market-input.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;resize:vertical;}
+textarea.bot-market-input{min-height:96px;}
+.bot-market-edit-files{display:flex;flex-direction:column;gap:10px;}
+.bot-market-edit-file{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--sand-border-default);border-radius:10px;}
+.bot-market-edit-file-head{display:flex;align-items:center;gap:8px;font-weight:400;}
+.bot-market-edit-file-head .bot-market-input{flex:1;width:auto;}
+.bot-market-link{border:0;background:none;font:inherit;font-size:12px;font-weight:400;color:var(--sand-text-secondary);cursor:pointer;padding:4px 6px;border-radius:6px;}
+.bot-market-link:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
+.bot-market-link.add{align-self:flex-start;font-size:13px;}
+.bot-market-link.danger{color:var(--sand-text-danger);}
+.bot-market-edit-actions{display:flex;align-items:center;gap:8px;}
+.bot-market-spacer{flex:1;}
+.bot-market-error{font-size:13px;color:var(--sand-text-danger);}
