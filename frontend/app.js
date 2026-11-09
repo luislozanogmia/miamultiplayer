@@ -18330,7 +18330,8 @@
     // Views (Automations, Artifacts, Browser) are the same in Solo and a
     // team; only creating chats and bots differs.
     // Making a bot works the same in a team: it belongs to the team you are in.
-    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills' || action === 'new-bot';
+    // The Bot marketplace opens anywhere, on the shelf of the company you are in.
+    var sharedView = action === 'automations' || action === 'artifacts' || action === 'apps' || action === 'web-browser' || action === 'skills' || action === 'new-bot' || action === 'bot-store';
     if(hubWorkspace() && !sharedView){if(action==='new-channel')openNewChannelFlow();else if(action==='new-chat')openHubDirectMessagePicker();else showBenchToast('Switch to Solo to use local tools.');return;}
     // Bot creation renders into the same side chat pane browser-collab-mode
     // already uses for agent/bot conversations, so it doesn't need the full

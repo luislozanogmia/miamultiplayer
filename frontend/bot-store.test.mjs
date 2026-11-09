@@ -59,3 +59,8 @@ test('backend serves the catalog and its manifests, and installing stays on the 
   assert.match(server, /BOT_CATALOG_ID_RE = \/\^\[a-z0-9-\]\+\$\//);
   assert.doesNotMatch(server, /app\.post\('\/api\/bots\/catalog/);
 });
+
+test('the Bot marketplace opens inside a company too, not only in Solo', async () => {
+  const source = await readFile(appUrl, 'utf8');
+  assert.match(source, /var sharedView = [^;]*action === 'bot-store'/);
+});
