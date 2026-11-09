@@ -1685,7 +1685,10 @@
 
   // Hoisted so both the boot-time /api/settings load and the drawer's change
   // handler (defined much later in this module) share one renderer.
+  // Normal user (saved as 'concise', the default) or Power user ('verbose'):
+  // a power user also sees how things work, like progress and skill files.
   var chatOutputMode = 'concise';
+  function powerUser(){ return chatOutputMode === 'verbose'; }
   function renderOutputSetting(mode){
     chatOutputMode = mode;
     renderChatActivityPanel();
@@ -1694,8 +1697,8 @@
     var verbose = mode === 'verbose';
     if(select) select.value = verbose ? 'verbose' : 'concise';
     if(note) note.textContent = verbose
-      ? 'Detailed activity is selected — replies include additional execution progress.'
-      : 'Concise is selected — replies show only the final answer.';
+      ? 'Power user — replies include execution progress, and settings show how things work, like skill files.'
+      : 'Normal user — replies show only the final answer, and settings stay simple.';
   }
 
   function renderInstructionSettings(value){
@@ -3980,9 +3983,10 @@
       '</div>' +
       '<div class="styled-agent-edit-body">' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">INSTRUCTIONS</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="About instructions" title="About instructions">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot instructions"></textarea></section>' +
+        // A normal user ticks skills; a power user sees them as folders.
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SKILLS</span></div>' +
-          '<div class="styled-agent-edit-skill-folders" id="styledAgentEditSkillFolders"></div>' +
-          '<details class="styled-agent-edit-skill-choose"><summary>Choose skills</summary>' + skillPickerHtml('styledAgentEditSkills', editState.skills) + '</details></section>' +
+          (powerUser() ? '<div class="styled-agent-edit-skill-folders" id="styledAgentEditSkillFolders"></div><div class="styled-agent-edit-skill-add" id="styledAgentEditSkillAdd"></div>'
+            : skillPickerHtml('styledAgentEditSkills', editState.skills)) + '</section>' +
         styledAgentAutomationMarkup(a) +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">WORKPLACES</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditWorkplacesInfo" aria-label="Workplaces information" title="Workplaces information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditWorkplacesInfo" role="tooltip">The workplace this bot belongs to. In multiplayer you can share it with the people in your workplace.</span></span></div><div class="styled-agent-edit-select styled-agent-edit-workspace" id="styledAgentEditWorkspace">' + esc(workspaceLabel()) + '</div></section>' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">AVATAR COLOR</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditAvatarInfo" aria-label="Avatar color information" title="Avatar color information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditAvatarInfo" role="tooltip">Automatic follows the bot identity.</span></span></div><div class="styled-agent-edit-color-control"><div class="styled-agent-color-options" id="styledAgentEditColorOptions" role="group" aria-label="Bot avatar color">' + colorMarkup + '</div></div></section>' +
@@ -4085,9 +4089,30 @@
       renderEditSkillFolders();
     }
   }
-  // The skills the bot carries, as folders whose files edit in place. Follows
-  // Choose skills as you tick, before Save.
+  // For a power user, the skills the bot carries as folders whose files edit
+  // in place. Remove takes one off and + Add skill puts one on; the bot keeps
+  // it after Save changes.
   var editSkillFolders = {ids: '', skills: []};
+  function setEditSkills(ids){
+    editState.skills = ids;
+    renderEditSkillFolders();
+  }
+  function renderEditSkillAdd(){
+    var box = el('#styledAgentEditSkillAdd');
+    if(!box) return;
+    var carried = editState.skills || [];
+    var others = (skillsLibrary && skillsLibrary.skills || []).filter(function(skill){ return carried.indexOf(skill.id) < 0; });
+    var full = carried.length >= (skillsLibrary && skillsLibrary.limits ? skillsLibrary.limits.perBot : 10);
+    box.innerHTML = '<details class="styled-agent-edit-skill-choose"' + (box.querySelector('details[open]') ? ' open' : '') + '><summary>+ Add skill</summary><div class="styled-agent-edit-skill-options">'
+      + (full ? '<p class="bot-market-empty">A bot can carry up to 10 skills.</p>' : others.map(function(skill){
+        return '<button type="button" class="styled-agent-edit-skill-option" data-add-skill="' + esc(skill.id) + '"><strong>' + esc(skill.name) + '</strong>' + (skill.description ? '<span>' + esc(skill.description) + '</span>' : '') + '</button>';
+      }).join(''))
+      + '<button type="button" class="bot-market-link add" data-new-skill>New skill…</button></div></details>';
+    els('[data-add-skill]', box).forEach(function(button){
+      button.addEventListener('click', function(){ setEditSkills(carried.concat([button.getAttribute('data-add-skill')])); });
+    });
+    el('[data-new-skill]', box).addEventListener('click', function(){ openBotStorePane('skills'); });
+  }
   function renderEditSkillFolders(){
     var box = el('#styledAgentEditSkillFolders');
     if(!box || !window.MiaBotMarketplace) return;
@@ -4097,7 +4122,17 @@
       if(!box.isConnected || editSkillFolders.ids !== key) return;
       box.innerHTML = editSkillFolders.skills.length
         ? window.MiaBotMarketplace.skillFoldersHtml(editSkillFolders.skills, {esc: esc}, true)
-        : '<p class="bot-market-empty">No skills yet. Choose some below.</p>';
+        : '<p class="bot-market-empty">No skills yet.</p>';
+      els('.bot-market-skill', box).forEach(function(folder, index){
+        var skill = editSkillFolders.skills[index], summary = folder.querySelector('summary');
+        if(!skill || !summary) return;
+        summary.insertAdjacentHTML('beforeend', '<button type="button" class="bot-market-link" data-remove-skill title="Take this skill off the bot. It stays in your skills.">Remove</button>');
+        summary.lastChild.addEventListener('click', function(event){
+          event.preventDefault(); event.stopPropagation();
+          setEditSkills((editState.skills || []).filter(function(id){ return id !== skill.id; }));
+        });
+      });
+      renderEditSkillAdd();
       els('[data-card-edit]', box).forEach(function(target){
         target.addEventListener('click', function(){ beginSkillFileEdit(target, editSkillFolders.skills, draw); });
         target.addEventListener('keydown', function(event){ if(event.key === 'Enter'){ event.preventDefault(); beginSkillFileEdit(target, editSkillFolders.skills, draw); } });
@@ -14907,6 +14942,11 @@
         });
       },
       currentTeamId: function(){ return hubWorkspace() ? activeWorkspaceKey.slice(4) : ''; },
+      // The Hub names people by member id; show their name when it's someone here.
+      personName: function(subject){
+        var member = (hubChat.members || []).filter(function(item){ return item.clerk_user_id === subject; })[0];
+        return member ? displayNameForEmail(member.email) : '';
+      },
       hubCall: hubCall,
       localBots: function(){ return chatWs.botRecords || []; },
       getMarketBot: getMarketBotCopy,
@@ -15006,8 +15046,8 @@
     var model = selectedConnectedBotModel();
     if(!model) return Promise.reject(new Error('connect and choose a model first.'));
     return hubCall('GET', '/v1/teams/' + teamId + '/market/bots/' + encodeURIComponent(bot.id)).then(function(result){
-      var shared = result && (result.bot || result) || {};
-      var latest = shared.latest || shared;
+      // The Hub answers {bot, definition, versions}; definition is the latest version.
+      var latest = result && (result.definition || result.latest) || {};
       var instructions = String(latest.instructions || '').trim();
       if(!instructions) throw new Error('this bot has no instructions yet.');
       return createLibrarySkills(latest.skills).then(function(skillIds){

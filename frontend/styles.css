@@ -4288,3 +4288,7 @@ textarea.bot-market-input{min-height:96px;}
 .styled-agent-edit-skill-choose>summary:hover{color:var(--sand-text-primary);}
 /* Closed info tooltips take no room, so the bot editor never scrolls sideways. */
 body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:not(.open) .styled-agent-edit-info-popover{display:none;}
+.styled-agent-edit-skill-options{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
+.styled-agent-edit-skill-option{display:flex;flex-direction:column;gap:2px;text-align:left;border:1px solid var(--sand-border-default);background:var(--sand-bg-base);border-radius:10px;padding:8px 10px;font:inherit;font-size:13px;cursor:pointer;color:var(--sand-text-primary);}
+.styled-agent-edit-skill-option:hover{background:var(--sand-fill-ghost-hover);}
+.styled-agent-edit-skill-option span{font-size:12px;color:var(--sand-text-secondary);}

@@ -22,11 +22,16 @@
       about: text(raw.description || latest.description || ''),
       tags: Array.isArray(raw.tags) ? raw.tags : Array.isArray(latest.tags) ? latest.tags : [],
       version: Number(raw.latest_version || latest.version || 0),
-      by: text(latest.published_by_name || latest.published_by || raw.shared_by_name || raw.shared_by || ''),
+      by: personName(raw.published_by || latest.published_by || raw.shared_by),
       at: Number(latest.published_at || raw.shared_at || 0),
       canUse: raw.can_use !== false,
       owner: raw.is_owner === true
     };
+  }
+
+  function personName(subject){
+    var name = subject && opts.personName ? opts.personName(subject) : '';
+    return name || (subject && !/^user_/.test(subject) ? text(subject) : '');
   }
 
   function localCopy(teamId, botId){
@@ -188,7 +193,7 @@
         requires: requires};
     } else {
       var shelf = state.market[d.teamId] || {}, raw = (shelf.bots || []).filter(function(item){ return text(item.id) === d.id; })[0] || {};
-      var summary = marketBot(raw), full = d.data || {}, latest = full.latest || full;
+      var summary = marketBot(raw), full = d.data || {}, latest = full.definition || full.latest || {};
       view = {name: summary.name, color: summary.color, about: text(latest.description || summary.about),
         meta: [summary.by ? 'by ' + summary.by : '', summary.version ? 'v' + summary.version : '', when(summary.at)].filter(Boolean).join(' · '),
         action: companyCardAction(d.teamId, summary),
@@ -230,7 +235,7 @@
       var teamId = parts[1], id = parts.slice(2).join(':'), detail = {kind: 'company', teamId: teamId, id: id, loading: true};
       state.detail = detail;
       opts.hubCall('GET', '/v1/teams/' + teamId + '/market/bots/' + encodeURIComponent(id)).then(function(result){
-        detail.data = result && (result.bot || result) || {};
+        detail.data = result || {};
       }, function(){ detail.error = 'Couldn\'t load this bot. Try again.'; }).then(function(){ detail.loading = false; if(state && state.detail === detail) render(); });
     }
     render();

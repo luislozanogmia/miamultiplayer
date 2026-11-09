@@ -73,7 +73,11 @@ test('Bot settings is one page: instructions, then skills as folders whose files
   assert.doesNotMatch(source, /renderBotCardPane|'bot-card'/, 'no second settings page');
   assert.match(source, /styled-agent-edit-section-label">INSTRUCTIONS<\/span>/);
   assert.doesNotMatch(source, /section-label">BRIEF</);
-  assert.match(source, /id="styledAgentEditSkillFolders"[\s\S]*?<summary>Choose skills<\/summary>' \+ skillPickerHtml\('styledAgentEditSkills', editState\.skills\)/);
+  // A normal user (the default) ticks skills; a power user sees folders, with Remove and + Add skill.
+  assert.match(source, /\(powerUser\(\) \? '<div class="styled-agent-edit-skill-folders" id="styledAgentEditSkillFolders"><\/div><div class="styled-agent-edit-skill-add" id="styledAgentEditSkillAdd"><\/div>'\s*: skillPickerHtml\('styledAgentEditSkills', editState\.skills\)\)/);
+  assert.match(source, /function powerUser\(\)\{ return chatOutputMode === 'verbose'; \}/);
+  assert.match(source, /data-remove-skill/);
+  assert.match(source, /<summary>\+ Add skill<\/summary>/);
   assert.match(source, /window\.MiaBotMarketplace\.skillFoldersHtml\(editSkillFolders\.skills, \{esc: esc\}, true\)/);
   assert.match(source, /if\(!main\) update\.files = \(skill\.files \|\| \[\]\)\.map\(function\(file\)\{ return \{path: file\.path, body: file\.path === path \? value : file\.body\}; \}\);/);
   assert.match(market, /data-card-edit="file"/);
@@ -86,4 +90,10 @@ test('Ask Mia in the marketplace opens her chat with what you were looking at na
   assert.match(market, /if\(event\.target\.closest\('\[data-market-ask\]'\)\)\{ var context = askMiaContext\(\); close\(\); return opts\.askMia\(context\); \}/);
   assert.match(market, /return 'About ' \+ \(\(manifest\.bot && manifest\.bot\.name\) \|\| 'this bot'\) \+ ' in the Bot marketplace: ';/);
   assert.match(source, /function askMiaAbout\(start\)\{[\s\S]*?selectAgentRoom\(mia\)[\s\S]*?input\.value = start;/);
+});
+
+test('the view setting is Normal user (default) or Power user', async () => {
+  const html = await readFile(htmlUrl, 'utf8');
+  assert.match(html, /<option value="concise">Normal user<\/option>\s*<option value="verbose">Power user<\/option>/);
+  assert.doesNotMatch(html, />Concise<|>Verbose</);
 });
