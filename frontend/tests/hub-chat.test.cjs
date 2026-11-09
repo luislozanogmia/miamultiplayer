@@ -659,8 +659,23 @@ test('a group starts once two teammates are picked and adds them all at once',as
   assert.equal(opened.join(),'g');
   assert.match(source,/label:'New group…',run:function\(\)\{openHubGroupPicker\(\);return 'close';\}/);
 });
-test('renaming a channel uses a one-line box that submits on Enter',()=>{
-  assert.match(source,/inputLabel:'Channel name',submitLabel:'Rename',singleLine:true\}/);
+test('Edit channel sets its name, description and picture, saving only what changed',()=>{
+  assert.match(source,/if\(id==='rename'\)return openEditHubChannel\(channel\);/);
+  const body=source.slice(source.indexOf('  function openEditHubChannel('),source.indexOf('  function runHubChannelAction('));
+  assert.match(body,/if\(name!==channel\.name\) patch\.name=name;/);
+  assert.match(body,/if\(description!==\(channel\.description\|\|''\)\) patch\.description=description;/);
+  assert.match(body,/hubCall\('PUT',base\+'\/picture',picture\)/);
+  assert.match(body,/hubCall\('DELETE',base\+'\/picture'\)/);
+  assert.match(body,/if\(!steps\.length\) return close\(\);/);
+  // Any photo works: it is cropped square and shrunk under the Hub's 64 KB.
+  assert.match(source,/var HUB_CHANNEL_PICTURE_BYTES=64\*1024;/);
+});
+test('a channel picture must be an image',async()=>{
+  const make=appFunction('hubChannelPictureFrom',{HUB_CHANNEL_PICTURE_BYTES:65536});
+  await assert.rejects(make({type:'application/pdf'}),/PNG, JPEG or WebP/);
+  await assert.rejects(make(null),/PNG, JPEG or WebP/);
+});
+test('the one-line prompt box submits on Enter',()=>{
   const body=source.slice(source.indexOf('  function appPrompt('),source.indexOf('\n  }\n',source.indexOf('  function appPrompt(')));
   assert.match(body,/document\.createElement\(options\.singleLine \? 'input' : 'textarea'\)/);
   assert.match(body,/options\.singleLine && event\.key === 'Enter'/);
@@ -1065,4 +1080,8 @@ test('a company sidebar has My Bots and no Company bots: shared bots are your bo
   assert.doesNotMatch(source,/function companyBotRow\(|function soloBotSharedAway\(|function copyCompanyBotToCompany\(/);
   assert.match(source,/var hiddenBots=myBots\.filter\(function\(bot\)\{ return hubRowHidden\('bot:mine:'\+bot\.id\) && !botPinned\('mine:'\+bot\.id\); \}\);/,'only bots you hid are hidden');
   assert.match(source,/button\.addEventListener\('click',function\(\)\{ openTeamBotChat\(bot\); \}\);/);
+});
+test('the chat header dots open the channel menu right under them',()=>{
+  assert.match(source,/openHubChannelMenu\(channel,rect\.right,rect\.bottom\+4,'here'\);/);
+  assert.match(source,/at==='here' \? Math\.max\(8,Math\.min\(x-menu\.offsetWidth,window\.innerWidth-menu\.offsetWidth-8\)\) : sidebarMenuLeft\(x,menu\.offsetWidth\)/);
 });

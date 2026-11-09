@@ -6085,7 +6085,9 @@
   function hubActionError(error,fallback){
     var code=error && error.code;
     return {channel_name_taken:'Another channel already has that name.',cannot_leave_dm:'You can\'t leave a direct message.',
-      channel_archived:'This channel is archived.',invalid_channel:'Use a name of up to 80 characters.'}[code]
+      channel_archived:'This channel is archived.',invalid_channel:'Use a name of up to 80 characters.',
+      invalid_description:'Use a description of up to 500 characters.',invalid_picture:'Use a PNG, JPEG or WebP picture.',
+      picture_too_large:'That picture is too big. Try a smaller one.',forbidden:'Only the channel\'s creator or an admin can change that.'}[code]
       || (error && error.status===404 ? 'You don\'t have access to do that.' : fallback);
   }
   // Team channel actions follow the Hub's permissions: anyone can pin or
@@ -6110,12 +6112,12 @@
     if(!regular && !channel.pinned)actions.push({id:'close',label:'Close conversation',icon:'close',group:2});
     return actions;
   }
-  function openHubChannelMenu(channel,x,y){
+  function openHubChannelMenu(channel,x,y,at){
     var groups=[[],[],[]];
     hubChannelActions(channel).forEach(function(item){
       groups[item.group].push({label:item.label,icon:item.icon,danger:item.danger,run:function(){ runHubChannelAction(channel,item.id); }});
     });
-    openRowMenu(groups,x,y);
+    openRowMenu(groups,x,y,at);
   }
   var ROW_MENU_ICONS={
     pin:'<path d="M12 17v5M9 3h6l-1 7 3.5 3.5h-11L10 10z"/>',
@@ -6140,7 +6142,10 @@
   };
   // The one row menu for chats, bots and channels, Solo and companies:
   // groups of {label, icon, run, danger}, with a line between groups.
-  function openRowMenu(groups,x,y){
+  // at: 'sidebar' (default) keeps a row's menu inside the sidebar, where a
+  // browser tab beside it can't cover it; 'here' opens it right where it was
+  // asked for, its right edge at x, as the chat header's dots do.
+  function openRowMenu(groups,x,y,at){
     closeHubChannelMenu();
     if(chatSidebarCtxMenuClose)chatSidebarCtxMenuClose();
     var items=[], html=[];
@@ -6156,7 +6161,7 @@
     menu.className='chat-ctx-menu chat-sidebar-ctx-menu hub-channel-menu'; menu.setAttribute('role','menu');
     menu.innerHTML=html.join('');
     document.body.appendChild(menu); hubChannelMenu=menu;
-    menu.style.left=sidebarMenuLeft(x,menu.offsetWidth)+'px';
+    menu.style.left=(at==='here' ? Math.max(8,Math.min(x-menu.offsetWidth,window.innerWidth-menu.offsetWidth-8)) : sidebarMenuLeft(x,menu.offsetWidth))+'px';
     menu.style.top=Math.max(8,Math.min(y,window.innerHeight-menu.offsetHeight-8))+'px';
     menu.addEventListener('click',function(event){
       var button=event.target.closest('[data-row-menu]');
@@ -6167,6 +6172,97 @@
     setTimeout(function(){
       document.addEventListener('click',function dismiss(event){ if(hubChannelMenu && !hubChannelMenu.contains(event.target)){closeHubChannelMenu();} if(!hubChannelMenu)document.removeEventListener('click',dismiss); });
     },0);
+  }
+  // A picture the Hub keeps for a channel: a small square (256 px or less),
+  // made under its 64 KB limit here so any photo works. -> {mime, data}
+  var HUB_CHANNEL_PICTURE_BYTES=64*1024;
+  function hubChannelPictureFrom(file){
+    return new Promise(function(resolve,reject){
+      if(!file || !/^image\//.test(file.type||'')) return reject(new Error('Choose a PNG, JPEG or WebP picture.'));
+      var url=URL.createObjectURL(file), img=new Image();
+      img.onerror=function(){ URL.revokeObjectURL(url); reject(new Error('That picture couldn\'t be read. Try another one.')); };
+      img.onload=function(){
+        URL.revokeObjectURL(url);
+        var side=Math.min(img.naturalWidth,img.naturalHeight), sizes=[256,192,128,96];
+        (function attempt(k){
+          var size=Math.min(sizes[k],side), canvas=document.createElement('canvas');
+          canvas.width=canvas.height=size;
+          canvas.getContext('2d').drawImage(img,(img.naturalWidth-side)/2,(img.naturalHeight-side)/2,side,side,0,0,size,size);
+          var dataUrl=canvas.toDataURL('image/webp',0.86);
+          if(dataUrl.indexOf('data:image/webp')!==0) dataUrl=canvas.toDataURL('image/jpeg',0.86);
+          var data=dataUrl.slice(dataUrl.indexOf(',')+1), mime=dataUrl.slice(5,dataUrl.indexOf(';'));
+          if(Math.floor(data.length*3/4)<=HUB_CHANNEL_PICTURE_BYTES) return resolve({mime:mime,data:data});
+          if(k+1<sizes.length) return attempt(k+1);
+          reject(new Error('That picture is too detailed to fit. Try a simpler one.'));
+        })(0);
+      };
+      img.src=url;
+    });
+  }
+  // Edit channel: its name, description and picture. Each is saved only when it changed.
+  function openEditHubChannel(channel){
+    var base=hubPath()+'/channels/'+channel.id;
+    var overlay=document.createElement('div');
+    overlay.className='app-prompt-overlay open';
+    overlay.setAttribute('role','presentation');
+    overlay.innerHTML='<div class="app-prompt-card hub-edit-channel" role="dialog" aria-modal="true" aria-labelledby="hubEditChannelTitle">'
+      +'<h2 class="app-prompt-title" id="hubEditChannelTitle">Edit #'+esc(channel.name)+'</h2>'
+      +'<p class="app-prompt-msg">Everyone in the company sees these.</p>'
+      +'<div class="hub-edit-channel-picture"><span class="hub-edit-channel-pic" aria-hidden="true">#</span>'
+      +'<div><button type="button" class="btn" data-edit-pic>Upload picture</button> <button type="button" class="btn" data-remove-pic hidden>Remove</button>'
+      +'<input type="file" accept="image/png,image/jpeg,image/webp" hidden data-pic-file /></div></div>'
+      +'<label class="hub-edit-channel-label">Channel name<input type="text" class="app-prompt-input" maxlength="80" data-edit-name /></label>'
+      +'<label class="hub-edit-channel-label">Description<textarea class="app-prompt-input" maxlength="500" rows="3" placeholder="What this channel is for" data-edit-desc></textarea></label>'
+      +'<p class="app-prompt-note" role="alert" hidden data-edit-error></p>'
+      +'<div class="app-prompt-actions"><button type="button" class="btn" data-edit-cancel>Cancel</button><button type="button" class="btn app-prompt-submit" data-edit-save>Save</button></div></div>';
+    document.body.appendChild(overlay);
+    var card=overlay.firstChild, q=function(sel){ return card.querySelector(sel); };
+    var nameField=q('[data-edit-name]'), descField=q('[data-edit-desc]'), error=q('[data-edit-error]'), pic=q('.hub-edit-channel-pic');
+    var removeBtn=q('[data-remove-pic]'), fileInput=q('[data-pic-file]'), save=q('[data-edit-save]');
+    nameField.value=channel.name||''; descField.value=channel.description||'';
+    var hadPicture=!!channel.picture_at, picture=null, removePicture=false;
+    function showPicture(src){
+      pic.innerHTML=src ? '<img alt="" src="'+esc(src)+'" />' : '#';
+      removeBtn.hidden=!src;
+    }
+    function fail(message){ error.textContent=message; error.hidden=false; }
+    if(hadPicture) hubCall('GET',base+'/picture').then(function(res){
+      if(res && res.data && !picture && !removePicture) showPicture('data:'+res.mime+';base64,'+res.data);
+    }).catch(function(){});
+    function close(){ document.removeEventListener('keydown',onKey); overlay.remove(); }
+    function onKey(event){ if(event.key==='Escape'){ event.preventDefault(); close(); } }
+    document.addEventListener('keydown',onKey);
+    overlay.addEventListener('mousedown',function(event){ if(event.target===overlay) close(); });
+    q('[data-edit-cancel]').addEventListener('click',close);
+    q('[data-edit-pic]').addEventListener('click',function(){ fileInput.click(); });
+    fileInput.addEventListener('change',function(){
+      var file=fileInput.files && fileInput.files[0]; fileInput.value='';
+      if(!file) return;
+      error.hidden=true;
+      hubChannelPictureFrom(file).then(function(next){ picture=next; removePicture=false; showPicture('data:'+next.mime+';base64,'+next.data); }, function(e){ fail(e.message); });
+    });
+    removeBtn.addEventListener('click',function(){ picture=null; removePicture=hadPicture; showPicture(''); });
+    save.addEventListener('click',function(){
+      var name=nameField.value.replace(/\s+/g,' ').trim().replace(/^#/,''), description=descField.value.trim();
+      if(!name) return fail('Give the channel a name.');
+      var patch={};
+      if(name!==channel.name) patch.name=name;
+      if(description!==(channel.description||'')) patch.description=description;
+      var steps=[];
+      if(Object.keys(patch).length) steps.push(function(){ return hubCall('PATCH',base,patch); });
+      if(picture) steps.push(function(){ return hubCall('PUT',base+'/picture',picture); });
+      else if(removePicture) steps.push(function(){ return hubCall('DELETE',base+'/picture'); });
+      if(!steps.length) return close();
+      save.disabled=true; save.textContent='Saving…'; error.hidden=true;
+      steps.reduce(function(done,step){ return done.then(step); },Promise.resolve()).then(function(){
+        close();
+        return refreshHubChannels().then(function(){ if(chatWs.activeRoomId===channel.id) openHubChannel(hubChannel(channel.id)); });
+      }).catch(function(e){
+        save.disabled=false; save.textContent='Save';
+        fail(hubActionError(e,'Couldn\'t save the channel. Try again.'));
+      });
+    });
+    nameField.focus(); nameField.select();
   }
   function runHubChannelAction(channel,id){
     var base=hubPath()+'/channels/'+channel.id, name=hubPrivateConversation(channel) ? hubChannelTitle(channel) : '#'+channel.name;
@@ -6181,13 +6277,7 @@
         channel.pinned=!pinned; renderChatSidebar(); showBenchToast(hubActionError(error,'Couldn\'t update the pin. Try again.'));
       });
     }
-    if(id==='rename')return appPrompt(channel.name,{title:'Rename '+name,message:'Everyone in the company sees the new name.',inputLabel:'Channel name',submitLabel:'Rename',singleLine:true}).then(function(result){
-      var value=result.ok ? result.text.replace(/\s+/g,' ').trim() : '';
-      if(!value || value===channel.name)return;
-      return hubCall('PATCH',base,{name:value}).then(refreshHubChannels).then(function(){
-        if(chatWs.activeRoomId===channel.id)openHubChannel(hubChannel(channel.id));
-      }).catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t rename the channel. Try again.'));});
-    });
+    if(id==='rename')return openEditHubChannel(channel);
     if(id==='close'){
       setHubConversationClosed(channel.id,Number(channel.latest_sequence||0));
       if(chatWs.activeRoomId===channel.id){
@@ -15529,7 +15619,7 @@
         var channel=hubChannel(chatWs.activeRoomId), rect=event.currentTarget.getBoundingClientRect();
         if(!channel)return;
         if(hubChannelMenu){closeHubChannelMenu();return;}
-        openHubChannelMenu(channel,rect.right-200,rect.bottom+4);
+        openHubChannelMenu(channel,rect.right,rect.bottom+4,'here');
       });
       if(el('#chatMobileBack'))el('#chatMobileBack').addEventListener('click',closeMobileChatRoom);
       return;
