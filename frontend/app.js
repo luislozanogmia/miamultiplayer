@@ -13113,26 +13113,55 @@
     list.innerHTML = skills.length ? skills.map(function(skill){
       var bots = (skill.bots || []).map(function(bot){ return bot.name; }).join(', ');
       return '<div class="styled-settings-row"><div><div class="styled-settings-row-label">' + esc(skill.name) + '</div>' +
-        '<div class="styled-settings-row-desc">' + esc(skill.description || 'No description') + (bots ? ' · Used by ' + esc(bots) : '') + '</div></div>' +
+        '<div class="styled-settings-row-desc">' + esc(skill.description || 'No description') + (skill.files && skill.files.length ? ' · ' + esc((skill.files.length + 1) + ' files') : '') + (bots ? ' · Used by ' + esc(bots) : '') + '</div></div>' +
         '<div class="skills-row-actions"><button class="styled-settings-pill-btn" data-skill-edit="' + esc(skill.id) + '">Edit</button><button class="styled-settings-pill-btn" data-skill-remove="' + esc(skill.id) + '">Remove</button></div></div>';
     }).join('') : '<div class="styled-settings-row"><div class="styled-settings-row-desc">Skills teach a bot how to do a job. A skill you edit here changes for every bot that carries it.</div></div>';
   }
   function refreshSkillsPane(){ return loadSkillsLibrary().then(renderSkillsPane).catch(function(){ showBenchToast('Could not load your skills.'); }); }
+  // A skill is a folder: SKILL.md (the fields above) plus its other files.
+  function skillFileRowHtml(file){
+    return '<div class="skill-file"><div class="skill-file-head"><input class="styled-settings-field skill-file-path" aria-label="File name" placeholder="ICP.md" maxlength="200" value="' + esc(file.path || '') + '">' +
+      '<button type="button" class="styled-settings-pill-btn" data-skill-file-remove>Remove</button></div>' +
+      '<textarea class="styled-settings-field skill-file-body" aria-label="' + esc((file.path || 'File') + ' contents') + '" placeholder="What this file holds">' + esc(file.body || '') + '</textarea></div>';
+  }
+  function renderSkillFiles(files){
+    var box = el('#settingsSkillFiles');
+    if(box) box.innerHTML = (files || []).map(skillFileRowHtml).join('');
+  }
+  function skillFormFiles(){
+    return Array.prototype.map.call(document.querySelectorAll('#settingsSkillFiles .skill-file'), function(row){
+      return {path: row.querySelector('.skill-file-path').value.trim(), body: row.querySelector('.skill-file-body').value};
+    }).filter(function(file){ return file.path || file.body.trim(); });
+  }
   function openSkillForm(skill){
     skillEditing = skill;
     el('#settingsSkillName').value = skill.name || '';
     el('#settingsSkillDescription').value = skill.description || '';
     el('#settingsSkillBody').value = skill.body || '';
     el('#settingsSkillError').textContent = '';
+    renderSkillFiles(skill.files);
     renderSkillsPane();
   }
+  var settingsSkillAddFile = el('#settingsSkillAddFile');
+  if(settingsSkillAddFile) settingsSkillAddFile.addEventListener('click', function(){
+    var box = el('#settingsSkillFiles');
+    if(!box) return;
+    box.insertAdjacentHTML('beforeend', skillFileRowHtml({}));
+    var rows = box.querySelectorAll('.skill-file-path');
+    rows[rows.length - 1].focus();
+  });
+  var settingsSkillFiles = el('#settingsSkillFiles');
+  if(settingsSkillFiles) settingsSkillFiles.addEventListener('click', function(e){
+    var remove = e.target.closest('[data-skill-file-remove]');
+    if(remove) remove.closest('.skill-file').remove();
+  });
   var settingsSkillNew = el('#settingsSkillNew');
   if(settingsSkillNew) settingsSkillNew.addEventListener('click', function(){ openSkillForm({}); });
   var settingsSkillCancel = el('#settingsSkillCancel');
   if(settingsSkillCancel) settingsSkillCancel.addEventListener('click', function(){ skillEditing = null; renderSkillsPane(); });
   var settingsSkillSave = el('#settingsSkillSave');
   if(settingsSkillSave) settingsSkillSave.addEventListener('click', function(){
-    var body = {name: el('#settingsSkillName').value, description: el('#settingsSkillDescription').value, body: el('#settingsSkillBody').value};
+    var body = {name: el('#settingsSkillName').value, description: el('#settingsSkillDescription').value, body: el('#settingsSkillBody').value, files: skillFormFiles()};
     var path = skillEditing && skillEditing.id ? '/api/skills/' + encodeURIComponent(skillEditing.id) : '/api/skills';
     api(path, {method: skillEditing && skillEditing.id ? 'PUT' : 'POST', body: body}).then(function(res){
       if(res.status !== 200){ el('#settingsSkillError').textContent = (res.data && res.data.message) || 'Could not save this skill.'; return; }
@@ -14998,9 +15027,21 @@
       var latest = shared.latest || shared;
       var instructions = String(latest.instructions || '').trim();
       if(!instructions) throw new Error('this bot has no instructions yet.');
-      return api('/api/bots', {method:'POST', body:{name: String(latest.name || bot.name), instructions: instructions, model: model, status: 'running', departments: [],
-        avatarColor: latest.avatar_color || bot.color || null,
-        marketSource: {teamId: teamId, botId: bot.id, version: Number(latest.version || bot.version || 0), skills: Array.isArray(latest.skills) ? latest.skills : []}}});
+      // Its skills become skill folders in your library, files and all.
+      var shared = (Array.isArray(latest.skills) ? latest.skills : []).slice(0, 10);
+      return shared.reduce(function(done, skill){
+        return done.then(function(ids){
+          return api('/api/skills', {method:'POST', body:{name: skill.name, description: skill.description || '', body: skill.body || '',
+            files: Array.isArray(skill.files) ? skill.files : []}}).then(function(res){
+            if(res.status !== 200 || !res.data || !res.data.skill) throw new Error(res.data && res.data.message || 'its skill "' + (skill.name || 'skill') + '" could not be added.');
+            return ids.concat([res.data.skill.id]);
+          });
+        });
+      }, Promise.resolve([])).then(function(skillIds){
+        return api('/api/bots', {method:'POST', body:{name: String(latest.name || bot.name), instructions: instructions, model: model, status: 'running', departments: [],
+          avatarColor: latest.avatar_color || bot.color || null, skills: skillIds,
+          marketSource: {teamId: teamId, botId: bot.id, version: Number(latest.version || bot.version || 0)}}});
+      });
     }).then(function(res){
       var created = res.data && res.data.bot;
       if(res.status !== 201 || !created) throw new Error(res.data && (res.data.message || res.data.error) || 'try again.');

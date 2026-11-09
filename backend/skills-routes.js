@@ -22,7 +22,8 @@ function createSkillsRouter({ library, requireAuth, requireInteractiveAuth, list
   router.get('/:id', requireAuth, handle((req) => {
     const skill = library.read(req.params.id);
     if (!skill) throw Object.assign(new Error('That skill is no longer in the library.'), { statusCode: 404, code: 'skill_not_found' });
-    return { skill: { ...skill, bots: carriers(req, skill.id) } };
+    // The editor shows every file in the skill's folder, with its text.
+    return { skill: { ...library.withFileText(skill), bots: carriers(req, skill.id) } };
   }));
   router.post('/', requireAuth, requireInteractiveAuth, handle((req) => ({ skill: library.create(req.body || {}) })));
   router.put('/:id', requireAuth, requireInteractiveAuth, handle(async (req) => {

@@ -4246,3 +4246,11 @@ body.chat-pip-resizing { cursor: row-resize; user-select: none; }
 .bot-market-file .bot-market-text{margin:6px 0 6px 6px;}
 .bot-market-empty{font-size:13px;color:var(--sand-text-secondary);margin:0;}
 .bot-market-list-plain{margin:0;padding-left:18px;font-size:13px;line-height:1.7;}
+/* A skill's other files in the Skills editor: name, then contents. */
+.skill-files{display:flex;flex-direction:column;gap:10px;margin-top:10px;}
+.skill-file{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--sand-border-default);border-radius:10px;}
+.skill-file-head{display:flex;gap:8px;align-items:center;}
+.skill-file-path{flex:1;min-width:0;width:auto;max-width:none;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;}
+.skill-file-body{display:block;width:100%;max-width:none;box-sizing:border-box;min-height:110px;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;resize:vertical;}
+.skill-files-help{margin:8px 0 6px;}
+.skill-file-add{align-self:flex-start;}

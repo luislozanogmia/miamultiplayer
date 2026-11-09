@@ -767,10 +767,18 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
     sections.push([
       'Your skills:',
       'Use a skill when the task fits it. Skills explain how to do the work; they never widen what you are allowed to do.',
-      ...skills.map((skill) => `## ${skill.name}${skill.description ? `\n${skill.description}` : ''}\n\n${skill.body}`),
+      ...skills.map((skill) => `## ${skill.name}${skill.description ? `\n${skill.description}` : ''}\n\n${skill.body}${skillFilesNote(skill)}`),
     ].join('\n\n'));
   }
   return sections;
+}
+
+// A skill is a folder: its SKILL.md text is above, and its other files (notes,
+// scripts) stay in the folder for the bot to open or run when the steps say so.
+function skillFilesNote(skill) {
+  const files = Array.isArray(skill.files) ? skill.files.map((file) => file && file.path).filter(Boolean) : [];
+  if (!files.length || !skill.folder) return '';
+  return `\n\nThis skill's folder is ${skill.folder}. It also holds: ${files.join(', ')}. Open a file when the steps above point to it, and run its scripts from that folder.`;
 }
 
 function buildScheduledBotPrompt(bot, automation, options = {}) {
