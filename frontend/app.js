@@ -7376,7 +7376,9 @@
   var chatAttentionRooms = {};
   var chatSidebarSections = {pinned: true, all: true, bots: true};
   var chatTaskStopPending = {};
-  var chatAttachment = {file: null, app: null, previewUrl: null, busy: false, error: ''};
+  // file is the one sent with the text; more are files dropped or picked with
+  // it, each sent next as its own message: {file, previewUrl}.
+  var chatAttachment = {file: null, app: null, previewUrl: null, busy: false, error: '', more: [], progress: ''};
   var googleDriveDrafts = {};
 
   function stagedGoogleDriveFiles(){ return googleDriveDrafts[chatWs.activeRoomId] || []; }
@@ -7570,7 +7572,8 @@
 
   function clearChatAttachment(){
     if(chatAttachment.previewUrl) URL.revokeObjectURL(chatAttachment.previewUrl);
-    chatAttachment = {file: null, app: null, previewUrl: null, busy: false, error: ''};
+    (chatAttachment.more || []).forEach(function(item){ if(item.previewUrl) URL.revokeObjectURL(item.previewUrl); });
+    chatAttachment = {file: null, app: null, previewUrl: null, busy: false, error: '', more: [], progress: ''};
     var picker = el('#ccFileInput');
     if(picker) picker.value = '';
     renderChatAttachment();
@@ -7590,15 +7593,47 @@
       ? '<img class="cc-attach-thumb" src="' + esc(chatAttachment.previewUrl) + '" alt="" />'
       : '<span class="cc-attach-icon" aria-hidden="true">' + (app ? '&#128279;' : '&#128196;') + '</span>';
     var label = app ? app.name + ' \u00b7 ' + appLinkHost(app.url) : (file.name || 'file') + ' \u00b7 ' + humanFileSize(file.size);
+    var more = (chatAttachment.more || []).map(function(item, index){
+      return '<div class="cc-attach-chip">' + (item.previewUrl ? '<img class="cc-attach-thumb" src="' + esc(item.previewUrl) + '" alt="" />' : '<span class="cc-attach-icon" aria-hidden="true">&#128196;</span>')
+        + '<span class="cc-attach-name">' + esc((item.file.name || 'file') + ' \u00b7 ' + humanFileSize(item.file.size)) + '</span>'
+        + '<button type="button" class="cc-attach-remove" data-attach-more="' + index + '" aria-label="' + esc('Remove ' + (item.file.name || 'file')) + '"' + (chatAttachment.busy ? ' disabled' : '') + '>&times;</button></div>';
+    }).join('');
     strip.style.display = '';
     strip.innerHTML = (app && app.local ? '<div class="cc-attach-note" role="note"><strong>Local app sharing</strong>' +
         '<span>You\u2019re sharing a local app. Changes aren\u2019t synced between you and your company yet.</span>' +
         '<span>Shared editing is coming soon.</span></div>' : '') +
       '<div class="cc-attach-chip">' + preview +
       '<span class="cc-attach-name">' + esc(label) + '</span>' +
-      (chatAttachment.busy ? '<span class="cc-attach-state">Uploading&hellip;</span>' : '') +
+      (chatAttachment.busy ? '<span class="cc-attach-state">' + esc(chatAttachment.progress || 'Uploading\u2026') + '</span>' : '') +
       '<button type="button" class="cc-attach-remove" aria-label="Remove attachment"' + (chatAttachment.busy ? ' disabled' : '') + '>&times;</button></div>' +
+      more +
       (chatAttachment.error ? '<div class="cc-attach-error" role="alert">' + esc(chatAttachment.error) + '</div>' : '');
+  }
+  // Files dropped on the composer or picked with +: each is checked like one
+  // file; the first is staged as usual and the others wait beside it. Files
+  // that can't be sent are named in the error; the rest still attach.
+  // -> true when at least one file was staged.
+  var CHAT_ATTACHMENT_MAX_FILES = 10;
+  function stageChatAttachments(files){
+    var list = Array.prototype.slice.call(files || []);
+    if(!list.length) return false;
+    var refused = [], staged = 0;
+    var room = CHAT_ATTACHMENT_MAX_FILES - (chatAttachment.file ? 1 + (chatAttachment.more || []).length : 0);
+    list.forEach(function(file){
+      var problem = chatAttachmentProblem(file);
+      if(problem){ refused.push((file.name || 'A file') + ': ' + problem); return; }
+      if(staged >= room){ refused.push((file.name || 'A file') + ': up to ' + CHAT_ATTACHMENT_MAX_FILES + ' files at once.'); return; }
+      if(!chatAttachment.file){
+        stageChatAttachment(file);
+      } else {
+        chatAttachment.more = (chatAttachment.more || []).concat([{file: file,
+          previewUrl: /^image\/(png|jpeg|gif|webp)$/.test(chatAttachmentType(file)) ? URL.createObjectURL(file) : null}]);
+      }
+      staged += 1;
+    });
+    chatAttachment.error = refused.length ? (refused.length === 1 ? refused[0] : refused.length + ' files can\u2019t be attached. ' + refused.join(' ')) : '';
+    renderChatAttachment();
+    return staged > 0;
   }
 
   // Images, PDFs, Office files and text files (CSV, TXT, Markdown, JSON) go
@@ -19746,12 +19781,16 @@
         chatAttachment.error = '';
         renderChatAttachment();
         syncDraftState();
+        var extras = (chatAttachment.more || []).slice();
+        if(extras.length) chatAttachment.progress = 'Uploading 1 of ' + (extras.length + 1) + '\u2026';
+        renderChatAttachment();
         prepareChatAttachment(file, roomId, null).then(function(prepared){
           if(input.value.trim() === draftText) input.value = '';
           return sendActiveRoomMessage(text, null, prepared, roomId).then(function(result){
             if(result && (result.status === 200 || result.status === 201 || result.undelivered)){
               googleDriveDrafts[driveRoomId]=(googleDriveDrafts[driveRoomId]||[]).filter(function(item){return !driveFiles.some(function(sent){return sent.id===item.id;});});
               clearChatAttachment();
+              if(extras.length) return sendMoreChatAttachments(extras, roomId, 2, extras.length + 1);
             } else {
               chatAttachment.busy = false;
               chatAttachment.error = result && result.data && result.data.error || 'Message send failed.';
@@ -19762,9 +19801,35 @@
           });
         }).catch(function(err){
           chatAttachment.busy = false;
-          chatAttachment.error = err && err.message || 'Image upload failed.';
+          chatAttachment.progress = '';
+          chatAttachment.error = err && err.message || 'Upload failed. Press Enter to try again.';
           renderChatAttachment();
           syncDraftState();
+        });
+      }
+      // The other files, one message each, through the same upload. A file that
+      // fails stays in the composer with the ones after it, to send again.
+      function sendMoreChatAttachments(items, roomId, number, total){
+        if(!items.length){ syncDraftState(); return; }
+        var item = items[0];
+        chatAttachment.file = item.file; chatAttachment.previewUrl = item.previewUrl;
+        chatAttachment.more = items.slice(1); chatAttachment.busy = true; chatAttachment.error = '';
+        chatAttachment.progress = 'Uploading ' + number + ' of ' + total + '\u2026';
+        renderChatAttachment(); syncDraftState();
+        return prepareChatAttachment(item.file, roomId, null).then(function(prepared){
+          return sendActiveRoomMessage('', null, prepared, roomId);
+        }).then(function(result){
+          if(!(result && (result.status === 200 || result.status === 201 || result.undelivered))) throw new Error(result && result.data && result.data.error || 'Message send failed.');
+          var rest = items.slice(1);
+          if(item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+          chatAttachment = {file: null, app: null, previewUrl: null, busy: false, error: '', more: [], progress: ''};
+          renderChatAttachment();
+          return sendMoreChatAttachments(rest, roomId, number + 1, total);
+        }).catch(function(err){
+          chatAttachment.busy = false; chatAttachment.progress = '';
+          var reason = String(err && err.message || 'upload failed').replace(/[.!?]*$/, '.');
+          chatAttachment.error = (item.file.name || 'A file') + ' didn\u2019t send: ' + reason + ' Press Enter to try again.';
+          renderChatAttachment(); syncDraftState();
         });
       }
       // Group tags reach many people at once — confirm the blast radius
@@ -19792,13 +19857,22 @@
         if(chatWs.activeRoomId && !chatAttachment.busy) setComposerPlusMenu(el('#ccPlusMenu').hidden ? 'menu' : null);
       });
       fileInput.addEventListener('change', function(){
-        if(stageChatAttachment(fileInput.files && fileInput.files[0])) syncDraftState();
+        if(stageChatAttachments(fileInput.files)) syncDraftState();
+        fileInput.value = '';
       });
       wireComposerPlusMenu(fileInput, syncDraftState);
     }
     composerAttachmentStaged = syncDraftState;
     if(attachStrip){
       attachStrip.addEventListener('click', function(e){
+        var extra = e.target.closest('[data-attach-more]');
+        if(extra && !chatAttachment.busy){
+          var removed = chatAttachment.more.splice(Number(extra.getAttribute('data-attach-more')), 1)[0];
+          if(removed && removed.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+          renderChatAttachment();
+          syncDraftState();
+          return;
+        }
         if(e.target.closest('.cc-attach-remove') && !chatAttachment.busy){
           clearChatAttachment();
           syncDraftState();
@@ -19816,6 +19890,41 @@
         }
       }
     });
+    // Files dragged onto the composer attach as if picked with +: the same
+    // checks, previews, upload progress and errors.
+    var composer = input.closest('.chat-composer-wrap');
+    function draggingFiles(e){ return !!(e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') !== -1); }
+    if(composer){
+      var dragDepth = 0;
+      composer.addEventListener('dragenter', function(e){
+        if(!draggingFiles(e)) return;
+        e.preventDefault();
+        dragDepth += 1;
+        composer.classList.toggle('is-drop-target', !!chatWs.activeRoomId && !chatAttachment.busy);
+      });
+      composer.addEventListener('dragover', function(e){
+        if(!draggingFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = chatWs.activeRoomId && !chatAttachment.busy ? 'copy' : 'none';
+      });
+      composer.addEventListener('dragleave', function(){
+        dragDepth = Math.max(0, dragDepth - 1);
+        if(!dragDepth) composer.classList.remove('is-drop-target');
+      });
+      composer.addEventListener('drop', function(e){
+        if(!draggingFiles(e)) return;
+        e.preventDefault();
+        dragDepth = 0;
+        composer.classList.remove('is-drop-target');
+        if(!chatWs.activeRoomId || chatAttachment.busy) return;
+        if(stageChatAttachments(e.dataTransfer.files)) syncDraftState();
+        input.focus();
+      });
+    }
+    // A file dropped anywhere else in the app is ignored instead of opening
+    // in place of the app.
+    document.addEventListener('dragover', function(e){ if(draggingFiles(e) && !(composer && composer.contains(e.target))) e.preventDefault(); });
+    document.addEventListener('drop', function(e){ if(draggingFiles(e) && !(composer && composer.contains(e.target))) e.preventDefault(); });
     input.addEventListener('input', syncDraftState);
     input.addEventListener('focus', syncDraftState);
     sendBtn.addEventListener('click', function(){

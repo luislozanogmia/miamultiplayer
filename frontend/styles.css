@@ -4297,3 +4297,5 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
    incoming one, before your own (which sits on the right). */
 .chat-msg-row>.chat-msg-body{position:relative;}
 .chat-msg-row.is-you>.chat-msg-body>.chat-msg-react-add{left:auto;right:calc(100% + 6px);}
+/* A file dragged over the composer: the drop target lights up. */
+.chat-composer-wrap.is-drop-target .chat-composer{outline:2px dashed var(--accent,#DC4E13);outline-offset:2px;background:var(--accent-tint,rgba(220,78,19,.06));}
