@@ -4277,3 +4277,13 @@ textarea.bot-market-input{min-height:96px;}
 .bot-market-ask{margin-top:auto;display:flex;align-items:center;gap:8px;border:1px solid var(--sand-border-default);background:var(--sand-bg-base);border-radius:10px;padding:8px 10px;font:inherit;font-size:13px;color:var(--sand-text-primary);cursor:pointer;}
 .bot-market-ask:hover{background:var(--sand-fill-ghost-hover);}
 .bot-market-ask svg{width:16px;height:16px;fill:#E4B43C;}
+/* Your bot's card edits in place: a text shows it can be clicked, then turns into a box. */
+[data-card-edit]{cursor:text;border-radius:8px;transition:box-shadow .12s ease;}
+[data-card-edit]:hover,[data-card-edit]:focus-visible{box-shadow:0 0 0 2px var(--sand-border-default);outline:none;}
+h1[data-card-edit]{padding:0 4px;margin-left:-4px;}
+.bot-card-editor{display:flex;flex-direction:column;gap:8px;}
+.bot-card-editor.single{flex:1;min-width:0;}
+.bot-card-editor-actions{display:flex;align-items:center;gap:8px;}
+.bot-card-editor-hint{flex:1;font-size:11px;color:var(--sand-text-secondary);}
+.bot-card-editor .bot-market-error:empty{display:none;}
+.bot-card-editor textarea.bot-market-input{min-height:220px;}

@@ -71,7 +71,13 @@ test('Bot settings shows the bot as the same card the marketplace shows, with Ed
   const [source, market] = await Promise.all([readFile(appUrl, 'utf8'), readFile(new URL('./bot-marketplace.js', import.meta.url), 'utf8')]);
   assert.match(source, /function openActiveBotSettings\(\)\{[\s\S]*?openBotCardPane\(botId\);/);
   assert.match(source, /function renderBotCardPane\(pane\)\{[\s\S]*?window\.MiaBotMarketplace\.cardHtml\(\{/);
-  assert.match(source, /if\(edit\) edit\.addEventListener\('click', function\(\)\{ if\(bench\) openEditCinema\(bench\.id\); \}\);/);
+  // No Edit button: your bot's name, instructions and skill files edit in place.
+  assert.match(source, /editable: true,/);
+  assert.match(source, /target\.addEventListener\('click', function\(\)\{ beginBotCardEdit\(target, botId\); \}\);/);
+  assert.match(source, /if\(more\) more\.addEventListener\('click', function\(\)\{ if\(bench\) openEditCinema\(bench\.id\); \}\);/, 'More settings opens the editor');
+  assert.match(source, /if\(!main\) update\.files = \(skill\.files \|\| \[\]\)\.map\(function\(file\)\{ return \{path: file\.path, body: file\.path === path \? value : file\.body\}; \}\);/);
+  assert.match(market, /data-card-edit=/);
+  assert.doesNotMatch(market, /function detailView\(\)\{[\s\S]*?editable: true/, 'marketplace cards stay read-only');
   assert.match(market, /return '<button type="button" class="bot-market-back" data-market-back>&larr; Back<\/button>' \+ botCard\(view\);/, 'the marketplace uses the same card');
 });
 

@@ -153,17 +153,24 @@
   function fileKind(path){
     return /\.md$/i.test(path) ? 'Notes' : /\.(py|js|mjs|sh|ts)$/i.test(path) ? 'Script' : /\.(json|ya?ml|csv)$/i.test(path) ? 'Data' : 'File';
   }
-  function skillsHtml(skills){
+  // edit: where the card is your own bot's, each text says where it saves to,
+  // and clicking it edits it in place.
+  function editAttrs(edit, attrs){
+    if(!edit) return '';
+    return ' data-card-edit="' + esc(attrs.kind) + '"' + (attrs.skill ? ' data-skill-id="' + esc(attrs.skill) + '"' : '')
+      + (attrs.path ? ' data-file-path="' + esc(attrs.path) + '"' : '') + ' tabindex="0" title="Click to edit"';
+  }
+  function skillsHtml(skills, edit){
     if(!skills.length) return '<p class="bot-market-empty">No skills.</p>';
     return skills.map(function(skill){
-      var files = skillFiles(skill);
+      var files = skillFiles(skill), editable = edit && skill.id;
       return '<details class="bot-market-skill"><summary>' + FOLDER_ICON + '<span class="bot-market-skill-head"><strong>' + esc(skill.name || 'Skill') + '</strong>'
         + (skill.description ? '<span>' + esc(skill.description) + '</span>' : '') + '</span>'
         + '<span class="bot-market-skill-count">' + esc(files.length === 1 ? '1 file' : files.length + ' files') + '</span></summary>'
         + '<div class="bot-market-files">' + files.map(function(file){
           return '<details class="bot-market-file"><summary>' + FILE_ICON + '<span class="bot-market-file-name">' + esc(file.path) + '</span>'
             + '<span class="bot-market-file-kind">' + esc(/^skill\.md$/i.test(file.path) ? 'Read first' : fileKind(file.path)) + '</span></summary>'
-            + '<pre class="bot-market-text">' + esc(file.body || '') + '</pre></details>';
+            + '<pre class="bot-market-text"' + editAttrs(editable, {kind: 'file', skill: skill.id, path: file.path}) + '>' + esc(file.body || '') + '</pre></details>';
         }).join('') + '</div></details>';
     }).join('');
   }
@@ -195,16 +202,16 @@
   // One bot card for the marketplace and for a bot's own right pane, so a bot
   // looks the same wherever you see it. view: {name, color, about, meta,
   // action, instructions (null while loading), skills, automations, requires,
-  // owners, error}.
+  // owners, error, editable (your own bot: its texts edit in place)}.
   function botCard(view){
     var instructions = view.error ? '<p class="bot-market-empty">' + esc(view.error) + '</p>'
       : view.instructions === null ? '<p class="bot-market-empty">Loading…</p>'
-      : view.instructions ? '<pre class="bot-market-text">' + esc(view.instructions) + '</pre>' : '<p class="bot-market-empty">No instructions.</p>';
-    var skills = view.skills === null ? '<p class="bot-market-empty">Loading…</p>' : skillsHtml(view.skills || []);
+      : view.instructions || view.editable ? '<pre class="bot-market-text"' + editAttrs(view.editable, {kind: 'instructions'}) + '>' + esc(view.instructions || '') + '</pre>' : '<p class="bot-market-empty">No instructions.</p>';
+    var skills = view.skills === null ? '<p class="bot-market-empty">Loading…</p>' : skillsHtml(view.skills || [], view.editable);
     var requires = view.requires || [], automations = view.automations || [], owners = view.owners || [];
     return '<div class="bot-market-detail">'
       + '<div class="bot-market-detail-head"><span class="bot-market-avatar large">' + opts.avatarHtml(view.name, view.color) + '</span>'
-      + '<div class="bot-market-copy"><h1 class="bot-market-detail-name">' + esc(view.name) + '</h1>'
+      + '<div class="bot-market-copy"><h1 class="bot-market-detail-name"' + editAttrs(view.editable, {kind: 'name'}) + '>' + esc(view.name) + '</h1>'
       + (view.meta ? '<span class="bot-market-meta">' + esc(view.meta) + '</span>' : '') + '</div>' + (view.action || '') + '</div>'
       + (view.about ? section('What it does', '<p class="bot-market-about-full">' + esc(view.about) + '</p>') : '')
       + (requires.length ? section('Needs', '<p class="bot-market-about-full">' + esc(requires.join(', ')) + '</p>') : '')

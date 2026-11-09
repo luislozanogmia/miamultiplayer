@@ -15128,7 +15128,8 @@
       : window.MiaBotMarketplace.cardHtml({
           name: bench.name, color: bench.avatarColor,
           meta: [bench.model && bench.model !== 'default' ? String(bench.model).split('/').pop() : '', record.marketSource ? 'from the marketplace' : ''].filter(Boolean).join(' · '),
-          action: '<button type="button" class="bot-market-btn" data-bot-card-edit>Edit</button>',
+          action: '<button type="button" class="bot-market-link" data-bot-card-more title="Model, workplaces and color">More settings</button>',
+          editable: true,
           instructions: String(bench.instructions || ''),
           skills: botCardSkills[botId] === undefined ? [] : botCardSkills[botId],
           automations: (Array.isArray(record.automations) ? record.automations : []).map(function(item){ return {name: item.name, schedule: automationScheduleText(item)}; })
@@ -15137,8 +15138,79 @@
       '<button type="button" class="cip-pane-btn" id="botCardPaneClose" aria-label="Close bot settings" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div></div>' +
       '<div class="bot-store-body bot-card-pane">' + card + '</div>';
     el('#botCardPaneClose', pane).addEventListener('click', closeBotCardPane);
-    var edit = el('[data-bot-card-edit]', pane);
-    if(edit) edit.addEventListener('click', function(){ if(bench) openEditCinema(bench.id); });
+    var more = el('[data-bot-card-more]', pane);
+    if(more) more.addEventListener('click', function(){ if(bench) openEditCinema(bench.id); });
+    els('[data-card-edit]', pane).forEach(function(target){
+      target.addEventListener('click', function(){ beginBotCardEdit(target, botId); });
+      target.addEventListener('keydown', function(event){ if(event.key === 'Enter'){ event.preventDefault(); beginBotCardEdit(target, botId); } });
+    });
+  }
+  // Clicking a text in your bot's card edits it right there: its name, its
+  // instructions, or a file in one of its skill folders.
+  function beginBotCardEdit(target, botId){
+    if(target.hidden) return;
+    var kind = target.getAttribute('data-card-edit'), single = kind === 'name';
+    var editor = document.createElement('div');
+    editor.className = 'bot-card-editor' + (single ? ' single' : '');
+    editor.innerHTML = (single ? '<input class="bot-market-input" maxlength="40" aria-label="Bot name">'
+      : '<textarea class="bot-market-input mono" aria-label="' + esc(kind === 'file' ? target.getAttribute('data-file-path') : 'Instructions') + '"></textarea>')
+      + '<div class="bot-card-editor-actions"><span class="bot-card-editor-hint">' + (single ? 'Enter to save' : '⌘Enter to save') + ' · Esc to cancel</span>'
+      + '<button type="button" class="bot-market-btn" data-card-cancel>Cancel</button><button type="button" class="bot-market-btn primary" data-card-save>Save</button></div>'
+      + '<div class="bot-market-error" role="alert"></div>';
+    var field = editor.querySelector(single ? 'input' : 'textarea');
+    field.value = target.textContent;
+    if(!single) field.rows = Math.min(24, Math.max(6, field.value.split('\n').length + 1));
+    target.hidden = true;
+    target.insertAdjacentElement('afterend', editor);
+    field.focus();
+    function done(){ editor.remove(); target.hidden = false; }
+    function save(){
+      var value = single ? field.value.trim() : field.value;
+      if(value === target.textContent){ done(); return; }
+      var saveBtn = editor.querySelector('[data-card-save]');
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      saveBotCardText(botId, target, kind, value).then(function(){
+        if(chatInfo.mode === 'bot-card' && chatInfo.cardBotId === botId) renderChatInfoPane();
+      }, function(error){
+        saveBtn.disabled = false; saveBtn.textContent = 'Save';
+        editor.querySelector('.bot-market-error').textContent = error && error.message || 'That didn\'t save. Try again.';
+      });
+    }
+    editor.querySelector('[data-card-cancel]').addEventListener('click', done);
+    editor.querySelector('[data-card-save]').addEventListener('click', save);
+    field.addEventListener('keydown', function(event){
+      if(event.key === 'Escape'){ event.preventDefault(); event.stopPropagation(); done(); }
+      else if(event.key === 'Enter' && (single || event.metaKey || event.ctrlKey)){ event.preventDefault(); save(); }
+    });
+  }
+  function saveBotCardText(botId, target, kind, value){
+    var bench = findBenchAgentByServerId(botId);
+    if(!bench) return Promise.reject(new Error('This bot isn\'t available right now.'));
+    function check(res){
+      if(res.status < 200 || res.status >= 300) throw new Error(res.data && (res.data.message || res.data.error) || 'That didn\'t save. Try again.');
+      return res;
+    }
+    if(kind === 'name' || kind === 'instructions'){
+      var body = kind === 'name' ? {name: value} : {instructions: value, expectedInstructionsRevision: bench.instructionsRevision};
+      if(kind === 'name' && !value) return Promise.reject(new Error('Give the bot a name.'));
+      return api('/api/bots/' + encodeURIComponent(botId), {method:'PUT', body: body}).then(check).then(function(){
+        return loadBenchAgents();
+      }).then(function(){ renderChatSidebar(); renderChatHeaderBar(); });
+    }
+    // A skill file: SKILL.md is the skill's body; any other file is saved with the rest.
+    var skillId = target.getAttribute('data-skill-id'), path = target.getAttribute('data-file-path');
+    var skill = (botCardSkills[botId] || []).filter(function(item){ return item.id === skillId; })[0];
+    if(!skill) return Promise.reject(new Error('This skill isn\'t available right now.'));
+    var main = /^skill\.md$/i.test(path);
+    var update = {name: skill.name, description: skill.description || '', body: main ? value : skill.body};
+    if(!main) update.files = (skill.files || []).map(function(file){ return {path: file.path, body: file.path === path ? value : file.body}; });
+    return api('/api/skills/' + encodeURIComponent(skillId), {method:'PUT', body: update}).then(check).then(function(){
+      return api('/api/skills/' + encodeURIComponent(skillId));
+    }).then(function(res){
+      if(res.status === 200 && res.data && res.data.skill){
+        botCardSkills[botId] = (botCardSkills[botId] || []).map(function(item){ return item.id === skillId ? res.data.skill : item; });
+      }
+    });
   }
   function bindDetailsBotSettings(pane, agent){
     els('[data-bot-setting]', pane).forEach(function(button){
