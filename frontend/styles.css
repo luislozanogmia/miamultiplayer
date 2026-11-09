@@ -4219,3 +4219,20 @@ body.chat-pip-resizing { cursor: row-resize; user-select: none; }
 .bot-market-note{flex:none;font-size:12px;color:var(--sand-text-secondary);}
 .bot-market-group{grid-column:1/-1;font-size:12px;color:var(--sand-text-secondary);margin-top:6px;}
 .bot-market-status{grid-column:1/-1;font-size:13px;color:var(--sand-text-secondary);max-width:520px;line-height:1.5;}
+.bot-market-card[data-market-detail]{cursor:pointer;}
+.bot-market-card[data-market-detail]:hover{border-color:var(--sand-border-strong,#c9c4bb);}
+.bot-market-back{align-self:flex-start;border:0;background:none;font:inherit;font-size:13px;color:var(--sand-text-secondary);cursor:pointer;padding:2px 0;margin-bottom:12px;}
+.bot-market-back:hover{color:var(--sand-text-primary);}
+.bot-market-detail{max-width:760px;display:flex;flex-direction:column;gap:18px;}
+.bot-market-detail-head{display:flex;align-items:center;gap:14px;}
+.bot-market-avatar.large,.bot-market-avatar.large img{width:64px;height:64px;}
+.bot-market-detail-name{font-size:20px;font-weight:600;margin:0 0 2px;color:var(--sand-text-primary);}
+.bot-market-section h2{font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--sand-text-secondary);margin:0 0 8px;}
+.bot-market-about-full{font-size:14px;line-height:1.55;margin:0;color:var(--sand-text-primary);}
+.bot-market-text{margin:0;padding:12px 14px;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--sand-fill-secondary-hover);border-radius:10px;color:var(--sand-text-primary);}
+.bot-market-skill{border:1px solid var(--sand-border-default);border-radius:10px;padding:10px 12px;margin-bottom:8px;}
+.bot-market-skill summary{cursor:pointer;display:flex;flex-direction:column;gap:2px;font-size:13px;}
+.bot-market-skill summary span{font-size:12px;color:var(--sand-text-secondary);}
+.bot-market-skill .bot-market-text{margin-top:10px;}
+.bot-market-empty{font-size:13px;color:var(--sand-text-secondary);margin:0;}
+.bot-market-list-plain{margin:0;padding-left:18px;font-size:13px;line-height:1.7;}

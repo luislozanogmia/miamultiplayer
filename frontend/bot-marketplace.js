@@ -56,7 +56,7 @@
   }
 
   function card(options){
-    return '<div class="bot-market-card">'
+    return '<div class="bot-market-card"' + (options.detail ? ' data-market-detail="' + esc(options.detail) + '" role="button" tabindex="0" aria-label="' + esc('About ' + options.name) + '"' : '') + '>'
       + '<span class="bot-market-avatar">' + opts.avatarHtml(options.name, options.color) + '</span>'
       + '<span class="bot-market-copy"><span class="bot-market-name">' + esc(options.name) + '</span>'
       + (options.about ? '<span class="bot-market-about">' + esc(options.about) + '</span>' : '')
@@ -75,7 +75,7 @@
       var bot = manifest.bot || {}, store = manifest.store || {};
       var installed = opts.installedByName(bot.name);
       var busy = state.busy === 'mia:' + manifest.id;
-      return card({name: bot.name || manifest.id, color: store.avatarColor || bot.avatarColor || null, about: store.tagline,
+      return card({detail: 'mia:' + manifest.id, name: bot.name || manifest.id, color: store.avatarColor || bot.avatarColor || null, about: store.tagline,
         meta: [store.category, manifest.author || 'Mia'].filter(Boolean).join(' · '),
         action: installed ? '<button type="button" class="bot-market-btn" data-market-open-local="' + esc(installed.id) + '">Open</button>'
           : '<button type="button" class="bot-market-btn primary" data-market-install="' + esc(manifest.id) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Getting…' : 'Get') + '</button>'});
@@ -95,7 +95,7 @@
     var shelf = state.market[teamId];
     if(!shelf || (shelf.loading && !shelf.bots)) return null;
     return (shelf.bots || []).map(marketBot).filter(function(bot){ return (!filter || filter(bot)) && matches(bot.name, bot.about); }).map(function(bot){
-      return card({name: bot.name, color: bot.color, about: bot.about,
+      return card({detail: 'company:' + teamId + ':' + bot.id, name: bot.name, color: bot.color, about: bot.about,
         meta: [bot.by ? 'by ' + bot.by : '', bot.version ? 'v' + bot.version : '', when(bot.at), bot.owner ? 'you own it' : ''].filter(Boolean).join(' · '),
         action: companyCardAction(teamId, bot)});
     });
@@ -132,7 +132,75 @@
     }).join('');
   }
 
+  // The large card: what the bot does, its instructions (its AGENTS.md),
+  // skills and automations, with the same Get or Open as its small card.
+  function section(title, html){ return '<section class="bot-market-section"><h2>' + esc(title) + '</h2>' + html + '</section>'; }
+  function skillsHtml(skills){
+    if(!skills.length) return '<p class="bot-market-empty">No skills.</p>';
+    return skills.map(function(skill){
+      return '<details class="bot-market-skill"><summary><strong>' + esc(skill.name || 'Skill') + '</strong>'
+        + (skill.description ? '<span>' + esc(skill.description) + '</span>' : '') + '</summary>'
+        + (skill.body ? '<pre class="bot-market-text">' + esc(skill.body) + '</pre>' : '') + '</details>';
+    }).join('');
+  }
+  function detailView(){
+    var d = state.detail, view;
+    if(d.kind === 'mia'){
+      var manifest = ((state.catalog.entries || []).filter(function(entry){ return entry.id === d.id; })[0]) || {};
+      var bot = manifest.bot || {}, store = manifest.store || {}, requires = (store.requires && store.requires.connectors) || [];
+      var installed = opts.installedByName(bot.name), busy = state.busy === 'mia:' + d.id;
+      view = {name: bot.name || d.id, color: store.avatarColor || bot.avatarColor || null, about: store.tagline || '',
+        meta: [store.category, 'by ' + (manifest.author || 'Mia'), manifest.version ? 'v' + manifest.version : ''].filter(Boolean).join(' · '),
+        action: installed ? '<button type="button" class="bot-market-btn" data-market-open-local="' + esc(installed.id) + '">Open</button>'
+          : '<button type="button" class="bot-market-btn primary" data-market-install="' + esc(d.id) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Getting…' : 'Get') + '</button>',
+        instructions: text(bot.instructions), skills: Array.isArray(bot.skills) ? bot.skills : [],
+        automations: Array.isArray(bot.automations) ? bot.automations : [],
+        requires: requires};
+    } else {
+      var shelf = state.market[d.teamId] || {}, raw = (shelf.bots || []).filter(function(item){ return text(item.id) === d.id; })[0] || {};
+      var summary = marketBot(raw), full = d.data || {}, latest = full.latest || full;
+      view = {name: summary.name, color: summary.color, about: text(latest.description || summary.about),
+        meta: [summary.by ? 'by ' + summary.by : '', summary.version ? 'v' + summary.version : '', when(summary.at)].filter(Boolean).join(' · '),
+        action: companyCardAction(d.teamId, summary),
+        instructions: d.loading ? null : text(latest.instructions), skills: Array.isArray(latest.skills) ? latest.skills : [],
+        automations: [], requires: [], error: d.error, owners: Array.isArray(full.owners) ? full.owners : []};
+    }
+    var instructions = view.error ? '<p class="bot-market-empty">' + esc(view.error) + '</p>'
+      : view.instructions === null ? '<p class="bot-market-empty">Loading…</p>'
+      : view.instructions ? '<pre class="bot-market-text">' + esc(view.instructions) + '</pre>' : '<p class="bot-market-empty">No instructions.</p>';
+    return '<button type="button" class="bot-market-back" data-market-back>&larr; Back</button>'
+      + '<div class="bot-market-detail">'
+      + '<div class="bot-market-detail-head"><span class="bot-market-avatar large">' + opts.avatarHtml(view.name, view.color) + '</span>'
+      + '<div class="bot-market-copy"><h1 class="bot-market-detail-name">' + esc(view.name) + '</h1>'
+      + (view.meta ? '<span class="bot-market-meta">' + esc(view.meta) + '</span>' : '') + '</div>' + view.action + '</div>'
+      + (view.about ? section('What it does', '<p class="bot-market-about-full">' + esc(view.about) + '</p>') : '')
+      + (view.requires.length ? section('Needs', '<p class="bot-market-about-full">' + esc(view.requires.join(', ')) + '</p>') : '')
+      + section('Instructions', instructions)
+      + section('Skills', skillsHtml(view.skills))
+      + (view.automations.length ? section('Automations', '<ul class="bot-market-list-plain">' + view.automations.map(function(item){
+          return '<li><strong>' + esc(item.name || 'Automation') + '</strong>' + (item.schedule || item.cron ? ' · ' + esc(item.schedule || item.cron) : '') + '</li>';
+        }).join('') + '</ul>') : '')
+      + (view.owners && view.owners.length ? section('Owners', '<p class="bot-market-about-full">' + esc(view.owners.map(function(o){ return o.name || o.email || o; }).join(', ')) + '</p>') : '')
+      + '</div>';
+  }
+
+  function openDetail(key){
+    var parts = key.split(':');
+    if(parts[0] === 'mia') state.detail = {kind: 'mia', id: parts.slice(1).join(':')};
+    else {
+      var teamId = parts[1], id = parts.slice(2).join(':'), detail = {kind: 'company', teamId: teamId, id: id, loading: true};
+      state.detail = detail;
+      opts.hubCall('GET', '/v1/teams/' + teamId + '/market/bots/' + encodeURIComponent(id)).then(function(result){
+        detail.data = result && (result.bot || result) || {};
+      }, function(){ detail.error = 'Couldn\'t load this bot. Try again.'; }).then(function(){ detail.loading = false; if(state && state.detail === detail) render(); });
+    }
+    render();
+    var scroller = state.sheet.querySelector('.styled-settings-content');
+    if(scroller) scroller.scrollTop = 0;
+  }
+
   function body(){
+    if(state.detail) return detailView();
     if(state.shelf === 'mia') return catalogShelf();
     if(state.shelf === 'everyone') return '<p class="bot-market-status">The open marketplace, with bots shared by everyone using Mia, is coming later.</p>';
     if(state.shelf === 'uploads') return uploadsShelf();
@@ -151,9 +219,9 @@
     }).join('');
     state.sheet.innerHTML = '<button type="button" class="styled-sheet-close" data-market-close aria-label="Close Bot marketplace">&times;</button>'
       + '<nav class="styled-settings-nav" aria-label="Shelves"><div class="bot-market-title">Bot marketplace</div>' + nav + '</nav>'
-      + '<div class="styled-settings-content"><h1 class="styled-settings-h1">' + esc(current.label) + '</h1>'
+      + '<div class="styled-settings-content">' + (state.detail ? body() : '<h1 class="styled-settings-h1">' + esc(current.label) + '</h1>'
       + (current.soon ? '' : '<input type="search" class="styled-settings-input bot-market-search" data-market-search placeholder="Search bots" aria-label="Search bots" value="' + esc(state.query) + '">')
-      + '<div class="bot-market-list">' + body() + '</div></div>';
+      + '<div class="bot-market-list">' + body() + '</div>') + '</div>';
     if(focused){ var search = state.sheet.querySelector('[data-market-search]'); if(search){ search.focus(); search.setSelectionRange(search.value.length, search.value.length); } }
   }
 
@@ -172,6 +240,7 @@
 
   function pick(shelf){
     state.shelf = shelf;
+    state.detail = null;
     if(shelf.indexOf('company:') === 0) loadCompany(shelf.slice(8));
     if(shelf === 'uploads') (state.companies || []).forEach(function(company){ loadCompany(company.teamId); });
     render();
@@ -194,8 +263,10 @@
   }
 
   function onClick(event){
-    var target = event.target.closest('[data-market-close],[data-market-shelf],[data-market-install],[data-market-get],[data-market-open-local]');
+    var target = event.target.closest('[data-market-close],[data-market-shelf],[data-market-install],[data-market-get],[data-market-open-local],[data-market-back],[data-market-detail]');
     if(!target) return;
+    if(target.hasAttribute('data-market-back')){ state.detail = null; return render(); }
+    if(target.hasAttribute('data-market-detail')) return openDetail(target.getAttribute('data-market-detail'));
     if(target.hasAttribute('data-market-close')) return close();
     if(target.hasAttribute('data-market-shelf')) return pick(target.getAttribute('data-market-shelf'));
     if(target.hasAttribute('data-market-open-local')){ close(); return opts.openLocal(target.getAttribute('data-market-open-local')); }
@@ -210,7 +281,12 @@
     get(target.getAttribute('data-market-team'), target.getAttribute('data-market-get'));
   }
 
-  function onKey(event){ if(event.key === 'Escape' && state){ event.preventDefault(); close(); } }
+  function onKey(event){
+    if(!state) return;
+    if(event.key === 'Escape'){ event.preventDefault(); if(state.detail){ state.detail = null; render(); } else close(); return; }
+    var card = event.target.closest && event.target.closest('[data-market-detail]');
+    if(card && (event.key === 'Enter' || event.key === ' ') && event.target === card){ event.preventDefault(); openDetail(card.getAttribute('data-market-detail')); }
+  }
 
   function close(){
     if(!state) return;
@@ -223,7 +299,7 @@
   function open(options, shelf){
     opts = options;
     if(state) close();
-    state = {shelf: 'mia', query: '', catalog: {loading: true, entries: null, error: ''}, companies: [], market: {}, busy: null};
+    state = {shelf: 'mia', detail: null, query: '', catalog: {loading: true, entries: null, error: ''}, companies: [], market: {}, busy: null};
     state.scrim = document.createElement('div');
     state.scrim.className = 'styled-scrim open bot-market-scrim';
     state.scrim.addEventListener('click', close);
