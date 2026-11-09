@@ -3979,8 +3979,10 @@
         '' +
       '</div>' +
       '<div class="styled-agent-edit-body">' +
-        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">BRIEF</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="Brief information" title="Brief information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot brief"></textarea></section>' +
-        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SKILLS</span></div>' + skillPickerHtml('styledAgentEditSkills', editState.skills) + '</section>' +
+        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">INSTRUCTIONS</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditBriefInfo" aria-label="About instructions" title="About instructions">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditBriefInfo" role="tooltip">Describe what this bot should do and when it should flag something for a human.</span></span></div><textarea id="styledAgentEditInstructions" class="styled-agent-edit-textarea" aria-label="Bot instructions"></textarea></section>' +
+        '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SKILLS</span></div>' +
+          '<div class="styled-agent-edit-skill-folders" id="styledAgentEditSkillFolders"></div>' +
+          '<details class="styled-agent-edit-skill-choose"><summary>Choose skills</summary>' + skillPickerHtml('styledAgentEditSkills', editState.skills) + '</details></section>' +
         styledAgentAutomationMarkup(a) +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">WORKPLACES</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditWorkplacesInfo" aria-label="Workplaces information" title="Workplaces information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditWorkplacesInfo" role="tooltip">The workplace this bot belongs to. In multiplayer you can share it with the people in your workplace.</span></span></div><div class="styled-agent-edit-select styled-agent-edit-workspace" id="styledAgentEditWorkspace">' + esc(workspaceLabel()) + '</div></section>' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">AVATAR COLOR</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditAvatarInfo" aria-label="Avatar color information" title="Avatar color information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditAvatarInfo" role="tooltip">Automatic follows the bot identity.</span></span></div><div class="styled-agent-edit-color-control"><div class="styled-agent-color-options" id="styledAgentEditColorOptions" role="group" aria-label="Bot avatar color">' + colorMarkup + '</div></div></section>' +
@@ -4080,7 +4082,37 @@
       var remove = el('#styledAgentEditDelete', pane);
       if(remove) remove.style.display = (a.isBuiltin && !a.agentId) ? 'none' : '';
       wireStyledAgentEditControls(pane);
+      renderEditSkillFolders();
     }
+  }
+  // The skills the bot carries, as folders whose files edit in place. Follows
+  // Choose skills as you tick, before Save.
+  var editSkillFolders = {ids: '', skills: []};
+  function renderEditSkillFolders(){
+    var box = el('#styledAgentEditSkillFolders');
+    if(!box || !window.MiaBotMarketplace) return;
+    var ids = Array.isArray(editState.skills) ? editState.skills.slice() : [];
+    var key = ids.join(',');
+    function draw(){
+      if(!box.isConnected || editSkillFolders.ids !== key) return;
+      box.innerHTML = editSkillFolders.skills.length
+        ? window.MiaBotMarketplace.skillFoldersHtml(editSkillFolders.skills, {esc: esc}, true)
+        : '<p class="bot-market-empty">No skills yet. Choose some below.</p>';
+      els('[data-card-edit]', box).forEach(function(target){
+        target.addEventListener('click', function(){ beginSkillFileEdit(target, editSkillFolders.skills, draw); });
+        target.addEventListener('keydown', function(event){ if(event.key === 'Enter'){ event.preventDefault(); beginSkillFileEdit(target, editSkillFolders.skills, draw); } });
+      });
+    }
+    if(editSkillFolders.ids === key && editSkillFolders.skills.length === ids.length) return draw();
+    editSkillFolders = {ids: key, skills: []};
+    box.innerHTML = ids.length ? '<p class="bot-market-empty">Loading…</p>' : '';
+    Promise.all(ids.map(function(id){
+      return api('/api/skills/' + encodeURIComponent(id)).then(function(res){ return res.status === 200 && res.data ? res.data.skill : null; }, function(){ return null; });
+    })).then(function(skills){
+      if(editSkillFolders.ids !== key) return;
+      editSkillFolders.skills = skills.filter(Boolean);
+      draw();
+    });
   }
 
   function openCinema(origin){
@@ -13100,7 +13132,7 @@
       showBenchToast('A bot can carry up to ' + limit + ' skills.');
     }
     picker.setAttribute('data-selected', JSON.stringify(chosen));
-    if(picker.id === 'styledAgentEditSkills') editState.skills = chosen;
+    if(picker.id === 'styledAgentEditSkills'){ editState.skills = chosen; renderEditSkillFolders(); }
   });
 
   function agentSetupProposalText(draft){
@@ -15082,96 +15114,41 @@
     var places = bench ? agentDepartments(bench).length : 0;
     return '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">Bot settings</span></div>' +
       row('Model', '<span id="cipModelValue">' + esc(tags ? tags.textContent.trim() : '') + '</span>', 'data-bot-setting="model"') +
-      (agent ? row('Brief', '', 'data-bot-setting="edit"') + row('Workplaces', places ? String(places) : '', 'data-bot-setting="edit"') + row('Avatar color', color, 'data-bot-setting="edit"') : '') + '</section>';
+      (agent ? row('Instructions', '', 'data-bot-setting="edit"') + row('Workplaces', places ? String(places) : '', 'data-bot-setting="edit"') + row('Avatar color', color, 'data-bot-setting="edit"') : '') + '</section>';
   }
-  // Bot settings, from the conversation's menu, shows the bot in the right
-  // pane as the same card the marketplace shows; its Edit opens the editor.
+  // The same editor the details pane opens, from the conversation's menu.
   function openActiveBotSettings(){
     var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === chatWs.activeRoomId; })[0] || null;
     var botId = conversation && conversation.metadata && conversation.metadata.botId;
     return loadBenchAgents().then(function(){
       var bench = botId && findBenchAgentByServerId(botId);
-      if(!bench){ showBenchToast('Bot settings are unavailable right now'); return; }
-      openBotCardPane(botId);
+      if(!bench){ showBenchToast('Bot editor is unavailable right now'); return; }
+      openEditCinema(bench.id);
     });
   }
-  var botCardSkills = {};
-  function openBotCardPane(botId){
-    if(!STYLED_SKIN) return;
-    prepareChatUtilityPane('bot-card');
-    chatInfo.cardBotId = botId;
-    renderChatInfoPane();
-    var bench = findBenchAgentByServerId(botId);
-    var ids = bench && Array.isArray(bench.skills) ? bench.skills : [];
-    botCardSkills[botId] = null;
-    Promise.all(ids.map(function(id){
-      return api('/api/skills/' + encodeURIComponent(id)).then(function(res){ return res.status === 200 && res.data ? res.data.skill : null; }, function(){ return null; });
-    })).then(function(skills){
-      botCardSkills[botId] = skills.filter(Boolean);
-      if(chatInfo.mode === 'bot-card' && chatInfo.cardBotId === botId) renderChatInfoPane();
-    });
-  }
-  function closeBotCardPane(){
-    if(chatInfo.mode !== 'bot-card') return;
-    chatInfo.mode = 'automations';
-    chatInfo.open = false;
-    renderChatInfoPane();
-    syncSidebarToolButtons();
-  }
-  function renderBotCardPane(pane){
-    var botId = chatInfo.cardBotId, bench = findBenchAgentByServerId(botId);
-    var record = (chatWs.botRecords || []).filter(function(item){ return String(item.id) === String(botId); })[0] || {};
-    pane.setAttribute('aria-label', 'Bot settings');
-    pane.classList.remove('plugins-open', 'agents-open', 'automation-detail-open');
-    pane.classList.add('open', 'bot-store-open');
-    var card = !bench || !window.MiaBotMarketplace ? '<p class="bot-market-empty">This bot isn\'t available right now.</p>'
-      : window.MiaBotMarketplace.cardHtml({
-          name: bench.name, color: bench.avatarColor,
-          meta: [bench.model && bench.model !== 'default' ? String(bench.model).split('/').pop() : '', record.marketSource ? 'from the marketplace' : ''].filter(Boolean).join(' · '),
-          action: '<button type="button" class="bot-market-link" data-bot-card-more title="Model, workplaces and color">More settings</button>',
-          editable: true,
-          instructions: String(bench.instructions || ''),
-          skills: botCardSkills[botId] === undefined ? [] : botCardSkills[botId],
-          automations: (Array.isArray(record.automations) ? record.automations : []).map(function(item){ return {name: item.name, schedule: automationScheduleText(item)}; })
-        }, {esc: esc, avatarHtml: function(name, color){ return agentAvatarHtml(name, botId, 56, null, color || null); }});
-    pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">Bot settings</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
-      '<button type="button" class="cip-pane-btn" id="botCardPaneClose" aria-label="Close bot settings" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></div></div>' +
-      '<div class="bot-store-body bot-card-pane">' + card + '</div>';
-    el('#botCardPaneClose', pane).addEventListener('click', closeBotCardPane);
-    var more = el('[data-bot-card-more]', pane);
-    if(more) more.addEventListener('click', function(){ if(bench) openEditCinema(bench.id); });
-    els('[data-card-edit]', pane).forEach(function(target){
-      target.addEventListener('click', function(){ beginBotCardEdit(target, botId); });
-      target.addEventListener('keydown', function(event){ if(event.key === 'Enter'){ event.preventDefault(); beginBotCardEdit(target, botId); } });
-    });
-  }
-  // Clicking a text in your bot's card edits it right there: its name, its
-  // instructions, or a file in one of its skill folders.
-  function beginBotCardEdit(target, botId){
+  // In Bot settings, a bot's skills show as folders. Clicking a file edits it
+  // right there and saves it into the skill's folder, for every bot that
+  // carries the skill. skills: the folders on screen; onSaved redraws them.
+  function beginSkillFileEdit(target, skills, onSaved){
     if(target.hidden) return;
-    var kind = target.getAttribute('data-card-edit'), single = kind === 'name';
     var editor = document.createElement('div');
-    editor.className = 'bot-card-editor' + (single ? ' single' : '');
-    editor.innerHTML = (single ? '<input class="bot-market-input" maxlength="40" aria-label="Bot name">'
-      : '<textarea class="bot-market-input mono" aria-label="' + esc(kind === 'file' ? target.getAttribute('data-file-path') : 'Instructions') + '"></textarea>')
-      + '<div class="bot-card-editor-actions"><span class="bot-card-editor-hint">' + (single ? 'Enter to save' : '⌘Enter to save') + ' · Esc to cancel</span>'
+    editor.className = 'bot-card-editor';
+    editor.innerHTML = '<textarea class="bot-market-input mono" aria-label="' + esc(target.getAttribute('data-file-path')) + '"></textarea>'
+      + '<div class="bot-card-editor-actions"><span class="bot-card-editor-hint">⌘Enter to save · Esc to cancel</span>'
       + '<button type="button" class="bot-market-btn" data-card-cancel>Cancel</button><button type="button" class="bot-market-btn primary" data-card-save>Save</button></div>'
       + '<div class="bot-market-error" role="alert"></div>';
-    var field = editor.querySelector(single ? 'input' : 'textarea');
+    var field = editor.querySelector('textarea');
     field.value = target.textContent;
-    if(!single) field.rows = Math.min(24, Math.max(6, field.value.split('\n').length + 1));
+    field.rows = Math.min(24, Math.max(6, field.value.split('\n').length + 1));
     target.hidden = true;
     target.insertAdjacentElement('afterend', editor);
     field.focus();
     function done(){ editor.remove(); target.hidden = false; }
     function save(){
-      var value = single ? field.value.trim() : field.value;
-      if(value === target.textContent){ done(); return; }
+      if(field.value === target.textContent){ done(); return; }
       var saveBtn = editor.querySelector('[data-card-save]');
       saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
-      saveBotCardText(botId, target, kind, value).then(function(){
-        if(chatInfo.mode === 'bot-card' && chatInfo.cardBotId === botId) renderChatInfoPane();
-      }, function(error){
+      saveSkillFile(skills, target.getAttribute('data-skill-id'), target.getAttribute('data-file-path'), field.value).then(onSaved, function(error){
         saveBtn.disabled = false; saveBtn.textContent = 'Save';
         editor.querySelector('.bot-market-error').textContent = error && error.message || 'That didn\'t save. Try again.';
       });
@@ -15180,38 +15157,26 @@
     editor.querySelector('[data-card-save]').addEventListener('click', save);
     field.addEventListener('keydown', function(event){
       if(event.key === 'Escape'){ event.preventDefault(); event.stopPropagation(); done(); }
-      else if(event.key === 'Enter' && (single || event.metaKey || event.ctrlKey)){ event.preventDefault(); save(); }
+      else if(event.key === 'Enter' && (event.metaKey || event.ctrlKey)){ event.preventDefault(); save(); }
     });
   }
-  function saveBotCardText(botId, target, kind, value){
-    var bench = findBenchAgentByServerId(botId);
-    if(!bench) return Promise.reject(new Error('This bot isn\'t available right now.'));
-    function check(res){
-      if(res.status < 200 || res.status >= 300) throw new Error(res.data && (res.data.message || res.data.error) || 'That didn\'t save. Try again.');
-      return res;
-    }
-    if(kind === 'name' || kind === 'instructions'){
-      var body = kind === 'name' ? {name: value} : {instructions: value, expectedInstructionsRevision: bench.instructionsRevision};
-      if(kind === 'name' && !value) return Promise.reject(new Error('Give the bot a name.'));
-      return api('/api/bots/' + encodeURIComponent(botId), {method:'PUT', body: body}).then(check).then(function(){
-        return loadBenchAgents();
-      }).then(function(){ renderChatSidebar(); renderChatHeaderBar(); });
-    }
-    // A skill file: SKILL.md is the skill's body; any other file is saved with the rest.
-    var skillId = target.getAttribute('data-skill-id'), path = target.getAttribute('data-file-path');
-    var skill = (botCardSkills[botId] || []).filter(function(item){ return item.id === skillId; })[0];
+  // SKILL.md is the skill's body; any other file is saved with the rest.
+  // -> Promise<the saved skill, also put back in skills>
+  function saveSkillFile(skills, skillId, path, value){
+    var index = skills.map(function(item){ return item.id; }).indexOf(skillId), skill = skills[index];
     if(!skill) return Promise.reject(new Error('This skill isn\'t available right now.'));
     var main = /^skill\.md$/i.test(path);
     var update = {name: skill.name, description: skill.description || '', body: main ? value : skill.body};
     if(!main) update.files = (skill.files || []).map(function(file){ return {path: file.path, body: file.path === path ? value : file.body}; });
-    return api('/api/skills/' + encodeURIComponent(skillId), {method:'PUT', body: update}).then(check).then(function(){
+    return api('/api/skills/' + encodeURIComponent(skillId), {method:'PUT', body: update}).then(function(res){
+      if(res.status !== 200) throw new Error(res.data && (res.data.message || res.data.error) || 'That didn\'t save. Try again.');
       return api('/api/skills/' + encodeURIComponent(skillId));
     }).then(function(res){
-      if(res.status === 200 && res.data && res.data.skill){
-        botCardSkills[botId] = (botCardSkills[botId] || []).map(function(item){ return item.id === skillId ? res.data.skill : item; });
-      }
+      if(res.status === 200 && res.data && res.data.skill) skills[index] = res.data.skill;
+      return skills[index];
     });
   }
+
   function bindDetailsBotSettings(pane, agent){
     els('[data-bot-setting]', pane).forEach(function(button){
       button.addEventListener('click', function(event){
@@ -15238,7 +15203,7 @@
       restorePluginShell();
       chatInfo.mode = 'automations';
     }
-    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail' || chatInfo.mode === 'bot-card';
+    var specialMode = chatInfo.mode === 'plugins' || chatInfo.mode === 'agents' || chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail';
     if(!STYLED_SKIN || !chatInfo.open || (!chatWs.activeRoomId && chatInfo.mode !== 'agents' && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agent-edit') || (!specialMode && !isInfoPaneAvailable())){
       restorePluginShell();
       pane.classList.remove('open', 'agents-open', 'agent-edit-open', 'automation-detail-open', 'bot-store-open');
@@ -15264,10 +15229,6 @@
     }
     if(chatInfo.mode === 'agents'){
       renderManageAgentsPane(pane);
-      return;
-    }
-    if(chatInfo.mode === 'bot-card'){
-      renderBotCardPane(pane);
       return;
     }
     if(chatInfo.mode === 'plugins'){

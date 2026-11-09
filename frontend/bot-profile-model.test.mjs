@@ -38,7 +38,7 @@ test('the rendered bot profile removes MODEL while preserving its editable field
   for (const id of ['styledAgentEditName', 'styledAgentEditInstructions', 'styledAgentAddAutomation', 'styledAgentEditWorkspace', 'styledAgentEditColorOptions', 'styledAgentEditSave', 'styledAgentEditCancel', 'styledAgentEditDelete']) {
     assert.ok(html.includes(`id="${id}"`), id);
   }
-  for (const label of ['BRIEF', 'AUTOMATIONS', 'WORKPLACES', 'AVATAR COLOR']) assert.ok(html.includes(label), label);
+  for (const label of ['INSTRUCTIONS', 'SKILLS', 'AUTOMATIONS', 'WORKPLACES', 'AVATAR COLOR']) assert.ok(html.includes(label), label);
 });
 
 for (const storedModel of ['current-chat-model', null]) {

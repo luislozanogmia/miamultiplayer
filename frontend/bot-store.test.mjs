@@ -67,18 +67,17 @@ test('the Bot marketplace opens inside a company too, not only in Solo', async (
   assert.match(source, /var sharedView = [^;]*action === 'bot-store'/);
 });
 
-test('Bot settings shows the bot as the same card the marketplace shows, with Edit', async () => {
+test('Bot settings is one page: instructions, then skills as folders whose files edit in place', async () => {
   const [source, market] = await Promise.all([readFile(appUrl, 'utf8'), readFile(new URL('./bot-marketplace.js', import.meta.url), 'utf8')]);
-  assert.match(source, /function openActiveBotSettings\(\)\{[\s\S]*?openBotCardPane\(botId\);/);
-  assert.match(source, /function renderBotCardPane\(pane\)\{[\s\S]*?window\.MiaBotMarketplace\.cardHtml\(\{/);
-  // No Edit button: your bot's name, instructions and skill files edit in place.
-  assert.match(source, /editable: true,/);
-  assert.match(source, /target\.addEventListener\('click', function\(\)\{ beginBotCardEdit\(target, botId\); \}\);/);
-  assert.match(source, /if\(more\) more\.addEventListener\('click', function\(\)\{ if\(bench\) openEditCinema\(bench\.id\); \}\);/, 'More settings opens the editor');
+  assert.match(source, /function openActiveBotSettings\(\)\{[\s\S]*?openEditCinema\(bench\.id\);/);
+  assert.doesNotMatch(source, /renderBotCardPane|'bot-card'/, 'no second settings page');
+  assert.match(source, /styled-agent-edit-section-label">INSTRUCTIONS<\/span>/);
+  assert.doesNotMatch(source, /section-label">BRIEF</);
+  assert.match(source, /id="styledAgentEditSkillFolders"[\s\S]*?<summary>Choose skills<\/summary>' \+ skillPickerHtml\('styledAgentEditSkills', editState\.skills\)/);
+  assert.match(source, /window\.MiaBotMarketplace\.skillFoldersHtml\(editSkillFolders\.skills, \{esc: esc\}, true\)/);
   assert.match(source, /if\(!main\) update\.files = \(skill\.files \|\| \[\]\)\.map\(function\(file\)\{ return \{path: file\.path, body: file\.path === path \? value : file\.body\}; \}\);/);
-  assert.match(market, /data-card-edit=/);
-  assert.doesNotMatch(market, /function detailView\(\)\{[\s\S]*?editable: true/, 'marketplace cards stay read-only');
-  assert.match(market, /return '<button type="button" class="bot-market-back" data-market-back>&larr; Back<\/button>' \+ botCard\(view\);/, 'the marketplace uses the same card');
+  assert.match(market, /data-card-edit="file"/);
+  assert.match(market, /return '<button type="button" class="bot-market-back" data-market-back>&larr; Back<\/button>' \+ botCard\(view\);/);
 });
 
 test('Ask Mia in the marketplace opens her chat with what you were looking at named', async () => {
