@@ -3988,6 +3988,7 @@
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SKILLS</span></div>' +
           (powerUser() ? '<div class="styled-agent-edit-skill-folders" id="styledAgentEditSkillFolders"></div><div class="styled-agent-edit-skill-add" id="styledAgentEditSkillAdd"></div>'
             : skillPickerHtml('styledAgentEditSkills', editState.skills)) + '</section>' +
+        styledAgentSharedFolderMarkup(a) +
         styledAgentAutomationMarkup(a) +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">WORKPLACES</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditWorkplacesInfo" aria-label="Workplaces information" title="Workplaces information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditWorkplacesInfo" role="tooltip">The workplace this bot belongs to. In multiplayer you can share it with the people in your workplace.</span></span></div><div class="styled-agent-edit-select styled-agent-edit-workspace" id="styledAgentEditWorkspace">' + esc(workspaceLabel()) + '</div></section>' +
         '<section class="styled-agent-edit-section"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">AVATAR COLOR</span><span class="styled-agent-edit-info-wrap"><button type="button" class="styled-agent-edit-info" data-agent-info-trigger aria-expanded="false" aria-controls="styledAgentEditAvatarInfo" aria-label="Avatar color information" title="Avatar color information">i</button><span class="styled-agent-edit-info-popover" id="styledAgentEditAvatarInfo" role="tooltip">Automatic follows the bot identity.</span></span></div><div class="styled-agent-edit-color-control"><div class="styled-agent-color-options" id="styledAgentEditColorOptions" role="group" aria-label="Bot avatar color">' + colorMarkup + '</div></div></section>' +
@@ -4088,7 +4089,54 @@
       if(remove) remove.style.display = (a.isBuiltin && !a.agentId) ? 'none' : '';
       wireStyledAgentEditControls(pane);
       renderEditSkillFolders();
+      wireSharedFolderSection(pane, a);
     }
+  }
+  // A power user sees a marketplace bot's shared folder: the files everyone
+  // who uses the bot shares, synced around each run. Owners and admins turn it
+  // on or off; the Hub checks that.
+  function editBotRecord(a){
+    return (chatWs.botRecords || []).filter(function(record){ return String(record.id) === String(a.agentId || a.id); })[0] || null;
+  }
+  function styledAgentSharedFolderMarkup(a){
+    var record = editBotRecord(a), source = record && record.marketSource;
+    if(!powerUser() || !source || !source.teamId) return '';
+    return '<section class="styled-agent-edit-section" id="styledAgentEditSharedFolder"><div class="styled-agent-edit-label-row"><span class="styled-agent-edit-section-label">SHARED FOLDER</span></div>' +
+      '<p class="styled-agent-edit-folder-note">The <code>shared</code> folder in this bot\u2019s working folder, the same for everyone who uses it. It syncs before and after each run; the rest stays on this computer.</p>' +
+      '<div class="styled-agent-edit-folder-row"><span class="styled-agent-edit-folder-status" data-folder-status>' + (source.folder ? 'On' : 'Off') + '</span>' +
+      '<button type="button" class="styled-settings-pill-btn" data-folder-toggle>' + (source.folder ? 'Turn off' : 'Share its folder') + '</button>' +
+      (source.folder ? '<button type="button" class="styled-settings-pill-btn" data-folder-sync>Sync now</button>' : '') + '</div>' +
+      '<div class="bot-market-error" role="alert" data-folder-error></div></section>';
+  }
+  function wireSharedFolderSection(pane, a){
+    var box = el('#styledAgentEditSharedFolder', pane);
+    if(!box) return;
+    var record = editBotRecord(a), source = record.marketSource;
+    var status = el('[data-folder-status]', box), error = el('[data-folder-error]', box);
+    function redraw(){ box.outerHTML = styledAgentSharedFolderMarkup(a); wireSharedFolderSection(pane, a); }
+    var toggle = el('[data-folder-toggle]', box), sync = el('[data-folder-sync]', box);
+    toggle.addEventListener('click', function(){
+      var on = !source.folder;
+      toggle.disabled = true;
+      hubCall('PUT', '/v1/teams/' + source.teamId + '/market/bots/' + encodeURIComponent(source.botId) + '/folder', {enabled: on}).then(function(){
+        return api('/api/bots/' + encodeURIComponent(record.id), {method: 'PUT', body: {marketSource: Object.assign({}, source, {folder: on})}});
+      }).then(function(res){
+        if(res.status !== 200) throw new Error(res.data && res.data.message || 'That didn\u2019t save.');
+        record.marketSource = Object.assign({}, source, {folder: on});
+        redraw();
+      }).catch(function(err){
+        toggle.disabled = false;
+        error.textContent = err && err.status === 404 ? 'Only this bot\u2019s owners and admins can change its shared folder, once the company\u2019s marketplace has folders.' : (err && err.message || 'That didn\u2019t save. Try again.');
+      });
+    });
+    if(sync) sync.addEventListener('click', function(){
+      var engine = sharedFolderSync();
+      if(!engine) return;
+      sync.disabled = true; status.textContent = 'Syncing\u2026'; error.textContent = '';
+      engine.pull(record).then(function(){ return engine.push(record); }).then(function(result){
+        status.textContent = 'On \u00b7 synced' + (result && result.copies && result.copies.length ? ', kept both copies of ' + result.copies.length + ' file' + (result.copies.length === 1 ? '' : 's') : '');
+      }, function(err){ status.textContent = 'On'; error.textContent = err && err.message || 'It didn\u2019t sync. Try again.'; }).then(function(){ sync.disabled = false; });
+    });
   }
   // For a power user, the skills the bot carries as folders whose files edit
   // in place. Remove takes one off and + Add skill puts one on; the bot keeps
@@ -5506,6 +5554,40 @@
       +sidebarRowText('Mia',chat ? chat.id : null,!!(state && state.thinking));
     button.addEventListener('click',function(){ openTeamMiaChat(); });
     return button;
+  }
+  // A shared bot's shared folder (bot-folder-sync.js): the same files for
+  // everyone who uses the bot, pulled before your message reaches it and
+  // pushed after its reply. A failed sync never blocks the chat.
+  var botFolderSync = null, sharedFolderPushes = {};
+  function sharedFolderSync(){
+    if(!botFolderSync && window.MiaBotFolderSync && window.MiaTeamFiles){
+      botFolderSync = window.MiaBotFolderSync.createSync({api: api, hubCall: hubCall, teamFiles: window.MiaTeamFiles,
+        who: String(displayNameForEmail(currentUser) || '').split(/\s+/)[0]});
+    }
+    return botFolderSync;
+  }
+  function sharedFolderBot(roomId){
+    var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
+    var botId = conversation && conversation.metadata && conversation.metadata.botId;
+    var bot = botId && (chatWs.botRecords || []).filter(function(record){ return String(record.id) === String(botId); })[0];
+    return bot && bot.marketSource && bot.marketSource.folder === true ? bot : null;
+  }
+  function pullSharedFolderBeforeSend(roomId){
+    var bot = sharedFolderBot(roomId), sync = bot && sharedFolderSync();
+    if(!sync) return Promise.resolve();
+    var timeout = new Promise(function(resolve){ setTimeout(resolve, 60000); });
+    return Promise.race([sync.pull(bot), timeout]).catch(function(error){
+      showBenchToast('Couldn\u2019t get ' + bot.name + '\u2019s latest shared files: ' + (error && error.message || 'try again.') + ' It works from the ones on this computer.');
+    });
+  }
+  function pushSharedFolderAfterRun(roomId){
+    var bot = sharedFolderBot(roomId), sync = bot && sharedFolderSync();
+    if(!sync || sharedFolderPushes[bot.id]) return;
+    sharedFolderPushes[bot.id] = sync.push(bot).then(function(result){
+      if(result && result.copies && result.copies.length) showBenchToast('Someone changed the same shared file meanwhile; ' + bot.name + ' kept both: ' + result.copies.join(', ') + '.');
+    }, function(error){
+      showBenchToast(bot.name + '\u2019s shared files didn\u2019t sync: ' + (error && error.message || 'try again.') + ' They stay on this computer and sync after the next run.');
+    }).then(function(){ delete sharedFolderPushes[bot.id]; });
   }
   function initHubChat(){
     ['channels','bots','company-bots'].forEach(function(key){ hubHiddenBotsOpen[activeWorkspaceKey+':'+key]=false; });
@@ -7041,6 +7123,8 @@
     // become stale (for example, if the final event omitted its dispatchId).
     // Reconcile with the durable active list so an idle chat never keeps a
     // pulsing activity dot after its work has completed.
+    // The run is done: what it changed in a shared folder goes to the company.
+    if(fromWorker && !isProgress) pushSharedFolderAfterRun(event.conversationId);
     if(fromWorker && !isProgress){
       loadActiveNativeDispatches(event.conversationId);
       // Unread dots and desktop notifications are handled by the watch
@@ -19841,8 +19925,10 @@
       // Group tags reach many people at once — confirm the blast radius
       // first. Cancel keeps the draft in the composer untouched.
       var counts = groupTagCounts(text);
-      if(counts && (counts.agents || counts.humans)){ openGroupSendConfirm(counts, reallySend); return; }
-      reallySend();
+      // A bot with a shared folder gets the company's latest files first.
+      var send = function(){ pullSharedFolderBeforeSend(chatWs.activeRoomId).then(reallySend); };
+      if(counts && (counts.agents || counts.humans)){ openGroupSendConfirm(counts, send); return; }
+      send();
     }
     // Send lights up (and the hint swaps to how-to-send) only once there's
     // a real draft — mirrors the mock's sendStyle/hint being keyed off

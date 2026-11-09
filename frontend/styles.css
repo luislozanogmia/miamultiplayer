@@ -4323,3 +4323,6 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
 .mcp-app-remove{flex:none;color:var(--sand-text-danger);}
 .mcp-app-error{font-size:12px;color:var(--sand-text-danger);}
 .mcp-app-error:empty{display:none;}
+.styled-agent-edit-folder-note{font-size:12px;color:var(--sand-text-secondary);margin:0 0 8px;line-height:1.5;}
+.styled-agent-edit-folder-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.styled-agent-edit-folder-status{font-size:13px;color:var(--sand-text-primary);margin-right:auto;}

@@ -1039,6 +1039,10 @@ app.use((req, res, next) => req.method === 'POST' && HUB_LARGE_DEFINITION_POST.t
 // cookie-authenticated local share route. Authenticate before parsing it.
 app.use((req, res, next) => req.method === 'POST' && req.path === '/api/hub-bots/share'
   ? requireSessionAuth(req, res, () => largeHubDefinitionJson(req, res, next)) : next());
+// A shared bot folder file (up to 50 MB) syncs as base64 JSON. Authenticate
+// before parsing it.
+app.use((req, res, next) => req.method === 'PUT' && /^\/api\/bots\/[^/]+\/shared-folder\/file$/.test(req.path)
+  ? requireAuth(req, res, () => largeHubDefinitionJson(req, res, next)) : next());
 // There is no multipart middleware in this backend. Ordinary JSON requests
 // stay bounded to one 8 MiB image plus base64/JSON overhead.
 app.use(express.json({ limit: MAX_MEDIA_UPLOAD_REQUEST_BYTES }));
@@ -5931,6 +5935,46 @@ app.delete('/api/mcp-apps/:id', requireInteractiveAuth, mcpAppRoute(async (req) 
   }));
   return { removed: found.id };
 }));
+
+// A shared bot's shared folder on this computer (backend/bot-shared-folder.js):
+// the app syncs it with the company's copy around each run. Only your own
+// bot, only its shared/ folder; file bytes travel as base64 JSON.
+const botSharedFolder = require('./bot-shared-folder');
+function sharedFolderFor(req) {
+  const bot = db.loadOne(conn, 'bots', String(req.params.id || ''));
+  if (!bot || !botVisibleInWorkspace(bot, req) || !sameOwner(bot, req.userEmail)) {
+    throw new botSharedFolder.SharedFolderError('not_found', 'That bot is not here.', 404);
+  }
+  return botSharedFolder.createSharedFolder(soloBotWorkFolder(bot));
+}
+function sharedFolderRoute(action) {
+  return async (req, res) => {
+    try { res.status(200).json(await action(req)); } catch (error) {
+      if (!(error instanceof botSharedFolder.SharedFolderError)) return res.status(500).json({ error: 'shared_folder_failed', message: 'The shared folder could not be read on this computer.' });
+      res.status(error.statusCode).json({ error: error.code, message: error.message });
+    }
+  };
+}
+app.get('/api/bots/:id/shared-folder', requireAuth, sharedFolderRoute((req) => {
+  const folder = sharedFolderFor(req);
+  return { files: folder.list(), state: folder.state() };
+}));
+app.get('/api/bots/:id/shared-folder/file', requireAuth, sharedFolderRoute((req) => ({
+  contentBase64: sharedFolderFor(req).read(String(req.query.path || '')).toString('base64'),
+})));
+app.put('/api/bots/:id/shared-folder/file', requireAuth, sharedFolderRoute((req) => {
+  const body = req.body || {};
+  if (typeof body.contentBase64 !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.contentBase64)) {
+    throw new botSharedFolder.SharedFolderError('invalid_file', 'The file bytes are not valid.');
+  }
+  sharedFolderFor(req).write(String(body.path || ''), Buffer.from(body.contentBase64, 'base64'));
+  return { ok: true };
+}));
+app.delete('/api/bots/:id/shared-folder/file', requireAuth, sharedFolderRoute((req) => {
+  sharedFolderFor(req).remove(String(req.query.path || ''));
+  return { ok: true };
+}));
+app.put('/api/bots/:id/shared-folder/state', requireAuth, sharedFolderRoute((req) => ({ state: sharedFolderFor(req).saveState(req.body || {}) })));
 
 // The skills library. A scheduled job stores its prompt, so editing a skill
 // refreshes the jobs of the bots that carry it.

@@ -763,6 +763,17 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
   // A shared bot brings the text of its skills with it; a Solo bot reads the
   // library, so an edit there reaches its next turn.
   const skills = Array.isArray(record.bundledSkills) ? record.bundledSkills : defaultSkillsLibrary.bundle(record.skills);
+  // A shared bot's shared folder is the same for everyone who uses it; the
+  // app syncs it before and after each turn.
+  if (record.marketSource && record.marketSource.folder === true) {
+    sections.push([
+      'Your shared folder:',
+      '- The `shared` folder in your working folder is the same for everyone who uses you, on every computer. It syncs before and after each turn.',
+      '- Keep there what others should find next time: notes, lists, reference files and finished outputs. Keep scratch work, downloads and logs outside it.',
+      '- A file named like "name (Ana\u2019s run).md" is a copy kept when two runs changed the same file. Merge it into the original and remove the copy.',
+      '- Never put keys, passwords or personal data there.',
+    ].join('\n'));
+  }
   if (skills.length) {
     sections.push([
       'Your skills:',
