@@ -135,12 +135,34 @@
   // The large card: what the bot does, its instructions (its AGENTS.md),
   // skills and automations, with the same Get or Open as its small card.
   function section(title, html){ return '<section class="bot-market-section"><h2>' + esc(title) + '</h2>' + html + '</section>'; }
+  // A skill is a folder: SKILL.md says what it is and when to use it, and
+  // points to the other files in it (notes like ICP.md, scripts like search.py).
+  // An older skill is just a name, a description and a body (its SKILL.md).
+  var FOLDER_ICON = '<svg class="bot-market-skill-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  var FILE_ICON = '<svg class="bot-market-file-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+  function skillFiles(skill){
+    var files = Array.isArray(skill.files) ? skill.files.filter(function(file){ return file && file.path; }) : [];
+    if(!files.some(function(file){ return /^skill\.md$/i.test(file.path); }) && skill.body) files.unshift({path: 'SKILL.md', body: skill.body});
+    return files.sort(function(a, b){
+      var main = /^skill\.md$/i;
+      return (main.test(b.path) ? 1 : 0) - (main.test(a.path) ? 1 : 0) || a.path.localeCompare(b.path);
+    });
+  }
+  function fileKind(path){
+    return /\.md$/i.test(path) ? 'Notes' : /\.(py|js|mjs|sh|ts)$/i.test(path) ? 'Script' : /\.(json|ya?ml|csv)$/i.test(path) ? 'Data' : 'File';
+  }
   function skillsHtml(skills){
     if(!skills.length) return '<p class="bot-market-empty">No skills.</p>';
     return skills.map(function(skill){
-      return '<details class="bot-market-skill"><summary><strong>' + esc(skill.name || 'Skill') + '</strong>'
-        + (skill.description ? '<span>' + esc(skill.description) + '</span>' : '') + '</summary>'
-        + (skill.body ? '<pre class="bot-market-text">' + esc(skill.body) + '</pre>' : '') + '</details>';
+      var files = skillFiles(skill);
+      return '<details class="bot-market-skill"><summary>' + FOLDER_ICON + '<span class="bot-market-skill-head"><strong>' + esc(skill.name || 'Skill') + '</strong>'
+        + (skill.description ? '<span>' + esc(skill.description) + '</span>' : '') + '</span>'
+        + '<span class="bot-market-skill-count">' + esc(files.length === 1 ? '1 file' : files.length + ' files') + '</span></summary>'
+        + '<div class="bot-market-files">' + files.map(function(file){
+          return '<details class="bot-market-file"><summary>' + FILE_ICON + '<span class="bot-market-file-name">' + esc(file.path) + '</span>'
+            + '<span class="bot-market-file-kind">' + esc(/^skill\.md$/i.test(file.path) ? 'Read first' : fileKind(file.path)) + '</span></summary>'
+            + '<pre class="bot-market-text">' + esc(file.body || '') + '</pre></details>';
+        }).join('') + '</div></details>';
     }).join('');
   }
   function detailView(){
