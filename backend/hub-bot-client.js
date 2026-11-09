@@ -87,7 +87,16 @@ function materializeSharedSkills(skills) {
     return {skills:prepared,cleanup:()=>fs.rmSync(root,{recursive:true,force:true})};
   } catch(error) {fs.rmSync(root,{recursive:true,force:true});throw error;}
 }
-function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,isHeld=()=>false,isClosing=()=>false,checkIntervalMs=15000,fetcher=fetch}) {
+// A company run gets Solo's turn time, but always ends before the Hub's claim
+// does, and reads the channel's last 100 messages, as Solo reads its chat.
+const SHARED_RUN_HISTORY = 100;
+const CLAIM_MARGIN_MS = 30000;
+function sharedRunTimeoutMs(runTimeoutMs, deadline, now = Date.now()) {
+  if (!Number.isFinite(deadline) || deadline <= 0) return runTimeoutMs;
+  const endsAt = deadline < 1e12 ? deadline * 1000 : deadline; // the Hub counts seconds
+  return Math.max(1000, Math.min(runTimeoutMs, endsAt - now - CLAIM_MARGIN_MS));
+}
+function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,isHeld=()=>false,isClosing=()=>false,checkIntervalMs=15000,runTimeoutMs=10*60*1000,fetcher=fetch}) {
   const journal=createHubBotJournal(db);
   const inFlight=new Map(), freshTokens=new Map(), selections=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
@@ -136,7 +145,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     // never permission to repeat a potentially side-effecting tool operation.
     if(!journal.start(s,run.job_id)) return;
     const controller=new AbortController();
-    const timeout=setTimeout(()=>controller.abort(),120000);
+    const timeout=setTimeout(()=>controller.abort(),sharedRunTimeoutMs(runTimeoutMs,Number(claim.deadline)));
     let checking=false;
     let skillFilesCleanup=()=>{};
     const check=setInterval(async()=>{
@@ -151,8 +160,8 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     try {
       const triggerPage=await requestHub(s.origin,token(),'GET',base(s)+'/messages/after/'+(claim.triggerSequence-1),undefined,fetcher);
       const trigger=(triggerPage.messages||[]).find(row=>row.sequence===claim.triggerSequence);
-      const history=[];let after=Math.max(0,claim.triggerSequence-40);
-      for(let page=0;page<3 && after<claim.triggerSequence;page++) {
+      const history=[];let after=Math.max(0,claim.triggerSequence-SHARED_RUN_HISTORY);
+      for(let page=0;page<6 && after<claim.triggerSequence;page++) {
         const result=await requestHub(s.origin,token(),'GET',base(s)+'/messages/after/'+after,undefined,fetcher);
         history.push(...(result.messages||[]).filter(row=>row.sequence<=claim.triggerSequence)
           .map(row=>row.author_type==='bot'?{...row,body:withoutRunLabel(row.body)}:row));
@@ -296,4 +305,4 @@ function createHubBotRouter(options) {
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
-module.exports={sharedSkills,materializeSharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};
+module.exports={sharedRunTimeoutMs,SHARED_RUN_HISTORY,sharedSkills,materializeSharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};

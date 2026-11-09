@@ -1373,6 +1373,7 @@ app.use('/api/hub-bots', requireSessionAuth, require('./hub-bot-client').createH
   listBots: (owner) => db.loadAll(conn, 'bots').filter(bot => sameOwner(bot, owner) && bot.status !== 'draft'),
   bundleSkills: (bot) => skillsLibrary.defaultLibrary.bundle(bot.skills),
   runBot: runSharedBotTurn,
+  runTimeoutMs: NATIVE_DISPATCH_TIMEOUT_MS,
 }));
 // Team workflow steps: the same bot turn, the owner's own account, one step at a time.
 app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-client').createHubWorkflowRouter({
