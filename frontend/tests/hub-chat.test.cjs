@@ -84,7 +84,8 @@ test('Hub channels cannot start a local chat socket; a company polls only its ow
 test('a team loads only its own bot chats, from Solo storage on this computer',async()=>{
   const key=appFunction('localChatWorkspaceKey',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
   assert.equal(key(),'solo');
-  const inView=appFunction('nativeConversationInView',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
+  const miaEnv={hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'};appFunction('isNativeMiaConversation',miaEnv);
+  const inView=appFunction('nativeConversationInView',miaEnv);
   assert.equal(inView({type:'bot',metadata:{teamWorkspace:'hub_a'}}),true);
   assert.equal(inView({type:'bot',metadata:{teamWorkspace:'hub_b'}}),false);
   assert.equal(inView({type:'bot',metadata:{}}),false);
@@ -1132,4 +1133,20 @@ test('a bot row has one menu in Solo and companies: its own actions, the chat\'s
   assert.deepEqual(labels(mine)[2],['Restart conversation'],'a company never archives your Solo bot');
   assert.deepEqual(labels({name:'Web',agent:null,roomId:null,pinned:true,hidden:true,open(){},extra:[{label:'Copy to another company…'}],danger:[{label:'Remove from company'}]}),
     [['Unpin','Show bot','Copy to another company…'],[],['Remove from company']],'a company bot you don\'t own');
+});
+test('in a company, Mia is your own 1:1 chat at the top, apart from Solo\'s, and never in the @ menu',()=>{
+  const env={hubWorkspace:()=>true,activeWorkspaceKey:'hub_'+'a'.repeat(32)};
+  appFunction('isNativeMiaConversation',env);
+  const inView=appFunction('nativeConversationInView',env);
+  const mia=team=>({type:'agent',metadata:{agentId:'gateway',...(team?{teamWorkspace:team}:{})}});
+  assert.equal(inView(mia('hub_'+'a'.repeat(32))),true,'this company\'s Mia chat');
+  assert.equal(inView(mia('hub_'+'b'.repeat(32))),false,'another company\'s');
+  assert.equal(inView(mia(null)),false,'Solo\'s Mia chat stays in Solo');
+  env.hubWorkspace=()=>false;
+  assert.equal(appFunction('nativeConversationInView',env)(mia('hub_'+'a'.repeat(32))),false,'and a company\'s stays out of Solo');
+  assert.match(source,/all\.appendChild\(teamMiaRow\(\)\);\s*var channelSection=section\('channels'/);
+  assert.match(source,/agent\.id==='gateway' \? openTeamMiaChat\(\) : openTeamBotChat\(agent\)/);
+  assert.match(source,/metadata:\{agentId:'gateway',teamWorkspace:workspace,source:'team-mia-chat'\}/);
+  // The @ menu in a company lists the channel's bots from the Hub; Mia is never one.
+  assert.doesNotMatch(source.slice(source.indexOf('  function roomMentionBots('),source.indexOf('  function roomMentionPeople(')),/gateway'\s*\?\s*true|gatewayAgent/);
 });

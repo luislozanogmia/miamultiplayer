@@ -5471,6 +5471,41 @@
       return loadChatRoom(conversation.id,'agent',bot.name);
     }).catch(function(){ showBenchToast('Couldn\'t open a chat with '+bot.name+'. Try again.'); });
   }
+  // In a company, Mia is your own 1:1 chat, never in a channel and never
+  // @-mentioned. Each company has its own Mia chat, apart from Solo's.
+  function teamMiaChat(){
+    return (chatWs.nativeConversations||[]).filter(function(conversation){
+      var metadata=conversation.metadata||{};
+      return isNativeMiaConversation(conversation) && metadata.teamWorkspace===activeWorkspaceKey && metadata.conversationMode!=='fresh';
+    })[0]||null;
+  }
+  function openTeamMiaChat(){
+    var existing=teamMiaChat();
+    if(existing)return loadChatRoom(existing.id,'agent','Mia');
+    var workspace=activeWorkspaceKey;
+    return window.MiaHubChat.sessionToken().then(function(token){
+      return api('/api/conversations?workspace=solo',{method:'POST',headers:{'x-hub-token':token},body:{type:'agent',name:'Mia',
+        metadata:{agentId:'gateway',teamWorkspace:workspace,source:'team-mia-chat'}}});
+    }).then(function(res){
+      var conversation=res.data && res.data.conversation;
+      if((res.status!==201 && res.status!==200) || !conversation)throw new Error('team mia chat');
+      if(activeWorkspaceKey!==workspace)return;
+      if(!(chatWs.nativeConversations||[]).some(function(item){return item.id===conversation.id;}))chatWs.nativeConversations.push(conversation);
+      applyNativeConversationList(chatWs.nativeConversations);
+      return loadChatRoom(conversation.id,'agent','Mia');
+    }).catch(function(){ showBenchToast('Couldn\'t open your chat with Mia. Try again.'); });
+  }
+  function teamMiaRow(){
+    var chat=teamMiaChat(), state=chat && chatWs.byRoom[chat.id];
+    var button=document.createElement('button'); button.type='button';
+    button.className='chat-recent-row hub-channel-row hub-mia-row'+(chat && chatWs.activeRoomId===chat.id?' active':'');
+    button.setAttribute('data-team-mia','');
+    button.title='Your own chat with Mia. She can manage your bots here.';
+    button.innerHTML='<span class="chat-row-mark tile">'+miaAvatarHtml(40,'mia-avatar-mark--static','static')+'</span>'
+      +sidebarRowText('Mia',chat ? chat.id : null,!!(state && state.thinking));
+    button.addEventListener('click',function(){ openTeamMiaChat(); });
+    return button;
+  }
   function initHubChat(){
     ['channels','bots','company-bots'].forEach(function(key){ hubHiddenBotsOpen[activeWorkspaceKey+':'+key]=false; });
     // Local startup callbacks may already have selected Mia. A Hub selection
@@ -5653,6 +5688,7 @@
       list.appendChild(hiddenToggle);
       if(hiddenOpen)rows.forEach(function(make){ list.appendChild(make()); });
     }
+    all.appendChild(teamMiaRow());
     var channelSection=section('channels','Channels','Add a channel',openHubChannelAddMenu);
     var hiddenChannels=channels.filter(function(channel){ return hubRowHidden('channel:'+channel.id); });
     channels.forEach(function(channel){ if(hiddenChannels.indexOf(channel)<0)channelSection.list.appendChild(row(channel)); });
@@ -7446,11 +7482,11 @@
     notifyDesktopChatMessage(roomId, message);
   }
 
-  // A bot chat tagged with a team shows only in that team; untagged chats
-  // show only outside teams.
+  // A bot chat, or your Mia chat, tagged with a team shows only in that team;
+  // untagged chats show only outside teams.
   function nativeConversationInView(conversation){
     var team = conversation && conversation.metadata && conversation.metadata.teamWorkspace || '';
-    return hubWorkspace() ? !!conversation && conversation.type === 'bot' && team === activeWorkspaceKey : !team;
+    return hubWorkspace() ? !!conversation && (conversation.type === 'bot' || isNativeMiaConversation(conversation)) && team === activeWorkspaceKey : !team;
   }
   function applyNativeConversationList(conversations){
     var listWorkspace = conversations && conversations.workspaceKey;
@@ -8344,7 +8380,7 @@
   function askBotFromBrowserSuggestion(text, botId){
     var agent = botId
       ? (chatWs.allAgents || []).filter(function(item){ return item && String(item.id) === String(botId); })[0]
-      : (hubWorkspace() ? null : chatWs.gatewayAgent);
+      : (chatWs.gatewayAgent || {id:'gateway', name:'Mia'});
     if(!agent){ showBenchToast('That bot is no longer here.'); return; }
     Promise.resolve(navigateToAgentChat(agent, true)).then(function(){
       var input = el('#ccInput');
@@ -15029,10 +15065,9 @@
     }, shelf);
   }
 
-  // Opens Mia's chat with the start of a message filled in. Her chat lives in
-  // Solo; a company has none yet.
+  // Opens Mia's chat with the start of a message filled in: Solo's, or in a
+  // company, your own Mia chat there.
   function askMiaAbout(start){
-    if(hubWorkspace()){ showBenchToast('Mia\'s chat is in Solo. Switch to Solo to ask her.'); return; }
     var mia = chatWs.gatewayAgent || {id:'gateway', name:'Mia'};
     clearChatBack();
     chatRoster.open = null;
@@ -16485,7 +16520,7 @@
   }
 
   function selectAgentRoom(agent, canNavigate){
-    if(hubWorkspace())return agent && agent.id!=='gateway' ? openTeamBotChat(agent) : Promise.resolve();
+    if(hubWorkspace())return !agent ? Promise.resolve() : agent.id==='gateway' ? openTeamMiaChat() : openTeamBotChat(agent);
     var generation = chatWs.navigationGeneration = Number(chatWs.navigationGeneration || 0) + 1;
     function current(){ return chatWs.navigationGeneration === generation && (!canNavigate || canNavigate()); }
     if(!current()) return;

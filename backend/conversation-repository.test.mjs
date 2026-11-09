@@ -490,3 +490,21 @@ test('restarting a conversation keeps its metadata and drops only the model sess
     historyResetAt: '2026-09-03T07:00:00.000Z',
   });
 });
+
+test('each company gets its own main Mia chat, apart from Solo\'s', () => {
+  const { repository } = fixture();
+  const ask = (metadata) => repository.getOrCreateGatewayConversation({
+    companyId: 'company-a', createdBy: 'alice@example.com', name: 'Mia', createdAt: '2026-11-09T06:00:00.000Z',
+    metadata: { agentId: 'gateway', ...metadata },
+    owner: { principalId: 'alice@example.com', principalType: 'user', joinedAt: '2026-11-09T06:00:00.000Z' },
+  }).conversation;
+  const solo = ask({});
+  const companyOne = ask({ teamWorkspace: 'hub_' + 'a'.repeat(32) });
+  const companyTwo = ask({ teamWorkspace: 'hub_' + 'b'.repeat(32) });
+  assert.notEqual(solo.id, companyOne.id);
+  assert.notEqual(companyOne.id, companyTwo.id);
+  assert.equal(ask({}).id, solo.id, 'Solo keeps its one chat');
+  assert.equal(ask({ teamWorkspace: 'hub_' + 'a'.repeat(32) }).id, companyOne.id, 'a company keeps its one chat');
+  assert.equal(companyOne.metadata.teamWorkspace, 'hub_' + 'a'.repeat(32));
+  assert.equal(solo.metadata.teamWorkspace, undefined);
+});

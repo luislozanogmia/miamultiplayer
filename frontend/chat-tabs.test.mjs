@@ -100,7 +100,7 @@ test('a browser recommendation goes to the bot that proposed it and sends right 
   };
   assert.deepEqual(await run('b2', [{ id: 'b1' }, { id: 'b2' }]), [['open', 'b2'], ['send', 'Trash the caches']]);
   assert.deepEqual(await run(null, []), [['open', 'gateway'], ['send', 'Trash the caches']]);
-  assert.deepEqual(await run(null, [], true), [['toast', 'That bot is no longer here.']], 'never lands in the open team chat');
+  assert.deepEqual(await run(null, [], true), [['open', 'gateway'], ['send', 'Trash the caches']], 'in a company, your own Mia chat there');
   assert.deepEqual(await run('gone', [{ id: 'b1' }]), [['toast', 'That bot is no longer here.']], 'never sent to the wrong bot');
 });
 

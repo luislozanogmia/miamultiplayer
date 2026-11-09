@@ -152,7 +152,8 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
     const body = requestBody(req);
     const metadata = optionalObject(body.metadata, 'metadata');
     if (Object.prototype.hasOwnProperty.call(metadata, 'teamWorkspace')) {
-      if (body.type !== 'bot' || typeof metadata.teamWorkspace !== 'string'
+      // A company's bot chat, or your own Mia chat there: you must be in that company.
+      if ((body.type !== 'bot' && body.type !== 'agent') || typeof metadata.teamWorkspace !== 'string'
           || !/^hub_[a-f0-9]{32}$/.test(metadata.teamWorkspace)
           || typeof authorizeTeamWorkspace !== 'function'
           || !(await authorizeTeamWorkspace(req, metadata.teamWorkspace))) {

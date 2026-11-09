@@ -163,9 +163,10 @@ CREATE INDEX IF NOT EXISTS conversation_dispatches_event
 -- Legacy records are normalized before they receive this metadata, so this
 -- protects the new path without discarding old history. Extra Mia chats the
 -- user starts with "New conversation" are marked conversationMode 'fresh'
--- and are not the canonical one.
+-- and are not the canonical one. Each company a person is in has its own
+-- (tagged teamWorkspace), beside their Solo one.
 CREATE UNIQUE INDEX IF NOT EXISTS conversations_gateway_canonical_owner
-  ON conversations (company_id, created_by)
+  ON conversations (company_id, created_by, coalesce(json_extract(metadata, '$.teamWorkspace'), ''))
   WHERE type = 'agent'
     AND deleted_at IS NULL
     AND json_extract(metadata, '$.agentId') = 'gateway'
@@ -625,13 +626,14 @@ function migrateLegacyBotConversationData(db) {
   });
 }
 
-// Databases created before fresh Mia chats have a canonical-Mia index that
-// also covers them. Drop it so SCHEMA recreates it with the fresh exclusion.
+// Databases created before fresh Mia chats, or before company Mia chats, have
+// a canonical-Mia index that also covers them. Drop it so SCHEMA recreates it
+// with the fresh exclusion and one chat per company.
 function migrateGatewayCanonicalIndex(db) {
   const index = db.prepare(
     "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'conversations_gateway_canonical_owner'"
   ).get();
-  if (index && !String(index.sql || '').includes('conversationMode')) {
+  if (index && (!String(index.sql || '').includes('conversationMode') || !String(index.sql || '').includes('teamWorkspace'))) {
     db.exec('DROP INDEX conversations_gateway_canonical_owner');
   }
 }
@@ -766,6 +768,9 @@ function createConversationRepository(db) {
         metadata: jsonText(owner.metadata, 'owner.metadata', {}),
       };
     }
+    // One main Mia chat per person in Solo, and one per company they're in
+    // (tagged teamWorkspace), so a company's chat never mixes with Solo's.
+    const requestedTeam = typeof metadata.teamWorkspace === 'string' ? metadata.teamWorkspace : '';
     return runImmediate(db, () => {
       const existing = db.prepare(
         `SELECT c.* FROM conversations c
@@ -773,6 +778,7 @@ function createConversationRepository(db) {
             AND lower(c.created_by) = lower(?)
             AND c.type = 'agent' AND lower(coalesce(c.name, '')) = 'mia' AND c.deleted_at IS NULL
             AND coalesce(json_extract(c.metadata, '$.conversationMode'), '') != 'fresh'
+            AND coalesce(json_extract(c.metadata, '$.teamWorkspace'), '') = ?
             AND (
               json_extract(c.metadata, '$.agentId') = 'gateway'
               OR EXISTS (
@@ -786,7 +792,7 @@ function createConversationRepository(db) {
             )
           ORDER BY c.created_at ASC, c.id ASC
           LIMIT 1`
-      ).get(normalizedCompanyId, normalizedCreatedBy);
+      ).get(normalizedCompanyId, normalizedCreatedBy, requestedTeam);
       if (existing) {
         const existingMetadata = fromJson(existing.metadata, 'conversation.metadata');
         const requestedMetadata = fromJson(encodedMetadata, 'metadata');
