@@ -74,3 +74,11 @@ test('Bot settings shows the bot as the same card the marketplace shows, with Ed
   assert.match(source, /if\(edit\) edit\.addEventListener\('click', function\(\)\{ if\(bench\) openEditCinema\(bench\.id\); \}\);/);
   assert.match(market, /return '<button type="button" class="bot-market-back" data-market-back>&larr; Back<\/button>' \+ botCard\(view\);/, 'the marketplace uses the same card');
 });
+
+test('Ask Mia in the marketplace opens her chat with what you were looking at named', async () => {
+  const [source, market] = await Promise.all([readFile(appUrl, 'utf8'), readFile(new URL('./bot-marketplace.js', import.meta.url), 'utf8')]);
+  assert.match(market, /data-market-ask/);
+  assert.match(market, /if\(event\.target\.closest\('\[data-market-ask\]'\)\)\{ var context = askMiaContext\(\); close\(\); return opts\.askMia\(context\); \}/);
+  assert.match(market, /return 'About ' \+ \(\(manifest\.bot && manifest\.bot\.name\) \|\| 'this bot'\) \+ ' in the Bot marketplace: ';/);
+  assert.match(source, /function askMiaAbout\(start\)\{[\s\S]*?selectAgentRoom\(mia\)[\s\S]*?input\.value = start;/);
+});

@@ -14904,8 +14904,27 @@
         var agent = (chatWs.allAgents || []).filter(function(item){ return item.id === id; })[0];
         if(agent) navigateToAgentChat(agent, true);
       },
-      toast: showBenchToast
+      toast: showBenchToast,
+      askMia: askMiaAbout
     }, shelf);
+  }
+
+  // Opens Mia's chat with the start of a message filled in. Her chat lives in
+  // Solo; a company has none yet.
+  function askMiaAbout(start){
+    if(hubWorkspace()){ showBenchToast('Mia\'s chat is in Solo. Switch to Solo to ask her.'); return; }
+    var mia = chatWs.gatewayAgent || {id:'gateway', name:'Mia'};
+    clearChatBack();
+    chatRoster.open = null;
+    clearChatActive();
+    Promise.resolve(selectAgentRoom(mia)).then(function(){
+      var input = el('#ccInput');
+      if(!input || chatWs.activeKind !== 'agent') return;
+      input.value = start;
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
   }
 
   // -> Promise<manifests>; the catalog and every manifest, fetched once.

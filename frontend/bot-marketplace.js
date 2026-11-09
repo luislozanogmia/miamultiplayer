@@ -348,6 +348,25 @@
     return companyShelf(state.shelf.slice(8));
   }
 
+  // Ask Mia opens her chat with what you're looking at already named, so you
+  // only type what you want her to do.
+  var MIA_SPARK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>';
+  function askMiaContext(){
+    if(state.editing) return 'About my skill ' + (state.editing.name || 'I\'m writing') + ': ';
+    var d = state.detail;
+    if(d && d.kind === 'skill') return 'About my skill ' + (d.data ? d.data.name : '') + ': ';
+    if(d && d.kind === 'mia'){
+      var manifest = ((state.catalog.entries || []).filter(function(entry){ return entry.id === d.id; })[0]) || {};
+      return 'About ' + ((manifest.bot && manifest.bot.name) || 'this bot') + ' in the Bot marketplace: ';
+    }
+    if(d && d.kind === 'company'){
+      var raw = ((state.market[d.teamId] || {}).bots || []).filter(function(item){ return text(item.id) === d.id; })[0];
+      return 'About ' + (raw ? marketBot(raw).name : 'this bot') + ' in my company\'s marketplace: ';
+    }
+    if(state.shelf === 'skills') return 'About my skills: ';
+    return 'About the Bot marketplace: ';
+  }
+
   function render(){
     if(!state || !state.sheet) return;
     var list = shelves(), current = list.filter(function(item){ return item.id === state.shelf; })[0] || list[0];
@@ -358,7 +377,8 @@
         + esc(item.label) + (item.soon ? ' <span class="bot-market-soon">Later</span>' : '') + '</button>';
     }).join('');
     state.sheet.innerHTML = '<button type="button" class="styled-sheet-close" data-market-close aria-label="Close Bot marketplace">&times;</button>'
-      + '<nav class="styled-settings-nav" aria-label="Shelves"><div class="bot-market-title">Bot marketplace</div>' + nav + '</nav>'
+      + '<nav class="styled-settings-nav" aria-label="Shelves"><div class="bot-market-title">Bot marketplace</div>' + nav
+      + '<button type="button" class="bot-market-ask" data-market-ask title="Mia can find, get, build and change bots and skills for you">' + MIA_SPARK + 'Ask Mia</button></nav>'
       + '<div class="styled-settings-content">' + (state.detail || state.editing ? body() : '<div class="bot-market-head"><h1 class="styled-settings-h1">' + esc(current.label) + '</h1>'
       + (current.id === 'skills' ? '<button type="button" class="bot-market-btn primary" data-skill-new>New skill</button>' : '') + '</div>'
       + (current.soon ? '' : '<input type="search" class="styled-settings-input bot-market-search" data-market-search placeholder="' + (current.id === 'skills' ? 'Search skills' : 'Search bots') + '" aria-label="' + (current.id === 'skills' ? 'Search skills' : 'Search bots') + '" value="' + esc(state.query) + '">')
@@ -406,6 +426,7 @@
   }
 
   function onClick(event){
+    if(event.target.closest('[data-market-ask]')){ var context = askMiaContext(); close(); return opts.askMia(context); }
     var target = event.target.closest('[data-market-close],[data-market-shelf],[data-market-install],[data-market-get],[data-market-open-local],[data-market-back],[data-market-detail],[data-skill-new],[data-skill-edit],[data-edit-cancel],[data-edit-save],[data-edit-add-file],[data-edit-remove-file],[data-edit-delete]');
     if(!target) return;
     if(target.hasAttribute('data-skill-new')) return editSkill(null);

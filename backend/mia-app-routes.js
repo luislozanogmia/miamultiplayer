@@ -81,6 +81,19 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
     skills_list: { group: 'A', description: 'The skills library: each skill with the bots that carry it.', args: {}, async run({ call }) {
       return call('GET', '/api/skills');
     } },
+    skill_get: { group: 'A', description: "One skill folder: SKILL.md, every other file in it with its text, and the bots that carry it.", args: { skill_id: 'string' }, async run({ call, args }) {
+      return call('GET', `/api/skills/${seg(text(args.skill_id, 'skill_id', 80))}`);
+    } },
+    marketplace_list: { group: 'A', description: "The Bot marketplace's From Mia shelf: each bot with what it does, its skills and whether the person already has it.", args: {}, async run({ call }) {
+      const [index, { bots }] = await Promise.all([call('GET', '/api/bots/catalog'), call('GET', '/api/bots')]);
+      const have = new Set(bots.map(bot => String(bot.name || '').trim().toLowerCase()));
+      const manifests = await Promise.all((index.bots || []).map(entry => call('GET', `/api/bots/catalog/${seg(entry.id)}`).catch(() => null)));
+      return { bots: manifests.filter(Boolean).map(manifest => ({
+        id: manifest.id, name: manifest.bot.name, version: manifest.version, about: manifest.store && manifest.store.tagline,
+        skills: (manifest.skills || []).map(skill => ({ name: skill.name, description: skill.description, files: ['SKILL.md', ...(skill.files || []).map(file => file.path)] })),
+        installed: have.has(String(manifest.bot.name || '').trim().toLowerCase()),
+      })) };
+    } },
     bot_get: { group: 'A', description: "One bot's instructions, automations, departments and last run.", args: { bot_id: 'string' }, async run({ call, args }) {
       const bot = await botOf(call, args.bot_id);
       const active = await call('GET', '/api/automations/active');
@@ -245,6 +258,55 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
       async apply({ call }, input) {
         await call('POST', `/api/bots/${seg(input.bot_id)}/departments`, { add: input.department });
         return { bot_id: input.bot_id, department: input.department };
+      } },
+    // Skills go into the prompt of every bot that carries them, so changing
+    // one, or what a bot carries, always asks the person.
+    skill_save_propose: { group: 'C', trust: null, description: 'Ask to create a skill, or change one (give skill_id). A skill is a folder: body is its SKILL.md (what it is, when to use it, the steps); files are the other files it points to, each {path, body}, such as ICP.md or search.py. Leaving files out keeps the ones it has.', args: { skill_id: 'string, to change one', name: 'string', description: 'string', body: 'string', files: '{path, body}[], optional' },
+      async prepare({ call, args }) {
+        const existing = args.skill_id ? (await call('GET', `/api/skills/${seg(text(args.skill_id, 'skill_id', 80))}`)).skill : null;
+        const input = { ...(existing ? { skill_id: existing.id } : {}), name: text(args.name, 'name', 64), description: String(args.description || '').trim(),
+          body: text(args.body, 'body', 20000), ...(Array.isArray(args.files) ? { files: args.files.map(file => ({ path: String(file && file.path || ''), body: String(file && file.body || '') })) } : {}) };
+        const files = input.files ? input.files.map(file => file.path) : (existing ? existing.files.map(file => file.path) : []);
+        return { summary: existing ? `Change the skill ${existing.name}` : `Create the skill ${input.name}`,
+          details: [input.description, `Files: ${['SKILL.md', ...files].join(', ')}`].filter(Boolean), input };
+      },
+      async apply({ call }, input) {
+        const { skill_id: id, ...skill } = input;
+        const saved = await call(id ? 'PUT' : 'POST', id ? `/api/skills/${seg(id)}` : '/api/skills', skill);
+        return { skill_id: saved.skill.id, files: saved.skill.files.map(file => file.path) };
+      } },
+    bot_skills_propose: { group: 'C', trust: null, description: "Ask to set which skills a bot carries (up to 10, from skills_list). The list replaces the bot's current skills.", args: { bot_id: 'string', skill_ids: 'string[]' },
+      async prepare({ call, args }) {
+        const bot = await botOf(call, args.bot_id);
+        const ids = Array.isArray(args.skill_ids) ? [...new Set(args.skill_ids.map(String))] : [];
+        if (ids.length > 10) throw fail(400, 'A bot can carry up to 10 skills.');
+        const { skills } = await call('GET', '/api/skills');
+        const names = ids.map(id => (skills.find(skill => skill.id === id) || {}).name);
+        if (names.some(name => !name)) throw fail(404, 'A skill is not in the library. Check skills_list.');
+        return { summary: `Give ${bot.name} ${ids.length ? names.join(', ') : 'no skills'}`, details: [], input: { bot_id: bot.id, skill_ids: ids } };
+      },
+      async apply({ call }, input) {
+        await call('PUT', `/api/bots/${seg(input.bot_id)}`, { skills: input.skill_ids });
+        return { bot_id: input.bot_id, skill_ids: input.skill_ids };
+      } },
+    marketplace_get_propose: { group: 'C', trust: 'bots', description: "Ask to get a bot from the marketplace's From Mia shelf (marketplace_list). Its skills become skill folders in the library, then the bot carries them.", args: { catalog_id: 'string' },
+      async prepare({ call, args }) {
+        const manifest = await call('GET', `/api/bots/catalog/${seg(text(args.catalog_id, 'catalog_id', 80))}`);
+        return { summary: `Get ${manifest.bot.name} from the Bot marketplace`, details: [manifest.store && manifest.store.tagline,
+          ...(manifest.skills || []).map(skill => `Skill: ${skill.name}`)].filter(Boolean), input: { catalog_id: manifest.id } };
+      },
+      async apply({ call, owner }, input) {
+        const manifest = await call('GET', `/api/bots/catalog/${seg(input.catalog_id)}`);
+        const model = await botModel(owner);
+        if (!model) throw fail(409, 'Connect a model in Mia first.');
+        const skillIds = [];
+        for (const skill of (manifest.skills || []).slice(0, 10)) {
+          const saved = await call('POST', '/api/skills', { name: skill.name, description: skill.description || '', body: skill.body, files: skill.files || [] });
+          skillIds.push(saved.skill.id);
+        }
+        const created = await call('POST', '/api/bots', { ...manifest.bot, model, ...(skillIds.length ? { skills: skillIds } : {}) });
+        const bot = created.bot || created;
+        return { bot_id: bot.id, name: bot.name, skill_ids: skillIds };
       } },
     app_install_propose: { group: 'C', trust: null, description: "Ask to install one version of a company's app on this computer.", args: { team_id: 'string', app_id: 'string', version: 'string' },
       prepare({ args }) {
