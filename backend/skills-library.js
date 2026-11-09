@@ -23,6 +23,7 @@ const MAX_SKILL_FILES = 50;
 const MAX_FILE_CHARS = 200000;
 const MAX_FOLDER_CHARS = 1000000;
 const FILE_PATH = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,3}$/;
+const WINDOWS_DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 class SkillError extends Error {
@@ -154,7 +155,7 @@ function createSkillsLibrary(rootDirectory) {
     const files = input.files.map((file) => {
       const rel = String(file && file.path || '').trim();
       const text = String(file && file.body || '').replace(/\r\n/g, '\n');
-      if (!FILE_PATH.test(rel) || rel.toUpperCase() === SKILL_FILE.toUpperCase() || rel.split('/').some((part) => part.startsWith('.'))) {
+      if (!FILE_PATH.test(rel) || rel.toUpperCase() === SKILL_FILE.toUpperCase() || rel.split('/').some((part) => part.startsWith('.') || WINDOWS_DEVICE.test(part))) {
         throw new SkillError('invalid_skill_file', `"${rel || 'A file'}" isn't a file name a skill can hold. Use letters, numbers, dots, dashes and folders.`);
       }
       if (seen.has(rel.toLowerCase())) throw new SkillError('invalid_skill_file', `"${rel}" is in this skill twice.`);

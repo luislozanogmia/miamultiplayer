@@ -39,10 +39,12 @@ function withoutRunLabel(body) {
 function failure(status,code) { return Object.assign(new Error(code),{status,code}); }
 async function requestHub(origin,token,method,path,body,fetcher=fetch) {
   if(typeof token!=='string' || !/^[A-Za-z0-9_.-]+$/.test(token) || token.length>16384) throw failure(401,'hub_sign_in_required');
+  const definitionRoute=/(?:\/versions|\/definition|\/claim)$/.test(path);
   const response=await fetcher(origin+path,{method,redirect:'error',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
-    body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+    body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(definitionRoute?60000:15000)});
   const chunks=[];let length=0;
-  const responseLimit = /\/(?:definition|claim)$/.test(path) ? DEFINITION_RESPONSE_BYTES : RESPONSE_BYTES;
+  const responseLimit = method==='GET' && /\/versions$/.test(path) ? 5*DEFINITION_RESPONSE_BYTES
+    : /\/(?:definition|claim)$/.test(path) ? DEFINITION_RESPONSE_BYTES : RESPONSE_BYTES;
   for await(const chunk of response.body) {length+=chunk.length;if(length>responseLimit) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
   const result=JSON.parse(Buffer.concat(chunks));
   if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','dispatch_cancelled','invalid_claim','bot_storage_limit'].includes(result.error)?result.error:'hub_request_failed');
@@ -57,8 +59,9 @@ function sharedSkills(value) {
 function safeSharedSkillPath(value) {
   if(typeof value!=='string' || value.length>512 || !value.isWellFormed()) return false;
   const parts=value.split('/');
+  const device=/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i;
   return parts.length<=5 && value.toLowerCase()!=='skill.md' && parts.every(part=>part && !part.startsWith('.')
-    && !part.includes('..') && !part.endsWith('.') && !part.endsWith(' ') && !/[\\:\x00-\x1f\x7f]/.test(part));
+    && !part.includes('..') && !part.endsWith('.') && !part.endsWith(' ') && !/[\\:\x00-\x1f\x7f]/.test(part) && !device.test(part));
 }
 function materializeSharedSkills(skills) {
   if(!skills.some(skill=>skill.files && skill.files.length)) return {skills,cleanup:()=>{}};
@@ -69,8 +72,12 @@ function materializeSharedSkills(skills) {
       const folder=path.join(root,String(index));
       fs.mkdirSync(folder,{mode:0o700});
       fs.writeFileSync(path.join(folder,'SKILL.md'),skill.body,{mode:0o600,flag:'wx'});
+      const names=new Set();
       for(const file of skill.files) {
         if(!safeSharedSkillPath(file.path) || file.body.length>200000) throw new Error('invalid_shared_skill_file');
+        const key=file.path.normalize('NFC').toLocaleLowerCase('en-US');
+        if(names.has(key)) throw new Error('invalid_shared_skill_file');
+        names.add(key);
         const target=path.join(folder,file.path);
         fs.mkdirSync(path.dirname(target),{recursive:true,mode:0o700});
         fs.writeFileSync(target,file.body,{mode:/\.(py|sh|js|mjs)$/i.test(file.path)?0o700:0o600,flag:'wx'});

@@ -78,8 +78,9 @@ test('a shared bot receives executable skill files only inside a temporary folde
   assert.equal(readFileSync(join(folder,'score.py'),'utf8'),'print(1)');
   prepared.cleanup();
   assert.equal(existsSync(folder),false);
-  for(const badPath of ['../escape.py','nested/../escape.py','/absolute.py'])
+  for(const badPath of ['../escape.py','nested/../escape.py','/absolute.py','CON.py'])
     assert.throws(()=>materializeSharedSkills([{name:'Bad',body:'Bad',files:[{path:badPath,body:'x'}]}]),/invalid_shared_skill_file/);
+  assert.throws(()=>materializeSharedSkills([{name:'Bad',body:'Bad',files:[{path:'a.py',body:'x'},{path:'A.py',body:'y'}]}]),/invalid_shared_skill_file/);
 });
 
 test('different Hub identity, disabled account, unknown local bot and invalid scope fail closed',async t=>{

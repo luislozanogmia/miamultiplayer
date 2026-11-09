@@ -98,8 +98,9 @@ test('same-named files remain separate and the panel renders only names', () => 
   const state = activity.reduceActivity(null, sig({ paths: ['/one/report.md', '/two/report.md'] }));
   assert.deepEqual(state.files.map(file => file.name), ['report.md', 'report.md']);
   assert.notEqual(state.files[0].id, state.files[1].id);
-  assert.match(appSource, /title="' \+ esc\(file\.name\)/);
-  assert.doesNotMatch(appSource, /esc\(file\.path\)/);
+  const panel = appSource.slice(appSource.indexOf('  function renderChatActivityPanel(){'), appSource.indexOf('  function tickChatActivityElapsed(){'));
+  assert.match(panel, /title="' \+ esc\(file\.name\)/);
+  assert.doesNotMatch(panel, /esc\(file\.path\)/);
 });
 
 test('real backend activity records keep edit status without exposing local paths', () => {

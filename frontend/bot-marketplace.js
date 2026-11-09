@@ -4,7 +4,7 @@
   // bots (the catalog), each company you're in (bots people shared there),
   // Everyone (later), then the bots you own, the copies you got, and your
   // skills (each a folder: SKILL.md plus the files it points to).
-  // A copy you get is your bot everywhere; it follows the shared bot's updates.
+  // A copy you get is your bot everywhere; a new shared version can be reviewed and applied.
 
   var state = null;
   var opts = null;
@@ -90,9 +90,14 @@
     return cards.length ? cards.join('') : '<p class="bot-market-status">' + (state.query ? 'No bots match.' : 'No bots here yet.') + '</p>';
   }
 
-  function companyCardAction(teamId, bot){
+  function companyCardAction(teamId, bot, inDetail){
     var copy = localCopy(teamId, bot.id);
-    if(copy) return '<button type="button" class="bot-market-btn" data-market-open-local="' + esc(copy.id) + '">Open</button>';
+    if(copy){
+      if(bot.version > Number(copy.marketSource.version || 0)) return inDetail
+        ? '<button type="button" class="bot-market-btn primary" data-market-update="' + esc(bot.id) + '" data-market-team="' + esc(teamId) + '"' + (state.busy === teamId + ':' + bot.id ? ' disabled' : '') + '>' + (state.busy === teamId + ':' + bot.id ? 'Updating…' : 'Update to v' + esc(bot.version)) + '</button>'
+        : '<button type="button" class="bot-market-btn" data-market-detail="' + esc('company:' + teamId + ':' + bot.id) + '">Review update</button>';
+      return '<button type="button" class="bot-market-btn" data-market-open-local="' + esc(copy.id) + '">Open</button>';
+    }
     if(!bot.canUse) return '<span class="bot-market-note" title="Ask an admin of this company for access">No access</span>';
     var busy = state.busy === teamId + ':' + bot.id;
     return '<button type="button" class="bot-market-btn primary" data-market-get="' + esc(bot.id) + '" data-market-team="' + esc(teamId) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Getting…' : 'Get') + '</button>';
@@ -130,12 +135,14 @@
 
   function downloadedShelf(){
     var copies = (opts.localBots() || []).filter(function(bot){ return bot && bot.marketSource && matches(text(bot.name), ''); });
-    if(!copies.length) return '<p class="bot-market-status">Bots you get from a company show up here. They\'re your bots everywhere and follow the shared bot\'s updates.</p>';
+    if(!copies.length) return '<p class="bot-market-status">Bots you get from a company show up here. They\'re your bots everywhere; you can review new versions when available.</p>';
     return copies.map(function(bot){
       var company = (state.companies || []).filter(function(item){ return item.teamId === bot.marketSource.teamId; })[0];
+      var current = ((state.market[bot.marketSource.teamId] || {}).bots || []).map(marketBot).filter(function(item){ return item.id === bot.marketSource.botId; })[0];
       return card({name: bot.name, color: bot.avatarColor || null, about: '',
         meta: [company ? 'from ' + company.name : '', bot.marketSource.version ? 'v' + bot.marketSource.version : ''].filter(Boolean).join(' · '),
-        action: '<button type="button" class="bot-market-btn" data-market-open-local="' + esc(bot.id) + '">Open</button>'});
+        action: current && current.version > Number(bot.marketSource.version || 0)
+          ? companyCardAction(bot.marketSource.teamId, current) : '<button type="button" class="bot-market-btn" data-market-open-local="' + esc(bot.id) + '">Open</button>'});
     }).join('');
   }
 
@@ -193,12 +200,14 @@
         requires: requires};
     } else {
       var shelf = state.market[d.teamId] || {}, raw = (shelf.bots || []).filter(function(item){ return text(item.id) === d.id; })[0] || {};
-      var summary = marketBot(raw), full = d.data || {}, latest = full.definition || full.latest || {};
+      var summary = marketBot(raw), full = d.data || {}, latest = full.definition || full.latest || {}, copy = localCopy(d.teamId,d.id);
       view = {name: summary.name, color: summary.color, about: text(latest.description || summary.about),
         meta: [summary.by ? 'by ' + summary.by : '', summary.version ? 'v' + summary.version : '', when(summary.at)].filter(Boolean).join(' · '),
-        action: companyCardAction(d.teamId, summary),
+        action: d.loading || d.error ? '' : companyCardAction(d.teamId, summary, true),
         instructions: d.loading ? null : text(latest.instructions), skills: Array.isArray(latest.skills) ? latest.skills : [],
-        automations: [], requires: [], error: d.error, owners: Array.isArray(full.owners) ? full.owners : []};
+        automations: [], requires: [], error: d.error, owners: Array.isArray(full.owners) ? full.owners : [],
+        updateNote: !d.loading && !d.error && copy && summary.version > Number(copy.marketSource.version || 0)
+          ? 'Updating replaces this local bot’s instructions and skills. Your chats stay here.' : ''};
     }
     return '<button type="button" class="bot-market-back" data-market-back>&larr; Back</button>' + botCard(view);
   }
@@ -217,6 +226,7 @@
       + '<div class="bot-market-detail-head"><span class="bot-market-avatar large">' + opts.avatarHtml(view.name, view.color) + '</span>'
       + '<div class="bot-market-copy"><h1 class="bot-market-detail-name">' + esc(view.name) + '</h1>'
       + (view.meta ? '<span class="bot-market-meta">' + esc(view.meta) + '</span>' : '') + '</div>' + (view.action || '') + '</div>'
+      + (view.updateNote ? '<p class="bot-market-empty">' + esc(view.updateNote) + '</p>' : '')
       + (view.about ? section('What it does', '<p class="bot-market-about-full">' + esc(view.about) + '</p>') : '')
       + (requires.length ? section('Needs', '<p class="bot-market-about-full">' + esc(requires.join(', ')) + '</p>') : '')
       + section('Instructions', instructions)
@@ -417,6 +427,7 @@
     if(shelf === 'skills') loadSkills();
     if(shelf.indexOf('company:') === 0) loadCompany(shelf.slice(8));
     if(shelf === 'uploads') (state.companies || []).forEach(function(company){ loadCompany(company.teamId); });
+    if(shelf === 'downloaded') (state.companies || []).forEach(function(company){ loadCompany(company.teamId); });
     render();
   }
 
@@ -436,9 +447,26 @@
     });
   }
 
+  function update(teamId, botId){
+    var shelf = state.market[teamId], raw = shelf && (shelf.bots || []).filter(function(item){ return text(item.id) === botId; })[0];
+    var bot = raw && marketBot(raw), copy = bot && localCopy(teamId, botId);
+    if(!copy || state.busy) return;
+    state.busy = teamId + ':' + botId;
+    render();
+    Promise.resolve(opts.updateMarketBot(teamId, bot, copy)).then(function(updated){
+      state.busy = null;
+      if(updated){ close(); opts.openLocal(updated.id); }
+      else render();
+    }, function(error){
+      state.busy = null;
+      render();
+      opts.toast('Couldn\'t update this bot: ' + (error && error.message || 'try again.'));
+    });
+  }
+
   function onClick(event){
     if(event.target.closest('[data-market-ask]')){ var context = askMiaContext(); close(); return opts.askMia(context); }
-    var target = event.target.closest('[data-market-close],[data-market-shelf],[data-market-install],[data-market-get],[data-market-open-local],[data-market-back],[data-market-detail],[data-skill-new],[data-skill-edit],[data-edit-cancel],[data-edit-save],[data-edit-add-file],[data-edit-remove-file],[data-edit-delete]');
+    var target = event.target.closest('[data-market-close],[data-market-shelf],[data-market-install],[data-market-get],[data-market-update],[data-market-open-local],[data-market-back],[data-market-detail],[data-skill-new],[data-skill-edit],[data-edit-cancel],[data-edit-save],[data-edit-add-file],[data-edit-remove-file],[data-edit-delete]');
     if(!target) return;
     if(target.hasAttribute('data-skill-new')) return editSkill(null);
     if(target.hasAttribute('data-skill-edit')) return editSkill(state.detail && state.detail.data);
@@ -469,6 +497,7 @@
     if(target.hasAttribute('data-market-close')) return close();
     if(target.hasAttribute('data-market-shelf')) return pick(target.getAttribute('data-market-shelf'));
     if(target.hasAttribute('data-market-open-local')){ close(); return opts.openLocal(target.getAttribute('data-market-open-local')); }
+    if(target.hasAttribute('data-market-update')) return update(target.getAttribute('data-market-team'), target.getAttribute('data-market-update'));
     if(target.hasAttribute('data-market-install')){
       var id = target.getAttribute('data-market-install');
       state.busy = 'mia:' + id;

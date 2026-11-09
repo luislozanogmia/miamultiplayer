@@ -5982,11 +5982,20 @@
       state.phase='error'; state.error=error && error.message || 'Couldn\'t load your companies.'; render();
     });
   }
+  function companyCopyWithFiles(copy,originalSkills){
+    copy.skills.forEach(function(skill,i){ var original=originalSkills[i]||{};
+      skill.files=(original.files||[]).map(function(file){ return {path:file.path,body:file.body}; });
+    });
+    return copy;
+  }
+  function companyCopyFilesReviewed(copy,reviews){
+    return !copy || copy.skills.every(function(skill,i){ return (skill.files||[]).every(function(file,j){ return !!reviews[i+':'+j]; }); });
+  }
   function copyCompanyBotToCompany(bot){
     var place=bot.places && bot.places[0];
     if(!place || (hubChat.membership||{}).role!=='admin')return;
     var fromTeamId=activeWorkspaceKey.slice(4);
-    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',fromName:'this company',original:null,copy:null,error:''};
+    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',fromName:'this company',original:null,copy:null,fileReviews:{},error:''};
     var previousFocus=document.activeElement;
     var overlay=document.createElement('div');
     overlay.className='app-confirm-overlay open';
@@ -6027,13 +6036,21 @@
             var original=state.original.skills[i]||{};
             return '<details class="bot-copy-skill"><summary>Skill: '+esc(skill.name)+'</summary><div class="bot-copy-compare">'
               +'<pre class="bot-copy-original">'+esc(original.body||'')+'</pre>'
-              +'<textarea data-bot-copy-skill="'+i+'" aria-label="'+esc('Skill '+skill.name+' in the copy')+'">'+esc(skill.body)+'</textarea></div></details>';
+              +'<textarea data-bot-copy-skill="'+i+'" aria-label="'+esc('Skill '+skill.name+' in the copy')+'">'+esc(skill.body)+'</textarea></div>'
+              +(skill.files||[]).map(function(file,j){
+                var key=i+':'+j, source=(original.files||[])[j]||{};
+                return '<details class="bot-copy-skill"><summary>File: '+esc(file.path)+'</summary><p>Review and edit this file before sharing it with another company.</p>'
+                  +'<div class="bot-copy-compare"><pre class="bot-copy-original">'+esc(source.body||'')+'</pre>'
+                  +'<textarea data-bot-copy-file="'+key+'" aria-label="'+esc('File '+file.path+' in the copy')+'">'+esc(file.body)+'</textarea></div>'
+                  +'<label><input type="checkbox" data-bot-copy-file-reviewed="'+key+'"'+(state.fileReviews[key]?' checked':'')+'> I reviewed this file</label></details>';
+              }).join('')+'</details>';
           }).join('');
       }
       if(state.error)html+='<div class="bot-copy-error" role="alert">'+esc(state.error)+'</div>';
+      var filesReviewed=companyCopyFilesReviewed(state.copy,state.fileReviews);
       var primary=state.phase==='pick'?'Prepare copy for review':(state.phase==='review'||state.phase==='copying')?'Add to #'+esc(channel().name):'';
       html+='<div class="app-confirm-actions"><button type="button" class="btn" data-bot-copy-cancel'+(state.phase==='copying'?' disabled':'')+'>Cancel</button>'
-        +(primary?'<button type="button" class="btn primary" data-bot-copy-go'+((state.phase==='pick'&&!state.channelId)||state.phase==='copying'?' disabled':'')+'>'+(state.phase==='copying'?'Adding…':primary)+'</button>':'')+'</div>';
+        +(primary?'<button type="button" class="btn primary" data-bot-copy-go'+((state.phase==='pick'&&!state.channelId)||state.phase==='copying'||(state.phase==='review'&&!filesReviewed)?' disabled':'')+'>'+(state.phase==='copying'?'Adding…':primary)+'</button>':'')+'</div>';
       card.innerHTML=html;
       card.classList.toggle('wide',state.phase==='review'||state.phase==='copying');
       var teamSelect=el('[data-bot-copy-team]',card), channelSelect=el('[data-bot-copy-channel]',card);
@@ -6042,6 +6059,11 @@
       el('[data-bot-copy-cancel]',card).addEventListener('click',close);
       var go=el('[data-bot-copy-go]',card);
       if(go)go.addEventListener('click',state.phase==='pick'?review:add);
+      els('[data-bot-copy-file]',card).forEach(function(field){ field.addEventListener('input',function(){
+        var key=field.getAttribute('data-bot-copy-file'),check=el('[data-bot-copy-file-reviewed="'+key+'"]',card);
+        state.fileReviews[key]=false;if(check)check.checked=false;if(go)go.disabled=true;
+      }); });
+      els('[data-bot-copy-file-reviewed]',card).forEach(function(check){ check.addEventListener('change',function(){ readEdits();render(); }); });
       (go||el('[data-bot-copy-cancel]',card)).focus();
     }
     function readEdits(){
@@ -6049,6 +6071,8 @@
       if(name)state.copy.name=name.value.trim();
       if(text)state.copy.instructions=text.value.trim();
       els('[data-bot-copy-skill]',card).forEach(function(box){ state.copy.skills[Number(box.getAttribute('data-bot-copy-skill'))].body=box.value.trim(); });
+      els('[data-bot-copy-file]',card).forEach(function(box){ var parts=box.getAttribute('data-bot-copy-file').split(':');state.copy.skills[Number(parts[0])].files[Number(parts[1])].body=box.value; });
+      els('[data-bot-copy-file-reviewed]',card).forEach(function(box){ state.fileReviews[box.getAttribute('data-bot-copy-file-reviewed')]=box.checked; });
     }
     function loadChannels(teamId){
       state.teamId=teamId; state.channels=[]; state.channelId=''; state.channelsLoading=true; state.error='';
@@ -6062,11 +6086,15 @@
     }
     function review(){
       state.phase='reviewing'; state.error=''; render();
-      api('/api/bots/generic-copy',{method:'POST',body:{name:bot.name,instructions:state.original.instructions,skills:state.original.skills,fromCompany:state.fromName}}).then(function(res){
+      // Mia rewrites the instructions; file contents stay local for explicit
+      // human review and never enter this model prompt.
+      var textSkills=state.original.skills.map(function(skill){ return {name:skill.name,description:skill.description,body:skill.body}; });
+      api('/api/bots/generic-copy',{method:'POST',body:{name:bot.name,instructions:state.original.instructions,skills:textSkills,fromCompany:state.fromName}}).then(function(res){
         if(!overlay.isConnected)return;
         var copy=res.data && res.data.copy;
         if(res.status!==200 || !copy)throw new Error(res.data && res.data.message || 'Mia couldn\'t prepare a proposed copy. Try again.');
-        state.copy=copy; state.phase='review'; render();
+        state.copy=companyCopyWithFiles(copy,state.original.skills);
+        state.fileReviews={};state.phase='review'; render();
       }).catch(function(error){
         if(!overlay.isConnected)return;
         state.phase='pick'; state.error=error.message; render();
@@ -6075,6 +6103,9 @@
     function add(){
       readEdits();
       if(!state.copy.name || !state.copy.instructions){ state.error='The copy needs a name and instructions.'; render(); return; }
+      if(!companyCopyFilesReviewed(state.copy,state.fileReviews)){
+        state.error='Review every skill file before sharing it with another company.';render();return;
+      }
       var target=team(), room=channel(), copy=state.copy, model=selectedConnectedBotModel(), createdId=null;
       if(!model){ state.error='Connect and choose a model before adding this bot.'; render(); return; }
       state.phase='copying'; state.error=''; render();
@@ -6103,7 +6134,8 @@
       if(!overlay.isConnected)return;
       var definition=results[1] && results[1].definition;
       if(!definition || !definition.instructions)throw new Error('Only a bot an admin has approved can be copied.');
-      state.original={instructions:definition.instructions,skills:(definition.skills||[]).map(function(skill){ return {name:skill.name,description:skill.description||'',body:skill.body}; })};
+      state.original={instructions:definition.instructions,skills:(definition.skills||[]).map(function(skill){ return {name:skill.name,description:skill.description||'',body:skill.body,
+        files:(skill.files||[]).map(function(file){ return {path:file.path,body:file.body}; })}; })};
       (results[0].teams||[]).forEach(function(t){
         if(t.teamId===fromTeamId){ state.fromName=String(t.name||state.fromName); return; }
         if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Company'),role:t.membership.role});
@@ -14924,7 +14956,7 @@
   // The Bot marketplace opens over the app like Settings (bot-marketplace.js).
   // Mia's shelf is the catalog (bots-catalog/ in the repo, GET /api/bots/catalog);
   // each company's shelf is the bots people brought into its channels. A bot
-  // you get is your bot everywhere (marketSource links it to the shared one).
+  // you get is your bot everywhere (marketSource records its reviewed version).
   function openBotStorePane(shelf){
     if(!STYLED_SKIN || !window.MiaBotMarketplace) return;
     // The native browser view covers HTML overlays, as for Settings.
@@ -14950,6 +14982,7 @@
       hubCall: hubCall,
       localBots: function(){ return chatWs.botRecords || []; },
       getMarketBot: getMarketBotCopy,
+      updateMarketBot: updateMarketBotCopy,
       // Your skills, each a folder (the same library bots carry skills from).
       loadSkills: function(){ return loadSkillsLibrary().then(function(library){ return library.skills || []; }); },
       loadSkill: function(id){
@@ -15040,7 +15073,7 @@
   }
 
   // Getting a company's shared bot makes it your bot: its latest version
-  // becomes a bot of yours, linked back so it follows the shared bot.
+  // becomes a bot of yours, with its source recorded for future reviewed updates.
   // -> Promise<created bot record>
   function getMarketBotCopy(teamId, bot){
     var model = selectedConnectedBotModel();
@@ -15064,6 +15097,34 @@
         applyNativeConversationList(chatWs.nativeConversations);
         renderChatSidebar();
         return loadAgents().then(function(){ return created; }, function(){ return created; });
+      });
+    });
+  }
+
+  // A downloaded company bot stays at its reviewed version until its owner
+  // chooses Update. Fetch both sides again so a stale shelf cannot overwrite a
+  // newer local copy or apply an update after company access was removed.
+  function updateMarketBotCopy(teamId, bot, copy){
+    return hubCall('GET', '/v1/teams/' + teamId + '/market/bots/' + encodeURIComponent(bot.id)).then(function(result){
+      var latest = result && (result.definition || result.latest) || {};
+      var version = Number(latest.version || 0);
+      if(!Number.isSafeInteger(version) || version < 1 || !String(latest.instructions || '').trim()) throw new Error('this company version is unavailable.');
+      return api('/api/bots/' + encodeURIComponent(copy.id)).then(function(local){
+        var current = local && local.data && local.data.bot;
+        var source = current && current.marketSource;
+        if(local.status !== 200 || !source || source.teamId !== teamId || source.botId !== bot.id) throw new Error('this local copy has changed.');
+        if(version <= Number(source.version || 0)) return current;
+        return createLibrarySkills(latest.skills).then(function(skillIds){
+          return api('/api/bots/' + encodeURIComponent(current.id), {method:'PUT', body:{
+            instructions: String(latest.instructions), skills: skillIds,
+            expectedInstructionsRevision: current.instructionsRevision,
+            marketSource: {teamId: teamId, botId: bot.id, version: version}
+          }}).then(function(saved){
+            if(saved.status !== 200 || !saved.data || !saved.data.bot) throw new Error(saved.data && (saved.data.message || saved.data.error) || 'try again.');
+            syncChatBotRecords((chatWs.botRecords || []).filter(function(record){ return String(record.id) !== String(saved.data.bot.id); }).concat([saved.data.bot]));
+            return loadAgents().then(function(){ return saved.data.bot; }, function(){ return saved.data.bot; });
+          });
+        });
       });
     });
   }

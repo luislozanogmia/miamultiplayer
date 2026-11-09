@@ -18,6 +18,7 @@ automatically through the in-app updater.
 - Mia can read your skills and the marketplace, and propose creating or changing a skill, giving skills to a bot, or getting a marketplace bot. Each change is a card you accept.
 - One right-click menu for bots and channels, in Solo and companies: pin, hide, share or mark as unread, then the chat's own actions, then the ones to be careful with. Hidden rows fold into a Hidden group.
 - The docked video or page under the chat has a bar to drag it taller or shorter, and fits the space left.
+- Downloaded company bots show an **Update** action when a newer approved version is available. You review and apply it; local chats stay in place.
 
 ### Changed
 - Settings' Output choice is now **View**: Normal user (the default) or Power user. In Bot settings, a normal user ticks skills from a list; a power user sees them as folders whose files edit in place.
@@ -28,6 +29,7 @@ automatically through the in-app updater.
 - An @-mention's name stays on the text line in chat messages.
 - A page you load yourself on a tab a bot used earlier no longer shows the bot in control.
 - On Mac, hidden browser tabs no longer take clicks meant for the tab in front.
+- Bot approval shows the full contents of shared skill files. Copying a bot to another company requires reviewing each file before sharing it.
 
 ## [0.3.5] — 2026-11-08
 

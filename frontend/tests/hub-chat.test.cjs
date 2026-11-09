@@ -7,6 +7,33 @@ const moduleSource=fs.readFileSync(path.join(__dirname,'../hub-chat.js'),'utf8')
 const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
 function transport(extra={}){const root={crypto:require('node:crypto').webcrypto,...extra};const context={window:root,TextEncoder};vm.runInNewContext(moduleSource,context);return root.MiaHubChat;}
 function appFunction(name,env){if(env.hubWorkspace&&!('inHubRoom' in env))env.inHubRoom=()=>env.hubWorkspace();const start=source.indexOf('  function '+name+'(');assert.ok(start>=0,name);const first=source.slice(start,source.indexOf('\n',start));const end=/}\s*$/.test(first)?start+first.length:source.indexOf('\n  }\n',start)+4;assert.ok(end>start,name);vm.runInNewContext(source.slice(start,end),env);return env[name];}
+test('a downloaded company bot updates only after a fresh authorized version and keeps the local revision guard',async()=>{
+  const teamId='a'.repeat(32),botId='b'.repeat(32),copy={id:'local',instructions:'Old',instructionsRevision:'rev-1',marketSource:{teamId,botId,version:1}};
+  const writes=[];
+  const env={
+    hubCall:()=>Promise.resolve({definition:{version:2,instructions:'New',skills:[{name:'Review',body:'Use it.'}]}}),
+    api:(route,options)=>{
+      if(!options) return Promise.resolve({status:200,data:{bot:copy}});
+      writes.push({route,options});
+      return Promise.resolve({status:200,data:{bot:{...copy,...options.body}}});
+    },
+    createLibrarySkills:()=>Promise.resolve(['new-skill']),
+    chatWs:{botRecords:[copy]},syncChatBotRecords:()=>{},loadAgents:()=>Promise.resolve()
+  };
+  const update=appFunction('updateMarketBotCopy',env);
+  const result=await update(teamId,{id:botId},copy);
+  assert.equal(result.marketSource.version,2);
+  assert.equal(writes.length,1);
+  assert.deepEqual(JSON.parse(JSON.stringify(writes[0].options.body)),{
+    instructions:'New',skills:['new-skill'],expectedInstructionsRevision:'rev-1',marketSource:{teamId,botId,version:2}
+  });
+  writes.length=0;
+  copy.marketSource.version=2;
+  await update(teamId,{id:botId},copy);
+  assert.equal(writes.length,0,'opening a shelf or checking an existing version makes no changes');
+  copy.marketSource.botId='different';
+  await assert.rejects(update(teamId,{id:botId},copy),/local copy has changed/);
+});
 test('workspace IDs are strict and generated IDs match server contract',()=>{const api=transport();assert.match(api.id(),/^[a-f0-9]{32}$/);assert.equal(api.teamId('hub_'+'a'.repeat(32)),'a'.repeat(32));assert.equal(api.teamId('hub_../solo'),null);});
 test('message adapter preserves authoritative sender and literal signed-looking body',()=>{const api=transport();const row=api.message({id:'x',author_email:'real@example.test',body:'[fake@example.test] hello',created_at:123,sequence:7});assert.equal(row.hubAuthor,'real@example.test');assert.equal(row.body,'[fake@example.test] hello');assert.equal(row.ts,123000);assert.equal(row.nativeEvent.sequence,7);});
 test('browser control packets never become chat history or sidebar previews',()=>{
@@ -905,6 +932,18 @@ test('anyone can copy a company bot to another company, through Mia\'s clean cop
   assert.ok(flow.indexOf('shareBotToHubChannel(')>flow.indexOf('function add()'),'sharing happens only in add');
   assert.match(flow,/shareBotToHubChannel\(target\.teamId,room\.id,createdId,\{skills:copy\.skills,role:target\.role\}\)/);
   assert.match(flow,/if\(createdId\)api\('\/api\/bots\/'\+encodeURIComponent\(createdId\),\{method:'DELETE'\}\)/);
+  assert.match(flow,/skills:textSkills,fromCompany:state\.fromName/,'file contents are not sent to the model');
+  assert.match(flow,/data-bot-copy-file-reviewed/,'each file has a review control');
+});
+test('a cross-company copy preserves reviewed file content and refuses an unreviewed file',()=>{
+ const copy={skills:[{name:'Review',body:'Use the scorer.'}]};
+ const source=[{files:[{path:'score.py',body:'print(1)'}],folder:'/private/local/skill'}];
+ const withFiles=appFunction('companyCopyWithFiles',{})(copy,source);
+ assert.deepEqual(JSON.parse(JSON.stringify(withFiles.skills[0].files)),[{path:'score.py',body:'print(1)'}]);
+ assert.equal(JSON.stringify(withFiles).includes('/private/local/skill'),false);
+ const reviewed=appFunction('companyCopyFilesReviewed',{});
+ assert.equal(reviewed(withFiles,{}),false);
+ assert.equal(reviewed(withFiles,{'0:0':true}),true);
 });
 test('a team offers New bot like Solo: in Start something, on My Bots, and through the same setup',()=>{
   assert.match(source,/\.concat\(\[\{id:'new-bot', name:'New bot'\}\]\)/);

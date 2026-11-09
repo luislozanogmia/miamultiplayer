@@ -65,6 +65,7 @@ test('bad input and links planted in the library are refused', (t) => {
   assert.throws(() => library.create({ name: '', body: 'x' }), { code: 'invalid_skill' });
   assert.throws(() => library.create({ name: 'x', body: '' }), { code: 'invalid_skill' });
   assert.throws(() => library.create({ name: 'x', body: 'y'.repeat(MAX_SKILL_CHARS + 1) }), { code: 'skill_too_long' });
+  assert.throws(() => library.create({ name: 'x', body: 'Safe', files: [{ path: 'CON.py', body: 'x' }] }), { code: 'invalid_skill_file' });
   assert.equal(library.read('../../etc'), null);
   const secret = path.join(data, 'secret.md');
   fs.writeFileSync(secret, 'private');
