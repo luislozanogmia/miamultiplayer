@@ -204,6 +204,40 @@ async function loginAsBootAdmin(server) {
   return cookie;
 }
 
+test('large valid skill definitions cross only the exact Hub proxy version route', async (t) => {
+  let forwardedBytes = 0;
+  const hub = http.createServer(async (request, response) => {
+    for await (const chunk of request) forwardedBytes += chunk.length;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end('{"proposal":{"version":1}}');
+  });
+  await new Promise((resolve) => hub.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => hub.close(resolve)));
+  const server = await startServer({ extraEnv: { MIA_HUB_URL: `http://127.0.0.1:${hub.address().port}` } });
+  t.after(() => stopServer(server));
+  const team = 'a'.repeat(32), channel = 'c'.repeat(32), bot = 'b'.repeat(32);
+  const route = `/api/hub/v1/teams/${team}/channels/${channel}/bots/${bot}/versions`;
+  const skills = Array.from({ length: 10 }, (_, i) => ({ name: `Skill ${i}`, body: 'Use the files.',
+    files: Array.from({ length: 5 }, (_, j) => ({ path: `file-${j}.txt`, body: '\u0001'.repeat(50000) })) }));
+  const payload = JSON.stringify({ mode: 'fork', instructions: 'Use the skills.', skills });
+  assert.ok(Buffer.byteLength(payload) > 12 * 1024 * 1024);
+  const headers = { authorization: 'Bearer fixture.token', origin: server.origin, 'content-type': 'application/json' };
+  const accepted = await fetch(server.origin + route, { method: 'POST', headers, body: payload });
+  assert.equal(accepted.status, 200);
+  assert.equal(forwardedBytes, Buffer.byteLength(payload));
+  const rejected = await fetch(server.origin + `/api/hub/v1/teams/${team}/channels`, { method: 'POST', headers, body: payload });
+  assert.equal(rejected.status, 413);
+  assert.equal(forwardedBytes, Buffer.byteLength(payload), 'ordinary routes never forward the oversized body');
+  const shareRoute = server.origin + '/api/hub-bots/share';
+  const shareBody = JSON.stringify({ teamId: team, channelId: channel, localBotId: 'missing', skills });
+  assert.ok(Buffer.byteLength(shareBody) > 12 * 1024 * 1024);
+  const unauthenticated = await fetch(shareRoute, { method: 'POST', headers: { origin: server.origin, 'content-type': 'application/json' }, body: shareBody });
+  assert.equal(unauthenticated.status, 401, 'the large share body is refused before parsing without a session');
+  const cookie = await loginAsBootAdmin(server);
+  const authenticated = await fetch(shareRoute, { method: 'POST', headers: { cookie, origin: server.origin, 'content-type': 'application/json' }, body: shareBody });
+  assert.equal(authenticated.status, 403, 'a valid session reaches the share guard beyond the 12 MiB parser');
+});
+
 test('Mia chat dispatch selects a defined Hermes profile and posts the reply', async () => {
   const preloadScript = `
 const fs = require('node:fs');
