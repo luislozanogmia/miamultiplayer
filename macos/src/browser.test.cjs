@@ -3256,3 +3256,25 @@ test("going to a page yourself on a tab a bot used earlier never shows the bot i
   assert.equal(h.command("state").tabs.find(tab => tab.id === opened.tab_id).botActivity, null, "no glow, working dot or Take over");
   h.window.emit("closed");
 });
+
+test("with two tabs open, a click in the visible tab never lands in the hidden one", () => {
+  const h = harness();
+  h.command("navigate", { value: "https://claude.ai/code" });
+  h.command("new");
+  h.command("navigate", { value: "https://chatgpt.com" });
+  h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 1000, height: 700 } });
+  const [hiddenTab, shownTab] = h.views;
+  // macOS can hit-test a native view even when it is hidden, so only the
+  // bounds decide: a click goes to every view whose rectangle holds it.
+  const under = (x, y) => h.views.filter(view => view.bounds && x >= view.bounds.x && x < view.bounds.x + view.bounds.width
+    && y >= view.bounds.y && y < view.bounds.y + view.bounds.height);
+  // ChatGPT's Home icon, where Claude Code's hidden "Show sidebar" sits.
+  assert.deepEqual(under(8, 108), [shownTab]);
+  assert.equal(shownTab.visible, true);
+  assert.equal(hiddenTab.visible, false);
+  assert.equal(hiddenTab.bounds.width, 1000, "the hidden page keeps its size");
+  // Switch: the other tab takes the spot, and the first one leaves it.
+  h.command("select", { id: h.command("state").tabs[0].id });
+  assert.deepEqual(under(76, 780), [hiddenTab]);
+  assert.equal(shownTab.visible, false);
+});
