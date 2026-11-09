@@ -37,7 +37,9 @@ test('Install fetches the manifest, creates the bot through POST \\/api\\/bots, 
   assert.ok(installStart >= 0 && installEnd > installStart, 'installBotStoreBot exists');
   const install = source.slice(installStart, installEnd);
   assert.match(install, /api\('\/api\/bots\/catalog\/' \+ encodeURIComponent\(id\)\)/);
-  assert.match(install, /api\('\/api\/bots', \{method:'POST', body: freshManifest\.bot\}\)/);
+  // The bot's skills become skill folders first, then the bot carries their ids.
+  assert.match(install, /createLibrarySkills\(freshManifest\.skills\)\.then\(function\(skillIds\)\{/);
+  assert.match(install, /api\('\/api\/bots', \{method:'POST', body: skillIds\.length \? Object\.assign\(\{\}, freshManifest\.bot, \{skills: skillIds\}\) : freshManifest\.bot\}\)/);
   assert.match(install, /createNativeAgentConversation\(created, \{\}\)/);
   assert.match(install, /chatRoomState\(conversation\.id\)\.localWelcome = buildBotStoreWelcomeMessage\(conversation\.id, created, freshManifest\.welcome\);/);
   assert.match(install, /loadChatRoom\(conversation\.id, 'agent', created\.name\);/);
