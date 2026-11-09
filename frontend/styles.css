@@ -3969,7 +3969,7 @@ html.mac-inset-titlebar body.mia-call-zoomed .local-browser-overlay .native-brow
 .mia-space-invite{flex-wrap:wrap;}
 /* Browsing together is live, invited or not: the card and its Join are green. */
 .mia-space-invite{border-color:#2f9e44;background:#f2fbf5;}
-.chat-msg-mention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;font-weight:500;}
+.chat-msg-mention{white-space:nowrap;font-weight:500;}
 .hub-channel-row.is-shared-away .chat-row-mark,.hub-channel-row.is-shared-away .row-text{opacity:.45;}
 .hub-hidden-bots-toggle{display:flex;align-items:center;gap:6px;width:100%;padding:4px 8px 4px 58px;border:0;background:none;color:var(--sand-text-tertiary,#8a857c);font:inherit;font-size:12px;text-align:left;cursor:pointer;border-radius:8px;}
 .hub-hidden-bots-toggle:hover{background:var(--sand-fill-ghost-hover,rgba(0,0,0,.04));}
@@ -3983,6 +3983,8 @@ html.mac-inset-titlebar body.mia-call-zoomed .local-browser-overlay .native-brow
 .chat-msg-mention-face .human-avatar-initials{display:flex;align-items:center;justify-content:center;width:100%;height:100%;border-radius:50%;line-height:1;}
 .chat-msg-mention-face .human-avatar-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
 .chat-msg-mention > :first-child,.chat-msg-mention img,.chat-msg-mention svg{flex:none;width:16px;height:16px;max-width:16px;max-height:16px;object-fit:contain;}
+/* Only the face drops to sit on the text; the "@name" stays on the line. */
+.chat-msg-mention > :first-child{display:inline-block;vertical-align:-3px;margin-right:3px;}
 .mia-space-invite .mia-space-btn.primary{background:#2f9e44;color:#FFFFFF;}
 .mia-space-invite .mia-space-btn.primary:hover{background:#278a3b;}
 .mia-space-invite-btn{flex:none;display:inline-flex;align-items:center;gap:5px;height:28px;margin:0 2px;padding:0 10px;border:1px solid var(--sand-border-default);border-radius:999px;background:var(--sand-bg-elevated);color:var(--sand-text-primary);font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;app-region:no-drag;}
