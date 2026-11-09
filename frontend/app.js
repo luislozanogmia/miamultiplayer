@@ -5406,7 +5406,7 @@
   // was just created: it is shared into the channel and, when you are a team
   // admin, published right away. Anyone else's bot waits for an admin.
   // -> Promise<true when published>
-  // A copy for another company (see copyCompanyBotToCompany) brings its
+  // A copy for another company brings its
   // reviewed skills and your role in that company.
   function shareBotToHubChannel(teamId, channelId, localBotId, copy){
     var body = {teamId: teamId, channelId: channelId, localBotId: String(localBotId)};
@@ -5665,7 +5665,6 @@
       pinned.innerHTML='';
       pinnedChannels.forEach(function(channel){pinned.appendChild(row(channel));});
       myBots.forEach(function(bot){ if(botPinned('mine:'+bot.id))pinned.appendChild(teamBotRow(bot,true)); });
-      companyBots.forEach(function(bot){ if(botPinned('company:'+bot.key))pinned.appendChild(companyBotRow(bot,true)); });
       if(!pinned.children.length)pinned.innerHTML='<div class="chat-sidebar-empty chat-pinned-empty">Nothing pinned yet</div>';
     }
     if(!all)return;
@@ -5701,21 +5700,14 @@
     var myBotSection=section('bots','My Bots','New bot',function(){ runToolsAction('new-bot'); });
     // Solo bots already shared with this company wait in a folded Hidden
     // group at the end, greyed; each can be reactivated from there.
-    // Bots you hid, and Solo bots already shared with this company (greyed,
-    // each can be reactivated), wait in the Hidden group.
-    var hiddenBots=myBots.filter(function(bot){ return (soloBotSharedAway(bot) || hubRowHidden('bot:mine:'+bot.id)) && !botPinned('mine:'+bot.id); });
+    // Your bots are your bots everywhere, shared or not; only the ones you
+    // hid wait in the Hidden group.
+    var hiddenBots=myBots.filter(function(bot){ return hubRowHidden('bot:mine:'+bot.id) && !botPinned('mine:'+bot.id); });
     myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
     hiddenGroup(myBotSection.list,'bots',hiddenBots.map(function(bot){ return function(){ return teamBotRow(bot); }; }),
-      'Bots you hid, and bots you shared with the company. Shared ones are under Company bots.');
+      'Bots you hid. Right-click one to show it again.');
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
     all.appendChild(myBotSection.node);
-    // Company bots: every bot shared into a channel of this workspace you can see.
-    var companySection=section('company-bots','Company bots','',null);
-    var hiddenCompanyBots=companyBots.filter(function(bot){ return hubRowHidden('bot:company:'+bot.key) && !botPinned('company:'+bot.key); });
-    companyBots.forEach(function(bot){ if(!botPinned('company:'+bot.key) && hiddenCompanyBots.indexOf(bot)<0)companySection.list.appendChild(companyBotRow(bot)); });
-    hiddenGroup(companySection.list,'company-bots',hiddenCompanyBots.map(function(bot){ return function(){ return companyBotRow(bot); }; }),'Company bots you hid. You can still mention them.');
-    if(!companyBots.length)companySection.list.innerHTML='<div class="chat-sidebar-empty">Bots shared in this workspace show up here</div>';
-    all.appendChild(companySection.node);
   }
   // Pinned bots live with every other pinned chat (one store per workspace,
   // as in Solo). Pins kept in the older bots-only store move over once.
@@ -5802,53 +5794,14 @@
     });
     return list.sort(function(a,b){return a.name.localeCompare(b.name);});
   }
-  // Your Solo bots that already live in this company as company bots:
-  // local id -> the company bot's name. Only copies still in the company count.
-  function sharedSoloBots(bots,teamId,companyBots){
-    var live={}, names={}, shared={};
-    (companyBots||[]).forEach(function(bot){ bot.botIds.forEach(function(id){ live[id]=true; names[id]=bot.name; }); });
-    (bots||[]).forEach(function(bot){
-      var copy=(bot.sharedAs||[]).filter(function(item){ return item.teamId===teamId && live[item.registrationId]; })[0];
-      if(copy)shared[String(bot.id)]=names[copy.registrationId];
-    });
-    return shared;
-  }
-  // A shared Solo bot is greyed out in a company's My Bots until its owner
-  // reactivates it there. Kept per company on this computer.
-  var REACTIVATED_SOLO_BOTS_KEY='miaReactivatedSoloBots';
-  function soloBotReactivated(botId){
-    try { return !!((JSON.parse(localStorage.getItem(REACTIVATED_SOLO_BOTS_KEY)||'{}')||{})[activeWorkspaceKey]||{})[botId]; } catch(_reactivatedError) { return false; }
-  }
-  function reactivateSoloBot(botId){
-    try {
-      var all=JSON.parse(localStorage.getItem(REACTIVATED_SOLO_BOTS_KEY)||'{}')||{};
-      var mine=all[activeWorkspaceKey]||{}; mine[botId]=true; all[activeWorkspaceKey]=mine;
-      localStorage.setItem(REACTIVATED_SOLO_BOTS_KEY,JSON.stringify(all));
-    } catch(_reactivatedError) {}
-  }
-  function soloBotSharedAway(bot){ return !!(hubChat.sharedSoloBots||{})[bot.id] && !soloBotReactivated(bot.id); }
-  function openSharedSoloBotNotice(bot){
-    var companyName=(hubChat.sharedSoloBots||{})[bot.id]||bot.name;
-    return appConfirm(bot.name+' was shared with the company. Here, everyone uses it as '+companyName+' under Company bots. Reactivate your Solo '+bot.name+' if you also want to use it here.','Reactivate').then(function(ok){
-      if(!ok)return;
-      reactivateSoloBot(bot.id);
-      renderChatSidebar();
-      return openTeamBotChat(bot);
-    });
-  }
   function loadCompanyBots(){
     var workspace=activeWorkspaceKey;
     var request=hubChat.companyBotsRequest=Number(hubChat.companyBotsRequest||0)+1;
-    return Promise.all([
-      window.MiaHubChat.teamBots(workspace.slice(4)),
-      window.MiaHubChat.localCall('GET','/available').catch(function(){ return {bots:[]}; })
-    ]).then(function(answers){
-      var results=answers[0];
+    return window.MiaHubChat.teamBots(workspace.slice(4)).then(function(results){
       if(workspace!==activeWorkspaceKey || request!==hubChat.companyBotsRequest)return;
       // The Hub decides who sees which bot: everyone by default, unless an
       // admin limits it. The sidebar shows exactly what it returns.
       hubChat.companyBots=companyBotsFromChannels(results);
-      hubChat.sharedSoloBots=sharedSoloBots(answers[1] && answers[1].bots, workspace.slice(4), hubChat.companyBots);
       renderChatSidebar();
     }).catch(function(){/* The sidebar keeps its last list; the next team open retries. */});
   }
@@ -5872,67 +5825,6 @@
     var open=bot.channels.filter(function(channel){return channel.kind==='channel' && channel.visibility!=='private';})[0];
     if(open)return {action:'join',channel:open};
     return {action:'none',channel:null};
-  }
-  function companyBotWhere(channel){
-    var mine=hubChannel(channel.id);
-    if(mine)return hubChannelTitle(mine);
-    return channel.kind==='dm' ? 'Direct message' : channel.kind==='group' ? 'Group' : channel.name || 'Channel';
-  }
-  // Your private chat with a company bot, if the Hub has made one.
-  function companyBotChat(bot){
-    return (hubChat.channels||[]).filter(function(channel){
-      return channel.kind==='bot' && channel.bot && bot.botIds.indexOf(String(channel.bot.source_bot_id||channel.bot.id))>=0;
-    })[0]||null;
-  }
-  // A company bot opens your private chat with it, made on the Hub the first
-  // time. A Hub without bot chats still sends you to a channel with the bot.
-  function openCompanyBotChat(bot){
-    var chat=companyBotChat(bot), place=bot.places && bot.places[0];
-    if(chat)return openHubChannel(chat);
-    if(!place)return openCompanyBot(bot);
-    var workspace=activeWorkspaceKey;
-    return hubCall('POST',hubPath()+'/bot-chats',{botId:place.botId}).then(function(result){
-      if(workspace!==activeWorkspaceKey)return;
-      return refreshHubChannels().then(function(){ return openHubChannel(hubChannel(result.channel.id)); });
-    }).catch(function(error){
-      if(workspace!==activeWorkspaceKey)return;
-      if(error && error.status===404)return openCompanyBot(bot);
-      showBenchToast(hubActionError(error,'Couldn\'t open a chat with '+bot.name+'. Try again.'));
-    });
-  }
-  function openCompanyBot(bot){
-    var place=companyBotPlace(bot,hubChannel);
-    if(place.action==='open')return openHubChannel(place.channel);
-    if(place.action==='none')return showBenchToast(bot.name+' is only in conversations you\'re not part of. Ask whoever added it to add it to one of your channels.');
-    return appConfirm('Join #'+place.channel.name+' to use '+bot.name+'?','Join').then(function(ok){
-      if(!ok)return;
-      return hubCall('POST',hubPath()+'/channels/'+place.channel.id+'/join').then(refreshHubChannels)
-        .then(function(){openHubChannel(hubChannel(place.channel.id));})
-        .catch(function(error){showBenchToast(hubActionError(error,'Couldn\'t join. Try again.'));});
-    });
-  }
-  // Admins, and whoever added the bot, can take it out of every channel at once:
-  // the same removal the channel's bot panel does, once per channel.
-  function companyBotCanRemove(bot){
-    var me=hubChat.membership||{};
-    if(!bot.places || !bot.places.length)return false;
-    return me.role==='admin' || bot.places.every(function(place){ return place.ownerId && place.ownerId===me.clerk_user_id; });
-  }
-  function removeCompanyBot(bot){
-    var count=bot.places.length;
-    return appConfirm('Remove '+bot.name+' from the company? It leaves '+(count===1?'its channel':'all '+count+' channels it is in')+', and nobody here can use it until it is added again.','Remove').then(function(ok){
-      if(!ok)return;
-      var workspace=activeWorkspaceKey;
-      return Promise.all(bot.places.map(function(place){
-        return hubCall('DELETE',hubPath()+'/channels/'+place.channelId+'/bots/'+place.botId).then(function(){return true;},function(){return false;});
-      })).then(function(results){
-        if(workspace!==activeWorkspaceKey)return;
-        var failed=results.filter(function(done){return !done;}).length;
-        refreshCompanyBots();
-        bot.places.forEach(function(place){ refreshHubBotState(place.channelId,true); });
-        showBenchToast(failed ? 'Couldn\'t remove '+bot.name+' from '+failed+' of '+count+' channels. Try again.' : bot.name+' was removed from the company.');
-      });
-    });
   }
   // Copy a company bot to another company you are in. Mia proposes a
   // generalized copy; an admin reviews and edits it before adding it there.
@@ -6027,194 +5919,6 @@
   function companyCopyFilesReviewed(copy,reviews){
     return !copy || copy.skills.every(function(skill,i){ return (skill.files||[]).every(function(file,j){ return !!reviews[i+':'+j]; }); });
   }
-  function copyCompanyBotToCompany(bot){
-    var place=bot.places && bot.places[0];
-    if(!place || (hubChat.membership||{}).role!=='admin')return;
-    var fromTeamId=activeWorkspaceKey.slice(4);
-    var state={phase:'loading',teams:[],teamId:'',channels:[],channelId:'',fromName:'this company',original:null,copy:null,fileReviews:{},error:''};
-    var previousFocus=document.activeElement;
-    var overlay=document.createElement('div');
-    overlay.className='app-confirm-overlay open';
-    overlay.setAttribute('role','presentation');
-    var card=document.createElement('div');
-    card.className='app-confirm-card bot-copy-card';
-    card.setAttribute('role','dialog');
-    card.setAttribute('aria-modal','true');
-    card.setAttribute('aria-label','Copy '+bot.name+' to another company');
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-    function close(){ overlay.remove(); if(previousFocus && previousFocus.focus)try{previousFocus.focus();}catch(_){} }
-    overlay.addEventListener('click',function(e){ if(e.target===overlay && state.phase!=='copying')close(); });
-    overlay.addEventListener('keydown',function(e){ if(e.key==='Escape' && state.phase!=='copying'){ e.preventDefault(); close(); } });
-    function team(){ return state.teams.filter(function(t){ return t.teamId===state.teamId; })[0]||null; }
-    function channel(){ return state.channels.filter(function(c){ return c.id===state.channelId; })[0]||null; }
-    function render(){
-      var html='<div class="bot-copy-title">Copy '+esc(bot.name)+' to another company</div>';
-      if(state.phase==='loading'){
-        html+='<p class="bot-copy-sub">Loading your companies…</p>';
-      } else if(state.phase==='pick'){
-        html+='<p class="bot-copy-sub">Mia proposes a generalized copy. Inspect it and remove private details from '+esc(state.fromName)+' before adding it. '+esc(bot.name)+' stays here as it is.</p>'
-          +'<label class="bot-copy-field"><span>Company</span><select data-bot-copy-team>'+state.teams.map(function(t){ return '<option value="'+esc(t.teamId)+'"'+(t.teamId===state.teamId?' selected':'')+'>'+esc(t.name)+'</option>'; }).join('')+'</select></label>'
-          +'<label class="bot-copy-field"><span>Channel</span><select data-bot-copy-channel'+(state.channels.length?'':' disabled')+'>'+(state.channels.length
-            ? state.channels.map(function(c){ return '<option value="'+esc(c.id)+'"'+(c.id===state.channelId?' selected':'')+'>#'+esc(c.name)+'</option>'; }).join('')
-            : '<option>'+(state.channelsLoading?'Loading channels…':'No channels you can add bots to')+'</option>')+'</select></label>';
-      } else if(state.phase==='reviewing'){
-        html+='<p class="bot-copy-sub">Mia is preparing a proposed copy for '+esc(team().name)+'…</p>';
-      } else {
-        var copy=state.copy;
-        html+='<p class="bot-copy-sub">Check names, clients, numbers and other private details in the proposed copy for '+esc(team().name)+' · #'+esc(channel().name)+'. Edit it before you add it.</p>'
-          +(copy.removed.length?'<div class="bot-copy-removed"><span>Mia says it removed</span><ul>'+copy.removed.map(function(item){ return '<li>'+esc(item)+'</li>'; }).join('')+'</ul></div>':'')
-          +'<div class="bot-copy-compare">'
-          +'<div class="bot-copy-col"><div class="bot-copy-col-label">In '+esc(state.fromName)+'</div><div class="bot-copy-name">'+esc(bot.name)+'</div><pre class="bot-copy-original">'+esc(state.original.instructions)+'</pre></div>'
-          +'<div class="bot-copy-col"><div class="bot-copy-col-label">Copy for '+esc(team().name)+'</div><input class="bot-copy-name-input" data-bot-copy-name aria-label="Name of the copy" maxlength="40" value="'+esc(copy.name)+'"><textarea data-bot-copy-instructions aria-label="Instructions of the copy">'+esc(copy.instructions)+'</textarea></div>'
-          +'</div>'
-          +copy.skills.map(function(skill,i){
-            var original=state.original.skills[i]||{};
-            return '<details class="bot-copy-skill"><summary>Skill: '+esc(skill.name)+'</summary><div class="bot-copy-compare">'
-              +'<pre class="bot-copy-original">'+esc(original.body||'')+'</pre>'
-              +'<textarea data-bot-copy-skill="'+i+'" aria-label="'+esc('Skill '+skill.name+' in the copy')+'">'+esc(skill.body)+'</textarea></div>'
-              +(skill.files||[]).map(function(file,j){
-                var key=i+':'+j, source=(original.files||[])[j]||{};
-                return '<details class="bot-copy-skill"><summary>File: '+esc(file.path)+'</summary><p>Review and edit this file before sharing it with another company.</p>'
-                  +'<div class="bot-copy-compare"><pre class="bot-copy-original">'+esc(source.body||'')+'</pre>'
-                  +'<textarea data-bot-copy-file="'+key+'" aria-label="'+esc('File '+file.path+' in the copy')+'">'+esc(file.body)+'</textarea></div>'
-                  +'<label><input type="checkbox" data-bot-copy-file-reviewed="'+key+'"'+(state.fileReviews[key]?' checked':'')+'> I reviewed this file</label></details>';
-              }).join('')+'</details>';
-          }).join('');
-      }
-      if(state.error)html+='<div class="bot-copy-error" role="alert">'+esc(state.error)+'</div>';
-      var filesReviewed=companyCopyFilesReviewed(state.copy,state.fileReviews);
-      var primary=state.phase==='pick'?'Prepare copy for review':(state.phase==='review'||state.phase==='copying')?'Add to #'+esc(channel().name):'';
-      html+='<div class="app-confirm-actions"><button type="button" class="btn" data-bot-copy-cancel'+(state.phase==='copying'?' disabled':'')+'>Cancel</button>'
-        +(primary?'<button type="button" class="btn primary" data-bot-copy-go'+((state.phase==='pick'&&!state.channelId)||state.phase==='copying'||(state.phase==='review'&&!filesReviewed)?' disabled':'')+'>'+(state.phase==='copying'?'Adding…':primary)+'</button>':'')+'</div>';
-      card.innerHTML=html;
-      card.classList.toggle('wide',state.phase==='review'||state.phase==='copying');
-      var teamSelect=el('[data-bot-copy-team]',card), channelSelect=el('[data-bot-copy-channel]',card);
-      if(teamSelect)teamSelect.addEventListener('change',function(){ loadChannels(teamSelect.value); });
-      if(channelSelect)channelSelect.addEventListener('change',function(){ state.channelId=channelSelect.value; });
-      el('[data-bot-copy-cancel]',card).addEventListener('click',close);
-      var go=el('[data-bot-copy-go]',card);
-      if(go)go.addEventListener('click',state.phase==='pick'?review:add);
-      els('[data-bot-copy-file]',card).forEach(function(field){ field.addEventListener('input',function(){
-        var key=field.getAttribute('data-bot-copy-file'),check=el('[data-bot-copy-file-reviewed="'+key+'"]',card);
-        state.fileReviews[key]=false;if(check)check.checked=false;if(go)go.disabled=true;
-      }); });
-      els('[data-bot-copy-file-reviewed]',card).forEach(function(check){ check.addEventListener('change',function(){ readEdits();render(); }); });
-      (go||el('[data-bot-copy-cancel]',card)).focus();
-    }
-    function readEdits(){
-      var name=el('[data-bot-copy-name]',card), text=el('[data-bot-copy-instructions]',card);
-      if(name)state.copy.name=name.value.trim();
-      if(text)state.copy.instructions=text.value.trim();
-      els('[data-bot-copy-skill]',card).forEach(function(box){ state.copy.skills[Number(box.getAttribute('data-bot-copy-skill'))].body=box.value.trim(); });
-      els('[data-bot-copy-file]',card).forEach(function(box){ var parts=box.getAttribute('data-bot-copy-file').split(':');state.copy.skills[Number(parts[0])].files[Number(parts[1])].body=box.value; });
-      els('[data-bot-copy-file-reviewed]',card).forEach(function(box){ state.fileReviews[box.getAttribute('data-bot-copy-file-reviewed')]=box.checked; });
-    }
-    function loadChannels(teamId){
-      state.teamId=teamId; state.channels=[]; state.channelId=''; state.channelsLoading=true; state.error='';
-      render();
-      hubCall('GET','/v1/teams/'+teamId+'/channels').then(function(result){
-        if(state.teamId!==teamId)return;
-        state.channels=(result.channels||[]).filter(function(c){ return !hubPrivateConversation(c); });
-        state.channelId=state.channels.length?state.channels[0].id:'';
-      }).catch(function(){ if(state.teamId===teamId)state.error='Couldn\'t load that company\'s channels.'; })
-        .finally(function(){ if(state.teamId!==teamId)return; state.channelsLoading=false; render(); });
-    }
-    function review(){
-      state.phase='reviewing'; state.error=''; render();
-      // Mia rewrites the instructions; file contents stay local for explicit
-      // human review and never enter this model prompt.
-      var textSkills=state.original.skills.map(function(skill){ return {name:skill.name,description:skill.description,body:skill.body}; });
-      api('/api/bots/generic-copy',{method:'POST',body:{name:bot.name,instructions:state.original.instructions,skills:textSkills,fromCompany:state.fromName}}).then(function(res){
-        if(!overlay.isConnected)return;
-        var copy=res.data && res.data.copy;
-        if(res.status!==200 || !copy)throw new Error(res.data && res.data.message || 'Mia couldn\'t prepare a proposed copy. Try again.');
-        state.copy=companyCopyWithFiles(copy,state.original.skills);
-        state.fileReviews={};state.phase='review'; render();
-      }).catch(function(error){
-        if(!overlay.isConnected)return;
-        state.phase='pick'; state.error=error.message; render();
-      });
-    }
-    function add(){
-      readEdits();
-      if(!state.copy.name || !state.copy.instructions){ state.error='The copy needs a name and instructions.'; render(); return; }
-      if(!companyCopyFilesReviewed(state.copy,state.fileReviews)){
-        state.error='Review every skill file before sharing it with another company.';render();return;
-      }
-      var target=team(), room=channel(), copy=state.copy, model=selectedConnectedBotModel(), createdId=null;
-      if(!model){ state.error='Connect and choose a model before adding this bot.'; render(); return; }
-      state.phase='copying'; state.error=''; render();
-      api('/api/bots',{method:'POST',body:{name:copy.name,instructions:copy.instructions,model:model,status:'running',departments:[],avatarColor:bot.avatarColor||null}}).then(function(res){
-        var created=res.data && res.data.bot;
-        if(res.status!==201 || !created)throw new Error(res.data && res.data.error || 'Couldn\'t make the copy.');
-        createdId=String(created.id);
-        return shareBotToHubChannel(target.teamId,room.id,createdId,{skills:copy.skills,role:target.role});
-      }).then(function(published){
-        close();
-        if(hubWorkspace())loadTeamBotChats();
-        showBenchToast(published ? copy.name+' was added to '+target.name+' · #'+room.name+'.'
-          : copy.name+' was added to '+target.name+' · #'+room.name+'. An admin there must approve it before it can reply.');
-      }).catch(function(error){
-        // A copy that never reached the other company is not left behind here.
-        if(createdId)api('/api/bots/'+encodeURIComponent(createdId),{method:'DELETE'}).catch(function(){});
-        if(!overlay.isConnected)return;
-        state.phase='review'; state.error='Couldn\'t add the copy: '+(error && error.message || 'try again.'); render();
-      });
-    }
-    render();
-    Promise.all([
-      hubCall('GET','/v1/me'),
-      hubCall('GET',hubPath()+'/channels/'+place.channelId+'/bots/'+place.botId+'/definition')
-    ]).then(function(results){
-      if(!overlay.isConnected)return;
-      var definition=results[1] && results[1].definition;
-      if(!definition || !definition.instructions)throw new Error('Only a bot an admin has approved can be copied.');
-      state.original={instructions:definition.instructions,skills:(definition.skills||[]).map(function(skill){ return {name:skill.name,description:skill.description||'',body:skill.body,
-        files:(skill.files||[]).map(function(file){ return {path:file.path,body:file.body}; })}; })};
-      (results[0].teams||[]).forEach(function(t){
-        if(t.teamId===fromTeamId){ state.fromName=String(t.name||state.fromName); return; }
-        if(t.membership && /^[a-f0-9]{32}$/.test(t.teamId))state.teams.push({teamId:t.teamId,name:String(t.name||'Company'),role:t.membership.role});
-      });
-      if(!state.teams.length)throw new Error('You are not in another company yet.');
-      state.phase='pick';
-      loadChannels(state.teams[0].teamId);
-    }).catch(function(error){
-      if(!overlay.isConnected)return;
-      state.phase='error'; state.error=error && error.message || 'Couldn\'t load this bot.'; render();
-    });
-  }
-  // A company bot is used in the channels it was shared to; its row opens
-  // one of them so you can mention it there.
-  function companyBotRow(bot,pinned){
-    var button=document.createElement('button'); button.type='button';
-    button.className='chat-recent-row hub-channel-row';
-    button.setAttribute('data-company-bot',bot.key);
-    var where=bot.channels.map(companyBotWhere).join(', ');
-    // With a private chat, the row shows it: lit while open, its latest line, unread.
-    var chat=companyBotChat(bot), state=chat && chatWs.byRoom[chat.id];
-    var chatPreview=chat ? hubRoomPreview(chat.id) : '';
-    if(chat && chatWs.activeRoomId===chat.id)button.className+=' active';
-    var unread=!!chat && chat.id!==chatWs.activeRoomId && Number(chat.unread||0)>0;
-    button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name,bot.key,40,null,bot.avatarColor,true)+'</span><span class="row-text"><span class="row-line1"><span class="row-label">'+esc(bot.name)+'</span>'
-      +'<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+bot.name)+'" title="Options">&#8943;</span></span>'
-      +'<span class="row-preview">'+esc(chatPreview||where)+'</span></span>';
-    if(chat){
-      var line=el('.row-line1',button), more=el('.hub-channel-more',button);
-      if(line && more)more.insertAdjacentHTML('beforebegin',renderChatActivityIndicator(!!(state && state.thinking),unread));
-    }
-    button.addEventListener('click',function(){ openCompanyBotChat(bot); });
-    wireRowMenu(button,function(){
-      // Only this company's admins may take a bot out of it, even as a clean copy.
-      var extra=(hubChat.membership||{}).role==='admin' ? [{label:'Copy to another company…',icon:'share',run:function(){ copyCompanyBotToCompany(bot); }}] : [];
-      var danger=companyBotCanRemove(bot) ? [{label:'Remove from company',icon:'archive',danger:true,run:function(){ removeCompanyBot(bot); }}] : [];
-      return botRowMenuGroups({name:bot.name,agent:null,roomId:chat ? chat.id : null,
-        pinned:!!pinned,setPinned:function(on){ setChatPinned('bot:company:'+bot.key,on); },
-        hidden:hubRowHidden('bot:company:'+bot.key),setHidden:function(on){ setHubRowHidden('bot:company:'+bot.key,on); },
-        open:function(){ return openCompanyBotChat(bot); },extra:extra,danger:danger});
-    });
-    return button;
-  }
   // A bot row in a team opens your private chat with it for this team.
   function teamBotRow(bot,pinned){
     var chat=(chatWs.nativeConversations||[]).filter(function(conversation){
@@ -6224,21 +5928,19 @@
     var state=chat && chatWs.byRoom[chat.id];
     var active=!!chat && chatWs.activeRoomId===chat.id;
     var button=document.createElement('button'); button.type='button';
-    var sharedAway=soloBotSharedAway(bot);
-    button.className='chat-recent-row hub-channel-row'+(active?' active':'')+(sharedAway?' is-shared-away':'');
+    button.className='chat-recent-row hub-channel-row'+(active?' active':'');
     button.setAttribute('data-team-bot-id',bot.id);
-    if(sharedAway)button.title='Shared with the company. Use it under Company bots.';
     // The same row text as Solo: activity, unread, time and latest line.
     button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span>'
       +sidebarRowText(bot.name||'Bot',chat ? chat.id : null,!!(state && state.thinking));
     var line=el('.row-line1',button);
     if(line)line.insertAdjacentHTML('beforeend','<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span>');
-    button.addEventListener('click',function(){ if(sharedAway)openSharedSoloBotNotice(bot); else openTeamBotChat(bot); });
+    button.addEventListener('click',function(){ openTeamBotChat(bot); });
     wireRowMenu(button,function(){
       return botRowMenuGroups({name:bot.name,agent:bot,roomId:chat ? chat.id : null,
         pinned:!!pinned,setPinned:function(on){ setChatPinned('bot:mine:'+bot.id,on); },
         hidden:hubRowHidden('bot:mine:'+bot.id),setHidden:function(on){ setHubRowHidden('bot:mine:'+bot.id,on); },
-        open:function(){ return sharedAway ? openSharedSoloBotNotice(bot) : openTeamBotChat(bot); }});
+        open:function(){ return openTeamBotChat(bot); }});
     });
     return button;
   }

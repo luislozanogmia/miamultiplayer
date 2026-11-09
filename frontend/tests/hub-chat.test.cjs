@@ -745,13 +745,6 @@ test('Solo Retry, delete and composer hand-off cover undelivered messages',()=>{
   assert.match(source,/if\(m\.sendFailed\) return true; \/\/ an undelivered copy exists only here/);
   assert.match(source,/result\.status === 201 \|\| result\.undelivered/);
 });
-test('team sidebar splits My Bots from Company bots',()=>{
-  const body=source.slice(source.indexOf('  function renderHubSidebar(){'),source.indexOf('  function hubInviteRow('));
-  assert.match(body,/section\('bots','My Bots','New bot',function\(\)\{ runToolsAction\('new-bot'\); \}\)/);
-  assert.match(body,/section\('company-bots','Company bots','',null\)/);
-  assert.match(source,/window\.MiaHubChat\.teamBots\(workspace\.slice\(4\)\)/,'the sidebar uses the shared team bot loader');
-  assert.match(require('fs').readFileSync(require('path').join(__dirname,'..','admin.js'),'utf8'),/win\.MiaHubChat\.teamBots\(team\.id\)/,'the Bot Roster uses the same loader');
-});
 test('a company bot shows once, by name, with every channel it is in',()=>{
   const start=source.indexOf('  function companyBotsFromChannels(');
   const merge=new Function('normalizeAgentAvatarColor',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null);
@@ -822,17 +815,6 @@ test('a bot reply shows its run label apart from the text; people cannot post on
   assert.equal(person.hubRunLabel,'');assert.match(person.body,/Ran on Tom/);
 });
 
-function companyRowEnv(activeRoomId){
-  return {document:{createElement:()=>({className:'',innerHTML:'',setAttribute(){},addEventListener(){}})},
-    companyBotPlace:()=>({action:'open',channel:{id:'c1'}}),hubChannel:()=>({id:'c1'}),chatWs:{activeRoomId},
-    companyBotWhere:()=>'ux-test',agentAvatarHtml:()=>'',esc:String,openCompanyBot(){},wireRowMenu(){},companyBotCanRemove:()=>false,hubChat:{membership:{role:'member'}},companyBotChat:()=>null};
-}
-test('a company bot row never lights up: the open channel is the channel row\'s to show',()=>{
-  const row=appFunction('companyBotRow',companyRowEnv('c1'));
-  const bot={key:'web',name:'Web',channels:[{id:'c1'}]};
-  assert.doesNotMatch(row(bot,false).className,/\bactive\b/);
-  assert.doesNotMatch(row(bot,true).className,/\bactive\b/,'a pinned row is the same');
-});
 test('the company bot list refreshes once after a burst of bot changes, only for the team still open',()=>{
   const timers=[];let loads=0;
   const env={hubWorkspace:()=>env.activeWorkspaceKey.indexOf('hub_')===0,activeWorkspaceKey:'hub_a',hubChat:{},loadCompanyBots(){loads+=1;},
@@ -907,35 +889,6 @@ test('the demo link reads MP with demo below it',()=>{
   const html=require('fs').readFileSync(require('path').join(__dirname,'..','index.html'),'utf8');
   assert.match(html,/id="workspaceRailDemo"[^>]*>\s*<span class="workspace-rail-mark" aria-hidden="true">MP<\/span><small class="workspace-rail-note">demo<\/small>/);
 });
-test('an admin can remove a company bot from every channel it is in, from its row',async()=>{
-  const merge=new Function('normalizeAgentAvatarColor',source.slice(source.indexOf('  function companyBotsFromChannels('),source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null);
-  const [bot]=merge([{channel:{id:'c1'},bots:[{id:'b1',name:'Disk Manager',published:true,owner_id:'u_owner'}]},{channel:{id:'c2'},bots:[{id:'b2',name:'Disk Manager',published:true,owner_id:'u_owner'}]}]);
-  assert.deepEqual(bot.places,[{channelId:'c1',botId:'b1',ownerId:'u_owner'},{channelId:'c2',botId:'b2',ownerId:'u_owner'}]);
-  const can=me=>appFunction('companyBotCanRemove',{hubChat:{membership:me}})(bot);
-  assert.equal(can({role:'admin',clerk_user_id:'u_admin'}),true);
-  assert.equal(can({role:'member',clerk_user_id:'u_owner'}),true,'whoever added it');
-  assert.equal(can({role:'member',clerk_user_id:'u_other'}),false);
-  const calls=[],toasts=[];
-  const remove=appFunction('removeCompanyBot',{appConfirm:()=>Promise.resolve(true),activeWorkspaceKey:'hub_t',hubPath:()=>'/v1/teams/t',
-    hubCall:(method,path)=>{calls.push(method+' '+path);return Promise.resolve({});},refreshCompanyBots:()=>calls.push('refresh'),refreshHubBotState:()=>{},showBenchToast:t=>toasts.push(t),Promise});
-  await remove(bot);
-  assert.deepEqual(calls,['DELETE /v1/teams/t/channels/c1/bots/b1','DELETE /v1/teams/t/channels/c2/bots/b2','refresh']);
-  assert.deepEqual(toasts,['Disk Manager was removed from the company.']);
-  assert.match(source,/var danger=companyBotCanRemove\(bot\) \? \[\{label:'Remove from company',icon:'archive',danger:true,run:function\(\)\{ removeCompanyBot\(bot\); \}\}\] : \[\];/);
-});
-test('anyone can copy a company bot to another company, through Mia\'s clean copy and their approval',()=>{
-  assert.match(source,/var extra=\(hubChat\.membership\|\|\{\}\)\.role==='admin' \? \[\{label:'Copy to another company…',icon:'share',run:function\(\)\{ copyCompanyBotToCompany\(bot\); \}\}\] : \[\];/,'only admins see Copy to another company');
-  assert.match(source,/if\(!place \|\| \(hubChat\.membership\|\|\{\}\)\.role!=='admin'\)return;/,'and the copy itself refuses anyone else');
-  const flow=source.slice(source.indexOf('  function copyCompanyBotToCompany('),source.indexOf('  function companyBotRow('));
-  assert.match(flow,/hubPath\(\)\+'\/channels\/'\+place\.channelId\+'\/bots\/'\+place\.botId\+'\/definition'/,'the copy starts from the approved definition');
-  assert.match(flow,/api\('\/api\/bots\/generic-copy'/);
-  // Nothing reaches the other company until the person presses Add.
-  assert.ok(flow.indexOf('shareBotToHubChannel(')>flow.indexOf('function add()'),'sharing happens only in add');
-  assert.match(flow,/shareBotToHubChannel\(target\.teamId,room\.id,createdId,\{skills:copy\.skills,role:target\.role\}\)/);
-  assert.match(flow,/if\(createdId\)api\('\/api\/bots\/'\+encodeURIComponent\(createdId\),\{method:'DELETE'\}\)/);
-  assert.match(flow,/skills:textSkills,fromCompany:state\.fromName/,'file contents are not sent to the model');
-  assert.match(flow,/data-bot-copy-file-reviewed/,'each file has a review control');
-});
 test('a cross-company copy preserves reviewed file content and refuses an unreviewed file',()=>{
  const copy={skills:[{name:'Review',body:'Use the scorer.'}]};
  const source=[{files:[{path:'score.py',body:'print(1)'}],folder:'/private/local/skill'}];
@@ -983,49 +936,6 @@ test('a direct message or group can be closed, and comes back when someone write
   appFunction('openHubChannel',Object.assign({setHubConversationClosed:set},env))(dm);
   assert.equal(closed(dm),false,'opening it clears the close');
   assert.match(source,/hubPrivateConversation\(channel\) && channel\.kind!=='bot' && !hubConversationClosed\(channel\)/);
-});
-test('a Solo bot shared with this company is greyed in My Bots until reactivated',()=>{
-  const shared=appFunction('sharedSoloBots',{})(
-    [{id:'solo-admin',sharedAs:[{teamId:'t1',registrationId:'r1'}]},{id:'solo-old',sharedAs:[{teamId:'t1',registrationId:'gone'}]},
-     {id:'solo-other',sharedAs:[{teamId:'t2',registrationId:'r9'}]},{id:'solo-plain'}],
-    't1',[{name:'Admin Bot',botIds:['r1']}]);
-  assert.deepEqual(JSON.parse(JSON.stringify(shared)),{'solo-admin':'Admin Bot'},'only copies still in this company count');
-  const store={};const localStorage={getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}};
-  const env={localStorage,JSON,REACTIVATED_SOLO_BOTS_KEY:'miaReactivatedSoloBots',activeWorkspaceKey:'hub_t1'};
-  const isOn=appFunction('soloBotReactivated',Object.assign({},env));
-  assert.equal(isOn('solo-admin'),false);
-  appFunction('reactivateSoloBot',Object.assign({},env))('solo-admin');
-  assert.equal(isOn('solo-admin'),true);
-  assert.equal(appFunction('soloBotReactivated',Object.assign({},env,{activeWorkspaceKey:'hub_t2'}))('solo-admin'),false,'per company');
-  assert.match(source,/function soloBotSharedAway\(bot\)\{ return !!\(hubChat\.sharedSoloBots\|\|\{\}\)\[bot\.id\] && !soloBotReactivated\(bot\.id\); \}/);
-  assert.match(source,/var sharedAway=soloBotSharedAway\(bot\);/);
-  // They sit folded in a Hidden group at the end of My Bots, with bots you hid, closed until opened.
-  assert.match(source,/var hiddenBots=myBots\.filter\(function\(bot\)\{ return \(soloBotSharedAway\(bot\) \|\| hubRowHidden\('bot:mine:'\+bot\.id\)\) && !botPinned\('mine:'\+bot\.id\); \}\);/);
-  assert.match(source,/var openKey=activeWorkspaceKey\+':'\+key, hiddenOpen=hubHiddenBotsOpen\[openKey\]===true;/);
-  assert.match(source,/function initHubChat\(\)\{\n\s*\['channels','bots','company-bots'\]\.forEach\(function\(key\)\{ hubHiddenBotsOpen\[activeWorkspaceKey\+':'\+key\]=false; \}\);/,'folded every time the company opens');
-  assert.match(source,/hiddenGroup\(myBotSection\.list,'bots',hiddenBots\.map\(function\(bot\)\{ return function\(\)\{ return teamBotRow\(bot\); \}; \}\),/);
-  assert.match(source,/if\(sharedAway\)openSharedSoloBotNotice\(bot\); else openTeamBotChat\(bot\);/);
-});
-test('a company bot opens your private chat with it on the Hub, and falls back to its channel on an older Hub',async()=>{
-  const calls=[];let refreshed=0;
-  const bot={key:'admin bot',name:'Admin Bot',botIds:['src1'],places:[{channelId:'c1',botId:'src1'}],channels:[{id:'c1'}]};
-  const chat={id:'chat1',kind:'bot',bot:{id:'cb1',source_bot_id:'src1',name:'Admin Bot'}};
-  const env=(channels,answer)=>{const hubChat={channels:channels.slice()};const e={hubChat,activeWorkspaceKey:'hub_t',hubPath:()=>'/v1/teams/t',Promise,
-    hubCall:(m,p,b)=>{calls.push([m,p,b]);return answer();},
-    refreshHubChannels:()=>{refreshed++;hubChat.channels.push(chat);return Promise.resolve();},
-    hubChannel:id=>hubChat.channels.filter(c=>c.id===id)[0],openHubChannel:c=>calls.push(['open',c.id]),
-    openCompanyBot:b=>calls.push(['channel',b.name]),showBenchToast:t=>calls.push(['toast',t]),hubActionError:(e,f)=>f};
-    e.companyBotChat=appFunction('companyBotChat',e);return e;};
-  await appFunction('openCompanyBotChat',env([chat],()=>Promise.reject(new Error('no call'))))(bot);
-  assert.deepEqual(calls.splice(0),[['open','chat1']],'an existing chat just opens');
-  await appFunction('openCompanyBotChat',env([],()=>Promise.resolve({channel:{id:'chat1'}})))(bot);
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.splice(0))),[['POST','/v1/teams/t/bot-chats',{botId:'src1'}],['open','chat1']]);
-  await appFunction('openCompanyBotChat',env([],()=>Promise.reject(Object.assign(new Error('missing'),{status:404}))))(bot);
-  assert.deepEqual(calls.splice(-1),[['channel','Admin Bot']],'a Hub without bot chats keeps the channel behavior');
-  const title=appFunction('hubChannelTitle',{hubPrivateConversation:c=>c.kind==='bot'});
-  assert.equal(title(chat),'Admin Bot');
-  assert.match(source,/channel\.kind!=='bot' && !hubConversationClosed/,'a bot chat is not listed under Direct messages');
-  assert.match(source,/if\(chat && chatWs\.activeRoomId===chat\.id\)button\.className\+=' active';/,'its company bot row lights up while it is open');
 });
 test('company messages carry their Hub reactions and can be reacted to like Solo ones',async()=>{
   const api=transport();
@@ -1149,4 +1059,10 @@ test('in a company, Mia is your own 1:1 chat at the top, apart from Solo\'s, and
   assert.match(source,/metadata:\{agentId:'gateway',teamWorkspace:workspace,source:'team-mia-chat'\}/);
   // The @ menu in a company lists the channel's bots from the Hub; Mia is never one.
   assert.doesNotMatch(source.slice(source.indexOf('  function roomMentionBots('),source.indexOf('  function roomMentionPeople(')),/gateway'\s*\?\s*true|gatewayAgent/);
+});
+test('a company sidebar has My Bots and no Company bots: shared bots are your bots, found in the marketplace',()=>{
+  assert.doesNotMatch(source,/section\('company-bots'/);
+  assert.doesNotMatch(source,/function companyBotRow\(|function soloBotSharedAway\(|function copyCompanyBotToCompany\(/);
+  assert.match(source,/var hiddenBots=myBots\.filter\(function\(bot\)\{ return hubRowHidden\('bot:mine:'\+bot\.id\) && !botPinned\('mine:'\+bot\.id\); \}\);/,'only bots you hid are hidden');
+  assert.match(source,/button\.addEventListener\('click',function\(\)\{ openTeamBotChat\(bot\); \}\);/);
 });
