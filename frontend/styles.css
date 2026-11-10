@@ -4172,7 +4172,7 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 .chat-msg-reaction.on{border-color:var(--sand-text-primary);color:var(--sand-text-primary);}
 .chat-msg-reaction:disabled{cursor:default;}
 .chat-msg-react-add{appearance:none;position:absolute;left:calc(100% + 6px);bottom:2px;z-index:2;width:24px;height:24px;display:flex;align-items:center;justify-content:center;padding:0;border:1px solid var(--sand-border-default);border-radius:50%;background:var(--sand-bg-base);color:var(--sand-text-secondary);cursor:pointer;opacity:0;}
-.chat-msg-row:hover>.chat-msg-body>.chat-msg-react-add,.chat-msg-react-add:focus-visible{opacity:1;}
+.chat-msg-row:hover>.chat-msg-body>.chat-msg-react-add,.chat-msg-row:hover>.chat-msg-body>.chat-msg-text>.chat-msg-react-add,.chat-msg-react-add:focus-visible{opacity:1;}
 .chat-msg-react-add:hover{color:var(--sand-text-primary);}
 @media (hover:none){.chat-msg-react-add{opacity:1;}}
 /* A company bot's approved instructions and skills in its chat's details. */
@@ -4304,10 +4304,17 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
 .styled-agent-edit-skill-option:hover{background:var(--sand-fill-ghost-hover);}
 .styled-agent-edit-skill-option span{font-size:12px;color:var(--sand-text-secondary);}
 
-/* The reaction button sits right beside the end of the bubble: after an
-   incoming one, before your own (which sits on the right). */
+/* The reaction button sits on the bubble's border, at the lower corner away
+   from the side the bubble hangs from: lower-right on an incoming bubble,
+   lower-left on your own (which sits on the right). It lives inside the
+   bubble, so it follows the bubble's width, not the row's. A message with no
+   text bubble keeps it just beside the message body. */
 .chat-msg-row>.chat-msg-body{position:relative;}
 .chat-msg-row.is-you>.chat-msg-body>.chat-msg-react-add{left:auto;right:calc(100% + 6px);}
+.chat-msg-row>.chat-msg-body>.chat-msg-text{position:relative;}
+.chat-msg-text>.chat-msg-react-add{left:auto;right:-12px;bottom:-4px;user-select:none;-webkit-user-select:none;cursor:pointer;}
+.chat-msg-row.is-you>.chat-msg-body>.chat-msg-text>.chat-msg-react-add{left:-12px;right:auto;}
+.chat-msg-text>:has(+.chat-msg-react-add:last-child){margin-bottom:0;}
 /* A file dragged over the composer: the drop target lights up. */
 .chat-composer-wrap.is-drop-target .chat-composer{outline:2px dashed var(--accent,#DC4E13);outline-offset:2px;background:var(--accent-tint,rgba(220,78,19,.06));}
 /* Your apps in Connected apps: MCP apps Mia added, with their logos. */

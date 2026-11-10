@@ -13046,9 +13046,14 @@
       ? '<div class="chat-msg-retry-row"><button type="button" class="chat-msg-retry" data-chat-retry data-retry-event-id="' + esc(m.id) + '"' +
           (retryAttempted ? ' disabled' : '') + '>' + (retryAttempted ? 'Retried' : 'Retry') + '</button></div>'
       : '';
+    // The add-reaction button rides on the bubble's border (see
+    // .chat-msg-react-add), so it follows the bubble's width; a message with
+    // no text bubble keeps it on the message body.
+    var hasBubble = !!(text || driveDisplay.files.length);
+    var reactAddHtml = canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (text || driveDisplay.files.length ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, reactionSelf(m), esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '') + '</div></div>';
+      '<div class="chat-msg-body">' + head + (hasBubble ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + reactAddHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, reactionSelf(m), esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (hasBubble ? '' : reactAddHtml) + '</div></div>';
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed

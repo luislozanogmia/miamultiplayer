@@ -246,7 +246,8 @@ test('image-only messages render through the native attachment endpoint', async 
   assert.match(renderer, /attachments\.map\(chatArtifactCardHtml\)/);
   assert.match(source, /function chatArtifactCardHtml\(media\)/);
   assert.match(source, /chat-msg-media/);
-  assert.match(renderer, /\(text \|\| driveDisplay\.files\.length \? '<div class="chat-msg-text/);
+  assert.match(renderer, /var hasBubble = !!\(text \|\| driveDisplay\.files\.length\)/);
+  assert.match(renderer, /\(hasBubble \? '<div class="chat-msg-text/);
 });
 
 test('native artifact cards preserve every attachment, keep originals downloadable, and sandbox previews', async () => {
