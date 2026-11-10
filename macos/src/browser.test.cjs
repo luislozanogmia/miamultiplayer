@@ -2287,9 +2287,9 @@ test("closing a grouped tab stays in its group, and leaves it only once the grou
   await page();
   const two = h.command("new").activeId;
   await page();
+  h.command("move", { id: two, index: 1, groupId: g1 });
   const three = h.command("new").activeId;
   await page();
-  h.command("groupRemoveTab", { id: three });
   h.command("groupCreate", { id: three });
   assert.equal(h.command("state").tabs.find(tab => tab.id === two).groupId, g1);
   for (const id of [one, three, two]) h.command("select", { id });
@@ -2984,24 +2984,20 @@ test("tab menu saves a page as an artifact or an app, only for a web page", asyn
   fs.rmSync(folder, { recursive: true, force: true });
 });
 
-test("a new tab joins the group in front, and opens alone while that group's bot is working", async () => {
+test("+ and Cmd+T open a tab outside every group, even with a grouped tab in front", async () => {
   const h = harness();
   const first = h.command("new").activeId;
   h.command("groupCreate", { id: first });
-  const groupId = h.command("state").groups[0].id;
   h.command("select", { id: first });
   h.command("navigate", { value: "https://first.example/" });
   await new Promise(resolve => setImmediate(resolve));
   const added = h.command("new").activeId;
-  assert.equal(h.command("state").tabs.find(tab => tab.id === added).groupId, groupId, "Cmd+T and + join the group");
-  assert.equal(h.command("new").activeId, added, "its blank tab is reused instead of piling up");
-  // The bot is loading a page in the group: the person's tab stays out of its way.
+  assert.notEqual(added, first, "a new tab, not the group's tab");
+  assert.equal(h.command("state").tabs.find(tab => tab.id === added).groupId ?? null, null, "Cmd+T and + open it on its own");
   h.command("select", { id: first });
-  const page = h.views[0].webContents;
-  page.isLoading = () => true;
-  const alone = h.command("new").activeId;
-  assert.equal(h.command("state").tabs.find(tab => tab.id === alone).groupId ?? null, null);
-  page.isLoading = () => false;
+  const another = h.command("new").activeId;
+  assert.notEqual(another, added);
+  assert.equal(h.command("state").tabs.find(tab => tab.id === another).groupId ?? null, null);
   h.window.emit("closed");
 });
 

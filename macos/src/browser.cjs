@@ -2634,15 +2634,13 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     for (const item of order) tabs.set(item.id, item);
     return true;
   }
-  // In a shared session a new tab belongs to the session. Otherwise it joins
-  // the group of the tab in front, reusing its blank tab, unless that group's
-  // bot is working: the bot steers every tab in its group, so the person's new
-  // tab then opens on its own.
+  // In a shared session a new tab belongs to the session. Otherwise + and
+  // Cmd+T open a tab of its own, outside every group, as in Chrome: the tab in
+  // front's group gets new tabs only from its own links, New Tab to the
+  // Right and Duplicate.
   function newSessionOrPlainTab() {
-    const front = tabs.get(activeId);
-    const frontGroup = front && groups.has(front.groupId) && !groupTabs(front.groupId).find(browserWorkPending) ? front.groupId : null;
-    const groupId = sessionGroupId && groups.has(sessionGroupId) ? sessionGroupId : frontGroup;
-    if (!groupId) return newTab();
+    const groupId = sessionGroupId && groups.has(sessionGroupId) ? sessionGroupId : null;
+    if (!groupId) return newTab(undefined, { groupId: null });
     const members = groupTabs(groupId);
     const blank = members.find(item => !item.url);
     if (blank) { activateTab(blank.id); layout(); persistTabs(); return blank; }
