@@ -5,6 +5,7 @@ const path = require('path');
 const { summarizeWork, workResults } = require('./browser-work-proposal');
 const { safeBrowserPageUrl } = require('./browser-context');
 const { DEFAULT_WORKSPACE_ID } = require('./workspace-scope');
+const { fetchAppLogo } = require('./safe-logo-fetch');
 
 const TRUST_CATEGORIES = ['browserWork', 'automations', 'bots'];
 const ACTIVITY_LIMIT = 200;
@@ -38,25 +39,6 @@ function botSummary(bot) {
     updatedAt: bot.updatedAt,
   };
 }
-// An app's logo, fetched once when Mia proposes adding it, kept as a small
-// image in the app's record. Public https hosts only, no redirects, 100 KB.
-const LOGO_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/x-icon', 'image/vnd.microsoft.icon']);
-async function fetchAppLogo(value) {
-  if (!value) return null;
-  let url;
-  try { url = new URL(String(value)); } catch (_) { return null; }
-  const host = url.hostname.toLowerCase();
-  if (url.protocol !== 'https:' || url.username || url.password || host === 'localhost' || /^[\d.]+$/.test(host)
-      || host.includes(':') || /\.(local|internal|lan|home|arpa)$/.test(host)) return null;
-  try {
-    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(5000) });
-    const type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!response.ok || !LOGO_TYPES.has(type)) return null;
-    const bytes = Buffer.from(await response.arrayBuffer());
-    return bytes.length && bytes.length <= 100 * 1024 ? `data:${type};base64,${bytes.toString('base64')}` : null;
-  } catch (_) { return null; }
-}
-
 function lastRunsByBot(checklists) {
   const runs = {};
   for (const item of checklists || []) (runs[item.botId] = runs[item.botId] || []).push(item);
@@ -341,7 +323,11 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
         const logo = await fetchAppLogo(args.logo_url);
         const signIn = { oauth: 'You sign in to it the first time Mia uses it.', key: 'You paste its key in Connected apps; it never goes through chat.', none: 'No sign-in.' }[checked.auth];
         return { summary: `Add ${checked.name} to Connected apps`,
-          details: [checked.description, `Server: ${checked.url || `${checked.runner} ${checked.package}`}`, `From: ${checked.docsUrl}`, signIn, logo ? 'With its logo.' : 'No logo found.'].filter(Boolean),
+          details: [checked.description, `Server: ${checked.url || `${checked.runner} ${checked.package}`}`,
+            ...(!checked.url && checked.args.length ? [`Arguments: ${checked.args.join(' ')}`] : []),
+            ...(checked.keyHeader ? [`Key header: ${checked.keyHeader}`] : []),
+            ...(checked.keyEnv ? [`Key variable: ${checked.keyEnv}`] : []),
+            `From: ${checked.docsUrl}`, signIn, logo ? 'With its logo.' : 'No logo found.'].filter(Boolean),
           input: { ...input, logo } };
       },
       async apply({ call }, input) {

@@ -38,6 +38,15 @@ test('Hermes gets each app as a server that names its key, never holds it', () =
   assert.match(lines, /  u_notes:\n    command: "npx"\n    args:\n      - "-y"\n      - "@vendor\/notes-mcp"\n      - "--stdio"\n    env:\n      NOTES_TOKEN: "\$\{MIA_MCP_NOTES_KEY\}"/);
 });
 
+test('long app names cannot collide in Hermes when their first twelve characters match', () => {
+  const first = apps.cleanMcpApp({ name: 'Company Accounting One', package: 'accounting-one' });
+  const second = apps.cleanMcpApp({ name: 'Company Accounting Two', package: 'accounting-two' });
+  assert.notEqual(apps.serverName(first.id), apps.serverName(second.id));
+  const lines = apps.hermesMcpServerLines([first, second]).join('\n');
+  assert.match(lines, new RegExp(apps.serverName(first.id) + ':'));
+  assert.match(lines, new RegExp(apps.serverName(second.id) + ':'));
+});
+
 test('a key goes only into a profile .env, is replaced or removed, and is reported only as present', () => {
   const env = path.join(temp(), '.env');
   fs.writeFileSync(env, '# Mia runtime profile\nOTHER=1\n');

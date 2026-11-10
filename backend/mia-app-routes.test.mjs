@@ -258,4 +258,11 @@ test('Mia adds an MCP app only through a card, from the vendor, and never with a
   assert.equal(state.mcpApps[0].logo, null);
   assert.equal((await call('mcp_apps_list')).data.result.apps.length, 1);
   assert.doesNotMatch(JSON.stringify((await call('list_tools')).data.result.find(tool => tool.name === 'mcp_app_add_propose').arguments), /"key"\s*:/, 'no tool takes a key');
+  const packageAsk = await call('mcp_app_add_propose', { name: 'Vendor Tool', package: '@vendor/tool', runner: 'npx', args: ['--readonly'], auth: 'key', keyEnv: 'VENDOR_TOKEN',
+    docs_url: 'https://example.test/docs/tool' });
+  assert.equal(packageAsk.status, 200);
+  const packageCard = JSON.stringify(state.cards.get(packageAsk.data.result.event_id));
+  assert.match(packageCard, /Arguments: --readonly/);
+  assert.match(packageCard, /Key variable: VENDOR_TOKEN/);
+  assert.doesNotMatch(packageCard, /credential|secret value/i);
 });

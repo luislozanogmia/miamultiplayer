@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const MAX_APPS = 30;
 const MAX_LOGO_BYTES = 100 * 1024;
@@ -35,7 +36,11 @@ function slug(name) {
 }
 // Hermes names each tool mcp__<server>__<tool>, and Claude refuses tool
 // names over 50 characters, so the server name stays short.
-function serverName(id) { return 'u_' + id.replace(/-/g, '_').slice(0, 12); }
+function serverName(id) {
+  const safe = id.replace(/-/g, '_');
+  if (safe.length <= 12) return 'u_' + safe;
+  return 'u_' + safe.slice(0, 8) + crypto.createHash('sha256').update(id).digest('hex').slice(0, 8);
+}
 function keyEnvName(id) { return 'MIA_MCP_' + id.replace(/-/g, '_').toUpperCase().slice(0, 40) + '_KEY'; }
 
 function httpsUrl(value, field) {

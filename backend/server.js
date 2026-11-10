@@ -5957,7 +5957,7 @@ function sharedFolderRoute(action) {
 }
 app.get('/api/bots/:id/shared-folder', requireAuth, sharedFolderRoute((req) => {
   const folder = sharedFolderFor(req);
-  return { files: folder.list(), state: folder.state() };
+  return { ...folder.scan(), state: folder.state() };
 }));
 app.get('/api/bots/:id/shared-folder/file', requireAuth, sharedFolderRoute((req) => ({
   contentBase64: sharedFolderFor(req).read(String(req.query.path || '')).toString('base64'),
@@ -5967,7 +5967,7 @@ app.put('/api/bots/:id/shared-folder/file', requireAuth, sharedFolderRoute((req)
   if (typeof body.contentBase64 !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.contentBase64)) {
     throw new botSharedFolder.SharedFolderError('invalid_file', 'The file bytes are not valid.');
   }
-  sharedFolderFor(req).write(String(body.path || ''), Buffer.from(body.contentBase64, 'base64'));
+  sharedFolderFor(req).write(String(body.path || ''), Buffer.from(body.contentBase64, 'base64'), { exclusive: body.exclusive === true });
   return { ok: true };
 }));
 app.delete('/api/bots/:id/shared-folder/file', requireAuth, sharedFolderRoute((req) => {
