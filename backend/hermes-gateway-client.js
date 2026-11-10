@@ -490,16 +490,29 @@ class HermesGatewayClient {
     }
   }
 
+  // One live socket per client. A connect attempt that fails before ready
+  // drops only its own socket: the connect loop retrying it still owns
+  // readyPromise, so the next request waits on that loop instead of opening a
+  // second socket. Frames from any socket but the current one are ignored;
+  // Hermes sends a session's events to every socket attached to it, so a
+  // leftover socket would deliver each reply twice.
   attachSocket(socket, resolve, reject) {
+    const previous = this.socket;
     this.socket = socket;
+    if (previous && previous !== socket) {
+      try { previous.close(); } catch (_) { /* already closed */ }
+    }
     let opened = false;
     let ready = false;
+    const current = () => this.socket === socket;
+    const abandon = (error) => {
+      clearTimeout(timer);
+      if (current()) this.socket = null;
+      try { socket.close(); } catch (_) { /* already closed */ }
+      reject(error);
+    };
     const timer = setTimeout(() => {
-      if (!ready) {
-        const error = new Error('Hermes gateway connection timed out');
-        this.failConnection(error);
-        reject(error);
-      }
+      if (!ready) abandon(new Error('Hermes gateway connection timed out'));
     }, CONNECT_TIMEOUT_MS);
 
     const complete = () => {
@@ -513,6 +526,7 @@ class HermesGatewayClient {
       opened = true;
     };
     socket.onmessage = (event) => {
+      if (!current()) return;
       const raw = typeof event.data === 'string' ? event.data : String(event.data || '');
       for (const line of raw.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
         let frame;
@@ -544,23 +558,12 @@ class HermesGatewayClient {
     };
     socket.onerror = (event) => {
       const error = event instanceof Error ? event : new Error('Hermes gateway WebSocket error');
-      if (!opened || !ready) {
-        clearTimeout(timer);
-        this.failConnection(error);
-        reject(error);
-      } else {
-        this.failConnection(error);
-      }
+      if (!opened || !ready) abandon(error);
+      else if (current()) this.failConnection(error);
     };
     socket.onclose = () => {
-      if (!ready) {
-        clearTimeout(timer);
-        const error = new Error('Hermes gateway WebSocket closed before ready');
-        this.failConnection(error);
-        reject(error);
-      } else {
-        this.failConnection(new Error('Hermes gateway WebSocket closed'));
-      }
+      if (!ready) abandon(new Error('Hermes gateway WebSocket closed before ready'));
+      else if (current()) this.failConnection(new Error('Hermes gateway WebSocket closed'));
     };
   }
 
