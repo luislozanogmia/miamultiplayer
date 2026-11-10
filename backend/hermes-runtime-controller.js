@@ -99,6 +99,16 @@ class HermesRuntimeController {
     });
   }
 
+  // Stop the runtime only if it still passes the check once its turn in the
+  // queue comes, so a request that arrived meanwhile keeps it.
+  stopIf(check) {
+    return this.enqueue(async () => {
+      if (!this.current || !check(this.current)) return false;
+      const { stopped, external } = await this.stopCurrent();
+      return stopped && !external;
+    });
+  }
+
   start() {
     return this.enqueue(async () => {
       await this.retireDrainedClient();

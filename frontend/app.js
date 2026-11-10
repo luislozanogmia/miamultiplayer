@@ -5335,6 +5335,18 @@
   // name; a group without its own name shows its members' names.
   // A bot chat is one person's private conversation with a company bot.
   function hubPrivateConversation(channel){ return !!channel && (channel.kind==='dm' || channel.kind==='group' || channel.kind==='bot'); }
+  // Mia's agent runtime sleeps after a quiet while. Typing a message starts it
+  // again, so it is ready by the time the message is sent. A chat between
+  // people needs no agent.
+  var agentWakeAt = 0;
+  function wakeAgentForTyping(){
+    var channel = hubChannel(chatWs.activeRoomId);
+    if(channel && (channel.kind==='dm' || channel.kind==='group')) return;
+    if(Date.now() - agentWakeAt < 60000) return;
+    agentWakeAt = Date.now();
+    api('/api/agent/wake', {method:'POST'}).catch(function(){});
+  }
+  document.addEventListener('input', function(e){ if(e.target && e.target.id==='ccInput') wakeAgentForTyping(); });
   // Teammates' emails are remembered per team, from the member list and from
   // their messages, so a conversation keeps their name after they leave.
   var HUB_PEOPLE_STORAGE_KEY = 'miaHubPeople';

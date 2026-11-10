@@ -6049,6 +6049,13 @@ app.post('/api/bots/generic-copy', requireAuth, async (req, res) => {
   res.status(200).json({ copy });
 });
 
+// The agent runtime sleeps after a quiet while. The app calls this when the
+// person starts typing to a bot, so the runtime is up before they send.
+app.post('/api/agent/wake', requireAuth, (req, res) => {
+  startHermesGatewayRuntime().catch(() => {});
+  res.status(204).end();
+});
+
 // Live automation status comes from active Hermes cron sessions, not from
 // normal native chat dispatches. Keep the payload workspace-scoped and expose
 // only the fields the right-hand Automations panel needs.

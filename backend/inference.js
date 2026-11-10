@@ -20,6 +20,7 @@ const { externalChatEnabled } = require('./chat-security');
 const { redactHermesDiagnosticText } = require('./redact-secrets');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
 const { HermesRuntimeController } = require('./hermes-runtime-controller');
+const { createHermesIdleSleep, DEFAULT_IDLE_MS: DEFAULT_HERMES_IDLE_MS } = require('./hermes-idle-sleep');
 const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
 const { normalizedGatewayUrl } = require('./hermes-web-search-config');
 const {
@@ -636,6 +637,16 @@ function closeHermesGatewayRuntime() {
 
 process.once('exit', closeHermesGatewayRuntime);
 
+// Hermes sleeps after ten quiet minutes and starts again on the next request
+// or before an automation is due. MIAOS_HERMES_IDLE_SLEEP_MS=0 keeps it up.
+const hermesIdleSleep = createHermesIdleSleep({
+  runtime: hermesGatewayRuntime,
+  home: String(process.env.HERMES_HOME || '').trim(),
+  idleMs: process.env.MIAOS_HERMES_IDLE_SLEEP_MS === undefined || process.env.MIAOS_HERMES_IDLE_SLEEP_MS === ''
+    ? DEFAULT_HERMES_IDLE_MS : Number(process.env.MIAOS_HERMES_IDLE_SLEEP_MS) || 0,
+  log: message => console.log('[hermes-idle]', message),
+});
+
 const ROUTING_INSTRUCTION =
   `Answer the user's request directly in your Mia persona. You may use ` +
   `the tools available in your configured harness when needed, but do not ` +
@@ -1104,6 +1115,7 @@ async function getHermesGatewayModelOptions(options) {
 }
 
 async function startHermesGatewayRuntime() {
+  hermesIdleSleep.start();
   return hermesGatewayRuntime.start();
 }
 
