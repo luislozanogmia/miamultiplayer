@@ -61,7 +61,9 @@ function harness(options = {}) {
     constructor() {
       super(); this.loads = []; this.scripts = []; this.closed = false;
       this.sent = [];
-      this.navigationHistory = { canGoBack: () => false, canGoForward: () => false };
+      this.navigationHistory = { canGoBack: () => false, canGoForward: () => false,
+        getAllEntries: () => this.loads.map(url => ({ url, title: "" })), getActiveIndex: () => Math.max(0, this.loads.length - 1),
+        restore: saved => { this.restored = saved; return Promise.resolve(); } };
     }
     insertCSS(css) { this.styles = [...(this.styles || []), css]; return Promise.resolve("style-key"); }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
@@ -155,6 +157,7 @@ function harness(options = {}) {
     require: request => request === "electron" ? electron : require(request),
     module: { exports: {} }, URL, Buffer, setImmediate,
     setTimeout: options.setTimeout || setTimeout, clearTimeout: options.clearTimeout || clearTimeout,
+    setInterval, clearInterval,
     AbortController, ReadableStream, process,
     __dirname,
   };
@@ -229,7 +232,8 @@ test("new creates one tab; switching and hiding preserve loaded pages", () => {
   h.command("layout", { visible: false, bounds: { x: 0, y: 100, width: 700, height: 600 } });
   assert.equal(h.views[0].webContents.loads.length, 1);
   assert.equal(h.views[0].webContents.closed, false);
-  assert.equal(h.views[0].webContents.listenerCount("media-started-playing"), 1);
+  // The pause guard, plus the listener that keeps a playing tab awake.
+  assert.equal(h.views[0].webContents.listenerCount("media-started-playing"), 2);
   assert.match(h.views[0].webContents.scripts.at(-1), /querySelectorAll\("audio,video"\)/);
   assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
   h.views[0].webContents.emit("media-started-playing");
@@ -451,7 +455,7 @@ test("browser media position survives close and restores paused", async () => {
     await new Promise(resolve => setImmediate(resolve));
     assert.match(restored.views[0].webContents.scripts.at(-1), /video\.pause\(\)/);
     assert.match(restored.views[0].webContents.scripts.at(-1), /currentTime = 42\.5/);
-    assert.equal(restored.views[0].webContents.listenerCount("media-started-playing"), 1);
+    assert.equal(restored.views[0].webContents.listenerCount("media-started-playing"), 2);
     restored.views[0].webContents.emit("media-started-playing");
     assert.match(restored.views[0].webContents.scripts.at(-1), /video\.pause\(\)/);
     assert.doesNotMatch(restored.views[0].webContents.scripts.at(-1), /navigator\.userActivation/);
@@ -3294,4 +3298,78 @@ test("Chrome sign-in works on a bot's ChatGPT tab, but not while the bot is driv
   await new Promise(resolve => setTimeout(resolve, 2600));
   assert.equal((await h.command("chromeSignInStart")).chromeSignIn.tabId, opened.tab_id, "the bot's tab, once it is idle");
   h.window.emit("closed");
+});
+
+// Sleeping tabs: pages in the back give their memory back and load again when used.
+const LATER = () => Date.now() + 60 * 60 * 1000;
+function openTabs(h, count) {
+  const ids = [];
+  for (let index = 0; index < count; index++) {
+    ids.push(h.command("new").activeId);
+    h.command("navigate", { value: `https://site${index}.example/` });
+  }
+  return ids;
+}
+test("saved tabs come back asleep and load only when they come to the front", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-sleep-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    const first = harness({ statePath });
+    const ids = openTabs(first, 4);
+    first.command("select", { id: ids[1] });
+    first.window.emit("closed");
+
+    const again = harness({ statePath });
+    const tabs = again.command("state").tabs;
+    assert.deepEqual(Array.from(tabs, tab => tab.asleep), [true, false, true, true], "only the tab in front is awake");
+    assert.deepEqual(Array.from(tabs, tab => tab.url), [0, 1, 2, 3].map(index => `https://site${index}.example/`), "every tab keeps its address");
+    assert.deepEqual(again.views.map(view => view.webContents.loads.length), [0, 1, 0, 0], "only the tab in front loaded");
+    const woken = again.command("select", { id: ids[3] }).tabs;
+    assert.equal(woken[3].asleep, false);
+    assert.deepEqual(again.views[3].webContents.loads, ["https://site3.example/"], "picking a sleeping tab loads it");
+    assert.equal(woken[0].asleep, true, "the others stay asleep");
+    again.window.emit("closed");
+    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).tabs.length, 4, "sleeping tabs are still saved");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("tabs left in the back go to sleep, except the three used last, and wake with their history", () => {
+  const h = harness();
+  const ids = openTabs(h, 6);
+  assert.equal(h.controller.sleepIdleTabs(), 0, "nothing sleeps before its time in the back");
+  assert.equal(h.controller.sleepIdleTabs(LATER()), 3);
+  const tabs = h.command("state").tabs;
+  assert.deepEqual(Array.from(tabs, tab => tab.asleep), [true, true, true, false, false, false], "the tab in front and the two before it stay awake");
+  assert.deepEqual(h.views.slice(0, 3).map(view => view.webContents.closed), [true, true, true], "a sleeping tab's page is closed");
+  assert.equal(tabs[0].url, "https://site0.example/");
+  h.command("select", { id: ids[0] });
+  const fresh = h.views.at(-1).webContents; // tab 0 went to sleep last, so its empty page is the newest
+  assert.equal(JSON.stringify(fresh.restored), JSON.stringify({ entries: [{ url: "https://site0.example/", title: "" }], index: 0 }), "it wakes with its back and forward list");
+  assert.equal(h.command("state").tabs[0].asleep, false);
+});
+
+test("a tab that is playing, docked or held by a bot never sleeps", () => {
+  const h = harness();
+  const ids = openTabs(h, 7);
+  h.views[0].webContents.emit("media-started-playing");
+  h.views[1].webContents.isCurrentlyAudible = () => true;
+  h.command("dock", { id: ids[2] });
+  h.command("botHeld", { ids: [ids[3]] });
+  h.controller.sleepIdleTabs(LATER());
+  assert.deepEqual(Array.from(h.command("state").tabs, tab => tab.asleep), [false, false, false, false, false, false, false],
+    "seven tabs: four that cannot sleep, the one in front and the two before it");
+  h.views[0].webContents.emit("media-paused");
+  h.controller.sleepIdleTabs(LATER());
+  assert.equal(h.command("state").tabs[0].asleep, true, "it sleeps once it stops playing");
+});
+
+test("a bot command on a sleeping tab loads the page first", async () => {
+  const h = harness({ resolveActor: knownActor({}) });
+  const ids = openTabs(h, 5);
+  h.controller.sleepIdleTabs(LATER());
+  assert.equal(h.command("state").tabs[0].asleep, true);
+  const result = await h.controller.protocol("read", { tab_id: ids[0], actor_session: "s-mia" });
+  assert.equal(h.command("state").tabs[0].asleep, false);
+  assert.ok(h.views.at(-1).webContents.restored, "the page was loaded before the read");
+  assert.equal(result.url ?? "https://site0.example/", "https://site0.example/");
 });

@@ -218,6 +218,11 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // a download can claim it without the error page flashing first.
   const downloadErrorGraceMs = Number.isFinite(options.downloadErrorGraceMs)
     ? options.downloadErrorGraceMs : 1500;
+  // Sleeping tabs: the tab in front and the ones used most recently stay
+  // loaded; any other tab gives its page back after this long in the back.
+  const AWAKE_TABS = Number.isInteger(options.awakeTabs) && options.awakeTabs > 0 ? options.awakeTabs : 3;
+  const TAB_SLEEP_AFTER_MS = Number.isFinite(options.tabSleepAfterMs) && options.tabSleepAfterMs > 0
+    ? options.tabSleepAfterMs : 5 * 60 * 1000;
   const workspaceRoot = typeof options.workspaceRoot === "string" && options.workspaceRoot.trim()
     ? path.resolve(options.workspaceRoot)
     : "";
@@ -792,7 +797,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   async function captureMediaState({ pause = false } = {}) {
     await Promise.all([...tabs.values()].map(async (tab) => {
       const wc = tab.view.webContents;
-      if (wc.isDestroyed()) return;
+      // A sleeping tab has no page; it keeps the position it was saved with.
+      if (wc.isDestroyed() || tab.asleep) return;
       try {
         const media = await wc.executeJavaScript(`(() => {
           const mediaNodes = [...document.querySelectorAll("audio,video")];
@@ -943,6 +949,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     private: tab.private === true,
     lastActiveAt: tab.lastActiveAt || 0,
     active: tab.id === activeId,
+    asleep: !!tab.asleep,
     loading: tab.view.webContents.isLoading(), timing: tab.timing,
     canGoBack: tab.view.webContents.navigationHistory.canGoBack(),
     canGoForward: tab.view.webContents.navigationHistory.canGoForward(),
@@ -1053,8 +1060,10 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (fullscreenId !== null && fullscreenId !== id) exitPageFullscreen();
     // Picking the docked tab brings it back to the browser.
     if (docked.id === id) undock();
+    // The tab leaving the front starts its time in the back now.
+    if (tabs.has(activeId)) tabs.get(activeId).usedAt = Date.now();
     activeId = id;
-    if (tabs.has(id)) tabs.get(id).lastActiveAt = ++lastActiveCounter;
+    if (tabs.has(id)) { tabs.get(id).lastActiveAt = ++lastActiveCounter; wakeTab(tabs.get(id)); }
     // The tab in front is never hidden inside a collapsed group.
     const group = groups.get(tabs.get(id)?.groupId);
     if (group) group.collapsed = false;
@@ -1148,6 +1157,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     const tab = tabs.get(id);
     if (!tab || !tab.url || tab.view.webContents.isDestroyed()) return;
     if (docked.id === id) return;
+    wakeTab(tab);
     if (docked.id !== null) undock();
     if (fullscreenId === id) exitPageFullscreen();
     docked.id = id; docked.mode = "page"; docked.applied = "";
@@ -1284,6 +1294,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
 
   function navigate(tab, value) {
     const target = normalizeTarget(value);
+    tab.asleep = null;
     tab.url = target;
     tab.error = "";
     clearPendingLoadError(tab);
@@ -1299,6 +1310,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
 
   function openLocalFile(tab, value) {
     const target = normalizeLocalFileTarget(value, workspaceRoot);
+    tab.asleep = null;
     tab.url = target;
     tab.error = "";
     clearPendingLoadError(tab);
@@ -2338,6 +2350,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (existing) {
         existing.botUsedAt = ++botUseCounter;
         touch(existing);
+        await wakeForBot(existing, params.signal);
         return { ...protocolTabResult(existing), reused: true };
       }
       // A bot's new tab opens behind, so it never takes the tab in front, and it
@@ -2425,6 +2438,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       tab = protocolTab(params.tab_id);
     }
     touch(tab);
+    // A bot's own navigation loads the page it wants; anything else needs
+    // the page the tab was on, so a sleeping tab loads first.
+    if (method !== "navigate") await wakeForBot(tab, params.signal);
     if (method === "navigate") {
       if (!params.url) throw protocolError("INVALID_PARAMS", "url is required.");
       navigate(tab, params.url);
@@ -2646,11 +2662,68 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (blank) { activateTab(blank.id); layout(); persistTabs(); return blank; }
     return newTab(undefined, { after: members.at(-1)?.id, groupId });
   }
-  function newTab(value, options = {}) {
-    if (value) normalizeStoredTarget(value);
-    const groupId = groups.has(options.groupId) ? options.groupId
-      : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null;
-    if (!restoring) requireGroupIdle(groupId, options.pagesMayLoad === true);
+  // Sleeping tabs. A tab that has been in the back for a while gives its page
+  // back, as Chrome's Memory Saver does. Its place in the strip, its title,
+  // icon and back/forward list stay, and the page loads again when the tab
+  // comes to the front or a bot uses it. A tab that is playing, docked,
+  // shared in a session or being worked on never sleeps.
+  function canSleep(tab) {
+    if (!tab.url || tab.asleep || tab.id === activeId || tab.id === docked.id || tab.id === fullscreenId) return false;
+    if (sessionGroupId && tab.groupId === sessionGroupId) return false;
+    if ((tab.botWork || 0) > 0 || (tab.actorOperationCount || 0) > 0 || heldByRenderer.has(tab.id)) return false;
+    if (actorRuntime.list().some(actor => actor.tabId === tab.id)) return false;
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed() || tab.mediaPlaying) return false;
+    return !(wc.isCurrentlyAudible?.() || wc.isBeingCaptured?.() || wc.isDevToolsOpened?.());
+  }
+  function sleepTab(tab) {
+    if (!canSleep(tab)) return false;
+    const old = tab.view, wc = old.webContents;
+    let entries = [], index = 0;
+    try { entries = wc.navigationHistory.getAllEntries(); index = wc.navigationHistory.getActiveIndex(); }
+    catch (_) { /* It wakes at its address, without its back/forward list. */ }
+    tab.asleep = { entries: Array.isArray(entries) ? entries : [], index };
+    clearPendingLoadError(tab);
+    tab.sequence++; tab.snapshots.clear(); tab.vacuumElements = []; tab.timing = null; tab.waking = false;
+    window.contentView.removeChildView(old);
+    wc.close();
+    attachView(tab);
+    return true;
+  }
+  // Returns true when the tab was asleep and is now loading.
+  function wakeTab(tab) {
+    const saved = tab && tab.asleep;
+    if (!saved) return false;
+    tab.asleep = null; tab.usedAt = Date.now(); tab.waking = true;
+    const wc = tab.view.webContents, target = tab.url;
+    try {
+      if (saved.entries.length && typeof wc.navigationHistory.restore === "function") {
+        trackBrowserOperation(wc, wc.navigationHistory.restore({ entries: saved.entries, index: saved.index }),
+          () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
+      } else if (isLocalFileTarget(target)) openLocalFile(tab, target);
+      else navigate(tab, target);
+    } catch (error) { tab.waking = false; showLoadError(tab, target, error.message, false); }
+    return true;
+  }
+  async function wakeForBot(tab, signal) {
+    if (wakeTab(tab) || tab.waking) await waitForProtocolPage(tab, "load", signal);
+  }
+  function sleepIdleTabs(now = Date.now()) {
+    if (disposed) return 0;
+    const used = tab => Math.max(tab.usedAt || 0, tab.botWorkAt || 0);
+    // The tab in front stays awake, and so do the ones used last. A tab that
+    // cannot sleep (playing, shared, a bot's) does not take one of those places.
+    const idle = [...tabs.values()].filter(canSleep).sort((a, b) => used(b) - used(a) || b.id - a.id);
+    let slept = 0;
+    for (const tab of idle.slice(AWAKE_TABS - 1)) if (now - used(tab) >= TAB_SLEEP_AFTER_MS && sleepTab(tab)) slept++;
+    if (slept) { log(`browser tabs put to sleep: ${slept}`); layout(); publish(); }
+    return slept;
+  }
+  const sleepTimer = setInterval(() => sleepIdleTabs(), Math.min(30000, TAB_SLEEP_AFTER_MS));
+  sleepTimer.unref?.();
+  // A tab's page: its view and everything Mia listens for on it. A sleeping
+  // tab gets a fresh, empty one, which has no page process until it loads.
+  function attachView(tab) {
     const view = new WebContentsView({ webPreferences: {
       session: profile, sandbox: true, contextIsolation: true, nodeIntegration: false,
       webSecurity: true, allowRunningInsecureContent: false,
@@ -2658,31 +2731,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       // Chrome pages see them; Google's sign-in checks for both.
       preload: path.join(__dirname, "google-oauth-preload.cjs"),
     } });
-    const requestedId = Number(options.id);
-    const id = Number.isInteger(requestedId) && requestedId > 0 && !tabs.has(requestedId)
-      ? requestedId
-      : nextId;
-    nextId = Math.max(nextId, id + 1);
-    const tab = {
-      id, view, url: "", title: typeof options.title === "string" && options.title.trim()
-        ? options.title.slice(0, 500) : "New tab", error: "", favicon: null, faviconPending: false,
-      faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [], snapshots: new Map(), crashed: false,
-      media: options.media || null,
-      // Stays on this computer during a shared session; what it opens does too.
-      private: options.private === true || tabs.get(options.after)?.private === true,
-      // A tab opened from a grouped tab (a link, New Tab to the Right,
-      // Duplicate) joins its opener's group.
-      groupId,
-      restoreMediaPending: !!options.media,
-      mediaRestoreTarget: null,
-      mediaRestoreUntil: 0,
-      restoredMediaPlaybackGuard: null,
-      hiddenMediaPlaybackGuard: null,
-    };
-    tabs.set(tab.id, tab);
-    // A link opened from a page goes immediately after its source tab.
-    if (tabs.has(options.after)) moveTab(tab.id, [...tabs.keys()].indexOf(options.after) + 1);
-    if (options.activate !== false || activeId === null) activateTab(tab.id);
+    tab.view = view;
     window.contentView.addChildView(view);
     view.setBackgroundColor(darkTheme ? "#0B0A09" : "#ffffff");
     const wc = view.webContents;
@@ -2831,7 +2880,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       publish();
     });
     wc.on("did-start-loading", publish);
-    wc.on("did-stop-loading", () => { collectTiming(tab); publish(); });
+    wc.on("did-stop-loading", () => { tab.waking = false; collectTiming(tab); publish(); });
+    // A page that is playing (a call, a video) is in use even when silent.
+    wc.on("media-started-playing", () => { tab.mediaPlaying = true; });
+    wc.on("media-paused", () => { tab.mediaPlaying = false; });
     wc.on("dom-ready", () => {
       tab.presenceStylePromise = null; collectTiming(tab);
       // Presence lives only in pages with bound browser work.
@@ -2892,6 +2944,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     wc.on("enter-html-full-screen", () => enterPageFullscreen(tab));
     wc.on("leave-html-full-screen", () => leavePageFullscreen(tab));
     wc.on("render-process-gone", () => {
+      if (tab.view !== view) return; // The page a sleeping tab gave back.
       tab.crashed = true; tab.sequence++; tab.snapshots.clear();
       tab.error = "This tab stopped responding. Reload to try again."; layout(); publish();
     });
@@ -2913,7 +2966,46 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         { type: "separator" }, ...printMenuItems(tab));
       Menu.buildFromTemplate(items).popup({ window });
     });
-    if (value) {
+  }
+  function newTab(value, options = {}) {
+    if (value) normalizeStoredTarget(value);
+    const groupId = groups.has(options.groupId) ? options.groupId
+      : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null;
+    if (!restoring) requireGroupIdle(groupId, options.pagesMayLoad === true);
+    const requestedId = Number(options.id);
+    const id = Number.isInteger(requestedId) && requestedId > 0 && !tabs.has(requestedId)
+      ? requestedId
+      : nextId;
+    nextId = Math.max(nextId, id + 1);
+    const tab = {
+      id, view: null, url: "", title: typeof options.title === "string" && options.title.trim()
+        ? options.title.slice(0, 500) : "New tab", error: "", favicon: null, faviconPending: false,
+      faviconRequest: 0, timing: null, sequence: 0, vacuumElements: [], snapshots: new Map(), crashed: false,
+      media: options.media || null,
+      // Stays on this computer during a shared session; what it opens does too.
+      private: options.private === true || tabs.get(options.after)?.private === true,
+      // A tab opened from a grouped tab (a link, New Tab to the Right,
+      // Duplicate) joins its opener's group.
+      groupId,
+      restoreMediaPending: !!options.media,
+      mediaRestoreTarget: null,
+      mediaRestoreUntil: 0,
+      restoredMediaPlaybackGuard: null,
+      hiddenMediaPlaybackGuard: null,
+    };
+    attachView(tab);
+    tabs.set(tab.id, tab);
+    // A link opened from a page goes immediately after its source tab.
+    if (tabs.has(options.after)) moveTab(tab.id, [...tabs.keys()].indexOf(options.after) + 1);
+    if (options.activate !== false || activeId === null) activateTab(tab.id);
+    tab.usedAt = Date.now();
+    if (value && options.asleep === true) {
+      // Opens asleep: its page loads when it comes to the front or a bot uses it.
+      tab.url = isLocalFileTarget(value) ? value : normalizeTarget(value);
+      tab.asleep = { entries: [], index: 0 };
+      try { tab.favicon = historyIcons.get(historyHost(tab.url)) || null; } catch (_) { /* no icon yet */ }
+      if (tab.id === activeId && !restoring) wakeTab(tab);
+    } else if (value) {
       if (isLocalFileTarget(value)) openLocalFile(tab, value);
       else navigate(tab, value);
     }
@@ -3552,6 +3644,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (command.action === "reopenClosed") { reopenClosedTab(boundedInteger(command.index, 0, 0, 24)); return state(); }
       if (command.action === "spaceSession") {
         sessionGroupId = typeof command.groupId === "string" || Number.isInteger(command.groupId) ? command.groupId : null;
+        // Teammates see every page in the session, so none of them sleeps.
+        if (sessionGroupId) for (const tab of groupTabs(sessionGroupId)) wakeTab(tab);
         return state();
       }
       if (command.action === "privateTabMenu") {
@@ -3568,7 +3662,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         const width = boundedInteger(command.width, 360, 120, 640);
         return Promise.all(ids.map(async id => {
           const item = tabs.get(id);
-          if (!item || !item.url || item.view.webContents.isDestroyed()) return null;
+          if (!item || !item.url || item.asleep || item.view.webContents.isDestroyed()) return null;
           try {
             const image = visible && activeId === id ? await item.view.webContents.capturePage() : await captureHiddenPage(item);
             if (!image || image.isEmpty()) return null;
@@ -3817,6 +3911,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   window.once("closed", () => {
     persistTabs();
     disposed = true;
+    clearInterval(sleepTimer);
     actorRuntime.dispose();
     chromeHandoff.dispose();
     if (!shellContents.isDestroyed()) shellContents.removeListener("zoom-changed", requestLayout);
@@ -3852,7 +3947,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       groups.set(group.id, group);
     }
     for (const savedTab of restored.tabs) {
-      newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false,
+      // Saved tabs come back asleep; only the one in front loads.
+      newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false, asleep: true,
         groupId: renamed.get(savedTab.groupId) || savedTab.groupId, private: savedTab.private === true });
     }
     normalizeGroups();
@@ -3907,7 +4003,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     state,
     work: { execute: executeActorOperation, validate: validateActorOperation, actors: publicActors },
     execute: executeActorOperation, validate: validateActorOperation,
-    shortcut: runShortcut, protocol: protocolCommand, persist: persistTabs,
+    shortcut: runShortcut, protocol: protocolCommand, persist: persistTabs, sleepIdleTabs,
     actors: publicActors,
     prepareToClose: captureMediaState, clearData,
     prepareAttachment: attachmentAccess.prepare, openLink,

@@ -2167,6 +2167,8 @@ function createWindow() {
       statePath: path.join(app.getPath("userData"), "miaos-browser-state.json"),
       safeStorage,
       workspaceRoot: miaosWorkspacePath(),
+      // Development only: a shorter wait before background tabs sleep.
+      tabSleepAfterMs: app.isPackaged ? undefined : Number(process.env.MIAOS_TAB_SLEEP_MS) || undefined,
       onActorEvent: createActorDiagnostics({
         enabled: !app.isPackaged && process.env.MIAOS_LOCAL_PROFILE === "1" && process.env.MIAOS_BROWSER_ACTOR_DIAGNOSTICS === "1",
         log: desktopLog,
