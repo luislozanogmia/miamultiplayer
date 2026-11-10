@@ -9055,30 +9055,14 @@
     renderAutomationsPage();
   }
 
-  // The chat follows the automation: its live run's conversation, else the
-  // conversation it posts results to, else the bot's own chat.
-  function showAutomationsChat(botId, automationId){
-    var run = (chatWs.automationRuns || []).filter(function(item){
-      return item && String(item.botId) === String(botId) && String(item.automationId) === String(automationId);
-    })[0];
-    var found = automationRecordById(botId, automationId);
-    var targets = [run && run.conversationId, found && found.automation.deliveryConversationId].filter(Boolean);
-    for(var i = 0; i < targets.length; i += 1){
-      var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item && String(item.id) === String(targets[i]); })[0];
-      if(conversation){
-        loadChatRoom(conversation.id, nativeConversationKind(conversation.type), conversation.name || (found && found.bot.name) || 'Automation');
-        return;
-      }
-    }
-    var agent = (chatWs.allAgents || []).filter(function(item){ return item && String(item.id) === String(botId); })[0];
-    if(agent) navigateToAgentChat(agent, true);
-  }
-
+  // Opening an automation only changes the middle. The chat on the right stays
+  // on whatever conversation was open: an automation can have many bots, so
+  // none of them is "its" chat. Explicit actions (Fix with Mia, a running
+  // automation's row) still open a chat themselves.
   function openAutomationsDetail(botId, automationId){
     automationsPage.botId = String(botId);
     automationsPage.automationId = String(automationId);
     if(!automationsTabById(automationsTabId(botId, automationId))) automationsPage.tabs.push({botId:String(botId), automationId:String(automationId)});
-    showAutomationsChat(botId, automationId);
     renderAutomationsPage();
     var body = el('#automationsBody');
     if(body) body.scrollTop = 0;
