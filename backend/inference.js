@@ -41,6 +41,7 @@ const {
 } = require('./hermes-bot-profile');
 
 const { configuredHermesLaunch } = require('./runtime-paths');
+const { miaCodeLine } = require('./mia-code-reference');
 
 const HERMES_BIN = String(process.env.HERMES_BIN || '').trim();
 
@@ -810,6 +811,7 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
   return [
     ...sections,
     'Capabilities:\nUse the tools available in this session, the same ones you have in your chat, to do this automation and create the files it needs.',
+    miaCodeLine(),
     [
       'Operating rules:',
       '- Look facts up before answering. If the user names a page, site, or source, or the answer depends on facts that change (numbers, dates, prices, news, what a page says), get it with your tools first. If you answer from memory, say so.',
@@ -899,6 +901,7 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
     `Your automations:\n${automationLines.join('\n')}`,
   );
   if (bot.filesFolder) sections.push(botFilesRule(bot.filesFolder));
+  sections.push(miaCodeLine());
   if (platformContext) sections.push(`Current Mia context (authoritative):\n${String(platformContext).trim()}`);
   return sections.join('\n\n');
 }

@@ -15,7 +15,7 @@ function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,remov
   const triggerSequence=smallPages?40:2;
   const received=[];
   const response=(body,status=200)=>new Response(JSON.stringify(body),{status});
-  const client=createHubBotClient({db,dataDirectory,isOwnerActive:()=>true,checkIntervalMs:5,
+  const client=createHubBotClient({db,dataDirectory,isOwnerActive:()=>true,checkIntervalMs:5,retryDelayMs:1,tokenWaitMs:50,tokenPollMs:5,log:()=>{},
     getAccountIdentity:()=>({subject:'user_owner',email:'owner@example.test',issuer:'https://clerk.miamultiplayer.com'}),
     getBot:(id,email)=>botAvailable && id==='local' && email===owner?{id:'local',name:'Helper',instructions:'Shared purpose'}:null,listBots:()=>[],
     runBot:async args=>{
@@ -60,7 +60,7 @@ function fixture(t,{replyFailures=0,revokeDuringRun=false,smallPages=false,remov
 }
 
 test('explicit approval executes once as approving participant for a handed-off request and retries delivery without inference',async t=>{
-  const f=fixture(t,{replyFailures:1});
+  const f=fixture(t,{replyFailures:2});
   await f.client.share(owner,f.input,'fixture.token');
   await f.client.poll(owner,f.input,'fixture.token');await f.client.idle();assert.equal(f.runs(),0,'polling never executes');
   await Promise.all([f.client.run(owner,f.input,'fixture.token'),f.client.run(owner,f.input,'fixture.token')]);

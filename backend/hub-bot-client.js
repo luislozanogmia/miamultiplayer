@@ -96,10 +96,58 @@ function sharedRunTimeoutMs(runTimeoutMs, deadline, now = Date.now()) {
   const endsAt = deadline < 1e12 ? deadline * 1000 : deadline; // the Hub counts seconds
   return Math.max(1000, Math.min(runTimeoutMs, endsAt - now - CLAIM_MARGIN_MS));
 }
-function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,isHeld=()=>false,isClosing=()=>false,checkIntervalMs=15000,runTimeoutMs=10*60*1000,fetcher=fetch}) {
+// Why a run stopped, as a short code in the log and a few words in the reply.
+// Neither ever carries a token or message text.
+const STOP_LABELS={time_limit:'time limit',sign_in_expired:'sign-in expired',claim_gone:'claim taken',owner_changed:'account changed',
+  hub_unreachable:'company server unreachable',hub_refused:'company server refused it',invalid_trigger:'message not found',bot_failed:'the bot hit an error'};
+function stoppedReply(code) {
+  return 'This bot could not complete the request ('+(STOP_LABELS[code]||STOP_LABELS.bot_failed)+'). Please send a new message to try again.';
+}
+// The Hub's answer about a dispatch: 403, 404 and 409 mean the claim is gone.
+function hubStopReason(error) {
+  const status=error && error.status;
+  if([403,404,409].includes(status)) return 'claim_gone';
+  if(status===401) return 'sign_in_expired';
+  if(!status || status===429 || status>=500) return 'hub_unreachable';
+  return 'hub_refused';
+}
+function stopError(code) {return Object.assign(new Error(code),{reason:code});}
+function logStop(event,code,jobId) {
+  console.warn('[team-bot] '+event+': '+code+(jobId?' (run '+String(jobId).slice(0,8)+')':''));
+}
+function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[],isPrivateAgent=()=>false,isOwnerActive,getAccountIdentity,runBot,isHeld=()=>false,isClosing=()=>false,checkIntervalMs=15000,runTimeoutMs=10*60*1000,
+  tokenWaitMs=30000,tokenPollMs=1000,retryDelayMs=2000,log=logStop,fetcher=fetch}) {
   const journal=createHubBotJournal(db);
-  const inFlight=new Map(), freshTokens=new Map(), selections=new Map();
+  // Sign-in tokens are the person's, not a channel's, and last about a minute:
+  // every poll and every /token refresh replaces the account's one, and each
+  // Hub call during a run reads the newest.
+  const inFlight=new Map(), runScopes=new Map(), freshTokens=new Map(), selections=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
+  const accountKey=s=>JSON.stringify([s.origin,s.owner,s.subject]);
+  const accountRunning=s=>[...runScopes.values()].some(other=>accountKey(other)===accountKey(s));
+  const pause=(ms,signal)=>new Promise(resolve=>{
+    const timer=setTimeout(resolve,ms);
+    if(signal) signal.addEventListener('abort',()=>{clearTimeout(timer);resolve();},{once:true});
+  });
+  // One Hub call with the newest token. A 401 waits for a newer token (the app
+  // sends one every ~20 seconds while a run is going) and tries once more; a
+  // network or server error tries once more after a short pause. Errors keep
+  // their status and get a stop reason.
+  async function withFreshToken(s,fallback,call,signal) {
+    const current=()=>freshTokens.get(accountKey(s))||fallback;
+    const used=current();
+    try {return await call(used);}
+    catch(error) {
+      const reason=hubStopReason(error);
+      if(reason!=='sign_in_expired' && reason!=='hub_unreachable') throw Object.assign(error,{reason});
+      if(reason==='sign_in_expired') {
+        const started=Date.now();
+        while(current()===used && Date.now()-started<tokenWaitMs && !(signal && signal.aborted)) await pause(tokenPollMs,signal);
+      } else await pause(retryDelayMs,signal);
+      try {return await call(current());}
+      catch(again) {throw Object.assign(again,{reason:hubStopReason(again)});}
+    }
+  }
   const runKey=(s,id)=>scopeKey(s)+':'+id;
   const base=s=>`/v1/teams/${s.teamId}/channels/${s.channelId}`;
   // The file on the message being answered. A file that can't be fetched is still named to the bot.
@@ -119,64 +167,83 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       && identity.issuer===CLERK_INSTANCES.production.issuer && hubEndpoint(dataDirectory)===s.origin;
   }
   async function publish(s,run,token) {
-    if(!localIdentityValid(s)) return journal.discard(s,run.job_id);
+    if(!localIdentityValid(s)) {log('reply discarded','owner_changed',run.job_id);return journal.discard(s,run.job_id);}
     try {
-      await requestHub(s.origin,token,'POST',base(s)+'/bot-dispatches/'+run.job_id+'/result',
-        {claimId:run.claim_id,text:run.reply},fetcher);
+      await withFreshToken(s,token,used=>requestHub(s.origin,used,'POST',base(s)+'/bot-dispatches/'+run.job_id+'/result',
+        {claimId:run.claim_id,text:run.reply},fetcher));
       journal.published(s,run.job_id);
     } catch(error) {
-      if([403,404,409].includes(error.status)) journal.discard(s,run.job_id);
+      const reason=error.reason||hubStopReason(error);
+      if(reason==='claim_gone') {log('reply discarded',reason,run.job_id);journal.discard(s,run.job_id);}
       // Transient/auth failures retain the reply for a fresh authenticated poll.
+      else log('reply kept for the next poll',reason,run.job_id);
     }
   }
   async function execute(s,run,initialToken) {
-    const token=()=>freshTokens.get(scopeKey(s))||initialToken;
-    if(!localIdentityValid(s)) return journal.discard(s,run.job_id);
+    const token=()=>freshTokens.get(accountKey(s))||initialToken;
+    const claimPath=base(s)+'/bot-dispatches/'+run.job_id+'/claim';
+    if(!localIdentityValid(s)) {log('run not started','owner_changed',run.job_id);return journal.discard(s,run.job_id);}
     let claim;
     try {
-      claim=await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
+      claim=await withFreshToken(s,initialToken,used=>requestHub(s.origin,used,'POST',claimPath,{claimId:run.claim_id},fetcher));
     } catch(error) {
-      if([403,404,409].includes(error.status)) journal.discard(s,run.job_id);
+      const reason=error.reason||hubStopReason(error);
+      log('run not started',reason,run.job_id);
+      if(reason==='claim_gone') journal.discard(s,run.job_id);
       return;
     }
     if(!Number.isSafeInteger(claim.triggerSequence) || claim.triggerSequence<1 || claim.botId!==run.registration_id
-      || claim.id!==run.job_id || claim.executorId!==s.subject || !claim.definition || !Number.isSafeInteger(claim.definition.version) || typeof claim.definition.instructions!=='string' || !localIdentityValid(s)) return journal.discard(s,run.job_id);
+      || claim.id!==run.job_id || claim.executorId!==s.subject || !claim.definition || !Number.isSafeInteger(claim.definition.version) || typeof claim.definition.instructions!=='string' || !localIdentityValid(s)) {
+      log('run not started','invalid_claim',run.job_id);
+      return journal.discard(s,run.job_id);
+    }
     // Commit before any inference call. A process crash here is uncertain work,
     // never permission to repeat a potentially side-effecting tool operation.
     if(!journal.start(s,run.job_id)) return;
     const controller=new AbortController();
-    const timeout=setTimeout(()=>controller.abort(),sharedRunTimeoutMs(runTimeoutMs,Number(claim.deadline)));
+    const stopRun=code=>{if(!controller.signal.aborted) controller.abort(stopError(code));};
+    const hub=(method,route,body)=>withFreshToken(s,initialToken,used=>requestHub(s.origin,used,method,route,body,fetcher),controller.signal);
+    const timeout=setTimeout(()=>stopRun('time_limit'),sharedRunTimeoutMs(runTimeoutMs,Number(claim.deadline)));
     let checking=false;
     let skillFilesCleanup=()=>{};
+    // Only the Hub saying the claim is gone, or this computer's account
+    // changing, stops a run. A check that can't get through (an expired
+    // sign-in, no network) is tried again at the next one.
     const check=setInterval(async()=>{
       if(checking) return;
       checking=true;
       try {
-        if(!localIdentityValid(s)) throw new Error('owner_changed');
-        await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
-      } catch {controller.abort();}
+        if(!localIdentityValid(s)) return stopRun('owner_changed');
+        await requestHub(s.origin,token(),'POST',claimPath,{claimId:run.claim_id},fetcher);
+      } catch(error) {
+        const reason=hubStopReason(error);
+        if(reason==='claim_gone') stopRun(reason);
+        else log('claim check missed',reason,run.job_id);
+      }
       finally {checking=false;}
     },checkIntervalMs);
     try {
-      const triggerPage=await requestHub(s.origin,token(),'GET',base(s)+'/messages/after/'+(claim.triggerSequence-1),undefined,fetcher);
+      const triggerPage=await hub('GET',base(s)+'/messages/after/'+(claim.triggerSequence-1));
       const trigger=(triggerPage.messages||[]).find(row=>row.sequence===claim.triggerSequence);
       const history=[];let after=Math.max(0,claim.triggerSequence-SHARED_RUN_HISTORY);
       for(let page=0;page<6 && after<claim.triggerSequence;page++) {
-        const result=await requestHub(s.origin,token(),'GET',base(s)+'/messages/after/'+after,undefined,fetcher);
+        const result=await hub('GET',base(s)+'/messages/after/'+after);
         history.push(...(result.messages||[]).filter(row=>row.sequence<=claim.triggerSequence)
           .map(row=>row.author_type==='bot'?{...row,body:withoutRunLabel(row.body)}:row));
         if(!result.next || result.next<=after) break;
         after=result.next;
       }
-      if(!trigger || trigger.author_type!=='user' || trigger.author_id!==claim.requesterId || controller.signal.aborted) throw new Error('invalid_trigger');
+      if(controller.signal.aborted) throw controller.signal.reason;
+      if(!trigger || trigger.author_type!=='user' || trigger.author_id!==claim.requesterId) throw stopError('invalid_trigger');
       // Recheck revocation immediately before invoking the existing runtime.
-      await requestHub(s.origin,token(),'POST',base(s)+'/bot-dispatches/'+run.job_id+'/claim',{claimId:run.claim_id},fetcher);
-      if(!localIdentityValid(s) || controller.signal.aborted) throw new Error('owner_changed');
+      await hub('POST',claimPath,{claimId:run.claim_id});
+      if(controller.signal.aborted) throw controller.signal.reason;
+      if(!localIdentityValid(s)) throw stopError('owner_changed');
       // In the person's own private chat with a company bot, their Bot
       // Instructions apply, as in their Solo bot chats. Read from the Hub, not
       // the page: a bot chat with this person as its only member, and their
       // message. Anything else, or a failed lookup, stays a shared turn.
-      const listed=await requestHub(s.origin,token(),'GET','/v1/teams/'+s.teamId+'/channels',undefined,fetcher).catch(()=>null);
+      const listed=await hub('GET','/v1/teams/'+s.teamId+'/channels').catch(()=>null);
       const place=((listed && listed.channels)||[]).find(channel=>channel && channel.id===s.channelId);
       const privateChat=!!place && place.kind==='bot' && claim.requesterId===s.subject
         && Array.isArray(place.member_ids) && place.member_ids.length===1 && place.member_ids[0]===s.subject;
@@ -186,21 +253,25 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
         channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
-      if(controller.signal.aborted) throw new Error('cancelled');
+      if(controller.signal.aborted) throw controller.signal.reason;
       journal.saveReply(s,run.job_id,withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName)));
-    } catch {
+    } catch(error) {
       // Mia is closing: the journal keeps this as started, and the person decides next time.
-      if(isClosing()) return;
-      journal.saveReply(s,run.job_id,'This bot could not complete the request. Please send a new message to try again.');
+      if(isClosing()) {log('run left for later','closing',run.job_id);return;}
+      // A stop wins over whatever the bot threw while it was being stopped.
+      const reason=controller.signal.aborted ? controller.signal.reason.reason : error && STOP_LABELS[error.reason] ? error.reason : 'bot_failed';
+      log('run stopped',reason,run.job_id);
+      journal.saveReply(s,run.job_id,stoppedReply(reason));
     } finally {clearTimeout(timeout);clearInterval(check);skillFilesCleanup();}
     await publish(s,journal.getRun(s,run.job_id),token());
   }
   function launch(s,run,token) {
     const key=runKey(s,run.job_id);
     if(inFlight.has(key) || inFlight.size>=2) return;
-    const task=Promise.resolve().then(()=>execute(s,run,token)).catch(()=>{}).finally(()=>{
-      inFlight.delete(key);selections.delete(key);
-      if(![...inFlight.keys()].some(key=>key.startsWith(scopeKey(s)+':'))) freshTokens.delete(scopeKey(s));
+    runScopes.set(key,s);
+    const task=Promise.resolve().then(()=>execute(s,run,token)).catch(error=>log('run failed',error && error.reason || 'unexpected',run.job_id)).finally(()=>{
+      inFlight.delete(key);runScopes.delete(key);selections.delete(key);
+      if(!accountRunning(s)) freshTokens.delete(accountKey(s));
     });
     inFlight.set(key,task);
   }
@@ -228,7 +299,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const scope=await context(owner,input,token),key=scopeKey(scope);
       const roster=await requestHub(scope.origin,token,'GET',base(scope)+'/bots',undefined,fetcher);
       const jobs=await requestHub(scope.origin,token,'GET',base(scope)+'/bot-dispatches',undefined,fetcher);
-      freshTokens.set(key,token);
+      freshTokens.set(accountKey(scope),token);
       const allowed=new Set((roster.bots||[]).map(bot=>bot.id));
       for(const run of journal.unfinished(scope)) {
         if(!allowed.has(run.registration_id)) {journal.discard(scope,run.job_id);continue;}
@@ -254,8 +325,23 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
             reasoningEffort:selection.reasoningEffort,speed:selection.speed,fast:selection.fast===true});
         launch(scope,run,token);
       }
-      if(![...inFlight.keys()].some(k=>k.startsWith(key+':'))) freshTokens.delete(key);
+      if(!accountRunning(scope)) freshTokens.delete(accountKey(scope));
       return {running:[...inFlight.keys()].filter(k=>k.startsWith(key+':')).length, pending};
+    },
+    // A fresh sign-in token while any of this person's runs is going, whatever
+    // room they have open. -> {running} (0 tells the app to stop sending).
+    async refresh(owner,token) {
+      owner=String(owner||'').trim().toLowerCase();
+      if(!owner || !isOwnerActive(owner)) throw failure(403,'account_unavailable');
+      const scopes=[...runScopes.values()].filter(s=>s.owner===owner);
+      if(!scopes.length) return {running:0};
+      const identity=getAccountIdentity(owner);
+      if(!identity || identity.issuer!==CLERK_INSTANCES.production.issuer || !identity.subject) throw failure(403,'account_not_linked');
+      // The Hub, not the token's own claims, says whose token it is.
+      const me=await requestHub(scopes[0].origin,token,'GET','/v1/me',undefined,fetcher);
+      if(!(me.teams||[]).some(team=>team && team.membership && team.membership.clerk_user_id===identity.subject)) throw failure(403,'account_mismatch');
+      for(const s of scopes) if(s.subject===identity.subject) freshTokens.set(accountKey(s),token);
+      return {running:scopes.length};
     },
     async run(owner,input,token) {
       if (!/^[a-f0-9]{32}$/.test(input.jobId||'')) throw failure(400,'invalid_job');
@@ -301,8 +387,9 @@ function createHubBotRouter(options) {
   };
   router.get('/available',handle(req=>client.available(req.userEmail)));
   router.post('/poll',handle(req=>client.poll(req.userEmail,req.body,req.get('x-hub-token'))));
+  router.post('/token',handle(req=>client.refresh(req.userEmail,req.get('x-hub-token'))));
   router.post('/run',handle(req=>client.run(req.userEmail,req.body,req.get('x-hub-token'))));
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
-module.exports={sharedRunTimeoutMs,SHARED_RUN_HISTORY,sharedSkills,materializeSharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};
+module.exports={stoppedReply,hubStopReason,sharedRunTimeoutMs,SHARED_RUN_HISTORY,sharedSkills,materializeSharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};

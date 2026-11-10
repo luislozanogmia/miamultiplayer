@@ -5072,6 +5072,20 @@
   // The requester's own Mia runs their bot requests right away, on their own
   // computer and subscription, exactly as Solo does. `immediate` skips the
   // background throttle; a request arriving mid-poll runs once more after it.
+  // A sign-in token lasts about a minute and a bot run can take many, so
+  // while any of this person's runs is going Mia hands the backend a fresh
+  // token every 20 seconds, whatever room is open. It stops when none is left.
+  var HUB_RUN_TOKEN_MS=20000, hubRunTokenTimer=null;
+  function keepHubRunTokensFresh(){
+    if(hubRunTokenTimer || !window.MiaHubChat)return;
+    hubRunTokenTimer=setInterval(function(){
+      window.MiaHubChat.localCall('POST','/token',{}).then(function(result){
+        if(!result || !result.running){clearInterval(hubRunTokenTimer);hubRunTokenTimer=null;}
+      },function(error){
+        if(error && error.status===403){clearInterval(hubRunTokenTimer);hubRunTokenTimer=null;}
+      });
+    },HUB_RUN_TOKEN_MS);
+  }
   function pollHubBots(roomId,immediate){
     if(!inHubRoom(roomId) || !roomId || chatWs.configured===false)return Promise.resolve();
     var state=chatRoomState(roomId),workspace=activeWorkspaceKey;
@@ -5080,7 +5094,7 @@
     state.hubExecutionAt=Date.now();
     var selection=chatModelSelectionMetadata();
     state.hubExecutionRequest=window.MiaHubChat.localCall('POST','/poll',Object.assign({teamId:workspace.slice(4),channelId:roomId},selection?{modelSelection:selection}:{}))
-      .then(function(result){state.hubPendingRuns=result.pending||[];if(chatWs.activeRoomId===roomId)renderChatHeaderBar();})
+      .then(function(result){state.hubPendingRuns=result.pending||[];if(result.running)keepHubRunTokensFresh();if(chatWs.activeRoomId===roomId)renderChatHeaderBar();})
       .catch(function(){/* Own requests authorize local execution; handoffs await local acceptance. */})
       .finally(function(){
         state.hubExecutionRequest=null;

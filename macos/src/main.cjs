@@ -999,6 +999,9 @@ async function startLocalBackend(exactPort = null) {
     // firewall access just because Clerk authentication is enabled.
     MIAOS_BIND_HOST: "127.0.0.1",
     STATIC_DIR: "../frontend",
+    // Bots asked about Mia itself read the code of the version this is.
+    MIAOS_APP_VERSION: app.getVersion(),
+    MIAOS_APP_RESOURCES: app.isPackaged ? process.resourcesPath : path.resolve(BACKEND_ROOT, ".."),
     DB_PATH: databasePath,
     // Install-specific identity and service credentials live beside the
     // user's database, outside the signed/read-only application bundle.

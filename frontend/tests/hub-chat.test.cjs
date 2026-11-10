@@ -1085,3 +1085,16 @@ test('the chat header dots open the channel menu right under them',()=>{
   assert.match(source,/openHubChannelMenu\(channel,rect\.right,rect\.bottom\+4,'here'\);/);
   assert.match(source,/at==='here' \? Math\.max\(8,Math\.min\(x-menu\.offsetWidth,window\.innerWidth-menu\.offsetWidth-8\)\) : sidebarMenuLeft\(x,menu\.offsetWidth\)/);
 });
+test('while a team bot run is going, Mia sends a fresh sign-in token every 20 seconds, whatever room is open',async()=>{
+  const calls=[];let tick=null;const answers=[{running:1},{running:0}];
+  const env={window:{MiaHubChat:{localCall:(method,route,body)=>{calls.push([method,route]);return Promise.resolve(answers.shift());}}},
+    setInterval:(fn,ms)=>{assert.equal(ms,20000);tick=fn;return 1;},clearInterval:()=>{tick=null;}};
+  vm.runInNewContext(source.slice(source.indexOf('  var HUB_RUN_TOKEN_MS'),source.indexOf('  function pollHubBots(')),env);
+  env.keepHubRunTokensFresh();env.keepHubRunTokensFresh();
+  tick();await new Promise(r=>setImmediate(r));
+  assert.ok(tick,'still running, so it keeps sending');
+  tick();await new Promise(r=>setImmediate(r));
+  assert.equal(tick,null,'no run left: it stops');
+  assert.deepEqual(calls,[['POST','/token'],['POST','/token']]);
+  assert.match(source,/state\.hubPendingRuns=result\.pending\|\|\[\];if\(result\.running\)keepHubRunTokensFresh\(\);/);
+});
