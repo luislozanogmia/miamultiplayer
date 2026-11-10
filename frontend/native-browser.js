@@ -743,23 +743,24 @@
     requestAnimationFrame(function () {
       scheduled = false;
       var rect = screen.getBoundingClientRect();
+      // Full-window cards and viewers (Edit channel, a confirmation, an image)
+      // sit in the page too.
+      var dialogOpen = !!document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
       // Native views sit above HTML; hide them while something covers the page.
       // The docked "Your bots" panel doesn't: it narrows the screen instead.
       var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered && !tipsCovered &&
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation') &&
-        // Full-window cards and viewers sit in the page too.
-        !document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
+        !dialogOpen;
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       var pipRect = pipView.getBoundingClientRect();
       payload.dock = { x: pipRect.x, y: pipRect.y, width: pipRect.width, height: pipRect.height };
       // The dock sits beside the chat, so only full-window layers cover it.
-      payload.dockVisible = !pip.hidden && pipRect.width > 0 && pipRect.height > 0 &&
-        !document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
-      // The Downloads menu sits over a still of the page, so the live view
-      // steps aside without pausing what it plays.
-      if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered) payload.menu = true;
+      payload.dockVisible = !pip.hidden && pipRect.width > 0 && pipRect.height > 0 && !dialogOpen;
+      // A menu (over a still of the page) or a dialog only covers the page for
+      // a while, so the live view steps aside without pausing what it plays.
+      if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered || dialogOpen) payload.menu = true;
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });

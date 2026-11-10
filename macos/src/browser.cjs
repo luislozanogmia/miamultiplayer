@@ -251,6 +251,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const docked = { id: null, mode: "page", bounds: null, visible: false, area: null, applied: "" };
   let nextId = 1;
   let visible = false;
+  // Hidden only while a menu or dialog covers the page: still showing, so it keeps playing.
+  let coveredForMenu = false;
   let panelOpen = false;
   let bounds = { x: 0, y: 0, width: 0, height: 0 };
   let queued = false;
@@ -3565,15 +3567,17 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (command.action === "layout") {
         const b = command.bounds;
         if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return;
-        const wasVisible = visible;
+        const wasShowing = visible || coveredForMenu;
         bounds = b; visible = command.visible === true;
         const d = command.dock;
         docked.bounds = d && [d.x, d.y, d.width, d.height].every(Number.isFinite) ? d : null;
         docked.visible = command.dockVisible === true;
         panelOpen = command.panelOpen === undefined ? visible : command.panelOpen === true;
-        // A menu drawn over a still of the page hides the view only for a
-        // moment; the page keeps playing and stays in fullscreen.
-        if (wasVisible && !visible && command.menu !== true) { exitPageFullscreen(); holdAllMediaPausedWhileHidden(); }
+        // A menu or dialog over the page hides the view only for a while; the
+        // page keeps playing and stays in fullscreen. Hiding it for real (the
+        // panel closes, even under a dialog) pauses it.
+        coveredForMenu = wasShowing && !visible && command.menu === true;
+        if (wasShowing && !visible && command.menu !== true) { exitPageFullscreen(); holdAllMediaPausedWhileHidden(); }
         layout(); return;
       }
       if (command.action === "snapshot") {
@@ -3889,7 +3893,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   window.webContents.on("before-input-event", shortcut);
   window.webContents.on("focus", () => { userFocus = window.webContents; });
   // A shell reload/log-out must never leave a foreign native surface over the app.
-  window.webContents.on("did-start-loading", () => { visible = false; panelOpen = false; layout(); });
+  window.webContents.on("did-start-loading", () => { visible = false; coveredForMenu = false; panelOpen = false; layout(); });
   window.webContents.on("zoom-changed", requestLayout);
   window.on("resize", requestLayout);
   // Leaving macOS fullscreen (green button, Ctrl-Cmd-F) also ends page fullscreen.

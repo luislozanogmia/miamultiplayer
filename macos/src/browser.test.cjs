@@ -257,6 +257,22 @@ test("a menu over a page still hides the view without pausing its media", async 
   assert.equal(h.views[0].visible, true);
 });
 
+test("closing the panel while a dialog covers the page still pauses its media", () => {
+  const h = harness();
+  h.command("new");
+  h.command("navigate", { value: "https://example.com/music" });
+  const box = { x: 0, y: 100, width: 700, height: 600 };
+  h.command("layout", { visible: true, bounds: box });
+  const scripts = h.views[0].webContents.scripts.length;
+  // A dialog (Edit channel) opens over the page: hidden, still playing.
+  h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: box });
+  h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: box });
+  assert.equal(h.views[0].webContents.scripts.length, scripts, "no pause script runs for a dialog");
+  // The panel closes behind the dialog: now it is really hidden.
+  h.command("layout", { visible: false, panelOpen: false, bounds: box });
+  assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
+});
+
 test("tab favicon is refetched as a data: URI and clears on navigation", async () => {
   const h = harness();
   const created = h.command("new");

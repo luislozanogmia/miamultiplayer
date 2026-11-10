@@ -196,3 +196,36 @@ test('the follow list opens once its page still is ready, and closing it mid-cap
   assert.equal(h.c.followMenu.hidden, true);
   assert.equal(h.snapshot.hidden, true);
 });
+
+// The page's layout as it reaches the desktop shell, with one dialog open or not.
+function layoutHarness() {
+  const layoutSource = source.slice(source.indexOf('  function layout() {'), source.indexOf('  function render(next) {'));
+  const sent = [], box = () => ({ x: 0, y: 0, width: 700, height: 600 });
+  const c = {
+    JSON, scheduled: false, lastLayout: '', dialog: null,
+    requestAnimationFrame: fn => fn(),
+    open: true, overlay: { hidden: false }, screen: { getBoundingClientRect: box },
+    pip: { hidden: true }, pipView: { getBoundingClientRect: box },
+    downloadsOpen: false, suggestCovered: false, tabsListOpen: false, followMenuOpen: false, callMenuCovered: false, tipsCovered: false,
+    bridge: { command(payload) { sent.push(payload); return Promise.resolve(); } },
+  };
+  c.document = { body: { classList: { contains: () => false } }, querySelector: () => c.dialog };
+  vm.createContext(c);
+  vm.runInContext(layoutSource, c);
+  return { c, sent };
+}
+
+test('a dialog over the page hides the live view without pausing what it plays', () => {
+  const h = layoutHarness();
+  h.c.layout();
+  assert.equal(h.sent.at(-1).visible, true);
+  h.c.dialog = { className: 'app-prompt-overlay open' };
+  h.c.layout();
+  assert.equal(h.sent.at(-1).visible, false);
+  assert.equal(h.sent.at(-1).panelOpen, true);
+  assert.equal(h.sent.at(-1).menu, true, 'a dialog covers the page only for a while, like a menu');
+  h.c.dialog = null;
+  h.c.layout();
+  assert.equal(h.sent.at(-1).visible, true);
+  assert.equal(h.sent.at(-1).menu, undefined);
+});
