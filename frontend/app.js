@@ -11195,12 +11195,21 @@
       kind: 'native-dispatch'
     };
   }
+  // Runs this window has seen stopped or failed. Such a run never works
+  // again, but a progress row it posted while being stopped, or an active
+  // list asked for just before, can arrive after the stop. Neither may bring
+  // it back: Mia or the bot would look busy, and the browser would keep the
+  // pages it used lit, until that chat's next reply.
+  var endedNativeDispatches = {};
+  function endNativeDispatch(dispatchId){
+    if(dispatchId) endedNativeDispatches[dispatchId] = true;
+  }
 
   function setRoomNativeDispatches(roomId, dispatches){
     chatWs.tasks = (chatWs.tasks || []).filter(function(task){
       return task.kind !== 'native-dispatch' || task.roomId !== roomId;
     }).concat((dispatches || []).filter(function(dispatch){
-      return dispatch && (dispatch.status === 'pending' || dispatch.status === 'claimed');
+      return dispatch && (dispatch.status === 'pending' || dispatch.status === 'claimed') && !endedNativeDispatches[dispatch.id];
     }).map(nativeDispatchTask));
   }
 
@@ -11212,7 +11221,7 @@
     // A deleted progress row means the dispatch was stopped: it must retire
     // the task (falling through to removal below), never resurrect it.
     if((event.senderType === 'agent' || event.senderType === 'bot') && metadata.progress === true && metadata.status !== 'failed' && !event.deletedAt){
-      if(!existing){
+      if(!existing && !endedNativeDispatches[dispatchId]){
         chatWs.tasks.push(nativeDispatchTask({
           id: dispatchId,
           conversationId: event.conversationId,
@@ -11224,6 +11233,9 @@
       }
       return;
     }
+    // A stop notice, a failure, or the stopped run's deleted status row ends
+    // it for good. A plain reply does not: a mid-run answer is one too.
+    if(metadata.status === 'stopped' || metadata.status === 'failed' || (metadata.progress === true && event.deletedAt)) endNativeDispatch(dispatchId);
     chatWs.tasks = (chatWs.tasks || []).filter(function(task){ return task.id !== dispatchId; });
     delete chatTaskStopPending[dispatchId];
   }
@@ -11316,6 +11328,8 @@
     }).then(function(res){
       if(res.status !== 200) throw new Error(res.data && (res.data.message || res.data.error) || 'Stop failed');
       var stoppedIds = (res.data && res.data.stoppedDispatchIds) || [taskId];
+      endNativeDispatch(taskId);
+      stoppedIds.forEach(endNativeDispatch);
       chatWs.tasks = (chatWs.tasks || []).filter(function(candidate){ return candidate.id !== taskId && stoppedIds.indexOf(candidate.id) === -1; });
       delete chatTaskStopPending[taskId];
       stopChatThinking(task.roomId);

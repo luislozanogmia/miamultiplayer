@@ -2289,6 +2289,16 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       tab.botWork = Math.max(0, (tab.botWork || 0) - 1);
       tab.botWorkAt = Date.now();
     };
+    // Work ending on a tab is sent now and again once the linger has passed.
+    // The tab strip keeps a tab lit while its last state says a bot works
+    // there, so that second state is what lets the glow go off.
+    const settleBotWork = worked => {
+      publish();
+      setTimeout(() => {
+        for (const tab of worked) if (tabs.has(tab.id)) syncBotGlow(tab);
+        publish();
+      }, BOT_WORK_LINGER_MS + 50).unref?.();
+    };
     // As a command starts on a page, the tab shows who is working there
     // (Mia or a bot): the glow, the working dot and Take over.
     const touch = tab => {
@@ -2298,7 +2308,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       const hardLimit = setTimeout(() => {
         log(`browser busy cleared: tab ${tab.id} bot command ${method} passed ${Math.round(BOT_COMMAND_LIMIT_MS / 1000)}s`);
         releaseBotWork(tab);
-        publish();
+        settleBotWork([tab]);
       }, BOT_COMMAND_LIMIT_MS);
       hardLimit.unref?.();
       commandLimits.set(tab, hardLimit);
@@ -2320,13 +2330,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       for (const tab of touched) {
         releaseBotWork(tab);
       }
-      if (touched.size) {
-        publish();
-        setTimeout(() => {
-          for (const tab of touched) if (tabs.has(tab.id)) syncBotGlow(tab);
-          publish();
-        }, BOT_WORK_LINGER_MS + 50).unref?.();
-      }
+      if (touched.size) settleBotWork([...touched]);
     }
   }
 

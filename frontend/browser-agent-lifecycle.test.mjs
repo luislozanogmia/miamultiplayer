@@ -111,7 +111,7 @@ function stopHarness() {
     renderComposerTaskControl() {}, stopChatThinking() {}, renderLiveViews() {}, showToast: text => toasts.push(text),
   };
   vm.createContext(ctx);
-  const helpers = ['hubRoomRun', 'browserBotRunningTasks', 'stopBrowserBot', 'stopTaskFromComposer'].filter(name => app.includes('  function ' + name + '(')).map(sourceFunction).join('\n');
+  const helpers = 'var endedNativeDispatches = {};\n' + ['hubRoomRun', 'browserBotRunningTasks', 'stopBrowserBot', 'stopTaskFromComposer', 'endNativeDispatch'].filter(name => app.includes('  function ' + name + '(')).map(sourceFunction).join('\n');
   // The object is the public production bridge used by the toolbar and native
   // Stop and Switch, not a replacement implementation of its cancellation.
   const start = app.indexOf('  window.miaBrowserAgents = {');
@@ -479,4 +479,63 @@ test('a browser tab without its own icon shows what it is: building blocks for l
   assert.equal(tabTypeIcon('https://localhost.example.com/'), globe);
   assert.equal(tabTypeIcon(''), globe);
   assert.match(source, /iconUrl: t\.favicon, iconHtml: tabTypeIcon\(t\.url\)/);
+});
+
+// The browser keeps a page lit while its agent's reply runs, and "runs" is
+// read from chatWs.tasks. Once a run is stopped or failed, nothing that comes
+// after (a progress row it posted while being stopped, an active list asked
+// for before the stop) may bring it back, in Solo or in a company's Mia chat.
+function dispatchHarness() {
+  const ctx = {
+    chatTaskStopPending: {},
+    chatWs: { tasks: [], nativeConversations: [
+      { id: 'mia-solo', type: 'agent', metadata: { agentId: 'gateway' } },
+      { id: 'mia-company', type: 'agent', metadata: { agentId: 'gateway', teamWorkspace: 'hub_' + 'a'.repeat(32) } },
+    ] },
+    hubRoomRun: () => null, renderComposerTaskControl() {}, stopChatThinking() {}, renderLiveViews() {},
+    nativeConversationPath: (roomId, suffix) => '/api/conversations/' + roomId + suffix,
+    api: () => Promise.resolve({ status: 200, data: { stoppedDispatchIds: ['run-1', 'run-0'] } }),
+  };
+  vm.createContext(ctx);
+  vm.runInContext('var endedNativeDispatches = {};\n' + ['isNativeMiaConversation', 'nativeDispatchTask', 'endNativeDispatch', 'setRoomNativeDispatches',
+    'syncNativeDispatchFromEvent', 'browserBotRunningTasks', 'stopTaskFromComposer'].map(sourceFunction).join('\n'), ctx);
+  const progress = (roomId, id) => ({ conversationId: roomId, senderType: 'agent', senderId: 'gateway', metadata: { dispatchId: id, progress: true }, createdAt: '2026-11-10T00:00:00Z' });
+  return { ctx, progress, running: () => ctx.browserBotRunningTasks('mia').map(task => task.id) };
+}
+
+test('app.js keeps the record of ended runs beside the dispatch tracking', () => {
+  assert.match(app, /\n  var endedNativeDispatches = \{\};\n  function endNativeDispatch\(/);
+});
+
+for (const roomId of ['mia-solo', 'mia-company']) {
+  test('a stopped run never comes back as running (' + roomId + ')', () => {
+    const { ctx, progress, running } = dispatchHarness();
+    ctx.syncNativeDispatchFromEvent(progress(roomId, 'run-1'));
+    assert.deepEqual(running(), ['run-1'], 'running while it works');
+    ctx.syncNativeDispatchFromEvent({ conversationId: roomId, senderType: 'agent', metadata: { dispatchId: 'run-1', status: 'stopped' } });
+    assert.deepEqual(running(), [], 'the stop notice ends it');
+    ctx.syncNativeDispatchFromEvent(progress(roomId, 'run-1'));
+    assert.deepEqual(running(), [], 'a late progress row does not bring it back');
+    ctx.setRoomNativeDispatches(roomId, [{ id: 'run-1', conversationId: roomId, targetId: 'gateway', targetType: 'gateway', status: 'claimed' }]);
+    assert.deepEqual(running(), [], 'nor does an active list from before the stop');
+    ctx.syncNativeDispatchFromEvent(progress(roomId, 'run-2'));
+    assert.deepEqual(running(), ['run-2'], 'the next message is a new run');
+    // A mid-run answer is a plain reply; the run goes on and shows again.
+    ctx.syncNativeDispatchFromEvent({ conversationId: roomId, senderType: 'agent', metadata: { dispatchId: 'run-2' } });
+    ctx.syncNativeDispatchFromEvent(progress(roomId, 'run-2'));
+    assert.deepEqual(running(), ['run-2']);
+    ctx.syncNativeDispatchFromEvent({ conversationId: roomId, senderType: 'agent', metadata: { dispatchId: 'run-2', progress: true, status: 'failed' } });
+    ctx.syncNativeDispatchFromEvent(progress(roomId, 'run-2'));
+    assert.deepEqual(running(), [], 'a failed run stays ended');
+  });
+}
+
+test('Stop ends every run it stopped, so their late progress rows stay ignored', async () => {
+  const { ctx, progress, running } = dispatchHarness();
+  ctx.syncNativeDispatchFromEvent(progress('mia-company', 'run-1'));
+  assert.equal(await ctx.stopTaskFromComposer('run-1'), true);
+  assert.deepEqual(running(), []);
+  ctx.syncNativeDispatchFromEvent(progress('mia-company', 'run-1'));
+  ctx.syncNativeDispatchFromEvent(progress('mia-company', 'run-0'));
+  assert.deepEqual(running(), [], 'neither the stopped run nor the one queued behind it returns');
 });

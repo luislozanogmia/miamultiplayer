@@ -2212,6 +2212,53 @@ test("bot tab groups: the glow stays through a reply and comes back after a page
   assert.ok(!userPage.insertedCSS, "Mia's tab is never lit as bot work");
 });
 
+// A command that never returns is let go at the command limit. The glow must
+// go off then too, and the tab strip must get a state that says so: it keeps
+// a tab lit for as long as its last state shows a bot working there.
+test("bot tab groups: a stuck command let go at the limit turns the glow off", async () => {
+  const LIMIT = 4321;
+  const held = [];
+  const holdTimer = (fn, ms, ...args) => {
+    // The command limit fires when the test says; a stuck page script's own
+    // timeouts never do, so the command stays stuck.
+    if (ms === LIMIT || ms === 10000 || ms === 60000) { const timer = { fn, ms, unref() { return timer; } }; held.push(timer); return timer; }
+    return setTimeout(fn, ms, ...args);
+  };
+  const releaseTimer = timer => { const at = held.indexOf(timer); if (at >= 0) held.splice(at, 1); else clearTimeout(timer); };
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: knownActor(sessions), botCommandLimitMs: LIMIT, setTimeout: holdTimer, clearTimeout: releaseTimer });
+  h.command("new");
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const botPage = h.views[h.views.length - 1].webContents;
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  let removed = 0;
+  botPage.removeInsertedCSS = () => { removed++; return Promise.resolve(); };
+  await new Promise(resolve => setTimeout(resolve, 2600));
+  await flush();
+  const lit = () => botPage.insertedCSS - removed;
+  assert.equal(lit(), 0, "idle after the first command");
+
+  botPage.executeJavaScript = () => new Promise(() => {});
+  h.controller.protocol("read", { actor_session: "s-a", tab_id: opened.tab_id }).catch(() => {});
+  await flush(); await flush();
+  assert.equal(lit(), 1, "the page glows while the command runs");
+
+  // The stuck page script is let go at its own limit first; the command,
+  // still waiting on it, holds the tab until the command limit.
+  for (const timer of held.filter(item => item.ms === 60000)) timer.fn();
+  await flush();
+  assert.equal(lit(), 1, "the command still holds the page");
+  const limit = held.find(timer => timer.ms === LIMIT);
+  assert.ok(limit, "the command limit is set");
+  limit.fn();
+  await new Promise(resolve => setTimeout(resolve, 2700));
+  await flush();
+  assert.equal(lit(), 0, "the glow goes off once the command is let go");
+  const states = h.window.webContents.sent.filter(item => item.channel === "miaos-browser-state");
+  const last = states.at(-1).payload.tabs.find(tab => tab.id === opened.tab_id);
+  assert.equal(last.botActivity, null, "the tab strip is told the bot stopped working there");
+});
+
 test("bot tab groups: the glow takes the bot's color, and Mia's is gold", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
   const h = harness({ resolveActor: knownActor(sessions) });
