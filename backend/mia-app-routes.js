@@ -80,9 +80,9 @@ function mcpAppFollowUp(proposal) {
     return { keyApp: String(proposal.result.app_id), ready, line: `Mia was told ${name} is waiting for its key.`,
       text: `they accepted your card, and ${name} is now in Connected apps, but it cannot work until they save its key in its key field there. Never ask for the key in chat. Tell them that in one short line, carry on with anything that does not need ${name}, and wait: another note comes when the key is saved.` };
   }
-  if (proposal.result?.status === 'sign_in_on_first_use') {
-    return { line: `Mia was told ${name} was added.`,
-      text: `they accepted your card, and ${name} is now in Connected apps. It signs in the first time you use it: the person finishes the sign-in when you call one of its tools. Carry on with what you were doing.` };
+  if (proposal.result?.status === 'needs_sign_in' && proposal.result.app_id) {
+    return { keyApp: String(proposal.result.app_id), ready, line: `Mia was told ${name} is waiting for its sign-in.`,
+      text: `they accepted your card, and ${name} is now in Connected apps, but it cannot work until they sign in to it. Its sign-in page opens in their browser by itself; if they closed it, the Sign in button is on ${name} in Connected apps. Tell them that in one short line, carry on with anything that does not need ${name}, and wait: another note comes when they are signed in.` };
   }
   return ready;
 }
@@ -90,6 +90,11 @@ function mcpAppKeyNote(name) {
   const app = oneLine(name, 80) || 'The app';
   return { line: `Mia was told ${app}'s key was saved.`,
     text: `${APP_NOTE} the key for ${app} was saved in Connected apps, so ${app} is ready to use. Carry on with what you were doing.` };
+}
+function mcpAppSignedInNote(name) {
+  const app = oneLine(name, 80) || 'The app';
+  return { line: `Mia was told you signed in to ${app}.`,
+    text: `${APP_NOTE} they signed in to ${app}, so ${app} is ready to use. Carry on with what you were doing.` };
 }
 // Several answered cards from one of Mia's replies become one note.
 function answerNote(parts) {
@@ -145,7 +150,7 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
     skill_get: { group: 'A', description: "One skill folder: SKILL.md, every other file in it with its text, and the bots that carry it.", args: { skill_id: 'string' }, async run({ call, args }) {
       return call('GET', `/api/skills/${seg(text(args.skill_id, 'skill_id', 80))}`);
     } },
-    mcp_apps_list: { group: 'A', description: 'Your own MCP apps in Connected apps (beside Google): name, where its server runs, how you sign in, and whether it needs its key.', args: {}, run: ({ call }) => call('GET', '/api/mcp-apps') },
+    mcp_apps_list: { group: 'A', description: 'Your own MCP apps in Connected apps (beside Google): name, where its server runs, how you sign in, and its status: ready, signed_in, needs_key (they paste it in Connected apps), or needs_sign_in (they press Sign in on it in Connected apps; it opens in their browser).', args: {}, run: ({ call }) => call('GET', '/api/mcp-apps') },
     marketplace_list: { group: 'A', description: "The Bot marketplace's From Mia shelf: each bot with what it does, its skills and whether the person already has it.", args: {}, async run({ call }) {
       const [index, { bots }] = await Promise.all([call('GET', '/api/bots/catalog'), call('GET', '/api/bots')]);
       const have = new Set(bots.map(bot => String(bot.name || '').trim().toLowerCase()));
@@ -381,7 +386,7 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
         try { checked = require('./mcp-apps').cleanMcpApp(input, apps.map(app => app.id)); } catch (error) { throw fail(400, error.message); }
         if (!checked.docsUrl) throw fail(400, "Name the vendor's page for this server (docs_url), so the person can check it.");
         const logo = await fetchAppLogo(args.logo_url);
-        const signIn = { oauth: 'You sign in to it the first time Mia uses it.', key: 'You paste its key in Connected apps; it never goes through chat.', none: 'No sign-in.' }[checked.auth];
+        const signIn = { oauth: 'Its sign-in opens in your browser when you accept.', key: 'You paste its key in Connected apps; it never goes through chat.', none: 'No sign-in.' }[checked.auth];
         return { summary: `Add ${checked.name} to Connected apps`,
           details: [checked.description, `Server: ${checked.url || `${checked.runner} ${checked.package}`}`, `From: ${checked.docsUrl}`, signIn, logo ? 'With its logo.' : 'No logo found.'].filter(Boolean),
           input: { ...input, logo } };
@@ -584,9 +589,12 @@ function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSe
       }) };
     } catch (_) { return { event }; }
   }
-  // Connected apps saved an app's key: if Mia was told she is waiting on it,
-  // tell her it is in. Called by the key route only after the key is written.
-  function keySaved(owner, appId) {
+  // Connected apps saved an app's key, or the person finished its sign-in: if
+  // Mia was told she is waiting on it, tell her it is in. Called only after
+  // the key is written or the sign-in is saved.
+  const keySaved = (owner, appId) => appReady(owner, appId, mcpAppKeyNote);
+  const signedIn = (owner, appId) => appReady(owner, appId, mcpAppSignedInNote);
+  function appReady(owner, appId, readyNote) {
     const waits = { ...(keyWaits()[owner] || {}) };
     const wait = waits[appId];
     if (!wait) return null;
@@ -594,7 +602,7 @@ function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSe
     saveKeyWaits(owner, waits);
     // Not yet told about the app at all: that note will say it is ready.
     if (!wait.noteSent || !postNote) return null;
-    const note = mcpAppKeyNote(wait.name);
+    const note = readyNote(wait.name);
     try {
       return postNote({ companyId: wait.companyId, conversationId: wait.conversationId, owner }, {
         text: note.text, key: `mia-app-key-${wait.eventId}`,
@@ -637,6 +645,6 @@ function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSe
       res.status(error.status || 500).json({ ...withNote(answer({ status: 'failed', error: String(message).slice(0, 300) })), error: message });
     }
   });
-  return { keySaved };
+  return { keySaved, signedIn };
 }
 module.exports = { TRUST_CATEGORIES, trustFor, createActivityLog, createMiaAppTools, registerMiaAppRoutes };

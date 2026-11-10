@@ -56,7 +56,7 @@ async function harness(t) {
   app.get('/api/mcp-apps', (_req, res) => res.json({ apps: state.mcpApps }));
   app.post('/api/mcp-apps', (req, res) => {
     if (state.mcpFail) return res.status(400).json({ error: 'invalid_mcp_app', message: state.mcpFail });
-    const added = { id: String(req.body.name).toLowerCase(), status: state.mcpStatus || 'sign_in_on_first_use', ...req.body }; state.mcpApps.push(added); res.json({ app: added });
+    const added = { id: String(req.body.name).toLowerCase(), status: state.mcpStatus || 'needs_sign_in', ...req.body }; state.mcpApps.push(added); res.json({ app: added });
   });
   // Notes to Mia, posted once per key like the conversation store does.
   state.notes = [];
@@ -287,8 +287,8 @@ test('accepting an add-app card tells Mia once, as the app, with the chat model'
   assert.equal(accepted.status, 200);
   assert.equal(state.notes.length, 1);
   const [note] = state.notes;
-  assert.equal(note.text, `${NOTE} they accepted your card, and Attio is now in Connected apps. It signs in the first time you use it: the person finishes the sign-in when you call one of its tools. Carry on with what you were doing.`);
-  assert.equal(note.metadata.miaAppNote.line, 'Mia was told Attio was added.');
+  assert.equal(note.text, `${NOTE} they accepted your card, and Attio is now in Connected apps, but it cannot work until they sign in to it. Its sign-in page opens in their browser by itself; if they closed it, the Sign in button is on Attio in Connected apps. Tell them that in one short line, carry on with anything that does not need Attio, and wait: another note comes when they are signed in.`);
+  assert.equal(note.metadata.miaAppNote.line, 'Mia was told Attio is waiting for its sign-in.');
   assert.deepEqual(note.metadata.miaAppNote.cards, [id]);
   assert.deepEqual(note.metadata.chatModelSelection, model);
   assert.deepEqual(note.where, { companyId: 'co', conversationId: 'c-mia', owner: OWNER });
@@ -348,6 +348,20 @@ test('an app that needs a key: Mia waits for it, then hears it is saved, never t
   assert.equal(state.notes[1].metadata.miaAppNote.line, "Mia was told Attio's key was saved.");
   assert.equal(answers.keySaved(OWNER, 'attio'), null, 'a replaced key says nothing more');
   assert.equal(state.settings.miaAppKeyWaits[OWNER], undefined);
+});
+
+test('an app that signs you in: Mia waits for the sign-in, then hears once that it is done', async t => {
+  const { call, post, state, answers } = await harness(t);
+  const asked = await call('mcp_app_add_propose', { name: 'Attio', ...MCP });
+  assert.ok(state.cards.get(asked.data.result.event_id).details.includes('Its sign-in opens in your browser when you accept.'));
+  const accepted = await post(`/api/mia-app/proposals/${asked.data.result.event_id}`, { decision: 'accept' });
+  assert.equal(accepted.data.result.status, 'needs_sign_in', 'the page starts the sign-in from this');
+  assert.equal(state.notes.length, 1);
+  const done = answers.signedIn(OWNER, 'attio');
+  assert.equal(done.event.id, 'note-2');
+  assert.equal(state.notes[1].text, `${NOTE} they signed in to Attio, so Attio is ready to use. Carry on with what you were doing.`);
+  assert.equal(state.notes[1].metadata.miaAppNote.line, 'Mia was told you signed in to Attio.');
+  assert.equal(answers.signedIn(OWNER, 'attio'), null, 'signing in again says nothing more');
 });
 
 test('a key saved while the note still waits makes that note say the app is ready', async t => {

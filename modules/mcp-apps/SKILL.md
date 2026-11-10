@@ -21,8 +21,8 @@ everything else is added this way and shows in Connected apps with its logo.
 3. **Pick how it runs.** Prefer the vendor's hosted https server (`url`). Use an
    `npx` or `uvx` package only when the vendor publishes that instead.
 4. **Pick how the person signs in:**
-   - `oauth` when the hosted server signs people in itself (most do). They
-     sign in the first time you use it.
+   - `oauth` when the hosted server signs people in itself (most do). Its
+     sign-in page opens in their own browser when they accept the card.
    - `key` when it takes an API key. Give `keyHeader` (usually
      `Authorization`) for a url, or `keyEnv` (the variable the vendor's
      package reads) for a package.
@@ -37,7 +37,9 @@ everything else is added this way and shows in Connected apps with its logo.
    vendor page that names this server) and `logo_url`. The person sees a card;
    nothing is added until they accept.
 7. **Tell them what's next.** Say it's waiting on the card, not done. Then:
-   - `oauth`: they'll sign in the first time you use it.
+   - `oauth`: the sign-in page opens in their browser when they accept. If
+     they closed it, they press **Sign in** on that app in **Connected apps**.
+     You hear when they are signed in; the app works only after that.
    - `key`: they paste the key in **Connected apps**, on that app's row. Never
      ask for a key, token or password in chat, and never repeat one they paste
      there. If they do paste one in chat, tell them to revoke it and add a new

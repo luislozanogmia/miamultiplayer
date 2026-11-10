@@ -5894,9 +5894,36 @@ app.post('/api/bots/archived/:id/restore', requireAuth, async (req, res) => {
 const mcpApps = require('./mcp-apps');
 const mcpAppKeyFiles = () => [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE]
   .map((profile) => path.join(String(process.env.HERMES_HOME || ''), 'profiles', profile, '.env'));
-function reloadMcpApps() {
-  return withStoppedHermesGateway(async () => { provisionHermesRuntimeProfiles(); });
+// An oauth app's sign-in (backend/mcp-app-sign-in.js) is made once, for Mia's
+// first profile; her second profile's sign-in folder is a link to it.
+const mcpAppSignIn = require('./mcp-app-sign-in');
+function shareMcpAppSignIns() {
+  try { mcpAppSignIn.shareSignIns(process.env.HERMES_HOME, MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE); }
+  catch (error) { console.error('[mcp-apps] could not share app sign-ins between Mia\u2019s profiles:', error.code || 'error'); }
 }
+if (process.env.HERMES_HOME) shareMcpAppSignIns();
+const mcpAppSignedIn = (app) => mcpAppSignIn.hasSignIn(process.env.HERMES_HOME, MIAOS_AGENT_HERMES_PROFILE, mcpApps.serverName(app.id));
+function reloadMcpApps() {
+  return withStoppedHermesGateway(async () => { provisionHermesRuntimeProfiles(); shareMcpAppSignIns(); });
+}
+const mcpAppSignIns = mcpAppSignIn.createMcpAppSignIn({
+  // SSH_TTY keeps Hermes from opening a browser itself: the app opens the
+  // address in the person's default browser.
+  spawnLogin: (server) => spawnHermesCli(['--profile', MIAOS_AGENT_HERMES_PROFILE, 'mcp', 'login', server], {
+    cwd: process.cwd(),
+    env: hermesCredentialProcessEnv({ PYTHONUNBUFFERED: '1', SSH_TTY: 'mia' }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }),
+  signedIn: (server) => mcpAppSignIn.hasSignIn(process.env.HERMES_HOME, MIAOS_AGENT_HERMES_PROFILE, server),
+  // Mia's gateway picks the sign-in up on a restart; then Mia, if she was
+  // told she is waiting on it, hears the app is ready.
+  onSignedIn: async (entry) => {
+    await reloadMcpApps();
+    miaAppAnswers.signedIn(entry.owner, entry.appId);
+  },
+});
+const shownMcpApp = (app, hasKey) => mcpApps.publicMcpApp(app, hasKey,
+  app.auth === 'oauth' ? { signedIn: mcpAppSignedIn(app), state: mcpAppSignIns.stateOf(app.id) } : undefined);
 function mcpAppRoute(action) {
   return async (req, res) => {
     try { res.status(200).json(await action(req)); } catch (error) {
@@ -5906,14 +5933,24 @@ function mcpAppRoute(action) {
   };
 }
 function listedMcpApps() {
-  return mcpApps.defaultStore.list().map((app) => mcpApps.publicMcpApp(app,
+  return mcpApps.defaultStore.list().map((app) => shownMcpApp(app,
     app.auth !== 'key' || mcpAppKeyFiles().every((file) => mcpApps.hasProfileKey(file, mcpApps.keyEnvName(app.id)))));
 }
 app.get('/api/mcp-apps', requireAuth, mcpAppRoute(async () => ({ apps: listedMcpApps() })));
 app.post('/api/mcp-apps', requireInteractiveAuth, mcpAppRoute(async (req) => {
   const added = mcpApps.defaultStore.add(req.body || {});
   await reloadMcpApps();
-  return { app: mcpApps.publicMcpApp(added, added.auth !== 'key') };
+  return { app: shownMcpApp(added, added.auth !== 'key') };
+}));
+// Starts the vendor's sign-in for an oauth app and answers with the address
+// to open in the default browser. GET /api/mcp-apps then shows how it went.
+app.post('/api/mcp-apps/:id/sign-in', requireInteractiveAuth, mcpAppRoute(async (req) => {
+  const found = mcpApps.defaultStore.get(String(req.params.id || ''));
+  if (!found || found.auth !== 'oauth') throw new mcpApps.McpAppError('mcp_app_not_found', 'That app doesn\u2019t sign in this way.', 404);
+  shareMcpAppSignIns();
+  const signIn = await mcpAppSignIns.start(String(req.userEmail || '').toLowerCase(), found, mcpApps.serverName(found.id));
+  if (signIn.state === 'error') throw new mcpApps.McpAppError('mcp_sign_in_failed', `${found.name} didn\u2019t start its sign-in. Try again.`, 502);
+  return { app: shownMcpApp(found, true), ...signIn };
 }));
 app.post('/api/mcp-apps/:id/key', requireInteractiveAuth, mcpAppRoute(async (req) => {
   const found = mcpApps.defaultStore.get(String(req.params.id || ''));
@@ -5933,8 +5970,10 @@ app.delete('/api/mcp-apps/:id', requireInteractiveAuth, mcpAppRoute(async (req) 
   const found = mcpApps.defaultStore.get(String(req.params.id || ''));
   if (!found) throw new mcpApps.McpAppError('mcp_app_not_found', 'That app is no longer in Connected apps.', 404);
   mcpApps.defaultStore.remove(found.id);
+  mcpAppSignIns.cancel(found.id);
   await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
     for (const file of mcpAppKeyFiles()) mcpApps.setProfileKey(file, mcpApps.keyEnvName(found.id), null);
+    if (found.auth === 'oauth') mcpAppSignIn.forgetSignIn(process.env.HERMES_HOME, MIAOS_AGENT_HERMES_PROFILE, mcpApps.serverName(found.id));
     provisionHermesRuntimeProfiles();
   }));
   return { removed: found.id };

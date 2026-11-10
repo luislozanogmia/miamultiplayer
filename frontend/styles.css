@@ -4336,11 +4336,14 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
 .mcp-app-name{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500;}
 .mcp-app-status{font-size:11px;font-weight:500;padding:1px 7px;border-radius:999px;background:var(--sand-fill-secondary-hover);color:var(--sand-text-secondary);}
 .mcp-app-status.is-needs_key{background:#fff4d6;color:#8a5a00;}
-.mcp-app-status.is-ready{background:#e7f6ec;color:#1f6b3a;}
+.mcp-app-status.is-needs_sign_in,.mcp-app-status.is-signing_in{background:#fff4d6;color:#8a5a00;}
+.mcp-app-status.is-ready,.mcp-app-status.is-signed_in{background:#e7f6ec;color:#1f6b3a;}
 .mcp-app-desc,.mcp-app-where{font-size:12px;color:var(--sand-text-secondary);}
 .mcp-app-key{display:flex;gap:8px;margin-top:6px;}
 .mcp-app-key input{flex:1;min-width:0;border:1px solid var(--sand-border-default);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;}
-.mcp-app-key button,.mcp-app-remove{border:1px solid var(--sand-border-default);background:var(--sand-bg-base);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer;}
+.mcp-app-sign-in{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-top:6px;font-size:12px;color:var(--sand-text-secondary);}
+.mcp-app-key button,.mcp-app-sign-in button,.mcp-app-remove{border:1px solid var(--sand-border-default);background:var(--sand-bg-base);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer;}
+.mcp-app-sign-in button{white-space:nowrap;}
 .mcp-app-remove{flex:none;color:var(--sand-text-danger);}
 .mcp-app-error{font-size:12px;color:var(--sand-text-danger);}
 .mcp-app-error:empty{display:none;}

@@ -2728,6 +2728,28 @@ ipcMain.handle("miaos-app-pane", (event, command = {}) => {
   }
 });
 
+// The sign-in page of an MCP app in Connected apps, opened in the person's
+// default browser. The backend made the proof with this launch's secret, so
+// only an address it got from Hermes's own sign-in opens; any https vendor.
+ipcMain.handle("miaos-mcp-app-auth-open", async (event, value) => {
+  if (!isMainWindowSender(event)) return { ok: false };
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+        || Object.keys(value).length !== 2 || typeof value.url !== "string"
+        || typeof value.proof !== "string" || value.url.length > 12000
+        || !/^[A-Za-z0-9_-]{43}$/.test(value.proof)) return { ok: false };
+    const expectedProof = crypto.createHmac("sha256", googleAuthOpenSecret).update(value.url).digest();
+    const suppliedProof = Buffer.from(value.proof, "base64url");
+    if (suppliedProof.length !== expectedProof.length || !crypto.timingSafeEqual(suppliedProof, expectedProof)) {
+      return { ok: false };
+    }
+    const url = new URL(value.url);
+    if (url.protocol !== "https:" || url.username || url.password) return { ok: false };
+    await shell.openExternal(url.toString());
+    return { ok: true };
+  } catch (_) { return { ok: false }; }
+});
+
 ipcMain.handle("miaos-google-workspace-auth-open", async (event, value) => {
   if (!isMainWindowSender(event)) return { ok: false };
   try {

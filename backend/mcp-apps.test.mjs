@@ -72,3 +72,13 @@ test('Mia\'s own profiles carry your apps in the one mcp_servers block; bots get
   assert.match(source, /lines\.push\(\.\.\.google\.slice\(0, tools\), \.\.\.yours, \.\.\.google\.slice\(tools\)\);/);
   assert.equal((source.match(/mcpApps: searchOnly \? \[\] : mcpApps\(\),/g) || []).length, 2, 'Mia\'s two agent profiles only');
 });
+
+test('an oauth app shows where its sign-in stands; other apps are untouched by it', () => {
+  const oauth = apps.cleanMcpApp({ name: 'Attio', url: 'https://mcp.example.test/mcp', auth: 'oauth' });
+  assert.equal(apps.publicMcpApp(oauth, true).status, 'needs_sign_in');
+  assert.equal(apps.publicMcpApp(oauth, true, { signedIn: false, state: 'waiting' }).status, 'signing_in');
+  assert.equal(apps.publicMcpApp(oauth, true, { signedIn: true, state: null }).status, 'signed_in');
+  assert.deepEqual([apps.publicMcpApp(oauth, true, { state: 'error' }).status, apps.publicMcpApp(oauth, true, { state: 'error' }).signInFailed], ['needs_sign_in', true]);
+  assert.equal(apps.publicMcpApp(oauth, true, { signedIn: true, state: 'error' }).signInFailed, undefined);
+  assert.equal(apps.publicMcpApp(apps.cleanMcpApp({ name: 'Wiki', url: 'https://mcp.example.test/mcp' }), true, { state: 'error' }).status, 'ready');
+});

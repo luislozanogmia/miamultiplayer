@@ -149,11 +149,16 @@ function hermesMcpServerLines(apps) {
 }
 
 // What the app shows: the record without anything that could carry a secret.
-function publicMcpApp(app, hasKey) {
+// For an oauth app, signIn says where its sign-in stands (mcp-app-sign-in.js):
+// { signedIn, state } with state 'starting' | 'waiting' | 'error' | null.
+function publicMcpApp(app, hasKey, signIn = {}) {
+  const signingIn = signIn.state === 'starting' || signIn.state === 'waiting';
   return {
     id: app.id, name: app.name, description: app.description, auth: app.auth, docsUrl: app.docsUrl, logo: app.logo,
     where: app.url ? new URL(app.url).host : `${app.runner} ${app.package}`, addedAt: app.addedAt,
-    status: app.auth === 'key' && !hasKey ? 'needs_key' : app.auth === 'oauth' ? 'sign_in_on_first_use' : 'ready',
+    status: app.auth === 'key' ? (hasKey ? 'ready' : 'needs_key')
+      : app.auth !== 'oauth' ? 'ready' : signingIn ? 'signing_in' : signIn.signedIn ? 'signed_in' : 'needs_sign_in',
+    ...(app.auth === 'oauth' && signIn.state === 'error' && !signIn.signedIn ? { signInFailed: true } : {}),
   };
 }
 

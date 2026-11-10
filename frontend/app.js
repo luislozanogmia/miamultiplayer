@@ -1878,6 +1878,12 @@
       if(res.data && res.data.result && res.data.result.clientAction === 'installTeamApp'){
         installTeamVersion(res.data.result.teamId, res.data.result.appId, res.data.result.version, false).catch(function(){ showBenchToast('That app could not be installed.'); });
       }
+      // An app that signs you in itself: its sign-in page opens in your browser now.
+      if(res.data && res.data.result && res.data.result.status === 'needs_sign_in' && res.data.result.app_id && window.MiaMcpAppsUI){
+        window.MiaMcpAppsUI.signIn(res.data.result.app_id).then(function(problem){
+          if(problem) showBenchToast(problem + ' The Sign in button is in Connected apps.');
+        });
+      }
       if(res.data && res.data.event){
         delete miaAppCardStates[eventId];
         applyNativeEvent(res.data.event);
