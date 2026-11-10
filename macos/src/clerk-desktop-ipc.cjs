@@ -124,6 +124,10 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
       init();
       let result;
       if (action === "status") {
+        // Startup can request a session token while the sign-in screen asks
+        // for status. Both use the native client's exclusive lane; let the
+        // in-flight token read finish before starting a status operation.
+        if (tokenRead) await tokenRead.catch(() => {});
         result = flow.status();
         if (result && result.status === "expired") { await flow.cancel(); result = null; }
         if (!result) {

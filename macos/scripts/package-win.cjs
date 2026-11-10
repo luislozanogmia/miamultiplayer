@@ -158,7 +158,7 @@ function pruneWindowsHermesBundle(root, originalRoot) {
   for (const relative of [
     ".git", ".github", "apps", "build", "contributors", "datagen-config-examples",
     "docker", "docs", "evals", "nix", "node_modules", "scripts", "tests", "tests-js", "ui-tui", "web", "website",
-    ".env.example", ".envrc", "skills", "optional-skills", "optional-mcps",
+    ".env.example", ".envrc", "skills", "optional-skills", "optional-mcps", "venv/.lock",
   ]) {
     fs.rmSync(path.join(root, relative), { recursive: true, force: true });
   }

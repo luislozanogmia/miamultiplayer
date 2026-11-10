@@ -103,6 +103,23 @@ test('a burst of token reads during a sign-in action never fails busy and shares
  assert.ok(later.every(r=>r.ok));assert.equal(f.tokenCalls(),2,'a later burst reads again, from the client cache');
 });
 
+test('startup status waits for an in-flight token read before entering native auth',async()=>{
+ const {window,event}=fixture();let handler,releaseToken,tokenStarted=false,active=false;
+ const pending=new Promise(resolve=>{releaseToken=resolve;});
+ const client={
+  getSessionToken:async()=>{active=true;tokenStarted=true;await pending;active=false;return 'synthetic-token';},
+  status:async()=>{if(active)throw Object.assign(new Error('busy'),{code:'AUTH_BUSY'});return {status:'signed_out'};},
+ };
+ createDesktopAuth({ipcMain:{handle(_channel,fn){handler=fn;}},getWindow:()=>window,getBackendUrl:()=>"http://localhost:4871",getClient:()=>client,openExternal:()=>{}});
+ const token=handler(event,'token');
+ await Promise.resolve();
+ assert.equal(tokenStarted,true);
+ const status=handler(event,'status');
+ releaseToken();
+ assert.deepEqual(await token,{ok:true,result:'synthetic-token'});
+ assert.deepEqual(await status,{ok:true,result:{status:'signed_out'}});
+});
+
 test('auth failure returns its safe response even when launcher diagnostics have a broken pipe',async()=>{
  const {window,event}=fixture();let handler;
  const previous=console.warn;
