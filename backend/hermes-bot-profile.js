@@ -35,6 +35,10 @@ const SEARCH_ONLY_TOOLSETS = Object.freeze(['web', 'todo', 'clarify']);
 // terminal. No memory or session search: scheduled runs share one Hermes
 // home, so those would reach other bots' notes and runs.
 const BOT_FULL_TOOLSETS = Object.freeze(['web', 'file', 'terminal', 'todo', 'clarify']);
+// Hermes gives every profile its full default tools (toolsets are not
+// enforced), so the one tool bots must not have is taken away here: bots
+// don't hand work to background subagents. Mia keeps delegation.
+const BOT_DISABLED_TOOLSETS = Object.freeze(['delegation']);
 function botToolsets({ searchOnly = MIAOS_AGENT_SEARCH_ONLY } = {}) {
   return [...(searchOnly ? SEARCH_ONLY_TOOLSETS : BOT_FULL_TOOLSETS)];
 }
@@ -222,7 +226,8 @@ function existingProfileModel(config) {
 // the same point, so a long chat behaves the same wherever it runs.
 const COMPRESSION_THRESHOLD_TOKENS = 64000;
 function runtimeProfileConfig({
-  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, model = null,
+  toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, model = null, mcpApps = [],
+  disabledToolsets = [],
 }) {
   const lines = [
     MANAGED_MARKER,
@@ -233,7 +238,9 @@ function runtimeProfileConfig({
     'agent:',
     `  max_turns: ${maxTurns}`,
     '  coding_context: off',
-    '  disabled_toolsets: []',
+    ...(disabledToolsets.length
+      ? ['  disabled_toolsets:', ...disabledToolsets.map((name) => `    - ${name}`)]
+      : ['  disabled_toolsets: []']),
     // Mia has no UI channel to answer Hermes approval prompts yet, so manual
     // mode stalls every gated action until it times out. Hermes's hardline
     // approval floors still block destructive commands unconditionally.
@@ -287,7 +294,15 @@ function runtimeProfileConfig({
     `    - ${PROVIDER_LIMITS_PLUGIN}`,
     ...(terminal && terminal.cwd ? [`    - ${GHOST_FIRST_PLUGIN}`] : []),
   );
-  if (googleWorkspace) lines.push(...googleWorkspaceMcpConfig());
+  // Google's server and your own MCP apps share one mcp_servers block.
+  const google = googleWorkspace ? googleWorkspaceMcpConfig() : [];
+  const yours = require('./mcp-apps').hermesMcpServerLines(mcpApps);
+  if (google.length) {
+    const tools = google.indexOf('tools:');
+    lines.push(...google.slice(0, tools), ...yours, ...google.slice(tools));
+  } else if (yours.length) {
+    lines.push('mcp_servers:', ...yours);
+  }
   lines.push('');
   return lines.join('\n');
 }
@@ -329,7 +344,8 @@ function provisionBundledPlugin(profileDir, plugin) {
 }
 
 function provisionRuntimeProfile({
-  profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false,
+  profilesRoot, profile, toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, mcpApps = [],
+  disabledToolsets = [],
 }) {
   const profileDir = path.join(profilesRoot, profile);
   const configPath = path.join(profileDir, 'config.yaml');
@@ -339,7 +355,7 @@ function provisionRuntimeProfile({
     if (error.code !== 'ENOENT') throw error;
   }
   const next = runtimeProfileConfig({
-    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots,
+    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots, mcpApps, disabledToolsets,
     model: existing.startsWith(MANAGED_MARKER) ? existingProfileModel(existing) : null,
   });
 
@@ -433,6 +449,7 @@ function provisionHermesBotProfile({
     profilesRoot,
     profile: MIAOS_BOT_HERMES_PROFILE,
     toolsets: botToolsets({ searchOnly }),
+    disabledToolsets: [...BOT_DISABLED_TOOLSETS],
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     backgroundReview: backgroundReviewEnabledForBot(),
@@ -448,11 +465,17 @@ function provisionHermesGoogleBotProfile({
     profilesRoot,
     profile: MIAOS_BOT_GOOGLE_HERMES_PROFILE,
     toolsets: botToolsets({ searchOnly }),
+    disabledToolsets: [...BOT_DISABLED_TOOLSETS],
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForBot(),
   });
+}
+
+// The MCP apps Mia added for you; a missing or unreadable list is none.
+function mcpApps() {
+  try { return require('./mcp-apps').defaultStore.list(); } catch (_) { return []; }
 }
 
 function provisionHermesAgentProfile({
@@ -477,6 +500,8 @@ function provisionHermesAgentProfile({
     terminal,
     backgroundReview: backgroundReviewEnabledForGateway(),
     editsBots: !searchOnly,
+    // Your own MCP apps reach Mia's agent only, never bots.
+    mcpApps: searchOnly ? [] : mcpApps(),
   });
 }
 
@@ -498,6 +523,8 @@ function provisionHermesGoogleAgentProfile({
     googleWorkspace: true,
     backgroundReview: backgroundReviewEnabledForGateway(),
     editsBots: !searchOnly,
+    // Your own MCP apps reach Mia's agent only, never bots.
+    mcpApps: searchOnly ? [] : mcpApps(),
   });
 }
 
@@ -568,6 +595,7 @@ module.exports = {
   FULL_AGENT_TOOLSETS,
   SEARCH_ONLY_TOOLSETS,
   BOT_FULL_TOOLSETS,
+  BOT_DISABLED_TOOLSETS,
   botToolsets,
   cronShellGuard,
   GOOGLE_WORKSPACE_MCP_SERVER,

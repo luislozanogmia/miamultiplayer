@@ -123,3 +123,13 @@ test('a shared bot turn receives the file on the message it answers',async()=>{
   assert.match(source,/modelSelection:selections\.get\(runKey\(s,run\.job_id\)\)\|\|null,\.\.\.attached\}/);
   assert.match(source,/unreadableFiles:\[item\.filename\|\|'image'\]/);
 });
+
+test('a company run gets Solo\'s turn time, ends before the Hub claim does, and reads 100 messages', () => {
+  const { sharedRunTimeoutMs, SHARED_RUN_HISTORY } = require('./hub-bot-client.js');
+  const now = 1_800_000_000_000, solo = 10 * 60 * 1000;
+  assert.equal(sharedRunTimeoutMs(solo, undefined, now), solo, 'no deadline: Solo\'s time');
+  assert.equal(sharedRunTimeoutMs(solo, now / 1000 + 900, now), solo, 'a 15-minute claim leaves Solo\'s 10 minutes');
+  assert.equal(sharedRunTimeoutMs(solo, now / 1000 + 300, now), 300000 - 30000, 'a short claim: stop 30 seconds before it ends');
+  assert.equal(sharedRunTimeoutMs(solo, now / 1000 - 5, now), 1000, 'an ended claim stops at once');
+  assert.equal(SHARED_RUN_HISTORY, 100);
+});

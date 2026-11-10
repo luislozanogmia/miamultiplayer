@@ -41,6 +41,7 @@ const {
 } = require('./hermes-bot-profile');
 
 const { configuredHermesLaunch } = require('./runtime-paths');
+const { miaCodeLine } = require('./mia-code-reference');
 
 const HERMES_BIN = String(process.env.HERMES_BIN || '').trim();
 
@@ -152,6 +153,7 @@ Mia browser boundary (non-negotiable): when the user asks you to browse, navigat
 // boundary survive a normal Mia checkout without changing user config.
 const MIAOS_GHOST_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'browser', 'SKILL.md');
 const MIAOS_APP_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'mia-app', 'SKILL.md');
+const MIAOS_MCP_APPS_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'mcp-apps', 'SKILL.md');
 const MIAOS_BOT_CREATION_SKILL_PATH = path.resolve(__dirname, '..', 'modules', 'bot-creation', 'SKILL.md');
 const MIAOS_GHOST_FALLBACK = `
 Mia browser policy (authoritative): use only the browser already embedded in
@@ -181,8 +183,8 @@ const MIAOS_HERMES_TOOLSETS = MIAOS_AGENT_SEARCH_ONLY
   ? SEARCH_ONLY_TOOLSETS
   : FULL_AGENT_TOOLSETS;
 // Bots are bounded task workers, not private agents. They can research the
-// web and drive the Mia browser through the guarded terminal, but they
-// cannot access durable memory, sessions, skills, or delegation.
+// web and drive the Mia browser through the guarded terminal. Delegation is
+// turned off in their profiles (hermes-bot-profile.js BOT_DISABLED_TOOLSETS).
 const MIAOS_BOT_TOOLSETS = Object.freeze(
   MIAOS_AGENT_SEARCH_ONLY
     ? ['web', 'todo', 'clarify']
@@ -273,12 +275,11 @@ function stripHermesOperationalLines(value) {
     .trim();
 }
 
+// The mia-app CLI, then how to add an MCP app with it.
 function loadMiaAppSkill() {
-  try {
-    return fs.readFileSync(MIAOS_APP_SKILL_PATH, 'utf8').trim().replace(/^---[\s\S]*?---\s*/, '').trim();
-  } catch {
-    return '';
-  }
+  return [MIAOS_APP_SKILL_PATH, MIAOS_MCP_APPS_SKILL_PATH].map((file) => {
+    try { return fs.readFileSync(file, 'utf8').trim().replace(/^---[\s\S]*?---\s*/, '').trim(); } catch { return ''; }
+  }).filter(Boolean).join('\n\n');
 }
 
 function loadMiaGhostSkill() {
@@ -763,6 +764,17 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
   // A shared bot brings the text of its skills with it; a Solo bot reads the
   // library, so an edit there reaches its next turn.
   const skills = Array.isArray(record.bundledSkills) ? record.bundledSkills : defaultSkillsLibrary.bundle(record.skills);
+  // A shared bot's shared folder is the same for everyone who uses it; the
+  // app syncs it before and after each turn.
+  if (record.marketSource && record.marketSource.folder === true) {
+    sections.push([
+      'Your shared folder:',
+      '- The `shared` folder in your working folder is the same for everyone who uses you, on every computer. It syncs before and after each turn.',
+      '- Keep there what others should find next time: notes, lists, reference files and finished outputs. Keep scratch work, downloads and logs outside it.',
+      '- A file named like "name (Ana\u2019s run).md" is a copy kept when two runs changed the same file. Merge it into the original and remove the copy.',
+      '- Never put keys, passwords or personal data there.',
+    ].join('\n'));
+  }
   if (skills.length) {
     sections.push([
       'Your skills:',
@@ -799,6 +811,7 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
   return [
     ...sections,
     'Capabilities:\nUse the tools available in this session, the same ones you have in your chat, to do this automation and create the files it needs.',
+    miaCodeLine(),
     [
       'Operating rules:',
       '- Look facts up before answering. If the user names a page, site, or source, or the answer depends on facts that change (numbers, dates, prices, news, what a page says), get it with your tools first. If you answer from memory, say so.',
@@ -888,6 +901,7 @@ function buildBotContext(agent, transcript, message, platformContext, senderLabe
     `Your automations:\n${automationLines.join('\n')}`,
   );
   if (bot.filesFolder) sections.push(botFilesRule(bot.filesFolder));
+  sections.push(miaCodeLine());
   if (platformContext) sections.push(`Current Mia context (authoritative):\n${String(platformContext).trim()}`);
   return sections.join('\n\n');
 }

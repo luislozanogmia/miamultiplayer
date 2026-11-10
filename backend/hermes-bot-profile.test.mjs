@@ -39,6 +39,23 @@ test('the scheduler home gets the Claude provider too, since scheduled jobs run 
   }
 });
 
+// Hermes gives every profile its full default tools, so bots lose only
+// delegation: they don't hand work to background subagents. Mia keeps it.
+test('bots cannot delegate to background subagents; Mia can', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-delegation-'));
+  const profilesRoot = path.join(root, 'profiles');
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot });
+    const disabled = (profile) => YAML.parse(fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8')).agent.disabled_toolsets;
+    assert.deepEqual(disabled(MIAOS_BOT_HERMES_PROFILE), ['delegation']);
+    assert.deepEqual(disabled(MIAOS_BOT_GOOGLE_HERMES_PROFILE), ['delegation']);
+    assert.deepEqual(disabled(MIAOS_AGENT_HERMES_PROFILE), []);
+    assert.deepEqual(disabled(MIAOS_AGENT_GOOGLE_HERMES_PROFILE), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Claude DirectSDK is provisioned unchanged for agent, Google-agent, and bot profiles', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-claude-plugin-'));
   const profilesRoot = path.join(root, 'profiles');

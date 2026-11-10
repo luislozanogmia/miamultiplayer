@@ -9,6 +9,24 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.3.7] — 2026-11-10
+
+### Added
+- Company bot chats keep up to 100 recent messages and allow longer runs. Each company has a private 1:1 Mia chat.
+- Chat accepts CSV, Office, text, image and other supported files through the composer or drag and drop. Thread replies use the full composer.
+- Shared company bots can sync a reviewed working folder around each run. Concurrent edits keep both copies.
+- Mia can propose an MCP app from its vendor address or package. The person reviews its connection details before accepting and supplies any key outside chat.
+- Channel settings can change its name, description and picture. Browser links and text can be dropped into a prompt.
+
+### Changed
+- Bot delegation is off; Mia retains delegation. Browser tab groups keep new tabs outside groups unless the person puts them there.
+- Reactions sit beside message bubbles, list markers appear in dark bubbles, and switching rooms closes the old thread panel.
+
+### Fixed
+- Shared-folder paths and conflict copies follow the Hub's file rules, avoid symlink escapes and stop a late download before a bot run.
+- Proposed app logos allow public HTTPS images with bounded downloads and refuse private network addresses. MCP approval cards show the executable arguments and connection settings.
+- MCP apps with similar long names no longer overwrite one another's Hermes server configuration.
+
 ## [0.3.6] — 2026-11-09
 
 ### Added

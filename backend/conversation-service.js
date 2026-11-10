@@ -23,8 +23,9 @@ function conversationMetadata(type, metadata) {
   // client can never attach one (that would let a chat borrow another profile).
   if (result.privateAgentId !== undefined) invalidInput('privateAgentId is set by the server');
   if (result.teamWorkspace !== undefined) {
-    if (type !== 'bot' || typeof result.teamWorkspace !== 'string' || !TEAM_WORKSPACE_PATTERN.test(result.teamWorkspace)) {
-      invalidInput('teamWorkspace must name a company workspace on a bot conversation');
+    // A company's bot chat, or your own chat with Mia in that company.
+    if ((type !== 'bot' && type !== 'agent') || typeof result.teamWorkspace !== 'string' || !TEAM_WORKSPACE_PATTERN.test(result.teamWorkspace)) {
+      invalidInput('teamWorkspace must name a company workspace on a bot or Mia conversation');
     }
   }
   if (type !== 'channel') return result;

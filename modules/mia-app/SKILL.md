@@ -17,9 +17,9 @@ mia-app call automation_propose --arguments '{"bot_id":"<id>","automation":{"nam
 Use this instead of reading bot folders or clicking through the app's screens.
 `list-tools` shows each tool's arguments.
 
-- **A, reads:** `bots_list`, `bot_get`, `bot_runs`, `skills_list`, `skill_get`, `marketplace_list`, `automations_list`, `chat_threads`, `chat_read`, `artifacts_list`, `apps_list`, `departments_list`, `users_list`, `instance_get`, `connections_status`, `browser_work_status`, `browser_work_results`.
+- **A, reads:** `bots_list`, `bot_get`, `bot_runs`, `skills_list`, `skill_get`, `marketplace_list`, `mcp_apps_list`, `automations_list`, `chat_threads`, `chat_read`, `artifacts_list`, `apps_list`, `departments_list`, `users_list`, `instance_get`, `connections_status`, `browser_work_status`, `browser_work_results`.
 - **B, your own lane, logged in "What Mia did":** `chat_post` (@-mention a bot there to hand it a task), `artifact_save`, `artifact_link`, `app_bundle_local`, `bot_instructions_update`.
-- **C, proposals:** `bot_create_propose`, `automation_propose`, `automation_pause_propose`, `browser_work_start`, `bot_archive_propose`, `bot_departments_propose`, `skill_save_propose`, `bot_skills_propose`, `marketplace_get_propose`, `app_install_propose`, `artifact_share_propose`.
+- **C, proposals:** `bot_create_propose`, `automation_propose`, `automation_pause_propose`, `browser_work_start`, `bot_archive_propose`, `bot_departments_propose`, `skill_save_propose`, `bot_skills_propose`, `marketplace_get_propose`, `mcp_app_add_propose`, `app_install_propose`, `artifact_share_propose`.
 
 ## Skills and the Bot marketplace
 

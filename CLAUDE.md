@@ -38,6 +38,14 @@ alone does not control GitHub attribution. Also check
 Correct a mismatch before creating new commits. Published commits and tags
 require an explicit release-history decision before any rewrite.
 
+## Hub code is never committed here
+
+The Hub's server code (routes, database, migrations, AWS handlers, and its
+specs and tests) lives in its own private repository. Never copy, commit or
+paste it into this repo, not even a snippet or a spec. This repo holds only
+the app's calls to the Hub. Hub changes go to the private repo, and only with
+the human's OK.
+
 ## What lives where
 
 - **This repo** — the entire app, plus `operations/` (how we work:

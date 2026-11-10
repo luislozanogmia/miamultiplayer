@@ -5,6 +5,7 @@ const path = require('path');
 const { summarizeWork, workResults } = require('./browser-work-proposal');
 const { safeBrowserPageUrl } = require('./browser-context');
 const { DEFAULT_WORKSPACE_ID } = require('./workspace-scope');
+const { fetchAppLogo } = require('./safe-logo-fetch');
 
 const TRUST_CATEGORIES = ['browserWork', 'automations', 'bots'];
 const ACTIVITY_LIMIT = 200;
@@ -84,6 +85,7 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
     skill_get: { group: 'A', description: "One skill folder: SKILL.md, every other file in it with its text, and the bots that carry it.", args: { skill_id: 'string' }, async run({ call, args }) {
       return call('GET', `/api/skills/${seg(text(args.skill_id, 'skill_id', 80))}`);
     } },
+    mcp_apps_list: { group: 'A', description: 'Your own MCP apps in Connected apps (beside Google): name, where its server runs, how you sign in, and whether it needs its key.', args: {}, run: ({ call }) => call('GET', '/api/mcp-apps') },
     marketplace_list: { group: 'A', description: "The Bot marketplace's From Mia shelf: each bot with what it does, its skills and whether the person already has it.", args: {}, async run({ call }) {
       const [index, { bots }] = await Promise.all([call('GET', '/api/bots/catalog'), call('GET', '/api/bots')]);
       const have = new Set(bots.map(bot => String(bot.name || '').trim().toLowerCase()));
@@ -307,6 +309,30 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
         const created = await call('POST', '/api/bots', { ...manifest.bot, model, ...(skillIds.length ? { skills: skillIds } : {}) });
         const bot = created.bot || created;
         return { bot_id: bot.id, name: bot.name, skill_ids: skillIds };
+      } },
+    // An app reaches Mia's tools and the data the person signs in to, so
+    // adding one always asks. Its key never passes through here.
+    mcp_app_add_propose: { group: 'C', trust: null, description: "Ask to add an MCP app to Connected apps (follow the mcp-apps skill). Give name, description, either url (the vendor's hosted https MCP server) or package (an npx/uvx package from the vendor) with runner and args, auth (oauth, key or none; for key, keyHeader for a url or keyEnv for a package), docs_url (the vendor page that names this server) and logo_url (the vendor's own logo image, https).", args: { name: 'string', description: 'string', url: 'string, or package', package: 'string, or url', runner: 'npx or uvx, with package', args: 'string[], optional', auth: 'oauth, key or none', keyHeader: 'string, optional', keyEnv: 'string, with package and key', docs_url: 'string', logo_url: 'string' },
+      async prepare({ call, args }) {
+        const { apps } = await call('GET', '/api/mcp-apps');
+        const input = { name: args.name, description: args.description, url: args.url, package: args.package, runner: args.runner, args: args.args,
+          auth: args.auth || 'none', keyHeader: args.keyHeader, keyEnv: args.keyEnv, docsUrl: args.docs_url };
+        let checked;
+        try { checked = require('./mcp-apps').cleanMcpApp(input, apps.map(app => app.id)); } catch (error) { throw fail(400, error.message); }
+        if (!checked.docsUrl) throw fail(400, "Name the vendor's page for this server (docs_url), so the person can check it.");
+        const logo = await fetchAppLogo(args.logo_url);
+        const signIn = { oauth: 'You sign in to it the first time Mia uses it.', key: 'You paste its key in Connected apps; it never goes through chat.', none: 'No sign-in.' }[checked.auth];
+        return { summary: `Add ${checked.name} to Connected apps`,
+          details: [checked.description, `Server: ${checked.url || `${checked.runner} ${checked.package}`}`,
+            ...(!checked.url && checked.args.length ? [`Arguments: ${checked.args.join(' ')}`] : []),
+            ...(checked.keyHeader ? [`Key header: ${checked.keyHeader}`] : []),
+            ...(checked.keyEnv ? [`Key variable: ${checked.keyEnv}`] : []),
+            `From: ${checked.docsUrl}`, signIn, logo ? 'With its logo.' : 'No logo found.'].filter(Boolean),
+          input: { ...input, logo } };
+      },
+      async apply({ call }, input) {
+        const added = await call('POST', '/api/mcp-apps', input);
+        return { app_id: added.app.id, status: added.app.status };
       } },
     app_install_propose: { group: 'C', trust: null, description: "Ask to install one version of a company's app on this computer.", args: { team_id: 'string', app_id: 'string', version: 'string' },
       prepare({ args }) {

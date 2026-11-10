@@ -142,6 +142,11 @@
             <div class="styled-integrations-view" id="styledConnectorsView">
               <div class="styled-connector-grid" id="hermesConnectorGrid"></div>
               <p id="hermesConnectorEmpty" class="hermes-catalog-empty" hidden>No connected apps match your search.</p>
+            <section class="mcp-apps" id="mcpApps" aria-labelledby="mcpAppsTitle">
+              <div class="mcp-apps-head"><h3 id="mcpAppsTitle">Your apps</h3><button type="button" class="mcp-apps-ask" id="mcpAppsAsk">Ask Mia to add an app</button></div>
+              <p class="mcp-apps-note">Apps Mia added for you, like your CRM. Tell her "add the MCP for Attio CRM" and she finds the vendor's own server and asks you first.</p>
+              <div class="mcp-apps-list" id="mcpAppsList"></div>
+            </section>
             </div>
           </div>
         </div>
@@ -539,7 +544,7 @@
                     <button type="button" class="cc-plus-btn" id="ccPlusBtn" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">+</button>
                     <button type="button" class="cc-plus-btn" id="ccDriveBtn" title="Attach from Google Drive" aria-label="Attach from Google Drive" aria-expanded="false" hidden><img src="assets/connectors/google-drive.svg" width="18" height="18" alt="" /></button>
                     <button type="button" class="cc-plus-btn" id="ccEmojiBtn" title="Emoji" aria-label="Add an emoji" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>
-                    <input type="file" id="ccFileInput" class="cc-file-input" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.pdf" style="display:none" />
+                    <input type="file" id="ccFileInput" class="cc-file-input" multiple accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.pdf,.docx,.xlsx,.pptx,.csv,.txt,.md,.json,text/csv,text/plain,text/markdown,application/json" style="display:none" />
                     <!-- Reserved for the composer keyboard hint. -->
                     <span class="cc-hint" id="ccHint"></span>
                     <div class="cc-model-select" id="ccModelSelect">
@@ -593,9 +598,7 @@
                 <div class="ctp-divider" id="ctpDivider"></div>
                 <div class="ctp-replies" id="ctpReplies"></div>
               </div>
-              <div class="ctp-composer-row">
-                <input type="search" class="ctp-composer-input" id="ctpComposerInput" name="chat_thread_message" data-thread-reply-input placeholder="Reply in thread&hellip;" autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
-              </div>
+              <div class="ctp-composer-slot" id="ctpComposerSlot"></div>
             </aside>
             <aside class="chat-thread-panel" id="chatTasksPanel" hidden>
               <div class="ctp-resize" data-ctp-resize title="Drag to resize"></div>
@@ -1377,6 +1380,7 @@
     <script src="safe-page-url.js?v=20261102-space-1"></script>
     <script src="shared-space.js?v=20261103-space-control-1"></script>
     <script src="team-files.js?v=20261102-team-files-2"></script>
+    <script src="bot-folder-sync.js?v=20261109-folder-1"></script>
     <script src="team-files-ui.js?v=20261102-team-files-1"></script>
     <script src="step-report.js?v=20261102-step-report-1"></script>
     <script src="team-workflows.js?v=20261102-team-workflows-2"></script>
@@ -1386,6 +1390,7 @@
     <script src="interrupted-work.js?v=20261104-interrupted-1"></script>
     <script src="bot-files-tidy.js?v=20261106-tidy-1"></script>
     <script src="bot-marketplace.js?v=20261109-market-1"></script>
+    <script src="mcp-apps-ui.js?v=20261109-mcp-1"></script>
     <script src="emoji-picker.js?v=20261106-emoji-all"></script>
     <script src="provider-marks.js?v=20261106-1"></script>
     <script src="app.js?v=20261106-company-logo-1"></script>
