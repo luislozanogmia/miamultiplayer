@@ -1114,7 +1114,8 @@
   .chat-msg-text .chat-md-h:first-child{margin-top:0;}
   .chat-msg-text .chat-md-list{margin:2px 0 12px;padding-left:1.35em;}
   .chat-msg-text .chat-md-list li{margin:4px 0;padding-left:.15em;}
-  .chat-msg-text .chat-md-list li::marker{color:var(--sand-text-secondary);}
+  /* Dots and numbers follow the bubble's text, so they show on your own dark bubble too. */
+  .chat-msg-text .chat-md-list li::marker{color:color-mix(in srgb,currentColor 60%,transparent);}
   .chat-msg-text > :last-child{margin-bottom:0;}
   .chat-msg-text strong{font-weight:700;}
   .chat-msg-activity{font-size:12.5px;color:var(--sand-text-secondary);}

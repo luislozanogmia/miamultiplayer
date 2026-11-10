@@ -97,3 +97,9 @@ test('the thread header keeps its title and room name in the pane bar, and bubbl
   assert.match(css, /\.chat-thread-panel \.ctp-header \.ctp-header-room\{grid-row:2;grid-column:2;\}/);
   assert.match(css, /\.chat-thread-panel \.chat-msg-body\{flex:0 1 auto;max-width:calc\(100% - 34px\);\}/);
 });
+
+test('list dots and numbers follow the bubble text, so they show on your own dark bubble', async () => {
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.chat-msg-text \.chat-md-list li::marker\{color:color-mix\(in srgb,currentColor 60%,transparent\);\}/);
+  assert.doesNotMatch(css, /\.chat-md-list li::marker\{color:var\(--sand-text-secondary\)/);
+});
