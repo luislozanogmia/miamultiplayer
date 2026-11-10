@@ -1160,7 +1160,10 @@
   @keyframes chatThinkingSweep{0%{background-position:140% 0;}100%{background-position:-40% 0;}}
   .chat-md-table{width:100%;min-width:0;max-width:100%;margin:8px 0;overflow-x:auto;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:8px;}
   .chat-md-table table{border-collapse:collapse;width:100%;font-size:13px;}
-  .chat-md-table th,.chat-md-table td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--sand-border-default);white-space:nowrap;}
+  /* Cells wrap between words, so a table fits its bubble and scrolls only when
+     one word (a long address) cannot fit. The min width keeps a column from
+     collapsing into a one-word-per-line stack. */
+  .chat-md-table th,.chat-md-table td{min-width:10ch;padding:6px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--sand-border-default);white-space:normal;overflow-wrap:normal;word-break:normal;}
   .chat-md-table tr:last-child td{border-bottom:none;}
   .chat-md-table thead th{font-family:var(--styled-sans);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--sand-text-secondary);background:var(--sand-fill-secondary);}
   .chat-md-hr{border:none;border-top:1px solid var(--sand-border-default);margin:10px 0;}

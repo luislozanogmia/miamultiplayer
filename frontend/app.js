@@ -11782,7 +11782,49 @@
       end = matcher.lastIndex;
     }
     if(!match || !matcher.exec(raw)) return raw;
+    var blockCut = chatPreviewBlockCut(raw, end);
+    if(blockCut !== null) return blockCut + '\n\n…';
     return closeCutMarkdown(raw.slice(0, end).replace(/\s+$/, '')) + '…';
+  }
+  // A word cut inside a table or a code block would leave half a block that
+  // renders as raw pipes or swallows the "…". Cut such a block only between
+  // its lines instead: keep whole table rows (the header, separator and first
+  // row at least, so it still reads as a table) and close a code block. The
+  // "…" then goes on its own line. Returns null when the cut is in prose.
+  function chatPreviewBlockCut(raw, end){
+    var lines = raw.split('\n');
+    var cutLine = raw.slice(0, end).split('\n').length - 1;
+    var lineDone = /^[ \t]*(?:\n|$)/.test(raw.slice(end));
+    var fenceStart = -1;
+    for(var i = 0; i <= cutLine; i++){
+      var t = lines[i].trim();
+      if(fenceStart < 0){ if(/^```/.test(t)) fenceStart = i; }
+      else if(/^```\s*$/.test(t)) fenceStart = -1;
+    }
+    if(fenceStart >= 0){
+      var keepTo = lineDone ? cutLine : cutLine - 1;
+      if(keepTo <= fenceStart){
+        var before = lines.slice(0, fenceStart).join('\n').replace(/\s+$/, '');
+        if(before) return before;
+        keepTo = cutLine;
+      }
+      return lines.slice(0, keepTo + 1).join('\n').replace(/\s+$/, '') + '\n```';
+    }
+    var isRow = function(line){ return /^\s*\|/.test(line || ''); };
+    if(isRow(lines[cutLine])){
+      var start = cutLine;
+      while(start > 0 && isRow(lines[start - 1])) start--;
+      var stop = cutLine;
+      while(stop + 1 < lines.length && isRow(lines[stop + 1])) stop++;
+      if(stop > start){
+        var last = lineDone ? cutLine : cutLine - 1;
+        last = Math.min(stop, Math.max(last, start + 2));
+        return lines.slice(0, last + 1).join('\n').replace(/\s+$/, '');
+      }
+    }
+    // A cut right after a closing fence: "…" on that line would reopen it.
+    if(lineDone && /^```/.test(lines[cutLine].trim())) return lines.slice(0, cutLine + 1).join('\n').replace(/\s+$/, '');
+    return null;
   }
   // The preview cuts raw markdown at a word, so a span can be left open. Inline
   // spans never cross a line, so only the last line needs repair: drop a link
@@ -11826,7 +11868,9 @@
       : '';
     var previewHtml = isPreReasoning ? esc(preview) : mdLite(preview);
     var full = hasMore ? '<div class="chat-expandable-full' + fullClass + '" data-chat-expand-full' + fullAttr + ' hidden>' + mdLite(raw) + '</div>' : '';
-    return '<div class="chat-expandable-preview' + previewClass + '" data-chat-expand-preview' + previewAttr + compactPreviewAttr + truncatedAttr + '>' + previewHtml + '</div>' + toggle + full;
+    // The toggle follows both bodies, so "Show less" sits at the end of the
+    // expanded text, where "Show more" sat under the preview.
+    return '<div class="chat-expandable-preview' + previewClass + '" data-chat-expand-preview' + previewAttr + compactPreviewAttr + truncatedAttr + '>' + previewHtml + '</div>' + full + toggle;
   }
   function syncChatCompactPreviewVisibility(thread){
     if(!thread) return;
