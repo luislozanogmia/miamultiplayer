@@ -71,3 +71,21 @@ test('the composer takes drops and the + picker takes several files', () => {
   assert.match(source, /fileInput\.addEventListener\('change', function\(\)\{\s*if\(stageChatAttachments\(fileInput\.files\)\) syncDraftState\(\);/);
   assert.match(source, /if\(extras\.length\) return sendMoreChatAttachments\(extras, roomId, 2, extras\.length \+ 1\);/);
 });
+
+// A link or text dragged from the Mia browser has no file: it lands in the
+// prompt at the cursor, spaced from the words around it.
+test('a dropped link goes into the prompt at the cursor', () => {
+  const code = slice('    function droppedText(dataTransfer){', '\n    if(composer){');
+  const input = { value: 'look at', selectionStart: 7, selectionEnd: 7, dispatchEvent() {} };
+  const { droppedText, insertIntoPrompt } = new Function('input', 'Event', code + '\nreturn { droppedText, insertIntoPrompt };')(input, function Event() {});
+  const link = droppedText({ getData: (type) => type === 'text/uri-list' ? '# comment\r\nhttps://example.com/report' : 'ignored' });
+  assert.equal(link, 'https://example.com/report');
+  insertIntoPrompt(link);
+  assert.equal(input.value, 'look at https://example.com/report');
+  assert.equal(droppedText({ getData: (type) => type === 'text/plain' ? '  some words ' : '' }), 'some words');
+  assert.match(source, /if\(draggingText\(e\)\)\{\n\s+var text = droppedText\(e\.dataTransfer\);/);
+});
+
+test('switching rooms closes the last room\'s thread right away', () => {
+  assert.match(source, /chatWs\.activeRoomId = roomId;\n\s+chatWs\.activeRoomWorkspace = activeWorkspaceKey;\n\s+chatWs\.activeKind = kind;\n(\s+\/\/.*\n)+\s+syncChatThreadPanel\(\);/);
+});

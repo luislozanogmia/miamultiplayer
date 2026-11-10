@@ -16366,6 +16366,9 @@
     chatWs.activeRoomId = roomId;
     chatWs.activeRoomWorkspace = activeWorkspaceKey;
     chatWs.activeKind = kind;
+    // A thread belongs to its room: switching rooms shows the new room's
+    // open thread, or none, right away rather than after its first render.
+    syncChatThreadPanel();
     chatWs.activeLabel = label;
     if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
     if(roomId !== AGENT_SETUP_ROOM_ID) saveActiveChatLocation(roomId);
@@ -20076,6 +20079,25 @@
     // checks, previews, upload progress and errors.
     var composer = input.closest('.chat-composer-wrap');
     function draggingFiles(e){ return !!(e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') !== -1); }
+    // A link or text dragged from the Mia browser (or any page) carries no
+    // file: it goes into the prompt at the cursor instead.
+    function draggingText(e){
+      var types = e.dataTransfer && e.dataTransfer.types || [];
+      return !draggingFiles(e) && (Array.prototype.indexOf.call(types, 'text/uri-list') !== -1 || Array.prototype.indexOf.call(types, 'text/plain') !== -1);
+    }
+    function droppedText(dataTransfer){
+      var uris = String(dataTransfer.getData('text/uri-list') || '').split(/\r?\n/).filter(function(line){ return line && line.charAt(0) !== '#'; });
+      return (uris.length ? uris.join(' ') : String(dataTransfer.getData('text/plain') || '')).trim();
+    }
+    function insertIntoPrompt(text){
+      var start = input.selectionStart == null ? input.value.length : input.selectionStart;
+      var end = input.selectionEnd == null ? start : input.selectionEnd;
+      var before = input.value.slice(0, start), after = input.value.slice(end);
+      var piece = (before && !/\s$/.test(before) ? ' ' : '') + text + (after && !/^\s/.test(after) ? ' ' : '');
+      input.value = before + piece + after;
+      input.selectionStart = input.selectionEnd = before.length + piece.length;
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+    }
     if(composer){
       var dragDepth = 0;
       composer.addEventListener('dragenter', function(e){
@@ -20093,7 +20115,20 @@
         dragDepth = Math.max(0, dragDepth - 1);
         if(!dragDepth) composer.classList.remove('is-drop-target');
       });
+      composer.addEventListener('dragover', function(e){
+        if(!draggingText(e) || e.target === input) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      });
       composer.addEventListener('drop', function(e){
+        if(draggingText(e)){
+          var text = droppedText(e.dataTransfer);
+          if(!text) return;
+          e.preventDefault();
+          insertIntoPrompt(text);
+          input.focus();
+          return;
+        }
         if(!draggingFiles(e)) return;
         e.preventDefault();
         dragDepth = 0;
