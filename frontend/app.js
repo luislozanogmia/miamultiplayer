@@ -1864,15 +1864,26 @@
     var card = decision && decision.closest('[data-mia-app-card]');
     if(!card) return;
     var eventId = card.getAttribute('data-mia-app-card');
+    // One answer per card: a second click while the first is on its way does nothing.
+    if(miaAppCardStates[eventId] && miaAppCardStates[eventId].busy) return;
     var state = miaAppCardStates[eventId] = {busy: true, error: ''};
     renderChatThread();
     // The card lives in the chat's own store: in a company, your Mia chat is kept in Solo's.
-    api('/api/mia-app/proposals/' + encodeURIComponent(eventId) + '?workspace=' + encodeURIComponent(localChatWorkspaceKey()), {method: 'POST', body: {decision: decision.getAttribute('data-mia-app-decision')}}).then(function(res){
+    // The chat's model goes along, so Mia carries on with it after the answer.
+    var answerBody = {decision: decision.getAttribute('data-mia-app-decision')};
+    var answerModel = chatModelSelectionMetadata();
+    if(answerModel) answerBody.chatModelSelection = answerModel;
+    api('/api/mia-app/proposals/' + encodeURIComponent(eventId) + '?workspace=' + encodeURIComponent(localChatWorkspaceKey()), {method: 'POST', body: answerBody}).then(function(res){
       state.busy = false;
       if(res.data && res.data.result && res.data.result.clientAction === 'installTeamApp'){
         installTeamVersion(res.data.result.teamId, res.data.result.appId, res.data.result.version, false).catch(function(){ showBenchToast('That app could not be installed.'); });
       }
-      if(res.data && res.data.event){ delete miaAppCardStates[eventId]; applyNativeEvent(res.data.event); return; }
+      if(res.data && res.data.event){
+        delete miaAppCardStates[eventId];
+        applyNativeEvent(res.data.event);
+        applyMiaAppAnswerNote(res.data.note);
+        return;
+      }
       state.error = (res.data && res.data.error) || 'That didn’t work. Try again.';
       renderChatThread();
     }, function(){
@@ -1881,6 +1892,23 @@
       renderChatThread();
     });
   });
+  // After an answer to a card Mia was waiting on, the server tells her in a
+  // system line (miaAppNote) that starts her turn; show it and her working
+  // state as a sent message would.
+  function applyMiaAppAnswerNote(note){
+    if(!note || !note.event) return;
+    var roomId = note.event.conversationId;
+    var busyBefore = chatWs.activeRoomId === roomId && !!activeRoomTask();
+    applyNativeEvent(note.event);
+    var dispatches = note.dispatch && Array.isArray(note.dispatch.dispatches) ? note.dispatch.dispatches : [];
+    if(!dispatches.length || busyBefore) return;
+    chatRoomState(roomId).thinkingAgentName = nativeThinkingAgentName(roomId, '', null) || 'Mia';
+    startChatThinking(roomId);
+    setRoomNativeDispatches(roomId, dispatches);
+    renderComposerTaskControl();
+    renderChatSidebar();
+    if(chatWs.activeRoomId === roomId) renderChatThread();
+  }
   function renderSettingsAccount(){
     var avatar = el('#settingsAcctAvatar'), name = el('#settingsAcctName'), email = el('#settingsAcctEmail');
     if(!avatar || !currentUser) return;
@@ -7072,6 +7100,10 @@
     if(typeof content.text === 'string') body = content.text;
     else if(typeof content.body === 'string') body = content.body;
     else if(typeof content.message === 'string') body = content.message;
+    // A card's answer, sent to Mia as a system line: the person sees its short
+    // line, Mia reads the full note.
+    var appNote = event && event.type === 'system' && event.metadata && event.metadata.miaAppNote;
+    if(appNote && typeof appNote.line === 'string' && appNote.line) body = appNote.line;
     // A deleted transient progress row (a stopped dispatch's "working…"
     // status) disappears entirely — a "Message deleted" tombstone is only
     // for real messages someone removed.

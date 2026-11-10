@@ -5922,6 +5922,11 @@ app.post('/api/mcp-apps/:id/key', requireInteractiveAuth, mcpAppRoute(async (req
   await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
     for (const file of mcpAppKeyFiles()) mcpApps.setProfileKey(file, mcpApps.keyEnvName(found.id), key);
   }));
+  // Mia, if she was told she is waiting on this key, now hears it is in.
+  // The note names the app only; the key never leaves the profiles.
+  if (mcpAppKeyFiles().every((file) => mcpApps.hasProfileKey(file, mcpApps.keyEnvName(found.id)))) {
+    miaAppAnswers.keySaved(String(req.userEmail || '').toLowerCase(), found.id);
+  }
   return { app: mcpApps.publicMcpApp(found, true) };
 }));
 app.delete('/api/mcp-apps/:id', requireInteractiveAuth, mcpAppRoute(async (req) => {
@@ -7017,7 +7022,8 @@ function nativePromptLine(event) {
       : (bot && bot.name ? bot.name : event.senderId);
     return `[${name}] ${body}`;
   }
-  if (event.senderType === 'system') return body;
+  // A system line is the app speaking (a card's answer), not the person.
+  if (event.senderType === 'system' || event.type === 'system') return body;
   return `${senderDisplayName(event.senderId)}: ${body}`;
 }
 
@@ -7978,6 +7984,8 @@ async function createNativeArtifactAttachments({ conversation, principal, artifa
 
 const MID_RUN_MESSAGE_RULE = 'The user sent this while you are working. Answer it in a short message now, before your next tool call, then carry on with your work unless they asked you to stop or change course.';
 
+const MID_RUN_APP_NOTE_RULE = 'The Mia app sent this note while you are working; the person did not type it. Use it and carry on with your work. It needs no separate reply.';
+
 const MID_RUN_NUDGE = 'Answer the user\'s last message now in a short message, before anything else. Your command keeps running in the background.';
 
 // A model can fold its answer into the tool it was about to run, which keeps the
@@ -8027,9 +8035,14 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   const workspaceConnection = await googleWorkspaceAgentContextForOwner(trigger.senderId, '');
   const inventory = connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: activeGateway.agentId || GATEWAY_AGENT_ID }, false);
   if (inventory.revision !== activeGateway.capabilityRevision) return false;
+  // A system line (a card's answer) is the app's note, not the person's
+  // words: it joins the turn without asking Mia for a separate reply.
+  const appNote = trigger.type === 'system';
   let result;
   try {
-    result = await steerHermesGatewaySession(activeGateway.sessionId, inventory.note + '\n\nUser: ' + message + '\n\n' + MID_RUN_MESSAGE_RULE);
+    result = await steerHermesGatewaySession(activeGateway.sessionId, appNote
+      ? inventory.note + '\n\n' + message + '\n\n' + MID_RUN_APP_NOTE_RULE
+      : inventory.note + '\n\nUser: ' + message + '\n\n' + MID_RUN_MESSAGE_RULE);
   } catch (_) {
     return false;
   }
@@ -8038,7 +8051,7 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: activeGateway.agentId || GATEWAY_AGENT_ID });
   // Mia invoked in a channel can only post under a claimed dispatch, so there
   // the answer arrives with the final reply.
-  if (dispatch.targetType !== 'gateway' || conversation.type === 'agent') {
+  if (!appNote && (dispatch.targetType !== 'gateway' || conversation.type === 'agent')) {
     activeGateway.midRunMessage = activeGateway.midRunMessage || { dispatch, trigger };
     activeGateway.midRunNudged = false;
   }
@@ -9675,7 +9688,7 @@ async function initializeBrowserWork() {
 }
 
 const miaAppRoutes = require('./mia-app-routes');
-miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
+const miaAppAnswers = miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
   requireAuth, requireInteractiveAuth,
   loadSettings: () => db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS),
   saveSettings: settings => db.saveSingleton(conn, 'settings', settings),
@@ -9733,6 +9746,26 @@ miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
     });
     bumpVersion();
     return updated;
+  },
+  // The other cards Mia posted lately in the same chat, for answers that go
+  // back to her together.
+  listCards({ companyId, conversationId, workspace }) {
+    const { events } = nativeConversationRepository.listEvents({
+      companyId, conversationId, latest: true, limit: 100, includeDeleted: false, excludedSenderTypes: ['user', 'bot', 'system'],
+    });
+    return events.filter((event) => event.metadata && event.metadata.miaAppProposal)
+      .map((event) => ({ event, proposal: event.metadata.miaAppProposal, companyId, workspace, conversationId }));
+  },
+  // A note to Mia about a card's answer: a system line in her chat, sent as
+  // the person who answered, so it starts (or joins) her turn like a message.
+  postNote({ companyId, conversationId, owner }, { text, key, metadata }) {
+    const created = nativeConversationService.createEvent({
+      companyId, conversationId,
+      principal: { companyId, principalId: owner, principalType: 'user' },
+      type: 'system', content: { text }, clientIdempotencyKey: key, metadata,
+    });
+    bumpVersion();
+    return { event: created.event, dispatch: created.dispatch || null };
   },
 });
 

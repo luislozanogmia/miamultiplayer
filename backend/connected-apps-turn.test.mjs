@@ -265,3 +265,44 @@ test('a message sent while the first turn is still starting waits, then reaches 
   await ctx.schedule({ id: 'idle' });
   assert.deepEqual(queued, ['orphan', 'idle'], 'an idle chat runs the message right away');
 });
+
+test("an app's note joins a busy Mia's turn as the app's words, with no reply asked for", async () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function trySteerNativeConversationDispatch(');
+  const fn = source.slice(start, source.indexOf('\n}\n', start) + 3);
+  const messages = [];
+  const note = 'Note from the Mia app, not typed by the person: they accepted your card.';
+  const ctx = {
+    crypto, GATEWAY_AGENT_ID: 'gateway', MID_RUN_MESSAGE_RULE: 'Answer it now.', MID_RUN_APP_NOTE_RULE: 'No reply needed.',
+    nativeSlashCommand: () => false, nativeEventText: event => event.text, cancelNativeDispatchForInactiveUser: () => false,
+    googleWorkspaceAgentContextForOwner: async () => ({ status: {} }),
+    connectedAppsForTurn: () => ({ revision: 'r', note: 'Current connections' }),
+    steerHermesGatewaySession: async (id, message) => { messages.push(message); return { status: 'queued' }; },
+    nativeConversationRepository: {
+      getEvent: () => ({ senderType: 'user', senderId: base.ownerEmail, type: 'system', text: note }),
+      getConversation: () => ({ id: 'chat', companyId: 'company', type: 'agent' }),
+      claimDispatch: () => ({ idempotent: false, dispatch: {} }),
+      completeDispatch: () => {},
+    },
+  };
+  vm.createContext(ctx); vm.runInContext(fn, ctx);
+  const active = { sessionId: 'live', capabilityRevision: 'r' };
+  assert.equal(await ctx.trySteerNativeConversationDispatch({ id: 'd', targetType: 'gateway', companyId: 'company', conversationId: 'chat', eventId: 'e' }, active), true);
+  assert.equal(messages[0], `Current connections\n\n${note}\n\nNo reply needed.`);
+  assert.doesNotMatch(messages[0], /User:|Answer it now/);
+  assert.equal(active.midRunMessage, undefined, 'no separate answer is waited for');
+  assert.match(source, /const MID_RUN_APP_NOTE_RULE = 'The Mia app sent this note while you are working; the person did not type it\./);
+});
+
+test("an app's system line reads in Mia's transcript without the person's name", () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function nativePromptLine(');
+  const fn = source.slice(start, source.indexOf('\n}\n', start) + 3);
+  const ctx = {
+    turnFiles: { attachedLabel: () => '' }, nativeEventAttachments: () => [], nativeEventText: event => event.text,
+    senderDisplayName: () => 'Owner', db: {}, conn: null,
+  };
+  vm.createContext(ctx); vm.runInContext(fn, ctx);
+  assert.equal(ctx.nativePromptLine({ senderType: 'user', type: 'system', text: 'Note from the Mia app: done.' }), 'Note from the Mia app: done.');
+  assert.equal(ctx.nativePromptLine({ senderType: 'user', type: 'message', text: 'hello' }), 'Owner: hello');
+});

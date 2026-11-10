@@ -54,10 +54,15 @@ async function harness(t) {
   app.post('/api/bots', (req, res) => { state.createdBots.push(req.body); res.status(201).json({ bot: { id: 'b2', name: req.body.name } }); });
   state.mcpApps = [];
   app.get('/api/mcp-apps', (_req, res) => res.json({ apps: state.mcpApps }));
-  app.post('/api/mcp-apps', (req, res) => { const added = { id: 'attio', status: 'sign_in_on_first_use', ...req.body }; state.mcpApps.push(added); res.json({ app: added }); });
+  app.post('/api/mcp-apps', (req, res) => {
+    if (state.mcpFail) return res.status(400).json({ error: 'invalid_mcp_app', message: state.mcpFail });
+    const added = { id: String(req.body.name).toLowerCase(), status: state.mcpStatus || 'sign_in_on_first_use', ...req.body }; state.mcpApps.push(added); res.json({ app: added });
+  });
+  // Notes to Mia, posted once per key like the conversation store does.
+  state.notes = [];
   // Group D routes exist in the app. Nothing may reach them.
   for (const route of ['/api/keys', '/api/settings/guardrails', '/api/dev/clean-slate']) app.all(route, (_req, res) => { state.reachedForbidden = true; res.json({}); });
-  registerMiaAppRoutes(app, {
+  const answers = registerMiaAppRoutes(app, {
     requireAuth: auth, requireInteractiveAuth: auth,
     loadSettings: () => state.settings, saveSettings: value => { state.settings = value; },
     tools: createMiaAppTools({
@@ -71,15 +76,24 @@ async function harness(t) {
       return null;
     },
     postCard(_target, proposal) { const id = `card-${state.cards.size + 1}`; state.cards.set(id, proposal); return id; },
-    findCard(_req, id) { const proposal = state.cards.get(id); return proposal ? { event: { id }, proposal, workspace: 'multiplayer_test', conversationId: 'c-mia' } : null; },
+    findCard(_req, id) { const proposal = state.cards.get(id); return proposal ? { event: { id }, proposal, companyId: 'co', workspace: 'multiplayer_test', conversationId: 'c-mia' } : null; },
     updateCard({ event }, proposal) { state.cards.set(event.id, proposal); return { id: event.id, metadata: { miaAppProposal: proposal } }; },
+    listCards: () => [...state.cards].map(([id, proposal]) => ({ event: { id }, proposal, companyId: 'co', workspace: 'multiplayer_test', conversationId: 'c-mia' })),
+    postNote(where, note) {
+      const found = state.notes.find(item => item.key === note.key);
+      if (found) return found.result;
+      const result = { event: { id: `note-${state.notes.length + 1}`, conversationId: where.conversationId, type: 'system', content: { text: note.text }, metadata: note.metadata },
+        dispatch: { dispatches: [{ id: `d-${state.notes.length + 1}`, status: 'pending' }] } };
+      state.notes.push({ ...note, where, result });
+      return result;
+    },
   });
   const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   t.after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const post = async (url, body) => { const res = await fetch(base + url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: res.status, data: await res.json() }; };
   return {
-    state, post, get: async url => (await fetch(base + url)).json(),
+    state, post, answers, get: async url => (await fetch(base + url)).json(),
     call: (tool, args = {}, extra = {}) => post('/api/mia-app/call', { tool, arguments: args, turn: 'mia-session', ...extra }),
   };
 }
@@ -258,4 +272,99 @@ test('Mia adds an MCP app only through a card, from the vendor, and never with a
   assert.equal(state.mcpApps[0].logo, null);
   assert.equal((await call('mcp_apps_list')).data.result.apps.length, 1);
   assert.doesNotMatch(JSON.stringify((await call('list_tools')).data.result.find(tool => tool.name === 'mcp_app_add_propose').arguments), /"key"\s*:/, 'no tool takes a key');
+});
+
+// After the person answers an add-app card, Mia is told and carries on.
+const MCP = { description: 'Your CRM', url: 'https://mcp.example.test/mcp', auth: 'oauth', docs_url: 'https://example.test/docs/mcp' };
+const NOTE = 'Note from the Mia app, not typed by the person:';
+
+test('accepting an add-app card tells Mia once, as the app, with the chat model', async t => {
+  const { call, post, state } = await harness(t);
+  const asked = await call('mcp_app_add_propose', { name: 'Attio', ...MCP });
+  const id = asked.data.result.event_id;
+  const model = { provider: 'openrouter', model: 'example/model' };
+  const accepted = await post(`/api/mia-app/proposals/${id}`, { decision: 'accept', chatModelSelection: model });
+  assert.equal(accepted.status, 200);
+  assert.equal(state.notes.length, 1);
+  const [note] = state.notes;
+  assert.equal(note.text, `${NOTE} they accepted your card, and Attio is now in Connected apps. It signs in the first time you use it: the person finishes the sign-in when you call one of its tools. Carry on with what you were doing.`);
+  assert.equal(note.metadata.miaAppNote.line, 'Mia was told Attio was added.');
+  assert.deepEqual(note.metadata.miaAppNote.cards, [id]);
+  assert.deepEqual(note.metadata.chatModelSelection, model);
+  assert.deepEqual(note.where, { companyId: 'co', conversationId: 'c-mia', owner: OWNER });
+  assert.equal(accepted.data.note.event.id, 'note-1', 'the page gets the note and its dispatch');
+  assert.ok(state.cards.get(id).followUp.sentAt);
+  // A second click, or a re-rendered card, is already answered and says nothing more.
+  assert.equal((await post(`/api/mia-app/proposals/${id}`, { decision: 'accept' })).status, 409);
+  assert.equal((await post(`/api/mia-app/proposals/${id}`, { decision: 'dismiss' })).status, 409);
+  assert.equal(state.notes.length, 1);
+});
+
+test('a dismissed or failed add-app card tells Mia why, and other cards stay quiet', async t => {
+  const { call, post, state } = await harness(t);
+  const dismissed = await call('mcp_app_add_propose', { name: 'Attio', ...MCP });
+  await post(`/api/mia-app/proposals/${dismissed.data.result.event_id}`, { decision: 'dismiss' });
+  assert.equal(state.notes[0].text, `${NOTE} they dismissed your card to add Attio to Connected apps, so it was not added. Carry on without it, and do not propose it again unless they ask.`);
+  assert.equal(state.notes[0].metadata.chatModelSelection, undefined);
+  state.mcpFail = 'That app is already in Connected apps.';
+  const failing = await call('mcp_app_add_propose', { name: 'Linear', ...MCP });
+  const failed = await post(`/api/mia-app/proposals/${failing.data.result.event_id}`, { decision: 'accept' });
+  assert.equal(failed.status, 400);
+  assert.equal(failed.data.event.metadata.miaAppProposal.status, 'failed');
+  assert.equal(state.notes[1].text, `${NOTE} they accepted your card, but adding Linear to Connected apps failed: That app is already in Connected apps. Tell them in one short line and say what they can do next.`);
+  assert.equal(state.notes[1].metadata.miaAppNote.line, 'Mia was told adding Linear failed.');
+  // A card for anything else is answered as before, with no note.
+  const archive = await call('bot_archive_propose', { bot_id: 'b1' });
+  await post(`/api/mia-app/proposals/${archive.data.result.event_id}`, { decision: 'dismiss' });
+  assert.equal(state.notes.length, 2);
+});
+
+test('cards from one reply wait for each other and go to Mia as one note', async t => {
+  const { call, post, state } = await harness(t);
+  const first = await call('mcp_app_add_propose', { name: 'Attio', ...MCP });
+  const second = await call('mcp_app_add_propose', { name: 'Linear', ...MCP, auth: 'none' });
+  state.mcpStatus = 'ready';
+  await post(`/api/mia-app/proposals/${first.data.result.event_id}`, { decision: 'accept' });
+  assert.equal(state.notes.length, 0, 'held while the other card is open');
+  await post(`/api/mia-app/proposals/${second.data.result.event_id}`, { decision: 'dismiss' });
+  assert.equal(state.notes.length, 1);
+  assert.equal(state.notes[0].text, [NOTE,
+    '- they accepted your card, and Attio is now in Connected apps and ready to use. Carry on with what you were doing.',
+    '- they dismissed your card to add Linear to Connected apps, so it was not added. Carry on without it, and do not propose it again unless they ask.'].join('\n'));
+  assert.equal(state.notes[0].metadata.miaAppNote.line, 'Mia was told Attio is ready. Mia was told you dismissed Linear.');
+  assert.deepEqual(state.notes[0].metadata.miaAppNote.cards, [first.data.result.event_id, second.data.result.event_id]);
+});
+
+test('an app that needs a key: Mia waits for it, then hears it is saved, never the key', async t => {
+  const { call, post, state, answers } = await harness(t);
+  state.mcpStatus = 'needs_key';
+  const asked = await call('mcp_app_add_propose', { name: 'Attio', ...MCP, auth: 'key', keyHeader: 'Authorization' });
+  await post(`/api/mia-app/proposals/${asked.data.result.event_id}`, { decision: 'accept' });
+  assert.equal(state.notes[0].text, `${NOTE} they accepted your card, and Attio is now in Connected apps, but it cannot work until they save its key in its key field there. Never ask for the key in chat. Tell them that in one short line, carry on with anything that does not need Attio, and wait: another note comes when the key is saved.`);
+  assert.equal(answers.keySaved(OWNER, 'someone-else'), null);
+  const saved = answers.keySaved(OWNER, 'attio');
+  assert.equal(saved.event.id, 'note-2');
+  assert.equal(state.notes[1].text, `${NOTE} the key for Attio was saved in Connected apps, so Attio is ready to use. Carry on with what you were doing.`);
+  assert.equal(state.notes[1].metadata.miaAppNote.line, "Mia was told Attio's key was saved.");
+  assert.equal(answers.keySaved(OWNER, 'attio'), null, 'a replaced key says nothing more');
+  assert.equal(state.settings.miaAppKeyWaits[OWNER], undefined);
+});
+
+test('a key saved while the note still waits makes that note say the app is ready', async t => {
+  const { call, post, state, answers } = await harness(t);
+  state.mcpStatus = 'needs_key';
+  const keyed = await call('mcp_app_add_propose', { name: 'Attio', ...MCP, auth: 'key', keyHeader: 'Authorization' });
+  const other = await call('mcp_app_add_propose', { name: 'Linear', ...MCP });
+  await post(`/api/mia-app/proposals/${keyed.data.result.event_id}`, { decision: 'accept' });
+  assert.equal(answers.keySaved(OWNER, 'attio'), null, 'nothing yet: Mia has not heard of the app');
+  await post(`/api/mia-app/proposals/${other.data.result.event_id}`, { decision: 'dismiss' });
+  assert.equal(state.notes.length, 1);
+  assert.match(state.notes[0].text, /- they accepted your card, and Attio is now in Connected apps and ready to use\./);
+  assert.doesNotMatch(state.notes[0].text, /key/i);
+});
+
+test('the key route tells Mia only after the key is in every profile, passing the app id, never the key', () => {
+  const source = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const route = source.slice(source.indexOf("app.post('/api/mcp-apps/:id/key'"), source.indexOf("app.delete('/api/mcp-apps/:id'"));
+  assert.match(route, /setProfileKey[\s\S]*mcpAppKeyFiles\(\)\.every\(\(file\) => mcpApps\.hasProfileKey\(file, mcpApps\.keyEnvName\(found\.id\)\)\)\) \{\s*miaAppAnswers\.keySaved\(String\(req\.userEmail \|\| ''\)\.toLowerCase\(\), found\.id\);/);
 });
